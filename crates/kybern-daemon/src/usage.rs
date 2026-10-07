@@ -25,8 +25,9 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use kybern_drivers::claude::UsageUnread;
 use kybern_protocol::methods::{LimitsSource, LimitsStale, ProviderLimits, UsageLimitsParams, UsageLimitsResult};
-use kybern_protocol::{ProviderKind, UsageLimit};
+use kybern_protocol::{ProviderInstance, ProviderKind, UsageLimit};
 use kybern_store::Store;
+use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 
 use crate::settings::SettingsStore;
@@ -74,6 +75,7 @@ struct Inner {
 #[derive(Default)]
 struct State {
     seeded: bool,
+    account_identities: BTreeMap<ProviderKind, String>,
     providers: BTreeMap<ProviderKind, Entry>,
     last_interest: Option<Instant>,
     refreshing: HashSet<ProviderKind>,
@@ -117,12 +119,48 @@ impl UsageMonitor {
         }
     }
 
+    fn identity(&self, kind: ProviderKind) -> String {
+        let settings = self.inner.settings.get();
+        let raw = settings.providers.get(&kind).cloned().unwrap_or_default();
+        let account = crate::provider_accounts::resolve(&raw, None, None);
+        let effective = crate::settings::provider_settings(&settings, kind, None);
+        let bytes = Sha256::digest(serde_json::to_vec(&(account, effective.binary, effective.env)).unwrap_or_default());
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// Global limits describe the selected global account. Never show the
+    /// previous account's values or accept its in-flight read after a switch.
+    fn sync_accounts(&self) {
+        let identities = LIVE.into_iter().map(|kind| (kind, self.identity(kind))).collect::<Vec<_>>();
+        let mut state = self.lock();
+        for (kind, identity) in identities {
+            if state.account_identities.get(&kind).is_some_and(|old| old != &identity) {
+                state.providers.remove(&kind);
+            }
+            state.account_identities.insert(kind, identity);
+        }
+    }
+
+    pub fn settings_changed(&self) {
+        self.sync_accounts();
+        self.publish();
+    }
+
+    pub fn observe_account(&self, provider: &ProviderInstance, limits: &[UsageLimit]) {
+        let settings = self.inner.settings.get();
+        let raw = settings.providers.get(&provider.kind).cloned().unwrap_or_default();
+        if provider.instance == crate::provider_accounts::resolve(&raw, None, None) {
+            self.observe(provider.kind, limits);
+        }
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<UsageLimitsResult> {
         self.inner.changed.subscribe()
     }
 
     /// Answer `usage.limits`.
     pub async fn limits(&self, params: UsageLimitsParams) -> UsageLimitsResult {
+        self.sync_accounts();
         self.seed();
         let due = {
             let mut state = self.lock();
@@ -161,6 +199,7 @@ impl UsageMonitor {
         if limits.is_empty() {
             return;
         }
+        self.sync_accounts();
         self.seed();
         {
             let mut state = self.lock();
@@ -228,7 +267,17 @@ impl UsageMonitor {
             return;
         }
         state.seeded = true;
+        let settings = self.inner.settings.get();
         for report in stored {
+            // Legacy reports do not contain account identity. Once accounts
+            // are configured, a live read is required instead of guessing.
+            if settings
+                .providers
+                .get(&report.provider)
+                .is_some_and(|provider| !provider.accounts.is_empty() || provider.default_account.is_some())
+            {
+                continue;
+            }
             let entry = state.providers.entry(report.provider).or_default();
             if entry.updated_at.is_none() {
                 entry.limits = report.limits;
@@ -243,10 +292,18 @@ impl UsageMonitor {
     async fn refresh(&self, kind: ProviderKind, spacing: Duration) {
         let Some(gate) = self.inner.gates.get(&kind) else { return };
         let _gate = gate.lock().await;
+        self.sync_accounts();
+        let identity = self.identity(kind);
         let recent = self.lock().providers.get(&kind).and_then(|entry| entry.attempted).is_some_and(|at| at.elapsed() < spacing);
         if !recent {
             self.lock().refreshing.insert(kind);
             let read = self.read(kind).await;
+            self.sync_accounts();
+            if self.identity(kind) != identity {
+                self.lock().refreshing.remove(&kind);
+                self.publish();
+                return;
+            }
             let mut state = self.lock();
             let entry = state.providers.entry(kind).or_default();
             entry.attempted = Some(Instant::now());
@@ -355,7 +412,7 @@ impl UsageMonitor {
 mod tests {
     use super::*;
 
-    fn monitor() -> UsageMonitor {
+    pub(super) fn monitor() -> UsageMonitor {
         let root = std::env::temp_dir().join(format!("kybern-usage-test-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&root).unwrap();
         let settings = SettingsStore::load(&root.join("settings.json")).unwrap();
@@ -425,5 +482,37 @@ mod tests {
         assert_eq!(monitor.lock().after_turn.len(), 1, "turns ending together share a read");
         monitor.turn_finished(ProviderKind::Opencode);
         assert!(!monitor.lock().after_turn.contains(&ProviderKind::Opencode), "no account limits to read");
+    }
+}
+
+#[cfg(test)]
+mod account_tests {
+    use super::*;
+    #[test]
+    fn global_account_changes_clear_cached_limits_and_isolate_session_reports() {
+        let monitor = super::tests::monitor();
+        monitor.observe(
+            ProviderKind::Codex,
+            &[UsageLimit { name: "5-hour".into(), used_percent: 99.0, window_minutes: Some(300), resets_at: None }],
+        );
+        let mut settings = monitor.inner.settings.get();
+        let provider = settings.providers.entry(ProviderKind::Codex).or_default();
+        provider
+            .accounts
+            .insert("work".into(), kybern_protocol::ProviderAccount { name: "Work".into(), directory: "/account-work".into() });
+        provider.default_account = Some("work".into());
+        monitor.inner.settings.set(settings).unwrap();
+        monitor.settings_changed();
+        assert!(monitor.snapshot().providers.is_empty());
+        monitor.observe_account(
+            &ProviderInstance::default_for(ProviderKind::Codex),
+            &[UsageLimit { name: "5-hour".into(), used_percent: 99.0, window_minutes: Some(300), resets_at: None }],
+        );
+        assert!(monitor.snapshot().providers.is_empty());
+        monitor.observe_account(
+            &ProviderInstance { kind: ProviderKind::Codex, instance: "work".into() },
+            &[UsageLimit { name: "5-hour".into(), used_percent: 10.0, window_minutes: Some(300), resets_at: None }],
+        );
+        assert_eq!(monitor.snapshot().providers[0].limits[0].used_percent, 10.0);
     }
 }

@@ -1,3 +1,4 @@
+import { useNow } from "@/lib/hooks"
 import { AccountPicker } from "@/components/kybern/AccountPicker"
 import type { ThreadTargetState, SessionTarget, ProviderStatus } from "@/protocol"
 import { offerWorktreeCleanup } from "@/state/worktreeCleanup"
@@ -466,11 +467,16 @@ function AccountLimitRecovery({ threadId, provider }: { threadId: string; provid
     for (let index = blocks.length - 1; index >= 0; index--) { const block = blocks[index]; if (block.kind === "turn_end") return block.error }
     return null
   })
+  const threadStatus = useStore((state) => state.threads[threadId]?.status)
+  const limits = useStore((state) => state.transcripts[threadId]?.providerUsage?.limits)
+  const now = useNow()
+  const confirmedLimit = limits?.some((limit) => limit.used_percent >= 100 && (limit.window_minutes === 300 || limit.window_minutes === 10080) && (!limit.resets_at || limit.resets_at > now / 1000))
   const accounts = useStore((state) => state.settings?.providers[provider.kind]?.accounts)
   const [selected, setSelected] = useState("")
   const [busy, setBusy] = useState(false)
   const attempt = useRef<string | null>(null)
-  if (!error || !/(usage limit|quota|rate_limit_exceeded|hit your limit)/i.test(error) || !/(5.hour|five.hour|week|usage limit)/i.test(error)) return null
+  const confirmedError = threadStatus === "failed" && !!error && /(usage limit|quota|rate_limit_exceeded|hit your limit)/i.test(error) && /(5.hour|five.hour|week)/i.test(error)
+  if (!confirmedLimit && !confirmedError) return null
   const options = [{ id: "default", name: "Default account" }, ...Object.entries(accounts ?? {}).map(([id, account]) => ({ id, name: account.name }))].filter((account) => account.id !== provider.instance)
   const choice = options.find((account) => account.id === selected) ?? options[0]
   return <ComposerStackedPanel><ComposerStackedPanelRow compact>

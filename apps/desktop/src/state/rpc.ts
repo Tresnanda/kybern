@@ -28,6 +28,7 @@ import {
   type ProviderKind,
   type ProviderInstance,
   type ProviderStatus,
+  type Settings,
   type RuntimeTask,
   type SkillInfo,
   type ThreadEvent,
@@ -223,6 +224,13 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
             detail: detail ?? "Connection closed",
           },
         })
+      }
+    })
+    client.onNotification("settings.changed", (params) => {
+      const settings = (params as { settings?: Settings } | null)?.settings
+      if (!disposed && settings) {
+        useStore.getState().set({ settings, providers: [] })
+        void refreshProviders().catch(() => {})
       }
     })
     client.onNotification(PROJECTS_CHANGED_NOTIFICATION, (params) => {

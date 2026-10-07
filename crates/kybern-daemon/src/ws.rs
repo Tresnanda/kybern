@@ -407,6 +407,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let mut notes = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_notes());
     let mut tasks = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_tasks());
     let mut usage = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.usage().subscribe());
+    let mut settings = ctx.principal.has(Scope::OrchestrationRead).then(|| state.settings.subscribe());
     let mut projects = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_projects());
     if !state.store.token_is_active(ctx.principal.token_id).unwrap_or(false) {
         return;
@@ -494,6 +495,18 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                     // Each notification carries the whole list; the next one catches up.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(_) => projects = None,
+                }
+            }
+            updated = async {
+                match settings.as_mut() {
+                    Some(settings) => settings.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match updated {
+                    Ok(updated) => { state.orchestrator.usage().settings_changed(); let _ = ctx.out.notify("settings.changed", serde_json::json!({ "settings": updated })).await; }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => { let _ = ctx.out.notify("settings.changed", serde_json::json!({ "settings": state.settings.get() })).await; }
+                    Err(_) => settings = None,
                 }
             }
             limits = async {

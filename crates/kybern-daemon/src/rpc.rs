@@ -47,7 +47,10 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 )),
                 None => None,
             };
-            let settings = crate::settings::provider_settings(&state.settings.get(), p.provider, cwd.as_deref().and_then(|p| p.to_str()));
+            let snapshot = state.settings.get();
+            let raw_provider = snapshot.providers.get(&p.provider).cloned().unwrap_or_default();
+            let instance = crate::provider_accounts::resolve(&raw_provider, cwd.as_deref().and_then(|path| path.to_str()), None);
+            let settings = crate::settings::provider_settings(&snapshot, p.provider, cwd.as_deref().and_then(|p| p.to_str()));
             let context = kybern_drivers::ProbeContext { binary: settings.binary.map(std::path::PathBuf::from), cwd, env: settings.env };
             let driver = state.drivers.get(p.provider).ok_or_else(|| RpcError::not_found("harness"))?;
             let mut result =
@@ -56,7 +59,11 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             for session in &mut result.sessions {
                 session.thread_id = threads
                     .iter()
-                    .find(|thread| thread.provider.kind == session.provider && thread.provider_session_id.as_deref() == Some(&session.id))
+                    .find(|thread| {
+                        thread.provider.kind == session.provider
+                            && thread.provider.instance == instance
+                            && thread.provider_session_id.as_deref() == Some(&session.id)
+                    })
                     .map(|thread| thread.id);
             }
             ok(result)
@@ -631,7 +638,9 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         SettingsUpdate::NAME => {
             let p: SettingsUpdateParams = parse(params)?;
-            ok(state.settings.set(p.settings).map_err(internal)?)
+            let updated = state.settings.set(p.settings).map_err(internal)?;
+            state.orchestrator.usage().settings_changed();
+            ok(updated)
         }
         UsageSummary::NAME => {
             let p: UsageSummaryParams = parse_or_default(params)?;

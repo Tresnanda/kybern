@@ -131,6 +131,18 @@ async fn quota_continuation_retry_uses_existing_admission_receipt_without_switch
         .orchestrator
         .emit(thread.id, Some(turn_id), EventPayload::TurnStarted { message_id, message: UserMessage::text("continuation") })
         .unwrap();
+    fixture
+        .store
+        .meta_set(
+            &format!("quota_continue:{message_id}"),
+            &serde_json::to_string(&methods::ThreadsSwitchContinueParams {
+                thread_id: thread.id,
+                provider: ProviderInstance { kind: thread.provider.kind, instance: "missing".into() },
+                message_id,
+            })
+            .unwrap(),
+        )
+        .unwrap();
     let result = fixture
         .orchestrator
         .switch_continue(methods::ThreadsSwitchContinueParams {
@@ -291,4 +303,53 @@ async fn repeated_native_task_ids_keep_both_owners_and_translate_targeted_contro
     assert!(outgoing.tasks.lock().await[&old.id].status.is_active());
     assert_eq!(incoming.tasks.lock().await[&new.id].status, RuntimeTaskStatus::Completed);
     assert_eq!(fixture.store.runtime_tasks_for_thread(thread.id).unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn stale_quota_failure_cannot_switch_a_newer_turn() {
+    let fixture = Fixture::new();
+    let thread = fixture.thread(ThreadStatus::Running);
+    add_test_account(&fixture, thread.provider.kind, "work");
+    let failed_turn = Uuid::now_v7();
+    fixture
+        .orchestrator
+        .emit(
+            thread.id,
+            Some(failed_turn),
+            EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("old task") },
+        )
+        .unwrap();
+    fixture
+        .orchestrator
+        .emit(thread.id, Some(failed_turn), EventPayload::TurnFailed { error: "weekly usage limit exceeded".into() })
+        .unwrap();
+    fixture
+        .orchestrator
+        .emit(
+            thread.id,
+            Some(Uuid::now_v7()),
+            EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("new task") },
+        )
+        .unwrap();
+    let request = methods::ThreadsSwitchContinueParams {
+        thread_id: thread.id,
+        provider: ProviderInstance { kind: thread.provider.kind, instance: "work".into() },
+        message_id: Uuid::now_v7(),
+    };
+    assert!(fixture.orchestrator.switch_continue(request).await.is_err());
+    assert_eq!(fixture.orchestrator.thread_target(thread.id).unwrap().target.provider, thread.provider);
+}
+
+#[test]
+fn changed_native_directory_or_environment_invalidates_same_account_continuation() {
+    let fixture = Fixture::new();
+    let mut thread = fixture.thread(ThreadStatus::Idle);
+    fixture.orchestrator.save_account_binding(&thread).unwrap();
+    let mut settings = fixture.orchestrator.inner.settings.get();
+    settings.providers.entry(thread.provider.kind).or_default().env.insert("NATIVE_PROFILE_SETTING".into(), "changed".into());
+    fixture.orchestrator.inner.settings.set(settings).unwrap();
+    let target = SessionTarget { provider: thread.provider.clone(), model: thread.model.clone(), effort: thread.effort.clone() };
+    fixture.orchestrator.admit_target(&mut thread, target).unwrap();
+    assert!(thread.provider_session_id.is_none());
+    assert!(fixture.store.meta_get(&format!("handoff:{}", thread.id)).unwrap().is_some());
 }

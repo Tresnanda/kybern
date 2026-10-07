@@ -191,7 +191,7 @@ impl Orchestrator {
     }
 
     pub(super) fn environment_fingerprint(&self, thread: &Thread) -> Result<String> {
-        let bytes = Sha256::digest(serde_json::to_vec(&self.account_environment(thread)?)?);
+        let bytes = Sha256::digest(serde_json::to_vec(&(&thread.cwd, self.account_environment(thread)?))?);
         Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
     }
 
@@ -211,9 +211,19 @@ impl Orchestrator {
     }
 
     pub(super) fn save_account_binding(&self, thread: &Thread) -> Result<()> {
+        let owner = self.inner.store.meta_get(&format!("live_owner:{}", thread.id))?;
+        let admitted_fingerprint = if owner.as_deref() == Some(serde_json::to_string(&thread.provider)?.as_str()) {
+            self.inner.store.meta_get(&format!("live_fingerprint:{}", thread.id))?
+        } else {
+            None
+        };
+        let previous =
+            self.inner.store.meta_get(&Self::binding_key(thread))?.map(|saved| serde_json::from_str::<Binding>(&saved)).transpose()?;
+        let previous_fingerprint =
+            previous.filter(|binding| binding.session_id == thread.provider_session_id).map(|binding| binding.environment_fingerprint);
         let binding = Binding {
             session_id: thread.provider_session_id.clone(),
-            environment_fingerprint: self.environment_fingerprint(thread)?,
+            environment_fingerprint: admitted_fingerprint.or(previous_fingerprint).unwrap_or(self.environment_fingerprint(thread)?),
             through: thread.last_seq,
         };
         self.inner.store.meta_set(&Self::binding_key(thread), &serde_json::to_string(&binding)?)
@@ -222,8 +232,16 @@ impl Orchestrator {
     /// Called under the send admission gate, before appending the user's intent.
     pub(super) fn admit_target(&self, thread: &mut Thread, target: SessionTarget) -> Result<()> {
         let provider_changed = thread.provider != target.provider;
+        let binding =
+            self.inner.store.meta_get(&Self::binding_key(thread))?.map(|saved| serde_json::from_str::<Binding>(&saved)).transpose()?;
+        let fingerprint = self.environment_fingerprint(thread)?;
+        let live_fingerprint = self.inner.store.meta_get(&format!("live_fingerprint:{}", thread.id))?;
+        let configuration_changed = live_fingerprint
+            .as_deref()
+            .or(binding.as_ref().map(|binding| binding.environment_fingerprint.as_str()))
+            .is_some_and(|previous| previous != fingerprint);
         let model_changed = thread.model != target.model || thread.effort != target.effort;
-        if !provider_changed && !model_changed {
+        if !provider_changed && !model_changed && !configuration_changed {
             return Ok(());
         }
         // A target selection never grants additional authority. Validate the effective
@@ -239,7 +257,7 @@ impl Orchestrator {
         thread.provider = target.provider;
         thread.model = target.model;
         thread.effort = target.effort;
-        if provider_changed {
+        if provider_changed || configuration_changed {
             let binding =
                 self.inner.store.meta_get(&Self::binding_key(thread))?.map(|s| serde_json::from_str::<Binding>(&s)).transpose()?;
             let fingerprint = self.environment_fingerprint(thread)?;
@@ -296,12 +314,31 @@ impl Orchestrator {
         if !items.is_empty() {
             let attachment_reserve =
                 message.parts.iter().filter(|part| !matches!(part, ContentPart::Text { .. })).count().saturating_mul(8192);
-            let remaining = 128_000usize.saturating_sub(32_000 + message.plain_text().len() + attachment_reserve);
+            let capacity_key = format!(
+                "model_context:{}:{}:{}",
+                thread.provider.kind,
+                thread.provider.instance,
+                thread.model.as_deref().unwrap_or("default")
+            );
+            let advertised_tokens = self.inner.store.meta_get(&capacity_key)?.and_then(|value| value.parse::<usize>().ok());
+            // Native context reports are model/account bound. Unknown models use
+            // an explicit conservative 32k-token estimate, charged at one byte
+            // per token instead of assuming English's usual four-byte ratio.
+            let capacity = advertised_tokens.unwrap_or(32_000);
+            let remaining = capacity.saturating_sub(8_000 + message.plain_text().len() + attachment_reserve);
             ensure!(
                 remaining >= 1024,
                 "The target has too little estimated capacity for portable context. Compact the conversation or choose a larger-context model before trying again."
             );
-            let text = bounded_context(thread.id, &items, remaining.min(16_000));
+            let mut text = bounded_context(thread.id, &items, remaining.min(16_000).saturating_sub(120));
+            text.insert_str(
+                0,
+                if advertised_tokens.is_some() {
+                    "Context budget uses this account/model's native context report.\n"
+                } else {
+                    "Target context capacity is unknown; using a conservative 32k-token estimate.\n"
+                },
+            );
             copy.parts.insert(0, ContentPart::Text { text });
         }
         Ok(copy)
@@ -417,33 +454,115 @@ impl Orchestrator {
     }
 
     pub async fn switch_continue(&self, params: methods::ThreadsSwitchContinueParams) -> Result<methods::ThreadsSendResult> {
-        if let Some((owner, turn_id, _)) = self.inner.store.turn_started_receipt(params.message_id)? {
-            ensure!(owner == params.thread_id, "Continuation id belongs to another thread.");
-            return Ok(methods::ThreadsSendResult { turn_id, message_id: params.message_id });
+        self.ensure_not_subagent(params.thread_id)?;
+        let operation_key = format!("quota_continue:{}", params.message_id);
+        let signature = serde_json::to_string(&params)?;
+        if let Some(previous) = self.inner.store.meta_get(&operation_key)? {
+            ensure!(previous == signature, "Continuation id belongs to a different account or request.");
+            if let Some((owner, turn_id, _)) = self.inner.store.turn_started_receipt(params.message_id)? {
+                ensure!(owner == params.thread_id, "Continuation id belongs to another thread.");
+                return Ok(methods::ThreadsSendResult { turn_id, message_id: params.message_id });
+            }
+        } else {
+            ensure!(
+                self.inner.store.turn_started_receipt(params.message_id)?.is_none(),
+                "Continuation id already belongs to another message."
+            );
         }
         let thread = self.inner.store.thread_get(params.thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+        ensure!(thread.status != ThreadStatus::Archived, "Unarchive this conversation before continuing.");
         let events = self.inner.store.events_for_thread(thread.id)?;
-        let error = events
+        let latest_turn = events
+            .iter()
+            .rev()
+            .find(|event| matches!(event.payload, EventPayload::TurnStarted { .. }))
+            .and_then(|event| event.turn_id)
+            .ok_or_else(|| anyhow!("No interrupted task to continue."))?;
+        let current = events.iter().filter(|event| event.turn_id == Some(latest_turn)).collect::<Vec<_>>();
+        let quota_report = current
+            .iter()
+            .rev()
+            .find_map(|event| match &event.payload {
+                EventPayload::ProviderUsageUpdated { usage } => usage.limits.as_ref(),
+                _ => None,
+            })
+            .is_some_and(|limits| limits.iter().any(confirmed_quota));
+        let quota_error = current
             .iter()
             .rev()
             .find_map(|event| match &event.payload {
                 EventPayload::TurnFailed { error } => Some(error.as_str()),
                 _ => None,
             })
-            .ok_or_else(|| anyhow!("No usage-limit failure to continue."))?;
-        ensure!(quota_failure(error), "This failure is not a confirmed account usage limit. Retry your prompt normally.");
-        ensure!(params.provider != thread.provider, "Choose a different account.");
+            .is_some_and(quota_failure);
+        ensure!(
+            quota_report || (thread.status == ThreadStatus::Failed && quota_error),
+            "This turn has no confirmed 5-hour or weekly account limit. Retry your prompt normally."
+        );
+        ensure!(
+            params.provider.kind == thread.provider.kind && params.provider != thread.provider,
+            "Choose a different account for the same agent."
+        );
+        self.validate_provider_selection(thread.project_id, &params.provider, thread.model.as_deref(), thread.effort.as_deref()).await?;
+        {
+            let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
+            if let Some(previous) = self.inner.store.meta_get(&operation_key)? {
+                ensure!(previous == signature, "Continuation id belongs to a different account or request.");
+            }
+            self.inner.store.meta_set(&operation_key, &signature)?;
+        }
+        if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
+            self.interrupt(thread.id).await?;
+            for _ in 0..100 {
+                if self
+                    .inner
+                    .store
+                    .thread_get(thread.id)?
+                    .is_some_and(|thread| !matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval))
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            ensure!(
+                self.inner
+                    .store
+                    .thread_get(thread.id)?
+                    .is_some_and(|thread| !matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)),
+                "The agent is still stopping. Try Switch and continue after it stops."
+            );
+        }
+        let previous_target = self.thread_target(thread.id)?;
         let mut target = self.thread_target(thread.id)?.target;
         if target.provider.kind != params.provider.kind {
             target.model = None;
             target.effort = None;
         }
-        target.provider = params.provider;
-        self.set_thread_target(methods::ThreadTargetParams { thread_id: thread.id, target, inherit_account: false }).await?;
+        target.provider = params.provider.clone();
+        self.set_thread_target(methods::ThreadTargetParams { thread_id: thread.id, target: target.clone(), inherit_account: false })
+            .await?;
+        self.inner.store.meta_set_many(&[
+            (&operation_key, &signature),
+            (&format!("quota_target:{}", params.message_id), &serde_json::to_string(&target)?),
+        ])?;
         let message = UserMessage::text(
             "Continue the interrupted task from the saved conversation. Honor the user's existing instructions, inspect completed work before acting, and do not repeat completed mutations.",
         );
-        self.send_client_message(methods::ThreadsSendParams { thread_id: thread.id, message, message_id: Some(params.message_id) }).await
+        let result = self
+            .send_client_message(methods::ThreadsSendParams { thread_id: thread.id, message, message_id: Some(params.message_id) })
+            .await;
+        if result.is_err()
+            && self.inner.store.turn_started_receipt(params.message_id)?.is_none()
+            && self.thread_target(thread.id)?.target == target
+        {
+            self.set_thread_target(methods::ThreadTargetParams {
+                thread_id: thread.id,
+                target: previous_target.target,
+                inherit_account: !previous_target.account_override,
+            })
+            .await?;
+        }
+        result
     }
 }
 
@@ -461,6 +580,12 @@ fn validate_permission(thread: &Thread, mode: PermissionMode) -> Result<()> {
     Ok(())
 }
 
+fn confirmed_quota(limit: &UsageLimit) -> bool {
+    limit.used_percent >= 100.0
+        && matches!(limit.window_minutes, Some(300 | 10080))
+        && limit.resets_at.is_none_or(|reset| reset > chrono::Utc::now().timestamp())
+}
+
 pub(super) fn quota_failure(error: &str) -> bool {
     let text = error.to_ascii_lowercase();
     (text.contains("usage limit") || text.contains("quota") || text.contains("rate_limit_exceeded") || text.contains("hit your limit"))
@@ -468,8 +593,7 @@ pub(super) fn quota_failure(error: &str) -> bool {
             || text.contains("5 hour")
             || text.contains("five-hour")
             || text.contains("weekly")
-            || text.contains("week")
-            || text.contains("usage limit"))
+            || text.contains("week"))
 }
 
 fn bounded_context(thread_id: ThreadId, items: &[String], cap: usize) -> String {

@@ -130,7 +130,7 @@ impl Orchestrator {
             .get_or_refresh(cache_key, false, || async move {
                 let probes = ProviderKind::ALL.into_iter().map(|kind| {
                     let driver = drivers.get(kind);
-                    let provider_settings = settings.providers.get(&kind).cloned().unwrap_or_default();
+                    let provider_settings = crate::settings::provider_settings(&settings, kind, cwd.to_str());
                     let context = kybern_drivers::ProbeContext {
                         binary: provider_settings.binary.map(PathBuf::from),
                         cwd: Some(cwd.clone()),
@@ -172,6 +172,12 @@ impl Orchestrator {
         let settings = self.inner.settings.get();
         let provider_settings = settings.providers.get(&provider.kind).cloned().unwrap_or_default();
         crate::provider_accounts::environment(&provider_settings, provider.kind, &provider.instance)?;
+        let project = self.inner.store.project_get(project_id)?.ok_or_else(|| anyhow!("Project not found."))?;
+        if provider.instance != crate::provider_accounts::resolve(&provider_settings, Some(&project.path), None) {
+            // The legacy aggregate cache describes the project-default account.
+            // It cannot reject a model/effort advertised by a different account.
+            return Ok(());
+        }
 
         let Some(statuses) = self.cached_provider_statuses(project_id).await? else { return Ok(()) };
         let Some(status) = statuses.iter().find(|status| status.kind == provider.kind) else { return Ok(()) };
@@ -3608,8 +3614,15 @@ impl Orchestrator {
     // ---- threads ----
 
     pub async fn resume_external_session(&self, params: methods::SessionsResumeParams) -> Result<Thread> {
+        let settings = self.inner.settings.get();
+        let source_project =
+            params.project_id.map(|id| self.inner.store.project_get(id)?.ok_or_else(|| anyhow!("Project not found"))).transpose()?;
+        let raw_provider = settings.providers.get(&params.provider).cloned().unwrap_or_default();
+        let instance = crate::provider_accounts::resolve(&raw_provider, source_project.as_ref().map(|project| project.path.as_str()), None);
         let existing = self.inner.store.threads_list(None, true)?.into_iter().find(|thread| {
-            thread.provider.kind == params.provider && thread.provider_session_id.as_deref() == Some(params.session_id.as_str())
+            thread.provider.kind == params.provider
+                && thread.provider.instance == instance
+                && thread.provider_session_id.as_deref() == Some(params.session_id.as_str())
         });
         if let Some(mut thread) = existing {
             if thread.status == ThreadStatus::Archived {
@@ -3621,9 +3634,6 @@ impl Orchestrator {
         }
         let _gate = self.inner.harness_gates.get(&params.provider).ok_or_else(|| anyhow!("Harness unavailable"))?.read().await;
         let driver = self.inner.drivers.get(params.provider).ok_or_else(|| anyhow!("Harness unavailable"))?;
-        let settings = self.inner.settings.get();
-        let source_project =
-            params.project_id.map(|id| self.inner.store.project_get(id)?.ok_or_else(|| anyhow!("Project not found"))).transpose()?;
         let provider = crate::settings::provider_settings(&settings, params.provider, source_project.as_ref().map(|p| p.path.as_str()));
         let context = kybern_drivers::ProbeContext {
             binary: provider.binary.map(PathBuf::from),
@@ -3652,7 +3662,7 @@ impl Orchestrator {
             title: if session.title.trim().is_empty() { DEFAULT_TITLE.into() } else { session.title },
             model: session.model,
             effort: None,
-            provider: ProviderInstance { kind: session.provider, instance: "default".into() },
+            provider: ProviderInstance { kind: session.provider, instance: instance.clone() },
             permission_mode: if session.id.starts_with("cursor-sdk:") {
                 default_provider_permission(session.provider, settings.default_permission_mode)
             } else {
@@ -3674,6 +3684,10 @@ impl Orchestrator {
         };
         let store = self.inner.store.clone();
         let (mut thread, events) = tokio::task::spawn_blocking(move || store.thread_import(thread, history.events)).await??;
+        // Imported native ids belong to the discovery account, even if global
+        // defaults change later or the session cwd uses a different project.
+        self.inner.store.meta_set(&format!("account_override:{}", thread.id), &instance)?;
+        self.save_account_binding(&thread)?;
         if let Some(profile) = imported_profile {
             self.inner.store.meta_set(&format!("omp_profile:{}", thread.id), &profile)?;
         }
@@ -4000,7 +4014,12 @@ impl Orchestrator {
                 .transpose()?
                 .unwrap_or(self.thread_target(thread_id)?.target)
         } else {
-            self.thread_target(thread_id)?.target
+            self.inner
+                .store
+                .meta_get(&format!("quota_target:{message_id}"))?
+                .map(|saved| serde_json::from_str(&saved))
+                .transpose()?
+                .unwrap_or(self.thread_target(thread_id)?.target)
         };
         self.admit_target(&mut thread, selected_target)?;
         let turn_id = Uuid::now_v7();
@@ -5109,6 +5128,7 @@ impl Orchestrator {
                 live.retained.store(false, Ordering::Relaxed);
                 self.inner.sessions.lock().await.insert(thread.id, live.clone());
                 self.inner.store.meta_set_many(&[
+                    (&format!("live_fingerprint:{}", thread.id), &self.environment_fingerprint(thread)?),
                     (&format!("live_identity:{}", thread.id), &expected),
                     (&format!("live_owner:{}", thread.id), &serde_json::to_string(&thread.provider)?),
                 ])?;
@@ -5222,6 +5242,7 @@ impl Orchestrator {
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
         });
         self.inner.store.meta_set_many(&[
+            (&format!("live_fingerprint:{}", thread.id), &self.environment_fingerprint(thread)?),
             (&format!("live_identity:{}", thread.id), &self.session_identity(thread)?),
             (&format!("live_owner:{}", thread.id), &serde_json::to_string(&thread.provider)?),
         ])?;
@@ -6224,14 +6245,25 @@ impl Orchestrator {
                 self.emit(thread_id, turn_id, EventPayload::ProviderCommandsUpdated { commands })?;
             }
             DriverEvent::UsageUpdated(usage) => {
+                if let Some(context) = &usage.context
+                    && let Some(thread) = self.inner.store.thread_get(thread_id)?
+                {
+                    self.inner.store.meta_set(
+                        &format!(
+                            "model_context:{}:{}:{}",
+                            thread.provider.kind,
+                            thread.provider.instance,
+                            thread.model.as_deref().unwrap_or("default")
+                        ),
+                        &context.window_tokens.to_string(),
+                    )?;
+                }
                 // Plan limits are account-wide: every client's limits view
                 // updates, not only this thread's.
                 if let Some(limits) = usage.limits.as_deref()
                     && let Some(thread) = self.inner.store.thread_get(thread_id)?
                 {
-                    if thread.provider.instance == "default" {
-                        self.inner.usage.observe(thread.provider.kind, limits);
-                    }
+                    self.inner.usage.observe_account(&thread.provider, limits);
                     self.inner.store.meta_set(
                         &format!("account_usage:{}:{}", thread.provider.kind, thread.provider.instance),
                         &serde_json::to_string(&usage)?,

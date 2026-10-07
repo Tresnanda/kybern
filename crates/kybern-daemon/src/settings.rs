@@ -10,6 +10,7 @@ use kybern_protocol::Settings;
 pub struct SettingsStore {
     path: PathBuf,
     current: Arc<RwLock<Settings>>,
+    changed: tokio::sync::broadcast::Sender<Settings>,
 }
 
 impl SettingsStore {
@@ -23,7 +24,7 @@ impl SettingsStore {
             }
             Err(e) => return Err(e.into()),
         };
-        Ok(Self { path: path.to_path_buf(), current: Arc::new(RwLock::new(settings)) })
+        Ok(Self { path: path.to_path_buf(), current: Arc::new(RwLock::new(settings)), changed: tokio::sync::broadcast::channel(32).0 })
     }
 
     /// The data directory `settings.json` lives in.
@@ -33,6 +34,10 @@ impl SettingsStore {
 
     pub fn get(&self) -> Settings {
         self.current.read().unwrap().clone()
+    }
+
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Settings> {
+        self.changed.subscribe()
     }
 
     pub fn set(&self, settings: Settings) -> Result<Settings> {
@@ -45,6 +50,7 @@ impl SettingsStore {
         crate::provider_accounts::validate(&settings)?;
         write_atomic(&self.path, &settings)?;
         *self.current.write().unwrap() = settings.clone();
+        let _ = self.changed.send(settings.clone());
         Ok(settings)
     }
 }
