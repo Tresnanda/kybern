@@ -1091,6 +1091,18 @@ impl Orchestrator {
             let mut project = self.inner.store.project_get(group.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
             let configured_model =
                 self.inner.settings.get().providers.get(&child.provider.kind).and_then(|provider| provider.model.clone());
+            if child.provider.instance != "default"
+                && !settings
+                    .providers
+                    .get(&child.provider.kind)
+                    .is_some_and(|provider| provider.accounts.contains_key(&child.provider.instance))
+            {
+                return Err(anyhow!(
+                    "Unknown {} provider instance '{}'. Choose a configured account. Put the model selector in child.model, not child.provider.instance.",
+                    child.provider.kind,
+                    child.provider.instance
+                ));
+            }
             let selected_model = child.model.as_deref().or(configured_model.as_deref());
             self.validate_provider_selection(project.id, &child.provider, selected_model, child.effort.as_deref()).await?;
             if params.kind.mutates_workspace() && !project.is_git {
@@ -3934,17 +3946,33 @@ impl Orchestrator {
         let admission_gate = self.session_admission(thread_id).await;
         let _admission = admission_gate.lock().await;
         let current = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
-        if !matches!(current.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)
-            && let Some(mode) = self.thread_target(thread_id)?.pending_permission_mode
-        {
-            self.apply_permission_admitted(thread_id, mode).await?;
-        }
         let target = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
         self.restore_worktree_if_cleaned(&target).await?;
         if target.subagent.is_some() {
             return Err(anyhow!(subagents::READ_ONLY_ERROR));
         }
-        let kind = self.thread_target(thread_id)?.target.provider.kind;
+        let selected_target = if queued {
+            self.inner
+                .store
+                .meta_get(&format!("queue_target:{message_id}"))?
+                .map(|s| serde_json::from_str(&s))
+                .transpose()?
+                .unwrap_or(self.thread_target(thread_id)?.target)
+        } else {
+            self.inner
+                .store
+                .meta_get(&format!("quota_target:{message_id}"))?
+                .map(|saved| serde_json::from_str(&saved))
+                .transpose()?
+                .unwrap_or(self.thread_target(thread_id)?.target)
+        };
+        if selected_target.provider == current.provider
+            && !matches!(current.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)
+            && let Some(mode) = self.pending_permission_for(&current, &current.provider)?
+        {
+            self.apply_permission_admitted(thread_id, mode).await?;
+        }
+        let kind = selected_target.provider.kind;
         let _harness = self.inner.harness_gates[&kind]
             .clone()
             .try_read_owned()
@@ -4006,21 +4034,14 @@ impl Orchestrator {
                 return Err(anyhow!("Wait for agents and background tasks to finish before compacting."));
             }
         }
-        let selected_target = if queued {
-            self.inner
-                .store
-                .meta_get(&format!("queue_target:{message_id}"))?
-                .map(|s| serde_json::from_str(&s))
-                .transpose()?
-                .unwrap_or(self.thread_target(thread_id)?.target)
+        let selected_mode = if queued {
+            self.inner.store.meta_get(&format!("queue_permission:{message_id}"))?.map(|saved| serde_json::from_str(&saved)).transpose()?
         } else {
-            self.inner
-                .store
-                .meta_get(&format!("quota_target:{message_id}"))?
-                .map(|saved| serde_json::from_str(&saved))
-                .transpose()?
-                .unwrap_or(self.thread_target(thread_id)?.target)
+            self.pending_permission_for(&thread, &selected_target.provider)?
         };
+        if let Some(mode) = selected_mode {
+            thread.permission_mode = mode;
+        }
         self.admit_target(&mut thread, selected_target)?;
         let turn_id = Uuid::now_v7();
         self.inner.store.meta_set(&format!("turn_target:{turn_id}"), &serde_json::to_string(&thread.provider)?)?;
@@ -4031,6 +4052,12 @@ impl Orchestrator {
         let thread = self.update_thread(thread)?;
         let startup_started = std::time::Instant::now();
         self.emit(thread.id, Some(turn_id), EventPayload::TurnStarted { message_id, message: message.clone() })?;
+        if selected_mode.is_some() && self.pending_permission_for(&thread, &thread.provider)? == selected_mode {
+            self.inner.store.meta_set_many(&[
+                (&format!("pending_permission:{thread_id}"), ""),
+                (&format!("pending_permission_target:{thread_id}"), ""),
+            ])?;
+        }
         self.messaging_turn_started(thread.id, turn_id, message_id);
 
         // The user's intent is persisted and broadcast, so the call returns now
@@ -4062,7 +4089,17 @@ impl Orchestrator {
             return Ok(());
         }
         let target = self.thread_target(message.thread_id)?.target;
-        self.inner.store.meta_set(&format!("queue_target:{}", message.id), &serde_json::to_string(&target)?)?;
+        let mut receiving = self.inner.store.thread_get(message.thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+        let mode = self.pending_permission_for(&receiving, &target.provider)?.unwrap_or(receiving.permission_mode);
+        if receiving.provider != target.provider {
+            receiving.provider_session_id = None;
+        }
+        receiving.provider = target.provider.clone();
+        accounts::validate_permission(&receiving, mode)?;
+        self.inner.store.meta_set_many(&[
+            (&format!("queue_target:{}", message.id), &serde_json::to_string(&target)?),
+            (&format!("queue_permission:{}", message.id), &serde_json::to_string(&mode)?),
+        ])?;
         self.emit(message.thread_id, None, EventPayload::MessageQueued { message })?;
         Ok(())
     }

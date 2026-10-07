@@ -24,6 +24,31 @@ pub fn environment(settings: &ProviderSettings, kind: ProviderKind, instance: &s
     let dir = PathBuf::from(&account.directory);
     ensure!(dir.is_absolute(), "Account directory must be absolute.");
     let path = |child: &str| dir.join(child).to_string_lossy().to_string();
+    // A named native account must not be silently replaced by the regular
+    // process/global provider API key. Empty overrides also suppress inherited
+    // keys for native probes and PTY sign-in without altering the user's shell.
+    let credentials: &[&str] = match kind {
+        ProviderKind::ClaudeCode => &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
+        ProviderKind::Codex => &["OPENAI_API_KEY", "CODEX_API_KEY"],
+        ProviderKind::Cursor => &["CURSOR_API_KEY"],
+        ProviderKind::Pi | ProviderKind::Omp | ProviderKind::Opencode => &[
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+            "GROQ_API_KEY",
+            "OPENROUTER_API_KEY",
+            "MISTRAL_API_KEY",
+            "XAI_API_KEY",
+            "AI_GATEWAY_API_KEY",
+            "CEREBRAS_API_KEY",
+            "TOGETHER_API_KEY",
+            "DEEPSEEK_API_KEY",
+        ],
+    };
+    for key in credentials {
+        env.insert((*key).into(), String::new());
+    }
     match kind {
         ProviderKind::ClaudeCode => {
             env.insert("CLAUDE_CONFIG_DIR".into(), account.directory.clone());
@@ -213,5 +238,28 @@ mod tests {
         assert_eq!(cursor["KYBERN_CURSOR_AUTH_FILE"], "/isolated/auth.json");
         assert_eq!(cursor["KYBERN_CURSOR_STATE_DIR"], "/isolated/sessions");
         assert!(environment(&p, ProviderKind::Codex, "missing").is_err());
+    }
+}
+
+#[cfg(test)]
+mod native_environment_tests {
+    use super::*;
+    #[test]
+    fn named_native_process_does_not_inherit_regular_cli_api_credentials() {
+        let mut provider = ProviderSettings::default();
+        provider.env.insert("CURSOR_API_KEY".into(), "regular-cli-sentinel".into());
+        provider.accounts.insert("work".into(), ProviderAccount { name: "Work".into(), directory: "/scratch-work-account".into() });
+        let named = environment(&provider, ProviderKind::Cursor, "work").unwrap();
+        let output = std::process::Command::new("/usr/bin/env")
+            .env_clear()
+            .env("CURSOR_API_KEY", "inherited-cli-sentinel")
+            .envs(&named)
+            .output()
+            .unwrap();
+        let captured = String::from_utf8(output.stdout).unwrap();
+        assert!(!captured.contains("regular-cli-sentinel"));
+        assert!(!captured.contains("inherited-cli-sentinel"));
+        assert!(captured.contains("KYBERN_CURSOR_AUTH_FILE=/scratch-work-account/auth.json"));
+        assert_eq!(environment(&provider, ProviderKind::Cursor, "default").unwrap()["CURSOR_API_KEY"], "regular-cli-sentinel");
     }
 }

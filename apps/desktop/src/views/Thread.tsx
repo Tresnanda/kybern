@@ -166,6 +166,7 @@ export function ThreadView({
   const targetState = nextTarget?.threadId === threadId ? nextTarget.state : null
   const target = targetState?.target ?? (thread ? { provider: thread.provider, model: thread.model, effort: thread.effort } : null)
   const catalogKey = target ? `${threadId}:${target.provider.kind}:${target.provider.instance}` : ""
+  const targetChanged = !!target && !!thread && (target.provider.kind !== thread.provider.kind || target.provider.instance !== thread.provider.instance)
   const targetKind = target?.provider.kind
   const targetInstance = target?.provider.instance
   const targetProjectId = thread?.project_id
@@ -405,7 +406,7 @@ export function ThreadView({
               onStop={() => void interrupt(threadId)}
               onSend={onSend}
               onSteer={onSteer}
-              mode={thread.permission_mode}
+              mode={targetChanged ? targetState?.pending_permission_mode ?? thread.permission_mode : thread.permission_mode}
               onModeChange={(m) => changePermission(m).catch((e) => toast.error("Unable to change mode", { description: errorText(e) }))}
               provider={target?.provider ?? thread.provider}
               accountControl={target && <AccountPicker provider={target.provider} settings={settings?.providers[target.provider.kind]} inherited={!targetState?.account_override} onChange={(instance) => void chooseTarget({ ...target, provider: { ...target.provider, instance: instance ?? "default" } }, instance === null).catch((error) => toast.error("Unable to change account", { description: errorText(error) }))} />}
@@ -427,14 +428,14 @@ export function ThreadView({
                 <ComposerPanelStack closed={hideInput}>
                   {targetState?.pending_permission_mode && <ComposerStackedPanel>
                     <ComposerStackedPanelRow compact>
-                      <ComposerStackedPanelRowMain>Permissions change to {targetState.pending_permission_mode === "full-access" ? "Full access" : targetState.pending_permission_mode} after this turn.</ComposerStackedPanelRowMain>
-                      <Button variant="ghost" size="sm" onClick={() => void rpc().call("threads.permissions.apply", { thread_id: threadId }).then(async (applied) => {
+                      <ComposerStackedPanelRowMain>{targetChanged ? "Selected agent uses" : "Permissions change to"} {targetState.pending_permission_mode === "full-access" ? "Full access" : targetState.pending_permission_mode} {targetChanged ? "with your next message." : "after this turn."}</ComposerStackedPanelRowMain>
+                      {!targetChanged && <Button variant="ghost" size="sm" onClick={() => void rpc().call("threads.permissions.apply", { thread_id: threadId }).then(async (applied) => {
                         set((state) => ({ threads: { ...state.threads, [threadId]: applied } }))
                         setNextTarget({ threadId, state: await rpc().call("threads.target.get", { thread_id: threadId }) })
-                      }).catch((error) => toast.error("Unable to apply permissions", { description: errorText(error) }))}>Stop and apply now</Button>
+                      }).catch((error) => toast.error("Unable to apply permissions", { description: errorText(error) }))}>Stop and apply now</Button>}
                     </ComposerStackedPanelRow>
                   </ComposerStackedPanel>}
-                  {thread.status === "failed" && target && <AccountLimitRecovery threadId={threadId} provider={target.provider} />}
+                  <AccountLimitRecovery threadId={threadId} provider={thread.provider} />
                   {thread.coordinator_project_id && <CoordinatorControlsPanel key={thread.id} thread={thread} />}
                   {helperThreads.length > 0 && <HelperThreadsPanel threads={helperThreads} />}
                   <SubagentStrip

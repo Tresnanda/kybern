@@ -17,6 +17,25 @@ impl Orchestrator {
         self.inner.session_admission.lock().await.entry(thread_id).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
     }
 
+    pub(super) fn pending_permission_for(&self, thread: &Thread, provider: &ProviderInstance) -> Result<Option<PermissionMode>> {
+        let owner = self
+            .inner
+            .store
+            .meta_get(&format!("pending_permission_target:{}", thread.id))?
+            .filter(|saved| !saved.is_empty())
+            .map(|saved| serde_json::from_str::<ProviderInstance>(&saved))
+            .transpose()?;
+        if owner.as_ref().is_some_and(|owner| owner != provider) {
+            return Ok(None);
+        }
+        self.inner
+            .store
+            .meta_get(&format!("pending_permission:{}", thread.id))?
+            .filter(|saved| !saved.is_empty())
+            .map(|saved| serde_json::from_str(&saved).map_err(Into::into))
+            .transpose()
+    }
+
     pub(super) fn stored_target(&self, thread: &Thread) -> Result<Option<SessionTarget>> {
         self.inner
             .store
@@ -40,13 +59,7 @@ impl Orchestrator {
         let project = self.inner.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("Project not found."))?;
         target.provider.instance = crate::provider_accounts::resolve(&provider, Some(&project.path), override_id.as_deref());
         crate::provider_accounts::environment(&provider, target.provider.kind, &target.provider.instance)?;
-        let pending_permission_mode = self
-            .inner
-            .store
-            .meta_get(&format!("pending_permission:{}", thread.id))?
-            .filter(|s| !s.is_empty())
-            .map(|s| serde_json::from_str(&s))
-            .transpose()?;
+        let pending_permission_mode = self.pending_permission_for(&thread, &target.provider)?;
         Ok(methods::ThreadTargetState {
             target,
             account_override: override_id.is_some(),
@@ -363,19 +376,22 @@ impl Orchestrator {
             .await?;
         }
         if let Some(mode) = params.permission_mode.take() {
-            validate_permission(&thread, mode)?;
-            let mut receiving = thread.clone();
-            receiving.provider = self.thread_target(thread.id)?.target.provider;
-            if receiving.provider != thread.provider {
-                receiving.provider_session_id = None;
-            }
-            validate_permission(&receiving, mode)?;
             let _workspace = self.inner.workspace_ops.lock().await;
             let gate = self.session_admission(thread.id).await;
             let _admission = gate.lock().await;
             let current = self.inner.store.thread_get(thread.id)?.ok_or_else(|| anyhow!("Thread not found."))?;
-            if matches!(current.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
-                self.inner.store.meta_set(&format!("pending_permission:{}", thread.id), &serde_json::to_string(&mode)?)?;
+            let selected = self.thread_target(thread.id)?.target.provider;
+            let mut receiving = current.clone();
+            receiving.provider = selected.clone();
+            if receiving.provider != current.provider {
+                receiving.provider_session_id = None;
+            }
+            validate_permission(&receiving, mode)?;
+            if selected != current.provider || matches!(current.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
+                self.inner.store.meta_set_many(&[
+                    (&format!("pending_permission:{}", thread.id), &serde_json::to_string(&mode)?),
+                    (&format!("pending_permission_target:{}", thread.id), &serde_json::to_string(&selected)?),
+                ])?;
             } else {
                 self.apply_permission_admitted(thread.id, mode).await?;
             }
@@ -424,9 +440,10 @@ impl Orchestrator {
     pub fn apply_pending_permission(&self, thread_id: ThreadId, stop_now: bool) -> futures::future::BoxFuture<'_, Result<Thread>> {
         Box::pin(async move {
             self.ensure_not_subagent(thread_id)?;
-            let state = self.thread_target(thread_id)?;
             let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
-            let Some(mode) = state.pending_permission_mode else { return Ok(thread) };
+            let Some(mode) = self.pending_permission_for(&thread, &thread.provider)? else { return Ok(thread) };
+            // Receiving-target choices launch with that target's next message;
+            // the outgoing native process must never receive its permissions.
             if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
                 ensure!(stop_now, "Permission change is waiting for this turn to finish.");
                 self.interrupt(thread_id).await?;
@@ -566,7 +583,7 @@ impl Orchestrator {
     }
 }
 
-fn validate_permission(thread: &Thread, mode: PermissionMode) -> Result<()> {
+pub(super) fn validate_permission(thread: &Thread, mode: PermissionMode) -> Result<()> {
     let legacy_cursor = thread.provider_session_id.as_deref().is_some_and(|id| !id.starts_with("cursor-sdk:"));
     if thread.provider.kind == ProviderKind::Cursor && !legacy_cursor {
         ensure!(

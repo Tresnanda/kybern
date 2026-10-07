@@ -353,3 +353,63 @@ fn changed_native_directory_or_environment_invalidates_same_account_continuation
     assert!(thread.provider_session_id.is_none());
     assert!(fixture.store.meta_get(&format!("handoff:{}", thread.id)).unwrap().is_some());
 }
+
+#[tokio::test]
+async fn receiving_modes_are_explicit_target_bound_and_queued_without_reconfiguring_outgoing() {
+    for active in [false, true] {
+        for (from, to, old_mode, selected_mode) in [
+            (ProviderKind::ClaudeCode, ProviderKind::Cursor, PermissionMode::Supervised, PermissionMode::Auto),
+            (ProviderKind::Cursor, ProviderKind::ClaudeCode, PermissionMode::Auto, PermissionMode::Supervised),
+        ] {
+            let fixture = Fixture::new();
+            let mut thread = fixture.thread_with_provider(if active { ThreadStatus::Running } else { ThreadStatus::Idle }, from);
+            thread.permission_mode = old_mode;
+            fixture.store.thread_upsert(&thread).unwrap();
+            fixture
+                .orchestrator
+                .set_thread_target(methods::ThreadTargetParams {
+                    thread_id: thread.id,
+                    target: SessionTarget { provider: ProviderInstance::default_for(to), model: None, effort: None },
+                    inherit_account: false,
+                })
+                .await
+                .unwrap();
+            fixture
+                .orchestrator
+                .update_session_fields(methods::ThreadsUpdateParams {
+                    thread_id: thread.id,
+                    title: None,
+                    pinned: None,
+                    permission_mode: Some(selected_mode),
+                    model: None,
+                    effort: None,
+                })
+                .await
+                .unwrap();
+            assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().permission_mode, old_mode);
+            assert_eq!(fixture.orchestrator.thread_target(thread.id).unwrap().pending_permission_mode, Some(selected_mode));
+            fixture.orchestrator.apply_pending_permission(thread.id, false).await.unwrap();
+            assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().permission_mode, old_mode);
+            if active {
+                let id = Uuid::now_v7();
+                fixture
+                    .orchestrator
+                    .enqueue(methods::QueuedMessage {
+                        id,
+                        thread_id: thread.id,
+                        message: UserMessage::text("explicit receiving authority"),
+                    })
+                    .unwrap();
+                assert_eq!(
+                    fixture.store.meta_get(&format!("queue_permission:{id}")).unwrap().unwrap(),
+                    serde_json::to_string(&selected_mode).unwrap()
+                );
+            }
+            let selected = fixture.orchestrator.thread_target(thread.id).unwrap().target;
+            thread.permission_mode = fixture.orchestrator.pending_permission_for(&thread, &selected.provider).unwrap().unwrap();
+            fixture.orchestrator.admit_target(&mut thread, selected).unwrap();
+            assert_eq!(thread.provider.kind, to);
+            assert_eq!(thread.permission_mode, selected_mode);
+        }
+    }
+}
