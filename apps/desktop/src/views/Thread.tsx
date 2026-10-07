@@ -408,7 +408,7 @@ export function ThreadView({
               onModeChange={(m) => changePermission(m).catch((e) => toast.error("Unable to change mode", { description: errorText(e) }))}
               provider={target?.provider ?? thread.provider}
               accountControl={target && <AccountPicker provider={target.provider} settings={settings?.providers[target.provider.kind]} inherited={!targetState?.account_override} onChange={(instance) => void chooseTarget({ ...target, provider: { ...target.provider, instance: instance ?? "default" } }, instance === null).catch((error) => toast.error("Unable to change account", { description: errorText(error) }))} />}
-              providerSessionId={thread.provider_session_id}
+              providerSessionId={target?.provider.kind === thread.provider.kind && target.provider.instance === thread.provider.instance ? thread.provider_session_id : null}
               providers={composerProviders}
               onProviderChange={thread.coordinator_project_id ? canSwitchCoordinator ? (provider, choice) => switchCoordinatorHarness(provider, choice?.model, choice?.effort) : undefined : (provider, choice) => chooseTarget({ provider, model: choice?.model, effort: choice?.effort }, true)}
               model={target?.model ?? undefined}

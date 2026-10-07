@@ -88,21 +88,114 @@ impl Orchestrator {
         crate::provider_accounts::environment(&provider, thread.provider.kind, &thread.provider.instance)
     }
 
+    pub(super) async fn task_session(&self, thread_id: ThreadId, task_id: &str) -> Result<Arc<LiveSession>> {
+        let current = self.inner.sessions.lock().await.get(&thread_id).cloned();
+        if let Some(live) = current
+            && live.tasks.lock().await.contains_key(task_id)
+        {
+            return Ok(live);
+        }
+        let retained = self
+            .inner
+            .retained_sessions
+            .lock()
+            .await
+            .iter()
+            .filter(|((owner, _), _)| *owner == thread_id)
+            .map(|(_, (_, live))| live.clone())
+            .collect::<Vec<_>>();
+        for live in retained {
+            if live.tasks.lock().await.contains_key(task_id) {
+                return Ok(live);
+            }
+        }
+        Err(anyhow!("This task no longer has a live provider session."))
+    }
+
+    pub(super) async fn retire_or_close_session(&self, thread_id: ThreadId, live: Arc<LiveSession>, identity: String) -> Result<()> {
+        let reusable = live.tasks.lock().await.values().any(|task| {
+            task.status.is_active() && task.backgrounded && matches!(task.kind, RuntimeTaskKind::Process | RuntimeTaskKind::Monitor)
+        });
+        if reusable {
+            let owner =
+                self.inner.store.meta_get(&format!("live_owner:{thread_id}"))?.map(|s| serde_json::from_str(&s)).transpose()?.ok_or_else(
+                    || anyhow!("The outgoing background session has no account identity. Stop its background work before switching."),
+                )?;
+            live.retained.store(true, Ordering::Relaxed);
+            self.inner.sessions.lock().await.remove(&thread_id);
+            self.inner.retained_sessions.lock().await.insert((thread_id, identity), (owner, live));
+        } else {
+            live.mark_released();
+            self.revoke_native_session(&live);
+            live.session.close().await?;
+            self.inner.sessions.lock().await.remove(&thread_id);
+        }
+        Ok(())
+    }
+
+    pub(super) async fn close_retained_sessions(&self, thread_id: ThreadId) -> Result<()> {
+        let owners = self.inner.retained_sessions.lock().await.keys().filter(|(owner, _)| *owner == thread_id).cloned().collect::<Vec<_>>();
+        for owner in owners {
+            let removed = { self.inner.retained_sessions.lock().await.remove(&owner) };
+            if let Some((_, live)) = removed {
+                live.mark_released();
+                self.revoke_native_session(&live);
+                live.session.close().await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) async fn handle_retained_event(&self, thread_id: ThreadId, live: &Arc<LiveSession>, event: DriverEvent) -> Result<()> {
+        match event {
+            DriverEvent::RuntimeTaskUpdated(update) => {
+                self.apply_runtime_task_update(thread_id, live, update, RuntimeTaskUpdateKind::Progress).await?;
+            }
+            DriverEvent::RuntimeTaskResumed(update) => {
+                self.apply_runtime_task_update(thread_id, live, update, RuntimeTaskUpdateKind::Resume).await?;
+            }
+            DriverEvent::RuntimeTaskCompleted(update) => {
+                self.apply_runtime_task_update(thread_id, live, update, RuntimeTaskUpdateKind::Complete).await?;
+            }
+            DriverEvent::PermissionRequest { request_id, .. } => {
+                live.session
+                    .respond_permission(
+                        &request_id,
+                        &ApprovalDecision::Deny {
+                            reason: Some(
+                                "The foreground conversation switched accounts. Background work cannot request new permission.".into(),
+                            ),
+                        },
+                    )
+                    .await?;
+            }
+            // The process owns its original native state; no outgoing root prose,
+            // tool mutation, authentication report or completion affects the receiver.
+            _ => {}
+        }
+        if !live.tasks.lock().await.values().any(|task| task.status.is_active()) {
+            self.inner.retained_sessions.lock().await.retain(|_, (_, owner)| !Arc::ptr_eq(owner, live));
+            live.mark_released();
+            self.revoke_native_session(live);
+            live.session.close().await?;
+        }
+        Ok(())
+    }
+
     pub(super) fn environment_fingerprint(&self, thread: &Thread) -> Result<String> {
-        Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(&self.account_environment(thread)?)?)))
+        let bytes = Sha256::digest(serde_json::to_vec(&self.account_environment(thread)?)?);
+        Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
     }
 
     pub(super) fn session_identity(&self, thread: &Thread) -> Result<String> {
-        Ok(format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(&(
-                thread.provider.clone(),
-                thread.model.clone(),
-                thread.effort.clone(),
-                thread.permission_mode,
-                self.environment_fingerprint(thread)?
-            ))?)
-        ))
+        let bytes = Sha256::digest(serde_json::to_vec(&(
+            thread.provider.clone(),
+            thread.model.clone(),
+            thread.effort.clone(),
+            thread.permission_mode,
+            self.environment_fingerprint(thread)?,
+        ))?);
+        Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
     }
 
     pub(super) fn binding_key(thread: &Thread) -> String {
@@ -125,6 +218,14 @@ impl Orchestrator {
         if !provider_changed && !model_changed {
             return Ok(());
         }
+        // A target selection never grants additional authority. Validate the effective
+        // mode for the receiving native binding before writing any transition state.
+        let mut receiving = thread.clone();
+        receiving.provider = target.provider.clone();
+        if provider_changed {
+            receiving.provider_session_id = None;
+        }
+        validate_permission(&receiving, receiving.permission_mode)?;
         self.save_account_binding(thread)?;
         let previous = thread.provider.clone();
         thread.provider = target.provider;
@@ -218,6 +319,13 @@ impl Orchestrator {
         }
         if let Some(mode) = params.permission_mode.take() {
             validate_permission(&thread, mode)?;
+            let mut receiving = thread.clone();
+            receiving.provider = self.thread_target(thread.id)?.target.provider;
+            if receiving.provider != thread.provider {
+                receiving.provider_session_id = None;
+            }
+            validate_permission(&receiving, mode)?;
+            let _workspace = self.inner.workspace_ops.lock().await;
             let gate = self.session_admission(thread.id).await;
             let _admission = gate.lock().await;
             let current = self.inner.store.thread_get(thread.id)?.ok_or_else(|| anyhow!("Thread not found."))?;
@@ -231,6 +339,7 @@ impl Orchestrator {
     }
 
     async fn apply_permission(&self, thread_id: ThreadId, mode: PermissionMode) -> Result<Thread> {
+        let _workspace = self.inner.workspace_ops.lock().await;
         let gate = self.session_admission(thread_id).await;
         let _admission = gate.lock().await;
         self.apply_permission_admitted(thread_id, mode).await

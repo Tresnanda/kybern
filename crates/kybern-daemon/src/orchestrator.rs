@@ -2705,6 +2705,7 @@ struct Inner {
     workspace_ops: Mutex<()>,
     commands: std::sync::Mutex<()>,
     session_admission: Mutex<HashMap<ThreadId, Arc<Mutex<()>>>>,
+    workspace_ops: Mutex<()>,
     collaboration_writes: std::sync::Mutex<()>,
     question_answers: Mutex<()>,
     collaboration_commands: Mutex<()>,
@@ -2719,6 +2720,7 @@ struct Inner {
     native_tools: Option<crate::native_tools_mcp::NativeToolsGateway>,
     computer: crate::computer::ComputerUse,
     sessions: Mutex<HashMap<ThreadId, Arc<LiveSession>>>,
+    retained_sessions: Mutex<HashMap<(ThreadId, String), (ProviderInstance, Arc<LiveSession>)>>,
     releasing: Mutex<HashMap<ThreadId, tokio::sync::watch::Receiver<()>>>,
     harness_gates: HashMap<ProviderKind, Arc<tokio::sync::RwLock<()>>>,
     /// Threads whose next session must fork the provider conversation at this point.
@@ -2766,6 +2768,8 @@ struct LiveSession {
     /// Set once the daemon decided to close this process on purpose, so the
     /// provider's exit is not reported as a failure.
     released: AtomicBool,
+    /// Owns outgoing background services; root responses cannot re-enter the thread.
+    retained: AtomicBool,
     /// Forced stop owns cleanup and discards late provider events.
     stop_cleanup: AtomicBool,
     /// The turn currently executing, if any.
@@ -2985,6 +2989,7 @@ impl Orchestrator {
             inner: Arc::new(Inner {
                 commands: std::sync::Mutex::new(()),
                 session_admission: Mutex::new(HashMap::new()),
+                workspace_ops: Mutex::new(()),
                 collaboration_writes: std::sync::Mutex::new(()),
                 question_answers: Mutex::new(()),
                 collaboration_commands: Mutex::new(()),
@@ -3000,6 +3005,7 @@ impl Orchestrator {
                 computer,
                 workspace_ops: Mutex::new(()),
                 sessions: Mutex::new(HashMap::new()),
+                retained_sessions: Mutex::new(HashMap::new()),
                 releasing: Mutex::new(HashMap::new()),
                 harness_gates: ProviderKind::ALL.into_iter().map(|kind| (kind, Arc::new(tokio::sync::RwLock::new(())))).collect(),
                 pending_rewinds: Mutex::new(HashMap::new()),
@@ -3390,7 +3396,8 @@ impl Orchestrator {
     }
 
     pub async fn shutdown(&self) {
-        let sessions: Vec<_> = self.inner.sessions.lock().await.drain().collect();
+        let mut sessions: Vec<_> = self.inner.sessions.lock().await.drain().collect();
+        sessions.extend(self.inner.retained_sessions.lock().await.drain().map(|((thread_id, _), (_, live))| (thread_id, live)));
         for (_, live) in &sessions {
             live.mark_released();
             self.revoke_native_session(live);
@@ -3865,6 +3872,7 @@ impl Orchestrator {
             self.emit(thread_id, None, EventPayload::ThreadArchived)?;
             self.subagents_archive_below(thread_id)?;
         }
+        self.close_retained_sessions(thread_id).await?;
         if let Some(live) = self.inner.sessions.lock().await.remove(&thread_id) {
             live.mark_released();
             self.revoke_native_session(&live);
@@ -4462,14 +4470,7 @@ impl Orchestrator {
     pub async fn stop_runtime_task(&self, thread_id: ThreadId, task_id: &str) -> Result<RuntimeTask> {
         let (thread_id, task_id) = self.resolve_task_control(thread_id, task_id)?;
         let task_id = task_id.as_str();
-        let live = self
-            .inner
-            .sessions
-            .lock()
-            .await
-            .get(&thread_id)
-            .cloned()
-            .ok_or_else(|| anyhow!("this task no longer has a live provider session"))?;
+        let live = self.task_session(thread_id, task_id).await?;
         let task = live
             .tasks
             .lock()
@@ -4498,14 +4499,7 @@ impl Orchestrator {
     pub async fn background_runtime_task(&self, thread_id: ThreadId, task_id: &str) -> Result<RuntimeTask> {
         let (thread_id, task_id) = self.resolve_task_control(thread_id, task_id)?;
         let task_id = task_id.as_str();
-        let live = self
-            .inner
-            .sessions
-            .lock()
-            .await
-            .get(&thread_id)
-            .cloned()
-            .ok_or_else(|| anyhow!("this task no longer has a live provider session"))?;
+        let live = self.task_session(thread_id, task_id).await?;
         let task = live
             .tasks
             .lock()
@@ -5099,23 +5093,31 @@ impl Orchestrator {
     }
 
     async fn ensure_session(&self, thread: &Thread) -> Result<(Arc<LiveSession>, bool)> {
-        let waiting = {
-            let sessions = self.inner.sessions.lock().await;
-            if let Some(live) = sessions.get(&thread.id).cloned() {
-                let expected = self.session_identity(thread)?;
-                let identity = self.inner.store.meta_get(&format!("live_identity:{}", thread.id))?;
-                if identity.as_deref().is_none_or(|identity| identity == expected) {
-                    return Ok((live, true));
-                }
-                drop(sessions);
-                live.mark_released();
-                self.revoke_native_session(&live);
-                live.session.close().await?;
-                self.inner.sessions.lock().await.remove(&thread.id);
-                return self.spawn_session(thread, None).await.map(|live| (live, false));
+        let expected = self.session_identity(thread)?;
+        let current = self.inner.sessions.lock().await.get(&thread.id).cloned();
+        if let Some(live) = current {
+            let identity = self.inner.store.meta_get(&format!("live_identity:{}", thread.id))?;
+            if identity.as_deref().is_none_or(|identity| identity == expected) {
+                return Ok((live, true));
             }
-            self.inner.releasing.lock().await.get(&thread.id).cloned()
-        };
+            self.retire_or_close_session(thread.id, live, identity.unwrap_or_default()).await?;
+        }
+        let retained = self.inner.retained_sessions.lock().await.remove(&(thread.id, expected.clone()));
+        if let Some((owner, live)) = retained {
+            if owner == thread.provider && !live.is_released() {
+                live.retained.store(false, Ordering::Relaxed);
+                self.inner.sessions.lock().await.insert(thread.id, live.clone());
+                self.inner.store.meta_set_many(&[
+                    (&format!("live_identity:{}", thread.id), &expected),
+                    (&format!("live_owner:{}", thread.id), &serde_json::to_string(&thread.provider)?),
+                ])?;
+                return Ok((live, true));
+            }
+            live.mark_released();
+            self.revoke_native_session(&live);
+            live.session.close().await?;
+        }
+        let waiting = self.inner.releasing.lock().await.get(&thread.id).cloned();
         if let Some(mut waiting) = waiting {
             let _ = waiting.changed().await;
         }
@@ -5204,6 +5206,7 @@ impl Orchestrator {
             computer_tools,
             last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
             released: AtomicBool::new(false),
+            retained: AtomicBool::new(false),
             stop_cleanup: AtomicBool::new(false),
             turn: Mutex::new(None),
             continuation: Mutex::new(None),
@@ -5216,7 +5219,10 @@ impl Orchestrator {
             app_tool_requests: Mutex::new(HashSet::new()),
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
         });
-        self.inner.store.meta_set(&format!("live_identity:{}", thread.id), &self.session_identity(thread)?)?;
+        self.inner.store.meta_set_many(&[
+            (&format!("live_identity:{}", thread.id), &self.session_identity(thread)?),
+            (&format!("live_owner:{}", thread.id), &serde_json::to_string(&thread.provider)?),
+        ])?;
         self.inner.sessions.lock().await.insert(thread.id, live.clone());
         let this = self.clone();
         let thread_id = thread.id;
@@ -5555,6 +5561,7 @@ impl Orchestrator {
                 break;
             }
         }
+        self.inner.retained_sessions.lock().await.retain(|_, (_, current)| !Arc::ptr_eq(current, &live));
         // An idle session retired for an update must not remove its replacement.
         let cleanup_barrier = {
             let mut sessions = self.inner.sessions.lock().await;
@@ -5696,6 +5703,9 @@ impl Orchestrator {
     }
 
     async fn handle_driver_event(&self, thread_id: ThreadId, live: &Arc<LiveSession>, ev: DriverEvent) -> Result<()> {
+        if live.retained.load(Ordering::Relaxed) {
+            return self.handle_retained_event(thread_id, live, ev).await;
+        }
         match ev {
             DriverEvent::AppToolRequest { request_id, name, arguments } => {
                 self.queue_app_tool_request(thread_id, live.clone(), request_id, name, arguments).await;
@@ -5804,6 +5814,17 @@ impl Orchestrator {
                 if let Some(m) = model.clone() {
                     t.model = Some(m);
                 }
+                if let Some(mut selected) = self.stored_target(&t)?
+                    && selected.provider == t.provider
+                    && selected.model.is_none()
+                    && model.is_some()
+                {
+                    selected.model = t.model.clone();
+                    self.inner.store.meta_set(&format!("target:{thread_id}"), &serde_json::to_string(&selected)?)?;
+                }
+                // Native canonical model reports belong to this live binding and must
+                // not look like a user-requested reconfiguration on the next send.
+                self.inner.store.meta_set(&format!("live_identity:{thread_id}"), &self.session_identity(&t)?)?;
                 if changed {
                     self.update_thread(t)?;
                 }
@@ -6755,6 +6776,7 @@ mod tests {
             computer_tools: false,
             last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
             released: AtomicBool::new(false),
+            retained: AtomicBool::new(false),
             stop_cleanup: AtomicBool::new(false),
             turn: Mutex::new(Some(ActiveTurn {
                 response_id: Uuid::now_v7(),
@@ -7115,6 +7137,7 @@ mod tests {
                 computer_tools: false,
                 last_activity: std::sync::Mutex::new(SessionActivityTime { monotonic: last_activity, wall: SystemTime::now() }),
                 released: AtomicBool::new(false),
+                retained: AtomicBool::new(false),
                 stop_cleanup: AtomicBool::new(false),
                 turn: Mutex::new(None),
                 continuation: Mutex::new(None),
@@ -7139,6 +7162,7 @@ mod tests {
                 computer_tools: false,
                 last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
                 released: AtomicBool::new(false),
+                retained: AtomicBool::new(false),
                 stop_cleanup: AtomicBool::new(false),
                 turn: Mutex::new(None),
                 continuation: Mutex::new(None),
@@ -10217,6 +10241,7 @@ for line in sys.stdin:
             computer_tools: false,
             last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
             released: AtomicBool::new(false),
+            retained: AtomicBool::new(false),
             stop_cleanup: AtomicBool::new(false),
             turn: Mutex::new(None),
             continuation: Mutex::new(None),

@@ -690,6 +690,15 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   const submit = async (delivery: "queue" | "steer" = promptMode) => {
     if (!canSend) return
+    const targetStatus = provider ? providers.find((candidate) => candidate.kind === provider.kind) : undefined
+    const targetLegacyCursor = provider?.kind === "cursor" && !!props.providerSessionId && !props.providerSessionId.startsWith("cursor-sdk:")
+    const unsupportedMode = provider?.kind === "cursor" && !targetLegacyCursor
+      ? mode !== "auto" && mode !== "full-access"
+      : provider?.kind === "pi" ? mode === "auto" : !!targetStatus && !targetStatus.supported_permission_modes.includes(mode)
+    if (unsupportedMode) {
+      toast.error("Choose permissions", { description: "Choose a supported permission mode for the selected agent before sending." })
+      return
+    }
     setSending(true)
     try {
       await (running && delivery === "steer" && onSteer ? onSteer : onSend)({ parts: buildParts() })
@@ -851,7 +860,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       ? { ...m, label: "Auto-review", description: "Run in Cursor’s sandbox with automatic review; no approval prompts" }
       : { ...m, description: "Disable Cursor’s sandbox and automatic review" })
     : MODES
-  const modeInfo = modes.find((m) => m.mode === mode) ?? modes[0]!
+  const supportedMode = modes.find((candidate) => candidate.mode === mode && (legacyCursor || !status || status.supported_permission_modes.includes(mode)))
+  const effectiveMode = MODES.find((candidate) => candidate.mode === mode)!
+  const modeInfo = supportedMode ?? { ...effectiveMode, label: "Choose permissions", description: `${effectiveMode.label} is not supported by the selected agent` }
   const wantsMention = (kind: MentionKind) => mentionFilter === "all" || mentionFilter === kind
   const menuLoading = mention && term !== null
     ? (wantsMention("file") && !!projectId && fileResult.query !== term) || (wantsMention("thread") && !!term && threadResult.query !== term)
