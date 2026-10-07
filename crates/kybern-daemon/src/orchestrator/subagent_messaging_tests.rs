@@ -75,7 +75,97 @@ async fn finished_child_keeps_failed_input_and_explicit_parent_forward_is_idempo
     let parent_queue = fixture.store.queue_list(Some(root.id)).unwrap();
     assert_eq!(parent_queue.len(), 1);
     assert_eq!(parent_queue[0].message, input.message);
-    assert!(o.send_subagent_message(methods::QueuedMessage { id: Uuid::now_v7(), ..input }).await.is_err());
+    assert_eq!(
+        o.send_subagent_message(methods::QueuedMessage { id: Uuid::now_v7(), ..input }).await.unwrap().status,
+        SubagentMessageStatus::Failed
+    );
+}
+
+#[tokio::test]
+async fn finished_at_admission_preserves_input_retries_and_explicit_forward_once() {
+    let (fixture, root, live) = subagent_fixture().await;
+    let o = &fixture.orchestrator;
+    o.handle_driver_event(root.id, &live, DriverEvent::RuntimeTaskStarted(agent_task("child", Some("launch"), None))).await.unwrap();
+    let child = child_of(&fixture, root.id, "child");
+    o.handle_driver_event(
+        root.id,
+        &live,
+        DriverEvent::RuntimeTaskCompleted(DriverRuntimeTaskUpdate::status("child", RuntimeTaskStatus::Completed)),
+    )
+    .await
+    .unwrap();
+    let root_seq = fixture.store.thread_get(root.id).unwrap().unwrap().last_seq;
+    let input = methods::QueuedMessage {
+        id: Uuid::now_v7(),
+        thread_id: child.id,
+        message: UserMessage::text("Submitted just before this child finished."),
+    };
+    let failed = o.send_subagent_message(input.clone()).await.unwrap();
+    assert_eq!(failed.status, SubagentMessageStatus::Failed);
+    assert_eq!(failed.error.as_deref(), Some("Not delivered — subagent finished."));
+    assert_eq!(failed.session_instance_id, live.session_instance_id);
+    assert_eq!(failed.message, input.message);
+    assert!(!failed.parent_queued);
+    assert_eq!(fixture.store.thread_get(root.id).unwrap().unwrap().last_seq, root_seq);
+    assert!(fixture.store.queue_list(Some(root.id)).unwrap().is_empty());
+    let child_seq = fixture.store.thread_get(child.id).unwrap().unwrap().last_seq;
+    assert_eq!(o.send_subagent_message(input.clone()).await.unwrap(), failed);
+    assert_eq!(fixture.store.thread_get(child.id).unwrap().unwrap().last_seq, child_seq);
+    assert!(
+        o.send_subagent_message(methods::QueuedMessage { message: UserMessage::text("Changed retry"), ..input.clone() }).await.is_err()
+    );
+    o.handle_driver_event(root.id, &live, DriverEvent::RuntimeTaskStarted(agent_task("sibling", Some("launch-sibling"), None)))
+        .await
+        .unwrap();
+    let sibling = child_of(&fixture, root.id, "sibling");
+    assert!(o.send_subagent_message(methods::QueuedMessage { thread_id: sibling.id, ..input.clone() }).await.is_err());
+    let messages = o.subagent_messages(child.id).await.unwrap();
+    assert_eq!(messages, vec![failed]);
+    assert_eq!(fixture.store.thread_get(child.id).unwrap().unwrap().last_seq, child_seq, "delivery status reads remain pure");
+    assert_eq!(
+        fixture
+            .store
+            .events_for_thread(child.id)
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(&event.payload, EventPayload::SubagentMessageUpdated { message } if message.id == input.id))
+            .count(),
+        1
+    );
+    // A failed admission cannot later be acknowledged as a delivery.
+    o.acknowledge_subagent_message(root.id, live.session_instance_id, "child", &input.id.to_string()).unwrap();
+    assert_eq!(fixture.store.subagent_message_get(input.id).unwrap().unwrap().status, SubagentMessageStatus::Failed);
+    let action = methods::SubagentMessageActionParams { thread_id: child.id, message_id: input.id };
+    let forwarded = o.send_subagent_message_to_parent(action.clone()).await.unwrap();
+    let retried = o.send_subagent_message_to_parent(action).await.unwrap();
+    assert!(forwarded.parent_queued);
+    assert_eq!(retried.parent_message_id, forwarded.parent_message_id);
+    assert_eq!(fixture.store.queue_list(Some(root.id)).unwrap().len(), 1);
+    assert_eq!(fixture.store.queue_list(Some(root.id)).unwrap()[0].message, input.message);
+}
+
+#[tokio::test]
+async fn unavailable_original_owner_preserves_failure_without_binding_a_replacement() {
+    let (fixture, root, live) = subagent_fixture().await;
+    let o = &fixture.orchestrator;
+    o.handle_driver_event(root.id, &live, DriverEvent::RuntimeTaskStarted(agent_task("child", Some("launch"), None))).await.unwrap();
+    let child = child_of(&fixture, root.id, "child");
+    o.inner.sessions.lock().await.remove(&root.id);
+    let input = methods::QueuedMessage {
+        id: Uuid::now_v7(),
+        thread_id: child.id,
+        message: UserMessage::text("Keep this input with the original child."),
+    };
+    let failed = o.send_subagent_message(input.clone()).await.unwrap();
+    assert_eq!(failed.status, SubagentMessageStatus::Failed);
+    assert_eq!(failed.error.as_deref(), Some("Not delivered — native session ended."));
+    assert_eq!(failed.session_instance_id, live.session_instance_id);
+    let (replacement, _) = fixture.park(&root, Instant::now()).await;
+    replacement.tasks.lock().await.insert("child".into(), live.tasks.lock().await["child"].clone());
+    assert_eq!(o.send_subagent_message(input).await.unwrap(), failed);
+    o.acknowledge_subagent_message(root.id, replacement.session_instance_id, "child", &failed.id.to_string()).unwrap();
+    assert_eq!(fixture.store.subagent_message_get(failed.id).unwrap().unwrap().status, SubagentMessageStatus::Failed);
+    assert!(fixture.store.queue_list(Some(root.id)).unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -94,15 +184,16 @@ async fn replacement_session_cannot_receive_the_original_child_inbox() {
         .unwrap();
     let (replacement, _) = fixture.park(&root, Instant::now()).await;
     replacement.tasks.lock().await.insert("child".into(), live.tasks.lock().await["child"].clone());
-    assert!(
-        o.send_subagent_message(methods::QueuedMessage {
+    let failed_replacement = o
+        .send_subagent_message(methods::QueuedMessage {
             id: Uuid::now_v7(),
             thread_id: child.id,
-            message: UserMessage::text("Never redirect.")
+            message: UserMessage::text("Never redirect."),
         })
         .await
-        .is_err()
-    );
+        .unwrap();
+    assert_eq!(failed_replacement.status, SubagentMessageStatus::Failed);
+    assert_eq!(failed_replacement.session_instance_id, live.session_instance_id);
     let before_read = fixture.store.thread_get(child.id).unwrap().unwrap().last_seq;
     assert_eq!(o.subagent_messages(child.id).await.unwrap()[0].status, SubagentMessageStatus::Pending);
     assert_eq!(fixture.store.thread_get(child.id).unwrap().unwrap().last_seq, before_read);

@@ -24,20 +24,28 @@ impl Orchestrator {
             );
             return Ok(record);
         }
-        anyhow::ensure!(info.status.is_active(), "Not delivered — subagent finished.");
-        let live =
-            self.task_session(info.root_thread_id, &info.task_id).await.map_err(|_| anyhow!("Not delivered — native session ended."))?;
+        if !info.status.is_active() {
+            return self.save_unaccepted_subagent_message(input, &child, "Not delivered — subagent finished.");
+        }
+        let live = match self.task_session(info.root_thread_id, &info.task_id).await {
+            Ok(live) => live,
+            Err(_) => return self.save_unaccepted_subagent_message(input, &child, "Not delivered — native session ended."),
+        };
         let owner = self.inner.store.meta_get(&format!("subagent_owner:{}", child.id))?;
-        anyhow::ensure!(
-            owner.as_deref() == Some(&live.session_instance_id.to_string()) && !live.is_released(),
-            "Not delivered — native session ended."
-        );
-        let task = live.tasks.lock().await.get(&info.task_id).cloned().ok_or_else(|| anyhow!("Not delivered — subagent finished."))?;
-        anyhow::ensure!(task.kind == RuntimeTaskKind::Agent && task.status.is_active(), "Not delivered — subagent finished.");
+        if owner.as_deref() != Some(&live.session_instance_id.to_string()) || live.is_released() {
+            return self.save_unaccepted_subagent_message(input, &child, "Not delivered — native session ended.");
+        }
+        let task = live.tasks.lock().await.get(&info.task_id).cloned();
+        let Some(task) = task.filter(|task| task.kind == RuntimeTaskKind::Agent && task.status.is_active()) else {
+            return self.save_unaccepted_subagent_message(input, &child, "Not delivered — subagent finished.");
+        };
         let turn_id = {
             let mut router = self.inner.subagents.lock().unwrap_or_else(|p| p.into_inner());
             self.subagent_ensure_started(&mut router, child.id)?;
-            router.message_turn(child.id).ok_or_else(|| anyhow!("Not delivered — subagent finished."))?
+            router.message_turn(child.id)
+        };
+        let Some(turn_id) = turn_id else {
+            return self.save_unaccepted_subagent_message(input, &child, "Not delivered — subagent finished.");
         };
         let native_message = self.subagent_provider_message(&input.message, &live)?;
         let record = SubagentMessage {
@@ -92,6 +100,64 @@ impl Orchestrator {
             self.emit_subagent_message(&failed)?;
         }
         Ok(self.inner.store.subagent_message_get(record.id)?.unwrap_or(record))
+    }
+
+    /// Preserve a submitted input when its original receiver is already gone.
+    /// This writes delivery metadata only; it never starts or selects a receiver.
+    fn save_unaccepted_subagent_message(&self, input: methods::QueuedMessage, child: &Thread, reason: &str) -> Result<SubagentMessage> {
+        let text = input.message.plain_text();
+        anyhow::ensure!(!text.trim().is_empty(), "Write a message or attach a file.");
+        anyhow::ensure!(text.len() <= 64 * 1024, "Subagent message exceeds 64 KiB.");
+        anyhow::ensure!(
+            !input.message.parts.iter().any(|part| matches!(part, ContentPart::Image { .. })),
+            "Attach an image file so the subagent can read its path. Native hooks deliver file references, not inline images."
+        );
+        let info = child.subagent.as_ref().ok_or_else(|| anyhow!("This is not a native subagent thread."))?;
+        // Never attribute this failure to a replacement process. Legacy children
+        // without persisted owner metadata use nil, which cannot receive an ack.
+        let owner = self
+            .inner
+            .store
+            .meta_get(&format!("subagent_owner:{}", child.id))?
+            .map(|owner| owner.parse())
+            .transpose()?
+            .unwrap_or(Uuid::nil());
+        let turn_id = self
+            .inner
+            .store
+            .events_for_thread_recent(child.id, 100)?
+            .iter()
+            .rev()
+            .find_map(|event| event.turn_id)
+            // No turn is started for a legacy child with no remaining turn event.
+            .unwrap_or(input.id);
+        let record = SubagentMessage {
+            id: input.id,
+            thread_id: child.id,
+            root_thread_id: info.root_thread_id,
+            task_id: info.task_id.clone(),
+            session_instance_id: owner,
+            native_task_id: info.task_id.clone(),
+            turn_id,
+            message: input.message,
+            status: SubagentMessageStatus::Failed,
+            error: Some(reason.into()),
+            parent_message_id: None,
+            parent_queued: false,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let _command = self.inner.commands.lock().map_err(|_| anyhow!("Command lock poisoned."))?;
+        if let Some(existing) = self.inner.store.subagent_message_get(record.id)? {
+            anyhow::ensure!(
+                existing.thread_id == record.thread_id && existing.message == record.message,
+                "Message identity already belongs to another input."
+            );
+            return Ok(existing);
+        }
+        self.inner.store.subagent_message_insert(&record)?;
+        self.emit_subagent_message(&record)?;
+        Ok(record)
     }
 
     fn subagent_provider_message(&self, message: &UserMessage, live: &LiveSession) -> Result<UserMessage> {
