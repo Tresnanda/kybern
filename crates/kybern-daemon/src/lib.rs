@@ -21,12 +21,12 @@ mod maintenance;
 mod native_tools_mcp;
 mod orchestrator;
 mod power;
+mod provider_accounts;
 #[cfg(test)]
 mod remote_tests;
 mod rpc;
 mod self_update;
 mod settings;
-mod provider_accounts;
 mod skills;
 mod state;
 mod terminal;

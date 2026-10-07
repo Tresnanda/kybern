@@ -93,7 +93,10 @@ async fn install(cache: &Path, destination: &Path, platform: &str, size: u64, ha
         }
         output.flush().await?;
         drop(output);
-        ensure!(received == size && digest.finalize().iter().map(|byte| format!("{byte:02x}")).collect::<String>() == hash, "The browser archive failed its SHA-256 or size check.");
+        ensure!(
+            received == size && digest.finalize().iter().map(|byte| format!("{byte:02x}")).collect::<String>() == hash,
+            "The browser archive failed its SHA-256 or size check."
+        );
         let unpack = staging.join("unpacked");
         tokio::fs::create_dir(&unpack).await?;
         // Only an exact hash-verified archive reaches the system extractor.

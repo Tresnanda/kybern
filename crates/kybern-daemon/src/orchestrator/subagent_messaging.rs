@@ -3,6 +3,15 @@ use super::*;
 
 impl Orchestrator {
     pub async fn send_subagent_message(&self, input: methods::QueuedMessage) -> Result<SubagentMessage> {
+        let root = self
+            .inner
+            .store
+            .thread_get(input.thread_id)?
+            .and_then(|child| child.subagent.map(|info| info.root_thread_id))
+            .ok_or_else(|| anyhow!("This is not a native subagent thread."))?;
+        let _workspace = self.inner.workspace_ops.lock().await;
+        let admission = self.session_admission(root).await;
+        let _admission = admission.lock().await;
         let child = self.inner.store.thread_get(input.thread_id)?.ok_or_else(|| anyhow!("Subagent not found."))?;
         let info = child.subagent.as_ref().ok_or_else(|| anyhow!("This is not a native subagent thread."))?;
         if child.provider.kind != ProviderKind::ClaudeCode {
@@ -16,14 +25,8 @@ impl Orchestrator {
             return Ok(record);
         }
         anyhow::ensure!(info.status.is_active(), "Not delivered — subagent finished.");
-        let live = self
-            .inner
-            .sessions
-            .lock()
-            .await
-            .get(&info.root_thread_id)
-            .cloned()
-            .ok_or_else(|| anyhow!("Not delivered — native session ended."))?;
+        let live =
+            self.task_session(info.root_thread_id, &info.task_id).await.map_err(|_| anyhow!("Not delivered — native session ended."))?;
         let owner = self.inner.store.meta_get(&format!("subagent_owner:{}", child.id))?;
         anyhow::ensure!(
             owner.as_deref() == Some(&live.session_instance_id.to_string()) && !live.is_released(),
@@ -43,7 +46,7 @@ impl Orchestrator {
             root_thread_id: info.root_thread_id,
             task_id: info.task_id.clone(),
             session_instance_id: live.session_instance_id,
-            native_task_id: task.id.clone(),
+            native_task_id: self.native_runtime_task(&live, &task).await.id,
             turn_id,
             message: input.message,
             status: SubagentMessageStatus::Pending,
@@ -118,22 +121,7 @@ impl Orchestrator {
 
     pub async fn subagent_messages(&self, thread_id: ThreadId) -> Result<Vec<SubagentMessage>> {
         let child = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Subagent not found."))?;
-        let info = child.subagent.as_ref().ok_or_else(|| anyhow!("This is not a native subagent thread."))?;
-        let live = self.inner.sessions.lock().await.get(&info.root_thread_id).cloned();
-        for record in self.inner.store.subagent_messages(thread_id)? {
-            if record.status == SubagentMessageStatus::Pending
-                && live.as_ref().is_none_or(|live| live.is_released() || live.session_instance_id != record.session_instance_id)
-            {
-                if let Some(failed) = self.inner.store.subagent_message_settle(
-                    record.id,
-                    record.session_instance_id,
-                    SubagentMessageStatus::Failed,
-                    Some("Not delivered — native session ended before delivery could be confirmed.".into()),
-                )? {
-                    self.emit_subagent_message(&failed)?;
-                }
-            }
-        }
+        anyhow::ensure!(child.subagent.is_some(), "This is not a native subagent thread.");
         self.inner.store.subagent_messages(thread_id)
     }
 
@@ -202,6 +190,22 @@ impl Orchestrator {
                 Some(reason.into()),
             )? {
                 self.emit_subagent_message(&failed)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn fail_session_subagent_messages(&self, owner: Uuid) -> Result<()> {
+        for record in self.inner.store.subagent_messages_pending()? {
+            if record.session_instance_id == owner {
+                if let Some(failed) = self.inner.store.subagent_message_settle(
+                    record.id,
+                    owner,
+                    SubagentMessageStatus::Failed,
+                    Some("Not delivered — native session ended before delivery could be confirmed.".into()),
+                )? {
+                    self.emit_subagent_message(&failed)?;
+                }
             }
         }
         Ok(())

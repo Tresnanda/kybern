@@ -737,13 +737,14 @@ async fn cursor_acp_edits_are_recorded_when_the_call_completes() {
     std::fs::create_dir_all(&fixture.root).unwrap();
     let mut parent = fixture.thread(ThreadStatus::Idle);
     parent.title = "Parent".into();
+    parent.permission_mode = PermissionMode::FullAccess;
     fixture.store.thread_upsert(&parent).unwrap();
     let (live, _, _) = fixture.park_recording(&parent, Instant::now()).await;
     fixture.orchestrator.send(parent.id, UserMessage::text("go")).await.unwrap();
     live.turn_ready.notified().await;
     fixture.tool(&parent, &live, "d0", "kybern_agent_delegate", json!({"task": "own the sources", "title": "Owner", "owns": ["src/**"]})).await.unwrap();
     let started = fixture
-        .tool(&parent, &live, "d1", "kybern_agent_delegate", json!({"task": "edit through acp", "provider": "cursor", "title": "Cursor child"}))
+        .tool(&parent, &live, "d1", "kybern_agent_delegate", json!({"task": "edit through acp", "provider": "cursor", "permission_mode": "auto", "title": "Cursor child"}))
         .await
         .unwrap();
     let child = fixture.store.delegation_find_by_task(Uuid::parse_str(started["task_id"].as_str().unwrap()).unwrap()).unwrap().unwrap();

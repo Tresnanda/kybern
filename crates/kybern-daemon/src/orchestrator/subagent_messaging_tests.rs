@@ -103,6 +103,10 @@ async fn replacement_session_cannot_receive_the_original_child_inbox() {
         .await
         .is_err()
     );
+    let before_read = fixture.store.thread_get(child.id).unwrap().unwrap().last_seq;
+    assert_eq!(o.subagent_messages(child.id).await.unwrap()[0].status, SubagentMessageStatus::Pending);
+    assert_eq!(fixture.store.thread_get(child.id).unwrap().unwrap().last_seq, before_read);
+    o.revoke_native_session(&live);
     assert_eq!(o.subagent_messages(child.id).await.unwrap()[0].status, SubagentMessageStatus::Failed);
     o.acknowledge_subagent_message(root.id, replacement.session_instance_id, "child", &queued.id.to_string()).unwrap();
     assert_eq!(fixture.store.subagent_message_get(queued.id).unwrap().unwrap().status, SubagentMessageStatus::Failed);

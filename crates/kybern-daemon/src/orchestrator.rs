@@ -27,8 +27,8 @@ mod agent_items;
 mod delegation;
 mod messaging;
 mod notes;
-mod subagent_messaging;
 mod omp_recovery;
+mod subagent_messaging;
 mod subagents;
 mod tasks;
 mod worktrees;
@@ -1094,7 +1094,10 @@ impl Orchestrator {
             let configured_model =
                 self.inner.settings.get().providers.get(&child.provider.kind).and_then(|provider| provider.model.clone());
             if child.provider.instance != "default"
-                && !self.inner.settings.get()
+                && !self
+                    .inner
+                    .settings
+                    .get()
                     .providers
                     .get(&child.provider.kind)
                     .is_some_and(|provider| provider.accounts.contains_key(&child.provider.instance))
@@ -3072,6 +3075,9 @@ impl Orchestrator {
     }
 
     fn revoke_native_session(&self, live: &LiveSession) {
+        if let Err(error) = self.fail_session_subagent_messages(live.session_instance_id) {
+            tracing::warn!(%error, "Unable to settle the closed native child inbox");
+        }
         if let Some(gateway) = &self.inner.native_tools {
             gateway.revoke(live.session_instance_id);
         }
@@ -4390,9 +4396,7 @@ impl Orchestrator {
         let delivery = if is_compact_message(&message) {
             live.session.compact().await
         } else {
-            match self.portable_message(&thread, &message)
-                .and_then(|portable| self.workspace_transition_message(&thread, &portable))
-            {
+            match self.portable_message(&thread, &message).and_then(|portable| self.workspace_transition_message(&thread, &portable)) {
                 Ok((workspace_message, transition)) => {
                     workspace_transition = transition;
                     live.session.send_message(&message_id.to_string(), &self.provider_message(&workspace_message, &live)).await
