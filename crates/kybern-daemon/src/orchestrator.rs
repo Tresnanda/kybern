@@ -5959,11 +5959,12 @@ impl Orchestrator {
             DriverEvent::TurnCompleted { stop_reason, usage, cost_usd, duration_ms, anchors } => {
                 let Some(turn) = turn_guard.as_mut() else { return Ok(()) };
                 let has_pending_tasks = if turn.provider == ProviderKind::ClaudeCode && stop_reason == StopReason::Completed {
-                    live.tasks
-                        .lock()
-                        .await
-                        .values()
-                        .any(|task| task.origin_turn_id == turn.id && task.kind != RuntimeTaskKind::Monitor && task.status.is_active())
+                    live.tasks.lock().await.values().any(|task| {
+                        task.origin_turn_id == turn.id
+                            && task.kind != RuntimeTaskKind::Monitor
+                            && !(task.kind == RuntimeTaskKind::Process && task.backgrounded)
+                            && task.status.is_active()
+                    })
                 } else {
                     false
                 };
@@ -6562,7 +6563,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claude_result_waits_for_background_processes_and_scopes_the_continuation() {
+    async fn claude_background_process_leaves_the_composer_ready_for_normal_send() {
         assert_claude_background_continuation(RuntimeTaskKind::Process).await;
     }
 
@@ -6709,7 +6710,7 @@ mod tests {
             )
             .await
             .unwrap();
-        if kind != RuntimeTaskKind::Monitor {
+        if kind == RuntimeTaskKind::Agent {
             assert!(live.turn.lock().await.as_ref().is_some_and(|turn| turn.pending_completion.is_some()));
             assert!(
                 !store
@@ -6719,7 +6720,7 @@ mod tests {
                     .any(|event| matches!(event.payload, EventPayload::TurnCompleted { .. }))
             );
         } else {
-            assert!(live.turn.lock().await.is_none(), "monitors may outlive the foreground request");
+            assert!(live.turn.lock().await.is_none(), "background services and monitors may outlive the foreground request");
             assert_eq!(store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Idle);
         }
 
@@ -6731,7 +6732,7 @@ mod tests {
             )
             .await
             .unwrap();
-        if kind != RuntimeTaskKind::Monitor {
+        if kind == RuntimeTaskKind::Agent {
             // A notification can start another wave of work. Each provisional
             // result must keep the same parent busy without emitting an alert.
             for wave in 2..=3 {
@@ -6795,7 +6796,7 @@ mod tests {
         assert!(!orchestrator.session_parked(thread.id, &live).await.unwrap());
         let resumed =
             store.events_for_thread(thread.id).unwrap().iter().filter(|event| matches!(event.payload, EventPayload::TurnResumed)).count();
-        assert_eq!(resumed, usize::from(kind == RuntimeTaskKind::Monitor));
+        assert_eq!(resumed, usize::from(kind != RuntimeTaskKind::Agent));
         assert!(
             orchestrator.send(thread.id, UserMessage::text("continue?")).await.is_err(),
             "manual input must not replace a running continuation"
@@ -6878,7 +6879,7 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(completed.len(), if kind != RuntimeTaskKind::Monitor { 1 } else { 2 });
+        assert_eq!(completed.len(), if kind == RuntimeTaskKind::Agent { 1 } else { 2 });
         let completed = &completed[completed.len() - 1..];
         assert_eq!(completed[0].0.input_tokens, 4);
         assert_eq!(completed[0].0.output_tokens, 6);

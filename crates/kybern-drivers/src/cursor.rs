@@ -90,7 +90,7 @@ impl AgentDriver for CursorDriver {
             supported_permission_modes: vec![PermissionMode::Auto, PermissionMode::FullAccess],
             supports_fork: false,
             supports_model_switch: true,
-            supports_effort_switch: false,
+            supports_effort_switch: true,
             supported_efforts: vec![],
             models: vec![],
             instances: vec!["default".into()],
@@ -101,6 +101,13 @@ impl AgentDriver for CursorDriver {
                 status.binary_path = Some(binary.display().to_string());
                 status.version = Some(format!("SDK {}", value["version"].as_str().unwrap_or(SDK_VERSION)));
                 status.models = serde_json::from_value(value["models"].clone()).unwrap_or_default();
+                for model in &status.models {
+                    for effort in &model.efforts {
+                        if !status.supported_efforts.contains(effort) {
+                            status.supported_efforts.push(effort.clone());
+                        }
+                    }
+                }
             }
             Err(error) => status.unavailable_reason = Some(reason(error)),
         }
@@ -123,9 +130,6 @@ impl AgentDriver for CursorDriver {
             return Err(DriverError::Unsupported("Cursor SDK does not expose native conversation forks or rollback".into()));
         }
         validate_mode(config.permission_mode)?;
-        if config.effort.as_ref().is_some_and(|s| !s.is_empty()) {
-            return Err(DriverError::Unsupported("Choose a Cursor model variant; the SDK has no independent effort control".into()));
-        }
         let servers = mcp_servers(config.native_tool_bridge.as_ref())?;
         let context = ProbeContext { binary: config.binary.clone(), cwd: Some(config.cwd.clone()), env: config.env.into_iter().collect() };
         let (connection, events) = Connection::spawn(&context)?;
@@ -134,7 +138,7 @@ impl AgentDriver for CursorDriver {
             .call(
                 "open",
                 json!({
-                    "cwd": config.cwd, "model": config.model, "mode": config.permission_mode,
+                    "cwd": config.cwd, "model": config.model, "effort": config.effort, "mode": config.permission_mode,
                     "agentId": agent_id, "mcpServers": servers,
                 }),
             )
@@ -231,8 +235,9 @@ impl AgentSession for Session {
         *selected = Some(model.to_string());
         Ok(())
     }
-    async fn set_effort(&self, _: &str) -> Result<()> {
-        Err(DriverError::Unsupported("Choose a Cursor model variant; the SDK has no independent effort control".into()))
+    async fn set_effort(&self, effort: &str) -> Result<()> {
+        self.connection.call("set_effort", json!({"effort": effort})).await?;
+        Ok(())
     }
     async fn respond_permission(&self, _: &str, _: &ApprovalDecision) -> Result<()> {
         Err(DriverError::Unsupported("Cursor SDK uses sandboxing and Auto-review; it has no interactive approval requests".into()))

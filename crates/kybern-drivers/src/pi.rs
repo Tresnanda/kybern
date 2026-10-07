@@ -363,6 +363,9 @@ struct State {
     current_message: Option<String>,
     current_text: String,
     current_thinking: String,
+    /// OMP streams many explicit content blocks in one native message.
+    current_block: Option<usize>,
+    block_content: HashMap<usize, (String, String)>,
     turn_usage: Usage,
     turn_cost: f64,
     turn_started: Option<std::time::Instant>,
@@ -566,6 +569,28 @@ impl PiSession {
         None
     }
 
+    async fn complete_omp_block(&self) {
+        let completion = {
+            let mut st = self.state.lock().await;
+            st.current_block.take().and_then(|index| {
+                let id = st.current_message.as_ref()?.clone();
+                let (text, thinking) = st.block_content.get(&index)?.clone();
+                if text.is_empty() && thinking.is_empty() {
+                    return None;
+                }
+                Some(DriverEvent::MessageCompleted {
+                    message_id: format!("{id}:b{index}"),
+                    origin: EventOrigin::Root,
+                    text,
+                    thinking: if thinking.is_empty() { None } else { Some(thinking) },
+                })
+            })
+        };
+        if let Some(completion) = completion {
+            self.emit(completion).await;
+        }
+    }
+
     async fn handle_frame(self: &Arc<Self>, v: Value) {
         let ty = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
         match ty {
@@ -616,6 +641,8 @@ impl PiSession {
                     st.current_message = Some(format!("m{}", st.message_seq));
                     st.current_text.clear();
                     st.current_thinking.clear();
+                    st.current_block = None;
+                    st.block_content.clear();
                 }
             }
             "message_update" => {
@@ -624,6 +651,51 @@ impl PiSession {
                     Some(m) => m,
                     None => return,
                 };
+                if self.flavor == Flavor::Omp {
+                    let index = ev.get("contentIndex").and_then(Value::as_u64).unwrap_or(0) as usize;
+                    let previous = self.state.lock().await.current_block;
+                    if previous.is_some_and(|previous| previous != index) {
+                        self.complete_omp_block().await;
+                    }
+                    let block_id = format!("{message_id}:b{index}");
+                    let mut st = self.state.lock().await;
+                    st.current_block = Some(index);
+                    let content = st.block_content.entry(index).or_default();
+                    let event = ev.get("type").and_then(Value::as_str);
+                    let delta = ev.get("delta").and_then(Value::as_str).unwrap_or("");
+                    match event {
+                        Some("text_delta") => content.0.push_str(delta),
+                        Some("thinking_delta") => content.1.push_str(delta),
+                        Some("text_end") => {
+                            if let Some(text) = ev.get("content").and_then(Value::as_str) {
+                                content.0 = text.into();
+                            }
+                        }
+                        Some("thinking_end") => {
+                            if let Some(text) = ev.get("content").and_then(Value::as_str) {
+                                content.1 = text.into();
+                            }
+                        }
+                        _ => {}
+                    }
+                    drop(st);
+                    match event {
+                        Some("text_delta") => {
+                            self.emit(DriverEvent::TextDelta { message_id: block_id, origin: EventOrigin::Root, delta: delta.into() }).await
+                        }
+                        Some("thinking_delta") => {
+                            self.emit(DriverEvent::ThinkingDelta { message_id: block_id, origin: EventOrigin::Root, delta: delta.into() })
+                                .await
+                        }
+                        Some("thinking_end") => {
+                            self.emit(DriverEvent::ThinkingCompleted { message_id: block_id, origin: EventOrigin::Root }).await;
+                            self.complete_omp_block().await;
+                        }
+                        Some("text_end") => self.complete_omp_block().await,
+                        _ => {}
+                    }
+                    return;
+                }
                 match ev.get("type").and_then(|t| t.as_str()) {
                     Some("text_delta") => {
                         if let Some(d) = ev.get("delta").and_then(|d| d.as_str()) {
@@ -664,12 +736,17 @@ impl PiSession {
                 if msg.get("role").and_then(|r| r.as_str()) != Some("assistant") {
                     return;
                 }
+                if self.flavor == Flavor::Omp {
+                    // Close the streamed block before authoritative reconciliation so
+                    // an earlier block cannot capture the final block's logical id.
+                    self.complete_omp_block().await;
+                }
                 let (message_id, text, thinking) = {
                     let mut st = self.state.lock().await;
                     let id = st.current_message.take().unwrap_or_else(|| "m0".into());
                     let mut text = String::new();
                     let mut thinking = String::new();
-                    for block in msg.get("content").and_then(|c| c.as_array()).into_iter().flatten() {
+                    for block in msg.get("content").and_then(|c| c.as_array()).into_iter().flatten().filter(|_| self.flavor == Flavor::Pi) {
                         match block.get("type").and_then(|t| t.as_str()) {
                             Some("text") => text.push_str(block.get("text").and_then(|t| t.as_str()).unwrap_or("")),
                             Some("thinking") => thinking.push_str(block.get("thinking").and_then(|t| t.as_str()).unwrap_or("")),
@@ -692,6 +769,25 @@ impl PiSession {
                     }
                     (id, text, thinking)
                 };
+                if self.flavor == Flavor::Omp {
+                    // Preserve native boundaries and exact text. Progress before tool
+                    // calls belongs to the work log, not to the terminal answer.
+                    for (index, block) in msg.get("content").and_then(Value::as_array).into_iter().flatten().enumerate() {
+                        let (text, thinking) = match block.get("type").and_then(Value::as_str) {
+                            Some("text") => (block.get("text").and_then(Value::as_str).unwrap_or("").to_string(), None),
+                            Some("thinking") => (String::new(), block.get("thinking").and_then(Value::as_str).map(str::to_string)),
+                            _ => continue,
+                        };
+                        self.emit(DriverEvent::MessageCompleted {
+                            message_id: format!("{message_id}:b{index}"),
+                            origin: EventOrigin::Root,
+                            text,
+                            thinking,
+                        })
+                        .await;
+                    }
+                    return;
+                }
                 if !text.is_empty() || !thinking.is_empty() {
                     self.emit(DriverEvent::MessageCompleted {
                         message_id,
@@ -2082,6 +2178,43 @@ mod tests {
             pending_app_tools: Mutex::new(HashMap::new()),
             app_tool_names: extension::DEFAULT_APP_TOOL_NAMES.iter().map(|name| (*name).to_string()).collect(),
         })
+    }
+
+    #[tokio::test]
+    async fn omp_content_boundaries_keep_progress_out_of_the_final_answer() {
+        let (events, mut rx) = mpsc::channel(64);
+        let session = omp_session(Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap()), events, State::default());
+        session.handle_frame(json!({"type":"message_start","message":{"role":"assistant"}})).await;
+        for (index, text) in [(0, "Checking files."), (3, "Done.\n\nAll checks pass.")] {
+            session
+                .handle_frame(json!({"type":"message_update","assistantMessageEvent":{
+                    "type":"text_delta","contentIndex":index,"delta":text
+                }}))
+                .await;
+            session
+                .handle_frame(json!({"type":"message_update","assistantMessageEvent":{
+                    "type":"text_end","contentIndex":index,"content":text
+                }}))
+                .await;
+        }
+        session
+            .handle_frame(json!({"type":"message_end","message":{"role":"assistant","content":[
+                {"type":"text","text":"Checking files."},
+                {"type":"thinking","thinking":"Private reasoning"},
+                {"type":"toolCall","id":"tool-1","name":"read"},
+                {"type":"text","text":"Done.\n\nAll checks pass."}
+            ]}}))
+            .await;
+        let mut completions = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let DriverEvent::MessageCompleted { message_id, text, .. } = event {
+                completions.push((message_id, text));
+            }
+        }
+        assert!(completions.contains(&("m1:b0".into(), "Checking files.".into())));
+        assert_eq!(completions.last(), Some(&("m1:b3".into(), "Done.\n\nAll checks pass.".into())));
+        assert!(!completions.iter().any(|(_, text)| text.contains("Checking files.Done")));
+        session.child.close().await;
     }
 
     /// The `async-result` message OMP 18.4.10 sent over RPC for a bash job
