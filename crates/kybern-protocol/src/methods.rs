@@ -467,6 +467,28 @@ pub struct ThreadsToolOutputResult {
 }
 method!(ThreadsToolOutput, "threads.tool_output", Some(Scope::OrchestrationRead), ThreadsToolOutputParams, ThreadsToolOutputResult);
 
+/// Restore exact historical OMP message boundaries from its retained native session.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadsRecoverOmpAnswerParams {
+    pub thread_id: ThreadId,
+    pub turn_id: TurnId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadsRecoverOmpAnswerResult {
+    pub recovered: bool,
+    pub native_entry_id: String,
+    pub block_count: u32,
+    pub correction_seq: EventSeq,
+}
+method!(
+    ThreadsRecoverOmpAnswer,
+    "threads.recover_omp_answer",
+    Some(Scope::OrchestrationOperate),
+    ThreadsRecoverOmpAnswerParams,
+    ThreadsRecoverOmpAnswerResult
+);
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsUpdateParams {
     pub thread_id: ThreadId,
@@ -2797,6 +2819,7 @@ registry!(
     ThreadsCreate,
     ThreadsGet,
     ThreadsToolOutput,
+    ThreadsRecoverOmpAnswer,
     ThreadsUpdate,
     ThreadsArchive,
     ThreadsSend,

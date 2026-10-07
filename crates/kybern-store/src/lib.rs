@@ -2108,6 +2108,44 @@ impl Store {
         })
     }
 
+    /// Bounded recovery evidence for one turn. Never read large tool results or
+    /// streaming deltas just to restore explicit native message boundaries.
+    pub fn omp_recovery_events(&self, thread_id: ThreadId, turn_id: TurnId) -> Result<Vec<ThreadEvent>> {
+        self.with(|c| {
+            let mut statement = c.prepare(
+                "SELECT seq,thread_id,turn_id,at,payload FROM events
+                 WHERE thread_id=?1 AND turn_id=?2 AND kind IN
+                 ('turn_started','assistant_message_completed','tool_call_started','turn_completed',
+                  'provider_session_bound','assistant_message_blocks_recovered') ORDER BY seq LIMIT 10001",
+            )?;
+            let mut rows = statement.query(params![thread_id.to_string(), turn_id.to_string()])?;
+            let mut events = Vec::new();
+            let mut bytes = 0usize;
+            while let Some(row) = rows.next()? {
+                bytes = bytes.saturating_add(row.get_ref(4)?.as_str()?.len());
+                anyhow::ensure!(
+                    bytes <= 8 * 1024 * 1024 && events.len() < 10_000,
+                    "OMP recovery exceeds the 8 MB/10,000-event limit. Recover a shorter retained turn."
+                );
+                events.push(row_to_event(row)?);
+            }
+            Ok(events)
+        })
+    }
+
+    pub fn provider_session_before(&self, thread_id: ThreadId, through: EventSeq) -> Result<Option<ThreadEvent>> {
+        self.with(|c| {
+            c.query_row(
+                "SELECT seq,thread_id,turn_id,at,payload FROM events
+                WHERE thread_id=?1 AND seq<=?2 AND kind='provider_session_bound' ORDER BY seq DESC LIMIT 1",
+                params![thread_id.to_string(), through],
+                row_to_event,
+            )
+            .optional()
+            .map_err(Into::into)
+        })
+    }
+
     /// Read only settled user/assistant messages, newest page first in SQL and
     /// returned in conversation order. This never hydrates a provider session.
     pub fn thread_message_events(
@@ -2119,14 +2157,15 @@ impl Store {
     ) -> Result<Vec<ThreadEvent>> {
         self.with(|c| {
             let before = before_seq.unwrap_or(i64::MAX).min(through_seq.saturating_add(1));
-            let mut st = c.prepare(
-                "SELECT seq,thread_id,turn_id,at,payload FROM (
-                   SELECT seq,thread_id,turn_id,at,payload FROM events
+            let assistant_text = thread_history::corrected_assistant_text_sql("e", "?2");
+            let mut st = c.prepare(&format!(
+                "SELECT seq,thread_id,turn_id,at,
+                   CASE WHEN kind='assistant_message_completed' THEN json_set(payload,'$.text',{assistant_text}) ELSE payload END
+                 FROM (SELECT seq,thread_id,turn_id,at,kind,payload FROM events
                    WHERE thread_id=?1 AND seq<=?2 AND seq<?3
                      AND kind IN ('turn_started','assistant_message_completed')
-                   ORDER BY seq DESC LIMIT ?4
-                 ) ORDER BY seq",
-            )?;
+                   ORDER BY seq DESC LIMIT ?4) e ORDER BY seq"
+            ))?;
             Ok(st
                 .query_map(params![thread_id.to_string(), through_seq, before, limit.clamp(1, 200) + 1], row_to_event)?
                 .collect::<Result<Vec<_>, _>>()?)

@@ -817,7 +817,18 @@ export type NoticeLevel = "info" | "warning" | "error";
 /** Why the daemon closed an agent process; the next message resumes the conversation. */
 export type SessionReleaseReason = "manual" | "idle" | "capacity" | "update" | "power";
 
+export interface RecoveredAssistantBlock {
+  message_id: MessageId;
+  content_index: number;
+  text: string;
+  thinking: string | null;
+  before_tool_call_id: string | null;
+  seq: EventSeq;
+  at: DateTime;
+}
+
 export type EventPayload =
+  | { kind: "assistant_message_blocks_recovered"; message_id: MessageId; session_id: string; native_entry_id: string; blocks: RecoveredAssistantBlock[]; terminal_message_id: MessageId }
   | { kind: "html_published"; visual: HtmlVisual }
   | { kind: "async_questions_requested"; request: AsyncQuestionRequest }
   | { kind: "async_questions_answered"; request_id: string; answers: string[]; message_id: MessageId; message: UserMessage }
@@ -1111,6 +1122,9 @@ export interface ThreadsGetParams {
   /** When true, completed output-delta streams are marked for exact lazy hydration. */
   defer_tool_stream?: boolean;
 }
+
+export interface ThreadsRecoverOmpAnswerParams { thread_id: ThreadId; turn_id: TurnId }
+export interface ThreadsRecoverOmpAnswerResult { recovered: boolean; native_entry_id: string; block_count: number; correction_seq: EventSeq }
 
 export interface ThreadsToolOutputParams {
   thread_id: ThreadId;
@@ -2081,6 +2095,7 @@ export interface Methods {
   "threads.read": [{ thread_id: ThreadId; before_seq?: EventSeq | null; through_seq?: EventSeq | null; limit?: number; message_seq?: EventSeq | null; text_offset?: number | null }, ThreadsReadResult];
   "threads.create": [ThreadsCreateParams, Thread];
   "threads.get": [ThreadsGetParams, ThreadsGetResult];
+  "threads.recover_omp_answer": [ThreadsRecoverOmpAnswerParams, ThreadsRecoverOmpAnswerResult];
   "threads.tool_output": [ThreadsToolOutputParams, ThreadsToolOutputResult];
   "threads.update": [ThreadsUpdateParams, Thread];
   "threads.archive": [ThreadsArchiveParams, Empty];

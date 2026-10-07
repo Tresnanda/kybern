@@ -146,6 +146,14 @@ pub enum EventPayload {
         text: String,
         thinking: Option<String>,
     },
+    /// Explicit native OMP boundaries recovered without rewriting old events.
+    AssistantMessageBlocksRecovered {
+        message_id: MessageId,
+        session_id: String,
+        native_entry_id: String,
+        blocks: Vec<RecoveredAssistantBlock>,
+        terminal_message_id: MessageId,
+    },
     HtmlPublished {
         visual: HtmlVisual,
     },
@@ -282,6 +290,7 @@ impl EventPayload {
             Self::AssistantThinkingDelta { .. } => "assistant_thinking_delta",
             Self::AssistantThinkingCompleted { .. } => "assistant_thinking_completed",
             Self::AssistantMessageCompleted { .. } => "assistant_message_completed",
+            Self::AssistantMessageBlocksRecovered { .. } => "assistant_message_blocks_recovered",
             Self::HtmlPublished { .. } => "html_published",
             Self::ToolCallStarted { .. } => "tool_call_started",
             Self::ToolCallOutputDelta { .. } => "tool_call_output_delta",
@@ -304,6 +313,19 @@ impl EventPayload {
             Self::WorkspaceReverted { .. } => "workspace_reverted",
         }
     }
+}
+
+/// One retained native text/thinking block, placed immediately before the next
+/// native tool invocation, or before the turn summary after the final tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RecoveredAssistantBlock {
+    pub message_id: MessageId,
+    pub content_index: u32,
+    pub text: String,
+    pub thinking: Option<String>,
+    pub before_tool_call_id: Option<String>,
+    pub seq: EventSeq,
+    pub at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

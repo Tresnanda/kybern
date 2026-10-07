@@ -304,6 +304,10 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 pending_questions: projection.pending_questions.clone(),
             })
         }
+        ThreadsRecoverOmpAnswer::NAME => {
+            let p: ThreadsRecoverOmpAnswerParams = parse(params)?;
+            ok(state.orchestrator.recover_omp_answer(p).await.map_err(bad)?)
+        }
         ThreadsToolOutput::NAME => {
             let p: ThreadsToolOutputParams = parse(params)?;
             if p.start_seq.is_some_and(|seq| seq < 0) || p.through_seq.is_some_and(|seq| seq < 0) {

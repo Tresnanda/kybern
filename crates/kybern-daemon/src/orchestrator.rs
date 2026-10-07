@@ -28,6 +28,7 @@ mod delegation;
 mod messaging;
 mod notes;
 mod subagent_messaging;
+mod omp_recovery;
 mod subagents;
 mod tasks;
 mod worktrees;

@@ -756,3 +756,34 @@ test("native child delivery state does not remount transcript rows and survives 
   assert.equal(state.subagentMessages.length, 1)
   assert.equal(state.subagentMessages[0].status, "delivered")
 })
+
+test("OMP recovery preserves explicit progress/tool order and exact final text live, settled and reloaded", () => {
+  const events = JSON.parse(readFileSync(new URL("../../fixtures/transcript/omp-recovered-boundaries.json", import.meta.url), "utf8"))
+  const correction = events.at(-1)
+  const exact = correction.blocks.at(-1).text
+  let state = emptyThreadState()
+  for (const event of events.slice(0, -2)) state = applyEvent(state, event)
+  assert.equal(groupTurns(state.blocks)[0].answer, null, "live output remains work before completion")
+  state = applyEvent(state, events.at(-2))
+  assert.equal(groupTurns(state.blocks)[0].answer.text, events.find(e => e.kind === "assistant_message_completed").text)
+  const originalTools = state.blocks.filter(b => b.kind === "tool")
+  state = applyEvent(state, correction)
+  const settled = groupTurns(state.blocks)[0]
+  assert.equal(settled.answer.text, exact)
+  assert.deepEqual(settled.work.filter(b => b.kind === "assistant" && b.text).map(b => b.text), correction.blocks.slice(0, -1).filter(b => b.text).map(b => b.text))
+  assert.deepEqual(state.blocks.filter(b => b.kind === "tool"), originalTools)
+  assert.deepEqual(settled.work.map(b => b.kind), ["assistant", "assistant", "tool", "tool", "assistant"])
+  assert.equal(settled.work[1].thinking, "Inspect native ordering.")
+  assert.deepEqual(applyEvent(state, { ...correction, seq: correction.seq + 1 }).blocks, state.blocks, "duplicate correction retains row identities")
+  const transcript = state.blocks.map(b => b.kind === "assistant" ? {
+    role: "assistant", id: b.messageId, turn_id: b.turnId, seq: b.seq, origin: b.origin, segment: b.segment,
+    text: b.text, thinking: b.thinking || null, thinking_complete: b.thinkingComplete, complete: b.complete, at: b.at,
+  } : b.kind === "tool" ? { role: "tool_call", turn_id: b.turnId, seq: b.seq, origin: b.origin, call: b.call,
+    output: b.output, complete: b.complete, is_error: b.isError, at: b.at,
+  } : b.kind === "user" ? { role: "user", id: b.id, turn_id: b.turnId, seq: b.seq, message: b.message, at: b.at }
+    : { role: "turn_summary", turn_id: b.turnId, seq: b.seq, at: b.at, stop_reason: b.stopReason, usage: b.usage,
+      cost_usd: b.costUsd, duration_ms: b.durationMs, terminal_message_id: b.terminalMessageId, error: null })
+  const reloaded = seedFromGet({ thread: { id: correction.thread_id, last_seq: correction.seq }, transcript: JSON.parse(JSON.stringify(transcript)), pending_approvals: [] })
+  assert.equal(groupTurns(reloaded.blocks)[0].answer.text, exact)
+  assert.deepEqual(groupTurns(reloaded.blocks)[0].work.map(b => b.kind), settled.work.map(b => b.kind))
+})

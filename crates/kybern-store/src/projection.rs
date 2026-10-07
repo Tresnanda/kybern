@@ -473,6 +473,26 @@ fn apply_transcript_event(
                     }
                 }
             }
+            EventPayload::AssistantMessageBlocksRecovered { message_id, blocks, terminal_message_id, .. } => {
+                let Some(turn_id) = turn_id else { continue };
+                let recovered_ids = blocks.iter().map(|b| b.message_id).collect::<std::collections::HashSet<_>>();
+                out.retain(|entry| !matches!(entry, TranscriptEntry::Assistant { id, turn_id: id_turn, origin, .. }
+                    if *id_turn == turn_id && origin.is_root() && (*id == *message_id || recovered_ids.contains(id))));
+                for block in blocks {
+                    let index = out.iter().position(|entry| match entry {
+                        TranscriptEntry::ToolCall { turn_id: id, call, origin, .. } => *id == turn_id && origin.is_root() && block.before_tool_call_id.as_ref() == Some(&call.id),
+                        TranscriptEntry::TurnSummary { turn_id: id, .. } => *id == turn_id && block.before_tool_call_id.is_none(),
+                        _ => false,
+                    });
+                    let Some(index) = index else { continue };
+                    out.insert(index, TranscriptEntry::Assistant { id: block.message_id, turn_id, seq: block.seq, origin: EventOrigin::Root,
+                        segment: 0, text: block.text.clone(), thinking: block.thinking.clone(), thinking_complete: true, at: block.at, complete: true });
+                }
+                for entry in out.iter_mut() {
+                    if let TranscriptEntry::TurnSummary { turn_id: id, terminal_message_id: terminal, .. } = entry
+                        && *id == turn_id { *terminal = Some(*terminal_message_id); }
+                }
+            }
             EventPayload::HtmlPublished { visual } => {
                 let Some(turn_id) = turn_id.or(last_turn_id_value) else { continue };
                 out.push(TranscriptEntry::Visual { turn_id, seq: ev.seq, at: ev.at, visual: visual.clone() });
@@ -848,6 +868,74 @@ mod tests {
     use chrono::{Duration, TimeZone, Utc};
     use kybern_protocol::*;
     use uuid::Uuid;
+
+    #[test]
+    fn omp_recovery_live_settled_reload_preserves_exact_blocks_and_tools() {
+        let events: Vec<ThreadEvent> =
+            serde_json::from_str(include_str!("../../../fixtures/transcript/omp-recovered-boundaries.json")).unwrap();
+        let mut fold = super::TranscriptFold::default();
+        for event in &events[..events.len() - 1] {
+            fold.apply(event);
+        }
+        let before = project_transcript(&events[..events.len() - 1]);
+        let original = events
+            .iter()
+            .find_map(|event| match &event.payload {
+                EventPayload::AssistantMessageCompleted { text, .. } => Some(text),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            before
+                .iter()
+                .filter_map(|entry| match entry {
+                    TranscriptEntry::Assistant { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<String>(),
+            *original
+        );
+        let correction = events.last().unwrap();
+        fold.apply(correction);
+        let settled = fold.finish();
+        let reloaded: Vec<ThreadEvent> = serde_json::from_str(&serde_json::to_string(&events).unwrap()).unwrap();
+        assert_eq!(serde_json::to_value(&settled).unwrap(), serde_json::to_value(project_transcript(&reloaded)).unwrap());
+        let EventPayload::AssistantMessageBlocksRecovered { blocks, terminal_message_id, .. } = &correction.payload else { unreachable!() };
+        let terminal = settled
+            .iter()
+            .find_map(|entry| match entry {
+                TranscriptEntry::Assistant { id, text, .. } if id == terminal_message_id => Some(text),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(terminal, &blocks.last().unwrap().text);
+        assert!(
+            settled.iter().any(
+                |entry| matches!(entry, TranscriptEntry::TurnSummary { terminal_message_id: Some(id), .. } if id == terminal_message_id)
+            )
+        );
+        let tools = |entries: &[TranscriptEntry]| {
+            serde_json::to_value(entries.iter().filter(|entry| matches!(entry, TranscriptEntry::ToolCall { .. })).collect::<Vec<_>>())
+                .unwrap()
+        };
+        assert_eq!(tools(&before), tools(&settled));
+        let kinds = settled
+            .iter()
+            .map(|entry| match entry {
+                TranscriptEntry::User { .. } => "user",
+                TranscriptEntry::Assistant { .. } => "assistant",
+                TranscriptEntry::ToolCall { .. } => "tool",
+                _ => "end",
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(kinds, ["user", "assistant", "assistant", "tool", "tool", "assistant", "assistant", "end"]);
+        let (page, cursor) = crate::transcript_page_ref(&settled, Some(2), None);
+        assert_eq!(page.len(), 3, "same-sequence native tail blocks stay together");
+        assert!(cursor.is_some());
+        let mut duplicate = events.clone();
+        duplicate.push(correction.clone());
+        assert_eq!(serde_json::to_value(project_transcript(&duplicate)).unwrap(), serde_json::to_value(&settled).unwrap());
+    }
 
     fn runtime_task(id: &str, kind: RuntimeTaskKind, status: RuntimeTaskStatus, offset_seconds: i64) -> RuntimeTask {
         let at = Utc.timestamp_opt(1_700_000_000, 0).single().unwrap() + Duration::seconds(offset_seconds);

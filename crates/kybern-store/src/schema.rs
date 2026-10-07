@@ -429,6 +429,9 @@ const MIGRATIONS: &[&str] = &[
       task_id TEXT NOT NULL, status TEXT NOT NULL, record TEXT NOT NULL);
       CREATE INDEX subagent_messages_child ON subagent_messages(thread_id);
       CREATE INDEX subagent_messages_pending ON subagent_messages(session_instance_id, task_id, status);",
+    // v22: historical answer overlays must not scan large unrelated event logs.
+    "CREATE INDEX assistant_recovery_identity ON events(thread_id, json_extract(payload, '$.message_id'), seq)
+      WHERE kind = 'assistant_message_blocks_recovered';",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

@@ -351,6 +351,24 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       }
       break
     }
+    case "assistant_message_blocks_recovered": {
+      if (!ev.turn_id) break
+      const recoveredIds = new Set(ev.blocks.map(block => block.message_id))
+      blocks = blocks.filter(block => !(block.kind === "assistant" && block.turnId === turnId && block.origin.kind === "root" &&
+        (block.messageId === ev.message_id || recoveredIds.has(block.messageId))))
+      for (const recovered of ev.blocks) {
+        const index = blocks.findIndex(block => block.turnId === turnId && (
+          block.kind === "tool" && block.origin.kind === "root" && block.call.id === recovered.before_tool_call_id ||
+          block.kind === "turn_end" && recovered.before_tool_call_id === null))
+        if (index < 0) continue // The original turn may be outside the loaded page.
+        const block: Block = { kind: "assistant", id: `${recovered.message_id}#0`, messageId: recovered.message_id,
+          segment: 0, turnId, seq: recovered.seq, at: recovered.at, origin: { kind: "root" },
+          text: recovered.text, thinking: recovered.thinking ?? "", thinkingComplete: true, complete: true }
+        blocks = [...blocks.slice(0, index), block, ...blocks.slice(index)]
+      }
+      blocks = blocks.map(block => block.kind === "turn_end" && block.turnId === turnId ? { ...block, terminalMessageId: ev.terminal_message_id } : block)
+      break
+    }
     case "tool_call_started":
       blocks = [
         ...blocks,

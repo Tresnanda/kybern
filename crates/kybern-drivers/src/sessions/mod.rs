@@ -56,6 +56,26 @@ pub async fn read(kind: ProviderKind, context: &ProbeContext, id: &str) -> Resul
     }
 }
 
+/// Read retained explicit OMP blocks without starting the harness or importing history.
+pub async fn recover_omp_message(context: &ProbeContext, session_id: &str, text: &str) -> Result<NativeOmpMessage> {
+    if session_id.is_empty() || session_id.len() > 4096 || text.len() > 1024 * 1024 {
+        return Err(DriverError::Protocol("Choose a bounded retained OMP message to recover.".into()));
+    }
+    pi::recover_message(context, session_id, text).await
+}
+
+pub struct NativeOmpMessage {
+    pub entry_id: String,
+    pub at: DateTime<Utc>,
+    pub blocks: Vec<NativeOmpBlock>,
+}
+
+pub enum NativeOmpBlock {
+    Text(String),
+    Thinking(String),
+    ToolCall(String),
+}
+
 fn env(context: &ProbeContext, name: &str) -> Option<String> {
     context.env.get(name).cloned().or_else(|| std::env::var(name).ok()).filter(|s| !s.is_empty())
 }
@@ -106,9 +126,20 @@ fn matches_cwd(session: &SavedSession, context: &ProbeContext) -> bool {
 /// Metadata-only scan: read bounded head/tail windows, never whole transcripts
 /// just to populate a picker. Skip symlinks and harness subagent directories.
 fn jsonl_files(root: &Path) -> Result<Vec<PathBuf>> {
+    jsonl_files_bounded(root, usize::MAX)
+}
+
+fn jsonl_files_bounded(root: &Path, limit: usize) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     let mut dirs = vec![(root.to_path_buf(), 0)];
+    let mut visited = 0usize;
     while let Some((dir, depth)) = dirs.pop() {
+        visited = visited.saturating_add(1);
+        if visited > limit || dirs.len() > limit {
+            return Err(DriverError::Protocol(
+                "OMP session discovery exceeds its directory limit. Choose a narrower native history directory.".into(),
+            ));
+        }
         let entries = match std::fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
@@ -120,6 +151,11 @@ fn jsonl_files(root: &Path) -> Result<Vec<PathBuf>> {
             if ty.is_dir() && depth < 4 && entry.file_name() != "subagents" {
                 dirs.push((entry.path(), depth + 1));
             } else if ty.is_file() && entry.path().extension().is_some_and(|ext| ext == "jsonl") {
+                if files.len() >= limit {
+                    return Err(DriverError::Protocol(
+                        "OMP session discovery exceeds its file limit. Choose a narrower native history directory.".into(),
+                    ));
+                }
                 files.push(entry.path());
             }
         }

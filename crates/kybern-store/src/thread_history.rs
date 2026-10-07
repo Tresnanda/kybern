@@ -318,9 +318,10 @@ fn message_snippet(
     require_match: bool,
 ) -> Result<(Option<String>, Option<DateTime<Utc>>)> {
     let user_text = user_text_sql("e.payload", false);
+    let assistant_text = corrected_assistant_text_sql("e", "9223372036854775807");
     let sql = format!(
         "WITH texts AS (SELECT e.at,e.seq,CASE WHEN e.kind='assistant_message_completed'
-           THEN COALESCE(json_extract(e.payload,'$.text'),'') ELSE {user_text} END AS text
+           THEN CASE WHEN :require_match THEN COALESCE(json_extract(e.payload,'$.text'),'') ELSE {assistant_text} END ELSE {user_text} END AS text
          FROM events e WHERE e.thread_id=:thread_id AND e.kind IN ('turn_started','assistant_message_completed'))
          SELECT CAST(substr(CAST(text AS BLOB),1,:bytes) AS BLOB),length(CAST(text AS BLOB)),at
          FROM texts WHERE NOT :require_match OR instr(lower(text),:query)>0 ORDER BY seq DESC LIMIT 1"
@@ -343,13 +344,26 @@ fn message_snippet(
     Ok((Some(snippet), Some(parse_time(at).map_err(anyhow::Error::from)?)))
 }
 
+/// Select the semantic final answer while keeping immutable event/cursor identity.
+/// The partial recovery index makes the usual no-correction case a cheap lookup.
+pub(crate) fn corrected_assistant_text_sql(event: &str, through: &str) -> String {
+    format!(
+        "COALESCE((SELECT json_extract(r.payload,'$.blocks[#-1].text') FROM events r
+        WHERE r.thread_id={event}.thread_id AND r.turn_id={event}.turn_id
+          AND r.kind='assistant_message_blocks_recovered' AND r.seq<={through}
+          AND json_extract(r.payload,'$.message_id')=json_extract({event}.payload,'$.message_id')
+        ORDER BY r.seq DESC LIMIT 1),json_extract({event}.payload,'$.text'),'')"
+    )
+}
+
 fn read_sql() -> String {
+    let assistant_text = corrected_assistant_text_sql("e", ":through_seq");
     let user_text = user_text_sql("e.payload", true);
     format!(
         "WITH texts AS (
           SELECT e.seq,e.turn_id,e.at,e.kind,
             CASE WHEN cm.payload IS NOT NULL THEN COALESCE(json_extract(cm.payload,'$.body'),'')
-                 WHEN e.kind='assistant_message_completed' THEN COALESCE(json_extract(e.payload,'$.text'),'')
+                 WHEN e.kind='assistant_message_completed' THEN {assistant_text}
                  ELSE {user_text} END AS text,
             json_extract(cm.payload,'$.from_thread_id') AS source_thread_id,
             json_extract(cm.payload,'$.id') AS collaboration_message_id
@@ -547,6 +561,48 @@ mod tests {
             subagent: None,
             delegation: None,
         }
+    }
+
+    #[test]
+    fn recovered_answer_overlays_semantic_reads_without_rewriting_source_or_snapshot() {
+        let store = Store::open_in_memory().unwrap();
+        let now = Utc::now();
+        let project = uuid::Uuid::now_v7();
+        insert_project(&store, project, now);
+        let thread = thread(project, "OMP recovery", now);
+        store.thread_upsert(&thread).unwrap();
+        let mut events: Vec<ThreadEvent> =
+            serde_json::from_str(include_str!("../../../fixtures/transcript/omp-recovered-boundaries.json")).unwrap();
+        let correction = events.pop().unwrap();
+        for event in events {
+            store.event_append(thread.id, event.turn_id, event.payload).unwrap();
+        }
+        let original = store.events_for_thread(thread.id).unwrap();
+        let through = original.last().unwrap().seq;
+        let before = store.read_thread_history(thread.id, None, Some(through), 10, None, None).unwrap();
+        let assistant = before.messages.iter().find(|m| m.role == ThreadMessageRole::Assistant).unwrap();
+        let original_text = assistant.text.clone();
+        let source_seq = assistant.seq;
+        let EventPayload::AssistantMessageBlocksRecovered { blocks, .. } = &correction.payload else { unreachable!() };
+        let exact = blocks.last().unwrap().text.clone();
+        store.event_append(thread.id, correction.turn_id, correction.payload).unwrap();
+        let after = store.read_thread_history(thread.id, None, None, 10, None, None).unwrap();
+        let recovered = after.messages.iter().find(|m| m.role == ThreadMessageRole::Assistant).unwrap();
+        assert_eq!(recovered.text, exact);
+        assert_eq!(recovered.seq, source_seq);
+        assert_eq!(recovered.attribution.thread_id, Some(thread.id));
+        let frozen = store.read_thread_history(thread.id, None, Some(through), 10, None, None).unwrap();
+        assert_eq!(frozen.messages.iter().find(|m| m.role == ThreadMessageRole::Assistant).unwrap().text, original_text);
+        let canonical = store.thread_message_events(thread.id, after.through_seq, None, 10).unwrap();
+        assert!(canonical.iter().any(|e| matches!(&e.payload, EventPayload::AssistantMessageCompleted { text, .. } if text == &exact)));
+        assert_eq!(
+            serde_json::to_value(store.events_for_thread_through(thread.id, through).unwrap()).unwrap(),
+            serde_json::to_value(original).unwrap()
+        );
+        let continued = store
+            .read_thread_history(thread.id, None, Some(after.through_seq), 1, Some(source_seq), Some("Recovered answer\n\n".len() as u64))
+            .unwrap();
+        assert_eq!(continued.messages[0].text, exact["Recovered answer\n\n".len()..]);
     }
 
     #[test]

@@ -284,6 +284,8 @@ enum Cmd {
         #[arg(long)]
         through_seq: Option<i64>,
     },
+    /// Recover a historical OMP answer from exact retained native block boundaries.
+    RecoverOmpAnswer { thread: String, turn: String },
     /// Read one saved tool result at an optional historical snapshot.
     ToolOutput {
         thread: String,
@@ -1319,6 +1321,12 @@ pub async fn run() -> Result<()> {
                 })
                 .await?;
             if json { print_json(&r)? } else { render::transcript(&r) }
+        }
+        Cmd::RecoverOmpAnswer { thread, turn } => {
+            let result = client
+                .call::<ThreadsRecoverOmpAnswer>(ThreadsRecoverOmpAnswerParams { thread_id: thread.parse()?, turn_id: turn.parse()? })
+                .await?;
+            print_json(&result)?;
         }
         Cmd::ToolOutput { thread, tool_call_id, start_seq, through_seq } => {
             let result = client
