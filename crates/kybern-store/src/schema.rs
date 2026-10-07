@@ -432,6 +432,10 @@ const MIGRATIONS: &[&str] = &[
     // v22: historical answer overlays must not scan large unrelated event logs.
     "CREATE INDEX assistant_recovery_identity ON events(thread_id, json_extract(payload, '$.message_id'), seq)
       WHERE kind = 'assistant_message_blocks_recovered';",
+    // v23: lifecycle settlement queries only pending messages, independently of UI history.
+    "CREATE INDEX subagent_messages_pending_child ON subagent_messages(thread_id) WHERE status = 'pending';
+      CREATE INDEX subagent_messages_pending_owner ON subagent_messages(session_instance_id) WHERE status = 'pending';
+      CREATE INDEX subagent_messages_pending_status ON subagent_messages(status) WHERE status = 'pending';",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

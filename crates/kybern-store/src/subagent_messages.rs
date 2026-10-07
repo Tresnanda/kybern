@@ -61,10 +61,26 @@ impl Store {
         Ok(Some(record))
     }
 
-    pub fn subagent_messages_pending(&self) -> Result<Vec<SubagentMessage>> {
+    /// Lifecycle batches are independent of the newest-message UI window.
+    /// Filter by the original child/process so another owner cannot be settled.
+    pub fn subagent_messages_pending(&self, thread_id: Option<ThreadId>, owner: Option<Uuid>) -> Result<Vec<SubagentMessage>> {
         let conn = self.conn.lock().unwrap();
-        let mut query = conn.prepare("SELECT record FROM subagent_messages WHERE status='pending'")?;
-        query.query_map([], |r| r.get::<_, String>(0))?.map(|r| serde_json::from_str(&r?).map_err(Into::into)).collect()
+        let mut sql = String::from("SELECT record FROM subagent_messages WHERE status='pending'");
+        let mut values = Vec::new();
+        if let Some(thread_id) = thread_id {
+            sql.push_str(" AND thread_id=?");
+            values.push(thread_id.to_string());
+        }
+        if let Some(owner) = owner {
+            sql.push_str(" AND session_instance_id=?");
+            values.push(owner.to_string());
+        }
+        sql.push_str(" ORDER BY rowid LIMIT 100");
+        let mut query = conn.prepare(&sql)?;
+        query
+            .query_map(rusqlite::params_from_iter(values), |r| r.get::<_, String>(0))?
+            .map(|r| serde_json::from_str(&r?).map_err(Into::into))
+            .collect()
     }
 
     pub fn subagent_message_parent_queued(&self, id: MessageId) -> Result<SubagentMessage> {
@@ -114,6 +130,57 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn pending_batches_reach_old_messages_and_filter_child_and_original_owner() {
+        let store = Store::open_in_memory().unwrap();
+        let oldest = message();
+        store.subagent_message_insert(&oldest).unwrap();
+        // Failed sends can push accepted pending messages out of the latest UI page.
+        for _ in 0..101 {
+            let mut failed = oldest.clone();
+            failed.id = Uuid::now_v7();
+            failed.status = SubagentMessageStatus::Failed;
+            store.subagent_message_insert(&failed).unwrap();
+        }
+        assert!(!store.subagent_messages(oldest.thread_id).unwrap().iter().any(|m| m.id == oldest.id));
+        let mut other_owner = oldest.clone();
+        other_owner.id = Uuid::now_v7();
+        other_owner.session_instance_id = Uuid::now_v7();
+        store.subagent_message_insert(&other_owner).unwrap();
+        let mut other_child = oldest.clone();
+        other_child.id = Uuid::now_v7();
+        other_child.thread_id = Uuid::now_v7();
+        store.subagent_message_insert(&other_child).unwrap();
+        let exact = store.subagent_messages_pending(Some(oldest.thread_id), Some(oldest.session_instance_id)).unwrap();
+        assert_eq!(exact.len(), 1);
+        assert_eq!(exact[0].id, oldest.id);
+        assert_eq!(store.subagent_messages_pending(Some(oldest.thread_id), None).unwrap().len(), 2);
+        assert_eq!(store.subagent_messages_pending(None, Some(oldest.session_instance_id)).unwrap().len(), 2);
+        for _ in 0..205 {
+            let mut pending = oldest.clone();
+            pending.id = Uuid::now_v7();
+            store.subagent_message_insert(&pending).unwrap();
+        }
+        let mut settled = 0;
+        loop {
+            let batch = store.subagent_messages_pending(Some(oldest.thread_id), Some(oldest.session_instance_id)).unwrap();
+            assert!(batch.len() <= 100);
+            if batch.is_empty() {
+                break;
+            }
+            for record in batch {
+                store
+                    .subagent_message_settle(record.id, record.session_instance_id, SubagentMessageStatus::Failed, Some("finished".into()))
+                    .unwrap();
+                settled += 1;
+            }
+        }
+        assert_eq!(settled, 206);
+        assert_eq!(store.subagent_message_get(oldest.id).unwrap().unwrap().status, SubagentMessageStatus::Failed);
+        assert_eq!(store.subagent_message_get(other_owner.id).unwrap().unwrap().status, SubagentMessageStatus::Pending);
+        assert_eq!(store.subagent_message_get(other_child.id).unwrap().unwrap().status, SubagentMessageStatus::Pending);
     }
 
     #[test]

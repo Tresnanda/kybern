@@ -111,3 +111,69 @@ async fn replacement_session_cannot_receive_the_original_child_inbox() {
     o.acknowledge_subagent_message(root.id, replacement.session_instance_id, "child", &queued.id.to_string()).unwrap();
     assert_eq!(fixture.store.subagent_message_get(queued.id).unwrap().unwrap().status, SubagentMessageStatus::Failed);
 }
+
+#[tokio::test]
+async fn lifecycle_cleanup_settles_pending_beyond_the_ui_window_in_owner_scoped_batches() {
+    let (fixture, root, live) = subagent_fixture().await;
+    let o = &fixture.orchestrator;
+    o.handle_driver_event(root.id, &live, DriverEvent::RuntimeTaskStarted(agent_task("child", Some("launch"), None))).await.unwrap();
+    let child = child_of(&fixture, root.id, "child");
+    let first = o
+        .send_subagent_message(methods::QueuedMessage {
+            id: Uuid::now_v7(),
+            thread_id: child.id,
+            message: UserMessage::text("Accepted before later failed sends."),
+        })
+        .await
+        .unwrap();
+    let mut pending_ids = vec![first.id];
+    for _ in 0..205 {
+        let mut record = first.clone();
+        record.id = Uuid::now_v7();
+        fixture.store.subagent_message_insert(&record).unwrap();
+        pending_ids.push(record.id);
+    }
+    for _ in 0..101 {
+        let mut record = first.clone();
+        record.id = Uuid::now_v7();
+        record.status = SubagentMessageStatus::Failed;
+        record.error = Some("Native inbox was full.".into());
+        fixture.store.subagent_message_insert(&record).unwrap();
+    }
+    assert!(!fixture.store.subagent_messages(child.id).unwrap().iter().any(|record| record.id == first.id));
+    let mut another_owner = first.clone();
+    another_owner.id = Uuid::now_v7();
+    another_owner.session_instance_id = Uuid::now_v7();
+    fixture.store.subagent_message_insert(&another_owner).unwrap();
+    o.fail_session_subagent_messages(live.session_instance_id).unwrap();
+    for id in &pending_ids {
+        assert_eq!(fixture.store.subagent_message_get(*id).unwrap().unwrap().status, SubagentMessageStatus::Failed);
+    }
+    assert_eq!(fixture.store.subagent_message_get(another_owner.id).unwrap().unwrap().status, SubagentMessageStatus::Pending);
+    let updates = fixture
+        .store
+        .events_for_thread(child.id)
+        .unwrap()
+        .iter()
+        .filter(|event| {
+            matches!(&event.payload,
+        EventPayload::SubagentMessageUpdated { message } if message.status == SubagentMessageStatus::Failed)
+        })
+        .count();
+    assert_eq!(updates, pending_ids.len());
+    o.fail_session_subagent_messages(live.session_instance_id).unwrap();
+    assert_eq!(
+        fixture
+            .store
+            .events_for_thread(child.id)
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(&event.payload,
+        EventPayload::SubagentMessageUpdated { message } if message.status == SubagentMessageStatus::Failed))
+            .count(),
+        updates
+    );
+    o.fail_subagent_messages(child.id, "Not delivered — subagent finished.").unwrap();
+    assert_eq!(fixture.store.subagent_message_get(another_owner.id).unwrap().unwrap().status, SubagentMessageStatus::Failed);
+    assert!(fixture.store.subagent_messages_pending(Some(child.id), None).unwrap().is_empty());
+}

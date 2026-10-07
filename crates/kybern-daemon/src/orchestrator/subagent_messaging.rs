@@ -168,47 +168,34 @@ impl Orchestrator {
     }
 
     pub(super) fn fail_subagent_messages(&self, child: ThreadId, reason: &str) -> Result<()> {
-        for record in self.inner.store.subagent_messages(child)? {
-            if let Some(failed) = self.inner.store.subagent_message_settle(
-                record.id,
-                record.session_instance_id,
-                SubagentMessageStatus::Failed,
-                Some(reason.into()),
-            )? {
-                self.emit_subagent_message(&failed)?;
-            }
-        }
-        Ok(())
+        self.fail_pending_subagent_messages(Some(child), None, reason)
     }
 
     pub(super) fn fail_all_subagent_messages(&self, reason: &str) -> Result<()> {
-        for record in self.inner.store.subagent_messages_pending()? {
-            if let Some(failed) = self.inner.store.subagent_message_settle(
-                record.id,
-                record.session_instance_id,
-                SubagentMessageStatus::Failed,
-                Some(reason.into()),
-            )? {
-                self.emit_subagent_message(&failed)?;
-            }
-        }
-        Ok(())
+        self.fail_pending_subagent_messages(None, None, reason)
     }
 
     pub(super) fn fail_session_subagent_messages(&self, owner: Uuid) -> Result<()> {
-        for record in self.inner.store.subagent_messages_pending()? {
-            if record.session_instance_id == owner {
+        self.fail_pending_subagent_messages(None, Some(owner), "Not delivered — native session ended before delivery could be confirmed.")
+    }
+
+    fn fail_pending_subagent_messages(&self, child: Option<ThreadId>, owner: Option<Uuid>, reason: &str) -> Result<()> {
+        loop {
+            let batch = self.inner.store.subagent_messages_pending(child, owner)?;
+            if batch.is_empty() {
+                return Ok(());
+            }
+            for record in batch {
                 if let Some(failed) = self.inner.store.subagent_message_settle(
                     record.id,
-                    owner,
+                    record.session_instance_id,
                     SubagentMessageStatus::Failed,
-                    Some("Not delivered — native session ended before delivery could be confirmed.".into()),
+                    Some(reason.into()),
                 )? {
                     self.emit_subagent_message(&failed)?;
                 }
             }
         }
-        Ok(())
     }
 
     fn emit_subagent_message(&self, message: &SubagentMessage) -> Result<()> {
