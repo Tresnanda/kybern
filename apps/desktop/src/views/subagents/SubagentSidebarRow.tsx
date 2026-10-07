@@ -1,30 +1,44 @@
 // A subagent nested under its parent in the sidebar. It exists while it works, and stays
 // for as long as you are viewing it. When it finishes it holds a check for 600ms and then
 // leaves: it rises 4px, fades and collapses over 200ms. A finished row also has a hover
-// dismiss button. Read-only: no rename, pin, drag, archive or split.
+// dismiss button. Provider subagents are read-only: no rename, pin, drag, archive or split.
+// Kybern-delegated children use the same row (they follow the same visibility rule) but are
+// writable threads, so their menu can also stop and archive them.
 
 import { useEffect, useState } from "react"
 
+import { childState, canStopDelegation } from "../../../../../packages/kybern-client/src/delegations.ts"
 import {
   SUBAGENT_SIDEBAR_HOLD_MS,
   subagentThreadPhase,
+  type SubagentPhase,
 } from "../../../../../packages/kybern-client/src/subagents.ts"
 import { ProviderMark } from "@/components/kybern/bits"
 import { IconSwap, TextSwap } from "@/components/kybern/motion"
 import { DisclosureChevron } from "@/components/kit/DisclosureChevron"
 import { SidebarIconButton } from "@/components/kit/SidebarIconButton"
 import { ContextMenu, ContextMenuContent, ContextMenuGroup, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu"
-import { BackToParentIcon, CheckIcon, StopIcon, XIcon } from "@/lib/kit/icons"
+import { ArchiveIcon, BackToParentIcon, CheckIcon, StopIcon, XIcon } from "@/lib/kit/icons"
 import { primeMarquee } from "@/lib/kit/marquee"
 import { SIDEBAR_THREAD_ROW_BASE_CLASS_NAME, SIDEBAR_ROW_ACTIVE_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, sidebarHoverRevealHideClassName } from "@/lib/kit/sidebarRowStyles"
 import { cn } from "@/lib/utils"
 import type { Thread } from "@/protocol"
+import { stopDelegatedChild } from "@/state/delegations"
+import { archiveThread, errorText } from "@/state/rpc"
 import { useStore } from "@/state/store"
 import { dismissSubagentRow, openParentOf, openThreadView, stopOneSubagent } from "@/state/subagents"
+import { toast } from "sonner"
 
 /** Indentation stops growing here; deeper rows keep the cap and show their guide lines. */
 const MAX_DEPTH = 3
 const LEAVE_MS = 220
+
+/** Working, done, failed or stopped, for either kind of child. A wait on an approval still counts as working. */
+function rowPhase(thread: Thread): SubagentPhase {
+  if (thread.subagent) return subagentThreadPhase(thread)
+  const { phase } = childState(thread)
+  return phase === "working" || phase === "waiting" ? "working" : phase === "done" ? "done" : phase === "failed" ? "failed" : "stopped"
+}
 
 export function SubagentSidebarRow({
   thread,
@@ -39,9 +53,10 @@ export function SubagentSidebarRow({
   childrenOpen: boolean
   onToggleChildren: () => void
 }) {
-  const info = thread.subagent!
+  const info = (thread.subagent ?? thread.delegation)!
+  const delegated = !thread.subagent
   const selected = useStore((state) => state.selected.kind === "thread" && state.selected.id === thread.id)
-  const phase = subagentThreadPhase(thread)
+  const phase = rowPhase(thread)
   const working = phase === "working"
   const completedAt = info.completed_at ? Date.parse(info.completed_at) : NaN
   const [dismissing, setDismissing] = useState(false)
@@ -87,7 +102,7 @@ export function SubagentSidebarRow({
             {childCount > 0 && (
               <button
                 type="button"
-                aria-label={`${childrenOpen ? "Collapse" : "Expand"} ${childCount} nested ${childCount === 1 ? "subagent" : "subagents"} of ${thread.title || "subagent"}`}
+                aria-label={`${childrenOpen ? "Collapse" : "Expand"} ${childCount} nested ${delegated ? "agent" : "subagent"}${childCount === 1 ? "" : "s"} of ${thread.title || (delegated ? "agent" : "subagent")}`}
                 aria-expanded={childrenOpen}
                 onClick={onToggleChildren}
                 className="absolute top-1/2 z-20 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
@@ -119,7 +134,7 @@ export function SubagentSidebarRow({
               </span>
               <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
                 {/* A little quieter than its parent, so the parent stays dominant. */}
-                <TextSwap text={thread.title || "Subagent"} className={cn("t-marquee flex-1 text-[length:var(--app-font-size-ui,12px)] leading-5", selected ? "text-foreground" : "text-foreground/82")} />
+                <TextSwap text={thread.title || (delegated ? "Agent" : "Subagent")} className={cn("t-marquee flex-1 text-[length:var(--app-font-size-ui,12px)] leading-5", selected ? "text-foreground" : "text-foreground/82")} />
                 {approval && <span className="t-pop shrink-0 text-[10px] font-medium text-amber-600 dark:text-amber-300/90">Pending</span>}
               </div>
             </div>
@@ -165,9 +180,19 @@ export function SubagentSidebarRow({
               <ContextMenuItem onClick={() => void openParentOf(thread)}>
                 <BackToParentIcon /> Open parent
               </ContextMenuItem>
-              {working && info.capabilities?.stop !== false && (
+              {working && !delegated && thread.subagent?.capabilities?.stop !== false && (
                 <ContextMenuItem onClick={() => void stopOneSubagent(thread)}>
                   <StopIcon /> Stop
+                </ContextMenuItem>
+              )}
+              {canStopDelegation(thread) && (
+                <ContextMenuItem onClick={() => void stopDelegatedChild(thread)}>
+                  <StopIcon /> Stop
+                </ContextMenuItem>
+              )}
+              {delegated && (
+                <ContextMenuItem onClick={() => archiveThread(thread.id).catch((error) => toast.error("Unable to archive. Try again.", { description: errorText(error) }))}>
+                  <ArchiveIcon /> Archive
                 </ContextMenuItem>
               )}
             </ContextMenuGroup>

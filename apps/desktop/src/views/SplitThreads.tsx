@@ -35,6 +35,7 @@ import {
   type ThreadPane,
 } from "@/state/splitView"
 import { useStore } from "@/state/store"
+import { isChildThread } from "../../../../packages/kybern-client/src/subagents.ts"
 
 import { Draft } from "./Draft"
 import { ThreadView } from "./Thread"
@@ -374,7 +375,7 @@ function SplitPaneEmptyState({
       Object.values(threads)
         .filter(
           (thread) =>
-            thread.status !== "archived" && !thread.subagent && !excludedThreadIds.has(thread.id)
+            thread.status !== "archived" && !isChildThread(thread) && !excludedThreadIds.has(thread.id)
         )
         .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
         .slice(0, 6),

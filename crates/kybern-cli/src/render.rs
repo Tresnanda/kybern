@@ -55,7 +55,47 @@ pub fn projects(list: &[Project]) {
 pub fn threads(list: &[Thread]) {
     for t in list {
         let status = serde_json::to_value(t.status).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-        println!("{}  {:<18} {:<12} {}{}", t.id, status, t.provider.kind, t.title, if t.pinned { "  📌" } else { "" });
+        let delegation = t
+            .delegation
+            .as_ref()
+            .map(|d| {
+                format!(
+                    "  [delegated {} {}{}]",
+                    d.role,
+                    d.status,
+                    d.worktree_state.map(|s| format!(", worktree {s:?}")).unwrap_or_default()
+                )
+            })
+            .unwrap_or_default();
+        println!("{}  {:<18} {:<12} {}{}{}", t.id, status, t.provider.kind, t.title, if t.pinned { "  📌" } else { "" }, delegation);
+    }
+}
+
+pub fn thread_messages(list: &[ThreadMessageRecord]) {
+    if list.is_empty() {
+        println!("no messages");
+    }
+    for m in list {
+        let from = m.from_thread_id.map_or_else(|| "kybern".to_string(), |id| id.to_string());
+        let reply = m.reply_to.map(|id| format!(" reply to {id}")).unwrap_or_default();
+        let held = m.held_reason.as_deref().map(|reason| format!("  ({reason})")).unwrap_or_default();
+        let body = m.body.lines().next().unwrap_or("").chars().take(80).collect::<String>();
+        println!("{}  {:<9} {:<8} from {} to {}{}{}\n    {}", m.id, m.state.as_str(), m.purpose, from, m.to_thread_id, reply, held, body);
+    }
+}
+
+/// One line for an event that carries thread-to-thread messaging, for `watch` and `send`.
+fn messaging_summary(payload: &EventPayload) -> Option<String> {
+    match payload {
+        EventPayload::ThreadMessageHeld { message } => Some(format!(
+            "held {} {} from {}",
+            message.purpose,
+            message.id,
+            message.from_thread_id.map_or_else(|| "kybern".to_string(), |id| id.to_string())
+        )),
+        EventPayload::ThreadMessageResolved { message_id, resolution } => Some(format!("{resolution:?} {message_id}").to_lowercase()),
+        EventPayload::ThreadMessageUpdated { message } => Some(format!("{} {} {}", message.state.as_str(), message.purpose, message.id)),
+        _ => None,
     }
 }
 
@@ -251,6 +291,17 @@ pub async fn follow_turn(client: &Client, subscription_id: SubscriptionId, threa
                 let decision = prompt_approval(approval)?;
                 client.call::<ApprovalsRespond>(ApprovalsRespondParams { approval_id: approval.id, decision }).await?;
             }
+            EventPayload::ThreadMessageHeld { .. }
+            | EventPayload::ThreadMessageResolved { .. }
+            | EventPayload::ThreadMessageUpdated { .. }
+                if !json =>
+            {
+                if line_open {
+                    println!();
+                    line_open = false;
+                }
+                eprintln!("  [message] {}", messaging_summary(&en.event.payload).unwrap_or_default());
+            }
             EventPayload::ProviderNotice { level, text, .. } if !json => {
                 if line_open {
                     println!();
@@ -347,8 +398,11 @@ pub async fn watch(client: &Client, subscription_id: SubscriptionId, json: bool)
                 EventPayload::ToolCallStarted { call, .. } => call.name.clone(),
                 EventPayload::ApprovalRequested { approval } | EventPayload::UserInputRequested { approval } => approval.summary.clone(),
                 EventPayload::TurnFailed { error } => error.clone(),
-                EventPayload::ThreadUpdated { thread } => format!("{:?} {}", thread.status, thread.title),
-                _ => String::new(),
+                EventPayload::ThreadUpdated { thread } => {
+                    let delegation = thread.delegation.as_ref().map(|d| format!(" [delegated {}]", d.status)).unwrap_or_default();
+                    format!("{:?} {}{}", thread.status, thread.title, delegation)
+                }
+                other => messaging_summary(other).unwrap_or_default(),
             };
             println!("{:>6}  {}  {:<28} {}", en.event.seq, &en.event.thread_id.to_string()[..8], kind, short);
         }

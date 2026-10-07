@@ -112,6 +112,14 @@ expression: scopes
   - "orchestration:operate"
 - - threads.interrupt
   - "orchestration:operate"
+- - threads.messages.list
+  - "orchestration:read"
+- - threads.messages.deliver
+  - "orchestration:operate"
+- - threads.messages.dismiss
+  - "orchestration:operate"
+- - delegations.worktree_remove
+  - "orchestration:operate"
 - - collaboration.groups.create
   - "orchestration:operate"
 - - collaboration.coordinator.get

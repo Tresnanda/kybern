@@ -33,7 +33,7 @@ pub struct Repo {
     pub workdir: PathBuf,
 }
 
-pub use kybern_protocol::{Diff, FileChange, FileStatus};
+pub use kybern_protocol::{Diff, DiffStat, FileChange, FileStatus};
 
 impl Repo {
     pub fn new(workdir: impl Into<PathBuf>) -> Self {
@@ -269,6 +269,56 @@ impl Repo {
         Ok(Diff { from: from.into(), to: to.into(), files, patch, patch_truncated })
     }
 
+    // ---- state queries used by delegated-worktree cleanup ----
+
+    /// Whether the working tree has no changes, counting untracked files
+    /// (ignored files do not count).
+    pub async fn is_clean(&self) -> Result<bool> {
+        Ok(self.git(&["status", "--porcelain"]).await?.is_empty())
+    }
+
+    /// Whether `ancestor` is reachable from `descendant` (`git merge-base
+    /// --is-ancestor`). An unknown revision is an error, not `false`.
+    pub async fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool> {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&self.workdir)
+            .args(["merge-base", "--is-ancestor", ancestor, descendant])
+            .stdin(Stdio::null())
+            .output()
+            .await
+            .context("run git")?;
+        match out.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(anyhow!("git merge-base --is-ancestor failed: {}", String::from_utf8_lossy(&out.stderr).trim())),
+        }
+    }
+
+    /// Resolve a revision to a full commit id.
+    pub async fn rev_parse(&self, revision: &str) -> Result<String> {
+        self.git(&["rev-parse", "--verify", &format!("{revision}^{{commit}}")]).await
+    }
+
+    /// Delete a local branch. Without `force` git refuses unless it is merged.
+    pub async fn delete_branch(&self, branch: &str, force: bool) -> Result<()> {
+        self.git(&["branch", if force { "-D" } else { "-d" }, "--", branch]).await.map(|_| ())
+    }
+
+    /// Files and lines changed from `base` to `head` (binary files count as a file).
+    pub async fn diffstat(&self, base: &str, head: &str) -> Result<DiffStat> {
+        let numstat = self.git(&["diff", "--numstat", "-M", base, head]).await?;
+        let mut stat = DiffStat::default();
+        for line in numstat.lines() {
+            let mut parts = line.split('\t');
+            let (add, del) = (parts.next().unwrap_or("-"), parts.next().unwrap_or("-"));
+            stat.files += 1;
+            stat.additions += add.parse::<u32>().unwrap_or(0);
+            stat.deletions += del.parse::<u32>().unwrap_or(0);
+        }
+        Ok(stat)
+    }
+
     // ---- worktrees ----
 
     /// Add a worktree on a new branch, forked from `start` (HEAD when `None`).
@@ -279,6 +329,11 @@ impl Repo {
             args.push(start);
         }
         self.git(&args).await.map(|_| ())
+    }
+
+    /// Forget worktrees whose directory no longer exists (`git worktree prune`).
+    pub async fn worktree_prune(&self) -> Result<()> {
+        self.git(&["worktree", "prune"]).await.map(|_| ())
     }
 
     pub async fn worktree_remove(&self, path: &Path, force: bool) -> Result<()> {
@@ -431,5 +486,95 @@ mod tests {
 
         assert_eq!(repo.git(&["status", "--porcelain=v1"]).await.unwrap(), status_before);
         assert_eq!(repo.git(&["show", &format!("{snapshot}:a.txt")]).await.unwrap(), "working value");
+    }
+
+    #[tokio::test]
+    async fn state_queries_report_clean_ancestry_and_diffstat() {
+        let (dir, repo) = init_repo().await;
+        std::fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        repo.git(&["add", "."]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "init"]).await.unwrap();
+        let base = repo.rev_parse("HEAD").await.unwrap();
+        assert!(repo.is_clean().await.unwrap());
+
+        std::fs::write(dir.path().join("new.txt"), "hi\n").unwrap();
+        assert!(!repo.is_clean().await.unwrap(), "untracked files make the tree dirty");
+        repo.git(&["add", "."]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "more"]).await.unwrap();
+        std::fs::write(dir.path().join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        repo.git(&["commit", "-q", "-am", "edit"]).await.unwrap();
+        let head = repo.rev_parse("HEAD").await.unwrap();
+
+        assert!(repo.is_ancestor(&base, &head).await.unwrap());
+        assert!(!repo.is_ancestor(&head, &base).await.unwrap());
+        assert!(repo.is_ancestor(&head, &head).await.unwrap());
+        assert!(repo.is_ancestor("does-not-exist", &head).await.is_err());
+        assert_eq!(repo.diffstat(&base, &head).await.unwrap(), DiffStat { files: 2, additions: 3, deletions: 0 });
+        assert_eq!(repo.diffstat(&head, &head).await.unwrap(), DiffStat::default());
+    }
+
+    #[tokio::test]
+    async fn delete_branch_refuses_unmerged_unless_forced() {
+        let (dir, repo) = init_repo().await;
+        std::fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        repo.git(&["add", "."]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "init"]).await.unwrap();
+        repo.git(&["checkout", "-q", "-b", "feature"]).await.unwrap();
+        std::fs::write(dir.path().join("b.txt"), "two\n").unwrap();
+        repo.git(&["add", "."]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "feature work"]).await.unwrap();
+        repo.git(&["checkout", "-q", "-"]).await.unwrap();
+
+        assert!(repo.delete_branch("feature", false).await.is_err());
+        repo.git(&["merge", "-q", "--no-ff", "-m", "merge", "feature"]).await.unwrap();
+        repo.delete_branch("feature", false).await.unwrap();
+        assert!(repo.branches().await.unwrap().iter().all(|branch| branch.name != "feature"));
+
+        repo.git(&["branch", "scratch"]).await.unwrap();
+        repo.delete_branch("scratch", true).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn worktree_seeded_from_a_snapshot_is_clean_and_carries_uncommitted_files() {
+        let (dir, repo) = init_repo().await;
+        std::fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        repo.git(&["add", "."]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "init"]).await.unwrap();
+        std::fs::write(dir.path().join("wip.txt"), "uncommitted\n").unwrap();
+        let snapshot = repo.snapshot("base").await.unwrap();
+
+        let parent = tempfile::tempdir().unwrap();
+        let worktree = parent.path().join("child");
+        repo.worktree_add(&worktree, "kybern/child", Some(&snapshot)).await.unwrap();
+        let child = Repo::new(&worktree);
+        assert_eq!(std::fs::read_to_string(worktree.join("wip.txt")).unwrap(), "uncommitted\n");
+        assert!(child.is_clean().await.unwrap());
+        assert_eq!(child.rev_parse("HEAD").await.unwrap(), snapshot);
+        // No commits beyond the base yet: the branch tip is an ancestor of the base.
+        assert!(repo.is_ancestor("kybern/child", &snapshot).await.unwrap());
+        std::fs::write(worktree.join("scratch"), "x").unwrap();
+        assert!(!child.is_clean().await.unwrap());
+        repo.worktree_remove(&worktree, true).await.unwrap();
+        // The snapshot is a dangling commit, so `-d` sees an unmerged branch.
+        assert!(repo.delete_branch("kybern/child", false).await.is_err());
+        repo.delete_branch("kybern/child", true).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn worktree_prune_forgets_a_deleted_worktree_so_its_branch_can_be_judged() {
+        let (dir, repo) = init_repo().await;
+        std::fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        repo.git(&["add", "."]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "init"]).await.unwrap();
+        let wt = tempfile::tempdir().unwrap();
+        let path = wt.path().join("child");
+        repo.worktree_add(&path, "kybern/x", None).await.unwrap();
+        std::fs::remove_dir_all(&path).unwrap();
+        assert!(repo.git(&["worktree", "list", "--porcelain"]).await.unwrap().contains("kybern/x"));
+        repo.worktree_prune().await.unwrap();
+        assert!(!repo.git(&["worktree", "list", "--porcelain"]).await.unwrap().contains("kybern/x"));
+        // The branch survives and, with no commits of its own, is an ancestor of HEAD.
+        assert!(repo.is_ancestor("kybern/x", "HEAD").await.unwrap());
+        repo.delete_branch("kybern/x", false).await.unwrap();
     }
 }

@@ -237,13 +237,13 @@ pub struct ThreadsListParams {
     pub project_id: Option<ProjectId>,
     #[serde(default)]
     pub include_archived: bool,
-    /// Also return read-only subagent threads (`Thread::subagent`). They are
-    /// left out by default so clients that predate them never show one as a
-    /// normal thread.
+    /// Also return read-only subagent threads (`Thread::subagent`) and
+    /// delegated children (`Thread::delegation`). They are left out by default
+    /// so clients that predate them never show one as a normal thread.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub include_subagents: bool,
-    /// Return only the direct subagent children of this thread. Implies
-    /// `include_subagents`.
+    /// Return only the direct subagent and delegated children of this thread.
+    /// Implies `include_subagents`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_thread_id: Option<ThreadId>,
 }
@@ -480,6 +480,47 @@ pub struct ThreadsAnswerParams {
 method!(ThreadsAnswer, "threads.answer", Some(Scope::OrchestrationOperate), ThreadsAnswerParams, Empty);
 method!(ThreadsCompact, "threads.compact", Some(Scope::OrchestrationOperate), ThreadsInterruptParams, ThreadsSendResult);
 method!(ThreadsInterrupt, "threads.interrupt", Some(Scope::OrchestrationOperate), ThreadsInterruptParams, Empty);
+
+// ---- thread messages and delegations ----
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadMessagesListParams {
+    pub thread_id: ThreadId,
+    /// Only messages in these states. Omit for every state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub states: Option<Vec<ThreadMessageState>>,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadMessagesListResult {
+    /// Messages sent to or from the thread, oldest first, at most 200 (the newest).
+    pub messages: Vec<ThreadMessageRecord>,
+}
+method!(ThreadMessagesList, "threads.messages.list", Some(Scope::OrchestrationRead), ThreadMessagesListParams, ThreadMessagesListResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadMessageIdParams {
+    pub message_id: MessageId,
+}
+// The user approves a held message; it is delivered with its requested delivery.
+method!(ThreadMessagesDeliver, "threads.messages.deliver", Some(Scope::OrchestrationOperate), ThreadMessageIdParams, ThreadMessageRecord);
+method!(ThreadMessagesDismiss, "threads.messages.dismiss", Some(Scope::OrchestrationOperate), ThreadMessageIdParams, ThreadMessageRecord);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DelegationsWorktreeRemoveParams {
+    /// The delegated child whose worktree to remove.
+    pub thread_id: ThreadId,
+    /// Required when the worktree is dirty or its branch is unmerged. The
+    /// branch is deleted only when it is merged.
+    #[serde(default)]
+    pub force: bool,
+}
+method!(
+    DelegationsWorktreeRemove,
+    "delegations.worktree_remove",
+    Some(Scope::OrchestrationOperate),
+    DelegationsWorktreeRemoveParams,
+    Thread
+);
 
 // ---- daemon-owned collaboration ----
 
@@ -2523,6 +2564,10 @@ registry!(
     ThreadsCompact,
     ThreadsAnswer,
     ThreadsInterrupt,
+    ThreadMessagesList,
+    ThreadMessagesDeliver,
+    ThreadMessagesDismiss,
+    DelegationsWorktreeRemove,
     CollaborationGroupsCreate,
     CollaborationCoordinatorGet,
     CollaborationCoordinatorGetOrCreate,

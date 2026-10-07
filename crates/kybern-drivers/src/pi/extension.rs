@@ -27,7 +27,7 @@ pub const APP_TOOL_TITLE_PREFIX: &str = "kybern_app_tool_request:";
 pub const ALLOW_ONCE: &str = "Allow once";
 pub const ALLOW_ALWAYS: &str = "Always allow this exact call";
 pub const DENY: &str = "Deny";
-pub const APP_TOOL_NAMES: [&str; 33] = [
+pub const APP_TOOL_NAMES: [&str; 39] = [
     "kybern_thread_context",
     "kybern_workspace_diff",
     "kybern_read_file",
@@ -38,6 +38,12 @@ pub const APP_TOOL_NAMES: [&str; 33] = [
     "kybern_threads_search",
     "kybern_thread_read",
     "kybern_thread_send",
+    "kybern_agent_capabilities",
+    "kybern_agent_delegate",
+    "kybern_agent_status",
+    "kybern_agent_cancel",
+    "kybern_agent_wait",
+    "kybern_thread_interrupt",
     "kybern_collaboration_spawn",
     "kybern_collaboration_send",
     "kybern_collaboration_read",
@@ -539,6 +545,24 @@ mod tests {
         assert!(parse_permission_request("ordinary title").is_none());
         assert!(parse_permission_request(PERMISSION_TITLE_PREFIX).unwrap().is_err());
         assert!(parse_app_tool_request(&format!("{APP_TOOL_TITLE_PREFIX}not-base64")).unwrap().is_err());
+    }
+
+    #[test]
+    fn rust_and_typescript_allow_lists_name_the_same_tools_and_agent_waits_get_the_long_timeout() {
+        let source = include_str!("extension.ts");
+        for name in APP_TOOL_NAMES {
+            assert!(source.contains(&format!("\"{name}\"")), "{name} must be allow-listed in extension.ts");
+        }
+        // Delegation and thread tools that block for up to a minute need more than the 30 s default.
+        assert!(source.contains("const COMPUTER_TOOL_TIMEOUT_MS = 70 * 1000;"));
+        for name in ["kybern_agent_delegate", "kybern_agent_wait", "kybern_thread_send"] {
+            assert!(APP_TOOL_NAMES.contains(&name), "{name}");
+        }
+        let long = source.split("const LONG_TOOL_NAMES = new Set([").nth(1).and_then(|rest| rest.split("]);").next()).unwrap();
+        for name in ["kybern_agent_delegate", "kybern_agent_wait", "kybern_thread_send"] {
+            assert!(long.contains(name), "{name} must use the long timeout");
+        }
+        assert!(source.contains("LONG_TOOL_NAMES.has(name)"));
     }
 
     #[test]

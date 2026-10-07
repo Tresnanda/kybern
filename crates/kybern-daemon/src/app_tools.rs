@@ -42,6 +42,9 @@ pub(crate) fn prepare_native_operation(
     if !matches!(
         name,
         "kybern_thread_send"
+            | "kybern_agent_delegate"
+            | "kybern_agent_cancel"
+            | "kybern_thread_interrupt"
             | "kybern_collaboration_spawn"
             | "kybern_collaboration_send"
             | "kybern_collaboration_report"
@@ -162,7 +165,7 @@ impl AppTools {
             "tasks": tasks,
             "collaboration": {
                 "available": true,
-                "guidance": "Use kybern_threads_search and kybern_thread_read to inspect prior chats without waking them. Use kybern_thread_send for an addressed durable message. kybern_collaboration_spawn creates a managed Kybern child chat; group setup is automatic. Provider-native subagents and external plugins remain separate options."
+                "guidance": "Use kybern_threads_search and kybern_thread_read to inspect prior chats without waking them. Use kybern_thread_send to message another thread (queue or steer; questions get replies; held messages need the user). Use kybern_agent_delegate to hand work to an agent on any installed harness and model, and end your turn so its result wakes you. kybern_collaboration_spawn is for project coordinators and their workers. Harness-native subagents suit quick same-harness work."
             }
         }))
     }
@@ -320,10 +323,21 @@ pub(crate) fn native_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinit
         NativeToolDefinition { name: "kybern_read_terminal".into(), description: "Read recent output from a terminal owned by the active thread.".into(), input_schema: object(json!({"terminal_id":{"type":"string","format":"uuid"},"max_bytes":{"type":"integer","minimum":1}}), &["terminal_id"]) },
         NativeToolDefinition { name: "kybern_threads_search".into(), description: "Find current, old, or archived Kybern threads. Defaults to this project; pass an explicit project_id or all_projects to search other projects on this daemon. This is read-only and never wakes a thread.".into(), input_schema: object(json!({"project_id":{"type":["string","null"],"format":"uuid"},"all_projects":{"type":"boolean"},"query":{"type":["string","null"]},"include_archived":{"type":"boolean"},"cursor":{"type":["string","null"]},"limit":{"type":"integer","minimum":1,"maximum":100}}), &[]) },
         NativeToolDefinition { name: "kybern_thread_read".into(), description: "Read bounded persisted messages from any thread on this daemon with source attribution. This never starts, resumes, or wakes its provider. To continue a truncated message, pass the returned through_seq and message_seq, and set text_offset to next_text_offset.".into(), input_schema: object(json!({"thread_id":{"type":"string","format":"uuid"},"before_seq":{"type":["integer","null"]},"through_seq":{"type":["integer","null"]},"message_seq":{"type":["integer","null"]},"text_offset":{"type":["integer","null"],"minimum":0},"limit":{"type":"integer","minimum":1,"maximum":200}}), &["thread_id"]) },
-        NativeToolDefinition { name: "kybern_thread_send".into(), description: "Send a durable attributed message to an existing thread. The recipient keeps its project, workspace, provider, permission mode, and assignment ownership; busy recipients queue the message.".into(), input_schema: object(json!({
-            "operation_id":{"type":"string","format":"uuid"}, "assignment_id":{"type":["string","null"],"format":"uuid"}, "to_thread_id":{"type":"string","format":"uuid"},
-            "purpose":{"enum":["progress","question","reply","change_request","result","failure","redirect"]}, "reply_to":{"type":["string","null"],"format":"uuid"}, "body":{"type":"string"}
-        }), &["operation_id","to_thread_id","purpose","body"]) },
+        NativeToolDefinition { name: "kybern_thread_send".into(), description: concat!(
+            "Send a message to another Kybern thread: a progress update, an instruction, a question or a reply. The recipient sees who sent it and keeps its own project, workspace and permissions. ",
+            "purpose \"message\" (default) needs no answer. \"question\" asks for one: end your turn and the reply wakes you, or set wait_for_reply to block up to 60 seconds for it (a timeout is normal, the reply still arrives later). ",
+            "\"reply\" answers a question you received: pass its id as reply_to. If you do not reply, your final message of that turn is sent back automatically. ",
+            "delivery \"queue\" (default) lets the recipient read it when it is idle or finishes its turn; \"steer\" puts it into a running turn when the recipient's harness supports that and queues otherwise. ",
+            "A message to a thread with broader permissions than yours is held until the user approves it in that thread (delivered_as \"held\"); do not resend it. ",
+            "Messaging a finished agent you delegated work to reopens it, and you are notified again when it finishes. ",
+            "Two threads can exchange at most 16 messages before a person writes in either, so do not ping-pong."
+        ).into(), input_schema: object(json!({
+            "operation_id":{"type":"string","format":"uuid"}, "thread_id":{"type":"string","format":"uuid","description":"The thread to message (the id in @thread[<id>])."},
+            "body":{"type":"string","description":"The message. Be self-contained: the recipient sees only this."},
+            "purpose":{"enum":["message","question","reply",null]}, "reply_to":{"type":["string","null"],"format":"uuid","description":"purpose reply only: the id of the question you are answering."},
+            "delivery":{"enum":["queue","steer",null]}, "wait_for_reply":{"type":["boolean","null"],"description":"purpose question only: wait for the answer inside this call."},
+            "timeout_ms":{"type":["integer","null"],"minimum":1000,"maximum":60000,"description":"wait_for_reply only; default 55000, at most 60000."}
+        }), &["operation_id","thread_id","body"]) },
         NativeToolDefinition { name: "kybern_collaboration_spawn".into(), description: "Spawn a Kybern helper/worker/subagent using Codex, Claude, OpenCode, pi, OMP, or Cursor, or assign an existing member. Use for managed delegation requests so the helper appears as a real child chat in Kybern. Group setup and the owned parent assignment are automatic. Read kybern_thread_context for harness/model/effort choices; preserve the requested model and effort. Omitted base_revision uses the source workspace's committed HEAD for isolated editing; research and review also work in non-Git projects.".into(), input_schema: object(json!({
             "operation_id":{"type":"string","format":"uuid"}, "parent_assignment_id":{"type":["string","null"],"format":"uuid"},
             "owner_thread_id":{"type":["string","null"],"format":"uuid"}, "child":{"anyOf":[{"type":"object","additionalProperties":false,"properties":{"provider":{"type":"object","additionalProperties":false,"properties":{"kind":{"enum":["claude-code","codex","opencode","pi","omp","cursor"]},"instance":{"type":"string","description":"Configured harness profile name, usually default. This is not a model name; put a model such as gpt-5.6-luna in child.model."}},"required":["kind","instance"]},"model":{"type":["string","null"],"description":"Exact model ID for the selected harness. Set this when the user requests a model; provider.instance does not select a model."},"effort":{"type":["string","null"],"description":"Reasoning effort supported by the selected model. Preserve the user requested effort; if unsupported, report the available levels instead of silently substituting."},"permission_mode":{"enum":["supervised","accept-edits","auto","full-access",null],"description":"Omit unless the user requests a different worker permission policy. Kybern inherits the parent mode for the same harness or a full-access parent; otherwise supervised. Do not broaden permissions to bypass a pending approval. Choose only permissions authorized for the delegated work."},"base_revision":{"type":["string","null"],"description":"Optional git base; defaults to the source chat workspace's committed HEAD and is resolved to a commit OID."}},"required":["provider"]},{"type":"null"}]},
@@ -345,6 +359,7 @@ pub(crate) fn native_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinit
             "operation_id":{"type":"string","format":"uuid"},"entry_id":{"type":["string","null"],"format":"uuid"},"key":{"type":"string"},"kind":{"enum":["plan","decision","research","result_reference"]},"body":{"type":"string"},"expected_revision":{"type":["integer","null"]},"source_refs":{"type":"array","items":{"type":"string"}}
         }), &["operation_id","key","kind","body"]) },
     ];
+    definitions.extend(agent_tool_definitions());
     definitions.extend(notes_tasks_tool_definitions());
     for tool in &mut definitions {
         if tool.input_schema["properties"].get("operation_id").is_none() {
@@ -364,6 +379,74 @@ pub(crate) fn native_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinit
         tool.description.push_str(" Kybern handles operation IDs; omit operation_id. Use request_key for a retryable label if needed.");
     }
     definitions
+}
+
+/// Tools any thread can use to hand work to other Kybern agents.
+fn agent_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
+    use kybern_drivers::NativeToolDefinition;
+    let object = |properties: Value, required: &[&str]| {
+        json!({
+            "type": "object", "additionalProperties": false, "properties": properties, "required": required
+        })
+    };
+    let task_id = json!({"type":"string","format":"uuid","description":"The task_id kybern_agent_delegate returned."});
+    let timeout = json!({"type":"integer","minimum":1000,"maximum":60000,"description":"Milliseconds to wait, at most 60000 (default 55000). A timeout is a normal answer, not a failure."});
+    vec![
+        NativeToolDefinition {
+            name: "kybern_agent_capabilities".into(),
+            description: "List the agent harnesses installed on this machine with their models, reasoning efforts and default model, whether each accepts steering messages mid-turn, plus your delegation limits and how many agents you have running. Read-only. Call it before choosing a provider or model for kybern_agent_delegate.".into(),
+            input_schema: object(json!({}), &[]),
+        },
+        NativeToolDefinition {
+            name: "kybern_agent_delegate".into(),
+            description: concat!(
+                "Hand a self-contained task to another Kybern agent. It runs as a new child thread the user can open, in any installed harness and model. ",
+                "By default (mode \"async\") this returns at once: after delegating, end your turn instead of polling. Kybern wakes you with a message holding every finished agent's result, batched when several finish together. ",
+                "Use mode \"wait\" only for a short task whose answer you need before you can continue; it blocks up to 50 seconds (default 45), and a timeout does not stop the agent, so end your turn then. If the call itself times out or errors, retry with the same request_key: the retry returns the same agent instead of starting a second one. ",
+                "The agent sees only the task text you write, not this conversation: include the goal, the files or areas involved, constraints, what to verify and what to report. Give it a concise role (implementation, research, review, design, test or general). ",
+                "Agents are one-shot: for another round, delegate again with the full brief, the prior findings and any responses; do not rely on the old thread's memory. ",
+                "provider, model and effort default to yours; call kybern_agent_capabilities to see the choices. A child never gets more permissions than you have. ",
+                "workspace \"shared\" (default) works in your checkout and branch. The agent must not commit, stash, reset, checkout or rebase, and you integrate its edits; list owns globs (such as src/api/**) for the paths it may edit so Kybern warns it when it strays onto a sibling's. ",
+                "Choose workspace \"worktree\" for parallel implementers that edit overlapping code: the agent gets its own git worktree and branch (kybern/<id>) seeded from your current checkout (including uncommitted changes), commits there, and its result carries the branch, base commit, commit and diffstat. If your checkout is clean, merge the branch; otherwise apply only the agent's changes with `git diff <base>..<head> | git apply --3way` so Kybern's snapshot commit never lands in your history. ",
+                "The number of agents running at once and the depth of delegation are limited in Settings. ",
+                "Prefer your harness's own subagents for quick same-harness work they can run on the model you want; use this tool for other harnesses or models, or work Kybern should track and show to the user."
+            ).into(),
+            input_schema: object(json!({
+                "operation_id": {"type":"string","format":"uuid"},
+                "task": {"type":"string","description":"The complete brief. The agent sees nothing else."},
+                "title": {"type":["string","null"],"description":"Short thread title; defaults to the first line of the task."},
+                "role": {"enum":["implementation","research","review","design","test","general",null]},
+                "provider": {"enum":["claude-code","codex","opencode","pi","omp","cursor",null],"description":"Harness; defaults to yours."},
+                "model": {"type":["string","null"],"description":"Exact model id for that harness (see kybern_agent_capabilities); defaults to yours on the same harness."},
+                "effort": {"type":["string","null"],"description":"Reasoning effort the model supports; defaults to yours on the same harness and model."},
+                "permission_mode": {"enum":["supervised","accept-edits","auto","full-access",null],"description":"Omit to inherit yours (supervised when the harness differs). It can never exceed your own."},
+                "workspace": {"enum":["shared","worktree",null],"description":"shared (default) or worktree (git projects only)."},
+                "owns": {"type":["array","null"],"items":{"type":"string"},"description":"Shared workspace only: globs relative to the checkout root this agent owns, such as src/api/**."},
+                "mode": {"enum":["async","wait",null],"description":"async (default) or wait."},
+                "timeout_ms": {"type":["integer","null"],"minimum":1000,"maximum":50000,"description":"wait mode only; default 45000, at most 50000."}
+            }), &["task"]),
+        },
+        NativeToolDefinition {
+            name: "kybern_agent_status".into(),
+            description: "Read the agents you delegated: status (running, completed, failed, cancelled, interrupted), result, files touched, ownership conflicts, and for worktree agents the branch, commit and diffstat. Without task_ids it lists your most recent agents. Read-only. Prefer ending your turn; completed results wake you automatically.".into(),
+            input_schema: object(json!({"task_ids":{"type":["array","null"],"items":{"type":"string","format":"uuid"}}}), &[]),
+        },
+        NativeToolDefinition {
+            name: "kybern_agent_cancel".into(),
+            description: "Stop an agent you delegated, and anything it delegated in turn. Safe to repeat. Use it when the work is no longer needed or went wrong; the agent's thread stays readable.".into(),
+            input_schema: object(json!({"operation_id": {"type":"string","format":"uuid"}, "task_id": task_id}), &["task_id"]),
+        },
+        NativeToolDefinition {
+            name: "kybern_agent_wait".into(),
+            description: "Wait up to 60 seconds for agents you delegated to finish (all that are running when task_ids is omitted). Returns their results, or wait_timed_out when some are still working; a timeout never stops them. Prefer ending your turn instead of waiting: completed results wake you automatically.".into(),
+            input_schema: object(json!({"task_ids":{"type":["array","null"],"items":{"type":"string","format":"uuid"}}, "timeout_ms": timeout}), &[]),
+        },
+        NativeToolDefinition {
+            name: "kybern_thread_interrupt".into(),
+            description: "Interrupt the current turn of a thread you delegated work to (or one of its descendants), the same as pressing Stop in Kybern's agents panel. Its delegation is marked cancelled. Works only on your own delegated agents.".into(),
+            input_schema: object(json!({"operation_id": {"type":"string","format":"uuid"}, "thread_id": {"type":"string","format":"uuid"}}), &["thread_id"]),
+        },
+    ]
 }
 
 /// How agents may use the user's notes and tasks; repeated in every write tool.
@@ -610,6 +693,7 @@ mod tests {
                 coordinator_project_id: None,
                 collaboration_group_id: None,
                 subagent: None,
+                delegation: None,
             };
             let thread = make_thread(Uuid::now_v7());
             let other_thread = make_thread(Uuid::now_v7());

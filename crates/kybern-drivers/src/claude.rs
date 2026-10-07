@@ -1543,6 +1543,12 @@ fn content_blocks(message: &UserMessage) -> Vec<Value> {
                 }
             }
             ContentPart::Skill { .. } => unreachable!(),
+            ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } => {
+                if let Some(text) = part.orchestration_text() {
+                    trailing.push('\n');
+                    trailing.push_str(&text);
+                }
+            }
         }
     }
     // Claude Code only expands a slash command at the start of the last text
@@ -1570,6 +1576,9 @@ fn claude_block(part: &ContentPart) -> Option<Value> {
                 .then(|| json!({ "type": "image", "source": { "type": "base64", "media_type": media_type, "data": data } }))
         }
         ContentPart::Attachment { name, .. } => Some(json!({ "type": "text", "text": format!("[attached file: {name}]") })),
+        ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } => {
+            part.orchestration_text().map(|text| json!({ "type": "text", "text": text }))
+        }
     }
 }
 
@@ -2330,5 +2339,27 @@ mod tests {
         std::fs::write(config.join(".credentials.json"), r#"{"claudeAiOauth":{"refreshToken":"r","expiresAt":1}}"#).unwrap();
         assert!(super::read_account_limits(temp.path(), Some(&binary), &env).await.is_none());
         assert_eq!(std::fs::read_to_string(&launches).unwrap().lines().count(), 1);
+    }
+}
+
+#[cfg(test)]
+mod orchestration_part_tests {
+    use super::*;
+    use crate::test_support::*;
+
+    #[test]
+    fn thread_messages_and_agent_results_flatten_to_text_blocks() {
+        let blocks = content_blocks(&orchestration_message());
+        assert_flattened(&blocks.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n"));
+    }
+
+    #[test]
+    fn they_also_flatten_after_a_skill_invocation() {
+        let mut message = orchestration_message();
+        message.parts.insert(0, ContentPart::Skill { name: "review".into(), path: "/s/SKILL.md".into() });
+        let blocks = content_blocks(&message);
+        let text = blocks.last().unwrap()["text"].as_str().unwrap();
+        assert!(text.starts_with("/review"));
+        assert_flattened(text);
     }
 }

@@ -2,6 +2,7 @@
 // Keeps the wire payload untouched while deriving a concise, tense-aware activity row.
 
 import type { JsonValue, ToolCall } from "@/protocol"
+import { orchestrationLabel, orchestrationTool } from "../../../../packages/kybern-client/src/orchestrationTools.ts"
 import { agentItemLabel, agentItemTool } from "./agentItemTools"
 import { toolSurface } from "./toolSurface"
 
@@ -667,6 +668,8 @@ export function toolLine(call: ToolCall, complete = true): ToolActivityLine {
 
   const item = agentItemTool(name)
   if (item) return line("other", "", complete, false, agentItemLabel(item, input, null, complete, false))
+  const orchestration = orchestrationTool(name)
+  if (orchestration) return line("delegate", "", complete, false, orchestrationLabel(orchestration, complete, false))
 
   if (!WEB_SEARCH_TOOLS.has(tool) && (matchesTool(COMMAND_TOOLS, tool, leaf) || leaf === "execcommand")) {
     const actions = commandActions(input)
@@ -791,6 +794,7 @@ export type ToolVisualKind =
   | "computer"
   | "note"
   | "task"
+  | "message"
 
 /** Pick a recognizable 16px glyph before falling back to the activity kind. */
 export function toolVisualKind(
@@ -807,6 +811,8 @@ export function toolVisualKind(
   if (toolSurface(call)?.kind === "computer") return "computer"
   const item = agentItemTool(call.name)
   if (item) return item.kind
+  const orchestration = orchestrationTool(call.name)
+  if (orchestration) return orchestration === "thread_send" ? "message" : "delegate"
   if (/browser|playwright|computer|cua[_:]/.test(name)) return "web"
   if (name === "web__run" || WEB_SEARCH_TOOLS.has(tool) || activity.kind === "fetch")
     return "web"
@@ -868,7 +874,7 @@ export function summarizeToolCalls(
   const fileKeys = new Map<SummaryCategory, Set<string>>()
   for (const item of items) {
     const activity = toolLine(item.call, true)
-    const category = toolSurface(item.call)?.kind === "computer" ? "computer" : agentItemCategory(item.call) ?? summaryCategory(activity.kind)
+    const category = toolSurface(item.call)?.kind === "computer" ? "computer" : agentItemCategory(item.call) ?? (orchestrationTool(item.call.name) ? "tool" : summaryCategory(activity.kind))
     if (category === "read" || category === "edit") {
       const keys = summaryFileKeys(item.call, activity)
       if (keys.length > 0) {

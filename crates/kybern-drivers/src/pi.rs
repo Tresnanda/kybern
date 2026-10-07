@@ -1596,6 +1596,11 @@ fn prompt_text(message: &UserMessage) -> String {
                 out.push_str(name);
                 out.push(']');
             }
+            ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } => {
+                if let Some(text) = part.orchestration_text() {
+                    out.push_str(&text);
+                }
+            }
         }
     }
     if skills.is_empty() {
@@ -2290,5 +2295,16 @@ cat >/dev/null
 
         assert_eq!(completed.as_deref(), Some("entry-1"));
         session.child.kill().await;
+    }
+}
+
+#[cfg(test)]
+mod orchestration_part_tests {
+    use super::*;
+    use crate::test_support::*;
+
+    #[test]
+    fn thread_messages_and_agent_results_flatten_into_the_prompt() {
+        assert_flattened(&prompt_text(&orchestration_message()));
     }
 }

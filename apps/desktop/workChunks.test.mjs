@@ -21,7 +21,8 @@ const thinking = () => ({ kind: "assistant", id: id(), turnId: "t", at: "", seq:
 const text = () => ({ ...thinking(), text: "Answer", thinking: "" })
 const runtimeAgent = () => ({ kind: "runtime_task", id: id(), turnId: "t", at: "", seq: n, task: { id: `task-${n}`, kind: "agent", status: "running" } })
 const none = new Map()
-const shape = (chunks) => chunks.map((chunk) => (chunk.kind === "single" ? "1" : chunk.kind === "tools" ? `T${chunk.blocks.length}` : `S${chunk.blocks.length}`)).join(" ")
+const delegate = (extra) => tool("mcp__kybern__kybern_agent_delegate", { task: "Do it" }, extra)
+const shape = (chunks) => chunks.map((chunk) => (chunk.kind === "single" ? "1" : chunk.kind === "tools" ? `T${chunk.blocks.length}` : chunk.kind === "delegations" ? `D${chunk.blocks.length}` : `S${chunk.blocks.length}`)).join(" ")
 
 test("two or more consecutive launches become one subagents chunk", () => {
   assert.equal(shape(chunkWork([launch(), launch(), launch()], none)), "S3")
@@ -71,4 +72,46 @@ test("chunk keys are stable and distinct", () => {
   assert.equal(chunkKey({ kind: "subagents", blocks: [a, b] }), `subagents:${a.id}`)
   assert.equal(chunkKey({ kind: "single", block: a }), a.id)
   assert.equal(chunkKey({ kind: "tools", blocks: [a, b] }), `group:${a.id}`)
+})
+
+test("two or more delegations become one delegations chunk, one stays a plain row", () => {
+  assert.equal(shape(chunkWork([delegate(), delegate(), delegate()], none)), "D3")
+  assert.equal(shape(chunkWork([delegate()], none)), "1")
+  assert.equal(shape(chunkWork([read(), read(), delegate(), delegate(), read()], none)), "T2 D2 1")
+})
+
+test("delegations and provider subagents never share a group", () => {
+  assert.equal(shape(chunkWork([delegate(), delegate(), launch(), launch()], none)), "D2 S2")
+  assert.equal(shape(chunkWork([launch(), delegate()], none)), "1 1")
+  assert.equal(shape(chunkWork([launch(), launch(), delegate(), delegate(), delegate()], none)), "S2 D3")
+})
+
+test("thinking between delegations stays above the group, and a failed delegation still groups", () => {
+  const a = delegate()
+  const think = thinking()
+  const b = delegate({ isError: true })
+  const chunks = chunkWork([a, think, b], none)
+  assert.equal(shape(chunks), "1 D2")
+  assert.equal(chunks[0].block, think)
+  assert.deepEqual(chunks[1].blocks, [a, b])
+})
+
+test("only the delegate tool starts a delegation; the other orchestration tools fold like any tool", () => {
+  const status = tool("mcp__kybern__kybern_agent_status", {})
+  const wait = tool("mcp__kybern__kybern_agent_wait", {})
+  assert.equal(shape(chunkWork([status, wait], none)), "T2")
+  assert.equal(shape(chunkWork([delegate(), status, delegate()], none)), "1 1 1")
+})
+
+test("delegation chunk keys are stable and distinct from subagent groups", () => {
+  const a = delegate()
+  const b = delegate()
+  assert.equal(chunkKey({ kind: "delegations", blocks: [a, b] }), `delegations:${a.id}`)
+  assert.notEqual(chunkKey({ kind: "delegations", blocks: [a, b] }), chunkKey({ kind: "subagents", blocks: [a, b] }))
+})
+
+test("messages to other threads keep their own rows instead of folding into a tool group", () => {
+  const send = (extra) => tool("mcp__kybern__kybern_thread_send", { thread_id: "t", body: "Hi" }, extra)
+  assert.equal(shape(chunkWork([read(), send(), send(), read()], none)), "1 1 1 1")
+  assert.equal(shape(chunkWork([read(), read(), send()], none)), "T2 1")
 })

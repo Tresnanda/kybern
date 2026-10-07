@@ -21,6 +21,7 @@ export default mergeConfig(base, {
     __COLLAB_REPLAY__: process.env.KYBERN_COLLAB_REPLAY ? readFileSync(process.env.KYBERN_COLLAB_REPLAY, "utf8") : "null",
     __COLLAB_VIEW__: JSON.stringify(process.env.KYBERN_COLLAB_VIEW ?? "work"),
     __COLLAB_STRESS__: JSON.stringify(process.env.KYBERN_COLLAB_STRESS ?? ""),
+    __ORCH_THEME__: JSON.stringify(process.env.KYBERN_ORCH_THEME ?? "dark"),
     __UPDATE_VIEW__: JSON.stringify(process.env.KYBERN_UPDATE_VIEW ?? "card"),
     __UPDATE_THEME__: JSON.stringify(process.env.KYBERN_UPDATE_THEME ?? "dark"),
     __UPDATE_REDUCED_MOTION__: JSON.stringify(process.env.KYBERN_UPDATE_REDUCED_MOTION === "1"),

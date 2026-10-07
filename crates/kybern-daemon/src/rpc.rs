@@ -167,11 +167,12 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         ThreadsList::NAME => {
             let p: ThreadsListParams = parse_or_default(params)?;
             let mut threads = state.store.threads_list(p.project_id, p.include_archived).map_err(internal)?;
-            // Subagent threads are opt-in: older clients must never list one as a normal thread.
+            // Subagent and delegated threads are opt-in: older clients must never list one as a normal thread.
             if let Some(parent) = p.parent_thread_id {
-                threads.retain(|thread| thread.subagent.is_some() && thread.parent_thread_id == Some(parent));
+                threads
+                    .retain(|thread| (thread.subagent.is_some() || thread.delegation.is_some()) && thread.parent_thread_id == Some(parent));
             } else if !p.include_subagents {
-                threads.retain(|thread| thread.subagent.is_none());
+                threads.retain(|thread| thread.subagent.is_none() && thread.delegation.is_none());
             }
             let activity = threads
                 .iter()
@@ -407,6 +408,23 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: ThreadsInterruptParams = parse(params)?;
             state.orchestrator.interrupt(p.thread_id).await.map_err(bad)?;
             ok(Empty {})
+        }
+        ThreadMessagesList::NAME => {
+            let p: ThreadMessagesListParams = parse(params)?;
+            let messages = state.store.thread_message_list_for_thread(p.thread_id, p.states.as_deref(), 200).map_err(internal)?;
+            ok(ThreadMessagesListResult { messages })
+        }
+        ThreadMessagesDeliver::NAME => {
+            let p: ThreadMessageIdParams = parse(params)?;
+            ok(state.orchestrator.thread_message_deliver(p.message_id).await.map_err(bad)?)
+        }
+        ThreadMessagesDismiss::NAME => {
+            let p: ThreadMessageIdParams = parse(params)?;
+            ok(state.orchestrator.thread_message_dismiss(p.message_id).await.map_err(bad)?)
+        }
+        DelegationsWorktreeRemove::NAME => {
+            let p: DelegationsWorktreeRemoveParams = parse(params)?;
+            ok(state.orchestrator.delegation_worktree_remove(p.thread_id, p.force).await.map_err(bad)?)
         }
         CollaborationGroupsCreate::NAME => ok(state.orchestrator.collaboration_group_create(parse(params)?).map_err(bad)?),
         CollaborationCoordinatorGet::NAME => {

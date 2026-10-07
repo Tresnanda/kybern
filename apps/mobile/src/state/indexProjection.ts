@@ -19,8 +19,8 @@ export function applyIndexEvent<S extends ThreadIndex>(
   switch (event.kind) {
     case "thread_created":
     case "thread_updated": {
-      // Subagent threads are reached from their parent, never listed.
-      if (event.thread.subagent) return state;
+      // Subagent and delegated threads are reached from their parent, never listed.
+      if (event.thread.subagent || event.thread.delegation) return state;
       const current = state.threads.find((t) => t.id === event.thread.id);
       if (current && current.last_seq > event.seq) return state;
       return {

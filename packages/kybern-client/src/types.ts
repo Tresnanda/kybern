@@ -204,6 +204,108 @@ export interface Thread {
    * stay out of ordinary thread lists. See `isSubagentThread`.
    */
   subagent?: SubagentInfo | null;
+  /**
+   * Set when another thread delegated this one with `kybern_agent_delegate`.
+   * Unlike a subagent it is a normal, writable thread; `parent_thread_id` is the
+   * delegating thread. Hidden from ordinary thread lists like subagents.
+   */
+  delegation?: DelegationInfo | null;
+}
+
+export type DelegationRole = "implementation" | "research" | "review" | "design" | "test" | "general";
+export type DelegationWorkspace = "shared" | "worktree";
+export type DelegationStatus = "running" | "completed" | "failed" | "cancelled" | "interrupted";
+/** A delegated child's own worktree: `kept` stays on disk because it was dirty or unmerged. */
+export type WorktreeState = "active" | "kept" | "removed";
+
+export interface DiffStat {
+  files: number;
+  additions: number;
+  deletions: number;
+}
+
+/** A shared-checkout edit that landed on a path a sibling delegation owns. */
+export interface DelegationConflict {
+  path: string;
+  owner_thread_id: ThreadId;
+  at: DateTime;
+}
+
+export interface DelegationInfo {
+  /** Stable id agents use for this delegation. */
+  task_id: Uuid;
+  /** Idempotency key of the delegate call. */
+  operation_id: Uuid;
+  parent_thread_id: ThreadId;
+  /** 1 for a direct child of a top-level thread. */
+  depth: number;
+  role: DelegationRole;
+  workspace: DelegationWorkspace;
+  /** Globs relative to the checkout root this child owns (shared only). */
+  owns?: string[];
+  status: DelegationStatus;
+  /** The child's final assistant text of the completing turn (at most 16 KiB). */
+  result?: string | null;
+  error?: string | null;
+  /** Repo-relative paths the child edited, at most 200. */
+  files_touched?: string[];
+  conflicts?: DelegationConflict[];
+  /** Worktree: the snapshot commit it was seeded from. */
+  base_commit?: string | null;
+  /** Worktree: `kybern/<child-id>`. */
+  branch?: string | null;
+  head_commit?: string | null;
+  diffstat?: DiffStat | null;
+  worktree_state?: WorktreeState | null;
+  started_at: DateTime;
+  completed_at?: DateTime | null;
+  /** Whether the delegating parent has been handed this outcome. Absent on old rows (treated as true). */
+  parent_notified?: boolean;
+}
+
+export type ThreadMessagePurpose = "task" | "message" | "question" | "reply" | "warning";
+export type ThreadMessageDelivery = "queue" | "steer";
+export type ThreadMessageState = "held" | "queued" | "steered" | "delivered" | "answered" | "dismissed" | "failed";
+export type HeldResolution = "delivered" | "dismissed";
+
+/** A message one thread sent another through `kybern_thread_send`; the id is also the queued or steered message id. */
+export interface ThreadMessageRecord {
+  id: MessageId;
+  operation_id: Uuid;
+  /** Absent when Kybern itself sent it. */
+  from_thread_id?: ThreadId | null;
+  to_thread_id: ThreadId;
+  purpose: ThreadMessagePurpose;
+  reply_to?: MessageId | null;
+  body: string;
+  /** Requested delivery. */
+  delivery: ThreadMessageDelivery;
+  state: ThreadMessageState;
+  held_reason?: string | null;
+  created_at: DateTime;
+  updated_at: DateTime;
+}
+
+/** One delegated agent's outcome inside an `agent_results` part. */
+export interface AgentResultItem {
+  task_id: Uuid;
+  thread_id: ThreadId;
+  title: string;
+  provider: ProviderKind;
+  model?: string | null;
+  role: DelegationRole;
+  status: DelegationStatus;
+  result?: string | null;
+  error?: string | null;
+  workspace: DelegationWorkspace;
+  branch?: string | null;
+  /** Worktree only: the commit the child started from; apply `base_commit..head_commit` when the parent checkout is dirty. */
+  base_commit?: string | null;
+  head_commit?: string | null;
+  diffstat?: DiffStat | null;
+  /** At most 50. */
+  files_touched?: string[];
+  conflicts?: DelegationConflict[];
 }
 
 /** Subagent metadata of a read-only child thread; title, model and effort live on the thread. */
@@ -440,9 +542,29 @@ export interface ThreadReferencePart {
   project_id?: ProjectId | null;
 }
 
+/** A message from another thread, or from Kybern itself when `from_thread_id` is absent. Providers see flattened text. */
+export interface ThreadMessagePart {
+  type: "thread_message";
+  /** The `thread_messages` row id; also the queued or steered message id. */
+  message_id: MessageId;
+  from_thread_id?: ThreadId | null;
+  from_title: string;
+  purpose: ThreadMessagePurpose;
+  reply_to?: MessageId | null;
+  body: string;
+}
+
+/** A batch of delegated-agent outcomes delivered to the delegating thread. */
+export interface AgentResultsPart {
+  type: "agent_results";
+  items: AgentResultItem[];
+}
+
 export type ContentPart =
   | { type: "text"; text: string }
   | ThreadReferencePart
+  | ThreadMessagePart
+  | AgentResultsPart
   | { type: "image"; media_type: string; data: string }
   | {
       type: "attachment";
@@ -696,6 +818,10 @@ export type EventPayload =
   | { kind: "message_queue_updated"; message: QueuedMessage }
   | { kind: "message_steered"; message_id: MessageId; message: UserMessage }
   | { kind: "thread_notes_updated"; notes: ThreadNotes }
+  | { kind: "thread_message_held"; message: ThreadMessageRecord }
+  /** A thread message changed state after it was created. Sent on the sender's thread and the recipient's. */
+  | { kind: "thread_message_updated"; message: ThreadMessageRecord }
+  | { kind: "thread_message_resolved"; message_id: MessageId; resolution: HeldResolution }
   | { kind: "collaboration_group_updated"; group: CollaborationGroup }
   | { kind: "collaboration_member_updated"; member: GroupMember }
   | { kind: "collaboration_assignment_updated"; assignment: CollaborationAssignment }
@@ -871,10 +997,28 @@ export interface ProjectsRemoveParams {
 export interface ThreadsListParams {
   project_id?: ProjectId;
   include_archived?: boolean;
-  /** Also return read-only subagent threads; left out by default. */
+  /** Also return read-only subagent threads and delegated children; left out by default. */
   include_subagents?: boolean;
-  /** Only the direct subagent children of this thread (implies `include_subagents`). */
+  /** Only the direct subagent and delegated children of this thread (implies `include_subagents`). */
   parent_thread_id?: ThreadId;
+}
+
+export interface ThreadMessagesListParams {
+  thread_id: ThreadId;
+  /** Only messages in these states; omit for every state. */
+  states?: ThreadMessageState[] | null;
+}
+
+export interface ThreadMessagesListResult {
+  /** Messages sent to or from the thread, oldest first, at most the newest 200. */
+  messages: ThreadMessageRecord[];
+}
+
+export interface DelegationsWorktreeRemoveParams {
+  /** The delegated child whose worktree to remove. */
+  thread_id: ThreadId;
+  /** Required when the worktree is dirty or its branch is unmerged. The branch is deleted only when merged. */
+  force?: boolean;
 }
 
 export interface ThreadsListResult {
@@ -1437,8 +1581,18 @@ export interface Settings {
   background: BackgroundSettings;
   access: AccessSettings;
   computer_use: ComputerUseSettings;
+  /** Limits on agents delegating work to other agents. */
+  orchestration: OrchestrationSettings;
   /** Give new agent sessions a short guide to Kybern. Defaults to on. */
   tell_agents_about_kybern: boolean;
+}
+
+/** Limits for `kybern_agent_delegate`, read each time an agent delegates. */
+export interface OrchestrationSettings {
+  /** Most delegated children one thread may have running at once (1-16). */
+  max_active_children: number;
+  /** Deepest chain of delegation; 1 means only top-level threads delegate (1-4). */
+  max_depth: number;
 }
 
 /** Whether an agent may ask to use the real cursor and focus. */
@@ -1884,6 +2038,10 @@ export interface Methods {
   "threads.answer": [ThreadsAnswerParams, Empty];
   "threads.compact": [ThreadsInterruptParams, ThreadsSendResult];
   "threads.interrupt": [ThreadsInterruptParams, Empty];
+  "threads.messages.list": [ThreadMessagesListParams, ThreadMessagesListResult];
+  "threads.messages.deliver": [{ message_id: MessageId }, ThreadMessageRecord];
+  "threads.messages.dismiss": [{ message_id: MessageId }, ThreadMessageRecord];
+  "delegations.worktree_remove": [DelegationsWorktreeRemoveParams, Thread];
   "collaboration.coordinator.get": [{ project_id: ProjectId }, ProjectCoordinator | null];
   "collaboration.coordinator.get_or_create": [ProjectCoordinatorCreateParams, ProjectCoordinator];
   "collaboration.coordinator.delete": [{ operation_id: OperationId; project_id: ProjectId; thread_id: ThreadId }, Thread];

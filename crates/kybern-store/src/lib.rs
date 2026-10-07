@@ -1618,6 +1618,206 @@ impl Store {
         })
     }
 
+    /// The delegated child created for the delegate call `operation_id`.
+    pub fn delegation_find_by_operation(&self, operation_id: Uuid) -> Result<Option<Thread>> {
+        self.with(|c| {
+            Ok(c.query_row(
+                &format!("{THREAD_SELECT} WHERE delegation IS NOT NULL AND json_extract(delegation, '$.operation_id') = ?1"),
+                [operation_id.to_string()],
+                row_to_thread,
+            )
+            .optional()?)
+        })
+    }
+
+    /// The delegated child that `kybern_agent_*` tools know as `task_id`.
+    pub fn delegation_find_by_task(&self, task_id: Uuid) -> Result<Option<Thread>> {
+        self.with(|c| {
+            Ok(c.query_row(
+                &format!("{THREAD_SELECT} WHERE delegation IS NOT NULL AND json_extract(delegation, '$.task_id') = ?1"),
+                [task_id.to_string()],
+                row_to_thread,
+            )
+            .optional()?)
+        })
+    }
+
+    /// Delegated children of a thread, oldest first.
+    pub fn delegation_children(&self, parent_thread_id: ThreadId) -> Result<Vec<Thread>> {
+        self.with(|c| {
+            let mut st =
+                c.prepare(&format!("{THREAD_SELECT} WHERE delegation IS NOT NULL AND parent_thread_id = ?1 ORDER BY created_at, id"))?;
+            Ok(st.query_map([parent_thread_id.to_string()], row_to_thread)?.collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
+    /// How many delegated children of a thread are still `running`.
+    pub fn delegation_active_count(&self, parent_thread_id: ThreadId) -> Result<u32> {
+        self.with(|c| {
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM threads WHERE delegation IS NOT NULL AND parent_thread_id = ?1
+                 AND json_extract(delegation, '$.status') = 'running'",
+                [parent_thread_id.to_string()],
+                |r| r.get(0),
+            )?)
+        })
+    }
+
+    // ---- thread messages ----
+
+    /// Insert a message. Fails when `operation_id` or `id` already exists; use
+    /// [`Store::thread_message_find_by_operation`] first to make a send idempotent.
+    pub fn thread_message_insert(&self, m: &ThreadMessageRecord) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO thread_messages(id, operation_id, from_thread_id, to_thread_id, purpose, reply_to, body, delivery,
+                                             state, held_reason, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    m.id.to_string(),
+                    m.operation_id.to_string(),
+                    m.from_thread_id.map(|id| id.to_string()),
+                    m.to_thread_id.to_string(),
+                    snake(m.purpose)?,
+                    m.reply_to.map(|id| id.to_string()),
+                    m.body,
+                    snake(m.delivery)?,
+                    snake(m.state)?,
+                    m.held_reason,
+                    m.created_at.to_rfc3339(),
+                    m.updated_at.to_rfc3339(),
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn thread_message_get(&self, id: MessageId) -> Result<Option<ThreadMessageRecord>> {
+        self.with(|c| {
+            Ok(c.query_row(&format!("{THREAD_MESSAGE_SELECT} WHERE id = ?1"), [id.to_string()], row_to_thread_message).optional()?)
+        })
+    }
+
+    pub fn thread_message_find_by_operation(&self, operation_id: Uuid) -> Result<Option<ThreadMessageRecord>> {
+        self.with(|c| {
+            Ok(c.query_row(&format!("{THREAD_MESSAGE_SELECT} WHERE operation_id = ?1"), [operation_id.to_string()], row_to_thread_message)
+                .optional()?)
+        })
+    }
+
+    /// Move a message to `state` and bump `updated_at`. Returns the updated row,
+    /// or `None` when no message has that id.
+    pub fn thread_message_update_state(&self, id: MessageId, state: ThreadMessageState) -> Result<Option<ThreadMessageRecord>> {
+        self.with(|c| {
+            let changed = c.execute(
+                "UPDATE thread_messages SET state = ?2, updated_at = ?3 WHERE id = ?1",
+                params![id.to_string(), snake(state)?, Utc::now().to_rfc3339()],
+            )?;
+            if changed == 0 {
+                return Ok(None);
+            }
+            Ok(c.query_row(&format!("{THREAD_MESSAGE_SELECT} WHERE id = ?1"), [id.to_string()], row_to_thread_message).optional()?)
+        })
+    }
+
+    /// Every thread message in one of `states`, oldest first (startup recovery).
+    pub fn thread_messages_in_states(&self, states: &[ThreadMessageState], limit: usize) -> Result<Vec<ThreadMessageRecord>> {
+        if states.is_empty() {
+            return Ok(Vec::new());
+        }
+        let states = states.iter().map(|state| snake(*state)).collect::<Result<Vec<_>>>()?;
+        let limit = limit.clamp(1, 10_000) as i64;
+        self.with(|c| {
+            let marks = (0..states.len()).map(|i| format!("?{}", i + 2)).collect::<Vec<_>>().join(",");
+            let mut values: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(limit)];
+            values.extend(states.into_iter().map(|state| Box::new(state) as Box<dyn rusqlite::ToSql>));
+            let mut st = c.prepare(&format!("{THREAD_MESSAGE_SELECT} WHERE state IN ({marks}) ORDER BY created_at, rowid LIMIT ?1"))?;
+            Ok(st
+                .query_map(rusqlite::params_from_iter(values.iter().map(|v| v.as_ref())), row_to_thread_message)?
+                .collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+    }
+
+    /// Move a message to `to` only while it is still in one of the `from` states
+    /// (one atomic UPDATE, so a newer state is never overwritten). Returns the
+    /// updated row when it changed, `None` when it did not or does not exist.
+    pub fn thread_message_transition(
+        &self,
+        id: MessageId,
+        from: &[ThreadMessageState],
+        to: ThreadMessageState,
+    ) -> Result<Option<ThreadMessageRecord>> {
+        if from.is_empty() {
+            return Ok(None);
+        }
+        let from = from.iter().map(|state| snake(*state)).collect::<Result<Vec<_>>>()?;
+        self.with(|c| {
+            let placeholders = (0..from.len()).map(|index| format!("?{}", index + 4)).collect::<Vec<_>>().join(",");
+            let mut values: Vec<Box<dyn rusqlite::ToSql>> =
+                vec![Box::new(id.to_string()), Box::new(snake(to)?), Box::new(Utc::now().to_rfc3339())];
+            values.extend(from.into_iter().map(|state| Box::new(state) as Box<dyn rusqlite::ToSql>));
+            let refs: Vec<&dyn rusqlite::ToSql> = values.iter().map(|value| value.as_ref()).collect();
+            let changed = c.execute(
+                &format!("UPDATE thread_messages SET state = ?2, updated_at = ?3 WHERE id = ?1 AND state IN ({placeholders})"),
+                refs.as_slice(),
+            )?;
+            if changed == 0 {
+                return Ok(None);
+            }
+            Ok(c.query_row(&format!("{THREAD_MESSAGE_SELECT} WHERE id = ?1"), [id.to_string()], row_to_thread_message).optional()?)
+        })
+    }
+
+    /// Messages sent to or from `thread_id`, oldest first. Only the newest
+    /// `limit` rows (at most 200) are returned. `states` filters by state.
+    pub fn thread_message_list_for_thread(
+        &self,
+        thread_id: ThreadId,
+        states: Option<&[ThreadMessageState]>,
+        limit: usize,
+    ) -> Result<Vec<ThreadMessageRecord>> {
+        let limit = limit.clamp(1, 200) as i64;
+        let states = states.map(|states| states.iter().map(|s| snake(*s)).collect::<Result<Vec<_>>>()).transpose()?;
+        self.with(|c| {
+            let mut rows = match &states {
+                Some(states) if states.is_empty() => return Ok(Vec::new()),
+                Some(states) => {
+                    let marks = (0..states.len()).map(|i| format!("?{}", i + 3)).collect::<Vec<_>>().join(",");
+                    let sql = format!(
+                        "{THREAD_MESSAGE_SELECT} WHERE (to_thread_id = ?1 OR from_thread_id = ?1) AND state IN ({marks})
+                         ORDER BY created_at DESC, rowid DESC LIMIT ?2"
+                    );
+                    let mut values: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(thread_id.to_string()), Box::new(limit)];
+                    values.extend(states.iter().map(|s| Box::new(s.clone()) as Box<dyn rusqlite::ToSql>));
+                    let mut st = c.prepare(&sql)?;
+                    st.query_map(rusqlite::params_from_iter(values.iter().map(|v| v.as_ref())), row_to_thread_message)?
+                        .collect::<Result<Vec<_>, _>>()?
+                }
+                None => {
+                    let mut st = c.prepare(&format!(
+                        "{THREAD_MESSAGE_SELECT} WHERE to_thread_id = ?1 OR from_thread_id = ?1
+                         ORDER BY created_at DESC, rowid DESC LIMIT ?2"
+                    ))?;
+                    st.query_map(params![thread_id.to_string(), limit], row_to_thread_message)?.collect::<Result<Vec<_>, _>>()?
+                }
+            };
+            rows.reverse();
+            Ok(rows)
+        })
+    }
+
+    /// The first reply recorded for the question `reply_to`.
+    pub fn thread_message_find_reply(&self, reply_to: MessageId) -> Result<Option<ThreadMessageRecord>> {
+        self.with(|c| {
+            Ok(c.query_row(
+                &format!("{THREAD_MESSAGE_SELECT} WHERE reply_to = ?1 AND purpose = 'reply' ORDER BY created_at, rowid LIMIT 1"),
+                [reply_to.to_string()],
+                row_to_thread_message,
+            )
+            .optional()?)
+        })
+    }
+
     pub fn threads_running(&self) -> Result<Vec<Thread>> {
         self.with(|c| {
             let mut st = c.prepare(&format!("{THREAD_SELECT} WHERE status IN ('running','awaiting-approval')"))?;
@@ -1933,6 +2133,26 @@ impl Store {
         })
     }
 
+    /// Latest turn a person started in `thread_id`: not a collaboration delivery,
+    /// a thread message, delegation brief or batch of agent results. Thread
+    /// messaging resets its per-pair wake cap on it.
+    pub fn thread_latest_person_turn_at(&self, thread_id: ThreadId) -> Result<Option<DateTime<Utc>>> {
+        self.with(|c| {
+            c.query_row(
+                "SELECT e.at FROM events e
+                 LEFT JOIN collaboration_messages cm ON cm.delivery_message_id=json_extract(e.payload,'$.message_id')
+                 LEFT JOIN thread_messages tm ON tm.id=json_extract(e.payload,'$.message_id')
+                 WHERE e.thread_id=?1 AND e.kind='turn_started' AND cm.id IS NULL AND tm.id IS NULL
+                   AND COALESCE(json_extract(e.payload,'$.message.parts[0].type'),'') NOT IN ('thread_message','agent_results')
+                 ORDER BY e.seq DESC LIMIT 1",
+                [thread_id.to_string()],
+                |row| parse_time(row.get(0)?),
+            )
+            .optional()
+            .map_err(Into::into)
+        })
+    }
+
     /// Keep a hydrated transcript aligned with the thread's acknowledged head.
     pub fn events_for_thread_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<Vec<ThreadEvent>> {
         self.with(|c| {
@@ -1957,7 +2177,8 @@ impl Store {
                    'thread_created', 'thread_updated', 'message_queued', 'message_queue_updated',
                    'project_coordinator_deleted', 'collaboration_group_updated', 'collaboration_member_updated',
                    'collaboration_assignment_updated', 'collaboration_message_updated', 'collaboration_context_updated',
-                   'thread_notes_updated', 'message_removed', 'thread_archived', 'tool_call_output_delta', 'checkpoint_updated'
+                   'thread_notes_updated', 'message_removed', 'thread_archived', 'tool_call_output_delta', 'checkpoint_updated',
+                   'thread_message_held', 'thread_message_resolved', 'thread_message_updated'
                  ) ORDER BY seq",
             )?;
             let mut rows = statement.query(params![thread_id.to_string(), through_seq])?;
@@ -2444,7 +2665,31 @@ fn stamp_runtime_task_sequence(payload: &mut EventPayload, seq: EventSeq) -> boo
 
 const THREAD_SELECT: &str = "SELECT id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode, status,
     worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq,
-    parent_thread_id, coordinator_project_id, collaboration_group_id, subagent FROM threads";
+    parent_thread_id, coordinator_project_id, collaboration_group_id, subagent, delegation FROM threads";
+
+const THREAD_MESSAGE_SELECT: &str = "SELECT id, operation_id, from_thread_id, to_thread_id, purpose, reply_to, body, delivery, state,
+    held_reason, created_at, updated_at FROM thread_messages";
+
+fn enum_from_column<T: serde::de::DeserializeOwned>(value: String) -> rusqlite::Result<T> {
+    serde_json::from_value(serde_json::Value::String(value)).map_err(other)
+}
+
+fn row_to_thread_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadMessageRecord> {
+    Ok(ThreadMessageRecord {
+        id: parse_uuid(r.get::<_, String>(0)?)?,
+        operation_id: parse_uuid(r.get::<_, String>(1)?)?,
+        from_thread_id: r.get::<_, Option<String>>(2)?.map(parse_uuid).transpose()?,
+        to_thread_id: parse_uuid(r.get::<_, String>(3)?)?,
+        purpose: enum_from_column(r.get::<_, String>(4)?)?,
+        reply_to: r.get::<_, Option<String>>(5)?.map(parse_uuid).transpose()?,
+        body: r.get(6)?,
+        delivery: enum_from_column(r.get::<_, String>(7)?)?,
+        state: enum_from_column(r.get::<_, String>(8)?)?,
+        held_reason: r.get(9)?,
+        created_at: parse_time(r.get::<_, String>(10)?)?,
+        updated_at: parse_time(r.get::<_, String>(11)?)?,
+    })
+}
 
 fn row_to_project(r: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
     Ok(Project {
@@ -2488,6 +2733,7 @@ fn row_to_thread(r: &rusqlite::Row<'_>) -> rusqlite::Result<Thread> {
         coordinator_project_id: r.get::<_, Option<String>>(18)?.map(parse_uuid).transpose()?,
         collaboration_group_id: r.get::<_, Option<String>>(19)?.map(parse_uuid).transpose()?,
         subagent: r.get::<_, Option<String>>(20)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
+        delegation: r.get::<_, Option<String>>(21)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
     })
 }
 
@@ -2679,8 +2925,8 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
     c.execute(
         "INSERT INTO threads(id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode,
                     status, worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq,
-                    parent_thread_id, coordinator_project_id, collaboration_group_id, subagent)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+                    parent_thread_id, coordinator_project_id, collaboration_group_id, subagent, delegation)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
                  ON CONFLICT(id) DO UPDATE SET
                     title = excluded.title, model = excluded.model, effort = excluded.effort, permission_mode = excluded.permission_mode,
                     status = excluded.status, worktree_path = excluded.worktree_path, worktree_branch = excluded.worktree_branch,
@@ -2689,7 +2935,8 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
                     parent_thread_id = COALESCE(threads.parent_thread_id, excluded.parent_thread_id),
                     coordinator_project_id = excluded.coordinator_project_id,
                     collaboration_group_id = excluded.collaboration_group_id,
-                    subagent = COALESCE(excluded.subagent, threads.subagent)",
+                    subagent = COALESCE(excluded.subagent, threads.subagent),
+                    delegation = COALESCE(excluded.delegation, threads.delegation)",
         params![
             t.id.to_string(),
             t.project_id.to_string(),
@@ -2712,6 +2959,7 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
             t.coordinator_project_id.map(|id| id.to_string()),
             t.collaboration_group_id.map(|id| id.to_string()),
             t.subagent.as_ref().map(serde_json::to_string).transpose()?,
+            t.delegation.as_ref().map(serde_json::to_string).transpose()?,
         ],
     )?;
     Ok(())
@@ -2755,6 +3003,7 @@ mod tests {
             coordinator_project_id: None,
             collaboration_group_id: None,
             subagent: None,
+            delegation: None,
         };
         store.thread_upsert(&thread).unwrap();
         let group = CollaborationGroup {
@@ -2852,6 +3101,7 @@ mod tests {
             coordinator_project_id: None,
             collaboration_group_id: None,
             subagent: None,
+            delegation: None,
         };
         let history = vec![ThreadEvent {
             seq: 999,
@@ -2922,6 +3172,7 @@ mod tests {
             coordinator_project_id: None,
             collaboration_group_id: None,
             subagent: None,
+            delegation: None,
         };
         s.thread_upsert(&t).unwrap();
         let e = s.event_append(t.id, None, EventPayload::ThreadCreated { thread: t.clone() }).unwrap();
@@ -3063,6 +3314,7 @@ mod tests {
             coordinator_project_id: None,
             collaboration_group_id: None,
             subagent: None,
+            delegation: None,
         };
         store.thread_upsert(&thread).unwrap();
         let turn = Uuid::now_v7();
@@ -3459,5 +3711,291 @@ mod transcript_scan_allocation_tests {
         }
         assert!(store.project_transcript_through(ThreadId::new_v4(), i64::MAX).unwrap().is_empty());
         assert_eq!(store.events_for_thread_through(thread, i64::MAX).unwrap().len(), events.len(), "full replay remains untouched");
+    }
+}
+
+#[cfg(test)]
+mod orchestration_tests {
+    use super::*;
+
+    fn project(store: &Store) -> Project {
+        let now = Utc::now();
+        let project = Project {
+            id: Uuid::now_v7(),
+            name: "orchestration".into(),
+            path: format!("/tmp/{}", Uuid::now_v7()),
+            is_git: true,
+            worktrees_default: None,
+            task_prefix: None,
+            created_at: now,
+            updated_at: now,
+        };
+        store.project_insert(&project).unwrap();
+        project
+    }
+
+    fn thread(project: &Project, parent: Option<ThreadId>, delegation: Option<DelegationInfo>) -> Thread {
+        let now = Utc::now();
+        Thread {
+            id: Uuid::now_v7(),
+            project_id: project.id,
+            title: "t".into(),
+            provider: ProviderInstance::default_for(ProviderKind::Codex),
+            model: None,
+            effort: None,
+            permission_mode: PermissionMode::Supervised,
+            status: ThreadStatus::Idle,
+            worktree: None,
+            cwd: project.path.clone(),
+            provider_session_id: None,
+            pinned: false,
+            created_at: now,
+            updated_at: now,
+            last_seq: 0,
+            parent_thread_id: parent,
+            coordinator_project_id: None,
+            collaboration_group_id: None,
+            subagent: None,
+            delegation,
+        }
+    }
+
+    fn delegation(parent: ThreadId, status: DelegationStatus) -> DelegationInfo {
+        DelegationInfo {
+            task_id: Uuid::now_v7(),
+            operation_id: Uuid::now_v7(),
+            parent_thread_id: parent,
+            depth: 1,
+            role: DelegationRole::Research,
+            workspace: DelegationWorkspace::Worktree,
+            owns: vec!["src/**".into()],
+            status,
+            result: None,
+            error: None,
+            files_touched: vec!["src/a.rs".into()],
+            conflicts: vec![DelegationConflict { path: "src/b.rs".into(), owner_thread_id: Uuid::now_v7(), at: Utc::now() }],
+            base_commit: Some("abc".into()),
+            branch: Some("kybern/x".into()),
+            head_commit: None,
+            diffstat: Some(DiffStat { files: 1, additions: 2, deletions: 3 }),
+            worktree_state: Some(WorktreeState::Active),
+            started_at: Utc::now(),
+            completed_at: None,
+            parent_notified: true,
+        }
+    }
+
+    fn message(to: ThreadId, from: Option<ThreadId>, purpose: ThreadMessagePurpose, state: ThreadMessageState) -> ThreadMessageRecord {
+        let now = Utc::now();
+        ThreadMessageRecord {
+            id: Uuid::now_v7(),
+            operation_id: Uuid::now_v7(),
+            from_thread_id: from,
+            to_thread_id: to,
+            purpose,
+            reply_to: None,
+            body: "hello".into(),
+            delivery: ThreadMessageDelivery::Queue,
+            state,
+            held_reason: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn migration_18_upgrades_an_existing_database_in_place() {
+        let conn = Connection::open_in_memory().unwrap();
+        schema::migrate_to(&conn, 17).unwrap();
+        conn.execute("INSERT INTO projects(id, name, path, is_git, created_at, updated_at) VALUES ('p', 'n', '/x', 1, 'a', 'a')", [])
+            .unwrap();
+        let before: i64 = conn.query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0)).unwrap();
+        schema::migrate(&conn).unwrap();
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), schema::migration_count() as i64);
+        assert!(schema::migration_count() >= 18);
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM projects", [], |r| r.get::<_, i64>(0)).unwrap(), before);
+        conn.query_row("SELECT COUNT(delegation) FROM threads", [], |r| r.get::<_, i64>(0)).unwrap();
+        conn.query_row("SELECT COUNT(*) FROM thread_messages", [], |r| r.get::<_, i64>(0)).unwrap();
+    }
+
+    #[test]
+    fn delegation_roundtrips_and_is_found_by_operation_task_and_parent() {
+        let store = Store::open_in_memory().unwrap();
+        let project = project(&store);
+        let parent = thread(&project, None, None);
+        store.thread_upsert(&parent).unwrap();
+        let info = delegation(parent.id, DelegationStatus::Running);
+        let child = thread(&project, Some(parent.id), Some(info.clone()));
+        store.thread_upsert(&child).unwrap();
+        let other = thread(&project, Some(parent.id), Some(delegation(parent.id, DelegationStatus::Completed)));
+        store.thread_upsert(&other).unwrap();
+
+        assert_eq!(store.thread_get(child.id).unwrap().unwrap().delegation, Some(info.clone()));
+        assert_eq!(store.thread_get(parent.id).unwrap().unwrap().delegation, None);
+        assert_eq!(store.delegation_find_by_operation(info.operation_id).unwrap().unwrap().id, child.id);
+        assert_eq!(store.delegation_find_by_task(info.task_id).unwrap().unwrap().id, child.id);
+        assert!(store.delegation_find_by_task(Uuid::now_v7()).unwrap().is_none());
+        let children = store.delegation_children(parent.id).unwrap();
+        assert_eq!(children.iter().map(|t| t.id).collect::<Vec<_>>(), [child.id, other.id]);
+        assert_eq!(store.delegation_active_count(parent.id).unwrap(), 1);
+
+        // A status change is persisted; a later write without delegation keeps it.
+        let mut done = child.clone();
+        done.delegation.as_mut().unwrap().status = DelegationStatus::Completed;
+        store.thread_upsert(&done).unwrap();
+        assert_eq!(store.delegation_active_count(parent.id).unwrap(), 0);
+        let mut bare = child.clone();
+        bare.delegation = None;
+        store.thread_upsert(&bare).unwrap();
+        assert_eq!(store.thread_get(child.id).unwrap().unwrap().delegation.unwrap().status, DelegationStatus::Completed);
+    }
+
+    #[test]
+    fn delegation_operation_and_task_ids_are_unique() {
+        let store = Store::open_in_memory().unwrap();
+        let project = project(&store);
+        let parent = thread(&project, None, None);
+        store.thread_upsert(&parent).unwrap();
+        let info = delegation(parent.id, DelegationStatus::Running);
+        store.thread_upsert(&thread(&project, Some(parent.id), Some(info.clone()))).unwrap();
+        let mut same_operation = delegation(parent.id, DelegationStatus::Running);
+        same_operation.operation_id = info.operation_id;
+        assert!(store.thread_upsert(&thread(&project, Some(parent.id), Some(same_operation))).is_err());
+        let mut same_task = delegation(parent.id, DelegationStatus::Running);
+        same_task.task_id = info.task_id;
+        assert!(store.thread_upsert(&thread(&project, Some(parent.id), Some(same_task))).is_err());
+    }
+
+    #[test]
+    fn thread_messages_insert_get_update_list_and_find_reply() {
+        let store = Store::open_in_memory().unwrap();
+        let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+        let question = message(b, Some(a), ThreadMessagePurpose::Question, ThreadMessageState::Queued);
+        store.thread_message_insert(&question).unwrap();
+        assert_eq!(store.thread_message_get(question.id).unwrap().unwrap(), question);
+        assert_eq!(store.thread_message_find_by_operation(question.operation_id).unwrap().unwrap().id, question.id);
+        assert!(store.thread_message_get(Uuid::now_v7()).unwrap().is_none());
+
+        let mut duplicate = message(b, Some(a), ThreadMessagePurpose::Message, ThreadMessageState::Queued);
+        duplicate.operation_id = question.operation_id;
+        assert!(store.thread_message_insert(&duplicate).is_err());
+
+        let mut reply = message(a, Some(b), ThreadMessagePurpose::Reply, ThreadMessageState::Delivered);
+        reply.reply_to = Some(question.id);
+        store.thread_message_insert(&reply).unwrap();
+        assert_eq!(store.thread_message_find_reply(question.id).unwrap().unwrap().id, reply.id);
+        assert!(store.thread_message_find_reply(reply.id).unwrap().is_none());
+
+        let mut held = message(b, None, ThreadMessagePurpose::Warning, ThreadMessageState::Held);
+        held.held_reason = Some("permission".into());
+        store.thread_message_insert(&held).unwrap();
+
+        let all = store.thread_message_list_for_thread(b, None, 200).unwrap();
+        assert_eq!(all.iter().map(|m| m.id).collect::<Vec<_>>(), [question.id, reply.id, held.id], "oldest first, to or from");
+        let only_held = store.thread_message_list_for_thread(b, Some(&[ThreadMessageState::Held]), 200).unwrap();
+        assert_eq!(only_held.len(), 1);
+        assert_eq!(only_held[0].held_reason.as_deref(), Some("permission"));
+        assert!(store.thread_message_list_for_thread(b, Some(&[]), 200).unwrap().is_empty());
+        let newest = store.thread_message_list_for_thread(b, None, 1).unwrap();
+        assert_eq!(newest.iter().map(|m| m.id).collect::<Vec<_>>(), [held.id], "the cap keeps the newest");
+        assert!(store.thread_message_list_for_thread(Uuid::now_v7(), None, 200).unwrap().is_empty());
+
+        let answered = store.thread_message_update_state(question.id, ThreadMessageState::Answered).unwrap().unwrap();
+        assert_eq!(answered.state, ThreadMessageState::Answered);
+        assert!(answered.updated_at >= question.updated_at);
+        assert!(store.thread_message_update_state(Uuid::now_v7(), ThreadMessageState::Failed).unwrap().is_none());
+    }
+
+    #[test]
+    fn thread_message_transition_never_overwrites_a_newer_state() {
+        let store = Store::open_in_memory().unwrap();
+        let project = project(&store);
+        let to = thread(&project, None, None);
+        store.thread_upsert(&to).unwrap();
+        let record = message(to.id, None, ThreadMessagePurpose::Message, ThreadMessageState::Held);
+        store.thread_message_insert(&record).unwrap();
+        let held_or_queued = [ThreadMessageState::Held, ThreadMessageState::Queued];
+        let queued = store.thread_message_transition(record.id, &held_or_queued, ThreadMessageState::Queued).unwrap().unwrap();
+        assert_eq!(queued.state, ThreadMessageState::Queued);
+        store.thread_message_update_state(record.id, ThreadMessageState::Delivered).unwrap();
+        assert!(store.thread_message_transition(record.id, &held_or_queued, ThreadMessageState::Queued).unwrap().is_none());
+        assert_eq!(store.thread_message_get(record.id).unwrap().unwrap().state, ThreadMessageState::Delivered);
+        assert!(store.thread_message_transition(Uuid::now_v7(), &held_or_queued, ThreadMessageState::Failed).unwrap().is_none());
+    }
+
+    #[test]
+    fn user_messages_with_orchestration_parts_project_as_user_blocks() {
+        let store = Store::open_in_memory().unwrap();
+        let project = project(&store);
+        let thread = thread(&project, None, None);
+        store.thread_upsert(&thread).unwrap();
+        let turn = Uuid::now_v7();
+        let message_id = Uuid::now_v7();
+        let message = UserMessage {
+            parts: vec![
+                ContentPart::ThreadMessage {
+                    message_id,
+                    from_thread_id: Some(Uuid::now_v7()),
+                    from_title: "Parent".into(),
+                    purpose: ThreadMessagePurpose::Task,
+                    reply_to: None,
+                    body: "do it".into(),
+                },
+                ContentPart::AgentResults { items: Vec::new() },
+            ],
+        };
+        store.event_append(thread.id, Some(turn), EventPayload::TurnStarted { message_id, message: message.clone() }).unwrap();
+        let record = message_record_for(thread.id);
+        store.event_append(thread.id, None, EventPayload::ThreadMessageHeld { message: record.clone() }).unwrap();
+        store
+            .event_append(
+                thread.id,
+                None,
+                EventPayload::ThreadMessageResolved { message_id: record.id, resolution: HeldResolution::Delivered },
+            )
+            .unwrap();
+        let rows = store.project_transcript_through(thread.id, i64::MAX).unwrap();
+        assert_eq!(rows.len(), 1, "held and resolved events add no transcript row");
+        assert!(matches!(&rows[0], TranscriptEntry::User { id, message: m, .. } if *id == message_id && *m == message));
+    }
+
+    #[test]
+    fn only_a_person_started_turn_counts_as_the_latest_person_turn() {
+        let store = Store::open_in_memory().unwrap();
+        let project = project(&store);
+        let thread = thread(&project, None, None);
+        store.thread_upsert(&thread).unwrap();
+        assert!(store.thread_latest_person_turn_at(thread.id).unwrap().is_none());
+        let start = |message_id: MessageId, parts: Vec<ContentPart>| {
+            store
+                .event_append(thread.id, Some(Uuid::now_v7()), EventPayload::TurnStarted { message_id, message: UserMessage { parts } })
+                .unwrap()
+        };
+        let human = start(Uuid::now_v7(), vec![ContentPart::Text { text: "hi".into() }]);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        // A turn a thread message started (by row id, or by its part) is not a person's.
+        let record = message(thread.id, Some(Uuid::now_v7()), ThreadMessagePurpose::Message, ThreadMessageState::Queued);
+        store.thread_message_insert(&record).unwrap();
+        start(record.id, vec![ContentPart::Text { text: "from the queue".into() }]);
+        start(
+            Uuid::now_v7(),
+            vec![ContentPart::ThreadMessage {
+                message_id: Uuid::now_v7(),
+                from_thread_id: None,
+                from_title: "Kybern".into(),
+                purpose: ThreadMessagePurpose::Warning,
+                reply_to: None,
+                body: "w".into(),
+            }],
+        );
+        start(Uuid::now_v7(), vec![ContentPart::AgentResults { items: Vec::new() }]);
+        assert_eq!(store.thread_latest_person_turn_at(thread.id).unwrap(), Some(human.at));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let later = start(Uuid::now_v7(), vec![ContentPart::Text { text: "again".into() }]);
+        assert_eq!(store.thread_latest_person_turn_at(thread.id).unwrap(), Some(later.at));
+    }
+
+    fn message_record_for(to: ThreadId) -> ThreadMessageRecord {
+        message(to, None, ThreadMessagePurpose::Message, ThreadMessageState::Held)
     }
 }

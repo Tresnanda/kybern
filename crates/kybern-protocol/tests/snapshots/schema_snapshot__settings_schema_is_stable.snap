@@ -104,6 +104,14 @@ expression: schema_for!(Settings)
         "show_cursor": false
       }
     },
+    "orchestration": {
+      "description": "Limits on agents delegating work to other agents.",
+      "$ref": "#/$defs/OrchestrationSettings",
+      "default": {
+        "max_active_children": 4,
+        "max_depth": 2
+      }
+    },
     "tell_agents_about_kybern": {
       "description": "Give new agent sessions a short guide to Kybern: images, notes and\ntasks, other threads, helpers. Applies to sessions started after the change.",
       "type": "boolean",
@@ -273,6 +281,26 @@ expression: schema_for!(Settings)
           "const": "never"
         }
       ]
+    },
+    "OrchestrationSettings": {
+      "description": "Limits for `kybern_agent_delegate`. Read each time an agent delegates.",
+      "type": "object",
+      "properties": {
+        "max_active_children": {
+          "description": "Most delegated children one thread may have running at once (1..=16).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 4
+        },
+        "max_depth": {
+          "description": "Deepest chain of delegation: 1 means only top-level threads delegate (1..=4).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 2
+        }
+      }
     }
   }
 }

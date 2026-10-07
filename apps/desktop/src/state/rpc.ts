@@ -44,6 +44,7 @@ import { createSnapshotReplay } from "./snapshotReplay"
 import { mergeSequencedSnapshot } from "./bootstrap"
 import { collectSplitThreadIds } from "./splitView"
 import { mergeProjects, selectsMissingProject } from "./projects"
+import { recordThreadMessage, resolveThreadMessage, unseedThreadMessages } from "./threadMessages"
 import {
   diffKey,
   isThreadFocused,
@@ -66,6 +67,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   const gitStatusLoads = new Map<ThreadId, Promise<GitStatus | null>>()
   const threadLoads = new Map<ThreadId, Promise<void>>()
   const subagentLoads = new Map<ThreadId, Promise<void>>()
+  const heldLoads = new Map<ThreadId, Promise<void>>()
   const historyLoads = new Map<ThreadId, { promise: Promise<void>; buffer: ReturnType<typeof createSnapshotReplay> }>()
   const providerLoads = new Map<string, Promise<ProviderStatus[]>>()
   const snapshots = new Map<ThreadId, ReturnType<typeof createSnapshotReplay>>()
@@ -208,6 +210,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
         toolOutputs.invalidatePending()
         canReuseSnapshots = false
         hydrationGeneration++
+        unseedThreadMessages()
       }
       if (status === "open") {
         s.set({ connection: { state: "open" }, info: client?.info ?? null })
@@ -439,6 +442,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
         })
         trackThreadOutputs(id)
         void loadSubagents(id)
+        void loadHeldMessages(id)
         const cached = useStore.getState().transcripts
         for (const cachedId of reusableSnapshots)
           if (!cached[cachedId]?.loaded) reusableSnapshots.delete(cachedId)
@@ -490,6 +494,53 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     subagentLoads.set(parentId, request)
     void request.finally(() => {
       if (subagentLoads.get(parentId) === request) subagentLoads.delete(parentId)
+    })
+    return request
+  }
+
+  /**
+   * Fetch the children and grandchildren of a thread (delegated, native and legacy helpers), a level
+   * at a time. Live changes arrive as `thread_created` and `thread_updated`; this only seeds the tree.
+   */
+  async function loadLineage(rootId: ThreadId, maxDepth = 3): Promise<void> {
+    const seen = new Set<ThreadId>([rootId])
+    let level: ThreadId[] = [rootId]
+    for (let depth = 0; depth < maxDepth && level.length > 0; depth++) {
+      await Promise.all(level.map((id) => loadSubagents(id)))
+      const parents = new Set(level)
+      const next: ThreadId[] = []
+      for (const thread of Object.values(useStore.getState().threads)) {
+        if (thread.parent_thread_id && parents.has(thread.parent_thread_id) && !seen.has(thread.id)) {
+          seen.add(thread.id)
+          next.push(thread.id)
+        }
+      }
+      level = next
+    }
+  }
+
+  /** Messages other threads sent here that wait for the reader's approval. Live ones arrive as events. */
+  function loadHeldMessages(threadId: ThreadId): Promise<void> {
+    const pending = heldLoads.get(threadId)
+    if (pending) return pending
+    const generation = hydrationGeneration
+    const request = (async () => {
+      try {
+        const result = await rpc().call("threads.messages.list", { thread_id: threadId, states: ["held"] })
+        if (!isCurrentHydration(generation)) return
+        const held = result.messages.filter((message) => message.to_thread_id === threadId && message.state === "held")
+        useStore.getState().set((state) => {
+          const current = state.heldMessages[threadId] ?? []
+          if (held.length === current.length && held.every((message, index) => message.id === current[index]?.id)) return {}
+          return { heldMessages: { ...state.heldMessages, [threadId]: held } }
+        })
+      } catch {
+        // An older daemon has no thread messages; the panel simply stays hidden.
+      }
+    })()
+    heldLoads.set(threadId, request)
+    void request.finally(() => {
+      if (heldLoads.get(threadId) === request) heldLoads.delete(threadId)
     })
     return request
   }
@@ -602,6 +653,19 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     }
     if (ev.kind === "thread_created") {
       s.set((st) => ({ threads: { ...st.threads, [ev.thread.id]: ev.thread } }))
+    }
+    if (ev.kind === "thread_message_held" || ev.kind === "thread_message_updated") recordThreadMessage(ev.thread_id, ev.message)
+    if (ev.kind === "thread_message_resolved") {
+      resolveThreadMessage(ev.thread_id, ev.message_id, ev.resolution)
+      s.set((st) => {
+        const current = st.heldMessages[ev.thread_id]
+        if (!current?.some((item) => item.id === ev.message_id)) return {}
+        const next = current.filter((item) => item.id !== ev.message_id)
+        const heldMessages = { ...st.heldMessages }
+        if (next.length > 0) heldMessages[ev.thread_id] = next
+        else delete heldMessages[ev.thread_id]
+        return { heldMessages }
+      })
     }
     if (
       ev.kind === "runtime_task_started" ||
@@ -1100,6 +1164,8 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     rpc,
     loadThread,
     loadSubagents,
+    loadLineage,
+    loadHeldMessages,
     stopSubagent,
     backgroundSubagent,
     loadEarlier,
@@ -1157,6 +1223,8 @@ export const rpc: EnvironmentRuntime["rpc"] = (...args) =>
   activeRuntime().rpc(...args)
 export const loadEarlier: EnvironmentRuntime["loadEarlier"] = (...args) => activeRuntime().loadEarlier(...args)
 export const loadSubagents: EnvironmentRuntime["loadSubagents"] = (...args) => activeRuntime().loadSubagents(...args)
+export const loadLineage: EnvironmentRuntime["loadLineage"] = (...args) => activeRuntime().loadLineage(...args)
+export const loadHeldMessages: EnvironmentRuntime["loadHeldMessages"] = (...args) => activeRuntime().loadHeldMessages(...args)
 export const stopSubagent: EnvironmentRuntime["stopSubagent"] = (...args) => activeRuntime().stopSubagent(...args)
 export const backgroundSubagent: EnvironmentRuntime["backgroundSubagent"] = (...args) => activeRuntime().backgroundSubagent(...args)
 export const loadThread: EnvironmentRuntime["loadThread"] = (...args) =>

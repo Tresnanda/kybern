@@ -1,8 +1,13 @@
-import type { RuntimeTaskStatus, SubagentInfo } from "./types.ts";
+import type { DelegationInfo, RuntimeTaskStatus, SubagentInfo } from "./types.ts";
 
 /** A read-only child thread that mirrors a provider-native subagent. */
 export function isSubagentThread(thread: { subagent?: SubagentInfo | null } | null | undefined): boolean {
   return !!thread?.subagent;
+}
+
+/** A thread that is reached from its parent rather than listed: a provider subagent or a delegated child. */
+export function isChildThread(thread: { subagent?: SubagentInfo | null; delegation?: DelegationInfo | null } | null | undefined): boolean {
+  return !!thread?.subagent || !!thread?.delegation;
 }
 
 /** Threads a user manages themselves: subagent threads are reached from their parent, never listed. */
@@ -310,25 +315,37 @@ export const SUBAGENT_SIDEBAR_HOLD_MS = 600;
 /** A subagent that settled longer ago than this was not seen finishing; its row never appears. */
 export const SUBAGENT_SIDEBAR_RECENT_MS = 1500;
 
+/** Working or settled, and when, for any child thread the sidebar can nest. */
+function childClock(thread: { subagent?: SubagentInfo | null; delegation?: DelegationInfo | null }): { working: boolean; startedAt: string | null; completedAt: string | null } | null {
+  if (thread.subagent) {
+    return { working: subagentPhase(thread.subagent.status) === "working", startedAt: thread.subagent.started_at, completedAt: thread.subagent.completed_at ?? null };
+  }
+  if (thread.delegation) {
+    return { working: thread.delegation.status === "running", startedAt: thread.delegation.started_at, completedAt: thread.delegation.completed_at ?? null };
+  }
+  return null;
+}
+
 /**
- * The subagent threads the sidebar nests under their parents: those working, the one being
+ * The child threads the sidebar nests under their parents: those working, the one being
  * viewed (it stays until you navigate away), and any that settled a moment ago (its row
- * holds a check, then leaves). Rows dismissed by hand stay gone. A parent subagent is kept
+ * holds a check, then leaves). Rows dismissed by hand stay gone. A parent child is kept
  * while one of its children is still listed, so a nested row never jumps to the top level.
+ * Provider subagents and Kybern-delegated children follow the same rule.
  */
-export function visibleSubagentThreads<T extends { id: string; parent_thread_id?: string | null; status?: string; subagent?: SubagentInfo | null }>(
+export function visibleSubagentThreads<T extends { id: string; parent_thread_id?: string | null; status?: string; subagent?: SubagentInfo | null; delegation?: DelegationInfo | null }>(
   threads: readonly T[],
   options: { selectedId?: string | null; dismissed: ReadonlySet<string>; now: number },
 ): T[] {
   const byId = new Map(threads.map((thread) => [thread.id, thread]));
+  const startedOf = (thread: T) => timeOf(childClock(thread)?.startedAt) ?? 0;
   const keep = new Set<string>();
   for (const thread of threads) {
-    const info = thread.subagent;
-    if (!info || thread.status === "archived" || options.dismissed.has(thread.id)) continue;
-    const working = subagentPhase(info.status) === "working";
-    const settledAt = timeOf(info.completed_at);
-    const recent = !working && settledAt !== null && options.now - settledAt < SUBAGENT_SIDEBAR_RECENT_MS;
-    if (working || recent || thread.id === options.selectedId) keep.add(thread.id);
+    const clock = childClock(thread);
+    if (!clock || thread.status === "archived" || options.dismissed.has(thread.id)) continue;
+    const settledAt = timeOf(clock.completedAt);
+    const recent = !clock.working && settledAt !== null && options.now - settledAt < SUBAGENT_SIDEBAR_RECENT_MS;
+    if (clock.working || recent || thread.id === options.selectedId) keep.add(thread.id);
   }
   for (const id of [...keep]) {
     let parentId = byId.get(id)?.parent_thread_id;
@@ -336,14 +353,14 @@ export function visibleSubagentThreads<T extends { id: string; parent_thread_id?
     while (parentId && !seen.has(parentId)) {
       seen.add(parentId);
       const parent = byId.get(parentId);
-      if (!parent?.subagent) break;
+      if (!parent || !childClock(parent)) break;
       if (!options.dismissed.has(parent.id)) keep.add(parent.id);
       parentId = parent.parent_thread_id;
     }
   }
   return threads
     .filter((thread) => keep.has(thread.id))
-    .sort((a, b) => (timeOf(a.subagent!.started_at) ?? 0) - (timeOf(b.subagent!.started_at) ?? 0) || a.id.localeCompare(b.id));
+    .sort((a, b) => startedOf(a) - startedOf(b) || a.id.localeCompare(b.id));
 }
 
 /**

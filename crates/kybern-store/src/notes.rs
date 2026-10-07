@@ -668,6 +668,7 @@ mod tests {
             coordinator_project_id: None,
             collaboration_group_id: None,
             subagent: None,
+            delegation: None,
         };
         store.thread_upsert(&thread).unwrap();
         thread

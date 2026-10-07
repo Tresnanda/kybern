@@ -36,6 +36,7 @@ impl SettingsStore {
     }
 
     pub fn set(&self, settings: Settings) -> Result<Settings> {
+        validate_orchestration(&settings.orchestration)?;
         if let Some(omp) = settings.providers.get(&kybern_protocol::ProviderKind::Omp) {
             for profile in omp.env.get("OMP_PROFILE").into_iter().chain(omp.project_profiles.values()) {
                 kybern_drivers::omp_profile::normalize(profile)?;
@@ -45,6 +46,19 @@ impl SettingsStore {
         *self.current.write().unwrap() = settings.clone();
         Ok(settings)
     }
+}
+
+/// Delegation limits must stay in the ranges the settings screen offers.
+fn validate_orchestration(orchestration: &kybern_protocol::OrchestrationSettings) -> Result<()> {
+    anyhow::ensure!(
+        (1..=16).contains(&orchestration.max_active_children),
+        "Active agents per thread must be between 1 and 16. Change the value and save again."
+    );
+    anyhow::ensure!(
+        (1..=4).contains(&orchestration.max_depth),
+        "Delegation depth must be between 1 and 4. Change the value and save again."
+    );
+    Ok(())
 }
 
 fn write_atomic(path: &Path, settings: &Settings) -> Result<()> {
@@ -68,6 +82,30 @@ pub fn provider_settings(
         provider.env.insert("OMP_PROFILE".into(), profile.trim().into());
     }
     provider
+}
+
+#[cfg(test)]
+mod orchestration_tests {
+    use super::*;
+
+    #[test]
+    fn orchestration_limits_are_range_checked_on_update() {
+        let dir = std::env::temp_dir().join(format!("kybern-settings-test-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = SettingsStore::load(&dir.join("settings.json")).unwrap();
+        let mut settings = store.get();
+        for (children, depth) in [(0, 2), (17, 2), (4, 0), (4, 5)] {
+            settings.orchestration.max_active_children = children;
+            settings.orchestration.max_depth = depth;
+            let error = store.set(settings.clone()).unwrap_err().to_string();
+            assert!(error.contains("between"), "{error}");
+        }
+        assert_eq!(store.get().orchestration, kybern_protocol::OrchestrationSettings::default(), "rejected updates change nothing");
+        settings.orchestration.max_active_children = 16;
+        settings.orchestration.max_depth = 4;
+        assert_eq!(store.set(settings).unwrap().orchestration.max_active_children, 16);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[cfg(test)]

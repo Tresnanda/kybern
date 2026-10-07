@@ -31,6 +31,7 @@ export function filterThreads({
     .filter(
       (t) =>
         !t.subagent &&
+        !t.delegation &&
         (filter === "Archived"
           ? t.status === "archived"
           : t.status !== "archived") &&

@@ -1305,6 +1305,11 @@ fn parts(message: &UserMessage) -> Vec<Value> {
                 json!({ "type": "file", "mime": media_type, "url": format!("data:{media_type};base64,{data}"), "filename": "image" }),
             ),
             ContentPart::Attachment { name, .. } => out.push(json!({ "type": "text", "text": format!("[attached file: {name}]") })),
+            ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } => {
+                if let Some(text) = part.orchestration_text() {
+                    out.push(json!({ "type": "text", "text": text }));
+                }
+            }
         }
     }
     out
@@ -1351,6 +1356,12 @@ fn skill_command(message: &UserMessage) -> Option<SkillCommand> {
                 json!({ "type": "file", "mime": media_type, "url": format!("data:{media_type};base64,{data}"), "filename": "image" }),
             ),
             ContentPart::Attachment { name, .. } => arguments.push_str(&format!("[attached file: {name}]")),
+            ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } => {
+                if let Some(text) = part.orchestration_text() {
+                    arguments.push('\n');
+                    arguments.push_str(&text);
+                }
+            }
         }
     }
     Some(SkillCommand { name: name.clone(), arguments: arguments.trim().to_string(), files })
@@ -2008,5 +2019,24 @@ mod tests {
 
         assert_eq!(task.status, RuntimeTaskStatus::Running);
         assert_eq!(task.parent_id.as_deref(), Some("opencode:ses_parent_child"));
+    }
+}
+
+#[cfg(test)]
+mod orchestration_part_tests {
+    use super::*;
+    use crate::test_support::*;
+
+    #[test]
+    fn thread_messages_and_agent_results_flatten_to_text_parts() {
+        let out = parts(&orchestration_message());
+        assert_flattened(&out.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"));
+    }
+
+    #[test]
+    fn they_also_flatten_into_skill_command_arguments() {
+        let mut message = orchestration_message();
+        message.parts.insert(0, ContentPart::Skill { name: "review".into(), path: "/s/SKILL.md".into() });
+        assert_flattened(&skill_command(&message).unwrap().arguments);
     }
 }

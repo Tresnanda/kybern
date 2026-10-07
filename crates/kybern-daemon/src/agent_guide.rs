@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 
 /// Bumped with every wording change so a changed guide is a deliberate act.
-pub(crate) const GUIDE_VERSION: u32 = 1;
+pub(crate) const GUIDE_VERSION: u32 = 3;
 
 /// Hard ceiling for the rendered guide (about 1.5k tokens at 4 bytes a token).
 #[cfg(test)]
@@ -103,11 +103,26 @@ pub(crate) fn render(tools: &GuideTools) -> String {
                 describe(&threads)
             ));
         }
+        if tools.has("kybern_thread_send") {
+            out.push_str(
+                "A message to another thread is queued by default, so the recipient reads it when idle; `delivery: \"steer\"` puts it into a running turn when its harness allows. A `question` gets a reply: end your turn and the reply wakes you, or set `wait_for_reply` to wait up to a minute. A message the recipient's permissions do not allow is held until the user approves it in that thread; do not resend it.\n",
+            );
+        }
         if !inspect.is_empty() {
             out.push_str(&format!("Inspect this thread with {}.\n", describe(&inspect)));
         }
     }
-    if tools.has("kybern_collaboration_spawn") {
+    if tools.has("kybern_agent_delegate") {
+        out.push_str(
+            "\n## Helpers\n\
+             Hand a self-contained task to another agent with `kybern_agent_delegate`; it runs as a child thread the user can open, on any installed harness and model (`kybern_agent_capabilities` lists them). Do this when the user asks for delegation or the work clearly runs in parallel; otherwise do it yourself.\n\
+             - It returns at once: delegate, then end your turn. Kybern wakes you with the results, batched when several agents finish together. Use `mode: \"wait\"` only for a short task you need before you can go on.\n\
+             - The agent sees only the brief you write: the goal, the files involved, constraints, what to verify and what to report. Agents are one-shot; for another round, delegate again with a full brief and the earlier findings.\n\
+             - `workspace: \"shared\"` (default) edits your checkout. The agent never commits, stashes, resets or switches branches; you integrate its edits. List `owns` globs such as `src/api/**` so Kybern warns it when it strays onto a sibling's paths. `workspace: \"worktree\"` gives it its own branch, seeded from your checkout, for parallel work on overlapping code. If your checkout is clean, merge the branch it reports; otherwise apply only its changes with `git diff <base>..<head> | git apply --3way`.\n\
+             - For quick work on your own harness, prefer its built-in subagents when they support the model you want. Use `kybern_agent_delegate` for other harnesses or models, or for work Kybern should track and show the user.\n\
+             - `kybern_agent_status` lists your agents; `kybern_agent_cancel` stops one.\n",
+        );
+    } else if tools.has("kybern_collaboration_spawn") {
         out.push_str(
             "\n## Helpers\n\
              You can hand a self-contained side task to a helper agent with `kybern_collaboration_spawn`, then follow it with `kybern_collaboration_read` or `kybern_collaboration_wait`. Do this when the user asks for delegation or parallel work; otherwise do the work yourself.\n",
@@ -151,7 +166,7 @@ mod tests {
             include_str!("agent_guide_full.golden.txt"),
             "guide wording changed: bump GUIDE_VERSION and update the golden file (KYBERN_UPDATE_GOLDEN=1)"
         );
-        assert_eq!(GUIDE_VERSION, 1);
+        assert_eq!(GUIDE_VERSION, 3);
     }
 
     #[test]
@@ -186,8 +201,18 @@ mod tests {
         let threads = guide_for(&["kybern_thread_read"]);
         assert!(threads.contains("`kybern_thread_read` (read a thread)") && !threads.contains("kybern_thread_send"));
 
-        let codex_like = guide_for(&["kybern_thread_read", "kybern_note_read", "kybern_collaboration_spawn"]);
-        assert!(codex_like.contains("## Helpers") && !codex_like.contains("The user's Mac"));
+        let coordinator_like = guide_for(&["kybern_thread_read", "kybern_note_read", "kybern_collaboration_spawn"]);
+        assert!(
+            coordinator_like.contains("## Helpers")
+                && coordinator_like.contains("`kybern_collaboration_spawn`")
+                && !coordinator_like.contains("kybern_agent_delegate")
+                && !coordinator_like.contains("The user's Mac")
+        );
+
+        let delegating = guide_for(&["kybern_agent_delegate", "kybern_thread_send", "kybern_collaboration_spawn"]);
+        assert!(delegating.contains("## Helpers") && delegating.contains("end your turn") && delegating.contains("worktree"));
+        assert!(!delegating.contains("`kybern_collaboration_spawn`"), "ordinary threads are not told about the coordinator tools");
+        assert!(delegating.contains("built-in subagents") && delegating.contains("held until the user approves"));
 
         let computer = guide_for(&["kybern_computer_act"]);
         assert!(computer.contains("kybern_computer_apps") && !computer.contains("## Notes and tasks"));

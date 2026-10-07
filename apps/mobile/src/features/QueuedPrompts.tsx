@@ -3,6 +3,7 @@ import { useState } from "react";
 import { ScrollView, View } from "react-native";
 import { promptText, replacePromptText } from "../../../../packages/kybern-client/src/prompts";
 import type { QueuedMessage } from "../state/protocol";
+import { orchestrationLabel } from "../state/orchestration";
 import { errorText, rpc, useApp } from "../state/runtime";
 import { ErrorBanner, Field, Icon, IconButton, styles, T, Tap } from "../ui/primitives";
 
@@ -27,6 +28,7 @@ function QueuedPrompt({ item }: { item: QueuedMessage }) {
   const app = useApp();
   const connected = app.status === "open";
   const preview = collaborationPreview(promptText(item.message));
+  const relayed = orchestrationLabel(item.message);
   const sender = preview?.senderId ? app.threads.find(thread => thread.id === preview.senderId)?.title || "Helper" : "You";
   const [showBody, setShowBody] = useState(false);
   const [edit, setEdit] = useState<string | null>(null);
@@ -49,10 +51,10 @@ function QueuedPrompt({ item }: { item: QueuedMessage }) {
     <View style={styles.spread}>
       {edit === null ? <>
         <Tap static label={preview ? `${preview.purpose} from ${sender}. ${showBody ? "Hide" : "Show"} message` : "Show queued prompt"} expanded={showBody} onPress={() => setShowBody(value => !value)} style={{ flex: 1, minHeight: 48, justifyContent: "center" }}>
-          <View style={[styles.line, { gap: 8 }]}><T variant="caption" numberOfLines={showBody ? undefined : 2} style={{ flex: 1 }}>{preview ? `${preview.purpose} · ${sender}` : promptText(item.message) || "Attached context"}</T><Icon name={showBody ? "chevron.up" : "chevron.down"} size={12} /></View>
+          <View style={[styles.line, { gap: 8 }]}><T variant="caption" numberOfLines={showBody ? undefined : 2} style={{ flex: 1 }}>{preview ? `${preview.purpose} · ${sender}` : promptText(item.message) || relayed || "Attached context"}</T><Icon name={showBody ? "chevron.up" : "chevron.down"} size={12} /></View>
           {preview && <T variant="caption" tone="secondary" numberOfLines={showBody ? undefined : 2}>{preview.body}</T>}
         </Tap>
-        {!preview && <IconButton name="pencil" label="Edit queued prompt" disabled={!connected || busy} onPress={() => setEdit(promptText(item.message))} />}
+        {!preview && !relayed && <IconButton name="pencil" label="Edit queued prompt" disabled={!connected || busy} onPress={() => setEdit(promptText(item.message))} />}
       </> : <View style={styles.line}>
         <Tap label="Save queued prompt" disabled={!connected || busy || (!edit.trim() && !contextCount)} onPress={() => void run(true)} style={{ minHeight: 44, padding: 12 }}><T variant="caption">Save</T></Tap>
         <Tap label="Cancel edit" disabled={busy} onPress={() => setEdit(null)} style={{ minHeight: 44, padding: 12 }}><T variant="caption">Cancel</T></Tap>

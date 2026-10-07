@@ -110,6 +110,17 @@ expression: schema_for!(Thread)
           "type": "null"
         }
       ]
+    },
+    "delegation": {
+      "description": "Set when this thread is a child another thread delegated work to with\n`kybern_agent_delegate`. Unlike `subagent` it is a normal, writable\nthread; `parent_thread_id` is the delegating thread. Clients that do\nnot know about delegation hide such threads from thread lists the same\nway they hide subagents.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DelegationInfo"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
@@ -425,6 +436,256 @@ expression: schema_for!(Thread)
           "default": false
         }
       }
+    },
+    "DelegationInfo": {
+      "description": "Delegation metadata carried by a child [`Thread`] created with\n`kybern_agent_delegate`. Refreshed through `thread_updated`.",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "description": "Stable id agents use to refer to this delegation.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "operation_id": {
+          "description": "Idempotency key of the delegate call.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "parent_thread_id": {
+          "description": "Duplicate of `Thread::parent_thread_id` for convenience.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "depth": {
+          "description": "1 for a direct child of a top-level thread.",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "role": {
+          "$ref": "#/$defs/DelegationRole",
+          "default": "general"
+        },
+        "workspace": {
+          "$ref": "#/$defs/DelegationWorkspace",
+          "default": "shared"
+        },
+        "owns": {
+          "description": "Globs relative to the checkout root this child owns (shared only).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "$ref": "#/$defs/DelegationStatus"
+        },
+        "result": {
+          "description": "The child's final assistant text of the completing turn (at most\n16 KiB, truncated with a marker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "files_touched": {
+          "description": "Repo-relative paths the child edited, deduplicated, at most 200.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DelegationConflict"
+          }
+        },
+        "base_commit": {
+          "description": "Worktree: the snapshot commit the worktree was seeded from.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "description": "Worktree: `kybern/<child-id>`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "head_commit": {
+          "description": "Worktree: HEAD when the child completed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diffstat": {
+          "description": "Worktree: `base_commit..head_commit`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DiffStat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worktree_state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorktreeState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completed_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "parent_notified": {
+          "description": "Whether the delegating parent has been handed this outcome (delivered,\nsteered or queued). Cleared when the delegation reaches a terminal state\nand set once its `AgentResultItem` is out, so a restart can re-send an\noutcome that was still waiting in the debounce window. Rows written\nbefore this field existed read as `true`: nothing is re-sent.",
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "task_id",
+        "operation_id",
+        "parent_thread_id",
+        "depth",
+        "status",
+        "started_at"
+      ]
+    },
+    "DelegationRole": {
+      "description": "What the delegating agent asked this child to be.",
+      "type": "string",
+      "enum": [
+        "implementation",
+        "research",
+        "review",
+        "design",
+        "test",
+        "general"
+      ]
+    },
+    "DelegationWorkspace": {
+      "description": "Where a delegated child works.",
+      "oneOf": [
+        {
+          "description": "The parent's checkout and branch.",
+          "type": "string",
+          "const": "shared"
+        },
+        {
+          "description": "Its own git worktree on `kybern/<child-id>`, seeded from the parent's\ncurrent uncommitted state.",
+          "type": "string",
+          "const": "worktree"
+        }
+      ]
+    },
+    "DelegationStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "running",
+            "completed",
+            "failed",
+            "cancelled"
+          ]
+        },
+        {
+          "description": "Cut off by a daemon restart.",
+          "type": "string",
+          "const": "interrupted"
+        }
+      ]
+    },
+    "DelegationConflict": {
+      "description": "A shared-checkout edit that landed on a path a sibling delegation owns.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Repo-relative path that was edited.",
+          "type": "string"
+        },
+        "owner_thread_id": {
+          "description": "The sibling thread whose `owns` globs cover `path`.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "path",
+        "owner_thread_id",
+        "at"
+      ]
+    },
+    "DiffStat": {
+      "description": "Files and lines changed between two commits.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "additions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "deletions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "files",
+        "additions",
+        "deletions"
+      ]
+    },
+    "WorktreeState": {
+      "description": "State of a delegated child's own worktree (`DelegationWorkspace::Worktree`).",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "active",
+            "removed"
+          ]
+        },
+        {
+          "description": "Left on disk because it was dirty or its branch is unmerged.",
+          "type": "string",
+          "const": "kept"
+        }
+      ]
     }
   }
 }

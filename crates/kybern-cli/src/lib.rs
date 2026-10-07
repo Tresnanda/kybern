@@ -142,6 +142,7 @@ enum Cmd {
     Threads {
         #[arg(long)]
         project: Option<String>,
+        /// Include archived threads in the list (they are hidden by default).
         #[arg(long)]
         archived: bool,
     },
@@ -218,6 +219,16 @@ enum Cmd {
     Queue {
         #[command(subcommand)]
         cmd: QueueCmd,
+    },
+    /// List, deliver or dismiss messages other threads sent (held ones wait for you).
+    Messages {
+        #[command(subcommand)]
+        cmd: MessagesCmd,
+    },
+    /// Manage threads that agents delegated work to.
+    Delegations {
+        #[command(subcommand)]
+        cmd: DelegationsCmd,
     },
     /// Follow live events for one thread or all threads.
     Watch {
@@ -505,6 +516,37 @@ enum TaskCmd {
         #[arg(long)]
         project: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum MessagesCmd {
+    /// List messages sent to or from a thread, oldest first.
+    List {
+        thread: String,
+        /// Only these states: held, queued, steered, delivered, answered, dismissed, failed.
+        #[arg(long = "state", value_parser = parse_message_state)]
+        states: Vec<ThreadMessageState>,
+    },
+    /// Deliver a held message to its thread.
+    Deliver { message: String },
+    /// Dismiss a held message without delivering it.
+    Dismiss { message: String },
+}
+
+#[derive(Subcommand)]
+enum DelegationsCmd {
+    /// Remove a delegated child's worktree (and its branch when merged).
+    RemoveWorktree {
+        thread: String,
+        /// Required when the worktree has uncommitted changes or its branch is unmerged.
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+fn parse_message_state(s: &str) -> Result<ThreadMessageState, String> {
+    serde_json::from_value(serde_json::Value::String(s.to_string()))
+        .map_err(|_| format!("unknown message state `{s}`; use held, queued, steered, delivered, answered, dismissed or failed"))
 }
 
 #[derive(Subcommand)]
@@ -942,6 +984,48 @@ pub async fn run() -> Result<()> {
                 item.message.parts.retain(|part| !matches!(part, ContentPart::Text { .. }));
                 item.message.parts.insert(0, ContentPart::Text { text });
                 client.call::<QueueUpdate>(item).await?;
+            }
+        },
+        Cmd::Messages { cmd } => match cmd {
+            MessagesCmd::List { thread, states } => {
+                let result = client
+                    .call::<ThreadMessagesList>(ThreadMessagesListParams {
+                        thread_id: thread.parse()?,
+                        states: (!states.is_empty()).then_some(states),
+                    })
+                    .await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                } else {
+                    render::thread_messages(&result.messages);
+                }
+            }
+            MessagesCmd::Deliver { message } => {
+                let record = client.call::<ThreadMessagesDeliver>(ThreadMessageIdParams { message_id: message.parse()? }).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&record)?);
+                } else {
+                    render::thread_messages(&[record]);
+                }
+            }
+            MessagesCmd::Dismiss { message } => {
+                let record = client.call::<ThreadMessagesDismiss>(ThreadMessageIdParams { message_id: message.parse()? }).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&record)?);
+                } else {
+                    render::thread_messages(&[record]);
+                }
+            }
+        },
+        Cmd::Delegations { cmd } => match cmd {
+            DelegationsCmd::RemoveWorktree { thread, force } => {
+                let thread =
+                    client.call::<DelegationsWorktreeRemove>(DelegationsWorktreeRemoveParams { thread_id: thread.parse()?, force }).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&thread)?);
+                } else {
+                    render::threads(&[thread]);
+                }
             }
         },
         Cmd::Show { thread, limit, before_seq, through_seq } => {

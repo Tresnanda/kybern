@@ -42,7 +42,7 @@ import {
 import { SIDEBAR_ROW_HOVER_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "@/lib/kit/sidebarRowStyles"
 import { cn } from "@/lib/utils"
 import { useSlidingPill } from "@/lib/kit/slidingPill"
-import type { BackgroundSettings, ComputerForeground, ComputerNote, ComputerPermission, ComputerStatus, CursorSetupAction, CursorSetupStatus, DaemonActivity, DaemonUpdate, PermissionMode, ProviderKind, ProviderStatus, Settings, HarnessUpdate } from "@/protocol"
+import type { BackgroundSettings, OrchestrationSettings, ComputerForeground, ComputerNote, ComputerPermission, ComputerStatus, CursorSetupAction, CursorSetupStatus, DaemonActivity, DaemonUpdate, PermissionMode, ProviderKind, ProviderStatus, Settings, HarnessUpdate } from "@/protocol"
 import { setGlobalNotesHome, useGlobalNotesHome } from "@/lib/notesPrefs"
 import { setAskBeforeClose, useAskBeforeClose } from "@/state/closeGuard"
 import { errorText, refreshProviders, rpc } from "@/state/rpc"
@@ -692,8 +692,9 @@ function useDaemonActivity(): { activity: DaemonActivity | null; failed: boolean
  * numerals line up and long units never clip. Saves on blur or Enter; an empty
  * field means off. Arrow keys step the value (Shift steps by ten).
  */
-function LimitField({ label, unit, step, value, onCommit }: { label: string; unit: string; step: number; value: number; onCommit: (value: number) => void }) {
-  const show = (v: number) => (v === 0 ? "" : String(v))
+function LimitField({ label, unit, step, value, onCommit, min = 0, max = 100_000 }: { label: string; unit: string; step: number; value: number; onCommit: (value: number) => void; min?: number; max?: number }) {
+  // A field with a floor above zero has no "Off": an empty draft falls back to the current value.
+  const show = (v: number) => (v === 0 && min === 0 ? "" : String(v))
   const [draft, setDraft] = useState(show(value))
   // Adopt a value saved elsewhere (another client, a reverted save) without an effect.
   const [adopted, setAdopted] = useState(value)
@@ -701,19 +702,19 @@ function LimitField({ label, unit, step, value, onCommit }: { label: string; uni
     setAdopted(value)
     setDraft(show(value))
   }
-  const clamp = (n: number) => (Number.isFinite(n) && n >= 0 ? Math.min(n, 100_000) : value)
+  const clamp = (n: number) => (Number.isFinite(n) && n >= 0 ? Math.max(min, Math.min(n, max)) : value)
   const commit = () => {
-    const next = clamp(draft === "" ? 0 : Number.parseInt(draft, 10))
+    const next = clamp(draft === "" ? (min === 0 ? 0 : value) : Number.parseInt(draft, 10))
     setDraft(show(next))
     if (next !== value) onCommit(next)
   }
   const nudge = (direction: 1 | -1, big: boolean) => {
     const current = draft === "" ? 0 : Number.parseInt(draft, 10) || 0
-    const next = clamp(Math.max(0, current + direction * (big ? step * 10 : step)))
+    const next = clamp(Math.max(min, current + direction * (big ? step * 10 : step)))
     setDraft(show(next))
     if (next !== value) onCommit(next)
   }
-  const off = draft === ""
+  const off = draft === "" && min === 0
   return (
     <div className="flex items-center gap-2">
       <InputGroup className={cn("w-[4.5rem]", SETTINGS_CONTROL_RADIUS_CLASS_NAME)}>
@@ -722,7 +723,7 @@ function LimitField({ label, unit, step, value, onCommit }: { label: string; uni
           className="text-right tabular-nums placeholder:text-muted-foreground/70"
           inputMode="numeric"
           pattern="[0-9]*"
-          placeholder="Off"
+          placeholder={min === 0 ? "Off" : undefined}
           value={draft}
           onChange={(e) => setDraft(e.target.value.replace(/\D/g, "").slice(0, 6))}
           onBlur={commit}
@@ -806,6 +807,7 @@ function AgentSettings() {
       <DaemonUpdateRows autoUpdate={settings?.auto_update_daemon ?? false} onAutoUpdate={(checked) => void update({ auto_update_daemon: checked })} />
     </Section>
     {settings && <OmpProfiles settings={settings} update={update} />}
+    {settings && <DelegationSection orchestration={settings.orchestration} onChange={(orchestration) => void update({ orchestration })} />}
     <Section title="Installed agents">
       {providers.map((provider) => {
         const result = updates.find((item) => item.kind === provider.kind)
@@ -818,6 +820,21 @@ function AgentSettings() {
   </>
 }
 
+
+/** How far one thread may fan out when an agent delegates work to other agents. */
+function DelegationSection({ orchestration, onChange }: { orchestration: OrchestrationSettings | undefined; onChange: (next: OrchestrationSettings) => void }) {
+  const current: OrchestrationSettings = { max_active_children: 4, max_depth: 2, ...orchestration }
+  return (
+    <Section title="Delegation">
+      <Row title="Active agents per thread" description="How many delegated agents one thread can have working at once. At the limit, the thread waits for one to finish before delegating again.">
+        <LimitField label="Active agents per thread" unit="agents" step={1} min={1} max={16} value={current.max_active_children} onCommit={(value) => onChange({ ...current, max_active_children: value })} />
+      </Row>
+      <Row title="Delegation depth" description="1 lets only top-level threads delegate. 2 also lets their agents delegate again.">
+        <LimitField label="Delegation depth" unit="levels" step={1} min={1} max={4} value={current.max_depth} onCommit={(value) => onChange({ ...current, max_depth: value })} />
+      </Row>
+    </Section>
+  )
+}
 
 /** Bring the row named by `settingsFocus` into view and onto its first
  * control, e.g. when the composer's picker sends someone to set up an agent.

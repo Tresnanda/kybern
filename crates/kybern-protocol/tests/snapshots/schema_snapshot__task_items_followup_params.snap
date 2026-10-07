@@ -214,7 +214,288 @@ expression: schema_for!(TaskItemsFollowupParams)
             "name",
             "path"
           ]
+        },
+        {
+          "description": "A message from another thread (or from Kybern itself when\n`from_thread_id` is `None`). Providers receive it as flattened text; see\n[`thread_message_text`].",
+          "type": "object",
+          "properties": {
+            "message_id": {
+              "description": "The `thread_messages` row id; also the queued or steered message id.",
+              "type": "string",
+              "format": "uuid"
+            },
+            "from_thread_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "from_title": {
+              "type": "string"
+            },
+            "purpose": {
+              "$ref": "#/$defs/ThreadMessagePurpose"
+            },
+            "reply_to": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "body": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "thread_message"
+            }
+          },
+          "required": [
+            "type",
+            "message_id",
+            "from_title",
+            "purpose",
+            "body"
+          ]
+        },
+        {
+          "description": "A batch of delegated-agent outcomes delivered to the delegating thread.\nProviders receive it as flattened text; see [`agent_results_text`].",
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AgentResultItem"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "agent_results"
+            }
+          },
+          "required": [
+            "type",
+            "items"
+          ]
         }
+      ]
+    },
+    "ThreadMessagePurpose": {
+      "description": "Why a message exists. `Task` is a delegation brief; `Warning` comes from\nKybern itself (for example a file ownership clash).",
+      "type": "string",
+      "enum": [
+        "task",
+        "message",
+        "question",
+        "reply",
+        "warning"
+      ]
+    },
+    "AgentResultItem": {
+      "description": "One delegated agent's outcome inside an [`ContentPart::AgentResults`] batch.",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "title": {
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "$ref": "#/$defs/DelegationRole",
+          "default": "general"
+        },
+        "status": {
+          "$ref": "#/$defs/DelegationStatus"
+        },
+        "result": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "$ref": "#/$defs/DelegationWorkspace",
+          "default": "shared"
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "head_commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "base_commit": {
+          "description": "Worktree: the commit the worktree was seeded from.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diffstat": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DiffStat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "files_touched": {
+          "description": "At most 50.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DelegationConflict"
+          }
+        }
+      },
+      "required": [
+        "task_id",
+        "thread_id",
+        "title",
+        "provider",
+        "status"
+      ]
+    },
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    },
+    "DelegationRole": {
+      "description": "What the delegating agent asked this child to be.",
+      "type": "string",
+      "enum": [
+        "implementation",
+        "research",
+        "review",
+        "design",
+        "test",
+        "general"
+      ]
+    },
+    "DelegationStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "running",
+            "completed",
+            "failed",
+            "cancelled"
+          ]
+        },
+        {
+          "description": "Cut off by a daemon restart.",
+          "type": "string",
+          "const": "interrupted"
+        }
+      ]
+    },
+    "DelegationWorkspace": {
+      "description": "Where a delegated child works.",
+      "oneOf": [
+        {
+          "description": "The parent's checkout and branch.",
+          "type": "string",
+          "const": "shared"
+        },
+        {
+          "description": "Its own git worktree on `kybern/<child-id>`, seeded from the parent's\ncurrent uncommitted state.",
+          "type": "string",
+          "const": "worktree"
+        }
+      ]
+    },
+    "DiffStat": {
+      "description": "Files and lines changed between two commits.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "additions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "deletions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "files",
+        "additions",
+        "deletions"
+      ]
+    },
+    "DelegationConflict": {
+      "description": "A shared-checkout edit that landed on a path a sibling delegation owns.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Repo-relative path that was edited.",
+          "type": "string"
+        },
+        "owner_thread_id": {
+          "description": "The sibling thread whose `owns` globs cover `path`.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "path",
+        "owner_thread_id",
+        "at"
       ]
     }
   }

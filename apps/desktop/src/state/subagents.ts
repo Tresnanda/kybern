@@ -7,7 +7,7 @@ import { formatEffort } from "@/lib/format"
 import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
 
-import { stoppableSubagents, subagentAncestors, subagentChildren, subagentDepth } from "../../../../packages/kybern-client/src/subagents.ts"
+import { isChildThread, stoppableSubagents, subagentAncestors, subagentChildren, subagentDepth } from "../../../../packages/kybern-client/src/subagents.ts"
 import type { Thread, ThreadId } from "@/protocol"
 import { backgroundSubagent, errorText, loadThread, stopSubagent } from "./rpc"
 import { useStore, type AppState } from "./store"
@@ -26,11 +26,12 @@ export function createSubagentChildrenSelector(parentId: ThreadId) {
 }
 
 const sidebarKey = (thread: Thread) =>
-  `${thread.id}|${thread.title}|${thread.status}|${thread.parent_thread_id ?? ""}|${thread.provider.kind}|${thread.subagent?.status}|${thread.subagent?.started_at}|${thread.subagent?.completed_at ?? ""}`
+  `${thread.id}|${thread.title}|${thread.status}|${thread.parent_thread_id ?? ""}|${thread.provider.kind}|${thread.subagent?.status}|${thread.subagent?.started_at}|${thread.subagent?.completed_at ?? ""}|${thread.delegation?.status ?? ""}|${thread.delegation?.started_at ?? ""}|${thread.delegation?.completed_at ?? ""}`
 
 /**
- * Subagent threads of one project for the sidebar. Progress, tokens and tool names change
- * every few seconds; the list only changes when a row would look different.
+ * Child threads of one project for the sidebar: provider subagents and Kybern-delegated children.
+ * Progress, tokens, tool names and touched files change every few seconds; the list only changes
+ * when a row would look different.
  */
 export function createSidebarSubagentsSelector(projectId: string) {
   let source: AppState["threads"] | undefined
@@ -39,7 +40,7 @@ export function createSidebarSubagentsSelector(projectId: string) {
   return (state: Pick<AppState, "threads">) => {
     if (state.threads === source) return result
     source = state.threads
-    const next = Object.values(state.threads).filter((thread) => thread.subagent && thread.project_id === projectId && thread.status !== "archived")
+    const next = Object.values(state.threads).filter((thread) => isChildThread(thread) && thread.project_id === projectId && thread.status !== "archived")
     const nextKeys = next.map(sidebarKey)
     if (nextKeys.length === keys.length && nextKeys.every((key, index) => key === keys[index])) return result
     keys = nextKeys
@@ -120,14 +121,14 @@ export function useDismissedSubagentRows(): ReadonlySet<ThreadId> {
 
 // ---- selectors the thread view uses, so child progress does not re-render it ----
 
-/** Helper threads (real Kybern threads started from this one), not provider subagents. */
+/** Legacy helper threads (real Kybern threads started from this one), not provider subagents or delegated children. */
 export function createHelperThreadsSelector(parentId: ThreadId) {
   let source: AppState["threads"] | undefined
   let result: Thread[] = []
   return (state: Pick<AppState, "threads">) => {
     if (state.threads === source) return result
     source = state.threads
-    const next = Object.values(state.threads).filter((thread) => thread.parent_thread_id === parentId && thread.status !== "archived" && !thread.subagent)
+    const next = Object.values(state.threads).filter((thread) => thread.parent_thread_id === parentId && thread.status !== "archived" && !isChildThread(thread))
     if (next.length !== result.length || next.some((thread, index) => thread !== result[index])) result = next
     return result
   }
@@ -165,7 +166,7 @@ export function useSubagentDepth(threadId: ThreadId): number {
   })
 }
 
-/** The thread table without subagent threads, kept as the same object while only subagents change. */
+/** The thread table without subagent or delegated threads, kept as the same object while only they change. */
 export function createUserThreadsSelector() {
   let source: AppState["threads"] | undefined
   let result: AppState["threads"] = {}
@@ -176,7 +177,7 @@ export function createUserThreadsSelector() {
     let same = true
     let count = 0
     for (const [id, thread] of Object.entries(state.threads)) {
-      if (thread.subagent) continue
+      if (isChildThread(thread)) continue
       next[id as ThreadId] = thread
       count += 1
       if (result[id as ThreadId] !== thread) same = false

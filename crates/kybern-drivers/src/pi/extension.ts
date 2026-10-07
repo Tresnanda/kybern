@@ -35,6 +35,12 @@ const APP_TOOL_NAMES = new Set([
   "kybern_threads_search",
   "kybern_thread_read",
   "kybern_thread_send",
+  "kybern_agent_capabilities",
+  "kybern_agent_delegate",
+  "kybern_agent_status",
+  "kybern_agent_cancel",
+  "kybern_agent_wait",
+  "kybern_thread_interrupt",
   "kybern_collaboration_spawn",
   "kybern_collaboration_send",
   "kybern_collaboration_read",
@@ -59,6 +65,9 @@ const APP_TOOL_NAMES = new Set([
   "kybern_task_update",
   "kybern_task_claim",
 ]);
+// Delegation can wait on a child agent (up to 60 s) and send/wait tools can
+// block on a reply, so they get the same 70 s budget as computer use.
+const LONG_TOOL_NAMES = new Set(["kybern_agent_delegate", "kybern_agent_wait", "kybern_thread_send"]);
 // Note and task writes may wait for the user's approval in Kybern.
 const APPROVAL_TOOL_NAMES = new Set([
   "kybern_note_create",
@@ -286,7 +295,10 @@ async function executeAppTool(name, toolCallId, args, signal, ctx) {
 
   const encodedResult = await ctx.ui.input(title, "Kybern app tool bridge", {
     signal,
-    timeout: name.startsWith("kybern_computer_") || APPROVAL_TOOL_NAMES.has(name) ? COMPUTER_TOOL_TIMEOUT_MS : APP_TOOL_TIMEOUT_MS,
+    timeout:
+      name.startsWith("kybern_computer_") || APPROVAL_TOOL_NAMES.has(name) || LONG_TOOL_NAMES.has(name)
+        ? COMPUTER_TOOL_TIMEOUT_MS
+        : APP_TOOL_TIMEOUT_MS,
   });
   if (encodedResult === undefined) {
     throw new Error(signal?.aborted ? "Kybern app tool was cancelled." : "Kybern app tool timed out.");

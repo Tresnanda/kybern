@@ -4,6 +4,8 @@ import { readProviderCache } from "./providerCache"
 import { create, type UseBoundStore, type StoreApi } from "zustand"
 import { reloadOnHotUpdate } from "@/lib/hot"
 import { DEFAULT_SIDEBAR_FILTER, type SidebarFilter } from "./sidebarOrganize"
+import type { ThreadMessageIndex } from "../../../../packages/kybern-client/src/messageStates.ts"
+import { isChildThread } from "../../../../packages/kybern-client/src/subagents.ts"
 
 import type {
   DaemonInfo,
@@ -18,6 +20,7 @@ import type {
   ThreadActivitySummary,
   ThreadId,
   ThreadEvent,
+  ThreadMessageRecord,
   ProjectId,
   TurnId,
   UserMessage,
@@ -176,6 +179,10 @@ export interface AppState {
   sidebarFilter: SidebarFilter
   /** Messages waiting for the current turn to finish, per thread. */
   queued: Record<ThreadId, QueuedMessage[]>
+  /** Messages another thread sent here that need the reader's approval, per recipient. */
+  heldMessages: Record<ThreadId, ThreadMessageRecord[]>
+  /** Bounded records of the messages a thread sent or received, for the live state of "Sent to" rows. See `threadMessages.ts`. */
+  messageRecords: Record<ThreadId, ThreadMessageIndex>
   composerDrafts: Record<
     string,
     {
@@ -373,6 +380,8 @@ export function createEnvironmentStore(
     projectOrder: [],
     sidebarFilter: DEFAULT_SIDEBAR_FILTER,
     queued: {},
+    heldMessages: {},
+    messageRecords: {},
     composerDrafts: {},
     handoffThread: null,
     handoffTarget: null,
@@ -882,7 +891,7 @@ export const selectThreadsForProject = (
   projectId: ProjectId
 ): Thread[] =>
   Object.values(s.threads)
-    .filter((t) => t.project_id === projectId && t.status !== "archived" && !t.subagent)
+    .filter((t) => t.project_id === projectId && t.status !== "archived" && !isChildThread(t))
     .sort(
       (a, b) =>
         Number(b.pinned) - Number(a.pinned) ||
@@ -891,7 +900,7 @@ export const selectThreadsForProject = (
 
 export const selectRecentThreads = (s: AppState): Thread[] =>
   Object.values(s.threads)
-    .filter((t) => t.status !== "archived" && !t.subagent)
+    .filter((t) => t.status !== "archived" && !isChildThread(t))
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
 
 export const selectSelectedThread = (s: AppState): Thread | null =>

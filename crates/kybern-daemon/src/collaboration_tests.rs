@@ -56,6 +56,7 @@ impl Fixture {
             coordinator_project_id: None,
             collaboration_group_id: None,
             subagent: None,
+            delegation: None,
         };
         let coordinator = thread("Coordinator", ThreadStatus::Idle);
         let worker = thread("Worker", ThreadStatus::Idle);
@@ -287,7 +288,16 @@ async fn restart_marks_acknowledged_working_assignment_attention_needed() {
     let recovered = fixture.store.collaboration_assignment_get(assignment.id).unwrap().unwrap();
     assert_eq!(recovered.status, AssignmentStatus::AttentionNeeded);
     assert!(recovered.uncertainty.as_deref().is_some_and(|text| text.contains("restarted")));
-    assert_eq!(fixture.store.thread_get(worker.id).unwrap().unwrap().status, ThreadStatus::Failed);
+    // A restart interrupts the turn; it is not a failure, and the thread goes back to idle.
+    assert_eq!(fixture.store.thread_get(worker.id).unwrap().unwrap().status, ThreadStatus::Idle);
+    assert!(
+        fixture
+            .store
+            .events_for_thread(worker.id)
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::TurnCompleted { stop_reason: StopReason::Interrupted, .. }))
+    );
 }
 
 #[tokio::test]
@@ -1138,7 +1148,7 @@ async fn partial_coordinator_reservation_reconciles_exact_ids_and_rejects_change
 }
 
 #[tokio::test]
-async fn restart_marks_busy_external_delivery_uncertain_instead_of_stranding_queue() {
+async fn restart_interrupts_busy_recipient_and_lets_its_external_queue_drain() {
     let fixture = Fixture::new();
     let mut recipient = fixture.worker.clone();
     recipient.id = Uuid::now_v7();
@@ -1164,8 +1174,21 @@ async fn restart_marks_busy_external_delivery_uncertain_instead_of_stranding_que
     assert_eq!(message.state, CollaborationDeliveryState::Queued);
     assert!(fixture.store.queue_is_pending(message.id).unwrap());
     fixture.orchestrator.recover_after_restart().await.unwrap();
-    assert_eq!(fixture.store.collaboration_message_get(message.id).unwrap().unwrap().state, CollaborationDeliveryState::Uncertain);
+    // The cut-off turn ended as interrupted and the recipient is idle again, so
+    // the queued message is not stranded: the queue worker delivers it.
+    assert_eq!(fixture.store.thread_get(recipient.id).unwrap().unwrap().status, ThreadStatus::Idle);
+    assert_eq!(fixture.store.collaboration_message_get(message.id).unwrap().unwrap().state, CollaborationDeliveryState::Queued);
+    assert!(fixture.store.queue_is_pending(message.id).unwrap());
+    fixture.orchestrator.drain_queues().await.unwrap();
     assert!(!fixture.store.queue_is_pending(message.id).unwrap());
+    assert!(
+        fixture
+            .store
+            .events_for_thread(recipient.id)
+            .unwrap()
+            .iter()
+            .any(|event| matches!(&event.payload, EventPayload::TurnStarted { message_id, .. } if *message_id == message.id))
+    );
 }
 
 #[tokio::test]
