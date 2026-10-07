@@ -103,8 +103,14 @@ impl Orchestrator {
 
     pub(super) async fn native_runtime_task(&self, live: &LiveSession, task: &RuntimeTask) -> RuntimeTask {
         let mut native = task.clone();
-        if let Some(raw) = live.task_aliases.lock().await.iter().find_map(|(raw, public)| (public == &task.id).then_some(raw.clone())) {
+        let aliases = live.task_aliases.lock().await;
+        if let Some(raw) = aliases.iter().find_map(|(raw, public)| (public == &task.id).then_some(raw.clone())) {
             native.id = raw;
+        }
+        if let Some(parent) = native.parent_id.as_mut()
+            && let Some(raw) = aliases.iter().find_map(|(raw, public)| (public == parent).then_some(raw.clone()))
+        {
+            *parent = raw;
         }
         native
     }
@@ -159,6 +165,7 @@ impl Orchestrator {
         for owner in owners {
             let removed = { self.inner.retained_sessions.lock().await.remove(&owner) };
             if let Some((_, live)) = removed {
+                self.interrupt_runtime_tasks(thread_id, &live, "The owning background session ended.").await;
                 live.mark_released();
                 self.revoke_native_session(&live);
                 live.session.close().await?;

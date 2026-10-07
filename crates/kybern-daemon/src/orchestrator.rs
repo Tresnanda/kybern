@@ -5403,10 +5403,19 @@ impl Orchestrator {
             incoming.id = format!("native:{}:{raw_id}", live.session_instance_id);
             live.task_aliases.lock().await.insert(raw_id, incoming.id.clone());
         }
-        if let Some(parent) = incoming.parent_id.as_mut()
-            && let Some(alias) = live.task_aliases.lock().await.get(parent).cloned()
-        {
-            *parent = alias;
+        if let Some(parent) = incoming.parent_id.as_mut() {
+            let existing = live.task_aliases.lock().await.get(parent).cloned();
+            if let Some(alias) = existing {
+                *parent = alias;
+            } else if !live.tasks.lock().await.contains_key(parent)
+                && self.inner.store.runtime_tasks_for_thread(thread_id)?.iter().any(|task| task.id == *parent)
+            {
+                // Native child rosters can precede their parent's start frame.
+                // Reserve the owning parent's alias before linking the child.
+                let alias = format!("native:{}:{parent}", live.session_instance_id);
+                live.task_aliases.lock().await.insert(parent.clone(), alias.clone());
+                *parent = alias;
+            }
         }
         let origin_turn_id = match turn_id.or(*live.last_turn_id.lock().await) {
             Some(turn_id) => turn_id,

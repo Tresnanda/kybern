@@ -245,6 +245,32 @@ mod tests {
 mod native_environment_tests {
     use super::*;
     #[test]
+    fn every_harness_uses_its_native_account_root_without_replacing_regular_home() {
+        let mut provider = ProviderSettings::default();
+        provider.env.insert("HOME".into(), "/regular-home-sentinel".into());
+        provider.env.insert("OMP_PROFILE".into(), "regular-profile".into());
+        provider.accounts.insert("work".into(), ProviderAccount { name: "Work".into(), directory: "/scratch-work-account".into() });
+        for (kind, expected) in [
+            (ProviderKind::ClaudeCode, "CLAUDE_CONFIG_DIR=/scratch-work-account"),
+            (ProviderKind::Codex, "CODEX_HOME=/scratch-work-account"),
+            (ProviderKind::Cursor, "KYBERN_CURSOR_STATE_DIR=/scratch-work-account/sessions"),
+            (ProviderKind::Pi, "PI_CODING_AGENT_DIR=/scratch-work-account"),
+            (ProviderKind::Omp, "PI_CODING_AGENT_DIR=/scratch-work-account"),
+            (ProviderKind::Opencode, "XDG_DATA_HOME=/scratch-work-account/data"),
+        ] {
+            let named = environment(&provider, kind, "work").unwrap();
+            let output = std::process::Command::new("/usr/bin/env").env_clear().envs(&named).output().unwrap();
+            let captured = String::from_utf8(output.stdout).unwrap();
+            assert!(captured.lines().any(|line| line == expected), "{kind}: {captured}");
+            assert!(captured.contains("HOME=/regular-home-sentinel"));
+            assert_eq!(environment(&provider, kind, "default").unwrap(), provider.env);
+            if kind == ProviderKind::Omp {
+                assert_eq!(named["OMP_PROFILE"], "");
+            }
+        }
+    }
+
+    #[test]
     fn named_native_process_does_not_inherit_regular_cli_api_credentials() {
         let mut provider = ProviderSettings::default();
         provider.env.insert("CURSOR_API_KEY".into(), "regular-cli-sentinel".into());
