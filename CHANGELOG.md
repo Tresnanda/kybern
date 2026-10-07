@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.3
+
+<!-- kybern-release-title: Agents that delegate and talk to each other -->
+<!-- kybern-release-summary: Any chat can hand work to agents on other harnesses, in the same branch or their own worktree, and chats can message each other. -->
+
+- Let any chat delegate work to other agents, on any installed harness and model. Children work in the same checkout and branch by default, or in their own worktree started from your uncommitted changes. Their results come back together in one message, and Stop or archive takes the children with it.
+- See every agent a chat started in the Agents tab: delegated agents, each harness's own subagents and older helper threads, with status, branch or shared checkout, files touched, conflicts and results. Several agents started in one turn fold into one card.
+- Let chats message each other. A question gets an answer back automatically, a message can reach a running chat right away where the harness allows it, and a message to a chat with broader permissions waits for you to deliver or dismiss it. Mention a chat with @ and its agent knows it can write to it.
+- Agents in a shared checkout record the files they edit and are warned when they edit files another agent owns. Agents in their own worktree commit on their own branch, and worktrees are cleaned up once their work is merged.
+- Set how many agents one chat can run at once and how deep delegation goes in Settings → Agent providers → Delegation.
+- A turn cut off by a Kybern restart now ends as interrupted instead of failed, and messages queued behind it still go out.
+- Open each harness's own subagents as read-only child threads, with a live status bar, grouped launch rows and sidebar nesting.
+- Go back and forward between views with the title-bar arrows, ⌘[ and ⌘], or mouse buttons. The plain `d` theme shortcut is gone; use ⌘K → Toggle theme.
+- Select several tasks to change their status or priority, delete them, or send them to agents in one go. Each task page has a Send to agent field.
+- Notes and tasks mentioned in messages render as chips with their live titles, and every agent now learns how to use Kybern's tools (Settings → Threads → Tell agents about Kybern).
+- The `kybern` command now ships with the app. Add it to your PATH from Settings → About, and set up Cursor from Settings without the terminal.
+- Fix Codex showing as Not installed when it's installed through nvm and the app starts before your shell is ready.
+
 ## 0.6.2
 
 <!-- kybern-release-title: Agents can use your notes and tasks -->
