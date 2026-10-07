@@ -14,6 +14,22 @@ expression: scopes
   - "orchestration:operate"
 - - providers.list
   - "orchestration:read"
+- - providers.accounts.create
+  - "orchestration:operate"
+- - providers.accounts.sign_in
+  - "orchestration:operate"
+- - providers.accounts.usage
+  - "orchestration:read"
+- - providers.accounts.catalog
+  - "orchestration:read"
+- - threads.target.get
+  - "orchestration:read"
+- - threads.target.set
+  - "orchestration:operate"
+- - threads.permissions.apply
+  - "orchestration:operate"
+- - threads.switch_continue
+  - "orchestration:operate"
 - - harness_updates.list
   - "orchestration:read"
 - - harness_updates.run
@@ -236,6 +252,16 @@ expression: scopes
   - "orchestration:operate"
 - - github.pr.list
   - "orchestration:read"
+- - github.pr.detail
+  - "orchestration:read"
+- - github.pr.page
+  - "orchestration:read"
+- - github.pr.action
+  - "orchestration:operate"
+- - threads.worktree.inspect
+  - "orchestration:read"
+- - threads.worktree.remove
+  - "orchestration:operate"
 - - files.search
   - "orchestration:read"
 - - files.list
@@ -247,6 +273,16 @@ expression: scopes
 - - skills.list
   - "orchestration:read"
 - - integrations.list
+  - "orchestration:read"
+- - threads.visuals.publish
+  - "orchestration:operate"
+- - threads.visuals.preview
+  - "orchestration:read"
+- - threads.visuals.read
+  - "orchestration:read"
+- - threads.visuals.frame
+  - "orchestration:read"
+- - threads.visuals.revoke
   - "orchestration:read"
 - - threads.artifacts.list
   - "orchestration:read"

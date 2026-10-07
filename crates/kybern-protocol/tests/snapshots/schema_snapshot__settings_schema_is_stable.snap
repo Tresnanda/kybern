@@ -21,6 +21,11 @@ expression: schema_for!(Settings)
       "type": "boolean",
       "default": false
     },
+    "automatic_worktree_cleanup": {
+      "description": "Remove clean, merged, inactive managed worktrees when their thread is archived.",
+      "type": "boolean",
+      "default": false
+    },
     "generate_titles": {
       "description": "Generate thread titles with a model after the first turn.",
       "type": "boolean",
@@ -160,6 +165,25 @@ expression: schema_for!(Settings)
       "description": "Per-provider configuration in settings.json.",
       "type": "object",
       "properties": {
+        "accounts": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ProviderAccount"
+          }
+        },
+        "default_account": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project_accounts": {
+          "description": "Account overrides keyed by the registered project path.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "binary": {
           "description": "Absolute path to the executable; omit to look it up on PATH.",
           "type": [
@@ -189,6 +213,22 @@ expression: schema_for!(Settings)
           }
         }
       }
+    },
+    "ProviderAccount": {
+      "description": "A named, native-isolated account. Secrets remain in the harness directory.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "directory": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "directory"
+      ]
     },
     "BackgroundSettings": {
       "description": "Limits on what the daemon keeps alive after work finishes. Agent processes\nare resumed from the provider's own session on the next message, so\nreleasing one loses no conversation. Every value is in minutes; `0` turns\nthat limit off.",
