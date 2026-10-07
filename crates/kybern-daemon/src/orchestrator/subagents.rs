@@ -34,7 +34,7 @@ const PROMPT_LIMIT: usize = 24_000;
 /// How many launch prompts are remembered for tasks that have not started yet.
 const PROMPT_CACHE_LIMIT: usize = 256;
 
-pub(super) const READ_ONLY_ERROR: &str = "This is a subagent thread and it is read-only. Open its parent thread to send a message.";
+pub(super) const READ_ONLY_ERROR: &str = "This action is unavailable in a read-only subagent thread. Active Claude subagents can receive messages in their own composer. Open its parent for other actions.";
 
 #[derive(Default)]
 pub(super) struct SubagentRouter {

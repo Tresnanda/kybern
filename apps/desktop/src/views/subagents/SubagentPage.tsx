@@ -1,6 +1,5 @@
-// The subagent page: it is the ordinary thread view over a read-only child thread. These
-// are the three places it differs: the breadcrumb in the header, the divider and end row in
-// the transcript, and the read-only bar that stands in for the composer.
+// Native subagents use the ordinary thread view with ancestry and transcript bookends.
+// The bar replaces input for unsupported harnesses, or joins Claude's native composer.
 
 import { Fragment, forwardRef, useEffect, useLayoutEffect, useRef, useState, type ComponentProps } from "react"
 import { toast } from "sonner"
@@ -167,7 +166,7 @@ export function SubagentEndRow({ thread }: { thread: Thread }) {
 
 // ---- read-only bar ----
 
-/** Takes the composer's place. There is no input: sending to a subagent is not offered (yet). */
+/** Status and controls, embedded above Claude input or replacing unsupported input. */
 export function SubagentBar({ thread, embedded = false }: { thread: Thread; embedded?: boolean }) {
   const Frame = embedded ? Fragment : ComposerColumnFrame
   const info = thread.subagent!
