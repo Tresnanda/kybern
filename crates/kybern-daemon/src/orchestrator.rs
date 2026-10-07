@@ -1092,7 +1092,7 @@ impl Orchestrator {
             let configured_model =
                 self.inner.settings.get().providers.get(&child.provider.kind).and_then(|provider| provider.model.clone());
             if child.provider.instance != "default"
-                && !settings
+                && !self.inner.settings.get()
                     .providers
                     .get(&child.provider.kind)
                     .is_some_and(|provider| provider.accounts.contains_key(&child.provider.instance))
