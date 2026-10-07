@@ -1,6 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useStore } from "../src/state/store"
-import type { PrDetailResult, PrPageResult, UserMessage } from "../src/protocol"
+import type {
+  PrActionParams,
+  PrDetailResult,
+  PrPageResult,
+  UserMessage,
+} from "../src/protocol"
 export * from "../src/state/rpc"
 
 export const reviewFixture = {
@@ -8,6 +13,16 @@ export const reviewFixture = {
   slowSubmit: false,
   calls: [] as { method: string; params: any }[],
   sent: [] as { threadId: string; message: UserMessage }[],
+  checkedOut: null as {
+    threadId: string
+    headSha: string
+    branch: string
+  } | null,
+  repairSteps: [] as {
+    kind: "checkout" | "send"
+    threadId: string
+    headSha: string
+  }[],
 }
 export const detail: PrDetailResult = {
   pull_request: {
@@ -81,10 +96,39 @@ async function call(method: string, params: any): Promise<any> {
     return page
   }
   if (method === "github.pr.action") {
-    if (reviewFixture.slowSubmit)
-      await new Promise((resolve) => setTimeout(resolve, 300))
-    if (reviewFixture.failSubmit)
-      throw new Error("GitHub unavailable. Try again.")
+    const action = params as PrActionParams
+    if (action.action === "checkout") {
+      const thread =
+        action.thread_id && useStore.getState().threads[action.thread_id]
+      if (
+        action.project_id !== "project" ||
+        action.number !== detail.pull_request.number ||
+        action.head_sha !== detail.head_sha ||
+        !thread?.worktree
+      )
+        throw new Error(
+          "Cannot check out an unverified review head or unmanaged conversation."
+        )
+      await new Promise((resolve) => setTimeout(resolve, 180))
+      reviewFixture.checkedOut = {
+        threadId: thread.id,
+        headSha: action.head_sha,
+        branch: detail.pull_request.head,
+      }
+      reviewFixture.repairSteps.push({
+        kind: "checkout",
+        ...reviewFixture.checkedOut,
+      })
+      // Checkout returns Empty on the wire; its observable effect is a verified
+      // managed worktree. Publication failure/latency controls do not apply here.
+      return {}
+    }
+    if (["comment", "approve", "request_changes"].includes(action.action)) {
+      if (reviewFixture.slowSubmit)
+        await new Promise((resolve) => setTimeout(resolve, 300))
+      if (reviewFixture.failSubmit)
+        throw new Error("GitHub unavailable. Try again.")
+    }
     return {}
   }
   if (method === "git.status") return useStore.getState().gitStatuses.repair
@@ -123,6 +167,16 @@ export function activeRuntime() {
     loadGitStatus,
     createThread: async () => "repair",
     sendMessage: async (threadId: string, message: UserMessage) => {
+      const checkedOut = reviewFixture.checkedOut
+      if (
+        checkedOut?.threadId !== threadId ||
+        checkedOut.headSha !== detail.head_sha ||
+        checkedOut.branch !== detail.pull_request.head
+      )
+        throw new Error(
+          "Repair must check out the reviewed head before sending."
+        )
+      reviewFixture.repairSteps.push({ kind: "send", ...checkedOut })
       reviewFixture.sent.push({ threadId, message })
     },
   }

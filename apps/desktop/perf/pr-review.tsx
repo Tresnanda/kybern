@@ -77,6 +77,11 @@ async function click(label: string) {
   button(label).click()
   await sleep(120)
 }
+async function waitFor(condition: () => boolean, message: string) {
+  const deadline = performance.now() + 2000
+  while (!condition() && performance.now() < deadline) await sleep(20)
+  check(condition(), message)
+}
 function write(id: string, value: string) {
   const textarea = document.getElementById(id) as HTMLTextAreaElement
   check(textarea, `Missing input ${id}`)
@@ -293,6 +298,31 @@ async function run() {
   })
   await sleep(60)
   await click("Send to agent")
+  await waitFor(
+    () => reviewFixture.sent.length >= 1,
+    "Explicit repair did not finish checkout and send within two seconds"
+  )
+  const repairCheckouts = reviewFixture.calls.filter(
+    (call) =>
+      call.method === "github.pr.action" && call.params.action === "checkout"
+  )
+  check(repairCheckouts.length === 1, "Repair did not check out exactly once")
+  check(
+    repairCheckouts[0].params.for_repair === true &&
+      repairCheckouts[0].params.head_sha === detail.head_sha &&
+      repairCheckouts[0].params.thread_id === "repair" &&
+      reviewFixture.checkedOut?.branch === detail.pull_request.head,
+    "Repair checkout did not verify its target and reviewed head"
+  )
+  check(
+    reviewFixture.repairSteps.length === 2 &&
+      reviewFixture.repairSteps[0].kind === "checkout" &&
+      reviewFixture.repairSteps[1].kind === "send" &&
+      reviewFixture.repairSteps.every(
+        (step) => step.threadId === "repair" && step.headSha === detail.head_sha
+      ),
+    "Repair sent before the reviewed head was checked out"
+  )
   check(
     reviewFixture.sent.length === 1,
     "Explicit repair did not send exactly once"
@@ -318,6 +348,7 @@ async function run() {
     retainedFailureDrafts: true,
     keyboardChecks: true,
     cleanupConfirmation: true,
+    checkoutForRepair: true,
     explicitRepair: true,
   })
 }
