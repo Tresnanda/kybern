@@ -37,7 +37,7 @@ fn quota_recovery_requires_the_latest_interrupted_turn_and_its_own_report() {
             .into_iter()
             .enumerate()
             .map(|(index, payload)| ThreadEvent {
-                seq: index as u64 + 1,
+                seq: index as i64 + 1,
                 thread_id: Uuid::nil(),
                 turn_id: Some(turn),
                 at: Utc::now(),
@@ -75,7 +75,7 @@ fn quota_recovery_requires_the_latest_interrupted_turn_and_its_own_report() {
     let mut newer = reported_failure.clone();
     let next_turn = Uuid::now_v7();
     for payload in [start.clone(), failed] {
-        newer.push(ThreadEvent { seq: newer.len() as u64 + 1, thread_id: Uuid::nil(), turn_id: Some(next_turn), at: Utc::now(), payload });
+        newer.push(ThreadEvent { seq: newer.len() as i64 + 1, thread_id: Uuid::nil(), turn_id: Some(next_turn), at: Utc::now(), payload });
     }
     assert!(!accounts::quota_limited_turn(ThreadStatus::Failed, &newer, now));
     let mut resumed = reported_failure.clone();
