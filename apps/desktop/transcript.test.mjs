@@ -757,7 +757,7 @@ test("native child delivery state does not remount transcript rows and survives 
   assert.equal(state.subagentMessages[0].status, "delivered")
 })
 
-test("OMP recovery preserves explicit progress/tool order and exact final text live, settled and reloaded", () => {
+test("OMP recovery preserves explicit progress/tool order and exact final text live, settled and reloaded", async () => {
   const events = JSON.parse(readFileSync(new URL("../../fixtures/transcript/omp-recovered-boundaries.json", import.meta.url), "utf8"))
   const correction = events.at(-1)
   const exact = correction.blocks.at(-1).text
@@ -786,4 +786,37 @@ test("OMP recovery preserves explicit progress/tool order and exact final text l
   const reloaded = seedFromGet({ thread: { id: correction.thread_id, last_seq: correction.seq }, transcript: JSON.parse(JSON.stringify(transcript)), pending_approvals: [] })
   assert.equal(groupTurns(reloaded.blocks)[0].answer.text, exact)
   assert.deepEqual(groupTurns(reloaded.blocks)[0].work.map(b => b.kind), settled.work.map(b => b.kind))
+  const mobile = await import("../mobile/src/state/transcript.ts")
+  let mobileState = mobile.emptyThreadState()
+  for (const event of events) mobileState = mobile.applyEvent(mobileState, event)
+  assert.equal(groupTurns(mobileState.blocks)[0].answer.text, exact)
+  const mobileReloaded = mobile.seedFromGet({ thread: { id: correction.thread_id, last_seq: correction.seq }, transcript, pending_approvals: [] })
+  assert.equal(groupTurns(mobileReloaded.blocks)[0].answer.text, exact)
+})
+
+
+test("explicit OMP native text identities keep adjacent progress separate from the final answer", () => {
+  const fixture = JSON.parse(readFileSync(new URL("../../fixtures/transcript/omp-recovered-boundaries.json", import.meta.url), "utf8"))
+  const recovered = fixture.at(-1)
+  const blocks = recovered.blocks
+  const payloads = [start, ...blocks.flatMap(block => [
+    ...(block.text ? [{ kind: "assistant_text_delta", message_id: block.message_id, origin: ROOT, delta: block.text }] : []),
+    ...(block.thinking ? [{ kind: "assistant_thinking_delta", message_id: block.message_id, origin: ROOT, delta: block.thinking }] : []),
+    { kind: "assistant_message_completed", message_id: block.message_id, origin: ROOT, text: block.text, thinking: block.thinking },
+  ])]
+  const live = fold(payloads)
+  assert.equal(groupTurns(live.blocks)[0].answer, null)
+  const settled = applyEvent(live, { ...done, terminal_message_id: recovered.terminal_message_id, seq: live.lastSeq + 1, turn_id: T, at: AT })
+  const group = groupTurns(settled.blocks)[0]
+  assert.equal(group.answer.text, blocks.at(-1).text)
+  assert.deepEqual(group.work.filter(b => b.kind === "assistant" && b.text).map(b => b.text), blocks.slice(0, -1).filter(b => b.text).map(b => b.text))
+})
+
+test("historical OMP correction leaves a newer loaded turn's objects intact", () => {
+  const fixture = JSON.parse(readFileSync(new URL("../../fixtures/transcript/omp-recovered-boundaries.json", import.meta.url), "utf8"))
+  const newer = fold([start, { kind: "assistant_message_completed", message_id: "newer", origin: ROOT, text: "Newer exact answer", thinking: null }, { ...done, terminal_message_id: "newer" }])
+  const corrected = applyEvent(newer, { ...fixture.at(-1), seq: newer.lastSeq + 1 })
+  assert.deepEqual(corrected.blocks, newer.blocks)
+  assert.ok(corrected.blocks.every((block, i) => block === newer.blocks[i]))
+  assert.equal(groupTurns(corrected.blocks)[0].answer.text, "Newer exact answer")
 })
