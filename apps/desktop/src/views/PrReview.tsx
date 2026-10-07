@@ -42,7 +42,10 @@ import {
   useReviews,
 } from "@/state/prReview"
 import {
+  clearReviewDraft,
   repairReviewPrompt,
+  reuseReviewDraftText,
+  reviewDraftIsStale,
   selectedReviewFindings,
   submitReviewDraft,
   toggleReviewFinding,
@@ -114,6 +117,7 @@ export function PrReview({
   const setBusy = (submitting: boolean) => updateReview(key, { submitting })
   const [actionError, setActionError] = useState<string | null>(null)
   const [confirmation, setConfirmation] = useState<PrActionKind | null>(null)
+  const [confirmationHead, setConfirmationHead] = useState<string | null>(null)
   const anchor = review?.draft.pendingInline
   const inlineBody = anchor?.body ?? ""
   const inlineInput = useRef<HTMLTextAreaElement>(null)
@@ -134,6 +138,7 @@ export function PrReview({
   const detail = review?.detail
   const pr = detail?.pull_request
   const draft = review?.draft ?? emptyReviewDraft()
+  const staleDraft = detail ? reviewDraftIsStale(draft, detail.head_sha) : false
   const linked =
     draft.threadId === "new"
       ? undefined
@@ -159,8 +164,18 @@ export function PrReview({
   const file = review?.page?.files.find((f) => f.path === review.file)
   const selectedFindings = selectedReviewFindings(draft)
 
+  const openConfirmation = (action: PrActionKind) => {
+    setConfirmationHead(detail?.head_sha ?? null)
+    setConfirmation(action)
+  }
   const submit = async (action: PrActionKind) => {
     if (!detail || useReviews.getState().entries[key]?.submitting) return
+    if (confirmation === action && confirmationHead !== detail.head_sha) {
+      setActionError(
+        "The pull request changed while this confirmation was open. Cancel, review the current changes and open the action again."
+      )
+      return
+    }
     const runtime = activeRuntime()
     const client = runtime.rpc()
     setBusy(true)
@@ -185,7 +200,8 @@ export function PrReview({
           draft,
           publish,
           () => useReviews.getState().entries[key].draft,
-          (next) => updateReviewDraft(key, next)
+          (next) => updateReviewDraft(key, next),
+          detail.head_sha
         )
       } else await publish()
       setConfirmation(null)
@@ -364,19 +380,19 @@ export function PrReview({
                             linkedThread?.status === "running" ||
                             linkedThread?.status === "awaiting-approval"
                           }
-                          onClick={() => setConfirmation("checkout")}
+                          onClick={() => openConfirmation("checkout")}
                         >
                           Check out pull request
                         </MenuItem>
                         <MenuItem
                           disabled={busy || pr?.state !== "OPEN" || pr.is_draft}
-                          onClick={() => setConfirmation("merge")}
+                          onClick={() => openConfirmation("merge")}
                         >
                           Merge pull request
                         </MenuItem>
                         <MenuItem
                           disabled={busy || pr?.state !== "OPEN"}
-                          onClick={() => setConfirmation("close")}
+                          onClick={() => openConfirmation("close")}
                         >
                           Close pull request
                         </MenuItem>
@@ -557,6 +573,12 @@ export function PrReview({
                           <FileDiffBody
                             file={prFileDiff(file)}
                             onLineSelect={(line, side) => {
+                              if (staleDraft) {
+                                setActionError(
+                                  "This draft belongs to a different commit. Resolve the previous draft before choosing a new inline anchor."
+                                )
+                                return
+                              }
                               updateReviewDraft(key, {
                                 pendingInline: {
                                   path: file.path,
@@ -746,6 +768,57 @@ export function PrReview({
               </section>
               <section className="flex flex-col gap-3">
                 <h3 className="font-medium">Your review</h3>
+                {staleDraft && (
+                  <div
+                    role="alert"
+                    className="flex flex-col gap-2 rounded-lg border border-[color:var(--color-border)] p-3"
+                  >
+                    <p className="leading-relaxed">
+                      This draft refers to{" "}
+                      {draft.sourceHead
+                        ? `commit ${draft.sourceHead.slice(0, 8)}`
+                        : "an earlier commit"}
+                      . The current commit is {detail.head_sha.slice(0, 8)}.
+                      Review its changes before reusing your text. Inline
+                      comments need new line anchors.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={
+                          busy || !!draft.inline.length || !!draft.pendingInline
+                        }
+                        onClick={() => {
+                          updateReviewDraft(
+                            key,
+                            reuseReviewDraftText(draft, detail.head_sha)
+                          )
+                          setActionError(null)
+                        }}
+                      >
+                        Use draft text for current commit
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => {
+                          updateReviewDraft(key, clearReviewDraft(draft))
+                          setActionError(null)
+                        }}
+                      >
+                        Clear review draft
+                      </Button>
+                    </div>
+                    {(draft.inline.length > 0 || draft.pendingInline) && (
+                      <p className="text-muted-foreground">
+                        Remove saved inline drafts and cancel the unfinished
+                        inline editor to reuse only the summary.
+                      </p>
+                    )}
+                  </div>
+                )}
                 {draft.inline.map((comment, i) => (
                   <div
                     key={`${comment.path}:${comment.side}:${comment.line}:${i}`}
@@ -794,7 +867,9 @@ export function PrReview({
                   <Button
                     size="sm"
                     disabled={
-                      busy || (!draft.body.trim() && !draft.inline.length)
+                      busy ||
+                      staleDraft ||
+                      (!draft.body.trim() && !draft.inline.length)
                     }
                     onClick={() => void submit("comment")}
                   >
@@ -806,8 +881,8 @@ export function PrReview({
                   <Button
                     size="sm"
                     variant="secondary"
-                    disabled={busy || pr?.state !== "OPEN"}
-                    onClick={() => setConfirmation("approve")}
+                    disabled={busy || staleDraft || pr?.state !== "OPEN"}
+                    onClick={() => openConfirmation("approve")}
                   >
                     Approve
                   </Button>
@@ -816,10 +891,11 @@ export function PrReview({
                     variant="secondary"
                     disabled={
                       busy ||
+                      staleDraft ||
                       pr?.state !== "OPEN" ||
                       (!draft.body.trim() && !draft.inline.length)
                     }
-                    onClick={() => setConfirmation("request_changes")}
+                    onClick={() => openConfirmation("request_changes")}
                   >
                     Request changes
                   </Button>
@@ -918,7 +994,13 @@ export function PrReview({
               Cancel
             </Button>
             <Button
-              disabled={busy}
+              disabled={
+                busy ||
+                (staleDraft &&
+                  confirmation !== "checkout" &&
+                  confirmation !== "merge" &&
+                  confirmation !== "close")
+              }
               onClick={() => confirmation && void submit(confirmation)}
             >
               {busy

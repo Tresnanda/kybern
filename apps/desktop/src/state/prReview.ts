@@ -21,6 +21,7 @@ export interface ReviewState {
   draft: ReviewDraft
 }
 import {
+  bindReviewDraft,
   emptyReviewDraft,
   readReviewDraft,
   type ReviewDraft,
@@ -67,7 +68,12 @@ export function updateReview(key: string, patch: Partial<ReviewState>) {
 }
 export function updateReviewDraft(key: string, patch: Partial<ReviewDraft>) {
   ensureReview(key)
-  const draft = { ...useReviews.getState().entries[key].draft, ...patch }
+  const current = useReviews.getState().entries[key]
+  const draft = bindReviewDraft(
+    current.draft,
+    patch,
+    current.detail?.head_sha ?? null
+  )
   updateReview(key, { draft })
   try {
     localStorage.setItem(`kybern.pr.draft:${key}`, JSON.stringify(draft))

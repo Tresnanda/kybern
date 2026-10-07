@@ -4,6 +4,8 @@ import type {
 } from "../../../../packages/kybern-client/src/types.ts"
 
 export interface ReviewDraft {
+  /** Commit whose visible diff supplied this review text and inline anchors. */
+  sourceHead: string | null
   body: string
   inline: PrInlineComment[]
   pendingInline: PrInlineComment | null
@@ -12,6 +14,7 @@ export interface ReviewDraft {
   threadId: string | null
 }
 export const emptyReviewDraft = (): ReviewDraft => ({
+  sourceHead: null,
   body: "",
   inline: [],
   pendingInline: null,
@@ -19,6 +22,58 @@ export const emptyReviewDraft = (): ReviewDraft => ({
   findings: {},
   threadId: null,
 })
+
+export function hasReviewDraftContent(draft: ReviewDraft): boolean {
+  return !!draft.body || draft.inline.length > 0 || draft.pendingInline !== null
+}
+
+export function reviewDraftIsStale(
+  draft: ReviewDraft,
+  currentHead: string
+): boolean {
+  return hasReviewDraftContent(draft) && draft.sourceHead !== currentHead
+}
+
+/** Editing an existing draft never silently moves its anchors to a newer head. */
+export function bindReviewDraft(
+  current: ReviewDraft,
+  patch: Partial<ReviewDraft>,
+  visibleHead: string | null
+): ReviewDraft {
+  const next = { ...current, ...patch }
+  if (!hasReviewDraftContent(next)) next.sourceHead = null
+  else if (!("sourceHead" in patch) && !hasReviewDraftContent(current))
+    next.sourceHead = visibleHead
+  return next
+}
+
+export function reuseReviewDraftText(
+  draft: ReviewDraft,
+  currentHead: string
+): ReviewDraft {
+  if (draft.inline.length || draft.pendingInline)
+    throw new Error(
+      "Remove old inline drafts and their unfinished editor before using text for the current commit. Choose new lines to re-anchor those comments."
+    )
+  return bindReviewDraft(draft, { sourceHead: currentHead }, currentHead)
+}
+
+export function clearReviewDraft(draft: ReviewDraft): ReviewDraft {
+  return {
+    ...draft,
+    sourceHead: null,
+    body: "",
+    inline: [],
+    pendingInline: null,
+  }
+}
+
+export function assertReviewDraftHead(draft: ReviewDraft, currentHead: string) {
+  if (reviewDraftIsStale(draft, currentHead))
+    throw new Error(
+      "This draft belongs to a different commit. Review the current changes, then reuse its text or clear it and choose new inline anchors before submitting."
+    )
+}
 
 /** A successful submission removes only the exact content that was sent.
  * Typing during a slow request must remain a new draft; failure changes nothing. */
@@ -41,8 +96,10 @@ export async function submitReviewDraft(
   submitted: ReviewDraft,
   publish: () => Promise<unknown>,
   read: () => ReviewDraft,
-  save: (draft: ReviewDraft) => void
+  save: (draft: ReviewDraft) => void,
+  currentHead?: string
 ) {
+  if (currentHead !== undefined) assertReviewDraftHead(submitted, currentHead)
   await publish()
   save(afterReviewSubmission(read(), submitted))
 }
@@ -101,6 +158,10 @@ export function readReviewDraft(value: unknown): ReviewDraft {
     }
   }
   return {
+    sourceHead:
+      typeof draft.sourceHead === "string" && draft.sourceHead.length <= 128
+        ? draft.sourceHead
+        : null,
     body: typeof draft.body === "string" ? draft.body.slice(0, 65536) : "",
     inline: Array.isArray(draft.inline)
       ? draft.inline.filter(validComment).slice(0, 100)

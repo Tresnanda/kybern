@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { afterReviewSubmission, emptyReviewDraft, readReviewDraft, repairReviewPrompt, selectedReviewFindings, submitReviewDraft, toggleReviewFinding } from "./src/state/prReviewModel.ts"
+import { afterReviewSubmission, bindReviewDraft, clearReviewDraft, emptyReviewDraft, readReviewDraft, repairReviewPrompt, reuseReviewDraftText, reviewDraftIsStale, selectedReviewFindings, submitReviewDraft, toggleReviewFinding } from "./src/state/prReviewModel.ts"
 
 const inline = { path: "src/a.rs", line: 7, side: "RIGHT", body: "Keep this check" }
 const finding = { id: 13, author: "reviewer", body: "Handle this error", state: "CHANGES_REQUESTED", path: "src/a.rs", line: 7, side: "RIGHT", url: "https://github.com/example/repo/pull/1", updated_at: "2026-10-07" }
@@ -62,4 +62,134 @@ test("repair prompt carries the reviewed head and rejects oversized findings wit
   const huge = { ...draft, inline: [{ ...inline, body: "é".repeat(40000) }] }
   assert.throws(() => repairReviewPrompt(1, "Repair flow", finding.url, "head-sha", huge), /Select fewer findings/)
   assert.equal(huge.inline[0].body.length, 40000, "nothing was truncated")
+})
+
+test("refreshing head A to B keeps text and inline anchors but blocks publication against B", async () => {
+  const original = bindReviewDraft(
+    emptyReviewDraft(),
+    { body: "Review of A", inline: [inline] },
+    "head-A"
+  )
+  const persisted = readReviewDraft(JSON.parse(JSON.stringify(original)))
+  assert.equal(persisted.sourceHead, "head-A")
+  assert.equal(reviewDraftIsStale(persisted, "head-B"), true)
+  let published = false
+  let saved = false
+  await assert.rejects(
+    submitReviewDraft(
+      persisted,
+      async () => {
+        published = true
+      },
+      () => persisted,
+      () => {
+        saved = true
+      },
+      "head-B"
+    ),
+    /different commit/
+  )
+  assert.equal(published, false)
+  assert.equal(saved, false)
+  assert.deepEqual(
+    persisted,
+    original,
+    "refresh and failed submission preserve the complete draft"
+  )
+  const edited = bindReviewDraft(
+    persisted,
+    { body: "Still reviewing A" },
+    "head-B"
+  )
+  assert.equal(
+    edited.sourceHead,
+    "head-A",
+    "typing never silently rebinds an old review"
+  )
+})
+
+test("inline anchors cannot be reused automatically on a different head", () => {
+  const original = bindReviewDraft(
+    emptyReviewDraft(),
+    { body: "Keep my text", inline: [inline] },
+    "head-A"
+  )
+  assert.throws(
+    () => reuseReviewDraftText(original, "head-B"),
+    /Remove old inline drafts/
+  )
+  assert.deepEqual(original.inline, [inline])
+  assert.equal(original.body, "Keep my text")
+  const pending = { ...original, inline: [], pendingInline: inline }
+  assert.throws(
+    () => reuseReviewDraftText(pending, "head-B"),
+    /unfinished editor/
+  )
+})
+
+test("explicit text reuse keeps the summary and permits a review of the current commit", async () => {
+  const original = bindReviewDraft(
+    emptyReviewDraft(),
+    { body: "Keep my text" },
+    "head-A"
+  )
+  const current = reuseReviewDraftText(original, "head-B")
+  assert.equal(current.body, original.body)
+  assert.equal(current.sourceHead, "head-B")
+  assert.equal(reviewDraftIsStale(current, "head-B"), false)
+  let published = false
+  await submitReviewDraft(
+    current,
+    async () => {
+      published = true
+    },
+    () => current,
+    () => {},
+    "head-B"
+  )
+  assert.equal(published, true)
+  assert.equal(
+    original.sourceHead,
+    "head-A",
+    "explicit reuse does not mutate the prior draft"
+  )
+})
+
+test("explicit clearing allows newly anchored comments against B and preserves repair selection", () => {
+  const original = toggleReviewFinding(
+    bindReviewDraft(
+      emptyReviewDraft(),
+      { body: "Old summary", inline: [inline] },
+      "head-A"
+    ),
+    "review_comments:13",
+    finding
+  )
+  const cleared = clearReviewDraft(original)
+  assert.equal(cleared.body, "")
+  assert.deepEqual(cleared.inline, [])
+  assert.deepEqual(selectedReviewFindings(cleared), [finding])
+  const fresh = bindReviewDraft(
+    cleared,
+    { pendingInline: { ...inline, line: 12, body: "Comment on B" } },
+    "head-B"
+  )
+  assert.equal(fresh.sourceHead, "head-B")
+  assert.equal(reviewDraftIsStale(fresh, "head-B"), false)
+})
+
+test("legacy stored text cannot acquire a current head merely by being loaded or edited", () => {
+  const legacy = readReviewDraft({
+    body: "Old saved summary",
+    inline: [inline],
+  })
+  assert.equal(legacy.sourceHead, null)
+  assert.equal(reviewDraftIsStale(legacy, "head-B"), true)
+  const edited = bindReviewDraft(
+    legacy,
+    { body: "Edited old summary" },
+    "head-B"
+  )
+  assert.equal(edited.sourceHead, null)
+  assert.equal(reviewDraftIsStale(edited, "head-B"), true)
 })
