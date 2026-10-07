@@ -143,7 +143,7 @@ function ModelPickerPanel({
   const multiBackend = useMemo(() => catalogBackends(catalog).length > 1, [catalog])
   const large = catalog.length > MODEL_FLAT_LIMIT
   const agentName = status?.display_name ?? PROVIDER_LABEL[provider.kind]
-  const efforts = current?.efforts?.length ? current.efforts : status?.supported_efforts ?? []
+  const efforts = current ? current.efforts ?? [] : status?.supported_efforts ?? []
   const effortValue = effort ?? current?.default_effort ?? null
 
   const results = useMemo(() => (query.trim() && !showFavorites ? searchModels(catalog, query) : []), [catalog, query, showFavorites])
