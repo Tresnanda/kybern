@@ -102,6 +102,8 @@ expression: names
 - settings.update
 - computer.status
 - computer.setup
+- cursor.status
+- cursor.setup
 - computer.frame
 - computer.notes.list
 - computer.notes.set

@@ -1258,6 +1258,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                     onEffortChange={(next) => changeModel(current?.id ?? model ?? undefined, next)}
                     onProviderChange={changeProvider}
                     onReload={() => void reloadModels()}
+                    onSetUpProvider={(kind) => useStore.getState().set({ settingsOpen: true, settingsTab: "agents", settingsFocus: `provider:${kind}` })}
                     trigger={
                       <Button
                         size="sm"

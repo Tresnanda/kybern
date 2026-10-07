@@ -324,6 +324,21 @@ mod tests {
         (directory, path)
     }
 
+    /// Linux refuses to run a file that another test's freshly forked child
+    /// still holds open for writing (ETXTBSY) until that child execs. Retry.
+    #[cfg(unix)]
+    async fn discover_fixture(binary: &std::path::Path, context: &ProbeContext) -> Result<Discovery> {
+        for _ in 0..50 {
+            match discover(binary, context).await {
+                Err(error) if error.to_string().contains("Text file busy") => {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await
+                }
+                result => return result,
+            }
+        }
+        discover(binary, context).await
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn rpc_probe_is_ephemeral_and_uses_project_context() {
@@ -341,7 +356,7 @@ printf '{"type":"response","command":"get_available_models","success":true,"data
         let mut context = ProbeContext { cwd: Some(directory.path().to_path_buf()), ..ProbeContext::default() };
         context.env.insert("PI_DISCOVERY_FIXTURE".into(), "from-context".into());
 
-        let discovery = discover(&binary, &context).await.unwrap();
+        let discovery = discover_fixture(&binary, &context).await.unwrap();
         assert_eq!(discovery.models.len(), 1);
         assert_eq!(discovery.models[0].id, "custom/from-context");
         assert_eq!(discovery.models[0].display_name, directory.path().canonicalize().unwrap().display().to_string());
@@ -362,7 +377,7 @@ case "$answer" in *'"type":"extension_ui_response"'*'"id":"startup-1"'*'"cancell
 "###,
         );
 
-        let error = discover(&binary, &ProbeContext::default()).await.unwrap_err();
+        let error = discover_fixture(&binary, &ProbeContext::default()).await.unwrap_err();
         assert!(error.to_string().contains("Trust extension?"));
     }
 
@@ -376,7 +391,7 @@ printf '%s\n' 'not-json'
 "###,
         );
 
-        let error = discover(&binary, &ProbeContext::default()).await.unwrap_err();
+        let error = discover_fixture(&binary, &ProbeContext::default()).await.unwrap_err();
         assert!(error.to_string().contains("malformed JSON"));
         assert!(error.to_string().contains("get_state"));
     }

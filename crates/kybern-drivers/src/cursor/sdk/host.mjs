@@ -262,9 +262,9 @@ async function loadSdk() {
   const [major, minor] = process.versions.node.split(".").map(Number);
   if (major < 22 || (major === 22 && minor < 13)) throw new Error("Cursor SDK requires Node.js 22.13 or newer.");
   const root = process.env.KYBERN_CURSOR_SDK_DIR;
-  if (!root) throw new Error("Cursor SDK is not installed. Run `kybern cursor install`.");
+  if (!root) throw new Error("Cursor’s SDK isn’t installed. Install it in Settings → Agent providers, or run `kybern cursor install`.");
   const manifest = JSON.parse(await readFile(join(root, "node_modules/@cursor/sdk/package.json"), "utf8"));
-  if (manifest.version !== SDK_VERSION) throw new Error(`Kybern requires @cursor/sdk ${SDK_VERSION}. Run \`kybern cursor install\`.`);
+  if (manifest.version !== SDK_VERSION) throw new Error(`Kybern requires @cursor/sdk ${SDK_VERSION}. Install it in Settings → Agent providers, or run \`kybern cursor install\`.`);
   return createRequire(join(resolve(root), "package.json"))("@cursor/sdk");
 }
 
@@ -285,9 +285,13 @@ async function main(mode) {
     const abort = () => controller.abort();
     process.once("SIGINT", abort);
     process.once("SIGTERM", abort);
+    // The daemon may run on another machine, so it relays the page to the
+    // client that asked instead of opening a browser here.
+    const relay = process.env.KYBERN_CURSOR_LOGIN_EVENTS === "1";
     const result = await sdk.Cursor.auth.login({
       apiKeyName: "Kybern", store: credentialStore, signal: controller.signal,
-      onLoginUrl: (url) => log(`Open this page to sign in to Cursor:\n${url}`),
+      ...(relay ? { openBrowser: false } : {}),
+      onLoginUrl: (url) => relay ? void emit({ status: "login-url", url }) : log(`Open this page to sign in to Cursor:\n${url}`),
     });
     await emit({ status: "logged-in", email: result.email, apiKeyExpiresAtMs: result.apiKeyExpiresAtMs });
     return;
@@ -302,7 +306,7 @@ async function main(mode) {
   runtimeSecrets.push(apiKey);
   const store = process.env.KYBERN_CURSOR_STATE_DIR ? new sdk.JsonlLocalAgentStore(process.env.KYBERN_CURSOR_STATE_DIR) : undefined;
   if (mode === "probe") {
-    if (!apiKey) throw new Error("Sign in with `kybern cursor login` or set CURSOR_API_KEY in Cursor provider settings. Cursor CLI sign-in is separate.");
+    if (!apiKey) throw new Error("Sign in to Cursor in Settings → Agent providers, or run `kybern cursor login`. Signing in to the Cursor app or CLI doesn’t carry over.");
     const models = await sdk.Cursor.models.list({ apiKey });
     await emit({ version: SDK_VERSION, models: modelCatalog(models) });
     return;
@@ -320,7 +324,7 @@ async function main(mode) {
       try {
         if (line.length > 32 * 1024 * 1024) throw new Error("Cursor SDK request exceeds the 32 MB limit.");
         request = JSON.parse(line);
-        if (request.type === "open" && !apiKey) throw new Error("Sign in with `kybern cursor login` or set CURSOR_API_KEY in Cursor provider settings.");
+        if (request.type === "open" && !apiKey) throw new Error("Sign in to Cursor in Settings → Agent providers, or run `kybern cursor login`.");
         const result = await host.request(request);
         await emit({ id: request.id, result });
         if (request.type === "close") await stop();

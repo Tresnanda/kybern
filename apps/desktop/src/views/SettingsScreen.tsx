@@ -1,9 +1,9 @@
 import { Integrations } from "./Integrations"
 import { canSelfUpdate, checkForAppUpdate, installAppUpdate, useAppUpdate } from "@/lib/appUpdate"
-import { notificationPermission, notify, type NotificationPermissionState } from "@/lib/tauri"
+import { cliInstall, cliRemoveOther, cliStatus, cliUninstall, isTauri, notificationPermission, notify, openExternal, type CliStatus, type NotificationPermissionState } from "@/lib/tauri"
 // Dedicated settings screen. The workspace remains mounted behind it for a lossless return.
 
-import { Fragment, useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
+import { Fragment, useEffect, useEffectEvent, useId, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { toast } from "sonner"
 
 import { ProviderMark } from "@/components/kybern/bits"
@@ -12,7 +12,7 @@ import { Button } from "@/components/kit/button"
 import { ArrowLeftIcon, SearchIcon, PluginIcon, BellIcon, BackgroundTrayIcon } from "@/lib/kit/icons"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import { Menu, MenuGroup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
-import { CheckIcon, ChevronDownIcon, XIcon, SettingsIcon, TerminalIcon, SunIcon as AppearanceIcon, InfoIcon } from "@/lib/kit/icons"
+import { ArrowUpRightIcon, CheckIcon, ChevronDownIcon, XIcon, SettingsIcon, TerminalIcon, SunIcon as AppearanceIcon, InfoIcon } from "@/lib/kit/icons"
 import { Switch } from "@/components/kit/switch"
 import { Textarea } from "@/components/kit/textarea"
 import { InputGroup, InputGroupInput } from "@/components/kit/input-group"
@@ -42,10 +42,10 @@ import {
 import { SIDEBAR_ROW_HOVER_CLASS_NAME, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME } from "@/lib/kit/sidebarRowStyles"
 import { cn } from "@/lib/utils"
 import { useSlidingPill } from "@/lib/kit/slidingPill"
-import type { BackgroundSettings, OrchestrationSettings, ComputerForeground, ComputerNote, ComputerPermission, ComputerStatus, DaemonActivity, DaemonUpdate, PermissionMode, ProviderKind, Settings, HarnessUpdate } from "@/protocol"
+import type { BackgroundSettings, OrchestrationSettings, ComputerForeground, ComputerNote, ComputerPermission, ComputerStatus, CursorSetupAction, CursorSetupStatus, DaemonActivity, DaemonUpdate, PermissionMode, ProviderKind, ProviderStatus, Settings, HarnessUpdate } from "@/protocol"
 import { setGlobalNotesHome, useGlobalNotesHome } from "@/lib/notesPrefs"
 import { setAskBeforeClose, useAskBeforeClose } from "@/state/closeGuard"
-import { errorText, rpc } from "@/state/rpc"
+import { errorText, refreshProviders, rpc } from "@/state/rpc"
 import { activeEnvironment } from "@/state/environments"
 import { useStore } from "@/state/store"
 
@@ -72,11 +72,11 @@ const SEARCH_TERMS: Record<Tab, string> = {
   general: "default agent permissions worktree thread titles close workspace notes global shared separate",
   notifications: "alerts sound permission work finishes fails input",
   background: "idle memory warm shells daemon battery power activity",
-  agents: "provider harness install updates claude codex cursor opencode pi omp profiles",
+  agents: "provider harness install updates claude codex cursor opencode pi omp profiles sign in sdk",
   integrations: "plugins connectors tools mcp skills sign in authentication",
   computer: "computer use cuadriver screen apps click type accessibility screen recording permissions cursor",
   appearance: "theme light dark system translucent glass window",
-  about: "version update protocol host data folder machine",
+  about: "version update protocol host data folder machine command line terminal cli path",
 }
 
 export function SettingsScreen({
@@ -221,10 +221,10 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
-function Row({ title, description, status, children }: { title: string; description?: React.ReactNode; status?: string; children?: React.ReactNode }) {
+function Row({ title, description, status, anchor, children }: { title: string; description?: React.ReactNode; status?: string; anchor?: string; children?: React.ReactNode }) {
   const labelId = useId()
   return (
-    <div className={cn(SETTINGS_CARD_ROW_CLASS_NAME, "settings-row scroll-mt-24 py-4!")}>
+    <div data-settings-anchor={anchor} className={cn(SETTINGS_CARD_ROW_CLASS_NAME, "settings-row scroll-mt-24 py-4!")}>
       <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-3">
         <div className="min-w-0 basis-52 flex-1 space-y-1">
           {title && <div className="flex min-h-5 items-center gap-1.5">
@@ -768,6 +768,7 @@ function AgentSettings() {
   const { settings, update } = useSettings()
   const [updates, setUpdates] = useState<HarnessUpdate[]>([])
   const [loadError, setLoadError] = useState("")
+  useSettingsFocus()
   useEffect(() => {
     const client = rpc()
     let canceled = false
@@ -810,17 +811,9 @@ function AgentSettings() {
     <Section title="Installed agents">
       {providers.map((provider) => {
         const result = updates.find((item) => item.kind === provider.kind)
-        const busy = result?.status === "waiting" || result?.status === "updating"
         const custom = !!settings?.providers[provider.kind]?.binary
-        return <Row key={provider.kind} title={provider.display_name} description={provider.unavailable_reason ?? (provider.available ? <span title={provider.binary_path ?? undefined} className="block truncate">{provider.binary_path}</span> : "Not found on PATH")}>
-          <div className="flex min-w-0 flex-col items-end gap-2">
-            <div className="flex items-center gap-3">
-              <span className="text-[length:var(--app-font-size-ui,12px)] text-muted-foreground tabular-nums">{provider.version ?? (provider.available ? "Installed" : "Not installed")}</span>
-              {provider.available && !custom && <Button size="sm" variant="chrome-outline" disabled={busy} onClick={() => void run(provider.kind)}>{result?.status === "updating" ? "Updating…" : result?.status === "waiting" ? "Waiting for idle…" : "Update now"}</Button>}
-            </div>
-            {custom ? <p className="max-w-80 text-right text-xs text-muted-foreground">Custom executable · Update manually</p> : result && result.status !== "not_checked" && <p role="status" className={cn("max-w-80 text-right text-xs leading-relaxed break-words", result.status === "failed" ? "text-destructive" : "text-muted-foreground")}>{result.message}{result.checked_at && <span className="mt-1 block">Last checked {new Date(result.checked_at).toLocaleString()}</span>}</p>}
-          </div>
-        </Row>
+        const row = <ProviderRow key={provider.kind} provider={provider} result={result} custom={custom} onUpdate={() => void run(provider.kind)} />
+        return provider.kind === "cursor" ? <CursorProviderRow key={provider.kind} provider={provider} fallback={row} /> : row
       })}
       {loadError && <Row title="Unable to load update status" description={loadError} />}
     </Section>
@@ -841,6 +834,165 @@ function DelegationSection({ orchestration, onChange }: { orchestration: Orchest
       </Row>
     </Section>
   )
+}
+
+/** Bring the row named by `settingsFocus` into view and onto its first
+ * control, e.g. when the composer's picker sends someone to set up an agent.
+ * Runs after the screen's own focus and scroll reset. */
+function useSettingsFocus() {
+  const focus = useStore((s) => s.settingsFocus)
+  const set = useStore((s) => s.set)
+  const providers = useStore((s) => s.providers)
+  useEffect(() => {
+    if (!focus) return
+    const frame = requestAnimationFrame(() => {
+      const row = document.querySelector<HTMLElement>(`[data-settings-anchor="${CSS.escape(focus)}"]`)
+      if (!row) return
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      row.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" })
+      row.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true })
+      set({ settingsFocus: null })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [focus, providers, set])
+}
+
+const VERSION_TEXT_CLASS_NAME = "text-[length:var(--app-font-size-ui,12px)] text-muted-foreground tabular-nums whitespace-nowrap"
+const ROW_NOTE_CLASS_NAME = "max-w-80 text-right text-xs leading-relaxed break-words text-pretty"
+
+function ProviderRow({ provider, result, custom, onUpdate }: { provider: ProviderStatus; result?: HarnessUpdate; custom: boolean; onUpdate: () => void }) {
+  const busy = result?.status === "waiting" || result?.status === "updating"
+  // Cursor's SDK is pinned to this Kybern release and updates with it.
+  const updatable = provider.available && !custom && provider.kind !== "cursor"
+  return <Row anchor={`provider:${provider.kind}`} title={provider.display_name} description={provider.unavailable_reason ?? (provider.available ? <span title={provider.binary_path ?? undefined} className="block truncate">{provider.binary_path}</span> : "Not found on PATH")}>
+    <div className="flex min-w-0 flex-col items-end gap-2">
+      <div className="flex items-center gap-3">
+        <span className={VERSION_TEXT_CLASS_NAME}>{provider.version ?? (provider.available ? "Installed" : "Not installed")}</span>
+        {updatable && <Button size="sm" variant="chrome-outline" disabled={busy} onClick={onUpdate}>{result?.status === "updating" ? "Updating…" : result?.status === "waiting" ? "Waiting for idle…" : "Update now"}</Button>}
+      </div>
+      {custom ? <p className={cn(ROW_NOTE_CLASS_NAME, "text-muted-foreground")}>Custom executable · Update manually</p> : result && result.status !== "not_checked" && <p role="status" className={cn(ROW_NOTE_CLASS_NAME, result.status === "failed" ? "text-destructive" : "text-muted-foreground")}>{result.message}{result.checked_at && <span className="mt-1 block">Last checked {new Date(result.checked_at).toLocaleString()}</span>}</p>}
+    </div>
+  </Row>
+}
+
+/** Cursor runs through Cursor's SDK, which installs and signs in apart from
+ * the Cursor app. The daemon does both, so this works for remote machines
+ * too: the sign-in page opens here, on the computer you're using. */
+function CursorProviderRow({ provider, fallback }: { provider: ProviderStatus; fallback: React.ReactElement }) {
+  const [status, setStatus] = useState<CursorSetupStatus | null>(null)
+  const [unsupported, setUnsupported] = useState(false)
+  const [pending, setPending] = useState<CursorSetupAction | "check" | null>(null)
+  const [checking, setChecking] = useState(false)
+  const previous = useRef<CursorSetupStatus | null>(null)
+  const opened = useRef<string | null>(null)
+
+  const apply = (next: CursorSetupStatus) => {
+    const before = previous.current
+    previous.current = next
+    setStatus(next)
+    if (next.signing_in && next.login_url && opened.current !== next.login_url) {
+      opened.current = next.login_url
+      void openExternal(next.login_url)
+    }
+    const installed = !!before?.installing && !next.installing && next.installed
+    const signedIn = !!before?.signing_in && !next.signing_in && next.account === "signed_in"
+    if (installed || signedIn || (before && before.account !== next.account)) {
+      setChecking(true)
+      void refreshProviders().catch(() => {}).finally(() => setChecking(false))
+    }
+    if (signedIn) toast.success("Signed in to Cursor", next.email ? { description: next.email } : undefined)
+  }
+
+  const load = async () => {
+    try { apply(await rpc().call("cursor.status", {})) }
+    catch { if (!previous.current) setUnsupported(true) }
+  }
+  const onLoad = useEffectEvent(load)
+  // Read once, then keep reading while an install or sign-in runs.
+  const waiting = !!status && (status.installing || status.signing_in)
+  useEffect(() => {
+    let canceled = false
+    let timer: ReturnType<typeof setTimeout>
+    const poll = async () => {
+      await onLoad()
+      if (!canceled && waiting) timer = setTimeout(() => void poll(), 1500)
+    }
+    void poll()
+    return () => { canceled = true; clearTimeout(timer) }
+  }, [waiting])
+
+  const act = async (action: CursorSetupAction) => {
+    setPending(action)
+    try { apply(await rpc().call("cursor.setup", { action })) }
+    catch (error) {
+      const title = { install: "Unable to install Cursor’s SDK", sign_in: "Unable to start Cursor sign-in", cancel_sign_in: "Unable to cancel sign-in", sign_out: "Unable to sign out of Cursor" }[action]
+      toast.error(title, { description: errorText(error) })
+    }
+    finally { setPending(null) }
+  }
+  const check = async () => {
+    setPending("check")
+    await load()
+    setChecking(true)
+    await refreshProviders().catch(() => {})
+    setChecking(false)
+    setPending(null)
+  }
+
+  if (unsupported) return fallback
+  const anchor = `provider:${provider.kind}`
+  if (!status) return <Row anchor={anchor} title={provider.display_name} description="Checking…"><span className={VERSION_TEXT_CLASS_NAME}>{provider.version ?? ""}</span></Row>
+
+  let description: React.ReactNode
+  let actions: React.ReactNode = null
+  const version = status.installed ? `SDK ${status.sdk_version}` : "Not installed"
+  if (status.installing || pending === "install") {
+    description = "Installing Cursor’s SDK. This usually takes under a minute."
+    actions = <Button size="sm" disabled><MatrixLoader className="size-3" /> Installing…</Button>
+  } else if (!status.installed) {
+    description = status.problem ?? "Kybern runs Cursor through Cursor’s SDK, which installs separately from the Cursor app."
+    actions = status.problem
+      ? <Button size="sm" variant="chrome-outline" disabled={pending !== null} onClick={() => void check()}>Check again</Button>
+      : <Button size="sm" onClick={() => void act("install")}>Install SDK</Button>
+  } else if (status.signing_in || pending === "sign_in") {
+    const url = status.login_url
+    description = url
+      ? <>
+          <span className="block text-pretty">Finish signing in on the Cursor page in your browser. This page updates when you’re done.</span>
+          <Button variant="link" className="mt-1 h-auto min-h-0 gap-1 border-0 p-0 text-[length:inherit] text-foreground" onClick={() => void openExternal(url)}>
+            Open the sign-in page again <ArrowUpRightIcon aria-hidden className="size-3" />
+          </Button>
+        </>
+      : "Opening Cursor’s sign-in page…"
+    actions = <Button size="sm" variant="chrome-outline" disabled={pending === "cancel_sign_in" || !status.signing_in} onClick={() => void act("cancel_sign_in")}>Cancel</Button>
+  } else if (status.account === "signed_out" || status.account === "unknown") {
+    description = "Sign in to use Cursor in Kybern. Your Cursor app sign-in doesn’t carry over."
+    actions = <Button size="sm" onClick={() => void act("sign_in")}>Sign in…</Button>
+  } else if (checking) {
+    description = "Checking Cursor…"
+  } else if (!provider.available) {
+    description = provider.unavailable_reason ?? "Cursor didn’t respond. Check your connection, then try again."
+    actions = <Button size="sm" variant="chrome-outline" disabled={pending !== null} onClick={() => void check()}>Try again</Button>
+  } else {
+    description = status.account === "api_key"
+      ? "Signed in with CURSOR_API_KEY from this agent’s environment."
+      : status.email ? <span className="block truncate" title={status.email}>Signed in as <bdi>{status.email}</bdi></span> : "Signed in"
+    if (status.account === "signed_in") {
+      actions = <Button size="sm" variant="chrome-outline" disabled={pending === "sign_out"} onClick={() => void act("sign_out")}>Sign out</Button>
+    }
+  }
+  const waitingIndicator = status.signing_in && !!status.login_url
+  return <Row anchor={anchor} title={provider.display_name} description={description}>
+    <div className="flex min-w-0 flex-col items-end gap-2">
+      <div className="flex items-center gap-3">
+        {waitingIndicator
+          ? <span role="status" className={cn(VERSION_TEXT_CLASS_NAME, "flex items-center gap-1.5")}><MatrixLoader className="size-3" />Waiting for sign-in</span>
+          : <span className={VERSION_TEXT_CLASS_NAME}>{version}</span>}
+        {actions}
+      </div>
+      {status.error && !status.installing && !status.signing_in && <p role="status" className={cn(ROW_NOTE_CLASS_NAME, "text-destructive")}>{status.error}</p>}
+    </div>
+  </Row>
 }
 
 export function OmpProfiles({ settings, update }: { settings: Settings; update: (patch: Partial<Settings>) => Promise<void> }) {
@@ -1045,7 +1197,7 @@ function AppUpdateRow() {
 
 function About() {
   const info = useStore((s) => s.info)
-  return (
+  return <>
     <Section title="About">
       <AppUpdateRow />
       <Row title="Daemon" description={info?.version ?? "…"} />
@@ -1053,5 +1205,85 @@ function About() {
       <Row title="Host" description={info ? `${info.hostname} · ${info.os} ${info.arch}` : "…"} />
       <Row title="Data" description={info?.data_dir ?? "…"} />
     </Section>
-  )
+    {isTauri() && <Section title="Command line"><CommandLineRow /></Section>}
+  </>
+}
+
+const MONO_CLASS_NAME = "font-mono text-[0.95em]"
+
+/** The `kybern` command shipped inside the app, put on PATH the way this
+ * platform expects. It always matches the app because it lives inside it. */
+function CommandLineRow() {
+  const [status, setStatus] = useState<CliStatus | null>(null)
+  const [busy, setBusy] = useState<"install" | "uninstall" | "remove" | null>(null)
+  const [justInstalled, setJustInstalled] = useState(false)
+  useEffect(() => {
+    let canceled = false
+    void cliStatus().then((next) => { if (!canceled) setStatus(next) }).catch(() => {})
+    return () => { canceled = true }
+  }, [])
+  const run = async (action: "install" | "uninstall" | "remove") => {
+    setBusy(action)
+    try {
+      const next = action === "install" ? await cliInstall() : action === "uninstall" ? await cliUninstall() : await cliRemoveOther(status?.resolved ?? "")
+      setStatus(next)
+      setJustInstalled(action !== "uninstall" && next.installed)
+    } catch (error) {
+      const text = errorText(error)
+      if (text !== "canceled") {
+        toast.error({ install: "Unable to install the command", uninstall: "Unable to uninstall the command", remove: "Unable to remove the older command" }[action], { description: text })
+      }
+    } finally { setBusy(null) }
+  }
+  const command = <code className={MONO_CLASS_NAME}>kybern</code>
+  if (!status) return <Row title="Terminal command" description="Checking…" />
+  if (status.method === "unavailable") return <Row title="Terminal command" description={status.problem ?? "Not available in this build."} />
+
+  // Shorter, familiar paths in a terminal context: ~/.local/bin/kybern.
+  const tidy = (path: string) => status.method !== "path" && status.home && path.startsWith(`${status.home}/`) ? `~${path.slice(status.home.length)}` : path
+  const where = status.target && <bdi className={MONO_CLASS_NAME}>{tidy(status.target)}</bdi>
+  let description: React.ReactNode
+  if (status.method === "package") {
+    description = <>Installed with Kybern’s package at {where}. It updates with the app.</>
+  } else if (status.installed) {
+    description = status.method === "path"
+      ? <>Kybern’s folder is on your Path, so terminals can run {command}. It updates with the app.</>
+      : <>Installed at {where}. It updates with the app.</>
+  } else {
+    description = status.method === "path"
+      ? <>Adds Kybern’s folder to your Path so terminals can run {command}. It updates with the app.</>
+      : <>Run Kybern from a terminal with {command}. It stays in step with the app.</>
+  }
+  // What a terminal runs today matters most when it isn't Kybern's copy.
+  const other = status.resolved && (status.shadowed || !status.installed) ? status.resolved : null
+  const otherVersion = status.resolved_version ? `kybern ${status.resolved_version}` : "another kybern"
+  const notes: { text: React.ReactNode; tone?: "warning" }[] = []
+  if (status.problem) notes.push({ text: status.problem, tone: "warning" })
+  if (status.installed && status.shadowed && other) {
+    notes.push({ text: <>Terminals still run {otherVersion} at <bdi className={MONO_CLASS_NAME}>{tidy(other)}</bdi>, which comes first on your PATH.</>, tone: "warning" })
+  } else if (!status.installed && other) {
+    notes.push({ text: <>Terminals currently run {otherVersion} at <bdi className={MONO_CLASS_NAME}>{tidy(other)}</bdi>.</> })
+  }
+  if (status.installed && !status.target_on_path && status.method !== "path" && status.method !== "package") {
+    notes.push({ text: <>Add <bdi className={MONO_CLASS_NAME}>{tidy(status.target ?? "").replace(/[\\/][^\\/]+$/, "")}</bdi> to your PATH to use it.</>, tone: "warning" })
+  } else if (justInstalled && !status.shadowed) {
+    notes.push({ text: "Open a new terminal window to use it." })
+  }
+  const canInstall = !status.installed && !status.problem
+  return <Row title="Terminal command" description={<>
+    <span className="block text-pretty">{description}</span>
+    {notes.map((note, index) => <span key={index} role="status" className={cn("mt-1 block text-pretty break-words", note.tone === "warning" ? "text-foreground" : "text-muted-foreground")}>{note.text}</span>)}
+  </>}>
+    {status.installed && status.shadowed && other && (
+      <Button size="sm" variant="chrome-outline" disabled={busy !== null} onClick={() => void run("remove")}>{busy === "remove" ? "Removing…" : "Remove older copy"}</Button>
+    )}
+    {canInstall && (
+      <Button size="sm" disabled={busy !== null} onClick={() => void run("install")}>
+        {busy === "install" ? <><MatrixLoader className="size-3" /> Installing…</> : status.needs_admin ? "Install…" : "Install"}
+      </Button>
+    )}
+    {status.installed && status.method !== "package" && (
+      <Button size="sm" variant="chrome-outline" disabled={busy !== null} onClick={() => void run("uninstall")}>{busy === "uninstall" ? "Uninstalling…" : "Uninstall"}</Button>
+    )}
+  </Row>
 }

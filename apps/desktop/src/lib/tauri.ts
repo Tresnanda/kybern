@@ -62,6 +62,54 @@ export async function pairingQr(invitation: string): Promise<string | null> {
   return invoke<string>("pairing_qr", { invitation })
 }
 
+/** How this platform puts the bundled `kybern` command on PATH. */
+export type CliMethod = "link" | "copy" | "path" | "package" | "unavailable"
+
+export interface CliStatus {
+  method: CliMethod
+  /** The command inside this app. */
+  bundled: string | null
+  /** The link or copy Kybern installs, or the folder it adds to Path. */
+  target: string | null
+  installed: boolean
+  /** Installing asks for an administrator password. */
+  needs_admin: boolean
+  /** `target` is in a folder the user's shell searches. */
+  target_on_path: boolean
+  /** What a new terminal runs for `kybern`. */
+  resolved: string | null
+  resolved_version: string | null
+  /** A different `kybern` comes before Kybern's on PATH. */
+  shadowed: boolean
+  problem: string | null
+  /** For showing paths under it as `~/…`. */
+  home: string | null
+}
+
+/** The bundled CLI on this computer, or null outside the desktop shell. */
+export async function cliStatus(): Promise<CliStatus | null> {
+  if (!isTauri()) return null
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<CliStatus>("cli_status")
+}
+
+/** Rejects with "canceled" when the user dismisses the password prompt. */
+export async function cliInstall(): Promise<CliStatus> {
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<CliStatus>("cli_install")
+}
+
+export async function cliUninstall(): Promise<CliStatus> {
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<CliStatus>("cli_uninstall")
+}
+
+/** Delete an older `kybern` that comes first on PATH. */
+export async function cliRemoveOther(path: string): Promise<CliStatus> {
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<CliStatus>("cli_remove_other", { path })
+}
+
 export async function openExternal(url: string): Promise<void> {
   if (isTauri()) {
     const { openUrl } = await import("@tauri-apps/plugin-opener")
