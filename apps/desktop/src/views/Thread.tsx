@@ -70,7 +70,7 @@ import { ComputerLiveView } from "./ComputerLiveView"
 import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME, COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME } from "@/components/kit/chat/composerStackedPanelStyles"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
-import { isFreeChatProject, type ApprovalRequest, type JsonValue, type RuntimeTask, type ThreadId, type UserMessage } from "@/protocol"
+import { ConnectionClosedError, isFreeChatProject, type ApprovalRequest, type JsonValue, type RuntimeTask, type ThreadId, type UserMessage } from "@/protocol"
 import { newThread } from "@/state/nav"
 import { activeRuntime, subscribeCollaboration, archiveThread, errorText, interrupt, loadThread, respondApproval, rpc, sendMessage, queueMessage, removeQueuedMessage, updateThread } from "@/state/rpc"
 import { canSplitPane, type PaneId } from "@/state/splitView"
@@ -157,18 +157,21 @@ export function ThreadView({
   const targetRequests = useRef(new AccountRequestSequence())
   const catalogGeneration = useRef(0)
   const targetEnvironmentId = useStore((s) => s.environmentId)
+  const connected = useStore((s) => s.connection.state === "open")
   const hasThread = !!thread
   const readOnlyThread = !!thread?.subagent
   useEffect(() => {
-    if (!hasThread || readOnlyThread) return
+    if (!connected || !hasThread || readOnlyThread) return
     const request = targetRequests.current.read({ threadId, settings, environmentId: targetEnvironmentId })
     if (!request) return
     let canceled = false
-    void rpc().call("threads.target.get", { thread_id: threadId }).then((state) => {
+    void Promise.resolve().then(async () => {
+      if (canceled) return
+      const state = await rpc().call("threads.target.get", { thread_id: threadId })
       if (!canceled && targetRequests.current.accepts(request)) setNextTarget({ threadId, environmentId: targetEnvironmentId, settings, state })
-    }).catch((error) => { if (!canceled && targetRequests.current.accepts(request)) toast.error("Unable to load account selection", { description: errorText(error) }) })
+    }).catch((error) => { if (!canceled && targetRequests.current.accepts(request) && !(error instanceof ConnectionClosedError)) toast.error("Unable to load account selection", { description: errorText(error) }) })
     return () => { canceled = true }
-  }, [threadId, thread?.status, thread?.provider.instance, thread?.model, settings, hasThread, readOnlyThread, targetEnvironmentId])
+  }, [threadId, thread?.status, thread?.provider.instance, thread?.model, settings, hasThread, readOnlyThread, targetEnvironmentId, connected])
   const targetState = nextTarget?.threadId === threadId && nextTarget.environmentId === targetEnvironmentId && nextTarget.settings === settings ? nextTarget.state : null
   const target = targetState?.target ?? (thread ? { provider: thread.provider, model: thread.model, effort: thread.effort } : null)
   const catalogKey = target ? `${targetEnvironmentId}:${threadId}:${target.provider.kind}:${target.provider.instance}` : ""
@@ -189,14 +192,14 @@ export function ThreadView({
     }
   }, [catalogKey, targetKind, targetInstance, targetProjectId, readOnlyThread, settings])
   useEffect(() => {
-    if (!targetKind || !targetInstance || !targetProjectId || readOnlyThread) return
+    if (!connected || !targetKind || !targetInstance || !targetProjectId || readOnlyThread) return
     let canceled = false
     const generation = catalogGeneration
     void Promise.resolve().then(() => {
       if (!canceled) return refreshAccountCatalog({ kind: targetKind, instance: targetInstance }, false)
-    }).catch((error) => { if (!canceled) toast.error("Unable to load account models", { description: errorText(error) }) })
+    }).catch((error) => { if (!canceled && !(error instanceof ConnectionClosedError)) toast.error("Unable to load account models", { description: errorText(error) }) })
     return () => { canceled = true; generation.current++ }
-  }, [refreshAccountCatalog, targetKind, targetInstance, targetProjectId, readOnlyThread])
+  }, [refreshAccountCatalog, targetKind, targetInstance, targetProjectId, readOnlyThread, connected])
   const composerProviders = useMemo(() => providers.map((status) => status.kind !== targetKind ? status : accountCatalog?.key === catalogKey && accountCatalog.settings === settings ? accountCatalog.status : { ...status, models: [] }), [providers, targetKind, accountCatalog, catalogKey, settings])
   const chooseTarget = async (selection: SessionTarget, inherit = !targetState?.account_override) => {
     const scope = { threadId, settings, environmentId: targetEnvironmentId }
@@ -502,27 +505,31 @@ export function ThreadView({
 }
 
 function AccountLimitRecovery({ threadId, provider }: { threadId: string; provider: import("@/protocol").ProviderInstance }) {
+  const connected = useStore((state) => state.connection.state === "open")
+  const environmentId = useStore((state) => state.environmentId)
   const threadStatus = useStore((state) => state.threads[threadId]?.status)
   const latestEnd = useStore((state) => {
     const end = state.transcripts[threadId]?.blocks.findLast((block) => block.kind === "turn_end")
     return end ? `${end.turnId}:${end.seq}` : ""
   })
   const limitsKey = useStore((state) => JSON.stringify(state.transcripts[threadId]?.providerUsage?.limits ?? null))
-  const identity = JSON.stringify([threadId, provider.kind, provider.instance, threadStatus, latestEnd, limitsKey])
+  const identity = JSON.stringify([environmentId, threadId, provider.kind, provider.instance, threadStatus, latestEnd, limitsKey])
   const [confirmation, setConfirmation] = useState<{ identity: string; limited: boolean } | null>(null)
   useEffect(() => {
-    if (threadStatus !== "failed" && threadStatus !== "idle") return
+    if (!connected || (threadStatus !== "failed" && threadStatus !== "idle")) return
     let canceled = false
-    void rpc().call("threads.target.get", { thread_id: threadId }).then((state) => {
+    void Promise.resolve().then(async () => {
+      if (canceled) return
+      const state = await rpc().call("threads.target.get", { thread_id: threadId })
       if (!canceled) setConfirmation({ identity, limited: state.quota_limited === true })
     }).catch(() => { if (!canceled) setConfirmation({ identity, limited: false }) })
     return () => { canceled = true }
-  }, [threadId, threadStatus, identity])
+  }, [threadId, threadStatus, identity, connected])
   const accounts = useStore((state) => state.settings?.providers[provider.kind]?.accounts)
   const [selected, setSelected] = useState("")
   const [busy, setBusy] = useState(false)
   const attempt = useRef<string | null>(null)
-  if (confirmation?.identity !== identity || !confirmation.limited) return null
+  if (!connected || confirmation?.identity !== identity || !confirmation.limited) return null
   const options = [{ id: "default", name: "Default account" }, ...Object.entries(accounts ?? {}).map(([id, account]) => ({ id, name: account.name }))].filter((account) => account.id !== provider.instance)
   const choice = options.find((account) => account.id === selected) ?? options[0]
   return <ComposerStackedPanel><ComposerStackedPanelRow compact>
