@@ -106,7 +106,16 @@ pub(crate) async fn preview(paths: &crate::config::Paths, params: HtmlPreviewPar
 
 /// Only transient tool transport carries screenshot bytes. Provider tools can
 /// echo them in completions: strip these known image fields before persistence.
-pub(crate) fn persisted_output(mut value: serde_json::Value) -> serde_json::Value {
+pub(crate) fn is_preview_tool(name: &str) -> bool {
+    name == "kybern_html_preview"
+        || ["mcp__kybern__", "mcp_kybern_", "kybern.", "kybern/"]
+            .iter()
+            .any(|prefix| name.strip_prefix(prefix) == Some("kybern_html_preview"))
+}
+pub(crate) fn persisted_output(name: Option<&str>, mut value: serde_json::Value) -> serde_json::Value {
+    if !name.is_some_and(is_preview_tool) {
+        return value;
+    }
     fn strip(value: &mut serde_json::Value, budget: &mut usize) {
         if *budget == 0 {
             return;
@@ -128,6 +137,15 @@ pub(crate) fn persisted_output(mut value: serde_json::Value) -> serde_json::Valu
             serde_json::Value::Array(children) => {
                 for child in children {
                     strip(child, budget);
+                }
+            }
+            serde_json::Value::String(text) if text.len() > 256 * 1024 => {
+                // Some harnesses serialize MCP content again as one JSON string.
+                if let Ok(mut nested) = serde_json::from_str::<serde_json::Value>(text) {
+                    strip(&mut nested, budget);
+                    *text = nested.to_string();
+                } else {
+                    *text = "Preview image omitted from the saved tool log; screenshot was delivered to the agent.".into();
                 }
             }
             _ => {}
@@ -159,8 +177,25 @@ mod tests {
     #[test]
     fn screenshot_bytes_do_not_enter_event_logs() {
         let value = serde_json::json!({"_kybern_content":[{"type":"image","mimeType":"image/png","data":"huge bytes"},{"type":"text","text":"checked"}]});
-        let clean = persisted_output(value);
+        let clean = persisted_output(Some("kybern_html_preview"), value);
         assert!(!clean.to_string().contains("huge bytes"));
         assert!(clean.to_string().contains("checked"));
+    }
+    #[test]
+    fn only_native_preview_outputs_lose_transient_images() {
+        let image = serde_json::json!({"content":[{"type":"image","mimeType":"image/png","data":"image bytes"}]});
+        for name in ["kybern_computer_screenshot", "mcp__plugin__imagegen", "Image", "custom_kybern_html_preview"] {
+            assert_eq!(persisted_output(Some(name), image.clone()), image);
+        }
+        assert_eq!(persisted_output(None, image.clone()), image);
+        for name in [
+            "kybern_html_preview",
+            "mcp__kybern__kybern_html_preview",
+            "mcp_kybern_kybern_html_preview",
+            "kybern.kybern_html_preview",
+            "kybern/kybern_html_preview",
+        ] {
+            assert!(!persisted_output(Some(name), image.clone()).to_string().contains("image bytes"));
+        }
     }
 }

@@ -44,9 +44,52 @@ pub async fn save_text_file<R: Runtime>(window: tauri::Window<R>, file_name: Str
     Ok(true)
 }
 
+/// Save HTML with the same destination boundary as note/image export. The
+/// source can contain embedded images, so its limit matches durable visuals.
+#[tauri::command]
+pub async fn save_html_file<R: Runtime>(window: tauri::Window<R>, file_name: String, contents: String) -> Result<bool, String> {
+    if contents.len() > 25 * 1024 * 1024 + 64 * 1024 {
+        return Err("This visual is too large to save. Ask the agent to use smaller images.".into());
+    }
+    let name = html_file_name(&file_name);
+    let mut dialog = window.app_handle().dialog().file();
+    #[cfg(desktop)]
+    {
+        dialog = dialog.set_parent(&window);
+    }
+    let dialog = dialog.set_title("Save visual").set_file_name(name).add_filter("HTML", &["html", "htm"]);
+    let path = tauri::async_runtime::spawn_blocking(move || dialog.blocking_save_file())
+        .await
+        .map_err(|error| format!("The save dialog failed: {error}"))?;
+    let Some(path) = path else { return Ok(false) };
+    let path = path.into_path().map_err(|error| format!("Choose a valid save location: {error}"))?;
+    if path.file_name().is_none() {
+        return Err("Choose a file name first.".into());
+    }
+    std::fs::write(path, contents).map_err(|error| format!("Unable to save the visual: {error}. Choose another location and retry."))?;
+    Ok(true)
+}
+fn html_file_name(requested: &str) -> String {
+    let cleaned: String = requested
+        .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], " ")
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect();
+    let cleaned = cleaned.trim().trim_start_matches('.').trim();
+    let stem = cleaned.strip_suffix(".html").unwrap_or(cleaned).trim();
+    let stem: String = stem.chars().take(120).collect();
+    if stem.is_empty() { "Visual.html".into() } else { format!("{stem}.html") }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::markdown_file_name;
+    use super::{html_file_name, markdown_file_name};
+    #[test]
+    fn html_names_are_safe_and_keep_html_extension() {
+        assert_eq!(html_file_name("Chart.html"), "Chart.html");
+        assert_eq!(html_file_name("../Chart:*"), "Chart.html");
+        assert_eq!(html_file_name(""), "Visual.html");
+    }
 
     #[test]
     fn export_file_names_are_safe_markdown_names() {

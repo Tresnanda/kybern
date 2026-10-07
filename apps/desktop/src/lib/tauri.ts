@@ -174,6 +174,19 @@ export async function saveTextFile(fileName: string, contents: string): Promise<
   return invoke<boolean>("save_text_file", { fileName, contents })
 }
 
+/** Save a durable HTML visual through the native dialog (download in browsers). */
+export async function saveHtmlFile(fileName: string, contents: string): Promise<boolean> {
+  if (!isTauri()) {
+    const url = URL.createObjectURL(new Blob([contents], { type: "text/html;charset=utf-8" }))
+    const link = Object.assign(document.createElement("a"), { href: url, download: fileName })
+    link.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    return true
+  }
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<boolean>("save_html_file", { fileName, contents })
+}
+
 export async function writeImageClipboard(data: Uint8Array): Promise<void> {
   if (!isTauri()) throw new Error("Native image copying is not available in this window.")
   const { invoke } = await import("@tauri-apps/api/core")

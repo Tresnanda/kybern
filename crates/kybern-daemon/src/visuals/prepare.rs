@@ -104,6 +104,12 @@ pub async fn prepare(html: &str, tolerate_missing: bool) -> Result<(String, Vec<
             continue;
         }
         let file_path = if path.as_bytes().get(1) == Some(&b':') { path.replace("\\\\", "\\") } else { path.to_owned() };
+        // Reject directories/devices/FIFOs before opening; only regular image
+        // files can be embedded. Canonical symlinks to regular images work.
+        if !tokio::fs::metadata(&file_path).await.is_ok_and(|metadata| metadata.is_file()) {
+            missing.push(path.to_owned());
+            continue;
+        }
         let bytes = match tokio::fs::File::open(&file_path).await {
             Ok(file) => {
                 let mut bytes = Vec::new();
@@ -140,7 +146,9 @@ pub async fn prepare(html: &str, tolerate_missing: bool) -> Result<(String, Vec<
         }
     }
     output.push_str(&html[cursor..]);
-    Ok((bootstrap(&output), missing))
+    let output = bootstrap(&output);
+    ensure!(output.len() <= MAX_PAGE_BYTES, "With embedded images this page exceeds 25 MiB. Use smaller images.");
+    Ok((output, missing))
 }
 
 pub fn bootstrap(html: &str) -> String {

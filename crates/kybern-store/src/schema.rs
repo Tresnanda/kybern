@@ -421,6 +421,9 @@ const MIGRATIONS: &[&str] = &[
        height INTEGER NOT NULL,
        html TEXT NOT NULL
      ); CREATE INDEX html_visuals_thread ON html_visuals(thread_id);",
+    // v20: bounded, indexed identity lookup for preview-result persistence.
+    "CREATE INDEX tool_start_identity ON events(thread_id, json_extract(payload, '$.call.id'), seq)
+      WHERE kind = 'tool_call_started';",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

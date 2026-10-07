@@ -249,9 +249,13 @@ async fn handle(State(state): State<AppState>, headers: HeaderMap, body: Bytes) 
             if params.get("cursor").is_some_and(|value| !value.is_null()) {
                 return rpc_error(id, -32602, "The tool catalog has no additional page", StatusCode::BAD_REQUEST);
             }
-            let mut catalog = json!({ "tools": session.tools.iter().map(|tool| json!({
-                "name": tool.name, "description": tool.description, "inputSchema": tool.input_schema,
-            })).collect::<Vec<_>>() });
+            let mut catalog = json!({ "tools": session.tools.iter().map(|tool| {
+                let mut definition = json!({"name": tool.name, "description": tool.description, "inputSchema": tool.input_schema});
+                if matches!(tool.name.as_str(), "kybern_html_preview" | "kybern_html_publish") {
+                    definition["annotations"] = json!({"readOnlyHint":true,"destructiveHint":false,"idempotentHint":tool.name == "kybern_html_preview","openWorldHint":true});
+                }
+                definition
+            }).collect::<Vec<_>>() });
             if modern {
                 catalog["ttlMs"] = json!(0);
                 catalog["cacheScope"] = json!("private");

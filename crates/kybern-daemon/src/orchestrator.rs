@@ -5890,6 +5890,11 @@ impl Orchestrator {
                 }
             }
             DriverEvent::ToolOutputDelta { tool_call_id, delta } => {
+                // Preview screenshots belong only to the transient tool transport.
+                // A provider may echo its MCP content as a JSON output stream.
+                if self.inner.store.tool_call_name(thread_id, &tool_call_id)?.as_deref().is_some_and(crate::visuals::is_preview_tool) {
+                    return Ok(());
+                }
                 if self.subagent_holds_call(thread_id, &tool_call_id) {
                     self.subagent_mirror_tool_event(
                         thread_id,
@@ -5912,7 +5917,10 @@ impl Orchestrator {
                     turn_id,
                     EventPayload::ToolCallCompleted {
                         tool_call_id: tool_call_id.clone(),
-                        output: crate::visuals::persisted_output(output.clone()),
+                        output: crate::visuals::persisted_output(
+                            self.inner.store.tool_call_name(thread_id, &tool_call_id)?.as_deref(),
+                            output.clone(),
+                        ),
                         output_omitted: false,
                         stream_recoverable: false,
                         is_error,

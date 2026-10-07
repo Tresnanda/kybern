@@ -13,6 +13,9 @@ impl Store {
             Ok(event)
         })
     }
+    pub fn tool_call_name(&self, thread_id: ThreadId, call_id: &str) -> Result<Option<String>> {
+        self.with(|c| Ok(c.query_row("SELECT json_extract(payload, '$.call.name') FROM events WHERE thread_id=?1 AND kind='tool_call_started' AND json_extract(payload, '$.call.id')=?2 ORDER BY seq DESC LIMIT 1", params![thread_id.to_string(),call_id], |r| r.get(0)).optional()?))
+    }
     pub fn visual_latest_turn(&self, thread_id: ThreadId) -> Result<Option<TurnId>> {
         self.with(|c| {
             Ok(c.query_row(
@@ -46,7 +49,7 @@ mod tests {
         let thread = Uuid::now_v7();
         store.with(|c| {
             c.execute("INSERT INTO projects(id,name,path,is_git,created_at,updated_at) VALUES(?1,'Visual test','/scratch',0,'2026-10-07T00:00:00Z','2026-10-07T00:00:00Z')", [project.to_string()])?;
-            c.execute("INSERT INTO threads(id,project_id,title,provider_kind,permission_mode,status,cwd,created_at,updated_at) VALUES(?1,?2,'Visual test','codex','supervised','idle','/scratch','2026-10-07T00:00:00Z','2026-10-07T00:00:00Z')",params![thread.to_string(),project.to_string()])?; Ok(())
+            c.execute("INSERT INTO threads(id,project_id,title,provider_kind,provider_instance,permission_mode,status,cwd,created_at,updated_at) VALUES(?1,?2,'Visual test','codex','default','supervised','idle','/scratch','2026-10-07T00:00:00Z','2026-10-07T00:00:00Z')",params![thread.to_string(),project.to_string()])?; Ok(())
         }).unwrap();
         (store, project, thread)
     }

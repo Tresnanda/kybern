@@ -1128,6 +1128,11 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     }
   }
 
+  async function visualFrameUrl(threadId: string, visualId: string): Promise<{url: string; ticket: string}> {
+    const { ticket } = await rpc().call("threads.visuals.frame", { thread_id: threadId, visual_id: visualId })
+    return { url: `${httpBase}/visual-frame/${encodeURIComponent(ticket)}`, ticket }
+  }
+
   async function artifactPreviewUrl(threadId: string, path: string): Promise<string> {
     const result = await rpc().call("threads.artifacts.preview", { thread_id: threadId, path })
     return `${httpBase}/artifact-preview/${encodeURIComponent(result.ticket)}`
@@ -1201,6 +1206,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     fetchThreadImage,
     fetchAssetImage,
     artifactPreviewUrl,
+    visualFrameUrl,
     subscribeCollaboration,
   }
 }

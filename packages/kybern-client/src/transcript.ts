@@ -23,6 +23,7 @@ import type {
 } from "./types.ts"
 
 export type Block =
+  | { kind: "visual"; id: string; turnId: TurnId; at: string; seq: number; visual: import("./types.ts").HtmlVisual }
   | { kind: "image"; id: string; turnId: TurnId; at: string; seq: number; source: string }
   | { kind: "user"; id: string; turnId: TurnId; at: string; seq: number; message: UserMessage }
   | {
@@ -164,6 +165,7 @@ export function applyBackgroundEvent(state: ThreadState, event: ThreadEvent): Th
 
 function entryToBlock(e: TranscriptEntry): Block | null {
   switch (e.role) {
+    case "visual": return { kind: "visual", id: e.visual.id, turnId: e.turn_id, at: e.at, seq: e.seq, visual: e.visual }
     case "image": return e.origin.kind === "root" ? { kind: "image", id: e.id, turnId: e.turn_id, at: e.at, seq: e.seq, source: e.source } : null
     case "approval":
       return { kind: "approval", id: `approval:${e.approval.id}`, turnId: e.turn_id, at: e.approval.created_at, seq: e.seq ?? 0, approval: e.approval, decision: e.decision ?? null }
@@ -358,6 +360,10 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       // Once the exact stream is deferred, individual replay/live suffixes
       // would be incomplete. Keep the marker and recover the whole sequence.
       if (b && b.kind === "tool" && !b.streamOmitted) blocks = replaceAt(blocks, idx, { ...b, stream: b.stream + ev.delta })
+      break
+    }
+    case "html_published": {
+      if (ev.turn_id && !blocks.some(block => block.kind === "visual" && block.id === ev.visual.id)) blocks = [...blocks, { kind: "visual", id: ev.visual.id, turnId: ev.turn_id, at, seq: ev.seq, visual: ev.visual }]
       break
     }
     case "tool_call_completed": {
@@ -654,6 +660,7 @@ export interface TurnGroup {
   user: Extract<Block, { kind: "user" }> | null
   /** Tool calls, thinking, notices and intermediate assistant text, in order. */
   images: Extract<Block, { kind: "image" }>[]
+  visuals?: Extract<Block, { kind: "visual" }>[]
   work: Block[]
   /** Whole terminal root message. It is deliberately absent until settlement. */
   answer: Extract<Block, { kind: "assistant" }> | null
@@ -905,6 +912,9 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
       case "user":
         if (!g.user) g.user = b
         else g.work.push(b)
+        break
+      case "visual":
+        (g.visuals ??= []).push(b)
         break
       case "approval":
         g.approvals.push(b)

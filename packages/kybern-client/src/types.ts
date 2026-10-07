@@ -689,7 +689,9 @@ export interface ToolCall {
 
 export type StopReason = "completed" | "interrupted" | "max_turns" | "error";
 
+export interface HtmlVisual { id: Uuid; title: string; height: number }
 export type TranscriptEntry =
+  | { role: "visual"; turn_id: TurnId; seq: EventSeq; at: DateTime; visual: HtmlVisual }
   | { role: "image"; id: string; turn_id: TurnId; seq: number; at: string; origin: EventOrigin; source: string }
   | {
       role: "user";
@@ -816,6 +818,7 @@ export type NoticeLevel = "info" | "warning" | "error";
 export type SessionReleaseReason = "manual" | "idle" | "capacity" | "update" | "power";
 
 export type EventPayload =
+  | { kind: "html_published"; visual: HtmlVisual }
   | { kind: "async_questions_requested"; request: AsyncQuestionRequest }
   | { kind: "async_questions_answered"; request_id: string; answers: string[]; message_id: MessageId; message: UserMessage }
   | { kind: "thread_created"; thread: Thread }
@@ -2047,6 +2050,11 @@ export interface Methods {
   "files.read": [FilesReadParams, FilesReadResult];
   "threads.files.read": [ThreadFileReadParams, FilesReadResult];
   "skills.list": [SkillsListParams, SkillsListResult];
+  "threads.visuals.publish": [{ thread_id: ThreadId; html: string; title: string; height: number }, { visual: HtmlVisual }];
+  "threads.visuals.preview": [{ thread_id: ThreadId; html: string; width?: number; appearance?: "dark" | "light" }, { width: number; content_height: number; captured_height: number; console_messages: {level: string; text: string}[]; missing_images: string[]; screenshot: string }];
+  "threads.visuals.read": [{ thread_id: ThreadId; visual_id: Uuid }, { html: string }];
+  "threads.visuals.frame": [{ thread_id: ThreadId; visual_id: Uuid }, { ticket: string }];
+  "threads.visuals.revoke": [{ thread_id: ThreadId; ticket: string }, Record<string, never>];
   "threads.artifacts.list": [{ thread_id: ThreadId; before_seq?: number | null; limit?: number }, { artifacts: ArtifactTool[]; next_before_seq: number | null }];
   "threads.artifacts.preview": [{ thread_id: ThreadId; path: string }, { ticket: string }];
   "threads.artifacts.read": [{ thread_id: ThreadId; path: string }, FilesReadResult];
