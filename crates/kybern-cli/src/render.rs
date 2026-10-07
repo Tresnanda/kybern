@@ -197,6 +197,7 @@ pub fn transcript(r: &ThreadsGetResult) {
     for e in &r.transcript {
         match e {
             TranscriptEntry::Image { .. } => println!("  [Agent image — open the desktop to preview]"),
+            TranscriptEntry::Visual { visual, .. } => println!("  [Visual: {} — open the desktop to interact; id {}]", visual.title, visual.id),
             TranscriptEntry::User { message, .. } => println!("\n> {}\n", message.plain_text()),
             TranscriptEntry::Assistant { text, thinking, .. } => {
                 if let Some(th) = thinking {
