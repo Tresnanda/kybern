@@ -99,8 +99,10 @@ impl AppState {
         let daemon_updates = crate::self_update::DaemonUpdates::new(&store)?;
         let terminals = TerminalManager::default();
         let native_tools = crate::native_tools_mcp::NativeToolsGateway::default();
+        let previews = Arc::new(crate::previews::tickets::PreviewTickets::new());
         let orchestrator = Orchestrator::new(store.clone(), drivers.clone(), events.clone(), paths.clone(), settings.clone())
             .with_terminal_manager(terminals.clone())
+            .with_previews(previews.clone())
             .with_native_tools(native_tools.clone());
         let provider_catalogs = orchestrator.provider_catalog_cache();
         Ok(Self {
@@ -119,7 +121,7 @@ impl AppState {
                 harness_updates,
                 daemon_updates,
                 cursor_setup: Default::default(),
-                previews: Arc::default(),
+                previews,
                 desktop_managed: std::sync::atomic::AtomicBool::new(false),
                 restart_pending: std::sync::atomic::AtomicBool::new(false),
                 pairing: Pairing::default(),

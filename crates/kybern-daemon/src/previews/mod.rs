@@ -5,6 +5,7 @@
 //! classifier (`is_local_or_private_host`), target resolution for
 //! `previews.open` and the agent tool, root selection and folder grants.
 
+pub mod agent;
 pub mod discovery;
 pub mod files;
 pub mod mime;
@@ -136,6 +137,9 @@ impl PreviewError {
     }
     pub fn folder_not_grantable() -> Self {
         Self::new("folder_not_grantable", "Kybern can't preview files from this folder. Move the file into your project or a subfolder.")
+    }
+    pub fn internal(message: &str) -> Self {
+        Self::new("internal_error", message)
     }
     pub fn invalid_address() -> Self {
         Self::new("invalid_address", "Kybern can't open this kind of address.")
@@ -277,7 +281,7 @@ pub fn resolve(
         }
         // `localhost:3000` has a "scheme" of localhost; fall through to host rules.
     }
-    if looks_like_path(input) || (has_entry_extension(input) && roots.cwd.join(input).is_file()) {
+    if looks_like_path(input) || (has_entry_extension(input) && !input.contains(':')) {
         return resolve_file(input, roots, allowed_folders, allow_folder, policy);
     }
     if let Some(port) = input.strip_prefix(':').unwrap_or(input).parse::<u16>().ok().filter(|port| *port != 0) {
@@ -440,14 +444,59 @@ pub fn file_path_for(ticket: &str, rel: &str) -> String {
     format!("/preview-files/{ticket}/{}", encode_path(rel))
 }
 
-/// Whether something accepts TCP connections on `127.0.0.1:{port}` right now.
-pub async fn loopback_listening(port: u16) -> bool {
-    let connect = tokio::net::TcpStream::connect(("127.0.0.1", port));
-    matches!(tokio::time::timeout(std::time::Duration::from_millis(500), connect).await, Ok(Ok(_)))
-        || matches!(
-            tokio::time::timeout(std::time::Duration::from_millis(500), tokio::net::TcpStream::connect(("::1", port))).await,
-            Ok(Ok(_))
-        )
+// ---- daemon glue ----
+
+/// Roots for a thread: its cwd (worktree or project) and its project path.
+pub fn thread_roots(store: &kybern_store::Store, thread: &kybern_protocol::Thread) -> ThreadRoots {
+    let project = store.project_get(thread.project_id).ok().flatten().map(|project| PathBuf::from(project.path));
+    ThreadRoots { cwd: PathBuf::from(&thread.cwd), project }
+}
+
+/// Persist a folder grant (canonical) in `settings.json`. Idempotent.
+pub fn persist_grant(settings: &crate::settings::SettingsStore, folder: &Path) -> anyhow::Result<()> {
+    let mut current = settings.get();
+    let value = folder.to_string_lossy().into_owned();
+    if !current.preview_allowed_folders.contains(&value) {
+        current.preview_allowed_folders.push(value);
+        settings.set(current)?;
+    }
+    Ok(())
+}
+
+/// `previews.open`: classify, check grants, persist an approved grant, and
+/// mint the ticket a client loads the page with.
+pub async fn open(
+    state: &crate::state::AppState,
+    principal: Option<uuid::Uuid>,
+    thread: &kybern_protocol::Thread,
+    params: &kybern_protocol::methods::PreviewOpenParams,
+) -> Result<kybern_protocol::methods::PreviewOpenResult, PreviewError> {
+    use kybern_protocol::methods::PreviewOpenResult;
+    let roots = thread_roots(&state.store, thread);
+    let policy = GrantPolicy::new(&state.paths.root);
+    let allowed = state.settings.get().preview_allowed_folders;
+    let resolved = resolve(&params.target, &roots, &allowed, params.allow_folder, &policy)?;
+    if let Some(folder) = &resolved.grant {
+        persist_grant(&state.settings, folder).map_err(|error| PreviewError::internal(&error.to_string()))?;
+    }
+    let mut result = PreviewOpenResult { target: resolved.info.clone(), ticket: None, path: None, needs_permission: resolved.needs_permission };
+    if let Some(plan) = resolved.file {
+        let ticket = state.previews.mint(tickets::TicketKind::Files { root: plan.root }, thread.id, principal);
+        result.path = Some(file_path_for(&ticket, &plan.rel));
+        result.ticket = Some(ticket);
+    } else if let (true, PreviewTargetInfo::Server { url, port }) = (params.proxy, &resolved.info) {
+        let host = reqwest::Url::parse(url).ok().and_then(|url| url.host_str().map(str::to_owned)).unwrap_or_default();
+        // The proxy only ever reaches loopback on the daemon host.
+        if is_loopback_host(&host) {
+            if proxy::listener_addr(*port).await.is_none() {
+                return Err(PreviewError { code: "not_found", message: "Nothing is listening on that port yet.".into() });
+            }
+            let ticket = state.previews.mint(tickets::TicketKind::Proxy { port: *port }, thread.id, principal);
+            result.path = Some(format!("/preview-proxy/{ticket}/"));
+            result.ticket = Some(ticket);
+        }
+    }
+    Ok(result)
 }
 
 #[cfg(test)]

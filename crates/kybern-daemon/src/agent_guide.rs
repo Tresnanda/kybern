@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 
 /// Bumped with every wording change so a changed guide is a deliberate act.
-pub(crate) const GUIDE_VERSION: u32 = 5;
+pub(crate) const GUIDE_VERSION: u32 = 6;
 
 /// Hard ceiling for the rendered guide (about 1.5k tokens at 4 bytes a token).
 #[cfg(test)]
@@ -89,6 +89,9 @@ pub(crate) fn render(tools: &GuideTools) -> String {
     );
     if tools.has("kybern_html_preview") && tools.has("kybern_html_publish") {
         out.push_str("\n## Visual replies\nUse interactive HTML charts, tables, diagrams, collages or mockups when asked, or when they make an explanation easier to understand. Write one self-contained document; call `kybern_html_preview` for a screenshot and console diagnostics, then `kybern_html_publish` before your final written reply. Publication stores a durable inline attachment, embeds supported absolute local image paths, and needs no browser. Preview installs Kybern’s own small headless browser on first use; retry in a minute if it is installing. Pages run scripts in an isolated sandbox and follow the reader’s light, dark and custom theme live through CSS variables (see the tool description). Keep width fluid and height content-driven; avoid an outer card or banner title. The reader sees the page: add only what it does not explain in the final reply.\n");
+    }
+    if tools.has("kybern_preview_open") {
+        out.push_str("\n## Previews\nTo show the user a running web app or an HTML mockup beside the chat, call `kybern_preview_open` with its URL (`http://localhost:5173`) or file path. Use relative asset paths in mockups. Files outside your working folder ask the user first; pages outside localhost open in their browser.\n");
     }
     if tools.any(&NOTE_TASK_TOOLS) {
         out.push_str(
@@ -170,7 +173,7 @@ mod tests {
             include_str!("agent_guide_full.golden.txt"),
             "guide wording changed: bump GUIDE_VERSION and update the golden file (KYBERN_UPDATE_GOLDEN=1)"
         );
-        assert_eq!(GUIDE_VERSION, 5);
+        assert_eq!(GUIDE_VERSION, 6);
     }
 
     #[test]

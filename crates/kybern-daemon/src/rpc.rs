@@ -732,6 +732,16 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
             ok(crate::visuals::preview(&state.paths, p).await.map_err(bad)?)
         }
+        PreviewOpen::NAME => {
+            let p: PreviewOpenParams = parse(params)?;
+            let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            ok(crate::previews::open(state, Some(ctx.principal.token_id), &thread, &p).await.map_err(preview_error)?)
+        }
+        PreviewClose::NAME => {
+            let p: PreviewCloseParams = parse(params)?;
+            state.previews.revoke(&p.ticket);
+            ok(Empty {})
+        }
         HtmlRead::NAME => ok(crate::visuals::read(&state.store, parse(params)?).map_err(bad)?),
         HtmlFrame::NAME => ok(crate::visuals::issue(&state.store, parse(params)?).map_err(bad)?),
         HtmlRevoke::NAME => {
@@ -928,6 +938,16 @@ fn parse_or_default<T: DeserializeOwned + Default>(v: Value) -> Result<T, RpcErr
 
 fn internal(e: impl std::fmt::Display) -> RpcError {
     RpcError::internal(e)
+}
+
+/// Preview failures keep a stable machine code in `data.code`.
+fn preview_error(error: crate::previews::PreviewError) -> RpcError {
+    let code = match error.code {
+        "not_found" => codes::NOT_FOUND,
+        "internal_error" => codes::INTERNAL_ERROR,
+        _ => codes::INVALID_PARAMS,
+    };
+    RpcError::new(code, error.message).with_data(serde_json::json!({ "code": error.code }))
 }
 
 /// User-facing failures from the orchestrator: not found, busy, bad input.

@@ -2199,6 +2199,17 @@ impl Orchestrator {
                 let _ = self.inner.events.send(event);
                 return Ok(result);
             }
+            if name == crate::previews::agent::TOOL {
+                let roots = crate::previews::thread_roots(&self.inner.store, &thread);
+                let policy = crate::previews::GrantPolicy::new(&self.inner.paths.root);
+                let settings = self.inner.settings.get();
+                let clients = self.inner.preview_requests.receiver_count();
+                let outcome = crate::previews::agent::open(thread_id, &roots, &settings, &policy, arguments, clients)?;
+                if let Some(notification) = outcome.notify {
+                    let _ = self.inner.preview_requests.send(notification);
+                }
+                return Ok(outcome.result);
+            }
             if crate::computer::ComputerUse::is_tool(name) {
                 let consent = ComputerConsent { orchestrator: self, thread_id, turn_id, live: live.clone() };
                 let ctx = crate::computer::CallContext {
@@ -2767,6 +2778,10 @@ struct Inner {
     tasks_changed: tokio::sync::broadcast::Sender<methods::TaskItemsChangedNotification>,
     /// The project list after each change, forwarded as `projects.changed`.
     projects_changed: tokio::sync::broadcast::Sender<methods::ProjectsChangedNotification>,
+    /// Agent requests to show a page, forwarded as `previews.open_requested`.
+    preview_requests: tokio::sync::broadcast::Sender<methods::PreviewOpenRequestedNotification>,
+    /// Preview tickets, revoked when a thread is archived.
+    previews: Arc<crate::previews::tickets::PreviewTickets>,
     /// Account plan limits per provider, forwarded as `usage.limits.changed`.
     usage: crate::usage::UsageMonitor,
     /// Serializes task writes, including the run tracker that `emit` calls.
@@ -3048,6 +3063,8 @@ impl Orchestrator {
                 notes_changed: tokio::sync::broadcast::channel(1024).0,
                 tasks_changed: tokio::sync::broadcast::channel(1024).0,
                 projects_changed: tokio::sync::broadcast::channel(64).0,
+                preview_requests: tokio::sync::broadcast::channel(64).0,
+                previews: Arc::default(),
                 usage,
                 task_writes: std::sync::Mutex::new(()),
                 task_threads: std::sync::Mutex::new(task_threads),
@@ -3068,6 +3085,16 @@ impl Orchestrator {
         Arc::get_mut(&mut self.inner).expect("terminal manager must be installed before cloning the orchestrator").app_tools =
             crate::app_tools::AppTools::new(store, terminals);
         self
+    }
+
+    pub fn with_previews(mut self, previews: Arc<crate::previews::tickets::PreviewTickets>) -> Self {
+        Arc::get_mut(&mut self.inner).expect("preview tickets must be installed before cloning the orchestrator").previews = previews;
+        self
+    }
+
+    /// Agent requests to show a page, for forwarding to connected clients.
+    pub fn subscribe_preview_requests(&self) -> tokio::sync::broadcast::Receiver<methods::PreviewOpenRequestedNotification> {
+        self.inner.preview_requests.subscribe()
     }
 
     pub fn with_native_tools(mut self, native_tools: crate::native_tools_mcp::NativeToolsGateway) -> Self {
@@ -3915,6 +3942,7 @@ impl Orchestrator {
             }
             t.status = ThreadStatus::Archived;
             self.update_thread(t)?;
+            self.inner.previews.revoke_thread(thread_id);
             self.emit(thread_id, None, EventPayload::ThreadArchived)?;
             self.subagents_archive_below(thread_id)?;
         }
@@ -5382,6 +5410,7 @@ impl Orchestrator {
                 "kybern_workspace_diff",
                 "kybern_html_preview",
                 "kybern_html_publish",
+                "kybern_preview_open",
                 "kybern_threads_search",
                 "kybern_thread_read",
                 "kybern_thread_send",
@@ -8777,6 +8806,39 @@ mod tests {
         for name in ["kybern_thread_send", "kybern_workspace_diff", "kybern_html_preview", "kybern_html_publish"] {
             assert_eq!(guide.contains(name), bridge.has_tool(name), "the guide must describe exactly the tools the session has: {name}");
         }
+    }
+
+    #[tokio::test]
+    async fn preview_open_tool_reports_status_notifies_clients_and_archive_revokes_tickets() {
+        let fixture = Fixture::new();
+        std::fs::write(fixture.root.join("mock.html"), "<p>mock</p>").unwrap();
+        let thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Pi);
+        let (live, _) = fixture.active_app_tool_session(&thread).await;
+        let call = |id: &'static str, args: serde_json::Value| {
+            fixture.orchestrator.execute_native_app_tool_call(thread.id, live.session_instance_id, id, "kybern_preview_open", args)
+        };
+        // Nobody is listening yet.
+        assert_eq!(call("p0", json!({"target": "mock.html"})).await.unwrap()["status"], "no_client");
+        let mut clients = fixture.orchestrator.subscribe_preview_requests();
+        let shown = call("p1", json!({"target": "mock.html", "title": "Mock"})).await.unwrap();
+        assert_eq!(shown["status"], "shown");
+        let note = clients.try_recv().unwrap();
+        assert_eq!((note.thread_id, note.title.as_deref(), note.requested_by_agent), (thread.id, Some("Mock"), true));
+        assert!(note.target.ends_with("mock.html") && std::path::Path::new(&note.target).is_absolute());
+        assert_eq!(call("p2", json!({"target": "http://localhost:5173"})).await.unwrap()["status"], "shown");
+        assert_eq!(call("p3", json!({"target": "https://example.com/docs"})).await.unwrap()["status"], "opens_in_browser");
+        let error = call("p4", json!({"target": "mock.html", "thread_id": Uuid::now_v7()})).await.unwrap_err();
+        assert!(error.to_string().contains("bound to the current thread"), "{error}");
+        assert!(call("p5", json!({"target": "mock.html", "allow_folder": true})).await.is_err(), "agents cannot grant folders");
+        // Archiving a thread revokes its preview tickets.
+        let ticket = fixture.orchestrator.inner.previews.mint(
+            crate::previews::tickets::TicketKind::Files { root: fixture.root.clone() },
+            thread.id,
+            None,
+        );
+        assert!(fixture.orchestrator.inner.previews.lookup(&ticket).is_some());
+        fixture.orchestrator.archive_thread(thread.id).await.unwrap();
+        assert!(fixture.orchestrator.inner.previews.lookup(&ticket).is_none());
     }
 
     #[tokio::test]

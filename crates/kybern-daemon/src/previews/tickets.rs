@@ -192,6 +192,7 @@ mod tests {
         let thread = Uuid::new_v4();
         let ids: Vec<String> = (0..MAX_TICKETS + 1).map(|i| tickets.mint_at(files("/a"), thread, None, t0 + Duration::from_millis(i as u64))).collect();
         assert_eq!(tickets.len(), MAX_TICKETS);
+        assert!(!tickets.is_empty());
         assert!(tickets.lookup_at(&ids[0], t0 + Duration::from_secs(1)).is_none());
         assert!(tickets.lookup_at(&ids[MAX_TICKETS], t0 + Duration::from_secs(1)).is_some());
     }
