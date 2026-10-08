@@ -3555,9 +3555,6 @@ html[data-full-translucency] .chat-scroll-fade {
 .preview-surface[data-device="true"] {
   background: color-mix(in srgb, var(--color-text-foreground) 3%, var(--color-background-surface));
 }
-.preview-surface[data-shape="pip"] {
-  border-radius: 12px;
-}
 /* A dock drag, a dock spring or a device-rail drag: the page must not swallow pointermove. */
 html[data-resizing] .preview-surface,
 .preview-surface[data-moving="true"],
@@ -3644,23 +3641,21 @@ html[data-resizing] .preview-surface,
   to { transform: scaleX(0.9); }
 }
 
-/* Mini player: the shell is chrome only. The page is the surface beneath it. */
-.preview-pip {
-  position: fixed;
-  top: 0;
-  left: 0;
+/* Mini player: the floating page is a surface in the same layer, so the header and the
+   resize handle (portalled in by `PreviewMiniPlayer`) sit above the iframe. */
+.preview-surface[data-shape="pip"] {
   border-radius: 12px;
-  pointer-events: none;
   box-shadow: 0 0 0 1px var(--color-border-heavy), 0 12px 32px -8px rgb(0 0 0 / 0.28), 0 2px 6px rgb(0 0 0 / 0.12);
   transition: opacity 150ms var(--ease-out), scale 150ms var(--ease-out);
   transform-origin: var(--pip-origin, 100% 100%);
 }
-.dark .preview-pip {
+.dark .preview-surface[data-shape="pip"] {
   box-shadow: 0 0 0 1px var(--color-border-heavy), 0 12px 32px -8px rgb(0 0 0 / 0.55), 0 2px 6px rgb(0 0 0 / 0.3);
 }
-.preview-pip[data-exiting="true"] {
+.preview-surface[data-exiting="true"] {
   opacity: 0;
   scale: 0.96;
+  pointer-events: none;
 }
 .preview-pip__header {
   position: absolute;
@@ -3682,8 +3677,8 @@ html[data-resizing] .preview-surface,
 .preview-pip__header[data-dragging="true"] {
   cursor: grabbing;
 }
-.preview-pip:hover .preview-pip__header,
-.preview-pip:focus-within .preview-pip__header,
+.preview-surface[data-shape="pip"]:hover .preview-pip__header,
+.preview-surface[data-shape="pip"]:focus-within .preview-pip__header,
 .preview-pip__header[data-dragging="true"] {
   opacity: 1;
   translate: 0 0;
@@ -3692,12 +3687,18 @@ html[data-resizing] .preview-surface,
   background: color-mix(in srgb, var(--color-background-elevated-primary-opaque) 78%, transparent);
   backdrop-filter: blur(12px) saturate(140%);
 }
+.preview-pip-chrome {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
 .preview-pip__resize {
   position: absolute;
+  pointer-events: auto;
   z-index: 3;
   width: 16px;
   height: 16px;
-  pointer-events: auto;
   touch-action: none;
 }
 .preview-pip__resize[data-corner="top-left"] { top: 0; left: 0; cursor: nwse-resize; }
@@ -3728,13 +3729,14 @@ html[data-resizing] .preview-surface,
   .preview-rail::after {
     transition-duration: 1ms;
   }
-  .preview-pip { transition: opacity 150ms linear; }
-  .preview-pip[data-exiting="true"] { scale: 1; }
+  .preview-surface[data-shape="pip"] { transition: opacity 150ms linear; }
+  .preview-surface[data-exiting="true"] { scale: 1; }
   .preview-pip__header { translate: 0 0; transition: opacity 150ms linear; }
 }
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
-  .preview-pip:hover .preview-pip__header,
-  .preview-pip:focus-within .preview-pip__header,
+  .preview-surface[data-shape="pip"]:hover .preview-pip__header,
+  .preview-surface[data-shape="pip"]:focus-within .preview-pip__header,
+  .preview-pip__header,
   .preview-pip__header[data-dragging="true"] {
     background: var(--color-background-elevated-primary-opaque);
     backdrop-filter: none;
@@ -3742,8 +3744,8 @@ html[data-resizing] .preview-surface,
   }
 }
 @media (prefers-contrast: more) {
-  .preview-pip,
-  .dark .preview-pip {
+  .preview-surface[data-shape="pip"],
+  .dark .preview-surface[data-shape="pip"] {
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-foreground) 55%, transparent), 0 12px 32px -8px rgb(0 0 0 / 0.4);
   }
   .preview-badge {
