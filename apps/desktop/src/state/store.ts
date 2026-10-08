@@ -153,6 +153,8 @@ export interface AppState {
   /** Persisted recursive pane tree for showing up to four chat threads together. */
   splitView: SplitView | null
   sidebarOpen: boolean
+  /** Pull requests hide the thread panel; ⌘B peeks it here without changing `sidebarOpen`. Not persisted. */
+  pullsPanelPeek: boolean
   /** When on, the sidebar shows only threads that need attention (bell filter). */
   notificationFilter: boolean
   rightOpen: boolean
@@ -365,6 +367,7 @@ export function createEnvironmentStore(
     homeSelection: null,
     splitView: readPersistedSplitView(environmentId),
     sidebarOpen: true,
+    pullsPanelPeek: false,
     notificationFilter: false,
     rightOpen: false,
     rightTabs: [],
