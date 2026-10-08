@@ -7,9 +7,10 @@ import { spawn, spawnSync } from "node:child_process"
 
 const desktop = fileURLToPath(new URL("../", import.meta.url))
 const fixture = process.argv[2] ?? "rendering"
-if (!["accounts", "native-subagents", "visuals", "theme-provider", "real-session", "live-tool-memory", "usage", "tool-leases", "settings", "history-retention", "terminal-memory", "tool-memory", "image-memory", "app-update", "chat-collaboration", "collaboration", "markdown-memory", "worker-lifecycle", "profiles", "mermaid", "composer-stack", "scrolling", "work-shell", "work-stream", "history", "rendering", "materials", "scaling", "interaction", "questions", "artifacts", "memory", "continuation", "sessions", "chat-fixes", "activity", "prompts", "integrations", "icon-swap", "free-chat", "orchestrator", "pr-review"].includes(fixture)) throw new Error("Unknown rendering fixture")
+if (!["accounts", "native-subagents", "visuals", "theme-provider", "real-session", "live-tool-memory", "usage", "tool-leases", "settings", "history-retention", "terminal-memory", "tool-memory", "image-memory", "app-update", "chat-collaboration", "collaboration", "markdown-memory", "worker-lifecycle", "profiles", "mermaid", "composer-stack", "scrolling", "work-shell", "work-stream", "history", "rendering", "materials", "scaling", "interaction", "questions", "artifacts", "memory", "continuation", "sessions", "chat-fixes", "activity", "prompts", "integrations", "icon-swap", "free-chat", "orchestrator", "pr-review", "preview"].includes(fixture)) throw new Error("Unknown rendering fixture")
 const scratch = mkdtempSync(path.join(tmpdir(), "kybern-rendering-"))
 let daemon
+const cleanups = []
 try {
   if (["tool-leases", "live-tool-memory"].includes(fixture)) {
     const repo = path.resolve(desktop, "../..")
@@ -135,6 +136,49 @@ c.commit()`,path.join(dataDir,"state.sqlite"),thread.id],{encoding:"utf8"})
     const urls = Array.from({ length: 2 }, () => `http://127.0.0.1:${port}/artifact-preview/${call("threads.artifacts.preview", { thread_id: thread.id, path: "demo.html" }).ticket}`)
     process.env.KYBERN_INTEGRATION_PREVIEW_URLS = JSON.stringify(urls)
   }
+  if (fixture === "preview") {
+    const repo = path.resolve(desktop, "../..")
+    const binary = process.env.KYBERN_PERF_DAEMON_BINARY ?? path.join(repo, "target/debug/kybernd")
+    const cli = process.env.KYBERN_PERF_CLI_BINARY ?? path.join(repo, "target/debug/kybern")
+    const dataDir = path.join(scratch, "daemon")
+    daemon = spawn(binary, ["--data-dir", dataDir, "--port", "0"], { stdio: "ignore" })
+    const until = Date.now() + 10000
+    let port
+    while (!port && Date.now() < until) { try { port = readFileSync(path.join(dataDir, "daemon.port"), "utf8").trim() } catch { await new Promise(resolve => setTimeout(resolve, 50)) } }
+    if (!port) throw new Error("Build kybern before running the preview fixture")
+    const call = (method, params) => {
+      const result = spawnSync(cli, ["--data-dir", dataDir, "call", method, JSON.stringify(params)], { encoding: "utf8" })
+      if (result.status !== 0) throw new Error(result.stderr)
+      return JSON.parse(result.stdout)
+    }
+    // The project holds an in-project mockup with relative assets; `outside` is a folder that needs a grant.
+    const project = path.join(scratch, "project")
+    // Outside the project, and not under /var (the daemon never lets /var be granted).
+    const outside = mkdtempSync(path.join(process.env.KYBERN_PREVIEW_OUTSIDE_BASE ?? "/private/tmp", "kybern-preview-outside-"))
+    cleanups.push(() => rmSync(outside, { recursive: true, force: true }))
+    for (const dir of [path.join(project, "assets"), path.join(project, "sub"), outside]) mkdirSync(dir, { recursive: true })
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64")
+    const mockup = `<!doctype html><html><head><meta charset="utf-8"><title>Mockup</title><link rel="stylesheet" href="assets/style.css"><style>@font-face{font-family:Fx;src:url(assets/font.woff2) format("woff2")}</style></head><body><h1>Mockup page</h1><img id="img" src="assets/pixel.png" width="40" height="40"><p>Counter: <b id="n">0</b></p><p><a id="go" href="sub/page.html">Next page</a></p><script src="assets/app.js"></script></body></html>`
+    for (const dir of [project, outside]) {
+      writeFileSync(path.join(dir, "mockup.html"), mockup)
+      const assets = path.join(dir, "assets")
+      mkdirSync(assets, { recursive: true })
+      writeFileSync(path.join(assets, "style.css"), "body{font:14px -apple-system,system-ui,sans-serif;padding:24px;background:#f6f1e8;color:#241f18}h1{margin:0 0 8px}@media(prefers-color-scheme:dark){body{background:#1d1a16;color:#f1ebe0}}")
+      writeFileSync(path.join(assets, "pixel.png"), png)
+      writeFileSync(path.join(assets, "font.woff2"), Buffer.from([0x77, 0x4f, 0x46, 0x32, 0, 0, 0, 0]))
+      writeFileSync(path.join(assets, "app.js"), "let n=0;setInterval(()=>{n++;document.getElementById('n').textContent=n},100);const rel=()=>location.pathname.split('/').slice(3).join('/');const post=e=>parent.postMessage({fixture:'kybern-preview',mockup:true,n,path:rel(),css:getComputedStyle(document.body).backgroundColor,img:document.getElementById('img')?.naturalWidth,...e},'*');(async()=>{const get=async u=>{try{return (await fetch(u)).status}catch{return 'blocked'}};post({font:await get('assets/font.woff2'),env:await get('.env'),health:await get('/health'),git:await get('.git/config'),escape:await get('a/../../secret'),encoded:await get('%2e%2e/secret'),link:await get('leak.txt'),dir:await get('sub/'),own:await get('assets/style.css')})})();setInterval(()=>post({}),400)")
+    }
+    writeFileSync(path.join(project, ".env"), "SECRET=1")
+    writeFileSync(path.join(scratch, "secret.txt"), "outside the root")
+    symlinkSync(path.join(scratch, "secret.txt"), path.join(project, "leak.txt"))
+    writeFileSync(path.join(project, "sub/page.html"), `<!doctype html><html><head><meta charset="utf-8"><title>Sub page</title></head><body><h1>Sub page</h1><a id="push" href="#" onclick="history.pushState({},'','?view=2');document.title='Pushed';return false">Push</a><a id="hash" href="#section">Hash</a><script>setInterval(()=>parent.postMessage({fixture:'kybern-preview',sub:true,title:document.title},'*'),300);addEventListener('message',e=>{if(e.data&&e.data.fixture==='kybern-preview-command'){if(e.data.action==='push'){try{history.pushState({},'','?view=2');document.title='Pushed'}catch(err){parent.postMessage({fixture:'kybern-preview',pushError:String(err)},'*')}}else if(e.data.action==='hash')location.hash='#section'}})</script></body></html>`)
+    const call2 = call("projects.add", { path: project, name: "Preview fixture" })
+    const thread = call("threads.create", { project_id: call2.id, provider: { kind: "claude-code", instance: "default" }, title: "Preview fixture", use_worktree: false })
+    const servers = spawn("node", [path.join(desktop, "scripts/preview-fixture-servers.mjs")], { stdio: ["ignore", "pipe", "inherit"] })
+    const ports = await new Promise((resolve, reject) => { let text = ""; servers.stdout.on("data", chunk => { text += chunk; if (text.includes("\n")) resolve(JSON.parse(text.trim())) }); servers.on("exit", () => reject(new Error("Preview servers exited"))) })
+    cleanups.push(() => servers.kill("SIGTERM"))
+    process.env.KYBERN_PREVIEW_FIXTURE = JSON.stringify({ url: `ws://127.0.0.1:${port}/ws`, http_base: `http://127.0.0.1:${port}`, token: readFileSync(path.join(dataDir, "daemon.token"), "utf8").trim(), thread_id: thread.id, project, outside, ports, realMockup: "/Users/mymac/projects/ade/previews/ade-31/mockup.html" })
+  }
   const dist = path.join(scratch, "dist")
   const build = spawnSync("pnpm", ["exec", "vite", "build", "--config", "perf/vite.config.ts", "--outDir", dist], { cwd: desktop, encoding: "utf8", env: {
     ...process.env,
@@ -157,6 +201,7 @@ c.commit()`,path.join(dataDir,"state.sqlite"),thread.id],{encoding:"utf8"})
   if (result.error) throw result.error
   process.exitCode = result.status ?? 1
 } finally {
+  for (const cleanup of cleanups) cleanup()
   daemon?.kill("SIGTERM")
   rmSync(scratch, { recursive: true, force: true })
 }

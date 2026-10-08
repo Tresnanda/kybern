@@ -4,6 +4,7 @@ import { mergeConfig } from "vite"
 import base from "../vite.config"
 export default mergeConfig(base, {
   define: {
+    __PREVIEW_FIXTURE__: process.env.KYBERN_PREVIEW_FIXTURE ?? "null",
     __VISUAL_FIXTURE__: process.env.KYBERN_VISUAL_FIXTURE ?? "null",
     __TOOL_LEASE_ENDPOINT__: process.env.KYBERN_TOOL_LEASE_ENDPOINT ?? "null",
     __TERMINAL_RETAIN__: JSON.stringify(process.env.KYBERN_TERMINAL_RETAIN === "1"),
@@ -27,7 +28,14 @@ export default mergeConfig(base, {
     __UPDATE_THEME__: JSON.stringify(process.env.KYBERN_UPDATE_THEME ?? "dark"),
     __UPDATE_REDUCED_MOTION__: JSON.stringify(process.env.KYBERN_UPDATE_REDUCED_MOTION === "1"),
   },
-  plugins: process.env.KYBERN_PERF_FIXTURE === "accounts" ? [{
+  plugins: process.env.KYBERN_PERF_FIXTURE === "preview" ? [{
+    name: "preview-fixture-transport",
+    enforce: "pre",
+    transform(code, id) {
+      if (!/\/(state\/previewSession\.ts|views\/dock\/preview\/(PreviewChromeRow|PreviewStates)\.tsx|views\/dock\/VisualPreviewPanel\.tsx)$/.test(id)) return
+      return code.replace(/"@\/state\/rpc"|"\.\/rpc"|"@\/lib\/tauri"/g, JSON.stringify(path.resolve(import.meta.dirname, "preview-rpc.ts")))
+    },
+  }] : process.env.KYBERN_PERF_FIXTURE === "accounts" ? [{
     name: "accounts-fixture-transport",
     enforce: "pre",
     transform(code, id) {
