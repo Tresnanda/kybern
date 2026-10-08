@@ -161,3 +161,5 @@ const EFFORT_LABEL: Record<string, string> = { xhigh: "X-High" }
 export function formatEffort(effort: string): string {
   return EFFORT_LABEL[effort] ?? effort.charAt(0).toUpperCase() + effort.slice(1)
 }
+
+export { truncateMiddle } from "@/lib/truncate"

@@ -222,7 +222,23 @@ export function useResize(opts: { initial: number; min: number; max: number; sid
     [width, opts.min, opts.max, opts.side, opts.storageKey],
   )
 
-  return { width, dragging, onPointerDown }
+  /** Set the width directly (keyboard, reset). Clamped and persisted like a drag. */
+  const setWidthPersisted = useCallback(
+    (next: number) => {
+      const clamped = Math.min(opts.max, Math.max(opts.min, next))
+      setWidth(clamped)
+      if (opts.storageKey) {
+        try {
+          localStorage.setItem(opts.storageKey, String(clamped))
+        } catch {
+          // ignore
+        }
+      }
+    },
+    [opts.min, opts.max, opts.storageKey],
+  )
+
+  return { width, dragging, onPointerDown, setWidth: setWidthPersisted }
 }
 
 export function useLocalStorage<T>(key: string, initial: T): [T, (v: T | ((p: T) => T)) => void] {

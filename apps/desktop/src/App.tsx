@@ -106,11 +106,14 @@ function Workspace() {
   const selected = useStore((s) => s.selected)
   const splitView = useStore((s) => s.splitView)
   const sidebarOpen = useStore((s) => s.sidebarOpen)
+  const pullsPanelPeek = useStore((s) => s.pullsPanelPeek)
+  const onPulls = selected.kind === "pulls"
   // Notes use the whole card: no panel there, while the sidebar preference waits for the next page.
-  const panelless = selected.kind === "notes"
-  const panelOpen = sidebarOpen && !panelless
-  // Notes and Tasks are full pages with no dock. The preference is kept, so the dock returns on threads.
-  const dockless = selected.kind === "notes" || selected.kind === "tasks"
+  // Pull requests do too (the list is the sidebar); ⌘B peeks the thread panel without touching the preference.
+  const panelless = selected.kind === "notes" || (onPulls && !pullsPanelPeek)
+  const panelOpen = onPulls ? pullsPanelPeek : sidebarOpen && !panelless
+  // Notes, Tasks and Pull requests are full pages with no dock. The preference is kept, so the dock returns on threads.
+  const dockless = selected.kind === "notes" || selected.kind === "tasks" || onPulls
   const rightOpen = useStore((s) => s.rightOpen) && !dockless
   const settingsOpen = useStore((s) => s.settingsOpen)
   const reducedMotion = useReducedMotion()
@@ -124,7 +127,8 @@ function Workspace() {
   useAccountsSync()
 
   useNavigationShortcuts()
-  useHotkey("mod+b", () => set((s) => ({ sidebarOpen: !s.sidebarOpen })), { allowInInput: true, enabled: !settingsOpen && !panelless })
+  useHotkey("mod+b", () => set((s) => (s.selected.kind === "pulls" ? { pullsPanelPeek: !s.pullsPanelPeek } : { sidebarOpen: !s.sidebarOpen })), { allowInInput: true, enabled: !settingsOpen && selected.kind !== "notes" })
+  useEffect(() => { if (!onPulls) set({ pullsPanelPeek: false }) }, [onPulls, set])
   useHotkey("mod+j", () => set((s) => ({ rightOpen: !s.rightOpen })), { allowInInput: true, enabled: !settingsOpen && !dockless })
   useHotkey("mod+k", () => set((s) => ({ paletteOpen: !s.paletteOpen })), { allowInInput: true })
   // On the Notes page ⌘N starts a note in the section you are in; everywhere else, a thread.
@@ -181,7 +185,8 @@ function Workspace() {
     <SidebarProvider
       open={panelOpen}
       onOpenChange={(open) => {
-        if (!panelless) set({ sidebarOpen: open })
+        if (onPulls) set({ pullsPanelPeek: open })
+        else if (!panelless) set({ sidebarOpen: open })
       }}
       className="relative bg-(--app-frame-surface,var(--app-shell-background))"
       onPointerDownCapture={() => setKeyboardNavigation(false)}

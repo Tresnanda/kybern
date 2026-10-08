@@ -223,3 +223,15 @@ export function repairReviewPrompt(
     )
   return body
 }
+
+export type PrErrorClass = "gh-missing" | "gh-auth" | "no-remote" | "other"
+/** Sorts a daemon error into the recovery the user needs. */
+export function classifyPrError(text: string): PrErrorClass {
+  if (/command not found|No such file|program not found|gh: not found/i.test(text))
+    return "gh-missing"
+  if (/gh auth login|not logged in|authentication required|HTTP 401/i.test(text))
+    return "gh-auth"
+  if (/no git remotes|not a git repository|could not find|no such remote/i.test(text))
+    return "no-remote"
+  return "other"
+}

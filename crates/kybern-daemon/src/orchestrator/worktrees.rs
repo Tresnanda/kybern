@@ -292,8 +292,8 @@ impl Orchestrator {
         );
         let project = self.inner.store.project_get(p.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
         // Check the remote identity before even recreating a cleaned directory.
-        let current = crate::github_review::detail(Path::new(&project.path), p.number).await?;
-        self.pr_checkout_at_head(p, &current.head_sha, thread).await
+        let current = crate::github_review::head_sha(Path::new(&project.path), p.number).await?;
+        self.pr_checkout_at_head(p, &current, thread).await
     }
 
     /// The remote head is read by the admitted RPC immediately before this step.
