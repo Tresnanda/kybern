@@ -26,6 +26,9 @@ function recalledHeight(key: string, width: number): number | undefined {
 
 const SKELETON_DELAY_MS = 200
 const LOAD_WATCHDOG_MS = 4000
+// Reveal without a size post only for a page that never sends one (an empty body). A busy
+// engine can take several frames to deliver the first post; revealing earlier shows the jump.
+const READY_FALLBACK_MS = 1000
 const PANEL_MAX_HEIGHT = 20_000
 type Status = "minting" | "loading" | "ready" | "error"
 
@@ -50,7 +53,6 @@ export const VisualFrame = memo(function VisualFrame({ threadId, visual, mode = 
   // Survives `active` toggles, which re-run the message effect between a ready signal and its timer.
   const readyTimer = useRef(0), watchdog = useRef(0)
   const cacheKey = `${visual.id}:${mode}`
-  const measured = !!visual.heights?.length
   const settle = useCallback((next: Status) => { statusRef.current = next; setStatus(next) }, [])
 
   // Measure before the first paint so a measured page reserves its final box.
@@ -134,16 +136,16 @@ export const VisualFrame = memo(function VisualFrame({ threadId, visual, mode = 
         if (!frame) frame = requestAnimationFrame(apply)
       } else if (event.data.kind === "kybern-visual-ready") {
         // Reveal on the first size post (one frame later), so a measurement that differs from this
-        // engine's layout by a few pixels settles while the page is still invisible. The timer only
-        // covers a page that never posts a size; a measured page has its box already.
-        if (statusRef.current === "loading" && !readyTimer.current) readyTimer.current = window.setTimeout(() => { if (statusRef.current === "loading") settle("ready") }, measured ? 100 : 250)
+        // engine's layout, or an unmeasured page's real height, settles while the page is still
+        // invisible. The timer only covers a page that never posts a size.
+        if (statusRef.current === "loading" && !readyTimer.current && pendingHeight === null) readyTimer.current = window.setTimeout(() => { if (statusRef.current === "loading") settle("ready") }, READY_FALLBACK_MS)
       } else if (event.data.kind === "kybern-visual-link" && lastVisible && navigator.userActivation?.isActive) {
         const link = visualLink(event.data.url); if (link) void openExternal(link).catch(failure => { setError(errorText(failure)) })
       }
     }
     window.addEventListener("message", message); document.addEventListener("visibilitychange", send); send()
     return () => { observer.disconnect(); mutations.disconnect(); window.removeEventListener("message", message); document.removeEventListener("visibilitychange", send); cancelAnimationFrame(frame); post.current = () => {}; element.contentWindow?.postMessage({ kind: "kybern-visual-host", visible: false }, "*") }
-  }, [url, active, panel, visual, measured, cacheKey, settle])
+  }, [url, active, panel, visual, cacheKey, settle])
 
   // Hand the canvas its real scheme once the page is painted (see the no-flash note in the spec).
   useLayoutEffect(() => {

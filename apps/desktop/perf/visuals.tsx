@@ -54,9 +54,13 @@ async function mountVisual(visual: typeof fixture.visual, width: number, dock = 
   const figure = document.querySelector<HTMLElement>("[data-visual-reply]")!
   check(figure,"Figure mounts synchronously")
   const first = figure.getBoundingClientRect().height
+  // The box height is set in a frame callback, so a sampling loop that runs first in that frame
+  // only sees it a frame later, after the reveal may have started. A resize observer records the
+  // new height in the frame that paints it, with the frame's opacity at that moment.
+  const resized = new ResizeObserver(sample); resized.observe(figure)
   let stop = false; const loop = () => { sample(); if (!stop) requestAnimationFrame(loop) }; loop()
   await waitFor(()=>figure.dataset.status==="ready"||figure.dataset.status==="error","Visual reaches a final state")
-  await sleep(120); stop = true; sample()
+  await sleep(120); stop = true; resized.disconnect(); sample()
   return { figure, first, last: figure.getBoundingClientRect().height, trace, status: figure.dataset.status }
 }
 const heightsChanged = (trace: {height:number}[]) => trace.reduce((count,entry,index)=>index>0&&Math.abs(entry.height-trace[index-1].height)>=1?count+1:count,0)
@@ -85,9 +89,11 @@ async function run() {
   // The font-dependent page: report how far Chrome's measurement is from WebKit's layout.
   const realistic = await mountVisual(fixture.visual,736)
   const settledInvisibly = realistic.trace.every((entry,index)=>index===0||Math.abs(entry.height-realistic.trace[index-1].height)<1||entry.opacity==="0")
-  report({stage:"visual-measurement-delta",reserved:realistic.first,settled:realistic.last,changes:heightsChanged(realistic.trace),settledInvisibly})
+  report({stage:"visual-measurement-delta",reserved:realistic.first,settled:realistic.last,changes:heightsChanged(realistic.trace),settledInvisibly,...(settledInvisibly ? {} : {trace:realistic.trace.filter((entry,index)=>index===0||JSON.stringify(entry)!==JSON.stringify(realistic.trace[index-1]))})})
   check(settledInvisibly,"A measurement that differs from WebKit's layout settles before the page fades in")
-  check(Math.abs(realistic.first-realistic.last)<=8 && heightsChanged(realistic.trace)<=1,"Chrome's measurement stays within a few pixels of WebKit's layout")
+  // Without a preview browser the box starts at the agent's guess, so only a measured page is held to a few pixels.
+  if (measuredHeights) check(Math.abs(realistic.first-realistic.last)<=8 && heightsChanged(realistic.trace)<=1,"Chrome's measurement stays within a few pixels of WebKit's layout")
+  else check(heightsChanged(realistic.trace)<=1,"An unmeasured page changes height at most once")
 
   // AC 4: an unmeasured page changes height once, while still invisible; a remount reserves the cached height.
   const first = await mountVisual(fixture.unmeasured,736)
