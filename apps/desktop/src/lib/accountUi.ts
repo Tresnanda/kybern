@@ -212,6 +212,6 @@ export function glyphAriaLabel({
           : "Prompt cache cold.",
     )
   }
-  if (account) parts.push(`${account.name}: ${Math.round(account.leftPercent)}% of the ${account.windowLabel} limit left.`)
+  if (account) parts.push(`${account.name}: ${Math.round(account.leftPercent)}% of the ${account.windowLabel.toLowerCase()} limit left.`)
   return parts.join(" ")
 }

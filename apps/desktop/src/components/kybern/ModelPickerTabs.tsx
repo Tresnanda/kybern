@@ -135,9 +135,11 @@ export function ModelPickerTabs({
 export function FollowDefaultsLine({ line, busy, onFollow }: { line: FollowLine; busy: boolean; onFollow: () => void }) {
   return (
     <div className="flex h-7 items-center gap-1.5 px-3 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground">
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span className="truncate">{line.state === "following" ? <>Following defaults · <bdi>{line.name}</bdi></> : <>This thread uses <bdi>{line.name}</bdi></>}</span>
-        <AccountDot color={line.color} />
+      {/* The dot leads the name, so a truncated name never leaves it next to "Follow defaults". */}
+      <span className="flex min-w-0 items-center gap-1">
+        <span className="shrink-0">{line.state === "following" ? "Following defaults ·" : "This thread uses"}</span>
+        <AccountDot color={line.color} className="ms-0.5 ring-0" />
+        <bdi className="min-w-0 truncate">{line.name}</bdi>
       </span>
       {line.state === "pinned" && (
         <button type="button" disabled={busy} onClick={onFollow} className="press-row ms-auto shrink-0 rounded-sm font-medium text-foreground/80 outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">

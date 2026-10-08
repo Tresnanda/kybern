@@ -31,7 +31,7 @@ export default mergeConfig(base, {
     name: "accounts-fixture-transport",
     enforce: "pre",
     transform(code, id) {
-      if (!id.endsWith("/views/SettingsScreen.tsx")) return
+      if (!["/views/SettingsScreen.tsx", "/views/settings/AccountsSettings.tsx", "/state/accounts.ts"].some(file => id.endsWith(file))) return
       return code.replaceAll('"@/state/rpc"', JSON.stringify(path.resolve(import.meta.dirname, "accounts-rpc.ts")))
         .replace('"./Terminal"', JSON.stringify(path.resolve(import.meta.dirname, "accounts-terminal.tsx")))
     },

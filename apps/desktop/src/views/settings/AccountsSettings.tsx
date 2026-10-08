@@ -243,7 +243,7 @@ function UsageCell({ account }: { account: AccountSummary }) {
       <TooltipTrigger
         render={
           <button type="button" onClick={() => openUsageForAccount(kind, instance)}
-            className={cn("press inline-flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 text-muted-foreground outline-none hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60", "@max-[34rem]:col-start-2 @max-[34rem]:row-start-2 @max-[34rem]:justify-self-start")}
+            className={cn("press inline-flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 text-muted-foreground outline-none hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60", "@max-[34rem]:col-start-2 @max-[34rem]:row-start-2 @max-[34rem]:-ms-1.5 @max-[34rem]:justify-self-start")}
           />
         }
       >
