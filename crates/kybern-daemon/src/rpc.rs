@@ -708,6 +708,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             }
             state.store.token_revoke(p.token_id).map_err(internal)?;
             let _ = state.revoked_tokens.send(p.token_id);
+            state.previews.revoke_principal(p.token_id);
             ok(Empty {})
         }
         FilesSearch::NAME => {
@@ -754,11 +755,33 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
             ok(crate::visuals::preview(&state.paths, p).await.map_err(bad)?)
         }
+        PreviewOpen::NAME => {
+            let p: PreviewOpenParams = parse(params)?;
+            let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            ok(crate::previews::open(state, Some(ctx.principal.token_id), &thread, &p).await.map_err(preview_error)?)
+        }
+        PreviewClose::NAME => {
+            let p: PreviewCloseParams = parse(params)?;
+            state.previews.revoke(&p.ticket);
+            ok(Empty {})
+        }
         HtmlRead::NAME => ok(crate::visuals::read(&state.store, parse(params)?).map_err(bad)?),
         HtmlFrame::NAME => ok(crate::visuals::issue(&state.store, parse(params)?).map_err(bad)?),
         HtmlRevoke::NAME => {
             crate::visuals::revoke(parse(params)?);
             ok(Empty {})
+        }
+        PreviewProbe::NAME => {
+            let p: PreviewProbeParams = parse(params)?;
+            match crate::previews::probe::probe(&p.url).await {
+                Ok(result) => ok(result),
+                Err(_) => Err(RpcError::new(codes::INVALID_PARAMS, "Preview addresses must be on this computer or its private network.")
+                    .with_data(serde_json::json!({ "reason": "invalid_address" }))),
+            }
+        }
+        PreviewServersList::NAME => {
+            let p: PreviewServersListParams = parse_or_default(params)?;
+            ok(crate::previews::discovery::servers_list(state, p.thread_id).await.map_err(bad)?)
         }
         ArtifactsList::NAME => {
             let p: ArtifactsListParams = parse(params)?;
@@ -938,6 +961,16 @@ fn parse_or_default<T: DeserializeOwned + Default>(v: Value) -> Result<T, RpcErr
 
 fn internal(e: impl std::fmt::Display) -> RpcError {
     RpcError::internal(e)
+}
+
+/// Preview failures keep a stable machine code in `data.code`.
+fn preview_error(error: crate::previews::PreviewError) -> RpcError {
+    let code = match error.code {
+        "not_found" => codes::NOT_FOUND,
+        "internal_error" => codes::INTERNAL_ERROR,
+        _ => codes::INVALID_PARAMS,
+    };
+    RpcError::new(code, error.message).with_data(serde_json::json!({ "code": error.code }))
 }
 
 /// User-facing failures from the orchestrator: not found, busy, bad input.

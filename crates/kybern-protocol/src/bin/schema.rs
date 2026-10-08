@@ -217,6 +217,10 @@ fn main() {
     method::<HtmlRead>(&mut methods);
     method::<HtmlFrame>(&mut methods);
     method::<HtmlRevoke>(&mut methods);
+    method::<PreviewOpen>(&mut methods);
+    method::<PreviewClose>(&mut methods);
+    method::<PreviewProbe>(&mut methods);
+    method::<PreviewServersList>(&mut methods);
     method::<ArtifactsList>(&mut methods);
     method::<ArtifactRead>(&mut methods);
     method::<ArtifactPreview>(&mut methods);

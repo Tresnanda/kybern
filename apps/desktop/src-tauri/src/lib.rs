@@ -21,6 +21,7 @@ use tauri_plugin_dialog::DialogExt;
 mod cli;
 mod environments;
 mod notifications;
+mod preview_relay;
 mod remote;
 mod text_export;
 #[cfg(target_os = "macos")]
@@ -555,6 +556,8 @@ pub fn run() {
             environments::environment_remove,
             remote::remote_bootstrap,
             remote::remote_ssh_hosts,
+            preview_relay::preview_relay_open,
+            preview_relay::preview_relay_close,
             pairing_qr,
             window_surface::window_surface,
             cli::cli_status,
@@ -562,8 +565,13 @@ pub fn run() {
             cli::cli_uninstall,
             cli::cli_remove_other,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                preview_relay::close_all();
+            }
+        });
 }
 
 /// SVG QR code for a pairing invitation, drawn in `currentColor` so the

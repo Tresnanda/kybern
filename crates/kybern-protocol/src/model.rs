@@ -1553,6 +1553,10 @@ pub struct Settings {
     /// Give new agent sessions a short guide to Kybern: images, notes and
     /// tasks, other threads, helpers. Applies to sessions started after the change.
     pub tell_agents_about_kybern: bool,
+    /// Folders outside a project the user allowed the Preview panel to serve
+    /// files from. Canonical absolute paths; a grant covers descendants.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preview_allowed_folders: Vec<String>,
 }
 
 /// Limits for `kybern_agent_delegate`. Read each time an agent delegates.
@@ -1628,6 +1632,7 @@ impl Default for Settings {
             computer_use: ComputerUseSettings::default(),
             orchestration: OrchestrationSettings::default(),
             tell_agents_about_kybern: true,
+            preview_allowed_folders: Vec::new(),
         }
     }
 }

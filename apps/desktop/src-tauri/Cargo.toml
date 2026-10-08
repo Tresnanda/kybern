@@ -26,6 +26,7 @@ reqwest = { workspace = true, features = ["rustls"] }
 qrcode.workspace = true
 keyring = { version = "=3.6.3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 log = "0.4"
+httparse = "=1.10.1"
 tauri = { version = "2.11.5", features = ["macos-private-api"] }
 tauri-plugin-log = "2"
 tauri-plugin-notification = "2.4.0"

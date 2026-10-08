@@ -310,6 +310,14 @@ expression: scopes
   - "orchestration:read"
 - - threads.visuals.revoke
   - "orchestration:read"
+- - previews.open
+  - "orchestration:operate"
+- - previews.close
+  - "orchestration:operate"
+- - previews.probe
+  - "orchestration:read"
+- - previews.servers.list
+  - "orchestration:read"
 - - threads.artifacts.list
   - "orchestration:read"
 - - threads.artifacts.read

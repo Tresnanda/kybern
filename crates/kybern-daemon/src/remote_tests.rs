@@ -1569,3 +1569,94 @@ async fn tool_hydration_preserves_snapshot_and_reused_call_identity_over_real_rp
     store.project_delete(thread.project_id).unwrap();
     assert!(client.call::<ThreadsToolOutput>(exact).await.is_err(), "deleted content is not resurrected");
 }
+
+#[tokio::test]
+async fn previews_open_serve_grant_and_close_over_rpc_and_http() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    let client = host.client().await;
+    let http = reqwest::Client::new();
+    let get = |path: String| {
+        let http = http.clone();
+        let url = format!("{}{path}", host.url);
+        async move { http.get(url).send().await.unwrap() }
+    };
+    let open = |target: &str, allow_folder: bool| {
+        client.call::<PreviewOpen>(PreviewOpenParams { thread_id: thread.id, target: target.into(), allow_folder, proxy: false })
+    };
+
+    // Inside the project: no card, page plus relative assets load.
+    std::fs::create_dir_all(host.root.join("mock")).unwrap();
+    std::fs::write(host.root.join("mock/index.html"), "<html><head><link rel=stylesheet href=style.css></head><body>hi</body></html>")
+        .unwrap();
+    std::fs::write(host.root.join("mock/style.css"), "body{color:red}").unwrap();
+    std::fs::write(host.root.join(".env"), "SECRET=1").unwrap();
+    let inside = open("mock/index.html", false).await.unwrap();
+    assert!(inside.needs_permission.is_none());
+    let ticket = inside.ticket.clone().unwrap();
+    let page_path = inside.path.clone().unwrap();
+    assert_eq!(page_path, format!("/preview-files/{ticket}/mock/index.html"));
+    let page = get(page_path.clone()).await;
+    assert_eq!(page.status(), 200);
+    assert!(page.headers()["content-security-policy"].to_str().unwrap().contains("sandbox allow-scripts allow-forms allow-modals"));
+    assert!(page.text().await.unwrap().contains("kybern-preview"), "bridge injected");
+    let css = get(format!("/preview-files/{ticket}/mock/style.css")).await;
+    assert_eq!(css.headers()["content-type"], "text/css; charset=utf-8");
+    assert_eq!(get(format!("/preview-files/{ticket}/.env")).await.status(), 404);
+    assert_eq!(get(format!("/preview-files/{ticket}/mock/%2e%2e/.env")).await.status(), 404);
+    assert_eq!(get("/preview-files/not-a-ticket/mock/index.html".into()).await.status(), 404);
+
+    // Closing revokes, and closing again is fine.
+    client.call::<PreviewClose>(PreviewCloseParams { ticket: ticket.clone() }).await.unwrap();
+    client.call::<PreviewClose>(PreviewCloseParams { ticket: ticket.clone() }).await.unwrap();
+    assert_eq!(get(page_path).await.status(), 404);
+
+    // Servers and external addresses are classified without tickets.
+    match open("localhost:5173", false).await.unwrap().target {
+        PreviewTargetInfo::Server { port, .. } => assert_eq!(port, 5173),
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(open("https://example.com", false).await.unwrap().target, PreviewTargetInfo::External { .. }));
+    for bad in ["javascript:alert(1)", "missing.html", "./mock/style.css"] {
+        assert!(open(bad, false).await.is_err(), "{bad}");
+    }
+
+    // Proxy tickets exist only for live loopback listeners.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let live = format!("localhost:{}", listener.local_addr().unwrap().port());
+    let proxied = client
+        .call::<PreviewOpen>(PreviewOpenParams { thread_id: thread.id, target: live, allow_folder: false, proxy: true })
+        .await
+        .unwrap();
+    assert_eq!(proxied.path.unwrap(), format!("/preview-proxy/{}/", proxied.ticket.unwrap()));
+    drop(listener);
+    let closed = client
+        .call::<PreviewOpen>(PreviewOpenParams { thread_id: thread.id, target: "localhost:1".into(), allow_folder: false, proxy: true })
+        .await;
+    assert!(closed.is_err());
+
+    // Outside the project: a card first, then a persisted grant.
+    let outside = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target").join(format!("preview-e2e-{}", Uuid::now_v7()));
+    std::fs::create_dir_all(outside.join("deeper")).unwrap();
+    let outside = outside.canonicalize().unwrap();
+    std::fs::write(outside.join("page.html"), "<p>outside</p>").unwrap();
+    std::fs::write(outside.join("deeper/other.html"), "<p>deeper</p>").unwrap();
+    let page = outside.join("page.html").to_string_lossy().into_owned();
+    let asked = open(&page, false).await.unwrap();
+    assert!(asked.ticket.is_none() && asked.path.is_none());
+    assert_eq!(asked.needs_permission, Some(PreviewFolderRequest { folder: outside.to_string_lossy().into_owned(), grantable: true }));
+    assert!(host.state.settings.get().preview_allowed_folders.is_empty());
+    let granted = open(&page, true).await.unwrap();
+    assert_eq!(get(granted.path.unwrap()).await.status(), 200);
+    assert_eq!(host.state.settings.get().preview_allowed_folders, vec![outside.to_string_lossy().into_owned()]);
+    // Survives a restart, covers descendants, shows no card again.
+    let reloaded = crate::settings::SettingsStore::load(&host.state.paths.settings).unwrap();
+    assert_eq!(reloaded.get().preview_allowed_folders, vec![outside.to_string_lossy().into_owned()]);
+    assert!(open(&page, false).await.unwrap().needs_permission.is_none());
+    let nested = open(&outside.join("deeper/other.html").to_string_lossy(), false).await.unwrap();
+    assert!(nested.needs_permission.is_none() && nested.ticket.is_some());
+    // Non-grantable folders stay refused even when the user said yes.
+    let refused = open("/etc/hosts", true).await.unwrap_err().to_string();
+    assert!(!refused.is_empty());
+    let _ = std::fs::remove_dir_all(&outside);
+}

@@ -48,10 +48,10 @@ const DOCK_PANELS = [
   { id: "explorer", label: "Explorer", Icon: FoldersIcon },
   { id: "notes", label: "Notes", Icon: NoteIcon },
   { id: "tasks", label: "Tasks", Icon: ListChecksIcon },
-  // Only exists while a thread holds a preview; opened from content, never from the Add panel menu.
+  // Opened from content (a visual reply, an .html file, the agent) or added here for web pages.
   { id: "preview", label: "Preview", Icon: WindowIcon },
 ] as const
-const ADDABLE_PANELS = DOCK_PANELS.filter((panel) => panel.id !== "preview")
+const ADDABLE_PANELS = DOCK_PANELS
 /** Panes that follow the project (or Global) rather than a thread, so they work on Home too. */
 const THREADLESS_TABS: readonly RightTab[] = ["notes", "tasks"]
 
@@ -73,6 +73,8 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
   // Coordinators and the members of a coordinator group keep the collaboration pane; every other thread shows its Lineage.
   const collaborationThread = useStore((s) => !!(threadId && (s.threads[threadId]?.coordinator_project_id || s.threads[threadId]?.collaboration_group_id)))
   const [adds, dels] = useMemo(() => [diff?.files.reduce((n, f) => n + f.additions, 0) ?? 0, diff?.files.reduce((n, f) => n + f.deletions, 0) ?? 0], [diff])
+  // An agent opened a page while another tab was showing: a dot on the tab until it is shown.
+  const previewUnseen = useStore((s) => { const preview = threadId ? s.previews[threadId] : undefined; return preview?.kind === "web" && !!preview.unseen })
   const activeTasks = useStore((s) => (threadId ? (s.runtimeTasks[threadId] ?? []).filter(isRuntimeTaskActive).length : 0))
   const [tabsRef, pillStyle, pillReady] = useSlidingPill<HTMLDivElement>(`${tab}:${tabs.join(",")}`)
   const headerRef = useRef<HTMLDivElement>(null)
@@ -110,6 +112,7 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
           {tabs.map((id) => {
             const { label, Icon } = DOCK_PANELS.find((panel) => panel.id === id)!
             return <DockTab key={id} active={workspaceActive && tab === id} onClick={() => set({ rightTab: id })} onClose={() => closeTab(id)} icon={<Icon className="size-3.5 shrink-0 opacity-70" />} label={id === "collaboration" && projectCoordinator ? "Project" : label}>
+              {id === "preview" && previewUnseen && tab !== "preview" && <span aria-label="New page" className="ml-0.5 size-1.5 shrink-0 rounded-full bg-[var(--color-text-accent)]" />}
               {id === "activity" && activeTasks > 0 && <span key={activeTasks} className="t-pop ml-0.5 min-w-3 text-center text-[10px] tabular-nums text-muted-foreground/70">{activeTasks}</span>}
               {id === "changes" && adds + dels > 0 && <span key={`${adds}:${dels}`} className="t-pop inline-flex"><DiffStat additions={adds} deletions={dels} className="ml-1 font-system-ui text-[length:var(--app-font-size-ui-xs,10px)] font-normal" /></span>}
             </DockTab>

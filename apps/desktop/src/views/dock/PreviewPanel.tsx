@@ -13,17 +13,19 @@ import { DOCK_HEADER_ICON_BUTTON_CLASS } from "../chrome"
  * Content kinds fill the slots; today that is a visual reply (`VisualPreviewPanel`), and a
  * web page kind can reuse the same tab and chrome.
  */
-export function PreviewPanel({ kind, title, actions, children, className }: { kind: string; title: string; actions?: ReactNode; children: ReactNode; className?: string }) {
+export function PreviewPanel({ kind, title, actions, header, children, className }: { kind: string; title?: string; actions?: ReactNode; /** Replaces the crumbs row (the web kind brings its own 36px chrome row). */ header?: ReactNode; children: ReactNode; className?: string }) {
   return (
     <div className={cn("flex h-full min-h-0 w-full flex-col bg-[var(--color-background-surface)]", className)} data-preview-kind={kind.toLowerCase()}>
-      <div className="chat-surface-divider flex h-9 shrink-0 items-center gap-2 px-3">
-        <nav aria-label={kind} className="flex min-w-0 flex-1 items-center gap-1 font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/55">
-          <span className="shrink-0">{kind}</span>
-          <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/35" />
-          <span className="min-w-0 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground/90" title={title}>{title}</span>
-        </nav>
-        {actions && <div className="flex shrink-0 items-center">{actions}</div>}
-      </div>
+      {header ?? (
+        <div className="chat-surface-divider flex h-9 shrink-0 items-center gap-2 px-3">
+          <nav aria-label={kind} className="flex min-w-0 flex-1 items-center gap-1 font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/55">
+            <span className="shrink-0">{kind}</span>
+            <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/35" />
+            <span className="min-w-0 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground/90" title={title}>{title}</span>
+          </nav>
+          {actions && <div className="flex shrink-0 items-center">{actions}</div>}
+        </div>
+      )}
       <div className="relative min-h-0 flex-1">{children}</div>
     </div>
   )

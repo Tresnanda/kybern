@@ -318,7 +318,35 @@ function General() {
       <Section title="Notes">
         <GlobalNotesRow />
       </Section>
+      <Section title="Preview">
+        <PreviewFoldersRow />
+      </Section>
     </>
+  )
+}
+
+/** Folders outside a project that the user allowed Preview to serve files from. */
+function PreviewFoldersRow() {
+  const { settings, update } = useSettings()
+  const folders = settings?.preview_allowed_folders ?? []
+  return (
+    <Row
+      title="Allowed folders"
+      description={folders.length > 0 ? "Pages in these folders can open in Preview. Files inside your projects never need this." : "None yet. Kybern asks the first time a page outside your projects opens in Preview."}
+    >
+      {folders.length > 0 && (
+        <ul className="flex w-80 max-w-full flex-col gap-1">
+          {folders.map((folder) => (
+            <li key={folder} className="flex h-7 items-center gap-1 rounded-md bg-[var(--color-background-elevated-secondary)] ps-2.5 pe-1 text-xs text-foreground/85">
+              <span dir="rtl" title={folder} className="min-w-0 flex-1 truncate text-start font-mono text-[11px]"><bdi>{folder}</bdi></span>
+              <Button type="button" variant="ghost" size="xs" aria-label={`Remove ${folder}`} onClick={() => void update({ preview_allowed_folders: folders.filter((item) => item !== folder) })}>
+                Remove
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Row>
   )
 }
 

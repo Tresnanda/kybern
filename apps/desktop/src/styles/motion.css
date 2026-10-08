@@ -166,7 +166,8 @@
   animation: none;
 }
 .t-matrix[data-loop-paused] i,
-.t-pane[data-active="false"] .t-matrix i {
+.t-pane[data-active="false"] .t-matrix i,
+.t-pane[data-active="false"] .preview-loading {
   animation-play-state: paused;
 }
 @keyframes t-matrix-pulse {

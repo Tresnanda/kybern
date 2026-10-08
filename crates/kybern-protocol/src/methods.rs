@@ -2460,6 +2460,138 @@ pub struct ArtifactPreviewResult {
 }
 method!(ArtifactPreview, "threads.artifacts.preview", Some(Scope::OrchestrationRead), ArtifactReadParams, ArtifactPreviewResult);
 
+// ---- in-app browser preview ----
+
+/// Open a page in the Preview panel: a local HTML file, a dev server, or an
+/// external address. The daemon normalizes the target, checks folder grants
+/// and mints a ticket for file and relayed pages.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewOpenParams {
+    pub thread_id: ThreadId,
+    /// Raw input: a URL, a file path, or `host:port`.
+    pub target: String,
+    /// The user confirmed the folder grant card.
+    #[serde(default)]
+    pub allow_folder: bool,
+    /// Mint a proxy ticket for a server target (remote environments and
+    /// "Preview through Kybern").
+    #[serde(default)]
+    pub proxy: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PreviewTargetInfo {
+    File { path: String, root: String, in_project: bool },
+    Server { url: String, port: u16 },
+    External { url: String },
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewFolderRequest {
+    pub folder: String,
+    pub grantable: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewOpenResult {
+    pub target: PreviewTargetInfo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ticket: Option<String>,
+    /// HTTP path to load, e.g. `/preview-files/{ticket}/mock/index.html`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs_permission: Option<PreviewFolderRequest>,
+}
+method!(PreviewOpen, "previews.open", Some(Scope::OrchestrationOperate), PreviewOpenParams, PreviewOpenResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewCloseParams {
+    pub ticket: String,
+}
+method!(PreviewClose, "previews.close", Some(Scope::OrchestrationOperate), PreviewCloseParams, Empty);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewProbeParams {
+    /// Loopback or private-network address only.
+    pub url: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewProbeError {
+    ConnectionRefused,
+    TimedOut,
+    Dns,
+    Tls,
+    HttpStatus,
+    NotHttp,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewFrameBlock {
+    /// `x-frame-options` or `content-security-policy`.
+    pub header: String,
+    pub value: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewProbeResult {
+    pub reachable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<PreviewProbeError>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_by: Option<PreviewFrameBlock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+}
+method!(PreviewProbe, "previews.probe", Some(Scope::OrchestrationRead), PreviewProbeParams, PreviewProbeResult);
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewServersListParams {
+    #[serde(default)]
+    pub thread_id: Option<ThreadId>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewServer {
+    pub url: String,
+    pub port: u16,
+    pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Data URL, at most 16 KB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub favicon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub framework: Option<String>,
+    #[serde(default)]
+    pub in_project: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewServersListResult {
+    pub servers: Vec<PreviewServer>,
+    pub scanned_at: chrono::DateTime<chrono::Utc>,
+    /// `lsof`, `proc` or `common_ports`.
+    pub method: String,
+}
+method!(PreviewServersList, "previews.servers.list", Some(Scope::OrchestrationRead), PreviewServersListParams, PreviewServersListResult);
+
+/// Pushed to clients when an agent asks to show a page. Not persisted.
+pub const PREVIEW_OPEN_REQUESTED_NOTIFICATION: &str = "previews.open_requested";
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewOpenRequestedNotification {
+    pub thread_id: ThreadId,
+    pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub requested_by_agent: bool,
+}
+
 // ---- notes ----
 
 /// Notification method delivered to every client that can read orchestration
@@ -3204,6 +3336,10 @@ registry!(
     HtmlRead,
     HtmlFrame,
     HtmlRevoke,
+    PreviewOpen,
+    PreviewClose,
+    PreviewProbe,
+    PreviewServersList,
     ArtifactsList,
     ArtifactRead,
     ArtifactPreview,

@@ -156,6 +156,10 @@ expression: names
 - threads.visuals.read
 - threads.visuals.frame
 - threads.visuals.revoke
+- previews.open
+- previews.close
+- previews.probe
+- previews.servers.list
 - threads.artifacts.list
 - threads.artifacts.read
 - threads.artifacts.preview

@@ -157,7 +157,8 @@ export function useHotkey(combo: string, handler: Handler, opts: { enabled?: boo
       if (wantMod !== mod || wantShift !== e.shiftKey || wantAlt !== e.altKey) return
       // Shift changes `event.key` for punctuation (for example `\` becomes
       // `|`), while `event.code` keeps the physical shortcut key stable.
-      const keyMatches = e.key.toLowerCase() === key || (key === "\\" && e.code === "Backslash")
+      // Option rewrites `event.key` on macOS (⌥P types π), so Alt shortcuts match the physical letter.
+      const keyMatches = e.key.toLowerCase() === key || (key === "\\" && e.code === "Backslash") || (wantAlt && /^[a-z]$/.test(key) && e.code === `Key${key.toUpperCase()}`)
       if (!keyMatches) return
       if (!opts.allowInInput) {
         const t = e.target as HTMLElement | null
@@ -195,6 +196,8 @@ export function useResize(opts: { initial: number; min: number; max: number; sid
       target.setPointerCapture(e.pointerId)
       setDragging(true)
       document.body.style.cursor = "col-resize"
+      // A live preview page would swallow pointermove while the handle crosses it.
+      document.documentElement.setAttribute("data-resizing", "")
       const move = (ev: PointerEvent) => {
         const dx = ev.clientX - startX
         const next = Math.min(opts.max, Math.max(opts.min, opts.side === "left" ? startW + dx : startW - dx))
@@ -203,6 +206,7 @@ export function useResize(opts: { initial: number; min: number; max: number; sid
       const up = () => {
         setDragging(false)
         document.body.style.cursor = ""
+        document.documentElement.removeAttribute("data-resizing")
         window.removeEventListener("pointermove", move)
         window.removeEventListener("pointerup", up)
         setWidth((w) => {

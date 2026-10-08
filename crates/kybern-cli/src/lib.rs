@@ -420,6 +420,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: IntegrationsCmd,
     },
+    /// Find and check web pages for the in-app browser preview.
+    Preview {
+        #[command(subcommand)]
+        cmd: PreviewCmd,
+    },
     /// Preview and publish durable inline interactive HTML replies.
     Visuals {
         #[command(subcommand)]
@@ -802,6 +807,38 @@ enum SettingsCmd {
 }
 
 #[derive(Subcommand)]
+enum PreviewCmd {
+    /// List local web servers that can be previewed.
+    Servers {
+        /// Mark servers running from this thread's folder.
+        #[arg(long)]
+        thread: Option<String>,
+    },
+    /// Check whether a local or private-network page answers and can be framed.
+    Probe {
+        /// Page address, such as http://localhost:5173.
+        #[arg(value_name = "URL")]
+        address: String,
+    },
+    /// Open a page or HTML file for a thread and print the path to load.
+    Open {
+        /// Thread id.
+        thread: String,
+        /// URL, file path, or host:port.
+        target: String,
+        /// Allow previewing files from the target's folder (saved in settings).
+        #[arg(long)]
+        allow_folder: bool,
+    },
+    /// List the folders outside projects that previews may serve.
+    Folders {
+        /// Remove this folder from the list.
+        #[arg(long, value_name = "PATH")]
+        remove: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum ComputerCmd {
     /// Print computer-use status as JSON.
     Status,
@@ -909,6 +946,91 @@ enum CursorCmd {
     Status,
     /// Forget the SDK browser login. Running chats retain their current credential until closed.
     Logout,
+}
+
+async fn preview_cmd(client: &Client, cmd: PreviewCmd, json: bool) -> Result<()> {
+    match cmd {
+        PreviewCmd::Servers { thread } => {
+            let thread_id = thread.map(|id| id.parse()).transpose()?;
+            let r = client.call::<PreviewServersList>(PreviewServersListParams { thread_id }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else if r.servers.is_empty() {
+                println!("No local web servers found.");
+            } else {
+                for server in r.servers {
+                    println!(
+                        "{:<28} {}{:<10} {:<16} {}",
+                        server.url,
+                        if server.in_project { "* " } else { "  " },
+                        server.framework.unwrap_or_default(),
+                        server.process_name.unwrap_or_default(),
+                        server.title.or(server.cwd).unwrap_or_default()
+                    );
+                }
+            }
+        }
+        PreviewCmd::Open { thread, target, allow_folder } => {
+            let r =
+                client.call::<PreviewOpen>(PreviewOpenParams { thread_id: thread.parse()?, target, allow_folder, proxy: false }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else if let Some(request) = &r.needs_permission {
+                println!("Needs permission to preview files in {}. Run again with --allow-folder.", request.folder);
+            } else if let Some(path) = &r.path {
+                println!("{path}");
+            } else {
+                match &r.target {
+                    PreviewTargetInfo::Server { url, .. } => println!("{url}"),
+                    PreviewTargetInfo::External { url } => println!("{url} (opens in your browser)"),
+                    PreviewTargetInfo::File { path, .. } => println!("{path}"),
+                }
+            }
+        }
+        PreviewCmd::Folders { remove } => {
+            let mut settings = client.call::<SettingsGet>(Empty {}).await?;
+            if let Some(folder) = remove {
+                let wanted = std::fs::canonicalize(&folder).map(|p| p.to_string_lossy().into_owned()).unwrap_or(folder.clone());
+                let before = settings.preview_allowed_folders.len();
+                settings.preview_allowed_folders.retain(|stored| *stored != folder && *stored != wanted);
+                if settings.preview_allowed_folders.len() == before {
+                    anyhow::bail!("{folder} is not an allowed preview folder. Run `kybern preview folders` to see the list.");
+                }
+                settings = client.call::<SettingsUpdate>(SettingsUpdateParams { settings }).await?;
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&settings.preview_allowed_folders)?);
+            } else if settings.preview_allowed_folders.is_empty() {
+                println!("No folders are allowed for preview.");
+            } else {
+                for folder in &settings.preview_allowed_folders {
+                    println!("{folder}");
+                }
+            }
+        }
+        PreviewCmd::Probe { address } => {
+            let r = client.call::<PreviewProbe>(PreviewProbeParams { url: address }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else {
+                match (r.reachable, r.error) {
+                    (true, _) => println!("reachable (status {})", r.status.map_or_else(|| "?".into(), |s| s.to_string())),
+                    (false, Some(error)) => println!("not reachable: {}", serde_json::to_value(error)?.as_str().unwrap_or("error")),
+                    (false, None) => println!("not reachable"),
+                }
+                if let Some(title) = &r.title {
+                    println!("title: {title}");
+                }
+                if let Some(location) = &r.location {
+                    println!("redirects to: {location}");
+                }
+                if let Some(block) = &r.blocked_by {
+                    println!("blocks embedding: {}: {}", block.header, block.value);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn cursor_setup(cmd: &CursorCmd) -> Result<()> {
@@ -1726,6 +1848,7 @@ pub async fn run() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
         },
+        Cmd::Preview { cmd } => preview_cmd(&client, cmd, json).await?,
         Cmd::Visuals { cmd } => match cmd {
             VisualsCmd::Publish { thread, path, title, height } => {
                 let html = tokio::fs::read_to_string(path).await?;
