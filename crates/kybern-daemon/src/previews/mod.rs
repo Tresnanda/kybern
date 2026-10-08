@@ -271,9 +271,13 @@ pub fn resolve(
         if scheme == "http" || scheme == "https" {
             return resolve_url(input);
         }
+        // Any other `scheme://` (ftp, ws, ssh, ...) is not something to preview.
+        if input[scheme.len()..].starts_with("://") {
+            return Err(PreviewError::invalid_address());
+        }
         // `localhost:3000` has a "scheme" of localhost; fall through to host rules.
     }
-    if looks_like_path(input) {
+    if looks_like_path(input) || (has_entry_extension(input) && roots.cwd.join(input).is_file()) {
         return resolve_file(input, roots, allowed_folders, allow_folder, policy);
     }
     if let Some(port) = input.strip_prefix(':').unwrap_or(input).parse::<u16>().ok().filter(|port| *port != 0) {
@@ -287,15 +291,17 @@ pub fn resolve(
     Err(PreviewError::invalid_address())
 }
 
+fn has_entry_extension(input: &str) -> bool {
+    let lower = input.to_ascii_lowercase();
+    [".html", ".htm", ".svg", ".xhtml"].iter().any(|ext| lower.ends_with(ext))
+}
+
 fn looks_like_path(input: &str) -> bool {
     input.starts_with('/')
         || input.starts_with('~')
         || input.starts_with("./")
         || input.starts_with("../")
-        || (input.contains('/') && {
-            let lower = input.to_ascii_lowercase();
-            [".html", ".htm", ".svg", ".xhtml"].iter().any(|ext| lower.ends_with(ext))
-        })
+        || (input.contains('/') && has_entry_extension(input))
 }
 
 fn resolve_url(input: &str) -> Result<Resolved, PreviewError> {
