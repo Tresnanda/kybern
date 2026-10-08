@@ -17,7 +17,7 @@ import { AccountDot, AccountMarkStack } from "@/components/kybern/accounts/Accou
 import { openAddAccount } from "@/components/kybern/accounts/AddAccountSheet"
 import { ProviderMark } from "@/components/kybern/bits"
 import { LimitMeter } from "@/components/kybern/LimitMeter"
-import { accountsOfKind } from "@/lib/accountUi"
+import { accountsOfKind, limitsForAccount } from "@/lib/accountUi"
 import { CLI_INSTANCE, isCliInstance } from "@/lib/accounts"
 import { useNow } from "@/lib/hooks"
 import { CheckIcon, PlusIcon } from "@/lib/kit/icons"
@@ -113,8 +113,7 @@ function AccountsUsageCard({ kind }: { kind: ProviderKind }) {
   }, [kind])
   useEffect(() => () => clearTimeout(changedTimer.current), [])
   const defaultAccount = accounts.find((account) => account.is_default) ?? accounts[0]
-  const limitsOf = (account: AccountSummary) =>
-    entries.find((entry) => entry.provider === kind && entry.instance === account.provider.instance) ?? (account.is_default ? global : undefined)
+  const limitsOf = (account: AccountSummary) => limitsForAccount(account, entries, global ? [global] : [])
   const entry = (defaultAccount ? limitsOf(defaultAccount) : undefined) ?? global
   const choose = async (account: AccountSummary) => {
     if (account.is_default) return

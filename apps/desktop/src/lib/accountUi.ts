@@ -2,8 +2,22 @@
 // strip, its "follow defaults" line and the status glyph. No React and no `@/`
 // imports, so node tests load it directly.
 
-import type { AccountSummary, ProviderKind } from "../../../../packages/kybern-client/src/types.ts"
+import type { AccountSummary, ProviderKind, ProviderLimits } from "../../../../packages/kybern-client/src/types.ts"
 import { CLI_ACCOUNT_NAME, CLI_INSTANCE, isCliInstance } from "./accounts.ts"
+
+/**
+ * Limits of one account. Per-account entries carry `instance`; the default
+ * account's are also the daemon's global entry, which covers an agent with a
+ * single account and daemons that do not report per-account entries.
+ */
+export function limitsForAccount(
+  account: Pick<AccountSummary, "provider" | "is_default">,
+  entries: readonly ProviderLimits[],
+  global: readonly ProviderLimits[],
+): ProviderLimits | undefined {
+  const { kind, instance } = account.provider
+  return entries.find((entry) => entry.provider === kind && entry.instance === instance) ?? (account.is_default ? global.find((entry) => entry.provider === kind) : undefined)
+}
 
 // ── Model picker tabs ────────────────────────────────────────────────────────
 
@@ -108,7 +122,7 @@ export function pickerTabs({
 }
 
 /** Next enabled tab for arrow keys in the tablist, wrapping at the ends. */
-export function nextTabIndex(tabs: readonly { disabled?: boolean }[], from: number, step: 1 | -1): number {
+export function nextTabIndex(tabs: readonly { disabled?: boolean | undefined; [key: string]: unknown }[], from: number, step: 1 | -1): number {
   if (!tabs.length) return -1
   for (let i = 1; i <= tabs.length; i++) {
     const index = (((from + step * i) % tabs.length) + tabs.length) % tabs.length

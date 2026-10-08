@@ -1,6 +1,8 @@
 import { ComposerImageAttachment } from "@/components/kybern/ComposerImageAttachment"
-import { PromptCacheIndicator } from "@/components/kybern/PromptCacheIndicator"
-import { ProviderUsageIndicator } from "@/components/kybern/ProviderUsageIndicator"
+import { AccountMarkStack } from "@/components/kybern/accounts/AccountMark"
+import { ComposerStatusGlyph } from "@/components/kybern/ComposerStatusGlyph"
+import { accountsOfKind } from "@/lib/accountUi"
+import { useAccounts } from "@/state/accounts"
 import type { PromptCacheWindow } from "@/lib/promptCache"
 import type { ProviderUsage } from "@/protocol"
 // Composer: frosted 1.2rem squircle
@@ -12,7 +14,7 @@ import type { ProviderUsage } from "@/protocol"
 import { Fragment, forwardRef, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
-import { ProviderMark, Spinner } from "@/components/kybern/bits"
+import { Spinner } from "@/components/kybern/bits"
 import { Button } from "@/components/kit/button"
 import { ComposerColumnFrame } from "@/components/kit/chat/ComposerColumnFrame"
 import { FileEntryIcon } from "@/components/kit/chat/FileEntryIcon"
@@ -155,12 +157,15 @@ export interface ComposerProps {
   /** Native children inherit permissions from their owning session. */
   lockMode?: boolean
   provider: ProviderInstance | null
-  accountControl?: React.ReactNode
+  /** The thread follows the project and global defaults. Undefined for a draft, which has no override to follow. */
+  accountFollowsDefaults?: boolean
+  /** Pin the next message to an account of the current agent; `null` follows defaults again. */
+  onAccountChange?: (instance: string | null) => Promise<void> | void
   providerSessionId?: string | null
   providers: ProviderStatus[]
   onRefreshModels?: (provider: ProviderInstance, forceRefresh: boolean) => Promise<ProviderStatus | undefined>
   /** `choice` carries a model picked from another harness's favorites. */
-  onProviderChange?: (p: ProviderInstance, choice?: { model?: string; effort?: string }) => Promise<void> | void
+  onProviderChange?: (p: ProviderInstance, choice?: { model?: string; effort?: string; pinAccount?: boolean }) => Promise<void> | void
   model?: string | null
   effort?: string | null
   onModelChange?: (model: string | undefined, effort: string | undefined) => Promise<void> | void
@@ -281,6 +286,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     provider,
     providers,
     onProviderChange,
+    onAccountChange,
+    accountFollowsDefaults,
     model,
     effort,
     onModelChange,
@@ -870,6 +877,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const canPickModel = !!onModelChange
   const canReloadModels = !!onModelChange && !!status?.available && status.supports_model_switch
   const canPickProvider = !!onProviderChange
+  const accounts = useAccounts()
+  // A draft stores the CLI instance ("default") to mean "whatever the defaults say", so its picker shows the default account as current.
+  const accountInstance = provider
+    ? accountFollowsDefaults === undefined && provider.instance === "default"
+      ? accountsOfKind(accounts, provider.kind).find((account) => account.is_default)?.provider.instance ?? "default"
+      : provider.instance
+    : "default"
+  const triggerAccount = provider ? accountsOfKind(accounts, provider.kind).find((account) => account.provider.instance === accountInstance) : undefined
   const legacyCursor = provider?.kind === "cursor" && !!props.providerSessionId && !props.providerSessionId.startsWith("cursor-sdk:")
   const modes = provider?.kind === "cursor" && !legacyCursor
     ? MODES.filter((m) => m.mode === "auto" || m.mode === "full-access").map((m) => m.mode === "auto"
@@ -905,7 +920,21 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     }
   }
 
-  async function changeProvider(nextProvider: ProviderInstance, choice?: { model?: string; effort?: string }) {
+  async function changeAccount(instance: string | null) {
+    if (changingModel) return false
+    setChangingModel(true)
+    try {
+      await onAccountChange?.(instance)
+      return true
+    } catch (error) {
+      toast.error("Unable to change account", { description: errorText(error) })
+      return false
+    } finally {
+      setChangingModel(false)
+    }
+  }
+
+  async function changeProvider(nextProvider: ProviderInstance, choice?: { model?: string; effort?: string; pinAccount?: boolean }) {
     if (changingModel) return false
     setChangingModel(true)
     try {
@@ -1263,15 +1292,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 data-chat-composer-actions="right"
                 className="flex min-w-0 flex-1 items-center justify-end gap-1"
               >
-                {props.promptCache && (
-                  <PromptCacheIndicator
-                    cacheWindow={props.promptCache.window}
-                    lastActivityAt={props.promptCache.lastActivityAt}
-                    running={running}
-                  />
-                )}
-                {props.accountControl}
-                {props.showProviderUsage && <ProviderUsageIndicator usage={props.providerUsage} provider={provider?.kind} />}
+                {(props.showProviderUsage || props.promptCache) && <ComposerStatusGlyph usage={props.providerUsage} provider={provider} promptCache={props.promptCache} running={running} />}
                 {provider && (
                   <ModelPicker
                     provider={provider}
@@ -1294,6 +1315,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                     onModelChange={changeModel}
                     onEffortChange={(next) => changeModel(variantSelector(current, model) ?? model ?? undefined, next)}
                     onProviderChange={changeProvider}
+                    accounts={accounts}
+                    accountInstance={accountInstance}
+                    accountFollowsDefaults={accountFollowsDefaults}
+                    onAccountChange={onAccountChange ? changeAccount : undefined}
                     onReload={() => void reloadModels()}
                     onSetUpProvider={(kind) => useStore.getState().set({ settingsOpen: true, settingsTab: "agents", settingsFocus: `provider:${kind}` })}
                     trigger={
@@ -1301,7 +1326,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                         size="sm"
                         variant="chrome"
                         disabled={!canPickModel && !canReloadModels && !canPickProvider}
-                        aria-label="Change model and reasoning"
+                        aria-label={`Change model and reasoning${triggerAccount?.color ? `, ${triggerAccount.name} account` : ""}`}
                         title={`${modelLabel ?? PROVIDER_LABEL[provider.kind]}${modelQualifierLabel ? ` from ${modelQualifierLabel}` : ""}${effortLabel ? `, ${formatEffort(effortLabel)} effort` : ""}`}
                         className={cn(
                           COMPOSER_FOOTER_PICKER_TRIGGER_CLASS_NAME,
@@ -1312,7 +1337,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                         )}
                       >
                         <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-                          <ProviderMark kind={provider.kind} size={14} className="size-3.5 shrink-0 text-[var(--color-text-foreground)] opacity-100" />
+                          <AccountMarkStack kind={provider.kind} color={triggerAccount?.color} size={14} className="size-3.5 text-[var(--color-text-foreground)] opacity-100" />
                           <span className={cn(
                             "min-w-0 truncate leading-none text-[var(--color-text-foreground)]",
                             "[text-box-trim:trim-both] [text-box-edge:cap_alphabetic]",

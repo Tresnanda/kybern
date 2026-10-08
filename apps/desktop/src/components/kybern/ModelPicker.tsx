@@ -11,7 +11,9 @@
 import { Popover as PopoverPrimitive } from "@base-ui/react/popover"
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactElement } from "react"
 
-import { ProviderMark, Spinner } from "@/components/kybern/bits"
+import { openAddAccount } from "@/components/kybern/accounts/AddAccountSheet"
+import { ProviderMark } from "@/components/kybern/bits"
+import { FollowDefaultsLine, ModelPickerTabs } from "@/components/kybern/ModelPickerTabs"
 import { TextSwap } from "@/components/kybern/motion"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import { Menu, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
@@ -21,9 +23,10 @@ import { COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME, COMPOSER_PICKER_MODEL_LIST_SCR
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { useLocalStorage } from "@/lib/hooks"
 import { PROVIDER_LABEL, formatEffort, isMac, mod } from "@/lib/format"
-import { ChevronDownIcon, RefreshCwIcon, SearchIcon, StarFilledIcon, StarIcon } from "@/lib/kit/icons"
+import { ChevronDownIcon, SearchIcon, StarFilledIcon, StarIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
-import type { ModelParameter, ProviderInstance, ProviderKind, ProviderModel, ProviderStatus } from "@/protocol"
+import { followLine, pickerTabs, type PickerTab } from "@/lib/accountUi"
+import type { AccountSummary, ModelParameter, ProviderInstance, ProviderKind, ProviderModel, ProviderStatus } from "@/protocol"
 import {
   MODEL_FLAT_LIMIT,
   MODEL_SECTION_PREVIEW,
@@ -56,7 +59,6 @@ const SECTION_STEP = 100
 const THUMB = 28
 
 const PICKER_DIVIDER_CLASS_NAME = "mx-3 h-px shrink-0 bg-[color-mix(in_srgb,var(--foreground)_7%,transparent)]"
-const PICKER_ICON_BUTTON_CLASS_NAME = "press-row inline-flex size-7 shrink-0 items-center justify-center rounded-[0.4rem] text-muted-foreground/60 outline-none transition-colors duration-150 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:hover:bg-transparent"
 
 type Row =
   | { kind: "default"; key: string }
@@ -84,8 +86,16 @@ interface ModelPickerProps {
   onOpenChange?: (open: boolean) => void
   onModelChange: (model: string, effort: string | undefined) => Promise<boolean>
   onEffortChange: (effort: string) => Promise<boolean>
-  /** `choice` is set when a favorite from another harness is picked. */
-  onProviderChange: (provider: ProviderInstance, choice?: { model?: string; effort?: string }) => Promise<boolean>
+  /** `choice` is set when a favorite from another harness is picked; `pinAccount` when an account tab names the account. */
+  onProviderChange: (provider: ProviderInstance, choice?: { model?: string; effort?: string; pinAccount?: boolean }) => Promise<boolean>
+  /** Every account of every agent, for the tab strip. */
+  accounts: AccountSummary[]
+  /** The thread follows the project and global defaults; undefined for a draft, which has no override to follow. */
+  accountFollowsDefaults?: boolean
+  /** The account the tabs treat as current; defaults to the provider's own instance. */
+  accountInstance?: string
+  /** Pin the next message to an account of the current agent; `null` follows defaults again. */
+  onAccountChange?: (instance: string | null) => Promise<boolean>
   onReload: () => void
   /** Open setup for an agent that can't run yet. */
   onSetUpProvider?: (kind: ProviderKind) => void
@@ -136,6 +146,10 @@ function ModelPickerPanel({
   onModelChange,
   onEffortChange,
   onProviderChange,
+  accounts,
+  accountFollowsDefaults,
+  accountInstance,
+  onAccountChange,
   onReload,
   onSetUpProvider,
   inputRef,
@@ -297,97 +311,59 @@ function ModelPickerPanel({
     }
   }
 
-  const switchAgent = async (kind: ProviderStatus["kind"]) => {
-    if (kind === provider.kind || busy) return
+  const tabs = useMemo(
+    () => pickerTabs({ agents: providers.map((item) => ({ kind: item.kind, display_name: item.display_name, available: item.available })), accounts, current: { kind: provider.kind, instance: accountInstance ?? provider.instance }, canPickProvider, starredView: showFavorites }),
+    [accountInstance, accounts, canPickProvider, provider.kind, provider.instance, providers, showFavorites],
+  )
+  const follow = followLine({ accounts, current: { kind: provider.kind, instance: accountInstance ?? provider.instance }, followsDefaults: accountFollowsDefaults })
+
+  const resetList = () => {
     setQuery("")
     setExpanded({})
     setActiveKey(null)
-    await onProviderChange({ kind, instance: "default" })
+  }
+
+  const selectAccountTab = async (tab: Extract<PickerTab, { type: "account" }>) => {
+    if (busy) return
+    // An agent that isn't set up leads to its setup; an account that needs
+    // signing in leads to the sign-in sheet. Neither changes the thread.
+    if (tab.notSetUp && onSetUpProvider) {
+      close()
+      onSetUpProvider(tab.kind)
+      return
+    }
+    if (tab.needsSignIn) {
+      close()
+      openAddAccount({ kind: tab.kind, instance: tab.instance })
+      return
+    }
+    if (tab.notSetUp) return
+    if (tab.kind === provider.kind) {
+      setView("all")
+      if (tab.instance !== (accountInstance ?? provider.instance) || (accountFollowsDefaults && tab.multi)) {
+        resetList()
+        if (onAccountChange) await onAccountChange(tab.instance)
+        else await onProviderChange({ kind: tab.kind, instance: tab.instance })
+      }
+      inputRef.current?.focus()
+      return
+    }
+    setView("all")
+    resetList()
+    await onProviderChange({ kind: tab.kind, instance: tab.instance }, tab.multi ? { pinAccount: true } : undefined)
     inputRef.current?.focus()
   }
 
-  const toggleView = () => {
-    setView(showFavorites ? "all" : "favorites")
+  const selectStarred = () => {
+    setView("favorites")
     setActiveKey(null)
     inputRef.current?.focus()
   }
 
   return (
     <>
-      <div className="flex items-center gap-0.5 px-1.5 pt-1.5">
-        {canPickProvider && (
-          <div role="radiogroup" aria-label="Agent" className="flex min-w-0 items-center gap-0.5">
-            {providers.map((item) => {
-              const selected = item.kind === provider.kind
-              // An agent that isn't set up stays dim but leads to its setup,
-              // rather than a dead control.
-              const setUp = !item.available && onSetUpProvider
-              return (
-                <Tooltip key={item.kind}>
-                  <TooltipTrigger
-                    render={
-                      <button
-                        type="button"
-                        role="radio"
-                        aria-checked={selected}
-                        aria-label={item.available ? item.display_name : `${item.display_name}, not set up`}
-                        aria-disabled={setUp ? true : undefined}
-                        disabled={setUp ? false : !item.available || busy}
-                        onClick={() => {
-                          if (!setUp) return void switchAgent(item.kind)
-                          close()
-                          onSetUpProvider(item.kind)
-                        }}
-                        className={cn(
-                          "press-row inline-flex size-7 shrink-0 items-center justify-center rounded-[0.4rem] outline-none transition-[background-color,opacity] duration-150 focus-visible:ring-1 focus-visible:ring-ring",
-                          selected
-                            ? "bg-[var(--color-background-button-secondary)]"
-                            : setUp
-                              ? "opacity-20 hover:bg-[var(--color-background-button-secondary-hover)] hover:opacity-60"
-                              : "opacity-45 hover:bg-[var(--color-background-button-secondary-hover)] hover:opacity-100 disabled:opacity-20 disabled:hover:bg-transparent",
-                        )}
-                      />
-                    }
-                  >
-                    <ProviderMark kind={item.kind} size={14} className="size-3.5" />
-                  </TooltipTrigger>
-                  <TooltipPopup side="top" sideOffset={6} variant="picker">
-                    {item.available ? item.display_name : setUp ? `Set up ${item.display_name}` : `${item.display_name} isn’t installed`}
-                  </TooltipPopup>
-                </Tooltip>
-              )
-            })}
-          </div>
-        )}
-        {canPickModel && (
-          <div className="ms-auto flex items-center gap-0.5">
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    aria-label="Show favorites only"
-                    aria-pressed={showFavorites}
-                    onClick={toggleView}
-                    className={cn(PICKER_ICON_BUTTON_CLASS_NAME, showFavorites && "bg-[var(--color-background-button-secondary)] text-[var(--color-accent-yellow)] hover:text-[var(--color-accent-yellow)]")}
-                  />
-                }
-              >
-                {showFavorites ? <StarFilledIcon className="size-3.5" /> : <StarIcon className="size-3.5" />}
-              </TooltipTrigger>
-              <TooltipPopup side="top" sideOffset={6} variant="picker">{showFavorites ? "Show all models" : "Show favorites"}</TooltipPopup>
-            </Tooltip>
-            {canReload && (
-              <Tooltip>
-                <TooltipTrigger render={<button type="button" aria-label="Reload models" disabled={loading} onClick={onReload} className={PICKER_ICON_BUTTON_CLASS_NAME} />}>
-                  {loading ? <Spinner size={12} /> : <RefreshCwIcon className="size-3.5" />}
-                </TooltipTrigger>
-                <TooltipPopup side="top" sideOffset={6} variant="picker">{loading ? "Reloading models…" : "Reload models"}</TooltipPopup>
-              </Tooltip>
-            )}
-          </div>
-        )}
-      </div>
+      <ModelPickerTabs tabs={tabs} busy={busy} canReload={canPickModel && canReload} loading={loading} onStarred={selectStarred} onAccount={(tab) => void selectAccountTab(tab)} onReload={onReload} />
+      {follow && <FollowDefaultsLine line={follow} busy={busy} onFollow={() => void onAccountChange?.(null)} />}
 
       {canPickModel && (
         <>
