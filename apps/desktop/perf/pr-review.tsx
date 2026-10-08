@@ -169,7 +169,8 @@ async function closePopover() {
   cancel?.click()
   await waitFor(
     () => !document.querySelector("[data-pr-review-popover]"),
-    "Review popover did not close"
+    "Review popover did not close",
+    5000
   )
 }
 async function openSend() {
