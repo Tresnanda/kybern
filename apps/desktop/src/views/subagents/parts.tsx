@@ -36,11 +36,11 @@ export function ProviderAvatarStack({ kinds, className }: { kinds: readonly Prov
   return (
     <span aria-hidden className={cn("flex shrink-0 pl-0.5", className)}>
       {shown.map((kind, index) => (
-        <span key={kind} className={cn("sa-avatar", index > 0 && "-ml-1.5")}>
+        <span key={kind} className={cn("sa-avatar sa-avatar--stacked", index > 0 && "-ml-1.5")}>
           <ProviderMark kind={kind} size={12} className="size-3" />
         </span>
       ))}
-      {extra > 0 && <span className="sa-avatar -ml-1.5 text-[10px] font-medium text-[var(--color-text-foreground-secondary)]">+{extra}</span>}
+      {extra > 0 && <span className="sa-avatar sa-avatar--stacked -ml-1.5 text-[10px] font-medium text-[var(--color-text-foreground-secondary)]">+{extra}</span>}
     </span>
   )
 }
