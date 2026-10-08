@@ -9,7 +9,8 @@
 //! client. Phases are pushed to clients as `providers.accounts.login.changed`.
 //!
 //! Nothing here logs a URL, a code or any output: OAuth `state` and
-//! `code_challenge` values travel only to the client that started the login.
+//! `code_challenge` values travel only to clients with `access:write`, the
+//! scope that may start a login; others see progress (`for_observer`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -142,7 +143,14 @@ impl AccountLogins {
     }
 
     fn purge(&self) {
-        self.lock().retain(|_, login| login.ended_at.is_none_or(|at| at.elapsed() < RETAIN));
+        // A login still holding a staging folder stays until `abandon` deletes it.
+        self.lock().retain(|_, login| {
+            login.ended_at.is_none_or(|at| at.elapsed() < RETAIN) || (login.staging.is_some() && login.finished.is_none())
+        });
+    }
+
+    fn handle(&self) -> AccountLogins {
+        AccountLogins { inner: self.inner.clone() }
     }
 
     pub fn get(&self, id: &str) -> Result<AccountLogin> {
@@ -315,7 +323,7 @@ impl AccountLogins {
                 let _ = terminal.write(b"/login\r");
             }
         }
-        let logins = AccountLogins { inner: self.inner.clone() };
+        let logins = self.handle();
         let drive_state = state.clone();
         let drive_id = id.clone();
         tokio::spawn(async move { logins.drive(drive_state, drive_id, spec, attempt, canceled).await });
@@ -387,15 +395,33 @@ impl AccountLogins {
             while waited.elapsed() < Duration::from_secs(5) && self.lock().get(id).is_some_and(|login| login.active) {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            return;
+            // A cancel that lands while the sign-in is being verified reaches a
+            // driver that has stopped listening; it ends signed in, so fall
+            // through and discard that sign-in too.
+            if self.lock().get(id).is_some_and(|login| login.active) {
+                return;
+            }
         }
         // Not running: a verified sign-in that was never finished still holds a folder.
         self.cleanup(state, id).await;
         self.update(id, |login| {
-            if login.finished.is_none() && !matches!(login.public.phase, AccountLoginPhase::Failed | AccountLoginPhase::Canceled) {
+            let reauthorized = login.public.instance.is_some() && login.public.phase == AccountLoginPhase::SignedIn;
+            if login.finished.is_none()
+                && !reauthorized
+                && !matches!(login.public.phase, AccountLoginPhase::Failed | AccountLoginPhase::Canceled)
+            {
                 login.public.phase = AccountLoginPhase::Canceled;
             }
         });
+    }
+
+    /// The client never finished or canceled a verified sign-in (its window
+    /// closed): discard it once the login is no longer readable.
+    async fn abandon_later(self, state: AppState, id: String) {
+        tokio::time::sleep(RETAIN).await;
+        if self.lock().get(&id).is_some_and(|login| login.staging.is_some() && login.finished.is_none()) {
+            self.cancel_inner(&state, &id).await;
+        }
     }
 
     /// Delete the staging folder this login created, after signing the folder
@@ -573,6 +599,9 @@ impl AccountLogins {
             login.writer = None;
             login.ended_at = Some(Instant::now());
         });
+        if self.lock().get(&id).is_some_and(|login| login.staging.is_some() && login.finished.is_none()) {
+            tokio::spawn(self.handle().abandon_later(state, id));
+        }
     }
 
     /// Fold the shim file and harness output into the login's page or code.
@@ -853,6 +882,53 @@ fn spawn_attempt(state: &AppState, spec: &Spec, visible_terminal: bool) -> Resul
 
 // ---- helpers ----
 
+/// What a client without `access:write` (a paired phone) may see of a login:
+/// its progress, never the sign-in page, the one-time code or the terminal.
+pub fn for_observer(mut login: AccountLogin) -> AccountLogin {
+    login.url = None;
+    login.user_code = None;
+    login.terminal = None;
+    login
+}
+
+/// Staging folders a previous daemon left behind (it stopped mid sign-in): a
+/// folder under `<data>/accounts/<kind>/` that no account uses, since finished
+/// accounts are registered before their login ends. Call before serving, so no
+/// sign-in of this daemon has started yet.
+pub fn orphaned_staging(state: &AppState) -> Vec<(ProviderKind, PathBuf)> {
+    let settings = state.settings.get();
+    let registered: Vec<PathBuf> = settings
+        .providers
+        .values()
+        .flat_map(|provider| provider.accounts.values())
+        .map(|account| {
+            let path = PathBuf::from(&account.directory);
+            path.canonicalize().unwrap_or(path)
+        })
+        .collect();
+    let root = state.settings.dir().join("accounts");
+    let mut orphans = Vec::new();
+    for kind in ProviderKind::ALL {
+        let Ok(entries) = std::fs::read_dir(root.join(kind.as_str())) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if entry.file_type().is_ok_and(|file| file.is_dir()) && !registered.contains(&canonical) {
+                orphans.push((kind, path));
+            }
+        }
+    }
+    orphans
+}
+
+/// Sign out and delete the folders `orphaned_staging` found.
+pub async fn remove_orphans(state: AppState, orphans: Vec<(ProviderKind, PathBuf)>) {
+    for (kind, path) in orphans {
+        sign_out_folder(&state, kind, &path).await;
+        let _ = std::fs::remove_dir_all(&path);
+    }
+}
+
 /// Write the `open` and `xdg-open` shims once per daemon start. They only
 /// record the URL they were given, so a remote daemon never opens a browser
 /// on its own screen.
@@ -1108,6 +1184,7 @@ case "$1 $2" in
   cp "$dir/email" "$dir/.signed-in"
   exit 0 ;;
 "auth status")
+  if [ -e "$CLAUDE_CONFIG_DIR/slow-status" ]; then sleep 1; fi
   if [ -e "$CLAUDE_CONFIG_DIR/.signed-in" ]; then
     printf '{"loggedIn":true,"authMethod":"claude.ai","email":"%s","subscriptionType":"pro"}\n' "$(cat "$CLAUDE_CONFIG_DIR/.signed-in")"
     exit 0
@@ -1352,6 +1429,56 @@ exit 0
         let second = state.account_logins.start(state, params(ProviderKind::Codex, AccountLoginMode::Browser)).await.unwrap();
         state.account_logins.cancel(state, &second.id).await.unwrap();
         assert!(fixture.staging(ProviderKind::Codex.as_str()).is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_cancel_while_verifying_still_discards_the_sign_in() {
+        let fixture = fixture();
+        let state = &fixture.state;
+        let login = state.account_logins.start(state, params(ProviderKind::ClaudeCode, AccountLoginMode::Browser)).await.unwrap();
+        let dir = fixture.login_dir(&login);
+        std::fs::write(dir.join("email"), "dev@arunika.co").unwrap();
+        std::fs::write(dir.join("slow-status"), "").unwrap();
+        std::fs::write(dir.join("approve"), "").unwrap();
+        wait_for(state, &login.id, |login| login.phase == AccountLoginPhase::Verifying).await;
+        let canceled = state.account_logins.cancel(state, &login.id).await.unwrap();
+        assert_eq!(canceled.phase, AccountLoginPhase::Canceled);
+        assert!(!dir.exists(), "the verified sign-in is signed out and deleted");
+        assert!(fixture.staging(ProviderKind::ClaudeCode.as_str()).is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn staging_left_by_a_stopped_daemon_is_found_and_removed() {
+        let fixture = fixture();
+        let state = &fixture.state;
+        let accounts = state.settings.dir().join("accounts").join(ProviderKind::ClaudeCode.as_str());
+        let orphan = accounts.join("orphan");
+        let kept = accounts.join("kept");
+        std::fs::create_dir_all(&orphan).unwrap();
+        std::fs::create_dir_all(&kept).unwrap();
+        let mut settings = state.settings.get();
+        settings.providers.entry(ProviderKind::ClaudeCode).or_default().accounts.insert(
+            "kept".into(),
+            ProviderAccount { name: "Kept".into(), directory: kept.to_string_lossy().into_owned(), ..Default::default() },
+        );
+        state.settings.set(settings).unwrap();
+        let orphans = orphaned_staging(state);
+        assert_eq!(orphans, vec![(ProviderKind::ClaudeCode, orphan.clone())]);
+        remove_orphans(state.clone(), orphans).await;
+        assert!(!orphan.exists());
+        assert!(kept.is_dir(), "a registered account's folder is never swept");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn observers_never_see_the_page_or_code() {
+        let fixture = fixture();
+        let state = &fixture.state;
+        let login = state.account_logins.start(state, params(ProviderKind::ClaudeCode, AccountLoginMode::Browser)).await.unwrap();
+        assert!(login.url.is_some());
+        let observed = for_observer(login.clone());
+        assert!(observed.url.is_none() && observed.user_code.is_none() && observed.terminal.is_none());
+        assert_eq!(observed.phase, login.phase);
+        state.account_logins.cancel(state, &login.id).await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]

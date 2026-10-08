@@ -138,7 +138,8 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         AccountsLoginStart::NAME => ok(state.account_logins.start(state, parse(params)?).await.map_err(bad)?),
         AccountsLoginGet::NAME => {
             let p: AccountLoginIdParams = parse(params)?;
-            ok(state.account_logins.get(&p.id).map_err(bad)?)
+            let login = state.account_logins.get(&p.id).map_err(bad)?;
+            ok(if ctx.principal.has(Scope::AccessWrite) { login } else { crate::account_login::for_observer(login) })
         }
         AccountsLoginInput::NAME => {
             let p: AccountLoginInputParams = parse(params)?;

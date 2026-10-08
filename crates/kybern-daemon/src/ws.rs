@@ -517,7 +517,11 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                 }
             } => {
                 match login {
-                    Ok(login) => { let _ = ctx.out.notify(kybern_protocol::methods::ACCOUNTS_LOGIN_CHANGED_NOTIFICATION, login).await; }
+                    Ok(login) => {
+                        // A paired phone sees progress, never the sign-in page or code.
+                        let login = if ctx.principal.has(Scope::AccessWrite) { login } else { crate::account_login::for_observer(login) };
+                        let _ = ctx.out.notify(kybern_protocol::methods::ACCOUNTS_LOGIN_CHANGED_NOTIFICATION, login).await;
+                    }
                     // Clients also poll `providers.accounts.login.get`, so a missed phase is recovered.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(_) => account_logins = None,

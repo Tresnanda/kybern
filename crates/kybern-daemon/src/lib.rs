@@ -161,6 +161,10 @@ pub async fn run() -> Result<()> {
     // daemon.port to general clients until the state is consistent.
     state.orchestrator.recover_after_restart().await?;
 
+    let orphans = account_login::orphaned_staging(&state);
+    if !orphans.is_empty() {
+        tokio::spawn(account_login::remove_orphans(state.clone(), orphans));
+    }
     let update_worker = tokio::spawn(harness_updates::run(state.clone()));
     let self_update_worker = tokio::spawn(self_update::run(state.clone()));
     let maintenance_worker = tokio::spawn(maintenance::run(state.clone(), !args.pair));
