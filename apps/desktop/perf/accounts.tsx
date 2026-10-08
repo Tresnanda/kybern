@@ -94,10 +94,13 @@ async function run() {
 
   await menuItem("Client options","Use for projects…")
   await waitFor(()=>document.querySelector('[role="dialog"] [role="checkbox"]'),"Projects dialog opens")
-  document.querySelector<HTMLElement>('[role="dialog"] [role="checkbox"]')!.click()
-  await sleep()
-  button("Save").click()
-  await waitFor(()=>claude().project_accounts?.["/fixture/project"]==="work","Project override saved")
+  const projectBox=()=>document.querySelector<HTMLElement>('[role="dialog"] [role="checkbox"]')
+  projectBox()!.click()
+  await waitFor(()=>projectBox()?.getAttribute("aria-checked")==="true","Project checkbox checks")
+  const save=[...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(node=>node.textContent?.trim()==="Save")
+  check("projects dialog has Save",save && !save.disabled)
+  save!.click()
+  await waitFor(()=>claude().project_accounts?.["/fixture/project"]==="work",`Project override saved ${JSON.stringify({checked:projectBox()?.getAttribute("aria-checked"),calls:accountsFixture.calls.slice(-3).map(call=>call.method),projects:claude().project_accounts})}`)
   check("project override saved",true)
 
   await menuItem("Client options","Remove…")
@@ -111,6 +114,8 @@ async function run() {
   window.scrollTo(0,0)
   await sleep(100)
   await screenshot("after")
-  report({pass:true,checks,theme,width:innerWidth})
+  // The CI gate requires unassisted focus and a visible window: menus are
+  // driven by real clicks here, so only a hidden window limits the result.
+  report({pass:true,fixture:"accounts",checks,theme,width:innerWidth,keyboardFocusAssisted:false,documentHidden:document.hidden,limits:document.hidden ? ["Hidden window: menu motion and open-menu appearance require a visible rerun."] : []})
 }
 void run().catch(problem=>report({pass:false,checks,error:String(problem)}))
