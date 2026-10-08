@@ -64,6 +64,17 @@ fn parse_upstream(raw: &str) -> Result<Upstream, String> {
     Ok(Upstream { authority, prefix: prefix.to_string() })
 }
 
+/// Normalized `host:port` of a plain `http://` base, or `None` for anything else.
+pub fn http_authority(base: &str) -> Option<String> {
+    let rest = base.strip_prefix("http://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if authority.is_empty() || authority.contains('@') {
+        return None;
+    }
+    let authority = authority.to_ascii_lowercase();
+    Some(if has_port(&authority) { authority } else { format!("{authority}:80") })
+}
+
 fn has_port(authority: &str) -> bool {
     match authority.rfind(':') {
         Some(i) => !authority[i + 1..].is_empty() && authority[i + 1..].bytes().all(|b| b.is_ascii_digit()),
@@ -77,8 +88,11 @@ struct Relays {
 }
 
 impl Relays {
-    async fn open(&self, raw_upstream: &str, on_ws_failed: WsFailed) -> Result<u16, String> {
+    async fn open(&self, raw_upstream: &str, allowed: &[String], on_ws_failed: WsFailed) -> Result<u16, String> {
         let upstream = parse_upstream(raw_upstream)?;
+        if !allowed.iter().any(|a| a.eq_ignore_ascii_case(&upstream.authority)) {
+            return Err("Kybern only forwards previews from your configured daemon".into());
+        }
         {
             let open = self.open.lock().unwrap();
             if open.len() >= MAX_RELAYS {
@@ -257,10 +271,11 @@ async fn handle(mut client: TcpStream, upstream: &Upstream, port: u16, on_ws_fai
 /// and returns its origin, `http://127.0.0.1:{port}`.
 #[tauri::command]
 pub async fn preview_relay_open<R: tauri::Runtime>(app: tauri::AppHandle<R>, upstream: String) -> Result<String, String> {
+    let allowed = crate::environments::daemon_authorities(&app).await;
     let on_ws_failed: WsFailed = Arc::new(move |port| {
         let _ = app.emit(WS_FAILED_EVENT, serde_json::json!({ "port": port }));
     });
-    let port = RELAYS.open(&upstream, on_ws_failed).await?;
+    let port = RELAYS.open(&upstream, &allowed, on_ws_failed).await?;
     Ok(format!("http://127.0.0.1:{port}"))
 }
 
@@ -278,6 +293,10 @@ pub fn close_all() {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU16, Ordering};
+
+    fn any() -> Vec<String> {
+        vec!["127.0.0.1:9".into()]
+    }
 
     fn noop() -> WsFailed {
         Arc::new(|_| {})
@@ -319,8 +338,39 @@ mod tests {
     #[tokio::test]
     async fn rejects_non_http_upstream() {
         let relays = Relays::default();
-        assert!(relays.open("https://h:1/preview-proxy/abc", noop()).await.is_err());
-        assert!(relays.open("http://h:1/nope", noop()).await.is_err());
+        assert!(relays.open("https://h:1/preview-proxy/abc", &any(), noop()).await.is_err());
+        assert!(relays.open("http://h:1/nope", &any(), noop()).await.is_err());
+        assert_eq!(relays.len(), 0);
+    }
+
+    #[test]
+    fn normalizes_http_authorities() {
+        assert_eq!(http_authority("http://127.0.0.1:4199").as_deref(), Some("127.0.0.1:4199"));
+        assert_eq!(http_authority("http://Box.Local").as_deref(), Some("box.local:80"));
+        assert_eq!(http_authority("http://[::1]:9/x").as_deref(), Some("[::1]:9"));
+        assert_eq!(http_authority("https://h:443"), None);
+        assert_eq!(http_authority("ws://h:1"), None);
+    }
+
+    #[tokio::test]
+    async fn accepts_only_the_configured_daemon() {
+        let relays = Relays::default();
+        let allowed = vec!["127.0.0.1:4199".to_string(), "box.local:80".to_string()];
+        for ok in ["http://127.0.0.1:4199/preview-proxy/a", "http://BOX.local/preview-proxy/a"] {
+            let port = relays.open(ok, &allowed, noop()).await.unwrap();
+            relays.close(port);
+        }
+        for bad in [
+            "http://127.0.0.1:4198/preview-proxy/a",
+            "http://127.0.0.2:4199/preview-proxy/a",
+            "http://evil.com/preview-proxy/a",
+            "http://127.0.0.1:80/preview-proxy/a",
+            "http://box.local:8080/preview-proxy/a",
+        ] {
+            let err = relays.open(bad, &allowed, noop()).await.unwrap_err();
+            assert!(err.contains("configured daemon"), "{bad}: {err}");
+        }
+        assert!(relays.open("http://127.0.0.1:4199/preview-proxy/a", &[], noop()).await.is_err());
         assert_eq!(relays.len(), 0);
     }
 
@@ -329,11 +379,11 @@ mod tests {
         let relays = Relays::default();
         let mut ports = vec![];
         for _ in 0..4 {
-            ports.push(relays.open("http://127.0.0.1:9/preview-proxy/abc", noop()).await.unwrap());
+            ports.push(relays.open("http://127.0.0.1:9/preview-proxy/abc", &any(), noop()).await.unwrap());
         }
-        assert!(relays.open("http://127.0.0.1:9/preview-proxy/abc", noop()).await.is_err());
+        assert!(relays.open("http://127.0.0.1:9/preview-proxy/abc", &any(), noop()).await.is_err());
         relays.close(ports[0]);
-        assert!(relays.open("http://127.0.0.1:9/preview-proxy/abc", noop()).await.is_ok());
+        assert!(relays.open("http://127.0.0.1:9/preview-proxy/abc", &any(), noop()).await.is_ok());
         relays.close_all();
         assert_eq!(relays.len(), 0);
     }
@@ -343,7 +393,7 @@ mod tests {
         let (daemon, upstream) = daemon().await;
         let authority = daemon.local_addr().unwrap().to_string();
         let relays = Relays::default();
-        let port = relays.open(&upstream, noop()).await.unwrap();
+        let port = relays.open(&upstream, std::slice::from_ref(&authority), noop()).await.unwrap();
 
         let server = tokio::spawn(async move {
             let (mut sock, _) = daemon.accept().await.unwrap();
@@ -392,10 +442,14 @@ mod tests {
 
     async fn upgrade_roundtrip(answer: &'static [u8]) -> (String, Option<u16>) {
         let (daemon, upstream) = daemon().await;
+        let authority = daemon.local_addr().unwrap().to_string();
         let failed = Arc::new(AtomicU16::new(0));
         let seen_failed = failed.clone();
         let relays = Relays::default();
-        let port = relays.open(&upstream, Arc::new(move |p| seen_failed.store(p, Ordering::SeqCst))).await.unwrap();
+        let port = relays
+            .open(&upstream, std::slice::from_ref(&authority), Arc::new(move |p| seen_failed.store(p, Ordering::SeqCst)))
+            .await
+            .unwrap();
 
         let server = tokio::spawn(async move {
             let (mut sock, _) = daemon.accept().await.unwrap();
@@ -463,7 +517,7 @@ mod tests {
     #[tokio::test]
     async fn answers_502_when_the_daemon_is_unreachable() {
         let relays = Relays::default();
-        let port = relays.open("http://127.0.0.1:1/preview-proxy/abc", noop()).await.unwrap();
+        let port = relays.open("http://127.0.0.1:1/preview-proxy/abc", &["127.0.0.1:1".into()], noop()).await.unwrap();
         let mut client = connect(port).await;
         client.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").await.unwrap();
         let mut answer = String::new();
