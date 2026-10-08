@@ -35,17 +35,46 @@ export function findModel<T extends Pick<ProviderModel, "id" | "resolved_id" | "
   );
 }
 
-/** Older Cursor threads stored each effort as an opaque variant selector. */
-function cursorModelKey(selector: string): string | undefined {
+/** Parameters Cursor models use for effort. Keep in step with `EFFORT_PARAMS` in the Cursor SDK host. */
+const CURSOR_EFFORT_PARAMS = ["effort", "reason_effort", "reasoning_effort", "reasoningEffort", "reasoning"];
+
+interface CursorSelection {
+  id: string;
+  params: { id: string; value: string }[];
+}
+
+function decodeCursorSelector(selector: string): CursorSelection | undefined {
   if (!selector.startsWith("cursor-model:")) return undefined;
   try {
     const encoded = selector.slice(13).replaceAll("-", "+").replaceAll("_", "/");
     const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
-    const selection = JSON.parse(new TextDecoder().decode(bytes)) as {id: string; params: {id: string; value: string}[]};
-    if (typeof selection.id !== "string" || !Array.isArray(selection.params)) return undefined;
-    const params = selection.params.filter((param) => !["effort", "reason_effort", "reasoning_effort", "reasoningEffort"].includes(param.id));
-    return JSON.stringify([selection.id, params.sort((a, b) => a.id.localeCompare(b.id))]);
+    const selection = JSON.parse(new TextDecoder().decode(bytes)) as CursorSelection;
+    return typeof selection.id === "string" && Array.isArray(selection.params) ? selection : undefined;
   } catch { return undefined; }
+}
+
+/** Older Cursor threads stored each effort as an opaque variant selector. */
+function cursorModelKey(selector: string): string | undefined {
+  const selection = decodeCursorSelector(selector);
+  if (!selection) return undefined;
+  const params = selection.params.filter((param) => !CURSOR_EFFORT_PARAMS.includes(param.id));
+  return JSON.stringify([selection.id, params.sort((a, b) => a.id.localeCompare(b.id))]);
+}
+
+/**
+ * The effort an older Cursor selector carried as a plain parameter (GPT's
+ * `reasoning`), or undefined when it names none the row offers. Effort used to
+ * live in the selector; now it is a separate control.
+ */
+export function selectorEffort(
+  model: Pick<ProviderModel, "id" | "variants" | "efforts"> | undefined,
+  selected: string | null | undefined,
+): string | undefined {
+  const selection = selected ? decodeCursorSelector(selected) : undefined;
+  const value = selection?.params.find((param) => CURSOR_EFFORT_PARAMS.includes(param.id))?.value;
+  if (value === undefined) return undefined;
+  const offered = selectedVariant(model, selected)?.efforts?.length ? selectedVariant(model, selected)!.efforts! : model?.efforts ?? [];
+  return offered.includes(value) ? value : undefined;
 }
 
 function sameCursorModel(left: string, right: string): boolean {
@@ -109,6 +138,46 @@ export function changeTrait(
     }
   }
   return best;
+}
+
+/** How a trait value reads inside a sentence: `Fast`, `Fast off`, `1M context`. */
+function traitPhrase(parameter: ModelParameter, value: string): string {
+  const toggle = parameterSwitch(parameter);
+  if (toggle) return value === toggle.on ? parameter.label : `${parameter.label} off`;
+  const label = parameter.values.find((item) => item.value === value)?.label ?? value;
+  return `${label} ${parameter.label.toLowerCase()}`;
+}
+
+/**
+ * Why a trait value cannot be chosen with the other traits as they are, or
+ * null when it can. A catalog need not offer every combination (GPT-5.5 has
+ * no 1M with Fast), so the picker disables such options instead of changing
+ * another trait behind the user's back.
+ */
+export function traitUnavailableReason(
+  model: Pick<ProviderModel, "id" | "variants" | "parameters">,
+  selected: string | null | undefined,
+  parameter: string,
+  value: string,
+): string | null {
+  const variants = model.variants ?? [];
+  if (!variants.length) return null;
+  const current = traitValues(model, selected);
+  const others = Object.entries(current).filter(([id]) => id !== parameter);
+  if (variants.some((variant) => variant.params[parameter] === value && others.every(([id, other]) => variant.params[id] === other))) return null;
+  const target = model.parameters?.find((item) => item.id === parameter);
+  if (!target) return null;
+  const withValue = variants.filter((variant) => variant.params[parameter] === value);
+  // Name the traits that, on their own, rule the value out; fall back to all of them.
+  let blockers = others.filter(([id, other]) => !withValue.some((variant) => variant.params[id] === other));
+  if (!blockers.length) blockers = others;
+  const phrases = blockers.flatMap(([id, other]) => {
+    const item = model.parameters?.find((entry) => entry.id === id);
+    return item ? [traitPhrase(item, other)] : [];
+  });
+  const subject = traitPhrase(target, value);
+  const text = `${subject} isn't available${phrases.length ? ` with ${phrases.join(" and ")}` : ""}`;
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /** A parameter that is a plain on/off choice reads as a switch. */

@@ -39,7 +39,9 @@ import {
   rememberModel,
   searchModels,
   selectedVariant,
+  selectorEffort,
   toggleFavoriteModel,
+  traitUnavailableReason,
   traitValues,
   type FavoriteModel,
   type ModelSection,
@@ -155,7 +157,7 @@ function ModelPickerPanel({
   const multiBackend = useMemo(() => catalogBackends(catalog).length > 1, [catalog])
   const large = catalog.length > MODEL_FLAT_LIMIT
   const agentName = status?.display_name ?? PROVIDER_LABEL[provider.kind]
-  const effortValue = effort ?? current?.default_effort ?? null
+  const effortValue = effort ?? selectorEffort(current, model) ?? current?.default_effort ?? null
 
   const results = useMemo(() => (query.trim() && !showFavorites ? searchModels(catalog, query) : []), [catalog, query, showFavorites])
 
@@ -511,7 +513,8 @@ function ModelFooter({
   const variant = selectedVariant(current, model)
   const efforts = current ? (variant?.efforts?.length ? variant.efforts : current.efforts ?? []) : fallbackEfforts ?? []
   const defaultEffort = variant?.default_effort ?? current?.default_effort ?? null
-  const effortValue = effort ?? defaultEffort
+  // Older GPT threads kept their reasoning level inside the model selector.
+  const effortValue = effort ?? selectorEffort(current, model) ?? defaultEffort
   const parameters = current?.parameters ?? []
   const traits = traitValues(current, model)
   // Shown until the parent reports the new variant; cleared on failure.
@@ -536,7 +539,14 @@ function ModelFooter({
       {parameters.length > 0 && (
         <div className={cn("flex flex-col gap-2 px-3 pt-2.5 transition-opacity duration-150", efforts.length > 1 ? "pb-0.5" : "pb-3", busy && "opacity-60")}>
           {parameters.map((parameter) => (
-            <TraitRow key={parameter.id} parameter={parameter} value={shown[parameter.id] ?? parameter.default} disabled={busy} onChange={(value) => void change(parameter.id, value)} />
+            <TraitRow
+              key={parameter.id}
+              parameter={parameter}
+              value={shown[parameter.id] ?? parameter.default}
+              disabled={busy}
+              unavailable={(value) => (current ? traitUnavailableReason(current, model, parameter.id, value) : null)}
+              onChange={(value) => void change(parameter.id, value)}
+            />
           ))}
         </div>
       )}
@@ -559,23 +569,53 @@ function TraitRow({
   parameter,
   value,
   disabled,
+  unavailable,
   onChange,
 }: {
   parameter: ModelParameter
   value: string
   disabled: boolean
+  /** The reason a value cannot be chosen with the other traits as they are, or null. */
+  unavailable: (value: string) => string | null
   onChange: (value: string) => void
 }) {
   const labelId = useId()
   const toggle = parameterSwitch(parameter)
   const labelOf = (item: string) => parameter.values.find((entry) => entry.value === item)?.label ?? item
+  const switchReason = toggle ? unavailable(value === toggle.on ? toggle.off : toggle.on) : null
+  // Like SegmentedControl, the switch is `aria-disabled` and ignores input rather than `disabled`, which drops focus in WebKit.
+  const switchControl = toggle && (
+    <Switch
+      aria-labelledby={labelId}
+      aria-disabled={disabled || !!switchReason || undefined}
+      className="aria-disabled:cursor-not-allowed aria-disabled:opacity-64"
+      checked={value === toggle.on}
+      onCheckedChange={(checked) => {
+        if (disabled || switchReason) return
+        onChange(checked ? toggle.on : toggle.off)
+      }}
+    />
+  )
   return (
     <div className="flex min-h-7 items-center justify-between gap-3 text-[length:var(--app-font-size-ui-sm,11px)]">
       <span id={labelId} className="shrink-0 text-muted-foreground/50">{parameter.label}</span>
       {toggle ? (
-        <Switch aria-labelledby={labelId} checked={value === toggle.on} disabled={disabled} onCheckedChange={(checked) => onChange(checked ? toggle.on : toggle.off)} />
+        switchReason ? (
+          <Tooltip>
+            <TooltipTrigger render={switchControl as ReactElement} />
+            <TooltipPopup side="left" sideOffset={8} variant="picker">{switchReason}</TooltipPopup>
+          </Tooltip>
+        ) : (
+          switchControl
+        )
       ) : parameter.values.length <= SEGMENTED_LIMIT ? (
-        <SegmentedControl aria-labelledby={labelId} options={parameter.values} value={value} busy={disabled} onChange={onChange} />
+        <SegmentedControl
+          aria-labelledby={labelId}
+          options={parameter.values.map((entry) => ({ ...entry, unavailable: unavailable(entry.value) }))}
+          value={value}
+          busy={disabled}
+          onChange={onChange}
+        />
       ) : (
         <Menu>
           <MenuTrigger
@@ -589,7 +629,7 @@ function TraitRow({
           <ComposerPickerMenuPopup align="end" side="top">
             <MenuRadioGroup value={value} onValueChange={(next) => onChange(String(next))}>
               {parameter.values.map((entry) => (
-                <MenuRadioItem key={entry.value} value={entry.value}>{entry.label}</MenuRadioItem>
+                <MenuRadioItem key={entry.value} value={entry.value} disabled={!!unavailable(entry.value)} title={unavailable(entry.value) ?? undefined}>{entry.label}</MenuRadioItem>
               ))}
             </MenuRadioGroup>
           </ComposerPickerMenuPopup>

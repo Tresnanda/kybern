@@ -165,7 +165,25 @@ test("lowercase context sizes and xhigh read as labels", () => {
     { params: [{ id: "context", value: "300k" }, { id: "reasoning", value: "low" }] },
     { params: [{ id: "context", value: "1m" }, { id: "reasoning", value: "xhigh" }] },
   ] }]);
-  assert.deepEqual(row.parameters.map((p) => p.values.map((v) => v.label)), [["300K", "1M"], ["Low", "X-High"]]);
+  assert.deepEqual(row.parameters.map((p) => [p.id, p.values.map((v) => v.label)]), [["context", ["300K", "1M"]]]);
+  assert.deepEqual(row.variants.map((v) => v.efforts), [["low"], ["xhigh"]]);
+});
+
+test("GPT-style `reasoning` is an effort, not a trait, and missing combinations stay missing", () => {
+  const combos = [["300k", "false"], ["300k", "true"], ["1m", "false"]];
+  const variants = [];
+  for (const [context, fast] of combos) for (const reasoning of ["low", "high"]) {
+    variants.push({ isDefault: context === "300k" && fast === "false" && reasoning === "low",
+      params: [{ id: "reasoning", value: reasoning }, { id: "context", value: context }, { id: "fast", value: fast }] });
+  }
+  const [, row] = modelCatalog([{ id: "gpt-5.5", displayName: "GPT-5.5", variants }]);
+  assert.deepEqual(row.parameters.map((p) => p.id), ["context", "fast"]);
+  assert.equal(row.variants.length, 3);
+  assert.deepEqual(row.efforts, ["low", "high"]);
+  assert.ok(!row.variants.some((v) => v.params.context === "1m" && v.params.fast === "true"));
+  assert.deepEqual(modelSelection(row.id, "high").params.at(-1), { id: "reasoning", value: "high" });
+  const old = `cursor-model:${Buffer.from(JSON.stringify({ id: "gpt-5.5", params: [{ id: "reasoning", value: "high" }] })).toString("base64url")}`;
+  assert.deepEqual(modelSelection(old, "low").params, [{ id: "reasoning", value: "low" }]);
 });
 
 test("the effort control reaches native sends and survives permission changes", async () => {

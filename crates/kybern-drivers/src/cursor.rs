@@ -102,7 +102,9 @@ impl AgentDriver for CursorDriver {
                 status.version = Some(format!("SDK {}", value["version"].as_str().unwrap_or(SDK_VERSION)));
                 status.models = serde_json::from_value(value["models"].clone()).unwrap_or_default();
                 for model in &status.models {
-                    for effort in &model.efforts {
+                    // A variant can offer efforts the row's default combination lacks.
+                    let variant_efforts = model.variants.iter().flat_map(|variant| &variant.efforts);
+                    for effort in model.efforts.iter().chain(variant_efforts) {
                         if !status.supported_efforts.contains(effort) {
                             status.supported_efforts.push(effort.clone());
                         }

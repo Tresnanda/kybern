@@ -10,6 +10,8 @@ import {
   parameterSwitch,
   rememberModel,
   searchModels,
+  selectorEffort,
+  traitUnavailableReason,
   selectedVariant,
   toggleFavorite,
   toggleFavoriteModel,
@@ -189,4 +191,39 @@ test("favorites store the model row and still honor variant favorites saved earl
   assert.equal(isFavoriteModel([{ kind: "claude", id: "claude-opus-5-5" }], "claude", { id: "opus", resolved_id: "claude-opus-5-5" }), false);
   assert.deepEqual(toggleFavoriteModel(legacy, "cursor", opus), [{ kind: "claude", id: "opus" }]);
   assert.deepEqual(toggleFavoriteModel([], "cursor", opus), [{ kind: "cursor", id: opus.id }]);
+});
+
+const gptSelector = (params, effortValues) => selector({ id: "gpt-5.5", params, ...(effortValues ? { effortParam: "reasoning", effortValues, defaultEffort: "medium" } : {}) });
+const gptVariant = (context, fast) => ({
+  id: gptSelector([{ id: "context", value: context }, { id: "fast", value: fast }], ["low", "medium", "high"]),
+  params: { context, fast }, efforts: ["low", "medium", "high"], default_effort: "medium",
+});
+// GPT-5.5 has no 1M context with Fast.
+const gpt = {
+  id: gptVariant("300000", "false").id, display_name: "GPT-5.5", resolved_id: "gpt-5.5",
+  efforts: ["low", "medium", "high"], default_effort: "medium",
+  parameters: opus.parameters,
+  variants: [gptVariant("300000", "false"), gptVariant("300000", "true"), gptVariant("1000000", "false")],
+};
+
+test("an old GPT selector with a reasoning parameter resolves to its row and its effort", () => {
+  const old = gptSelector([{ id: "reasoning", value: "high" }, { id: "context", value: "1000000" }, { id: "fast", value: "false" }]);
+  assert.equal(findModel([gpt], old), gpt);
+  assert.equal(selectedVariant(gpt, old), gpt.variants[2]);
+  assert.equal(selectorEffort(gpt, old), "high");
+  assert.equal(selectorEffort(gpt, gpt.variants[2].id), undefined);
+  assert.equal(selectorEffort(gpt, gptSelector([{ id: "reasoning", value: "none" }])), undefined);
+  assert.equal(selectorEffort(gpt, "gpt-5.5"), undefined);
+});
+
+test("options a catalog does not offer with the current traits say why they are unavailable", () => {
+  const big = gpt.variants[2].id;
+  assert.equal(traitUnavailableReason(gpt, big, "fast", "true"), "Fast isn't available with 1M context");
+  assert.equal(traitUnavailableReason(gpt, big, "fast", "false"), null);
+  assert.equal(traitUnavailableReason(gpt, big, "context", "300000"), null);
+  const fast = gpt.variants[1].id;
+  assert.equal(traitUnavailableReason(gpt, fast, "context", "1000000"), "1M context isn't available with Fast");
+  assert.equal(traitUnavailableReason(gpt, gpt.variants[0].id, "context", "1000000"), null);
+  assert.equal(traitUnavailableReason(opus, opus.variants[2].id, "fast", "true"), null);
+  assert.equal(traitUnavailableReason({ id: "plain" }, "plain", "fast", "true"), null);
 });

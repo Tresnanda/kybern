@@ -76,7 +76,7 @@ import {
   type MentionKind,
 } from "./composerMentions"
 import { SendCancelled } from "./sendCancelled"
-import { findModel, modelQualifier, selectedVariant, traitSummary, variantSelector } from "../../../../packages/kybern-client/src/models"
+import { findModel, modelQualifier, selectedVariant, selectorEffort, traitSummary, variantSelector } from "../../../../packages/kybern-client/src/models"
 import { isChildThread } from "../../../../packages/kybern-client/src/subagents.ts"
 import { ModelPicker } from "@/components/kybern/ModelPicker"
 
@@ -866,7 +866,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const traitLabel = traitSummary(current, model)
   const modelLabel = current ? `${current.display_name}${traitLabel ? ` · ${traitLabel}` : ""}` : model || null
   const modelQualifierLabel = modelQualifier(models, current)
-  const effortLabel = effort ?? selectedVariant(current, model)?.default_effort ?? current?.default_effort ?? null
+  const effortLabel = effort ?? selectorEffort(current, model) ?? selectedVariant(current, model)?.default_effort ?? current?.default_effort ?? null
   const canPickModel = !!onModelChange
   const canReloadModels = !!onModelChange && !!status?.available && status.supports_model_switch
   const canPickProvider = !!onProviderChange

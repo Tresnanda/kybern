@@ -24,7 +24,7 @@ export function runtimePolicy(mode) {
 
 // Params travel in the model selector so the existing Kybern model picker can
 // offer native variants without dropping a Cursor-specific parameter.
-const EFFORT_PARAMS = new Set(["effort", "reason_effort", "reasoning_effort", "reasoningEffort"]);
+const EFFORT_PARAMS = new Set(["effort", "reason_effort", "reasoning_effort", "reasoningEffort", "reasoning"]);
 const selectorFor = (selection) => `cursor-model:${Buffer.from(JSON.stringify(selection)).toString("base64url")}`;
 
 export function modelSelection(selector, effort) {

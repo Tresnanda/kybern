@@ -1,5 +1,5 @@
 // The model picker over a synthetic Cursor catalog: one row per model with
-// context and fast traits. No daemon or provider. `?theme=dark|light`, `?model=<index>`.
+// context and fast traits. No daemon or provider. `?theme=dark|light`, `?model=<index>` (5 is GPT-5.5, which lacks 1M with Fast), `?variant=<n>` for that model's n-th combination.
 import { useState } from "react"
 import { createRoot } from "react-dom/client"
 import { ModelPicker } from "../src/components/kybern/ModelPicker"
@@ -23,11 +23,11 @@ for (const [key, value] of Object.entries(built.variables)) root.style.setProper
 root.style.setProperty("--app-font-size-ui", "12px")
 root.style.setProperty("--app-font-size-ui-sm", "11px")
 
-const selector = (id: string, context: string, fast: string, efforts: string[]) =>
-  `cursor-model:${btoa(JSON.stringify({ id, params: [{ id: "context", value: context }, { id: "fast", value: fast }], effortParam: "effort", effortValues: efforts, defaultEffort: "medium" })).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "")}`
-function traited(id: string, name: string, efforts: string[], description?: string): ProviderModel {
-  const combos = [["300000", "false"], ["300000", "true"], ["1000000", "false"], ["1000000", "true"]] as const
-  const variants = combos.map(([context, fast]) => ({ id: selector(id, context, fast, efforts), params: { context, fast }, efforts, default_effort: "medium" }))
+const selector = (id: string, context: string, fast: string, efforts: string[], effortParam = "effort") =>
+  `cursor-model:${btoa(JSON.stringify({ id, params: [{ id: "context", value: context }, { id: "fast", value: fast }], effortParam, effortValues: efforts, defaultEffort: "medium" })).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "")}`
+const ALL_COMBOS: readonly (readonly [string, string])[] = [["300000", "false"], ["300000", "true"], ["1000000", "false"], ["1000000", "true"]]
+function traited(id: string, name: string, efforts: string[], description?: string, combos = ALL_COMBOS, effortParam = "effort"): ProviderModel {
+  const variants = combos.map(([context, fast]) => ({ id: selector(id, context, fast, efforts, effortParam), params: { context, fast }, efforts, default_effort: "medium" }))
   return {
     id: variants[0]!.id, display_name: name, resolved_id: id, description, efforts, default_effort: "medium", provider: null,
     parameters: [
@@ -43,6 +43,8 @@ const models: ProviderModel[] = [
   traited("claude-sonnet-5", "Claude Sonnet 5", ["low", "medium", "high"]),
   { id: "grok-4.7", display_name: "Grok 4.7", efforts: ["low", "medium", "high"], default_effort: "medium" },
   { id: "composer-2", display_name: "Composer 2" },
+  // GPT-like: effort travels as `reasoning`, and Cursor offers no 1M context with Fast.
+  traited("gpt-5.5", "GPT-5.5", ["low", "medium", "high", "xhigh"], undefined, [["300000", "false"], ["300000", "true"], ["1000000", "false"]], "reasoning"),
   { id: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", efforts: ["low", "medium", "high"], default_effort: "medium" },
 ]
 const status: ProviderStatus = {
@@ -51,7 +53,8 @@ const status: ProviderStatus = {
 } as ProviderStatus
 
 function Fixture() {
-  const [model, setModel] = useState<string | null>(models[Number(params.get("model") ?? 1)]!.id)
+  const start = models[Number(params.get("model") ?? 1)]!
+  const [model, setModel] = useState<string | null>(start.variants?.[Number(params.get("variant") ?? 0)]?.id ?? start.id)
   const [effort, setEffort] = useState<string | null>("medium")
   const current = model ? findModel(models, model) : undefined
   const traits = traitSummary(current, model)
