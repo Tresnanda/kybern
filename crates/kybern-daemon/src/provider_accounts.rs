@@ -239,8 +239,8 @@ fn summarize(
     let provider = settings.providers.get(&kind).cloned().unwrap_or_default();
     let account = provider.accounts.get(instance);
     let (status, mut identity) = probed;
-    if status == AccountStatus::Unknown
-        && identity.is_none()
+    // A signed-out or unreadable account still shows the identity it last had.
+    if identity.is_none()
         && let Some(account) = account
         && (account.email.is_some() || account.plan.is_some())
     {

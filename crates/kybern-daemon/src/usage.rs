@@ -83,6 +83,8 @@ struct State {
     accounts_refreshing: HashSet<AccountKey>,
     seeded: bool,
     account_identities: BTreeMap<ProviderKind, String>,
+    /// The global account each identity above was taken for.
+    global_accounts: BTreeMap<ProviderKind, String>,
     providers: BTreeMap<ProviderKind, Entry>,
     last_interest: Option<Instant>,
     refreshing: HashSet<ProviderKind>,
@@ -150,7 +152,15 @@ impl UsageMonitor {
     fn identity(&self, kind: ProviderKind) -> String {
         let settings = self.inner.settings.get();
         let raw = settings.providers.get(&kind).cloned().unwrap_or_default();
-        let account = crate::provider_accounts::resolve(&raw, None, None);
+        self.identity_for(kind, &crate::provider_accounts::resolve(&raw, None, None))
+    }
+
+    /// The identity global limits would have if `account` were the default
+    /// under today's binary and environment.
+    fn identity_for(&self, kind: ProviderKind, account: &str) -> String {
+        let mut settings = self.inner.settings.get();
+        settings.providers.entry(kind).or_default().default_account = (account != "default").then(|| account.to_string());
+        let account = account.to_string();
         let effective = crate::settings::provider_settings(&settings, kind, None);
         let bytes = Sha256::digest(serde_json::to_vec(&(account, effective.binary, effective.env)).unwrap_or_default());
         bytes.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -158,14 +168,39 @@ impl UsageMonitor {
 
     /// Global limits describe the selected global account. Never show the
     /// previous account's values or accept its in-flight read after a switch.
+    ///
+    /// When only the default account changed (same binary and environment),
+    /// the limits swap places: the previous default keeps its values as a
+    /// named-account entry and the new default starts from its own, so a
+    /// surface showing the default never goes blank until the next read.
     fn sync_accounts(&self) {
-        let identities = LIVE.into_iter().map(|kind| (kind, self.identity(kind))).collect::<Vec<_>>();
+        let settings = self.inner.settings.get();
+        let identities = LIVE
+            .into_iter()
+            .map(|kind| {
+                let raw = settings.providers.get(&kind).cloned().unwrap_or_default();
+                (kind, self.identity(kind), crate::provider_accounts::resolve(&raw, None, None))
+            })
+            .collect::<Vec<_>>();
         let mut state = self.lock();
-        for (kind, identity) in identities {
+        for (kind, identity, account) in identities {
             if state.account_identities.get(&kind).is_some_and(|old| old != &identity) {
-                state.providers.remove(&kind);
+                let previous = state.providers.remove(&kind);
+                let previous_account = state.global_accounts.get(&kind).cloned();
+                let switched_only = previous_account.as_ref().is_some_and(|old| {
+                    old != &account && self.identity_for(kind, old) == *state.account_identities.get(&kind).unwrap_or(&String::new())
+                });
+                if switched_only {
+                    if let (Some(entry), Some(old)) = (previous, previous_account) {
+                        state.accounts.insert((kind, old), entry);
+                    }
+                    if let Some(entry) = state.accounts.remove(&(kind, account.clone())) {
+                        state.providers.insert(kind, entry);
+                    }
+                }
             }
             state.account_identities.insert(kind, identity);
+            state.global_accounts.insert(kind, account);
         }
     }
 
@@ -557,6 +592,13 @@ impl UsageMonitor {
         let settings = self.inner.settings.get();
         let mut accounts = Vec::new();
         for ((kind, instance), entry) in state.accounts.iter().filter(|(_, entry)| !entry.limits.is_empty()) {
+            // The current default is reported from the global entry below; an
+            // entry read while it was not the default would duplicate it.
+            let default = settings.providers.get(kind).map(|raw| crate::provider_accounts::resolve(raw, None, None));
+            let global = state.providers.get(kind).is_some_and(|entry| !entry.limits.is_empty());
+            if global && default.as_deref().unwrap_or("default") == instance {
+                continue;
+            }
             accounts.push(entry_limits(*kind, Some(instance.clone()), entry, now));
         }
         // The default account's limits are the global entry; label it so clients
@@ -722,6 +764,39 @@ mod named_account_tests {
             ..Default::default()
         });
         assert!(instances.is_empty(), "unknown accounts are never read");
+    }
+
+    #[test]
+    fn an_account_that_became_the_default_is_reported_once() {
+        let monitor = with_accounts();
+        let limit = UsageLimit { name: "5-hour".into(), used_percent: 30.0, window_minutes: Some(300), resets_at: None };
+        let work = ProviderInstance { kind: ProviderKind::ClaudeCode, instance: "work".into() };
+        monitor.observe_account(&work, std::slice::from_ref(&limit));
+        let mut settings = monitor.inner.settings.get();
+        settings.providers.entry(ProviderKind::ClaudeCode).or_default().default_account = Some("work".into());
+        monitor.inner.settings.set(settings).unwrap();
+        monitor.observe(ProviderKind::ClaudeCode, std::slice::from_ref(&limit));
+        let snapshot = monitor.snapshot();
+        let labeled = snapshot.accounts.iter().filter(|entry| entry.instance.as_deref() == Some("work")).count();
+        assert_eq!(labeled, 1, "{:?}", snapshot.accounts);
+    }
+
+    #[test]
+    fn switching_the_default_swaps_limits_instead_of_dropping_them() {
+        let monitor = with_accounts();
+        monitor.settings_changed();
+        let five = |used: f64| UsageLimit { name: "5-hour".into(), used_percent: used, window_minutes: Some(300), resets_at: None };
+        monitor.observe(ProviderKind::ClaudeCode, &[five(70.0)]);
+        monitor.observe_account(&ProviderInstance { kind: ProviderKind::ClaudeCode, instance: "work".into() }, &[five(20.0)]);
+        let mut settings = monitor.inner.settings.get();
+        settings.providers.entry(ProviderKind::ClaudeCode).or_default().default_account = Some("work".into());
+        monitor.inner.settings.set(settings).unwrap();
+        monitor.settings_changed();
+        let snapshot = monitor.snapshot();
+        assert_eq!(snapshot.providers[0].limits[0].used_percent, 20.0, "the new default starts from its own limits");
+        let cli = snapshot.accounts.iter().find(|entry| entry.instance.as_deref() == Some("default")).unwrap();
+        assert_eq!(cli.limits[0].used_percent, 70.0, "the CLI account keeps its limits");
+        assert_eq!(snapshot.accounts.iter().filter(|entry| entry.instance.as_deref() == Some("work")).count(), 1);
     }
 
     #[test]

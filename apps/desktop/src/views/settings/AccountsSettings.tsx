@@ -40,7 +40,7 @@ import { makeDefaultAccount, openUsageForAccount, refreshAccounts, updateProvide
 import { activeEnvironment } from "@/state/environments"
 import { errorText, rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
-import { loadAccountLimits, useAccountLimitEntries } from "@/state/usageLimits"
+import { loadAccountLimits, useAccountLimitEntries, useProviderLimits } from "@/state/usageLimits"
 
 /** What to run in a terminal to sign the CLI account in again; Kybern picks the sign-in up on its own. */
 const CLI_SIGN_IN_COMMAND: Record<ProviderKind, string> = {
@@ -230,8 +230,10 @@ function RenameField({ account, onDone }: { account: AccountSummary; onDone: () 
 function UsageCell({ account }: { account: AccountSummary }) {
   const { kind, instance } = account.provider
   const entries = useAccountLimitEntries()
+  const global = useProviderLimits(kind)
   const now = useNow(60_000)
-  const entry = entries.find((e) => e.provider === kind && e.instance === instance)
+  // The default account's limits are the global entry, which is labeled only once the agent has named accounts.
+  const entry = entries.find((e) => e.provider === kind && e.instance === instance) ?? (account.is_default ? global : undefined)
   const binding = entry ? bindingLimit(entry.limits, now) : null
   if (!binding) return <span className="@max-[34rem]:hidden" aria-hidden />
   const left = Math.max(0, Math.min(100, Math.round(100 - binding.used)))

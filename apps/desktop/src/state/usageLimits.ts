@@ -122,18 +122,6 @@ export function useAccountLimitEntries(): ProviderLimits[] {
   return useUsageLimits((s) => (s.ownerKey === environmentId ? s.accounts : NONE))
 }
 
-/**
- * Limits of one account. The CLI account ("default") falls back to the global
- * entry for the agent, which is its limits. Undefined before any are known.
- */
-export function useAccountLimitsFor(kind: ProviderKind | undefined, instance: string | null | undefined): ProviderLimits | undefined {
-  const accounts = useAccountLimitEntries()
-  const global = useAccountLimits()
-  if (!kind) return undefined
-  if (!instance || instance === "default") return accounts.find((e) => e.provider === kind && e.instance === "default") ?? global.find((e) => e.provider === kind)
-  return accounts.find((e) => e.provider === kind && e.instance === instance)
-}
-
 /** The current limits for one provider, or undefined before any are known. */
 export function useProviderLimits(kind: ProviderKind | undefined): ProviderLimits | undefined {
   return useAccountLimits().find((entry) => entry.provider === kind)

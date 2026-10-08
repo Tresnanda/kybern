@@ -143,8 +143,6 @@ function RemoteNote({ host, transport }: { host: string; transport: "SSH" | "Tai
 function Flow({ request, onClosing }: { request: Opened; onClosing: (fn: () => void) => void }) {
   const providers = useStore((s) => s.providers)
   const legacy = useAccountsLegacy()
-  const reauthInstance = request.instance
-  const reauth = !!reauthInstance
   const [kind, setKind] = useState<ProviderKind | undefined>(request.kind)
   const [upstream, setUpstream] = useState<string>(OMP_UPSTREAMS[0].id)
   const [folder, setFolder] = useState("")
@@ -154,6 +152,9 @@ function Flow({ request, onClosing }: { request: Opened; onClosing: (fn: () => v
   const apiRef = useRef(api)
   useEffect(() => { apiRef.current = api })
   const { login, failure, starting } = api
+  // Signing in again: opened for an account, or "Sign in again to Work" from the duplicate step.
+  const reauthInstance = login?.instance ?? request.instance
+  const reauth = !!reauthInstance
   const accounts = useAccounts(kind)
   const settings = useStore((s) => s.settings)
 
@@ -181,7 +182,7 @@ function Flow({ request, onClosing }: { request: Opened; onClosing: (fn: () => v
   const forcedDefault = namedCount === 0 && !providerSettings?.default_account
   const defaultOn = forcedDefault || makeDefault
 
-  const step: SheetStep | null = failure ? "error" : api.legacyTerminal ? "terminal" : reauth && !login ? null : stepFor(login)
+  const step: SheetStep | null = failure ? "error" : api.legacyTerminal ? "terminal" : request.instance && !login ? null : stepFor(login)
   const verifying = login?.phase === "verifying"
 
   const modeFor = (k: ProviderKind): AccountLoginMode => initialLoginMode(k, remote)
@@ -416,8 +417,9 @@ function Flow({ request, onClosing }: { request: Opened; onClosing: (fn: () => v
             </div>
             <div className="flex items-center justify-between gap-3">
               <Label htmlFor={`${uid}-default`}>Use as default for {agent}</Label>
-              <Switch id={`${uid}-default`} checked={defaultOn} disabled={forcedDefault} onCheckedChange={setMakeDefault} />
+              <Switch id={`${uid}-default`} checked={defaultOn} disabled={forcedDefault} aria-describedby={forcedDefault ? `${uid}-default-note` : undefined} onCheckedChange={setMakeDefault} />
             </div>
+            {forcedDefault && <p id={`${uid}-default-note`} className="-mt-2.5 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground text-pretty">Your first added account becomes the default. You can switch back to the CLI account in Settings › Accounts.</p>}
           </div>
         )}
         {finishError && <p role="alert" className="text-[length:var(--app-font-size-ui-sm,11px)] text-destructive text-pretty">{finishError}</p>}
@@ -427,7 +429,7 @@ function Flow({ request, onClosing }: { request: Opened; onClosing: (fn: () => v
       ? <Button autoFocus onClick={() => { void refreshAccounts(); close() }}>Done</Button>
       : (
         <>
-          <Button variant="ghost" onClick={cancelAndClose}>Cancel</Button>
+          {/* No Cancel: closing a successful sign-in saves it (signing in was the consent). */}
           <Button disabled={!isNameValid(shownName) || finishing} onClick={() => void finish().then((ok) => { if (ok) close() })}>Add account</Button>
         </>
       )
