@@ -89,6 +89,23 @@ fn parse_reviews(value: &Value, pr_url: &str) -> Vec<PrReviewer> {
     out
 }
 
+/// The current head commit only. Action guards use this rather than `detail`, which
+/// also reads reviews, labels and the comment count.
+pub(crate) async fn head_sha(cwd: &Path, number: u64) -> Result<String> {
+    validate_number(number)?;
+    let json = run(cwd, "gh", &["pr", "view", &number.to_string(), "--json", "headRefOid"]).await?;
+    let value: Value = serde_json::from_str(&json)?;
+    let head = text(&value, "headRefOid");
+    ensure!(!head.is_empty(), "Unable to read this pull request. Refresh and try again.");
+    Ok(head)
+}
+
+/// GitHub's REST avatar URLs already carry `?v=4`; ask for a 40 px image.
+fn sized_avatar(url: &str) -> String {
+    let joiner = if url.contains('?') { '&' } else { '?' };
+    format!("{url}{joiner}s=40")
+}
+
 pub async fn detail(cwd: &Path, number: u64) -> Result<PrDetailResult> {
     validate_number(number)?;
     let number = number.to_string();
@@ -143,7 +160,7 @@ pub async fn page(cwd: &Path, p: &PrPageParams) -> Result<PrPageResult> {
     validate_number(p.number)?;
     ensure!((1..=1000).contains(&p.page), "Choose a page between 1 and 1000.");
     if matches!(p.kind, PrPageKind::Checks) {
-        let head = detail(cwd, p.number).await?.head_sha;
+        let head = head_sha(cwd, p.number).await?;
         let checks_endpoint = format!("repos/{{owner}}/{{repo}}/commits/{head}/check-runs?per_page={PAGE_SIZE}&page={}", p.page);
         let status_endpoint = format!("repos/{{owner}}/{{repo}}/commits/{head}/status?per_page={PAGE_SIZE}&page={}", p.page);
         let checks_args = ["api", checks_endpoint.as_str(), "--method", "GET"];
@@ -192,7 +209,7 @@ fn parse_page(value: &Value, kind: PrPageKind, page: u32) -> Result<PrPageResult
                 side: v["side"].as_str().map(str::to_owned),
                 url: text(v, "html_url"),
                 updated_at: v.get("updated_at").or_else(|| v.get("submitted_at")).and_then(Value::as_str).unwrap_or_default().to_owned(),
-                avatar_url: v.pointer("/user/avatar_url").and_then(Value::as_str).map(|u| format!("{u}&s=40")),
+                avatar_url: v.pointer("/user/avatar_url").and_then(Value::as_str).map(sized_avatar),
                 author_is_bot: v.pointer("/user/type").and_then(Value::as_str) == Some("Bot"),
             });
         }
@@ -268,8 +285,8 @@ pub async fn action(cwd: &Path, p: &PrActionParams) -> Result<()> {
     let pull = format!("repos/{{owner}}/{{repo}}/pulls/{}", p.number);
     match p.action {
         PrActionKind::Checkout => {
-            let current = detail(cwd, p.number).await?;
-            validate_checkout_head(&p.head_sha, &current.head_sha)?;
+            let current = head_sha(cwd, p.number).await?;
+            validate_checkout_head(&p.head_sha, &current)?;
             run(cwd, "gh", &["pr", "checkout", &p.number.to_string()]).await?;
         }
         PrActionKind::Close => write_api(cwd, &pull, "PATCH", json!({"state":"closed"})).await?,
@@ -283,8 +300,8 @@ pub async fn action(cwd: &Path, p: &PrActionParams) -> Result<()> {
         }
         _ => {
             ensure!(!p.head_sha.is_empty(), "Refresh this pull request before submitting a review.");
-            let current = detail(cwd, p.number).await?;
-            ensure!(current.head_sha == p.head_sha, "The pull request changed. Refresh it and check your draft before submitting.");
+            let current = head_sha(cwd, p.number).await?;
+            ensure!(current == p.head_sha, "The pull request changed. Refresh it and check your draft before submitting.");
             if matches!(p.action, PrActionKind::RequestChanges) {
                 ensure!(!p.body.trim().is_empty() || !p.inline_comments.is_empty(), "Describe the changes you need before submitting.");
             }
@@ -343,6 +360,12 @@ mod tests {
         assert_eq!(page.entries[0].avatar_url.as_deref(), Some("https://avatars.githubusercontent.com/u/1?v=4&s=40"));
         assert!(!page.entries[0].author_is_bot);
         assert!(page.entries[1].author_is_bot);
+    }
+
+    #[test]
+    fn avatar_size_joins_any_query() {
+        assert_eq!(sized_avatar("https://a.example/u/1?v=4"), "https://a.example/u/1?v=4&s=40");
+        assert_eq!(sized_avatar("https://a.example/u/1"), "https://a.example/u/1?s=40");
     }
 
     #[test]
