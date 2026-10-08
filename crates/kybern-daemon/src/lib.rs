@@ -21,6 +21,7 @@ mod maintenance;
 mod native_tools_mcp;
 mod orchestrator;
 mod power;
+mod previews;
 mod provider_accounts;
 #[cfg(test)]
 mod remote_tests;
