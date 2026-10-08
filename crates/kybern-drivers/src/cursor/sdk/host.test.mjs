@@ -160,6 +160,14 @@ test("context and fast combinations are one row, never fast: false", () => {
 });
 
 
+test("lowercase context sizes and xhigh read as labels", () => {
+  const [, row] = modelCatalog([{ id: "g", displayName: "G", variants: [
+    { params: [{ id: "context", value: "300k" }, { id: "reasoning", value: "low" }] },
+    { params: [{ id: "context", value: "1m" }, { id: "reasoning", value: "xhigh" }] },
+  ] }]);
+  assert.deepEqual(row.parameters.map((p) => p.values.map((v) => v.label)), [["300K", "1M"], ["Low", "X-High"]]);
+});
+
 test("the effort control reaches native sends and survives permission changes", async () => {
   const f = fixture();
   const [, model] = modelCatalog([{id:"m", variants:[

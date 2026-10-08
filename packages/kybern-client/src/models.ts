@@ -123,7 +123,8 @@ export function parameterSwitch(parameter: Pick<ModelParameter, "values">): { on
 
 /**
  * Traits that differ from the model's defaults, for the composer trigger:
- * `1M · Fast` after the model name. A switch that is on shows its label.
+ * `1M · Fast` after the model name. A switch shows its label when on and
+ * `<label> off` when its default is on.
  */
 export function traitSummary(
   model: Pick<ProviderModel, "id" | "variants" | "parameters"> | undefined,
@@ -136,7 +137,7 @@ export function traitSummary(
     const value = values[parameter.id];
     if (value === undefined || value === parameter.default) continue;
     const toggle = parameterSwitch(parameter);
-    parts.push(toggle ? (value === toggle.on ? parameter.label : `No ${parameter.label.toLowerCase()}`) : parameter.values.find((item) => item.value === value)?.label ?? value);
+    parts.push(toggle ? (value === toggle.on ? parameter.label : `${parameter.label} off`) : parameter.values.find((item) => item.value === value)?.label ?? value);
   }
   return parts.length ? parts.join(" · ") : null;
 }

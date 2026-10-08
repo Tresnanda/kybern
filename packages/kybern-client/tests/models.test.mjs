@@ -171,7 +171,7 @@ test("the trigger shows only traits that differ from the default", () => {
   assert.equal(traitSummary(opus, opus.variants[1].id), "Fast");
   assert.equal(traitSummary({ id: "x" }, "x"), null);
   const defaultsOn = { ...opus, parameters: [{ ...opus.parameters[1], default: "true" }], variants: [{ id: "a", params: { fast: "false" } }] };
-  assert.equal(traitSummary(defaultsOn, "a"), "No fast");
+  assert.equal(traitSummary(defaultsOn, "a"), "Fast off");
 });
 
 test("boolean parameters render as switches, others do not", () => {

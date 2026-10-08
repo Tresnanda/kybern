@@ -58,9 +58,11 @@ export function modelSelection(selector, effort) {
 const ON_VALUES = { true: "false", on: "off" };
 const sentence = (text) => { const words = text.replaceAll("_", " ").trim(); return /^zdr$/i.test(words) ? "ZDR" : words.charAt(0).toUpperCase() + words.slice(1); };
 function valueLabel(parameter, value, named) {
-  if (/context/i.test(parameter)) return value.replace(/000000$/, "M").replace(/000$/, "K");
+  // Cursor sends sizes as `300k`/`1m` or as plain numbers; show `300K`/`1M`.
+  if (/context/i.test(parameter)) return value.replace(/000000$/, "M").replace(/000$/, "K").replace(/[km]$/, (unit) => unit.toUpperCase());
   if (value === "true" || value === "on") return "On";
   if (value === "false" || value === "off") return "Off";
+  if (value === "xhigh") return "X-High";
   return named || sentence(value);
 }
 

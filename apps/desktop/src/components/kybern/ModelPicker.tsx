@@ -40,7 +40,6 @@ import {
   selectedVariant,
   toggleFavoriteModel,
   traitValues,
-  variantSelector,
   type FavoriteModel,
   type ModelSection,
 } from "../../../../../packages/kybern-client/src/models"
@@ -261,12 +260,14 @@ function ModelPickerPanel({
       return
     }
     // Picking the model already in use keeps its traits.
-    const id = row.kind === "model" ? (row.harness === provider.kind && row.model.id === selectedId && model ? variantSelector(row.model, model) ?? row.model.id : row.model.id) : row.id
-    const nextEfforts = row.kind === "model" ? row.model.efforts ?? [] : []
+    const held = row.kind === "model" && row.harness === provider.kind && row.model.id === selectedId && model ? selectedVariant(row.model, model) : undefined
+    const id = row.kind === "model" ? held?.id ?? row.model.id : row.id
+    // The held combination can offer other efforts than the row's default one.
+    const nextEfforts = held?.efforts?.length ? held.efforts : row.kind === "model" ? row.model.efforts ?? [] : []
     // Keep the chosen effort when the new model offers it; otherwise its own default.
     const nextEffort = effortValue && nextEfforts.includes(effortValue)
       ? effortValue
-      : row.kind === "model" ? row.model.default_effort ?? undefined : undefined
+      : held?.default_effort ?? (row.kind === "model" ? row.model.default_effort ?? undefined : undefined)
     const harness = row.kind === "model" ? row.harness : provider.kind
     const saved = harness === provider.kind
       ? await onModelChange(id, nextEffort)
