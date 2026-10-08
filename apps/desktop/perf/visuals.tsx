@@ -84,7 +84,9 @@ async function run() {
   if (!measuredHeights) report({stage:"visual-warning",message:"No preview browser was available to measure; AC 3 not exercised"})
   // The font-dependent page: report how far Chrome's measurement is from WebKit's layout.
   const realistic = await mountVisual(fixture.visual,736)
-  report({stage:"visual-measurement-delta",reserved:realistic.first,settled:realistic.last,changes:heightsChanged(realistic.trace)})
+  const settledInvisibly = realistic.trace.every((entry,index)=>index===0||Math.abs(entry.height-realistic.trace[index-1].height)<1||entry.opacity==="0")
+  report({stage:"visual-measurement-delta",reserved:realistic.first,settled:realistic.last,changes:heightsChanged(realistic.trace),settledInvisibly})
+  check(settledInvisibly,"A measurement that differs from WebKit's layout settles before the page fades in")
   check(Math.abs(realistic.first-realistic.last)<=8 && heightsChanged(realistic.trace)<=1,"Chrome's measurement stays within a few pixels of WebKit's layout")
 
   // AC 4: an unmeasured page changes height once, while still invisible; a remount reserves the cached height.

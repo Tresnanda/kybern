@@ -3453,7 +3453,7 @@ html[data-full-translucency] .chat-scroll-fade {
   animation: visual-skeleton-breathe 1.6s ease-in-out infinite;
 }
 .visual-reply[data-loop-paused] .visual-reply__skeleton,
-.visual-reply-panel[data-loop-paused] .visual-reply__skeleton {
+.visual-reply-panel__box[data-loop-paused] .visual-reply__skeleton {
   animation-play-state: paused;
 }
 @keyframes visual-skeleton-breathe {
@@ -3481,11 +3481,12 @@ html[data-full-translucency] .chat-scroll-fade {
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  /* Matches the reveal rules' specificity so the nudge and fades really turn off. */
   .visual-reply__frame[data-ready="true"],
-  .visual-reply__open {
+  .visual-reply .visual-reply__open {
     transition: none;
   }
-  .visual-reply__open {
+  .visual-reply .visual-reply__open {
     translate: 0 0;
   }
   .visual-reply__skeleton {

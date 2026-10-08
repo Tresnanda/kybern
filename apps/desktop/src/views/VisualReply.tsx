@@ -44,6 +44,11 @@ export const VisualFrame = memo(function VisualFrame({ threadId, visual, mode = 
   const [width, setWidth] = useState(VISUAL_COLUMN_WIDTH)
   const post = useRef<() => void>(() => {})
   const statusRef = useRef<Status>("minting"), sized = useRef(false), stopResize = useRef<() => void>(() => {})
+  // The height last written to the box. Re-renders reuse it, so React never overwrites a posted
+  // height with one computed from a width that stopped updating once the page reported its size.
+  const applied = useRef<number | null>(null)
+  // Survives `active` toggles, which re-run the message effect between a ready signal and its timer.
+  const readyTimer = useRef(0), watchdog = useRef(0)
   const cacheKey = `${visual.id}:${mode}`
   const measured = !!visual.heights?.length
   const settle = useCallback((next: Status) => { statusRef.current = next; setStatus(next) }, [])
@@ -69,6 +74,7 @@ export const VisualFrame = memo(function VisualFrame({ threadId, visual, mode = 
 
   useEffect(() => {
     setUrl(null); setError(""); settle("minting"); setSkeleton(false); sized.current = false
+    window.clearTimeout(readyTimer.current); window.clearTimeout(watchdog.current); readyTimer.current = 0
     const runtime = activeRuntime(); let alive = true; let ticket: string | null = null
     const timer = window.setTimeout(() => { if (alive && statusRef.current !== "ready") setSkeleton(true) }, SKELETON_DELAY_MS)
     void runtime.visualFrameUrl(threadId, visual.id).then(frame => {
@@ -80,8 +86,7 @@ export const VisualFrame = memo(function VisualFrame({ threadId, visual, mode = 
   }, [threadId, visual.id, attempt, settle])
 
   // A consumed or expired ticket serves a plain 404 body that stays invisible; turn it into Retry.
-  const watchdog = useRef(0)
-  useEffect(() => () => window.clearTimeout(watchdog.current), [])
+  useEffect(() => () => { window.clearTimeout(watchdog.current); window.clearTimeout(readyTimer.current) }, [])
   const armWatchdog = () => {
     window.clearTimeout(watchdog.current)
     watchdog.current = window.setTimeout(() => { if (statusRef.current === "loading") { setError(""); settle("error") } }, LOAD_WATCHDOG_MS)
@@ -95,7 +100,7 @@ export const VisualFrame = memo(function VisualFrame({ threadId, visual, mode = 
 
   useEffect(() => {
     const element = frameRef.current, box = boxRef.current; if (!element || !box || !url) return
-    let intersects = false, frame = 0, pendingHeight: number | null = null, lastVisible: boolean | undefined, readyTimer = 0
+    let intersects = false, frame = 0, pendingHeight: number | null = null, lastVisible: boolean | undefined
     const ancestors: HTMLElement[] = []; let ancestor: HTMLElement | null = element.parentElement
     while (ancestor) { ancestors.push(ancestor); ancestor = ancestor.parentElement }
     const send = () => {
@@ -110,14 +115,15 @@ export const VisualFrame = memo(function VisualFrame({ threadId, visual, mode = 
     const observer = new IntersectionObserver(entries => { intersects = entries.some(entry => entry.isIntersecting && entry.intersectionRatio > 0); send() })
     observer.observe(element)
     const mutations = new MutationObserver(send)
-    for (const parent of ancestors) mutations.observe(parent, { attributes: true, attributeFilter: ["class", "style", "data-theme-variant"] })
+    // The box is skipped: its style changes with every posted height, which is not a theme change.
+    for (const parent of ancestors) if (parent !== box) mutations.observe(parent, { attributes: true, attributeFilter: ["class", "style", "data-theme-variant"] })
     const apply = () => {
       frame = 0; if (pendingHeight === null) return
       const next = panel ? Math.max(80, Math.min(PANEL_MAX_HEIGHT, pendingHeight)) : visualFrameHeight(visual, Math.round(box.clientWidth) || VISUAL_COLUMN_WIDTH, pendingHeight)
-      box.style.height = `${next}px`
+      box.style.height = `${next}px`; applied.current = next
       rememberHeight(cacheKey, Math.round(box.clientWidth), next)
       if (!sized.current) { sized.current = true; stopResize.current() }
-      if (statusRef.current !== "ready") { window.clearTimeout(readyTimer); settle("ready") }
+      if (statusRef.current !== "ready") { window.clearTimeout(readyTimer.current); settle("ready") }
     }
     const message = (event: MessageEvent) => {
       if (event.source !== element.contentWindow || event.origin !== "null" || !event.data || typeof event.data !== "object") return
@@ -127,14 +133,16 @@ export const VisualFrame = memo(function VisualFrame({ threadId, visual, mode = 
         pendingHeight = height
         if (!frame) frame = requestAnimationFrame(apply)
       } else if (event.data.kind === "kybern-visual-ready") {
-        // A measured page already reserves its final box; others wait for their first size.
-        if (statusRef.current === "loading" && !readyTimer) readyTimer = window.setTimeout(() => { if (statusRef.current === "loading") settle("ready") }, measured ? 0 : 250)
+        // Reveal on the first size post (one frame later), so a measurement that differs from this
+        // engine's layout by a few pixels settles while the page is still invisible. The timer only
+        // covers a page that never posts a size; a measured page has its box already.
+        if (statusRef.current === "loading" && !readyTimer.current) readyTimer.current = window.setTimeout(() => { if (statusRef.current === "loading") settle("ready") }, measured ? 100 : 250)
       } else if (event.data.kind === "kybern-visual-link" && lastVisible && navigator.userActivation?.isActive) {
         const link = visualLink(event.data.url); if (link) void openExternal(link).catch(failure => { setError(errorText(failure)) })
       }
     }
     window.addEventListener("message", message); document.addEventListener("visibilitychange", send); send()
-    return () => { observer.disconnect(); mutations.disconnect(); window.removeEventListener("message", message); document.removeEventListener("visibilitychange", send); cancelAnimationFrame(frame); window.clearTimeout(readyTimer); post.current = () => {}; element.contentWindow?.postMessage({ kind: "kybern-visual-host", visible: false }, "*") }
+    return () => { observer.disconnect(); mutations.disconnect(); window.removeEventListener("message", message); document.removeEventListener("visibilitychange", send); cancelAnimationFrame(frame); post.current = () => {}; element.contentWindow?.postMessage({ kind: "kybern-visual-host", visible: false }, "*") }
   }, [url, active, panel, visual, measured, cacheKey, settle])
 
   // Hand the canvas its real scheme once the page is painted (see the no-flash note in the spec).
@@ -143,9 +151,9 @@ export const VisualFrame = memo(function VisualFrame({ threadId, visual, mode = 
   }, [status])
 
   const retry = () => { setAttempt(value => value + 1); requestAnimationFrame(() => boxRef.current?.focus({ preventScroll: true })) }
-  const reserved = panel
+  const reserved = applied.current ?? (panel
     ? recalledHeight(cacheKey, width) ?? visualFrameHeight({ ...visual, height: Math.max(visual.height, 80) }, width)
-    : visualFrameHeight(visual, width, recalledHeight(cacheKey, width))
+    : visualFrameHeight(visual, width, recalledHeight(cacheKey, width)))
   const ready = status === "ready"
   const open = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
     setPreviewOrigin(event.currentTarget)
