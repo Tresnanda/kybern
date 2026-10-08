@@ -4,10 +4,11 @@
 //! The ticket is the only capability. It fixes the target to
 //! `127.0.0.1:{port}` or `[::1]:{port}` on this machine; nothing in the
 //! request (path, headers, query) can choose another host or port. The route
-//! never reads the daemon bearer and never forwards `Authorization` or
-//! `Cookie`. Responses lose `X-Frame-Options` and CSP `frame-ancestors` so
+//! never reads the daemon bearer. Responses lose `X-Frame-Options` and CSP `frame-ancestors` so
 //! the Preview panel can frame them, `Location` headers that point back at
 //! the dev server become root-relative, and `Set-Cookie` `Domain=` is dropped.
+//! The previewed app's own `Cookie` and `Authorization` are forwarded; only
+//! values that are Kybern credentials (header, cookie or query parameter) are removed.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::OnceLock;
@@ -88,20 +89,51 @@ fn connection_tokens(headers: &HeaderMap) -> Vec<String> {
         .collect()
 }
 
-/// Request headers for the dev server: no hop-by-hop, no daemon credentials,
-/// `Host` / `Origin` / `Referer` pointing at `localhost:{port}`.
-pub fn upstream_request_headers(incoming: &HeaderMap, port: u16) -> HeaderMap {
+/// Whether a value is a Kybern credential that must never reach a dev server.
+pub type IsSecret<'a> = &'a (dyn Fn(&str) -> bool + Sync);
+
+fn filter_cookie(cookie: &str, is_secret: IsSecret) -> Option<String> {
+    let kept: Vec<&str> = cookie
+        .split(';')
+        .map(str::trim)
+        .filter(|pair| !pair.is_empty() && !is_secret(pair.split_once('=').map_or(*pair, |(_, value)| value.trim_matches('"'))))
+        .collect();
+    (!kept.is_empty()).then(|| kept.join("; "))
+}
+
+fn filter_query(target: &str, is_secret: IsSecret) -> String {
+    let Some((path, query)) = target.split_once('?') else { return target.to_string() };
+    let kept: Vec<&str> = query.split('&').filter(|pair| !is_secret(pair.split_once('=').map_or("", |(_, value)| value))).collect();
+    if kept.is_empty() { path.to_string() } else { format!("{path}?{}", kept.join("&")) }
+}
+
+fn is_secret_authorization(value: &str, is_secret: IsSecret) -> bool {
+    let token = value.split_once(' ').map_or(value, |(_, rest)| rest).trim();
+    is_secret(token)
+}
+
+/// Request headers for the dev server: no hop-by-hop, no Kybern credentials
+/// (the app's own `Cookie` / `Authorization` pass), `Host` / `Origin` /
+/// `Referer` pointing at `localhost:{port}`.
+pub fn upstream_request_headers(incoming: &HeaderMap, port: u16, is_secret: IsSecret) -> HeaderMap {
     let tokens = connection_tokens(incoming);
     let origin = format!("http://localhost:{port}");
     let mut out = HeaderMap::new();
     for (name, value) in incoming {
         if is_hop_header(name, &tokens)
-            || matches!(name.as_str(), "authorization" | "cookie" | "host" | "origin" | "referer")
+            || matches!(name.as_str(), "cookie" | "host" | "origin" | "referer")
             || name.as_str().starts_with("sec-websocket-")
         {
             continue;
         }
+        if name == header::AUTHORIZATION && value.to_str().map_or(true, |v| is_secret_authorization(v, is_secret)) {
+            continue;
+        }
         out.append(name.clone(), value.clone());
+    }
+    let cookies: Vec<&str> = incoming.get_all(header::COOKIE).iter().filter_map(|v| v.to_str().ok()).collect();
+    if let Some(cookie) = filter_cookie(&cookies.join("; "), is_secret).and_then(|c| HeaderValue::from_str(&c).ok()) {
+        out.insert(header::COOKIE, cookie);
     }
     out.insert(header::HOST, HeaderValue::from_str(&format!("localhost:{port}")).expect("host"));
     if incoming.contains_key(header::ORIGIN) {
@@ -179,11 +211,12 @@ fn plain(status: StatusCode, message: &'static str) -> Response {
 
 /// Axum handler for every method on `/preview-proxy/{ticket}` and below.
 pub async fn serve(State(state): State<AppState>, request: Request) -> Response {
-    handle(&state.previews, request).await
+    let is_secret = |value: &str| value.starts_with("kyb_") && crate::auth::authenticate(&state.store, value).ok().flatten().is_some();
+    handle(&state.previews, request, &is_secret).await
 }
 
 /// The route's logic over just the ticket store (so tests need no daemon).
-pub async fn handle(tickets: &super::tickets::PreviewTickets, request: Request) -> Response {
+pub async fn handle(tickets: &super::tickets::PreviewTickets, request: Request, is_secret: IsSecret<'_>) -> Response {
     let path_and_query = request.uri().path_and_query().map(|p| p.as_str().to_string()).unwrap_or_default();
     let Some((ticket, target)) = split_target(&path_and_query) else { return plain(StatusCode::NOT_FOUND, "not found") };
     let Some(info) = tickets.lookup(ticket) else { return plain(StatusCode::NOT_FOUND, "not found") };
@@ -192,12 +225,13 @@ pub async fn handle(tickets: &super::tickets::PreviewTickets, request: Request) 
     let is_upgrade =
         request.headers().get(header::UPGRADE).and_then(|v| v.to_str().ok()).is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
     if is_upgrade {
-        return upgrade(request, port, target).await;
+        return upgrade(request, port, target, is_secret).await;
     }
-    forward(request, port, target).await
+    forward(request, port, target, is_secret).await
 }
 
-async fn forward(request: Request, port: u16, target: String) -> Response {
+async fn forward(request: Request, port: u16, target: String, is_secret: IsSecret<'_>) -> Response {
+    let target = filter_query(&target, is_secret);
     let Some(addr) = listener_addr(port).await else { return plain(StatusCode::BAD_GATEWAY, "The server isn't answering.") };
     let host = match addr.ip() {
         IpAddr::V4(ip) => ip.to_string(),
@@ -211,7 +245,7 @@ async fn forward(request: Request, port: u16, target: String) -> Response {
         return plain(StatusCode::BAD_REQUEST, "bad request");
     }
     let (parts, body) = request.into_parts();
-    let headers = upstream_request_headers(&parts.headers, port);
+    let headers = upstream_request_headers(&parts.headers, port, is_secret);
     let mut builder = client().request(parts.method.clone(), url).headers(headers);
     if !matches!(parts.method, Method::GET | Method::HEAD) {
         builder = builder.body(reqwest::Body::wrap_stream(body.into_data_stream()));
@@ -230,7 +264,8 @@ async fn forward(request: Request, port: u16, target: String) -> Response {
     }
 }
 
-async fn upgrade(request: Request, port: u16, target: String) -> Response {
+async fn upgrade(request: Request, port: u16, target: String, is_secret: IsSecret<'_>) -> Response {
+    let target = filter_query(&target, is_secret);
     let (mut parts, _body) = request.into_parts();
     let requested: Vec<String> = parts
         .headers
@@ -241,18 +276,19 @@ async fn upgrade(request: Request, port: u16, target: String) -> Response {
         .map(|p| p.trim().to_string())
         .filter(|p| !p.is_empty())
         .collect();
+    let app_headers = upstream_request_headers(&parts.headers, port, is_secret);
     let socket = match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
         Ok(socket) => socket,
         Err(rejection) => return rejection.into_response(),
     };
-    socket.protocols(requested.clone()).on_upgrade(move |client| async move { pump(client, port, target, requested).await })
+    socket.protocols(requested.clone()).on_upgrade(move |client| async move { pump(client, port, target, requested, app_headers).await })
 }
 
 fn close_reason(code: u16, reason: &'static str) -> Message {
     Message::Close(Some(CloseFrame { code, reason: reason.into() }))
 }
 
-async fn pump(mut client: WebSocket, port: u16, target: String, protocols: Vec<String>) {
+async fn pump(mut client: WebSocket, port: u16, target: String, protocols: Vec<String>, app_headers: HeaderMap) {
     use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest as _};
     let Some(addr) = listener_addr(port).await else {
         let _ = client.send(close_reason(1011, "upstream unavailable")).await;
@@ -267,6 +303,11 @@ async fn pump(mut client: WebSocket, port: u16, target: String, protocols: Vec<S
         let headers = request.headers_mut();
         headers.insert(header::HOST, HeaderValue::from_str(&format!("localhost:{port}")).ok()?);
         headers.insert(header::ORIGIN, HeaderValue::from_str(&format!("http://localhost:{port}")).ok()?);
+        for name in [header::COOKIE, header::AUTHORIZATION] {
+            if let Some(value) = app_headers.get(&name) {
+                headers.insert(name, value.clone());
+            }
+        }
         if !protocols.is_empty() {
             headers.insert("sec-websocket-protocol", HeaderValue::from_str(&protocols.join(", ")).ok()?);
         }
@@ -375,6 +416,7 @@ mod tests {
                 }),
             )
             .route("/redirect-other", get(|| async { (StatusCode::FOUND, [("location", "http://example.com/x")]) }))
+            .route("/query", get(|uri: axum::http::Uri| async move { uri.query().unwrap_or("").to_string() }))
             .route("/post", axum::routing::post(|body: String| async move { format!("got:{body}") }))
             .route(
                 "/ws",
@@ -410,7 +452,7 @@ mod tests {
     }
 
     async fn handler(State(tickets): State<Arc<PreviewTickets>>, request: Request) -> Response {
-        handle(&tickets, request).await
+        handle(&tickets, request, &|v: &str| v == "kyb_daemon").await
     }
 
     impl Rig {
@@ -433,8 +475,8 @@ mod tests {
         let ticket = rig.ticket(dev);
         let response = http()
             .get(rig.url(&ticket, "/headers"))
-            .header("authorization", "Bearer daemon-secret")
-            .header("cookie", "kybern=1")
+            .header("authorization", "Bearer kyb_daemon")
+            .header("cookie", "kybern=kyb_daemon")
             .header("origin", format!("http://127.0.0.1:{}", rig.proxy))
             .header("referer", format!("http://127.0.0.1:{}/preview-proxy/{ticket}/x", rig.proxy))
             .header("connection", "x-hop")
@@ -457,6 +499,40 @@ mod tests {
             body,
             format!("host=localhost:{dev};origin=http://localhost:{dev};referer=http://localhost:{dev}/;auth=-;cookie=-;conn=-")
         );
+    }
+
+    #[tokio::test]
+    async fn app_cookie_and_authorization_pass_but_kybern_credentials_do_not() {
+        let dev = dev_server().await;
+        let rig = rig().await;
+        let ticket = rig.ticket(dev);
+        let body = http()
+            .get(rig.url(&ticket, "/headers?token=kyb_daemon&keep=1"))
+            .header("authorization", "Bearer app-token")
+            .header("cookie", "sid=abc; kybern=kyb_daemon; theme=dark")
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(body.contains("auth=Bearer app-token;cookie=sid=abc; theme=dark;"), "{body}");
+        let query = http().get(rig.url(&ticket, "/query?token=kyb_daemon&keep=1")).send().await.unwrap().text().await.unwrap();
+        assert_eq!(query, "keep=1");
+        // The daemon token as Authorization is removed, even alone.
+        let body = http()
+            .get(rig.url(&ticket, "/headers"))
+            .header("authorization", "Bearer kyb_daemon")
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(body.contains("auth=-;"), "{body}");
+        // Set-Cookie from the app reaches the client.
+        let response = http().get(rig.url(&ticket, "/headers")).send().await.unwrap();
+        assert!(response.headers().get("set-cookie").is_some());
     }
 
     #[tokio::test]
