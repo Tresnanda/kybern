@@ -21,6 +21,7 @@ pub const SCAN_CACHE_TTL: Duration = Duration::from_secs(2);
 pub const PROBE_CACHE_TTL: Duration = Duration::from_secs(15);
 pub const PROBE_CONCURRENCY: usize = 16;
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+#[cfg(not(target_os = "linux"))]
 const LSOF_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub const COMMON_PORTS: [u16; 15] = [3000, 3001, 4173, 4200, 4321, 5000, 5173, 5174, 6006, 8000, 8080, 8081, 8787, 8888, 9000];
@@ -37,6 +38,7 @@ pub struct Listener {
 
 // ---- parsers (platform independent so they test everywhere) ----
 
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 fn parse_socket_name(name: &str) -> Option<(IpAddr, u16)> {
     let name = name.split_whitespace().next()?;
     let (host, port) = name.rsplit_once(':')?;
@@ -47,6 +49,7 @@ fn parse_socket_name(name: &str) -> Option<(IpAddr, u16)> {
 }
 
 /// Parse `lsof -F pcn` output into listeners (one per `n` line).
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub fn parse_lsof_listeners(text: &str) -> Vec<Listener> {
     let mut out = Vec::new();
     let mut pid = None;
@@ -71,6 +74,7 @@ pub fn parse_lsof_listeners(text: &str) -> Vec<Listener> {
 }
 
 /// Parse `lsof -d cwd -Fn` output into `pid -> cwd`.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub fn parse_lsof_cwds(text: &str) -> HashMap<u32, String> {
     let mut out = HashMap::new();
     let mut pid = None;
@@ -133,6 +137,7 @@ pub fn is_local_bind(addr: IpAddr) -> bool {
 
 // ---- platform listing ----
 
+#[cfg(not(target_os = "linux"))]
 async fn host_uid() -> Option<String> {
     let text = crate::discovery::output_within("id", &["-u"], Duration::from_secs(2)).await?;
     let uid = text.trim();
