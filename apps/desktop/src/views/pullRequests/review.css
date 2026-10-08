@@ -1,0 +1,51 @@
+/* Pull request surfaces. Containers: pr-inbox, pr-list, pr-review, pr-topbar. */
+.pr-inbox {
+  container: pr-inbox / inline-size;
+}
+.pr-inbox-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.pr-inbox-list,
+.pr-inbox-detail {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+.pr-inbox-list {
+  position: relative;
+  container: pr-list / inline-size;
+}
+.pr-inbox[data-detail-open="true"] .pr-inbox-list {
+  display: none;
+}
+.pr-inbox-placeholder,
+.pr-resize {
+  display: none;
+}
+@container pr-inbox (min-width: 52rem) {
+  .pr-inbox .pr-inbox-list,
+  .pr-inbox[data-detail-open="true"] .pr-inbox-list {
+    display: flex;
+    flex: 0 0 var(--pr-list-width, 352px);
+    border-inline-end: 1px solid var(--color-border);
+  }
+  .pr-inbox-placeholder {
+    display: flex;
+  }
+  .pr-resize {
+    display: block;
+  }
+  .pr-inbox .pr-back {
+    display: none;
+  }
+}
+@container pr-list (max-width: 20rem) {
+  .pr-row-counts {
+    display: none;
+  }
+}

@@ -1,403 +1,95 @@
-// Pull requests list: header
-// with refresh, state filter pills and a project filter, rows grouped by
-// project with a state glyph, title, meta line and a relative timestamp.
+// Pull requests route: the list is the only sidebar. Wide, list and detail sit
+// side by side; narrow, one pane shows at a time.
 
-import {
-  useCallback,
-  useDeferredValue,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react"
+import { useEffect, useRef } from "react"
 
-import { Spinner } from "@/components/kybern/bits"
-import { Input } from "@/components/kit/input"
-import { Button } from "@/components/kit/button"
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "@/components/kit/empty"
-import { IconButton } from "@/components/kit/icon-button"
-import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
-import {
-  Menu,
-  MenuGroup,
-  MenuGroupLabel,
-  MenuItem,
-  MenuTrigger,
-} from "@/components/kit/menu"
-import { relativeTime } from "@/lib/format"
-import { mapWithConcurrency } from "@/lib/workload"
-import {
-  CheckIcon,
-  FilterIcon,
-  GitMergeIcon,
-  GitPullRequestClosedIcon,
-  GitPullRequestIcon,
-  RefreshCwIcon,
-} from "@/lib/kit/icons"
-import { openPullRequest } from "@/state/prReview"
-import { PrReview } from "./PrReview"
-import { cn } from "@/lib/utils"
-import type { Project, ProjectId, PullRequest } from "@/protocol"
-import { errorText, rpc } from "@/state/rpc"
+import { Kbd } from "@/components/kit/kbd"
+import { ResizeHandle } from "@/components/kybern/ResizeHandle"
+import { useResize } from "@/lib/hooks"
+import { GitPullRequestIcon } from "@/lib/kit/icons"
 import { useStore } from "@/state/store"
 
-import { SurfaceHeader } from "./chrome"
-import "./prReview/review.css"
+import { PrReview } from "./PrReview"
+import { PrList } from "./pullRequests/PrList"
+import { prRowId } from "./pullRequests/prIds"
+import { PR_FINE_TEXT, PR_QUIET_INK } from "./pullRequests/prText"
+import { cn } from "@/lib/utils"
+import "./pullRequests/review.css"
 
-type Filter = "open" | "merged" | "closed" | "all"
-const FILTERS: [Filter, string][] = [
-  ["open", "Open"],
-  ["merged", "Merged"],
-  ["closed", "Closed"],
-  ["all", "All"],
-]
-const PR_PROJECT_CONCURRENCY = 3
-const PR_ROWS_BATCH = 100
-const PR_CACHE_TTL_MS = 30_000
-const prCache = new Map<
-  string,
-  { expiresAt: number; pullRequests: PullRequest[] }
->()
-
-interface Row {
-  pr: PullRequest
-  project: Project
-}
+const LIST_DEFAULT = 352
+const KEY_STEP = 16
 
 export function PullRequests() {
-  const projects = useStore((s) => s.projects)
   const selection = useStore((s) => s.prSelection)
-  const [filter, setFilter] = useState<Filter>("open")
-  const [projectId, setProjectId] = useState<ProjectId | null>(null)
-  const [rows, setRows] = useState<Row[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [pending, setPending] = useState(false)
-  const [query, setQuery] = useState("")
-  const [visibleCount, setVisibleCount] = useState(PR_ROWS_BATCH)
-  const loadVersion = useRef(0)
-  const deferredQuery = useDeferredValue(query)
-
-  const targets = useMemo(
-    () =>
-      Object.values(projects).filter(
-        (p) => p.is_git && (!projectId || p.id === projectId)
-      ),
-    [projects, projectId]
-  )
-
-  const load = useCallback(
-    async (force = false) => {
-      const version = ++loadVersion.current
-      setPending(true)
-      setError(null)
-      let firstError: string | null = null
-      try {
-        const results = await mapWithConcurrency(
-          targets,
-          PR_PROJECT_CONCURRENCY,
-          (project) => {
-            const cacheKey = `${project.id}:${filter}`
-            const cached = prCache.get(cacheKey)
-            if (!force && cached && cached.expiresAt > Date.now()) {
-              return Promise.resolve(
-                cached.pullRequests.map((pr) => ({ pr, project }))
-              )
-            }
-            return rpc()
-              .call("github.pr.list", {
-                project_id: project.id,
-                state: filter,
-                limit: 30,
-              })
-              .then((r) => {
-                prCache.set(cacheKey, {
-                  expiresAt: Date.now() + PR_CACHE_TTL_MS,
-                  pullRequests: r.pull_requests,
-                })
-                return r.pull_requests.map((pr) => ({ pr, project }))
-              })
-              .catch((e: unknown) => {
-                // Projects without a GitHub remote simply have no pull requests.
-                const text = errorText(e)
-                if (
-                  !firstError &&
-                  !/no git remotes|not a git repository|could not find|no such remote/i.test(
-                    text
-                  )
-                ) {
-                  firstError = text.replace(/^gh pr list[^:]*: /, "")
-                }
-                return [] as Row[]
-              })
-          }
-        )
-        if (version !== loadVersion.current) return
-        setError(firstError)
-        setRows(
-          results
-            .flat()
-            .sort((a, b) => b.pr.updated_at.localeCompare(a.pr.updated_at))
-        )
-      } finally {
-        if (version === loadVersion.current) setPending(false)
-      }
-    },
-    [targets, filter]
-  )
-
-  useEffect(() => {
-    void load(false)
-  }, [load])
-
-  useEffect(
-    () => setVisibleCount(PR_ROWS_BATCH),
-    [deferredQuery, filter, projectId]
-  )
-
-  const matching = useMemo(() => {
-    const q = deferredQuery.trim().toLowerCase()
-    return (rows ?? []).filter(
-      (r) =>
-        !q ||
-        r.pr.title.toLowerCase().includes(q) ||
-        r.pr.head.toLowerCase().includes(q) ||
-        String(r.pr.number).includes(q)
-    )
-  }, [rows, deferredQuery])
-  const visible = useMemo(
-    () => matching.slice(0, visibleCount),
-    [matching, visibleCount]
-  )
-
-  const groups = useMemo(() => {
-    const m = new Map<ProjectId, Row[]>()
-    for (const r of visible)
-      m.set(r.project.id, [...(m.get(r.project.id) ?? []), r])
-    return [...m.entries()]
-  }, [visible])
+  const resize = useResize({
+    initial: LIST_DEFAULT,
+    min: 288,
+    max: 512,
+    side: "left",
+    storageKey: "kybern.pulls.listWidth",
+  })
+  const listRef = useRef<HTMLElement>(null)
+  const detailRef = useRef<HTMLElement>(null)
 
   const backToList = () => {
-    const selectedRow =
-      selection && `pr-row-${selection.projectId}-${selection.number}`
+    const selectedRow = selection && prRowId(selection.projectId, selection.number)
     useStore.getState().set({ prSelection: null })
     requestAnimationFrame(() => {
       if (selectedRow) document.getElementById(selectedRow)?.focus()
     })
   }
 
+  // Esc returns to the list in single-pane mode, unless a field, popover or dialog owns it.
+  useEffect(() => {
+    const detail = detailRef.current
+    if (!detail || !selection) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return
+      const target = event.target as HTMLElement | null
+      if (
+        target?.closest(
+          'input, textarea, select, [contenteditable="true"], [role="dialog"], [role="menu"], [data-slot="popover-popup"]'
+        )
+      )
+        return
+      if (document.querySelector('[role="dialog"], [data-slot="popover-popup"]')) return
+      const list = listRef.current
+      if (!list || getComputedStyle(list).display !== "none") return
+      backToList()
+    }
+    detail.addEventListener("keydown", onKey)
+    return () => detail.removeEventListener("keydown", onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection])
+
   return (
     <div
       className="pr-inbox relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-background-surface)]"
       data-detail-open={!!selection}
+      style={{ "--pr-list-width": `${resize.width}px` } as React.CSSProperties}
     >
       <div className="pr-inbox-layout">
-        <aside className="pr-inbox-list" aria-label="Pull requests list">
-          <SurfaceHeader
-            inline
-            dock={false}
-            trailing={
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                aria-label="Refresh"
-                onClick={() => void load(true)}
-                disabled={pending}
-              >
-                <RefreshCwIcon
-                  className={cn("size-4", pending && "animate-spin")}
-                />
-              </Button>
-            }
-          >
-            <h1 className="font-system-ui truncate text-sm font-medium">
-              Pull requests
-            </h1>
-            {projectId && (
-              <>
-                <span className="text-muted-foreground/50">·</span>
-                <span className="truncate text-xs text-muted-foreground">
-                  {projects[projectId]?.name}
-                </span>
-              </>
-            )}
-          </SurfaceHeader>
-
-          <main className="min-h-0 flex-1 overflow-y-auto">
-            <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-4 pt-4 pb-8">
-              <div className="flex flex-col gap-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <div
-                    role="radiogroup"
-                    className="flex items-center gap-1 text-[length:var(--app-font-size-ui,12px)]"
-                  >
-                    {FILTERS.map(([v, label]) => (
-                      <button
-                        key={v}
-                        type="button"
-                        role="radio"
-                        aria-checked={filter === v}
-                        onClick={() => setFilter(v)}
-                        className={cn(
-                          "rounded-md px-2.5 py-1 transition-colors",
-                          filter === v
-                            ? "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]"
-                            : "text-muted-foreground hover:text-foreground"
-                        )}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id="pr-search"
-                    aria-label="Search pull requests"
-                    type="search"
-                    size="sm"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Search pull requests"
-                    className="min-w-0 flex-1"
-                  />
-                  <Menu>
-                    <IconButton
-                      render={<MenuTrigger />}
-                      variant="ghost"
-                      size="icon-sm"
-                      label="Filter by project"
-                      tooltip="Filter by project"
-                      className={cn(projectId && "text-foreground")}
-                    >
-                      <FilterIcon className="size-4" />
-                    </IconButton>
-                    <ComposerPickerMenuPopup
-                      align="end"
-                      side="bottom"
-                      className="w-64 min-w-64"
-                    >
-                      <MenuGroup>
-                        <MenuGroupLabel>Project</MenuGroupLabel>
-                        <MenuItem onClick={() => setProjectId(null)}>
-                          <span className="min-w-0 flex-1 truncate">
-                            All projects
-                          </span>
-                          {!projectId && (
-                            <CheckIcon className="size-3.5 shrink-0" />
-                          )}
-                        </MenuItem>
-                        {Object.values(projects)
-                          .filter((p) => p.is_git)
-                          .map((p) => (
-                            <MenuItem
-                              key={p.id}
-                              onClick={() => setProjectId(p.id)}
-                            >
-                              <span className="min-w-0 flex-1 truncate">
-                                {p.name}
-                              </span>
-                              {projectId === p.id && (
-                                <CheckIcon className="size-3.5 shrink-0" />
-                              )}
-                            </MenuItem>
-                          ))}
-                      </MenuGroup>
-                    </ComposerPickerMenuPopup>
-                  </Menu>
-                </div>
-              </div>
-
-              {error && (
-                <p className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                  {error}
-                </p>
-              )}
-
-              {rows === null ? (
-                <div className="space-y-0.5">
-                  {Array.from({ length: 7 }).map((_, i) => (
-                    <div
-                      key={i}
-                      className="h-13 w-full rounded-lg bg-[var(--color-background-button-secondary-hover)]/45 motion-safe:animate-pulse"
-                    />
-                  ))}
-                </div>
-              ) : targets.length === 0 ? (
-                <Empty className="py-16">
-                  <EmptyHeader>
-                    <EmptyTitle>No git projects</EmptyTitle>
-                    <EmptyDescription>
-                      Add a project that lives in a GitHub repository to see its
-                      pull requests here.
-                    </EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
-              ) : groups.length === 0 ? (
-                <Empty className="py-16">
-                  <EmptyHeader>
-                    <EmptyTitle>
-                      No {filter === "all" ? "" : `${filter} `}pull requests
-                    </EmptyTitle>
-                    <EmptyDescription>
-                      {pending
-                        ? "Checking GitHub"
-                        : "Pull requests show up here for projects with a GitHub remote, using the GitHub CLI signed in on this Mac."}
-                    </EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
-              ) : (
-                <div className="space-y-0.5">
-                  {groups.map(([pid, list], gi) => (
-                    <div key={pid} className="t-stagger">
-                      <h2
-                        className={cn(
-                          "pb-0.5 text-[length:var(--app-font-size-ui-sm,11px)] font-medium text-muted-foreground/70",
-                          gi > 0 && "pt-2.5"
-                        )}
-                      >
-                        {projects[pid]?.name}
-                      </h2>
-                      {list.map((r) => (
-                        <PullRequestRow
-                          key={`${pid}:${r.pr.number}`}
-                          row={r}
-                          selected={
-                            selection?.projectId === pid &&
-                            selection?.number === r.pr.number
-                          }
-                        />
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              )}
-              {pending && rows !== null && (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground/70">
-                  <Spinner size={12} /> Refreshing
-                </div>
-              )}
-              {visibleCount < matching.length && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    setVisibleCount((count) => count + PR_ROWS_BATCH)
-                  }
-                  className="flex w-full items-center justify-center rounded-md border border-[color:var(--color-border)] px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground"
-                >
-                  Show {Math.min(PR_ROWS_BATCH, matching.length - visibleCount)}{" "}
-                  more of {matching.length} pull requests
-                </button>
-              )}
-            </div>
-          </main>
+        <aside ref={listRef} className="pr-inbox-list" aria-label="Pull requests list">
+          <PrList />
+          <ResizeHandle
+            edge="right"
+            label="Resize pull request list"
+            onPointerDown={resize.onPointerDown}
+            dragging={resize.dragging}
+            onReset={() => resize.setWidth(LIST_DEFAULT)}
+            onKeyDown={(event) => {
+              const step = event.shiftKey ? KEY_STEP * 4 : KEY_STEP
+              if (event.key === "ArrowLeft") resize.setWidth(resize.width - step)
+              else if (event.key === "ArrowRight") resize.setWidth(resize.width + step)
+              else return
+              event.preventDefault()
+            }}
+            className="pr-resize"
+          />
         </aside>
         {selection ? (
           <section
+            ref={detailRef}
             className="pr-inbox-detail"
             aria-label="Selected pull request"
           >
@@ -409,85 +101,19 @@ export function PullRequests() {
             />
           </section>
         ) : (
-          <div className="pr-inbox-detail pr-inbox-placeholder items-center justify-center gap-3 p-6 text-center text-muted-foreground">
-            <GitPullRequestIcon className="size-7" />
+          <div className="pr-inbox-detail pr-inbox-placeholder items-center justify-center gap-2 p-6 text-center">
+            <GitPullRequestIcon className={cn("mb-1 size-7", PR_QUIET_INK)} />
             <p className="font-medium text-foreground">Select a pull request</p>
-            <p className="max-w-xs text-sm leading-relaxed">
-              Read its overview, review changes and send selected findings to an
-              agent.
+            <p className="max-w-xs text-sm leading-relaxed text-muted-foreground">
+              Read its summary, review changes and send findings to an agent.
+            </p>
+            <p className={cn("mt-2 flex items-center gap-1.5", PR_FINE_TEXT, PR_QUIET_INK)}>
+              <Kbd>↑</Kbd>
+              <Kbd>↓</Kbd> to move · <Kbd>Enter</Kbd> to open
             </p>
           </div>
         )}
       </div>
-    </div>
-  )
-}
-
-function stateGlyph(pr: PullRequest) {
-  const state = pr.state.toUpperCase()
-  if (state === "MERGED")
-    return (
-      <GitMergeIcon className="size-[1.125rem] text-[color:var(--color-status-merged,#a371f7)]" />
-    )
-  if (state === "CLOSED")
-    return (
-      <GitPullRequestClosedIcon className="size-[1.125rem] text-muted-foreground" />
-    )
-  if (pr.is_draft)
-    return (
-      <GitPullRequestIcon className="size-[1.125rem] text-muted-foreground" />
-    )
-  return (
-    <GitPullRequestIcon className="size-[1.125rem] text-[var(--color-decoration-added)]" />
-  )
-}
-
-function PullRequestRow({ row, selected }: { row: Row; selected: boolean }) {
-  const { pr, project } = row
-  return (
-    <div
-      className={cn(
-        "group -mx-2 flex w-[calc(100%+1rem)] items-stretch rounded-lg text-start transition-colors focus-within:bg-[var(--color-background-elevated-secondary)]/70 hover:bg-[var(--color-background-elevated-secondary)]/70",
-        selected && "bg-[var(--color-background-button-secondary)]"
-      )}
-    >
-      <button
-        id={`pr-row-${project.id}-${pr.number}`}
-        aria-current={selected ? "page" : undefined}
-        type="button"
-        onClick={() => openPullRequest(project.id, pr.number)}
-        className="grid min-w-0 flex-1 grid-cols-[auto_minmax(0,1fr)] items-start gap-2 rounded-lg px-2 py-2 text-start focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
-      >
-        <span className="flex size-[1.125rem] shrink-0 items-center justify-center">
-          {stateGlyph(pr)}
-        </span>
-        <span className="min-w-0">
-          <span className="flex min-w-0 items-center gap-1.5">
-            <span
-              className="line-clamp-2 min-w-0 flex-1 text-[length:var(--app-font-size-ui-lg,13px)] leading-[1.5] font-medium text-foreground"
-              title={pr.title}
-            >
-              {pr.title}
-            </span>
-            {pr.is_draft && (
-              <span className="shrink-0 rounded-full bg-[var(--color-background-elevated-secondary)] px-1.5 py-px text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground">
-                Draft
-              </span>
-            )}
-          </span>
-          <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/70">
-            <span className="shrink-0 tabular-nums">#{pr.number}</span>
-            <span className="truncate">{pr.author}</span>
-            <span className="max-w-[14rem] truncate">{pr.head}</span>
-            <span className="opacity-60">→</span>
-            <span className="truncate">{pr.base}</span>
-          </span>
-        </span>
-        <span className="col-start-2 flex flex-wrap items-center gap-2 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/70 tabular-nums">
-          <span>{relativeTime(pr.updated_at)}</span>
-          <span className="capitalize">{pr.state.toLowerCase()}</span>
-        </span>
-      </button>
     </div>
   )
 }
