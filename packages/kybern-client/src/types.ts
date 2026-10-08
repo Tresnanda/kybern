@@ -148,6 +148,32 @@ export interface ProviderModel {
   efforts?: string[];
   default_effort?: string | null;
   is_default?: boolean;
+  /** Traits besides effort (context size, fast mode). One row per model; `variants` maps trait values to selectors. */
+  parameters?: ModelParameter[];
+  /** Selectable trait combinations. `id` on the row is the default one. */
+  variants?: ModelVariant[];
+}
+
+export interface ModelParameter {
+  id: string;
+  label: string;
+  values: ModelParameterValue[];
+  /** Value of the row's default combination. */
+  default: string;
+}
+
+export interface ModelParameterValue {
+  value: string;
+  label: string;
+}
+
+export interface ModelVariant {
+  /** Model selector to send for this combination. */
+  id: string;
+  params: Record<string, string>;
+  /** Empty means the row's efforts. */
+  efforts?: string[];
+  default_effort?: string | null;
 }
 
 export interface ProviderStatus {
