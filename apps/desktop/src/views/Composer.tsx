@@ -76,7 +76,7 @@ import {
   type MentionKind,
 } from "./composerMentions"
 import { SendCancelled } from "./sendCancelled"
-import { findModel, modelQualifier } from "../../../../packages/kybern-client/src/models"
+import { findModel, modelQualifier, selectedVariant, traitSummary, variantSelector } from "../../../../packages/kybern-client/src/models"
 import { isChildThread } from "../../../../packages/kybern-client/src/subagents.ts"
 import { ModelPicker } from "@/components/kybern/ModelPicker"
 
@@ -863,9 +863,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const status = provider ? providers.find((p) => p.kind === provider.kind) : undefined
   const models = status?.models ?? []
   const current = model ? findModel(models, model) : models.find((m) => m.is_default)
-  const modelLabel = current?.display_name ?? (model || null)
+  const traitLabel = traitSummary(current, model)
+  const modelLabel = current ? `${current.display_name}${traitLabel ? ` · ${traitLabel}` : ""}` : model || null
   const modelQualifierLabel = modelQualifier(models, current)
-  const effortLabel = effort ?? current?.default_effort ?? null
+  const effortLabel = effort ?? selectedVariant(current, model)?.default_effort ?? current?.default_effort ?? null
   const canPickModel = !!onModelChange
   const canReloadModels = !!onModelChange && !!status?.available && status.supports_model_switch
   const canPickProvider = !!onProviderChange
@@ -1291,7 +1292,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                       void refreshModelCatalog(true)
                     }}
                     onModelChange={changeModel}
-                    onEffortChange={(next) => changeModel(current?.id ?? model ?? undefined, next)}
+                    onEffortChange={(next) => changeModel(variantSelector(current, model) ?? model ?? undefined, next)}
                     onProviderChange={changeProvider}
                     onReload={() => void reloadModels()}
                     onSetUpProvider={(kind) => useStore.getState().set({ settingsOpen: true, settingsTab: "agents", settingsFocus: `provider:${kind}` })}

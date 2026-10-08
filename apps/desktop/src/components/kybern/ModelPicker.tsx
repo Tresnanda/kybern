@@ -2,8 +2,9 @@
 // Purpose: The composer's agent / model / effort panel. One searchable list that
 // stays usable from a 4-model catalog to a 600-model one: backends (or families)
 // become sections, long sections collapse, favorites and recent picks sit on top,
-// and a favorites view gathers starred models from every harness. Effort is a
-// stepped slider under the list.
+// and a favorites view gathers starred models from every harness. Traits of the
+// selected model (context size, fast mode) and its effort sit under the list: a
+// segmented control, a switch, or a small menu per trait, then a stepped slider.
 // Layer: Composer UI
 // Exports: ModelPicker
 
@@ -12,25 +13,34 @@ import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type R
 
 import { ProviderMark, Spinner } from "@/components/kybern/bits"
 import { TextSwap } from "@/components/kybern/motion"
+import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
+import { Menu, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
+import { Switch } from "@/components/kit/switch"
 import { COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME, COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME } from "@/components/kit/chat/composerPickerStyles"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { useLocalStorage } from "@/lib/hooks"
 import { PROVIDER_LABEL, formatEffort, isMac, mod } from "@/lib/format"
-import { RefreshCwIcon, SearchIcon, StarFilledIcon, StarIcon } from "@/lib/kit/icons"
+import { ChevronDownIcon, RefreshCwIcon, SearchIcon, StarFilledIcon, StarIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
-import type { ProviderInstance, ProviderKind, ProviderModel, ProviderStatus } from "@/protocol"
+import type { ModelParameter, ProviderInstance, ProviderKind, ProviderModel, ProviderStatus } from "@/protocol"
 import {
   MODEL_FLAT_LIMIT,
   MODEL_SECTION_PREVIEW,
   backendLabel,
   catalogBackends,
+  changeTrait,
   customModelId,
+  favoriteMatches,
   findModel,
-  isFavorite,
+  isFavoriteModel,
   modelSections,
+  parameterSwitch,
   rememberModel,
   searchModels,
-  toggleFavorite,
+  selectedVariant,
+  toggleFavoriteModel,
+  traitValues,
+  variantSelector,
   type FavoriteModel,
   type ModelSection,
 } from "../../../../../packages/kybern-client/src/models"
@@ -145,7 +155,6 @@ function ModelPickerPanel({
   const multiBackend = useMemo(() => catalogBackends(catalog).length > 1, [catalog])
   const large = catalog.length > MODEL_FLAT_LIMIT
   const agentName = status?.display_name ?? PROVIDER_LABEL[provider.kind]
-  const efforts = current ? current.efforts ?? [] : status?.supported_efforts ?? []
   const effortValue = effort ?? current?.default_effort ?? null
 
   const results = useMemo(() => (query.trim() && !showFavorites ? searchModels(catalog, query) : []), [catalog, query, showFavorites])
@@ -167,7 +176,9 @@ function ModelPickerPanel({
         if (!item.available || (item.kind !== provider.kind && !canPickProvider)) continue
         const starred = favorites
           .filter((favorite) => favorite.kind === item.kind && (favorite.instance ?? "default") === (item.kind === provider.kind ? provider.instance : instances?.[item.kind] ?? "default"))
-          .map((favorite) => item.models?.find((entry) => entry.id === favorite.id) ?? { id: favorite.id, display_name: favorite.id })
+          .map((favorite) => item.models?.find((entry) => favoriteMatches(favorite, entry)) ?? { id: favorite.id, display_name: favorite.id })
+          // Older favorites name a variant; several can resolve to one row.
+          .filter((entry, index, list) => list.findIndex((other) => other.id === entry.id) === index)
         const shown = search ? searchModels(starred, search) : starred
         if (!shown.length) continue
         const backends = catalogBackends(item.models ?? []).length > 1
@@ -201,12 +212,12 @@ function ModelPickerPanel({
     const sections = modelSections(catalog)
     const grouped = sections.length > 1
     if (grouped) {
-      const starred = catalog.filter((item) => isFavorite(favorites, provider.kind, item.id, provider.instance))
+      const starred = catalog.filter((item) => isFavoriteModel(favorites, provider.kind, item, provider.instance))
       if (starred.length) out.push({ key: "starred", label: "Favorites", rows: starred.map((item) => modelRow("starred", item, multiBackend)) })
       const recent = (recents[`${provider.kind}:${provider.instance}`] ?? (provider.instance === "default" ? recents[provider.kind] : undefined) ?? [])
-        .filter((id) => !isFavorite(favorites, provider.kind, id, provider.instance))
-        .map((id) => catalog.find((item) => item.id === id))
-        .filter((item): item is ProviderModel => !!item)
+        .map((id) => findModel(catalog, id))
+        .filter((item): item is ProviderModel => !!item && !isFavoriteModel(favorites, provider.kind, item, provider.instance))
+        .filter((item, index, list) => list.indexOf(item) === index)
       if (recent.length) out.push({ key: "recent", label: "Recent", rows: recent.map((item) => modelRow("recent", item, multiBackend)) })
     }
     for (const section of sections) {
@@ -236,7 +247,7 @@ function ModelPickerPanel({
   }, [activeRow])
 
   const star = (row: Row) => {
-    if (row.kind === "model") setFavorites((value) => toggleFavorite(value, row.harness, row.model.id, row.harness === provider.kind ? provider.instance : instances?.[row.harness] ?? "default"))
+    if (row.kind === "model") setFavorites((value) => toggleFavoriteModel(value, row.harness, row.model, row.harness === provider.kind ? provider.instance : instances?.[row.harness] ?? "default"))
   }
 
   const pick = async (row: Row) => {
@@ -249,7 +260,8 @@ function ModelPickerPanel({
       if (await onModelChange("", undefined)) close()
       return
     }
-    const id = row.kind === "model" ? row.model.id : row.id
+    // Picking the model already in use keeps its traits.
+    const id = row.kind === "model" ? (row.harness === provider.kind && row.model.id === selectedId && model ? variantSelector(row.model, model) ?? row.model.id : row.model.id) : row.id
     const nextEfforts = row.kind === "model" ? row.model.efforts ?? [] : []
     // Keep the chosen effort when the new model offers it; otherwise its own default.
     const nextEffort = effortValue && nextEfforts.includes(effortValue)
@@ -260,7 +272,7 @@ function ModelPickerPanel({
       ? await onModelChange(id, nextEffort)
       : await onProviderChange({ kind: harness, instance: instances?.[harness] ?? "default" }, { model: id, effort: nextEffort })
     if (saved) {
-      setRecents((value) => ({ ...value, [`${harness}:${harness === provider.kind ? provider.instance : instances?.[harness] ?? "default"}`]: rememberModel(value[`${harness}:${harness === provider.kind ? provider.instance : instances?.[harness] ?? "default"}`] ?? [], id) }))
+      setRecents((value) => ({ ...value, [`${harness}:${harness === provider.kind ? provider.instance : instances?.[harness] ?? "default"}`]: rememberModel(value[`${harness}:${harness === provider.kind ? provider.instance : instances?.[harness] ?? "default"}`] ?? [], row.kind === "model" ? row.model.id : id) }))
       close()
     }
   }
@@ -427,7 +439,7 @@ function ModelPickerPanel({
                     agentName={agentName}
                     active={row === activeRow}
                     selected={isSelected(row)}
-                    favorite={row.kind === "model" && isFavorite(favorites, row.harness, row.model.id, row.harness === provider.kind ? provider.instance : instances?.[row.harness] ?? "default")}
+                    favorite={row.kind === "model" && isFavoriteModel(favorites, row.harness, row.model, row.harness === provider.kind ? provider.instance : instances?.[row.harness] ?? "default")}
                     starOnHover={showFavorites}
                     onHover={() => setActiveKey(row.key)}
                     onPick={() => void pick(row)}
@@ -458,19 +470,167 @@ function ModelPickerPanel({
         </>
       )}
 
-      {canPickModel && efforts.length > 1 && (
-        <>
-          <div aria-hidden className={PICKER_DIVIDER_CLASS_NAME} />
-          <EffortSlider
-            efforts={efforts}
-            value={effortValue}
-            defaultEffort={current?.default_effort ?? null}
-            disabled={busy}
-            onChange={onEffortChange}
-          />
-        </>
+      {canPickModel && (
+        <ModelFooter
+          current={current}
+          model={model}
+          effort={effort}
+          fallbackEfforts={status?.supported_efforts}
+          busy={busy}
+          onModelChange={onModelChange}
+          onEffortChange={onEffortChange}
+        />
       )}
     </>
+  )
+}
+
+/**
+ * Traits of the selected model, then its effort. A model with traits is one
+ * row, so the variant a thread holds decides which efforts apply.
+ */
+function ModelFooter({
+  current,
+  model,
+  effort,
+  fallbackEfforts,
+  busy,
+  onModelChange,
+  onEffortChange,
+}: {
+  current: ProviderModel | undefined
+  model?: string | null
+  effort?: string | null
+  fallbackEfforts?: string[]
+  busy: boolean
+  onModelChange: (model: string, effort: string | undefined) => Promise<boolean>
+  onEffortChange: (effort: string) => Promise<boolean>
+}) {
+  const variant = selectedVariant(current, model)
+  const efforts = current ? (variant?.efforts?.length ? variant.efforts : current.efforts ?? []) : fallbackEfforts ?? []
+  const defaultEffort = variant?.default_effort ?? current?.default_effort ?? null
+  const effortValue = effort ?? defaultEffort
+  const parameters = current?.parameters ?? []
+  const traits = traitValues(current, model)
+  // Shown until the parent reports the new variant; cleared on failure.
+  const [pending, setPending] = useState<{ id: string; value: string; from: string | undefined } | null>(null)
+  const shown = pending && pending.from === variant?.id ? { ...traits, [pending.id]: pending.value } : traits
+
+  const change = async (parameter: string, value: string) => {
+    if (!current || busy || traits[parameter] === value) return
+    const next = changeTrait(current, model, parameter, value)
+    if (!next) return
+    const nextEfforts = next.efforts?.length ? next.efforts : current.efforts ?? []
+    // Keep the chosen effort when the new combination offers it; otherwise its own default.
+    const nextEffort = effortValue && nextEfforts.includes(effortValue) ? effortValue : next.default_effort ?? current.default_effort ?? undefined
+    setPending({ id: parameter, value, from: variant?.id })
+    if (!(await onModelChange(next.id, nextEffort))) setPending(null)
+  }
+
+  if (!parameters.length && efforts.length < 2) return null
+  return (
+    <>
+      <div aria-hidden className={PICKER_DIVIDER_CLASS_NAME} />
+      {parameters.length > 0 && (
+        <div className={cn("flex flex-col gap-2 px-3 pt-2.5 transition-opacity duration-150", efforts.length > 1 ? "pb-0.5" : "pb-3", busy && "opacity-60")}>
+          {parameters.map((parameter) => (
+            <TraitRow key={parameter.id} parameter={parameter} value={shown[parameter.id] ?? parameter.default} disabled={busy} onChange={(value) => void change(parameter.id, value)} />
+          ))}
+        </div>
+      )}
+      {efforts.length > 1 && (
+        <EffortSlider efforts={efforts} value={effortValue} defaultEffort={defaultEffort} disabled={busy} onChange={onEffortChange} />
+      )}
+    </>
+  )
+}
+
+/** Up to this many values read as a segmented control; more open a menu. */
+const SEGMENTED_LIMIT = 4
+
+/**
+ * One model trait. A plain on/off choice is a switch, a few values are a
+ * segmented control, and a longer list is a menu. The label names the trait
+ * and the control shows its state, so no value ever reads as "fast: false".
+ */
+function TraitRow({
+  parameter,
+  value,
+  disabled,
+  onChange,
+}: {
+  parameter: ModelParameter
+  value: string
+  disabled: boolean
+  onChange: (value: string) => void
+}) {
+  const labelId = useId()
+  const toggle = parameterSwitch(parameter)
+  const labelOf = (item: string) => parameter.values.find((entry) => entry.value === item)?.label ?? item
+  return (
+    <div className="flex min-h-7 items-center justify-between gap-3 text-[length:var(--app-font-size-ui-sm,11px)]">
+      <span id={labelId} className="shrink-0 text-muted-foreground/50">{parameter.label}</span>
+      {toggle ? (
+        <Switch aria-labelledby={labelId} checked={value === toggle.on} disabled={disabled} onCheckedChange={(checked) => onChange(checked ? toggle.on : toggle.off)} />
+      ) : parameter.values.length <= SEGMENTED_LIMIT ? (
+        <div
+          role="radiogroup"
+          aria-labelledby={labelId}
+          className="inline-flex min-w-0 items-center gap-0.5 rounded-[0.5rem] bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] p-0.5"
+          onKeyDown={(event) => {
+            const step = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 0
+            if (!step || disabled) return
+            event.preventDefault()
+            const index = parameter.values.findIndex((entry) => entry.value === value)
+            const next = parameter.values[(index + step + parameter.values.length) % parameter.values.length]!
+            onChange(next.value)
+            event.currentTarget.querySelector<HTMLElement>(`[data-value="${CSS.escape(next.value)}"]`)?.focus()
+          }}
+        >
+          {parameter.values.map((entry) => {
+            const selected = entry.value === value
+            return (
+              <button
+                key={entry.value}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                data-value={entry.value}
+                tabIndex={selected ? 0 : -1}
+                disabled={disabled}
+                onClick={() => onChange(entry.value)}
+                className={cn(
+                  "press-row h-6 min-w-9 rounded-[0.375rem] px-2 tabular-nums outline-none transition-[background-color,color,box-shadow] duration-150 focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default",
+                  selected
+                    ? "bg-[var(--color-background-surface)] text-foreground shadow-[0_0_0_0.5px_color-mix(in_srgb,var(--foreground)_8%,transparent),0_1px_2px_rgba(0,0,0,0.08)]"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {entry.label}
+              </button>
+            )
+          })}
+        </div>
+      ) : (
+        <Menu>
+          <MenuTrigger
+            disabled={disabled}
+            aria-labelledby={labelId}
+            className="press-row inline-flex h-6 min-w-0 items-center gap-1 rounded-[0.4rem] bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] pe-1.5 ps-2 text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <span className="truncate">{labelOf(value)}</span>
+            <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
+          </MenuTrigger>
+          <ComposerPickerMenuPopup align="end" side="top">
+            <MenuRadioGroup value={value} onValueChange={(next) => onChange(String(next))}>
+              {parameter.values.map((entry) => (
+                <MenuRadioItem key={entry.value} value={entry.value}>{entry.label}</MenuRadioItem>
+              ))}
+            </MenuRadioGroup>
+          </ComposerPickerMenuPopup>
+        </Menu>
+      )}
+    </div>
   )
 }
 
