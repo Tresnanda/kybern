@@ -6,7 +6,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{
     Json, Router,
-    routing::{get, post},
+    routing::{any, get, post},
 };
 use chrono::Utc;
 use kybern_protocol::methods::{AssetInfo, PairRequest, PairResponse};
@@ -24,6 +24,9 @@ pub fn routes() -> Router<AppState> {
         .route("/preview-files/{ticket}", get(crate::previews::files::serve_index))
         .route("/preview-files/{ticket}/", get(crate::previews::files::serve_index))
         .route("/preview-files/{ticket}/{*path}", get(crate::previews::files::serve))
+        .route("/preview-proxy/{ticket}", any(crate::previews::proxy::serve))
+        .route("/preview-proxy/{ticket}/", any(crate::previews::proxy::serve))
+        .route("/preview-proxy/{ticket}/{*path}", any(crate::previews::proxy::serve))
         .route("/pair", post(pair).options(asset_preflight))
         .route("/session", post(session).options(asset_preflight))
         .route("/assets", post(upload_asset).options(asset_preflight))
