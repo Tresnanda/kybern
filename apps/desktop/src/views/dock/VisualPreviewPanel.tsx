@@ -18,17 +18,19 @@ import { visualFileName, visualThemeFragment } from "../../../../../packages/kyb
 import { VisualFrame } from "../VisualReply"
 import { currentTheme, restorePreviewFocus } from "../visualFrameSupport"
 import { PreviewAction, PreviewActionGroup, PreviewPanel, PreviewToggle } from "./PreviewPanel"
+import { WebPreviewPanel } from "./preview/WebPreviewPanel"
 
 const SOURCE_PREVIEW_BYTES = 256_000
 
-/** The dock Preview tab: whichever preview the selected thread holds, or an empty state. */
+/** The dock Preview tab: a visual reply, or the web page kind (which also shows the empty state). */
 export const DockPreviewPane = memo(function DockPreviewPane({ threadId, active }: { threadId: ThreadId | null; active: boolean }) {
   const preview = useStore((s) => (threadId ? s.previews[threadId] : undefined))
-  if (!threadId || !preview) {
-    return <div className="flex h-full items-center justify-center p-6 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">Open a visual reply in this thread to preview it here.</div>
+  if (!threadId) return null
+  if (preview?.kind === "visual") {
+    // One preview per thread: switching to another visual replaces the document.
+    return <VisualPreviewPanel key={`${threadId}:${preview.visual.id}`} threadId={threadId} preview={preview} active={active} />
   }
-  // One preview per thread: switching to another visual replaces the document.
-  return <VisualPreviewPanel key={`${threadId}:${preview.visual.id}`} threadId={threadId} preview={preview} active={active} />
+  return <WebPreviewPanel threadId={threadId} preview={preview} active={active} />
 })
 
 function VisualPreviewPanel({ threadId, preview, active }: { threadId: ThreadId; preview: Extract<DockPreview, { kind: "visual" }>; active: boolean }) {

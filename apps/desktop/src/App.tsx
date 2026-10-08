@@ -33,6 +33,8 @@ import { SessionsDialog } from "@/views/SessionsDialog"
 import { Palette } from "@/views/Palette"
 import { PullRequests } from "@/views/PullRequests"
 import { RightPanel } from "@/views/RightPanel"
+import { PreviewMiniPlayer } from "@/views/dock/preview/PreviewMiniPlayer"
+import { PreviewSurfaceLayer } from "@/views/dock/preview/PreviewSurfaceLayer"
 import { SettingsScreen } from "@/views/SettingsScreen"
 import { ThreadSidebar } from "@/views/Sidebar"
 import { SplitThreads } from "@/views/SplitThreads"
@@ -132,6 +134,18 @@ function Workspace() {
     else newThread()
   }, { allowInInput: true })
   useHotkey("mod+shift+n", () => openQuickNote(), { allowInInput: true })
+  // ⌥⌘P floats the page over the chat, or returns it to the dock.
+  useHotkey("mod+alt+p", () => {
+    const state = useStore.getState()
+    const web = (id: string) => { const preview = state.previews[id]; return preview?.kind === "web" && preview.entries.length > 0 ? preview : undefined }
+    const selectedId = state.selected.kind === "thread" ? state.selected.id : null
+    const floatingId = Object.keys(state.previews).find((id) => web(id)?.floating)
+    const target = selectedId && web(selectedId) ? selectedId : floatingId
+    const preview = target ? web(target) : undefined
+    if (!target || !preview || preview.entries[preview.index]?.target.kind === "external") return
+    if (preview.floating && selectedId !== target) state.selectThread(target)
+    state.setPreviewFloating(target, !preview.floating)
+  }, { allowInInput: true, enabled: !settingsOpen })
   useHotkey("mod+,", () => { setKeyboardNavigation(true); set({ settingsOpen: true }) }, { allowInInput: true })
   useHotkey("mod+\\", () => {
     if (useStore.getState().settingsOpen) return
@@ -310,6 +324,11 @@ function Workspace() {
         </motion.div>}
       </AnimatePresence>
 
+      {/* Live preview pages sit in one stable layer; the dock and the mini player only provide slots. */}
+      <ErrorBoundary label="the page preview">
+        <PreviewSurfaceLayer />
+        <PreviewMiniPlayer />
+      </ErrorBoundary>
       <ErrorBoundary label="the palette">
         <Palette />
       </ErrorBoundary>
