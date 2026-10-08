@@ -78,7 +78,6 @@ function Shell() {
 const web = () => { const p = useStore.getState().previews[threadId]; return p?.kind === "web" ? p : undefined }
 const load = () => usePreviewSessions.getState().sessions[threadId]?.load
 const addressText = () => document.querySelector<HTMLElement>("[data-preview-address]")?.textContent ?? ""
-const click = (selector: string) => { const el = document.querySelector<HTMLElement>(selector); check(el, `Missing ${selector}`); el.click() }
 const buttonByText = (text: string) => [...document.querySelectorAll<HTMLElement>("button")].find(b => b.textContent?.trim() === text)
 const clickText = (text: string) => { const b = buttonByText(text); check(b, `Missing button "${text}"`); b.click() }
 const results: Record<string, unknown> = {}
