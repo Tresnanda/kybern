@@ -97,3 +97,16 @@ test("older daemons list the CLI account and the named accounts from settings", 
   assert.equal(defaultAccountFor(accounts, "claude-code").provider.instance, "work")
   assert.equal(defaultAccountFor(accounts, "codex").provider.instance, "default")
 })
+
+test("a late poll cannot pull a signed-in login back, but a new error gets through", async () => {
+  const { acceptLoginUpdate, loginHost } = await import("./src/lib/accounts.ts")
+  const waiting = login({ phase: "waiting" })
+  const done = login({ phase: "signed_in" })
+  assert.equal(acceptLoginUpdate(done, waiting), done)
+  assert.equal(acceptLoginUpdate(waiting, done), done)
+  const wrongCode = login({ phase: "waiting", error: "That code didn't work." })
+  assert.equal(acceptLoginUpdate(waiting, wrongCode), wrongCode)
+  assert.equal(acceptLoginUpdate(done, login({ id: "l2", phase: "starting" })).id, "l2")
+  assert.equal(loginHost("https://www.claude.com/cai/oauth/authorize?x=1"), "claude.com")
+  assert.equal(loginHost("nonsense"), null)
+})

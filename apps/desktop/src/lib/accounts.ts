@@ -216,3 +216,26 @@ export function isNameValid(name: string): boolean {
   const trimmed = name.trim()
   return trimmed.length > 0 && trimmed.length <= 120
 }
+
+const PHASE_RANK: Record<AccountLogin["phase"], number> = { starting: 0, waiting: 1, verifying: 2, signed_in: 3, failed: 3, canceled: 3 }
+
+/**
+ * Which of two reports of one login to keep. A poll answered late must not pull
+ * a login back from `signed_in`, but a report of a new error (a wrong code
+ * leaves the phase where it was) still gets through.
+ */
+export function acceptLoginUpdate(previous: AccountLogin | null, next: AccountLogin): AccountLogin {
+  if (!previous || previous.id !== next.id) return next
+  if (PHASE_RANK[next.phase] >= PHASE_RANK[previous.phase] || next.error !== previous.error) return next
+  return previous
+}
+
+/** "claude.com" from a sign-in URL, for "We opened claude.com" and "Open auth.openai.com". */
+export function loginHost(url: string | null | undefined): string | null {
+  if (!url) return null
+  try {
+    return new URL(url).hostname.replace(/^www\./, "")
+  } catch {
+    return null
+  }
+}

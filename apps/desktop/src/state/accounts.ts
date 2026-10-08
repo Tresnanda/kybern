@@ -15,7 +15,7 @@ import { create } from "zustand"
 import { PROVIDER_NAMES } from "@/lib/providerUsage"
 import { accountFor, defaultAccountFor, isCliInstance, legacyAccounts } from "@/lib/accounts"
 import { reloadOnHotUpdate } from "@/lib/hot"
-import type { AccountLogin, AccountSummary, KybernClient, ProviderKind } from "@/protocol"
+import type { AccountLogin, AccountSummary, KybernClient, ProviderKind, ProviderSettings } from "@/protocol"
 import { ACCOUNTS_LOGIN_CHANGED_NOTIFICATION, RpcCallError, codes } from "@/protocol"
 import { errorText, rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
@@ -29,12 +29,16 @@ interface EnvironmentAccounts {
 
 interface AccountsState {
   byEnvironment: Record<string, EnvironmentAccounts>
+  /** `kind:instance` of an account that was just added; its row flashes once. */
+  flash: string | null
+  /** Element id the Usage page scrolls to when it opens. */
+  usageAnchor: string | null
 }
 
 const EMPTY: EnvironmentAccounts = { accounts: [], legacy: false, loaded: false }
 const NO_ACCOUNTS: AccountSummary[] = []
 
-export const useAccountsStore = create<AccountsState>(() => ({ byEnvironment: {} }))
+export const useAccountsStore = create<AccountsState>(() => ({ byEnvironment: {}, flash: null, usageAnchor: null }))
 
 function put(environmentId: string, next: Partial<EnvironmentAccounts>) {
   useAccountsStore.setState((state) => ({
@@ -132,7 +136,38 @@ export function useDefaultAccount(kind: ProviderKind | undefined): AccountSummar
   return kind ? defaultAccountFor(accounts, kind) : undefined
 }
 
+let flashTimer: ReturnType<typeof setTimeout> | undefined
+/** Flash the row of a newly added account once (600ms). */
+export function flashAccount(kind: ProviderKind, instance: string) {
+  clearTimeout(flashTimer)
+  useAccountsStore.setState({ flash: `${kind}:${instance}` })
+  flashTimer = setTimeout(() => useAccountsStore.setState({ flash: null }), 900)
+}
+
+export function useAccountFlash(kind: ProviderKind, instance: string): boolean {
+  return useAccountsStore((s) => s.flash === `${kind}:${instance}`)
+}
+
 // ── Changing ─────────────────────────────────────────────────────────────────
+
+/**
+ * Save a change to one agent's provider settings. The store updates at once and
+ * rolls back when the daemon refuses; the error is thrown for the caller to word.
+ */
+export async function updateProviderSettings(kind: ProviderKind, change: (current: ProviderSettings) => ProviderSettings): Promise<void> {
+  const state = useStore.getState()
+  const settings = state.settings
+  if (!settings) throw new Error("Settings are not loaded.")
+  const next = { ...settings, providers: { ...settings.providers, [kind]: change(settings.providers[kind] ?? { env: {} }) } }
+  state.set({ settings: next })
+  try {
+    useStore.getState().set({ settings: await rpc().call("settings.update", { settings: next }) })
+  } catch (error) {
+    useStore.getState().set({ settings })
+    throw error
+  }
+  await refreshAccounts()
+}
 
 /**
  * Make an account the default for its agent. The CLI account clears
@@ -140,23 +175,33 @@ export function useDefaultAccount(kind: ProviderKind | undefined): AccountSummar
  */
 export async function makeDefaultAccount(account: AccountSummary): Promise<boolean> {
   const { kind, instance } = account.provider
-  const state = useStore.getState()
-  const settings = state.settings
-  if (!settings) return false
-  const current = settings.providers[kind] ?? { env: {} }
-  const next = { ...settings, providers: { ...settings.providers, [kind]: { ...current, default_account: isCliInstance(instance) ? null : instance } } }
-  state.set({ settings: next })
   try {
-    const saved = await rpc().call("settings.update", { settings: next })
-    useStore.getState().set({ settings: saved })
-    await refreshAccounts()
+    await updateProviderSettings(kind, (current) => ({ ...current, default_account: isCliInstance(instance) ? null : instance }))
     toast.success(`${account.name} is now the default for ${PROVIDER_NAMES[kind] ?? kind}. Running turns keep their account.`)
     return true
   } catch (error) {
-    useStore.getState().set({ settings })
     toast.error("Unable to change the default account", { description: `${errorText(error)} Check your connection, then try again.` })
     return false
   }
+}
+
+// ── Usage page link ──────────────────────────────────────────────────────────
+
+/** Show the Usage page scrolled to one account's card (`usage-account-<kind>-<instance>`). */
+export function openUsageForAccount(kind: ProviderKind, instance: string) {
+  useAccountsStore.setState({ usageAnchor: usageAnchorId(kind, instance) })
+  const state = useStore.getState()
+  state.set({ settingsOpen: false })
+  state.selectUsage()
+}
+
+export const usageAnchorId = (kind: ProviderKind, instance: string) => `usage-account-${kind}-${instance}`
+
+/** The anchor the Usage page should scroll to, once; null when there is none. */
+export function takeUsageAnchor(): string | null {
+  const anchor = useAccountsStore.getState().usageAnchor
+  if (anchor) useAccountsStore.setState({ usageAnchor: null })
+  return anchor
 }
 
 // Stateful module: a hot update would drop the live subscriptions, so reload instead.
