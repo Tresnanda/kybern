@@ -208,6 +208,26 @@ impl GrantPolicy {
         }
         !self.system.iter().any(|system| folder.starts_with(system))
     }
+
+    /// Whether a thread's own folder (canonical) may be served whole without a
+    /// grant. Unlike a grant it may sit in a dot folder or in the data
+    /// directory's worktrees, but it must never cover the home directory, the
+    /// data directory (with `daemon.token`) or sit in `~/Library`:
+    /// a thread opened on `~` or `/` would otherwise expose every file below it
+    /// to the previewed page.
+    pub fn servable_thread_root(&self, root: &Path) -> bool {
+        if !root.is_absolute() || root.parent().is_none() {
+            return false;
+        }
+        if let Some(home) = &self.home
+            && (home.starts_with(root) || root.starts_with(home.join("Library")))
+        {
+            return false;
+        }
+        // Projects may live under system prefixes (`/usr/local/src`, temp
+        // folders under `/private/var`), so only coverage is refused here.
+        !(self.data_dir.starts_with(root) || (root.starts_with(&self.data_dir) && !root.starts_with(self.data_dir.join("worktrees"))))
+    }
 }
 
 /// Canonical folders from `Settings.preview_allowed_folders` that are still
@@ -370,7 +390,8 @@ fn resolve_file(
     }
     let canonical_cwd = roots.cwd.canonicalize().ok();
     let canonical_project = roots.project.as_ref().and_then(|project| project.canonicalize().ok());
-    let in_root = [canonical_cwd, canonical_project].into_iter().flatten().find(|root| entry.starts_with(root));
+    let in_root =
+        [canonical_cwd, canonical_project].into_iter().flatten().find(|root| entry.starts_with(root) && policy.servable_thread_root(root));
     let (root, in_project) = match in_root {
         Some(root) => (root, true),
         None => (entry.parent().ok_or_else(PreviewError::not_found)?.to_path_buf(), false),
@@ -495,6 +516,10 @@ pub async fn open(
         let host = reqwest::Url::parse(url).ok().and_then(|url| url.host_str().map(str::to_owned)).unwrap_or_default();
         // The proxy only ever reaches loopback on the daemon host.
         if is_loopback_host(&host) {
+            // Never a proxy into the daemon's own HTTP API.
+            if *port == state.port.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(PreviewError::invalid_address());
+            }
             if proxy::listener_addr(*port).await.is_none() {
                 return Err(PreviewError { code: "not_found", message: "Nothing is listening on that port yet.".into() });
             }

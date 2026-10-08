@@ -8811,8 +8811,14 @@ mod tests {
     #[tokio::test]
     async fn preview_open_tool_reports_status_notifies_clients_and_archive_revokes_tickets() {
         let fixture = Fixture::new();
-        std::fs::write(fixture.root.join("mock.html"), "<p>mock</p>").unwrap();
-        let thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Pi);
+        // The fixture project is the data directory, which previews never serve.
+        let work = std::env::temp_dir().join(format!("kybern-preview-tool-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&work).unwrap();
+        let work = work.canonicalize().unwrap();
+        std::fs::write(work.join("mock.html"), "<p>mock</p>").unwrap();
+        let mut thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Pi);
+        thread.cwd = work.to_string_lossy().into_owned();
+        fixture.orchestrator.inner.store.thread_upsert(&thread).unwrap();
         let (live, _) = fixture.active_app_tool_session(&thread).await;
         let call = |id: &'static str, args: serde_json::Value| {
             fixture.orchestrator.execute_native_app_tool_call(thread.id, live.session_instance_id, id, "kybern_preview_open", args)
@@ -8831,14 +8837,12 @@ mod tests {
         assert!(error.to_string().contains("bound to the current thread"), "{error}");
         assert!(call("p5", json!({"target": "mock.html", "allow_folder": true})).await.is_err(), "agents cannot grant folders");
         // Archiving a thread revokes its preview tickets.
-        let ticket = fixture.orchestrator.inner.previews.mint(
-            crate::previews::tickets::TicketKind::Files { root: fixture.root.clone() },
-            thread.id,
-            None,
-        );
+        let ticket =
+            fixture.orchestrator.inner.previews.mint(crate::previews::tickets::TicketKind::Files { root: work.clone() }, thread.id, None);
         assert!(fixture.orchestrator.inner.previews.lookup(&ticket).is_some());
         fixture.orchestrator.archive_thread(thread.id).await.unwrap();
         assert!(fixture.orchestrator.inner.previews.lookup(&ticket).is_none());
+        let _ = std::fs::remove_dir_all(&work);
     }
 
     #[tokio::test]

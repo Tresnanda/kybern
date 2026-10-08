@@ -2297,7 +2297,7 @@ pub struct PreviewProbeResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
 }
-method!(PreviewProbe, "previews.probe", Some(Scope::OrchestrationRead), PreviewProbeParams, PreviewProbeResult);
+method!(PreviewProbe, "previews.probe", Some(Scope::OrchestrationOperate), PreviewProbeParams, PreviewProbeResult);
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct PreviewServersListParams {
