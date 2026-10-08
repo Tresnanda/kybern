@@ -224,6 +224,11 @@ fn is_managed(data_dir: &Path, directory: &str) -> bool {
     let root = root.canonicalize().unwrap_or(root);
     let directory = PathBuf::from(directory);
     let directory = directory.canonicalize().unwrap_or(directory);
+    // A path that could not be resolved keeps its `..` parts, and `starts_with` compares
+    // components, so `accounts/../elsewhere` would otherwise count as inside the root.
+    if directory.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
+        return false;
+    }
     directory.starts_with(&root) && directory != root
 }
 
@@ -705,6 +710,8 @@ exit 2
     fn managed_folders_are_only_those_under_the_accounts_directory() {
         let root = std::env::temp_dir().join(format!("kybern-managed-test-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(root.join("accounts/claude/a")).unwrap();
+        // Resolve symlinks (macOS temp dirs) so unresolvable paths compare like they do on Linux.
+        let root = root.canonicalize().unwrap();
         assert!(is_managed(&root, &root.join("accounts/claude/a").to_string_lossy()));
         assert!(!is_managed(&root, &root.join("accounts").to_string_lossy()));
         assert!(!is_managed(&root, &root.join("accounts/../elsewhere").to_string_lossy()));
