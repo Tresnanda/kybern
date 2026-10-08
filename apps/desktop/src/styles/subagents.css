@@ -2,19 +2,22 @@
    subagent page (divider, prompt, end row, read-only bar) and the sidebar rows.
    Tokens and motion come from kit.css and motion.css; this adds only what they lack. */
 
-/* Provider disc in the avatar stack. The ring is the transcript surface, so overlapped
-   discs read as separate marks. */
+/* Provider disc: a plain filled badge with no stroke. A hairline inset ring read as a
+   stray outline around the mark, so separation comes from the fill alone. Only discs that
+   overlap in the avatar stack get a ring, in the surface colour, to cut the mark behind. */
 .sa-avatar {
   display: grid;
   width: 22px;
   height: 22px;
   place-items: center;
   border-radius: 9999px;
-  background: #f3f3f3;
-  box-shadow: 0 0 0 2px var(--background), inset 0 0 0 0.5px var(--color-border-heavy);
+  background: color-mix(in srgb, var(--foreground) 7%, var(--background));
 }
 .dark .sa-avatar {
   background: var(--color-background-control-opaque);
+}
+.sa-avatar--stacked {
+  box-shadow: 0 0 0 2px var(--background);
 }
 .sa-avatar--single {
   width: 20px;

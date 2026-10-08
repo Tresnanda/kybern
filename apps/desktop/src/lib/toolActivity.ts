@@ -2,6 +2,7 @@
 // Keeps the wire payload untouched while deriving a concise, tense-aware activity row.
 
 import type { JsonValue, ToolCall } from "@/protocol"
+import { isPreviewOpenTool, previewToolLabel } from "../../../../packages/kybern-client/src/previewTool.ts"
 import { orchestrationLabel, orchestrationTool } from "../../../../packages/kybern-client/src/orchestrationTools.ts"
 import { agentItemLabel, agentItemTool } from "./agentItemTools"
 import { toolSurface } from "./toolSurface"
@@ -670,6 +671,7 @@ export function toolLine(call: ToolCall, complete = true): ToolActivityLine {
   if (item) return line("other", "", complete, false, agentItemLabel(item, input, null, complete, false))
   const orchestration = orchestrationTool(name)
   if (orchestration) return line("delegate", "", complete, false, orchestrationLabel(orchestration, complete, false))
+  if (isPreviewOpenTool(name)) return line("other", "", complete, false, previewToolLabel(input, complete, false))
 
   if (!WEB_SEARCH_TOOLS.has(tool) && (matchesTool(COMMAND_TOOLS, tool, leaf) || leaf === "execcommand")) {
     const actions = commandActions(input)

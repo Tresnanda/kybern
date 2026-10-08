@@ -19,6 +19,7 @@ import type {
   Thread,
   ThreadActivitySummary,
   ThreadId,
+  HtmlVisual,
   ThreadEvent,
   ThreadMessageRecord,
   ProjectId,
@@ -81,7 +82,57 @@ export type Connection =
   | { state: "reconnecting"; detail?: string }
   | { state: "failed"; detail: string }
 
-export type RightTab = "collaboration" | "activity" | "changes" | "terminal" | "explorer" | "artifacts" | "notes" | "tasks" | "review"
+export type RightTab = "collaboration" | "activity" | "changes" | "terminal" | "explorer" | "artifacts" | "notes" | "tasks" | "review" | "preview"
+
+/** A resolved web preview address. File targets carry the daemon's canonical path and serving root. */
+export type PreviewTarget =
+  | { kind: "file"; path: string; root: string; display: string; inProject?: boolean }
+  | { kind: "server"; url: string; relay?: boolean }
+  | { kind: "external"; url: string; query?: string }
+export type WebPreviewEntry = { target: PreviewTarget; title?: string }
+export type PreviewViewport =
+  | { mode: "fill" }
+  | { mode: "device"; presetId: string | null; width: number; height: number }
+/** A file outside the project waits for the user's one-time folder grant. */
+export type PendingPermission = {
+  /** The address as typed or requested; sent again with `allow_folder`. */
+  input: string
+  folder: string
+  grantable: boolean
+  title?: string
+  /** Set when an agent asked; the card names it and the tab shows an unseen dot. */
+  agent?: boolean
+}
+/** A page an agent opened while the user was navigating; offered, never forced. */
+export type QueuedPreview = { input: string; title?: string }
+export type WebPreview = {
+  kind: "web"
+  entries: WebPreviewEntry[]
+  index: number
+  viewport: PreviewViewport
+  floating: boolean
+  /** Bumps on every navigation request, so reopening the same address reloads it. */
+  revision: number
+  pending?: PendingPermission
+  queued?: QueuedPreview
+  /** Epoch ms of the user's last navigation, for the 10 second agent grace. */
+  navigatedAt?: number
+  /** True until the Preview tab is next shown (the accent dot on the tab). */
+  unseen?: boolean
+}
+/** What a thread's dock Preview tab shows. Kinds share the Preview shell. */
+export type DockPreview = { kind: "visual"; visual: HtmlVisual; mode: "rendered" | "source" } | WebPreview
+const MAX_DOCK_PREVIEWS = 32
+const MAX_PREVIEW_HISTORY = 50
+export const AGENT_PREVIEW_GRACE_MS = 10_000
+
+function emptyWebPreview(): WebPreview {
+  return { kind: "web", entries: [], index: -1, viewport: { mode: "fill" }, floating: false, revision: 0 }
+}
+function sameTarget(a: PreviewTarget, b: PreviewTarget): boolean {
+  if (a.kind !== b.kind) return false
+  return a.kind === "file" ? a.path === (b as typeof a).path : a.url === (b as typeof a).url
+}
 
 /** A thread that has not been created on the daemon yet (Codex-style draft screen). */
 export interface Draft {
@@ -153,11 +204,43 @@ export interface AppState {
   /** Persisted recursive pane tree for showing up to four chat threads together. */
   splitView: SplitView | null
   sidebarOpen: boolean
+  /** Pull requests hide the thread panel; ⌘B peeks it here without changing `sidebarOpen`. Not persisted. */
+  pullsPanelPeek: boolean
   /** When on, the sidebar shows only threads that need attention (bell filter). */
   notificationFilter: boolean
   rightOpen: boolean
   rightTabs: RightTab[]
   rightTab: RightTab | null
+  /** In-memory dock previews, one per thread (never persisted). */
+  previews: Record<ThreadId, DockPreview>
+  /** Show a visual reply in the dock Preview tab, replacing the thread's previous preview. */
+  openVisualPreview: (threadId: ThreadId, visual: HtmlVisual) => void
+  setPreviewMode: (threadId: ThreadId, mode: "rendered" | "source") => void
+  /**
+   * Show a web page in the dock Preview tab (a visual is replaced). `focus: false` keeps keyboard
+   * focus where it is; an agent request within 10 seconds of the user's own navigation is queued.
+   */
+  openWebPreview: (threadId: ThreadId, target: PreviewTarget, options?: { title?: string; requestedByAgent?: boolean; focus?: boolean; input?: string }) => void
+  /** Show the grant card for a file outside the project, without leaving the previous page. */
+  requestPreviewPermission: (threadId: ThreadId, pending: PendingPermission, options?: { focus?: boolean }) => void
+  /** Cancel or finish the grant card. */
+  clearPreviewPermission: (threadId: ThreadId) => void
+  /** Accept (`true`) or drop the queued agent page; the caller opens it. */
+  clearQueuedPreview: (threadId: ThreadId) => void
+  /** Walk Kybern's history for the page; no-op at either end. */
+  navigatePreview: (threadId: ThreadId, delta: -1 | 1) => void
+  setPreviewViewport: (threadId: ThreadId, viewport: PreviewViewport) => void
+  /** Float the page over the chat (one floating page at a time) or return it to the dock. */
+  setPreviewFloating: (threadId: ThreadId, floating: boolean, options?: { reveal?: boolean }) => void
+  /** Record the title a page reported on its current entry. */
+  setPreviewTitle: (threadId: ThreadId, title: string) => void
+  /** Switch the current entry to the relayed load ("Preview through Kybern"). */
+  setPreviewRelay: (threadId: ThreadId, relay: boolean) => void
+  /** Back to the empty state for this thread; the tab stays. */
+  closePreviewPage: (threadId: ThreadId) => void
+  markPreviewSeen: (threadId: ThreadId) => void
+  /** Remove a thread's preview and close the Preview tab. */
+  closePreview: (threadId: ThreadId) => void
   /** The floating Environment card at the right edge of a thread. */
   envOpen: boolean
   /** File to show in the explorer pane, per project. */
@@ -171,7 +254,7 @@ export interface AppState {
   sessionsProjectId: ProjectId | null
   paletteOpen: boolean
   settingsOpen: boolean
-  settingsTab: "general" | "agents" | "integrations" | "computer" | "appearance" | "notifications" | "background" | "about"
+  settingsTab: "general" | "agents" | "accounts" | "integrations" | "computer" | "appearance" | "notifications" | "background" | "about"
   /** A settings row to bring into view when Settings opens, e.g. `provider:cursor`. */
   settingsFocus: string | null
   collapsedProjects: Record<ProjectId, boolean>
@@ -365,10 +448,172 @@ export function createEnvironmentStore(
     homeSelection: null,
     splitView: readPersistedSplitView(environmentId),
     sidebarOpen: true,
+    pullsPanelPeek: false,
     notificationFilter: false,
     rightOpen: false,
     rightTabs: [],
     rightTab: null,
+    previews: {},
+    openVisualPreview: (threadId, visual) => {
+      const state = get()
+      const pane = state.splitView ? findThreadPaneByThreadId(state.splitView.root, threadId) : null
+      // The dock follows the selected thread, so focus its split pane first.
+      if (pane && state.splitView?.focusedPaneId !== pane.id) get().focusSplitPane(pane.id)
+      set((current) => {
+        const previous = current.previews[threadId]
+        const kept = Object.entries(current.previews).filter(([id]) => id !== threadId).slice(-(MAX_DOCK_PREVIEWS - 1))
+        const same = previous?.kind === "visual" && previous.visual.id === visual.id
+        return {
+          previews: { ...Object.fromEntries(kept), [threadId]: same ? previous : { kind: "visual", visual, mode: "rendered" } },
+          rightOpen: true,
+          rightTab: "preview",
+        }
+      })
+    },
+    setPreviewMode: (threadId, mode) => set((current) => {
+      const preview = current.previews[threadId]
+      return preview?.kind === "visual" && preview.mode !== mode ? { previews: { ...current.previews, [threadId]: { ...preview, mode } } } : {}
+    }),
+    openWebPreview: (threadId, target, options = {}) => {
+      const state = get()
+      const pane = state.splitView ? findThreadPaneByThreadId(state.splitView.root, threadId) : null
+      if (pane && state.splitView?.focusedPaneId !== pane.id && options.focus !== false) get().focusSplitPane(pane.id)
+      set((current) => {
+        const previous = current.previews[threadId]
+        const web = previous?.kind === "web" ? previous : undefined
+        const now = Date.now()
+        // An agent request never replaces a page the user just navigated within.
+        if (options.requestedByAgent && web && web.entries.length > 0 && web.navigatedAt !== undefined && now - web.navigatedAt < AGENT_PREVIEW_GRACE_MS && !(web.pending)) {
+          return { previews: { ...current.previews, [threadId]: { ...web, queued: { input: options.input ?? (target.kind === "file" ? target.path : target.url), title: options.title } } } }
+        }
+        const base: WebPreview = web ?? emptyWebPreview()
+        const entry: WebPreviewEntry = { target, title: options.title }
+        const currentEntry = base.entries[base.index]
+        let entries = base.entries
+        let index = base.index
+        if (currentEntry && sameTarget(currentEntry.target, target)) {
+          entries = [...entries.slice(0, index), { target, title: options.title ?? currentEntry.title }, ...entries.slice(index + 1)]
+        } else {
+          entries = [...entries.slice(0, index + 1), entry]
+          if (entries.length > MAX_PREVIEW_HISTORY) entries = entries.slice(entries.length - MAX_PREVIEW_HISTORY)
+          index = entries.length - 1
+        }
+        // The page being shown right now is visible, so the tab only needs a dot when it is not.
+        const visibleNow = current.selected.kind === "thread" && current.selected.id === threadId && current.rightOpen && current.rightTab === "preview" && options.focus !== false
+        const next: WebPreview = {
+          ...base,
+          entries,
+          index,
+          revision: base.revision + 1,
+          pending: undefined,
+          queued: undefined,
+          navigatedAt: options.requestedByAgent ? base.navigatedAt : now,
+          unseen: options.requestedByAgent && !visibleNow ? true : undefined,
+        }
+        const others = Object.entries(current.previews).filter(([id]) => id !== threadId).slice(-(MAX_DOCK_PREVIEWS - 1))
+        const patch: Partial<AppState> = { previews: { ...Object.fromEntries(others), [threadId]: next } }
+        const tabs = current.rightTabs.includes("preview") ? current.rightTabs : [...current.rightTabs, "preview" as const]
+        patch.rightOpen = true
+        patch.rightTabs = tabs
+        // Requests from an agent never move the user's tab when it is elsewhere; the dot says so.
+        if (!(options.requestedByAgent && current.rightTab && current.rightTab !== "preview" && current.rightOpen)) patch.rightTab = "preview"
+        return patch
+      })
+    },
+    requestPreviewPermission: (threadId, pending, options = {}) => {
+      set((current) => {
+        const previous = current.previews[threadId]
+        const web = previous?.kind === "web" ? previous : emptyWebPreview()
+        const others = Object.entries(current.previews).filter(([id]) => id !== threadId).slice(-(MAX_DOCK_PREVIEWS - 1))
+        const keepTab = pending.agent && current.rightTab && current.rightTab !== "preview" && current.rightOpen
+        return {
+          previews: { ...Object.fromEntries(others), [threadId]: { ...web, pending, unseen: pending.agent && (keepTab || options.focus === false) ? true : undefined } },
+          rightOpen: true,
+          rightTabs: current.rightTabs.includes("preview") ? current.rightTabs : [...current.rightTabs, "preview"],
+          rightTab: keepTab ? current.rightTab : "preview",
+        }
+      })
+    },
+    clearPreviewPermission: (threadId) => set((current) => {
+      const preview = current.previews[threadId]
+      return preview?.kind === "web" && preview.pending ? { previews: { ...current.previews, [threadId]: { ...preview, pending: undefined } } } : {}
+    }),
+    clearQueuedPreview: (threadId) => set((current) => {
+      const preview = current.previews[threadId]
+      return preview?.kind === "web" && preview.queued ? { previews: { ...current.previews, [threadId]: { ...preview, queued: undefined } } } : {}
+    }),
+    navigatePreview: (threadId, delta) => set((current) => {
+      const preview = current.previews[threadId]
+      if (preview?.kind !== "web") return {}
+      const index = preview.index + delta
+      if (index < 0 || index >= preview.entries.length) return {}
+      return { previews: { ...current.previews, [threadId]: { ...preview, index, revision: preview.revision + 1, pending: undefined, navigatedAt: Date.now() } } }
+    }),
+    setPreviewViewport: (threadId, viewport) => set((current) => {
+      const preview = current.previews[threadId]
+      if (preview?.kind !== "web") return {}
+      const was = preview.viewport
+      if (was.mode === viewport.mode && (was.mode === "fill" || (viewport.mode === "device" && was.width === viewport.width && was.height === viewport.height && was.presetId === viewport.presetId))) return {}
+      return { previews: { ...current.previews, [threadId]: { ...preview, viewport } } }
+    }),
+    setPreviewFloating: (threadId, floating, options = {}) => set((current) => {
+      const preview = current.previews[threadId]
+      if (preview?.kind !== "web" || preview.floating === floating) return {}
+      const previews: Record<ThreadId, DockPreview> = {}
+      for (const [id, item] of Object.entries(current.previews)) {
+        // One floating page at a time: the previous one returns to its thread's dock.
+        previews[id] = floating && id !== threadId && item.kind === "web" && item.floating ? { ...item, floating: false } : item
+      }
+      previews[threadId] = { ...preview, floating }
+      // Returning to the panel opens the dock with Preview active.
+      if (!floating && options.reveal !== false) {
+        return {
+          previews,
+          rightOpen: true,
+          rightTabs: current.rightTabs.includes("preview") ? current.rightTabs : [...current.rightTabs, "preview"],
+          rightTab: "preview",
+        }
+      }
+      return { previews }
+    }),
+    setPreviewTitle: (threadId, title) => set((current) => {
+      const preview = current.previews[threadId]
+      if (preview?.kind !== "web") return {}
+      const entry = preview.entries[preview.index]
+      if (!entry || entry.title === title) return {}
+      const entries = preview.entries.slice()
+      entries[preview.index] = { ...entry, title }
+      return { previews: { ...current.previews, [threadId]: { ...preview, entries } } }
+    }),
+    setPreviewRelay: (threadId, relay) => set((current) => {
+      const preview = current.previews[threadId]
+      const entry = preview?.kind === "web" ? preview.entries[preview.index] : undefined
+      if (preview?.kind !== "web" || !entry || entry.target.kind !== "server" || !!entry.target.relay === relay) return {}
+      const entries = preview.entries.slice()
+      entries[preview.index] = { ...entry, target: { ...entry.target, relay } }
+      return { previews: { ...current.previews, [threadId]: { ...preview, entries, revision: preview.revision + 1 } } }
+    }),
+    closePreviewPage: (threadId) => set((current) => {
+      const preview = current.previews[threadId]
+      if (preview?.kind !== "web") return {}
+      return { previews: { ...current.previews, [threadId]: { ...emptyWebPreview(), viewport: preview.viewport, revision: preview.revision + 1 } } }
+    }),
+    markPreviewSeen: (threadId) => set((current) => {
+      const preview = current.previews[threadId]
+      return preview?.kind === "web" && preview.unseen ? { previews: { ...current.previews, [threadId]: { ...preview, unseen: undefined } } } : {}
+    }),
+    closePreview: (threadId) => set((current) => {
+      const previews = Object.fromEntries(Object.entries(current.previews).filter(([id]) => id !== threadId))
+      // The tab belongs to the selected thread; another thread's preview just goes away.
+      if (!(current.selected.kind === "thread" && current.selected.id === threadId)) return { previews }
+      const remaining = current.rightTabs.filter((tab) => tab !== "preview")
+      const index = current.rightTabs.indexOf("preview")
+      return {
+        previews,
+        rightTabs: remaining,
+        rightTab: current.rightTab === "preview" ? remaining[Math.min(index, remaining.length - 1)] ?? null : current.rightTab,
+      }
+    }),
     envOpen: false,
     explorerFile: {},
     terminalTabs: {},

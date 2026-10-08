@@ -155,6 +155,177 @@ method!(AccountsCreate, "providers.accounts.create", Some(Scope::OrchestrationOp
 method!(AccountsSignIn, "providers.accounts.sign_in", Some(Scope::OrchestrationOperate), ProviderInstance, TerminalInfo);
 method!(AccountsUsage, "providers.accounts.usage", Some(Scope::OrchestrationRead), ProviderInstance, ProviderUsage);
 
+// ---- account identity, sign-in and management ----
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountStatus {
+    SignedIn,
+    NeedsSignIn,
+    SignedOut,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AccountIdentity {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    /// "Max", "Pro", "Plus", "Pro+", "API key".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    /// The organization the harness reports (Claude `orgName`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountSummary {
+    /// Instance `default` is the CLI account.
+    pub provider: ProviderInstance,
+    /// "CLI account" for the default instance.
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<AccountIdentity>,
+    pub status: AccountStatus,
+    pub is_default: bool,
+    /// Registered project paths that override to this account.
+    #[serde(default)]
+    pub projects: Vec<String>,
+    /// None for the CLI account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directory: Option<String>,
+    /// Kybern created the directory under `<data>/accounts` (removal deletes it).
+    #[serde(default)]
+    pub managed: bool,
+    #[serde(default)]
+    pub can_sign_out: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct AccountsListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ProviderKind>,
+    /// Bypass the identity cache.
+    #[serde(default)]
+    pub refresh: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountsListResult {
+    pub accounts: Vec<AccountSummary>,
+}
+method!(AccountsList, "providers.accounts.list", Some(Scope::OrchestrationRead), AccountsListParams, AccountsListResult);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountLoginMode {
+    Browser,
+    Paste,
+    DeviceCode,
+    Terminal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountLoginPhase {
+    Starting,
+    Waiting,
+    Verifying,
+    SignedIn,
+    Failed,
+    Canceled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountLoginStartParams {
+    pub kind: ProviderKind,
+    /// Sign in again to this account. Omitted: a new account in a staging directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<String>,
+    pub mode: AccountLoginMode,
+    /// New account only: an existing native folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directory: Option<String>,
+    /// omp only: upstream provider id passed to `omp login <provider>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountLogin {
+    pub id: String,
+    pub kind: ProviderKind,
+    /// Set for re-sign-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<String>,
+    pub mode: AccountLoginMode,
+    pub phase: AccountLoginPhase,
+    /// https only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Device code, e.g. `ABCD-12345`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<TerminalInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<AccountIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_color: Option<String>,
+    /// Instance id of an account with the same email; `default` is the CLI account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_of: Option<String>,
+    /// For a re-sign-in: the email the account had before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountLoginIdParams {
+    pub id: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountLoginInputParams {
+    pub id: String,
+    pub code: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountLoginFinishParams {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub make_default: bool,
+}
+// Sign-in stores credentials on the daemon machine, so paired devices can't start it.
+method!(AccountsLoginStart, "providers.accounts.login.start", Some(Scope::AccessWrite), AccountLoginStartParams, AccountLogin);
+method!(AccountsLoginGet, "providers.accounts.login.get", Some(Scope::OrchestrationRead), AccountLoginIdParams, AccountLogin);
+method!(AccountsLoginInput, "providers.accounts.login.input", Some(Scope::AccessWrite), AccountLoginInputParams, AccountLogin);
+method!(AccountsLoginCancel, "providers.accounts.login.cancel", Some(Scope::AccessWrite), AccountLoginIdParams, AccountLogin);
+method!(AccountsLoginFinish, "providers.accounts.login.finish", Some(Scope::AccessWrite), AccountLoginFinishParams, ProviderInstance);
+/// Sent to every client that may read orchestration state whenever a sign-in changes phase. Params are an `AccountLogin`.
+pub const ACCOUNTS_LOGIN_CHANGED_NOTIFICATION: &str = "providers.accounts.login.changed";
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountsUpdateParams {
+    pub kind: ProviderKind,
+    pub instance: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+method!(AccountsUpdate, "providers.accounts.update", Some(Scope::OrchestrationOperate), AccountsUpdateParams, AccountSummary);
+method!(AccountsSignOut, "providers.accounts.sign_out", Some(Scope::AccessWrite), ProviderInstance, AccountSummary);
+method!(AccountsRemove, "providers.accounts.remove", Some(Scope::AccessWrite), ProviderInstance, Empty);
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AccountsCatalogParams {
     pub provider: ProviderInstance,
@@ -1515,6 +1686,12 @@ pub struct UsageLimitsParams {
     /// together than a few seconds are coalesced.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub refresh: bool,
+    /// Also read these accounts (the composer's thread account).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instances: Vec<ProviderInstance>,
+    /// Also read every named account (Settings, rail popover, Usage page).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub all_accounts: bool,
 }
 /// Where a provider's current limits came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1546,6 +1723,9 @@ pub struct ProviderLimits {
     /// While reads are throttled: when the next one may run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Set on per-account entries; the global default per kind leaves it unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<String>,
 }
 /// Why a provider's live read did not update its limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1565,6 +1745,9 @@ pub struct UsageLimitsResult {
     /// Providers with a live read in flight.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refreshing: Vec<crate::ProviderKind>,
+    /// Per-account entries (`instance` set). Absent from older daemons.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accounts: Vec<ProviderLimits>,
 }
 method!(UsageLimits, "usage.limits", Some(Scope::OrchestrationRead), UsageLimitsParams, UsageLimitsResult);
 /// Sent to every client that may read orchestration state whenever the limits
@@ -1728,6 +1911,42 @@ pub struct PullRequest {
     pub is_draft: bool,
     pub author: String,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub author_is_bot: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additions: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<u32>,
+    /// APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_decision: Option<String>,
+    /// MERGEABLE | CONFLICTING | UNKNOWN
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mergeable: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<PrLabel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks_summary: Option<PrChecksSummary>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct PrLabel {
+    pub name: String,
+    /// Hex without '#', as GitHub returns it.
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
+pub struct PrChecksSummary {
+    pub total: u32,
+    pub passed: u32,
+    pub failed: u32,
+    pub pending: u32,
+    pub skipped: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1792,6 +2011,30 @@ pub struct PrDetailResult {
     pub reviewers: Vec<String>,
     pub checks: Vec<PrCheck>,
     pub changed_files: u32,
+    /// CLEAN | BLOCKED | BEHIND | DIRTY | UNSTABLE | DRAFT | HAS_HOOKS | UNKNOWN
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_state_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reviews: Vec<PrReviewer>,
+    /// Issue comments plus review threads. None when the count query failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merged_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merged_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrReviewer {
+    pub login: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_bot: bool,
+    /// APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | REQUESTED
+    pub state: String,
 }
 method!(PrDetail, "github.pr.detail", Some(Scope::OrchestrationRead), PrDetailParams, PrDetailResult);
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
@@ -1835,6 +2078,10 @@ pub struct PrReviewEntry {
     pub side: Option<String>,
     pub url: String,
     pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub author_is_bot: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PrPageResult {
@@ -2212,6 +2459,138 @@ pub struct ArtifactPreviewResult {
     pub ticket: String,
 }
 method!(ArtifactPreview, "threads.artifacts.preview", Some(Scope::OrchestrationRead), ArtifactReadParams, ArtifactPreviewResult);
+
+// ---- in-app browser preview ----
+
+/// Open a page in the Preview panel: a local HTML file, a dev server, or an
+/// external address. The daemon normalizes the target, checks folder grants
+/// and mints a ticket for file and relayed pages.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewOpenParams {
+    pub thread_id: ThreadId,
+    /// Raw input: a URL, a file path, or `host:port`.
+    pub target: String,
+    /// The user confirmed the folder grant card.
+    #[serde(default)]
+    pub allow_folder: bool,
+    /// Mint a proxy ticket for a server target (remote environments and
+    /// "Preview through Kybern").
+    #[serde(default)]
+    pub proxy: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PreviewTargetInfo {
+    File { path: String, root: String, in_project: bool },
+    Server { url: String, port: u16 },
+    External { url: String },
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewFolderRequest {
+    pub folder: String,
+    pub grantable: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewOpenResult {
+    pub target: PreviewTargetInfo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ticket: Option<String>,
+    /// HTTP path to load, e.g. `/preview-files/{ticket}/mock/index.html`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs_permission: Option<PreviewFolderRequest>,
+}
+method!(PreviewOpen, "previews.open", Some(Scope::OrchestrationOperate), PreviewOpenParams, PreviewOpenResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewCloseParams {
+    pub ticket: String,
+}
+method!(PreviewClose, "previews.close", Some(Scope::OrchestrationOperate), PreviewCloseParams, Empty);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewProbeParams {
+    /// Loopback or private-network address only.
+    pub url: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewProbeError {
+    ConnectionRefused,
+    TimedOut,
+    Dns,
+    Tls,
+    HttpStatus,
+    NotHttp,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewFrameBlock {
+    /// `x-frame-options` or `content-security-policy`.
+    pub header: String,
+    pub value: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewProbeResult {
+    pub reachable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<PreviewProbeError>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_by: Option<PreviewFrameBlock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+}
+method!(PreviewProbe, "previews.probe", Some(Scope::OrchestrationOperate), PreviewProbeParams, PreviewProbeResult);
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewServersListParams {
+    #[serde(default)]
+    pub thread_id: Option<ThreadId>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewServer {
+    pub url: String,
+    pub port: u16,
+    pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Data URL, at most 16 KB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub favicon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub framework: Option<String>,
+    #[serde(default)]
+    pub in_project: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewServersListResult {
+    pub servers: Vec<PreviewServer>,
+    pub scanned_at: chrono::DateTime<chrono::Utc>,
+    /// `lsof`, `proc` or `common_ports`.
+    pub method: String,
+}
+method!(PreviewServersList, "previews.servers.list", Some(Scope::OrchestrationRead), PreviewServersListParams, PreviewServersListResult);
+
+/// Pushed to clients when an agent asks to show a page. Not persisted.
+pub const PREVIEW_OPEN_REQUESTED_NOTIFICATION: &str = "previews.open_requested";
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewOpenRequestedNotification {
+    pub thread_id: ThreadId,
+    pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub requested_by_agent: bool,
+}
 
 // ---- notes ----
 
@@ -2813,6 +3192,15 @@ registry!(
     AccountsSignIn,
     AccountsUsage,
     AccountsCatalog,
+    AccountsList,
+    AccountsLoginStart,
+    AccountsLoginGet,
+    AccountsLoginInput,
+    AccountsLoginCancel,
+    AccountsLoginFinish,
+    AccountsUpdate,
+    AccountsSignOut,
+    AccountsRemove,
     ThreadsTargetGet,
     ThreadsTargetSet,
     ThreadsPermissionsApply,
@@ -2948,6 +3336,10 @@ registry!(
     HtmlRead,
     HtmlFrame,
     HtmlRevoke,
+    PreviewOpen,
+    PreviewClose,
+    PreviewProbe,
+    PreviewServersList,
     ArtifactsList,
     ArtifactRead,
     ArtifactPreview,

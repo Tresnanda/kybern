@@ -71,6 +71,6 @@
   function measure() { scheduled = false; const body = document.body; if (!body) return; const next = Math.ceil(Math.max(body.scrollHeight, body.getBoundingClientRect().height)); if (next > 0 && next !== height) { height = next; window.parent.postMessage({ kind: "kybern-visual-size", height }, "*"); } }
   function schedule() { if (!scheduled) { scheduled = true; nativeRaf(measure); } }
   const observer = new ResizeObserver(schedule);
-  document.addEventListener("DOMContentLoaded", () => { if (document.body) observer.observe(document.body); schedule(); });
+  document.addEventListener("DOMContentLoaded", () => { if (document.body) observer.observe(document.body); schedule(); if (window.parent !== window) window.parent.postMessage({ kind: "kybern-visual-ready" }, "*"); });
   window.addEventListener("load", schedule);
 })();

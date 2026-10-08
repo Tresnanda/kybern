@@ -14,6 +14,7 @@ import {
   codes,
   KybernClient,
   ConnectionClosedError,
+  PREVIEW_OPEN_REQUESTED_NOTIFICATION,
   PROJECTS_CHANGED_NOTIFICATION,
   RpcCallError,
   type ApprovalDecision,
@@ -22,6 +23,9 @@ import {
   type GitStatus,
   type JsonValue,
   type PermissionMode,
+  type PreviewFolderRequest,
+  type PreviewOpenRequestedNotification,
+  type PreviewOpenResult,
   type Project,
   type ProjectId,
   type ProjectsChangedNotification,
@@ -232,6 +236,11 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
         useStore.getState().set({ settings, providers: [] })
         void refreshProviders().catch(() => {})
       }
+    })
+    client.onNotification(PREVIEW_OPEN_REQUESTED_NOTIFICATION, (params) => {
+      const request = params as PreviewOpenRequestedNotification | null
+      if (disposed || !request?.thread_id || typeof request.target !== "string") return
+      void import("./previewSession").then(({ openRequestedPreview }) => openRequestedPreview(request)).catch(() => {})
     })
     client.onNotification(PROJECTS_CHANGED_NOTIFICATION, (params) => {
       const projects = (params as ProjectsChangedNotification | null)?.projects
@@ -1071,6 +1080,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       return { threads }
     })
     useStore.getState().removeThreadFromSplit(threadId)
+    if (useStore.getState().previews[threadId]) useStore.getState().closePreview(threadId)
     const archived = useStore.getState().threads[threadId]
     if (archived?.worktree && !archived.delegation && !archived.subagent) {
       void rpc().call("threads.worktree.inspect", { thread_id: threadId }).then((inspection) => {
@@ -1139,6 +1149,43 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   async function visualFrameUrl(threadId: string, visualId: string): Promise<{url: string; ticket: string}> {
     const { ticket } = await rpc().call("threads.visuals.frame", { thread_id: threadId, visual_id: visualId })
     return { url: `${httpBase}/visual-frame/${encodeURIComponent(ticket)}`, ticket }
+  }
+
+  /**
+   * Mint a ticket for a preview target and build the URL its iframe loads. Files load from the
+   * daemon's file route; servers load directly unless `relay` (remote daemons and "Preview through
+   * Kybern"), where the desktop shell opens a loopback relay to the daemon's proxy route.
+   * Throws `PreviewNeedsPermissionError` when a file sits outside the project and is not granted.
+   */
+  async function previewFrameUrl(
+    threadId: ThreadId,
+    target: { kind: "file"; path: string } | { kind: "server"; url: string },
+    options: { relay?: boolean; allowFolder?: boolean; prefetched?: PreviewOpenResult } = {},
+  ): Promise<{ url: string; ticket?: string; relayPort?: number }> {
+    if (target.kind === "server" && !options.relay) return { url: target.url }
+    const result = options.prefetched ?? await rpc().call("previews.open", {
+      thread_id: threadId,
+      target: target.kind === "file" ? target.path : target.url,
+      allow_folder: options.allowFolder || undefined,
+      proxy: target.kind === "server" ? true : undefined,
+    })
+    if (result.needs_permission) throw new PreviewNeedsPermissionError(result.needs_permission)
+    if (!result.ticket) throw new Error("The preview could not start. Try again.")
+    if (target.kind === "file") {
+      if (!result.path) throw new Error("The preview could not start. Try again.")
+      return { url: `${httpBase}${result.path}`, ticket: result.ticket }
+    }
+    const { previewRelayOpen } = await import("@/lib/tauri")
+    const relay = await previewRelayOpen(`${httpBase}/preview-proxy/${encodeURIComponent(result.ticket)}`)
+    if (!relay) throw new PreviewRelayUnavailableError()
+    const upstream = new URL(target.url)
+    const port = Number(new URL(relay).port)
+    return { url: `${relay}${upstream.pathname}${upstream.search}${upstream.hash}`, ticket: result.ticket, relayPort: port }
+  }
+
+  async function closePreviewTicket(ticket: string): Promise<void> {
+    if (disposed) return
+    try { await rpc().call("previews.close", { ticket }) } catch { /* tickets also expire on their own */ }
   }
 
   async function artifactPreviewUrl(threadId: string, path: string): Promise<string> {
@@ -1215,6 +1262,8 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     fetchAssetImage,
     artifactPreviewUrl,
     visualFrameUrl,
+    previewFrameUrl,
+    closePreviewTicket,
     subscribeCollaboration,
   }
 }
@@ -1301,6 +1350,23 @@ export const subscribeCollaboration: EnvironmentRuntime["subscribeCollaboration"
   activeRuntime().subscribeCollaboration(...args)
 export const uploadFile: EnvironmentRuntime["uploadFile"] = (...args) =>
   activeRuntime().uploadFile(...args)
+
+/** `previews.open` found a file outside the project that the user has not allowed yet. */
+export class PreviewNeedsPermissionError extends Error {
+  readonly request: PreviewFolderRequest
+  constructor(request: PreviewFolderRequest) {
+    super("Allow previewing files in this folder?")
+    this.name = "PreviewNeedsPermissionError"
+    this.request = request
+  }
+}
+/** A relayed page needs the desktop shell's loopback relay, which a plain browser does not have. */
+export class PreviewRelayUnavailableError extends Error {
+  constructor() {
+    super("Kybern can't forward this server through the current connection.")
+    this.name = "PreviewRelayUnavailableError"
+  }
+}
 
 export function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e)

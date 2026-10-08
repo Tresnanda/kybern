@@ -72,6 +72,15 @@ fn main() {
     method::<AccountsSignIn>(&mut methods);
     method::<AccountsUsage>(&mut methods);
     method::<AccountsCatalog>(&mut methods);
+    method::<AccountsList>(&mut methods);
+    method::<AccountsLoginStart>(&mut methods);
+    method::<AccountsLoginGet>(&mut methods);
+    method::<AccountsLoginInput>(&mut methods);
+    method::<AccountsLoginCancel>(&mut methods);
+    method::<AccountsLoginFinish>(&mut methods);
+    method::<AccountsUpdate>(&mut methods);
+    method::<AccountsSignOut>(&mut methods);
+    method::<AccountsRemove>(&mut methods);
     method::<ThreadsTargetGet>(&mut methods);
     method::<ThreadsTargetSet>(&mut methods);
     method::<ThreadsPermissionsApply>(&mut methods);
@@ -208,6 +217,10 @@ fn main() {
     method::<HtmlRead>(&mut methods);
     method::<HtmlFrame>(&mut methods);
     method::<HtmlRevoke>(&mut methods);
+    method::<PreviewOpen>(&mut methods);
+    method::<PreviewClose>(&mut methods);
+    method::<PreviewProbe>(&mut methods);
+    method::<PreviewServersList>(&mut methods);
     method::<ArtifactsList>(&mut methods);
     method::<ArtifactRead>(&mut methods);
     method::<ArtifactPreview>(&mut methods);

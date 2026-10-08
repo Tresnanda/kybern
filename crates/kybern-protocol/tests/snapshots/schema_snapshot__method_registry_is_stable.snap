@@ -12,6 +12,15 @@ expression: names
 - providers.accounts.sign_in
 - providers.accounts.usage
 - providers.accounts.catalog
+- providers.accounts.list
+- providers.accounts.login.start
+- providers.accounts.login.get
+- providers.accounts.login.input
+- providers.accounts.login.cancel
+- providers.accounts.login.finish
+- providers.accounts.update
+- providers.accounts.sign_out
+- providers.accounts.remove
 - threads.target.get
 - threads.target.set
 - threads.permissions.apply
@@ -147,6 +156,10 @@ expression: names
 - threads.visuals.read
 - threads.visuals.frame
 - threads.visuals.revoke
+- previews.open
+- previews.close
+- previews.probe
+- previews.servers.list
 - threads.artifacts.list
 - threads.artifacts.read
 - threads.artifacts.preview

@@ -134,6 +134,28 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         AccountsSignIn::NAME => ok(crate::provider_accounts::sign_in(state, parse(params)?).map_err(provider_err)?),
         AccountsCatalog::NAME => ok(crate::provider_accounts::catalog(state, parse(params)?).await.map_err(provider_err)?),
         AccountsUsage::NAME => ok(crate::provider_accounts::usage(state, parse(params)?).await.map_err(provider_err)?),
+        AccountsList::NAME => ok(crate::provider_accounts::list(state, parse_or_default(params)?).await.map_err(bad)?),
+        AccountsLoginStart::NAME => ok(state.account_logins.start(state, parse(params)?).await.map_err(bad)?),
+        AccountsLoginGet::NAME => {
+            let p: AccountLoginIdParams = parse(params)?;
+            let login = state.account_logins.get(&p.id).map_err(bad)?;
+            ok(if ctx.principal.has(Scope::AccessWrite) { login } else { crate::account_login::for_observer(login) })
+        }
+        AccountsLoginInput::NAME => {
+            let p: AccountLoginInputParams = parse(params)?;
+            ok(state.account_logins.input(&p.id, p.code).await.map_err(bad)?)
+        }
+        AccountsLoginCancel::NAME => {
+            let p: AccountLoginIdParams = parse(params)?;
+            ok(state.account_logins.cancel(state, &p.id).await.map_err(bad)?)
+        }
+        AccountsLoginFinish::NAME => ok(state.account_logins.finish(state, parse(params)?).await.map_err(bad)?),
+        AccountsUpdate::NAME => ok(crate::provider_accounts::update(state, parse(params)?).await.map_err(bad)?),
+        AccountsSignOut::NAME => ok(crate::provider_accounts::sign_out(state, parse(params)?).await.map_err(bad)?),
+        AccountsRemove::NAME => {
+            crate::provider_accounts::remove(state, parse(params)?).await.map_err(bad)?;
+            ok(Empty {})
+        }
         ThreadsTargetGet::NAME => {
             let p: ThreadsInterruptParams = parse(params)?;
             ok(state.orchestrator.thread_target(p.thread_id).map_err(bad)?)
@@ -686,6 +708,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             }
             state.store.token_revoke(p.token_id).map_err(internal)?;
             let _ = state.revoked_tokens.send(p.token_id);
+            state.previews.revoke_principal(p.token_id);
             ok(Empty {})
         }
         FilesSearch::NAME => {
@@ -720,7 +743,8 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 .visual_latest_turn(p.thread_id)
                 .map_err(internal)?
                 .ok_or_else(|| RpcError::invalid_params("Send a message in this thread before publishing a visual."))?;
-            let event = crate::visuals::publish(&state.store, p.thread_id, turn, &p.html, &p.title, p.height).await.map_err(bad)?;
+            let event =
+                crate::visuals::publish(&state.store, &state.paths, p.thread_id, turn, &p.html, &p.title, p.height).await.map_err(bad)?;
             let EventPayload::HtmlPublished { visual } = &event.payload else { unreachable!() };
             let result = HtmlPublishResult { visual: visual.clone() };
             let _ = state.events.send(event);
@@ -731,11 +755,33 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
             ok(crate::visuals::preview(&state.paths, p).await.map_err(bad)?)
         }
+        PreviewOpen::NAME => {
+            let p: PreviewOpenParams = parse(params)?;
+            let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            ok(crate::previews::open(state, Some(ctx.principal.token_id), &thread, &p).await.map_err(preview_error)?)
+        }
+        PreviewClose::NAME => {
+            let p: PreviewCloseParams = parse(params)?;
+            state.previews.revoke(&p.ticket);
+            ok(Empty {})
+        }
         HtmlRead::NAME => ok(crate::visuals::read(&state.store, parse(params)?).map_err(bad)?),
         HtmlFrame::NAME => ok(crate::visuals::issue(&state.store, parse(params)?).map_err(bad)?),
         HtmlRevoke::NAME => {
             crate::visuals::revoke(parse(params)?);
             ok(Empty {})
+        }
+        PreviewProbe::NAME => {
+            let p: PreviewProbeParams = parse(params)?;
+            match crate::previews::probe::probe(&p.url).await {
+                Ok(result) => ok(result),
+                Err(_) => Err(RpcError::new(codes::INVALID_PARAMS, "Preview addresses must be on this computer or its private network.")
+                    .with_data(serde_json::json!({ "reason": "invalid_address" }))),
+            }
+        }
+        PreviewServersList::NAME => {
+            let p: PreviewServersListParams = parse_or_default(params)?;
+            ok(crate::previews::discovery::servers_list(state, p.thread_id).await.map_err(bad)?)
         }
         ArtifactsList::NAME => {
             let p: ArtifactsListParams = parse(params)?;
@@ -915,6 +961,16 @@ fn parse_or_default<T: DeserializeOwned + Default>(v: Value) -> Result<T, RpcErr
 
 fn internal(e: impl std::fmt::Display) -> RpcError {
     RpcError::internal(e)
+}
+
+/// Preview failures keep a stable machine code in `data.code`.
+fn preview_error(error: crate::previews::PreviewError) -> RpcError {
+    let code = match error.code {
+        "not_found" => codes::NOT_FOUND,
+        "internal_error" => codes::INTERNAL_ERROR,
+        _ => codes::INVALID_PARAMS,
+    };
+    RpcError::new(code, error.message).with_data(serde_json::json!({ "code": error.code }))
 }
 
 /// User-facing failures from the orchestrator: not found, busy, bad input.

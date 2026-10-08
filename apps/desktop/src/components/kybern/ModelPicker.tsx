@@ -2,35 +2,50 @@
 // Purpose: The composer's agent / model / effort panel. One searchable list that
 // stays usable from a 4-model catalog to a 600-model one: backends (or families)
 // become sections, long sections collapse, favorites and recent picks sit on top,
-// and a favorites view gathers starred models from every harness. Effort is a
-// stepped slider under the list.
+// and a favorites view gathers starred models from every harness. Traits of the
+// selected model sit under the list as an effort card (fast-mode bolt, effort
+// label, reset, stepped slider) and one "Label  value >" menu row per other trait.
+// The first nine model rows carry a mod+1..9 hint that picks them.
 // Layer: Composer UI
 // Exports: ModelPicker
 
 import { Popover as PopoverPrimitive } from "@base-ui/react/popover"
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactElement } from "react"
 
-import { ProviderMark, Spinner } from "@/components/kybern/bits"
+import { openAddAccount } from "@/components/kybern/accounts/AddAccountSheet"
+import { ProviderMark } from "@/components/kybern/bits"
+import { FollowDefaultsLine, ModelPickerTabs } from "@/components/kybern/ModelPickerTabs"
 import { TextSwap } from "@/components/kybern/motion"
+import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
+import { Menu, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
+import { Kbd } from "@/components/kit/kbd"
 import { COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME, COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME } from "@/components/kit/chat/composerPickerStyles"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { useLocalStorage } from "@/lib/hooks"
 import { PROVIDER_LABEL, formatEffort, isMac, mod } from "@/lib/format"
-import { RefreshCwIcon, SearchIcon, StarFilledIcon, StarIcon } from "@/lib/kit/icons"
+import { ChevronRightIcon, FastModeIcon, FastModeOutlineIcon, ResetIcon, SearchIcon, StarFilledIcon, StarIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
-import type { ProviderInstance, ProviderKind, ProviderModel, ProviderStatus } from "@/protocol"
+import { followLine, pickerTabs, type PickerTab } from "@/lib/accountUi"
+import type { AccountSummary, ModelParameter, ProviderInstance, ProviderKind, ProviderModel, ProviderStatus } from "@/protocol"
 import {
   MODEL_FLAT_LIMIT,
   MODEL_SECTION_PREVIEW,
   backendLabel,
   catalogBackends,
+  changeTrait,
   customModelId,
+  favoriteMatches,
   findModel,
-  isFavorite,
+  isFavoriteModel,
   modelSections,
+  parameterSwitch,
   rememberModel,
   searchModels,
-  toggleFavorite,
+  selectedVariant,
+  selectorEffort,
+  toggleFavoriteModel,
+  traitUnavailableReason,
+  traitValues,
   type FavoriteModel,
   type ModelSection,
 } from "../../../../../packages/kybern-client/src/models"
@@ -44,7 +59,6 @@ const SECTION_STEP = 100
 const THUMB = 28
 
 const PICKER_DIVIDER_CLASS_NAME = "mx-3 h-px shrink-0 bg-[color-mix(in_srgb,var(--foreground)_7%,transparent)]"
-const PICKER_ICON_BUTTON_CLASS_NAME = "press-row inline-flex size-7 shrink-0 items-center justify-center rounded-[0.4rem] text-muted-foreground/60 outline-none transition-colors duration-150 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:hover:bg-transparent"
 
 type Row =
   | { kind: "default"; key: string }
@@ -72,8 +86,16 @@ interface ModelPickerProps {
   onOpenChange?: (open: boolean) => void
   onModelChange: (model: string, effort: string | undefined) => Promise<boolean>
   onEffortChange: (effort: string) => Promise<boolean>
-  /** `choice` is set when a favorite from another harness is picked. */
-  onProviderChange: (provider: ProviderInstance, choice?: { model?: string; effort?: string }) => Promise<boolean>
+  /** `choice` is set when a favorite from another harness is picked; `pinAccount` when an account tab names the account. */
+  onProviderChange: (provider: ProviderInstance, choice?: { model?: string; effort?: string; pinAccount?: boolean }) => Promise<boolean>
+  /** Every account of every agent, for the tab strip. */
+  accounts: AccountSummary[]
+  /** The thread follows the project and global defaults; undefined for a draft, which has no override to follow. */
+  accountFollowsDefaults?: boolean
+  /** The account the tabs treat as current; defaults to the provider's own instance. */
+  accountInstance?: string
+  /** Pin the next message to an account of the current agent; `null` follows defaults again. */
+  onAccountChange?: (instance: string | null) => Promise<boolean>
   onReload: () => void
   /** Open setup for an agent that can't run yet. */
   onSetUpProvider?: (kind: ProviderKind) => void
@@ -124,6 +146,10 @@ function ModelPickerPanel({
   onModelChange,
   onEffortChange,
   onProviderChange,
+  accounts,
+  accountFollowsDefaults,
+  accountInstance,
+  onAccountChange,
   onReload,
   onSetUpProvider,
   inputRef,
@@ -145,8 +171,7 @@ function ModelPickerPanel({
   const multiBackend = useMemo(() => catalogBackends(catalog).length > 1, [catalog])
   const large = catalog.length > MODEL_FLAT_LIMIT
   const agentName = status?.display_name ?? PROVIDER_LABEL[provider.kind]
-  const efforts = current ? current.efforts ?? [] : status?.supported_efforts ?? []
-  const effortValue = effort ?? current?.default_effort ?? null
+  const effortValue = effort ?? selectorEffort(current, model) ?? current?.default_effort ?? null
 
   const results = useMemo(() => (query.trim() && !showFavorites ? searchModels(catalog, query) : []), [catalog, query, showFavorites])
 
@@ -167,7 +192,9 @@ function ModelPickerPanel({
         if (!item.available || (item.kind !== provider.kind && !canPickProvider)) continue
         const starred = favorites
           .filter((favorite) => favorite.kind === item.kind && (favorite.instance ?? "default") === (item.kind === provider.kind ? provider.instance : instances?.[item.kind] ?? "default"))
-          .map((favorite) => item.models?.find((entry) => entry.id === favorite.id) ?? { id: favorite.id, display_name: favorite.id })
+          .map((favorite) => item.models?.find((entry) => favoriteMatches(favorite, entry)) ?? { id: favorite.id, display_name: favorite.id })
+          // Older favorites name a variant; several can resolve to one row.
+          .filter((entry, index, list) => list.findIndex((other) => other.id === entry.id) === index)
         const shown = search ? searchModels(starred, search) : starred
         if (!shown.length) continue
         const backends = catalogBackends(item.models ?? []).length > 1
@@ -201,12 +228,12 @@ function ModelPickerPanel({
     const sections = modelSections(catalog)
     const grouped = sections.length > 1
     if (grouped) {
-      const starred = catalog.filter((item) => isFavorite(favorites, provider.kind, item.id, provider.instance))
+      const starred = catalog.filter((item) => isFavoriteModel(favorites, provider.kind, item, provider.instance))
       if (starred.length) out.push({ key: "starred", label: "Favorites", rows: starred.map((item) => modelRow("starred", item, multiBackend)) })
       const recent = (recents[`${provider.kind}:${provider.instance}`] ?? (provider.instance === "default" ? recents[provider.kind] : undefined) ?? [])
-        .filter((id) => !isFavorite(favorites, provider.kind, id, provider.instance))
-        .map((id) => catalog.find((item) => item.id === id))
-        .filter((item): item is ProviderModel => !!item)
+        .map((id) => findModel(catalog, id))
+        .filter((item): item is ProviderModel => !!item && !isFavoriteModel(favorites, provider.kind, item, provider.instance))
+        .filter((item, index, list) => list.indexOf(item) === index)
       if (recent.length) out.push({ key: "recent", label: "Recent", rows: recent.map((item) => modelRow("recent", item, multiBackend)) })
     }
     for (const section of sections) {
@@ -236,7 +263,7 @@ function ModelPickerPanel({
   }, [activeRow])
 
   const star = (row: Row) => {
-    if (row.kind === "model") setFavorites((value) => toggleFavorite(value, row.harness, row.model.id, row.harness === provider.kind ? provider.instance : instances?.[row.harness] ?? "default"))
+    if (row.kind === "model") setFavorites((value) => toggleFavoriteModel(value, row.harness, row.model, row.harness === provider.kind ? provider.instance : instances?.[row.harness] ?? "default"))
   }
 
   const pick = async (row: Row) => {
@@ -249,21 +276,43 @@ function ModelPickerPanel({
       if (await onModelChange("", undefined)) close()
       return
     }
-    const id = row.kind === "model" ? row.model.id : row.id
-    const nextEfforts = row.kind === "model" ? row.model.efforts ?? [] : []
+    // Picking the model already in use keeps its traits.
+    const held = row.kind === "model" && row.harness === provider.kind && row.model.id === selectedId && model ? selectedVariant(row.model, model) : undefined
+    const id = row.kind === "model" ? held?.id ?? row.model.id : row.id
+    // The held combination can offer other efforts than the row's default one.
+    const nextEfforts = held?.efforts?.length ? held.efforts : row.kind === "model" ? row.model.efforts ?? [] : []
     // Keep the chosen effort when the new model offers it; otherwise its own default.
     const nextEffort = effortValue && nextEfforts.includes(effortValue)
       ? effortValue
-      : row.kind === "model" ? row.model.default_effort ?? undefined : undefined
+      : held?.default_effort ?? (row.kind === "model" ? row.model.default_effort ?? undefined : undefined)
     const harness = row.kind === "model" ? row.harness : provider.kind
     const saved = harness === provider.kind
       ? await onModelChange(id, nextEffort)
       : await onProviderChange({ kind: harness, instance: instances?.[harness] ?? "default" }, { model: id, effort: nextEffort })
     if (saved) {
-      setRecents((value) => ({ ...value, [`${harness}:${harness === provider.kind ? provider.instance : instances?.[harness] ?? "default"}`]: rememberModel(value[`${harness}:${harness === provider.kind ? provider.instance : instances?.[harness] ?? "default"}`] ?? [], id) }))
+      setRecents((value) => ({ ...value, [`${harness}:${harness === provider.kind ? provider.instance : instances?.[harness] ?? "default"}`]: rememberModel(value[`${harness}:${harness === provider.kind ? provider.instance : instances?.[harness] ?? "default"}`] ?? [], row.kind === "model" ? row.model.id : id) }))
       close()
     }
   }
+
+  // The first nine model rows pick with mod+1..9, from anywhere in the open panel.
+  const shortcutRows = useMemo(() => rows.filter((row): row is Extract<Row, { kind: "model" }> => row.kind === "model").slice(0, 9), [rows])
+  const pickShortcut = useRef<(index: number) => void>(() => {})
+  useEffect(() => {
+    pickShortcut.current = (index) => {
+      const row = shortcutRows[index]
+      if (row) void pick(row)
+    }
+  })
+  useEffect(() => {
+    const onWindowKey = (event: KeyboardEvent) => {
+      if (!(isMac ? event.metaKey : event.ctrlKey) || event.shiftKey || event.altKey || !/^[1-9]$/.test(event.key)) return
+      event.preventDefault()
+      pickShortcut.current(Number(event.key) - 1)
+    }
+    window.addEventListener("keydown", onWindowKey)
+    return () => window.removeEventListener("keydown", onWindowKey)
+  }, [])
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (!rows.length) return
@@ -281,97 +330,59 @@ function ModelPickerPanel({
     }
   }
 
-  const switchAgent = async (kind: ProviderStatus["kind"]) => {
-    if (kind === provider.kind || busy) return
+  const tabs = useMemo(
+    () => pickerTabs({ agents: providers.map((item) => ({ kind: item.kind, display_name: item.display_name, available: item.available })), accounts, current: { kind: provider.kind, instance: accountInstance ?? provider.instance }, canPickProvider, starredView: showFavorites }),
+    [accountInstance, accounts, canPickProvider, provider.kind, provider.instance, providers, showFavorites],
+  )
+  const follow = followLine({ accounts, current: { kind: provider.kind, instance: accountInstance ?? provider.instance }, followsDefaults: accountFollowsDefaults })
+
+  const resetList = () => {
     setQuery("")
     setExpanded({})
     setActiveKey(null)
-    await onProviderChange({ kind, instance: "default" })
+  }
+
+  const selectAccountTab = async (tab: Extract<PickerTab, { type: "account" }>) => {
+    if (busy) return
+    // An agent that isn't set up leads to its setup; an account that needs
+    // signing in leads to the sign-in sheet. Neither changes the thread.
+    if (tab.notSetUp && onSetUpProvider) {
+      close()
+      onSetUpProvider(tab.kind)
+      return
+    }
+    if (tab.needsSignIn) {
+      close()
+      openAddAccount({ kind: tab.kind, instance: tab.instance })
+      return
+    }
+    if (tab.notSetUp) return
+    if (tab.kind === provider.kind) {
+      setView("all")
+      if (tab.instance !== (accountInstance ?? provider.instance) || (accountFollowsDefaults && tab.multi)) {
+        resetList()
+        if (onAccountChange) await onAccountChange(tab.instance)
+        else await onProviderChange({ kind: tab.kind, instance: tab.instance })
+      }
+      inputRef.current?.focus()
+      return
+    }
+    setView("all")
+    resetList()
+    await onProviderChange({ kind: tab.kind, instance: tab.instance }, tab.multi ? { pinAccount: true } : undefined)
     inputRef.current?.focus()
   }
 
-  const toggleView = () => {
-    setView(showFavorites ? "all" : "favorites")
+  const selectStarred = () => {
+    setView("favorites")
     setActiveKey(null)
     inputRef.current?.focus()
   }
 
   return (
     <>
-      <div className="flex items-center gap-0.5 px-1.5 pt-1.5">
-        {canPickProvider && (
-          <div role="radiogroup" aria-label="Agent" className="flex min-w-0 items-center gap-0.5">
-            {providers.map((item) => {
-              const selected = item.kind === provider.kind
-              // An agent that isn't set up stays dim but leads to its setup,
-              // rather than a dead control.
-              const setUp = !item.available && onSetUpProvider
-              return (
-                <Tooltip key={item.kind}>
-                  <TooltipTrigger
-                    render={
-                      <button
-                        type="button"
-                        role="radio"
-                        aria-checked={selected}
-                        aria-label={item.available ? item.display_name : `${item.display_name}, not set up`}
-                        aria-disabled={setUp ? true : undefined}
-                        disabled={setUp ? false : !item.available || busy}
-                        onClick={() => {
-                          if (!setUp) return void switchAgent(item.kind)
-                          close()
-                          onSetUpProvider(item.kind)
-                        }}
-                        className={cn(
-                          "press-row inline-flex size-7 shrink-0 items-center justify-center rounded-[0.4rem] outline-none transition-[background-color,opacity] duration-150 focus-visible:ring-1 focus-visible:ring-ring",
-                          selected
-                            ? "bg-[var(--color-background-button-secondary)]"
-                            : setUp
-                              ? "opacity-20 hover:bg-[var(--color-background-button-secondary-hover)] hover:opacity-60"
-                              : "opacity-45 hover:bg-[var(--color-background-button-secondary-hover)] hover:opacity-100 disabled:opacity-20 disabled:hover:bg-transparent",
-                        )}
-                      />
-                    }
-                  >
-                    <ProviderMark kind={item.kind} size={14} className="size-3.5" />
-                  </TooltipTrigger>
-                  <TooltipPopup side="top" sideOffset={6} variant="picker">
-                    {item.available ? item.display_name : setUp ? `Set up ${item.display_name}` : `${item.display_name} isn’t installed`}
-                  </TooltipPopup>
-                </Tooltip>
-              )
-            })}
-          </div>
-        )}
-        {canPickModel && (
-          <div className="ms-auto flex items-center gap-0.5">
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    aria-label="Show favorites only"
-                    aria-pressed={showFavorites}
-                    onClick={toggleView}
-                    className={cn(PICKER_ICON_BUTTON_CLASS_NAME, showFavorites && "bg-[var(--color-background-button-secondary)] text-[var(--color-accent-yellow)] hover:text-[var(--color-accent-yellow)]")}
-                  />
-                }
-              >
-                {showFavorites ? <StarFilledIcon className="size-3.5" /> : <StarIcon className="size-3.5" />}
-              </TooltipTrigger>
-              <TooltipPopup side="top" sideOffset={6} variant="picker">{showFavorites ? "Show all models" : "Show favorites"}</TooltipPopup>
-            </Tooltip>
-            {canReload && (
-              <Tooltip>
-                <TooltipTrigger render={<button type="button" aria-label="Reload models" disabled={loading} onClick={onReload} className={PICKER_ICON_BUTTON_CLASS_NAME} />}>
-                  {loading ? <Spinner size={12} /> : <RefreshCwIcon className="size-3.5" />}
-                </TooltipTrigger>
-                <TooltipPopup side="top" sideOffset={6} variant="picker">{loading ? "Reloading models…" : "Reload models"}</TooltipPopup>
-              </Tooltip>
-            )}
-          </div>
-        )}
-      </div>
+      <ModelPickerTabs tabs={tabs} busy={busy} canReload={canPickModel && canReload} loading={loading} onStarred={selectStarred} onAccount={(tab) => void selectAccountTab(tab)} onReload={onReload} />
+      {follow && <FollowDefaultsLine line={follow} busy={busy} onFollow={() => void onAccountChange?.(null)} />}
 
       {canPickModel && (
         <>
@@ -426,8 +437,9 @@ function ModelPickerPanel({
                     row={row}
                     agentName={agentName}
                     active={row === activeRow}
+                    shortcut={row.kind === "model" && shortcutRows.includes(row) ? shortcutRows.indexOf(row) + 1 : undefined}
                     selected={isSelected(row)}
-                    favorite={row.kind === "model" && isFavorite(favorites, row.harness, row.model.id, row.harness === provider.kind ? provider.instance : instances?.[row.harness] ?? "default")}
+                    favorite={row.kind === "model" && isFavoriteModel(favorites, row.harness, row.model, row.harness === provider.kind ? provider.instance : instances?.[row.harness] ?? "default")}
                     starOnHover={showFavorites}
                     onHover={() => setActiveKey(row.key)}
                     onPick={() => void pick(row)}
@@ -458,19 +470,263 @@ function ModelPickerPanel({
         </>
       )}
 
-      {canPickModel && efforts.length > 1 && (
-        <>
-          <div aria-hidden className={PICKER_DIVIDER_CLASS_NAME} />
-          <EffortSlider
-            efforts={efforts}
-            value={effortValue}
-            defaultEffort={current?.default_effort ?? null}
-            disabled={busy}
-            onChange={onEffortChange}
-          />
-        </>
+      {canPickModel && (
+        <ModelFooter
+          current={current}
+          model={model}
+          effort={effort}
+          fallbackEfforts={status?.supported_efforts}
+          busy={busy}
+          onModelChange={onModelChange}
+          onEffortChange={onEffortChange}
+        />
       )}
     </>
+  )
+}
+
+/** The trait that gets the lightning-bolt toggle: an on/off parameter about speed. */
+const isFastParameter = (parameter: ModelParameter) => !!parameterSwitch(parameter) && /fast|speed/i.test(`${parameter.id} ${parameter.label}`)
+
+/**
+ * Traits of the selected model. A model with traits is one row, so the variant
+ * a thread holds decides which efforts apply. Effort and fast mode share one
+ * card; every other trait is a "Label  value >" menu row.
+ */
+function ModelFooter({
+  current,
+  model,
+  effort,
+  fallbackEfforts,
+  busy,
+  onModelChange,
+  onEffortChange,
+}: {
+  current: ProviderModel | undefined
+  model?: string | null
+  effort?: string | null
+  fallbackEfforts?: string[]
+  busy: boolean
+  onModelChange: (model: string, effort: string | undefined) => Promise<boolean>
+  onEffortChange: (effort: string) => Promise<boolean>
+}) {
+  const variant = selectedVariant(current, model)
+  const efforts = current ? (variant?.efforts?.length ? variant.efforts : current.efforts ?? []) : fallbackEfforts ?? []
+  const defaultEffort = variant?.default_effort ?? current?.default_effort ?? null
+  // Older GPT threads kept their reasoning level inside the model selector.
+  const effortValue = effort ?? selectorEffort(current, model) ?? defaultEffort
+  const parameters = current?.parameters ?? []
+  const traits = traitValues(current, model)
+  // Shown until the parent reports the new variant; cleared on failure.
+  const [pending, setPending] = useState<{ id: string; value: string; from: string | undefined } | null>(null)
+  const shown = pending && pending.from === variant?.id ? { ...traits, [pending.id]: pending.value } : traits
+
+  const change = async (parameter: string, value: string) => {
+    if (!current || busy || traits[parameter] === value) return
+    const next = changeTrait(current, model, parameter, value)
+    if (!next) return
+    const nextEfforts = next.efforts?.length ? next.efforts : current.efforts ?? []
+    // Keep the chosen effort when the new combination offers it; otherwise its own default.
+    const nextEffort = effortValue && nextEfforts.includes(effortValue) ? effortValue : next.default_effort ?? current.default_effort ?? undefined
+    setPending({ id: parameter, value, from: variant?.id })
+    if (!(await onModelChange(next.id, nextEffort))) setPending(null)
+  }
+
+  const fast = parameters.find(isFastParameter)
+  const fastToggle = fast ? parameterSwitch(fast)! : null
+  const fastOn = !!fast && !!fastToggle && (shown[fast.id] ?? fast.default) === fastToggle.on
+  const fastReason = fast && fastToggle && current ? traitUnavailableReason(current, model, fast.id, fastOn ? fastToggle.off : fastToggle.on) : null
+  const rows = parameters.filter((parameter) => parameter !== fast)
+  const hasEffort = efforts.length > 1
+
+  // Differs from what the model starts with: any trait off its default, or another effort.
+  const traitsChanged = parameters.some((parameter) => (shown[parameter.id] ?? parameter.default) !== parameter.default)
+  const effortChanged = hasEffort && !!defaultEffort && effortValue !== defaultEffort
+  const reset = async () => {
+    if (!current || busy) return
+    let selector: string | null | undefined = model
+    let target = variant
+    for (const parameter of parameters) {
+      if (traitValues(current, selector)[parameter.id] === parameter.default) continue
+      const next = changeTrait(current, selector, parameter.id, parameter.default)
+      if (next) {
+        selector = next.id
+        target = next
+      }
+    }
+    const nextDefault = (hasEffort ? target?.default_effort ?? current.default_effort : undefined) ?? undefined
+    if (selector !== model) {
+      setPending(null)
+      await onModelChange(selector!, nextDefault)
+    } else if (effortChanged && defaultEffort) {
+      await onEffortChange(defaultEffort)
+    }
+  }
+  const resetButton = traitsChanged || effortChanged ? <ResetButton busy={busy} onReset={() => void reset()} /> : null
+  const fastButton = fast && fastToggle && (
+    <FastToggle
+      on={fastOn}
+      busy={busy}
+      reason={fastReason}
+      onToggle={() => {
+        if (fastReason) return
+        void change(fast.id, fastOn ? fastToggle.off : fastToggle.on)
+      }}
+    />
+  )
+
+  if (!rows.length && !hasEffort && !fast) return null
+  return (
+    <>
+      <div aria-hidden className={PICKER_DIVIDER_CLASS_NAME} />
+      {hasEffort ? (
+        <EffortSlider efforts={efforts} value={effortValue} disabled={busy} leading={fastButton} trailing={resetButton} onChange={onEffortChange} />
+      ) : fast ? (
+        <div className={cn("px-3 pb-1 pt-2.5 transition-opacity duration-150", busy && "opacity-60")}>
+          <CardHeader leading={fastButton} trailing={resetButton}>
+            <span className={cn("font-medium transition-colors duration-150", fastOn ? "text-[var(--effort-accent)]" : "text-muted-foreground/60")}>{fastOn ? "Fast" : "Standard"}</span>
+          </CardHeader>
+        </div>
+      ) : null}
+      {rows.length > 0 && (
+        <div className={cn("flex flex-col px-1 pb-1 transition-opacity duration-150", hasEffort || fast ? "pt-0.5" : "pt-1", busy && "opacity-60")}>
+          {rows.map((parameter) => (
+            <TraitRow
+              key={parameter.id}
+              parameter={parameter}
+              value={shown[parameter.id] ?? parameter.default}
+              busy={busy}
+              unavailable={(value) => (current ? traitUnavailableReason(current, model, parameter.id, value) : null)}
+              onChange={(value) => void change(parameter.id, value)}
+            />
+          ))}
+        </div>
+      )}
+      {!hasEffort && !fast && <div className="h-0.5" />}
+    </>
+  )
+}
+
+const EFFORT_ACCENT_CLASS_NAME = "[--effort-accent:oklch(0.62_0.1_255)] dark:[--effort-accent:oklch(0.76_0.08_255)]"
+
+/** Bolt on the left, state in the middle, reset on the right; each end is a fixed 24px slot so the label never shifts. */
+function CardHeader({ leading, trailing, children }: { leading?: React.ReactNode; trailing?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className={cn("mb-1.5 grid min-h-6 grid-cols-[1.5rem_minmax(0,1fr)_1.5rem] items-center gap-2 text-[length:var(--app-font-size-ui,12px)]", EFFORT_ACCENT_CLASS_NAME)}>
+      <span className="flex justify-start">{leading}</span>
+      <span className="truncate text-center">{children}</span>
+      <span className="flex justify-end">{trailing}</span>
+    </div>
+  )
+}
+
+const CARD_ICON_BUTTON_CLASS_NAME =
+  "press-row -mx-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-[0.4rem] outline-none transition-[color,opacity] duration-150 focus-visible:ring-1 focus-visible:ring-ring aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+
+/**
+ * Fast mode as a lightning bolt: tinted when on, muted when off. Like the rest
+ * of the picker it is `aria-disabled` while busy or unavailable, which keeps focus.
+ */
+function FastToggle({ on, busy, reason, onToggle }: { on: boolean; busy: boolean; reason: string | null; onToggle: () => void }) {
+  const Icon = on ? FastModeIcon : FastModeOutlineIcon
+  const button = (
+    <button
+      type="button"
+      aria-label="Fast mode"
+      aria-pressed={on}
+      aria-disabled={busy || !!reason || undefined}
+      onClick={() => {
+        if (!busy) onToggle()
+      }}
+      className={cn(CARD_ICON_BUTTON_CLASS_NAME, on ? "text-[var(--effort-accent)]" : "text-muted-foreground/60 hover:text-foreground")}
+    >
+      <Icon className="size-4" aria-hidden />
+    </button>
+  )
+  return (
+    <Tooltip>
+      <TooltipTrigger render={button} />
+      <TooltipPopup side="top" sideOffset={8} variant="picker">{reason ?? "Fast mode"}</TooltipPopup>
+    </Tooltip>
+  )
+}
+
+/** Puts effort and every trait back to the model's defaults. */
+function ResetButton({ busy, onReset }: { busy: boolean; onReset: () => void }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-label="Reset to default"
+            aria-disabled={busy || undefined}
+            onClick={() => {
+              if (!busy) onReset()
+            }}
+            className={cn(CARD_ICON_BUTTON_CLASS_NAME, "text-muted-foreground/60 hover:text-[var(--effort-accent)]")}
+          >
+            <ResetIcon className="size-4" aria-hidden />
+          </button>
+        }
+      />
+      <TooltipPopup side="top" sideOffset={8} variant="picker">Reset to default</TooltipPopup>
+    </Tooltip>
+  )
+}
+
+/**
+ * One model trait other than effort and fast mode: "Label  value >" opens a
+ * small menu of its values. Values the other traits rule out stay listed,
+ * disabled, with the reason underneath. While busy the row ignores input and
+ * stays `aria-disabled` rather than `disabled`, which drops focus in WebKit.
+ */
+function TraitRow({
+  parameter,
+  value,
+  busy,
+  unavailable,
+  onChange,
+}: {
+  parameter: ModelParameter
+  value: string
+  busy: boolean
+  /** The reason a value cannot be chosen with the other traits as they are, or null. */
+  unavailable: (value: string) => string | null
+  onChange: (value: string) => void
+}) {
+  const labelId = useId()
+  const [open, setOpen] = useState(false)
+  const labelOf = (item: string) => parameter.values.find((entry) => entry.value === item)?.label ?? item
+  return (
+    <Menu open={open && !busy} onOpenChange={(next) => setOpen(next && !busy)}>
+      <MenuTrigger
+        aria-labelledby={labelId}
+        aria-disabled={busy || undefined}
+        className="press-row flex h-8 w-full min-w-0 cursor-default items-center justify-between gap-3 rounded-[0.4rem] px-2 text-left text-[length:var(--app-font-size-ui,12px)] outline-none hover:bg-[var(--color-background-button-secondary-hover)] focus-visible:ring-1 focus-visible:ring-ring aria-disabled:cursor-not-allowed data-popup-open:bg-[var(--color-background-button-secondary-hover)]"
+      >
+        <span id={labelId} className="shrink-0">{parameter.label}</span>
+        <span className="flex min-w-0 items-center gap-1 text-muted-foreground/70">
+          <span className="truncate">{labelOf(value)}</span>
+          <ChevronRightIcon className="size-3 shrink-0 opacity-70" aria-hidden />
+        </span>
+      </MenuTrigger>
+      <ComposerPickerMenuPopup align="end" side="top">
+        <MenuRadioGroup value={value} onValueChange={(next) => onChange(String(next))}>
+          {parameter.values.map((entry) => {
+            const reason = unavailable(entry.value)
+            return (
+              <MenuRadioItem key={entry.value} value={entry.value} disabled={!!reason} title={reason ?? undefined}>
+                <span className="flex min-w-0 flex-col">
+                  <span className="truncate">{entry.label}</span>
+                  {reason && <span className="whitespace-normal text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-muted-foreground/70">{reason}</span>}
+                </span>
+              </MenuRadioItem>
+            )
+          })}
+        </MenuRadioGroup>
+      </ComposerPickerMenuPopup>
+    </Menu>
   )
 }
 
@@ -483,14 +739,16 @@ function ModelPickerPanel({
 function EffortSlider({
   efforts,
   value,
-  defaultEffort,
   disabled,
+  leading,
+  trailing,
   onChange,
 }: {
   efforts: string[]
   value: string | null
-  defaultEffort: string | null
   disabled: boolean
+  leading?: React.ReactNode
+  trailing?: React.ReactNode
   onChange: (effort: string) => Promise<boolean>
 }) {
   const trackRef = useRef<HTMLDivElement>(null)
@@ -519,20 +777,10 @@ function EffortSlider({
   }
 
   return (
-    <div className={cn("px-3 pb-3 pt-2.5 transition-opacity duration-150", disabled && "opacity-60")}>
-      <div className="mb-2 flex items-baseline justify-between gap-2 text-[length:var(--app-font-size-ui-sm,11px)]">
-        <span className="text-muted-foreground/50">Effort</span>
-        <TextSwap
-          text={formatEffort(label)}
-          render={(text) => (
-            <>
-              <span className="font-medium text-[var(--effort-accent)]">{text}</span>
-              {defaultEffort && text === formatEffort(defaultEffort) && <span className="text-muted-foreground/50"> · Default</span>}
-            </>
-          )}
-          className="[--effort-accent:oklch(0.62_0.1_255)] dark:[--effort-accent:oklch(0.76_0.08_255)]"
-        />
-      </div>
+    <div className={cn("px-3 pb-2.5 pt-2.5 transition-opacity duration-150", disabled && "opacity-60")}>
+      <CardHeader leading={leading} trailing={trailing}>
+        <TextSwap text={formatEffort(label)} render={(text) => <span className="font-medium text-[var(--effort-accent)]">{text}</span>} />
+      </CardHeader>
       <div
         ref={trackRef}
         role="slider"
@@ -541,7 +789,7 @@ function EffortSlider({
         aria-valuemin={0}
         aria-valuemax={max}
         aria-valuenow={live}
-        aria-valuetext={label === defaultEffort ? `${formatEffort(label)}, default` : formatEffort(label)}
+        aria-valuetext={formatEffort(label)}
         aria-disabled={disabled || undefined}
         data-held={held || undefined}
         style={{
@@ -630,6 +878,7 @@ function PickerRow({
   row,
   agentName,
   active,
+  shortcut,
   selected,
   favorite,
   starOnHover,
@@ -641,6 +890,8 @@ function PickerRow({
   row: Row
   agentName: string
   active: boolean
+  /** 1 to 9: picks this row with the mod key. */
+  shortcut?: number
   selected: boolean
   favorite: boolean
   /** In the favorites view every row is starred, so the star only appears to unstar. */
@@ -697,6 +948,12 @@ function PickerRow({
         </span>
         {description && <span className="truncate text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-muted-foreground/50">{description}</span>}
       </span>
+      {shortcut && (
+        <Kbd aria-hidden className="h-[1.125rem] min-w-0 shrink-0 gap-0.5 rounded-full bg-[color-mix(in_srgb,var(--foreground)_7%,transparent)] px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] tabular-nums">
+          {isMac ? mod : `${mod} `}
+          {shortcut}
+        </Kbd>
+      )}
       {row.kind === "model" && (
         <button
           type="button"

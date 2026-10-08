@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.0
+
+<!-- kybern-release-title: Preview anything, sign in once -->
+<!-- kybern-release-summary: Open mockups and dev servers in an in-app browser, add accounts in one browser step, and review pull requests in a cleaner workspace. -->
+
+- Preview local HTML files and dev servers in the right dock. The address bar takes URLs or file paths, with back, forward, reload, a loading bar, device sizes with rotate and drag handles, and a floating mini player that follows you across threads. The empty state lists local servers and recent pages. Agents can open a preview beside the chat with `kybern_preview_open`. Files outside the project ask once per folder, remote dev servers preview through the daemon, and public sites open in your browser.
+- Add an account in one sheet: pick the agent, finish signing in in your browser, and Kybern fills in the email and plan. Paste-code and device-code fallbacks cover remote connections. Settings has a new Accounts tab with colors, usage, default, rename, sign out and remove, and the rail usage rings open an accounts popover. The default account is now called the CLI account.
+- Choose the account inside the model picker with one tab per account; the composer trigger shows the account name and a small color dot only when a thread uses a named account. The prompt cache timer and plan usage now share one status glyph.
+- Show each Cursor model once. Context, Fast and effort are controls in the picker: ⚡ toggles Fast, effort has a slider with reset, and other options are menus that disable combinations Cursor doesn't offer. GPT, Codex, Kimi and GLM reasoning levels use the same effort slider. Model rows have ⌘1–⌘9 shortcuts.
+- Rework pull requests: the PR list is the only sidebar, rows show author avatar, checks and line counts, and each PR has Summary, Changes and Timeline tabs with merge status, reviews and a checks ring. Write inline comments under the line, review from a popover, and send findings to an agent from the top bar.
+- Make inline visual replies borderless with an Open in panel button, size them before they paint so nothing jumps, and open them in a Preview panel with rendered and source views instead of a dialog.
+- Let one chat claim several tasks at once. The thread header lists the tasks it runs, and claiming a task no longer reopens tasks already handed over.
+- Remove the ring around harness marks on subagent badges.
+
 ## 0.7.1
 
 <!-- kybern-release-title: A clearer pull request workspace -->

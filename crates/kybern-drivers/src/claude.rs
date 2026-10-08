@@ -266,6 +266,8 @@ impl ClaudeDriver {
                     efforts: vec!["low".into(), "medium".into(), "high".into(), "xhigh".into(), "max".into()],
                     default_effort: None,
                     is_default: false,
+                    parameters: Vec::new(),
+                    variants: Vec::new(),
                 },
                 ProviderModel {
                     id: "opus".into(),
@@ -276,6 +278,8 @@ impl ClaudeDriver {
                     efforts: vec!["low".into(), "medium".into(), "high".into(), "xhigh".into(), "max".into()],
                     default_effort: None,
                     is_default: false,
+                    parameters: Vec::new(),
+                    variants: Vec::new(),
                 },
             ],
             instances: vec!["default".into()],
@@ -350,6 +354,8 @@ impl ClaudeDriver {
                     resolved_id: target.map(|target| resolved_model_id(&id, target)),
                     description: None,
                     is_default: id == config.model,
+                    parameters: Vec::new(),
+                    variants: Vec::new(),
                     default_effort: Some(config.effort_for(&id)),
                     efforts: status.supported_efforts.clone(),
                     provider: None,
@@ -411,6 +417,8 @@ fn catalog_models(catalog: &[CatalogModel], config: &ClaudeConfig, fallback_effo
                 default_effort: (!efforts.is_empty()).then(|| config.effort_for(&model.value)),
                 efforts,
                 is_default: model.value == config.model,
+                parameters: Vec::new(),
+                variants: Vec::new(),
             }
         })
         .collect()
@@ -439,6 +447,8 @@ fn insert_configured_model(status: &mut ProviderStatus, config: &ClaudeConfig, c
             efforts: status.supported_efforts.clone(),
             default_effort: Some(config.effort.clone()),
             is_default: true,
+            parameters: Vec::new(),
+            variants: Vec::new(),
         },
     );
 }

@@ -105,10 +105,18 @@ impl ProviderInstance {
 }
 
 /// A named, native-isolated account. Secrets remain in the harness directory.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderAccount {
     pub name: String,
     pub directory: String,
+    /// Palette key: blue | green | purple | pink | teal | amber. Unknown keys render without a dot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Last identity seen by the daemon, for instant rendering. Never a credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
 }
 
 /// The target of the next message, separate from the admitted live session.
@@ -146,6 +154,46 @@ pub struct ProviderModel {
     pub default_effort: Option<String>,
     #[serde(default)]
     pub is_default: bool,
+    /// Traits a model can be run with besides effort (Cursor's context size,
+    /// fast mode). A picker shows one row for the model and one control per
+    /// parameter instead of a row for every combination.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parameters: Vec<ModelParameter>,
+    /// The selectable combinations of `parameters`. Selecting one sends its
+    /// `id` as the model; `id` on this row is the default combination.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variants: Vec<ModelVariant>,
+}
+
+/// One trait of a model. A parameter whose values are exactly `true` and
+/// `false` is a switch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ModelParameter {
+    pub id: String,
+    pub label: String,
+    pub values: Vec<ModelParameterValue>,
+    /// Value of the model's default combination.
+    pub default: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ModelParameterValue {
+    pub value: String,
+    pub label: String,
+}
+
+/// One combination of a model's parameters.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ModelVariant {
+    /// Model selector to send for this combination.
+    pub id: String,
+    /// Value of every parameter, keyed by `ModelParameter::id`.
+    pub params: std::collections::BTreeMap<String, String>,
+    /// Efforts this combination accepts; empty means the row's `efforts`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub efforts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_effort: Option<String>,
 }
 
 /// A command advertised by a live harness's native protocol.
@@ -1313,6 +1361,17 @@ pub struct HtmlVisual {
     pub title: String,
     /// Agent-requested height cap in CSS pixels.
     pub height: u32,
+    /// Content heights measured at publish, ascending by width. Empty when the
+    /// preview browser was not installed or measuring exceeded its budget.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub heights: Vec<VisualHeight>,
+}
+
+/// One content height measured at a frame width, in CSS pixels.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct VisualHeight {
+    pub width: u32,
+    pub height: u32,
 }
 
 /// Rendered transcript entries, projected from events by the daemon.
@@ -1494,6 +1553,10 @@ pub struct Settings {
     /// Give new agent sessions a short guide to Kybern: images, notes and
     /// tasks, other threads, helpers. Applies to sessions started after the change.
     pub tell_agents_about_kybern: bool,
+    /// Folders outside a project the user allowed the Preview panel to serve
+    /// files from. Canonical absolute paths; a grant covers descendants.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preview_allowed_folders: Vec<String>,
 }
 
 /// Limits for `kybern_agent_delegate`. Read each time an agent delegates.
@@ -1569,6 +1632,7 @@ impl Default for Settings {
             computer_use: ComputerUseSettings::default(),
             orchestration: OrchestrationSettings::default(),
             tell_agents_about_kybern: true,
+            preview_allowed_folders: Vec::new(),
         }
     }
 }
@@ -1815,6 +1879,24 @@ pub struct AsyncQuestionRequest {
 #[cfg(test)]
 mod orchestration_tests {
     use super::*;
+
+    #[test]
+    fn provider_model_traits_are_additive() {
+        let plain: ProviderModel = serde_json::from_str(r#"{"id":"m","display_name":"M","is_default":false}"#).unwrap();
+        assert!(plain.parameters.is_empty() && plain.variants.is_empty());
+        let encoded = serde_json::to_value(&plain).unwrap();
+        assert!(encoded.get("parameters").is_none() && encoded.get("variants").is_none());
+
+        let rich: ProviderModel = serde_json::from_str(
+            r#"{"id":"v1","display_name":"Opus","resolved_id":"opus","efforts":["low"],"default_effort":"low","is_default":false,
+                "parameters":[{"id":"fast","label":"Fast","default":"false","values":[{"value":"false","label":"Off"},{"value":"true","label":"On"}]}],
+                "variants":[{"id":"v1","params":{"fast":"false"},"efforts":["low"],"default_effort":"low"},{"id":"v2","params":{"fast":"true"}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(rich.parameters[0].values[1].label, "On");
+        assert_eq!(rich.variants[1].params["fast"], "true");
+        assert!(rich.variants[1].efforts.is_empty());
+    }
 
     fn id(n: u128) -> Uuid {
         Uuid::from_u128(n)

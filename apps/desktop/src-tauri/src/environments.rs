@@ -143,6 +143,20 @@ fn resolve_profile(registry: &EnvironmentRegistry, id: &str) -> Result<Environme
     registry.environments.iter().find(|p| p.id == id).cloned().context("This environment was removed; choose another environment")
 }
 
+/// `host:port` of every daemon this app is configured for (the local daemon
+/// and saved environments) whose HTTP base is plain `http://`.
+pub async fn daemon_authorities<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Vec<String> {
+    let mut urls: Vec<String> = vec![];
+    if let Ok(local) = crate::resolve() {
+        urls.push(local.url);
+    }
+    let _guard = REGISTRY_LOCK.lock().await;
+    if let Ok(registry) = registry_path(app).and_then(|path| read_registry(&path)) {
+        urls.extend(registry.environments.into_iter().filter_map(|p| p.url));
+    }
+    urls.iter().filter_map(|url| address::http_base(url).ok()).filter_map(|base| crate::preview_relay::http_authority(&base)).collect()
+}
+
 #[tauri::command]
 pub async fn environments_list<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<EnvironmentRegistry, String> {
     let _guard = REGISTRY_LOCK.lock().await;

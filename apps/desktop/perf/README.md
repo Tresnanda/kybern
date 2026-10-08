@@ -178,6 +178,7 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 
 | Change | Native check |
 | --- | --- |
+| In-app preview: file route, relay, slots, device mode, mini player | `KYBERN_PERF_FOREGROUND=1 node scripts/check-rendering.mjs preview` (needs `cargo build -p kybern`; `KYBERN_PERF_SHOTS_DIR` saves screenshots; set `KYBERN_PREVIEW_OUTSIDE_BASE` if `/private/tmp` is unavailable) |
 | Settings screen, navigation, and usage reporting | `node scripts/check-rendering.mjs settings` |
 | Theme tokens, surfaces, translucency | `node --experimental-strip-types scripts/check-window-material.mjs` |
 | Streaming, Markdown, highlighting, message rail | `node scripts/check-rendering.mjs` |

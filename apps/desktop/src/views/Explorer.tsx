@@ -21,7 +21,8 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { ResizeHandle } from "@/components/kybern/ResizeHandle"
 import { copyText, useResize } from "@/lib/hooks"
 import { basename } from "@/lib/format"
-import { ChevronRightIcon, CodeIcon, CopyIcon, EllipsisIcon, EyeOpenIcon, FolderIcon } from "@/lib/kit/icons"
+import { ChevronRightIcon, CodeIcon, CopyIcon, EllipsisIcon, EyeOpenIcon, FolderIcon, WindowIcon } from "@/lib/kit/icons"
+import { isPreviewablePath, openFileInPreview, selectedThreadId } from "@/state/previewSession"
 import { revealInFinder } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import { countLines, shouldHighlightSource } from "@/lib/workload"
@@ -333,6 +334,11 @@ const FileViewer = memo(function FileViewer({ projectId, path, projectName, proj
             </IconButton>
             <ComposerPickerMenuPopup align="end" side="bottom" className="w-52 min-w-52">
               <MenuGroup>
+                {isPreviewablePath(path) && (
+                  <MenuItem disabled={!selectedThreadId()} onClick={() => void openFileInPreview(`${projectPath}/${path}`)}>
+                    <WindowIcon className="size-3.5 shrink-0 text-muted-foreground" /> Open in preview
+                  </MenuItem>
+                )}
                 <MenuItem onClick={() => void copyText(path)}>
                   <CopyIcon className="size-3.5 shrink-0 text-muted-foreground" /> Copy relative path
                 </MenuItem>

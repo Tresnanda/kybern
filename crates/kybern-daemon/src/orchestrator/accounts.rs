@@ -320,6 +320,7 @@ impl Orchestrator {
 
     /// Called under the send admission gate, before appending the user's intent.
     pub(super) fn admit_target(&self, thread: &mut Thread, target: SessionTarget) -> Result<()> {
+        self.ensure_account_signed_in(&target.provider)?;
         let provider_changed = thread.provider != target.provider;
         let binding =
             self.inner.store.meta_get(&Self::binding_key(thread))?.map(|saved| serde_json::from_str::<Binding>(&saved)).transpose()?;
@@ -726,6 +727,61 @@ fn bounded_context(thread_id: ThreadId, items: &[String], cap: usize) -> String 
         }
     }
     text
+}
+
+impl Orchestrator {
+    fn signed_out_key(provider: &ProviderInstance) -> String {
+        format!("account_signed_out:{}:{}", provider.kind, provider.instance)
+    }
+
+    /// Remember that the user signed a named account out (or signed it in again),
+    /// so threads that target it fail fast instead of starting a doomed session.
+    pub fn mark_account_signed_out(&self, provider: &ProviderInstance, signed_out: bool) -> Result<()> {
+        self.inner.store.meta_set(&Self::signed_out_key(provider), if signed_out { "1" } else { "" })
+    }
+
+    pub(super) fn ensure_account_signed_in(&self, provider: &ProviderInstance) -> Result<()> {
+        if provider.instance == "default" {
+            return Ok(());
+        }
+        if self.inner.store.meta_get(&Self::signed_out_key(provider))?.is_some_and(|value| !value.is_empty()) {
+            let settings = self.inner.settings.get();
+            let name = settings
+                .providers
+                .get(&provider.kind)
+                .and_then(|provider_settings| provider_settings.accounts.get(&provider.instance))
+                .map(|account| account.name.clone())
+                .unwrap_or_else(|| provider.kind.display_name().to_string());
+            anyhow::bail!("{name} is signed out. Sign in again in Settings › Accounts.");
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn admit_signed_out_for_test(&self, provider: &ProviderInstance) -> bool {
+        self.ensure_account_signed_in(provider).is_err()
+    }
+
+    /// Threads whose latest stored account override is this account follow defaults again.
+    pub fn clear_account_overrides(&self, provider: &ProviderInstance) -> Result<usize> {
+        self.mark_account_signed_out(provider, false)?;
+        self.inner.store.meta_clear_matching("account_override:", &provider.instance)
+    }
+
+    /// How many threads have a turn running on this account right now.
+    pub async fn running_turns_on(&self, provider: &ProviderInstance) -> usize {
+        let sessions: Vec<(ThreadId, Arc<LiveSession>)> =
+            self.inner.sessions.lock().await.iter().map(|(id, live)| (*id, live.clone())).collect();
+        let owner = serde_json::to_string(provider).unwrap_or_default();
+        let mut count = 0;
+        for (thread_id, live) in sessions {
+            let owned = self.inner.store.meta_get(&format!("live_owner:{thread_id}")).ok().flatten().as_deref() == Some(owner.as_str());
+            if owned && live.turn.lock().await.is_some() {
+                count += 1;
+            }
+        }
+        count
+    }
 }
 
 #[cfg(test)]

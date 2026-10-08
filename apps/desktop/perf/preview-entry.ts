@@ -1,0 +1,6 @@
+const report = (value: unknown) => (window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (text: string) => void } } } }).webkit.messageHandlers.bench.postMessage(JSON.stringify(value))
+window.addEventListener("error", event => report({stage: "preview-global-error", message: event.message, file: event.filename, line: event.lineno, error: String(event.error)}))
+window.addEventListener("unhandledrejection", event => report({stage: "preview-unhandled-rejection", error: String(event.reason)}))
+window.addEventListener("securitypolicyviolation", event => report({stage: "preview-csp", blocked: event.blockedURI, directive: event.violatedDirective}))
+report({stage: "preview-module-loading"})
+import("./preview").then(() => report({stage: "preview-module-loaded"})).catch(error => report({pass: false, error: String(error)}))

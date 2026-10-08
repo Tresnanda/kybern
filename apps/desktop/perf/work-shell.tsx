@@ -80,7 +80,7 @@ async function run() {
     thread: document.querySelectorAll('[data-composer-draft="thread"]').length === 1,
     newThread: document.querySelectorAll('[data-composer-draft="new-thread"]').length === 1,
   }
-  const promptCache = document.querySelector('[data-prompt-cache="warm"]')?.textContent?.trim() === "30m"
+  const promptCache = document.querySelector('[data-prompt-cache="warm"]')?.getAttribute("aria-label")?.includes("Prompt cache warm, about 30 minutes left") === true
   const freeChats = document.body.textContent?.includes("Recents") === true && document.body.textContent?.includes("Plan a weekend trip") === true && document.querySelectorAll('[data-composer-draft="free-chat"]').length === 1
   const bell = document.querySelector<HTMLButtonElement>('button[aria-label^="Show threads that need attention"]')!
   const dot = bell.querySelector<HTMLElement>('[data-slot="notification-dot"]')!

@@ -125,7 +125,14 @@ export interface ProviderInstance {
 export type PermissionMode =
   "supervised" | "accept-edits" | "auto" | "full-access";
 
-export interface ProviderAccount { name: string; directory: string }
+export interface ProviderAccount {
+  name: string;
+  directory: string;
+  /** Palette key: blue | green | purple | pink | teal | amber. */
+  color?: string | null;
+  email?: string | null;
+  plan?: string | null;
+}
 export interface SessionTarget { provider: ProviderInstance; model?: string | null; effort?: string | null }
 export interface ThreadTargetState {
   target: SessionTarget;
@@ -148,6 +155,32 @@ export interface ProviderModel {
   efforts?: string[];
   default_effort?: string | null;
   is_default?: boolean;
+  /** Traits besides effort (context size, fast mode). One row per model; `variants` maps trait values to selectors. */
+  parameters?: ModelParameter[];
+  /** Selectable trait combinations. `id` on the row is the default one. */
+  variants?: ModelVariant[];
+}
+
+export interface ModelParameter {
+  id: string;
+  label: string;
+  values: ModelParameterValue[];
+  /** Value of the row's default combination. */
+  default: string;
+}
+
+export interface ModelParameterValue {
+  value: string;
+  label: string;
+}
+
+export interface ModelVariant {
+  /** Model selector to send for this combination. */
+  id: string;
+  params: Record<string, string>;
+  /** Empty means the row's efforts. */
+  efforts?: string[];
+  default_effort?: string | null;
 }
 
 export interface ProviderStatus {
@@ -691,7 +724,16 @@ export interface ToolCall {
 
 export type StopReason = "completed" | "interrupted" | "max_turns" | "error";
 
-export interface HtmlVisual { id: Uuid; title: string; height: number }
+/** One content height measured at a frame width, in CSS pixels. */
+export interface VisualHeight { width: number; height: number }
+export interface HtmlVisual {
+  id: Uuid;
+  title: string;
+  /** Agent-requested height cap in CSS pixels. */
+  height: number;
+  /** Content heights measured at publish, ascending by width; absent when not measured. */
+  heights?: VisualHeight[];
+}
 export type TranscriptEntry =
   | { role: "visual"; turn_id: TurnId; seq: EventSeq; at: DateTime; visual: HtmlVisual }
   | { role: "image"; id: string; turn_id: TurnId; seq: number; at: string; origin: EventOrigin; source: string }
@@ -1167,6 +1209,54 @@ export interface ThreadNotes {
 
 // ---- notes ----
 
+// ---- in-app browser preview ----
+export type PreviewTargetInfo =
+  | { kind: "file"; path: string; root: string; in_project: boolean }
+  | { kind: "server"; url: string; port: number }
+  | { kind: "external"; url: string };
+export interface PreviewFolderRequest { folder: string; grantable: boolean }
+export interface PreviewOpenResult {
+  target: PreviewTargetInfo;
+  ticket?: string;
+  /** HTTP path to load, e.g. `/preview-files/{ticket}/mock/index.html`. */
+  path?: string;
+  needs_permission?: PreviewFolderRequest;
+}
+export type PreviewProbeError = "connection_refused" | "timed_out" | "dns" | "tls" | "http_status" | "not_http";
+export interface PreviewFrameBlock { header: "x-frame-options" | "content-security-policy" | string; value: string }
+export interface PreviewProbeResult {
+  reachable: boolean;
+  status?: number;
+  error?: PreviewProbeError;
+  blocked_by?: PreviewFrameBlock;
+  title?: string;
+  location?: string;
+}
+export interface PreviewServer {
+  url: string;
+  port: number;
+  host: string;
+  pid?: number;
+  process_name?: string;
+  cwd?: string;
+  title?: string;
+  favicon?: string;
+  framework?: string;
+  in_project?: boolean;
+}
+export interface PreviewServersListResult {
+  servers: PreviewServer[];
+  scanned_at: string;
+  method: "lsof" | "proc" | "common_ports" | string;
+}
+export const PREVIEW_OPEN_REQUESTED_NOTIFICATION = "previews.open_requested";
+export interface PreviewOpenRequestedNotification {
+  thread_id: ThreadId;
+  target: string;
+  title?: string;
+  requested_by_agent: boolean;
+}
+
 export const NOTES_CHANGED_NOTIFICATION = "notes.changed";
 
 export type NoteId = Uuid;
@@ -1621,6 +1711,8 @@ export interface Settings {
   orchestration: OrchestrationSettings;
   /** Give new agent sessions a short guide to Kybern. Defaults to on. */
   tell_agents_about_kybern: boolean;
+  /** Folders outside a project the user allowed Preview to serve files from. */
+  preview_allowed_folders?: string[];
 }
 
 /** Limits for `kybern_agent_delegate`, read each time an agent delegates. */
@@ -1776,6 +1868,10 @@ export interface UsageLimitsParams {
   cached?: boolean;
   /** Re-read every provider now, even if fresh. */
   refresh?: boolean;
+  /** Also read these accounts (the composer's thread account). */
+  instances?: ProviderInstance[];
+  /** Also read every named account. */
+  all_accounts?: boolean;
 }
 /** Where a provider's current limits came from. */
 export type LimitsSource = "live" | "session" | "stored";
@@ -1793,12 +1889,60 @@ export interface ProviderLimits {
   stale?: LimitsStale;
   /** While reads are throttled: when the next one may run (ISO). */
   retry_at?: string;
+  /** Set on per-account entries; unset on the global default per kind. */
+  instance?: string;
 }
 export interface UsageLimitsResult {
   providers: ProviderLimits[];
   /** Providers with a live read in flight. */
   refreshing?: ProviderKind[];
+  /** Per-account entries (`instance` set). Absent from older daemons. */
+  accounts?: ProviderLimits[];
 }
+
+export type AccountStatus = "signed_in" | "needs_sign_in" | "signed_out" | "unknown";
+export interface AccountIdentity { email?: string; plan?: string; organization?: string }
+export interface AccountSummary {
+  /** Instance "default" is the CLI account. */
+  provider: ProviderInstance;
+  name: string;
+  color?: string;
+  identity?: AccountIdentity;
+  status: AccountStatus;
+  is_default: boolean;
+  projects: string[];
+  directory?: string;
+  managed: boolean;
+  can_sign_out: boolean;
+}
+export type AccountLoginMode = "browser" | "paste" | "device_code" | "terminal";
+export type AccountLoginPhase = "starting" | "waiting" | "verifying" | "signed_in" | "failed" | "canceled";
+export interface AccountLoginStartParams {
+  kind: ProviderKind;
+  instance?: string;
+  mode: AccountLoginMode;
+  directory?: string;
+  upstream?: string;
+}
+export interface AccountLogin {
+  id: string;
+  kind: ProviderKind;
+  instance?: string;
+  mode: AccountLoginMode;
+  phase: AccountLoginPhase;
+  url?: string;
+  user_code?: string;
+  terminal?: TerminalInfo;
+  identity?: AccountIdentity;
+  suggested_name?: string;
+  suggested_color?: string;
+  duplicate_of?: string;
+  previous_email?: string;
+  error?: string;
+  expires_at: string;
+}
+/** Params are an AccountLogin. */
+export const ACCOUNTS_LOGIN_CHANGED_NOTIFICATION = "providers.accounts.login.changed";
 /** Params are a full UsageLimitsResult. */
 export const USAGE_LIMITS_CHANGED_NOTIFICATION = "usage.limits.changed";
 
@@ -1812,7 +1956,20 @@ export interface PullRequest {
   is_draft: boolean;
   author: string;
   updated_at: DateTime;
+  author_avatar_url?: string;
+  author_is_bot?: boolean;
+  created_at?: DateTime;
+  additions?: number;
+  deletions?: number;
+  /** APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED */
+  review_decision?: string;
+  /** MERGEABLE | CONFLICTING | UNKNOWN */
+  mergeable?: string;
+  labels?: PrLabel[];
+  checks_summary?: PrChecksSummary;
 }
+export interface PrLabel { name: string; color: string }
+export interface PrChecksSummary { total: number; passed: number; failed: number; pending: number; skipped: number }
 
 export interface GitStatusParams {
   thread_id: ThreadId;
@@ -1878,11 +2035,22 @@ export interface PrListResult {
 
 export interface PrDetailParams { project_id: ProjectId; number: number }
 export interface PrCheck { name: string; status: string; conclusion: string; url: string }
-export interface PrDetailResult { pull_request: PullRequest; body: string; head_sha: string; reviewers: string[]; checks: PrCheck[]; changed_files: number }
+export interface PrDetailResult { pull_request: PullRequest; body: string; head_sha: string; reviewers: string[]; checks: PrCheck[]; changed_files: number
+  /** CLEAN | BLOCKED | BEHIND | DIRTY | UNSTABLE | DRAFT | HAS_HOOKS | UNKNOWN */
+  merge_state_status?: string
+  reviews?: PrReviewer[]
+  /** Issue comments plus review threads; absent when the count query failed. */
+  comment_count?: number
+  merged_at?: DateTime
+  merged_by?: string
+  closed_at?: DateTime
+}
+/** APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | REQUESTED */
+export interface PrReviewer { login: string; avatar_url?: string; is_bot?: boolean; state: string }
 export type PrPageKind = "files" | "comments" | "reviews" | "review_comments" | "checks";
 export interface PrPageParams { project_id: ProjectId; number: number; kind: PrPageKind; page?: number }
 export interface PrFile { path: string; old_path: string | null; status: string; additions: number; deletions: number; patch: string; patch_truncated: boolean }
-export interface PrReviewEntry { id: number; author: string; body: string; state: string; path: string | null; line: number | null; side: string | null; url: string; updated_at: string }
+export interface PrReviewEntry { id: number; author: string; body: string; state: string; path: string | null; line: number | null; side: string | null; url: string; updated_at: string; avatar_url?: string; author_is_bot?: boolean }
 export interface PrPageResult { checks?: PrCheck[]; files: PrFile[]; entries: PrReviewEntry[]; page: number; has_more: boolean }
 export type PrActionKind = "comment" | "approve" | "request_changes" | "checkout" | "merge" | "close";
 export interface PrInlineComment { path: string; line: number; side: string; body: string }
@@ -2054,6 +2222,15 @@ export interface Methods {
   "providers.accounts.create": [{ kind: ProviderKind; name: string; directory?: string | null }, ProviderInstance];
   "providers.accounts.sign_in": [ProviderInstance, TerminalInfo];
   "providers.accounts.usage": [ProviderInstance, ProviderUsage];
+  "providers.accounts.list": [{ kind?: ProviderKind | null; refresh?: boolean }, { accounts: AccountSummary[] }];
+  "providers.accounts.login.start": [AccountLoginStartParams, AccountLogin];
+  "providers.accounts.login.get": [{ id: string }, AccountLogin];
+  "providers.accounts.login.input": [{ id: string; code: string }, AccountLogin];
+  "providers.accounts.login.cancel": [{ id: string }, AccountLogin];
+  "providers.accounts.login.finish": [{ id: string; name: string; color?: string | null; make_default?: boolean }, ProviderInstance];
+  "providers.accounts.update": [{ kind: ProviderKind; instance: string; name?: string | null; color?: string | null }, AccountSummary];
+  "providers.accounts.sign_out": [ProviderInstance, AccountSummary];
+  "providers.accounts.remove": [ProviderInstance, Empty];
   "providers.accounts.catalog": [{ provider: ProviderInstance; project_id?: ProjectId | null; force_refresh?: boolean }, ProviderStatus];
   "threads.target.get": [{ thread_id: ThreadId }, ThreadTargetState];
   "threads.target.set": [{ thread_id: ThreadId; target: SessionTarget; inherit_account?: boolean }, ThreadTargetState];
@@ -2075,6 +2252,10 @@ export interface Methods {
   "threads.visuals.read": [{ thread_id: ThreadId; visual_id: Uuid; max_bytes?: number | null }, { html: string; truncated?: boolean }];
   "threads.visuals.frame": [{ thread_id: ThreadId; visual_id: Uuid; max_bytes?: number | null }, { ticket: string }];
   "threads.visuals.revoke": [{ thread_id: ThreadId; ticket: string }, Record<string, never>];
+  "previews.open": [{ thread_id: ThreadId; target: string; allow_folder?: boolean; proxy?: boolean }, PreviewOpenResult];
+  "previews.close": [{ ticket: string }, Record<string, never>];
+  "previews.probe": [{ url: string }, PreviewProbeResult];
+  "previews.servers.list": [{ thread_id?: ThreadId | null }, PreviewServersListResult];
   "threads.artifacts.list": [{ thread_id: ThreadId; before_seq?: number | null; limit?: number }, { artifacts: ArtifactTool[]; next_before_seq: number | null }];
   "threads.artifacts.preview": [{ thread_id: ThreadId; path: string }, { ticket: string }];
   "threads.artifacts.read": [{ thread_id: ThreadId; path: string }, FilesReadResult];

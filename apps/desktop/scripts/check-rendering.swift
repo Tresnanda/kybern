@@ -58,6 +58,10 @@ final class Bench: NSObject, WKScriptMessageHandler {
    DispatchQueue.main.async {
     self.window.makeKeyAndOrderFront(nil)
     app.activate(ignoringOtherApps: true)
+    NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+    self.window.makeKey()
+    self.window.makeFirstResponder(self.web)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { print("{\"stage\":\"native-window-state\",\"active\":\(app.isActive),\"key\":\(self.window.isKeyWindow)}"); fflush(stdout) }
     if let session = CGSessionCopyCurrentDictionary() as? [String: Any], session["CGSSessionScreenIsLocked"] as? Bool == true {
      print("{\"stage\":\"native-window-locked\",\"message\":\"Unlock macOS to exercise visible WebKit frames\"}")
      fflush(stdout)

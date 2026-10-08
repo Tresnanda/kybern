@@ -33,6 +33,8 @@ import { SessionsDialog } from "@/views/SessionsDialog"
 import { Palette } from "@/views/Palette"
 import { PullRequests } from "@/views/PullRequests"
 import { RightPanel } from "@/views/RightPanel"
+import { PreviewMiniPlayer } from "@/views/dock/preview/PreviewMiniPlayer"
+import { PreviewSurfaceLayer } from "@/views/dock/preview/PreviewSurfaceLayer"
 import { SettingsScreen } from "@/views/SettingsScreen"
 import { ThreadSidebar } from "@/views/Sidebar"
 import { SplitThreads } from "@/views/SplitThreads"
@@ -47,6 +49,8 @@ import { openQuickNote } from "@/state/quickNote"
 import { TasksSidebar } from "@/views/tasks/TasksSidebar"
 import { useTasksSync } from "@/views/tasks/useTasksSync"
 import { useUsageLimitsSync } from "@/views/useUsageLimitsSync"
+import { AddAccountSheet } from "@/components/kybern/accounts/AddAccountSheet"
+import { useAccountsSync } from "@/views/useAccountsSync"
 import { newTaskHere } from "@/views/tasks/taskActions"
 
 // The Notes page (editor and all) loads when it is first opened, not at launch.
@@ -104,11 +108,14 @@ function Workspace() {
   const selected = useStore((s) => s.selected)
   const splitView = useStore((s) => s.splitView)
   const sidebarOpen = useStore((s) => s.sidebarOpen)
+  const pullsPanelPeek = useStore((s) => s.pullsPanelPeek)
+  const onPulls = selected.kind === "pulls"
   // Notes use the whole card: no panel there, while the sidebar preference waits for the next page.
-  const panelless = selected.kind === "notes"
-  const panelOpen = sidebarOpen && !panelless
-  // Notes and Tasks are full pages with no dock. The preference is kept, so the dock returns on threads.
-  const dockless = selected.kind === "notes" || selected.kind === "tasks"
+  // Pull requests do too (the list is the sidebar); ⌘B peeks the thread panel without touching the preference.
+  const panelless = selected.kind === "notes" || (onPulls && !pullsPanelPeek)
+  const panelOpen = onPulls ? pullsPanelPeek : sidebarOpen && !panelless
+  // Notes, Tasks and Pull requests are full pages with no dock. The preference is kept, so the dock returns on threads.
+  const dockless = selected.kind === "notes" || selected.kind === "tasks" || onPulls
   const rightOpen = useStore((s) => s.rightOpen) && !dockless
   const settingsOpen = useStore((s) => s.settingsOpen)
   const reducedMotion = useReducedMotion()
@@ -119,9 +126,11 @@ function Workspace() {
   useNotesSync()
   useTasksSync()
   useUsageLimitsSync()
+  useAccountsSync()
 
   useNavigationShortcuts()
-  useHotkey("mod+b", () => set((s) => ({ sidebarOpen: !s.sidebarOpen })), { allowInInput: true, enabled: !settingsOpen && !panelless })
+  useHotkey("mod+b", () => set((s) => (s.selected.kind === "pulls" ? { pullsPanelPeek: !s.pullsPanelPeek } : { sidebarOpen: !s.sidebarOpen })), { allowInInput: true, enabled: !settingsOpen && selected.kind !== "notes" })
+  useEffect(() => { if (!onPulls) set({ pullsPanelPeek: false }) }, [onPulls, set])
   useHotkey("mod+j", () => set((s) => ({ rightOpen: !s.rightOpen })), { allowInInput: true, enabled: !settingsOpen && !dockless })
   useHotkey("mod+k", () => set((s) => ({ paletteOpen: !s.paletteOpen })), { allowInInput: true })
   // On the Notes page ⌘N starts a note in the section you are in; everywhere else, a thread.
@@ -132,6 +141,18 @@ function Workspace() {
     else newThread()
   }, { allowInInput: true })
   useHotkey("mod+shift+n", () => openQuickNote(), { allowInInput: true })
+  // ⌥⌘P floats the page over the chat, or returns it to the dock.
+  useHotkey("mod+alt+p", () => {
+    const state = useStore.getState()
+    const web = (id: string) => { const preview = state.previews[id]; return preview?.kind === "web" && preview.entries.length > 0 ? preview : undefined }
+    const selectedId = state.selected.kind === "thread" ? state.selected.id : null
+    const floatingId = Object.keys(state.previews).find((id) => web(id)?.floating)
+    const target = selectedId && web(selectedId) ? selectedId : floatingId
+    const preview = target ? web(target) : undefined
+    if (!target || !preview || preview.entries[preview.index]?.target.kind === "external") return
+    if (preview.floating && selectedId !== target) state.selectThread(target)
+    state.setPreviewFloating(target, !preview.floating)
+  }, { allowInInput: true, enabled: !settingsOpen })
   useHotkey("mod+,", () => { setKeyboardNavigation(true); set({ settingsOpen: true }) }, { allowInInput: true })
   useHotkey("mod+\\", () => {
     if (useStore.getState().settingsOpen) return
@@ -178,7 +199,8 @@ function Workspace() {
     <SidebarProvider
       open={panelOpen}
       onOpenChange={(open) => {
-        if (!panelless) set({ sidebarOpen: open })
+        if (onPulls) set({ pullsPanelPeek: open })
+        else if (!panelless) set({ sidebarOpen: open })
       }}
       className="relative bg-(--app-frame-surface,var(--app-shell-background))"
       onPointerDownCapture={() => setKeyboardNavigation(false)}
@@ -310,6 +332,11 @@ function Workspace() {
         </motion.div>}
       </AnimatePresence>
 
+      {/* Live preview pages sit in one stable layer; the dock and the mini player only provide slots. */}
+      <ErrorBoundary label="the page preview">
+        <PreviewSurfaceLayer />
+        <PreviewMiniPlayer />
+      </ErrorBoundary>
       <ErrorBoundary label="the palette">
         <Palette />
       </ErrorBoundary>
@@ -323,6 +350,9 @@ function Workspace() {
       <ErrorBoundary label="hand off">
         <HandoffDialog />
         <WorktreeCleanupDialog />
+      </ErrorBoundary>
+      <ErrorBoundary label="add account">
+        <AddAccountSheet />
       </ErrorBoundary>
       <ErrorBoundary label="closing">
         <CloseGuard />

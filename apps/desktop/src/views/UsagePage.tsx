@@ -3,6 +3,8 @@ import { Button } from "@/components/kit/button"
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/kit/input-group"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import { Menu, MenuGroup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
+import { AccountAvatar } from "@/components/kybern/accounts/AccountMark"
+import { Badge } from "@/components/kit/badge"
 import { ProviderMark } from "@/components/kybern/bits"
 import { LimitMeter } from "@/components/kybern/LimitMeter"
 import { ChevronDownIcon, RefreshCwIcon } from "@/lib/kit/icons"
@@ -11,9 +13,11 @@ import { useNow } from "@/lib/hooks"
 import { PROVIDER_NAMES, limitLabel, limitLeftLabel, limitPace, limitTone, limitUsed, limitsStale, resetIn, staleReason, updatedAgo } from "@/lib/providerUsage"
 import { errorText, rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
-import { refreshUsageLimits, useAccountLimits, useRefreshingLimits } from "@/state/usageLimits"
+import { refreshAccounts, takeUsageAnchor, useAccounts, usageAnchorId } from "@/state/accounts"
+import { loadAccountLimits, refreshUsageLimits, useAccountLimitEntries, useAccountLimits, useRefreshingLimits } from "@/state/usageLimits"
+import { accountsOfKind, limitsForAccount } from "@/lib/accountUi"
 import { SurfaceHeader } from "./chrome"
-import type { ProviderKind, UsageGroup, UsageSummaryResult } from "@/protocol"
+import type { AccountSummary, ProviderKind, ProviderLimits, UsageGroup, UsageSummaryResult } from "@/protocol"
 
 type Period = "7" | "30" | "all"
 const PERIODS: Record<Period, string> = { "7": "Last 7 days", "30": "Last 30 days", all: "All time" }
@@ -66,7 +70,28 @@ export function UsagePage() {
     }).catch((error) => { if (!canceled && !silent) setFailure({ key, message: errorText(error) }) })
     return () => { canceled = true }
   }, [key, scope, period, group, settled])
-  const accountLimits = limitProviders.filter((entry) => entry.limits.length > 0)
+  const accountEntries = useAccountLimitEntries()
+  const accounts = useAccounts()
+  // Named accounts are read only while this page is open: on mount, on refresh, and every minute while visible.
+  useEffect(() => {
+    void refreshAccounts()
+    loadAccountLimits({ allAccounts: true })
+    const timer = setInterval(() => { if (!document.hidden) loadAccountLimits({ allAccounts: true }) }, 60_000)
+    return () => clearInterval(timer)
+  }, [])
+  const accountGroups = limitGroups(limitProviders, accountEntries, accounts)
+  const accountLimits = accountGroups.flatMap((group) => group.cards.map((card) => card.entry))
+  // Settings › Accounts links to one account's card. Scroll to it once it is on the page; a missing card is ignored.
+  const anchor = useRef<string | null>(null)
+  useEffect(() => { anchor.current = takeUsageAnchor() }, [])
+  const cardCount = accountLimits.length
+  useEffect(() => {
+    const id = anchor.current
+    const node = id ? document.getElementById(id) : null
+    if (!id || !node) return
+    anchor.current = null
+    node.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })
+  }, [cardCount])
   const newest = accountLimits.reduce<string | undefined>((latest, entry) => (entry.updated_at && (!latest || entry.updated_at > latest) ? entry.updated_at : latest), undefined)
   // Never show the previous filter's totals under the next filter's label.
   const data = result?.scope === scope ? result : null
@@ -87,32 +112,43 @@ export function UsagePage() {
         <ComposerPickerMenuPopup align="start"><MenuGroup><MenuRadioGroup value={period} onValueChange={(next) => setPeriod(next as Period)}>{Object.entries(PERIODS).map(([value, label]) => <MenuRadioItem key={value} value={value}>{label}</MenuRadioItem>)}</MenuRadioGroup></MenuGroup></ComposerPickerMenuPopup>
       </Menu>
     <div className="usage-segments" role="group" aria-label="Group usage by">{([['provider', 'Agent'], ['model', 'Model'], ['day', 'Day']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={group === value} onClick={() => setGroup(value)}>{label}</button>)}</div>
-      <Button variant="ghost" size="sm" disabled={loading} onClick={() => { refresh(value => value + 1); refreshUsageLimits() }}><RefreshCwIcon className="size-3.5" />{loading && data ? "Refreshing…" : "Refresh"}</Button>
+      <Button variant="ghost" size="sm" disabled={loading} onClick={() => { refresh(value => value + 1); refreshUsageLimits({ allAccounts: true }) }}><RefreshCwIcon className="size-3.5" />{loading && data ? "Refreshing…" : "Refresh"}</Button>
     </div>
 
-    {accountLimits.length > 0 && <section aria-label="Account limits">
+    {accountGroups.length > 0 && <section aria-label="Account limits">
       <div className="usage-section-heading"><h2>Account limits</h2><span className="usage-filter-label" aria-live="polite">{limitsRefreshing ? "Updating…" : newest ? `Updated ${updatedAgo(newest, now)}` : null}</span></div>
-      <div className="usage-limits">
-        {accountLimits.map((entry) => {
-          const kind = entry.provider
-          const ago = limitsStale(entry, now) ? updatedAgo(entry.updated_at, now) : null
-          const reason = staleReason(entry, now)
-          return <div key={kind} className="usage-limit-card">
-            <div className="usage-limit-provider">{PROVIDER_NAMES[kind] && <ProviderMark kind={kind} size={16} className="size-4 shrink-0" />}<span>{PROVIDER_NAMES[kind] ?? kind}</span>{entry.plan && <span className="ms-auto font-normal text-muted-foreground">{entry.plan}</span>}</div>
-            {entry.limits.map((limit, index) => {
-              const percent = limitUsed(limit, now)
-              const name = limitLabel(limit, kind)
-              const pace = limitPace(limit, now)
-              return <div key={index} className="usage-limit" data-usage-tone={limitTone(percent)}>
-                <div className="usage-limit-heading"><b>{name}</b><span>{limitLeftLabel(limit, now)}</span></div>
-                {percent !== null && <LimitMeter left={100 - percent} pace={pace} label={`${name} left`} />}
-                <p className="usage-limit-reset flex justify-between gap-3"><span>{resetIn(limit.resets_at, now)}</span>{pace && <span data-pace-short={pace.short || undefined}>{pace.label}</span>}</p>
+      <div className="grid gap-5">
+        {accountGroups.map((group) => <div key={group.kind} role="group" aria-label={PROVIDER_NAMES[group.kind] ?? group.kind} className="grid gap-2.5">
+          <h3 className="flex items-center gap-2 text-[length:var(--app-font-size-ui,12px)] font-medium text-muted-foreground">{PROVIDER_NAMES[group.kind] && <ProviderMark kind={group.kind} size={14} className="size-3.5 shrink-0" />}{PROVIDER_NAMES[group.kind] ?? group.kind}</h3>
+          <div className="usage-limits">
+            {group.cards.map(({ entry, account }) => {
+              const kind = entry.provider
+              const ago = limitsStale(entry, now) ? updatedAgo(entry.updated_at, now) : null
+              const reason = staleReason(entry, now)
+              const plan = entry.plan ?? account?.identity?.plan
+              return <div key={account?.provider.instance ?? "default"} id={usageAnchorId(kind, account?.provider.instance ?? "default")} className="usage-limit-card scroll-mt-4">
+                <div className="usage-limit-provider">
+                  <AccountAvatar kind={kind} color={account?.color} instance={account?.provider.instance} size={20} />
+                  <span className="min-w-0 truncate"><bdi>{account?.name ?? "CLI account"}</bdi></span>
+                  {account?.is_default && group.cards.length > 1 && <Badge size="sm" variant="secondary">Default</Badge>}
+                  {plan && <span className="ms-auto shrink-0 font-normal text-muted-foreground">{plan}</span>}
+                </div>
+                {entry.limits.map((limit, index) => {
+                  const percent = limitUsed(limit, now)
+                  const name = limitLabel(limit, kind)
+                  const pace = limitPace(limit, now)
+                  return <div key={index} className="usage-limit" data-usage-tone={limitTone(percent)}>
+                    <div className="usage-limit-heading"><b>{name}</b><span>{limitLeftLabel(limit, now)}</span></div>
+                    {percent !== null && <LimitMeter left={100 - percent} pace={pace} label={`${name} left`} />}
+                    <p className="usage-limit-reset flex justify-between gap-3"><span>{resetIn(limit.resets_at, now)}</span>{pace && <span data-pace-short={pace.short || undefined}>{pace.label}</span>}</p>
+                  </div>
+                })}
+                {ago && <p className="usage-limit-reset">Last updated {ago}</p>}
+                {reason && <p className="usage-limit-reset">{reason}</p>}
               </div>
             })}
-            {ago && <p className="usage-limit-reset">Last updated {ago}</p>}
-            {reason && <p className="usage-limit-reset">{reason}</p>}
           </div>
-        })}
+        </div>)}
       </div>
     </section>}
 
@@ -142,6 +178,29 @@ export function UsagePage() {
       <p className="settings-note">Turns recorded by this Kybern daemon. Cost is each agent's own figure — on a subscription (Claude, Codex) it's the pay-as-you-go equivalent, not your actual bill, and some agents report none. Cache tokens count toward cost but are listed separately.</p>
     </>}
   </div>
+}
+
+type LimitCard = { entry: ProviderLimits; account: AccountSummary | undefined }
+
+/** Limit cards grouped by agent: one card per account that has limits, the agent's single account included. */
+function limitGroups(global: ProviderLimits[], entries: ProviderLimits[], accounts: AccountSummary[]): { kind: ProviderLimits["provider"]; cards: LimitCard[] }[] {
+  const kinds = [...new Set([...global.map((entry) => entry.provider), ...entries.map((entry) => entry.provider)])]
+  const groups: { kind: ProviderLimits["provider"]; cards: LimitCard[] }[] = []
+  for (const kind of kinds) {
+    const own = accountsOfKind(accounts, kind)
+    const cards: LimitCard[] = []
+    if (own.length < 2) {
+      const entry = global.find((item) => item.provider === kind)
+      if (entry?.limits.length) cards.push({ entry, account: own[0] })
+    } else {
+      for (const account of own) {
+        const entry = limitsForAccount(account, entries, global)
+        if (entry?.limits.length) cards.push({ entry, account })
+      }
+    }
+    if (cards.length) groups.push({ kind, cards })
+  }
+  return groups
 }
 
 const PLAN_COST_KEY = "kybern.usage.plan-cost"

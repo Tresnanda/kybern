@@ -1,4 +1,4 @@
-// Test-only account transport. Unexpected methods fail instead of reaching a daemon.
+// Test-only account transport for perf/accounts.tsx. Unexpected methods fail instead of reaching a daemon.
 export * from "../src/state/rpc"
 import { useStore } from "../src/state/store"
 import type { Methods, ProviderKind } from "../src/protocol"
@@ -24,6 +24,37 @@ async function dispatch(method: keyof Methods, input: unknown): Promise<unknown>
     const {settings: next} = input as Methods["settings.update"][0]
     useStore.getState().set({settings:next})
     return next
+  }
+  if (method === "providers.accounts.list") {
+    const provider = settings.providers["claude-code"] ?? {env:{}}
+    const projects = (instance: string) => Object.entries(provider.project_accounts ?? {}).filter(([,id]) => id === instance).map(([path]) => path)
+    const defaultInstance = provider.default_account ?? "default"
+    return {accounts:[
+      {provider:{kind:"claude-code",instance:"default"},name:"CLI account",identity:{email:"tresh@gmail.com",plan:"Pro"},status:"signed_in",is_default:defaultInstance==="default",projects:projects("default"),managed:false,can_sign_out:false},
+      ...Object.entries(provider.accounts ?? {}).map(([instance,account]) => ({
+        provider:{kind:"claude-code",instance},name:account.name,color:account.color,
+        ...(account.email ? {identity:{email:account.email,plan:account.plan}} : {}),
+        status:account.email ? "signed_in" : "needs_sign_in",is_default:defaultInstance===instance,projects:projects(instance),
+        directory:account.directory,managed:account.directory.startsWith("/fixture/data/accounts/"),can_sign_out:!!account.email,
+      })),
+    ]}
+  }
+  if (method === "providers.accounts.update") {
+    const {kind,instance,name,color} = input as Methods["providers.accounts.update"][0]
+    const provider = settings.providers[kind] ?? {env:{}}
+    const account = provider.accounts![instance]!
+    const next = {...account,...(name ? {name} : {}),...(color ? {color} : {})}
+    useStore.getState().set({settings:{...settings,providers:{...settings.providers,[kind]:{...provider,accounts:{...provider.accounts,[instance]:next}}}}})
+    return {provider:{kind,instance},name:next.name,status:"signed_in",is_default:false,projects:[],managed:true,can_sign_out:true}
+  }
+  if (method === "providers.accounts.remove") {
+    const {kind,instance} = input as Methods["providers.accounts.remove"][0]
+    const provider = settings.providers[kind] ?? {env:{}}
+    const accounts = {...provider.accounts}
+    delete accounts[instance]
+    const project_accounts = Object.fromEntries(Object.entries(provider.project_accounts ?? {}).filter(([,id]) => id !== instance))
+    useStore.getState().set({settings:{...settings,providers:{...settings.providers,[kind]:{...provider,accounts,project_accounts,default_account:provider.default_account===instance ? null : provider.default_account}}}})
+    return {}
   }
   if (method === "providers.accounts.create") {
     if (accountsFixture.failCreate) throw new Error("This native account directory is unavailable.")

@@ -219,3 +219,29 @@ export const platform = (): "macos" | "windows" | "linux" | "web" => {
   if (/Linux/.test(ua)) return "linux"
   return "web"
 }
+
+/** Loopback origin that relays a daemon preview route (remote servers, "Preview through Kybern"). Null outside the shell. */
+export async function previewRelayOpen(upstream: string): Promise<string | null> {
+  if (!isTauri()) return null
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<string>("preview_relay_open", { upstream })
+}
+
+export async function previewRelayClose(port: number): Promise<void> {
+  if (!isTauri()) return
+  try {
+    const { invoke } = await import("@tauri-apps/api/core")
+    await invoke("preview_relay_close", { port })
+  } catch { /* the relay may already be closed */ }
+}
+
+/** Fires when a relay's WebSocket upgrade was refused (live reload will not connect). */
+export async function onPreviewRelayWsFailed(listener: (port: number) => void): Promise<() => void> {
+  if (!isTauri()) return () => {}
+  const { listen } = await import("@tauri-apps/api/event")
+  const off = await listen<{ port: number } | number>("preview-relay://ws-failed", (event) => {
+    const payload = event.payload
+    listener(typeof payload === "number" ? payload : payload.port)
+  })
+  return off
+}

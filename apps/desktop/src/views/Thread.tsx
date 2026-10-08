@@ -1,5 +1,9 @@
-import { AccountPicker } from "@/components/kybern/AccountPicker"
 import type { ThreadTargetState, SessionTarget, ProviderStatus } from "@/protocol"
+import { AccountMarkStack } from "@/components/kybern/accounts/AccountMark"
+import { openAddAccount } from "@/components/kybern/accounts/AddAccountSheet"
+import { accountNeedsSignIn } from "@/lib/accountUi"
+import { accountDisplayName } from "@/lib/accounts"
+import { useAccounts } from "@/state/accounts"
 import { offerWorktreeCleanup } from "@/state/worktreeCleanup"
 import { collaborationPreview } from "../../../../packages/kybern-client/src/collaboration"
 import { promptText, replacePromptText } from "../../../../packages/kybern-client/src/prompts"
@@ -93,6 +97,7 @@ import { pageDirection, playPageMotion, lastInputWasPointer } from "@/lib/navMot
 import { subagentPhase } from "../../../../packages/kybern-client/src/subagents.ts"
 import { CHAT_COLUMN_GUTTER, CHAT_COLUMN_GUTTER_PX } from "./chatLayout"
 import { ChatHeaderButton, ChatHeaderIconButton, SurfaceHeader } from "./chrome"
+import { ThreadTaskChips } from "./tasks/ThreadTaskChips"
 
 const EMPTY: never[] = []
 const EMPTY_TASKS: RuntimeTask[] = []
@@ -450,11 +455,12 @@ export function ThreadView({
               mode={targetChanged ? targetState?.pending_permission_mode ?? thread.permission_mode : thread.permission_mode}
               onModeChange={(m) => changePermission(m).catch((e) => toast.error("Unable to change mode", { description: errorText(e) }))}
               provider={target?.provider ?? thread.provider}
-              accountControl={target && <AccountPicker provider={target.provider} settings={settings?.providers[target.provider.kind]} inherited={!targetState?.account_override} onChange={(instance) => void chooseTarget({ ...target, provider: { ...target.provider, instance: instance ?? "default" } }, instance === null).catch((error) => toast.error("Unable to change account", { description: errorText(error) }))} />}
+              accountFollowsDefaults={target ? !targetState?.account_override : undefined}
+              onAccountChange={target ? (instance) => chooseTarget({ ...target, provider: { ...target.provider, instance: instance ?? "default" } }, instance === null) : undefined}
               providerSessionId={targetState?.native_session_id ?? null}
               providers={composerProviders}
               onRefreshModels={refreshAccountCatalog}
-              onProviderChange={thread.coordinator_project_id ? canSwitchCoordinator ? (provider, choice) => switchCoordinatorHarness(provider, choice?.model, choice?.effort) : undefined : (provider, choice) => chooseTarget({ provider, model: choice?.model, effort: choice?.effort }, true)}
+              onProviderChange={thread.coordinator_project_id ? canSwitchCoordinator ? (provider, choice) => switchCoordinatorHarness(provider, choice?.model, choice?.effort) : undefined : (provider, choice) => chooseTarget({ provider, model: choice?.model, effort: choice?.effort }, !choice?.pinAccount)}
               model={target?.model ?? undefined}
               effort={target?.effort ?? undefined}
               surfaceMode={splitPaneId ? "split" : "single"}
@@ -504,6 +510,10 @@ export function ThreadView({
   )
 }
 
+function AccountOption({ kind, name, color }: { kind: import("@/protocol").ProviderKind; name: string; color?: string | null }) {
+  return <span className="flex min-w-0 items-center gap-2"><AccountMarkStack kind={kind} color={color} size={14} /><span className="truncate"><bdi>{name}</bdi></span></span>
+}
+
 function AccountLimitRecovery({ threadId, provider }: { threadId: string; provider: import("@/protocol").ProviderInstance }) {
   const connected = useStore((state) => state.connection.state === "open")
   const environmentId = useStore((state) => state.environmentId)
@@ -525,20 +535,21 @@ function AccountLimitRecovery({ threadId, provider }: { threadId: string; provid
     }).catch(() => { if (!canceled) setConfirmation({ identity, limited: false }) })
     return () => { canceled = true }
   }, [threadId, threadStatus, identity, connected])
-  const accounts = useStore((state) => state.settings?.providers[provider.kind]?.accounts)
+  const accounts = useAccounts(provider.kind)
   const [selected, setSelected] = useState("")
   const [busy, setBusy] = useState(false)
   const attempt = useRef<string | null>(null)
   if (!connected || confirmation?.identity !== identity || !confirmation.limited) return null
-  const options = [{ id: "default", name: "Default account" }, ...Object.entries(accounts ?? {}).map(([id, account]) => ({ id, name: account.name }))].filter((account) => account.id !== provider.instance)
+  // An account that needs signing in can't take the task, so it isn't offered.
+  const options = accounts.filter((account) => account.provider.instance !== provider.instance && !accountNeedsSignIn(account)).map((account) => ({ id: account.provider.instance, name: accountDisplayName(account.provider.instance, account.name), color: account.color }))
   const choice = options.find((account) => account.id === selected) ?? options[0]
   return <ComposerStackedPanel><ComposerStackedPanelRow compact>
     <ComposerStackedPanelRowMain><span>Account usage limit reached</span><span className="block text-xs text-muted-foreground">Choose an account to continue the interrupted task in this conversation.</span></ComposerStackedPanelRowMain>
-    {choice ? <><Menu><MenuTrigger render={<Button variant="ghost" size="sm" />}>{choice.name}</MenuTrigger><ComposerPickerMenuPopup align="end" side="top"><MenuGroup>{options.map((account) => <MenuItem key={account.id} onClick={() => { setSelected(account.id); attempt.current = null }}>{account.name}</MenuItem>)}</MenuGroup></ComposerPickerMenuPopup></Menu>
+    {choice ? <><Menu><MenuTrigger render={<Button variant="ghost" size="sm" />}><AccountOption kind={provider.kind} name={choice.name} color={choice.color} /></MenuTrigger><ComposerPickerMenuPopup align="end" side="top"><MenuGroup>{options.map((account) => <MenuItem key={account.id} onClick={() => { setSelected(account.id); attempt.current = null }}><AccountOption kind={provider.kind} name={account.name} color={account.color} /></MenuItem>)}</MenuGroup></ComposerPickerMenuPopup></Menu>
       <Button variant="chrome-outline" size="sm" disabled={busy} onClick={() => {
         setBusy(true); attempt.current ??= crypto.randomUUID()
         void rpc().call("threads.switch_continue", { thread_id: threadId, provider: { kind: provider.kind, instance: choice.id }, message_id: attempt.current }).catch((problem) => toast.error("Unable to continue", { description: errorText(problem) })).finally(() => setBusy(false))
-      }}>Switch and continue</Button></> : <Button variant="ghost" size="sm" onClick={() => useStore.getState().set({ settingsOpen: true, settingsTab: "agents" })}>Add an account</Button>}
+      }}>Switch and continue</Button></> : <Button variant="ghost" size="sm" onClick={() => openAddAccount({ kind: provider.kind })}>Add an account</Button>}
   </ComposerStackedPanelRow></ComposerStackedPanel>
 }
 
@@ -1147,6 +1158,7 @@ function Header({ threadId, splitPaneId }: { threadId: ThreadId; splitPaneId?: P
               </h2>
             )}
             {thread.coordinator_project_id && <span className="shrink-0 text-[10px] font-medium text-muted-foreground/60">Project coordinator</span>}
+            <ThreadTaskChips threadId={threadId} />
           </div>
         </div>
       </div>

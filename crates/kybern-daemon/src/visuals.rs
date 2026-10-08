@@ -20,6 +20,23 @@ use std::{
 pub(super) const POLICY: &str = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' https:; style-src 'unsafe-inline' https:; img-src data: blob: https: http:; font-src data: https:; connect-src https:; frame-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
 const TTL: Duration = Duration::from_secs(60);
 const MAX_TICKET_BYTES: usize = 64 * 1024 * 1024;
+/// Widths a visual is measured at: common phones, then the 736 px standard
+/// column (46rem) and the 1152 px wide column (72rem).
+const MEASURE_WIDTHS: [u32; 9] = [320, 375, 430, 520, 640, 736, 860, 1000, 1152];
+const MEASURE_BUDGET: Duration = Duration::from_secs(6);
+/// Default dark theme with Kybern's own font stacks; the daemon usually shares the client's fonts.
+fn measure_fragment() -> String {
+    let theme = serde_json::json!({"appearance":"dark","variables":{
+        "--font-sans":"-apple-system, BlinkMacSystemFont, \"Segoe UI\", system-ui, sans-serif",
+        "--font-mono":"\"JetBrains Mono\", \"SF Mono\", Menlo, monospace",
+    }});
+    let encoded: String = theme
+        .to_string()
+        .bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect();
+    format!("#kybern-theme={encoded}")
+}
 struct Ticket {
     created: Instant,
     thread: ThreadId,
@@ -32,6 +49,7 @@ fn tickets() -> &'static Mutex<HashMap<String, Ticket>> {
 
 pub(crate) async fn publish(
     store: &kybern_store::Store,
+    paths: &crate::config::Paths,
     thread_id: ThreadId,
     turn_id: TurnId,
     html: &str,
@@ -41,7 +59,19 @@ pub(crate) async fn publish(
     ensure!(!title.trim().is_empty() && title.chars().count() <= 200, "Give this page a title of 1–200 characters.");
     ensure!((80..=2000).contains(&height), "Use a frame height of 80–2000 CSS pixels.");
     let (source, _) = prepare::prepare(html, false).await?;
-    let visual = HtmlVisual { id: uuid::Uuid::now_v7(), title: title.trim().to_owned(), height };
+    let heights =
+        match tokio::time::timeout(MEASURE_BUDGET, preview::measure(&paths.root, &source, &MEASURE_WIDTHS, &measure_fragment())).await {
+            Ok(Ok(heights)) => heights,
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "publishing visual without measured heights");
+                Vec::new()
+            }
+            Err(_) => {
+                tracing::warn!("measuring visual exceeded 6 s; publishing without heights");
+                Vec::new()
+            }
+        };
+    let visual = HtmlVisual { id: uuid::Uuid::now_v7(), title: title.trim().to_owned(), height, heights };
     store.visual_publish(thread_id, turn_id, &visual, &source)
 }
 pub(crate) fn read(store: &kybern_store::Store, params: HtmlReadParams) -> Result<HtmlReadResult> {
@@ -167,6 +197,68 @@ pub(crate) fn persisted_output(name: Option<&str>, mut value: serde_json::Value)
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn scratch_paths(root: std::path::PathBuf) -> crate::config::Paths {
+        crate::config::Paths {
+            db: root.join("state.sqlite"),
+            token_file: root.join("daemon.token"),
+            port_file: root.join("daemon.port"),
+            worktrees: root.join("worktrees"),
+            assets: root.join("assets"),
+            settings: root.join("settings.json"),
+            root,
+        }
+    }
+    fn scratch_thread(store: &kybern_store::Store) -> Thread {
+        let now = chrono::Utc::now();
+        let project = Project {
+            id: uuid::Uuid::now_v7(),
+            name: "Visual publish fixture".into(),
+            path: "/scratch/visual-publish".into(),
+            is_git: false,
+            worktrees_default: None,
+            task_prefix: None,
+            created_at: now,
+            updated_at: now,
+        };
+        store.project_insert(&project).unwrap();
+        let thread: Thread = serde_json::from_value(serde_json::json!({
+            "id": uuid::Uuid::now_v7(), "project_id": project.id, "title": "Publish",
+            "provider": ProviderInstance::default_for(ProviderKind::Codex), "permission_mode": "supervised",
+            "status": "idle", "cwd": project.path, "pinned": false, "created_at": now, "updated_at": now, "last_seq": 0,
+        }))
+        .unwrap();
+        store.thread_upsert(&thread).unwrap();
+        thread
+    }
+    #[tokio::test]
+    async fn publish_without_an_installed_browser_omits_heights() {
+        let store = kybern_store::Store::open_in_memory().unwrap();
+        let thread = scratch_thread(&store);
+        let root = std::env::temp_dir().join(format!("kybern-visual-publish-{}", uuid::Uuid::now_v7()));
+        let started = Instant::now();
+        let event =
+            publish(&store, &scratch_paths(root.clone()), thread.id, uuid::Uuid::now_v7(), "<p>Hello</p>", "Hello", 300).await.unwrap();
+        let EventPayload::HtmlPublished { visual } = event.payload else { panic!("expected a published visual") };
+        assert!(visual.heights.is_empty());
+        assert!(started.elapsed() < Duration::from_secs(2), "A missing browser never delays publishing");
+        let json = serde_json::to_value(&visual).unwrap();
+        assert!(json.get("heights").is_none(), "Empty heights stay off the wire");
+        let _ = std::fs::remove_dir_all(root);
+    }
+    /// Needs the preview browser (`kybern html preview` installs it) under `KYBERN_VISUAL_LIVE_ROOT`.
+    #[tokio::test]
+    #[ignore]
+    async fn measure_follows_the_frame_width() {
+        let root = std::path::PathBuf::from(
+            std::env::var("KYBERN_VISUAL_LIVE_ROOT").expect("set KYBERN_VISUAL_LIVE_ROOT to a data dir with the preview browser"),
+        );
+        let html = "<style>body{margin:0}.a{height:100px}@media(min-width:600px){.a{height:300px}}</style><div class=a></div>";
+        let heights = preview::measure(&root, html, &MEASURE_WIDTHS, &measure_fragment()).await.unwrap();
+        assert_eq!(heights.len(), MEASURE_WIDTHS.len());
+        let narrow = heights.iter().find(|h| h.width == 375).unwrap().height;
+        let wide = heights.iter().find(|h| h.width == 736).unwrap().height;
+        assert!(wide > narrow, "{heights:?}");
+    }
     #[tokio::test]
     async fn source_previews_bound_unicode_bytes_without_truncating_exports_or_frames() {
         let store = kybern_store::Store::open_in_memory().unwrap();
@@ -189,7 +281,7 @@ mod tests {
         }))
         .unwrap();
         store.thread_upsert(&thread).unwrap();
-        let visual = HtmlVisual { id: uuid::Uuid::now_v7(), title: "Large embedded image".into(), height: 400 };
+        let visual = HtmlVisual { id: uuid::Uuid::now_v7(), title: "Large embedded image".into(), height: 400, heights: vec![] };
         let html = format!("{}🧭<img src=\"data:image/png;base64,{}\">", "x".repeat(255_999), "A".repeat(1024 * 1024));
         store.visual_publish(thread.id, uuid::Uuid::now_v7(), &visual, &html).unwrap();
         let head = store.events_head_seq().unwrap();

@@ -4,6 +4,7 @@ import { mergeConfig } from "vite"
 import base from "../vite.config"
 export default mergeConfig(base, {
   define: {
+    __PREVIEW_FIXTURE__: process.env.KYBERN_PREVIEW_FIXTURE ?? "null",
     __VISUAL_FIXTURE__: process.env.KYBERN_VISUAL_FIXTURE ?? "null",
     __TOOL_LEASE_ENDPOINT__: process.env.KYBERN_TOOL_LEASE_ENDPOINT ?? "null",
     __TERMINAL_RETAIN__: JSON.stringify(process.env.KYBERN_TERMINAL_RETAIN === "1"),
@@ -27,11 +28,18 @@ export default mergeConfig(base, {
     __UPDATE_THEME__: JSON.stringify(process.env.KYBERN_UPDATE_THEME ?? "dark"),
     __UPDATE_REDUCED_MOTION__: JSON.stringify(process.env.KYBERN_UPDATE_REDUCED_MOTION === "1"),
   },
-  plugins: process.env.KYBERN_PERF_FIXTURE === "accounts" ? [{
+  plugins: process.env.KYBERN_PERF_FIXTURE === "preview" ? [{
+    name: "preview-fixture-transport",
+    enforce: "pre",
+    transform(code, id) {
+      if (!/\/(state\/previewSession\.ts|views\/dock\/preview\/(PreviewChromeRow|PreviewStates)\.tsx|views\/dock\/VisualPreviewPanel\.tsx)$/.test(id)) return
+      return code.replace(/"@\/state\/rpc"|"\.\/rpc"|"@\/lib\/tauri"/g, JSON.stringify(path.resolve(import.meta.dirname, "preview-rpc.ts")))
+    },
+  }] : process.env.KYBERN_PERF_FIXTURE === "accounts" ? [{
     name: "accounts-fixture-transport",
     enforce: "pre",
     transform(code, id) {
-      if (!id.endsWith("/views/SettingsScreen.tsx")) return
+      if (!["/views/SettingsScreen.tsx", "/views/settings/AccountsSettings.tsx", "/state/accounts.ts"].some(file => id.endsWith(file))) return
       return code.replaceAll('"@/state/rpc"', JSON.stringify(path.resolve(import.meta.dirname, "accounts-rpc.ts")))
         .replace('"./Terminal"', JSON.stringify(path.resolve(import.meta.dirname, "accounts-terminal.tsx")))
     },
@@ -39,14 +47,14 @@ export default mergeConfig(base, {
     name: "visuals-fixture-transport",
     enforce: "pre",
     transform(code, id) {
-      if (!id.endsWith("/views/VisualReply.tsx")) return
+      if (!id.endsWith("/views/VisualReply.tsx") && !id.endsWith("/views/dock/VisualPreviewPanel.tsx")) return
       return code.replace(/"@\/state\/rpc"|"@\/lib\/tauri"/g, JSON.stringify(path.resolve(import.meta.dirname, "visuals-rpc.ts")))
     },
   }] : process.env.KYBERN_PERF_FIXTURE === "pr-review" ? [{
     name: "pr-review-fixture-transport",
     enforce: "pre",
     transform(code, id) {
-      if (!/\/(views\/(PrReview|PullRequests|WorktreeCleanup)\.tsx|state\/prReview\.ts)$/.test(id)) return
+      if (!/\/(views\/(PrReview|PullRequests|WorktreeCleanup)\.tsx|views\/pullRequests\/[^/]+\.tsx?|state\/prReview\.ts)$/.test(id)) return
       const transport = JSON.stringify(path.resolve(import.meta.dirname, "pr-review-rpc.ts"))
       return code.replaceAll('"@/state/rpc"', transport).replaceAll('"./rpc"', transport)
     },

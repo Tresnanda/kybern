@@ -117,8 +117,80 @@ async function click(label: string) {
   button(label).click()
   await sleep(120)
 }
-async function waitFor(condition: () => boolean, message: string) {
-  const deadline = performance.now() + 2000
+function buttonMatching(pattern: RegExp) {
+  const element = [
+    ...document.querySelectorAll<HTMLElement>('[role="dialog"] button'),
+    ...document.querySelectorAll<HTMLElement>("button"),
+  ].find(
+    (candidate) =>
+      visible(candidate) &&
+      (pattern.test(candidate.getAttribute("aria-label") ?? "") ||
+        pattern.test(candidate.textContent?.trim() ?? ""))
+  )
+  if (!element) throw new Error(`Missing button ${pattern}`)
+  return element
+}
+async function clickTab(name: string) {
+  const tab = [
+    ...reviewRoot().querySelectorAll<HTMLElement>('[role="tab"]'),
+  ].find((candidate) => candidate.textContent?.trim().startsWith(name))
+  if (!tab) throw new Error(`Missing tab ${name}`)
+  tab.click()
+  await sleep(160)
+}
+/** Refresh through the icon when the top bar shows it, else through More actions. */
+async function refreshPr() {
+  const icon = reviewRoot().querySelector<HTMLElement>(
+    '[aria-label="Refresh pull request"]'
+  )
+  if (icon && visible(icon)) {
+    icon.click()
+    await sleep(120)
+    return
+  }
+  await click("More actions")
+  await click("Refresh")
+}
+async function openReview() {
+  if (!document.querySelector("[data-pr-review-popover]"))
+    reviewRoot()
+      .querySelector<HTMLElement>('button[aria-label^="Review"]')!
+      .click()
+  await waitFor(
+    () => !!document.querySelector("[data-pr-review-popover]"),
+    "Review popover did not open"
+  )
+  await sleep(120)
+}
+async function closePopover() {
+  const cancel = [
+    ...document.querySelectorAll<HTMLElement>("[data-pr-review-popover] button"),
+  ].find((candidate) => candidate.textContent?.trim() === "Cancel")
+  cancel?.click()
+  await waitFor(
+    () => !document.querySelector("[data-pr-review-popover]"),
+    "Review popover did not close",
+    5000
+  )
+}
+async function openSend() {
+  reviewRoot()
+    .querySelector<HTMLElement>('button[aria-label^="Send to agent"]')!
+    .click()
+  await waitFor(
+    () => !!document.querySelector("[data-pr-send-popover]"),
+    "Send popover did not open"
+  )
+  await sleep(120)
+}
+const callCount = (method: string) =>
+  reviewFixture.calls.filter((call) => call.method === method).length
+async function waitFor(
+  condition: () => boolean,
+  message: string,
+  timeout = 2000
+) {
+  const deadline = performance.now() + timeout
   while (!condition() && performance.now() < deadline) await sleep(20)
   check(condition(), message)
 }
@@ -207,14 +279,117 @@ async function run() {
   })
   const key = reviewKey("project", 24)
   localStorage.removeItem(`kybern.pr.draft:${key}`)
+  // First load: hold the list so the skeleton can be captured.
+  reviewFixture.listDelay = 2500
   flushSync(() =>
     createRoot(document.getElementById("root")!, {
       onUncaughtError: (error) => post({ pass: false, error: String(error) }),
     }).render(<Shell />)
   )
   await waitFor(
+    () => !!document.querySelector('[aria-label="Loading pull requests"]'),
+    "Loading skeleton missing"
+  )
+  check(
+    document.querySelectorAll('[aria-label="Loading pull requests"] > div')
+      .length === 8,
+    "The loading skeleton is not eight rows"
+  )
+  await screenshot("pr-loading")
+  reviewFixture.listDelay = 0
+  await waitFor(
     () => !!document.getElementById("pr-row-project-24"),
-    "Pull request list did not load"
+    "Pull request list did not load",
+    6000
+  )
+  const rows = [...document.querySelectorAll<HTMLElement>(".pr-row")]
+  check(rows.length >= 5, "List rows missing")
+  check(
+    rows.every((row) => row.children.length === 2),
+    "A row is not exactly two lines"
+  )
+  check(
+    !rows.some((row) => /\bOpen\b|Draft/.test(row.textContent ?? "")),
+    "A row repeats the state word or a Draft pill"
+  )
+  check(
+    !rows.some((row) => row.textContent?.includes("feature/")),
+    "A row shows a branch name"
+  )
+  check(
+    document
+      .getElementById("pr-row-project-27")!
+      .querySelector('[aria-label="Has conflicts"]') !== null,
+    "The conflicting row lost its conflict glyph"
+  )
+  check(
+    document
+      .getElementById("pr-row-project-28")!
+      .querySelector('[aria-label="Draft"]') !== null,
+    "The draft row lost its draft glyph"
+  )
+  check(
+    document
+      .getElementById("pr-row-project-24")!
+      .querySelector('[role="img"][aria-label^="Checks:"]')
+      ?.getAttribute("aria-label") === "Checks: 1 failing of 100",
+    "The CI dot does not match the checks summary"
+  )
+  check(
+    !document
+      .getElementById("pr-row-project-27")!
+      .querySelector('[aria-label^="Checks:"]'),
+    "A PR without checks shows a CI dot"
+  )
+  const inbox = document.querySelector<HTMLElement>(".pr-inbox")!
+  const list = document.querySelector<HTMLElement>(
+    '[aria-label="Pull requests list"]'
+  )!
+  const wide = inbox.clientWidth >= 52 * rootRem
+  check(
+    getComputedStyle(
+      document.querySelector<HTMLElement>(".pr-inbox-placeholder")!
+    ).display !== "none" === wide,
+    "Empty selection did not follow the inbox width"
+  )
+  if (wide) await screenshot("pr-no-selection")
+  // Keyboard: roving focus walks the rows; moving focus never loads a pull request.
+  const detailCallsBefore = callCount("github.pr.detail")
+  const rowButtons = () =>
+    [...document.querySelectorAll<HTMLButtonElement>("[data-pr-row]")]
+  check(
+    rowButtons().filter((b) => b.tabIndex === 0).length === 1,
+    "The list does not have exactly one tab stop"
+  )
+  rowButtons()[0].focus()
+  for (let i = 0; i < 2; i++)
+    document.activeElement!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })
+    )
+  check(
+    document.activeElement === rowButtons()[2],
+    "Arrow keys did not move focus to the third row"
+  )
+  check(
+    callCount("github.pr.detail") === detailCallsBefore,
+    "Moving focus fetched pull request details"
+  )
+  document.activeElement!.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "End", bubbles: true })
+  )
+  check(
+    document.activeElement === rowButtons().at(-1),
+    "End did not focus the last row"
+  )
+  rowButtons()[2].focus()
+  ;(document.activeElement as HTMLElement).click() // Enter on a button is a click.
+  await waitFor(
+    () => useStore.getState().prSelection?.number === 26,
+    "Enter did not open the third row"
+  )
+  await waitFor(
+    () => callCount("github.pr.detail") === detailCallsBefore + 1,
+    "Opening a row did not load exactly one detail"
   )
   document.getElementById("pr-row-project-24")!.click()
   await waitFor(
@@ -223,52 +398,89 @@ async function run() {
   )
   check(
     useReviews.getState().entries[key].workspace === "overview",
-    "New review did not open on Overview"
+    "New review did not open on Summary"
   )
   check(
     !document.querySelector("[data-pr-diff]"),
-    "Overview mounted a hidden diff"
+    "Summary mounted a hidden diff"
   )
   check(
     !reviewFixture.calls.some((call) => call.method === "github.pr.page"),
-    "Overview eagerly downloaded changes"
+    "Summary eagerly downloaded changes"
   )
-  const inbox = document.querySelector<HTMLElement>(".pr-inbox")!
-  const list = document.querySelector<HTMLElement>(
-    '[aria-label="Pull requests list"]'
-  )!
   check(
-    visible(list) === inbox.clientWidth >= 60 * rootRem,
+    visible(list) === wide || !useStore.getState().prSelection,
     "List/detail did not adapt to its available pane width"
   )
   check(
-    !!document.querySelector('[aria-label="Pull request details"]'),
-    "Metadata disappeared"
+    document.querySelectorAll('[aria-label="Pull request details"]').length ===
+      1,
+    "The info column is not rendered exactly once"
   )
   const reviewPane = document.querySelector<HTMLElement>(
     '[data-review-mode="page"]'
   )!
-  const bodyColumns = getComputedStyle(
-    reviewPane.querySelector(".pr-review-body")!
-  ).gridTemplateColumns.split(/\s+/).length
+  const infoColumn = reviewPane.clientWidth >= 52 * rootRem
   check(
-    bodyColumns === (reviewPane.clientWidth >= 66 * rootRem ? 2 : 1),
-    "Metadata did not adapt to its detail width and computed text size"
+    (getComputedStyle(reviewPane.querySelector(".pr-info")!).position ===
+      "sticky") === infoColumn,
+    "The info column did not adapt to its detail width"
+  )
+  if (infoColumn)
+    check(
+      Math.abs(
+        reviewPane.querySelector(".pr-info")!.getBoundingClientRect().width -
+          18 * rootRem
+      ) < 2,
+      "The info column is not 18rem wide"
+    )
+  check(
+    document.documentElement.scrollWidth <= innerWidth + 2,
+    "The summary scrolls horizontally"
   )
   check(
     document
       .querySelector('[aria-label="Pull request description"]')
       ?.textContent?.includes("Preserve unsent drafts"),
-    "Overview description is not open"
+    "Summary description is not open"
   )
   check(
     document
       .querySelector('[aria-label="Pull request checks"]')
       ?.textContent?.includes("Desktop checks"),
-    "Overview checks missing"
+    "Summary checks missing"
   )
+  check(
+    document
+      .querySelector('[aria-label="Pull request checks"]')
+      ?.textContent?.includes("1 failing · 1 running · 98 passed"),
+    "Checks phrase missing"
+  )
+  const tabLabels = [
+    ...reviewPane.querySelectorAll('[role="tab"]'),
+  ].map((tab) => tab.textContent ?? "")
+  check(
+    tabLabels[1]?.includes("+1,284") && tabLabels[1].includes("−612"),
+    "Changes tab lost its diff stat"
+  )
+  check(tabLabels[2]?.includes("4"), "Timeline tab lost its comment count")
+  const topbar = reviewPane.querySelector<HTMLElement>(".pr-topbar")!
+  const folded = topbar.clientWidth < 46 * rootRem
+  check(
+    visible(reviewPane.querySelector<HTMLElement>(".pr-topbar-more")!) ===
+      folded,
+    "The More menu did not follow the 46rem threshold"
+  )
+  check(
+    visible(reviewPane.querySelector<HTMLElement>(".pr-topbar-icons")!) ===
+      !folded,
+    "The icon actions did not follow the 46rem threshold"
+  )
+  await openReview()
   write("review-page-24", "Draft summary retained across views")
-  if (inbox.clientWidth < 60 * rootRem) {
+  await screenshot("pr-review-popover")
+  await closePopover()
+  if (!wide) {
     await click("Back to pull requests")
     check(
       document.activeElement?.id === "pr-row-project-24",
@@ -283,6 +495,20 @@ async function run() {
         "draft",
       "Back discarded the list filter"
     )
+    // Esc in single-pane mode returns to the list with focus on the row.
+    document
+      .querySelector(".pr-review-scroll")!
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true })
+      )
+    await sleep(160)
+    check(
+      document.activeElement?.id === "pr-row-project-24" &&
+        useStore.getState().prSelection === null,
+      "Esc did not return to the list with focus on the row"
+    )
+    document.getElementById("pr-row-project-24")!.click()
+    await sleep(100)
   } else {
     document.getElementById("pr-row-project-25")!.click()
     await waitFor(
@@ -296,14 +522,14 @@ async function run() {
     await sleep(100)
   }
   check(
-    (document.getElementById("review-page-24") as HTMLTextAreaElement).value ===
+    useReviews.getState().entries[key].draft.body ===
       "Draft summary retained across views",
     "Selecting a PR discarded its draft"
   )
   const originalTitle = detail.pull_request.title
   detail.pull_request.title =
     "Preserve review drafts and exact inline comment anchors when GitHub rejects a request while a reviewer keeps typing in another conversation pane"
-  await click("Refresh pull request")
+  await refreshPr()
   check(
     document.querySelector(".pr-review h2")?.textContent ===
       detail.pull_request.title,
@@ -314,7 +540,7 @@ async function run() {
     "Long title overflowed the viewport"
   )
   detail.pull_request.title = originalTitle
-  await click("Refresh pull request")
+  await refreshPr()
   const resetScroll = () =>
     document
       .querySelectorAll<HTMLElement>("[data-pr-scroll]")
@@ -322,8 +548,9 @@ async function run() {
         element.scrollTop = 0
       })
   resetScroll()
-  await screenshot("pr-overview")
-  await click("Changes")
+  await screenshot("pr-list-summary")
+  if (!wide) await screenshot("pr-narrow-detail")
+  await clickTab("Changes")
   await waitFor(
     () => !!document.querySelector("[data-pr-diff]"),
     "Changes did not lazily load its selected diff"
@@ -333,8 +560,8 @@ async function run() {
     "Large diff exceeded initial line budget"
   )
   check(
-    document.querySelectorAll('[aria-label="Changed files"] button').length ===
-      30,
+    document.querySelectorAll('[aria-label="Changed files"] button[aria-pressed]')
+      .length === 30,
     "File page lost items"
   )
   check(
@@ -342,19 +569,36 @@ async function run() {
     "More than the selected file is mounted"
   )
   resetScroll()
-  await screenshot("pr-changes")
   await click("Comment on new line 7")
+  const composer = document.getElementById("inline-page-24")!
+  check(
+    composer.closest("tr")?.previousElementSibling?.querySelector(
+      '[aria-label="Comment on new line 7"]'
+    ),
+    "The inline composer is not directly under line 7"
+  )
   write("inline-page-24", "Preserve this inline draft")
-  await click("Save inline draft")
+  await click("Add to review")
   check(
     useReviews.getState().entries[key].draft.inline[0]?.side === "RIGHT",
     "Inline draft lost its line side"
   )
-  await click("Conversation")
+  check(
+    [...document.querySelectorAll("[data-pr-diff] tr")].some((row) =>
+      row.textContent?.includes("Preserve this inline draft")
+    ),
+    "The saved inline draft is not under its line"
+  )
+  check(
+    document.documentElement.scrollWidth <= innerWidth + 2,
+    "Changes scroll horizontally"
+  )
+  await screenshot("pr-changes-inline")
+  await clickTab("Timeline")
   await waitFor(
     () =>
       !!reviewRoot().querySelector('[aria-label="Select finding by reviewer"]'),
-    "Conversation did not load"
+    "Timeline did not load"
   )
   reviewRoot()
     .querySelector<HTMLElement>('[aria-label="Select finding by reviewer"]')!
@@ -369,12 +613,16 @@ async function run() {
     .click()
   check(
     useReviews.getState().entries[key].draft.selected.length === 3,
-    "Conversation source IDs collided or selection disappeared"
+    "Timeline source IDs collided or selection disappeared"
+  )
+  check(
+    !!document.querySelector('[aria-label="Selected findings"]'),
+    "The selection bar is missing"
   )
   await click("Next page")
   check(
     useReviews.getState().entries[key].page?.page === 2,
-    "Conversation pagination did not advance"
+    "Timeline pagination did not advance"
   )
   check(
     useReviews.getState().entries[key].draft.selected.length === 3,
@@ -382,25 +630,43 @@ async function run() {
   )
   check(
     !document.querySelector("[data-pr-diff]"),
-    "Conversation retained an offscreen diff"
+    "Timeline retained an offscreen diff"
   )
   resetScroll()
-  await screenshot("pr-conversation")
+  await screenshot("pr-timeline-selected")
+  await openSend()
+  check(
+    document.querySelector("[data-pr-send-popover]")?.textContent?.includes(
+      "3 comments and 1 inline draft"
+    ),
+    "Send popover miscounted the findings"
+  )
+  await screenshot("pr-send-popover")
+  document
+    .querySelector<HTMLElement>("[data-pr-send-popover]")!
+    .closest('[data-slot="popover-popup"]')
+    ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
+  await sleep(200)
   flushSync(() =>
     useStore.getState().set({ rightTab: "review", rightOpen: true })
   )
   await sleep(180)
+  await openReview()
   check(
     (document.getElementById("review-dock-24") as HTMLTextAreaElement).value ===
       "Draft summary retained across views",
     "Page and dock lost their shared summary"
   )
   check(
-    reviewRoot().textContent?.includes("Preserve this inline draft"),
-    "Dock lost saved inline draft"
+    document
+      .querySelector("[data-pr-review-popover]")
+      ?.textContent?.includes("1 inline comment"),
+    "Dock lost the saved inline draft"
   )
+  await closePopover()
   resetScroll()
-  await screenshot("pr-context-dock")
+  await screenshot("pr-dock")
   const callsBeforeHide = reviewFixture.calls.length
   flushSync(() => useStore.getState().set({ rightOpen: false }))
   await sleep(100)
@@ -414,10 +680,11 @@ async function run() {
   )
   flushSync(() => useStore.getState().set({ rightOpen: true }))
   await sleep(100)
+  await openReview()
   reviewFixture.failSubmit = true
   await click("Post comment and 1 inline draft")
   check(
-    document.querySelector('[role="alert"]'),
+    document.querySelector('[data-pr-review-popover] [role="alert"]'),
     "Failure was not actionable and inline"
   )
   check(
@@ -429,7 +696,7 @@ async function run() {
   button("Post comment and 1 inline draft").click()
   await sleep(50)
   write("review-dock-24", "Keep this newer draft")
-  await sleep(400)
+  await sleep(500)
   check(
     useReviews.getState().entries[key].draft.body === "Keep this newer draft",
     "Slow submission erased new typing"
@@ -438,6 +705,7 @@ async function run() {
     !useReviews.getState().entries[key].draft.inline.length,
     "Successful post did not remove submitted inline draft"
   )
+  reviewFixture.slowSubmit = false
   const tabs = Array.from(
     reviewRoot().querySelectorAll<HTMLButtonElement>(
       '[aria-label="Review workspace"] [role="tab"]'
@@ -449,12 +717,12 @@ async function run() {
   )
   await sleep(100)
   check(
-    document.activeElement?.textContent === "Conversation",
-    "End did not focus Conversation"
+    document.activeElement?.id.endsWith("-conversation") === true,
+    "End did not focus Timeline"
   )
   check(
     useReviews.getState().entries[key].workspace === "conversation",
-    "Keyboard did not select Conversation"
+    "Keyboard did not select Timeline"
   )
   tabs[2].dispatchEvent(
     new KeyboardEvent("keydown", { key: "Home", bubbles: true })
@@ -462,7 +730,7 @@ async function run() {
   await sleep(100)
   check(
     useReviews.getState().entries[key].workspace === "overview",
-    "Home did not return to Overview"
+    "Home did not return to Summary"
   )
   if (stress === "rtl") {
     tabs[0].dispatchEvent(
@@ -470,7 +738,7 @@ async function run() {
     )
     await sleep(100)
     check(
-      document.activeElement?.textContent === "Conversation",
+      document.activeElement?.id.endsWith("-conversation") === true,
       "RTL ArrowRight did not move toward the previous tab"
     )
     tabs[2].dispatchEvent(
@@ -478,11 +746,17 @@ async function run() {
     )
     await sleep(100)
     check(
-      document.activeElement?.textContent === "Overview",
+      document.activeElement?.id.endsWith("-overview") === true,
       "RTL ArrowLeft did not move toward the next tab"
     )
   }
-  await click("View all check pages")
+  reviewRoot().querySelector<HTMLElement>(".pr-checks-toggle")!.click()
+  await sleep(120)
+  check(
+    reviewRoot().querySelectorAll(".pr-checks-rows li").length === 100,
+    "Show all did not expand the checks in place"
+  )
+  await click("Load more checks")
   check(
     reviewRoot().textContent?.includes("Check 1.0"),
     "Complete check page missing"
@@ -492,7 +766,7 @@ async function run() {
     useReviews.getState().entries[key].page?.page === 2,
     "Checks pagination did not advance"
   )
-  await click("Changes")
+  await clickTab("Changes")
   await click("Next page")
   check(
     useReviews.getState().entries[key].page?.page === 2,
@@ -505,19 +779,18 @@ async function run() {
     "A pane mounted cumulative diffs"
   )
   resetScroll()
-  await screenshot("pr-dock-changes")
-  await click("Overview")
+  await clickTab("Summary")
   const bodyBeforeNewHead = useReviews.getState().entries[key].draft.body
   const pageCallsBeforeNewHead = reviewFixture.calls.filter(
     (call) => call.method === "github.pr.page" && call.params.kind === "files"
   ).length
   detail.head_sha = "reviewed-head-updated"
-  await click("Refresh pull request")
+  await refreshPr()
   check(
     useReviews.getState().entries[key].page === null,
-    "Overview refresh retained a diff from the prior head"
+    "Summary refresh retained a diff from the prior head"
   )
-  await click("Changes")
+  await clickTab("Changes")
   await waitFor(
     () =>
       useReviews.getState().entries[key].file ===
@@ -536,11 +809,18 @@ async function run() {
     "New head discarded the retained draft"
   )
   check(
-    reviewRoot().textContent?.includes("This draft refers to"),
+    reviewRoot().querySelector("[data-stale-dot]"),
+    "Changed head did not mark the Review button"
+  )
+  await openReview()
+  check(
+    document
+      .querySelector("[data-pr-review-popover]")
+      ?.textContent?.includes("This draft refers to"),
     "Changed head did not warn about stale draft"
   )
   check(
-    (button("Post comment") as HTMLButtonElement).disabled,
+    (buttonMatching(/^Post comment$/) as HTMLButtonElement).disabled,
     "Stale summary remained publishable"
   )
   await click("Use draft text for current commit")
@@ -548,21 +828,51 @@ async function run() {
     useReviews.getState().entries[key].draft.sourceHead === detail.head_sha,
     "Explicit draft reuse did not bind current commit"
   )
-  for (const action of [
-    "Merge pull request",
-    "Close pull request",
-    "Approve",
-  ]) {
-    await click("Review actions")
-    await click(action)
-    check(
-      document
-        .querySelector('[role="dialog"]')
-        ?.textContent?.includes(`${action}?`),
-      `${action} skipped explicit confirmation`
-    )
-    await click("Cancel")
-  }
+  // Approve is confirmed by choosing it and pressing submit: no second dialog.
+  document
+    .querySelector<HTMLInputElement>('[data-pr-review-popover] input[value="approve"]')!
+    .click()
+  await sleep(80)
+  check(
+    buttonMatching(/^Approve$/) instanceof HTMLButtonElement,
+    "The submit button is not labelled Approve"
+  )
+  const approvals = () =>
+    reviewFixture.calls.filter(
+      (call) =>
+        call.method === "github.pr.action" && call.params.action === "approve"
+    ).length
+  check(approvals() === 0, "Approve fired before submit")
+  const submit = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      "[data-pr-review-popover] button"
+    ),
+  ].find((candidate) => candidate.textContent?.trim() === "Approve")!
+  submit.click()
+  await waitFor(() => approvals() === 1, "Approve did not call GitHub once")
+  await sleep(200)
+  check(
+    !document.querySelector('[data-slot="dialog-popup"]'),
+    "Approve opened a second confirmation dialog"
+  )
+  // Merge and Close still confirm.
+  await click("Merge")
+  check(
+    document
+      .querySelector('[data-slot="dialog-popup"]')
+      ?.textContent?.includes("Merge pull request?"),
+    "Merge skipped explicit confirmation"
+  )
+  await click("Cancel")
+  await click("More merge options")
+  await click("Close pull request")
+  check(
+    document
+      .querySelector('[data-slot="dialog-popup"]')
+      ?.textContent?.includes("Close pull request?"),
+    "Close skipped explicit confirmation"
+  )
+  await click("Cancel")
   useStore.getState().set({ worktreeCleanupThread: "repair" })
   await sleep(160)
   check(
@@ -594,7 +904,8 @@ async function run() {
     threadId: "repair",
   })
   await sleep(60)
-  await click("Send to agent")
+  await openSend()
+  await click("Send 4 findings")
   await waitFor(
     () => reviewFixture.sent.length >= 1,
     "Explicit repair did not finish checkout and send within two seconds"
@@ -635,6 +946,44 @@ async function run() {
     ),
     "Repair unexpectedly merged"
   )
+  // List states: empty filter, search miss, GitHub CLI problems and first load.
+  flushSync(() => useStore.getState().set({ rightOpen: false, rightTab: null }))
+  await sleep(200)
+  const bodyText = () => document.querySelector(".pr-inbox-list")?.textContent ?? ""
+  if (!wide) {
+    useStore.getState().set({ prSelection: null })
+    await sleep(120)
+  }
+  write("pr-search", "no such pull request")
+  await waitFor(() => bodyText().includes("No results for"), "Search miss state missing")
+  await screenshot("pr-search-miss")
+  write("pr-search", "")
+  await sleep(100)
+  await click("Closed")
+  await waitFor(
+    () => bodyText().includes("No closed pull requests"),
+    "Empty filter state missing"
+  )
+  check(bodyText().includes("Show all pull requests"), "Empty filter lacks its action")
+  await screenshot("pr-empty")
+  await click("Open")
+  await sleep(150)
+  reviewFixture.ghError = "auth"
+  await click("Refresh")
+  await waitFor(
+    () => !!document.querySelector('[data-gh-problem="gh-auth"]'),
+    "Signed-out state missing"
+  )
+  check(bodyText().includes("Copy command"), "Signed-out state lacks Copy command")
+  await screenshot("pr-gh-auth")
+  reviewFixture.ghError = "missing"
+  await click("Refresh")
+  await waitFor(
+    () => !!document.querySelector('[data-gh-problem="gh-missing"]'),
+    "Missing gh state missing"
+  )
+  check(bodyText().includes("Open install guide"), "Missing gh state lacks its guide")
+  reviewFixture.ghError = null
   post({
     pass: true,
     fixture: "pr-review",
@@ -645,6 +994,12 @@ async function run() {
     rtl: stress === "rtl",
     width: innerWidth,
     mountedDiffRows: document.querySelectorAll("tr").length,
+    twoLineRows: true,
+    roveFocus: true,
+    singleInfoColumn: true,
+    inlineUnderLine: true,
+    approveWithoutDialog: true,
+    ghStates: true,
     sharedDrafts: true,
     retainedFailureDrafts: true,
     keyboardWorkspace: true,

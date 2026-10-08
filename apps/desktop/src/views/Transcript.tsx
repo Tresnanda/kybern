@@ -54,6 +54,8 @@ import { DelegationGroupRow, DelegationLaunchRow } from "./delegations/Delegatio
 import { AgentResultsCard, InboundMessageRow, SentToRow } from "./delegations/ThreadMessageRows"
 import { agentResultItems, threadMessagePart } from "../../../../packages/kybern-client/src/delegations.ts"
 import { orchestrationLabel, orchestrationTool } from "../../../../packages/kybern-client/src/orchestrationTools.ts"
+import { isPreviewOpenTool, previewToolLabel, previewToolRequest } from "../../../../packages/kybern-client/src/previewTool.ts"
+import { openPreviewInput } from "@/state/previewSession"
 import { SubagentDivider, SubagentEndRow } from "./subagents/SubagentPage"
 import { subagentThreadPhase } from "../../../../packages/kybern-client/src/subagents.ts"
 import { TranscriptStateRoot } from "@/components/kybern/TranscriptStateScope"
@@ -1557,7 +1559,10 @@ function ToolRow({
 }) {
   const [open, setOpen] = useTranscriptRowState("open", false)
   const inlineCards = useContext(ItemCardsInline)
+  const rowThreadId = useContext(ImageThreadContext)
   const active = !!task && isRuntimeTaskActive(task)
+  // `kybern_preview_open` leaves a durable way back to the page it showed.
+  const previewRequest = isPreviewOpenTool(block.call.name) && block.complete && !block.isError ? previewToolRequest(block.call.input) : null
   const { activity, visual, surface, screenshots, label, hasOutput, item, itemWrite } = useMemo(() => {
     const activity = toolLine(block.call, block.complete && !active)
     const visual = toolVisualKind(block.call, activity)
@@ -1569,7 +1574,9 @@ function ToolRow({
     const itemWrite = item?.write ? agentItemWriteResult(itemResult) : null
     const screenshots = surface?.screenshots ?? responseImages(block.output).map((image) => image.source)
     const hasText = surface ? surfaceHasOutputText(block.output) : hasOutputText(block.output, block.stream)
-    const label = orchestration
+    const label = isPreviewOpenTool(block.call.name)
+      ? previewToolLabel(block.call.input, block.complete && !active, block.isError)
+      : orchestration
       ? orchestrationLabel(orchestration, block.complete && !active, block.isError)
       : item
       ? agentItemLabel(item, block.call.input, itemResult, block.complete && !active, block.isError)
@@ -1588,7 +1595,7 @@ function ToolRow({
   // Decided once on mount: only a row that just arrived plays the entrance.
   const [fresh] = useState(() => Date.now() - new Date(block.at).getTime() < 3000)
   return (
-    <div className={cn("rounded-lg py-1", fresh && "t-row-enter")}>
+    <div className={cn("relative rounded-lg py-1", fresh && "t-row-enter")}>
       <button
         type="button"
         data-agent-launch-row={opensFocusedActivity ? "true" : undefined}
@@ -1600,7 +1607,7 @@ function ToolRow({
           if (canExpand) setOpen((value) => !value)
         }}
         aria-expanded={canExpand ? open : undefined}
-        className={cn("group/tool-row flex w-full items-center gap-1.5 text-start", canOpen ? "cursor-pointer focus-visible:outline-none" : "cursor-default")}
+        className={cn("group/tool-row flex w-full items-center gap-1.5 text-start", previewRequest && "pe-12", canOpen ? "cursor-pointer focus-visible:outline-none" : "cursor-default")}
       >
         <span data-work-entry-icon className={cn("flex size-4 shrink-0 items-center justify-center", tone)}>
           {workIcon(visual, block.isError)}
@@ -1618,6 +1625,17 @@ function ToolRow({
           ? <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/55 transition-colors group-hover/tool-row:text-foreground" />
           : canExpand && <DisclosureChevron open={open} className="text-muted-foreground/70 group-hover/tool-row:text-foreground" />}
       </button>
+      {previewRequest && rowThreadId && (
+        <button
+          type="button"
+          onClick={() => void openPreviewInput(rowThreadId, previewRequest.target, { title: previewRequest.title }).then((outcome) => {
+            if (outcome.status === "error" && outcome.message) toast.error("Unable to open the preview", { description: outcome.message })
+          })}
+          className="press absolute end-0 top-1/2 -translate-y-1/2 rounded-md px-1.5 py-0.5 font-system-ui text-[12px] text-muted-foreground outline-none hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          Open
+        </button>
+      )}
       {itemWrite && (!inlineCards || inlineCards.has(block.call.id)) && <AgentItemCard result={itemWrite} style={CHAT_FONT} />}
       {canExpand && (
         <DisclosureRegion open={open} contentClassName="ms-[1.375rem] min-w-0 pt-1.5">

@@ -69,13 +69,22 @@ struct Inner {
     /// One read per provider at a time; a caller that arrives mid-read waits
     /// for it and then finds the value fresh.
     gates: HashMap<ProviderKind, tokio::sync::Mutex<()>>,
+    /// The same, per named account. Reads happen only for accounts a client
+    /// asked about, so an idle window spawns nothing for them.
+    account_gates: std::sync::Mutex<HashMap<AccountKey, Arc<tokio::sync::Mutex<()>>>>,
     changed: broadcast::Sender<UsageLimitsResult>,
 }
 
+type AccountKey = (ProviderKind, String);
+
 #[derive(Default)]
 struct State {
+    accounts: BTreeMap<AccountKey, Entry>,
+    accounts_refreshing: HashSet<AccountKey>,
     seeded: bool,
     account_identities: BTreeMap<ProviderKind, String>,
+    /// The global account each identity above was taken for.
+    global_accounts: BTreeMap<ProviderKind, String>,
     providers: BTreeMap<ProviderKind, Entry>,
     last_interest: Option<Instant>,
     refreshing: HashSet<ProviderKind>,
@@ -102,6 +111,26 @@ fn window_key(limit: &UsageLimit) -> String {
     limit.window_minutes.map(|minutes| format!("window:{minutes}")).unwrap_or_else(|| format!("name:{}", limit.name))
 }
 
+fn entry_limits(kind: ProviderKind, instance: Option<String>, entry: &Entry, now: i64) -> ProviderLimits {
+    ProviderLimits {
+        provider: kind,
+        limits: entry
+            .limits
+            .iter()
+            .map(|limit| match limit.resets_at {
+                Some(reset) if reset <= now => UsageLimit { used_percent: 0.0, ..limit.clone() },
+                _ => limit.clone(),
+            })
+            .collect(),
+        updated_at: entry.updated_at,
+        source: entry.source,
+        plan: entry.plan.clone(),
+        stale: entry.stale.map(|(reason, _)| reason),
+        retry_at: entry.stale.and_then(|(_, retry_at)| retry_at),
+        instance,
+    }
+}
+
 fn provider_order(kind: ProviderKind) -> usize {
     LIVE.iter().position(|live| *live == kind).unwrap_or(LIVE.len())
 }
@@ -114,6 +143,7 @@ impl UsageMonitor {
                 settings,
                 state: std::sync::Mutex::new(State::default()),
                 gates: LIVE.into_iter().map(|kind| (kind, tokio::sync::Mutex::new(()))).collect(),
+                account_gates: Default::default(),
                 changed: broadcast::channel(64).0,
             }),
         }
@@ -122,7 +152,15 @@ impl UsageMonitor {
     fn identity(&self, kind: ProviderKind) -> String {
         let settings = self.inner.settings.get();
         let raw = settings.providers.get(&kind).cloned().unwrap_or_default();
-        let account = crate::provider_accounts::resolve(&raw, None, None);
+        self.identity_for(kind, &crate::provider_accounts::resolve(&raw, None, None))
+    }
+
+    /// The identity global limits would have if `account` were the default
+    /// under today's binary and environment.
+    fn identity_for(&self, kind: ProviderKind, account: &str) -> String {
+        let mut settings = self.inner.settings.get();
+        settings.providers.entry(kind).or_default().default_account = (account != "default").then(|| account.to_string());
+        let account = account.to_string();
         let effective = crate::settings::provider_settings(&settings, kind, None);
         let bytes = Sha256::digest(serde_json::to_vec(&(account, effective.binary, effective.env)).unwrap_or_default());
         bytes.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -130,14 +168,39 @@ impl UsageMonitor {
 
     /// Global limits describe the selected global account. Never show the
     /// previous account's values or accept its in-flight read after a switch.
+    ///
+    /// When only the default account changed (same binary and environment),
+    /// the limits swap places: the previous default keeps its values as a
+    /// named-account entry and the new default starts from its own, so a
+    /// surface showing the default never goes blank until the next read.
     fn sync_accounts(&self) {
-        let identities = LIVE.into_iter().map(|kind| (kind, self.identity(kind))).collect::<Vec<_>>();
+        let settings = self.inner.settings.get();
+        let identities = LIVE
+            .into_iter()
+            .map(|kind| {
+                let raw = settings.providers.get(&kind).cloned().unwrap_or_default();
+                (kind, self.identity(kind), crate::provider_accounts::resolve(&raw, None, None))
+            })
+            .collect::<Vec<_>>();
         let mut state = self.lock();
-        for (kind, identity) in identities {
+        for (kind, identity, account) in identities {
             if state.account_identities.get(&kind).is_some_and(|old| old != &identity) {
-                state.providers.remove(&kind);
+                let previous = state.providers.remove(&kind);
+                let previous_account = state.global_accounts.get(&kind).cloned();
+                let switched_only = previous_account.as_ref().is_some_and(|old| {
+                    old != &account && self.identity_for(kind, old) == *state.account_identities.get(&kind).unwrap_or(&String::new())
+                });
+                if switched_only {
+                    if let (Some(entry), Some(old)) = (previous, previous_account) {
+                        state.accounts.insert((kind, old), entry);
+                    }
+                    if let Some(entry) = state.accounts.remove(&(kind, account.clone())) {
+                        state.providers.insert(kind, entry);
+                    }
+                }
             }
             state.account_identities.insert(kind, identity);
+            state.global_accounts.insert(kind, account);
         }
     }
 
@@ -151,6 +214,27 @@ impl UsageMonitor {
         let raw = settings.providers.get(&provider.kind).cloned().unwrap_or_default();
         if provider.instance == crate::provider_accounts::resolve(&raw, None, None) {
             self.observe(provider.kind, limits);
+        } else if LIVE.contains(&provider.kind) && !limits.is_empty() {
+            {
+                let mut state = self.lock();
+                let entry = state.accounts.entry((provider.kind, provider.instance.clone())).or_default();
+                for limit in limits {
+                    let key = window_key(limit);
+                    match entry.limits.iter_mut().find(|old| window_key(old) == key) {
+                        Some(old) => {
+                            old.used_percent = limit.used_percent;
+                            old.resets_at = limit.resets_at.or(old.resets_at);
+                        }
+                        None => entry.limits.push(limit.clone()),
+                    }
+                }
+                entry.limits.sort_by_key(|limit| limit.window_minutes.unwrap_or(u64::MAX));
+                entry.updated_at = Some(Utc::now());
+                if entry.source != Some(LimitsSource::Live) {
+                    entry.source = Some(LimitsSource::Session);
+                }
+            }
+            self.publish();
         }
     }
 
@@ -181,16 +265,112 @@ impl UsageMonitor {
             }
             due
         };
+        let account_due = self.due_accounts(&params);
         if params.cached {
             for kind in due {
                 let monitor = self.clone();
                 tokio::spawn(async move { monitor.refresh(kind, MIN_SPACING).await });
             }
+            for key in account_due {
+                let monitor = self.clone();
+                tokio::spawn(async move { monitor.refresh_account(key, MIN_SPACING).await });
+            }
         } else {
             let reads = due.into_iter().map(|kind| self.refresh(kind, MIN_SPACING));
-            let _ = tokio::time::timeout(WAIT, futures::future::join_all(reads)).await;
+            let account_reads = account_due.into_iter().map(|key| self.refresh_account(key, MIN_SPACING));
+            let _ = tokio::time::timeout(WAIT, async {
+                futures::future::join(futures::future::join_all(reads), futures::future::join_all(account_reads)).await
+            })
+            .await;
         }
         self.snapshot()
+    }
+
+    /// The named accounts (and the CLI account, when another account is the
+    /// default) a request asks about and whose cache is older than the
+    /// freshness window. The default account's own limits are the global
+    /// entry, so it is never read twice.
+    fn due_accounts(&self, params: &UsageLimitsParams) -> Vec<AccountKey> {
+        if params.instances.is_empty() && !params.all_accounts {
+            return Vec::new();
+        }
+        let settings = self.inner.settings.get();
+        let mut wanted: Vec<AccountKey> = Vec::new();
+        for instance in &params.instances {
+            wanted.push((instance.kind, instance.instance.clone()));
+        }
+        if params.all_accounts {
+            for kind in LIVE {
+                let raw = settings.providers.get(&kind).cloned().unwrap_or_default();
+                if raw.accounts.is_empty() {
+                    continue;
+                }
+                wanted.push((kind, "default".into()));
+                wanted.extend(raw.accounts.keys().map(|id| (kind, id.clone())));
+            }
+        }
+        let mut state = self.lock();
+        let mut due = Vec::new();
+        for key in wanted {
+            let raw = settings.providers.get(&key.0).cloned().unwrap_or_default();
+            let known = key.1 == "default" || raw.accounts.contains_key(&key.1);
+            if !LIVE.contains(&key.0) || !known || key.1 == crate::provider_accounts::resolve(&raw, None, None) || due.contains(&key) {
+                continue;
+            }
+            let attempted = state.accounts.get(&key).and_then(|entry| entry.attempted);
+            let spacing = if params.refresh { MIN_SPACING } else { fresh_for(key.0) };
+            if attempted.is_some_and(|at| at.elapsed() < spacing) || (params.cached && state.accounts_refreshing.contains(&key)) {
+                continue;
+            }
+            if params.cached {
+                state.accounts_refreshing.insert(key.clone());
+            }
+            due.push(key);
+        }
+        due
+    }
+
+    /// Forget one account's cached limits (signed out, removed, or signed in again).
+    pub fn forget_account(&self, kind: ProviderKind, instance: &str) {
+        self.lock().accounts.remove(&(kind, instance.to_string()));
+        self.publish();
+    }
+
+    async fn refresh_account(&self, key: AccountKey, spacing: Duration) {
+        let gate = self.inner.account_gates.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).entry(key.clone()).or_default().clone();
+        let _gate = gate.lock().await;
+        let recent = self.lock().accounts.get(&key).and_then(|entry| entry.attempted).is_some_and(|at| at.elapsed() < spacing);
+        if !recent {
+            self.lock().accounts_refreshing.insert(key.clone());
+            let read = self.read_account(&key.0, &key.1).await;
+            let mut state = self.lock();
+            let entry = state.accounts.entry(key.clone()).or_default();
+            entry.attempted = Some(Instant::now());
+            match read {
+                Ok((limits, plan)) => {
+                    entry.limits = limits;
+                    entry.plan = plan.or(entry.plan.take());
+                    entry.updated_at = Some(Utc::now());
+                    entry.source = Some(LimitsSource::Live);
+                    entry.stale = None;
+                }
+                Err(unread) => {
+                    tracing::debug!(provider = %key.0, reason = ?unread.reason, "could not read a named account's limits");
+                    entry.stale = Some((unread.reason, unread.retry_at));
+                }
+            }
+        }
+        self.lock().accounts_refreshing.remove(&key);
+        self.publish();
+    }
+
+    async fn read_account(&self, kind: &ProviderKind, instance: &str) -> Result<(Vec<UsageLimit>, Option<String>), UsageUnread> {
+        let unavailable = |detail: &str| UsageUnread { reason: LimitsStale::Unavailable, retry_at: None, detail: detail.into() };
+        let settings = self.inner.settings.get();
+        let provider = settings.providers.get(kind).cloned().unwrap_or_default();
+        let env = crate::provider_accounts::environment(&provider, *kind, instance).map_err(|error| unavailable(&error.to_string()))?;
+        let cwd = self.inner.settings.dir().to_path_buf();
+        self.read_with(*kind, provider.binary.map(Into::into), &cwd, &env).await
     }
 
     /// Fold limits a running turn reported. Values from a live read and from
@@ -337,32 +517,38 @@ impl UsageMonitor {
         let binary: Option<PathBuf> = provider.binary.clone().map(Into::into);
         // cwd only needs to be a real directory; account auth lives under $HOME.
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+        self.read_with(kind, binary, &home, &provider.env).await
+    }
+
+    async fn read_with(
+        &self,
+        kind: ProviderKind,
+        binary: Option<PathBuf>,
+        home: &std::path::Path,
+        env: &BTreeMap<String, String>,
+    ) -> Result<(Vec<UsageLimit>, Option<String>), UsageUnread> {
         let started = Instant::now();
         let unavailable = |detail: &str| UsageUnread { reason: LimitsStale::Unavailable, retry_at: None, detail: detail.into() };
         let read = match kind {
-            ProviderKind::ClaudeCode => tokio::time::timeout(
-                Duration::from_secs(20),
-                kybern_drivers::claude::read_account_usage(&home, binary.as_ref(), &provider.env),
-            )
-            .await
-            .unwrap_or_else(|_| Err(unavailable("the read timed out"))),
-            ProviderKind::Codex => tokio::time::timeout(
-                Duration::from_secs(8),
-                kybern_drivers::codex::read_account_limits(&home, binary.as_ref(), &provider.env),
-            )
-            .await
-            .ok()
-            .flatten()
-            .map(|limits| (limits, None))
-            .ok_or_else(|| unavailable("Codex reported no rate limits")),
-            ProviderKind::Cursor => {
-                tokio::time::timeout(Duration::from_secs(10), kybern_drivers::cursor::usage::read_account_usage(&provider.env))
+            ProviderKind::ClaudeCode => {
+                tokio::time::timeout(Duration::from_secs(20), kybern_drivers::claude::read_account_usage(home, binary.as_ref(), env))
+                    .await
+                    .unwrap_or_else(|_| Err(unavailable("the read timed out")))
+            }
+            ProviderKind::Codex => {
+                tokio::time::timeout(Duration::from_secs(8), kybern_drivers::codex::read_account_limits(home, binary.as_ref(), env))
                     .await
                     .ok()
                     .flatten()
-                    .map(|usage| (usage.limits, usage.plan))
-                    .ok_or_else(|| unavailable("Cursor reported no usage"))
+                    .map(|limits| (limits, None))
+                    .ok_or_else(|| unavailable("Codex reported no rate limits"))
             }
+            ProviderKind::Cursor => tokio::time::timeout(Duration::from_secs(10), kybern_drivers::cursor::usage::read_account_usage(env))
+                .await
+                .ok()
+                .flatten()
+                .map(|usage| (usage.limits, usage.plan))
+                .ok_or_else(|| unavailable("Cursor reported no usage")),
             _ => Err(unavailable("no account limits to read")),
         };
         tracing::debug!(provider = %kind, ok = read.is_ok(), elapsed_ms = started.elapsed().as_millis() as u64, "read account limits");
@@ -399,12 +585,37 @@ impl UsageMonitor {
                 plan: entry.plan.clone(),
                 stale: entry.stale.map(|(reason, _)| reason),
                 retry_at: entry.stale.and_then(|(_, retry_at)| retry_at),
+                instance: None,
             })
             .collect::<Vec<_>>();
         providers.sort_by_key(|entry| provider_order(entry.provider));
+        let settings = self.inner.settings.get();
+        let mut accounts = Vec::new();
+        for ((kind, instance), entry) in state.accounts.iter().filter(|(_, entry)| !entry.limits.is_empty()) {
+            // The current default is reported from the global entry below; an
+            // entry read while it was not the default would duplicate it.
+            let default = settings.providers.get(kind).map(|raw| crate::provider_accounts::resolve(raw, None, None));
+            let global = state.providers.get(kind).is_some_and(|entry| !entry.limits.is_empty());
+            if global && default.as_deref().unwrap_or("default") == instance {
+                continue;
+            }
+            accounts.push(entry_limits(*kind, Some(instance.clone()), entry, now));
+        }
+        // The default account's limits are the global entry; label it so clients
+        // find every account in one list.
+        for kind in LIVE {
+            if !state.accounts.keys().any(|(k, _)| *k == kind) && settings.providers.get(&kind).is_none_or(|p| p.accounts.is_empty()) {
+                continue;
+            }
+            if let Some(entry) = state.providers.get(&kind).filter(|entry| !entry.limits.is_empty()) {
+                let raw = settings.providers.get(&kind).cloned().unwrap_or_default();
+                accounts.push(entry_limits(kind, Some(crate::provider_accounts::resolve(&raw, None, None)), entry, now));
+            }
+        }
+        accounts.sort_by_key(|entry| (provider_order(entry.provider), entry.instance.clone()));
         let mut refreshing = state.refreshing.iter().copied().collect::<Vec<_>>();
         refreshing.sort_by_key(|kind| provider_order(*kind));
-        UsageLimitsResult { providers, refreshing }
+        UsageLimitsResult { providers, refreshing, accounts }
     }
 }
 
@@ -497,9 +708,10 @@ mod account_tests {
         );
         let mut settings = monitor.inner.settings.get();
         let provider = settings.providers.entry(ProviderKind::Codex).or_default();
-        provider
-            .accounts
-            .insert("work".into(), kybern_protocol::ProviderAccount { name: "Work".into(), directory: "/account-work".into() });
+        provider.accounts.insert(
+            "work".into(),
+            kybern_protocol::ProviderAccount { name: "Work".into(), directory: "/account-work".into(), ..Default::default() },
+        );
         provider.default_account = Some("work".into());
         monitor.inner.settings.set(settings).unwrap();
         monitor.settings_changed();
@@ -514,5 +726,90 @@ mod account_tests {
             &[UsageLimit { name: "5-hour".into(), used_percent: 10.0, window_minutes: Some(300), resets_at: None }],
         );
         assert_eq!(monitor.snapshot().providers[0].limits[0].used_percent, 10.0);
+    }
+}
+
+#[cfg(test)]
+mod named_account_tests {
+    use super::*;
+
+    fn with_accounts() -> UsageMonitor {
+        let monitor = super::tests::monitor();
+        let mut settings = monitor.inner.settings.get();
+        let provider = settings.providers.entry(ProviderKind::ClaudeCode).or_default();
+        provider.accounts.insert(
+            "work".into(),
+            kybern_protocol::ProviderAccount { name: "Work".into(), directory: "/account-work".into(), ..Default::default() },
+        );
+        monitor.inner.settings.set(settings).unwrap();
+        monitor
+    }
+
+    #[test]
+    fn a_plain_poll_reads_no_named_accounts() {
+        let monitor = with_accounts();
+        assert!(monitor.due_accounts(&UsageLimitsParams { cached: true, ..Default::default() }).is_empty());
+    }
+
+    #[test]
+    fn interest_in_accounts_reads_only_those_and_skips_the_default_account() {
+        let monitor = with_accounts();
+        let due = monitor.due_accounts(&UsageLimitsParams { cached: true, all_accounts: true, ..Default::default() });
+        assert!(due.contains(&(ProviderKind::ClaudeCode, "work".into())));
+        assert!(!due.contains(&(ProviderKind::ClaudeCode, "default".into())), "the default account is the global entry");
+        let again = monitor.due_accounts(&UsageLimitsParams { cached: true, all_accounts: true, ..Default::default() });
+        assert!(again.is_empty(), "a read already in flight answers the second call");
+        let instances = monitor.due_accounts(&UsageLimitsParams {
+            instances: vec![ProviderInstance { kind: ProviderKind::ClaudeCode, instance: "missing".into() }],
+            ..Default::default()
+        });
+        assert!(instances.is_empty(), "unknown accounts are never read");
+    }
+
+    #[test]
+    fn an_account_that_became_the_default_is_reported_once() {
+        let monitor = with_accounts();
+        let limit = UsageLimit { name: "5-hour".into(), used_percent: 30.0, window_minutes: Some(300), resets_at: None };
+        let work = ProviderInstance { kind: ProviderKind::ClaudeCode, instance: "work".into() };
+        monitor.observe_account(&work, std::slice::from_ref(&limit));
+        let mut settings = monitor.inner.settings.get();
+        settings.providers.entry(ProviderKind::ClaudeCode).or_default().default_account = Some("work".into());
+        monitor.inner.settings.set(settings).unwrap();
+        monitor.observe(ProviderKind::ClaudeCode, std::slice::from_ref(&limit));
+        let snapshot = monitor.snapshot();
+        let labeled = snapshot.accounts.iter().filter(|entry| entry.instance.as_deref() == Some("work")).count();
+        assert_eq!(labeled, 1, "{:?}", snapshot.accounts);
+    }
+
+    #[test]
+    fn switching_the_default_swaps_limits_instead_of_dropping_them() {
+        let monitor = with_accounts();
+        monitor.settings_changed();
+        let five = |used: f64| UsageLimit { name: "5-hour".into(), used_percent: used, window_minutes: Some(300), resets_at: None };
+        monitor.observe(ProviderKind::ClaudeCode, &[five(70.0)]);
+        monitor.observe_account(&ProviderInstance { kind: ProviderKind::ClaudeCode, instance: "work".into() }, &[five(20.0)]);
+        let mut settings = monitor.inner.settings.get();
+        settings.providers.entry(ProviderKind::ClaudeCode).or_default().default_account = Some("work".into());
+        monitor.inner.settings.set(settings).unwrap();
+        monitor.settings_changed();
+        let snapshot = monitor.snapshot();
+        assert_eq!(snapshot.providers[0].limits[0].used_percent, 20.0, "the new default starts from its own limits");
+        let cli = snapshot.accounts.iter().find(|entry| entry.instance.as_deref() == Some("default")).unwrap();
+        assert_eq!(cli.limits[0].used_percent, 70.0, "the CLI account keeps its limits");
+        assert_eq!(snapshot.accounts.iter().filter(|entry| entry.instance.as_deref() == Some("work")).count(), 1);
+    }
+
+    #[test]
+    fn named_account_reports_appear_labeled_and_forget_clears_them() {
+        let monitor = with_accounts();
+        let limit = UsageLimit { name: "5-hour".into(), used_percent: 30.0, window_minutes: Some(300), resets_at: None };
+        monitor
+            .observe_account(&ProviderInstance { kind: ProviderKind::ClaudeCode, instance: "work".into() }, std::slice::from_ref(&limit));
+        let snapshot = monitor.snapshot();
+        assert_eq!(snapshot.accounts.len(), 1);
+        assert_eq!(snapshot.accounts[0].instance.as_deref(), Some("work"));
+        assert!(snapshot.providers.is_empty(), "the global default is untouched");
+        monitor.forget_account(ProviderKind::ClaudeCode, "work");
+        assert!(monitor.snapshot().accounts.is_empty());
     }
 }

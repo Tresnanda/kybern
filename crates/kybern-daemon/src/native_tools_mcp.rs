@@ -254,6 +254,9 @@ async fn handle(State(state): State<AppState>, headers: HeaderMap, body: Bytes) 
                 if matches!(tool.name.as_str(), "kybern_html_preview" | "kybern_html_publish") {
                     definition["annotations"] = json!({"readOnlyHint":true,"destructiveHint":false,"idempotentHint":tool.name == "kybern_html_preview","openWorldHint":true});
                 }
+                if tool.name == "kybern_preview_open" {
+                    definition["annotations"] = json!({"readOnlyHint":true,"destructiveHint":false,"openWorldHint":false});
+                }
                 definition
             }).collect::<Vec<_>>() });
             if modern {

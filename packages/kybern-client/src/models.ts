@@ -1,4 +1,4 @@
-import type { ProviderModel } from "./types.ts";
+import type { ModelParameter, ModelVariant, ProviderModel } from "./types.ts";
 
 export type ModelChoice = Pick<
   ProviderModel,
@@ -18,7 +18,7 @@ export function customModelId(value: string): string | null {
  * concrete id (`claude-opus-5-5`), so an alias entry (`opus`) claims it too,
  * with or without a context suffix such as `[1m]` on either side.
  */
-export function findModel<T extends Pick<ProviderModel, "id" | "resolved_id">>(
+export function findModel<T extends Pick<ProviderModel, "id" | "resolved_id" | "variants">>(
   catalog: readonly T[],
   id: string | null | undefined,
 ): T | undefined {
@@ -26,28 +26,219 @@ export function findModel<T extends Pick<ProviderModel, "id" | "resolved_id">>(
   const base = withoutContext(id);
   return (
     catalog.find((model) => model.id === id) ??
+    // A model with traits is one row; a thread may hold any of its variants.
+    catalog.find((model) => model.variants?.some((variant) => variant.id === id)) ??
     catalog.find((model) => model.resolved_id === id) ??
+    catalog.find((model) => model.variants?.some((variant) => sameCursorModel(variant.id, id))) ??
     catalog.find((model) => sameCursorModel(model.id, id)) ??
     catalog.find((model) => !!model.resolved_id && withoutContext(model.resolved_id) === base)
   );
 }
 
-/** Older Cursor threads stored each effort as an opaque variant selector. */
-function cursorModelKey(selector: string): string | undefined {
+/** Parameters Cursor models use for effort. Keep in step with `EFFORT_PARAMS` in the Cursor SDK host. */
+const CURSOR_EFFORT_PARAMS = ["effort", "reason_effort", "reasoning_effort", "reasoningEffort", "reasoning"];
+
+interface CursorSelection {
+  id: string;
+  params: { id: string; value: string }[];
+}
+
+function decodeCursorSelector(selector: string): CursorSelection | undefined {
   if (!selector.startsWith("cursor-model:")) return undefined;
   try {
     const encoded = selector.slice(13).replaceAll("-", "+").replaceAll("_", "/");
     const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
-    const selection = JSON.parse(new TextDecoder().decode(bytes)) as {id: string; params: {id: string; value: string}[]};
-    if (typeof selection.id !== "string" || !Array.isArray(selection.params)) return undefined;
-    const params = selection.params.filter((param) => !["effort", "reason_effort", "reasoning_effort", "reasoningEffort"].includes(param.id));
-    return JSON.stringify([selection.id, params.sort((a, b) => a.id.localeCompare(b.id))]);
+    const selection = JSON.parse(new TextDecoder().decode(bytes)) as CursorSelection;
+    return typeof selection.id === "string" && Array.isArray(selection.params) ? selection : undefined;
   } catch { return undefined; }
+}
+
+/** Older Cursor threads stored each effort as an opaque variant selector. */
+function cursorModelKey(selector: string): string | undefined {
+  const selection = decodeCursorSelector(selector);
+  if (!selection) return undefined;
+  const params = selection.params.filter((param) => !CURSOR_EFFORT_PARAMS.includes(param.id));
+  return JSON.stringify([selection.id, params.sort((a, b) => a.id.localeCompare(b.id))]);
+}
+
+/**
+ * The effort an older Cursor selector carried as a plain parameter (GPT's
+ * `reasoning`), or undefined when it names none the row offers. Effort used to
+ * live in the selector; now it is a separate control.
+ */
+export function selectorEffort(
+  model: Pick<ProviderModel, "id" | "variants" | "efforts"> | undefined,
+  selected: string | null | undefined,
+): string | undefined {
+  const selection = selected ? decodeCursorSelector(selected) : undefined;
+  const value = selection?.params.find((param) => CURSOR_EFFORT_PARAMS.includes(param.id))?.value;
+  if (value === undefined) return undefined;
+  const offered = selectedVariant(model, selected)?.efforts?.length ? selectedVariant(model, selected)!.efforts! : model?.efforts ?? [];
+  return offered.includes(value) ? value : undefined;
 }
 
 function sameCursorModel(left: string, right: string): boolean {
   const key = cursorModelKey(left);
   return key !== undefined && key === cursorModelKey(right);
+}
+
+/** The combination of traits a model id selects, or the row's default when it names none. */
+export function selectedVariant(
+  model: Pick<ProviderModel, "id" | "variants"> | undefined,
+  selected: string | null | undefined,
+): ModelVariant | undefined {
+  const variants = model?.variants;
+  if (!variants?.length) return undefined;
+  return (
+    (selected ? variants.find((variant) => variant.id === selected) ?? variants.find((variant) => sameCursorModel(variant.id, selected)) : undefined) ??
+    variants.find((variant) => variant.id === model!.id) ??
+    variants[0]
+  );
+}
+
+/** Current value of every trait. */
+export function traitValues(
+  model: Pick<ProviderModel, "id" | "variants" | "parameters"> | undefined,
+  selected: string | null | undefined,
+): Record<string, string> {
+  const variant = selectedVariant(model, selected);
+  const out: Record<string, string> = {};
+  for (const parameter of model?.parameters ?? []) out[parameter.id] = variant?.params[parameter.id] ?? parameter.default;
+  return out;
+}
+
+/** The model selector to send for the traits a thread already holds. Effort changes use this so they keep context and fast mode. */
+export function variantSelector(
+  model: Pick<ProviderModel, "id" | "variants"> | undefined,
+  selected: string | null | undefined,
+): string | undefined {
+  return selectedVariant(model, selected)?.id ?? model?.id;
+}
+
+/**
+ * The variant after changing one trait. A catalog need not offer every
+ * combination, so when the exact one is missing the closest keeps as many of
+ * the other traits as it can.
+ */
+export function changeTrait(
+  model: Pick<ProviderModel, "id" | "variants" | "parameters">,
+  selected: string | null | undefined,
+  parameter: string,
+  value: string,
+): ModelVariant | undefined {
+  const current = traitValues(model, selected);
+  let best: ModelVariant | undefined;
+  let bestScore = -1;
+  for (const variant of model.variants ?? []) {
+    if (variant.params[parameter] !== value) continue;
+    const score = Object.entries(current).filter(([id, other]) => id !== parameter && variant.params[id] === other).length;
+    if (score > bestScore) {
+      best = variant;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+/** How a trait value reads inside a sentence: `Fast`, `Fast off`, `1M context`. */
+function traitPhrase(parameter: ModelParameter, value: string): string {
+  const toggle = parameterSwitch(parameter);
+  if (toggle) return value === toggle.on ? parameter.label : `${parameter.label} off`;
+  const label = parameter.values.find((item) => item.value === value)?.label ?? value;
+  return `${label} ${parameter.label.toLowerCase()}`;
+}
+
+/**
+ * Why a trait value cannot be chosen with the other traits as they are, or
+ * null when it can. A catalog need not offer every combination (GPT-5.5 has
+ * no 1M with Fast), so the picker disables such options instead of changing
+ * another trait behind the user's back.
+ */
+export function traitUnavailableReason(
+  model: Pick<ProviderModel, "id" | "variants" | "parameters">,
+  selected: string | null | undefined,
+  parameter: string,
+  value: string,
+): string | null {
+  const variants = model.variants ?? [];
+  if (!variants.length) return null;
+  const current = traitValues(model, selected);
+  const others = Object.entries(current).filter(([id]) => id !== parameter);
+  if (variants.some((variant) => variant.params[parameter] === value && others.every(([id, other]) => variant.params[id] === other))) return null;
+  const target = model.parameters?.find((item) => item.id === parameter);
+  if (!target) return null;
+  const withValue = variants.filter((variant) => variant.params[parameter] === value);
+  // Name the traits that, on their own, rule the value out; fall back to all of them.
+  let blockers = others.filter(([id, other]) => !withValue.some((variant) => variant.params[id] === other));
+  if (!blockers.length) blockers = others;
+  const phrases = blockers.flatMap(([id, other]) => {
+    const item = model.parameters?.find((entry) => entry.id === id);
+    return item ? [traitPhrase(item, other)] : [];
+  });
+  const subject = traitPhrase(target, value);
+  const text = `${subject} isn't available${phrases.length ? ` with ${phrases.join(" and ")}` : ""}`;
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** A parameter that is a plain on/off choice reads as a switch. */
+export function parameterSwitch(parameter: Pick<ModelParameter, "values">): { on: string; off: string } | null {
+  const values = parameter.values.map((item) => item.value);
+  if (values.length !== 2) return null;
+  for (const [on, off] of [["true", "false"], ["on", "off"]] as const) {
+    if (values.includes(on) && values.includes(off)) return { on, off };
+  }
+  return null;
+}
+
+/**
+ * Traits that differ from the model's defaults, for the composer trigger:
+ * `1M · Fast` after the model name. A switch shows its label when on and
+ * `<label> off` when its default is on.
+ */
+export function traitSummary(
+  model: Pick<ProviderModel, "id" | "variants" | "parameters"> | undefined,
+  selected: string | null | undefined,
+): string | null {
+  if (!model?.parameters?.length) return null;
+  const values = traitValues(model, selected);
+  const parts: string[] = [];
+  for (const parameter of model.parameters) {
+    const value = values[parameter.id];
+    if (value === undefined || value === parameter.default) continue;
+    const toggle = parameterSwitch(parameter);
+    parts.push(toggle ? (value === toggle.on ? parameter.label : `${parameter.label} off`) : parameter.values.find((item) => item.value === value)?.label ?? value);
+  }
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/** A switch for fast mode (Claude Code's `fast`, Codex's speed tier). */
+export function isFastParameter(parameter: Pick<ModelParameter, "id" | "label" | "values">): boolean {
+  return !!parameterSwitch(parameter) && /fast|speed/i.test(`${parameter.id} ${parameter.label}`);
+}
+
+/**
+ * `traitSummary` split for the composer trigger: fast mode on reads as a bolt
+ * icon, every other changed trait (`1M`) as a muted label after the effort.
+ */
+export function triggerTraits(
+  model: Pick<ProviderModel, "id" | "variants" | "parameters"> | undefined,
+  selected: string | null | undefined,
+): { fast: boolean; labels: string[] } {
+  if (!model?.parameters?.length) return { fast: false, labels: [] };
+  const values = traitValues(model, selected);
+  let fast = false;
+  const labels: string[] = [];
+  for (const parameter of model.parameters) {
+    const value = values[parameter.id];
+    if (value === undefined || value === parameter.default) continue;
+    const toggle = parameterSwitch(parameter);
+    if (toggle && isFastParameter(parameter) && value === toggle.on) {
+      fast = true;
+      continue;
+    }
+    labels.push(toggle ? (value === toggle.on ? parameter.label : `${parameter.label} off`) : parameter.values.find((item) => item.value === value)?.label ?? value);
+  }
+  return { fast, labels };
 }
 
 function withoutContext(id: string) {
@@ -216,6 +407,34 @@ export interface FavoriteModel {
 
 export function isFavorite(favorites: readonly FavoriteModel[], kind: string, id: string, instance = "default"): boolean {
   return favorites.some((item) => item.kind === kind && item.id === id && (item.instance ?? "default") === instance);
+}
+
+/** Whether a favorite names this row, directly or through a variant id stored before models were folded into one row. */
+export function favoriteMatches(favorite: Pick<FavoriteModel, "id">, model: Pick<ProviderModel, "id" | "resolved_id" | "variants">): boolean {
+  if (favorite.id === model.id) return true;
+  if (!model.variants?.length) return false;
+  return model.resolved_id === favorite.id || model.variants.some((variant) => variant.id === favorite.id || sameCursorModel(variant.id, favorite.id));
+}
+
+export function isFavoriteModel(
+  favorites: readonly FavoriteModel[],
+  kind: string,
+  model: Pick<ProviderModel, "id" | "resolved_id" | "variants">,
+  instance = "default",
+): boolean {
+  return favorites.some((item) => item.kind === kind && (item.instance ?? "default") === instance && favoriteMatches(item, model));
+}
+
+/** Stars the model by its row id; unstarring also drops any older variant ids that resolve to it. */
+export function toggleFavoriteModel(
+  favorites: readonly FavoriteModel[],
+  kind: string,
+  model: Pick<ProviderModel, "id" | "resolved_id" | "variants">,
+  instance = "default",
+): FavoriteModel[] {
+  return isFavoriteModel(favorites, kind, model, instance)
+    ? favorites.filter((item) => item.kind !== kind || (item.instance ?? "default") !== instance || !favoriteMatches(item, model))
+    : [...favorites, { kind, id: model.id, ...(instance === "default" ? {} : { instance }) }];
 }
 
 /** Adds or removes a favorite; new favorites go last so the list keeps the order they were starred in. */

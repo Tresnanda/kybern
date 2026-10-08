@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "kybern",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "identifier": "dev.kybern.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -40,7 +40,7 @@
     ],
     "security": {
       "csp": "default-src 'self'; frame-src http: https:; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: http: https:; connect-src 'self' data: blob: ipc: http://ipc.localhost http: https: ws: wss:",
-      "devCsp": "default-src 'self' http://localhost:1420 ws://localhost:1420; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:1420; style-src 'self' 'unsafe-inline' http://localhost:1420; font-src 'self' data: http://localhost:1420; img-src 'self' data: blob: http: https:; connect-src 'self' data: blob: ipc: http://ipc.localhost http: https: ws: wss:"
+      "devCsp": "default-src 'self' http://localhost:1420 ws://localhost:1420; frame-src http: https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:1420; style-src 'self' 'unsafe-inline' http://localhost:1420; font-src 'self' data: http://localhost:1420; img-src 'self' data: blob: http: https:; connect-src 'self' data: blob: ipc: http://ipc.localhost http: https: ws: wss:"
     }
   },
   "bundle": {

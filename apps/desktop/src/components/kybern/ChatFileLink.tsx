@@ -8,6 +8,7 @@ import { ChatFileBaseContext } from "@/lib/chatFileContext"
 import { copyText } from "@/lib/hooks"
 import { openExternal } from "@/lib/tauri"
 import { activeRuntime, errorText } from "@/state/rpc"
+import { isPreviewablePath, openFileInPreview } from "@/state/previewSession"
 import type { FilesReadResult } from "@/protocol/types"
 import { CodeBlock, languageForPath, Markdown } from "./Markdown"
 
@@ -22,7 +23,11 @@ export function ChatFileLink({ href, children }: { href?: string; children?: Rea
       onClick={(event) => {
         event.preventDefault()
         if (target.kind === "external") void openExternal(target.url).catch((error) => toast.error("Unable to open link", { description: errorText(error) }))
-        else if (target.kind === "file" && threadId) setOpen(true)
+        // A linked mockup opens in the Preview tab; Option-click keeps the source dialog.
+        else if (target.kind === "file" && threadId) {
+          if (!event.altKey && isPreviewablePath(target.path, { svg: false })) void openFileInPreview(target.path, threadId)
+          else setOpen(true)
+        }
         else if (target.kind === "anchor") document.getElementById(target.id)?.scrollIntoView({ block: "nearest" })
         else toast.error(target.kind === "file" ? "Open this file from its conversation." : "This link cannot be opened.")
       }}>{children}</a>
@@ -71,6 +76,7 @@ function ChatFilePreview({ threadId, path, line, returnFocus, onClose }: { threa
       </DialogHeader>
       <div className="flex shrink-0 flex-wrap items-center gap-2 px-4 py-2">
         {markdown && <Button size="sm" variant="subtle" onClick={() => setRaw(!raw)}>{raw ? "Show preview" : "Show source"}</Button>}
+        {isPreviewablePath(path) && <Button size="sm" variant="subtle" onClick={() => { onClose(); void openFileInPreview(path, threadId) }}>Open in preview</Button>}
         <Button size="sm" variant="ghost" disabled={!file || file.binary} onClick={() => void copyText(file?.content ?? "")}>Copy contents</Button>
       </div>
       <div ref={body} className="min-h-0 flex-1 overflow-auto px-4 pb-4">

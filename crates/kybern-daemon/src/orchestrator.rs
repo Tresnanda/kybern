@@ -2184,12 +2184,31 @@ impl Orchestrator {
                 anyhow::ensure!(!object.contains_key("thread_id"), "HTML tools are bound to the current thread.");
                 object.insert("thread_id".into(), serde_json::json!(thread_id));
                 let params: methods::HtmlPublishParams = crate::app_tools::parse(serde_json::Value::Object(object))?;
-                let event =
-                    crate::visuals::publish(&self.inner.store, thread_id, turn_id, &params.html, &params.title, params.height).await?;
+                let event = crate::visuals::publish(
+                    &self.inner.store,
+                    &self.inner.paths,
+                    thread_id,
+                    turn_id,
+                    &params.html,
+                    &params.title,
+                    params.height,
+                )
+                .await?;
                 let EventPayload::HtmlPublished { visual } = &event.payload else { unreachable!() };
                 let result = serde_json::json!({"visual":visual,"message":"The visual is published inline. Add only what the page does not already explain."});
                 let _ = self.inner.events.send(event);
                 return Ok(result);
+            }
+            if name == crate::previews::agent::TOOL {
+                let roots = crate::previews::thread_roots(&self.inner.store, &thread);
+                let policy = crate::previews::GrantPolicy::new(&self.inner.paths.root);
+                let settings = self.inner.settings.get();
+                let clients = self.inner.preview_requests.receiver_count();
+                let outcome = crate::previews::agent::open(thread_id, &roots, &settings, &policy, arguments, clients)?;
+                if let Some(notification) = outcome.notify {
+                    let _ = self.inner.preview_requests.send(notification);
+                }
+                return Ok(outcome.result);
             }
             if crate::computer::ComputerUse::is_tool(name) {
                 let consent = ComputerConsent { orchestrator: self, thread_id, turn_id, live: live.clone() };
@@ -2759,6 +2778,10 @@ struct Inner {
     tasks_changed: tokio::sync::broadcast::Sender<methods::TaskItemsChangedNotification>,
     /// The project list after each change, forwarded as `projects.changed`.
     projects_changed: tokio::sync::broadcast::Sender<methods::ProjectsChangedNotification>,
+    /// Agent requests to show a page, forwarded as `previews.open_requested`.
+    preview_requests: tokio::sync::broadcast::Sender<methods::PreviewOpenRequestedNotification>,
+    /// Preview tickets, revoked when a thread is archived.
+    previews: Arc<crate::previews::tickets::PreviewTickets>,
     /// Account plan limits per provider, forwarded as `usage.limits.changed`.
     usage: crate::usage::UsageMonitor,
     /// Serializes task writes, including the run tracker that `emit` calls.
@@ -3040,6 +3063,8 @@ impl Orchestrator {
                 notes_changed: tokio::sync::broadcast::channel(1024).0,
                 tasks_changed: tokio::sync::broadcast::channel(1024).0,
                 projects_changed: tokio::sync::broadcast::channel(64).0,
+                preview_requests: tokio::sync::broadcast::channel(64).0,
+                previews: Arc::default(),
                 usage,
                 task_writes: std::sync::Mutex::new(()),
                 task_threads: std::sync::Mutex::new(task_threads),
@@ -3060,6 +3085,16 @@ impl Orchestrator {
         Arc::get_mut(&mut self.inner).expect("terminal manager must be installed before cloning the orchestrator").app_tools =
             crate::app_tools::AppTools::new(store, terminals);
         self
+    }
+
+    pub fn with_previews(mut self, previews: Arc<crate::previews::tickets::PreviewTickets>) -> Self {
+        Arc::get_mut(&mut self.inner).expect("preview tickets must be installed before cloning the orchestrator").previews = previews;
+        self
+    }
+
+    /// Agent requests to show a page, for forwarding to connected clients.
+    pub fn subscribe_preview_requests(&self) -> tokio::sync::broadcast::Receiver<methods::PreviewOpenRequestedNotification> {
+        self.inner.preview_requests.subscribe()
     }
 
     pub fn with_native_tools(mut self, native_tools: crate::native_tools_mcp::NativeToolsGateway) -> Self {
@@ -3907,6 +3942,7 @@ impl Orchestrator {
             }
             t.status = ThreadStatus::Archived;
             self.update_thread(t)?;
+            self.inner.previews.revoke_thread(thread_id);
             self.emit(thread_id, None, EventPayload::ThreadArchived)?;
             self.subagents_archive_below(thread_id)?;
         }
@@ -5374,6 +5410,7 @@ impl Orchestrator {
                 "kybern_workspace_diff",
                 "kybern_html_preview",
                 "kybern_html_publish",
+                "kybern_preview_open",
                 "kybern_threads_search",
                 "kybern_thread_read",
                 "kybern_thread_send",
@@ -7606,7 +7643,7 @@ mod tests {
             .unwrap();
         fixture.tool(&other, &other_live, "k2", "kybern_task_claim", json!({"task": second.key})).await.unwrap();
         let error = fixture.tool(&thread, &live, "k3", "kybern_task_claim", json!({"task": second.key})).await.unwrap_err();
-        assert!(error.to_string().contains("already works on"), "{error}");
+        assert!(error.to_string().contains("already has a run in progress in another chat"), "{error}");
 
         // An agent's task lands in the Inbox, attributed, and is fully editable.
         let filed = fixture
@@ -7806,6 +7843,95 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("newer run"), "{error}");
         assert_eq!(fixture.store.task_item_get(task.id).unwrap().unwrap().status, TaskStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn one_chat_claims_several_tasks_and_hands_them_over_together_or_one_by_one() {
+        let fixture = Fixture::new();
+        let (thread, live) = fixture.tool_thread(PermissionMode::FullAccess).await;
+        let (a, b, c) = (
+            fixture.user_task("First", methods::TaskStatus::Todo),
+            fixture.user_task("Second", methods::TaskStatus::Todo),
+            fixture.user_task("Third", methods::TaskStatus::Todo),
+        );
+        let status = |task: &methods::TaskItem| fixture.store.task_item_get(task.id).unwrap().unwrap().status;
+
+        // A list claims every task, and the chat is the run of each.
+        let claimed = fixture.tool(&thread, &live, "m1", "kybern_task_claim", json!({"tasks": [a.key, b.key]})).await.unwrap();
+        assert_eq!(claimed["claimed"].as_array().unwrap().len(), 2);
+        for task in [&a, &b] {
+            let current = fixture.store.task_item_get(task.id).unwrap().unwrap();
+            assert_eq!((current.status, current.runs.last().map(|run| run.thread_id)), (methods::TaskStatus::Running, Some(thread.id)));
+        }
+        // A later claim in the same chat adds a third task; claiming again is idempotent.
+        fixture.tool(&thread, &live, "m2", "kybern_task_claim", json!({"task": c.key})).await.unwrap();
+        fixture.tool(&thread, &live, "m3", "kybern_task_claim", json!({"tasks": [c.key, a.key]})).await.unwrap();
+        assert_eq!(fixture.store.task_runs_for_thread(thread.id).unwrap().len(), 3);
+        assert_eq!(fixture.store.task_item_get(a.id).unwrap().unwrap().runs.len(), 1, "no second run");
+
+        // One task is handed over early; claiming another reopens only the claimed one.
+        let reviewed =
+            fixture.tool(&thread, &live, "m4", "kybern_task_update", json!({"task": a.key, "status": "needs_review"})).await.unwrap();
+        assert_eq!(reviewed["status"], json!("needs_review"));
+        assert_eq!(
+            (status(&a), status(&b), status(&c)),
+            (methods::TaskStatus::NeedsReview, methods::TaskStatus::Running, methods::TaskStatus::Running)
+        );
+        fixture.tool(&thread, &live, "m5", "kybern_task_update", json!({"task": b.key, "status": "needs_review"})).await.unwrap();
+        fixture.tool(&thread, &live, "m6", "kybern_task_claim", json!({"task": c.key})).await.unwrap();
+        assert_eq!(
+            (status(&a), status(&b), status(&c)),
+            (methods::TaskStatus::NeedsReview, methods::TaskStatus::NeedsReview, methods::TaskStatus::Running)
+        );
+        // Reopening one task leaves the others' handover alone; reclaiming it comes back Running.
+        fixture.tool(&thread, &live, "m7", "kybern_task_claim", json!({"task": b.key})).await.unwrap();
+        assert_eq!((status(&a), status(&b)), (methods::TaskStatus::NeedsReview, methods::TaskStatus::Running));
+
+        // The turn's end moves the tasks still Running, and only those, to Needs review.
+        let turn = live.turn.lock().await.as_ref().map(|turn| turn.id);
+        fixture
+            .orchestrator
+            .emit(
+                thread.id,
+                turn,
+                EventPayload::TurnCompleted {
+                    stop_reason: StopReason::Completed,
+                    usage: Usage::default(),
+                    cost_usd: None,
+                    duration_ms: 1,
+                    terminal_message_id: None,
+                },
+            )
+            .unwrap();
+        for task in [&a, &b, &c] {
+            assert_eq!(status(task), methods::TaskStatus::NeedsReview, "{}", task.key);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_list_claim_is_all_or_none_and_refuses_closed_or_busy_tasks() {
+        let fixture = Fixture::new();
+        let (thread, live) = fixture.tool_thread(PermissionMode::FullAccess).await;
+        let (other, other_live) = fixture.tool_thread(PermissionMode::FullAccess).await;
+        let (a, busy, closed) = (
+            fixture.user_task("Free", methods::TaskStatus::Todo),
+            fixture.user_task("Busy", methods::TaskStatus::Todo),
+            fixture.user_task("Closed", methods::TaskStatus::Done),
+        );
+        fixture.tool(&other, &other_live, "o1", "kybern_task_claim", json!({"task": busy.key})).await.unwrap();
+
+        let error = fixture.tool(&thread, &live, "l1", "kybern_task_claim", json!({"tasks": [a.key, busy.key]})).await.unwrap_err();
+        assert!(error.to_string().contains("already has a run in progress in another chat"), "{error}");
+        let error = fixture.tool(&thread, &live, "l2", "kybern_task_claim", json!({"tasks": [a.key, closed.key]})).await.unwrap_err();
+        assert!(error.to_string().contains("closed"), "{error}");
+        let error = fixture.tool(&thread, &live, "l3", "kybern_task_claim", json!({"task": a.key, "tasks": [a.key]})).await.unwrap_err();
+        assert!(error.to_string().contains("either task or tasks"), "{error}");
+        let keys: Vec<String> = (0..11).map(|_| a.key.clone()).collect();
+        let error = fixture.tool(&thread, &live, "l4", "kybern_task_claim", json!({"tasks": keys})).await.unwrap_err();
+        assert!(error.to_string().contains("at most 10"), "{error}");
+        let free = fixture.store.task_item_get(a.id).unwrap().unwrap();
+        assert!(free.runs.is_empty() && free.status == methods::TaskStatus::Todo, "nothing was claimed");
+        assert!(fixture.store.task_runs_for_thread(thread.id).unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -8769,6 +8895,43 @@ mod tests {
         for name in ["kybern_thread_send", "kybern_workspace_diff", "kybern_html_preview", "kybern_html_publish"] {
             assert_eq!(guide.contains(name), bridge.has_tool(name), "the guide must describe exactly the tools the session has: {name}");
         }
+    }
+
+    #[tokio::test]
+    async fn preview_open_tool_reports_status_notifies_clients_and_archive_revokes_tickets() {
+        let fixture = Fixture::new();
+        // The fixture project is the data directory, which previews never serve.
+        let work = std::env::temp_dir().join(format!("kybern-preview-tool-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&work).unwrap();
+        let work = work.canonicalize().unwrap();
+        std::fs::write(work.join("mock.html"), "<p>mock</p>").unwrap();
+        let mut thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Pi);
+        thread.cwd = work.to_string_lossy().into_owned();
+        fixture.orchestrator.inner.store.thread_upsert(&thread).unwrap();
+        let (live, _) = fixture.active_app_tool_session(&thread).await;
+        let call = |id: &'static str, args: serde_json::Value| {
+            fixture.orchestrator.execute_native_app_tool_call(thread.id, live.session_instance_id, id, "kybern_preview_open", args)
+        };
+        // Nobody is listening yet.
+        assert_eq!(call("p0", json!({"target": "mock.html"})).await.unwrap()["status"], "no_client");
+        let mut clients = fixture.orchestrator.subscribe_preview_requests();
+        let shown = call("p1", json!({"target": "mock.html", "title": "Mock"})).await.unwrap();
+        assert_eq!(shown["status"], "shown");
+        let note = clients.try_recv().unwrap();
+        assert_eq!((note.thread_id, note.title.as_deref(), note.requested_by_agent), (thread.id, Some("Mock"), true));
+        assert!(note.target.ends_with("mock.html") && std::path::Path::new(&note.target).is_absolute());
+        assert_eq!(call("p2", json!({"target": "http://localhost:5173"})).await.unwrap()["status"], "shown");
+        assert_eq!(call("p3", json!({"target": "https://example.com/docs"})).await.unwrap()["status"], "opens_in_browser");
+        let error = call("p4", json!({"target": "mock.html", "thread_id": Uuid::now_v7()})).await.unwrap_err();
+        assert!(error.to_string().contains("bound to the current thread"), "{error}");
+        assert!(call("p5", json!({"target": "mock.html", "allow_folder": true})).await.is_err(), "agents cannot grant folders");
+        // Archiving a thread revokes its preview tickets.
+        let ticket =
+            fixture.orchestrator.inner.previews.mint(crate::previews::tickets::TicketKind::Files { root: work.clone() }, thread.id, None);
+        assert!(fixture.orchestrator.inner.previews.lookup(&ticket).is_some());
+        fixture.orchestrator.archive_thread(thread.id).await.unwrap();
+        assert!(fixture.orchestrator.inner.previews.lookup(&ticket).is_none());
+        let _ = std::fs::remove_dir_all(&work);
     }
 
     #[tokio::test]

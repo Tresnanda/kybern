@@ -3,13 +3,14 @@
 // diff background tokens. Shared by the dock and the inline "Edited N files"
 // card in the transcript.
 
-import { useMemo, useState } from "react"
+import { Fragment, memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 
 import { DisclosureChevron } from "@/components/kit/DisclosureChevron"
 import { DiffStatLabel } from "@/components/kit/chat/DiffStatLabel"
 import { FileEntryIcon } from "@/components/kit/chat/FileEntryIcon"
 import type { DiffHunk, FileDiff } from "@/lib/diff"
 import { basename } from "@/lib/format"
+import { observeResizeFrame } from "@/lib/resizeObserver"
 import { cn } from "@/lib/utils"
 
 const ADD_BG = "bg-[color-mix(in_srgb,var(--background)_92%,var(--success))]"
@@ -18,6 +19,26 @@ const DEL_BG = "bg-[color-mix(in_srgb,var(--background)_92%,var(--destructive))]
 const DEL_NUM_BG = "bg-[color-mix(in_srgb,var(--background)_88%,var(--destructive))]"
 const SEP_BG = "bg-[color-mix(in_srgb,var(--background)_95%,var(--foreground))]"
 export type DiffLineSelect = (line: number, side: "LEFT" | "RIGHT") => void
+/** A node rendered in its own row right after a line (inline review comments). */
+export interface DiffAnnotation {
+  key: string
+  line: number
+  side: "LEFT" | "RIGHT"
+  node: ReactNode
+}
+const NO_ANNOTATIONS: readonly DiffAnnotation[] = []
+
+/** The annotations that land in one hunk, so unannotated hunks keep their memoized rows. */
+function annotationsIn(hunk: DiffHunk, annotations: readonly DiffAnnotation[] | undefined): readonly DiffAnnotation[] {
+  if (!annotations?.length) return NO_ANNOTATIONS
+  const inside = annotations.filter((a) => hunk.lines.some((l) => annotationsAfter([a], l.kind, l.oldNo, l.newNo).length > 0))
+  return inside.length ? inside : NO_ANNOTATIONS
+}
+
+function annotationsAfter(annotations: readonly DiffAnnotation[], kind: "add" | "del" | "ctx", oldNo?: number | null, newNo?: number | null) {
+  if (annotations.length === 0) return annotations
+  return annotations.filter((a) => (a.side === "LEFT" ? kind !== "add" && oldNo === a.line : kind !== "del" && newNo === a.line))
+}
 
 const DIFF_LINES_BATCH = 600
 
@@ -52,7 +73,8 @@ export function FileDiffHeader({ file, open, onToggle, trailing }: { file: FileD
   )
 }
 
-function HunkRows({ hunk, first, onLineSelect }: { hunk: DiffHunk; first: boolean; onLineSelect?: DiffLineSelect }) {
+// Memoized on the hunk. Only hunks holding an annotation re-render, since their nodes are fresh elements.
+const HunkRows = memo(function HunkRows({ hunk, first, onLineSelect, annotations = NO_ANNOTATIONS }: { hunk: DiffHunk; first: boolean; onLineSelect?: DiffLineSelect; annotations?: readonly DiffAnnotation[] }) {
   return (
     <>
       <tr className={cn(SEP_BG, "font-system-ui text-muted-foreground")}>
@@ -64,7 +86,8 @@ function HunkRows({ hunk, first, onLineSelect }: { hunk: DiffHunk; first: boolea
         </td>
       </tr>
       {hunk.lines.map((l, i) => (
-        <tr key={i} className={cn(l.kind === "add" && ADD_BG, l.kind === "del" && DEL_BG, l.kind === "ctx" && "hover:bg-[color-mix(in_srgb,var(--background)_96%,var(--foreground))]")}>
+        <Fragment key={i}>
+        <tr className={cn(l.kind === "add" && ADD_BG, l.kind === "del" && DEL_BG, l.kind === "ctx" && "hover:bg-[color-mix(in_srgb,var(--background)_96%,var(--foreground))]")}>
           <td className={cn("w-px min-w-[3ch] pr-1 pl-3 text-right align-top font-system-ui tabular-nums text-muted-foreground/45 select-none", l.kind === "add" && ADD_NUM_BG, l.kind === "del" && DEL_NUM_BG)}>
             {onLineSelect && l.oldNo != null ? <button type="button" aria-label={`Comment on original line ${l.oldNo}`} onClick={() => onLineSelect(l.oldNo!, "LEFT")} className="w-full rounded-sm hover:text-foreground focus-visible:outline focus-visible:outline-ring">{l.oldNo}</button> : l.oldNo ?? ""}
           </td>
@@ -78,13 +101,29 @@ function HunkRows({ hunk, first, onLineSelect }: { hunk: DiffHunk; first: boolea
             {l.text}
           </td>
         </tr>
+        {annotationsAfter(annotations, l.kind, l.oldNo, l.newNo).map((a) => (
+          <tr key={a.key}>
+            <td colSpan={3} className="p-0 font-system-ui whitespace-normal">{a.node}</td>
+          </tr>
+        ))}
+        </Fragment>
       ))}
     </>
   )
-}
+}, (prev, next) => prev.hunk === next.hunk && prev.first === next.first && prev.onLineSelect === next.onLineSelect && !prev.annotations?.length && !next.annotations?.length)
 
-export function FileDiffBody({ file, truncated = false, onLineSelect }: { file: FileDiff; truncated?: boolean; onLineSelect?: DiffLineSelect }) {
+export function FileDiffBody({ file, truncated = false, onLineSelect, annotations }: { file: FileDiff; truncated?: boolean; onLineSelect?: DiffLineSelect; annotations?: readonly DiffAnnotation[] }) {
   const [visibleLines, setVisibleLines] = useState(DIFF_LINES_BATCH)
+  const scroller = useRef<HTMLDivElement>(null)
+  const annotated = !!annotations?.length
+  // Annotation cards stay inside the visible width while the code scrolls sideways.
+  useEffect(() => {
+    const el = scroller.current
+    if (!el || !annotated) return
+    const write = () => el.style.setProperty("--pr-diff-viewport", `${el.clientWidth}px`)
+    write()
+    return observeResizeFrame(el, write)
+  }, [annotated])
   const totalLines = useMemo(() => file.hunks.reduce((total, hunk) => total + hunk.lines.length, 0), [file.hunks])
   const visibleHunks = useMemo(() => {
     let remaining = visibleLines
@@ -102,11 +141,11 @@ export function FileDiffBody({ file, truncated = false, onLineSelect }: { file: 
   if (file.hunks.length === 0) return <p className="px-3 py-2 text-[11px] text-muted-foreground/75">No textual changes.</p>
   return (
     <>
-      <div className="selectable overflow-x-auto">
+      <div ref={scroller} className="selectable overflow-x-auto">
         <table className="w-full border-collapse font-chat-code text-[length:var(--app-font-size-chat-code,11px)] leading-[1.65] text-foreground">
           <tbody>
             {visibleHunks.map((h, i) => (
-              <HunkRows key={i} hunk={h} first={i === 0} onLineSelect={onLineSelect} />
+              <HunkRows key={i} hunk={h} first={i === 0} onLineSelect={onLineSelect} annotations={annotationsIn(h, annotations)} />
             ))}
           </tbody>
         </table>
