@@ -1202,6 +1202,54 @@ export interface ThreadNotes {
 
 // ---- notes ----
 
+// ---- in-app browser preview ----
+export type PreviewTargetInfo =
+  | { kind: "file"; path: string; root: string; in_project: boolean }
+  | { kind: "server"; url: string; port: number }
+  | { kind: "external"; url: string };
+export interface PreviewFolderRequest { folder: string; grantable: boolean }
+export interface PreviewOpenResult {
+  target: PreviewTargetInfo;
+  ticket?: string;
+  /** HTTP path to load, e.g. `/preview-files/{ticket}/mock/index.html`. */
+  path?: string;
+  needs_permission?: PreviewFolderRequest;
+}
+export type PreviewProbeError = "connection_refused" | "timed_out" | "dns" | "tls" | "http_status" | "not_http";
+export interface PreviewFrameBlock { header: "x-frame-options" | "content-security-policy" | string; value: string }
+export interface PreviewProbeResult {
+  reachable: boolean;
+  status?: number;
+  error?: PreviewProbeError;
+  blocked_by?: PreviewFrameBlock;
+  title?: string;
+  location?: string;
+}
+export interface PreviewServer {
+  url: string;
+  port: number;
+  host: string;
+  pid?: number;
+  process_name?: string;
+  cwd?: string;
+  title?: string;
+  favicon?: string;
+  framework?: string;
+  in_project?: boolean;
+}
+export interface PreviewServersListResult {
+  servers: PreviewServer[];
+  scanned_at: string;
+  method: "lsof" | "proc" | "common_ports" | string;
+}
+export const PREVIEW_OPEN_REQUESTED_NOTIFICATION = "previews.open_requested";
+export interface PreviewOpenRequestedNotification {
+  thread_id: ThreadId;
+  target: string;
+  title?: string;
+  requested_by_agent: boolean;
+}
+
 export const NOTES_CHANGED_NOTIFICATION = "notes.changed";
 
 export type NoteId = Uuid;
@@ -1656,6 +1704,8 @@ export interface Settings {
   orchestration: OrchestrationSettings;
   /** Give new agent sessions a short guide to Kybern. Defaults to on. */
   tell_agents_about_kybern: boolean;
+  /** Folders outside a project the user allowed Preview to serve files from. */
+  preview_allowed_folders?: string[];
 }
 
 /** Limits for `kybern_agent_delegate`, read each time an agent delegates. */
@@ -2110,6 +2160,10 @@ export interface Methods {
   "threads.visuals.read": [{ thread_id: ThreadId; visual_id: Uuid; max_bytes?: number | null }, { html: string; truncated?: boolean }];
   "threads.visuals.frame": [{ thread_id: ThreadId; visual_id: Uuid; max_bytes?: number | null }, { ticket: string }];
   "threads.visuals.revoke": [{ thread_id: ThreadId; ticket: string }, Record<string, never>];
+  "previews.open": [{ thread_id: ThreadId; target: string; allow_folder?: boolean; proxy?: boolean }, PreviewOpenResult];
+  "previews.close": [{ ticket: string }, Record<string, never>];
+  "previews.probe": [{ url: string }, PreviewProbeResult];
+  "previews.servers.list": [{ thread_id?: ThreadId | null }, PreviewServersListResult];
   "threads.artifacts.list": [{ thread_id: ThreadId; before_seq?: number | null; limit?: number }, { artifacts: ArtifactTool[]; next_before_seq: number | null }];
   "threads.artifacts.preview": [{ thread_id: ThreadId; path: string }, { ticket: string }];
   "threads.artifacts.read": [{ thread_id: ThreadId; path: string }, FilesReadResult];

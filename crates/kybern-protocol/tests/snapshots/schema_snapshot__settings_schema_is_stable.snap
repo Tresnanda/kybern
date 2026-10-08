@@ -121,6 +121,13 @@ expression: schema_for!(Settings)
       "description": "Give new agent sessions a short guide to Kybern: images, notes and\ntasks, other threads, helpers. Applies to sessions started after the change.",
       "type": "boolean",
       "default": true
+    },
+    "preview_allowed_folders": {
+      "description": "Folders outside a project the user allowed the Preview panel to serve\nfiles from. Canonical absolute paths; a grant covers descendants.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "$defs": {
