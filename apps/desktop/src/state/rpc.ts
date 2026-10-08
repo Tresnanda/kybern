@@ -1071,6 +1071,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       return { threads }
     })
     useStore.getState().removeThreadFromSplit(threadId)
+    if (useStore.getState().previews[threadId]) useStore.getState().closePreview(threadId)
     const archived = useStore.getState().threads[threadId]
     if (archived?.worktree && !archived.delegation && !archived.subagent) {
       void rpc().call("threads.worktree.inspect", { thread_id: threadId }).then((inspection) => {
