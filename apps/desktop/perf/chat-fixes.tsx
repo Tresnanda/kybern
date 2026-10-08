@@ -23,7 +23,7 @@ function check(value: unknown, message: string): asserts value { if (!value) thr
 async function waitFor(condition: () => unknown, message: string) {
   const deadline = performance.now() + 5000
   while (!condition()) {
-    check(performance.now() < deadline, message)
+    check(performance.now() < deadline, message + " DIAG " + JSON.stringify({dialogs:[...document.querySelectorAll('[role="dialog"]')].map(n=>(n.getAttribute("aria-label")??"")+"|"+n.className.slice(0,80)+"|"+(n.textContent??"").slice(0,60)),active:document.activeElement?.outerHTML.slice(0,160),hasFocus:document.hasFocus(),hidden:document.hidden,dock:!!document.querySelector('[data-workspace-dock]')}))
     await sleep(20)
   }
 }
@@ -351,10 +351,16 @@ async function run() {
   useEnvironments.setState({ error: null, switching: false })
   for (const width of [900, 1300]) {
     flushSync(() => view.render(<ThemeProviderContext value={{ theme: "dark", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><div style={{ width }}><App /></div></ThemeProviderContext>))
+    // The dock springs between overlay and inline mode; wait for the settled layout instead of a fixed delay.
+    const layout = () => {
+      const chat = document.querySelector<HTMLElement>('[data-workspace-chat]'), dock = document.querySelector<HTMLElement>('[data-workspace-dock]')
+      return { chat, dock, chatWidth: chat?.getBoundingClientRect().width ?? 0, dockWidth: dock?.getBoundingClientRect().width ?? 0 }
+    }
+    const settled = () => { const { chat, dock, chatWidth, dockWidth } = layout(); return chat && dock && chatWidth >= 319 && dockWidth >= 415 && (dock.dataset.overlay === "true") === (width === 900) }
     await sleep(600)
-    const chat = document.querySelector<HTMLElement>('[data-workspace-chat]')!
-    const dock = document.querySelector<HTMLElement>('[data-workspace-dock]')!
-    check(chat?.getBoundingClientRect().width >= 319, `${width}: dock squeezed the chat below minimum width`)
+    if (!settled()) await waitFor(settled, `${width}: dock layout did not settle ${JSON.stringify({ chat: layout().chatWidth, dock: layout().dockWidth, overlay: layout().dock?.dataset.overlay })}`).catch(() => {})
+    const { chat, dock } = layout() as { chat: HTMLElement; dock: HTMLElement }
+    check(chat?.getBoundingClientRect().width >= 319, `${width}: dock squeezed the chat below minimum width (${JSON.stringify({ chat: layout().chatWidth, dock: layout().dockWidth })})`)
     check(dock?.getBoundingClientRect().width >= 415, `${width}: dock lost its usable width`)
     check((dock.dataset.overlay === "true") === (width === 900), `${width}: incorrect responsive dock mode`)
     check(chat.inert === (width === 900), `${width}: covered chat remains interactive`)

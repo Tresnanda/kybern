@@ -233,7 +233,11 @@ async function run() {
   await sleep(80); check(!loading.querySelector(".visual-reply__skeleton"),"No skeleton before 200ms")
   await waitFor(()=>loading.querySelector(".visual-reply__skeleton"),"Skeleton appears after the delay",1000)
   const skeleton = loading.querySelector<HTMLElement>(".visual-reply__skeleton")!
-  check(getComputedStyle(skeleton).animationName==="visual-skeleton-breathe" && skeleton.getAnimations().every(animation=>(animation as CSSAnimation).animationName==="visual-skeleton-breathe"),"Skeleton breathes with the opacity-only keyframes")
+  // Reduced motion (a runner setting) turns the breathing off; otherwise it is the only animation.
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches
+  const skeletonAnimation = getComputedStyle(skeleton).animationName
+  const skeletonAnimations = skeleton.getAnimations().map(animation=>(animation as CSSAnimation).animationName ?? animation.constructor.name)
+  check(reducedMotion ? skeletonAnimation==="none" && skeletonAnimations.length===0 : skeletonAnimation==="visual-skeleton-breathe" && skeletonAnimations.every(name=>name==="visual-skeleton-breathe"),`Skeleton breathes with the opacity-only keyframes ${JSON.stringify({reducedMotion,skeletonAnimation,skeletonAnimations})}`)
   await sleep(100); await screenshot("visuals-loading-dark")
   await waitFor(()=>loading.dataset.status==="ready","Delayed visual loads"); check(!loading.querySelector(".visual-reply__skeleton"),"Skeleton unmounts when ready")
   transport.mintDelay = 0
