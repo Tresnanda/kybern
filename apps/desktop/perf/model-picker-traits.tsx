@@ -1,5 +1,5 @@
 // The model picker over a synthetic Cursor catalog: one row per model with
-// context and fast traits. No daemon or provider. `?theme=dark|light`, `?model=<index>` (5 is GPT-5.5, which lacks 1M with Fast), `?variant=<n>` for that model's n-th combination.
+// context and fast traits. No daemon or provider. `?theme=dark|light`, `?model=<index>` (1 Opus: 1M + Fast; 3 Grok: effort only; 4 Composer: fast only; 5 GPT-5.5 lacks 1M with Fast), `?variant=<n>` for that model's n-th combination.
 import { useState } from "react"
 import { createRoot } from "react-dom/client"
 import { ModelPicker } from "../src/components/kybern/ModelPicker"
@@ -41,8 +41,14 @@ const models: ProviderModel[] = [
   { id: "default", display_name: "Default", description: "Cursor’s default model", is_default: true },
   traited("claude-opus-5-5", "Claude Opus 5.5", ["low", "medium", "high", "max"]),
   traited("claude-sonnet-5", "Claude Sonnet 5", ["low", "medium", "high"]),
+  // Effort only: no traits, so no bolt.
   { id: "grok-4.7", display_name: "Grok 4.7", efforts: ["low", "medium", "high"], default_effort: "medium" },
-  { id: "composer-2", display_name: "Composer 2" },
+  // Fast but no effort levels: the slim card.
+  {
+    id: "composer-2", display_name: "Composer 2",
+    parameters: [{ id: "fast", label: "Fast", default: "false", values: [{ value: "false", label: "Off" }, { value: "true", label: "On" }] }],
+    variants: [["false", "Standard"], ["true", "Fast"]].map(([fast]) => ({ id: `composer-2:${fast}`, params: { fast: fast! } })),
+  },
   // GPT-like: effort travels as `reasoning`, and Cursor offers no 1M context with Fast.
   traited("gpt-5.5", "GPT-5.5", ["low", "medium", "high", "xhigh"], undefined, [["300000", "false"], ["300000", "true"], ["1000000", "false"]], "reasoning"),
   { id: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", efforts: ["low", "medium", "high"], default_effort: "medium" },
@@ -64,6 +70,7 @@ function Fixture() {
       <ModelPicker
         provider={{ kind: "cursor", instance: "default" }}
         providers={[status]}
+        accounts={[]}
         model={model}
         effort={effort}
         canPickModel
