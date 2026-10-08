@@ -23,7 +23,7 @@ import { COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME, COMPOSER_PICKER_MODEL_LIST_SCR
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { useLocalStorage } from "@/lib/hooks"
 import { PROVIDER_LABEL, formatEffort, isMac, mod } from "@/lib/format"
-import { ChevronRightIcon, FastModeIcon, FastModeOutlineIcon, RotateCcwIcon, SearchIcon, StarFilledIcon, StarIcon } from "@/lib/kit/icons"
+import { ChevronRightIcon, FastModeIcon, FastModeOutlineIcon, ResetIcon, SearchIcon, StarFilledIcon, StarIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import { followLine, pickerTabs, type PickerTab } from "@/lib/accountUi"
 import type { AccountSummary, ModelParameter, ProviderInstance, ProviderKind, ProviderModel, ProviderStatus } from "@/protocol"
@@ -664,9 +664,9 @@ function ResetButton({ busy, onReset }: { busy: boolean; onReset: () => void }) 
             onClick={() => {
               if (!busy) onReset()
             }}
-            className={cn(CARD_ICON_BUTTON_CLASS_NAME, "text-muted-foreground/60 hover:text-foreground")}
+            className={cn(CARD_ICON_BUTTON_CLASS_NAME, "text-muted-foreground/60 hover:text-[var(--effort-accent)]")}
           >
-            <RotateCcwIcon className="size-3.5" aria-hidden />
+            <ResetIcon className="size-4" aria-hidden />
           </button>
         }
       />

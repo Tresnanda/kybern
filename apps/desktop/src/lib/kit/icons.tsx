@@ -57,6 +57,7 @@ import {
   PlusSignIcon as HiPlus,
   RefreshIcon as HiRefresh,
   RotateLeft01Icon as HiRotateCcw,
+  Refresh01Icon as HiResetArc,
   StarIcon as HiStar,
   Sun03Icon as HiSun,
   TextWrapIcon as HiTextWrap,
@@ -356,6 +357,9 @@ export const Plus = hugeIcon(HiPlus);
 export const PlusIcon = hugeIcon(HiPlus);
 export const RefreshCwIcon = hugeIcon(HiRefresh);
 export const RotateCcwIcon = hugeIcon(HiRotateCcw);
+// Clean counter-clockwise arrow (↺) for "reset to default" controls.
+const ResetArc = hugeIcon(HiResetArc);
+export const ResetIcon: LucideIcon = (props) => <ResetArc {...props} className={cn(props.className, "-scale-x-100")} />;
 export const Rows3Icon = hugeIcon(HiRows3);
 export const SearchIcon: LucideIcon = hugeIcon(HcSearch);
 // Single source for the settings gear.
