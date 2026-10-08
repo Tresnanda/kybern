@@ -13,22 +13,24 @@ import type { ProviderKind } from "@/protocol"
 export { ACCOUNT_COLORS, ACCOUNT_COLOR_LABELS, accountDisplayName, nextFreeColor, type AccountColor } from "@/lib/accounts"
 
 /**
- * An 8px dot with a ring in the surface color, so it reads as cut out of the
- * agent mark. Position it with `absolute -end-0.5 -bottom-0.5` (AccountMarkStack does).
- * Set `--account-dot-ring` on a parent when the surface is not the page background.
+ * The account's color as a small dot. It never sits on an agent mark: beside a
+ * mark use AccountMarkStack, which places it at the mark's top-right.
  */
 export function AccountDot({ color, className }: { color?: string | null; className?: string }) {
   const fill = accountColorVar(color)
   if (!fill) return null
-  return <span aria-hidden data-account-dot={color} className={cn("size-2 shrink-0 rounded-full ring-2 ring-[color:var(--account-dot-ring,var(--color-background-elevated-primary-opaque))]", className)} style={{ backgroundColor: fill }} />
+  return <span aria-hidden data-account-dot={color} className={cn("size-1.5 shrink-0 rounded-full", className)} style={{ backgroundColor: fill }} />
 }
 
-/** The agent mark with the account's dot at its bottom-right. */
+/**
+ * The agent mark with the account's dot beside it at the top-right, never on
+ * the mark. The CLI account and accounts without a color show the mark alone.
+ */
 export function AccountMarkStack({ kind, color, size = 14, className }: { kind: ProviderKind; color?: string | null; size?: number; className?: string }) {
   return (
-    <span className={cn("relative inline-flex shrink-0", className)}>
+    <span className={cn("inline-flex shrink-0 items-start", className)}>
       <ProviderMark kind={kind} size={size} />
-      <AccountDot color={color} className="absolute -end-0.5 -bottom-0.5" />
+      <AccountDot color={color} className="ms-px" />
     </span>
   )
 }

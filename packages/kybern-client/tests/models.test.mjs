@@ -16,6 +16,7 @@ import {
   toggleFavorite,
   toggleFavoriteModel,
   traitSummary,
+  triggerTraits,
   traitValues,
   variantSelector,
 } from "../src/models.ts";
@@ -170,6 +171,8 @@ test("the trigger shows only traits that differ from the default", () => {
   assert.equal(traitSummary(opus, opus.id), null);
   assert.equal(traitSummary(opus, opus.variants[2].id), "1M");
   assert.equal(traitSummary(opus, opus.variants[3].id), "1M · Fast");
+  assert.deepEqual(triggerTraits(opus, opus.id), { fast: false, labels: [] });
+  assert.deepEqual(triggerTraits(opus, opus.variants[3].id), { fast: true, labels: ["1M"] }, "fast reads as the bolt, context as a label");
   assert.equal(traitSummary(opus, opus.variants[1].id), "Fast");
   assert.equal(traitSummary({ id: "x" }, "x"), null);
   const defaultsOn = { ...opus, parameters: [{ ...opus.parameters[1], default: "true" }], variants: [{ id: "a", params: { fast: "false" } }] };

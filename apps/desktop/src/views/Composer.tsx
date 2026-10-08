@@ -1,5 +1,6 @@
 import { ComposerImageAttachment } from "@/components/kybern/ComposerImageAttachment"
-import { AccountMarkStack } from "@/components/kybern/accounts/AccountMark"
+import { ComposerModelTriggerLabel } from "@/components/kybern/ComposerModelTriggerLabel"
+import { isCliInstance } from "@/lib/accounts"
 import { ComposerStatusGlyph } from "@/components/kybern/ComposerStatusGlyph"
 import { accountsOfKind } from "@/lib/accountUi"
 import { useAccounts } from "@/state/accounts"
@@ -36,7 +37,6 @@ import {
   COMPOSER_FOOTER_ROW_CLASS_NAME,
   COMPOSER_INPUT_SHELL_CLASS_NAME,
   COMPOSER_INPUT_SURFACE_CLASS_NAME,
-  COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
   COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME,
   RUNTIME_AUTO_ACCENT_CLASS_NAME,
@@ -78,7 +78,7 @@ import {
   type MentionKind,
 } from "./composerMentions"
 import { SendCancelled } from "./sendCancelled"
-import { findModel, modelQualifier, selectedVariant, selectorEffort, traitSummary, variantSelector } from "../../../../packages/kybern-client/src/models"
+import { findModel, modelQualifier, selectedVariant, selectorEffort, traitSummary, triggerTraits, variantSelector } from "../../../../packages/kybern-client/src/models"
 import { isChildThread } from "../../../../packages/kybern-client/src/subagents.ts"
 import { ModelPicker } from "@/components/kybern/ModelPicker"
 
@@ -871,6 +871,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const models = status?.models ?? []
   const current = model ? findModel(models, model) : models.find((m) => m.is_default)
   const traitLabel = traitSummary(current, model)
+  const triggerTraitParts = triggerTraits(current, model)
   const modelLabel = current ? `${current.display_name}${traitLabel ? ` · ${traitLabel}` : ""}` : model || null
   const modelQualifierLabel = modelQualifier(models, current)
   const effortLabel = effort ?? selectorEffort(current, model) ?? selectedVariant(current, model)?.default_effort ?? current?.default_effort ?? null
@@ -1326,7 +1327,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                         size="sm"
                         variant="chrome"
                         disabled={!canPickModel && !canReloadModels && !canPickProvider}
-                        aria-label={`Change model and reasoning${triggerAccount?.color ? `, ${triggerAccount.name} account` : ""}`}
+                        aria-label={`Change model and reasoning${triggerAccount && !isCliInstance(triggerAccount.provider.instance) ? `, ${triggerAccount.name} account` : ""}`}
                         title={`${modelLabel ?? PROVIDER_LABEL[provider.kind]}${modelQualifierLabel ? ` from ${modelQualifierLabel}` : ""}${effortLabel ? `, ${formatEffort(effortLabel)} effort` : ""}`}
                         className={cn(
                           COMPOSER_FOOTER_PICKER_TRIGGER_CLASS_NAME,
@@ -1336,39 +1337,16 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                           "max-w-full !shrink overflow-hidden px-2 sm:px-2",
                         )}
                       >
-                        <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-                          <AccountMarkStack kind={provider.kind} color={triggerAccount?.color} size={14} className="size-3.5 text-[var(--color-text-foreground)] opacity-100" />
-                          <span className={cn(
-                            "min-w-0 truncate leading-none text-[var(--color-text-foreground)]",
-                            "[text-box-trim:trim-both] [text-box-edge:cap_alphabetic]",
-                            "@max-[360px]:hidden",
-                          )}>{modelLabel ?? PROVIDER_LABEL[provider.kind]}</span>
-                          {modelQualifierLabel && (
-                            <span
-                              className={cn(
-                                "shrink-0 leading-none",
-                                "[text-box-trim:trim-both] [text-box-edge:cap_alphabetic]",
-                                COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
-                                "@max-[480px]:hidden",
-                              )}
-                            >
-                              {modelQualifierLabel}
-                            </span>
-                          )}
-                          {modelLabel && effortLabel && (
-                            <span
-                              className={cn(
-                                "shrink-0 leading-none",
-                                "[text-box-trim:trim-both] [text-box-edge:cap_alphabetic]",
-                                COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
-                                "@max-[620px]:hidden",
-                              )}
-                            >
-                              {formatEffort(effortLabel)}
-                            </span>
-                          )}
-                          {(canPickModel || canReloadModels || canPickProvider) && <ChevronDownIcon className="size-3.5 shrink-0 opacity-60" />}
-                        </span>
+                        <ComposerModelTriggerLabel
+                          kind={provider.kind}
+                          account={triggerAccount && !isCliInstance(triggerAccount.provider.instance) ? { name: triggerAccount.name, color: triggerAccount.color } : null}
+                          model={current?.display_name ?? model ?? PROVIDER_LABEL[provider.kind]}
+                          qualifier={modelQualifierLabel ?? null}
+                          fast={triggerTraitParts.fast}
+                          effort={(current?.display_name ?? model) && effortLabel ? formatEffort(effortLabel) : null}
+                          traits={triggerTraitParts.labels}
+                          chevron={canPickModel || canReloadModels || canPickProvider}
+                        />
                       </Button>
                     }
                   />

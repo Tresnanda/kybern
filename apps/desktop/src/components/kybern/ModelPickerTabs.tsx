@@ -138,7 +138,7 @@ export function FollowDefaultsLine({ line, busy, onFollow }: { line: FollowLine;
       {/* The dot leads the name, so a truncated name never leaves it next to "Follow defaults". */}
       <span className="flex min-w-0 items-center gap-1">
         <span className="shrink-0">{line.state === "following" ? "Following defaults ·" : "This thread uses"}</span>
-        <AccountDot color={line.color} className="ms-0.5 ring-0" />
+        <AccountDot color={line.color} className="ms-0.5" />
         <bdi className="min-w-0 truncate">{line.name}</bdi>
       </span>
       {line.state === "pinned" && (

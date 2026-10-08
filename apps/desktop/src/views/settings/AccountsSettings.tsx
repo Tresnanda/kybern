@@ -340,7 +340,7 @@ function AccountMenu({ account, onRename, onRemove, onAssign }: {
               <MenuRadioGroup value={isAccountColor(account.color) ? account.color : ""} onValueChange={(value) => void setColor(value)}>
                 {ACCOUNT_COLORS.map((color) => (
                   <MenuRadioItem key={color} value={color}>
-                    <span className="flex items-center gap-2"><AccountDot color={color} className="ring-0" />{ACCOUNT_COLOR_LABELS[color]}</span>
+                    <span className="flex items-center gap-2"><AccountDot color={color} />{ACCOUNT_COLOR_LABELS[color]}</span>
                   </MenuRadioItem>
                 ))}
               </MenuRadioGroup>

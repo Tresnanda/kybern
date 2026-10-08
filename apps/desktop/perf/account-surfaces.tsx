@@ -46,6 +46,19 @@ const accountLimits = [entry("claude-code", "default", "Max", 62, 40), entry("cl
 
 const efforts = ["low", "medium", "high", "xhigh"]
 const claude: ProviderModel[] = ["Claude Opus 5.5", "Claude Fable 5.1", "Claude Sonnet 5.5", "Claude Haiku 4.5"].map((display_name, i) => ({ id: display_name.toLowerCase().replace(/\s+/g, "-"), display_name, efforts, default_effort: "medium", is_default: i === 0 }))
+// `?traits=1`: Opus carries Context and Fast traits and the trigger shows 1M with Fast on.
+const traited = query.get("traits") === "1"
+if (traited) {
+  const params = [["300000", "false"], ["300000", "true"], ["1000000", "false"], ["1000000", "true"]] as const
+  const variants = params.map(([context, fast]) => ({ id: `claude-opus-5.5-${context}-${fast}`, params: { context, fast }, efforts, default_effort: "medium" }))
+  claude[0] = {
+    ...claude[0]!, id: variants[0]!.id, variants,
+    parameters: [
+      { id: "context", label: "Context", default: "300000", values: [{ value: "300000", label: "300K" }, { value: "1000000", label: "1M" }] },
+      { id: "fast", label: "Fast", default: "false", values: [{ value: "false", label: "Off" }, { value: "true", label: "On" }] },
+    ],
+  } as ProviderModel
+}
 const status = (kind: ProviderKind, display_name: string, models: ProviderModel[], available = true): ProviderStatus => ({
   kind, display_name, available, models, supports_model_switch: true, supported_permission_modes: ["supervised", "auto", "full-access"], supported_efforts: efforts, instances: ["default"],
 } as unknown as ProviderStatus)
@@ -72,7 +85,7 @@ function Surface({ children }: { children: React.ReactNode }) {
 
 function ComposerScene() {
   const kind = (query.get("agent") ?? "claude-code") as ProviderKind
-  const [pick, setPick] = useState<{ instance: string; follows: boolean }>(query.get("follow") === "0" ? { instance: "personal", follows: false } : { instance: kind === "claude-code" ? "work" : "default", follows: true })
+  const [pick, setPick] = useState<{ instance: string; follows: boolean }>(query.get("follow") === "0" ? { instance: "personal", follows: false } : query.get("account") === "cli" ? { instance: "default", follows: false } : { instance: kind === "claude-code" ? "work" : "default", follows: true })
   const [provider, setProvider] = useState<ProviderInstance>({ kind, instance: draft ? "default" : pick.instance })
   const current = draft ? provider : { kind: provider.kind, instance: pick.instance }
   return (
@@ -87,7 +100,7 @@ function ComposerScene() {
         accountFollowsDefaults={draft ? undefined : pick.follows}
         onAccountChange={draft ? undefined : (instance) => setPick(instance === null ? { instance: "work", follows: true } : { instance, follows: false })}
         onProviderChange={(next) => { setProvider(next); setPick({ instance: next.instance, follows: true }) }}
-        model="claude-opus-5.5"
+        model={traited ? "claude-opus-5.5-1000000-true" : "claude-opus-5.5"}
         effort="high"
         onModelChange={() => {}}
         mode="supervised"

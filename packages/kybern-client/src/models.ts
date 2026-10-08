@@ -211,6 +211,36 @@ export function traitSummary(
   return parts.length ? parts.join(" · ") : null;
 }
 
+/** A switch for fast mode (Claude Code's `fast`, Codex's speed tier). */
+export function isFastParameter(parameter: Pick<ModelParameter, "id" | "label" | "values">): boolean {
+  return !!parameterSwitch(parameter) && /fast|speed/i.test(`${parameter.id} ${parameter.label}`);
+}
+
+/**
+ * `traitSummary` split for the composer trigger: fast mode on reads as a bolt
+ * icon, every other changed trait (`1M`) as a muted label after the effort.
+ */
+export function triggerTraits(
+  model: Pick<ProviderModel, "id" | "variants" | "parameters"> | undefined,
+  selected: string | null | undefined,
+): { fast: boolean; labels: string[] } {
+  if (!model?.parameters?.length) return { fast: false, labels: [] };
+  const values = traitValues(model, selected);
+  let fast = false;
+  const labels: string[] = [];
+  for (const parameter of model.parameters) {
+    const value = values[parameter.id];
+    if (value === undefined || value === parameter.default) continue;
+    const toggle = parameterSwitch(parameter);
+    if (toggle && isFastParameter(parameter) && value === toggle.on) {
+      fast = true;
+      continue;
+    }
+    labels.push(toggle ? (value === toggle.on ? parameter.label : `${parameter.label} off`) : parameter.values.find((item) => item.value === value)?.label ?? value);
+  }
+  return { fast, labels };
+}
+
 function withoutContext(id: string) {
   return id.split("[", 1)[0]!;
 }

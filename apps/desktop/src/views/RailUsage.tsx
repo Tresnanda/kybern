@@ -87,7 +87,8 @@ function UsageRing({ kind, left, tone, stale, color }: { kind: ProviderKind; lef
         {left !== null && <circle cx="12" cy="12" r="10.25" strokeWidth="2" pathLength="100" strokeDasharray="100 100" strokeDashoffset={100 - left} strokeLinecap="round" className="rail-usage-arc" />}
       </svg>
       <ProviderMark kind={kind} size={11} className="absolute" />
-      <AccountDot color={color} className="absolute end-0.5 bottom-0.5 [--account-dot-ring:var(--color-background-surface)]" />
+      {/* Beside the ring at its top-right, clear of the arc. */}
+      <AccountDot color={color} className="absolute -end-1 -top-1" />
     </span>
   )
 }
