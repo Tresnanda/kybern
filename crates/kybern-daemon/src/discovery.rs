@@ -8,9 +8,20 @@ use serde_json::Value;
 use tokio::process::Command;
 
 async fn output(program: &str, args: &[&str]) -> Option<String> {
-    let output =
-        tokio::time::timeout(Duration::from_secs(2), Command::new(program).args(args).kill_on_drop(true).output()).await.ok()?.ok()?;
-    output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    output_within(program, args, Duration::from_secs(2)).await
+}
+
+/// Run a command, killing it when it outlives `timeout`; `None` on any failure.
+pub(crate) async fn output_within(program: &str, args: &[&str], timeout: Duration) -> Option<String> {
+    let (success, stdout) = run_within(program, args, timeout).await?;
+    success.then_some(stdout)
+}
+
+/// Like [`output_within`] but also returns the stdout of a command that exited
+/// non-zero (`lsof` exits 1 when it finds nothing). `None` if it could not run or timed out.
+pub(crate) async fn run_within(program: &str, args: &[&str], timeout: Duration) -> Option<(bool, String)> {
+    let output = tokio::time::timeout(timeout, Command::new(program).args(args).kill_on_drop(true).output()).await.ok()?.ok()?;
+    Some((output.status.success(), String::from_utf8_lossy(&output.stdout).into_owned()))
 }
 
 async fn tailscale(args: &[&str]) -> Option<String> {

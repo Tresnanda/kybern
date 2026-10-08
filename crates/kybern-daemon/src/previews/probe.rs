@@ -78,6 +78,10 @@ pub async fn probe_detailed(raw_url: &str, timeout: Duration) -> Result<ProbeOut
         return Err(InvalidAddress);
     }
     let host = url.host_str().ok_or(InvalidAddress)?.to_string();
+    // The shared classifier is strict: IP literals, `localhost`, `*.localhost`, `*.local`.
+    if !super::is_local_or_private_host(&host) {
+        return Err(InvalidAddress);
+    }
     let port = url.port_or_known_default().ok_or(InvalidAddress)?;
     let literal: Option<IpAddr> = host.trim_start_matches('[').trim_end_matches(']').parse().ok();
     let deadline = tokio::time::Instant::now() + timeout;

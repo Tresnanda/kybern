@@ -738,6 +738,18 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             crate::visuals::revoke(parse(params)?);
             ok(Empty {})
         }
+        PreviewProbe::NAME => {
+            let p: PreviewProbeParams = parse(params)?;
+            match crate::previews::probe::probe(&p.url).await {
+                Ok(result) => ok(result),
+                Err(_) => Err(RpcError::new(codes::INVALID_PARAMS, "Preview addresses must be on this computer or its private network.")
+                    .with_data(serde_json::json!({ "reason": "invalid_address" }))),
+            }
+        }
+        PreviewServersList::NAME => {
+            let p: PreviewServersListParams = parse_or_default(params)?;
+            ok(crate::previews::discovery::servers_list(state, p.thread_id).await.map_err(bad)?)
+        }
         ArtifactsList::NAME => {
             let p: ArtifactsListParams = parse(params)?;
             let _thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
