@@ -3521,3 +3521,235 @@ html[data-full-translucency] .chat-scroll-fade {
 .visual-source:focus-visible {
   box-shadow: inset 0 0 0 1px var(--color-border-focus);
 }
+
+/* ─── In-app preview ────────────────────────────────────────────────────────
+   Live page documents sit in one stable layer (`PreviewSurfaceLayer`) because
+   moving an iframe reloads it. The dock and the mini player only provide slots;
+   the layer writes each surface's rect straight to its style. The layer sits
+   above chat and dock content and below menus, dialogs and tooltips (>= 50). */
+:root {
+  --z-preview-surface: 30;
+}
+.preview-surface-layer {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-preview-surface);
+  pointer-events: none;
+}
+.preview-surface {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: hidden;
+  background: var(--color-background-surface);
+  opacity: 1;
+  transition: opacity 150ms var(--ease-out);
+  pointer-events: none;
+}
+.preview-surface[data-visible="true"] {
+  pointer-events: auto;
+}
+.preview-surface[data-visible="false"] {
+  opacity: 0;
+}
+.preview-surface[data-device="true"] {
+  background: color-mix(in srgb, var(--color-text-foreground) 3%, var(--color-background-surface));
+}
+.preview-surface[data-shape="pip"] {
+  border-radius: 12px;
+}
+/* A dock drag, a dock spring or a device-rail drag: the page must not swallow pointermove. */
+html[data-resizing] .preview-surface,
+.preview-surface[data-moving="true"],
+.preview-surface[data-dragging="true"] {
+  pointer-events: none !important;
+}
+.preview-surface__frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  border: 0;
+  transform-origin: top left;
+  background: transparent;
+  opacity: 0;
+}
+.preview-surface__frame[data-ready="true"] {
+  opacity: 1;
+  background: #fff;
+  transition: opacity 150ms var(--ease-out);
+}
+.preview-surface__frame[data-device="true"] {
+  box-shadow: 0 0 0 1px var(--color-border), 0 8px 24px -8px rgb(0 0 0 / 0.18);
+}
+.dark .preview-surface__frame[data-device="true"] {
+  box-shadow: 0 0 0 1px var(--color-border-heavy), 0 8px 24px -8px rgb(0 0 0 / 0.5);
+}
+
+/* Device resize rails: 10px hit areas, a grip pill that shows on hover or drag. */
+.preview-rail {
+  position: absolute;
+  touch-action: none;
+  z-index: 1;
+}
+.preview-rail[data-edge="e"] { width: 10px; cursor: ew-resize; }
+.preview-rail[data-edge="s"] { height: 10px; cursor: ns-resize; }
+.preview-rail[data-edge="se"] { width: 10px; height: 10px; cursor: nwse-resize; }
+.preview-rail::after {
+  content: "";
+  position: absolute;
+  border-radius: 9999px;
+  background: var(--color-border-heavy);
+  opacity: 0;
+  transition: opacity 150ms var(--ease-out);
+}
+.preview-rail[data-edge="e"]::after { top: 50%; left: 3px; width: 4px; height: 28px; translate: 0 -50%; }
+.preview-rail[data-edge="s"]::after { left: 50%; top: 3px; width: 28px; height: 4px; translate: -50% 0; }
+.preview-rail[data-edge="se"]::after { top: 3px; left: 3px; width: 4px; height: 4px; }
+.preview-rail:hover::after,
+.preview-rail[data-active="true"]::after {
+  opacity: 1;
+}
+.preview-badge {
+  position: absolute;
+  z-index: 2;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-foreground);
+  background: var(--color-background-elevated-primary-opaque);
+  box-shadow: 0 0 0 1px var(--color-border), 0 2px 8px rgb(0 0 0 / 0.12);
+  pointer-events: none;
+}
+
+/* Loading bar under the chrome row: compositor-only transform and opacity. */
+.preview-loading {
+  background: var(--color-text-accent);
+  border-start-end-radius: 9999px;
+  border-end-end-radius: 9999px;
+  box-shadow: 0 0 6px 0 color-mix(in srgb, var(--color-text-accent) 45%, transparent);
+  opacity: 0;
+  transform: scaleX(1);
+  transition: transform 150ms var(--ease-out), opacity 150ms var(--ease-out) 220ms;
+}
+.preview-loading[data-loading="true"] {
+  opacity: 1;
+  animation: preview-loading 5.3s cubic-bezier(0.1, 0.5, 0.2, 1) forwards;
+  transition: none;
+}
+@keyframes preview-loading {
+  from { transform: scaleX(0.04); }
+  to { transform: scaleX(0.9); }
+}
+
+/* Mini player: the shell is chrome only. The page is the surface beneath it. */
+.preview-pip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  border-radius: 12px;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px var(--color-border-heavy), 0 12px 32px -8px rgb(0 0 0 / 0.28), 0 2px 6px rgb(0 0 0 / 0.12);
+  transition: opacity 150ms var(--ease-out), scale 150ms var(--ease-out);
+  transform-origin: var(--pip-origin, 100% 100%);
+}
+.dark .preview-pip {
+  box-shadow: 0 0 0 1px var(--color-border-heavy), 0 12px 32px -8px rgb(0 0 0 / 0.55), 0 2px 6px rgb(0 0 0 / 0.3);
+}
+.preview-pip[data-exiting="true"] {
+  opacity: 0;
+  scale: 0.96;
+}
+.preview-pip__header {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  height: 28px;
+  align-items: center;
+  gap: 2px;
+  padding-inline: 10px 4px;
+  cursor: grab;
+  opacity: 0;
+  translate: 0 -2px;
+  pointer-events: none;
+  touch-action: none;
+  transition: opacity 150ms var(--ease-out), translate 150ms var(--ease-out);
+}
+.preview-pip__header[data-dragging="true"] {
+  cursor: grabbing;
+}
+.preview-pip:hover .preview-pip__header,
+.preview-pip:focus-within .preview-pip__header,
+.preview-pip__header[data-dragging="true"] {
+  opacity: 1;
+  translate: 0 0;
+  pointer-events: auto;
+  /* One blur layer, declared only while revealed so an idle player holds none. */
+  background: color-mix(in srgb, var(--color-background-elevated-primary-opaque) 78%, transparent);
+  backdrop-filter: blur(12px) saturate(140%);
+}
+.preview-pip__resize {
+  position: absolute;
+  z-index: 3;
+  width: 16px;
+  height: 16px;
+  pointer-events: auto;
+  touch-action: none;
+}
+.preview-pip__resize[data-corner="top-left"] { top: 0; left: 0; cursor: nwse-resize; }
+.preview-pip__resize[data-corner="bottom-right"] { right: 0; bottom: 0; cursor: nwse-resize; }
+.preview-pip__resize[data-corner="top-right"] { top: 0; right: 0; cursor: nesw-resize; }
+.preview-pip__resize[data-corner="bottom-left"] { bottom: 0; left: 0; cursor: nesw-resize; }
+@media (pointer: coarse) {
+  .preview-pip__header {
+    opacity: 1;
+    translate: 0 0;
+    pointer-events: auto;
+    background: color-mix(in srgb, var(--color-background-elevated-primary-opaque) 78%, transparent);
+    backdrop-filter: blur(12px) saturate(140%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .preview-loading,
+  .preview-loading[data-loading="true"] {
+    transition: none;
+    animation: none;
+  }
+  .preview-loading[data-loading="true"] {
+    transform: scaleX(0.9);
+  }
+  .preview-surface,
+  .preview-surface__frame[data-ready="true"],
+  .preview-rail::after {
+    transition-duration: 1ms;
+  }
+  .preview-pip { transition: opacity 150ms linear; }
+  .preview-pip[data-exiting="true"] { scale: 1; }
+  .preview-pip__header { translate: 0 0; transition: opacity 150ms linear; }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .preview-pip:hover .preview-pip__header,
+  .preview-pip:focus-within .preview-pip__header,
+  .preview-pip__header[data-dragging="true"] {
+    background: var(--color-background-elevated-primary-opaque);
+    backdrop-filter: none;
+    box-shadow: inset 0 -1px 0 var(--color-border-heavy);
+  }
+}
+@media (prefers-contrast: more) {
+  .preview-pip,
+  .dark .preview-pip {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-foreground) 55%, transparent), 0 12px 32px -8px rgb(0 0 0 / 0.4);
+  }
+  .preview-badge {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-foreground) 55%, transparent);
+  }
+  .preview-rail::after {
+    background: color-mix(in srgb, var(--color-text-foreground) 55%, transparent);
+  }
+}

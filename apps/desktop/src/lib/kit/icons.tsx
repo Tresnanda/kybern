@@ -148,6 +148,8 @@ import {
   SourceCodeSquareIcon as HcCodeBlock,
   TextAlignLeftIcon as HcOutline,
   Share08Icon as HcShare,
+  PictureInPictureIcon as HcPictureInPicture,
+  PictureInPictureExitIcon as HcPictureInPictureExit,
 } from "@hugeicons/core-free-icons";
 import { cn } from "@/lib/utils";
 
@@ -335,6 +337,8 @@ export const MicIcon: LucideIcon = hugeIcon(HcMic);
 export const PanelLeftIcon = hugeIcon(HcPanelLeft);
 export const PanelRightCloseIcon = hugeIcon(HcPanelRight);
 export const WindowIcon: LucideIcon = hugeIcon(HcWindow);
+export const PictureInPictureIcon: LucideIcon = hugeIcon(HcPictureInPicture);
+export const PictureInPictureExitIcon: LucideIcon = hugeIcon(HcPictureInPictureExit);
 export const LayoutSidebarIcon: LucideIcon = hugeIcon(HcLayoutSidebar);
 // Canonical edit glyph. Renders Hugeicons `Edit03Icon` (a pencil-on-line mark);
 // the export keeps the `PencilIcon` name so every edit/rename call site is unchanged.
