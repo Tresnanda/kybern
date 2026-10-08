@@ -1,3 +1,4 @@
+mod accounts;
 mod collaboration;
 mod render;
 
@@ -654,9 +655,50 @@ enum QueueCmd {
 
 #[derive(Subcommand)]
 enum AccountsCmd {
+    /// List accounts with identity and sign-in state. The CLI account is the
+    /// one the agent's own command line uses.
     List {
         #[arg(long)]
         provider: ProviderKind,
+    },
+    /// Sign in to a new account (or again to --account) in the browser.
+    Login {
+        #[arg(long)]
+        provider: ProviderKind,
+        /// Sign in again to this existing account instead of adding one.
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long, value_enum, default_value = "browser")]
+        mode: accounts::LoginModeArg,
+        /// Use an existing native folder for a new account.
+        #[arg(long)]
+        directory: Option<String>,
+        /// omp only: the upstream provider id (for example `anthropic`).
+        #[arg(long)]
+        upstream: Option<String>,
+    },
+    Rename {
+        #[arg(long)]
+        provider: ProviderKind,
+        account: String,
+        name: String,
+    },
+    /// Set an account color: blue, green, purple, pink, teal or amber.
+    Color {
+        #[arg(long)]
+        provider: ProviderKind,
+        account: String,
+        color: String,
+    },
+    SignOut {
+        #[arg(long)]
+        provider: ProviderKind,
+        account: String,
+    },
+    Remove {
+        #[arg(long)]
+        provider: ProviderKind,
+        account: String,
     },
     Create {
         #[arg(long)]
@@ -942,9 +984,39 @@ pub async fn run() -> Result<()> {
         }
         Cmd::Accounts { cmd } => match cmd {
             AccountsCmd::List { provider } => {
-                let settings = client.call::<SettingsGet>(Empty {}).await?;
-                let provider_settings = settings.providers.get(&provider).cloned().unwrap_or_default();
-                println!("{}", serde_json::to_string_pretty(&provider_settings)?);
+                match client.call::<AccountsList>(AccountsListParams { kind: Some(provider), refresh: false }).await {
+                    Ok(list) if json => println!("{}", serde_json::to_string_pretty(&list)?),
+                    Ok(list) => accounts::render_list(&list.accounts),
+                    // An older daemon has no identity probe: show the stored settings.
+                    Err(_) => {
+                        let settings = client.call::<SettingsGet>(Empty {}).await?;
+                        let provider_settings = settings.providers.get(&provider).cloned().unwrap_or_default();
+                        println!("{}", serde_json::to_string_pretty(&provider_settings)?);
+                    }
+                }
+            }
+            AccountsCmd::Login { provider, account, mode, directory, upstream } => {
+                accounts::login(&client, provider, account, mode, directory, upstream).await?;
+            }
+            AccountsCmd::Rename { provider, account, name } => {
+                let summary = client
+                    .call::<AccountsUpdate>(AccountsUpdateParams { kind: provider, instance: account, name: Some(name), color: None })
+                    .await?;
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            }
+            AccountsCmd::Color { provider, account, color } => {
+                let summary = client
+                    .call::<AccountsUpdate>(AccountsUpdateParams { kind: provider, instance: account, name: None, color: Some(color) })
+                    .await?;
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            }
+            AccountsCmd::SignOut { provider, account } => {
+                let summary = client.call::<AccountsSignOut>(ProviderInstance { kind: provider, instance: account }).await?;
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            }
+            AccountsCmd::Remove { provider, account } => {
+                client.call::<AccountsRemove>(ProviderInstance { kind: provider, instance: account }).await?;
+                println!("{}", serde_json::to_string(&Empty {})?);
             }
             AccountsCmd::Create { provider, name, directory } => {
                 let account = client.call::<AccountsCreate>(AccountsCreateParams { kind: provider, name, directory }).await?;

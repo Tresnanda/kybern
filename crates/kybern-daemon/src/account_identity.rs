@@ -96,7 +96,8 @@ fn write_back(state: &AppState, instance: &ProviderInstance, identity: &Option<A
         return;
     }
     let mut settings = state.settings.get();
-    let Some(account) = settings.providers.get_mut(&instance.kind).and_then(|provider| provider.accounts.get_mut(&instance.instance)) else {
+    let Some(account) = settings.providers.get_mut(&instance.kind).and_then(|provider| provider.accounts.get_mut(&instance.instance))
+    else {
         return;
     };
     let email = identity.email.clone().or_else(|| account.email.clone());

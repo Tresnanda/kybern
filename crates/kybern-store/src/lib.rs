@@ -1093,10 +1093,7 @@ impl Store {
     /// Blank every meta value under `prefix` that equals `value`; returns the count.
     pub fn meta_clear_matching(&self, prefix: &str, value: &str) -> Result<usize> {
         self.with(|c| {
-            Ok(c.execute(
-                "UPDATE meta SET value = '' WHERE substr(key, 1, length(?1)) = ?1 AND value = ?2",
-                params![prefix, value],
-            )?)
+            Ok(c.execute("UPDATE meta SET value = '' WHERE substr(key, 1, length(?1)) = ?1 AND value = ?2", params![prefix, value])?)
         })
     }
 

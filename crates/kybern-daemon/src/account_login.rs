@@ -203,9 +203,10 @@ impl AccountLogins {
         }
         // Codex's browser callback port is fixed, so only one browser login can run.
         if kind == ProviderKind::Codex && params.mode == AccountLoginMode::Browser {
-            let busy = self.lock().values().any(|login| {
-                login.active && login.public.kind == ProviderKind::Codex && login.public.mode == AccountLoginMode::Browser
-            });
+            let busy = self
+                .lock()
+                .values()
+                .any(|login| login.active && login.public.kind == ProviderKind::Codex && login.public.mode == AccountLoginMode::Browser);
             ensure!(!busy, "Another Codex sign-in is waiting in your browser. Finish or cancel it first.");
         }
 
@@ -679,10 +680,8 @@ impl AccountLogins {
         if let Some(email) = identity.email.as_deref().map(str::to_ascii_lowercase) {
             let instances = std::iter::once("default".to_string()).chain(provider.accounts.keys().cloned()).collect::<Vec<_>>();
             for instance in instances {
-                let probed = state
-                    .account_identities
-                    .probe(state, &ProviderInstance { kind: public.kind, instance: instance.clone() }, false)
-                    .await;
+                let probed =
+                    state.account_identities.probe(state, &ProviderInstance { kind: public.kind, instance: instance.clone() }, false).await;
                 if probed.1.and_then(|identity| identity.email).is_some_and(|other| other.to_ascii_lowercase() == email) {
                     duplicate_of = Some(instance);
                     break;
@@ -764,10 +763,10 @@ fn spawn_attempt(state: &AppState, spec: &Spec, visible_terminal: bool) -> Resul
     }
     if spec.hidden_pty || visible_terminal {
         let binary = spec.binary.clone().ok_or_else(|| anyhow!("This sign-in has no terminal form."))?;
-        let command: Vec<String> =
-            std::iter::once(binary.to_string_lossy().into_owned()).chain(spec.args.iter().cloned()).collect();
+        let command: Vec<String> = std::iter::once(binary.to_string_lossy().into_owned()).chain(spec.args.iter().cloned()).collect();
         let (cols, rows) = if visible_terminal { (100, 30) } else { (400, 30) };
-        let terminal = state.terminals.create_with_env(None, None, spec.cwd.to_string_lossy().into_owned(), cols, rows, Some(command), &env)?;
+        let terminal =
+            state.terminals.create_with_env(None, None, spec.cwd.to_string_lossy().into_owned(), cols, rows, Some(command), &env)?;
         let (events, rx) = mpsc::channel(256);
         let (mut output, replay) = terminal.subscribe_output(true);
         let reader = terminal.clone();
@@ -915,9 +914,13 @@ async fn sign_out_folder(state: &AppState, kind: ProviderKind, folder: &Path) {
     let settings = state.settings.get();
     let mut provider = settings.providers.get(&kind).cloned().unwrap_or_default();
     let id = "kybern-cleanup".to_string();
-    provider.accounts.insert(id.clone(), ProviderAccount { name: "Cleanup".into(), directory: folder.to_string_lossy().into_owned(), ..Default::default() });
+    provider.accounts.insert(
+        id.clone(),
+        ProviderAccount { name: "Cleanup".into(), directory: folder.to_string_lossy().into_owned(), ..Default::default() },
+    );
     let Ok(env) = crate::provider_accounts::environment(&provider, kind, &id) else { return };
-    let context = ProbeContext { binary: provider.binary.clone().map(Into::into), cwd: Some(state.settings.dir().to_path_buf()), env: env.clone() };
+    let context =
+        ProbeContext { binary: provider.binary.clone().map(Into::into), cwd: Some(state.settings.dir().to_path_buf()), env: env.clone() };
     if kind == ProviderKind::Cursor {
         let _ = kybern_drivers::cursor::sign_out(&ProbeContext { binary: None, ..context }).await;
         return;
@@ -965,7 +968,9 @@ pub fn suggest_name(kind: ProviderKind, identity: Option<&AccountIdentity>, exis
             let domain = domain.to_ascii_lowercase();
             if CONSUMER_DOMAINS.contains(&domain.as_str()) {
                 title_case_words(local)
-            } else if let Some(org) = identity.and_then(|identity| identity.organization.as_deref()).map(str::trim).filter(|org| !org.is_empty()) {
+            } else if let Some(org) =
+                identity.and_then(|identity| identity.organization.as_deref()).map(str::trim).filter(|org| !org.is_empty())
+            {
                 org.to_string()
             } else {
                 let mut labels: Vec<&str> = domain.split('.').collect();
@@ -1051,7 +1056,8 @@ mod tests {
 
     #[test]
     fn cursor_events_are_parsed_from_ndjson() {
-        let buffer = "Starting login process...\n{\"status\":\"login-url\",\"url\":\"https://cursor.com/login?x=1\"}\n{\"status\":\"logged-in\"}\n";
+        let buffer =
+            "Starting login process...\n{\"status\":\"login-url\",\"url\":\"https://cursor.com/login?x=1\"}\n{\"status\":\"logged-in\"}\n";
         assert_eq!(cursor_login_url(buffer).as_deref(), Some("https://cursor.com/login?x=1"));
         assert!(cursor_logged_in(buffer));
         assert!(!cursor_logged_in("{\"status\":\"login-url\",\"url\":\"http://x\"}"));
@@ -1307,7 +1313,11 @@ exit 0
         let mut settings = state.settings.get();
         settings.providers.entry(ProviderKind::ClaudeCode).or_default().accounts.insert(
             "work".into(),
-            ProviderAccount { name: "Work".into(), directory: folder.canonicalize().unwrap().to_string_lossy().into_owned(), ..Default::default() },
+            ProviderAccount {
+                name: "Work".into(),
+                directory: folder.canonicalize().unwrap().to_string_lossy().into_owned(),
+                ..Default::default()
+            },
         );
         state.settings.set(settings).unwrap();
         let error = state.account_logins.start(state, start).await.unwrap_err();
@@ -1354,4 +1364,3 @@ exit 0
         assert!(error.to_string().contains("CLI account"));
     }
 }
-

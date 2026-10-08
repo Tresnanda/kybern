@@ -229,7 +229,13 @@ fn is_managed(data_dir: &Path, directory: &str) -> bool {
 
 const CLI_ACCOUNT: &str = "CLI account";
 
-fn summarize(state: &AppState, settings: &Settings, kind: ProviderKind, instance: &str, probed: (AccountStatus, Option<AccountIdentity>)) -> AccountSummary {
+fn summarize(
+    state: &AppState,
+    settings: &Settings,
+    kind: ProviderKind,
+    instance: &str,
+    probed: (AccountStatus, Option<AccountIdentity>),
+) -> AccountSummary {
     let provider = settings.providers.get(&kind).cloned().unwrap_or_default();
     let account = provider.accounts.get(instance);
     let (status, mut identity) = probed;
@@ -314,8 +320,9 @@ async fn harness_sign_out(state: &AppState, instance: &ProviderInstance) -> Resu
         context.binary = None;
         return kybern_drivers::cursor::sign_out(&context).await.map_err(|error| anyhow!(kybern_drivers::cursor::reason(error)));
     }
-    let args = kybern_drivers::account_auth::sign_out_args(instance.kind, None)
-        .ok_or_else(|| anyhow!("{} can't sign out from Kybern. Remove its credentials from the agent instead.", instance.kind.display_name()))?;
+    let args = kybern_drivers::account_auth::sign_out_args(instance.kind, None).ok_or_else(|| {
+        anyhow!("{} can't sign out from Kybern. Remove its credentials from the agent instead.", instance.kind.display_name())
+    })?;
     let binary = kybern_drivers::binary::resolve(instance.kind, context.binary.as_ref()).map_err(|error| anyhow!(error.to_string()))?;
     let mut command = tokio::process::Command::new(binary);
     command.args(args).envs(&context.env).stdin(std::process::Stdio::null()).kill_on_drop(true);
@@ -469,7 +476,10 @@ mod native_environment_tests {
         let mut provider = ProviderSettings::default();
         provider.env.insert("HOME".into(), "/regular-home-sentinel".into());
         provider.env.insert("OMP_PROFILE".into(), "regular-profile".into());
-        provider.accounts.insert("work".into(), ProviderAccount { name: "Work".into(), directory: "/scratch-work-account".into(), ..Default::default() });
+        provider.accounts.insert(
+            "work".into(),
+            ProviderAccount { name: "Work".into(), directory: "/scratch-work-account".into(), ..Default::default() },
+        );
         for (kind, expected) in [
             (ProviderKind::ClaudeCode, "CLAUDE_CONFIG_DIR=/scratch-work-account"),
             (ProviderKind::Codex, "CODEX_HOME=/scratch-work-account"),
@@ -494,7 +504,10 @@ mod native_environment_tests {
     fn named_native_process_does_not_inherit_regular_cli_api_credentials() {
         let mut provider = ProviderSettings::default();
         provider.env.insert("CURSOR_API_KEY".into(), "regular-cli-sentinel".into());
-        provider.accounts.insert("work".into(), ProviderAccount { name: "Work".into(), directory: "/scratch-work-account".into(), ..Default::default() });
+        provider.accounts.insert(
+            "work".into(),
+            ProviderAccount { name: "Work".into(), directory: "/scratch-work-account".into(), ..Default::default() },
+        );
         let named = environment(&provider, ProviderKind::Cursor, "work").unwrap();
         let output = std::process::Command::new("/usr/bin/env")
             .env_clear()
@@ -548,7 +561,8 @@ exit 2
         let paths = crate::config::Paths::resolve(Some(root.join("data"))).unwrap();
         let state = AppState::initialize(&paths).unwrap();
         let mut settings = state.settings.get();
-        settings.providers.entry(ProviderKind::ClaudeCode).or_default().binary = Some(root.join("bin/claude").to_string_lossy().into_owned());
+        settings.providers.entry(ProviderKind::ClaudeCode).or_default().binary =
+            Some(root.join("bin/claude").to_string_lossy().into_owned());
         state.settings.set(settings).unwrap();
         Fixture { state, root }
     }
@@ -558,7 +572,12 @@ exit 2
         let mut settings = fixture.state.settings.get();
         settings.providers.entry(ProviderKind::ClaudeCode).or_default().accounts.insert(
             id.into(),
-            ProviderAccount { name: id.into(), directory: directory.to_string_lossy().into_owned(), color: color.map(str::to_string), ..Default::default() },
+            ProviderAccount {
+                name: id.into(),
+                directory: directory.to_string_lossy().into_owned(),
+                color: color.map(str::to_string),
+                ..Default::default()
+            },
         );
         fixture.state.settings.set(settings).unwrap();
     }
@@ -597,7 +616,10 @@ exit 2
         let list = list(&fixture.state, AccountsListParams { kind: Some(ProviderKind::ClaudeCode), refresh: false }).await.unwrap();
         assert_eq!(list.accounts.len(), 2);
         let cli = &list.accounts[0];
-        assert_eq!((cli.name.as_str(), cli.provider.instance.as_str(), cli.is_default, cli.can_sign_out), ("CLI account", "default", true, false));
+        assert_eq!(
+            (cli.name.as_str(), cli.provider.instance.as_str(), cli.is_default, cli.can_sign_out),
+            ("CLI account", "default", true, false)
+        );
         let named = &list.accounts[1];
         assert_eq!(named.status, AccountStatus::SignedIn);
         assert_eq!(named.identity.as_ref().unwrap().plan.as_deref(), Some("Max"));
@@ -614,20 +636,26 @@ exit 2
         add(&fixture, "work", &fixture.root.join("work"), Some("blue"));
         let renamed = update(
             &fixture.state,
-            AccountsUpdateParams { kind: ProviderKind::ClaudeCode, instance: "work".into(), name: Some("  Client  ".into()), color: Some("pink".into()) },
+            AccountsUpdateParams {
+                kind: ProviderKind::ClaudeCode,
+                instance: "work".into(),
+                name: Some("  Client  ".into()),
+                color: Some("pink".into()),
+            },
         )
         .await
         .unwrap();
         assert_eq!((renamed.name.as_str(), renamed.color.as_deref()), ("Client", Some("pink")));
         for (name, color) in [(Some(String::new()), None), (Some("x".repeat(121)), None), (None, Some("red".to_string()))] {
-            let result = update(
-                &fixture.state,
-                AccountsUpdateParams { kind: ProviderKind::ClaudeCode, instance: "work".into(), name, color },
-            )
-            .await;
+            let result =
+                update(&fixture.state, AccountsUpdateParams { kind: ProviderKind::ClaudeCode, instance: "work".into(), name, color }).await;
             assert!(result.is_err());
         }
-        let default = update(&fixture.state, AccountsUpdateParams { kind: ProviderKind::ClaudeCode, instance: "default".into(), name: Some("x".into()), color: None }).await;
+        let default = update(
+            &fixture.state,
+            AccountsUpdateParams { kind: ProviderKind::ClaudeCode, instance: "default".into(), name: Some("x".into()), color: None },
+        )
+        .await;
         assert!(default.is_err());
         assert!(sign_out(&fixture.state, claude("default")).await.is_err());
         assert!(remove(&fixture.state, claude("default")).await.is_err());
@@ -684,4 +712,3 @@ exit 2
         std::fs::remove_dir_all(root).unwrap();
     }
 }
-

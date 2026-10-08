@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use base64::Engine;
-use kybern_protocol::methods::{AccountIdentity, AccountLoginMode, AccountStatus};
 use kybern_protocol::ProviderKind;
+use kybern_protocol::methods::{AccountIdentity, AccountLoginMode, AccountStatus};
 use serde_json::Value;
 use tokio::process::Command;
 
@@ -166,9 +166,7 @@ pub fn cursor_identity_from_status(value: &Value) -> (AccountStatus, Option<Acco
     let email = value["email"].as_str().filter(|email| !email.is_empty()).map(str::to_string);
     match value["status"].as_str() {
         Some("logged-in") => (AccountStatus::SignedIn, Some(AccountIdentity { email, ..Default::default() })),
-        Some("api-key") => {
-            (AccountStatus::SignedIn, Some(AccountIdentity { plan: Some("API key".into()), ..Default::default() }))
-        }
+        Some("api-key") => (AccountStatus::SignedIn, Some(AccountIdentity { plan: Some("API key".into()), ..Default::default() })),
         Some("logged-out") => (AccountStatus::SignedOut, None),
         _ => (AccountStatus::Unknown, None),
     }
@@ -211,9 +209,7 @@ pub fn omp_identity_from_status(value: &Value) -> (AccountStatus, Option<Account
 // ---- OpenCode and Pi: key names only ----
 
 fn opencode_identity(context: &ProbeContext) -> (AccountStatus, Option<AccountIdentity>) {
-    let data = env_value(context, "XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| home_dir(context).map(|home| home.join(".local/share")));
+    let data = env_value(context, "XDG_DATA_HOME").map(PathBuf::from).or_else(|| home_dir(context).map(|home| home.join(".local/share")));
     let Some(data) = data else { return (AccountStatus::Unknown, None) };
     let Ok(text) = std::fs::read_to_string(data.join("opencode/auth.json")) else { return (AccountStatus::SignedOut, None) };
     key_names_identity(&text)
@@ -247,7 +243,7 @@ pub fn key_names_identity(text: &str) -> (AccountStatus, Option<AccountIdentity>
 }
 
 fn title_case(text: &str) -> String {
-    text.split(|c: char| c == '_' || c == '-' || c == ' ' || c == '.' || c == '+')
+    text.split(['_', '-', ' ', '.', '+'])
         .filter(|word| !word.is_empty())
         .map(|word| {
             let mut chars = word.chars();
@@ -379,7 +375,8 @@ pub fn parse_device_code(text: &str) -> (Option<String>, Option<String>) {
 /// Remove secret-looking query values (`code`, `state`, `code_challenge`,
 /// `access_token` and so on) and long opaque tokens from a diagnostic line.
 pub fn redact(text: &str) -> String {
-    const KEYS: &[&str] = &["code=", "state=", "code_challenge=", "access_token=", "refresh_token=", "id_token=", "token=", "challenge=", "key="];
+    const KEYS: &[&str] =
+        &["code=", "state=", "code_challenge=", "access_token=", "refresh_token=", "id_token=", "token=", "challenge=", "key="];
     let mut out = String::new();
     for (index, word) in text.split(' ').enumerate() {
         if index > 0 {
@@ -485,7 +482,8 @@ mod tests {
 
     #[test]
     fn redacts_oauth_values() {
-        let line = "failed https://x.test/cb?code=abc123&state=secretstate&code_challenge=zzz token eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9abcdefgh";
+        let line =
+            "failed https://x.test/cb?code=abc123&state=secretstate&code_challenge=zzz token eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9abcdefgh";
         let clean = redact(line);
         for secret in ["abc123", "secretstate", "zzz", "eyJhbGci"] {
             assert!(!clean.contains(secret), "{clean}");

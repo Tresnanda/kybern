@@ -495,29 +495,25 @@ impl UsageMonitor {
         let started = Instant::now();
         let unavailable = |detail: &str| UsageUnread { reason: LimitsStale::Unavailable, retry_at: None, detail: detail.into() };
         let read = match kind {
-            ProviderKind::ClaudeCode => tokio::time::timeout(
-                Duration::from_secs(20),
-                kybern_drivers::claude::read_account_usage(home, binary.as_ref(), env),
-            )
-            .await
-            .unwrap_or_else(|_| Err(unavailable("the read timed out"))),
-            ProviderKind::Codex => tokio::time::timeout(
-                Duration::from_secs(8),
-                kybern_drivers::codex::read_account_limits(home, binary.as_ref(), env),
-            )
-            .await
-            .ok()
-            .flatten()
-            .map(|limits| (limits, None))
-            .ok_or_else(|| unavailable("Codex reported no rate limits")),
-            ProviderKind::Cursor => {
-                tokio::time::timeout(Duration::from_secs(10), kybern_drivers::cursor::usage::read_account_usage(env))
+            ProviderKind::ClaudeCode => {
+                tokio::time::timeout(Duration::from_secs(20), kybern_drivers::claude::read_account_usage(home, binary.as_ref(), env))
+                    .await
+                    .unwrap_or_else(|_| Err(unavailable("the read timed out")))
+            }
+            ProviderKind::Codex => {
+                tokio::time::timeout(Duration::from_secs(8), kybern_drivers::codex::read_account_limits(home, binary.as_ref(), env))
                     .await
                     .ok()
                     .flatten()
-                    .map(|usage| (usage.limits, usage.plan))
-                    .ok_or_else(|| unavailable("Cursor reported no usage"))
+                    .map(|limits| (limits, None))
+                    .ok_or_else(|| unavailable("Codex reported no rate limits"))
             }
+            ProviderKind::Cursor => tokio::time::timeout(Duration::from_secs(10), kybern_drivers::cursor::usage::read_account_usage(env))
+                .await
+                .ok()
+                .flatten()
+                .map(|usage| (usage.limits, usage.plan))
+                .ok_or_else(|| unavailable("Cursor reported no usage")),
             _ => Err(unavailable("no account limits to read")),
         };
         tracing::debug!(provider = %kind, ok = read.is_ok(), elapsed_ms = started.elapsed().as_millis() as u64, "read account limits");
@@ -670,9 +666,10 @@ mod account_tests {
         );
         let mut settings = monitor.inner.settings.get();
         let provider = settings.providers.entry(ProviderKind::Codex).or_default();
-        provider
-            .accounts
-            .insert("work".into(), kybern_protocol::ProviderAccount { name: "Work".into(), directory: "/account-work".into(), ..Default::default() });
+        provider.accounts.insert(
+            "work".into(),
+            kybern_protocol::ProviderAccount { name: "Work".into(), directory: "/account-work".into(), ..Default::default() },
+        );
         provider.default_account = Some("work".into());
         monitor.inner.settings.set(settings).unwrap();
         monitor.settings_changed();
@@ -698,9 +695,10 @@ mod named_account_tests {
         let monitor = super::tests::monitor();
         let mut settings = monitor.inner.settings.get();
         let provider = settings.providers.entry(ProviderKind::ClaudeCode).or_default();
-        provider
-            .accounts
-            .insert("work".into(), kybern_protocol::ProviderAccount { name: "Work".into(), directory: "/account-work".into(), ..Default::default() });
+        provider.accounts.insert(
+            "work".into(),
+            kybern_protocol::ProviderAccount { name: "Work".into(), directory: "/account-work".into(), ..Default::default() },
+        );
         monitor.inner.settings.set(settings).unwrap();
         monitor
     }
@@ -716,7 +714,7 @@ mod named_account_tests {
         let monitor = with_accounts();
         let due = monitor.due_accounts(&UsageLimitsParams { cached: true, all_accounts: true, ..Default::default() });
         assert!(due.contains(&(ProviderKind::ClaudeCode, "work".into())));
-        assert!(due.contains(&(ProviderKind::ClaudeCode, "default".into())) == false, "the default account is the global entry");
+        assert!(!due.contains(&(ProviderKind::ClaudeCode, "default".into())), "the default account is the global entry");
         let again = monitor.due_accounts(&UsageLimitsParams { cached: true, all_accounts: true, ..Default::default() });
         assert!(again.is_empty(), "a read already in flight answers the second call");
         let instances = monitor.due_accounts(&UsageLimitsParams {
@@ -730,7 +728,8 @@ mod named_account_tests {
     fn named_account_reports_appear_labeled_and_forget_clears_them() {
         let monitor = with_accounts();
         let limit = UsageLimit { name: "5-hour".into(), used_percent: 30.0, window_minutes: Some(300), resets_at: None };
-        monitor.observe_account(&ProviderInstance { kind: ProviderKind::ClaudeCode, instance: "work".into() }, std::slice::from_ref(&limit));
+        monitor
+            .observe_account(&ProviderInstance { kind: ProviderKind::ClaudeCode, instance: "work".into() }, std::slice::from_ref(&limit));
         let snapshot = monitor.snapshot();
         assert_eq!(snapshot.accounts.len(), 1);
         assert_eq!(snapshot.accounts[0].instance.as_deref(), Some("work"));
