@@ -516,3 +516,30 @@ export function usePreviewServers(threadId: ThreadId, enabled: boolean): { serve
   }, [enabled, threadId])
   return state
 }
+
+// ── Entry points ───────────────────────────────────────────────────────────────────────────
+
+/** Files the Preview tab can show as an entry document. */
+export function isPreviewablePath(path: string, options: { svg?: boolean } = { svg: true }): boolean {
+  return options.svg === false ? /\.html?$/i.test(path) : /\.(?:html?|svg|xhtml)$/i.test(path)
+}
+
+/** The thread whose dock a click should open the page in, if one is selected. */
+export function selectedThreadId(): ThreadId | null {
+  const selected = useStore.getState().selected
+  return selected.kind === "thread" ? selected.id : null
+}
+
+/** Open an absolute file path in the selected thread's Preview tab; reports problems as a toast. */
+export async function openFileInPreview(path: string, threadId: ThreadId | null = selectedThreadId()): Promise<boolean> {
+  if (!threadId) return false
+  // A bare `mockup.html` would read as a host; a leading `./` keeps it a path.
+  const input = /^(?:\/|~|\.\.?\/|[a-z]:[\\/])/i.test(path) ? path : `./${path}`
+  const outcome = await openPreviewInput(threadId, input)
+  if (outcome.status === "error") {
+    const { toast } = await import("sonner")
+    toast.error("Unable to open the preview", { description: outcome.message || "Check the file path and try again." })
+    return false
+  }
+  return true
+}
