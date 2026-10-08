@@ -46,7 +46,7 @@ export default mergeConfig(base, {
     name: "pr-review-fixture-transport",
     enforce: "pre",
     transform(code, id) {
-      if (!/\/(views\/(PrReview|PullRequests|WorktreeCleanup)\.tsx|state\/prReview\.ts)$/.test(id)) return
+      if (!/\/(views\/(PrReview|PullRequests|WorktreeCleanup)\.tsx|views\/pullRequests\/[^/]+\.tsx?|state\/prReview\.ts)$/.test(id)) return
       const transport = JSON.stringify(path.resolve(import.meta.dirname, "pr-review-rpc.ts"))
       return code.replaceAll('"@/state/rpc"', transport).replaceAll('"./rpc"', transport)
     },
