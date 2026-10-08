@@ -246,9 +246,9 @@ pub fn frame_block(headers: &reqwest::header::HeaderMap) -> Option<PreviewFrameB
 
 /// The `frame-ancestors ...` directive of one CSP header value, if any.
 pub fn frame_ancestors(csp: &str) -> Option<&str> {
-    csp.split(';').map(str::trim).find(|directive| {
-        directive.split_ascii_whitespace().next().is_some_and(|name| name.eq_ignore_ascii_case("frame-ancestors"))
-    })
+    csp.split(';')
+        .map(str::trim)
+        .find(|directive| directive.split_ascii_whitespace().next().is_some_and(|name| name.eq_ignore_ascii_case("frame-ancestors")))
 }
 
 fn html_title(html: &str) -> Option<String> {
@@ -270,7 +270,12 @@ fn html_title(html: &str) -> Option<String> {
 }
 
 fn decode_entities(text: &str) -> String {
-    text.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&#x27;", "'").replace("&amp;", "&")
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#x27;", "'")
+        .replace("&amp;", "&")
 }
 
 fn html_icon_href(html: &str) -> Option<String> {
@@ -392,7 +397,9 @@ mod tests {
 
     #[tokio::test]
     async fn x_frame_options_is_reported() {
-        let port = serve("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nX-Frame-Options: SAMEORIGIN\r\nConnection: close\r\n\r\n<title>t</title>").await;
+        let port =
+            serve("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nX-Frame-Options: SAMEORIGIN\r\nConnection: close\r\n\r\n<title>t</title>")
+                .await;
         let result = probe(&format!("http://127.0.0.1:{port}")).await.unwrap();
         let block = result.blocked_by.unwrap();
         assert_eq!((block.header.as_str(), block.value.as_str()), ("x-frame-options", "SAMEORIGIN"));
@@ -406,7 +413,9 @@ mod tests {
         assert_eq!(block.header, "content-security-policy");
         assert_eq!(block.value, "frame-ancestors 'self'");
 
-        let open = serve("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Security-Policy: frame-ancestors *\r\nConnection: close\r\n\r\nx").await;
+        let open =
+            serve("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Security-Policy: frame-ancestors *\r\nConnection: close\r\n\r\nx")
+                .await;
         assert!(probe(&format!("http://127.0.0.1:{open}")).await.unwrap().blocked_by.is_none());
     }
 
@@ -459,14 +468,34 @@ mod tests {
 
     #[tokio::test]
     async fn public_hosts_are_refused() {
-        for url in ["http://example.com", "http://8.8.8.8/", "https://1.1.1.1", "http://[2001:4860:4860::8888]/", "ftp://127.0.0.1", "http://user:pw@127.0.0.1/", "not a url"] {
+        for url in [
+            "http://example.com",
+            "http://8.8.8.8/",
+            "https://1.1.1.1",
+            "http://[2001:4860:4860::8888]/",
+            "ftp://127.0.0.1",
+            "http://user:pw@127.0.0.1/",
+            "not a url",
+        ] {
             assert!(probe(url).await.is_err(), "{url} must be refused");
         }
     }
 
     #[test]
     fn local_and_private_classification() {
-        for ok in ["127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.5", "100.100.1.1", "169.254.1.1", "::1", "fd00::1", "fe80::1", "::ffff:127.0.0.1", "0.0.0.0"] {
+        for ok in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.0.1",
+            "192.168.1.5",
+            "100.100.1.1",
+            "169.254.1.1",
+            "::1",
+            "fd00::1",
+            "fe80::1",
+            "::ffff:127.0.0.1",
+            "0.0.0.0",
+        ] {
             assert!(is_local_or_private_ip(ok.parse().unwrap()), "{ok}");
         }
         for no in ["8.8.8.8", "172.32.0.1", "100.128.0.1", "2001:4860:4860::8888", "::ffff:8.8.8.8"] {

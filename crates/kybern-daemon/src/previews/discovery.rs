@@ -480,7 +480,10 @@ mod tests {
     fn lsof_listeners_parse() {
         let listeners = parse_lsof_listeners(LSOF);
         assert_eq!(listeners.len(), 6);
-        assert_eq!(listeners[0], Listener { addr: "0.0.0.0".parse().unwrap(), port: 5173, pid: Some(101), process_name: Some("node".into()), cwd: None });
+        assert_eq!(
+            listeners[0],
+            Listener { addr: "0.0.0.0".parse().unwrap(), port: 5173, pid: Some(101), process_name: Some("node".into()), cwd: None }
+        );
         assert_eq!(listeners[1].addr, "::1".parse::<IpAddr>().unwrap());
         assert_eq!(listeners[2].addr, "127.0.0.1".parse::<IpAddr>().unwrap());
         assert_eq!(listeners[3].addr, "::".parse::<IpAddr>().unwrap());
@@ -595,7 +598,8 @@ mod tests {
         let json = serve("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}").await;
         let redirect = serve("HTTP/1.1 302 Found\r\nLocation: /app\r\nConnection: close\r\n\r\n").await;
         let ssh = serve("SSH-2.0-OpenSSH\r\n").await;
-        let listeners = [html, json, redirect, ssh].iter().enumerate().map(|(i, &port)| listener("127.0.0.1", port, 10 + i as u32, "t")).collect();
+        let listeners =
+            [html, json, redirect, ssh].iter().enumerate().map(|(i, &port)| listener("127.0.0.1", port, 10 + i as u32, "t")).collect();
         let scanner = Scanner::new();
         let snapshot = scanner.build(listeners, "lsof", ScanOptions::default()).await;
         let ports: Vec<u16> = snapshot.servers.iter().map(|s| s.port).collect();

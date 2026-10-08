@@ -189,7 +189,8 @@ pub async fn handle(tickets: &super::tickets::PreviewTickets, request: Request) 
     let Some(info) = tickets.lookup(ticket) else { return plain(StatusCode::NOT_FOUND, "not found") };
     let TicketKind::Proxy { port } = info.kind else { return plain(StatusCode::NOT_FOUND, "not found") };
 
-    let is_upgrade = request.headers().get(header::UPGRADE).and_then(|v| v.to_str().ok()).is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
+    let is_upgrade =
+        request.headers().get(header::UPGRADE).and_then(|v| v.to_str().ok()).is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
     if is_upgrade {
         return upgrade(request, port, target).await;
     }
@@ -203,7 +204,9 @@ async fn forward(request: Request, port: u16, target: String) -> Response {
         IpAddr::V6(ip) => format!("[{ip}]"),
     };
     // The target always starts with `/`, so it cannot change the authority.
-    let Ok(url) = reqwest::Url::parse(&format!("http://{host}:{port}{target}")) else { return plain(StatusCode::BAD_REQUEST, "bad request") };
+    let Ok(url) = reqwest::Url::parse(&format!("http://{host}:{port}{target}")) else {
+        return plain(StatusCode::BAD_REQUEST, "bad request");
+    };
     if url.port() != Some(port) || url.host_str() != Some(host.as_str()) {
         return plain(StatusCode::BAD_REQUEST, "bad request");
     }
@@ -242,9 +245,7 @@ async fn upgrade(request: Request, port: u16, target: String) -> Response {
         Ok(socket) => socket,
         Err(rejection) => return rejection.into_response(),
     };
-    socket
-        .protocols(requested.clone())
-        .on_upgrade(move |client| async move { pump(client, port, target, requested).await })
+    socket.protocols(requested.clone()).on_upgrade(move |client| async move { pump(client, port, target, requested).await })
 }
 
 fn close_reason(code: u16, reason: &'static str) -> Message {
@@ -517,7 +518,10 @@ mod tests {
         let ticket = rig.ticket(closed);
         assert_eq!(http().get(rig.url(&ticket, "/")).send().await.unwrap().status(), 502);
         // The daemon token is never a credential for this route.
-        assert_eq!(http().get(rig.url("daemon-token", "/")).header("authorization", "Bearer daemon-token").send().await.unwrap().status(), 404);
+        assert_eq!(
+            http().get(rig.url("daemon-token", "/")).header("authorization", "Bearer daemon-token").send().await.unwrap().status(),
+            404
+        );
         rig.tickets.revoke(&ticket);
         assert_eq!(http().get(rig.url(&ticket, "/")).send().await.unwrap().status(), 404);
     }
@@ -550,7 +554,8 @@ mod tests {
             l.local_addr().unwrap().port()
         };
         let ticket = rig.ticket(closed);
-        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/preview-proxy/{ticket}/ws", rig.proxy)).await.unwrap();
+        let (mut socket, _) =
+            tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/preview-proxy/{ticket}/ws", rig.proxy)).await.unwrap();
         match socket.next().await {
             Some(Ok(tokio_tungstenite::tungstenite::Message::Close(Some(frame)))) => {
                 assert_eq!(u16::from(frame.code), 1011);
