@@ -158,6 +158,41 @@ async fn account_selection_does_not_mutate_running_session_and_invalid_selection
     assert_eq!(fixture.orchestrator.thread_target(thread.id).unwrap().target.provider.instance, "work");
 }
 
+#[tokio::test]
+async fn removing_an_account_resets_thread_overrides_and_signed_out_accounts_fail_fast() {
+    let fixture = Fixture::new();
+    let mut thread = fixture.thread(ThreadStatus::Idle);
+    let kind = thread.provider.kind;
+    add_test_account(&fixture, kind, "work");
+    let work = ProviderInstance { kind, instance: "work".into() };
+    fixture
+        .orchestrator
+        .set_thread_target(methods::ThreadTargetParams {
+            thread_id: thread.id,
+            target: SessionTarget { provider: work.clone(), model: None, effort: None },
+            inherit_account: false,
+        })
+        .await
+        .unwrap();
+    assert!(fixture.orchestrator.thread_target(thread.id).unwrap().account_override);
+
+    fixture.orchestrator.mark_account_signed_out(&work, true).unwrap();
+    let error = fixture
+        .orchestrator
+        .admit_target(&mut thread, SessionTarget { provider: work.clone(), model: None, effort: None })
+        .unwrap_err();
+    assert_eq!(error.to_string(), "work is signed out. Sign in again in Settings › Accounts.");
+
+    assert_eq!(fixture.orchestrator.clear_account_overrides(&work).unwrap(), 1);
+    let mut settings = fixture.orchestrator.inner.settings.get();
+    settings.providers.get_mut(&kind).unwrap().accounts.clear();
+    fixture.orchestrator.inner.settings.set(settings).unwrap();
+    let target = fixture.orchestrator.thread_target(thread.id).unwrap();
+    assert!(!target.account_override, "the thread follows defaults again");
+    assert_eq!(target.target.provider.instance, "default");
+    assert_eq!(fixture.orchestrator.running_turns_on(&work).await, 0);
+}
+
 #[test]
 fn default_following_threads_resolve_on_next_admission_and_account_return_restores_native_identity() {
     let fixture = Fixture::new();

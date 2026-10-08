@@ -408,6 +408,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let mut tasks = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_tasks());
     let mut usage = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.usage().subscribe());
     let mut settings = ctx.principal.has(Scope::OrchestrationRead).then(|| state.settings.subscribe());
+    let mut account_logins = ctx.principal.has(Scope::OrchestrationRead).then(|| state.account_logins.subscribe());
     let mut projects = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_projects());
     if !state.store.token_is_active(ctx.principal.token_id).unwrap_or(false) {
         return;
@@ -507,6 +508,19 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                     Ok(updated) => { state.orchestrator.usage().settings_changed(); let _ = ctx.out.notify("settings.changed", serde_json::json!({ "settings": updated })).await; }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => { let _ = ctx.out.notify("settings.changed", serde_json::json!({ "settings": state.settings.get() })).await; }
                     Err(_) => settings = None,
+                }
+            }
+            login = async {
+                match account_logins.as_mut() {
+                    Some(logins) => logins.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match login {
+                    Ok(login) => { let _ = ctx.out.notify(kybern_protocol::methods::ACCOUNTS_LOGIN_CHANGED_NOTIFICATION, login).await; }
+                    // Clients also poll `providers.accounts.login.get`, so a missed phase is recovered.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => account_logins = None,
                 }
             }
             limits = async {

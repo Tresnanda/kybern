@@ -1090,6 +1090,16 @@ impl Store {
         })
     }
 
+    /// Blank every meta value under `prefix` that equals `value`; returns the count.
+    pub fn meta_clear_matching(&self, prefix: &str, value: &str) -> Result<usize> {
+        self.with(|c| {
+            Ok(c.execute(
+                "UPDATE meta SET value = '' WHERE substr(key, 1, length(?1)) = ?1 AND value = ?2",
+                params![prefix, value],
+            )?)
+        })
+    }
+
     /// Persist related session identities in one SQLite transaction.
     pub fn meta_set_many(&self, values: &[(&str, &str)]) -> Result<()> {
         self.with(|connection| {

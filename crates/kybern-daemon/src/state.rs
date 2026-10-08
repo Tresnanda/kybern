@@ -37,6 +37,8 @@ pub struct Inner {
     pub harness_updates: crate::harness_updates::HarnessUpdates,
     pub daemon_updates: crate::self_update::DaemonUpdates,
     pub cursor_setup: crate::cursor_setup::CursorSetup,
+    pub account_identities: crate::account_identity::AccountIdentities,
+    pub account_logins: crate::account_login::AccountLogins,
     /// Started by the desktop app, whose bundle owns this binary.
     pub desktop_managed: std::sync::atomic::AtomicBool,
     /// A newer binary is in place; hand over to it after the graceful shutdown.
@@ -117,6 +119,8 @@ impl AppState {
                 harness_updates,
                 daemon_updates,
                 cursor_setup: Default::default(),
+                account_identities: Default::default(),
+                account_logins: Default::default(),
                 desktop_managed: std::sync::atomic::AtomicBool::new(false),
                 restart_pending: std::sync::atomic::AtomicBool::new(false),
                 pairing: Pairing::default(),

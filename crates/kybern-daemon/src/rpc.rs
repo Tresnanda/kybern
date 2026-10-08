@@ -134,6 +134,27 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         AccountsSignIn::NAME => ok(crate::provider_accounts::sign_in(state, parse(params)?).map_err(provider_err)?),
         AccountsCatalog::NAME => ok(crate::provider_accounts::catalog(state, parse(params)?).await.map_err(provider_err)?),
         AccountsUsage::NAME => ok(crate::provider_accounts::usage(state, parse(params)?).await.map_err(provider_err)?),
+        AccountsList::NAME => ok(crate::provider_accounts::list(state, parse_or_default(params)?).await.map_err(bad)?),
+        AccountsLoginStart::NAME => ok(state.account_logins.start(state, parse(params)?).await.map_err(bad)?),
+        AccountsLoginGet::NAME => {
+            let p: AccountLoginIdParams = parse(params)?;
+            ok(state.account_logins.get(&p.id).map_err(bad)?)
+        }
+        AccountsLoginInput::NAME => {
+            let p: AccountLoginInputParams = parse(params)?;
+            ok(state.account_logins.input(&p.id, p.code).await.map_err(bad)?)
+        }
+        AccountsLoginCancel::NAME => {
+            let p: AccountLoginIdParams = parse(params)?;
+            ok(state.account_logins.cancel(state, &p.id).await.map_err(bad)?)
+        }
+        AccountsLoginFinish::NAME => ok(state.account_logins.finish(state, parse(params)?).await.map_err(bad)?),
+        AccountsUpdate::NAME => ok(crate::provider_accounts::update(state, parse(params)?).await.map_err(bad)?),
+        AccountsSignOut::NAME => ok(crate::provider_accounts::sign_out(state, parse(params)?).await.map_err(bad)?),
+        AccountsRemove::NAME => {
+            crate::provider_accounts::remove(state, parse(params)?).await.map_err(bad)?;
+            ok(Empty {})
+        }
         ThreadsTargetGet::NAME => {
             let p: ThreadsInterruptParams = parse(params)?;
             ok(state.orchestrator.thread_target(p.thread_id).map_err(bad)?)
