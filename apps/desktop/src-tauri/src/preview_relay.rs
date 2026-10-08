@@ -180,7 +180,7 @@ fn header_has_token(value: &[u8], token: &str) -> bool {
 
 /// Rewrites the request head; returns the new head, the number of source
 /// bytes it consumed, and whether this is a protocol upgrade.
-fn rewrite_head(buf: &[u8], upstream: &Upstream) -> Result<(Vec<u8>, usize, bool), &'static str> {
+fn rewrite_head(buf: &[u8], upstream: &Upstream, port: u16) -> Result<(Vec<u8>, usize, bool), &'static str> {
     let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
     let mut req = httparse::Request::new(&mut headers);
     let consumed = match req.parse(buf) {
@@ -197,6 +197,14 @@ fn rewrite_head(buf: &[u8], upstream: &Upstream) -> Result<(Vec<u8>, usize, bool
     // Only origin-form targets (`/path?query`) are relayed.
     if !target.starts_with('/') || target.starts_with("//") {
         return Err("400 Bad Request");
+    }
+    // The relay's origin carries a ticket, so it must not answer under another
+    // name: a DNS-rebinding page (`evil.example` resolving to 127.0.0.1) would
+    // otherwise read the forwarded app as its own origin.
+    let hosts: Vec<&[u8]> = req.headers.iter().filter(|h| h.name.eq_ignore_ascii_case("host")).map(|h| h.value).collect();
+    let expected = [format!("127.0.0.1:{port}"), format!("localhost:{port}")];
+    if hosts.len() != 1 || !expected.iter().any(|e| e.as_bytes().eq_ignore_ascii_case(hosts[0].trim_ascii())) {
+        return Err("421 Misdirected Request");
     }
     let is_upgrade = req.headers.iter().any(|h| h.name.eq_ignore_ascii_case("connection") && header_has_token(h.value, "upgrade"))
         && req.headers.iter().any(|h| h.name.eq_ignore_ascii_case("upgrade"));
@@ -235,7 +243,7 @@ async fn handle(mut client: TcpStream, upstream: &Upstream, port: u16, on_ws_fai
             return Ok(());
         }
     };
-    let (head, consumed, is_upgrade) = match rewrite_head(&buf, upstream) {
+    let (head, consumed, is_upgrade) = match rewrite_head(&buf, upstream, port) {
         Ok(parts) => parts,
         Err(status) => {
             reply(&mut client, status).await;
@@ -519,7 +527,7 @@ mod tests {
         let relays = Relays::default();
         let port = relays.open("http://127.0.0.1:1/preview-proxy/abc", &["127.0.0.1:1".into()], noop()).await.unwrap();
         let mut client = connect(port).await;
-        client.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").await.unwrap();
+        client.write_all(format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n").as_bytes()).await.unwrap();
         let mut answer = String::new();
         client.read_to_string(&mut answer).await.unwrap();
         assert!(answer.starts_with("HTTP/1.1 502"));
@@ -529,8 +537,24 @@ mod tests {
     #[test]
     fn refuses_connect_and_absolute_targets() {
         let u = parse_upstream("http://h:1/preview-proxy/abc").unwrap();
-        assert_eq!(rewrite_head(b"CONNECT h:1 HTTP/1.1\r\n\r\n", &u).unwrap_err(), "405 Method Not Allowed");
-        assert!(rewrite_head(b"GET http://evil/ HTTP/1.1\r\n\r\n", &u).is_err());
-        assert!(rewrite_head(b"GET //evil/x HTTP/1.1\r\n\r\n", &u).is_err());
+        assert_eq!(rewrite_head(b"CONNECT h:1 HTTP/1.1\r\n\r\n", &u, 7).unwrap_err(), "405 Method Not Allowed");
+        assert!(rewrite_head(b"GET http://evil/ HTTP/1.1\r\nHost: 127.0.0.1:7\r\n\r\n", &u, 7).is_err());
+        assert!(rewrite_head(b"GET //evil/x HTTP/1.1\r\nHost: 127.0.0.1:7\r\n\r\n", &u, 7).is_err());
+    }
+
+    #[test]
+    fn refuses_foreign_host_headers() {
+        let u = parse_upstream("http://h:1/preview-proxy/abc").unwrap();
+        assert!(rewrite_head(b"GET / HTTP/1.1\r\nHost: 127.0.0.1:7\r\n\r\n", &u, 7).is_ok());
+        assert!(rewrite_head(b"GET / HTTP/1.1\r\nHost: LOCALHOST:7\r\n\r\n", &u, 7).is_ok());
+        for head in [
+            &b"GET / HTTP/1.1\r\n\r\n"[..],
+            b"GET / HTTP/1.1\r\nHost: evil.example:7\r\n\r\n",
+            b"GET / HTTP/1.1\r\nHost: 127.0.0.1:8\r\n\r\n",
+            b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+            b"GET / HTTP/1.1\r\nHost: 127.0.0.1:7\r\nHost: evil.example:7\r\n\r\n",
+        ] {
+            assert_eq!(rewrite_head(head, &u, 7).unwrap_err(), "421 Misdirected Request", "{}", String::from_utf8_lossy(head));
+        }
     }
 }

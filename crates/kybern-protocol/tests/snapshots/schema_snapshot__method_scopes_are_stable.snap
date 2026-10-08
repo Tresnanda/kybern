@@ -315,7 +315,7 @@ expression: scopes
 - - previews.close
   - "orchestration:operate"
 - - previews.probe
-  - "orchestration:read"
+  - "orchestration:operate"
 - - previews.servers.list
   - "orchestration:read"
 - - threads.artifacts.list

@@ -51,6 +51,15 @@ impl ProbeOutcome {
 /// Loopback, private (RFC 1918), CGNAT (Tailscale), link-local and unique-local
 /// addresses. `0.0.0.0` / `::` reach the local machine and are allowed.
 pub fn is_local_or_private_ip(ip: IpAddr) -> bool {
+    // Cloud instance metadata (AWS, GCP, Azure, and AWS's IPv6 form) is never a
+    // dev server, and a remote daemon on a VM must not reach it by DNS name.
+    const METADATA: [IpAddr; 2] = [
+        IpAddr::V4(std::net::Ipv4Addr::new(169, 254, 169, 254)),
+        IpAddr::V6(std::net::Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254)),
+    ];
+    if METADATA.contains(&ip) {
+        return false;
+    }
     match ip {
         IpAddr::V4(ip) => {
             let o = ip.octets();
@@ -498,7 +507,16 @@ mod tests {
         ] {
             assert!(is_local_or_private_ip(ok.parse().unwrap()), "{ok}");
         }
-        for no in ["8.8.8.8", "172.32.0.1", "100.128.0.1", "2001:4860:4860::8888", "::ffff:8.8.8.8"] {
+        for no in [
+            "8.8.8.8",
+            "172.32.0.1",
+            "100.128.0.1",
+            "2001:4860:4860::8888",
+            "::ffff:8.8.8.8",
+            "169.254.169.254",
+            "::ffff:169.254.169.254",
+            "fd00:ec2::254",
+        ] {
             assert!(!is_local_or_private_ip(no.parse().unwrap()), "{no}");
         }
     }

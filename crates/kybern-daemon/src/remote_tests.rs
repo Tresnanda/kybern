@@ -1573,8 +1573,21 @@ async fn tool_hydration_preserves_snapshot_and_reused_call_identity_over_real_rp
 #[tokio::test]
 async fn previews_open_serve_grant_and_close_over_rpc_and_http() {
     let host = Host::start().await;
-    let thread = host.thread();
+    let mut thread = host.thread();
     let client = host.client().await;
+    // The fixture project is the data directory itself, which is never served:
+    // its pages ask for a folder that cannot be granted.
+    std::fs::write(host.root.join("in-data.html"), "<p>x</p>").unwrap();
+    let in_data = client
+        .call::<PreviewOpen>(PreviewOpenParams { thread_id: thread.id, target: "in-data.html".into(), allow_folder: true, proxy: false })
+        .await;
+    assert!(in_data.is_err(), "the data directory (daemon.token) is never a preview root");
+    // Work in a project folder outside the data directory from here on.
+    let project = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target").join(format!("preview-e2e-project-{}", Uuid::now_v7()));
+    std::fs::create_dir_all(&project).unwrap();
+    let project = project.canonicalize().unwrap();
+    thread.cwd = project.to_string_lossy().into_owned();
+    host.state.store.thread_upsert(&thread).unwrap();
     let http = reqwest::Client::new();
     let get = |path: String| {
         let http = http.clone();
@@ -1586,11 +1599,11 @@ async fn previews_open_serve_grant_and_close_over_rpc_and_http() {
     };
 
     // Inside the project: no card, page plus relative assets load.
-    std::fs::create_dir_all(host.root.join("mock")).unwrap();
-    std::fs::write(host.root.join("mock/index.html"), "<html><head><link rel=stylesheet href=style.css></head><body>hi</body></html>")
+    std::fs::create_dir_all(project.join("mock")).unwrap();
+    std::fs::write(project.join("mock/index.html"), "<html><head><link rel=stylesheet href=style.css></head><body>hi</body></html>")
         .unwrap();
-    std::fs::write(host.root.join("mock/style.css"), "body{color:red}").unwrap();
-    std::fs::write(host.root.join(".env"), "SECRET=1").unwrap();
+    std::fs::write(project.join("mock/style.css"), "body{color:red}").unwrap();
+    std::fs::write(project.join(".env"), "SECRET=1").unwrap();
     let inside = open("mock/index.html", false).await.unwrap();
     assert!(inside.needs_permission.is_none());
     let ticket = inside.ticket.clone().unwrap();
@@ -1630,6 +1643,10 @@ async fn previews_open_serve_grant_and_close_over_rpc_and_http() {
         .unwrap();
     assert_eq!(proxied.path.unwrap(), format!("/preview-proxy/{}/", proxied.ticket.unwrap()));
     drop(listener);
+    // Never a proxy into the daemon's own API.
+    let own = format!("localhost:{}", host.state.port.load(std::sync::atomic::Ordering::Relaxed));
+    let own = client.call::<PreviewOpen>(PreviewOpenParams { thread_id: thread.id, target: own, allow_folder: false, proxy: true }).await;
+    assert!(own.is_err(), "proxying the daemon itself must be refused");
     let closed = client
         .call::<PreviewOpen>(PreviewOpenParams { thread_id: thread.id, target: "localhost:1".into(), allow_folder: false, proxy: true })
         .await;
@@ -1658,5 +1675,6 @@ async fn previews_open_serve_grant_and_close_over_rpc_and_http() {
     // Non-grantable folders stay refused even when the user said yes.
     let refused = open("/etc/hosts", true).await.unwrap_err().to_string();
     assert!(!refused.is_empty());
+    let _ = std::fs::remove_dir_all(&project);
     let _ = std::fs::remove_dir_all(&outside);
 }

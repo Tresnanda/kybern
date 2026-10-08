@@ -27,6 +27,11 @@ fn policy(home: &Path, data: &Path) -> GrantPolicy {
     GrantPolicy { home: Some(home.to_path_buf()), data_dir: data.to_path_buf(), system: Vec::new() }
 }
 
+/// Home and data directory far from every temp dir the tests create.
+fn elsewhere_policy() -> GrantPolicy {
+    policy(Path::new("/nonexistent-kybern-home"), Path::new("/nonexistent-kybern-home/.kybern"))
+}
+
 // ---- address classification ----
 
 #[test]
@@ -133,7 +138,7 @@ fn roots(dir: &Dir) -> ThreadRoots {
 #[test]
 fn urls_become_servers_or_external() {
     let work = Dir::new();
-    let pol = policy(&work.0, &work.0.join("data"));
+    let pol = elsewhere_policy();
     let resolve = |input: &str| resolve(input, &roots(&work), &[], false, &pol);
     let server = |input: &str| match resolve(input).unwrap().info {
         PreviewTargetInfo::Server { url, port } => (url, port),
@@ -177,14 +182,14 @@ fn urls_become_servers_or_external() {
 fn file_inside_the_worktree_needs_no_permission() {
     let work = Dir::new();
     let page = work.write("mockups/index.html");
-    let resolved = resolve("mockups/index.html", &roots(&work), &[], false, &policy(&work.0, &work.0.join("data"))).unwrap();
+    let resolved = resolve("mockups/index.html", &roots(&work), &[], false, &elsewhere_policy()).unwrap();
     assert!(resolved.needs_permission.is_none() && resolved.grant.is_none());
     let plan = resolved.file.unwrap();
     assert_eq!(plan, FilePlan { root: work.0.clone(), rel: "mockups/index.html".into() });
     assert!(matches!(resolved.info, PreviewTargetInfo::File { in_project: true, .. }));
     // The same file by absolute path and file URL.
     for form in [page.to_string_lossy().into_owned(), format!("file://{}", page.display())] {
-        let r = resolve(&form, &roots(&work), &[], false, &policy(&work.0, &work.0.join("data"))).unwrap();
+        let r = resolve(&form, &roots(&work), &[], false, &elsewhere_policy()).unwrap();
         assert_eq!(r.file.unwrap().rel, "mockups/index.html", "{form}");
     }
 }
@@ -196,11 +201,11 @@ fn project_root_outside_the_worktree_is_the_root() {
     let page = project.write("design/home.html");
     worktree.write("other.html");
     let roots = ThreadRoots { cwd: worktree.0.clone(), project: Some(project.0.clone()) };
-    let r = resolve(page.to_str().unwrap(), &roots, &[], false, &policy(&worktree.0, &worktree.0.join("data"))).unwrap();
+    let r = resolve(page.to_str().unwrap(), &roots, &[], false, &elsewhere_policy()).unwrap();
     assert!(r.needs_permission.is_none());
     assert_eq!(r.file.unwrap(), FilePlan { root: project.0.clone(), rel: "design/home.html".into() });
     // Worktree wins when the file is inside both.
-    let inside = resolve("other.html", &roots, &[], false, &policy(&worktree.0, &worktree.0.join("data"))).unwrap();
+    let inside = resolve("other.html", &roots, &[], false, &elsewhere_policy()).unwrap();
     assert_eq!(inside.file.unwrap().root, worktree.0);
 }
 
@@ -209,7 +214,7 @@ fn outside_files_need_a_grant_that_persists() {
     let work = Dir::new();
     let elsewhere = Dir::new();
     let page = elsewhere.write("mock/ade-34.html");
-    let pol = policy(&work.0, &work.0.join("data"));
+    let pol = elsewhere_policy();
     let first = resolve(page.to_str().unwrap(), &roots(&work), &[], false, &pol).unwrap();
     assert!(first.file.is_none() && first.grant.is_none());
     let request = first.needs_permission.unwrap();
@@ -305,7 +310,7 @@ fn outside_non_grantable_folder_is_refused_even_with_allow_folder() {
 #[test]
 fn entry_documents_and_missing_files() {
     let work = Dir::new();
-    let pol = policy(&work.0, &work.0.join("data"));
+    let pol = elsewhere_policy();
     for ok in ["a.html", "b.htm", "c.svg", "d.xhtml", "E.HTML"] {
         work.write(ok);
         assert!(resolve(ok, &roots(&work), &[], false, &pol).unwrap().file.is_some(), "{ok}");
@@ -329,7 +334,7 @@ fn symlinked_entries_resolve_to_their_real_folder() {
     let outside = Dir::new();
     let page = outside.write("real.html");
     std::os::unix::fs::symlink(&page, work.0.join("link.html")).unwrap();
-    let pol = policy(&work.0, &work.0.join("data"));
+    let pol = elsewhere_policy();
     // The link lives in the worktree, but its target does not: a grant is needed.
     let r = resolve("link.html", &roots(&work), &[], false, &pol).unwrap();
     assert!(r.file.is_none());
@@ -342,4 +347,35 @@ fn paths_encode_and_decode() {
     assert_eq!(file_path_for("T", "mock/index.html"), "/preview-files/T/mock/index.html");
     assert_eq!(percent_decode("a%20b%2e%2e").unwrap(), "a b..");
     assert!(percent_decode("%zz").is_none() && percent_decode("%f").is_none() && percent_decode("%ff").is_none());
+}
+
+#[test]
+fn thread_roots_covering_home_or_data_are_not_served_whole() {
+    let home = Dir::new();
+    let data = home.0.join(".kybern");
+    std::fs::create_dir_all(data.join("worktrees/wt")).unwrap();
+    std::fs::write(data.join("daemon.token"), "kyb_secret").unwrap();
+    let page = home.write("Documents/mock/page.html");
+    let pol = policy(&home.0, &data);
+    // A thread opened on the home directory: the page's own folder needs a grant,
+    // never the whole home (which holds the data directory and its token).
+    let at_home = ThreadRoots { cwd: home.0.clone(), project: None };
+    let r = resolve(page.to_str().unwrap(), &at_home, &[], false, &pol).unwrap();
+    assert!(r.file.is_none(), "the home directory is never a served root");
+    assert_eq!(r.needs_permission.unwrap().folder, home.0.join("Documents/mock").to_string_lossy());
+    // A thread on `/` or a parent of home behaves the same.
+    for cwd in [PathBuf::from("/"), home.0.parent().unwrap().to_path_buf()] {
+        let r = resolve(page.to_str().unwrap(), &ThreadRoots { cwd, project: None }, &[], false, &pol).unwrap();
+        assert!(r.file.is_none());
+    }
+    // The data directory itself is never a root; its worktrees are.
+    let in_data = home.write(".kybern/page.html");
+    let on_data = ThreadRoots { cwd: data.clone(), project: None };
+    assert!(resolve(in_data.to_str().unwrap(), &on_data, &[], true, &pol).is_err());
+    let wt_page = home.write(".kybern/worktrees/wt/index.html");
+    let on_worktree = ThreadRoots { cwd: data.join("worktrees/wt"), project: Some(home.0.clone()) };
+    let r = resolve(wt_page.to_str().unwrap(), &on_worktree, &[], false, &pol).unwrap();
+    assert_eq!(r.file.unwrap().root, data.join("worktrees/wt"));
+    assert!(!pol.servable_thread_root(&home.0.join("Library/Application Support")));
+    assert!(pol.servable_thread_root(&home.0.join("Documents")));
 }
