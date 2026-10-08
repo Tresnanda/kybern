@@ -14,6 +14,7 @@ import { useStore } from "../src/state/store"
 import { attachUsageFeed } from "../src/state/usageLimits"
 import { refreshAccounts } from "../src/state/accounts"
 import { buildThemeCssVariables, DEFAULT_THEME_STATE } from "../src/lib/kit/theme/theme.logic"
+import { RpcCallError } from "../src/protocol"
 import type { AccountLogin, AccountSummary, ProviderStatus, Settings } from "../src/protocol"
 import "../src/index.css"
 
@@ -21,6 +22,7 @@ const query = new URLSearchParams(location.search)
 const theme = query.get("theme") === "light" ? "light" : "dark"
 const scene = query.get("scene") ?? "settings"
 const remote = query.get("remote") === "1"
+const legacy = query.get("legacy") === "1"
 
 const account = (kind: AccountSummary["provider"]["kind"], instance: string, name: string, patch: Partial<AccountSummary> = {}): AccountSummary => ({
   provider: { kind, instance }, name, status: "signed_in", is_default: false, projects: [], managed: instance !== "default", can_sign_out: instance !== "default", ...patch,
@@ -35,7 +37,7 @@ const accounts: AccountSummary[] = [
 const providers: ProviderStatus[] = (["claude-code", "codex", "cursor", "omp", "opencode"] as const).map((kind) => ({
   kind, display_name: { "claude-code": "Claude Code", codex: "Codex", cursor: "Cursor", omp: "Oh My Pi", opencode: "OpenCode" }[kind], available: kind !== "opencode", supported_permission_modes: ["supervised"], supports_fork: true, supports_model_switch: true, instances: ["default"], models: [],
 }))
-const settings = { default_provider: "claude-code", default_permission_mode: "supervised", worktrees_default: true, generate_titles: true, notifications: true, auto_update_harnesses: false, auto_update_daemon: false, tell_agents_about_kybern: true, background: { session_idle_minutes: 15, max_idle_sessions: 3, terminal_idle_minutes: 30, daemon_idle_exit_minutes: 0, save_power_on_battery: true }, access: { tailscale: false }, computer_use: { enabled: false, foreground: "ask" }, orchestration: { max_active_children: 4, max_depth: 2 }, providers: { "claude-code": { env: {}, accounts: { work: { name: "Arunika", directory: "/x" } } } } } as unknown as Settings
+const settings = { default_provider: "claude-code", default_permission_mode: "supervised", worktrees_default: true, generate_titles: true, notifications: true, auto_update_harnesses: false, auto_update_daemon: false, tell_agents_about_kybern: true, background: { session_idle_minutes: 15, max_idle_sessions: 3, terminal_idle_minutes: 30, daemon_idle_exit_minutes: 0, save_power_on_battery: true }, access: { tailscale: false }, computer_use: { enabled: false, foreground: "ask" }, orchestration: { max_active_children: 4, max_depth: 2 }, providers: { "claude-code": { env: {}, project_accounts: { "/p/kybern": "work", "/p/ui": "personal" }, accounts: { work: { name: "Arunika", directory: "/x" }, personal: { name: "Personal", directory: "/y" } } } } } as unknown as Settings
 
 const base = (patch: Partial<AccountLogin>): AccountLogin => ({ id: "login-1", kind: query.get("kind") === "codex" ? "codex" : "claude-code", mode: "browser", phase: "waiting", url: "https://claude.com/cai/oauth/authorize?code=true", expires_at: new Date(Date.now() + 900_000).toISOString(), ...patch })
 const signedIn = base({ phase: "signed_in", identity: { email: "dev@arunika.co", plan: "Pro", organization: "Arunika Studio" }, suggested_name: "Arunika Studio", suggested_color: "teal" })
@@ -53,7 +55,10 @@ const script: Record<string, () => AccountLogin> = {
 const client = {
   async call(method: string, params: never) {
     const p = params as Record<string, unknown>
-    if (method === "providers.accounts.list") return { accounts }
+    if (method === "providers.accounts.list") {
+      if (legacy) throw new RpcCallError({ code: -32601, message: "method not found: providers.accounts.list" })
+      return { accounts }
+    }
     if (method === "providers.accounts.login.start") { login = (script[scene] ?? script.waiting)(); if ((p.mode as string) === "paste") login = { ...login, mode: "paste" }; return login }
     if (method === "providers.accounts.login.get") return login
     if (method === "providers.accounts.login.input") { if (scene === "paste-wrong") { login = { ...login, error: "bad code" }; return login } return { ...login, phase: "verifying" } }
@@ -99,7 +104,7 @@ async function run() {
     selectedId: remote ? "studio" : "local",
     profiles: [remote ? { id: "studio", name: "studio-mac", url: null, environment_id: "e2", hostname: "studio-mac", local: false, ssh: { host: "studio-mac" } as never } : { id: "local", name: "This Mac", url: null, environment_id: "e1", hostname: null, local: true }],
   })
-  useStore.getState().set({ settings, providers, settingsOpen: true, settingsTab: "accounts", connection: { state: "open" } as never })
+  useStore.getState().set({ settings, providers, projects: { a: { id: "a", name: "kybern", path: "/p/kybern", is_git: true }, b: { id: "b", name: "marketing site", path: "/p/site", is_git: true }, c: { id: "c", name: "ade-ui-rework", path: "/p/ui", is_git: true } } as never, settingsOpen: true, settingsTab: "accounts", connection: { state: "open" } as never })
   attachUsageFeed(client as never, useStore.getState().environmentId)
   createRoot(document.getElementById("root")!).render(<Harness />)
 }

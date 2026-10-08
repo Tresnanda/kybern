@@ -171,7 +171,7 @@ export interface AppState {
   sessionsProjectId: ProjectId | null
   paletteOpen: boolean
   settingsOpen: boolean
-  settingsTab: "general" | "agents" | "integrations" | "computer" | "appearance" | "notifications" | "background" | "about"
+  settingsTab: "general" | "agents" | "accounts" | "integrations" | "computer" | "appearance" | "notifications" | "background" | "about"
   /** A settings row to bring into view when Settings opens, e.g. `provider:cursor`. */
   settingsFocus: string | null
   collapsedProjects: Record<ProjectId, boolean>

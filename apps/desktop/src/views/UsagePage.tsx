@@ -11,6 +11,7 @@ import { useNow } from "@/lib/hooks"
 import { PROVIDER_NAMES, limitLabel, limitLeftLabel, limitPace, limitTone, limitUsed, limitsStale, resetIn, staleReason, updatedAgo } from "@/lib/providerUsage"
 import { errorText, rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
+import { takeUsageAnchor } from "@/state/accounts"
 import { refreshUsageLimits, useAccountLimits, useRefreshingLimits } from "@/state/usageLimits"
 import { SurfaceHeader } from "./chrome"
 import type { ProviderKind, UsageGroup, UsageSummaryResult } from "@/protocol"
@@ -67,6 +68,16 @@ export function UsagePage() {
     return () => { canceled = true }
   }, [key, scope, period, group, settled])
   const accountLimits = limitProviders.filter((entry) => entry.limits.length > 0)
+  // Settings › Accounts links to one account's card. Scroll to it once it is on the page; a missing card is ignored.
+  const anchor = useRef<string | null>(null)
+  useEffect(() => { anchor.current = takeUsageAnchor() }, [])
+  useEffect(() => {
+    const id = anchor.current
+    const node = id ? document.getElementById(id) : null
+    if (!id || !node) return
+    anchor.current = null
+    node.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })
+  }, [limitProviders])
   const newest = accountLimits.reduce<string | undefined>((latest, entry) => (entry.updated_at && (!latest || entry.updated_at > latest) ? entry.updated_at : latest), undefined)
   // Never show the previous filter's totals under the next filter's label.
   const data = result?.scope === scope ? result : null
