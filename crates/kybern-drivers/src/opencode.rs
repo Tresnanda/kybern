@@ -62,6 +62,8 @@ async fn opencode_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<P
                 efforts: Vec::new(),
                 default_effort: None,
                 is_default: false,
+                parameters: Vec::new(),
+                variants: Vec::new(),
             })
         })
         .collect();

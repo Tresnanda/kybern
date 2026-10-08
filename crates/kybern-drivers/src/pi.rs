@@ -183,6 +183,8 @@ async fn omp_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<Provid
                 .collect();
             Some(ProviderModel {
                 is_default: id.ends_with("/default"),
+                parameters: Vec::new(),
+                variants: Vec::new(),
                 id,
                 display_name,
                 resolved_id: None,

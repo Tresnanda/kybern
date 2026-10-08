@@ -55,6 +55,8 @@ fn parse_cursor_models(output: &[u8]) -> Vec<ProviderModel> {
                 efforts: Vec::new(),
                 default_effort: None,
                 is_default,
+                parameters: Vec::new(),
+                variants: Vec::new(),
             })
         })
         .collect()

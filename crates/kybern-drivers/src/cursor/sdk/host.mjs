@@ -55,15 +55,21 @@ export function modelSelection(selector, effort) {
   return { id: selector };
 }
 
-function variantLabel(params) {
-  return params.map(({ id, value }) => {
-    if (/context/i.test(id)) return `${value.replace(/000000$/, "M").replace(/000$/, "K")} context`;
-    if (/zdr/i.test(id)) return value === "true" || value === "on" ? "ZDR" : `ZDR ${value}`;
-    if (value === "true" || value === "on") return id.replaceAll("_", " ");
-    return `${id.replaceAll("_", " ")}: ${value}`;
-  }).join(" · ");
+const ON_VALUES = { true: "false", on: "off" };
+const sentence = (text) => { const words = text.replaceAll("_", " ").trim(); return /^zdr$/i.test(words) ? "ZDR" : words.charAt(0).toUpperCase() + words.slice(1); };
+function valueLabel(parameter, value, named) {
+  if (/context/i.test(parameter)) return value.replace(/000000$/, "M").replace(/000$/, "K");
+  if (value === "true" || value === "on") return "On";
+  if (value === "false" || value === "off") return "Off";
+  return named || sentence(value);
 }
 
+/**
+ * One row per model. Parameters other than effort become structured traits
+ * (`parameters`) and each combination that exists is a `variants` entry whose
+ * id is the selector the session receives, so the picker never lists a row
+ * per combination. The row's own id is the default combination's selector.
+ */
 export function modelCatalog(models) {
   const out = [{ id: "default", display_name: "Default", description: "Cursor’s default model", is_default: true, efforts: [] }];
   for (const model of models) {
@@ -77,22 +83,64 @@ export function modelCatalog(models) {
       const key = JSON.stringify([...params].sort((a, b) => a.id.localeCompare(b.id))) + (effort?.id ?? "");
       let group = groups.get(key);
       if (!group) {
-        group = { params, effortParam: effort?.id, efforts: [], description: variant.description || model.description,
-          name: variant.displayName || base };
+        group = { params, effortParam: effort?.id, efforts: [], isDefault: false };
         groups.set(key, group);
       }
+      group.isDefault ||= !!variant.isDefault;
       if (effort && !group.efforts.includes(effort.value)) group.efforts.push(effort.value);
     }
-    const plain = ![...groups.values()].some((g) => g.params.length === 0);
-    if (plain) out.push({ id: model.id, display_name: base, description: model.description, is_default: false, efforts: [] });
-    for (const group of groups.values()) {
+    if (!groups.size) {
+      out.push({ id: model.id, display_name: base, description: model.description, is_default: false, efforts: [] });
+      continue;
+    }
+    const list = [...groups.values()];
+    const initial = list.find((g) => g.isDefault) ?? list[0];
+
+    // Parameter order and labels come from the SDK; values seen only in
+    // variants are appended. A variant that omits a parameter is its off state.
+    const declared = new Map((model.parameters ?? []).map((p) => [p.id, p]));
+    const order = [];
+    const seen = new Map();
+    for (const group of list) for (const { id, value } of group.params) {
+      if (!seen.has(id)) { seen.set(id, new Set()); order.push(id); }
+      seen.get(id).add(value);
+    }
+    const missing = (id) => list.some((g) => !g.params.some((p) => p.id === id));
+    const absent = (id) => {
+      const values = [...seen.get(id)];
+      return values.length && values.every((v) => v in ON_VALUES) ? ON_VALUES[values[0]] : "default";
+    };
+    const parameters = [];
+    for (const id of order) {
+      const def = declared.get(id);
+      const values = [...seen.get(id)];
+      if (missing(id)) values.push(absent(id));
+      const known = (def?.values ?? []).map((v) => v.value).filter((v) => values.includes(v));
+      const sorted = [...known, ...values.filter((v) => !known.includes(v))];
+      if (sorted.length < 2) continue;
+      const named = new Map((def?.values ?? []).map((v) => [v.value, v.displayName]));
+      const initialValue = initial.params.find((p) => p.id === id)?.value ?? absent(id);
+      parameters.push({
+        id, label: def?.displayName || sentence(id), default: initialValue,
+        values: sorted.map((value) => ({ value, label: value === "default" ? "Default" : valueLabel(id, value, named.get(value)) })),
+      });
+    }
+
+    const variantFor = (group) => {
       const defaultEffort = group.efforts.includes("medium") ? "medium" : group.efforts[0];
       const selection = { id: model.id, params: group.params,
         ...(group.effortParam ? { effortParam: group.effortParam, effortValues: group.efforts, defaultEffort } : {}) };
-      const detail = variantLabel(group.params);
-      out.push({ id: selectorFor(selection), display_name: detail ? `${base} · ${detail}` : base,
-        description: group.description, is_default: false, efforts: group.efforts, default_effort: defaultEffort });
-    }
+      const values = {};
+      for (const { id } of parameters) values[id] = group.params.find((p) => p.id === id)?.value ?? absent(id);
+      return { id: selectorFor(selection), params: values, efforts: group.efforts, default_effort: defaultEffort };
+    };
+    const variants = list.map(variantFor);
+    const first = variants[list.indexOf(initial)];
+    out.push({
+      id: first.id, display_name: base, resolved_id: model.id, description: model.description, is_default: false,
+      efforts: first.efforts, ...(first.default_effort ? { default_effort: first.default_effort } : {}),
+      ...(parameters.length ? { parameters, variants } : {}),
+    });
   }
   return out;
 }

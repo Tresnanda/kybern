@@ -40,7 +40,7 @@ test("sandbox approval policy is explicit; model variants retain parameters", ()
   assert.throws(() => runtimePolicy("supervised"), /no interactive approvals/);
   assert.throws(() => runtimePolicy("accept-edits"));
   const models = modelCatalog([{ id: "m", variants: [{ displayName: "Thinking", params: [{ id: "thinking", value: "on" }] }] }]);
-  assert.deepEqual(modelSelection(models[2].id), { id: "m", params: [{ id: "thinking", value: "on" }] });
+  assert.deepEqual(modelSelection(models[1].id), { id: "m", params: [{ id: "thinking", value: "on" }] });
   assert.equal(errorText(new Error("secret failed"), ["secret"]), "[redacted] failed");
 });
 
@@ -109,23 +109,54 @@ test("run errors redact the SDK key and scoped MCP capability", async () => {
 });
 
 
-test("effort variants share a model; context and ZDR preserve native parameters", () => {
+test("variants fold into one row with structured traits", () => {
   const models = modelCatalog([{ id: "gpt", displayName: "GPT", variants: [
     { params: [{ id: "reasoning_effort", value: "low" }] },
     { params: [{ id: "reasoning_effort", value: "high" }] },
     { params: [{ id: "context", value: "1000000" }, { id: "reasoning_effort", value: "high" }] },
     { params: [{ id: "zdr", value: "true" }] },
   ] }]);
-  assert.equal(models.length, 4);
-  assert.deepEqual(models[1].efforts, ["low", "high"]);
-  assert.equal(models[1].display_name, "GPT");
-  assert.equal(models[2].display_name, "GPT · 1M context");
-  assert.equal(models[3].display_name, "GPT · ZDR");
-  assert.deepEqual(modelSelection(models[1].id, "high"), { id: "gpt", params: [{ id: "reasoning_effort", value: "high" }] });
-  assert.deepEqual(modelSelection(models[2].id), { id: "gpt", params: [{ id: "context", value: "1000000" }, { id: "reasoning_effort", value: "high" }] });
-  assert.throws(() => modelSelection(models[1].id, "max"), /does not offer/);
+  assert.equal(models.length, 2);
+  const [, row] = models;
+  assert.equal(row.display_name, "GPT");
+  assert.equal(row.resolved_id, "gpt");
+  assert.deepEqual(row.efforts, ["low", "high"]);
+  assert.deepEqual(row.parameters.map((p) => [p.id, p.label, p.default, p.values.map((v) => v.label)]), [
+    ["context", "Context", "default", ["1M", "Default"]],
+    ["zdr", "ZDR", "false", ["On", "Off"]],
+  ]);
+  assert.equal(row.variants.length, 3);
+  assert.equal(row.id, row.variants[0].id);
+  assert.deepEqual(row.variants[1].params, { context: "1000000", zdr: "false" });
+  assert.deepEqual(row.variants[2].params, { context: "default", zdr: "true" });
+  assert.deepEqual(modelSelection(row.id, "high"), { id: "gpt", params: [{ id: "reasoning_effort", value: "high" }] });
+  assert.deepEqual(modelSelection(row.variants[1].id), { id: "gpt", params: [{ id: "context", value: "1000000" }, { id: "reasoning_effort", value: "high" }] });
+  assert.throws(() => modelSelection(row.id, "max"), /does not offer/);
   assert.deepEqual(modelSelection(`cursor-model:${Buffer.from(JSON.stringify({id: "gpt", params: [{id: "reason_effort", value: "low"}]})).toString("base64url")}`),
     {id: "gpt", params: [{id: "reason_effort", value: "low"}]});
+});
+
+test("context and fast combinations are one row, never fast: false", () => {
+  const combos = [];
+  for (const context of ["300000", "1000000"]) for (const fast of ["false", "true"]) {
+    combos.push({ isDefault: context === "300000" && fast === "false",
+      params: [{ id: "context", value: context }, { id: "fast", value: fast }, { id: "effort", value: "low" }] });
+    combos.push({ params: [{ id: "context", value: context }, { id: "fast", value: fast }, { id: "effort", value: "high" }] });
+  }
+  const models = modelCatalog([{ id: "opus", displayName: "Claude Opus 5.5", parameters: [
+    { id: "fast", displayName: "Fast", values: [{ value: "false" }, { value: "true" }] },
+  ], variants: combos }]);
+  assert.equal(models.length, 2);
+  const [, row] = models;
+  assert.equal(row.display_name, "Claude Opus 5.5");
+  assert.deepEqual(row.efforts, ["low", "high"]);
+  assert.deepEqual(row.parameters.map((p) => [p.id, p.label, p.default]), [["context", "Context", "300000"], ["fast", "Fast", "false"]]);
+  assert.deepEqual(row.parameters[0].values.map((v) => v.label), ["300K", "1M"]);
+  assert.equal(row.variants.length, 4);
+  assert.ok(!JSON.stringify(models).includes("fast: false"));
+  const fast = row.variants.find((v) => v.params.context === "1000000" && v.params.fast === "true");
+  assert.deepEqual(modelSelection(fast.id, "high").params, [
+    { id: "context", value: "1000000" }, { id: "fast", value: "true" }, { id: "effort", value: "high" }]);
 });
 
 

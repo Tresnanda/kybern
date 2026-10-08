@@ -165,6 +165,8 @@ fn parse_model(model: &Value, default_model: Option<&str>, configured_effort: Op
     Some(ProviderModel {
         display_name,
         is_default: default_model == Some(id.as_str()),
+        parameters: Vec::new(),
+        variants: Vec::new(),
         id,
         resolved_id: None,
         description: None,

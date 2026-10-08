@@ -75,6 +75,8 @@ fn parse_codex_model(item: &Value) -> Option<ProviderModel> {
         efforts,
         default_effort: item.get("defaultReasoningEffort").and_then(Value::as_str).map(str::to_string),
         is_default: item.get("isDefault").and_then(Value::as_bool).unwrap_or(false),
+        parameters: Vec::new(),
+        variants: Vec::new(),
     })
 }
 
