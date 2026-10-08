@@ -1728,6 +1728,42 @@ pub struct PullRequest {
     pub is_draft: bool,
     pub author: String,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub author_is_bot: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additions: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<u32>,
+    /// APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_decision: Option<String>,
+    /// MERGEABLE | CONFLICTING | UNKNOWN
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mergeable: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<PrLabel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks_summary: Option<PrChecksSummary>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct PrLabel {
+    pub name: String,
+    /// Hex without '#', as GitHub returns it.
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
+pub struct PrChecksSummary {
+    pub total: u32,
+    pub passed: u32,
+    pub failed: u32,
+    pub pending: u32,
+    pub skipped: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1792,6 +1828,30 @@ pub struct PrDetailResult {
     pub reviewers: Vec<String>,
     pub checks: Vec<PrCheck>,
     pub changed_files: u32,
+    /// CLEAN | BLOCKED | BEHIND | DIRTY | UNSTABLE | DRAFT | HAS_HOOKS | UNKNOWN
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_state_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reviews: Vec<PrReviewer>,
+    /// Issue comments plus review threads. None when the count query failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merged_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merged_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrReviewer {
+    pub login: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_bot: bool,
+    /// APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | REQUESTED
+    pub state: String,
 }
 method!(PrDetail, "github.pr.detail", Some(Scope::OrchestrationRead), PrDetailParams, PrDetailResult);
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
@@ -1835,6 +1895,10 @@ pub struct PrReviewEntry {
     pub side: Option<String>,
     pub url: String,
     pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub author_is_bot: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PrPageResult {

@@ -1838,7 +1838,20 @@ export interface PullRequest {
   is_draft: boolean;
   author: string;
   updated_at: DateTime;
+  author_avatar_url?: string;
+  author_is_bot?: boolean;
+  created_at?: DateTime;
+  additions?: number;
+  deletions?: number;
+  /** APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED */
+  review_decision?: string;
+  /** MERGEABLE | CONFLICTING | UNKNOWN */
+  mergeable?: string;
+  labels?: PrLabel[];
+  checks_summary?: PrChecksSummary;
 }
+export interface PrLabel { name: string; color: string }
+export interface PrChecksSummary { total: number; passed: number; failed: number; pending: number; skipped: number }
 
 export interface GitStatusParams {
   thread_id: ThreadId;
@@ -1904,11 +1917,22 @@ export interface PrListResult {
 
 export interface PrDetailParams { project_id: ProjectId; number: number }
 export interface PrCheck { name: string; status: string; conclusion: string; url: string }
-export interface PrDetailResult { pull_request: PullRequest; body: string; head_sha: string; reviewers: string[]; checks: PrCheck[]; changed_files: number }
+export interface PrDetailResult { pull_request: PullRequest; body: string; head_sha: string; reviewers: string[]; checks: PrCheck[]; changed_files: number
+  /** CLEAN | BLOCKED | BEHIND | DIRTY | UNSTABLE | DRAFT | HAS_HOOKS | UNKNOWN */
+  merge_state_status?: string
+  reviews?: PrReviewer[]
+  /** Issue comments plus review threads; absent when the count query failed. */
+  comment_count?: number
+  merged_at?: DateTime
+  merged_by?: string
+  closed_at?: DateTime
+}
+/** APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | REQUESTED */
+export interface PrReviewer { login: string; avatar_url?: string; is_bot?: boolean; state: string }
 export type PrPageKind = "files" | "comments" | "reviews" | "review_comments" | "checks";
 export interface PrPageParams { project_id: ProjectId; number: number; kind: PrPageKind; page?: number }
 export interface PrFile { path: string; old_path: string | null; status: string; additions: number; deletions: number; patch: string; patch_truncated: boolean }
-export interface PrReviewEntry { id: number; author: string; body: string; state: string; path: string | null; line: number | null; side: string | null; url: string; updated_at: string }
+export interface PrReviewEntry { id: number; author: string; body: string; state: string; path: string | null; line: number | null; side: string | null; url: string; updated_at: string; avatar_url?: string; author_is_bot?: boolean }
 export interface PrPageResult { checks?: PrCheck[]; files: PrFile[]; entries: PrReviewEntry[]; page: number; has_more: boolean }
 export type PrActionKind = "comment" | "approve" | "request_changes" | "checkout" | "merge" | "close";
 export interface PrInlineComment { path: string; line: number; side: string; body: string }
