@@ -419,6 +419,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: IntegrationsCmd,
     },
+    /// Find and check web pages for the in-app browser preview.
+    Preview {
+        #[command(subcommand)]
+        cmd: PreviewCmd,
+    },
     /// Preview and publish durable inline interactive HTML replies.
     Visuals {
         #[command(subcommand)]
@@ -760,6 +765,22 @@ enum SettingsCmd {
 }
 
 #[derive(Subcommand)]
+enum PreviewCmd {
+    /// List local web servers that can be previewed.
+    Servers {
+        /// Mark servers running from this thread's folder.
+        #[arg(long)]
+        thread: Option<String>,
+    },
+    /// Check whether a local or private-network page answers and can be framed.
+    Probe {
+        /// Page address, such as http://localhost:5173.
+        #[arg(value_name = "URL")]
+        address: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum ComputerCmd {
     /// Print computer-use status as JSON.
     Status,
@@ -867,6 +888,53 @@ enum CursorCmd {
     Status,
     /// Forget the SDK browser login. Running chats retain their current credential until closed.
     Logout,
+}
+
+async fn preview_cmd(client: &Client, cmd: PreviewCmd, json: bool) -> Result<()> {
+    match cmd {
+        PreviewCmd::Servers { thread } => {
+            let thread_id = thread.map(|id| id.parse()).transpose()?;
+            let r = client.call::<PreviewServersList>(PreviewServersListParams { thread_id }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else if r.servers.is_empty() {
+                println!("No local web servers found.");
+            } else {
+                for server in r.servers {
+                    println!(
+                        "{:<28} {}{:<10} {:<16} {}",
+                        server.url,
+                        if server.in_project { "* " } else { "  " },
+                        server.framework.unwrap_or_default(),
+                        server.process_name.unwrap_or_default(),
+                        server.title.or(server.cwd).unwrap_or_default()
+                    );
+                }
+            }
+        }
+        PreviewCmd::Probe { address } => {
+            let r = client.call::<PreviewProbe>(PreviewProbeParams { url: address }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else {
+                match (r.reachable, r.error) {
+                    (true, _) => println!("reachable (status {})", r.status.map_or_else(|| "?".into(), |s| s.to_string())),
+                    (false, Some(error)) => println!("not reachable: {}", serde_json::to_value(error)?.as_str().unwrap_or("error")),
+                    (false, None) => println!("not reachable"),
+                }
+                if let Some(title) = &r.title {
+                    println!("title: {title}");
+                }
+                if let Some(location) = &r.location {
+                    println!("redirects to: {location}");
+                }
+                if let Some(block) = &r.blocked_by {
+                    println!("blocks embedding: {}: {}", block.header, block.value);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn cursor_setup(cmd: &CursorCmd) -> Result<()> {
@@ -1654,6 +1722,7 @@ pub async fn run() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
         },
+        Cmd::Preview { cmd } => preview_cmd(&client, cmd, json).await?,
         Cmd::Visuals { cmd } => match cmd {
             VisualsCmd::Publish { thread, path, title, height } => {
                 let html = tokio::fs::read_to_string(path).await?;
