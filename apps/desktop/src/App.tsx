@@ -47,6 +47,8 @@ import { openQuickNote } from "@/state/quickNote"
 import { TasksSidebar } from "@/views/tasks/TasksSidebar"
 import { useTasksSync } from "@/views/tasks/useTasksSync"
 import { useUsageLimitsSync } from "@/views/useUsageLimitsSync"
+import { AddAccountSheet } from "@/components/kybern/accounts/AddAccountSheet"
+import { useAccountsSync } from "@/views/useAccountsSync"
 import { newTaskHere } from "@/views/tasks/taskActions"
 
 // The Notes page (editor and all) loads when it is first opened, not at launch.
@@ -119,6 +121,7 @@ function Workspace() {
   useNotesSync()
   useTasksSync()
   useUsageLimitsSync()
+  useAccountsSync()
 
   useNavigationShortcuts()
   useHotkey("mod+b", () => set((s) => ({ sidebarOpen: !s.sidebarOpen })), { allowInInput: true, enabled: !settingsOpen && !panelless })
@@ -323,6 +326,9 @@ function Workspace() {
       <ErrorBoundary label="hand off">
         <HandoffDialog />
         <WorktreeCleanupDialog />
+      </ErrorBoundary>
+      <ErrorBoundary label="add account">
+        <AddAccountSheet />
       </ErrorBoundary>
       <ErrorBoundary label="closing">
         <CloseGuard />

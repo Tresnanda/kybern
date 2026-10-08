@@ -12,7 +12,7 @@ import { create } from "zustand"
 
 import { reloadOnHotUpdate } from "@/lib/hot"
 import type { KybernClient } from "@/protocol"
-import { USAGE_LIMITS_CHANGED_NOTIFICATION, type ProviderKind, type ProviderLimits, type UsageLimitsResult } from "@/protocol"
+import { USAGE_LIMITS_CHANGED_NOTIFICATION, type ProviderInstance, type ProviderKind, type ProviderLimits, type UsageLimitsParams, type UsageLimitsResult } from "@/protocol"
 import { activeRuntime } from "@/state/rpc"
 import { useStore } from "@/state/store"
 
@@ -21,22 +21,34 @@ const POLL_MS = 60_000
 type UsageLimitsState = {
   ownerKey: string | null
   providers: ProviderLimits[]
+  /** Per-account entries (`instance` set), kept from the asks that requested them. */
+  accounts: ProviderLimits[]
   refreshing: ProviderKind[]
   loaded: boolean
 }
 
-export const useUsageLimits = create<UsageLimitsState>(() => ({ ownerKey: null, providers: [], refreshing: [], loaded: false }))
+export const useUsageLimits = create<UsageLimitsState>(() => ({ ownerKey: null, providers: [], accounts: [], refreshing: [], loaded: false }))
 
 let feedClient: KybernClient | null = null
 let generation = 0
 
-function apply(token: number, result: UsageLimitsResult) {
-  if (token !== generation) return
-  useUsageLimits.setState({ providers: result.providers, refreshing: result.refreshing ?? [], loaded: true })
+const accountKey = (entry: ProviderLimits) => `${entry.provider}:${entry.instance ?? ""}`
+
+/** Newer per-account entries replace older ones; accounts nobody asked about this time stay as they were. */
+export function mergeAccountLimits(previous: ProviderLimits[], incoming: ProviderLimits[] | undefined): ProviderLimits[] {
+  if (!incoming?.length) return previous
+  const merged = new Map(previous.map((entry) => [accountKey(entry), entry]))
+  for (const entry of incoming) merged.set(accountKey(entry), entry)
+  return [...merged.values()]
 }
 
-function ask(client: KybernClient, token: number, refresh = false) {
-  void client.call("usage.limits", { cached: true, ...(refresh ? { refresh: true } : {}) }).then(
+function apply(token: number, result: UsageLimitsResult) {
+  if (token !== generation) return
+  useUsageLimits.setState((state) => ({ providers: result.providers, accounts: mergeAccountLimits(state.accounts, result.accounts), refreshing: result.refreshing ?? [], loaded: true }))
+}
+
+function ask(client: KybernClient, token: number, refresh = false, extra: Pick<UsageLimitsParams, "instances" | "all_accounts"> = {}) {
+  void client.call("usage.limits", { cached: true, ...(refresh ? { refresh: true } : {}), ...extra }).then(
     (result) => apply(token, result),
     () => { /* keep the last values; the next ask or notification catches up */ },
   )
@@ -47,7 +59,7 @@ export function attachUsageFeed(client: KybernClient, ownerKey: string): () => v
   const token = ++generation
   feedClient = client
   if (useUsageLimits.getState().ownerKey !== ownerKey) {
-    useUsageLimits.setState({ ownerKey, providers: [], refreshing: [], loaded: false })
+    useUsageLimits.setState({ ownerKey, providers: [], accounts: [], refreshing: [], loaded: false })
   }
   const off = client.onNotification(USAGE_LIMITS_CHANGED_NOTIFICATION, (params) => apply(token, params as UsageLimitsResult))
   const poll = () => { if (!document.hidden) ask(client, token) }
@@ -64,13 +76,26 @@ export function attachUsageFeed(client: KybernClient, ownerKey: string): () => v
   }
 }
 
-/** Re-read every provider now. The daemon coalesces asks a few seconds apart. */
-export function refreshUsageLimits() {
-  let client = feedClient
-  if (!client) {
-    try { client = activeRuntime().rpc() } catch { return }
-  }
-  ask(client, generation, true)
+function currentClient(): KybernClient | null {
+  if (feedClient) return feedClient
+  try { return activeRuntime().rpc() } catch { return null }
+}
+
+/**
+ * Re-read every provider now. The daemon coalesces asks a few seconds apart.
+ * `allAccounts` also reads every named account and `instances` reads the listed
+ * ones; ask only while a surface that shows them is open, since each read can
+ * start the agent's CLI.
+ */
+export function refreshUsageLimits({ allAccounts, instances }: { allAccounts?: boolean; instances?: ProviderInstance[] } = {}) {
+  const client = currentClient()
+  if (client) ask(client, generation, true, { ...(allAccounts ? { all_accounts: true } : {}), ...(instances?.length ? { instances } : {}) })
+}
+
+/** Like `refreshUsageLimits` but answered from the daemon's cache; stale accounts re-read in the background. */
+export function loadAccountLimits({ allAccounts, instances }: { allAccounts?: boolean; instances?: ProviderInstance[] } = {}) {
+  const client = currentClient()
+  if (client) ask(client, generation, false, { ...(allAccounts ? { all_accounts: true } : {}), ...(instances?.length ? { instances } : {}) })
 }
 
 const NONE: ProviderLimits[] = []
@@ -89,6 +114,24 @@ export function useAccountLimits(): ProviderLimits[] {
 export function useRefreshingLimits(): ProviderKind[] {
   const environmentId = useStore((s) => s.environmentId)
   return useUsageLimits((s) => (s.ownerKey === environmentId ? s.refreshing : NOT_REFRESHING))
+}
+
+/** Limits of every account the window has asked about, for this environment. */
+export function useAccountLimitEntries(): ProviderLimits[] {
+  const environmentId = useStore((s) => s.environmentId)
+  return useUsageLimits((s) => (s.ownerKey === environmentId ? s.accounts : NONE))
+}
+
+/**
+ * Limits of one account. The CLI account ("default") falls back to the global
+ * entry for the agent, which is its limits. Undefined before any are known.
+ */
+export function useAccountLimitsFor(kind: ProviderKind | undefined, instance: string | null | undefined): ProviderLimits | undefined {
+  const accounts = useAccountLimitEntries()
+  const global = useAccountLimits()
+  if (!kind) return undefined
+  if (!instance || instance === "default") return accounts.find((e) => e.provider === kind && e.instance === "default") ?? global.find((e) => e.provider === kind)
+  return accounts.find((e) => e.provider === kind && e.instance === instance)
 }
 
 /** The current limits for one provider, or undefined before any are known. */

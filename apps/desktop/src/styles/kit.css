@@ -3361,3 +3361,68 @@ html[data-full-translucency] .chat-scroll-fade {
     opacity: 0;
   }
 }
+
+/* Account colors. The protocol stores the key (blue, green, ...), never a hex
+   value, so each surface resolves it here and follows the theme. Red is left
+   out (error semantics) and so is orange (it reads as the Claude mark). */
+:root {
+  --account-blue: #0169cc;
+  --account-green: #00a240;
+  --account-purple: #751ed9;
+  --account-pink: #c2307a;
+  --account-teal: #0f8f86;
+  --account-amber: #d97706;
+}
+
+.dark {
+  --account-blue: #3386d6;
+  --account-green: #2fbf63;
+  --account-purple: #b06dff;
+  --account-pink: #e86aa6;
+  --account-teal: #33bfb3;
+  --account-amber: #f5b44a;
+}
+
+/* Add-account sheet: the body of each step arrives with a short fade and a 4px
+   rise. Under reduced motion it is opacity only. */
+@keyframes account-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.account-step-in {
+  animation: account-step-in var(--duration-fast) var(--ease-smooth-out) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  @keyframes account-step-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+}
+
+/* A row that was just added flashes once as its background fades out. */
+@keyframes account-row-flash {
+  from {
+    background-color: var(--color-background-accent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+.account-row-flash {
+  animation: account-row-flash 600ms var(--ease-smooth-out) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .account-row-flash {
+    animation: none;
+  }
+}

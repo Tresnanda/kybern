@@ -5,6 +5,7 @@
 //! session per thread, feeds it user messages, answers permission requests,
 //! and turns [`DriverEvent`]s into persisted thread events.
 
+pub mod account_auth;
 pub mod binary;
 #[cfg(test)]
 pub(crate) mod test_support {
