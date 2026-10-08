@@ -529,6 +529,18 @@ impl Store {
         patch: TaskRunPatch,
         status: Option<TaskStatusChange>,
     ) -> Result<Vec<TaskRunUpdate>> {
+        self.task_run_updates_for(thread_id, None, patch, status)
+    }
+
+    /// Like [`Store::task_run_updates`], limited to the thread's runs on `only`
+    /// when it is given, so one task of a combined run can change alone.
+    pub fn task_run_updates_for(
+        &self,
+        thread_id: ThreadId,
+        only: Option<&[TaskItemId]>,
+        patch: TaskRunPatch,
+        status: Option<TaskStatusChange>,
+    ) -> Result<Vec<TaskRunUpdate>> {
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
             let found: Vec<(String, u32)> = {
@@ -539,6 +551,9 @@ impl Store {
             let mut changed = Vec::new();
             for (task_id, number) in found {
                 let id: TaskItemId = task_id.parse()?;
+                if only.is_some_and(|only| !only.contains(&id)) {
+                    continue;
+                }
                 let before = fetch_item(&tx, id)?.map(|(item, _)| item);
                 let Some(before) = before else { continue };
                 let Some(run) = before.runs.iter().find(|run| run.number == number).cloned() else { continue };

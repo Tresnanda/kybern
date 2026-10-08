@@ -36,6 +36,8 @@ pub(crate) const WRITE_TOOLS: [&str; 6] =
     ["kybern_note_create", "kybern_note_append", "kybern_note_update", "kybern_task_create", "kybern_task_update", "kybern_task_claim"];
 /// The daemon's hard limit on tasks one turn may file.
 pub(crate) const MAX_TASK_CREATES_PER_TURN: u32 = 10;
+/// Tasks one `kybern_task_claim` call may take, as many as a batch send.
+const MAX_TASK_CLAIMS_PER_CALL: usize = 10;
 /// How much of a body a read returns.
 const READ_BODY_MAX_BYTES: usize = 128 * 1024;
 /// How much of new text the approval card previews.
@@ -102,7 +104,7 @@ enum Action {
     UpdateNote { id: NoteId, title: Option<String>, body: Option<String>, expected_revision: i64 },
     CreateTask(Box<NewTask>),
     UpdateTask { task: Box<TaskItem>, patch: Box<TaskItemsUpdateParams>, needs_review: bool, changes: Vec<String> },
-    ClaimTask { task: Box<TaskItem> },
+    ClaimTasks { tasks: Vec<TaskItem> },
 }
 
 impl Orchestrator {
@@ -539,30 +541,67 @@ impl Orchestrator {
         })
     }
 
-    fn plan_task_claim(&self, thread: &Thread, args: TaskRefArgs) -> Result<Write> {
-        let task = self.find_task(&args.task)?;
+    fn plan_task_claim(&self, thread: &Thread, args: TaskClaimArgs) -> Result<Write> {
+        let references: Vec<String> = match (args.task, args.tasks) {
+            (Some(task), None) => vec![task],
+            (None, Some(tasks)) => tasks,
+            (Some(_), Some(_)) => bail!("Pass either task or tasks, not both."),
+            (None, None) => bail!("Pass the task to claim as task, or several as tasks."),
+        };
+        ensure!(!references.is_empty(), "Pass at least one task to claim.");
+        ensure!(
+            references.len() <= MAX_TASK_CLAIMS_PER_CALL,
+            "A call claims at most {MAX_TASK_CLAIMS_PER_CALL} tasks. Claim the rest in a second call."
+        );
+        let held = self.inner.store.task_runs_for_thread(thread.id)?;
+        let mut tasks: Vec<TaskItem> = Vec::new();
+        for reference in &references {
+            let task = self.find_task(reference)?;
+            if tasks.iter().any(|seen| seen.id == task.id) {
+                continue;
+            }
+            Self::check_claimable(thread, &task, &held)?;
+            tasks.push(task);
+        }
+        let targets: Vec<Value> = tasks.iter().map(|task| json!({ "id": task.id, "key": task.key, "title": task.title })).collect();
+        let summary = match tasks.as_slice() {
+            [task] => format!("Work on {} '{}' in this chat", task.key, task.title),
+            _ => format!(
+                "Work on {} tasks in this chat: {}",
+                tasks.len(),
+                tasks.iter().map(|task| task.key.as_str()).collect::<Vec<_>>().join(", ")
+            ),
+        };
+        let mut input = json!({ "action": "claim_task", "kind": "task", "target": targets[0].clone() });
+        if targets.len() > 1 {
+            input["targets"] = json!(targets);
+        }
+        Ok(Write { summary, input, action: Action::ClaimTasks { tasks } })
+    }
+
+    /// Whether this chat may claim `task` now. `Some(number)` when the chat already holds a
+    /// run of it, which a claim reopens; `None` when the claim starts a new run.
+    fn check_claimable(thread: &Thread, task: &TaskItem, held: &[(TaskItemId, u32)]) -> Result<Option<u32>> {
         if matches!(task.status, TaskStatus::Done | TaskStatus::Canceled) {
             bail!("The user closed {} as {}. Ask the user before working on it again.", task.key, status_label(task.status));
         }
-        // A chat runs one task, or the several tasks it was sent with. It cannot take on another.
-        let runs = self.inner.store.task_runs_for_thread(thread.id)?;
-        if let Some((task_id, _)) = runs.first()
-            && !runs.iter().any(|(id, _)| *id == task.id)
-        {
-            let other = self.inner.store.task_item_get(*task_id)?.map(|task| task.key).unwrap_or_else(|| "another task".into());
-            bail!("This chat already works on {other}. Start a new chat for {}.", task.key);
+        if let Some((_, number)) = held.iter().find(|(id, _)| *id == task.id) {
+            if latest_run_number(task) != Some(*number) {
+                bail!("A newer run of {} replaced this chat. Do not claim it again.", task.key);
+            }
+            return Ok(Some(*number));
         }
         if let Some(run) = task.runs.last()
             && run.state.is_live()
             && run.thread_id != thread.id
         {
-            bail!("{} already has a run in progress in another chat ({}). Do not claim it.", task.key, run.thread_id);
+            bail!(
+                "{} already has a run in progress in another chat ({}). Do not claim it. Claim the other tasks without it.",
+                task.key,
+                run.thread_id
+            );
         }
-        Ok(Write {
-            summary: format!("Work on {} '{}' in this chat", task.key, task.title),
-            input: json!({ "action": "claim_task", "kind": "task", "target": { "id": task.id, "key": task.key, "title": task.title } }),
-            action: Action::ClaimTask { task: Box::new(task) },
-        })
+        Ok(None)
     }
 
     // ---- consent ----
@@ -726,52 +765,58 @@ impl Orchestrator {
                 value["changes"] = json!(changes);
                 Ok(value)
             }
-            Action::ClaimTask { task } => {
+            Action::ClaimTasks { tasks } => {
                 let claimed = {
                     let _locks = self.task_locks()?;
                     let store = &self.inner.store;
-                    let current = store.task_item_get(task.id)?.ok_or_else(|| anyhow!("{} was deleted.", task.key))?;
-                    let runs = store.task_runs_for_thread(thread.id)?;
-                    match runs.iter().find(|(task_id, _)| *task_id == current.id).copied().or_else(|| runs.first().copied()) {
-                        Some((task_id, number)) if task_id == current.id => {
-                            if latest_run_number(&current) != Some(number) {
-                                bail!("A newer run of {} replaced this chat. Do not claim it again.", current.key);
-                            }
-                            let patch = TaskRunPatch {
-                                state: Some(TaskRunState::Running),
-                                activity: Some(None),
-                                ended_at: Some(None),
-                                ..Default::default()
-                            };
-                            // A combined run reopens every task it holds, so publish them all.
-                            let updates = store.task_run_updates(
-                                thread.id,
-                                patch,
-                                Some(TaskStatusChange { status: TaskStatus::Running, only_from: None }),
-                            )?;
-                            let mut mine = None;
-                            for update in updates {
-                                if update.task.id == current.id {
-                                    mine = Some(update.task);
-                                } else {
-                                    self.publish_task(update.task);
-                                }
-                            }
-                            mine.unwrap_or(current)
-                        }
-                        Some(_) => bail!("This chat already works on another task."),
-                        None => {
-                            if current.runs.last().is_some_and(|run| run.state.is_live()) {
-                                bail!("{} already has a run in progress in another chat. Do not claim it.", current.key);
-                            }
-                            store.task_run_start(current.id, thread.id, &thread.provider, thread.model.as_deref(), &[])?
+                    let held = store.task_runs_for_thread(thread.id)?;
+                    let mut fresh = Vec::new();
+                    let mut reopen = Vec::new();
+                    for task in &tasks {
+                        let current = store.task_item_get(task.id)?.ok_or_else(|| anyhow!("{} was deleted.", task.key))?;
+                        match Self::check_claimable(thread, &current, &held)? {
+                            Some(_) => reopen.push(current.id),
+                            None => fresh.push(current.id),
                         }
                     }
+                    // New runs start all or none; a failure leaves every task as it was.
+                    if !fresh.is_empty() {
+                        store.task_runs_start(&fresh, thread.id, &thread.provider, thread.model.as_deref(), &[])?;
+                    }
+                    // Reopen only the claimed tasks: others this chat already handed over stay put.
+                    if !reopen.is_empty() {
+                        let patch = TaskRunPatch {
+                            state: Some(TaskRunState::Running),
+                            activity: Some(None),
+                            ended_at: Some(None),
+                            ..Default::default()
+                        };
+                        store.task_run_updates_for(
+                            thread.id,
+                            Some(&reopen),
+                            patch,
+                            Some(TaskStatusChange { status: TaskStatus::Running, only_from: None }),
+                        )?;
+                    }
+                    tasks
+                        .iter()
+                        .map(|task| store.task_item_get(task.id)?.ok_or_else(|| anyhow!("{} was deleted.", task.key)))
+                        .collect::<Result<Vec<_>>>()?
                 };
                 self.track_task_thread(thread.id);
-                self.publish_task(claimed.clone());
-                let mut value = task_result("claimed", &claimed);
-                value["hint"] = json!("The task shows Running and moves to Needs review when your turn ends. Tell the user what you did.");
+                for task in &claimed {
+                    self.publish_task(task.clone());
+                }
+                let mut value = task_result("claimed", &claimed[0]);
+                if claimed.len() > 1 {
+                    value["claimed"] = json!(claimed.iter().map(|task| task_result("claimed", task)).collect::<Vec<_>>());
+                    value["hint"] = json!(
+                        "The tasks show Running and move to Needs review when your turn ends. Hand one over earlier with kybern_task_update status needs_review. Tell the user what you did."
+                    );
+                } else {
+                    value["hint"] =
+                        json!("The task shows Running and moves to Needs review when your turn ends. Tell the user what you did.");
+                }
                 Ok(value)
             }
         }
@@ -901,6 +946,15 @@ struct TasksListArgs {
 #[serde(deny_unknown_fields)]
 struct TaskRefArgs {
     task: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TaskClaimArgs {
+    #[serde(default)]
+    task: Option<String>,
+    #[serde(default)]
+    tasks: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]

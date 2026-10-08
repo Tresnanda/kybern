@@ -504,9 +504,9 @@ fn notes_tasks_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
             "append":{"type":["string","null"],"description":"Markdown added to the description, above the checklist."}, "check": criterion.clone(), "uncheck": criterion, "priority": priority,
             "status":{"enum":["inbox","todo","needs_review",null]}
         }), &["task"]) },
-        NativeToolDefinition { name: "kybern_task_claim".into(), description: write("Link this chat to a Kybern task as its run: the task shows Running and moves to Needs review when your turn ends. Claim only a task the user asked you to work on. Fails when another chat's run is live or the task is closed."), input_schema: object(json!({
-            "operation_id": operation, "task": task_ref
-        }), &["task"]) },
+        NativeToolDefinition { name: "kybern_task_claim".into(), description: write("Link this chat to Kybern tasks as their run: each task shows Running and moves to Needs review when your turn ends. Claim one task with task, or up to 10 with tasks; a list is claimed all or none. Claim only tasks the user asked you to work on. Hand a task over early with kybern_task_update status needs_review. Fails when another chat's run is live or a task is closed."), input_schema: object(json!({
+            "operation_id": operation, "task": task_ref.clone(), "tasks":{"type":"array","items":task_ref.clone(),"minItems":1,"maxItems":10,"description":"Several tasks to claim at once, instead of task."}
+        }), &[]) },
     ]
 }
 

@@ -97,6 +97,7 @@ import { pageDirection, playPageMotion, lastInputWasPointer } from "@/lib/navMot
 import { subagentPhase } from "../../../../packages/kybern-client/src/subagents.ts"
 import { CHAT_COLUMN_GUTTER, CHAT_COLUMN_GUTTER_PX } from "./chatLayout"
 import { ChatHeaderButton, ChatHeaderIconButton, SurfaceHeader } from "./chrome"
+import { ThreadTaskChips } from "./tasks/ThreadTaskChips"
 
 const EMPTY: never[] = []
 const EMPTY_TASKS: RuntimeTask[] = []
@@ -1157,6 +1158,7 @@ function Header({ threadId, splitPaneId }: { threadId: ThreadId; splitPaneId?: P
               </h2>
             )}
             {thread.coordinator_project_id && <span className="shrink-0 text-[10px] font-medium text-muted-foreground/60">Project coordinator</span>}
+            <ThreadTaskChips threadId={threadId} />
           </div>
         </div>
       </div>

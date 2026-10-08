@@ -71,6 +71,8 @@ export interface AgentTaskResult {
   criteriaTotal: number
   /** What an update changed, in the daemon's words ("check 2 criteria"). */
   changes: string[]
+  /** Further tasks one claim took besides this one. */
+  more: number
 }
 
 export interface AgentListResult {
@@ -119,6 +121,7 @@ function readResult(value: Record<string, unknown>): AgentItemResult | null {
       criteriaDone: number(value.criteria_done),
       criteriaTotal: number(value.criteria_total),
       changes: Array.isArray(value.changes) ? value.changes.filter((item): item is string => typeof item === "string") : [],
+      more: Array.isArray(value.claimed) ? Math.max(0, value.claimed.length - 1) : 0,
     }
   }
   return null
@@ -212,7 +215,8 @@ const quoted = (title: string) => {
 
 /** The row's one-line label, in the tense of the call's state. */
 export function agentItemLabel(tool: AgentItemTool, input: JsonValue, result: AgentItemResult | null, complete: boolean, isError: boolean): string {
-  const key = (result?.kind === "task" ? result.key : "") || inputTaskKey(input)
+  const more = result?.kind === "task" ? result.more : 0
+  const key = ((result?.kind === "task" ? result.key : "") || inputTaskKey(input)) + (more > 0 ? ` +${more}` : "")
   const noteTitle = result?.kind === "note" ? quoted(result.title) : ""
   const query = string(record(input)?.query).trim()
   if (isError) {
