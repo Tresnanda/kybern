@@ -290,6 +290,18 @@ export function useAllTasks(): TaskItem[] {
   return useMemo(() => Object.values(tasks), [tasks])
 }
 
+/** The tasks a thread is the latest run of, in key order: what its header shows. */
+export function useThreadTasks(threadId: ThreadId): TaskItem[] {
+  const tasks = useTasks((s) => s.tasks)
+  return useMemo(
+    () =>
+      Object.values(tasks)
+        .filter((task) => latestRun(task)?.thread_id === threadId)
+        .sort((a, b) => a.key.localeCompare(b.key, undefined, { numeric: true })),
+    [tasks, threadId],
+  )
+}
+
 // ---- view state ----
 
 export function setTaskPrefs(patch: Partial<TaskViewPrefs> | ((prefs: TaskViewPrefs) => Partial<TaskViewPrefs>)) {

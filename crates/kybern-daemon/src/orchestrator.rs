@@ -7606,7 +7606,7 @@ mod tests {
             .unwrap();
         fixture.tool(&other, &other_live, "k2", "kybern_task_claim", json!({"task": second.key})).await.unwrap();
         let error = fixture.tool(&thread, &live, "k3", "kybern_task_claim", json!({"task": second.key})).await.unwrap_err();
-        assert!(error.to_string().contains("already works on"), "{error}");
+        assert!(error.to_string().contains("already has a run in progress in another chat"), "{error}");
 
         // An agent's task lands in the Inbox, attributed, and is fully editable.
         let filed = fixture
@@ -7806,6 +7806,95 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("newer run"), "{error}");
         assert_eq!(fixture.store.task_item_get(task.id).unwrap().unwrap().status, TaskStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn one_chat_claims_several_tasks_and_hands_them_over_together_or_one_by_one() {
+        let fixture = Fixture::new();
+        let (thread, live) = fixture.tool_thread(PermissionMode::FullAccess).await;
+        let (a, b, c) = (
+            fixture.user_task("First", methods::TaskStatus::Todo),
+            fixture.user_task("Second", methods::TaskStatus::Todo),
+            fixture.user_task("Third", methods::TaskStatus::Todo),
+        );
+        let status = |task: &methods::TaskItem| fixture.store.task_item_get(task.id).unwrap().unwrap().status;
+
+        // A list claims every task, and the chat is the run of each.
+        let claimed = fixture.tool(&thread, &live, "m1", "kybern_task_claim", json!({"tasks": [a.key, b.key]})).await.unwrap();
+        assert_eq!(claimed["claimed"].as_array().unwrap().len(), 2);
+        for task in [&a, &b] {
+            let current = fixture.store.task_item_get(task.id).unwrap().unwrap();
+            assert_eq!((current.status, current.runs.last().map(|run| run.thread_id)), (methods::TaskStatus::Running, Some(thread.id)));
+        }
+        // A later claim in the same chat adds a third task; claiming again is idempotent.
+        fixture.tool(&thread, &live, "m2", "kybern_task_claim", json!({"task": c.key})).await.unwrap();
+        fixture.tool(&thread, &live, "m3", "kybern_task_claim", json!({"tasks": [c.key, a.key]})).await.unwrap();
+        assert_eq!(fixture.store.task_runs_for_thread(thread.id).unwrap().len(), 3);
+        assert_eq!(fixture.store.task_item_get(a.id).unwrap().unwrap().runs.len(), 1, "no second run");
+
+        // One task is handed over early; claiming another reopens only the claimed one.
+        let reviewed =
+            fixture.tool(&thread, &live, "m4", "kybern_task_update", json!({"task": a.key, "status": "needs_review"})).await.unwrap();
+        assert_eq!(reviewed["status"], json!("needs_review"));
+        assert_eq!(
+            (status(&a), status(&b), status(&c)),
+            (methods::TaskStatus::NeedsReview, methods::TaskStatus::Running, methods::TaskStatus::Running)
+        );
+        fixture.tool(&thread, &live, "m5", "kybern_task_update", json!({"task": b.key, "status": "needs_review"})).await.unwrap();
+        fixture.tool(&thread, &live, "m6", "kybern_task_claim", json!({"task": c.key})).await.unwrap();
+        assert_eq!(
+            (status(&a), status(&b), status(&c)),
+            (methods::TaskStatus::NeedsReview, methods::TaskStatus::NeedsReview, methods::TaskStatus::Running)
+        );
+        // Reopening one task leaves the others' handover alone; reclaiming it comes back Running.
+        fixture.tool(&thread, &live, "m7", "kybern_task_claim", json!({"task": b.key})).await.unwrap();
+        assert_eq!((status(&a), status(&b)), (methods::TaskStatus::NeedsReview, methods::TaskStatus::Running));
+
+        // The turn's end moves the tasks still Running, and only those, to Needs review.
+        let turn = live.turn.lock().await.as_ref().map(|turn| turn.id);
+        fixture
+            .orchestrator
+            .emit(
+                thread.id,
+                turn,
+                EventPayload::TurnCompleted {
+                    stop_reason: StopReason::Completed,
+                    usage: Usage::default(),
+                    cost_usd: None,
+                    duration_ms: 1,
+                    terminal_message_id: None,
+                },
+            )
+            .unwrap();
+        for task in [&a, &b, &c] {
+            assert_eq!(status(task), methods::TaskStatus::NeedsReview, "{}", task.key);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_list_claim_is_all_or_none_and_refuses_closed_or_busy_tasks() {
+        let fixture = Fixture::new();
+        let (thread, live) = fixture.tool_thread(PermissionMode::FullAccess).await;
+        let (other, other_live) = fixture.tool_thread(PermissionMode::FullAccess).await;
+        let (a, busy, closed) = (
+            fixture.user_task("Free", methods::TaskStatus::Todo),
+            fixture.user_task("Busy", methods::TaskStatus::Todo),
+            fixture.user_task("Closed", methods::TaskStatus::Done),
+        );
+        fixture.tool(&other, &other_live, "o1", "kybern_task_claim", json!({"task": busy.key})).await.unwrap();
+
+        let error = fixture.tool(&thread, &live, "l1", "kybern_task_claim", json!({"tasks": [a.key, busy.key]})).await.unwrap_err();
+        assert!(error.to_string().contains("already has a run in progress in another chat"), "{error}");
+        let error = fixture.tool(&thread, &live, "l2", "kybern_task_claim", json!({"tasks": [a.key, closed.key]})).await.unwrap_err();
+        assert!(error.to_string().contains("closed"), "{error}");
+        let error = fixture.tool(&thread, &live, "l3", "kybern_task_claim", json!({"task": a.key, "tasks": [a.key]})).await.unwrap_err();
+        assert!(error.to_string().contains("either task or tasks"), "{error}");
+        let keys: Vec<String> = (0..11).map(|_| a.key.clone()).collect();
+        let error = fixture.tool(&thread, &live, "l4", "kybern_task_claim", json!({"tasks": keys})).await.unwrap_err();
+        assert!(error.to_string().contains("at most 10"), "{error}");
+        let free = fixture.store.task_item_get(a.id).unwrap().unwrap();
+        assert!(free.runs.is_empty() && free.status == methods::TaskStatus::Todo, "nothing was claimed");
+        assert!(fixture.store.task_runs_for_thread(thread.id).unwrap().is_empty());
     }
 
     #[tokio::test]
