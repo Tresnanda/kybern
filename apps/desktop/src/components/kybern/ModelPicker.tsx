@@ -15,6 +15,7 @@ import { ProviderMark, Spinner } from "@/components/kybern/bits"
 import { TextSwap } from "@/components/kybern/motion"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import { Menu, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
+import { SegmentedControl } from "@/components/kit/segmented-control"
 import { Switch } from "@/components/kit/switch"
 import { COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME, COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME } from "@/components/kit/chat/composerPickerStyles"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
@@ -574,44 +575,7 @@ function TraitRow({
       {toggle ? (
         <Switch aria-labelledby={labelId} checked={value === toggle.on} disabled={disabled} onCheckedChange={(checked) => onChange(checked ? toggle.on : toggle.off)} />
       ) : parameter.values.length <= SEGMENTED_LIMIT ? (
-        <div
-          role="radiogroup"
-          aria-labelledby={labelId}
-          className="inline-flex min-w-0 items-center gap-0.5 rounded-[0.5rem] bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] p-0.5"
-          onKeyDown={(event) => {
-            const step = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 0
-            if (!step || disabled) return
-            event.preventDefault()
-            const index = parameter.values.findIndex((entry) => entry.value === value)
-            const next = parameter.values[(index + step + parameter.values.length) % parameter.values.length]!
-            onChange(next.value)
-            event.currentTarget.querySelector<HTMLElement>(`[data-value="${CSS.escape(next.value)}"]`)?.focus()
-          }}
-        >
-          {parameter.values.map((entry) => {
-            const selected = entry.value === value
-            return (
-              <button
-                key={entry.value}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                data-value={entry.value}
-                tabIndex={selected ? 0 : -1}
-                disabled={disabled}
-                onClick={() => onChange(entry.value)}
-                className={cn(
-                  "press-row h-6 min-w-9 rounded-[0.375rem] px-2 tabular-nums outline-none transition-[background-color,color,box-shadow] duration-150 focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default",
-                  selected
-                    ? "bg-[var(--color-background-surface)] text-foreground shadow-[0_0_0_0.5px_color-mix(in_srgb,var(--foreground)_8%,transparent),0_1px_2px_rgba(0,0,0,0.08)]"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {entry.label}
-              </button>
-            )
-          })}
-        </div>
+        <SegmentedControl aria-labelledby={labelId} options={parameter.values} value={value} busy={disabled} onChange={onChange} />
       ) : (
         <Menu>
           <MenuTrigger
