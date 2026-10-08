@@ -1,5 +1,5 @@
 // Build the synthetic fixture separately; it never enters the shipped frontend.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -99,7 +99,10 @@ c.commit()`,path.join(dataDir,"state.sqlite"),thread.id],{encoding:"utf8"})
     const browser = path.join(homedir(),".kybern/cache/html-preview")
     let visual = unmeasured
     if (existsSync(browser)) {
-      mkdirSync(path.join(dataDir,"cache"),{recursive:true}); symlinkSync(browser,path.join(dataDir,"cache/html-preview"))
+      // Link only the browser builds: measuring writes its scratch profiles beside them, and those
+      // must land in the scratch data dir, not the user's ~/.kybern cache.
+      mkdirSync(path.join(dataDir,"cache/html-preview"),{recursive:true})
+      for (const entry of readdirSync(browser)) if (!entry.startsWith("render-")) symlinkSync(path.join(browser,entry),path.join(dataDir,"cache/html-preview",entry))
       visual = publish("Regional comparison, measured")
     }
     // Layout that does not depend on font metrics, so the daemon's and WebKit's heights agree exactly.
