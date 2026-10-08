@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { readFileSync } from "node:fs"
 import { runInNewContext } from "node:vm"
-import { visualHeight, visualLink, visualFileName, visualThemeFragment } from "../../packages/kybern-client/src/visuals.ts"
+import { visualHeight, visualLink, visualFileName, visualThemeFragment, visualMeasuredHeight, visualFrameHeight, readVisualHeights, clampVisualHeight } from "../../packages/kybern-client/src/visuals.ts"
 import { applyEvent, emptyThreadState, seedFromGet, createTurnGrouper } from "../../packages/kybern-client/src/transcript.ts"
 const visual = { id: "visual-1", title: "Comparison chart", height: 400 }
 const event = (seq, kind, payload = {}, turn_id = "turn-1") => ({ seq, kind, thread_id: "thread-1", turn_id, at: "2026-10-07T00:00:00Z", ...payload })
@@ -101,4 +101,56 @@ test("hidden visual animations pause on late starts and resume only the page's r
   assert.equal(late.playState, "paused", "explicit pause while hidden remains paused")
   assert.equal(direct.playState, "idle", "canceled work never resumes")
   assert.equal(finished.playState, "finished", "finished work never resumes")
+})
+
+const measured = [{width:320,height:900},{width:375,height:800},{width:736,height:400},{width:1152,height:300}]
+test("measured heights take the taller neighbour between widths and clamp at the ends", () => {
+  assert.equal(visualMeasuredHeight(measured,375),800)
+  assert.equal(visualMeasuredHeight(measured,500),800, "between 375 and 736 the taller of both")
+  assert.equal(visualMeasuredHeight(measured,900),400, "between 736 and 1152")
+  assert.equal(visualMeasuredHeight(measured,100),900, "below the narrowest measurement")
+  assert.equal(visualMeasuredHeight(measured,5000),400, "above the widest measurement: the last two widths")
+})
+test("frame height prefers the page, then the measurement, and caps only when the agent asked to scroll", () => {
+  const visual = {id:"v",title:"t",height:1000,heights:measured}
+  assert.equal(visualFrameHeight(visual,736,350),350, "posted content height wins")
+  assert.equal(visualFrameHeight(visual,375),800, "measured at this width")
+  assert.equal(visualFrameHeight({...visual,height:300},736),300, "agent cap below the measured column height")
+  assert.equal(visualFrameHeight({...visual,height:500},736),400, "agent cap above the measured column height does not apply")
+  assert.equal(visualFrameHeight({id:"v",title:"t",height:400},736,650),400, "unmeasured: min(agent, content)")
+  assert.equal(visualFrameHeight({id:"v",title:"t",height:400},736),400)
+  assert.equal(visualFrameHeight({id:"v",title:"t",height:400,heights:[]},736,120),120)
+  assert.equal(visualFrameHeight(visual,736,5),80); assert.equal(visualFrameHeight(visual,736,99999),2000)
+  assert.equal(clampVisualHeight(1.4),80)
+})
+test("reading measured heights rejects malformed lists and sorts valid ones", () => {
+  assert.deepEqual(readVisualHeights([{width:640,height:200},{width:320,height:900}]),[{width:320,height:900},{width:640,height:200}])
+  assert.equal(readVisualHeights(Array.from({length:25},(_,i)=>({width:i+1,height:100}))),undefined)
+  assert.equal(readVisualHeights([{width:320.5,height:100}]),undefined)
+  assert.equal(readVisualHeights([{width:320,height:"100"}]),undefined)
+  assert.equal(readVisualHeights([]),undefined); assert.equal(readVisualHeights(null),undefined)
+})
+test("published visuals keep their measured heights through events and reload, and old events still group", () => {
+  const group = createTurnGrouper(), withHeights = {...visual,heights:measured}
+  let state = applyEvent(emptyThreadState(),event(1,"html_published",{visual:withHeights}))
+  assert.deepEqual(state.blocks.find(block => block.kind === "visual").visual.heights,measured)
+  const reloaded = seedFromGet({thread:{id:"thread-1",last_seq:1},transcript:[{role:"visual",turn_id:"turn-1",seq:1,at:event(1).at,visual:withHeights}],pending_approvals:[],checkpoints:[]})
+  assert.deepEqual(group(reloaded.blocks)[0].visuals[0].visual.heights,measured)
+  const old = applyEvent(emptyThreadState(),event(1,"html_published",{visual}))
+  assert.equal(group(old.blocks)[0].visuals[0].visual.heights,undefined)
+})
+function bootstrap(parent) {
+  const messages = [], listeners = new Map()
+  const window = { parent: parent ?? null, postMessage: message => messages.push(message), requestAnimationFrame: callback => { callback(0); return 1 }, cancelAnimationFrame() {}, setInterval: () => 2, clearInterval() {}, addEventListener() {}, dispatchEvent() {} }
+  if (!parent) window.parent = window; else parent.postMessage = message => messages.push(message)
+  const document = { documentElement: { dataset: {} }, body: { scrollHeight: 10, getBoundingClientRect: () => ({ height: 10 }) }, getElementById: () => ({ textContent: "" }), createElement: () => ({ textContent: "" }), head: { appendChild() {} }, getAnimations: () => [], querySelectorAll: () => [], addEventListener: (kind, callback) => listeners.set(kind, callback) }
+  runInNewContext(readFileSync(new URL("../../crates/kybern-daemon/src/visuals/bootstrap.js", import.meta.url), "utf8"), { document, window, location: { hash: "" }, ResizeObserver: class { observe() {} }, CustomEvent: class {} })
+  listeners.get("DOMContentLoaded")()
+  return messages
+}
+test("a framed page announces readiness once and a top-level page stays silent", () => {
+  const framed = bootstrap({}), ready = framed.filter(message => message.kind === "kybern-visual-ready")
+  assert.equal(ready.length,1)
+  assert.ok(framed.some(message => message.kind === "kybern-visual-size"))
+  assert.ok(!bootstrap(null).some(message => message.kind === "kybern-visual-ready"))
 })
