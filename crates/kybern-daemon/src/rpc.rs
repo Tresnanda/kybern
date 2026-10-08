@@ -742,7 +742,8 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 .visual_latest_turn(p.thread_id)
                 .map_err(internal)?
                 .ok_or_else(|| RpcError::invalid_params("Send a message in this thread before publishing a visual."))?;
-            let event = crate::visuals::publish(&state.store, p.thread_id, turn, &p.html, &p.title, p.height).await.map_err(bad)?;
+            let event =
+                crate::visuals::publish(&state.store, &state.paths, p.thread_id, turn, &p.html, &p.title, p.height).await.map_err(bad)?;
             let EventPayload::HtmlPublished { visual } = &event.payload else { unreachable!() };
             let result = HtmlPublishResult { visual: visual.clone() };
             let _ = state.events.send(event);

@@ -2184,8 +2184,16 @@ impl Orchestrator {
                 anyhow::ensure!(!object.contains_key("thread_id"), "HTML tools are bound to the current thread.");
                 object.insert("thread_id".into(), serde_json::json!(thread_id));
                 let params: methods::HtmlPublishParams = crate::app_tools::parse(serde_json::Value::Object(object))?;
-                let event =
-                    crate::visuals::publish(&self.inner.store, thread_id, turn_id, &params.html, &params.title, params.height).await?;
+                let event = crate::visuals::publish(
+                    &self.inner.store,
+                    &self.inner.paths,
+                    thread_id,
+                    turn_id,
+                    &params.html,
+                    &params.title,
+                    params.height,
+                )
+                .await?;
                 let EventPayload::HtmlPublished { visual } = &event.payload else { unreachable!() };
                 let result = serde_json::json!({"visual":visual,"message":"The visual is published inline. Add only what the page does not already explain."});
                 let _ = self.inner.events.send(event);

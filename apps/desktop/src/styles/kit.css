@@ -3426,3 +3426,164 @@ html[data-full-translucency] .chat-scroll-fade {
     animation: none;
   }
 }
+
+/* ─── Glass control ─────────────────────────────────────────────────────────
+   A small floating control over content (the Open in panel button on visual
+   replies). Same material as the Scroll to bottom button, plus a hairline edge
+   and a two-layer shadow. The blur is declared only where a consumer reveals
+   the control (`.visual-reply__open`), so a resting, invisible one costs no
+   layer. */
+.kit-glass-control {
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-background-elevated-primary-opaque) 72%, transparent);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 2px 8px -2px rgb(0 0 0 / 0.1);
+}
+.dark .kit-glass-control {
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.4), inset 0 1px 0 rgb(255 255 255 / 0.06);
+}
+.kit-glass-control:hover,
+.kit-glass-control[data-pressed] {
+  background: color-mix(in srgb, var(--color-background-elevated-primary-opaque) 90%, transparent);
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .kit-glass-control,
+  .kit-glass-control:hover,
+  .kit-glass-control[data-pressed] {
+    background: var(--color-background-elevated-primary-opaque);
+    backdrop-filter: none !important;
+  }
+}
+@media (prefers-contrast: more) {
+  .kit-glass-control {
+    border-color: color-mix(in srgb, var(--color-text-foreground) 35%, transparent);
+    color: var(--color-text-foreground);
+  }
+}
+
+/* ─── Visual replies ────────────────────────────────────────────────────────
+   The page sits directly on the thread surface: no frame, border or chip row.
+   The figure reserves its final height before first paint (daemon heights,
+   cached height, or the agent's cap) and the page stays invisible until it
+   reports ready, so nothing flashes or jumps. */
+.visual-reply {
+  position: relative;
+  width: 100%;
+  margin-block: 8px;
+  contain: layout paint;
+}
+.visual-reply__frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+.visual-reply__frame[data-ready="true"] {
+  opacity: 1;
+  transition: opacity 150ms var(--ease-out);
+}
+.visual-reply .visual-reply__open {
+  position: absolute;
+  inset-block-start: 8px;
+  inset-inline-end: 8px;
+  z-index: 1;
+  opacity: 0;
+  translate: 0 -2px;
+  pointer-events: none;
+  transition: opacity 150ms var(--ease-out), translate 150ms var(--ease-out), scale var(--duration-quick) var(--ease-out);
+}
+.visual-reply[data-status="ready"]:hover .visual-reply__open,
+.visual-reply[data-status="ready"]:focus-within .visual-reply__open {
+  opacity: 1;
+  translate: 0 0;
+  pointer-events: auto;
+  backdrop-filter: blur(12px) saturate(140%);
+}
+@media (pointer: coarse) {
+  .visual-reply[data-status="ready"] .visual-reply__open {
+    opacity: 1;
+    translate: 0 0;
+    pointer-events: auto;
+    backdrop-filter: blur(12px) saturate(140%);
+  }
+}
+.visual-reply__skeleton,
+.visual-reply__error {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--color-text-foreground) 4%, transparent);
+}
+.visual-reply__skeleton {
+  animation: visual-skeleton-breathe 1.6s ease-in-out infinite;
+}
+.visual-reply[data-loop-paused] .visual-reply__skeleton,
+.visual-reply-panel__box[data-loop-paused] .visual-reply__skeleton {
+  animation-play-state: paused;
+}
+@keyframes visual-skeleton-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+.visual-reply__error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  align-content: start;
+  gap: 8px;
+  padding: min(35%, 160px) 16px 0;
+  border: 1px solid var(--color-border);
+  text-align: center;
+}
+@media (prefers-contrast: more) {
+  .visual-reply__error {
+    border-color: var(--color-border-heavy);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Matches the reveal rules' specificity so the nudge and fades really turn off. */
+  .visual-reply__frame[data-ready="true"],
+  .visual-reply .visual-reply__open {
+    transition: none;
+  }
+  .visual-reply .visual-reply__open {
+    translate: 0 0;
+  }
+  .visual-reply__skeleton {
+    animation: none;
+  }
+}
+
+/* Source view in the dock Preview tab: wraps long lines (data: URIs) instead of scrolling sideways. */
+.visual-source {
+  padding: 12px 16px;
+  font-family: var(--font-mono-family);
+  font-size: 12px;
+  line-height: 1.6;
+  outline: none;
+}
+.visual-source pre,
+.visual-source .shiki {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent !important;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+}
+.visual-source .shiki code,
+.visual-source .shiki * {
+  font-family: inherit !important;
+}
+.visual-source:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--color-border-focus);
+}

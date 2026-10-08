@@ -30,7 +30,7 @@ const headerButtonDarkBorderClassName =
 //
 // Visual style is intentionally flat — no drop shadows, no inset highlights, no
 // pseudo-element edge glints. Buttons are solid color + border + hover-bg only.
-// If you need depth, add a single new variant rather than reintroducing shadows
+// `glass` is the one variant with depth. If you need more, add a single new variant rather than reintroducing shadows
 // piecewise; the flat look is the project default and what most surfaces expect.
 //
 // Adding a new variant? Mirror an existing one's border/focus treatment so the
@@ -95,6 +95,10 @@ const buttonVariants = cva(
           "border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-destructive [:hover,[data-pressed]]:border-destructive/32 [:hover,[data-pressed]]:bg-destructive/4 [:hover,[data-pressed]]:text-destructive",
         ghost:
           "border-transparent bg-transparent text-[var(--color-text-foreground-secondary)] focus-visible:ring-[color:var(--color-border-focus)]/60 focus-visible:ring-offset-0 [:hover,[data-pressed]]:bg-[var(--color-background-button-secondary-hover)] [:hover,[data-pressed]]:text-[var(--color-text-foreground)] data-pressed:bg-[var(--color-background-button-secondary)] data-pressed:text-[var(--color-text-foreground)]",
+        // Floating control over content (see `.kit-glass-control` in kit.css): the material
+        // of the Scroll to bottom button, with a hairline edge and two-layer shadow.
+        glass:
+          "kit-glass-control rounded-full text-[var(--color-text-foreground-secondary)] focus-visible:ring-offset-0 [:hover,[data-pressed]]:text-[var(--color-text-foreground)] [&_svg]:!opacity-100",
         link: "border-transparent underline-offset-4 [:hover,[data-pressed]]:underline",
         outline:
           "border-[color:var(--color-border)] bg-transparent text-[var(--color-text-foreground)] focus-visible:ring-[color:var(--color-border-focus)]/60 [:hover,[data-pressed]]:bg-[var(--color-background-elevated-secondary)] dark:[:hover,[data-pressed]]:bg-[var(--color-background-elevated-secondary)]",

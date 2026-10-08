@@ -1361,6 +1361,17 @@ pub struct HtmlVisual {
     pub title: String,
     /// Agent-requested height cap in CSS pixels.
     pub height: u32,
+    /// Content heights measured at publish, ascending by width. Empty when the
+    /// preview browser was not installed or measuring exceeded its budget.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub heights: Vec<VisualHeight>,
+}
+
+/// One content height measured at a frame width, in CSS pixels.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct VisualHeight {
+    pub width: u32,
+    pub height: u32,
 }
 
 /// Rendered transcript entries, projected from events by the daemon.

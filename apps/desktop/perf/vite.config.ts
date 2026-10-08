@@ -39,7 +39,7 @@ export default mergeConfig(base, {
     name: "visuals-fixture-transport",
     enforce: "pre",
     transform(code, id) {
-      if (!id.endsWith("/views/VisualReply.tsx")) return
+      if (!id.endsWith("/views/VisualReply.tsx") && !id.endsWith("/views/dock/VisualPreviewPanel.tsx")) return
       return code.replace(/"@\/state\/rpc"|"@\/lib\/tauri"/g, JSON.stringify(path.resolve(import.meta.dirname, "visuals-rpc.ts")))
     },
   }] : process.env.KYBERN_PERF_FIXTURE === "pr-review" ? [{

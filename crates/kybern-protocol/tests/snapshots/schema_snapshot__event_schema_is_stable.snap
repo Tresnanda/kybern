@@ -3058,11 +3058,38 @@ expression: schema_for!(ThreadEvent)
           "type": "integer",
           "format": "uint32",
           "minimum": 0
+        },
+        "heights": {
+          "description": "Content heights measured at publish, ascending by width. Empty when the\npreview browser was not installed or measuring exceeded its budget.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VisualHeight"
+          }
         }
       },
       "required": [
         "id",
         "title",
+        "height"
+      ]
+    },
+    "VisualHeight": {
+      "description": "One content height measured at a frame width, in CSS pixels.",
+      "type": "object",
+      "properties": {
+        "width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "width",
         "height"
       ]
     },

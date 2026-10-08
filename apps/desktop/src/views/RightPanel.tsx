@@ -17,7 +17,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { FileDiffCard } from "@/components/kybern/DiffView"
 import { parseUnifiedDiff, type FileDiff } from "@/lib/diff"
 import { plural } from "@/lib/format"
-import { AppsIcon, ArrowUpRightIcon, ChangesIcon, DeviceLaptopIcon, DiffIcon, FoldersIcon, GitBranchIcon, GitCommitIcon, GitHubIcon, GitPullRequestIcon, ListChecksIcon, NoteIcon, PanelRightCloseIcon, PlusIcon, TerminalIcon, UsersIcon, WorkflowIcon, XIcon } from "@/lib/kit/icons"
+import { AppsIcon, ArrowUpRightIcon, ChangesIcon, DeviceLaptopIcon, DiffIcon, FoldersIcon, GitBranchIcon, GitCommitIcon, GitHubIcon, GitPullRequestIcon, ListChecksIcon, NoteIcon, PanelRightCloseIcon, PlusIcon, TerminalIcon, UsersIcon, WindowIcon, WorkflowIcon, XIcon } from "@/lib/kit/icons"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import { useSlidingPill } from "@/lib/kit/slidingPill"
@@ -26,6 +26,8 @@ import { errorText, loadDiff, loadFileDiff, loadGitStatus, rpc } from "@/state/r
 import { diffKey, isRuntimeTaskActive, useStore, type RightTab } from "@/state/store"
 
 import { ActivityPane } from "./Activity"
+import { restorePreviewFocus } from "./visualFrameSupport"
+import { DockPreviewPane } from "./dock/VisualPreviewPanel"
 import { CollaborationPane } from "./Collaboration"
 import { LineagePane } from "./lineage/LineagePane"
 import { ExplorerPane } from "./Explorer"
@@ -46,7 +48,10 @@ const DOCK_PANELS = [
   { id: "explorer", label: "Explorer", Icon: FoldersIcon },
   { id: "notes", label: "Notes", Icon: NoteIcon },
   { id: "tasks", label: "Tasks", Icon: ListChecksIcon },
+  // Only exists while a thread holds a preview; opened from content, never from the Add panel menu.
+  { id: "preview", label: "Preview", Icon: WindowIcon },
 ] as const
+const ADDABLE_PANELS = DOCK_PANELS.filter((panel) => panel.id !== "preview")
 /** Panes that follow the project (or Global) rather than a thread, so they work on Home too. */
 const THREADLESS_TABS: readonly RightTab[] = ["notes", "tasks"]
 
@@ -72,6 +77,11 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
   const [tabsRef, pillStyle, pillReady] = useSlidingPill<HTMLDivElement>(`${tab}:${tabs.join(",")}`)
   const headerRef = useRef<HTMLDivElement>(null)
   const closeTab = (id: RightTab) => {
+    if (id === "preview" && threadId) {
+      useStore.getState().closePreview(threadId)
+      requestAnimationFrame(() => { if (!restorePreviewFocus()) headerRef.current?.querySelector<HTMLButtonElement>('[data-tab-active="true"] button')?.focus() })
+      return
+    }
     set((state) => {
       const remaining = state.rightTabs.filter((item) => item !== id)
       const index = state.rightTabs.indexOf(id)
@@ -115,7 +125,7 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
             </MenuTrigger>
             <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
               <MenuGroup>
-                {DOCK_PANELS.map(({ id, label, Icon }) => (
+                {ADDABLE_PANELS.map(({ id, label, Icon }) => (
                   <MenuItem key={id} onClick={() => set({ rightTab: id })}>
                     <Icon className="size-3.5 shrink-0" />
                     <span>{id === "collaboration" && projectCoordinator ? "Project" : label}</span>
@@ -167,6 +177,9 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
               {projectId && <ExplorerPane projectId={projectId} active={workspaceActive && tab === "explorer"} />}
             </div>}
             {tabs.includes("artifacts") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "artifacts" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "artifacts"} aria-hidden={tab !== "artifacts"}><ArtifactsPane key={threadId} threadId={threadId} active={workspaceActive && tab === "artifacts"} /></div>}
+            {tabs.includes("preview") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "preview" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "preview"} aria-hidden={tab !== "preview"}>
+              <DockPreviewPane threadId={threadId} active={workspaceActive && tab === "preview"} />
+            </div>}
             {tabs.includes("terminal") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "terminal" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "terminal"} aria-hidden={tab !== "terminal"}>
               <TerminalWorkspace threadId={threadId} active={workspaceActive && tab === "terminal"} />
             </div>}

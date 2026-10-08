@@ -64,7 +64,7 @@ mod tests {
                 EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("Show a chart") },
             )
             .unwrap();
-        let visual = HtmlVisual { id: Uuid::now_v7(), title: "Usage chart".into(), height: 420 };
+        let visual = HtmlVisual { id: Uuid::now_v7(), title: "Usage chart".into(), height: 420, heights: vec![] };
         let source = "<button onclick='this.textContent=2'>1</button>";
         let event = store.visual_publish(thread, turn, &visual, source).unwrap();
         assert_eq!(store.visual_read(thread, visual.id).unwrap().as_deref(), Some(source));
@@ -78,7 +78,7 @@ mod tests {
     #[test]
     fn failed_publication_rolls_back_source_and_event() {
         let (store, _, thread) = fixture();
-        let visual = HtmlVisual { id: Uuid::now_v7(), title: "Chart".into(), height: 300 };
+        let visual = HtmlVisual { id: Uuid::now_v7(), title: "Chart".into(), height: 300, heights: vec![] };
         assert!(store.visual_publish(Uuid::now_v7(), Uuid::now_v7(), &visual, "<p>orphan</p>").is_err());
         assert!(store.visual_read(thread, visual.id).unwrap().is_none());
     }
@@ -126,7 +126,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(store.visual_latest_turn(thread).unwrap(), Some(newer));
-        let visual = HtmlVisual { id: Uuid::now_v7(), title: "New visual".into(), height: 300 };
+        let visual = HtmlVisual { id: Uuid::now_v7(), title: "New visual".into(), height: 300, heights: vec![] };
         let event =
             store.visual_publish(thread, store.visual_latest_turn(thread).unwrap().unwrap(), &visual, "<p>New turn chart</p>").unwrap();
         assert_eq!(event.turn_id, Some(newer));

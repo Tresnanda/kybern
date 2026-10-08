@@ -724,7 +724,16 @@ export interface ToolCall {
 
 export type StopReason = "completed" | "interrupted" | "max_turns" | "error";
 
-export interface HtmlVisual { id: Uuid; title: string; height: number }
+/** One content height measured at a frame width, in CSS pixels. */
+export interface VisualHeight { width: number; height: number }
+export interface HtmlVisual {
+  id: Uuid;
+  title: string;
+  /** Agent-requested height cap in CSS pixels. */
+  height: number;
+  /** Content heights measured at publish, ascending by width; absent when not measured. */
+  heights?: VisualHeight[];
+}
 export type TranscriptEntry =
   | { role: "visual"; turn_id: TurnId; seq: EventSeq; at: DateTime; visual: HtmlVisual }
   | { role: "image"; id: string; turn_id: TurnId; seq: number; at: string; origin: EventOrigin; source: string }

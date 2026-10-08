@@ -19,6 +19,7 @@ import type {
   Thread,
   ThreadActivitySummary,
   ThreadId,
+  HtmlVisual,
   ThreadEvent,
   ThreadMessageRecord,
   ProjectId,
@@ -81,7 +82,11 @@ export type Connection =
   | { state: "reconnecting"; detail?: string }
   | { state: "failed"; detail: string }
 
-export type RightTab = "collaboration" | "activity" | "changes" | "terminal" | "explorer" | "artifacts" | "notes" | "tasks" | "review"
+export type RightTab = "collaboration" | "activity" | "changes" | "terminal" | "explorer" | "artifacts" | "notes" | "tasks" | "review" | "preview"
+
+/** What a thread's dock Preview tab shows. Kinds share the Preview shell; only a visual exists today. */
+export type DockPreview = { kind: "visual"; visual: HtmlVisual; mode: "rendered" | "source" }
+const MAX_DOCK_PREVIEWS = 32
 
 /** A thread that has not been created on the daemon yet (Codex-style draft screen). */
 export interface Draft {
@@ -160,6 +165,13 @@ export interface AppState {
   rightOpen: boolean
   rightTabs: RightTab[]
   rightTab: RightTab | null
+  /** In-memory dock previews, one per thread (never persisted). */
+  previews: Record<ThreadId, DockPreview>
+  /** Show a visual reply in the dock Preview tab, replacing the thread's previous preview. */
+  openVisualPreview: (threadId: ThreadId, visual: HtmlVisual) => void
+  setPreviewMode: (threadId: ThreadId, mode: DockPreview["mode"]) => void
+  /** Remove a thread's preview and close the Preview tab. */
+  closePreview: (threadId: ThreadId) => void
   /** The floating Environment card at the right edge of a thread. */
   envOpen: boolean
   /** File to show in the explorer pane, per project. */
@@ -372,6 +384,39 @@ export function createEnvironmentStore(
     rightOpen: false,
     rightTabs: [],
     rightTab: null,
+    previews: {},
+    openVisualPreview: (threadId, visual) => {
+      const state = get()
+      const pane = state.splitView ? findThreadPaneByThreadId(state.splitView.root, threadId) : null
+      // The dock follows the selected thread, so focus its split pane first.
+      if (pane && state.splitView?.focusedPaneId !== pane.id) get().focusSplitPane(pane.id)
+      set((current) => {
+        const previous = current.previews[threadId]
+        const kept = Object.entries(current.previews).filter(([id]) => id !== threadId).slice(-(MAX_DOCK_PREVIEWS - 1))
+        const same = previous?.kind === "visual" && previous.visual.id === visual.id
+        return {
+          previews: { ...Object.fromEntries(kept), [threadId]: same ? previous : { kind: "visual", visual, mode: "rendered" } },
+          rightOpen: true,
+          rightTab: "preview",
+        }
+      })
+    },
+    setPreviewMode: (threadId, mode) => set((current) => {
+      const preview = current.previews[threadId]
+      return preview && preview.mode !== mode ? { previews: { ...current.previews, [threadId]: { ...preview, mode } } } : {}
+    }),
+    closePreview: (threadId) => set((current) => {
+      const previews = Object.fromEntries(Object.entries(current.previews).filter(([id]) => id !== threadId))
+      // The tab belongs to the selected thread; another thread's preview just goes away.
+      if (!(current.selected.kind === "thread" && current.selected.id === threadId)) return { previews }
+      const remaining = current.rightTabs.filter((tab) => tab !== "preview")
+      const index = current.rightTabs.indexOf("preview")
+      return {
+        previews,
+        rightTabs: remaining,
+        rightTab: current.rightTab === "preview" ? remaining[Math.min(index, remaining.length - 1)] ?? null : current.rightTab,
+      }
+    }),
     envOpen: false,
     explorerFile: {},
     terminalTabs: {},
