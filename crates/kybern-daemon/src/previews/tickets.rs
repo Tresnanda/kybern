@@ -122,10 +122,12 @@ impl PreviewTickets {
         before - entries.len()
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.lock().len()
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

@@ -93,6 +93,7 @@ pub struct ProcSocket {
     pub inode: u64,
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn hex_ip(hex: &str) -> Option<IpAddr> {
     // Each 32-bit word is printed in host (little-endian) byte order.
     let word = |chunk: &str| u32::from_str_radix(chunk, 16).ok().map(u32::to_le_bytes);
@@ -110,6 +111,7 @@ fn hex_ip(hex: &str) -> Option<IpAddr> {
 }
 
 /// Parse `/proc/net/tcp` or `/proc/net/tcp6`, keeping state `0A` (LISTEN).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn parse_proc_net_tcp(text: &str) -> Vec<ProcSocket> {
     text.lines()
         .skip(1)

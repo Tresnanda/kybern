@@ -198,10 +198,10 @@ impl GrantPolicy {
         }
         // Never an ancestor of the home directory or the data directory
         // (`/`, `/Users`, home itself): that would cover them.
-        if let Some(home) = &self.home {
-            if home.starts_with(folder) || folder.starts_with(home.join("Library")) {
-                return false;
-            }
+        if let Some(home) = &self.home
+            && (home.starts_with(folder) || folder.starts_with(home.join("Library")))
+        {
+            return false;
         }
         if self.data_dir.starts_with(folder) || folder.starts_with(&self.data_dir) {
             return false;
@@ -291,12 +291,11 @@ pub fn resolve(
     if let Some(port) = input.strip_prefix(':').unwrap_or(input).parse::<u16>().ok().filter(|port| *port != 0) {
         return resolve_url(&format!("http://localhost:{port}"));
     }
-    if input.contains('.')
-        || input.rsplit_once(':').is_some_and(|(_, port)| port.split('/').next().is_some_and(|p| p.parse::<u16>().is_ok()))
+    if (input.contains('.')
+        || input.rsplit_once(':').is_some_and(|(_, port)| port.split('/').next().is_some_and(|p| p.parse::<u16>().is_ok())))
+        && !input.contains(char::is_whitespace)
     {
-        if !input.contains(char::is_whitespace) {
-            return resolve_url(&format!("http://{input}"));
-        }
+        return resolve_url(&format!("http://{input}"));
     }
     Err(PreviewError::invalid_address())
 }

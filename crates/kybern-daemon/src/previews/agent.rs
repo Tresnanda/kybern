@@ -108,8 +108,8 @@ mod tests {
         // Never grants: the same call without a stored grant keeps asking.
         assert_eq!(status(json!({"target": page.to_str().unwrap()}), 1).0, "needs_permission");
         // Once the user granted the folder, the agent can show it.
-        let mut granted = Settings::default();
-        granted.preview_allowed_folders = vec![page.parent().unwrap().to_string_lossy().into_owned()];
+        let granted =
+            Settings { preview_allowed_folders: vec![page.parent().unwrap().to_string_lossy().into_owned()], ..Settings::default() };
         let outcome = call(&roots, &granted, &policy, json!({"target": page.to_str().unwrap()}), 1).unwrap();
         assert_eq!(outcome.result["status"], "shown");
         let _ = std::fs::remove_dir_all(&elsewhere);

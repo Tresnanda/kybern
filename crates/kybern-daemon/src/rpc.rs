@@ -686,6 +686,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             }
             state.store.token_revoke(p.token_id).map_err(internal)?;
             let _ = state.revoked_tokens.send(p.token_id);
+            state.previews.revoke_principal(p.token_id);
             ok(Empty {})
         }
         FilesSearch::NAME => {
