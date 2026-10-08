@@ -15,26 +15,34 @@ function Workspace() {
   useUsageLimitsSync()
   return <UsagePage />
 }
+// The Usage page asks for named accounts and the feed asks on attach, focus
+// and visibility, so a step answers every ask it has made rather than the
+// first one: only the feed's current generation may change what renders.
+const take = () => pending.splice(0)
+const answer = (asks: typeof pending, value: ReturnType<typeof limits>) => { for (const ask of asks) ask.resolve(value) }
 async function run() {
   useStore.getState().set({ environmentId: "first", connection: { state: "open" } })
   flushSync(() => createRoot(document.getElementById("root")!).render(<Workspace />))
   await sleep(50)
-  pending.shift()!.resolve(limits("First account"))
+  answer(take(), limits("First account"))
   await sleep(50)
   check(document.body.innerText.includes("First account"), "Initial limits render")
   flushSync(() => useStore.getState().set({ environmentId: "second" }))
   check(!document.body.innerText.includes("First account"), "Previous environment limits disappear immediately")
   await sleep(50)
-  pending.shift()!.reject(new Error("Method not found"))
+  for (const ask of take()) ask.reject(new Error("Method not found"))
   await sleep(50)
   check(!document.body.innerText.includes("First account"), "Older daemon cannot expose previous account")
   flushSync(() => useStore.getState().set({ environmentId: "third" }))
   await sleep(50)
-  const stale = pending.shift()!
+  const stale = take()
+  check(stale.length > 0, "Third environment asks for its limits")
   flushSync(() => useStore.getState().set({ environmentId: "fourth" }))
   await sleep(50)
-  pending.shift()!.resolve(limits("Current account"))
-  stale.resolve(limits("Stale account"))
+  const current = take()
+  check(current.length > 0, "Fourth environment asks for its limits")
+  answer(current, limits("Current account"))
+  answer(stale, limits("Stale account"))
   await sleep(50)
   check(document.body.innerText.includes("Current account") && !document.body.innerText.includes("Stale account"), "Late response cannot replace current account")
   report({ pass: true, environmentIsolation: true, olderDaemon: true, staleResponse: true })
