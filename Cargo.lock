@@ -2809,6 +2809,7 @@ version = "0.7.1"
 dependencies = [
  "anyhow",
  "block2",
+ "httparse",
  "keyring",
  "kybern-client",
  "kybern-protocol",
