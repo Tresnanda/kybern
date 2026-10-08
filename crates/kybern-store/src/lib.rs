@@ -2681,6 +2681,7 @@ impl Store {
                         plan: None,
                         stale: None,
                         retry_at: None,
+                        instance: None,
                     })
                 })
                 .collect();

@@ -4,7 +4,7 @@ fn add_test_account(fixture: &Fixture, kind: ProviderKind, id: &str) {
     let provider = settings.providers.entry(kind).or_default();
     provider
         .accounts
-        .insert(id.into(), ProviderAccount { name: id.into(), directory: fixture.root.join(id).to_string_lossy().into_owned() });
+        .insert(id.into(), ProviderAccount { name: id.into(), directory: fixture.root.join(id).to_string_lossy().into_owned(), ..Default::default() });
     fixture.orchestrator.inner.settings.set(settings).unwrap();
 }
 

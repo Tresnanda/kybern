@@ -399,12 +399,13 @@ impl UsageMonitor {
                 plan: entry.plan.clone(),
                 stale: entry.stale.map(|(reason, _)| reason),
                 retry_at: entry.stale.and_then(|(_, retry_at)| retry_at),
+                instance: None,
             })
             .collect::<Vec<_>>();
         providers.sort_by_key(|entry| provider_order(entry.provider));
         let mut refreshing = state.refreshing.iter().copied().collect::<Vec<_>>();
         refreshing.sort_by_key(|kind| provider_order(*kind));
-        UsageLimitsResult { providers, refreshing }
+        UsageLimitsResult { providers, refreshing, ..Default::default() }
     }
 }
 
@@ -499,7 +500,7 @@ mod account_tests {
         let provider = settings.providers.entry(ProviderKind::Codex).or_default();
         provider
             .accounts
-            .insert("work".into(), kybern_protocol::ProviderAccount { name: "Work".into(), directory: "/account-work".into() });
+            .insert("work".into(), kybern_protocol::ProviderAccount { name: "Work".into(), directory: "/account-work".into(), ..Default::default() });
         provider.default_account = Some("work".into());
         monitor.inner.settings.set(settings).unwrap();
         monitor.settings_changed();

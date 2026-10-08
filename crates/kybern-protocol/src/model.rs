@@ -105,10 +105,18 @@ impl ProviderInstance {
 }
 
 /// A named, native-isolated account. Secrets remain in the harness directory.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderAccount {
     pub name: String,
     pub directory: String,
+    /// Palette key: blue | green | purple | pink | teal | amber. Unknown keys render without a dot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Last identity seen by the daemon, for instant rendering. Never a credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
 }
 
 /// The target of the next message, separate from the admitted live session.

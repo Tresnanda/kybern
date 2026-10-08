@@ -125,7 +125,14 @@ export interface ProviderInstance {
 export type PermissionMode =
   "supervised" | "accept-edits" | "auto" | "full-access";
 
-export interface ProviderAccount { name: string; directory: string }
+export interface ProviderAccount {
+  name: string;
+  directory: string;
+  /** Palette key: blue | green | purple | pink | teal | amber. */
+  color?: string | null;
+  email?: string | null;
+  plan?: string | null;
+}
 export interface SessionTarget { provider: ProviderInstance; model?: string | null; effort?: string | null }
 export interface ThreadTargetState {
   target: SessionTarget;
@@ -1802,6 +1809,10 @@ export interface UsageLimitsParams {
   cached?: boolean;
   /** Re-read every provider now, even if fresh. */
   refresh?: boolean;
+  /** Also read these accounts (the composer's thread account). */
+  instances?: ProviderInstance[];
+  /** Also read every named account. */
+  all_accounts?: boolean;
 }
 /** Where a provider's current limits came from. */
 export type LimitsSource = "live" | "session" | "stored";
@@ -1819,12 +1830,60 @@ export interface ProviderLimits {
   stale?: LimitsStale;
   /** While reads are throttled: when the next one may run (ISO). */
   retry_at?: string;
+  /** Set on per-account entries; unset on the global default per kind. */
+  instance?: string;
 }
 export interface UsageLimitsResult {
   providers: ProviderLimits[];
   /** Providers with a live read in flight. */
   refreshing?: ProviderKind[];
+  /** Per-account entries (`instance` set). Absent from older daemons. */
+  accounts?: ProviderLimits[];
 }
+
+export type AccountStatus = "signed_in" | "needs_sign_in" | "signed_out" | "unknown";
+export interface AccountIdentity { email?: string; plan?: string; organization?: string }
+export interface AccountSummary {
+  /** Instance "default" is the CLI account. */
+  provider: ProviderInstance;
+  name: string;
+  color?: string;
+  identity?: AccountIdentity;
+  status: AccountStatus;
+  is_default: boolean;
+  projects: string[];
+  directory?: string;
+  managed: boolean;
+  can_sign_out: boolean;
+}
+export type AccountLoginMode = "browser" | "paste" | "device_code" | "terminal";
+export type AccountLoginPhase = "starting" | "waiting" | "verifying" | "signed_in" | "failed" | "canceled";
+export interface AccountLoginStartParams {
+  kind: ProviderKind;
+  instance?: string;
+  mode: AccountLoginMode;
+  directory?: string;
+  upstream?: string;
+}
+export interface AccountLogin {
+  id: string;
+  kind: ProviderKind;
+  instance?: string;
+  mode: AccountLoginMode;
+  phase: AccountLoginPhase;
+  url?: string;
+  user_code?: string;
+  terminal?: TerminalInfo;
+  identity?: AccountIdentity;
+  suggested_name?: string;
+  suggested_color?: string;
+  duplicate_of?: string;
+  previous_email?: string;
+  error?: string;
+  expires_at: string;
+}
+/** Params are an AccountLogin. */
+export const ACCOUNTS_LOGIN_CHANGED_NOTIFICATION = "providers.accounts.login.changed";
 /** Params are a full UsageLimitsResult. */
 export const USAGE_LIMITS_CHANGED_NOTIFICATION = "usage.limits.changed";
 
@@ -2080,6 +2139,15 @@ export interface Methods {
   "providers.accounts.create": [{ kind: ProviderKind; name: string; directory?: string | null }, ProviderInstance];
   "providers.accounts.sign_in": [ProviderInstance, TerminalInfo];
   "providers.accounts.usage": [ProviderInstance, ProviderUsage];
+  "providers.accounts.list": [{ kind?: ProviderKind | null; refresh?: boolean }, { accounts: AccountSummary[] }];
+  "providers.accounts.login.start": [AccountLoginStartParams, AccountLogin];
+  "providers.accounts.login.get": [{ id: string }, AccountLogin];
+  "providers.accounts.login.input": [{ id: string; code: string }, AccountLogin];
+  "providers.accounts.login.cancel": [{ id: string }, AccountLogin];
+  "providers.accounts.login.finish": [{ id: string; name: string; color?: string | null; make_default?: boolean }, ProviderInstance];
+  "providers.accounts.update": [{ kind: ProviderKind; instance: string; name?: string | null; color?: string | null }, AccountSummary];
+  "providers.accounts.sign_out": [ProviderInstance, AccountSummary];
+  "providers.accounts.remove": [ProviderInstance, Empty];
   "providers.accounts.catalog": [{ provider: ProviderInstance; project_id?: ProjectId | null; force_refresh?: boolean }, ProviderStatus];
   "threads.target.get": [{ thread_id: ThreadId }, ThreadTargetState];
   "threads.target.set": [{ thread_id: ThreadId; target: SessionTarget; inherit_account?: boolean }, ThreadTargetState];

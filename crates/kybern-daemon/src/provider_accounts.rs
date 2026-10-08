@@ -124,7 +124,7 @@ pub fn create(state: &AppState, params: AccountsCreateParams) -> Result<Provider
     }
     provider
         .accounts
-        .insert(id.clone(), ProviderAccount { name: params.name.trim().into(), directory: directory.to_string_lossy().into_owned() });
+        .insert(id.clone(), ProviderAccount { name: params.name.trim().into(), directory: directory.to_string_lossy().into_owned(), ..Default::default() });
     if let Err(error) = state.settings.set(settings) {
         if created {
             let _ = std::fs::remove_dir(&directory);
@@ -235,7 +235,7 @@ mod tests {
         assert_eq!(resolve(&p, Some("/project"), None), "project");
         assert_eq!(resolve(&p, None, None), "work");
         assert_eq!(environment(&p, ProviderKind::ClaudeCode, "default").unwrap(), p.env);
-        p.accounts.insert("work".into(), ProviderAccount { name: "Work".into(), directory: "/isolated".into() });
+        p.accounts.insert("work".into(), ProviderAccount { name: "Work".into(), directory: "/isolated".into(), ..Default::default() });
         let claude = environment(&p, ProviderKind::ClaudeCode, "work").unwrap();
         assert_eq!(claude["CLAUDE_CONFIG_DIR"], "/isolated");
         assert!(!claude.contains_key("HOME"));
@@ -254,7 +254,7 @@ mod native_environment_tests {
         let mut provider = ProviderSettings::default();
         provider.env.insert("HOME".into(), "/regular-home-sentinel".into());
         provider.env.insert("OMP_PROFILE".into(), "regular-profile".into());
-        provider.accounts.insert("work".into(), ProviderAccount { name: "Work".into(), directory: "/scratch-work-account".into() });
+        provider.accounts.insert("work".into(), ProviderAccount { name: "Work".into(), directory: "/scratch-work-account".into(), ..Default::default() });
         for (kind, expected) in [
             (ProviderKind::ClaudeCode, "CLAUDE_CONFIG_DIR=/scratch-work-account"),
             (ProviderKind::Codex, "CODEX_HOME=/scratch-work-account"),
@@ -279,7 +279,7 @@ mod native_environment_tests {
     fn named_native_process_does_not_inherit_regular_cli_api_credentials() {
         let mut provider = ProviderSettings::default();
         provider.env.insert("CURSOR_API_KEY".into(), "regular-cli-sentinel".into());
-        provider.accounts.insert("work".into(), ProviderAccount { name: "Work".into(), directory: "/scratch-work-account".into() });
+        provider.accounts.insert("work".into(), ProviderAccount { name: "Work".into(), directory: "/scratch-work-account".into(), ..Default::default() });
         let named = environment(&provider, ProviderKind::Cursor, "work").unwrap();
         let output = std::process::Command::new("/usr/bin/env")
             .env_clear()

@@ -22,6 +22,24 @@ expression: scopes
   - "orchestration:read"
 - - providers.accounts.catalog
   - "orchestration:read"
+- - providers.accounts.list
+  - "orchestration:read"
+- - providers.accounts.login.start
+  - "access:write"
+- - providers.accounts.login.get
+  - "orchestration:read"
+- - providers.accounts.login.input
+  - "access:write"
+- - providers.accounts.login.cancel
+  - "access:write"
+- - providers.accounts.login.finish
+  - "access:write"
+- - providers.accounts.update
+  - "orchestration:operate"
+- - providers.accounts.sign_out
+  - "access:write"
+- - providers.accounts.remove
+  - "access:write"
 - - threads.target.get
   - "orchestration:read"
 - - threads.target.set

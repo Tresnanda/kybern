@@ -223,6 +223,26 @@ expression: schema_for!(Settings)
         },
         "directory": {
           "type": "string"
+        },
+        "color": {
+          "description": "Palette key: blue | green | purple | pink | teal | amber. Unknown keys render without a dot.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "email": {
+          "description": "Last identity seen by the daemon, for instant rendering. Never a credential.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "plan": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
