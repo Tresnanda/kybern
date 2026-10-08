@@ -1587,7 +1587,8 @@ async fn previews_open_serve_grant_and_close_over_rpc_and_http() {
 
     // Inside the project: no card, page plus relative assets load.
     std::fs::create_dir_all(host.root.join("mock")).unwrap();
-    std::fs::write(host.root.join("mock/index.html"), "<html><head><link rel=stylesheet href=style.css></head><body>hi</body></html>").unwrap();
+    std::fs::write(host.root.join("mock/index.html"), "<html><head><link rel=stylesheet href=style.css></head><body>hi</body></html>")
+        .unwrap();
     std::fs::write(host.root.join("mock/style.css"), "body{color:red}").unwrap();
     std::fs::write(host.root.join(".env"), "SECRET=1").unwrap();
     let inside = open("mock/index.html", false).await.unwrap();

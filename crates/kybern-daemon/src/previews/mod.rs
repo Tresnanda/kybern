@@ -93,7 +93,11 @@ fn classify_v4(ip: Ipv4Addr) -> Option<HostClass> {
     let o = ip.octets();
     if o[0] == 127 || ip.is_unspecified() {
         Some(HostClass::Loopback)
-    } else if o[0] == 10 || (o[0] == 172 && (16..=31).contains(&o[1])) || (o[0] == 192 && o[1] == 168) || (o[0] == 100 && (64..=127).contains(&o[1])) {
+    } else if o[0] == 10
+        || (o[0] == 172 && (16..=31).contains(&o[1]))
+        || (o[0] == 192 && o[1] == 168)
+        || (o[0] == 100 && (64..=127).contains(&o[1]))
+    {
         Some(HostClass::Private)
     } else {
         None
@@ -287,7 +291,9 @@ pub fn resolve(
     if let Some(port) = input.strip_prefix(':').unwrap_or(input).parse::<u16>().ok().filter(|port| *port != 0) {
         return resolve_url(&format!("http://localhost:{port}"));
     }
-    if input.contains('.') || input.rsplit_once(':').is_some_and(|(_, port)| port.split('/').next().is_some_and(|p| p.parse::<u16>().is_ok())) {
+    if input.contains('.')
+        || input.rsplit_once(':').is_some_and(|(_, port)| port.split('/').next().is_some_and(|p| p.parse::<u16>().is_ok()))
+    {
         if !input.contains(char::is_whitespace) {
             return resolve_url(&format!("http://{input}"));
         }
@@ -371,7 +377,8 @@ fn resolve_file(
         None => (entry.parent().ok_or_else(PreviewError::not_found)?.to_path_buf(), false),
     };
     let rel = relative_entry(&root, &entry)?;
-    let info = PreviewTargetInfo::File { path: entry.to_string_lossy().into_owned(), root: root.to_string_lossy().into_owned(), in_project };
+    let info =
+        PreviewTargetInfo::File { path: entry.to_string_lossy().into_owned(), root: root.to_string_lossy().into_owned(), in_project };
     if in_project {
         return Ok(Resolved { info, file: Some(FilePlan { root, rel }), needs_permission: None, grant: None });
     }
@@ -479,7 +486,8 @@ pub async fn open(
     if let Some(folder) = &resolved.grant {
         persist_grant(&state.settings, folder).map_err(|error| PreviewError::internal(&error.to_string()))?;
     }
-    let mut result = PreviewOpenResult { target: resolved.info.clone(), ticket: None, path: None, needs_permission: resolved.needs_permission };
+    let mut result =
+        PreviewOpenResult { target: resolved.info.clone(), ticket: None, path: None, needs_permission: resolved.needs_permission };
     if let Some(plan) = resolved.file {
         let ticket = state.previews.mint(tickets::TicketKind::Files { root: plan.root }, thread.id, principal);
         result.path = Some(file_path_for(&ticket, &plan.rel));

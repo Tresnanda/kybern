@@ -155,7 +155,18 @@ fn urls_become_servers_or_external() {
     // Userinfo tricks never reach the local classifier.
     assert!(resolve("http://127.0.0.1@evil.com/").is_err());
     assert!(resolve("http://localhost:3000@evil.com/").is_err());
-    for rejected in ["javascript:alert(1)", "data:text/html,hi", "blob:abc", "about:blank", "tauri://localhost", "ipc:x", "kybern:x", "ftp://x.com", "", "react docs"] {
+    for rejected in [
+        "javascript:alert(1)",
+        "data:text/html,hi",
+        "blob:abc",
+        "about:blank",
+        "tauri://localhost",
+        "ipc:x",
+        "kybern:x",
+        "ftp://x.com",
+        "",
+        "react docs",
+    ] {
         assert_eq!(resolve(rejected).unwrap_err().code, "invalid_address", "{rejected}");
     }
 }

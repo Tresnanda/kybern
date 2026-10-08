@@ -45,7 +45,8 @@ pub fn open(
     ensure!(title.as_ref().is_none_or(|title| title.chars().count() <= 120), "Keep the title to 120 characters or fewer.");
 
     // Never allow_folder from an agent: only the user can grant a folder.
-    let resolved = resolve(target, roots, &settings.preview_allowed_folders, false, policy).map_err(|error| anyhow!("{}", error.message))?;
+    let resolved =
+        resolve(target, roots, &settings.preview_allowed_folders, false, policy).map_err(|error| anyhow!("{}", error.message))?;
     let (status, normalized, message) = match (&resolved.info, &resolved.needs_permission) {
         (PreviewTargetInfo::File { path, .. }, Some(request)) => (
             "needs_permission",

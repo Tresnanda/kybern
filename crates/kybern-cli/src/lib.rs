@@ -778,6 +778,22 @@ enum PreviewCmd {
         #[arg(value_name = "URL")]
         address: String,
     },
+    /// Open a page or HTML file for a thread and print the path to load.
+    Open {
+        /// Thread id.
+        thread: String,
+        /// URL, file path, or host:port.
+        target: String,
+        /// Allow previewing files from the target's folder (saved in settings).
+        #[arg(long)]
+        allow_folder: bool,
+    },
+    /// List the folders outside projects that previews may serve.
+    Folders {
+        /// Remove this folder from the list.
+        #[arg(long, value_name = "PATH")]
+        remove: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -909,6 +925,44 @@ async fn preview_cmd(client: &Client, cmd: PreviewCmd, json: bool) -> Result<()>
                         server.process_name.unwrap_or_default(),
                         server.title.or(server.cwd).unwrap_or_default()
                     );
+                }
+            }
+        }
+        PreviewCmd::Open { thread, target, allow_folder } => {
+            let r =
+                client.call::<PreviewOpen>(PreviewOpenParams { thread_id: thread.parse()?, target, allow_folder, proxy: false }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else if let Some(request) = &r.needs_permission {
+                println!("Needs permission to preview files in {}. Run again with --allow-folder.", request.folder);
+            } else if let Some(path) = &r.path {
+                println!("{path}");
+            } else {
+                match &r.target {
+                    PreviewTargetInfo::Server { url, .. } => println!("{url}"),
+                    PreviewTargetInfo::External { url } => println!("{url} (opens in your browser)"),
+                    PreviewTargetInfo::File { path, .. } => println!("{path}"),
+                }
+            }
+        }
+        PreviewCmd::Folders { remove } => {
+            let mut settings = client.call::<SettingsGet>(Empty {}).await?;
+            if let Some(folder) = remove {
+                let wanted = std::fs::canonicalize(&folder).map(|p| p.to_string_lossy().into_owned()).unwrap_or(folder.clone());
+                let before = settings.preview_allowed_folders.len();
+                settings.preview_allowed_folders.retain(|stored| *stored != folder && *stored != wanted);
+                if settings.preview_allowed_folders.len() == before {
+                    anyhow::bail!("{folder} is not an allowed preview folder. Run `kybern preview folders` to see the list.");
+                }
+                settings = client.call::<SettingsUpdate>(SettingsUpdateParams { settings }).await?;
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&settings.preview_allowed_folders)?);
+            } else if settings.preview_allowed_folders.is_empty() {
+                println!("No folders are allowed for preview.");
+            } else {
+                for folder in &settings.preview_allowed_folders {
+                    println!("{folder}");
                 }
             }
         }

@@ -10,8 +10,8 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Response, StatusCode, heade
 use futures::stream;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
-use super::tickets::{PreviewTickets, TicketKind};
 use super::mime;
+use super::tickets::{PreviewTickets, TicketKind};
 use crate::state::AppState;
 
 pub const MAX_FILE_BYTES: u64 = 50 * 1024 * 1024;
@@ -21,7 +21,11 @@ const EXPIRED: &str = "Preview expired. Reopen it from Kybern.";
 const FRAME_ANCESTORS: &str = "tauri://localhost http://tauri.localhost http://localhost:1420 'self'";
 const CHUNK: usize = 64 * 1024;
 
-pub async fn serve(State(state): State<AppState>, headers: HeaderMap, UrlPath((ticket, path)): UrlPath<(String, String)>) -> Response<Body> {
+pub async fn serve(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    UrlPath((ticket, path)): UrlPath<(String, String)>,
+) -> Response<Body> {
     respond(&state.previews, state.port.load(std::sync::atomic::Ordering::Relaxed), &headers, &ticket, &path, MAX_FILE_BYTES).await
 }
 
