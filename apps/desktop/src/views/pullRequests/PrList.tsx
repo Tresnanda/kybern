@@ -205,9 +205,14 @@ export function PrList({
   useHotkey(
     "mod+f",
     () => {
+      const focusSearch = () => {
+        searchRef.current?.focus()
+        searchRef.current?.select()
+      }
       onOpenSearchKey?.()
-      searchRef.current?.focus()
-      searchRef.current?.select()
+      focusSearch()
+      // The list may only become visible after the shell re-renders.
+      requestAnimationFrame(focusSearch)
     },
     { allowInInput: true }
   )

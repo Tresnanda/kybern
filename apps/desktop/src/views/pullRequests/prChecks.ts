@@ -46,6 +46,7 @@ export function checksPhrase(summary: PrChecksSummary | null | undefined): strin
 export function checksDotLabel(summary: PrChecksSummary): string {
   if (summary.failed) return `Checks: ${summary.failed} failing of ${summary.total}`
   if (summary.pending) return `Checks: ${summary.pending} running of ${summary.total}`
+  if (summary.skipped) return `Checks: ${summary.passed} passed, ${summary.skipped} skipped`
   return `Checks: all ${summary.total} passed`
 }
 

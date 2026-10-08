@@ -70,7 +70,13 @@ export function PullRequests() {
     >
       <div className="pr-inbox-layout">
         <aside ref={listRef} className="pr-inbox-list" aria-label="Pull requests list">
-          <PrList />
+          <PrList
+            onOpenSearchKey={() => {
+              // Single pane: ⌘F brings the list back so the search field is visible.
+              const list = listRef.current
+              if (list && getComputedStyle(list).display === "none") backToList()
+            }}
+          />
           <ResizeHandle
             edge="right"
             label="Resize pull request list"

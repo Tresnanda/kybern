@@ -160,7 +160,8 @@
     align-self: start;
     grid-row: 1 / span 2;
   }
-  .pr-checks-toggle-narrow {
+  .pr-checks-toggle-narrow,
+  .pr-checks-toggle-folded-only {
     display: none;
   }
 }

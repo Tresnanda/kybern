@@ -256,7 +256,12 @@ export function PrInfo({
               <Button
                 variant="ghost"
                 size="xs"
-                className={cn("pr-checks-toggle -ms-2 mt-1", PR_QUIET_INK)}
+                // Six or fewer checks are all listed in the column; only the folded rows need it.
+                className={cn(
+                  "pr-checks-toggle -ms-2 mt-1",
+                  sorted.length <= CHECK_ROWS && "pr-checks-toggle-folded-only",
+                  PR_QUIET_INK
+                )}
                 onClick={() => setExpanded(true)}
               >
                 <span className="pr-checks-toggle-wide">

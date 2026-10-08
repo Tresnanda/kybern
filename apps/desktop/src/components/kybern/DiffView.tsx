@@ -28,6 +28,13 @@ export interface DiffAnnotation {
 }
 const NO_ANNOTATIONS: readonly DiffAnnotation[] = []
 
+/** The annotations that land in one hunk, so unannotated hunks keep their memoized rows. */
+function annotationsIn(hunk: DiffHunk, annotations: readonly DiffAnnotation[] | undefined): readonly DiffAnnotation[] {
+  if (!annotations?.length) return NO_ANNOTATIONS
+  const inside = annotations.filter((a) => hunk.lines.some((l) => annotationsAfter([a], l.kind, l.oldNo, l.newNo).length > 0))
+  return inside.length ? inside : NO_ANNOTATIONS
+}
+
 function annotationsAfter(annotations: readonly DiffAnnotation[], kind: "add" | "del" | "ctx", oldNo?: number | null, newNo?: number | null) {
   if (annotations.length === 0) return annotations
   return annotations.filter((a) => (a.side === "LEFT" ? kind !== "add" && oldNo === a.line : kind !== "del" && newNo === a.line))
@@ -66,7 +73,7 @@ export function FileDiffHeader({ file, open, onToggle, trailing }: { file: FileD
   )
 }
 
-// Memoized on the hunk. Annotated hunks always re-render, since their nodes are fresh elements.
+// Memoized on the hunk. Only hunks holding an annotation re-render, since their nodes are fresh elements.
 const HunkRows = memo(function HunkRows({ hunk, first, onLineSelect, annotations = NO_ANNOTATIONS }: { hunk: DiffHunk; first: boolean; onLineSelect?: DiffLineSelect; annotations?: readonly DiffAnnotation[] }) {
   return (
     <>
@@ -138,7 +145,7 @@ export function FileDiffBody({ file, truncated = false, onLineSelect, annotation
         <table className="w-full border-collapse font-chat-code text-[length:var(--app-font-size-chat-code,11px)] leading-[1.65] text-foreground">
           <tbody>
             {visibleHunks.map((h, i) => (
-              <HunkRows key={i} hunk={h} first={i === 0} onLineSelect={onLineSelect} annotations={annotations?.length ? annotations : undefined} />
+              <HunkRows key={i} hunk={h} first={i === 0} onLineSelect={onLineSelect} annotations={annotationsIn(h, annotations)} />
             ))}
           </tbody>
         </table>

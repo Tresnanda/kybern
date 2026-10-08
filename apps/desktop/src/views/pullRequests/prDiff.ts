@@ -19,3 +19,14 @@ export function prFileDiff(file: PrFile): FileDiff {
     deletions: file.deletions,
   }
 }
+
+/** GitHub anchors each file in a pull request's Files tab by the SHA-256 of its path. */
+export async function prFileUrl(prUrl: string, path: string): Promise<string> {
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(path))
+    const hex = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("")
+    return `${prUrl}/files#diff-${hex}`
+  } catch {
+    return `${prUrl}/files`
+  }
+}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react"
+import { useCallback, useEffect, useMemo, useRef } from "react"
 
 import { Button } from "@/components/kit/button"
 import { FileEntryIcon } from "@/components/kit/chat/FileEntryIcon"
@@ -18,11 +18,15 @@ import { cn } from "@/lib/utils"
 import type { PrInlineComment, ProjectId } from "@/protocol"
 import { loadReview, updateReview, updateReviewDraft } from "@/state/prReview"
 
-import { prFileDiff } from "./prDiff"
+import { prFileDiff, prFileUrl } from "./prDiff"
 import { PR_FINE_TEXT, PR_META_TEXT, PR_QUIET_INK } from "./prText"
 import type { PrActions } from "./usePrActions"
 
 const PAGE_SIZE = 30
+
+async function openPrFile(prUrl: string, path: string) {
+  await openExternal(await prFileUrl(prUrl, path))
+}
 
 const sideText = (side: string) => (side === "LEFT" ? "original" : "new")
 
@@ -183,6 +187,24 @@ export function PrChangesTab({
     return out
   }, [file, draft.inline, anchor, mode, number, stateKey])
 
+  // Stable, so typing in an inline comment re-renders only the hunk that holds it.
+  const filePath = file?.path
+  const selectLine = useCallback(
+    (line: number, side: "LEFT" | "RIGHT") => {
+      if (!filePath) return
+      if (staleDraft) {
+        setActionError(
+          "This draft belongs to a different commit. Resolve the previous draft before choosing a new inline anchor."
+        )
+        return
+      }
+      updateReviewDraft(stateKey, {
+        pendingInline: { path: filePath, line, side, body: "" },
+      })
+    },
+    [filePath, staleDraft, setActionError, stateKey]
+  )
+
   const total = detail?.changed_files ?? 0
   const first = (page - 1) * PAGE_SIZE + 1
   const go = (next: number) =>
@@ -283,7 +305,7 @@ export function PrChangesTab({
                     size="icon-xs"
                     label="Open file on GitHub"
                     tooltip="Open file on GitHub"
-                    onClick={() => void openExternal(`${detail.pull_request.url}/files`)}
+                    onClick={() => void openPrFile(detail.pull_request.url, file.path)}
                   >
                     <ExternalLinkIcon className="size-3.5" />
                   </IconButton>
@@ -293,17 +315,7 @@ export function PrChangesTab({
             <FileDiffBody
               file={fileDiff}
               annotations={annotations}
-              onLineSelect={(line, side) => {
-                if (staleDraft) {
-                  setActionError(
-                    "This draft belongs to a different commit. Resolve the previous draft before choosing a new inline anchor."
-                  )
-                  return
-                }
-                updateReviewDraft(stateKey, {
-                  pendingInline: { path: file.path, line, side, body: "" },
-                })
-              }}
+              onLineSelect={selectLine}
             />
             {file.patch_truncated && (
               <p className={cn("border-t border-[color:var(--color-border-light)] p-3 text-muted-foreground", PR_FINE_TEXT)}>

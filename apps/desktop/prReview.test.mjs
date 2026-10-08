@@ -216,7 +216,7 @@ test("workspace navigation keeps paged conversation sources separate and directs
   assert.equal(reviewWorkspaceKind("conversation", "review_comments"), "review_comments")
 })
 
-import { checkBucket, checksPhrase, sortChecks, summarizeChecks } from "./src/views/pullRequests/prChecks.ts"
+import { checkBucket, checksDotLabel, checksPhrase, sortChecks, summarizeChecks } from "./src/views/pullRequests/prChecks.ts"
 import { resolvePrStateKind } from "./src/views/pullRequests/prStateKind.ts"
 import { ringSegments } from "./src/views/pullRequests/prChecks.ts"
 import { truncateMiddle } from "./src/lib/truncate.ts"
@@ -238,6 +238,9 @@ test("checks sort failing first and read as a phrase", () => {
   assert.equal(checksPhrase(summarizeChecks(list)), "1 failing · 1 running · 1 passed · 1 skipped")
   assert.equal(checksPhrase({ total: 14, passed: 14, failed: 0, pending: 0, skipped: 0 }), "All 14 passed")
   assert.equal(checksPhrase(undefined), "No checks reported")
+  // Real GitHub rollups often mix passed and skipped runs; the dot label must not claim all passed.
+  assert.equal(checksDotLabel({ total: 11, passed: 6, failed: 0, pending: 0, skipped: 5 }), "Checks: 6 passed, 5 skipped")
+  assert.equal(checksDotLabel({ total: 14, passed: 14, failed: 0, pending: 0, skipped: 0 }), "Checks: all 14 passed")
 })
 
 test("ring arcs are proportional with 2-unit gaps", () => {
