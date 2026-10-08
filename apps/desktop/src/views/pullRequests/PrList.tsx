@@ -369,7 +369,9 @@ export function PrList({
                 </PrErrorAlert>
               </div>
             )}
-            {rows === null ? (
+            {/* An empty result that is being replaced (first boot, a project list that just
+                arrived) is still loading, not "no pull requests". */}
+            {rows === null || (pending && rows.length === 0) ? (
               <ListSkeleton />
             ) : targets.length === 0 ? (
               <Empty className="py-16">

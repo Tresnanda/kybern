@@ -275,7 +275,6 @@ export function PrChangesTab({
                 {dir && (
                   <span
                     className={cn("block truncate", PR_FINE_TEXT, PR_QUIET_INK)}
-                    style={{ direction: "rtl", textAlign: "start" }}
                   >
                     <bdi>{truncateMiddle(dir, 48)}</bdi>
                   </span>

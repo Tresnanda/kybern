@@ -6,6 +6,9 @@ import { PrHeader } from "./PrHeader"
 import { PrInfo } from "./PrInfo"
 import { PR_BODY_TEXT, PR_QUIET_INK } from "./prText"
 
+// GitHub hides HTML comments in descriptions (agent and template markers); so do we.
+const visibleBody = (body: string) => body.replace(/<!--[\s\S]*?-->/g, "").trim()
+
 export function PrSummaryTab({
   detail,
   projectName,
@@ -33,6 +36,7 @@ export function PrSummaryTab({
   linkedTitle?: string
   onOpenConversation?: () => void
 }) {
+  const body = visibleBody(detail.body)
   return (
     <div className="pr-summary">
       <PrHeader detail={detail} projectName={projectName} number={number} dock={dock} />
@@ -40,8 +44,8 @@ export function PrSummaryTab({
         className={cn("pr-summary-body mt-6 max-w-[72ch] min-w-0 leading-relaxed break-words", PR_BODY_TEXT)}
         aria-label="Pull request description"
       >
-        {detail.body ? (
-          <Markdown text={detail.body} />
+        {body ? (
+          <Markdown text={body} />
         ) : (
           <p className={PR_QUIET_INK}>No description provided.</p>
         )}
