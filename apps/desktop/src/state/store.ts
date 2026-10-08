@@ -19,6 +19,7 @@ import type {
   Thread,
   ThreadActivitySummary,
   ThreadId,
+  HtmlVisual,
   ThreadEvent,
   ThreadMessageRecord,
   ProjectId,
@@ -84,7 +85,7 @@ export type Connection =
 export type RightTab = "collaboration" | "activity" | "changes" | "terminal" | "explorer" | "artifacts" | "notes" | "tasks" | "review" | "preview"
 
 /** What a thread's dock Preview tab shows. Kinds share the Preview shell; only a visual exists today. */
-export type DockPreview = { kind: "visual"; visualId: string; title: string; mode: "rendered" | "source" }
+export type DockPreview = { kind: "visual"; visual: HtmlVisual; mode: "rendered" | "source" }
 const MAX_DOCK_PREVIEWS = 32
 
 /** A thread that has not been created on the daemon yet (Codex-style draft screen). */
@@ -165,7 +166,7 @@ export interface AppState {
   /** In-memory dock previews, one per thread (never persisted). */
   previews: Record<ThreadId, DockPreview>
   /** Show a visual reply in the dock Preview tab, replacing the thread's previous preview. */
-  openVisualPreview: (threadId: ThreadId, visual: { id: string; title: string }) => void
+  openVisualPreview: (threadId: ThreadId, visual: HtmlVisual) => void
   setPreviewMode: (threadId: ThreadId, mode: DockPreview["mode"]) => void
   /** Remove a thread's preview and close the Preview tab. */
   closePreview: (threadId: ThreadId) => void
@@ -389,9 +390,9 @@ export function createEnvironmentStore(
       set((current) => {
         const previous = current.previews[threadId]
         const kept = Object.entries(current.previews).filter(([id]) => id !== threadId).slice(-(MAX_DOCK_PREVIEWS - 1))
-        const same = previous?.kind === "visual" && previous.visualId === visual.id
+        const same = previous?.kind === "visual" && previous.visual.id === visual.id
         return {
-          previews: { ...Object.fromEntries(kept), [threadId]: same ? previous : { kind: "visual", visualId: visual.id, title: visual.title, mode: "rendered" } },
+          previews: { ...Object.fromEntries(kept), [threadId]: same ? previous : { kind: "visual", visual, mode: "rendered" } },
           rightOpen: true,
           rightTab: "preview",
         }

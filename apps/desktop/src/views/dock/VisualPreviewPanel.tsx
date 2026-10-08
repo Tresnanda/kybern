@@ -28,15 +28,12 @@ export const DockPreviewPane = memo(function DockPreviewPane({ threadId, active 
     return <div className="flex h-full items-center justify-center p-6 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">Open a visual reply in this thread to preview it here.</div>
   }
   // One preview per thread: switching to another visual replaces the document.
-  return <VisualPreviewPanel key={`${threadId}:${preview.visualId}`} threadId={threadId} preview={preview} active={active} />
+  return <VisualPreviewPanel key={`${threadId}:${preview.visual.id}`} threadId={threadId} preview={preview} active={active} />
 })
 
 function VisualPreviewPanel({ threadId, preview, active }: { threadId: ThreadId; preview: Extract<DockPreview, { kind: "visual" }>; active: boolean }) {
-  const { visualId, title, mode } = preview
-  const visual = useStore((s) => {
-    for (const block of s.transcripts[threadId]?.blocks ?? []) if (block.kind === "visual" && block.visual.id === visualId) return block.visual
-    return undefined
-  })
+  const { visual, mode } = preview
+  const { id: visualId, title } = visual
   const dark = useIsDark()
   const [saving, setSaving] = useState(false)
   const [source, setSource] = useState<{ text: string; truncated: boolean } | null>(null), [sourceError, setSourceError] = useState("")
@@ -66,7 +63,6 @@ function VisualPreviewPanel({ threadId, preview, active }: { threadId: ThreadId;
   }, [source, dark])
 
   const highlighted = source && highlight?.text === source.text && highlight.dark === dark ? highlight.html : null
-  const frameVisual = visual ?? { id: visualId, title, height: 400 }
   const showSource = mode === "source"
   const save = async () => {
     setSaving(true)
@@ -109,7 +105,7 @@ function VisualPreviewPanel({ threadId, preview, active }: { threadId: ThreadId;
         {/* Both layers stay mounted so switching modes keeps the same document; the hidden one is inert. */}
         <div className="t-pane absolute inset-0" data-active={!showSource} inert={showSource} aria-hidden={showSource} style={showSource ? { pointerEvents: "none" } : undefined}>
           <ScrollArea className="h-full">
-            <VisualFrame threadId={threadId} visual={frameVisual} mode="panel" active={active && !showSource} />
+            <VisualFrame threadId={threadId} visual={visual} mode="panel" active={active && !showSource} />
           </ScrollArea>
         </div>
         <div className="t-pane absolute inset-0" data-active={showSource} inert={!showSource} aria-hidden={!showSource} style={!showSource ? { pointerEvents: "none" } : undefined}>

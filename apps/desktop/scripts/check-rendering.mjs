@@ -1,6 +1,6 @@
 // Build the synthetic fixture separately; it never enters the shipped frontend.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { homedir, tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { spawn, spawnSync } from "node:child_process"
@@ -92,9 +92,21 @@ c.commit()`,path.join(dataDir,"state.sqlite"),thread.id],{encoding:"utf8"})
       addEventListener('message',e=>{if(e.data?.fixture!=='kybern-visual-command')return;if(e.data.action==='click')document.getElementById('counter').click();else if(e.data.action==='spoof-link')parent.postMessage({kind:'kybern-visual-link',url:'https://example.test/spoof'},'*');else if(e.data.action==='animate'){const css=document.createElement('span');css.className='late-css';document.body.append(css);const moving=document.createElement('span');document.body.append(moving);moving.animate([{opacity:0.5},{opacity:1}],{duration:200,iterations:Infinity});const paused=document.createElement('span');document.body.append(paused);paused.animate([{opacity:0.5},{opacity:1}],{duration:200,iterations:Infinity}).pause();report()}else report()});
       console.log('table rows',document.querySelectorAll('tbody tr').length);addEventListener('load',report);
     </script></body></html>`
-    const {visual} = call("threads.visuals.publish",{thread_id:thread.id,html,title:"Regional comparison",height:600})
+    const publish = title => call("threads.visuals.publish",{thread_id:thread.id,html,title,height:600}).visual
+    // Published before the preview browser is linked in, so it carries no measured heights.
+    const unmeasured = publish("Regional comparison")
+    // Reuse the installed preview browser (never downloaded here) so the daemon measures the second page.
+    const browser = path.join(homedir(),".kybern/cache/html-preview")
+    let visual = unmeasured
+    if (existsSync(browser)) {
+      mkdirSync(path.join(dataDir,"cache"),{recursive:true}); symlinkSync(browser,path.join(dataDir,"cache/html-preview"))
+      visual = publish("Regional comparison, measured")
+    }
+    // Layout that does not depend on font metrics, so the daemon's and WebKit's heights agree exactly.
+    const fixedHtml = '<!doctype html><html><head><style>body{margin:0}.box{height:210px;background:var(--chart-1)}@media(max-width:600px){.box{height:340px}}@media(max-width:400px){.box{height:420px}}</style></head><body><div class="box"></div></body></html>'
+    const fixed = call("threads.visuals.publish",{thread_id:thread.id,html:fixedHtml,title:"Fixed layout",height:600}).visual
     rmSync(image)
-    process.env.KYBERN_VISUAL_FIXTURE = JSON.stringify({url:`ws://127.0.0.1:${port}/ws`,http_base:`http://127.0.0.1:${port}`,token:readFileSync(path.join(dataDir,"daemon.token"),"utf8").trim(),thread_id:thread.id,visual})
+    process.env.KYBERN_VISUAL_FIXTURE = JSON.stringify({url:`ws://127.0.0.1:${port}/ws`,http_base:`http://127.0.0.1:${port}`,token:readFileSync(path.join(dataDir,"daemon.token"),"utf8").trim(),thread_id:thread.id,visual,unmeasured,fixed})
   }
   if (fixture === "integrations") {
     const repo = path.resolve(desktop, "../..")
