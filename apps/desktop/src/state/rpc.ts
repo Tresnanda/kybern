@@ -233,7 +233,10 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     client.onNotification("settings.changed", (params) => {
       const settings = (params as { settings?: Settings } | null)?.settings
       if (!disposed && settings) {
-        useStore.getState().set({ settings, providers: [] })
+        // Account probes can update identity/settings while a picker is open.
+        // Keep the current catalog until its replacement arrives: clearing it
+        // unmounts the draft's model/account controls and blocks switching.
+        useStore.getState().set({ settings })
         void refreshProviders().catch(() => {})
       }
     })

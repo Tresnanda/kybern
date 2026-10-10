@@ -73,6 +73,38 @@ test("hydrateToolOutput is a no-op without a connected runtime", async () => {
   const { hydrateToolOutput } = await import("./src/state/rpc.ts")
   await hydrateToolOutput("t", "c")
 })
+test("account settings notifications retain available providers through pending and failed catalog refreshes", async () => {
+  const { createEnvironmentRuntime } = await import("./src/state/rpc.ts")
+  const { selectAvailableProviders } = await import("./src/state/store.ts")
+  const store = createEnvironmentStore("account-catalog-refresh")
+  const runtime = createEnvironmentRuntime(store)
+  runtime.connect({ url: "ws://fixture", token: "fixture", http_base: "http://fixture" })
+  const client = globalThis.memoryClient
+  const providers = [{ kind: "claude-code", available: true, instances: ["default", "second"], models: [{ id: "opus" }] }]
+  const settings = { providers: { "claude-code": { accounts: { second: { name: "Second account", plan: "Max" } } } } }
+  store.getState().set({ providers })
+  let rejectCatalog
+  client.reply = (method) => {
+    assert.equal(method, "providers.list")
+    return new Promise((_, reject) => { rejectCatalog = reject })
+  }
+  try {
+    client.notifications["settings.changed"]({ settings })
+    assert.equal(store.getState().settings, settings)
+    assert.equal(store.getState().providersLoading, true)
+    assert.deepEqual(selectAvailableProviders(store.getState()), providers)
+    const pending = runtime.refreshProviders()
+    rejectCatalog(new Error("Catalog temporarily unavailable"))
+    await assert.rejects(pending, /temporarily unavailable/)
+    assert.equal(store.getState().providersLoading, false)
+    assert.deepEqual(selectAvailableProviders(store.getState()), providers)
+    const refreshed = [{ ...providers[0], models: [{ id: "sonnet" }] }]
+    client.reply = async () => ({ providers: refreshed })
+    client.notifications["settings.changed"]({ settings })
+    await runtime.refreshProviders()
+    assert.equal(store.getState().providers, refreshed)
+  } finally { runtime.disconnect() }
+})
 test("hydrateToolOutput skips inlined tool results", async () => {
   const { createEnvironmentRuntime } = await import("./src/state/rpc.ts")
   const store = createEnvironmentStore("inlined-tool-output")
