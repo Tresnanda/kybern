@@ -180,7 +180,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             tokio::spawn(crate::self_update::tick(state.clone()));
             ok(record)
         }
-        ProjectsList::NAME => ok(ProjectsListResult { projects: state.store.projects_list().map_err(internal)? }),
+        ProjectsList::NAME => ok(ProjectsListResult { projects: state.orchestrator.refresh_projects_git().await.map_err(internal)? }),
         ProjectsBrowse::NAME => {
             let p: ProjectsBrowseParams = parse_or_default(params)?;
             ok(crate::files::browse_directories(p.path).await.map_err(bad)?)
@@ -847,11 +847,13 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         GitStatusMethod::NAME => {
             let p: GitStatusParams = parse(params)?;
             let t = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            state.orchestrator.refresh_project_git(t.project_id).await.map_err(internal)?;
             ok(crate::github::status(std::path::Path::new(&t.cwd)).await.map_err(internal)?)
         }
         GitBranches::NAME => {
             let p: GitBranchesParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            state.orchestrator.refresh_project_git(project.id).await.map_err(internal)?;
             ok(crate::github::branches(std::path::Path::new(&project.path)).await.map_err(internal)?)
         }
         GitCommit::NAME => {

@@ -104,6 +104,11 @@ pub async fn sweep(state: &AppState, policy: &BackgroundSettings, allow_idle_exi
     let on_battery = tokio::task::spawn_blocking(crate::power::on_battery).await.unwrap_or(None);
     *state.on_battery.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = on_battery;
     let saving_power = policy.save_power_on_battery && on_battery == Some(true);
+    // Detect `git init` (or repository removal) while a draft is open, without
+    // adding per-view polling or waking Git when no client is connected.
+    if state.connections.load(Ordering::Relaxed) > 0 {
+        state.orchestrator.refresh_projects_git().await?;
+    }
     match state.orchestrator.release_idle_sessions(policy, saving_power).await {
         Ok(released) if !released.is_empty() => tracing::debug!(count = released.len(), "released idle agent processes"),
         Ok(_) => {}

@@ -1259,6 +1259,17 @@ impl Store {
         })
     }
 
+    /// Persist a live Git probe without overwriting concurrent project edits.
+    /// Returns whether an existing record changed; identical probes stay quiet.
+    pub fn project_set_git_status(&self, id: ProjectId, is_git: bool) -> Result<bool> {
+        self.with(|c| {
+            Ok(c.execute(
+                "UPDATE projects SET is_git = ?2, updated_at = ?3 WHERE id = ?1 AND is_git != ?2",
+                params![id.to_string(), is_git, Utc::now().to_rfc3339()],
+            )? > 0)
+        })
+    }
+
     pub fn project_delete(&self, id: ProjectId) -> Result<()> {
         if is_free_chat_project(id) {
             return Err(anyhow::anyhow!("the free-chat workspace cannot be removed"));
@@ -3217,6 +3228,40 @@ mod tests {
         assert!(events.is_empty());
         assert!(store.thread_get(retry.id).unwrap().is_none());
         assert_eq!(store.events_for_thread(imported.id).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn live_project_git_updates_preserve_edits_and_skip_unchanged_or_removed_records() {
+        let store = Store::open_in_memory().unwrap();
+        let now = Utc::now();
+        let project = Project {
+            id: Uuid::now_v7(),
+            name: "demo".into(),
+            path: "/tmp/demo".into(),
+            is_git: false,
+            worktrees_default: None,
+            task_prefix: None,
+            created_at: now,
+            updated_at: now,
+        };
+        store.project_insert(&project).unwrap();
+        let mut edited = store.project_get(project.id).unwrap().unwrap();
+        edited.name = "Renamed".into();
+        edited.worktrees_default = Some(true);
+        store.project_update(&edited).unwrap();
+
+        assert!(store.project_set_git_status(project.id, true).unwrap());
+        let updated = store.project_get(project.id).unwrap().unwrap();
+        assert!(updated.is_git);
+        assert_eq!(updated.name, edited.name);
+        assert_eq!(updated.worktrees_default, edited.worktrees_default);
+        assert_eq!(updated.task_prefix, edited.task_prefix);
+        assert!(!store.project_set_git_status(project.id, true).unwrap());
+        assert_eq!(store.project_get(project.id).unwrap().unwrap().updated_at, updated.updated_at);
+        assert!(store.project_set_git_status(project.id, false).unwrap());
+        store.project_delete(project.id).unwrap();
+        assert!(!store.project_set_git_status(project.id, true).unwrap());
+        assert!(store.project_get(project.id).unwrap().is_none());
     }
 
     #[test]
