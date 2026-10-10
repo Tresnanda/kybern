@@ -1,14 +1,13 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { Button } from "@/components/kit/button"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
-import { PanelExpandIcon, RotateCcwIcon } from "@/lib/kit/icons"
+import { PanelExpandIcon, RotateCcwIcon, XIcon } from "@/lib/kit/icons"
 import { observeLoopVisibility } from "@/lib/loopVisibility"
 import { observeResizeFrame } from "@/lib/resizeObserver"
 import { openExternal } from "@/lib/tauri"
 import type { HtmlVisual, ThreadId } from "@/protocol"
 import { activeRuntime, errorText } from "@/state/rpc"
-import { useStore } from "@/state/store"
-import { currentTheme, setPreviewOrigin } from "./visualFrameSupport"
+import { currentTheme } from "./visualFrameSupport"
 import { visualFrameHeight, visualHeight, visualLink, visualThemeFragment, VISUAL_COLUMN_WIDTH } from "../../../../packages/kybern-client/src/visuals"
 
 // Last settled height per visual and mode, so a remount (virtual rows, thread revisit) reserves
@@ -40,11 +39,15 @@ type Status = "minting" | "loading" | "ready" | "error"
 export const VisualFrame = memo(function VisualFrame({ threadId, visual, mode = "inline", active = true }: { threadId: ThreadId; visual: HtmlVisual; mode?: "inline" | "panel"; active?: boolean }) {
   const panel = mode === "panel"
   const boxRef = useRef<HTMLDivElement>(null), frameRef = useRef<HTMLIFrameElement>(null)
+  const hostRef = useRef<HTMLDivElement>(null)
   const [url, setUrl] = useState<string | null>(null), [error, setError] = useState("")
   const [status, setStatus] = useState<Status>("minting")
   const [attempt, setAttempt] = useState(0)
   const [skeleton, setSkeleton] = useState(false)
   const [width, setWidth] = useState(VISUAL_COLUMN_WIDTH)
+  const [expanded, setExpanded] = useState(false)
+  const expandedRef = useRef(false)
+  const expandButton = useRef<HTMLButtonElement>(null)
   const post = useRef<() => void>(() => {})
   const statusRef = useRef<Status>("minting"), sized = useRef(false), stopResize = useRef<() => void>(() => {})
   // The height last written to the box. Re-renders reuse it, so React never overwrites a posted
@@ -118,11 +121,12 @@ export const VisualFrame = memo(function VisualFrame({ threadId, visual, mode = 
     observer.observe(element)
     const mutations = new MutationObserver(send)
     // The box is skipped: its style changes with every posted height, which is not a theme change.
-    for (const parent of ancestors) if (parent !== box) mutations.observe(parent, { attributes: true, attributeFilter: ["class", "style", "data-theme-variant"] })
+    for (const parent of ancestors) if (parent !== box && parent !== hostRef.current) mutations.observe(parent, { attributes: true, attributeFilter: ["class", "style", "data-theme-variant"] })
     const apply = () => {
-      frame = 0; if (pendingHeight === null) return
+      frame = 0; if (pendingHeight === null || expandedRef.current) return
       const next = panel ? Math.max(80, Math.min(PANEL_MAX_HEIGHT, pendingHeight)) : visualFrameHeight(visual, Math.round(box.clientWidth) || VISUAL_COLUMN_WIDTH, pendingHeight)
       box.style.height = `${next}px`; applied.current = next
+      if (hostRef.current) hostRef.current.style.height = `${next}px`
       rememberHeight(cacheKey, Math.round(box.clientWidth), next)
       if (!sized.current) { sized.current = true; stopResize.current() }
       if (statusRef.current !== "ready") { window.clearTimeout(readyTimer.current); settle("ready") }
@@ -157,11 +161,30 @@ export const VisualFrame = memo(function VisualFrame({ threadId, visual, mode = 
     ? recalledHeight(cacheKey, width) ?? visualFrameHeight({ ...visual, height: Math.max(visual.height, 80) }, width)
     : visualFrameHeight(visual, width, recalledHeight(cacheKey, width)))
   const ready = status === "ready"
-  const open = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
-    setPreviewOrigin(event.currentTarget)
-    useStore.getState().openVisualPreview(threadId, visual)
-  }, [threadId, visual])
+  const collapse = () => {
+    const dialog = boxRef.current as HTMLDialogElement | null
+    if (!dialog || !expandedRef.current) return
+    expandedRef.current = false
+    dialog.close()
+    // Return the same element/document to its inline presentation. No portal,
+    // reparenting or second ticket: counters, focus and page state survive.
+    dialog.open = true
+    setExpanded(false)
+    requestAnimationFrame(() => expandButton.current?.focus({ preventScroll: true }))
+  }
+  const open = () => {
+    const dialog = boxRef.current as HTMLDialogElement | null
+    if (!dialog) return
+    dialog.close()
+    dialog.showModal()
+    expandedRef.current = true
+    setExpanded(true)
+  }
   const content = <>
+    {expanded && <div className="visual-reply__expanded-header">
+      <span className="min-w-0 flex-1 truncate font-medium" title={visual.title}>{visual.title}</span>
+      <Button variant="ghost" size="icon-sm" aria-label="Close expanded preview" onClick={collapse} autoFocus><XIcon className="size-3.5" /></Button>
+    </div>}
     {url && <iframe ref={frameRef} title={visual.title} src={url} sandbox="allow-scripts" referrerPolicy="no-referrer" onLoad={() => { post.current(); armWatchdog() }} className="visual-reply__frame" data-ready={ready} data-visual-frame={visual.id} style={ready ? { opacity: 1 } : { opacity: 0, colorScheme: "light" }} />}
     {skeleton && !ready && status !== "error" && <div className="visual-reply__skeleton" role="status" aria-label={`Loading ${visual.title}`} />}
     {status === "error" && <div className="visual-reply__error" aria-live="polite">
@@ -170,10 +193,10 @@ export const VisualFrame = memo(function VisualFrame({ threadId, visual, mode = 
       <Button variant="subtle" size="xs" onClick={retry}><RotateCcwIcon className="size-3.5" />Retry</Button>
     </div>}
     {!panel && ready && <Tooltip>
-      <TooltipTrigger render={<Button variant="glass" size="icon-sm" aria-label="Open in panel" className="visual-reply__open" onClick={open} />}>
+      <TooltipTrigger render={<Button variant="glass" size="icon-sm" ref={expandButton} aria-label="Expand preview" className="visual-reply__open" onClick={open} />}>
         <PanelExpandIcon className="size-3.5" />
       </TooltipTrigger>
-      <TooltipPopup side="bottom" align="end">Open in panel</TooltipPopup>
+      <TooltipPopup side="bottom" align="end">Expand preview</TooltipPopup>
     </Tooltip>}
   </>
   if (panel) return <div className="visual-reply-panel px-4 py-3" data-status={status}>
@@ -181,9 +204,9 @@ export const VisualFrame = memo(function VisualFrame({ threadId, visual, mode = 
       {content}
     </div>
   </div>
-  return <div ref={boxRef} role="figure" aria-label={visual.title} tabIndex={-1} className="visual-reply chat-paint-host outline-none" data-visual-reply={visual.id} data-status={status} style={{ height: reserved }}>
+  return <div ref={hostRef} className="visual-reply-host chat-paint-host" style={{ height: reserved }}><dialog open ref={boxRef as React.Ref<HTMLDialogElement>} role={expanded ? "dialog" : "figure"} aria-modal={expanded || undefined} onCancel={(event) => { event.preventDefault(); collapse() }} aria-label={visual.title} tabIndex={-1} className="visual-reply outline-none" data-visual-reply={visual.id} data-status={status} style={{ height: reserved }}>
     {content}
-  </div>
+  </dialog></div>
 })
 
 /** A visual published into the transcript. */

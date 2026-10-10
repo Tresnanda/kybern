@@ -159,6 +159,8 @@ export interface ComposerProps {
   provider: ProviderInstance | null
   /** The thread follows the project and global defaults. Undefined for a draft, which has no override to follow. */
   accountFollowsDefaults?: boolean
+  /** Draft explicitly selected the CLI account instead of following defaults. */
+  accountPinned?: boolean
   /** Pin the next message to an account of the current agent; `null` follows defaults again. */
   onAccountChange?: (instance: string | null) => Promise<void> | void
   providerSessionId?: string | null
@@ -319,9 +321,15 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const projects = useStore((s) => s.projects)
   const providerSettings = useStore((s) => s.settings?.providers)
   const projectPath = props.projectId ? projects[props.projectId]?.path : undefined
+  const accounts = useAccounts()
+  const accountInstance = provider
+    ? accountFollowsDefaults === undefined && !props.accountPinned && provider.instance === "default"
+      ? (projectPath ? providerSettings?.[provider.kind]?.project_accounts?.[projectPath] : undefined) ?? providerSettings?.[provider.kind]?.default_account ?? "default"
+      : provider.instance
+    : "default"
   const providerInstances = useMemo(() => Object.fromEntries(providers.map((status) => [status.kind,
-    status.kind === provider?.kind ? provider.instance : (projectPath ? providerSettings?.[status.kind]?.project_accounts?.[projectPath] : undefined) ?? providerSettings?.[status.kind]?.default_account ?? "default",
-  ])) as Partial<Record<ProviderKind, string>>, [providers, provider, projectPath, providerSettings])
+    status.kind === provider?.kind ? accountInstance : (projectPath ? providerSettings?.[status.kind]?.project_accounts?.[projectPath] : undefined) ?? providerSettings?.[status.kind]?.default_account ?? "default",
+  ])) as Partial<Record<ProviderKind, string>>, [providers, provider, accountInstance, projectPath, providerSettings])
   const threads = useStore((s) => s.threads)
   const disabled = disabledByParent || !connected
   const [text, setText] = useState(savedDraft?.text ?? prefill?.text ?? "")
@@ -333,9 +341,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const steering = running && !!onSteer && promptMode === "steer"
   const catalogEnvironmentId = useStore((s) => s.environmentId)
   const modelCatalogScope = useMemo(() => ({
-    kind: provider?.kind, instance: provider?.instance, projectId,
+    kind: provider?.kind, instance: accountInstance, projectId,
     environmentId: catalogEnvironmentId, refresh: props.onRefreshModels,
-  }), [provider?.kind, provider?.instance, projectId, catalogEnvironmentId, props.onRefreshModels])
+  }), [provider?.kind, accountInstance, projectId, catalogEnvironmentId, props.onRefreshModels])
   const [loadingCatalogScope, setLoadingCatalogScope] = useState<typeof modelCatalogScope | null>(null)
   const modelCatalogLoading = loadingCatalogScope === modelCatalogScope
   // Throttles the silent catalog refresh fired whenever the picker opens, so
@@ -484,21 +492,22 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     }
   }, [term, projectId])
 
-  const skillCatalogKey = projectId && provider ? `${projectId}:${provider.kind}` : ""
+  const skillCatalogKey = projectId && provider ? `${catalogEnvironmentId}:${projectId}:${provider.kind}:${accountInstance}` : ""
   const needsSkills = !!skill || !!slash || !!mention
   useEffect(() => {
     selectedSkills.current.clear()
   }, [skillCatalogKey])
   useEffect(() => {
-    if (!needsSkills || !projectId || !provider || skillCatalog.key === skillCatalogKey) return
+    const kind = provider?.kind
+    if (!needsSkills || !projectId || !kind) return
     let live = true
-    listSkills(projectId, provider.kind)
+    listSkills(projectId, kind, accountInstance)
       .then((skills) => live && setSkillCatalog({ key: skillCatalogKey, skills }))
-      .catch(() => live && setSkillCatalog({ key: skillCatalogKey, skills: [] }))
+      .catch(() => live && setSkillCatalog((current) => current.key === skillCatalogKey ? current : { key: skillCatalogKey, skills: [] }))
     return () => {
       live = false
     }
-  }, [needsSkills, projectId, provider, skillCatalog.key, skillCatalogKey])
+  }, [needsSkills, projectId, provider?.kind, accountInstance, skillCatalogKey, providerSettings])
 
   const skills = useMemo<SkillInfo[]>(
     () => (!projectId ? (computerUse ? [{ ...COMPUTER_MENTION_SKILL }] : []) : skillCatalog.key === skillCatalogKey ? skillCatalog.skills : []),
@@ -878,13 +887,6 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const canPickModel = !!onModelChange
   const canReloadModels = !!onModelChange && !!status?.available && status.supports_model_switch
   const canPickProvider = !!onProviderChange
-  const accounts = useAccounts()
-  // A draft stores the CLI instance ("default") to mean "whatever the defaults say", so its picker shows the default account as current.
-  const accountInstance = provider
-    ? accountFollowsDefaults === undefined && provider.instance === "default"
-      ? accountsOfKind(accounts, provider.kind).find((account) => account.is_default)?.provider.instance ?? "default"
-      : provider.instance
-    : "default"
   const triggerAccount = provider ? accountsOfKind(accounts, provider.kind).find((account) => account.provider.instance === accountInstance) : undefined
   const legacyCursor = provider?.kind === "cursor" && !!props.providerSessionId && !props.providerSessionId.startsWith("cursor-sdk:")
   const modes = provider?.kind === "cursor" && !legacyCursor

@@ -25,6 +25,7 @@ mod orchestrator;
 mod power;
 mod previews;
 mod provider_accounts;
+mod provider_assets;
 #[cfg(test)]
 mod remote_tests;
 mod rpc;

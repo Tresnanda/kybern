@@ -3465,12 +3465,43 @@ html[data-full-translucency] .chat-scroll-fade {
    The figure reserves its final height before first paint (daemon heights,
    cached height, or the agent's cap) and the page stays invisible until it
    reports ready, so nothing flashes or jumps. */
+.visual-reply-host { margin-block: 8px; }
 .visual-reply {
   position: relative;
   width: 100%;
-  margin-block: 8px;
+  margin: 0;
   contain: layout paint;
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
 }
+.visual-reply:modal {
+  position: fixed;
+  inset: 16px;
+  width: auto;
+  height: calc(100dvh - 32px) !important;
+  margin: 0;
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-xl);
+  background: var(--color-background-surface);
+  box-shadow: 0 16px 50px -12px rgb(0 0 0 / 0.34);
+  contain: none;
+}
+.visual-reply:modal .visual-reply__open { display: none; }
+.visual-reply:modal::backdrop { background: rgb(0 0 0 / 0.6); }
+.visual-reply__expanded-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding-inline: 16px 8px;
+  font-size: var(--app-font-size-ui);
+  line-height: 1.5;
+}
+.visual-reply:modal .visual-reply__frame { height: calc(100% - 44px); }
 .visual-reply__frame {
   display: block;
   width: 100%;

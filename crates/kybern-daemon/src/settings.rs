@@ -24,6 +24,7 @@ impl SettingsStore {
             }
             Err(e) => return Err(e.into()),
         };
+        crate::provider_assets::prepare_existing(&settings);
         Ok(Self { path: path.to_path_buf(), current: Arc::new(RwLock::new(settings)), changed: tokio::sync::broadcast::channel(32).0 })
     }
 

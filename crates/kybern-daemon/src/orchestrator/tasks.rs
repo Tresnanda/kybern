@@ -248,6 +248,7 @@ impl Orchestrator {
         let thread = self
             .create_thread_with_id(
                 methods::ThreadsCreateParams {
+                    pin_account: false,
                     project_id: Some(project_id),
                     provider: params.provider,
                     model: params.model,
@@ -495,6 +496,7 @@ impl Orchestrator {
         let thread = self
             .create_thread_with_id(
                 methods::ThreadsCreateParams {
+                    pin_account: false,
                     project_id: Some(project_id),
                     provider: params.provider.clone(),
                     model: params.model.clone(),

@@ -66,7 +66,7 @@ pub async fn plugin_skills(roots: Vec<(String, PathBuf)>) -> Result<Vec<SkillInf
 }
 
 fn scan(cwd: &Path, provider: ProviderKind, env: &BTreeMap<String, String>) -> Vec<SkillInfo> {
-    let home = BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf());
+    let home = env.get("HOME").map(PathBuf::from).or_else(|| BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()));
     let roots = roots(cwd, provider, env, home.as_deref());
     let mut found = Vec::new();
     let mut seen_names = HashSet::new();
@@ -111,9 +111,10 @@ fn roots(cwd: &Path, provider: ProviderKind, env: &BTreeMap<String, String>, hom
                 add(cwd.join(relative), SkillScope::Project, MAX_DEPTH);
             }
             if let Some(home) = home {
-                for relative in [".codex/skills", ".agents/skills", ".codex/plugins/cache"] {
-                    add(home.join(relative), SkillScope::User, MAX_DEPTH);
-                }
+                let codex =
+                    env.get("CODEX_HOME").filter(|value| !value.is_empty()).map(PathBuf::from).unwrap_or_else(|| home.join(".codex"));
+                add(codex.join("skills"), SkillScope::User, MAX_DEPTH);
+                add(home.join(".agents/skills"), SkillScope::User, MAX_DEPTH);
             }
         }
         ProviderKind::Opencode => {
@@ -121,9 +122,11 @@ fn roots(cwd: &Path, provider: ProviderKind, env: &BTreeMap<String, String>, hom
                 add(cwd.join(relative), SkillScope::Project, MAX_DEPTH);
             }
             if let Some(home) = home {
-                for relative in [".config/opencode/skills", ".claude/skills", ".agents/skills"] {
-                    add(home.join(relative), SkillScope::User, MAX_DEPTH);
-                }
+                let config =
+                    env.get("XDG_CONFIG_HOME").filter(|value| !value.is_empty()).map(PathBuf::from).unwrap_or_else(|| home.join(".config"));
+                add(config.join("opencode/skills"), SkillScope::User, MAX_DEPTH);
+                add(home.join(".claude/skills"), SkillScope::User, MAX_DEPTH);
+                add(home.join(".agents/skills"), SkillScope::User, MAX_DEPTH);
             }
         }
         ProviderKind::Pi => {

@@ -161,8 +161,48 @@ async function run() {
   await sleep(120)
   check(commits===commitsBefore,"No Shell render while the page keeps posting")
 
-  // AC 10-12: Open in panel.
-  open.focus(); open.click(); await waitFor(()=>document.querySelector("[data-preview-kind=visual] iframe"),"Open in panel shows the Preview content")
+  // ADE-41: expanding uses the native top layer and the existing document.
+  const inlineHost = figure.parentElement!
+  check(Math.abs(inlineHost.getBoundingClientRect().height-figure.getBoundingClientRect().height)<1,"Inline host follows the page's settled height")
+  const hostHeight = inlineHost.getBoundingClientRect().height
+  const beforeExpand = { rightOpen: useStore.getState().rightOpen, rightTab: useStore.getState().rightTab, rightTabs: useStore.getState().rightTabs, previews: useStore.getState().previews }
+  const inlineLoads = transport.frameLoads
+  open.focus(); open.click(); await waitFor(()=>figure.matches(":modal"),"Expand preview opens over the chat")
+  check(document.querySelector("[data-visual-frame]")===inline && transport.frameLoads===inlineLoads,"Expansion preserves the same iframe and ticket")
+  check(useStore.getState().rightOpen===beforeExpand.rightOpen && useStore.getState().rightTab===beforeExpand.rightTab && useStore.getState().rightTabs===beforeExpand.rightTabs && useStore.getState().previews===beforeExpand.previews,"Expansion leaves the sidebar and its preview unchanged")
+  check((await snapshot(inline)).counter===1,"Expansion preserves the interactive state")
+  check(inlineHost.getBoundingClientRect().height===hostHeight,"Expansion preserves the inline space and reading position")
+  const modal = figure.getBoundingClientRect()
+  check(modal.width > box.width && modal.right <= innerWidth && modal.bottom <= innerHeight,"Expanded content fits the viewport")
+  await screenshot("visuals-expanded-dark")
+  // Host chrome stays reachable when text scales and reading direction changes.
+  document.documentElement.dir = "rtl"
+  document.documentElement.style.fontSize = "200%"
+  await sleep(100)
+  const closeButton = document.querySelector<HTMLButtonElement>('[aria-label="Close expanded preview"]')!
+  const closeRect = closeButton.getBoundingClientRect()
+  check(closeRect.left>=0 && closeRect.right<=innerWidth && closeRect.bottom<=innerHeight,"Close remains reachable with 200% text and RTL")
+  await screenshot("visuals-expanded-rtl-text-200")
+  document.documentElement.dir = "ltr"
+  document.documentElement.style.fontSize = ""
+  await sleep(100)
+  appearance("light"); await sleep(120); await screenshot("visuals-expanded-light")
+  probe(inline,"click"); await waitFor(()=>reports.get(inline.contentWindow!)?.counter===2,"Expanded document remains interactive")
+  document.querySelector<HTMLButtonElement>('[aria-label="Close expanded preview"]')!.click()
+  await waitFor(()=>!figure.matches(":modal"),"Closing returns to inline preview")
+  await sleep(120)
+  check(document.querySelector("[data-visual-frame]")===inline && transport.frameLoads===inlineLoads && (await snapshot(inline)).counter===2,"Closing preserves the document and its updated counter")
+  check(document.activeElement===open,"Closing restores focus to the inline expand button")
+  check(Math.abs(inlineHost.getBoundingClientRect().height-figure.getBoundingClientRect().height)<1,"Closing restores the inline host height")
+  open.click(); await waitFor(()=>figure.matches(":modal"),"Preview expands again")
+  figure.dispatchEvent(new Event("cancel", { cancelable: true }))
+  await waitFor(()=>!figure.matches(":modal"),"Escape cancellation returns to inline preview")
+  check(figure.hasAttribute("open"),"Cancellation does not hide the inline document")
+  appearance("dark"); await sleep(100)
+
+  // The separate dock retains its source, export and visibility behavior.
+  useStore.getState().openVisualPreview(threadId, fixture.visual)
+  await waitFor(()=>document.querySelector("[data-preview-kind=visual] iframe"),"Explicit dock preview shows the Preview content")
   check(useStore.getState().previews[threadId]?.visual.id===fixture.visual.id && useStore.getState().rightTab==="preview" && useStore.getState().rightOpen,"Store opens the dock on the Preview tab")
   const expanded = document.querySelector<HTMLIFrameElement>("[data-preview-kind=visual] iframe")!
   await waitFor(()=>document.querySelector("[data-preview-kind=visual] .visual-reply-panel")?.getAttribute("data-status")==="ready","Panel visual is ready")
@@ -195,7 +235,7 @@ async function run() {
   document.querySelector<HTMLButtonElement>('[aria-label="Save HTML"]')!.click(); await waitFor(()=>transport.saved.length===1,"Save forwards the complete durable source"); check(transport.saved[0].name.endsWith(".html") && transport.saved[0].html.includes("data:image/svg+xml;base64,"),"Saved HTML retains embedded images")
   document.querySelector<HTMLButtonElement>('[aria-label="Close preview"]')!.click(); await waitFor(()=>!document.querySelector("[data-preview-kind=visual]"),"Close removes the preview")
   check(!useStore.getState().previews[threadId] && !useStore.getState().rightTabs.includes("preview"),"Close clears the store entry and tab")
-  check(document.querySelector("iframe")===inline && (await snapshot(inline)).counter===1,"Closing the panel preserves the inline document")
+  check(document.querySelector("iframe")===inline && (await snapshot(inline)).counter===2,"Closing the panel preserves the inline document")
 
   const pane = document.getElementById("pane")!; pane.style.opacity="0"; await sleep(100)
   const hiddenBefore = await snapshot(inline); await sleep(150); const hiddenAfter = await snapshot(inline)
@@ -208,6 +248,12 @@ async function run() {
   check(resumed.runningAnimations===2 && resumed.pausedAnimations===1,"Visible animations resume while intentional pauses remain")
   pane.style.width="360px"; await sleep(100); check(inline.getBoundingClientRect().width<=360,"Responsive narrow layout")
   await screenshot("visuals-narrow-light")
+  const narrowExpand = figure.querySelector<HTMLButtonElement>('[aria-label="Expand preview"]')!
+  narrowExpand.click(); await waitFor(()=>figure.matches(":modal"),"Narrow inline preview expands")
+  check(figure.getBoundingClientRect().width > 360,"A narrow pane does not constrain the expanded preview")
+  await screenshot("visuals-expanded-from-narrow")
+  document.querySelector<HTMLButtonElement>('[aria-label="Close expanded preview"]')!.click()
+  await waitFor(()=>!figure.matches(":modal"),"Narrow expanded preview closes")
 
   // AC 9: a consumed or expired ticket becomes Retry, never the daemon's 404 text.
   appearance("dark"); transport.expireNext = 1

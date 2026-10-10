@@ -859,6 +859,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     paneId?: import("@/state/splitView").PaneId
     projectId?: ProjectId
     provider: ProviderInstance
+    pinAccount?: boolean
     permissionMode: PermissionMode
     model?: string
     effort?: string
@@ -869,6 +870,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     const t = await rpc().call("threads.create", {
       ...(opts.projectId ? { project_id: opts.projectId } : {}),
       provider: opts.provider,
+      pin_account: opts.pinAccount,
       permission_mode: opts.permissionMode,
       model: opts.model,
       effort: opts.effort,
@@ -942,11 +944,13 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
 
   async function listSkills(
     projectId: ProjectId,
-    provider: ProviderKind
+    provider: ProviderKind,
+    instance?: string
   ): Promise<SkillInfo[]> {
     const result = await rpc().call("skills.list", {
       project_id: projectId,
       provider,
+      instance,
     })
     return result.skills
   }

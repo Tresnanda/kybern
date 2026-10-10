@@ -129,6 +129,7 @@ function AgentSection({ provider, accounts, readOnly, onRemove, onAssign }: {
   return (
     <section className={cn(SETTINGS_PANEL_SECTION_CLASS_NAME, "settings-group")} aria-label={provider.display_name}>
       <h2 className={cn(SETTINGS_SECTION_LABEL_CLASS_NAME, "settings-group-title flex items-center gap-1.5")}><ProviderMark kind={provider.kind} size={14} />{provider.display_name}</h2>
+      {!readOnly && accounts.length > 1 && <p className="settings-note text-pretty">Accounts share skills and installed plugin files. Sign-ins, sessions and connections stay separate. Conflicting local files are kept in backups.</p>}
       <div className={cn(SETTINGS_CARD_CLASS_NAME, SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME, "@container")}>
         {accounts.map((account) => <AccountRow key={account.provider.instance} account={account} readOnly={readOnly} onRemove={onRemove} onAssign={onAssign} />)}
         {!readOnly && (

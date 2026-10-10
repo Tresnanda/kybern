@@ -18,7 +18,7 @@ const at = new Date().toISOString()
 const project = { id: "account-project", name: "Account switching", path: "/fixture/project", is_git: false, created_at: at, updated_at: at }
 let settings = {
   default_provider: "claude-code", default_permission_mode: "full-access", worktrees_default: false,
-  providers: { "claude-code": { env: {}, accounts: { second: { name: "Second account", color: "green", directory: "/fixture/accounts/second" } } } },
+  providers: { "claude-code": { env: {}, default_account: "second", accounts: { second: { name: "Second account", color: "green", directory: "/fixture/accounts/second" } } } },
   computer_use: { enabled: false },
 } as unknown as Settings
 const status: ProviderStatus = {

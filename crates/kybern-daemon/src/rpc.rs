@@ -802,7 +802,16 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: SkillsListParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
             let cwd = std::path::Path::new(&project.path);
-            let provider_settings = crate::settings::provider_settings(&state.settings.get(), p.provider, cwd.to_str());
+            let settings = state.settings.get();
+            let mut provider_settings = settings.providers.get(&p.provider).cloned().unwrap_or_default();
+            crate::provider_assets::prepare(&provider_settings, p.provider).map_err(bad)?;
+            if p.provider == ProviderKind::Omp
+                && let Some(profile) = provider_settings.project_profiles.get(&project.path).cloned()
+            {
+                provider_settings.env.insert("OMP_PROFILE".into(), profile);
+            }
+            let instance = crate::provider_accounts::resolve(&provider_settings, cwd.to_str(), p.instance.as_deref());
+            provider_settings.env = crate::provider_accounts::environment(&provider_settings, p.provider, &instance).map_err(bad)?;
             let binary = provider_settings.binary.as_ref().map(std::path::PathBuf::from);
             let skills = match p.provider {
                 ProviderKind::ClaudeCode => {

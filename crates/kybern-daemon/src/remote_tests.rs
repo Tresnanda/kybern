@@ -67,6 +67,66 @@ impl Drop for Host {
 }
 
 #[tokio::test]
+async fn skill_picker_explicit_account_overrides_project_and_provider_defaults() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    let shared = host.root.join("home/.claude");
+    std::fs::create_dir_all(shared.join("skills/review")).unwrap();
+    std::fs::write(shared.join("skills/review/SKILL.md"), "---\nname: review\ndescription: Review fixture\n---\nReview").unwrap();
+    let account = host.root.join("second");
+    let mut settings = host.state.settings.get();
+    let provider = settings.providers.entry(ProviderKind::ClaudeCode).or_default();
+    provider.env.insert("HOME".into(), host.root.join("home").to_string_lossy().into_owned());
+    provider.env.insert("CLAUDE_CONFIG_DIR".into(), shared.to_string_lossy().into_owned());
+    provider.binary = Some(host.root.join("no-agent-binary").to_string_lossy().into_owned());
+    provider.accounts.insert(
+        "second".into(),
+        ProviderAccount { name: "Second".into(), directory: account.to_string_lossy().into_owned(), ..Default::default() },
+    );
+    provider.default_account = Some("second".into());
+    provider.project_accounts.insert(thread.cwd.clone(), "second".into());
+    host.state.settings.set(settings).unwrap();
+    let client = host.client().await;
+    // An unavailable named folder must not silently discover the CLI account's
+    // skills. This distinguishes explicit CLI selection from following defaults.
+    for instance in [Some("default"), Some("second"), None] {
+        let result = client
+            .call::<SkillsList>(SkillsListParams {
+                project_id: thread.project_id,
+                provider: ProviderKind::ClaudeCode,
+                instance: instance.map(str::to_string),
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.skills.iter().any(|skill| skill.name == "review"), instance == Some("default"), "{instance:?}");
+    }
+    // Once available, all accounts discover the same canonical shared asset.
+    std::fs::create_dir_all(&account).unwrap();
+    for instance in [Some("default"), Some("second"), None] {
+        let result = client
+            .call::<SkillsList>(SkillsListParams {
+                project_id: thread.project_id,
+                provider: ProviderKind::ClaudeCode,
+                instance: instance.map(str::to_string),
+            })
+            .await
+            .unwrap();
+        let skill = result.skills.iter().find(|skill| skill.name == "review").unwrap();
+        assert!(PathBuf::from(&skill.path).starts_with(shared.canonicalize().unwrap()));
+    }
+    assert!(
+        client
+            .call::<SkillsList>(SkillsListParams {
+                project_id: thread.project_id,
+                provider: ProviderKind::ClaudeCode,
+                instance: Some("missing".into())
+            })
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn ordinary_worktree_cleanup_rpc_retains_thread_and_source_association() {
     let host = Host::start().await;
     let repo = host.root.join("repository");
@@ -85,6 +145,7 @@ async fn ordinary_worktree_cleanup_rpc_retains_thread_and_source_association() {
     let client = host.client().await;
     let thread = client
         .call::<ThreadsCreate>(ThreadsCreateParams {
+            pin_account: false,
             project_id: Some(project.id),
             provider: ProviderInstance::default_for(ProviderKind::Codex),
             model: None,

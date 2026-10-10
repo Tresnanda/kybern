@@ -158,6 +158,7 @@ pub fn create(state: &AppState, params: AccountsCreateParams) -> Result<Provider
             ..Default::default()
         },
     );
+    crate::provider_assets::prepare(provider, params.kind)?;
     if let Err(error) = state.settings.set(settings) {
         if created {
             let _ = std::fs::remove_dir(&directory);
@@ -170,6 +171,7 @@ pub fn create(state: &AppState, params: AccountsCreateParams) -> Result<Provider
 pub fn context(state: &AppState, instance: &ProviderInstance) -> Result<kybern_drivers::ProbeContext> {
     let settings = state.settings.get();
     let provider = settings.providers.get(&instance.kind).cloned().unwrap_or_default();
+    crate::provider_assets::prepare(&provider, instance.kind)?;
     Ok(kybern_drivers::ProbeContext {
         binary: provider.binary.clone().map(Into::into),
         cwd: Some(state.settings.dir().into()),

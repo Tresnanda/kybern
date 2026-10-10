@@ -362,7 +362,7 @@ function ModelPickerPanel({
       if (tab.instance !== (accountInstance ?? provider.instance) || (accountFollowsDefaults && tab.multi)) {
         resetList()
         if (onAccountChange) await onAccountChange(tab.instance)
-        else await onProviderChange({ kind: tab.kind, instance: tab.instance })
+        else await onProviderChange({ kind: tab.kind, instance: tab.instance }, { pinAccount: true })
       }
       inputRef.current?.focus()
       return

@@ -19,6 +19,7 @@ export function ComposerSuggestions({
   trigger,
   projectId,
   provider,
+  instance,
   commands,
   actions,
   onAction,
@@ -29,6 +30,7 @@ export function ComposerSuggestions({
   trigger: ComposerTrigger;
   projectId: string;
   provider: ProviderKind;
+  instance?: string;
   commands: ProviderCommand[];
   actions: { name: string; description: string }[];
   onAction: (name: string) => void;
@@ -50,7 +52,7 @@ export function ComposerSuggestions({
       setSkillsLoading(false);
       return;
     }
-    void rpc("skills.list", { project_id: projectId, provider })
+    void rpc("skills.list", { project_id: projectId, provider, instance })
       .then((r) => {
         if (alive) {
           setSkills(r.skills.filter((s) => s.enabled));
@@ -67,7 +69,7 @@ export function ComposerSuggestions({
     return () => {
       alive = false;
     };
-  }, [projectId, provider, onCatalog]);
+  }, [projectId, provider, instance, onCatalog]);
   useEffect(() => {
     let alive = true;
     setFiles([]);

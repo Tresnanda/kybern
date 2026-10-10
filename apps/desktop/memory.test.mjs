@@ -913,3 +913,25 @@ test("projects.changed keeps the project list current and moves a draft off a re
     assert.deepEqual(store.getState().selected, { kind: "draft", draft: {} }, "with no projects left, a free chat")
   } finally { runtime.disconnect() }
 })
+
+test("skill discovery sends the selected account and chat creation pins the CLI account", async () => {
+  const { createEnvironmentRuntime } = await import("./src/state/rpc.ts")
+  const store = createEnvironmentStore("account-skill-selection")
+  const runtime = createEnvironmentRuntime(store)
+  runtime.connect({ url: "ws://fixture", token: "fixture", http_base: "http://fixture" })
+  const client = globalThis.memoryClient
+  const requests = []
+  client.reply = async (method, params) => {
+    requests.push({ method, params })
+    if (method === "skills.list") return { skills: [] }
+    if (method === "threads.create") throw new Error("creation request recorded")
+    throw new Error(`Unexpected RPC: ${method}`)
+  }
+  try {
+    for (const instance of ["second", "default"]) await runtime.listSkills("project", "claude-code", instance)
+    assert.deepEqual(requests.map((request) => request.params.instance), ["second", "default"])
+    await assert.rejects(runtime.createThread({ projectId: "project", provider: { kind: "claude-code", instance: "default" }, pinAccount: true, permissionMode: "supervised" }), /request recorded/)
+    assert.equal(requests.at(-1).params.pin_account, true)
+    assert.equal(requests.at(-1).params.provider.instance, "default")
+  } finally { runtime.disconnect() }
+})

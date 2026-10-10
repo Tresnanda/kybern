@@ -401,6 +401,7 @@ export const Composer = memo(function Composer({
             await rpc("skills.list", {
               project_id: thread?.project_id ?? draft.projectId,
               provider: thread?.provider.kind ?? draft.provider,
+              instance: thread?.provider.instance ?? draft.instance,
             })
           ).skills
         : [];
@@ -801,6 +802,7 @@ export const Composer = memo(function Composer({
           trigger={trigger}
           projectId={thread?.project_id ?? draft.projectId}
           provider={thread?.provider.kind ?? draft.provider}
+          instance={thread?.provider.instance ?? draft.instance}
           commands={(commands ?? []).filter(
             (c) => c.name !== "compact" || !canCompact,
           )}
