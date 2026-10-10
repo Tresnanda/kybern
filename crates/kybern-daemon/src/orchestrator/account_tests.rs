@@ -842,3 +842,28 @@ async fn target_mutations_wait_for_session_admission_and_keep_human_request_orde
         "selection never changes the active native owner"
     );
 }
+
+#[tokio::test]
+async fn new_thread_can_pin_cli_account_when_named_account_is_default() {
+    let fixture = Fixture::new();
+    add_test_account(&fixture, ProviderKind::ClaudeCode, "work");
+    let mut settings = fixture.orchestrator.inner.settings.get();
+    settings.providers.get_mut(&ProviderKind::ClaudeCode).unwrap().default_account = Some("work".into());
+    fixture.orchestrator.inner.settings.set(settings).unwrap();
+    for (pin, expected) in [(false, "work"), (true, "default")] {
+        let params = serde_json::from_value(serde_json::json!({
+            "project_id": fixture.project.id,
+            "provider": {"kind":"claude-code", "instance":"default"},
+            "pin_account": pin,
+        })).unwrap();
+        let thread = fixture.orchestrator.create_thread(params).await.unwrap();
+        let target = fixture.orchestrator.thread_target(thread.id).unwrap();
+        assert_eq!(target.target.provider.instance, expected);
+        assert_eq!(target.account_override, pin);
+        // A later settings broadcast cannot replace an explicitly selected CLI account.
+        let mut settings = fixture.orchestrator.inner.settings.get();
+        settings.providers.get_mut(&ProviderKind::ClaudeCode).unwrap().project_accounts.insert(fixture.project.path.clone(), "work".into());
+        fixture.orchestrator.inner.settings.set(settings).unwrap();
+        assert_eq!(fixture.orchestrator.thread_target(thread.id).unwrap().target.provider.instance, expected);
+    }
+}

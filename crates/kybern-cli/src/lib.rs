@@ -1338,6 +1338,7 @@ pub async fn run() -> Result<()> {
             };
             let thread = client
                 .call::<ThreadsCreate>(ThreadsCreateParams {
+                    pin_account: false,
                     project_id: Some(project_id),
                     provider: ProviderInstance::default_for(provider.parse().map_err(|e: String| anyhow!(e))?),
                     model,
@@ -1907,7 +1908,7 @@ pub async fn run() -> Result<()> {
         },
         Cmd::Skills { project, provider } => {
             let project_id = resolve_project(&client, &project, false).await?;
-            let r = client.call::<SkillsList>(SkillsListParams { project_id, provider }).await?;
+            let r = client.call::<SkillsList>(SkillsListParams { project_id, provider, instance: None }).await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             } else {

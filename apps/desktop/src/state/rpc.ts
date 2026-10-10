@@ -233,7 +233,10 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     client.onNotification("settings.changed", (params) => {
       const settings = (params as { settings?: Settings } | null)?.settings
       if (!disposed && settings) {
-        useStore.getState().set({ settings, providers: [] })
+        // Account probes can update identity/settings while a picker is open.
+        // Keep the current catalog until its replacement arrives: clearing it
+        // unmounts the draft's model/account controls and blocks switching.
+        useStore.getState().set({ settings })
         void refreshProviders().catch(() => {})
       }
     })
@@ -856,6 +859,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     paneId?: import("@/state/splitView").PaneId
     projectId?: ProjectId
     provider: ProviderInstance
+    pinAccount?: boolean
     permissionMode: PermissionMode
     model?: string
     effort?: string
@@ -866,6 +870,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     const t = await rpc().call("threads.create", {
       ...(opts.projectId ? { project_id: opts.projectId } : {}),
       provider: opts.provider,
+      pin_account: opts.pinAccount,
       permission_mode: opts.permissionMode,
       model: opts.model,
       effort: opts.effort,
@@ -939,11 +944,13 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
 
   async function listSkills(
     projectId: ProjectId,
-    provider: ProviderKind
+    provider: ProviderKind,
+    instance?: string
   ): Promise<SkillInfo[]> {
     const result = await rpc().call("skills.list", {
       project_id: projectId,
       provider,
+      instance,
     })
     return result.skills
   }

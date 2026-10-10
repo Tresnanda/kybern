@@ -545,6 +545,9 @@ method!(ThreadsRead, "threads.read", Some(Scope::OrchestrationRead), ThreadsRead
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsCreateParams {
+    /// Pin the explicitly selected account, including the regular CLI account.
+    #[serde(default)]
+    pub pin_account: bool,
     /// Omit to create a free chat in the daemon-owned neutral workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<ProjectId>,
@@ -2256,6 +2259,9 @@ method!(ThreadFileRead, "threads.files.read", Some(Scope::OrchestrationRead), Th
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SkillsListParams {
+    /// Omit to follow project/provider defaults; use "default" for the CLI account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<String>,
     pub project_id: ProjectId,
     pub provider: ProviderKind,
 }

@@ -124,6 +124,7 @@ impl Orchestrator {
         let settings = self.inner.settings.get();
         let project = self.inner.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("Project not found."))?;
         let mut provider = settings.providers.get(&thread.provider.kind).cloned().unwrap_or_default();
+        crate::provider_assets::prepare(&provider, thread.provider.kind)?;
         if thread.provider.kind == ProviderKind::Omp
             && let Some(profile) = provider.project_profiles.get(&project.path).cloned()
         {

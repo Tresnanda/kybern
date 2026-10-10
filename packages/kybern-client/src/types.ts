@@ -1141,6 +1141,8 @@ export interface ThreadsReadResult {
 }
 
 export interface ThreadsCreateParams {
+  /** Pin the selected account, including the CLI account. */
+  pin_account?: boolean;
   /** Omit to create a free chat in the daemon-owned neutral workspace. */
   project_id?: ProjectId;
   provider: ProviderInstance;
@@ -2129,6 +2131,8 @@ export interface SkillInfo {
 }
 
 export interface SkillsListParams {
+  /** Omit to follow defaults; "default" selects the CLI account. */
+  instance?: string;
   project_id: ProjectId;
   provider: ProviderKind;
 }

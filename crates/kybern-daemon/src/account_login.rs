@@ -474,6 +474,7 @@ impl AccountLogins {
         if params.make_default {
             provider.default_account = Some(public.id.clone());
         }
+        crate::provider_assets::prepare(provider, public.kind)?;
         state.settings.set(settings)?;
         let instance = ProviderInstance { kind: public.kind, instance: public.id.clone() };
         self.update(&params.id, |login| {

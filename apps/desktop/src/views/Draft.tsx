@@ -41,7 +41,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
   } | null>(null)
 
   const [modeStored, setMode] = useLocalStorage<PermissionMode | null>(`kybern.mode:${environmentId}`, null)
-  const [providerStored, setProvider] = useLocalStorage<ProviderInstance | null>(`kybern.provider:${environmentId}`, null)
+  const [providerStored, setProvider] = useLocalStorage<(ProviderInstance & { pinAccount?: boolean }) | null>(`kybern.provider:${environmentId}`, null)
   const [modelStored, setModelStored] = useLocalStorage<Record<string, { model?: string; effort?: string }>>(`kybern.models:${environmentId}`, {})
   const [worktree, setWorktree] = useState<boolean | null>(null)
   const [baseBranch, setBaseBranch] = useState<string | null>(null)
@@ -52,11 +52,17 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
 
   const preferredMode = modeStored ?? settings?.default_permission_mode ?? "supervised"
   const provider = useMemo<ProviderInstance | null>(() => {
-    if (providerStored && providers.some((p) => p.kind === providerStored.kind)) return providerStored
+    if (providerStored && providers.some((p) => p.kind === providerStored.kind)) {
+      if (providerStored.pinAccount || providerStored.instance !== "default") return providerStored
+      const config = settings?.providers[providerStored.kind]
+      return { kind: providerStored.kind, instance: (project ? config?.project_accounts?.[project.path] : undefined) ?? config?.default_account ?? "default" }
+    }
     const def = settings?.default_provider
     const pick = providers.find((p) => p.kind === def) ?? providers[0]
-    return pick ? { kind: pick.kind, instance: "default" } : null
-  }, [providerStored, providers, settings])
+    const config = pick ? settings?.providers[pick.kind] : undefined
+    return pick ? { kind: pick.kind, instance: (project ? config?.project_accounts?.[project.path] : undefined) ?? config?.default_account ?? "default" } : null
+  }, [providerStored, providers, settings, project])
+  const pinAccount = !!providerStored && (providerStored.pinAccount ?? providerStored.instance !== "default")
   const choice = provider ? modelStored[provider.kind] : undefined
   const freeChat = !projectId
   const useWorktree = freeChat ? false : worktree ?? project?.worktrees_default ?? settings?.worktrees_default ?? false
@@ -151,8 +157,9 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
             mode={mode}
             onModeChange={setMode}
             provider={provider}
+            accountPinned={pinAccount}
             onProviderChange={(next, nextChoice) => {
-              setProvider(next)
+              setProvider({ ...next, pinAccount: nextChoice?.pinAccount ?? next.instance !== "default" })
               if (nextChoice) setModelStored((m) => ({ ...m, [next.kind]: nextChoice }))
               const nextStatus = providers.find((item) => item.kind === next.kind)
               if (nextStatus && !nextStatus.supported_permission_modes.includes(mode)) {
@@ -250,7 +257,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
               if (!provider) return
               if (paneId) useStore.getState().focusSplitPane(paneId)
               if (!coordinatorDraft) {
-                await createThread({ paneId, projectId, provider, permissionMode: mode, model: choice?.model, effort: choice?.effort, useWorktree, baseBranch: baseBranch ?? undefined, message })
+                await createThread({ paneId, projectId, provider: pinAccount ? provider : { ...provider, instance: "default" }, pinAccount, permissionMode: mode, model: choice?.model, effort: choice?.effort, useWorktree, baseBranch: baseBranch ?? undefined, message })
                 return
               }
               if (!projectId) throw new Error("Choose a project for the coordinator.")

@@ -309,6 +309,7 @@ impl Orchestrator {
             let created = self
                 .create_thread_with_id(
                     methods::ThreadsCreateParams {
+                        pin_account: false,
                         project_id: Some(project.id),
                         provider: params.provider.clone(),
                         model: params.model.clone(),
@@ -1209,6 +1210,7 @@ impl Orchestrator {
             let project = self.inner.store.project_get(group.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
             let thread = self
                 .create_thread(methods::ThreadsCreateParams {
+                    pin_account: false,
                     project_id: Some(group.project_id),
                     provider: child.provider,
                     model: child.model,
@@ -3832,7 +3834,7 @@ impl Orchestrator {
             delegation: None,
         };
         self.inner.store.thread_upsert(&thread)?;
-        if thread.provider.instance != "default" {
+        if params.pin_account || thread.provider.instance != "default" {
             self.inner.store.meta_set(&format!("account_override:{}", thread.id), &thread.provider.instance)?;
         }
 
@@ -6824,6 +6826,7 @@ mod tests {
 
         let thread = orchestrator
             .create_thread(methods::ThreadsCreateParams {
+                pin_account: false,
                 project_id: None,
                 provider: ProviderInstance::default_for(ProviderKind::Codex),
                 model: None,
@@ -6846,6 +6849,7 @@ mod tests {
 
         let rejected = orchestrator
             .create_thread(methods::ThreadsCreateParams {
+                pin_account: false,
                 project_id: None,
                 provider: ProviderInstance::default_for(ProviderKind::Codex),
                 model: None,
