@@ -112,6 +112,81 @@ async fn ordinary_worktree_cleanup_rpc_retains_thread_and_source_association() {
 }
 
 #[tokio::test]
+async fn git_status_refreshes_a_project_registered_before_git_init() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    let client = host.client().await;
+    assert!(!host.state.store.project_get(thread.project_id).unwrap().unwrap().is_git);
+    let mut changes = host.state.orchestrator.subscribe_projects();
+
+    let initialized =
+        tokio::process::Command::new("git").args(["init", "-q", "-b", "main"]).current_dir(&thread.cwd).output().await.unwrap();
+    assert!(initialized.status.success());
+    let status = client.call::<GitStatusMethod>(GitStatusParams { thread_id: thread.id }).await.unwrap();
+    assert!(status.is_git, "the environment panel discovers the repository");
+    assert_eq!(status.branch.as_deref(), Some("main"));
+    assert!(
+        host.state.store.project_get(thread.project_id).unwrap().unwrap().is_git,
+        "a live Git read must repair the flag used by project and composer controls"
+    );
+    let update = changes.try_recv().expect("connected clients must receive the repaired project");
+    assert!(update.projects.iter().find(|project| project.id == thread.project_id).unwrap().is_git);
+    let announced = next_projects_changed(&client).await;
+    assert!(announced.projects.iter().find(|project| project.id == thread.project_id).unwrap().is_git);
+    let projects = client.call::<ProjectsList>(Empty {}).await.unwrap();
+    assert!(projects.projects.iter().find(|project| project.id == thread.project_id).unwrap().is_git);
+    client.call::<GitStatusMethod>(GitStatusParams { thread_id: thread.id }).await.unwrap();
+    assert!(matches!(changes.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)), "unchanged Git reads stay quiet");
+}
+
+#[tokio::test]
+async fn projects_list_refreshes_git_without_an_existing_thread() {
+    let host = Host::start().await;
+    let project = host.state.orchestrator.add_project(host.root.to_string_lossy().into_owned(), None).unwrap();
+    assert!(!project.is_git);
+    let client = host.client().await;
+    let initialized =
+        tokio::process::Command::new("git").args(["init", "-q", "-b", "main"]).current_dir(&project.path).output().await.unwrap();
+    assert!(initialized.status.success());
+
+    let list = client.call::<ProjectsList>(Empty {}).await.unwrap();
+    assert!(list.projects.iter().find(|item| item.id == project.id).unwrap().is_git, "boot must discover repositories without a thread");
+    assert!(next_projects_changed(&client).await.projects.iter().find(|item| item.id == project.id).unwrap().is_git);
+}
+
+#[tokio::test]
+async fn connected_project_git_refresh_detects_init_and_removal_without_a_git_request() {
+    let host = Host::start().await;
+    let project = host.state.orchestrator.add_project(host.root.to_string_lossy().into_owned(), None).unwrap();
+    let client = host.client().await;
+    let initialized =
+        tokio::process::Command::new("git").args(["init", "-q", "-b", "main"]).current_dir(&project.path).output().await.unwrap();
+    assert!(initialized.status.success());
+
+    let policy = host.state.settings.get().background;
+    crate::maintenance::sweep(&host.state, &policy, false).await.unwrap();
+    assert!(next_projects_changed(&client).await.projects.iter().find(|item| item.id == project.id).unwrap().is_git);
+    std::fs::remove_dir_all(host.root.join(".git")).unwrap();
+    crate::maintenance::sweep(&host.state, &policy, false).await.unwrap();
+    assert!(!next_projects_changed(&client).await.projects.iter().find(|item| item.id == project.id).unwrap().is_git);
+}
+
+#[tokio::test]
+async fn git_status_of_an_independent_thread_checkout_does_not_mark_the_project_as_git() {
+    let host = Host::start().await;
+    let mut thread = host.thread();
+    let checkout = host.root.join("checkout");
+    std::fs::create_dir_all(&checkout).unwrap();
+    let initialized = tokio::process::Command::new("git").args(["init", "-q", "-b", "main"]).current_dir(&checkout).output().await.unwrap();
+    assert!(initialized.status.success());
+    thread.cwd = checkout.to_string_lossy().into_owned();
+    host.state.store.thread_upsert(&thread).unwrap();
+    let client = host.client().await;
+    assert!(client.call::<GitStatusMethod>(GitStatusParams { thread_id: thread.id }).await.unwrap().is_git);
+    assert!(!host.state.store.project_get(thread.project_id).unwrap().unwrap().is_git, "probe the project path, not the thread's checkout");
+}
+
+#[tokio::test]
 async fn environments_keep_projects_and_identity_separate() {
     let a = Host::start().await;
     let b = Host::start().await;

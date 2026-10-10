@@ -2721,9 +2721,9 @@ fn truncate_utf8(text: &mut String, max_bytes: usize) {
 }
 
 /// Live filesystem probe for a project's git status, mirroring the check
-/// `add_project` uses at registration. The cached `Project.is_git` is computed
-/// only once, so callers that gate git-only behavior (edit/integration spawns,
-/// child worktrees) re-probe through this to pick up a later `git init`.
+/// `add_project` uses at registration. Git reads, project listing and the client
+/// maintenance sweep refresh the cached `Project.is_git`; callers that gate
+/// git-only behavior also use this fallback to pick up a later `git init`.
 fn project_path_is_git(project_path: &str) -> bool {
     std::path::Path::new(project_path).join(".git").exists()
 }
@@ -3607,6 +3607,32 @@ impl Orchestrator {
     }
 
     // ---- projects ----
+
+    /// Git may have been initialized or removed since registration. Probe the
+    /// project checkout itself: a thread can be running in a separate worktree.
+    pub async fn refresh_project_git(&self, project_id: ProjectId) -> Result<()> {
+        if let Some(project) = self.inner.store.project_get(project_id)? {
+            let is_git = Repo::is_repo(std::path::Path::new(&project.path)).await;
+            if self.inner.store.project_set_git_status(project.id, is_git)? {
+                self.publish_projects();
+            }
+        }
+        Ok(())
+    }
+
+    /// Reconcile at boot and during the existing connected-client sweep, even
+    /// when no thread exists yet to issue `git.status`. Publish once per batch.
+    pub async fn refresh_projects_git(&self) -> Result<Vec<Project>> {
+        let mut changed = false;
+        for project in self.inner.store.projects_list()? {
+            let is_git = Repo::is_repo(std::path::Path::new(&project.path)).await;
+            changed |= self.inner.store.project_set_git_status(project.id, is_git)?;
+        }
+        if changed {
+            self.publish_projects();
+        }
+        self.inner.store.projects_list()
+    }
 
     pub fn add_project(&self, path: String, name: Option<String>) -> Result<Project> {
         let p = PathBuf::from(&path);
