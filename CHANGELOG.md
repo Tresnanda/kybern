@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.1
+
+<!-- kybern-release-title: Switch accounts and expand previews directly -->
+<!-- kybern-release-summary: Select CLI Claude directly in the model picker, expand interactive previews over the chat, and share reusable skills across accounts. -->
+
+- Switch back to CLI Claude directly in the model picker, even when another account is the project or global default. Keep account controls available while settings refresh and recover from failed catalog reads.
+- Expand an inline interactive preview over the chat without opening the sidebar. Keep its page state and reading position, and return focus to the expand button when it closes.
+- Share reusable skills and installed plugin files across accounts for the same provider. Preserve conflicting local files in backups, keep credentials, sessions and connections separate, and discover skills for the account selected in the chat. Remote plugins and services can still require per-account installation or sign-in.
+- Detect repositories initialized after a project was added, so Git and worktree controls become available without removing and adding the project again.
+
 ## 0.8.0
 
 <!-- kybern-release-title: Preview anything, sign in once -->
