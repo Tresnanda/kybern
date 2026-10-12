@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 
 /// Bumped with every wording change so a changed guide is a deliberate act.
-pub(crate) const GUIDE_VERSION: u32 = 6;
+pub(crate) const GUIDE_VERSION: u32 = 7;
 
 /// Hard ceiling for the rendered guide (about 1.5k tokens at 4 bytes a token).
 #[cfg(test)]
@@ -88,7 +88,13 @@ pub(crate) fn render(tools: &GuideTools) -> String {
          - Link files with relative paths, `[main.rs](src/main.rs)` or `[main.rs:42](src/main.rs#L42)`; Kybern shows them as clickable links that open the file.\n",
     );
     if tools.has("kybern_html_preview") && tools.has("kybern_html_publish") {
-        out.push_str("\n## Visual replies\nUse interactive HTML charts, tables, diagrams, collages or mockups when asked, or when they make an explanation easier to understand. Write one self-contained document; call `kybern_html_preview` for a screenshot and console diagnostics, then `kybern_html_publish` before your final written reply. Publication stores a durable inline attachment, embeds supported absolute local image paths, and needs no browser. Preview installs Kybern’s own small headless browser on first use; retry in a minute if it is installing. Pages run scripts in an isolated sandbox and follow the reader’s light, dark and custom theme live through CSS variables (see the tool description). Keep width fluid and height content-driven; avoid an outer card or banner title. The reader sees the page: add only what it does not explain in the final reply.\n");
+        out.push_str(
+            "\n## Presenting findings\n\
+             Put findings in the conversation. Answer ordinary questions in plain text. For a substantial comparison, plan, diagram or visual report, prefer an inline page from `kybern_html_publish` over a Markdown file or an external link. Write a separate report file only when the user asks for one or the task needs a repository document, and still give the useful findings here. Publish elsewhere only when the user wants a shareable link.\n\
+             \n\
+             ## Visual replies\n\
+             Write one self-contained HTML document; call `kybern_html_preview` for a screenshot and console diagnostics, then `kybern_html_publish` before your final written reply. The page appears where you publish it, above that reply. Publication stores a durable inline attachment, embeds supported absolute local image paths, and needs no browser. Preview installs Kybern’s own small headless browser on first use; retry in a minute if it is installing. Pages run scripts in an isolated sandbox and follow the reader’s theme live through CSS variables (see the tool description). Keep width fluid and height content-driven; avoid an outer card or banner title. The reader sees the page: add only what it does not explain in the final reply.\n",
+        );
     }
     if tools.has("kybern_preview_open") {
         out.push_str("\n## Previews\nTo show the user a running web app or an HTML mockup beside the chat, call `kybern_preview_open` with its URL (`http://localhost:5173`) or file path. Use relative asset paths in mockups. Files outside your working folder ask the user first; pages outside localhost open in their browser.\n");
@@ -129,10 +135,11 @@ pub(crate) fn render(tools: &GuideTools) -> String {
              - For quick work on your own harness, prefer its built-in subagents when they support the model you want. Use `kybern_agent_delegate` for other harnesses or models, or for work Kybern should track and show the user.\n\
              - `kybern_agent_status` lists your agents; `kybern_agent_cancel` stops one.\n",
         );
-    } else if tools.has("kybern_collaboration_spawn") {
+    }
+    if tools.has("kybern_request_secret") {
         out.push_str(
-            "\n## Helpers\n\
-             You can hand a self-contained side task to a helper agent with `kybern_collaboration_spawn`, then follow it with `kybern_collaboration_read` or `kybern_collaboration_wait`. Do this when the user asks for delegation or parallel work; otherwise do the work yourself.\n",
+            "\n## Secrets\n\
+             Never ask for an API key, token or password in chat. Call `kybern_request_secret`: the user enters it in a private card, Kybern writes it to a git-ignored env file in the workspace, and you get back only the variable name.\n",
         );
     }
     if tools.has("kybern_computer_act") {
@@ -173,7 +180,7 @@ mod tests {
             include_str!("agent_guide_full.golden.txt"),
             "guide wording changed: bump GUIDE_VERSION and update the golden file (KYBERN_UPDATE_GOLDEN=1)"
         );
-        assert_eq!(GUIDE_VERSION, 6);
+        assert_eq!(GUIDE_VERSION, 7);
     }
 
     #[test]
@@ -208,18 +215,24 @@ mod tests {
         let threads = guide_for(&["kybern_thread_read"]);
         assert!(threads.contains("`kybern_thread_read` (read a thread)") && !threads.contains("kybern_thread_send"));
 
-        let coordinator_like = guide_for(&["kybern_thread_read", "kybern_note_read", "kybern_collaboration_spawn"]);
-        assert!(
-            coordinator_like.contains("## Helpers")
-                && coordinator_like.contains("`kybern_collaboration_spawn`")
-                && !coordinator_like.contains("kybern_agent_delegate")
-                && !coordinator_like.contains("The user's Mac")
-        );
+        let reading = guide_for(&["kybern_thread_read", "kybern_note_read"]);
+        assert!(!reading.contains("## Helpers") && !reading.contains("The user's Mac"));
 
-        let delegating = guide_for(&["kybern_agent_delegate", "kybern_thread_send", "kybern_collaboration_spawn"]);
+        let delegating = guide_for(&["kybern_agent_delegate", "kybern_thread_send"]);
         assert!(delegating.contains("## Helpers") && delegating.contains("end your turn") && delegating.contains("worktree"));
-        assert!(!delegating.contains("`kybern_collaboration_spawn`"), "ordinary threads are not told about the coordinator tools");
         assert!(delegating.contains("built-in subagents") && delegating.contains("held until the user approves"));
+
+        let visuals = guide_for(&["kybern_html_preview", "kybern_html_publish"]);
+        assert!(
+            visuals.contains("## Presenting findings")
+                && visuals.contains("prefer an inline page")
+                && visuals.contains("only when the user asks")
+        );
+        assert!(visuals.contains("above that reply"), "agents must know where the page lands");
+        assert!(!guide_for(&["kybern_html_publish"]).contains("## Presenting findings"), "the advice needs both visual tools");
+
+        let secrets = guide_for(&["kybern_request_secret"]);
+        assert!(secrets.contains("## Secrets") && secrets.contains("Never ask") && !none.contains("## Secrets"));
 
         let computer = guide_for(&["kybern_computer_act"]);
         assert!(computer.contains("kybern_computer_apps") && !computer.contains("## Notes and tasks"));
