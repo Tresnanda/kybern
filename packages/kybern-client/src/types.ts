@@ -207,6 +207,8 @@ export interface Project {
   task_prefix?: string | null;
   /** When on, every new thread in the project also gets the project brief and an index of its notes at session start. */
   brief_in_all_threads: boolean;
+  /** This project's overrides of the Coordinator settings; absent fields use the global value. See `effectiveCoordinatorSettings`. */
+  coordinator?: CoordinatorOverrides | null;
   created_at: DateTime;
   updated_at: DateTime;
 }
@@ -265,6 +267,18 @@ export interface DiffStat {
   deletions: number;
 }
 
+/**
+ * A Coordinator delegation that used another harness or model than the default for its
+ * role. `provider` and `model` are the default that was set aside; the child's own are on
+ * its thread.
+ */
+export interface DefaultOverride {
+  provider: ProviderInstance;
+  model?: string | null;
+  /** The Coordinator's reason, as it passed it in `override_reason`. */
+  reason: string;
+}
+
 /** A shared-checkout edit that landed on a path a sibling delegation owns. */
 export interface DelegationConflict {
   path: string;
@@ -282,6 +296,8 @@ export interface DelegationInfo {
   depth: number;
   role: DelegationRole;
   workspace: DelegationWorkspace;
+  /** Set when a Coordinator chose another harness or model than its role's default. */
+  default_override?: DefaultOverride | null;
   /** Globs relative to the checkout root this child owns (shared only). */
   owns?: string[];
   status: DelegationStatus;
@@ -393,8 +409,19 @@ export interface CoordinatorOpenParams {
   model?: string | null;
   effort?: string | null;
   permission_mode?: PermissionMode | null;
-  /** The user's brief. Becomes the project's brief note when it has none; it is not submitted as a provider turn. */
+  /**
+   * The user's opening words. When the Coordinator is created for a project without a
+   * brief they become the user's first answer in its setup interview; with a brief the
+   * daemon sends them as an ordinary first message. Never saved as the brief.
+   */
+  opening_message?: string | null;
+  /** Older clients' name for `opening_message`, treated the same way. */
   initial_brief?: string | null;
+}
+
+/** "Redo setup": start the Coordinator's setup interview again. Refused while it runs a turn. */
+export interface CoordinatorSetupParams {
+  project_id: ProjectId;
 }
 
 export interface CoordinatorOpenResult {
@@ -451,7 +478,21 @@ export type ContentPart =
     }
   | { type: "file_mention"; path: string }
   | { type: "skill"; name: string; path: string }
-  | { type: "mention"; name: string; path: string; display_name?: string | null };
+  | { type: "mention"; name: string; path: string; display_name?: string | null }
+  | SystemRowPart;
+
+/** What a `system_row` part announces. */
+export type SystemRowKind = "coordinator_setup";
+
+/**
+ * A row Kybern itself adds to a conversation, such as "Setup started". Clients draw it as
+ * a small system row, never a user bubble; it may sit in front of the user's own parts.
+ */
+export interface SystemRowPart {
+  type: "system_row";
+  kind: SystemRowKind;
+  text: string;
+}
 
 export interface UserMessage {
   parts: ContentPart[];
@@ -563,6 +604,56 @@ export interface SecretRequestInput {
   /** Hint for the empty field, if the agent gave one. */
   placeholder?: string | null;
 }
+
+/**
+ * `tool_name` of the Coordinator's "Save this as the project brief?" card. `input` is a
+ * `BriefProposalInput`; the answer is `{ decision: "submit", response: { text } }` with the
+ * user's final wording (non-empty, at most `MAX_BRIEF_BYTES`) or a deny.
+ */
+export const COORDINATOR_BRIEF_TOOL = "kybern_coordinator_brief";
+/**
+ * `tool_name` of the Coordinator's "Apply these Coordinator settings?" card. `input` is a
+ * `SettingsProposalInput`; the answer is `{ decision: "submit", response: { accepted: [path, ...] } }`
+ * (at least one path from `input.changes`) or a deny.
+ */
+export const COORDINATOR_SETTINGS_TOOL = "kybern_coordinator_settings";
+/** `tool_name` of the Coordinator's git approvals (push, open a pull request, merge one). Answered allow once or deny. */
+export const LEAD_GIT_TOOL = "kybern_git";
+/** Longest project brief, in bytes. */
+export const MAX_BRIEF_BYTES = 16 * 1024;
+
+/** The `input` of a `COORDINATOR_BRIEF_TOOL` approval. */
+export interface BriefProposalInput {
+  /** The proposed brief, markdown. */
+  text: string;
+  /** The project already has a brief that saving replaces. */
+  replaces: boolean;
+}
+
+/** One proposed change in a `SettingsProposalInput`. */
+export interface SettingChange {
+  /** `lead_autonomy`, `lead_workspace`, `lead_push_without_asking`, `lead_max_children` or `role_defaults.<role>`; also the value `accepted` lists. */
+  path: string;
+  /** Short label for the row, e.g. `Autonomy`. */
+  label: string;
+  /** The effective value today: an enum's snake_case string, a `RoleDefault`, or `null` when none is set. */
+  old: JsonValue;
+  /** The proposed value, in the same shape. */
+  new: JsonValue;
+}
+
+/** The `input` of a `COORDINATOR_SETTINGS_TOOL` approval. */
+export interface SettingsProposalInput {
+  /** Why the Coordinator proposes these, in its words. */
+  reason: string;
+  changes: SettingChange[];
+}
+
+/** The `input` of a `LEAD_GIT_TOOL` approval. */
+export type LeadGitCardInput =
+  | { op: "push"; remote: string; branch: string; ahead: number }
+  | { op: "open_pr"; remote: string; branch: string; ahead: number; title: string; body: string; base: string }
+  | { op: "merge_pr"; number: number; title: string; checks: PrChecksSummary; method: "squash" | "merge" };
 
 export type ApprovalDecision =
   | { decision: "submit"; response: unknown }
@@ -910,6 +1001,12 @@ export interface ProjectsUpdateParams {
   task_prefix?: string | null;
   /** Give every new thread in the project the brief and a notes index. Absent leaves the switch as it is. */
   brief_in_all_threads?: boolean;
+  /**
+   * Replaces the project's Coordinator overrides. Absent leaves them as they are; `null`
+   * removes every override; an object sets exactly the fields it holds (a field left out
+   * falls back to the global setting). Send the whole object each time.
+   */
+  coordinator?: CoordinatorOverrides | null;
 }
 
 export interface ProjectsRemoveParams {
@@ -1581,6 +1678,48 @@ export interface OrchestrationSettings {
   lead_max_children: number;
   /** Deepest chain of delegation; 1 means only top-level threads delegate (1-4). */
   max_depth: number;
+  /** The harness, model and effort a Coordinator uses for each kind of work when it does not ask for another. Absent from older daemons. */
+  role_defaults?: RoleDefaults;
+  /** How freely the Coordinator acts. Absent from older daemons (`propose_large`). */
+  lead_autonomy?: LeadAutonomy;
+  /** Where the Coordinator's children work when it does not say. Absent from older daemons (`shared`). */
+  lead_workspace?: DelegationWorkspace;
+  /** Push and open pull requests without asking. Merging a pull request always asks. */
+  lead_push_without_asking?: boolean;
+}
+
+/** How freely a Coordinator acts before asking the user. */
+export type LeadAutonomy = "act" | "propose_large" | "propose_first";
+
+/** The roles with a configurable default (`general` has none). */
+export type CoordinatorRole = Exclude<DelegationRole, "general">;
+
+/** The harness, model and effort used for one kind of delegated work. An unset field follows the delegating thread. */
+export interface RoleDefault {
+  provider?: ProviderInstance | null;
+  model?: string | null;
+  effort?: string | null;
+}
+
+export type RoleDefaults = Partial<Record<CoordinatorRole, RoleDefault>>;
+
+/** A project's overrides of the Coordinator settings. Absent fields fall back to `OrchestrationSettings`; `role_defaults` replaces the global entry of each role it lists. */
+export interface CoordinatorOverrides {
+  role_defaults?: RoleDefaults;
+  lead_autonomy?: LeadAutonomy | null;
+  lead_workspace?: DelegationWorkspace | null;
+  lead_push_without_asking?: boolean | null;
+  /** Most delegated children the Coordinator may have running (1-16). */
+  lead_max_children?: number | null;
+}
+
+/** The Coordinator settings in force for one project. */
+export interface EffectiveCoordinatorSettings {
+  role_defaults: RoleDefaults;
+  lead_autonomy: LeadAutonomy;
+  lead_workspace: DelegationWorkspace;
+  lead_push_without_asking: boolean;
+  lead_max_children: number;
 }
 
 /** Whether an agent may ask to use the real cursor and focus. */
@@ -1736,7 +1875,7 @@ export interface UsageLimitsParams {
 /** Where a provider's current limits came from. */
 export type LimitsSource = "live" | "session" | "stored";
 /** Why a provider's live read did not update its limits. */
-export type LimitsStale = "login_refresh" | "throttled" | "unavailable";
+export type LimitsStale = "login_refresh" | "throttled" | "unavailable" | "from_last_run";
 export interface ProviderLimits {
   provider: ProviderKind;
   limits: NonNullable<ProviderUsage["limits"]>;
@@ -2155,6 +2294,7 @@ export interface Methods {
   "delegations.worktree_remove": [DelegationsWorktreeRemoveParams, Thread];
   "coordinator.get": [CoordinatorGetParams, Thread | null];
   "coordinator.open": [CoordinatorOpenParams, CoordinatorOpenResult];
+  "coordinator.setup": [CoordinatorSetupParams, Thread];
   "coordinator.switch_harness": [CoordinatorSwitchHarnessParams, Thread];
   "tasks.list": [TasksListParams, TasksListResult];
   "tasks.stop": [TaskControlParams, RuntimeTask];

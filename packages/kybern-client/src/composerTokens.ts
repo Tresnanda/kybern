@@ -205,3 +205,61 @@ export function nextAttachmentLabel(mediaType: string, taken: Iterable<string>):
   while (used.has(`${prefix}${index}`)) index++
   return `${prefix}${index}`
 }
+
+/**
+ * A skill typed as a slash command (`/review` rather than picked from the list): on send,
+ * every word-bounded `/name` in the text that names an enabled skill becomes that skill's
+ * part where it stood, and the token leaves the text. Unknown `/words`, paths and URLs
+ * stay text. Plugins are `@` mentions, never slash commands.
+ */
+export function convertTypedSlashSkills(parts: readonly ContentPart[], skillItems: readonly SkillInfo[]): ContentPart[] {
+  const skills = new Map<string, SkillInfo>()
+  for (const item of skillItems) {
+    if (item.enabled && item.scope !== "plugin" && item.name.trim() && !/\s/.test(item.name)) skills.set(item.name.toLowerCase(), item)
+  }
+  if (!skills.size) return [...parts]
+  const names = [...skills.values()].map((item) => item.name).sort((left, right) => right.length - left.length).map(escapeRegExp)
+  const pattern = new RegExp(`(^|\\s)/(${names.join("|")})(?=[\\s,.;:!?]|$)`, "gi")
+  const out: ContentPart[] = []
+  let converted = false
+  const pushText = (value: string) => {
+    if (!value) return
+    const previous = out.at(-1)
+    if (previous?.type === "text") out[out.length - 1] = { type: "text", text: previous.text + value }
+    else out.push({ type: "text", text: value })
+  }
+  for (const part of parts) {
+    if (part.type !== "text") {
+      out.push(part)
+      continue
+    }
+    let last = 0
+    let match: RegExpExecArray | null
+    pattern.lastIndex = 0
+    while ((match = pattern.exec(part.text))) {
+      const start = match.index + match[1]!.length
+      const skill = skills.get(match[2]!.toLowerCase())!
+      // The space before the token stays; the one after it goes, so no double space is left.
+      pushText(part.text.slice(last, start))
+      out.push({ type: "skill", name: skill.name, path: skill.path })
+      last = start + match[2]!.length + 1
+      if (part.text[last] === " ") last += 1
+      converted = true
+    }
+    pushText(part.text.slice(last))
+  }
+  if (!converted) return [...parts]
+  // Whitespace the tokens left at either end of the message, or alone between parts, goes too.
+  const trimmed: ContentPart[] = []
+  for (const [index, part] of out.entries()) {
+    if (part.type !== "text") {
+      trimmed.push(part)
+      continue
+    }
+    let value = part.text
+    if (index === 0) value = value.trimStart()
+    if (index === out.length - 1) value = value.trimEnd()
+    if (value.trim()) trimmed.push({ type: "text", text: value })
+  }
+  return trimmed
+}

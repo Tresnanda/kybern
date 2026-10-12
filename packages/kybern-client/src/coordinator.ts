@@ -6,7 +6,7 @@ import type {
   Thread,
   UserMessage,
 } from "./types.ts";
-import { promptText } from "./prompts.ts";
+import { partToken } from "./composerTokens.ts";
 
 export type CoordinatorRpc = <M extends keyof Methods>(
   method: M,
@@ -34,6 +34,9 @@ export function supportsProjectCoordinator(provider: Pick<ProviderStatus, "kind"
   return provider.available;
 }
 
+/** The Draft's line under the Coordinator heading. */
+export const COORDINATOR_DRAFT_HINT = "Tell the Coordinator about this project. It asks a few questions to set itself up.";
+
 export interface StartProjectCoordinatorInput {
   projectId: string;
   provider: ProviderStatus;
@@ -41,25 +44,44 @@ export interface StartProjectCoordinatorInput {
   model?: string;
   effort?: string;
   permissionMode?: PermissionMode;
-  /** The user's first message; becomes the project's brief when the project has none. */
-  initialBrief?: string;
+  /**
+   * The user's opening words. A Coordinator created for a project without a brief starts
+   * its setup interview with them as the user's first answer; with a brief the daemon sends
+   * them as an ordinary first message. They never become the brief.
+   */
+  openingMessage?: string;
+}
+
+/**
+ * The opening message as one string, for `coordinator.open`: text as typed, with skills,
+ * files, mentions and thread references written where they stood.
+ */
+export function openingMessageText(message: UserMessage): string {
+  return message.parts
+    .map((part) => {
+      if (part.type === "text") return part.text;
+      if (part.type === "thread_reference") return part.title;
+      return partToken(part) ?? "";
+    })
+    .join("")
+    .trim();
 }
 
 /** Use one controller for a mounted project entry. `coordinator.open` is idempotent on the
- * daemon, so a lost acknowledgement just retries; the first message keeps one client id.
- * Opening a Coordinator never starts a turn. */
+ * daemon, so a lost acknowledgement just retries; a first message for an existing
+ * Coordinator keeps one client id. */
 export function createCoordinatorStarter(call: CoordinatorRpc, newId: () => string) {
   let inFlight: { fingerprint: string; promise: Promise<CoordinatorOpenResult> } | undefined;
-  let deliveryAttempt: { fingerprint: string; messageId: string; message: UserMessage } | undefined;
+  let deliveryAttempt: { fingerprint: string; messageId: string; message: UserMessage; openSent: boolean } | undefined;
   let deliveryInFlight: { fingerprint: string; promise: Promise<CoordinatorOpenResult> } | undefined;
 
   const controller = {
-    async start(input: StartProjectCoordinatorInput): Promise<CoordinatorOpenResult> {
+    async start(input: StartProjectCoordinatorInput, onOpenSent?: () => void): Promise<CoordinatorOpenResult> {
       const model = input.model?.trim() || undefined;
       const effort = input.effort?.trim() || undefined;
       const instance = input.instance?.trim() || (input.provider.instances.includes("default") ? "default" : input.provider.instances[0] || "default");
-      const initialBrief = input.initialBrief?.trim() || undefined;
-      const fingerprint = JSON.stringify([input.projectId, input.provider.kind, instance, model, effort, input.permissionMode, initialBrief]);
+      const openingMessage = input.openingMessage?.trim() || undefined;
+      const fingerprint = JSON.stringify([input.projectId, input.provider.kind, instance, model, effort, input.permissionMode, openingMessage]);
       if (inFlight) {
         if (inFlight.fingerprint !== fingerprint) throw new Error("Wait for the Coordinator to finish opening.");
         return inFlight.promise;
@@ -79,13 +101,14 @@ export function createCoordinatorStarter(call: CoordinatorRpc, newId: () => stri
         if (!permission || !modes.includes(permission)) {
           throw new Error("Choose a permission mode supported by this provider.");
         }
+        onOpenSent?.();
         return call("coordinator.open", {
           project_id: input.projectId,
           provider: { kind: input.provider.kind, instance },
           ...(model ? { model } : {}),
           ...(effort ? { effort } : {}),
           permission_mode: permission,
-          ...(initialBrief ? { initial_brief: initialBrief } : {}),
+          ...(openingMessage ? { opening_message: openingMessage } : {}),
         });
       };
       const promise = execute();
@@ -93,26 +116,31 @@ export function createCoordinatorStarter(call: CoordinatorRpc, newId: () => stri
       try { return await promise; }
       finally { inFlight = undefined; }
     },
-    /** Open the Coordinator with the message as its brief, then send the message as its first turn. */
+    /**
+     * Open the Coordinator with the message as its opening words. A Coordinator the daemon
+     * creates here starts its first turn with them (the setup interview, or an ordinary
+     * message when the project has a brief), so nothing else is sent. A Coordinator that
+     * already existed gets the message as a normal send, with one frozen client id.
+     */
     async send(input: StartProjectCoordinatorInput, message: UserMessage): Promise<CoordinatorOpenResult> {
-      const goal = promptText(message).trim();
-      if (!goal) throw new Error("Describe what you want the Coordinator to work on.");
+      const opening = openingMessageText(message);
+      if (!opening) throw new Error("Tell the Coordinator about the project first.");
       const fingerprint = JSON.stringify([input.projectId, input.provider.kind, input.instance?.trim(), input.model?.trim(), input.effort?.trim(), input.permissionMode, message]);
       if (deliveryInFlight) {
         if (deliveryInFlight.fingerprint !== fingerprint) throw new Error("Wait for the Coordinator's first message to finish sending.");
         return deliveryInFlight.promise;
       }
       if (deliveryAttempt?.fingerprint !== fingerprint) {
-        deliveryAttempt = { fingerprint, messageId: newId(), message: structuredClone(message) };
+        deliveryAttempt = { fingerprint, messageId: newId(), message: structuredClone(message), openSent: false };
       }
       const frozen = deliveryAttempt;
       const deliver = async () => {
-        const result = await controller.start({ ...input, initialBrief: goal });
-        await call("threads.send", {
-          thread_id: result.thread.id,
-          message_id: frozen.messageId,
-          message: frozen.message,
-        });
+        const result = await controller.start({ ...input, openingMessage: opening }, () => { frozen.openSent = true; });
+        // A retry after a lost acknowledgement finds the Coordinator this delivery created,
+        // which already has the message; only one that was there before needs it sent.
+        if (!result.created && !frozen.openSent) {
+          await call("threads.send", { thread_id: result.thread.id, message_id: frozen.messageId, message: frozen.message });
+        }
         deliveryAttempt = undefined;
         return result;
       };
@@ -124,3 +152,4 @@ export function createCoordinatorStarter(call: CoordinatorRpc, newId: () => stri
   };
   return controller;
 }
+

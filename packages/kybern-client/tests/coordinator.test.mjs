@@ -91,19 +91,52 @@ test("concurrent clicks coalesce and cannot switch projects while opening", asyn
   assert.equal(f.calls.filter((call) => call.method === "coordinator.open").length, 1);
 });
 
-test("first send makes the message the brief and retries one frozen client message", async () => {
+test("the first message opens a new Coordinator with it and sends nothing else", async () => {
   const f = fixture();
+  const message = { parts: [{ type: "text", text: "We're building Kybern. " }, { type: "skill", name: "review", path: "/skills/review" }, { type: "text", text: " small PRs please" }] };
+  const result = await f.starter.send(input, message);
+  assert.equal(result.created, true);
+  const opens = f.calls.filter((call) => call.method === "coordinator.open");
+  assert.equal(opens.length, 1);
+  assert.equal(opens[0].params.opening_message, "We're building Kybern. $review small PRs please");
+  assert.equal("initial_brief" in opens[0].params, false, "the opening message is never sent as the brief");
+  assert.equal(f.calls.some((call) => call.method === "threads.send"), false, "the daemon starts the first turn with it");
+});
+
+test("a lost acknowledgement after creating does not send the message twice", async () => {
+  const f = fixture();
+  let lose = true;
+  const starter = createCoordinatorStarter(async (method, params) => {
+    const answer = await f.call(method, params);
+    if (method === "coordinator.open" && lose) { lose = false; throw new Error("Connection closed"); }
+    return answer;
+  }, () => "message");
+  const message = { parts: [{ type: "text", text: "Set yourself up." }] };
+  await assert.rejects(starter.send(input, message), /Connection closed/);
+  const result = await starter.send(input, message);
+  assert.equal(result.created, false);
+  assert.equal(f.calls.filter((call) => call.method === "coordinator.open").length, 1);
+  assert.equal(f.calls.some((call) => call.method === "threads.send"), false);
+});
+
+test("an existing Coordinator gets the first message as one frozen send", async () => {
+  const f = fixture();
+  f.coordinators.set(input.projectId, { id: "saved", coordinator_project_id: input.projectId });
   const message = { parts: [{ type: "text", text: "Ship the Coordinator with native fixture proof." }] };
   f.fail.sendAcknowledgement = true;
   await assert.rejects(f.starter.send(input, message), /Connection closed/);
   await f.starter.send(input, message);
-  const opens = f.calls.filter((call) => call.method === "coordinator.open");
   const sends = f.calls.filter((call) => call.method === "threads.send");
-  assert.equal(opens.length, 1);
-  assert.equal(opens[0].params.initial_brief, "Ship the Coordinator with native fixture proof.");
+  assert.equal(f.calls.filter((call) => call.method === "coordinator.open").length, 0);
   assert.deepEqual(sends[0].params, sends[1].params);
   assert.equal(sends[0].params.message_id, "message-1");
   assert.deepEqual(sends[0].params.message, message);
+});
+
+test("an empty first message is refused before anything is opened", async () => {
+  const f = fixture();
+  await assert.rejects(f.starter.send(input, { parts: [{ type: "text", text: "  " }] }), /Tell the Coordinator/);
+  assert.equal(f.calls.length, 0);
 });
 
 test("unavailable harness, known-model effort, and permission fail before creation", async () => {
