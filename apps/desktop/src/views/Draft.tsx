@@ -17,7 +17,7 @@ import type { PaneId } from "@/state/splitView"
 import type { GitBranchesResult, PermissionMode, ProjectId, ProviderInstance } from "@/protocol"
 import { activeRuntime, createThread, rpc } from "@/state/rpc"
 import { selectAvailableProviders, useStore } from "@/state/store"
-import { createProjectCoordinatorStarter, projectCoordinatorMode } from "../../../../packages/kybern-client/src/projectCoordinator"
+import { COORDINATOR_EDITS_NOT_BLOCKED_HINT, coordinatorEditsEnforced, createCoordinatorStarter } from "../../../../packages/kybern-client/src/coordinator"
 
 import { Composer, LandingTray, type ComposerHandle, type SlashCommand } from "./Composer"
 import { CHAT_COLUMN_GUTTER } from "./chatLayout"
@@ -37,7 +37,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
   const composer = useRef<ComposerHandle>(null)
   const coordinatorStarter = useRef<{
     runtime: ReturnType<typeof activeRuntime>
-    controller: ReturnType<typeof createProjectCoordinatorStarter>
+    controller: ReturnType<typeof createCoordinatorStarter>
   } | null>(null)
 
   const [modeStored, setMode] = useLocalStorage<PermissionMode | null>(`kybern.mode:${environmentId}`, null)
@@ -70,7 +70,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
   const providerStatus = provider ? providers.find((item) => item.kind === provider.kind) : undefined
   const mode = providerStatus && !providerStatus.supported_permission_modes.includes(preferredMode)
     ? providerStatus.supported_permission_modes[0] ?? preferredMode : preferredMode
-  const dedicatedCoordinator = provider ? projectCoordinatorMode(provider.kind) === "dedicated" : false
+  const editsBlocked = provider ? coordinatorEditsEnforced(provider.kind) : true
 
   useEffect(() => {
     composer.current?.focus()
@@ -141,7 +141,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
             </h2>
             {coordinatorDraft && (
               <p style={{ "--i": 2 } as CSSProperties} className="max-w-[58ch] text-pretty text-[length:var(--app-font-size-ui,12px)] leading-relaxed text-muted-foreground/75">
-                On your first Send, the coordinator researches this project and saves what it learns, then plans and delegates your work. Later tasks reuse that knowledge.
+                The Coordinator plans the work and delegates it to other agents. Your first message becomes the project brief.
               </p>
             )}
           </div>
@@ -179,11 +179,11 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
               <LandingTray>
                 {coordinatorDraft && (
                   <span
-                    title={dedicatedCoordinator ? "This harness enforces a coordination-only role." : "This harness keeps its native coding tools, so the coordination-only role is advisory."}
+                    title={editsBlocked ? "The Coordinator can't edit files on this harness. It delegates edits to other agents." : COORDINATOR_EDITS_NOT_BLOCKED_HINT}
                     className={cn(TRAY_CHIP_CLASS_NAME, "cursor-default text-[var(--color-text-foreground)]")}
                   >
                     <UsersIcon className="size-3.5 shrink-0" />
-                    <span className="min-w-0 truncate">Project coordinator</span>
+                    <span className="min-w-0 truncate">Coordinator</span>
                   </span>
                 )}
                 {freeChat ? (
@@ -260,13 +260,13 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
                 await createThread({ paneId, projectId, provider: pinAccount ? provider : { ...provider, instance: "default" }, pinAccount, permissionMode: mode, model: choice?.model, effort: choice?.effort, useWorktree, baseBranch: baseBranch ?? undefined, message })
                 return
               }
-              if (!projectId) throw new Error("Choose a project for the coordinator.")
-              if (!providerStatus) throw new Error("Choose an available harness for the project coordinator.")
+              if (!projectId) throw new Error("Choose a project for the Coordinator.")
+              if (!providerStatus) throw new Error("Choose an available harness for the Coordinator.")
               const runtime = activeRuntime()
               if (!coordinatorStarter.current || coordinatorStarter.current.runtime !== runtime) {
                 coordinatorStarter.current = {
                   runtime,
-                  controller: createProjectCoordinatorStarter((method, params) => runtime.rpc().call(method, params), () => crypto.randomUUID()),
+                  controller: createCoordinatorStarter((method, params) => runtime.rpc().call(method, params), () => crypto.randomUUID()),
                 }
               }
               const origin = coordinatorStarter.current

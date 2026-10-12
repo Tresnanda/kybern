@@ -1,5 +1,5 @@
 import { offerWorktreeCleanup } from "@/state/worktreeCleanup"
-import { collaborationThreadRows } from "../../../../packages/kybern-client/src/collaboration"
+import { nestedThreadRows } from "../../../../packages/kybern-client/src/threadRows"
 // Thread panel: the leading section of the workspace card, beside the app rail.
 // Brand row, chat actions, and the "Projects" list with nested thread rows.
 // Destinations (pull requests, usage, settings) live on the rail.
@@ -79,7 +79,6 @@ import { createSidebarSubagentsSelector, createUserThreadsSelector, nowMs, useDi
 import { isChildThread, visibleSubagentThreads } from "../../../../packages/kybern-client/src/subagents.ts"
 import { SubagentSidebarRow } from "./subagents/SubagentSidebarRow"
 
-import { DeleteCoordinatorDialog } from "./DeleteCoordinatorDialog"
 import { EnvironmentSwitcher } from "./EnvironmentSwitcher"
 import { NotificationBell } from "./NotificationBell"
 import { ProjectPicker } from "./ProjectPicker"
@@ -514,8 +513,7 @@ function ProjectItem({
   const isDraftHere = selected.kind === "draft" && selected.draft.projectId === project.id
   const running = threads.some((t) => t.status === "running")
   const waiting = threads.some((t) => t.status === "awaiting-approval")
-  // Archived coordinators are omitted from the normal project selector, but
-  // remain valid persistent chats and should still be offered as existing.
+  // The project's Coordinator is pinned first. Archiving it clears the marker, so a new one can be created.
   const coordinator = useStore((state) => {
     for (const thread of Object.values(state.threads)) {
       if (thread.coordinator_project_id === project.id) return thread
@@ -543,10 +541,10 @@ function ProjectItem({
           }
         }
       }
-      return collaborationThreadRows(filtered, expandedThreads, selectedThreadId, defaultOpen)
+      return nestedThreadRows(filtered, expandedThreads, selectedThreadId, defaultOpen)
     }
     const ordered = coordinator ? [coordinator, ...threads.filter(thread => thread.id !== coordinator.id)] : threads
-    return collaborationThreadRows([...ordered, ...shownSubagents], expandedThreads, selectedThreadId, defaultOpen)
+    return nestedThreadRows([...ordered, ...shownSubagents], expandedThreads, selectedThreadId, defaultOpen)
   }, [filterThreadIds, coordinator, threads, subagentThreads, dismissedSubagents, expandedThreads, selectedThreadId])
   // Subagent rows ride along with their parent; only real threads count toward the cap.
   const topRows = useMemo(() => orderedRows.filter((row) => !isChildThread(row.thread)).length, [orderedRows])
@@ -721,7 +719,6 @@ function ThreadRow({ thread, depth = 0, childCount = 0, childrenOpen = false, on
   const unread = useStore((s) => threadAttentionKind(thread, s.notifications[thread.id], s.notificationDismissals[thread.id]) === "done")
   const hasDraft = useStore((s) => !!s.composerDrafts[`thread:${thread.id}`])
   const [renaming, setRenaming] = useState(false)
-  const [deleting, setDeleting] = useState(false)
   const [title, setTitle] = useState(thread.title)
   // Decided once on mount: a row for a thread created just now rises in.
   const [fresh] = useState(() => Date.now() - Date.parse(thread.updated_at) < 3000)
@@ -748,7 +745,6 @@ function ThreadRow({ thread, depth = 0, childCount = 0, childrenOpen = false, on
   }
 
   return (
-    <>
     <ContextMenu>
       <ContextMenuTrigger render={<li className="group/menu-sub-item group/thread-row relative w-full" />}>
         {Array.from({ length: depth }, (_, level) => (
@@ -899,23 +895,12 @@ function ThreadRow({ thread, depth = 0, childCount = 0, childrenOpen = false, on
               <GitBranchIcon /> {thread.worktree.branch}
             </ContextMenuItem>
           )}
-          {thread.coordinator_project_id && (
-            <ContextMenuItem variant="destructive" onClick={() => setDeleting(true)}>
-              <ArchiveIcon /> Delete coordinator
-            </ContextMenuItem>
-          )}
-          {!thread.coordinator_project_id && (
-            <>
-            <ContextMenuItem variant="destructive" onClick={() => archiveThread(thread.id).catch((e) => toast.error("Unable to archive", { description: errorText(e) }))}>
-              <ArchiveIcon /> Archive
-            </ContextMenuItem>
-            {thread.worktree && !thread.delegation && !thread.subagent && <ContextMenuItem onClick={() => offerWorktreeCleanup(thread.id)}>Remove worktree…</ContextMenuItem>}
-            </>
-          )}
+          <ContextMenuItem variant="destructive" onClick={() => archiveThread(thread.id).catch((e) => toast.error("Unable to archive", { description: errorText(e) }))}>
+            <ArchiveIcon /> Archive
+          </ContextMenuItem>
+          {thread.worktree && !thread.delegation && !thread.subagent && <ContextMenuItem onClick={() => offerWorktreeCleanup(thread.id)}>Remove worktree…</ContextMenuItem>}
         </ContextMenuGroup>
       </ContextMenuContent>
     </ContextMenu>
-    {deleting && <DeleteCoordinatorDialog thread={thread} onClose={() => setDeleting(false)} />}
-    </>
   )
 }

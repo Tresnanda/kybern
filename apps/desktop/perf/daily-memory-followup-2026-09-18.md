@@ -251,7 +251,7 @@ The steady six-panel reduction is 17.9–18.5 MiB. WebKit Malloc remained about
 80–81 MiB resident / 62 MiB dirty. Startup lifetime peak ranges overlap, so this
 is evidence for accumulated hidden-pane layers, not a lower application peak.
 Normal native panel-switching/reopen/focus/terminal-shape checks passed.
-Reproduce with `KYBERN_COLLAB_VIEW=dock-memory` and the `chat-collaboration`
+Reproduce with `KYBERN_FIXTURE_VIEW=dock-memory` and the `chat-coordinator`
 rendering fixture. The comparison restores the old `.t-pane` will-change hint
 for the baseline only.
 

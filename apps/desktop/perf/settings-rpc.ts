@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-export * from "./chat-collaboration-rpc"
-import { rpc as chatRpc } from "./chat-collaboration-rpc"
+export * from "./chat-coordinator-rpc"
+import { rpc as chatRpc } from "./chat-coordinator-rpc"
 import { useStore } from "../src/state/store"
 import type { UsageRow } from "../src/protocol"
 export const settingsFixture = { fail: false, empty: false, delay: 20, calls: [] as any[] }

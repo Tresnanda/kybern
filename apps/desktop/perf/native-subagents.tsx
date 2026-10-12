@@ -13,9 +13,9 @@ import { emptyThreadState } from "../src/state/transcript"
 import { childFixture } from "./native-subagents-rpc"
 import type { ProviderKind, Thread } from "../src/protocol"
 import "../src/index.css"
-declare const __COLLAB_THEME__: "dark" | "light"
-declare const __COLLAB_STRESS__: string
-const theme = __COLLAB_THEME__
+declare const __FIXTURE_THEME__: "dark" | "light"
+declare const __FIXTURE_STRESS__: string
+const theme = __FIXTURE_THEME__
 const at = "2026-10-08T10:00:00Z"
 const thread: Thread = { id: "child", parent_thread_id: "parent", title: "Review the native child message routing", project_id: "project", provider: { kind: "claude-code", instance: "default" }, model: "sonnet", permission_mode: "supervised", status: "running", cwd: "/project", pinned: false, created_at: at, updated_at: at, last_seq: 0,
   subagent: {task_id:"child-task",root_thread_id:"parent",parent_turn_id:"parent-turn",status:"running",backgrounded:false,transcript:true,started_at:at} }
@@ -94,7 +94,7 @@ async function run() {
   await pause()
   const largeLayout = inspectDurationLayout()
   checks.largeTextDurationGeometry = largeLayout.pass
-  if (__COLLAB_STRESS__ !== "large-text") {
+  if (__FIXTURE_STRESS__ !== "large-text") {
     document.documentElement.style.removeProperty("--app-font-size-ui")
     document.documentElement.style.fontSize = ""
   }
@@ -139,7 +139,7 @@ async function run() {
   checks.forwardAcknowledged = document.body.textContent!.includes("Queued for parent") && childFixture.calls.filter((method) => method === "subagents.send_to_parent").length === 1
   checks.noOverflow = document.documentElement.scrollWidth <= innerWidth
   const target = window as unknown as {webkit?:{messageHandlers?:{bench?:{postMessage:(text:string)=>void}}}}
-  target.webkit?.messageHandlers?.bench?.postMessage(JSON.stringify({pass:Object.values(checks).every(Boolean),checks,theme,regularLayout,largeLayout,stopActions,backgroundActions,largeText:__COLLAB_STRESS__ === "large-text"}))
+  target.webkit?.messageHandlers?.bench?.postMessage(JSON.stringify({pass:Object.values(checks).every(Boolean),checks,theme,regularLayout,largeLayout,stopActions,backgroundActions,largeText:__FIXTURE_STRESS__ === "large-text"}))
 }
 void run().catch((error) => {
   const target = window as unknown as {webkit?:{messageHandlers?:{bench?:{postMessage:(text:string)=>void}}}}

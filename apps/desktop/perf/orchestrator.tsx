@@ -88,7 +88,6 @@ const runtime: any = new Proxy({
   retainToolOutput: () => () => {},
   interrupt: (id: string) => connection.call("threads.interrupt", { thread_id: id }),
   archiveThread: noop,
-  subscribeCollaboration: () => () => {},
   searchFiles: async () => [],
   listSkills: async () => [],
 }, { get: (target, key) => (key in target ? (target as any)[key] : noop) })
@@ -142,8 +141,8 @@ async function run() {
   transcripts["c-form"].blocks = formBlocks
   useStore.getState().set({
     projects, threads, providers, selected: { kind: "thread", id: "main" }, splitView: null, transcripts, composerDrafts: {}, connection: { state: "open" },
-    rightOpen: true, rightTabs: ["collaboration"], rightTab: "collaboration", envOpen: false, heldMessages: {}, messageRecords: {}, queued: {},
-    settings: { default_provider: "codex", default_permission_mode: "supervised", worktrees_default: true, generate_titles: true, providers: {}, notifications: true, auto_update_harnesses: false, auto_update_daemon: false, background: { session_idle_minutes: 15, max_idle_sessions: 3, terminal_idle_minutes: 30, daemon_idle_exit_minutes: 0, save_power_on_battery: true }, access: { tailscale: false }, orchestration: { max_active_children: 4, max_depth: 2 } } as any,
+    rightOpen: true, rightTabs: ["agents"], rightTab: "agents", envOpen: false, heldMessages: {}, messageRecords: {}, queued: {},
+    settings: { default_provider: "codex", default_permission_mode: "supervised", worktrees_default: true, generate_titles: true, providers: {}, notifications: true, auto_update_harnesses: false, auto_update_daemon: false, background: { session_idle_minutes: 15, max_idle_sessions: 3, terminal_idle_minutes: 30, daemon_idle_exit_minutes: 0, save_power_on_battery: true }, access: { tailscale: false }, orchestration: { max_active_children: 4, lead_max_children: 6, max_depth: 2 } } as any,
   })
   const root = createRoot(document.getElementById("root")!, { onUncaughtError: (error) => results({ pass: false, error: String(error) }) })
   flushSync(() => root.render(<Shell />))

@@ -83,7 +83,6 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
   let canReuseSnapshots = false
   const reusableSnapshots = new Set<ThreadId>()
   const uploads = new AbortController()
-  const collaborationListeners = new Set<(event: ThreadEvent | null) => void>()
   const stopReadTracking = trackFocusedThreadReads(useStore, isWindowFocused)
   // Weak keys distinguish replacement snapshots of the same tool row without
   // retaining an old block, transcript, or output in an in-flight request.
@@ -258,12 +257,10 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       // Old daemons and fresh subscriptions need authoritative snapshots.
       reusableSnapshots.clear()
       canReuseSnapshots = true
-      collaborationListeners.forEach((listener) => listener(null))
       void loadWorkspace(generation)
     }, (_headSeq, resumed) => {
       if (!resumed || disposed) return
       canReuseSnapshots = true
-      collaborationListeners.forEach((listener) => listener(null))
       void loadWorkspace(++hydrationGeneration)
     })
     client.connect()
@@ -703,9 +700,6 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
       )
       if (block?.kind === "tool" && block.complete) toolOutputs.track(ev.thread_id, ev.tool_call_id, block.seq)
     }
-    if (ev.kind.startsWith("collaboration_"))
-      collaborationListeners.forEach((listener) => listener(ev))
-
     if (ev.kind === "turn_completed" || ev.kind === "turn_failed") {
       const current = useStore.getState()
       const visible = isThreadVisible(current, ev.thread_id)
@@ -1225,12 +1219,6 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     uploads.abort()
     client?.close("Environment disconnected")
   }
-  function subscribeCollaboration(listener: (event: ThreadEvent | null) => void) {
-    collaborationListeners.add(listener)
-    return () => {
-      collaborationListeners.delete(listener)
-    }
-  }
   return {
     connect,
     disconnect,
@@ -1271,7 +1259,6 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     visualFrameUrl,
     previewFrameUrl,
     closePreviewTicket,
-    subscribeCollaboration,
   }
 }
 
@@ -1353,8 +1340,6 @@ export const addProject: EnvironmentRuntime["addProject"] = (...args) =>
   activeRuntime().addProject(...args)
 export const removeProject: EnvironmentRuntime["removeProject"] = (...args) =>
   activeRuntime().removeProject(...args)
-export const subscribeCollaboration: EnvironmentRuntime["subscribeCollaboration"] = (...args) =>
-  activeRuntime().subscribeCollaboration(...args)
 export const uploadFile: EnvironmentRuntime["uploadFile"] = (...args) =>
   activeRuntime().uploadFile(...args)
 

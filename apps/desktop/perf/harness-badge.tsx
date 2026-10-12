@@ -6,8 +6,8 @@ import { ThemeProviderContext } from "../src/components/theme-context"
 import { buildThemeCssVariables, DEFAULT_THEME_STATE } from "../src/lib/kit/theme/theme.logic"
 import type { ProviderKind } from "../src/protocol"
 import "../src/index.css"
-declare const __COLLAB_THEME__: "dark" | "light"
-const theme = __COLLAB_THEME__
+declare const __FIXTURE_THEME__: "dark" | "light"
+const theme = __FIXTURE_THEME__
 const kinds: ProviderKind[] = ["claude-code", "codex", "cursor", "opencode", "pi", "omp"]
 document.documentElement.classList.toggle("dark", theme === "dark")
 const tokens = buildThemeCssVariables({ codeThemeId: DEFAULT_THEME_STATE.codeThemeIds[theme], theme: DEFAULT_THEME_STATE.chromeThemes[theme] }, theme, { electron: true, isMac: true, systemUiFont: true })
