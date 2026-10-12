@@ -441,7 +441,8 @@ const MIGRATIONS: &[&str] = &[
     // a switch to share the brief with every thread, and the collaboration system is
     // removed. Each project's latest `project.brief` becomes its pinned brief note;
     // old coordinators and their workers are archived (start fresh); old
-    // collaboration events are deleted because they can no longer be decoded.
+    // collaboration events are deleted because they can no longer be decoded. The operation
+    // receipts of the agents' note and task tools survive as `tool_operations`.
     "
     BEGIN;
     ALTER TABLE notes ADD COLUMN project_role TEXT;
@@ -468,7 +469,8 @@ const MIGRATIONS: &[&str] = &[
       WHERE coordinator_project_id IS NOT NULL OR collaboration_group_id IS NOT NULL;
     DELETE FROM events WHERE kind IN ('project_coordinator_deleted', 'collaboration_group_updated', 'collaboration_member_updated',
       'collaboration_assignment_updated', 'collaboration_message_updated', 'collaboration_context_updated');
-    DROP TABLE collaboration_operations;
+    DELETE FROM collaboration_operations WHERE substr(operation_kind, 1, 7) != 'kybern_';
+    ALTER TABLE collaboration_operations RENAME TO tool_operations;
     DROP TABLE collaboration_context_revisions;
     DROP TABLE collaboration_messages;
     DROP TABLE collaboration_assignments;

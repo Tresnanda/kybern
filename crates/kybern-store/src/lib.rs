@@ -171,6 +171,77 @@ impl Store {
         f(&conn)
     }
 
+    // ---- tool operation receipts ----
+
+    /// The saved result of an agent tool call that carried an `operation_id`, so a
+    /// retry returns it instead of writing twice.
+    pub fn operation_receipt<T: serde::de::DeserializeOwned>(
+        &self,
+        operation_id: OperationId,
+        actor: &str,
+        operation_kind: &str,
+        request: &impl serde::Serialize,
+    ) -> Result<Option<T>> {
+        let request = serde_json::to_string(request)?;
+        self.with(|c| {
+            let row = c
+                .query_row(
+                    "SELECT actor, operation_kind, request, state, response FROM tool_operations WHERE operation_id = ?1",
+                    [operation_id.to_string()],
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                            r.get::<_, String>(3)?,
+                            r.get::<_, Option<String>>(4)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let Some((stored_actor, stored_kind, stored_request, state, response)) = row else { return Ok(None) };
+            if stored_actor != actor || stored_kind != operation_kind || stored_request != request {
+                anyhow::bail!("operation id already belongs to a different actor or request");
+            }
+            if state != "completed" {
+                anyhow::bail!(
+                    "operation outcome is uncertain after an interrupted daemon write; inspect the current notes and tasks before using a new operation id"
+                );
+            }
+            Ok(Some(serde_json::from_str(&response.ok_or_else(|| anyhow::anyhow!("completed operation has no response"))?)?))
+        })
+    }
+
+    pub fn operation_begin(&self, operation_id: OperationId, actor: &str, operation_kind: &str, request: &impl serde::Serialize) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO tool_operations(operation_id, actor, operation_kind, request, state, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?5)",
+                params![operation_id.to_string(), actor, operation_kind, serde_json::to_string(request)?, now],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn operation_complete<T: serde::Serialize>(&self, operation_id: OperationId, response: &T) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE tool_operations SET state = 'completed', response = ?2, updated_at = ?3 WHERE operation_id = ?1 AND state = 'pending'",
+                params![operation_id.to_string(), serde_json::to_string(response)?, Utc::now().to_rfc3339()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Forget a pending operation whose write failed before changing anything, so a
+    /// retry with the same id runs again instead of reporting an uncertain outcome.
+    pub fn operation_abandon(&self, operation_id: OperationId) -> Result<()> {
+        self.with(|c| {
+            c.execute("DELETE FROM tool_operations WHERE operation_id = ?1 AND state = 'pending'", [operation_id.to_string()])?;
+            Ok(())
+        })
+    }
+
     // ---- meta ----
 
     pub fn meta_get(&self, key: &str) -> Result<Option<String>> {
@@ -2962,6 +3033,15 @@ mod coordinator_upgrade_tests {
         insert_event(&conn, worker, "collaboration_assignment_updated", r#"{"kind":"collaboration_assignment_updated"}"#);
         insert_event(&conn, coordinator, "project_coordinator_deleted", r#"{"kind":"project_coordinator_deleted"}"#);
 
+        for (id, kind) in [(Uuid::now_v7(), "groups.create"), (Uuid::now_v7(), "kybern_note_create")] {
+            conn.execute(
+                "INSERT INTO collaboration_operations(operation_id, actor, operation_kind, request, state, response, created_at, updated_at)
+                 VALUES (?1, 'human', ?2, '{}', 'completed', '{}', 'a', 'a')",
+                params![id.to_string(), kind],
+            )
+            .unwrap();
+        }
+
         schema::migrate(&conn).unwrap();
         let store = Store::init(conn).unwrap();
 
@@ -2991,7 +3071,6 @@ mod coordinator_upgrade_tests {
                     "collaboration_assignments",
                     "collaboration_messages",
                     "collaboration_context_revisions",
-                    "collaboration_operations",
                     "project_coordinators",
                     "project_coordinator_reservations",
                 ] {
@@ -3002,6 +3081,9 @@ mod coordinator_upgrade_tests {
                     .query_map([], |r| r.get::<_, String>(0))?
                     .collect::<Result<Vec<_>, _>>()?;
                 assert!(!columns.iter().any(|name| name == "collaboration_group_id"));
+                let receipts =
+                    c.prepare("SELECT operation_kind FROM tool_operations")?.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+                assert_eq!(receipts, ["kybern_note_create"], "agent tool receipts survive, collaboration ones do not");
                 Ok(())
             })
             .unwrap();
