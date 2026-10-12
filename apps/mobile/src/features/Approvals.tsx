@@ -19,6 +19,8 @@ import {
 } from "../state/protocol";
 import { errorText, loadThread, refresh, rpc } from "../state/runtime";
 import { ApprovalCard, QuestionChoices } from "../components/beui/ApprovalCard";
+import { secretRequestInput } from "../../../../packages/kybern-client/src/secretRequest";
+import { SecretRequestCard } from "./SecretRequest";
 export { QuestionChoices } from "../components/beui/ApprovalCard";
 import { Code } from "../ui/Markdown";
 import {
@@ -101,6 +103,12 @@ export function AsyncQuestions({
   );
 }
 export function ApprovalPanel({ approval }: { approval: ApprovalRequest }) {
+  // A secret request has its own card: a masked field, and the value never stays here.
+  const secret = secretRequestInput(approval);
+  if (secret) return <SecretRequestCard approval={approval} input={secret} />;
+  return <DecisionPanel approval={approval} />;
+}
+function DecisionPanel({ approval }: { approval: ApprovalRequest }) {
   const { colors } = useTheme();
   const input = record(approval.input);
   const connector = connectorApproval(approval);

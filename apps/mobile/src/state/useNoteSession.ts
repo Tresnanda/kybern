@@ -17,7 +17,7 @@ export function useNoteSession(target: NoteTarget) {
       ? `id:${target.id}`
       : target.kind === "thread"
         ? `thread:${target.threadId}`
-        : `new:${target.projectId ?? ""}`;
+        : `new:${target.projectId ?? ""}:${target.role ?? ""}`;
   const session = useMemo(
     () =>
       new NoteSession(target, {

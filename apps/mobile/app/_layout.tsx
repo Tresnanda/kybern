@@ -339,6 +339,16 @@ function Navigation() {
           }}
         />
         <Stack.Screen
+          name="project-space"
+          options={{
+            title: "Project",
+            presentation: "formSheet",
+            sheetAllowedDetents: sheetDetents,
+            sheetGrabberVisible: true,
+            ...androidSheet,
+          }}
+        />
+        <Stack.Screen
           name="note-move"
           options={{
             title: "Move note",

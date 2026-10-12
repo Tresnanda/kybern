@@ -3,12 +3,16 @@
 // native imports (and testable with a fake daemon).
 import type { Note, NoteSummary, NotesChangedNotification } from "./protocol";
 import { AUTOSAVE_MS, NOTES_CONFLICT, type NoteSaveStatus } from "./notesModel";
+import { BRIEF_NOTE_TITLE } from "../../../../packages/kybern-client/src/projectSpace.ts";
 
 export type NoteTarget =
   | { kind: "id"; id: string }
   | { kind: "thread"; threadId: string }
-  /** Nothing exists until the first non-empty save, so abandoned notes never pile up. */
-  | { kind: "new"; projectId: string | null };
+  /**
+   * Nothing exists until the first non-empty save, so abandoned notes never pile up.
+   * With `role: "brief"` the save creates the project's brief (no title of its own).
+   */
+  | { kind: "new"; projectId: string | null; role?: "brief" };
 
 export interface NoteDraft {
   title: string;
@@ -239,14 +243,16 @@ export class NoteSession {
     try {
       let result: Note | null = null;
       if (!this.base && target.kind === "new") {
-        if (!sent.title.trim() && !sent.body.trim()) {
+        const brief = target.role === "brief" && !!target.projectId;
+        if (brief ? !sent.body.trim() : !sent.title.trim() && !sent.body.trim()) {
           this.draft = null;
         } else
           result = await this.deps.call("notes.create", {
             scope: target.projectId ? "project" : "global",
             project_id: target.projectId,
-            title: sent.title,
+            title: brief ? BRIEF_NOTE_TITLE : sent.title,
             body: sent.body,
+            ...(brief ? { project_role: "brief" } : {}),
           });
       } else if (!this.base && target.kind === "thread" && !sent.body.trim()) {
         this.draft = null;
@@ -260,7 +266,8 @@ export class NoteSession {
         result = await this.deps.call("notes.update", {
           id: this.base!.id,
           expected_revision: this.expected,
-          title: sent.title,
+          // A brief keeps the title it was created with.
+          ...(target.kind === "new" && target.role === "brief" ? {} : { title: sent.title }),
           body: sent.body,
         });
       }

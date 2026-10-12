@@ -18,6 +18,8 @@ import { useTheme } from "../ui/theme";
 import { UserMessageBubble } from "./UserMessageBubble";
 import { TaskRow } from "./Tasks";
 import { ApprovalPanel } from "./Approvals";
+import { SecretRequestLine } from "./SecretRequest";
+import { secretRequestInput } from "../../../../packages/kybern-client/src/secretRequest";
 import { MessagePart } from "./MessagePart";
 import { hasOrchestrationParts } from "../state/orchestration";
 
@@ -190,7 +192,9 @@ export const TranscriptBlock = memo(function TranscriptBlock({
           )}
         </View>
       );
-    case "approval":
+    case "approval": {
+      const secret = secretRequestInput(block.approval);
+      if (secret && block.decision) return <SecretRequestLine input={secret} decision={block.decision} />;
       return block.decision ? (
         <View style={[styles.line, { paddingVertical: 8 }]}>
           <Icon
@@ -213,6 +217,7 @@ export const TranscriptBlock = memo(function TranscriptBlock({
           <ApprovalPanel approval={block.approval} />
         </View>
       );
+    }
     case "notice":
       return (
         <T
