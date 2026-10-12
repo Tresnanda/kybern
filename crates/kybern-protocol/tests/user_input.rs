@@ -39,3 +39,48 @@ fn forms_preserve_false_numbers_enums_and_required_fields() {
         assert!(request.validate_decision(&ApprovalDecision::Submit { response: json!({"action":"accept","content":content}) }).is_err());
     }
 }
+#[test]
+fn secret_requests_need_a_value_or_a_decline() {
+    let request = request(
+        "kybern_request_secret",
+        json!({"label":"Stripe key","reason":"Run tests","env_key":"STRIPE_KEY","file":".env","replaces":false}),
+    );
+    assert!(request.is_user_input());
+    assert!(request.validate_decision(&ApprovalDecision::AllowOnce).is_err());
+    assert!(request.validate_decision(&ApprovalDecision::AllowAlways).is_err());
+    assert!(request.validate_decision(&ApprovalDecision::Deny { reason: None }).is_ok());
+    for bad in
+        [json!({}), json!({"secret":""}), json!({"secret":7}), json!({"secret":"a\u{0}b"}), json!({"secret":"x".repeat(16 * 1024 + 1)})]
+    {
+        assert!(request.validate_decision(&ApprovalDecision::Submit { response: bad }).is_err());
+    }
+    for good in [json!({"secret":"sk_live_1"}), json!({"secret":"-----BEGIN KEY-----\nabc\n"}), json!({"secret":"x".repeat(16 * 1024)})] {
+        assert!(request.validate_decision(&ApprovalDecision::Submit { response: good }).is_ok());
+    }
+}
+#[test]
+fn secret_answers_are_redacted_before_they_are_stored() {
+    let secret = request("kybern_request_secret", json!({"env_key":"STRIPE_KEY"}));
+    let answer = ApprovalDecision::Submit { response: json!({"secret":"hunter2"}) };
+    assert_eq!(secret.redacted_decision(&answer), ApprovalDecision::Submit { response: json!({"secret":"[redacted]"}) });
+    let deny = ApprovalDecision::Deny { reason: Some("no".into()) };
+    assert_eq!(secret.redacted_decision(&deny), deny);
+
+    let codex = request(
+        "request_user_input",
+        json!({"questions":[{"id":"token","question":"Token?","isSecret":true},{"id":"color","question":"Color?","isSecret":false},{"id":"name","question":"Name?"}]}),
+    );
+    let answers = ApprovalDecision::Submit {
+        response: json!({"answers":{"token":{"answers":["hunter2"]},"color":{"answers":["Blue"]},"name":{"answers":["Ada"]}}}),
+    };
+    assert_eq!(
+        codex.redacted_decision(&answers),
+        ApprovalDecision::Submit {
+            response: json!({"answers":{"token":{"answers":["[redacted]"]},"color":{"answers":["Blue"]},"name":{"answers":["Ada"]}}})
+        }
+    );
+    // Other requests are untouched.
+    let plain = request("AskUserQuestion", json!({"questions":[{"question":"Which?"}]}));
+    let reply = ApprovalDecision::Submit { response: json!({"answers":{"Which?":"Blue"}}) };
+    assert_eq!(plain.redacted_decision(&reply), reply);
+}

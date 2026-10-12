@@ -120,6 +120,27 @@ fn collaboration_queued_message(message: &CollaborationMessage) -> methods::Queu
     }
 }
 
+/// The persistence boundary for secret answers: an `ApprovalResolved` event
+/// never stores or broadcasts the value of a secret answer, whoever emits it.
+fn redact_resolved_approval(c: &Connection, payload: &mut EventPayload) -> Result<()> {
+    let EventPayload::ApprovalResolved { approval_id, decision } = payload else { return Ok(()) };
+    if matches!(decision, ApprovalDecision::Submit { .. })
+        && let Some(approval) = approval_row(c, *approval_id)?
+    {
+        *decision = approval.0.redacted_decision(decision);
+    }
+    Ok(())
+}
+
+fn approval_row(c: &Connection, id: ApprovalId) -> Result<Option<(ApprovalRequest, bool)>> {
+    Ok(c.query_row("SELECT payload, resolved FROM approvals WHERE id = ?1", [id.to_string()], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?))
+    })
+    .optional()?
+    .map(|(p, resolved)| serde_json::from_str::<ApprovalRequest>(&p).map(|a| (a, resolved)))
+    .transpose()?)
+}
+
 /// Append within the caller's transaction so collaboration state, receipts,
 /// queued delivery, and their observable events share one commit boundary.
 fn append_event_in_transaction(
@@ -129,6 +150,7 @@ fn append_event_in_transaction(
     mut payload: EventPayload,
 ) -> Result<ThreadEvent> {
     let c = tx;
+    redact_resolved_approval(c, &mut payload)?;
     let at = Utc::now();
     let kind = payload.kind();
     let serialized = serde_json::to_string(&payload)?;
@@ -2511,25 +2533,24 @@ impl Store {
         })
     }
 
+    /// Record the answer. A secret answer is stored redacted (see
+    /// [`ApprovalRequest::redacted_decision`]); the caller delivers the original.
     pub fn approval_resolve(&self, id: ApprovalId, decision: &ApprovalDecision) -> Result<()> {
         self.with(|c| {
+            let stored = match approval_row(c, id)? {
+                Some((approval, _)) => approval.redacted_decision(decision),
+                None => decision.clone(),
+            };
             c.execute(
                 "UPDATE approvals SET resolved = 1, decision = ?2 WHERE id = ?1",
-                params![id.to_string(), serde_json::to_string(decision)?],
+                params![id.to_string(), serde_json::to_string(&stored)?],
             )?;
             Ok(())
         })
     }
 
     pub fn approval_get(&self, id: ApprovalId) -> Result<Option<(ApprovalRequest, bool)>> {
-        self.with(|c| {
-            Ok(c.query_row("SELECT payload, resolved FROM approvals WHERE id = ?1", [id.to_string()], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?))
-            })
-            .optional()?
-            .map(|(p, resolved)| serde_json::from_str::<ApprovalRequest>(&p).map(|a| (a, resolved)))
-            .transpose()?)
-        })
+        self.with(|c| approval_row(c, id))
     }
 
     pub fn approvals_pending(&self, thread_id: Option<ThreadId>) -> Result<Vec<ApprovalRequest>> {
