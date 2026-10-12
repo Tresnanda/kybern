@@ -204,9 +204,7 @@ impl StagedExtension {
         if !expected.is_empty() && expected.iter().all(|name| advertised.contains(name.as_str())) {
             Ok(())
         } else {
-            Err(DriverError::Protocol(
-                "OMP did not load Kybern's configured tools; fix the extension error and send again".into(),
-            ))
+            Err(DriverError::Protocol("OMP did not load Kybern's configured tools; fix the extension error and send again".into()))
         }
     }
 }

@@ -167,10 +167,7 @@ impl AgentDriver for CursorDriver {
         // A project Coordinator's lead instructions and a thread's project brief
         // ride in the same block, since there is no system channel for them either.
         let guide = config.native_tool_bridge.as_ref().and_then(|bridge| bridge.provider_instructions());
-        Ok(SpawnedSession {
-            session: Box::new(Session { connection, model: Mutex::new(config.model), guide: Mutex::new(guide) }),
-            events,
-        })
+        Ok(SpawnedSession { session: Box::new(Session { connection, model: Mutex::new(config.model), guide: Mutex::new(guide) }), events })
     }
 }
 

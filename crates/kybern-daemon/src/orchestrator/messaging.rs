@@ -90,8 +90,7 @@ struct SendArgs {
 
 /// The permission rule for messages between threads: the sender may wake a
 /// recipient only when the recipient cannot do more than the sender could.
-/// `Err` carries the reason a message is held for the user. Shared with the
-/// collaboration path, which adds its own worktree rule on top.
+/// `Err` carries the reason a message is held for the user.
 pub(super) fn permission_rule(actor: &Thread, recipient: &Thread) -> std::result::Result<(), &'static str> {
     let safe = actor.permission_mode == PermissionMode::FullAccess
         || recipient.permission_mode == PermissionMode::Supervised

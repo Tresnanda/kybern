@@ -7,8 +7,8 @@
 
 use anyhow::{Result, anyhow};
 use kybern_protocol::methods::{
-    Note, NoteId, NoteSearchHit, NoteSummary, NotesChangedNotification, NotesCreateParams, NotesGetParams, NotesMoveParams,
-    NotesUpdateParams, NoteScope, ProjectNoteRole, ThreadNotes, ThreadNotesSetParams,
+    Note, NoteId, NoteScope, NoteSearchHit, NoteSummary, NotesChangedNotification, NotesCreateParams, NotesGetParams, NotesMoveParams,
+    NotesUpdateParams, ProjectNoteRole, ThreadNotes, ThreadNotesSetParams,
 };
 use kybern_protocol::{ProjectId, is_free_chat_project};
 use kybern_store::{NoteError, NoteTarget};

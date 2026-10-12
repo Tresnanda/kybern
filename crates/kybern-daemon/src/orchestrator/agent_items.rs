@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow, bail, ensure};
 use kybern_protocol::methods::{
-    Note, NoteId, NoteScope, NoteSummary, NotesUpdateParams, ProjectNoteRole, TaskItem, TaskItemId, TaskItemsUpdateParams, TaskRunState, TaskScope,
-    TaskStatus,
+    Note, NoteId, NoteScope, NoteSummary, NotesUpdateParams, ProjectNoteRole, TaskItem, TaskItemId, TaskItemsUpdateParams, TaskRunState,
+    TaskScope, TaskStatus,
 };
 use kybern_protocol::*;
 use kybern_store::{NewTask, NoteError, TaskRunPatch, TaskStatusChange};

@@ -474,9 +474,10 @@ fn write_claude_mcp_config(bridge: &NativeToolBridge) -> Result<NativeMcpConfig>
         .endpoint
         .as_deref()
         .ok_or_else(|| DriverError::Unsupported("Claude Code Kybern tools require a daemon MCP endpoint".into()))?;
-    let authorization = bridge.authorization.as_deref().ok_or_else(|| {
-        DriverError::Unsupported("Claude Code Kybern tools require a scoped MCP authorization capability".into())
-    })?;
+    let authorization = bridge
+        .authorization
+        .as_deref()
+        .ok_or_else(|| DriverError::Unsupported("Claude Code Kybern tools require a scoped MCP authorization capability".into()))?;
     let config = json!({
         "mcpServers": {
             bridge.server_name.clone(): {
@@ -2402,11 +2403,9 @@ mod tests {
     async fn a_lead_gets_only_the_read_only_builtins_and_everyone_else_loses_them_all_when_enforced() {
         use crate::{AgentDriver, SessionConfig};
         use std::os::unix::fs::PermissionsExt;
-        for (enforced, read_only, expected) in [
-            (true, true, Some("Read,Grep,Glob,WebSearch,WebFetch")),
-            (true, false, Some("")),
-            (false, true, None),
-        ] {
+        for (enforced, read_only, expected) in
+            [(true, true, Some("Read,Grep,Glob,WebSearch,WebFetch")), (true, false, Some("")), (false, true, None)]
+        {
             let root = tempfile::tempdir().unwrap();
             let binary = root.path().join("claude-fixture");
             std::fs::write(&binary, "#!/usr/bin/env python3\nimport json,pathlib,sys\ntmp=pathlib.Path('argv.tmp')\ntmp.write_text(json.dumps(sys.argv[1:]))\ntmp.rename('argv.json')\nfor line in sys.stdin: pass\n").unwrap();
@@ -2417,7 +2416,11 @@ mod tests {
                 authorization: Some("fixture-capability".into()),
                 coordinator_instructions: Some("LEAD".into()),
                 guide: None,
-                tools: vec![crate::NativeToolDefinition { name: "kybern_thread_read".into(), description: "x".into(), input_schema: json!({"type":"object"}) }],
+                tools: vec![crate::NativeToolDefinition {
+                    name: "kybern_thread_read".into(),
+                    description: "x".into(),
+                    input_schema: json!({"type":"object"}),
+                }],
                 restrictions: crate::NativeToolRestrictions {
                     require_enforcement: enforced,
                     allow_read_only_builtins: read_only,

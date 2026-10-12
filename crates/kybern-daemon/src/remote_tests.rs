@@ -704,7 +704,13 @@ async fn note_notifications_reach_only_clients_that_can_read_orchestration() {
     let blind = connect_with(&[Scope::ReviewWrite]).await;
     let writer = host.client().await;
     writer
-        .call::<NotesCreate>(NotesCreateParams { scope: NoteScope::Global, project_id: None, title: Some("Hello".into()), body: None, project_role: None })
+        .call::<NotesCreate>(NotesCreateParams {
+            scope: NoteScope::Global,
+            project_id: None,
+            title: Some("Hello".into()),
+            body: None,
+            project_role: None,
+        })
         .await
         .unwrap();
     assert_eq!(next_notes_changed(&reader).await.note.unwrap().title, "Hello");
@@ -716,7 +722,13 @@ async fn note_notifications_reach_only_clients_that_can_read_orchestration() {
     assert!(reader.call::<NotesList>(Empty {}).await.is_ok());
     assert!(
         reader
-            .call::<NotesCreate>(NotesCreateParams { scope: NoteScope::Global, project_id: None, title: None, body: None, project_role: None })
+            .call::<NotesCreate>(NotesCreateParams {
+                scope: NoteScope::Global,
+                project_id: None,
+                title: None,
+                body: None,
+                project_role: None
+            })
             .await
             .unwrap_err()
             .to_string()
@@ -1880,6 +1892,7 @@ async fn the_coordinator_and_project_brief_work_over_rpc() {
     // Archiving the Coordinator frees the slot; the old collaboration methods are gone.
     client.call::<ThreadsArchive>(ThreadsArchiveParams { thread_id: opened.thread.id }).await.unwrap();
     assert!(client.call::<CoordinatorGet>(CoordinatorGetParams { project_id }).await.unwrap().is_none());
-    let gone = client.call_raw("collaboration.coordinator.get", serde_json::json!({"project_id": project_id})).await.unwrap_err().to_string();
+    let gone =
+        client.call_raw("collaboration.coordinator.get", serde_json::json!({"project_id": project_id})).await.unwrap_err().to_string();
     assert!(gone.contains("-32601") || gone.to_lowercase().contains("method"), "{gone}");
 }

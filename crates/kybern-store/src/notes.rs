@@ -115,8 +115,9 @@ impl Store {
     /// most recently edited first.
     pub fn project_notes(&self, project_id: ProjectId) -> Result<Vec<Note>> {
         self.with(|c| {
-            let mut notes = query_notes(c, "WHERE n.project_id = ?1 AND n.scope = 'project' AND n.deleted_at IS NULL", [project_id.to_string()])?;
-            notes.sort_by(|a, b| b.summary.updated_at.cmp(&a.summary.updated_at));
+            let mut notes =
+                query_notes(c, "WHERE n.project_id = ?1 AND n.scope = 'project' AND n.deleted_at IS NULL", [project_id.to_string()])?;
+            notes.sort_by_key(|note| std::cmp::Reverse(note.summary.updated_at));
             Ok(notes)
         })
     }

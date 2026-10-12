@@ -78,6 +78,9 @@ async fn opening_the_coordinator_is_idempotent_keeps_the_brief_and_archiving_fre
     let archived = fixture.store.thread_get(first.thread.id).unwrap().unwrap();
     assert_eq!((archived.status, archived.coordinator_project_id), (ThreadStatus::Archived, None));
     assert!(fixture.orchestrator.coordinator_get(fixture.project.id).unwrap().is_none());
+    // A late write from a stale copy, marker included, does not take the slot back.
+    fixture.orchestrator.update_thread(first.thread.clone()).unwrap();
+    assert!(fixture.orchestrator.coordinator_get(fixture.project.id).unwrap().is_none());
     let replacement = fixture.orchestrator.coordinator_open(open_params(&fixture.project, ProviderKind::Codex, None)).await.unwrap();
     assert!(replacement.created && replacement.thread.id != first.thread.id);
     assert_eq!(replacement.thread.provider.kind, ProviderKind::Codex);
@@ -367,6 +370,10 @@ async fn switching_the_coordinators_harness_keeps_the_thread_restarts_the_sessio
     let first = fixture.orchestrator.spawn_session(&lead, None).await.unwrap();
     let before = bridges.lock().unwrap().last().cloned().flatten().unwrap();
     assert!(before.restrictions.require_enforcement);
+    assert!(
+        before.coordinator_instructions.as_deref().unwrap().contains("There is no setup note yet."),
+        "the lead is told when it still has to learn the project"
+    );
 
     // A running Coordinator is not switched.
     let mut running = fixture.store.thread_get(lead.id).unwrap().unwrap();

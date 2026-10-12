@@ -212,7 +212,13 @@ impl Store {
         })
     }
 
-    pub fn operation_begin(&self, operation_id: OperationId, actor: &str, operation_kind: &str, request: &impl serde::Serialize) -> Result<()> {
+    pub fn operation_begin(
+        &self,
+        operation_id: OperationId,
+        actor: &str,
+        operation_kind: &str,
+        request: &impl serde::Serialize,
+    ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.with(|c| {
             c.execute(
@@ -507,11 +513,7 @@ impl Store {
         self.with(|c| {
             c.execute(
                 "UPDATE threads SET parent_thread_id=COALESCE(parent_thread_id,?2), coordinator_project_id=?3 WHERE id=?1",
-                params![
-                    thread_id.to_string(),
-                    parent_thread_id.map(|id| id.to_string()),
-                    coordinator_project_id.map(|id| id.to_string()),
-                ],
+                params![thread_id.to_string(), parent_thread_id.map(|id| id.to_string()), coordinator_project_id.map(|id| id.to_string()),],
             )?;
             Ok(())
         })
@@ -3081,8 +3083,10 @@ mod coordinator_upgrade_tests {
                     .query_map([], |r| r.get::<_, String>(0))?
                     .collect::<Result<Vec<_>, _>>()?;
                 assert!(!columns.iter().any(|name| name == "collaboration_group_id"));
-                let receipts =
-                    c.prepare("SELECT operation_kind FROM tool_operations")?.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+                let receipts = c
+                    .prepare("SELECT operation_kind FROM tool_operations")?
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
                 assert_eq!(receipts, ["kybern_note_create"], "agent tool receipts survive, collaboration ones do not");
                 Ok(())
             })
@@ -3107,7 +3111,8 @@ mod coordinator_upgrade_tests {
         assert!(again.to_string().contains("already has that note"), "{again}");
         let setup = store.note_create_project_role(project, ProjectNoteRole::Setup, "Setup", "pnpm test", Some(thread.id)).unwrap();
         assert_eq!(setup.summary.created_by_thread, Some(thread.id));
-        for refused in [store.note_delete(brief.summary.id).map(|_| ()), store.note_move(brief.summary.id, NoteScope::Global, None).map(|_| ())]
+        for refused in
+            [store.note_delete(brief.summary.id).map(|_| ()), store.note_move(brief.summary.id, NoteScope::Global, None).map(|_| ())]
         {
             assert!(refused.unwrap_err().to_string().contains("project brief and setup note"));
         }

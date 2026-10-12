@@ -115,7 +115,8 @@ impl Orchestrator {
     pub async fn coordinator_open(&self, params: methods::CoordinatorOpenParams) -> Result<methods::CoordinatorOpenResult> {
         let _lead = self.inner.lead_commands.lock().await;
         ensure!(!is_free_chat_project(params.project_id), "Chats without a project have no Coordinator. Choose a project.");
-        let project = self.inner.store.project_get(params.project_id)?.ok_or_else(|| anyhow!("Project not found. Choose another project."))?;
+        let project =
+            self.inner.store.project_get(params.project_id)?.ok_or_else(|| anyhow!("Project not found. Choose another project."))?;
         if let Some(thread) = self.coordinator_get(project.id)? {
             self.save_initial_brief(project.id, params.initial_brief.as_deref())?;
             return Ok(methods::CoordinatorOpenResult { thread, created: false });
@@ -189,7 +190,9 @@ impl Orchestrator {
             // credential revocation, and the durable provider change.
             let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
             let mut thread = self.inner.store.thread_get(current.id)?.ok_or_else(|| anyhow!("The Coordinator thread was not found."))?;
-            if !matches!(thread.status, ThreadStatus::Idle | ThreadStatus::Failed) || thread.coordinator_project_id != Some(params.project_id) {
+            if !matches!(thread.status, ThreadStatus::Idle | ThreadStatus::Failed)
+                || thread.coordinator_project_id != Some(params.project_id)
+            {
                 return Err(busy());
             }
             let retry = || anyhow!("The Coordinator session is changing. Try the harness switch again in a moment.");
@@ -281,7 +284,7 @@ impl Orchestrator {
             text.push_str(LEAD_ROLE);
             text.push_str("\n\n");
         }
-        text.push_str(&project_context(brief, &notes));
+        text.push_str(&project_context(brief, &notes, lead));
         Ok(Some(SessionInstructions { text, brief_revision: brief.map_or(0, |note| note.summary.revision) }))
     }
 
@@ -318,7 +321,7 @@ pub(super) fn with_brief_update(message: &UserMessage, update: &str) -> UserMess
 
 /// The brief and the index of the project's notes, followed by the standing rule
 /// for anything that is missing.
-fn project_context(brief: Option<&Note>, notes: &[Note]) -> String {
+fn project_context(brief: Option<&Note>, notes: &[Note], lead: bool) -> String {
     let mut out = String::from("Project brief (the user's; to change it, suggest the edit in chat):\n");
     match brief.map(|note| note.body.trim()).filter(|body| !body.is_empty()) {
         Some(body) => {
@@ -356,6 +359,9 @@ fn project_context(brief: Option<&Note>, notes: &[Note]) -> String {
     if listed == 0 {
         out.push_str("(No notes yet.)\n");
     }
+    if lead && !notes.iter().any(|note| note.summary.project_role == Some(ProjectNoteRole::Setup)) {
+        out.push_str("There is no setup note yet.\n");
+    }
     if hidden > 0 {
         out.push_str(&format!("({hidden} more; find them with kybern_notes_search.)\n"));
     }
@@ -365,7 +371,11 @@ fn project_context(brief: Option<&Note>, notes: &[Note]) -> String {
 
 /// The first non-empty line of a note body, shortened for the index.
 fn first_line(body: &str) -> String {
-    let line = body.lines().map(|line| line.trim_start_matches(['#', '>', '-', '*', ' ', '\t']).trim()).find(|line| !line.is_empty()).unwrap_or("");
+    let line = body
+        .lines()
+        .map(|line| line.trim_start_matches(['#', '>', '-', '*', ' ', '\t']).trim())
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
     if line.chars().count() <= INDEX_LINE_CHARS {
         return line.to_owned();
     }

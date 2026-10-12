@@ -306,13 +306,12 @@ fn cursor_mcp_servers(bridge: Option<&NativeToolBridge>) -> Result<Vec<McpServer
             "Cursor ACP can attach Kybern MCP tools but cannot enforce coordinator tool restrictions at the native boundary".into(),
         ));
     }
-    let endpoint = bridge
-        .endpoint
+    let endpoint =
+        bridge.endpoint.as_deref().ok_or_else(|| DriverError::Unsupported("Cursor Kybern tools require a daemon MCP endpoint".into()))?;
+    let authorization = bridge
+        .authorization
         .as_deref()
-        .ok_or_else(|| DriverError::Unsupported("Cursor Kybern tools require a daemon MCP endpoint".into()))?;
-    let authorization = bridge.authorization.as_deref().ok_or_else(|| {
-        DriverError::Unsupported("Cursor Kybern tools require a scoped MCP authorization capability".into())
-    })?;
+        .ok_or_else(|| DriverError::Unsupported("Cursor Kybern tools require a scoped MCP authorization capability".into()))?;
     Ok(vec![McpServer::Http(
         McpServerHttp::new(bridge.server_name.clone(), endpoint.to_string())
             .headers(vec![HttpHeader::new("Authorization", format!("Bearer {authorization}"))]),

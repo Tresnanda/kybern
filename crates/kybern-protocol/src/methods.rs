@@ -840,13 +840,7 @@ pub struct CoordinatorSwitchHarnessParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<PermissionMode>,
 }
-method!(
-    CoordinatorSwitchHarness,
-    "coordinator.switch_harness",
-    Some(Scope::OrchestrationOperate),
-    CoordinatorSwitchHarnessParams,
-    Thread
-);
+method!(CoordinatorSwitchHarness, "coordinator.switch_harness", Some(Scope::OrchestrationOperate), CoordinatorSwitchHarnessParams, Thread);
 
 // ---- daemon-owned follow-ups ----
 

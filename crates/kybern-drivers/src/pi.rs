@@ -273,9 +273,11 @@ impl AgentDriver for PiDriver {
                 cmd.args(["--approval-mode", approval_tier(config.permission_mode)]);
                 // A lead keeps read-only built-ins; the private extension blocks every
                 // other call, and the session does not start without it.
-                if config.native_tool_bridge.as_ref().is_some_and(|bridge| {
-                    bridge.restrictions.require_enforcement && !bridge.restrictions.allow_read_only_builtins
-                }) {
+                if config
+                    .native_tool_bridge
+                    .as_ref()
+                    .is_some_and(|bridge| bridge.restrictions.require_enforcement && !bridge.restrictions.allow_read_only_builtins)
+                {
                     cmd.arg("--no-tools");
                 }
             }

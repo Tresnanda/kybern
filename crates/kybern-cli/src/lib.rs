@@ -2121,6 +2121,7 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
                     project_id,
                     title,
                     body: file.as_deref().map(read_input).transpose()?,
+                    project_role: None,
                 })
                 .await?;
             if json {

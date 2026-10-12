@@ -363,13 +363,12 @@ fn split_model(s: &str) -> Option<(String, String)> {
 
 fn opencode_config_content(base: Option<&String>, bridge: &NativeToolBridge) -> Result<String> {
     bridge.validate()?;
-    let endpoint = bridge
-        .endpoint
+    let endpoint =
+        bridge.endpoint.as_deref().ok_or_else(|| DriverError::Unsupported("OpenCode Kybern tools require a daemon MCP endpoint".into()))?;
+    let authorization = bridge
+        .authorization
         .as_deref()
-        .ok_or_else(|| DriverError::Unsupported("OpenCode Kybern tools require a daemon MCP endpoint".into()))?;
-    let authorization = bridge.authorization.as_deref().ok_or_else(|| {
-        DriverError::Unsupported("OpenCode Kybern tools require a scoped MCP authorization capability".into())
-    })?;
+        .ok_or_else(|| DriverError::Unsupported("OpenCode Kybern tools require a scoped MCP authorization capability".into()))?;
     let mut config = match base {
         Some(raw) => serde_json::from_str::<Value>(raw)
             .map_err(|error| DriverError::Unsupported(format!("OPENCODE_CONFIG_CONTENT is not valid JSON: {error}")))?,
@@ -1897,7 +1896,11 @@ mod tests {
             assert!(value["tools"].get(name).is_none(), "{name} stays behind the wildcard");
         }
         let without = NativeToolBridge {
-            restrictions: crate::NativeToolRestrictions { require_enforcement: false, allow_read_only_builtins: true, ..Default::default() },
+            restrictions: crate::NativeToolRestrictions {
+                require_enforcement: false,
+                allow_read_only_builtins: true,
+                ..Default::default()
+            },
             ..bridge
         };
         let value: Value = serde_json::from_str(&opencode_config_content(None, &without).unwrap()).unwrap();

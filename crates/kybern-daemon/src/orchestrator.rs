@@ -53,7 +53,6 @@ impl std::fmt::Display for ThreadBusy {
 impl std::error::Error for ThreadBusy {}
 
 impl Orchestrator {
-
     pub(crate) fn provider_catalog_cache(&self) -> Arc<crate::state::ProviderCatalogCache> {
         self.inner.provider_catalogs.clone()
     }
@@ -211,7 +210,9 @@ impl Orchestrator {
             if (!restrictions.allowed_tools.is_empty() && !restrictions.allowed_tools.iter().any(|allowed| allowed == name))
                 || restrictions.denied_tools.iter().any(|denied| denied == name)
             {
-                return Err(anyhow!("This tool is unavailable to a project Coordinator. Delegate the task to a child with kybern_agent_delegate."));
+                return Err(anyhow!(
+                    "This tool is unavailable to a project Coordinator. Delegate the task to a child with kybern_agent_delegate."
+                ));
             }
             let turn_id = live
                 .turn
@@ -373,7 +374,6 @@ impl Orchestrator {
             Ok(value)
         })
     }
-
 }
 
 fn derived_operation_id(base: Uuid, discriminator: u8) -> Uuid {
@@ -1089,6 +1089,8 @@ impl Orchestrator {
             // daemon queue worker to resume it while its session is being closed.
             if current.status == ThreadStatus::Archived {
                 thread.status = ThreadStatus::Archived;
+                // Archiving freed a Coordinator's slot; a stale copy must not take it back.
+                thread.coordinator_project_id = current.coordinator_project_id;
             }
             if keep_stored_delegation {
                 thread.delegation = current.delegation;
@@ -3202,8 +3204,7 @@ impl Orchestrator {
             let mut result = if this.owns_app_tool_turn(thread_id, &live, Some(turn_id)).await.is_none() {
                 Err("app tool request is stale".to_string())
             } else {
-                let timeout = if name == "kybern_collaboration_wait"
-                    || delegation::BLOCKING_TOOLS.contains(&name.as_str())
+                let timeout = if delegation::BLOCKING_TOOLS.contains(&name.as_str())
                     || (name == "kybern_thread_send" && arguments.get("wait_for_reply").and_then(serde_json::Value::as_bool) == Some(true))
                     || matches!(name.as_str(), "kybern_html_preview" | "kybern_html_publish")
                     || crate::computer::ComputerUse::is_tool(&name)
