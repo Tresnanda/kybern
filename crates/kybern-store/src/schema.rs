@@ -439,7 +439,9 @@ const MIGRATIONS: &[&str] = &[
     // v24: the Coordinator becomes an ordinary lead thread on Orchestrator V2. Project
     // notes gain a role (the user's brief, the Coordinator's setup note), projects get
     // a switch to share the brief with every thread, and the collaboration system is
-    // removed. Each project's latest `project.brief` becomes its pinned brief note;
+    // removed. Each project's latest `project.brief` becomes its pinned brief note and
+    // its `project.setup` the setup note; the old Coordinator's overview and setup log
+    // become ordinary memory notes credited to it;
     // old coordinators and their workers are archived (start fresh); old
     // collaboration events are deleted because they can no longer be decoded. The operation
     // receipts of the agents' note and task tools survive as `tool_operations`.
@@ -461,6 +463,25 @@ const MIGRATIONS: &[&str] = &[
                ROW_NUMBER() OVER (PARTITION BY group_id ORDER BY revision DESC) AS rn
         FROM collaboration_context_revisions
         WHERE key = 'project.brief'
+    ) e ON e.group_id = pc.group_id AND e.rn = 1
+    WHERE trim(COALESCE(e.body, '')) != '';
+    INSERT INTO notes(id, scope, project_id, title, body, pinned, revision, created_at, updated_at, project_role, created_by_thread_id)
+    SELECT
+        lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-'
+            || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6))),
+        'project', pc.project_id,
+        CASE e.key WHEN 'project.setup' THEN 'How to build, run and test' WHEN 'project-overview' THEN 'Project overview' ELSE 'Coordinator setup log' END,
+        e.body, e.key = 'project.setup', 1, e.at, e.at,
+        CASE e.key WHEN 'project.setup' THEN 'setup' END,
+        pc.thread_id
+    FROM project_coordinators pc
+    JOIN (
+        SELECT group_id, key,
+               json_extract(payload, '$.body') AS body,
+               COALESCE(json_extract(payload, '$.updated_at'), strftime('%Y-%m-%dT%H:%M:%SZ', 'now')) AS at,
+               ROW_NUMBER() OVER (PARTITION BY group_id, key ORDER BY revision DESC) AS rn
+        FROM collaboration_context_revisions
+        WHERE key IN ('project.setup', 'project-overview', 'coordinator-setup')
     ) e ON e.group_id = pc.group_id AND e.rn = 1
     WHERE trim(COALESCE(e.body, '')) != '';
     UPDATE queued_messages SET pending = 0

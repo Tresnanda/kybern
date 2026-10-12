@@ -3047,6 +3047,10 @@ mod coordinator_upgrade_tests {
         revision(group, "project.brief", 1, "Old brief");
         revision(group, "project.brief", 2, "Ship the importer");
         revision(group, "project.setup", 1, "pnpm install");
+        revision(group, "project-overview", 1, "Old overview");
+        revision(group, "project-overview", 2, "A Rust daemon and a desktop app");
+        revision(group, "coordinator-setup", 1, "Started the coordinator");
+        revision(group, "research.notes", 1, "Not carried over");
         revision(quiet_group, "project.brief", 1, "   ");
 
         let turn = EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("hello") };
@@ -3073,9 +3077,18 @@ mod coordinator_upgrade_tests {
         assert_eq!(brief.summary.title, "Project brief");
         assert_eq!(brief.summary.scope, NoteScope::Project);
         assert!(brief.summary.pinned && brief.summary.created_by_thread.is_none() && brief.summary.deleted_at.is_none());
-        assert!(store.note_for_project_role(project, ProjectNoteRole::Setup).unwrap().is_none(), "the setup note starts fresh");
+        let setup = store.note_for_project_role(project, ProjectNoteRole::Setup).unwrap().expect("the setup entry becomes the setup note");
+        assert_eq!(setup.body, "pnpm install");
+        assert!(setup.summary.pinned && setup.summary.created_by_thread == Some(coordinator));
         assert!(store.note_for_project_role(other_project, ProjectNoteRole::Brief).unwrap().is_none(), "a blank brief makes no note");
-        assert_eq!(store.notes_list().unwrap().len(), 1);
+        let notes = store.notes_list().unwrap();
+        assert_eq!(notes.len(), 4, "brief, setup, overview and setup log; other entries are dropped");
+        let memory = |title: &str| notes.iter().find(|note| note.title == title).unwrap_or_else(|| panic!("{title} is carried over"));
+        for (title, body_start) in [("Project overview", "A Rust daemon"), ("Coordinator setup log", "Started")] {
+            let note = memory(title);
+            assert!(note.project_role.is_none() && !note.pinned && note.created_by_thread == Some(coordinator), "{title}");
+            assert!(store.note_get(note.id).unwrap().unwrap().body.starts_with(body_start), "{title} keeps its latest revision");
+        }
 
         for id in [coordinator, worker, quiet_coordinator] {
             let thread = store.thread_get(id).unwrap().unwrap();
