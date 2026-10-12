@@ -70,6 +70,7 @@ fn validate_orchestration(orchestration: &kybern_protocol::OrchestrationSettings
         (1..=4).contains(&orchestration.max_depth),
         "Delegation depth must be between 1 and 4. Change the value and save again."
     );
+    orchestration.validate_coordinator().map_err(anyhow::Error::msg)?;
     Ok(())
 }
 

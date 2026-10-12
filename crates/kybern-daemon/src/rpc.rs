@@ -201,6 +201,12 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             if let Some(brief_everywhere) = p.brief_in_all_threads {
                 project.brief_in_all_threads = brief_everywhere;
             }
+            if let Some(coordinator) = p.coordinator {
+                if let Some(overrides) = &coordinator {
+                    overrides.validate().map_err(|error| RpcError::new(codes::INVALID_PARAMS, error))?;
+                }
+                project.coordinator = coordinator.filter(|overrides| !overrides.is_empty());
+            }
             project.updated_at = chrono::Utc::now();
             if let Some(prefix) = &p.task_prefix {
                 // Validated first, so a bad prefix leaves the other edits unsaved too.
@@ -488,6 +494,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             ok(state.orchestrator.coordinator_get(p.project_id).map_err(bad)?)
         }
         CoordinatorOpen::NAME => ok(state.orchestrator.coordinator_open(parse(params)?).await.map_err(bad)?),
+        CoordinatorSetup::NAME => ok(state.orchestrator.coordinator_setup(parse(params)?).await.map_err(bad)?),
         CoordinatorSwitchHarness::NAME => ok(state.orchestrator.coordinator_switch_harness(parse(params)?).await.map_err(bad)?),
         TasksList::NAME => {
             let p: TasksListParams = parse(params)?;

@@ -100,8 +100,16 @@ async fn the_coordinator_its_brief_and_a_harness_switch_survive_a_daemon_restart
     let project_id = project["id"].as_str().unwrap().to_owned();
     assert_eq!(project["brief_in_all_threads"], false);
 
+    // The user's brief exists first, so opening starts no setup interview (and no real harness).
+    call(
+        &client,
+        "notes.create",
+        json!({ "scope": "project", "project_id": project_id, "body": "Keep the project context", "project_role": "brief" }),
+    )
+    .await;
+
     // Open through the CLI: created once, then returned as it is.
-    let opened = daemon.cli(&["coordinator", "open", &project_id, "--provider", "claude-code", "--brief", "Keep the project context"]);
+    let opened = daemon.cli(&["coordinator", "open", &project_id, "--provider", "claude-code"]);
     assert_eq!(opened["created"], true);
     let thread_id = opened["thread"]["id"].as_str().unwrap().to_owned();
     assert_eq!(opened["thread"]["coordinator_project_id"], project_id.as_str());

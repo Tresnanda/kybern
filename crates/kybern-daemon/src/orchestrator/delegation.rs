@@ -66,6 +66,18 @@ const PREVIEW_CHARS: usize = 500;
 const STOP_PASSES: usize = 5;
 const DEFAULT_DEBOUNCE_MS: u64 = 1_500;
 const STATUS_LIMIT: usize = 20;
+/// Longest `override_reason` kept on a delegation (UTF-8 bytes).
+const OVERRIDE_REASON_CAP: usize = 500;
+
+/// "Claude Code / sonnet", for an error that names a harness and model.
+fn describe_choice(kind: Option<ProviderKind>, model: Option<&str>) -> String {
+    match (kind, model) {
+        (Some(kind), Some(model)) => format!("{kind} / {model}"),
+        (Some(kind), None) => kind.to_string(),
+        (None, Some(model)) => model.to_owned(),
+        (None, None) => "your own harness".to_owned(),
+    }
+}
 
 /// Harnesses whose sessions accept a message inside a running turn.
 pub(crate) fn harness_supports_steer(kind: ProviderKind) -> bool {
@@ -160,6 +172,10 @@ struct DelegateArgs {
     model: Option<String>,
     #[serde(default)]
     effort: Option<String>,
+    /// A Coordinator that picks another harness or model than its default for
+    /// this role says why here.
+    #[serde(default)]
+    override_reason: Option<String>,
     #[serde(default)]
     permission_mode: Option<PermissionMode>,
     #[serde(default)]
@@ -484,7 +500,12 @@ impl Orchestrator {
     /// project's Coordinator has its own child limit.
     fn orchestration_limits(&self, delegating: &Thread) -> (u32, u32) {
         let settings = self.inner.settings.get().orchestration;
-        let children = if delegating.coordinator_project_id.is_some() { settings.lead_max_children } else { settings.max_active_children };
+        let children = if delegating.coordinator_project_id.is_some() {
+            let project = self.inner.store.project_get(delegating.project_id).ok().flatten();
+            settings.effective_for(project.as_ref().and_then(|project| project.coordinator.as_ref())).lead_max_children
+        } else {
+            settings.max_active_children
+        };
         (children.clamp(1, 16), settings.max_depth.clamp(1, 4))
     }
 
@@ -557,7 +578,20 @@ impl Orchestrator {
         let (max_children, max_depth) = self.orchestration_limits(caller);
         let depth = caller.delegation.as_ref().map_or(0, |info| u32::from(info.depth));
         let active = self.inner.store.delegation_active_count(caller.id)?;
-        Ok(json!({
+        let coordinator_defaults = if caller.coordinator_project_id.is_some() {
+            let project = self.inner.store.project_get(caller.project_id)?;
+            let effective = settings.orchestration.effective_for(project.as_ref().and_then(|project| project.coordinator.as_ref()));
+            Some(json!({
+                "note": "Omit provider and model to use the default for the child's role. Pass another harness or model only with override_reason.",
+                "role_defaults": effective.role_defaults,
+                "workspace": effective.lead_workspace,
+                "autonomy": effective.lead_autonomy,
+                "push_without_asking": effective.lead_push_without_asking,
+            }))
+        } else {
+            None
+        };
+        let mut capabilities = json!({
             "harnesses": harnesses,
             "catalog_state": catalog_state,
             "you": {
@@ -573,7 +607,11 @@ impl Orchestrator {
                 "active_children": active,
                 "can_delegate": depth < max_depth && active < max_children,
             },
-        }))
+        });
+        if let Some(defaults) = coordinator_defaults {
+            capabilities["coordinator"] = defaults;
+        }
+        Ok(capabilities)
     }
 
     // ---- kybern_agent_delegate ----
@@ -588,7 +626,20 @@ impl Orchestrator {
         }
         let task = args.task.trim().to_owned();
         ensure!(!task.is_empty(), "task is required: write the full brief for the agent");
-        let workspace = args.workspace.unwrap_or_default();
+        let project = self.inner.store.project_get(parent.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
+        // A Coordinator's children follow its settings: workspace and models per role.
+        let lead = parent
+            .coordinator_project_id
+            .is_some()
+            .then(|| self.inner.settings.get().orchestration.effective_for(project.coordinator.as_ref()));
+        let workspace = match (args.workspace, &lead) {
+            (Some(workspace), _) => workspace,
+            // The default worktree only applies where there is a repository to branch from.
+            (None, Some(lead)) if lead.lead_workspace == DelegationWorkspace::Worktree && Repo::is_repo(Path::new(&parent.cwd)).await => {
+                DelegationWorkspace::Worktree
+            }
+            (None, _) => DelegationWorkspace::Shared,
+        };
         let owns = args.owns.unwrap_or_default();
         ensure!(
             workspace == DelegationWorkspace::Shared || owns.is_empty(),
@@ -621,8 +672,17 @@ impl Orchestrator {
             "You already have {active} delegated agents running (max {max_children}). End your turn to be woken with their results, or cancel one with kybern_agent_cancel."
         );
 
-        // Harness, model, effort and permissions (all default to the parent's).
-        let kind = args.provider.unwrap_or(parent.provider.kind);
+        // Harness, model, effort and permissions (all default to the parent's, or for a
+        // Coordinator to the default set for the child's role).
+        let role = args.role.unwrap_or_default();
+        let role_default = lead
+            .as_ref()
+            .and_then(|lead| lead.role_defaults.get(&role))
+            .filter(|default| default.provider.is_some() || default.model.is_some() || default.effort.is_some());
+        let kind = args
+            .provider
+            .or_else(|| role_default.and_then(|default| default.provider.as_ref()).map(|provider| provider.kind))
+            .unwrap_or(parent.provider.kind);
         ensure!(
             self.inner.drivers.get(kind).is_some(),
             "{kind} is not available in this build. Call kybern_agent_capabilities to see the installed harnesses."
@@ -637,24 +697,63 @@ impl Orchestrator {
             );
         }
         let same_kind = kind == parent.provider.kind;
-        let provider = if same_kind { parent.provider.clone() } else { ProviderInstance::default_for(kind) };
+        // The role default applies on its own harness only: a model id means nothing elsewhere.
+        let default_here = role_default.filter(|default| default.provider.as_ref().is_none_or(|provider| provider.kind == kind));
+        let provider = match default_here.and_then(|default| default.provider.clone()) {
+            Some(provider) => provider,
+            None if same_kind => parent.provider.clone(),
+            None => ProviderInstance::default_for(kind),
+        };
         let configured_model = self.inner.settings.get().providers.get(&kind).and_then(|provider| provider.model.clone());
-        let model = args
-            .model
+        let asked_model = args.model.clone().filter(|model| !model.trim().is_empty());
+        let default_model = default_here.and_then(|default| default.model.clone());
+        let model_from_parent = asked_model.is_none() && default_model.is_none() && same_kind;
+        let model = asked_model
             .clone()
-            .filter(|model| !model.trim().is_empty())
+            .or_else(|| default_model.clone())
             .or_else(|| same_kind.then(|| parent.model.clone()).flatten())
             .or(configured_model);
+        // A default effort goes with its model; the parent's goes with the parent's.
+        let default_effort =
+            default_here.and_then(|default| default.effort.clone()).filter(|_| asked_model.is_none() || asked_model == default_model);
         let effort = args
             .effort
             .clone()
             .filter(|effort| !effort.trim().is_empty())
-            .or_else(|| (same_kind && args.model.is_none()).then(|| parent.effort.clone()).flatten());
+            .or(default_effort)
+            .or_else(|| (model_from_parent && args.model.is_none()).then(|| parent.effort.clone()).flatten());
+        // Another harness or model than the role's default needs a reason the user can read.
+        let default_override = match role_default {
+            Some(default) => {
+                let other_harness = default.provider.as_ref().is_some_and(|provider| provider.kind != kind);
+                let other_model = default_here.is_some()
+                    && default_model.is_some()
+                    && asked_model.as_ref().is_some_and(|asked| Some(asked) != default_model.as_ref());
+                if other_harness || other_model {
+                    let reason = args.override_reason.as_deref().map(str::trim).filter(|reason| !reason.is_empty()).ok_or_else(|| {
+                        anyhow!(
+                            "The default for {role} children is {}. Pass override_reason to explain why you need {} instead, or omit provider and model to use the default.",
+                            describe_choice(default.provider.as_ref().map(|provider| provider.kind), default.model.as_deref()),
+                            describe_choice(Some(kind), model.as_deref()),
+                        )
+                    })?;
+                    let mut reason = reason.to_owned();
+                    truncate_utf8(&mut reason, OVERRIDE_REASON_CAP);
+                    Some(DefaultOverride {
+                        provider: default.provider.clone().unwrap_or_else(|| parent.provider.clone()),
+                        model: default.model.clone(),
+                        reason,
+                    })
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
         self.validate_provider_selection(parent.project_id, &provider, model.as_deref(), effort.as_deref()).await?;
         let permission_mode = resolve_child_permission(parent.permission_mode, parent.provider.kind, kind, args.permission_mode)?;
 
         // Workspace.
-        let project = self.inner.store.project_get(parent.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
         let child_id = Uuid::now_v7();
         let task_id = Uuid::now_v7();
         let (cwd, worktree, base_commit, branch) = match workspace {
@@ -688,7 +787,6 @@ impl Orchestrator {
         };
 
         let now = Utc::now();
-        let role = args.role.unwrap_or_default();
         let info = DelegationInfo {
             task_id,
             operation_id,
@@ -696,6 +794,7 @@ impl Orchestrator {
             depth: depth as u8,
             role,
             workspace,
+            default_override,
             owns: owns.clone(),
             status: DelegationStatus::Running,
             result: None,

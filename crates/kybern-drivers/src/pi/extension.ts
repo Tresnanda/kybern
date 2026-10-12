@@ -62,6 +62,8 @@ const APP_TOOL_NAMES = new Set([
   "kybern_task_update",
   "kybern_task_claim",
   "kybern_request_secret",
+  "kybern_coordinator_propose_brief",
+  "kybern_coordinator_propose_settings",
 ]);
 // Delegation can wait on a child agent (up to 60 s) and send/wait tools can
 // block on a reply. HTML preparation and preview rendering can also outlast
@@ -81,6 +83,8 @@ const APPROVAL_TOOL_NAMES = new Set([
   "kybern_task_create",
   "kybern_task_update",
   "kybern_task_claim",
+  "kybern_coordinator_propose_brief",
+  "kybern_coordinator_propose_settings",
 ]);
 // kybern_request_secret waits for the user for up to timeout_seconds (default
 // 600, at most 3600), plus the daemon's slack.

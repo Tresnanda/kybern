@@ -45,6 +45,15 @@ const READ_BODY_MAX_BYTES: usize = 128 * 1024;
 /// How much of new text the approval card previews.
 const PREVIEW_MAX_BYTES: usize = 2 * 1024;
 
+/// What a thread that tried to write the brief is told to do instead.
+fn brief_refusal(thread: &Thread) -> &'static str {
+    if thread.coordinator_project_id.is_some() {
+        "Propose the change with kybern_coordinator_propose_brief and the user will approve it. Suggest the change in chat if they decline."
+    } else {
+        "Suggest the change in chat and the user will make it."
+    }
+}
+
 pub(crate) fn is_tool(name: &str) -> bool {
     READ_TOOLS.contains(&name) || WRITE_TOOLS.contains(&name)
 }
@@ -318,10 +327,7 @@ impl Orchestrator {
     fn plan_note_create(&self, thread: &Thread, args: NoteCreateArgs) -> Result<Write> {
         ensure!(!args.title.trim().is_empty(), "Give the note a title.");
         if let Some(role) = args.project_role {
-            ensure!(
-                role == ProjectNoteRole::Setup,
-                "Only the user writes the project brief. Suggest the change in chat and the user will edit it."
-            );
+            ensure!(role == ProjectNoteRole::Setup, "Only the user writes the project brief. {}", brief_refusal(thread));
             ensure!(
                 thread.coordinator_project_id == Some(thread.project_id),
                 "Only the project's Coordinator saves the setup note. Ask the Coordinator, or the user, to record it."
@@ -412,7 +418,7 @@ impl Orchestrator {
     fn check_role_write(thread: &Thread, note: &Note) -> Result<()> {
         match note.summary.project_role {
             Some(ProjectNoteRole::Brief) => {
-                bail!("This is the project brief, which only the user edits. Suggest the change in chat and the user will make it.")
+                bail!("This is the project brief, which only the user edits. {}", brief_refusal(thread))
             }
             Some(ProjectNoteRole::Setup) if thread.coordinator_project_id != note.summary.project_id => {
                 bail!("This is the project's setup note, which only its Coordinator updates. Tell the Coordinator what should change.")

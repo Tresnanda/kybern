@@ -783,6 +783,7 @@ async fn project_changes_reach_every_client() {
             worktrees_default: None,
             task_prefix: None,
             brief_in_all_threads: None,
+            coordinator: None,
         })
         .await
         .unwrap();
@@ -987,6 +988,7 @@ async fn project_task_prefixes_are_assigned_edited_and_validated_over_rpc() {
         worktrees_default: None,
         task_prefix: Some(prefix.into()),
         brief_in_all_threads: None,
+        coordinator: None,
     };
     let renamed = client.call::<ProjectsUpdate>(update(a.id, "mob")).await.unwrap();
     assert_eq!(renamed.task_prefix.as_deref(), Some("MOB"));
@@ -1005,6 +1007,7 @@ async fn project_task_prefixes_are_assigned_edited_and_validated_over_rpc() {
             worktrees_default: None,
             task_prefix: None,
             brief_in_all_threads: None,
+            coordinator: None,
         })
         .await
         .unwrap();
@@ -1844,9 +1847,21 @@ async fn the_coordinator_and_project_brief_work_over_rpc() {
         model: None,
         effort: None,
         permission_mode: None,
+        opening_message: None,
         initial_brief: brief.map(str::to_owned),
     };
-    let opened = client.call::<CoordinatorOpen>(open(Some("Ship it carefully."))).await.unwrap();
+    // The user's brief exists before the Coordinator does, so no setup interview starts a real agent.
+    client
+        .call::<NotesCreate>(NotesCreateParams {
+            scope: NoteScope::Project,
+            project_id: Some(project_id),
+            title: None,
+            body: Some("Ship it carefully.".into()),
+            project_role: Some(ProjectNoteRole::Brief),
+        })
+        .await
+        .unwrap();
+    let opened = client.call::<CoordinatorOpen>(open(None)).await.unwrap();
     assert!(opened.created && opened.thread.coordinator_project_id == Some(project_id));
     let again = client.call::<CoordinatorOpen>(open(None)).await.unwrap();
     assert!(!again.created && again.thread.id == opened.thread.id);
@@ -1883,7 +1898,14 @@ async fn the_coordinator_and_project_brief_work_over_rpc() {
     assert!(delete.contains("cannot be deleted"), "{delete}");
 
     // The switch that shares the brief with every thread.
-    let update = |on| ProjectsUpdateParams { project_id, name: None, worktrees_default: None, task_prefix: None, brief_in_all_threads: on };
+    let update = |on| ProjectsUpdateParams {
+        project_id,
+        name: None,
+        worktrees_default: None,
+        task_prefix: None,
+        brief_in_all_threads: on,
+        coordinator: None,
+    };
     assert!(!client.call::<ProjectsUpdate>(update(None)).await.unwrap().brief_in_all_threads);
     assert!(client.call::<ProjectsUpdate>(update(Some(true))).await.unwrap().brief_in_all_threads);
     assert!(client.call::<ProjectsUpdate>(update(None)).await.unwrap().brief_in_all_threads, "absent leaves the switch alone");
@@ -1895,4 +1917,47 @@ async fn the_coordinator_and_project_brief_work_over_rpc() {
     let gone =
         client.call_raw("collaboration.coordinator.get", serde_json::json!({"project_id": project_id})).await.unwrap_err().to_string();
     assert!(gone.contains("-32601") || gone.to_lowercase().contains("method"), "{gone}");
+}
+
+#[tokio::test]
+async fn project_coordinator_overrides_are_set_kept_and_cleared_over_rpc() {
+    let host = Host::start().await;
+    let project_id = host.thread().project_id;
+    let client = host.client().await;
+    let update = |extra: Value| {
+        let mut params = json!({ "project_id": project_id });
+        params.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let client = &client;
+        async move { client.call_raw(ProjectsUpdate::NAME, params).await.map(|value| serde_json::from_value::<Project>(value).unwrap()) }
+    };
+    assert!(update(json!({})).await.unwrap().coordinator.is_none());
+
+    let set = update(json!({ "coordinator": {
+        "lead_autonomy": "propose_first",
+        "lead_max_children": 3,
+        "role_defaults": { "review": { "provider": { "kind": "codex", "instance": "default" }, "model": "m" } }
+    } }))
+    .await
+    .unwrap();
+    let overrides = set.coordinator.clone().expect("the override");
+    assert_eq!((overrides.lead_autonomy, overrides.lead_max_children), (Some(LeadAutonomy::ProposeFirst), Some(3)));
+    assert_eq!(overrides.role_defaults[&DelegationRole::Review].model.as_deref(), Some("m"));
+    assert_eq!(overrides.lead_workspace, None);
+
+    // Absent leaves it; an object replaces it as a whole; null removes it.
+    assert_eq!(update(json!({ "name": "Renamed" })).await.unwrap().coordinator, set.coordinator);
+    let replaced = update(json!({ "coordinator": { "lead_workspace": "worktree" } })).await.unwrap().coordinator.unwrap();
+    assert_eq!((replaced.lead_workspace, replaced.lead_autonomy), (Some(DelegationWorkspace::Worktree), None));
+    assert!(update(json!({ "coordinator": null })).await.unwrap().coordinator.is_none());
+    assert!(client.call::<ProjectsList>(Empty {}).await.unwrap().projects.iter().all(|project| project.coordinator.is_none()));
+
+    // Overrides the daemon could not honor are refused with a way forward.
+    for bad in [json!({ "lead_max_children": 99 }), json!({ "role_defaults": { "general": { "model": "m" } } })] {
+        let error = update(json!({ "coordinator": bad })).await.unwrap_err().to_string();
+        assert!(error.contains(&format!("code {}", codes::INVALID_PARAMS)), "{error}");
+    }
+    // Global defaults are validated the same way.
+    let mut settings = client.call::<SettingsGet>(Empty {}).await.unwrap();
+    settings.orchestration.role_defaults.insert(DelegationRole::General, RoleDefault { model: Some("m".into()), ..Default::default() });
+    assert!(client.call::<SettingsUpdate>(SettingsUpdateParams { settings }).await.is_err());
 }

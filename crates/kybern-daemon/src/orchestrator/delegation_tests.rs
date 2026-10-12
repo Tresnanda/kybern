@@ -363,7 +363,7 @@ async fn retrying_a_delegate_call_returns_the_same_child() {
 async fn depth_and_active_children_limits_come_from_settings_and_explain_the_next_step() {
     let t = Delegating::new().await;
     let mut settings = t.fixture.orchestrator.inner.settings.get();
-    settings.orchestration = OrchestrationSettings { max_active_children: 2, lead_max_children: 6, max_depth: 1 };
+    settings.orchestration = OrchestrationSettings { max_active_children: 2, lead_max_children: 6, max_depth: 1, ..Default::default() };
     t.fixture.orchestrator.inner.settings.set(settings.clone()).unwrap();
 
     let first = t.delegate(json!({"task": "one"})).await;

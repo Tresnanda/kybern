@@ -762,6 +762,27 @@ expression: schema_for!(TranscriptEntry)
             "type",
             "items"
           ]
+        },
+        {
+          "description": "A row Kybern itself adds to a conversation, such as \"Setup started\".\nClients draw it as a small system row, never a user bubble; it may sit in\nfront of the user's own parts. Providers never receive it as written:\nthe daemon swaps in its own instructions for the provider's copy, and a\ndriver that meets one flattens `text`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/SystemRowKind"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "system_row"
+            }
+          },
+          "required": [
+            "type",
+            "kind",
+            "text"
+          ]
         }
       ]
     },
@@ -979,6 +1000,16 @@ expression: schema_for!(TranscriptEntry)
         "path",
         "owner_thread_id",
         "at"
+      ]
+    },
+    "SystemRowKind": {
+      "description": "What a [`ContentPart::SystemRow`] announces.",
+      "oneOf": [
+        {
+          "description": "The Coordinator's setup interview began (a new Coordinator without a\nbrief, or \"Redo setup\").",
+          "type": "string",
+          "const": "coordinator_setup"
+        }
       ]
     },
     "ToolCall": {

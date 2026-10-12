@@ -166,6 +166,8 @@ expression: scopes
   - "orchestration:read"
 - - coordinator.open
   - "orchestration:operate"
+- - coordinator.setup
+  - "orchestration:operate"
 - - coordinator.switch_harness
   - "orchestration:operate"
 - - tasks.list

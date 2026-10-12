@@ -1424,6 +1424,17 @@ expression: schema_for!(ThreadEvent)
           "$ref": "#/$defs/DelegationWorkspace",
           "default": "shared"
         },
+        "default_override": {
+          "description": "Set when a Coordinator chose another harness or model than the default\nconfigured for this child's role.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DefaultOverride"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "owns": {
           "description": "Globs relative to the checkout root this child owns (shared only).",
           "type": "array",
@@ -1553,6 +1564,29 @@ expression: schema_for!(ThreadEvent)
           "type": "string",
           "const": "worktree"
         }
+      ]
+    },
+    "DefaultOverride": {
+      "description": "A Coordinator delegation that used another harness or model than the\ndefault configured for its role. `provider` and `model` are the default that\nwas set aside (the child's own are on its thread), so a client can write\n\"Claude Opus 5.5 · instead of the Sonnet default: <reason>\".",
+      "type": "object",
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/ProviderInstance"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "The Coordinator's reason, as it passed it in `override_reason`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "reason"
       ]
     },
     "DelegationStatus": {
@@ -1906,6 +1940,27 @@ expression: schema_for!(ThreadEvent)
             "type",
             "items"
           ]
+        },
+        {
+          "description": "A row Kybern itself adds to a conversation, such as \"Setup started\".\nClients draw it as a small system row, never a user bubble; it may sit in\nfront of the user's own parts. Providers never receive it as written:\nthe daemon swaps in its own instructions for the provider's copy, and a\ndriver that meets one flattens `text`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/SystemRowKind"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "system_row"
+            }
+          },
+          "required": [
+            "type",
+            "kind",
+            "text"
+          ]
         }
       ]
     },
@@ -2016,6 +2071,16 @@ expression: schema_for!(ThreadEvent)
         "title",
         "provider",
         "status"
+      ]
+    },
+    "SystemRowKind": {
+      "description": "What a [`ContentPart::SystemRow`] announces.",
+      "oneOf": [
+        {
+          "description": "The Coordinator's setup interview began (a new Coordinator without a\nbrief, or \"Redo setup\").",
+          "type": "string",
+          "const": "coordinator_setup"
+        }
       ]
     },
     "SubagentMessage": {

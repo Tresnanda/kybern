@@ -10,6 +10,7 @@ fn open_params(project: &Project, kind: ProviderKind, brief: Option<&str>) -> Co
         model: None,
         effort: None,
         permission_mode: None,
+        opening_message: None,
         initial_brief: brief.map(str::to_owned),
     }
 }
@@ -56,14 +57,16 @@ async fn opening_the_coordinator_is_idempotent_keeps_the_brief_and_archiving_fre
     std::fs::create_dir_all(&fixture.root).unwrap();
     assert!(fixture.orchestrator.coordinator_get(fixture.project.id).unwrap().is_none());
 
-    let first = fixture.orchestrator.coordinator_open(open_params(&fixture.project, ProviderKind::ClaudeCode, Some("  Ship the importer.  "))).await.unwrap();
+    // The user's own brief exists, so opening starts no setup interview.
+    user_note(&fixture, "Project brief", "Ship the importer.", Some(ProjectNoteRole::Brief));
+    let first = fixture.orchestrator.coordinator_open(open_params(&fixture.project, ProviderKind::ClaudeCode, None)).await.unwrap();
     assert!(first.created);
     assert_eq!(first.thread.coordinator_project_id, Some(fixture.project.id));
     assert_eq!(first.thread.parent_thread_id, None);
     assert_eq!(fixture.store.thread_get(first.thread.id).unwrap().unwrap().coordinator_project_id, Some(fixture.project.id));
     let brief = fixture.store.note_for_project_role(fixture.project.id, ProjectNoteRole::Brief).unwrap().expect("the brief note");
     assert_eq!((brief.body.as_str(), brief.summary.pinned, brief.summary.created_by_thread), ("Ship the importer.", true, None));
-    assert_eq!(brief.summary.title, "Project brief");
+    assert!(fixture.store.events_for_thread(first.thread.id).unwrap().iter().all(|event| !matches!(event.payload, EventPayload::TurnStarted { .. })));
 
     // A retry, or a second client, gets the same thread; an existing brief is never replaced.
     let again = fixture.orchestrator.coordinator_open(open_params(&fixture.project, ProviderKind::Codex, Some("Something else"))).await.unwrap();
@@ -172,6 +175,7 @@ async fn children_of_the_lead_and_every_thread_with_the_switch_on_get_the_projec
             depth: 1,
             role: DelegationRole::default(),
             workspace: DelegationWorkspace::Shared,
+            default_override: None,
             owns: vec![],
             status: DelegationStatus::Running,
             result: None,
@@ -215,6 +219,7 @@ async fn children_of_the_lead_and_every_thread_with_the_switch_on_get_the_projec
         worktrees_default: None,
         task_prefix: None,
         brief_in_all_threads: Some(on),
+        coordinator: None,
     };
     let mut project = fixture.store.project_get(fixture.project.id).unwrap().unwrap();
     project.brief_in_all_threads = rpc(true).brief_in_all_threads.unwrap();
@@ -277,6 +282,7 @@ async fn a_changed_brief_is_prepended_once_to_the_leads_next_message_in_the_prov
 async fn a_coordinator_cannot_call_tools_outside_its_allow_list_even_by_name() {
     let fixture = Fixture::new();
     std::fs::create_dir_all(&fixture.root).unwrap();
+    user_note(&fixture, "Project brief", "Be careful.", Some(ProjectNoteRole::Brief));
     let mut lead = fixture.orchestrator.coordinator_open(open_params(&fixture.project, ProviderKind::ClaudeCode, None)).await.unwrap().thread;
     lead.permission_mode = PermissionMode::FullAccess;
     fixture.store.thread_upsert(&lead).unwrap();
@@ -306,7 +312,8 @@ async fn the_brief_is_the_users_the_setup_note_is_the_coordinators_and_memory_no
             .await
             .unwrap_err()
             .to_string();
-        assert!(update.contains("project brief") && update.to_lowercase().contains("suggest the change in chat"), "{name}: {update}");
+        let advice = if name == "lead" { "kybern_coordinator_propose_brief" } else { "suggest the change in chat" };
+        assert!(update.contains("project brief") && update.to_lowercase().contains(advice), "{name}: {update}");
         let append = fixture
             .tool(thread, live, &format!("a-{name}"), "kybern_note_append", json!({"note_id": brief.summary.id, "text": "x"}))
             .await
@@ -423,7 +430,7 @@ async fn switching_the_coordinators_harness_keeps_the_thread_restarts_the_sessio
 async fn the_coordinator_has_its_own_child_limit_and_other_threads_keep_theirs() {
     let t = Delegating::new().await;
     let mut settings = t.fixture.orchestrator.inner.settings.get();
-    settings.orchestration = OrchestrationSettings { max_active_children: 3, lead_max_children: 1, max_depth: 2 };
+    settings.orchestration = OrchestrationSettings { max_active_children: 3, lead_max_children: 1, max_depth: 2, ..Default::default() };
     t.fixture.orchestrator.inner.settings.set(settings.clone()).unwrap();
 
     // The parent becomes its project's Coordinator.

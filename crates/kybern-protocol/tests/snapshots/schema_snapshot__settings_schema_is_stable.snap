@@ -115,7 +115,10 @@ expression: schema_for!(Settings)
       "default": {
         "max_active_children": 4,
         "lead_max_children": 6,
-        "max_depth": 2
+        "max_depth": 2,
+        "lead_autonomy": "propose_large",
+        "lead_workspace": "shared",
+        "lead_push_without_asking": false
       }
     },
     "tell_agents_about_kybern": {
@@ -374,8 +377,127 @@ expression: schema_for!(Settings)
           "format": "uint32",
           "minimum": 0,
           "default": 2
+        },
+        "role_defaults": {
+          "description": "The harness, model and effort a Coordinator uses for a kind of work when\nit does not ask for another. Keys: research, implementation, review,\ndesign and test (`general` has no default). Projects override per role.",
+          "type": "object",
+          "properties": {
+            "design": {
+              "$ref": "#/$defs/RoleDefault"
+            },
+            "general": {
+              "$ref": "#/$defs/RoleDefault"
+            },
+            "implementation": {
+              "$ref": "#/$defs/RoleDefault"
+            },
+            "research": {
+              "$ref": "#/$defs/RoleDefault"
+            },
+            "review": {
+              "$ref": "#/$defs/RoleDefault"
+            },
+            "test": {
+              "$ref": "#/$defs/RoleDefault"
+            }
+          },
+          "additionalProperties": false
+        },
+        "lead_autonomy": {
+          "description": "How freely the Coordinator acts. Projects can override it.",
+          "$ref": "#/$defs/LeadAutonomy",
+          "default": "propose_large"
+        },
+        "lead_workspace": {
+          "description": "Where the Coordinator's children work when it does not say.",
+          "$ref": "#/$defs/DelegationWorkspace",
+          "default": "shared"
+        },
+        "lead_push_without_asking": {
+          "description": "Let the Coordinator push and open pull requests without asking first.\nMerging a pull request always asks.",
+          "type": "boolean",
+          "default": false
         }
       }
+    },
+    "RoleDefault": {
+      "description": "The harness, model and effort used for one kind of delegated work. Every\nfield is optional: an unset one follows the delegating thread.",
+      "type": "object",
+      "properties": {
+        "provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderInstance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ProviderInstance": {
+      "description": "A configured account/instance of a provider. `default` is created implicitly.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "instance": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "instance"
+      ]
+    },
+    "LeadAutonomy": {
+      "description": "How freely a Coordinator acts before asking the user.",
+      "oneOf": [
+        {
+          "description": "Acts on its own judgment and reports.",
+          "type": "string",
+          "const": "act"
+        },
+        {
+          "description": "Acts on small work; proposes a plan first for anything large or risky.",
+          "type": "string",
+          "const": "propose_large"
+        },
+        {
+          "description": "Proposes a plan before every piece of work.",
+          "type": "string",
+          "const": "propose_first"
+        }
+      ]
+    },
+    "DelegationWorkspace": {
+      "description": "Where a delegated child works.",
+      "oneOf": [
+        {
+          "description": "The parent's checkout and branch.",
+          "type": "string",
+          "const": "shared"
+        },
+        {
+          "description": "Its own git worktree on `kybern/<child-id>`, seeded from the parent's\ncurrent uncommitted state.",
+          "type": "string",
+          "const": "worktree"
+        }
+      ]
     }
   }
 }
