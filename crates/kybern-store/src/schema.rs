@@ -502,6 +502,8 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE threads DROP COLUMN collaboration_group_id;
     COMMIT;
     ",
+    // v25: a project's Coordinator settings overrides (JSON of `CoordinatorOverrides`).
+    "ALTER TABLE projects ADD COLUMN coordinator TEXT;",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

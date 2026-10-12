@@ -13,6 +13,12 @@
 //! - the event log: the last stored report, shown only until the first read so
 //!   a freshly started daemon has something to show.
 //!
+//! The last good values are also kept in `<data dir>/cache/usage-limits.json`
+//! (written atomically a moment after each change), so the rings survive a
+//! restart. Values loaded from that file are served as `stale: from_last_run`
+//! until a live read succeeds, and a failed read keeps serving them with the
+//! reason it failed. A provider with cached values is never hidden.
+//!
 //! `usage.limits` can answer from the cache at once; every change, and every
 //! finished read, goes to clients as `usage.limits.changed`. Reads happen only
 //! while a client has asked recently, so an unattended daemon spawns nothing.
@@ -27,6 +33,7 @@ use kybern_drivers::claude::UsageUnread;
 use kybern_protocol::methods::{LimitsSource, LimitsStale, ProviderLimits, UsageLimitsParams, UsageLimitsResult};
 use kybern_protocol::{ProviderInstance, ProviderKind, UsageLimit};
 use kybern_store::Store;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 
@@ -40,6 +47,8 @@ const MIN_SPACING: Duration = Duration::from_secs(10);
 const INTEREST: Duration = Duration::from_secs(10 * 60);
 /// Upper bound for callers that wait for reads (older clients, the CLI).
 const WAIT: Duration = Duration::from_secs(16);
+/// Changes within this window share one write of the cache file.
+const PERSIST_DELAY: Duration = Duration::from_secs(2);
 
 /// How long a live read stays fresh. Claude and Cursor are HTTPS requests
 /// (Claude falls back to starting Claude Code for `/usage`); Codex starts its
@@ -73,6 +82,11 @@ struct Inner {
     /// asked about, so an idle window spawns nothing for them.
     account_gates: std::sync::Mutex<HashMap<AccountKey, Arc<tokio::sync::Mutex<()>>>>,
     changed: broadcast::Sender<UsageLimitsResult>,
+    /// Where the last good limits are kept between runs.
+    cache_file: PathBuf,
+    persist_delay: std::sync::Mutex<Duration>,
+    /// The bytes last written, so an unchanged cache is not written again.
+    last_written: std::sync::Mutex<Option<Vec<u8>>>,
 }
 
 type AccountKey = (ProviderKind, String);
@@ -82,6 +96,8 @@ struct State {
     accounts: BTreeMap<AccountKey, Entry>,
     accounts_refreshing: HashSet<AccountKey>,
     seeded: bool,
+    /// A write of the cache file is waiting for its delay to pass.
+    persist_scheduled: bool,
     account_identities: BTreeMap<ProviderKind, String>,
     /// The global account each identity above was taken for.
     global_accounts: BTreeMap<ProviderKind, String>,
@@ -131,14 +147,111 @@ fn entry_limits(kind: ProviderKind, instance: Option<String>, entry: &Entry, now
     }
 }
 
+/// Record the outcome of a live read. A failed read keeps the last values and
+/// says why they are old; a successful one makes them current.
+fn apply_read(entry: &mut Entry, kind: ProviderKind, read: Result<(Vec<UsageLimit>, Option<String>), UsageUnread>) {
+    entry.attempted = Some(Instant::now());
+    match read {
+        Ok((limits, plan)) => {
+            entry.limits = limits;
+            entry.plan = plan.or(entry.plan.take());
+            entry.updated_at = Some(Utc::now());
+            entry.source = Some(LimitsSource::Live);
+            entry.stale = None;
+            if entry.logged.take().is_some() {
+                tracing::info!(provider = %kind, "account limits read again");
+            }
+        }
+        Err(unread) => {
+            if entry.logged.as_deref() != Some(unread.detail.as_str()) {
+                tracing::info!(provider = %kind, reason = ?unread.reason, detail = %unread.detail, "could not read account limits; keeping the last values");
+                entry.logged = Some(unread.detail);
+            }
+            entry.stale = Some((unread.reason, unread.retry_at));
+        }
+    }
+}
+
+/// The cache file: the last good limits per provider and named account.
+#[derive(Default, Serialize, Deserialize)]
+struct SavedLimits {
+    #[serde(default)]
+    version: u32,
+    #[serde(default)]
+    providers: Vec<SavedProvider>,
+    #[serde(default)]
+    accounts: Vec<SavedAccount>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SavedProvider {
+    provider: ProviderKind,
+    /// The account, binary and environment the values were read for.
+    identity: String,
+    #[serde(flatten)]
+    entry: SavedEntry,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SavedAccount {
+    provider: ProviderKind,
+    instance: String,
+    #[serde(flatten)]
+    entry: SavedEntry,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SavedEntry {
+    limits: Vec<UsageLimit>,
+    #[serde(default)]
+    plan: Option<String>,
+    updated_at: DateTime<Utc>,
+    source: LimitsSource,
+}
+
+impl SavedEntry {
+    fn from_entry(entry: &Entry) -> Option<Self> {
+        let source = entry.source.filter(|source| *source != LimitsSource::Stored)?;
+        if entry.limits.is_empty() {
+            return None;
+        }
+        Some(Self { limits: entry.limits.clone(), plan: entry.plan.clone(), updated_at: entry.updated_at?, source })
+    }
+
+    /// Serve these as the last run's values, with their original time.
+    fn load_into(self, entry: &mut Entry) {
+        entry.limits = self.limits;
+        entry.plan = self.plan;
+        entry.updated_at = Some(self.updated_at);
+        entry.source = Some(self.source);
+        entry.stale = Some((LimitsStale::FromLastRun, None));
+    }
+}
+
+/// Write through a temporary file in the same directory, so a crash never leaves half a file.
+fn write_atomic(file: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let temporary = file.with_extension(format!("json.tmp-{}", uuid::Uuid::now_v7().simple()));
+    std::fs::write(&temporary, bytes)?;
+    std::fs::rename(&temporary, file).inspect_err(|_| {
+        let _ = std::fs::remove_file(&temporary);
+    })
+}
+
 fn provider_order(kind: ProviderKind) -> usize {
     LIVE.iter().position(|live| *live == kind).unwrap_or(LIVE.len())
 }
 
 impl UsageMonitor {
     pub fn new(store: Store, settings: SettingsStore) -> Self {
+        let cache_file = settings.dir().join("cache").join("usage-limits.json");
         Self {
             inner: Arc::new(Inner {
+                cache_file,
+                persist_delay: std::sync::Mutex::new(PERSIST_DELAY),
+                last_written: std::sync::Mutex::new(None),
                 store,
                 settings,
                 state: std::sync::Mutex::new(State::default()),
@@ -210,6 +323,7 @@ impl UsageMonitor {
     }
 
     pub fn observe_account(&self, provider: &ProviderInstance, limits: &[UsageLimit]) {
+        self.seed();
         let settings = self.inner.settings.get();
         let raw = settings.providers.get(&provider.kind).cloned().unwrap_or_default();
         if provider.instance == crate::provider_accounts::resolve(&raw, None, None) {
@@ -332,6 +446,7 @@ impl UsageMonitor {
 
     /// Forget one account's cached limits (signed out, removed, or signed in again).
     pub fn forget_account(&self, kind: ProviderKind, instance: &str) {
+        self.seed();
         self.lock().accounts.remove(&(kind, instance.to_string()));
         self.publish();
     }
@@ -442,12 +557,36 @@ impl UsageMonitor {
             tracing::warn!(%error, "could not read stored usage limits");
             Vec::new()
         });
+        let saved = self.read_saved();
+        let identities: BTreeMap<ProviderKind, String> = LIVE.into_iter().map(|kind| (kind, self.identity(kind))).collect();
         let mut state = self.lock();
         if state.seeded {
             return;
         }
         state.seeded = true;
         let settings = self.inner.settings.get();
+        // The last run's values come first: they are newer than the event log's.
+        // They describe the account they were read for, so a changed account,
+        // binary or environment leaves them out.
+        for provider in saved.providers {
+            if identities.get(&provider.provider) != Some(&provider.identity) {
+                continue;
+            }
+            let entry = state.providers.entry(provider.provider).or_default();
+            if entry.updated_at.is_none() {
+                provider.entry.load_into(entry);
+            }
+        }
+        for account in saved.accounts {
+            let known = settings.providers.get(&account.provider).is_some_and(|raw| raw.accounts.contains_key(&account.instance));
+            if !LIVE.contains(&account.provider) || !(known || account.instance == "default") {
+                continue;
+            }
+            let entry = state.accounts.entry((account.provider, account.instance)).or_default();
+            if entry.updated_at.is_none() {
+                account.entry.load_into(entry);
+            }
+        }
         for report in stored {
             // Legacy reports do not contain account identity. Once accounts
             // are configured, a live read is required instead of guessing.
@@ -487,25 +626,7 @@ impl UsageMonitor {
             let mut state = self.lock();
             let entry = state.providers.entry(kind).or_default();
             entry.attempted = Some(Instant::now());
-            match read {
-                Ok((limits, plan)) => {
-                    entry.limits = limits;
-                    entry.plan = plan.or(entry.plan.take());
-                    entry.updated_at = Some(Utc::now());
-                    entry.source = Some(LimitsSource::Live);
-                    entry.stale = None;
-                    if entry.logged.take().is_some() {
-                        tracing::info!(provider = %kind, "account limits read again");
-                    }
-                }
-                Err(unread) => {
-                    if entry.logged.as_deref() != Some(unread.detail.as_str()) {
-                        tracing::info!(provider = %kind, reason = ?unread.reason, detail = %unread.detail, "could not read account limits; keeping the last values");
-                        entry.logged = Some(unread.detail);
-                    }
-                    entry.stale = Some((unread.reason, unread.retry_at));
-                }
-            }
+            apply_read(entry, kind, read);
         }
         self.lock().refreshing.remove(&kind);
         self.publish();
@@ -558,6 +679,91 @@ impl UsageMonitor {
     fn publish(&self) {
         // No receivers just means no client is connected.
         let _ = self.inner.changed.send(self.snapshot());
+        self.schedule_persist();
+    }
+
+    // ---- the cache file ----
+
+    fn read_saved(&self) -> SavedLimits {
+        match std::fs::read(&self.inner.cache_file) {
+            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+                tracing::warn!(%error, "ignoring an unreadable usage limits cache");
+                SavedLimits::default()
+            }),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => SavedLimits::default(),
+            Err(error) => {
+                tracing::warn!(%error, "could not read the usage limits cache");
+                SavedLimits::default()
+            }
+        }
+    }
+
+    /// What to keep for the next run: values a live read or a turn reported.
+    /// The event log's older report is not copied.
+    fn saved_limits(&self) -> SavedLimits {
+        let state = self.lock();
+        SavedLimits {
+            version: 1,
+            providers: state
+                .providers
+                .iter()
+                .filter_map(|(kind, entry)| {
+                    Some(SavedProvider { provider: *kind, identity: self.identity(*kind), entry: SavedEntry::from_entry(entry)? })
+                })
+                .collect(),
+            accounts: state
+                .accounts
+                .iter()
+                .filter_map(|((kind, instance), entry)| {
+                    Some(SavedAccount { provider: *kind, instance: instance.clone(), entry: SavedEntry::from_entry(entry)? })
+                })
+                .collect(),
+        }
+    }
+
+    /// Write the cache file now, unless nothing changed since the last write.
+    /// Nothing is written before the file was read, or its content would be lost.
+    fn persist_now(&self) {
+        if !self.lock().seeded {
+            return;
+        }
+        let Ok(bytes) = serde_json::to_vec(&self.saved_limits()) else { return };
+        let mut last = self.inner.last_written.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if last.as_deref() == Some(bytes.as_slice()) {
+            return;
+        }
+        match write_atomic(&self.inner.cache_file, &bytes) {
+            Ok(()) => *last = Some(bytes),
+            Err(error) => tracing::warn!(%error, file = %self.inner.cache_file.display(), "could not save the usage limits cache"),
+        }
+    }
+
+    /// Save soon, and once for a burst of changes.
+    fn schedule_persist(&self) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            self.persist_now();
+            return;
+        };
+        {
+            let mut state = self.lock();
+            if state.persist_scheduled {
+                return;
+            }
+            state.persist_scheduled = true;
+        }
+        let monitor = self.clone();
+        let delay = *self.inner.persist_delay.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        runtime.spawn(async move {
+            tokio::time::sleep(delay).await;
+            monitor.lock().persist_scheduled = false;
+            let writer = monitor.clone();
+            let _ = tokio::task::spawn_blocking(move || writer.persist_now()).await;
+        });
+    }
+
+    #[cfg(test)]
+    fn set_persist_delay(&self, delay: Duration) {
+        *self.inner.persist_delay.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = delay;
     }
 
     /// The cache as clients see it. A window whose reset time has passed
@@ -811,5 +1017,215 @@ mod named_account_tests {
         assert!(snapshot.providers.is_empty(), "the global default is untouched");
         monitor.forget_account(ProviderKind::ClaudeCode, "work");
         assert!(monitor.snapshot().accounts.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+
+    fn root() -> PathBuf {
+        let root = std::env::temp_dir().join(format!("kybern-usage-persist-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    /// A monitor over the data directory `root`, as a daemon start would build.
+    fn monitor_at(root: &std::path::Path) -> UsageMonitor {
+        let settings = SettingsStore::load(&root.join("settings.json")).unwrap();
+        UsageMonitor::new(Store::open_in_memory().unwrap(), settings)
+    }
+
+    fn file(root: &std::path::Path) -> PathBuf {
+        root.join("cache").join("usage-limits.json")
+    }
+
+    fn limit(name: &str, used_percent: f64, window_minutes: u64, resets_at: Option<i64>) -> UsageLimit {
+        UsageLimit { name: name.into(), used_percent, window_minutes: Some(window_minutes), resets_at }
+    }
+
+    /// Start a monitor the way a client's first request would, without any live read.
+    fn started(root: &std::path::Path) -> UsageMonitor {
+        let monitor = monitor_at(root);
+        monitor.sync_accounts();
+        monitor.seed();
+        monitor
+    }
+
+    fn work_account() -> kybern_protocol::ProviderAccount {
+        kybern_protocol::ProviderAccount { name: "Work".into(), directory: "/account-work".into(), ..Default::default() }
+    }
+
+    #[test]
+    fn limits_survive_a_restart_and_are_marked_as_from_the_last_run() {
+        let root = root();
+        let future = Utc::now().timestamp() + 3600;
+        let before = started(&root);
+        before.observe(ProviderKind::ClaudeCode, &[limit("Current session", 40.0, 300, Some(future)), limit("Weekly", 12.0, 10080, None)]);
+        let saved_at = before.snapshot().providers[0].updated_at.expect("a report has a time");
+        before.persist_now();
+        assert!(file(&root).exists());
+        assert_eq!(std::fs::read_dir(root.join("cache")).unwrap().count(), 1, "no temporary file is left behind");
+
+        let after = started(&root);
+        let snapshot = after.snapshot();
+        let claude = &snapshot.providers[0];
+        assert_eq!(claude.provider, ProviderKind::ClaudeCode);
+        assert_eq!(claude.limits.len(), 2, "every window comes back");
+        assert_eq!((claude.limits[0].used_percent, claude.limits[0].resets_at), (40.0, Some(future)));
+        assert_eq!(claude.updated_at, Some(saved_at), "the original time, not the restart's");
+        assert_eq!(claude.source, Some(LimitsSource::Session));
+        assert_eq!(claude.stale, Some(LimitsStale::FromLastRun));
+        let wire = serde_json::to_value(claude).unwrap();
+        assert_eq!(wire["stale"], serde_json::json!("from_last_run"));
+    }
+
+    #[test]
+    fn a_live_read_replaces_the_last_runs_values_and_a_failed_one_keeps_them_with_its_reason() {
+        let root = root();
+        let before = started(&root);
+        before.observe(ProviderKind::Codex, &[limit("5-hour", 70.0, 300, None)]);
+        before.persist_now();
+
+        let after = started(&root);
+        let codex = ProviderKind::Codex;
+        // The login is due for a refresh: the values stay, with that reason instead.
+        {
+            let mut state = after.lock();
+            let unread = UsageUnread { reason: LimitsStale::LoginRefresh, retry_at: None, detail: "login due".into() };
+            apply_read(state.providers.get_mut(&codex).unwrap(), codex, Err(unread));
+        }
+        let kept = after.snapshot();
+        assert_eq!(kept.providers[0].limits[0].used_percent, 70.0, "a provider with cached values is never hidden");
+        assert_eq!(kept.providers[0].stale, Some(LimitsStale::LoginRefresh));
+        // Any other failed read says so.
+        {
+            let mut state = after.lock();
+            let unread = UsageUnread { reason: LimitsStale::Unavailable, retry_at: None, detail: "offline".into() };
+            apply_read(state.providers.get_mut(&codex).unwrap(), codex, Err(unread));
+        }
+        assert_eq!(after.snapshot().providers[0].stale, Some(LimitsStale::Unavailable));
+        // A live read makes them current.
+        {
+            let mut state = after.lock();
+            apply_read(state.providers.get_mut(&codex).unwrap(), codex, Ok((vec![limit("5-hour", 15.0, 300, None)], Some("Pro".into()))));
+        }
+        let fresh = after.snapshot();
+        assert_eq!((fresh.providers[0].limits[0].used_percent, fresh.providers[0].stale), (15.0, None));
+        assert_eq!((fresh.providers[0].source, fresh.providers[0].plan.as_deref()), (Some(LimitsSource::Live), Some("Pro")));
+        // The new values are what the next run starts from.
+        after.persist_now();
+        let next = started(&root);
+        assert_eq!(next.snapshot().providers[0].limits[0].used_percent, 15.0);
+        assert_eq!(next.snapshot().providers[0].plan.as_deref(), Some("Pro"));
+    }
+
+    #[test]
+    fn values_of_another_account_are_not_restored() {
+        let root = root();
+        let before = started(&root);
+        before.observe(ProviderKind::Codex, &[limit("5-hour", 90.0, 300, None)]);
+        before.persist_now();
+
+        // The user switched the default account since: those values are someone else's.
+        let settings = SettingsStore::load(&root.join("settings.json")).unwrap();
+        let mut changed = settings.get();
+        let provider = changed.providers.entry(ProviderKind::Codex).or_default();
+        provider.accounts.insert("work".into(), work_account());
+        provider.default_account = Some("work".into());
+        settings.set(changed).unwrap();
+        let after = UsageMonitor::new(Store::open_in_memory().unwrap(), settings);
+        after.sync_accounts();
+        after.seed();
+        assert!(after.snapshot().providers.is_empty());
+    }
+
+    #[test]
+    fn named_accounts_are_restored_while_they_still_exist() {
+        let root = root();
+        let settings = SettingsStore::load(&root.join("settings.json")).unwrap();
+        let mut with_work = settings.get();
+        with_work.providers.entry(ProviderKind::ClaudeCode).or_default().accounts.insert("work".into(), work_account());
+        settings.set(with_work).unwrap();
+        let build = || {
+            let monitor = UsageMonitor::new(Store::open_in_memory().unwrap(), settings.clone());
+            monitor.sync_accounts();
+            monitor.seed();
+            monitor
+        };
+        let before = build();
+        before.observe_account(
+            &ProviderInstance { kind: ProviderKind::ClaudeCode, instance: "work".into() },
+            &[limit("5-hour", 33.0, 300, None)],
+        );
+        before.persist_now();
+
+        let after = build();
+        let accounts = after.snapshot().accounts;
+        assert_eq!(accounts.len(), 1);
+        assert_eq!((accounts[0].instance.as_deref(), accounts[0].limits[0].used_percent), (Some("work"), 33.0));
+        assert_eq!(accounts[0].stale, Some(LimitsStale::FromLastRun));
+
+        // Forgetting an account removes it from the file too.
+        after.forget_account(ProviderKind::ClaudeCode, "work");
+        after.persist_now();
+        assert!(build().snapshot().accounts.is_empty());
+    }
+
+    #[test]
+    fn nothing_is_written_before_the_file_was_read_and_a_damaged_file_is_ignored() {
+        let root = root();
+        let before = started(&root);
+        before.observe(ProviderKind::Cursor, &[limit("Monthly", 50.0, 43200, None)]);
+        before.persist_now();
+        let saved = std::fs::read(file(&root)).unwrap();
+
+        // A monitor that has not loaded the file cannot overwrite it with nothing.
+        let fresh = monitor_at(&root);
+        fresh.publish();
+        fresh.persist_now();
+        assert_eq!(std::fs::read(file(&root)).unwrap(), saved);
+
+        std::fs::write(file(&root), "{ not json").unwrap();
+        let damaged = started(&root);
+        assert!(damaged.snapshot().providers.is_empty());
+        damaged.observe(ProviderKind::Cursor, &[limit("Monthly", 51.0, 43200, None)]);
+        damaged.persist_now();
+        assert_eq!(started(&root).snapshot().providers[0].limits[0].used_percent, 51.0, "the damaged file was replaced");
+    }
+
+    #[test]
+    fn the_event_logs_older_report_is_not_copied_into_the_file() {
+        let root = root();
+        let monitor = started(&root);
+        {
+            let mut state = monitor.lock();
+            let entry = state.providers.entry(ProviderKind::Codex).or_default();
+            entry.limits = vec![limit("5-hour", 5.0, 300, None)];
+            entry.updated_at = Some(Utc::now());
+            entry.source = Some(LimitsSource::Stored);
+        }
+        monitor.persist_now();
+        let saved: SavedLimits = serde_json::from_slice(&std::fs::read(file(&root)).unwrap()).unwrap();
+        assert!(saved.providers.is_empty() && saved.accounts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn changes_are_written_once_after_a_short_delay() {
+        let root = root();
+        let monitor = started(&root);
+        monitor.set_persist_delay(Duration::from_millis(30));
+        monitor.observe(ProviderKind::ClaudeCode, &[limit("Current session", 10.0, 300, None)]);
+        monitor.observe(ProviderKind::ClaudeCode, &[limit("Current session", 20.0, 300, None)]);
+        assert!(!file(&root).exists(), "the write waits for its delay");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !file(&root).exists() {
+            assert!(Instant::now() < deadline, "the cache file was never written");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let saved: SavedLimits = serde_json::from_slice(&std::fs::read(file(&root)).unwrap()).unwrap();
+        assert_eq!(saved.providers.len(), 1);
+        assert_eq!(saved.providers[0].entry.limits[0].used_percent, 20.0, "the burst was written once, with its last values");
     }
 }

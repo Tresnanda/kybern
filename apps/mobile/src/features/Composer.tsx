@@ -1,5 +1,6 @@
 import {
   buildStructuredTextParts,
+  convertTypedSlashSkills,
   partToken,
   structuredSegments,
 } from "../../../../packages/kybern-client/src/composerTokens";
@@ -331,13 +332,17 @@ export const Composer = memo(function Composer({
     const visualMessage: UserMessage = {
       parts: [
         ...sentAttachments,
-        ...buildStructuredTextParts(sentText, tokenSources.mentions, [
-          ...skillCatalog,
-          ...tokenSources.skills,
-        ]),
+        ...convertTypedSlashSkills(
+          buildStructuredTextParts(sentText, tokenSources.mentions, [
+            ...skillCatalog,
+            ...tokenSources.skills,
+          ]),
+          skillCatalog,
+        ),
       ],
     };
-    const structured = /(?:^|\s)[$@]/.test(sentText);
+    // `$skill`, `@mention` and a typed `/skill` all need the computer's skill list.
+    const structured = /(?:^|\s)[$@/]/.test(sentText);
     let outgoingId: number | undefined;
     try {
       const sources: Record<string, SendSource> = {};
@@ -408,10 +413,13 @@ export const Composer = memo(function Composer({
       const message: UserMessage = {
         parts: [
           ...sentAttachments,
-          ...buildStructuredTextParts(sentText, tokenSources.mentions, [
-            ...skillItems,
-            ...tokenSources.skills,
-          ]),
+          ...convertTypedSlashSkills(
+            buildStructuredTextParts(sentText, tokenSources.mentions, [
+              ...skillItems,
+              ...tokenSources.skills,
+            ]),
+            skillItems,
+          ),
         ],
       };
       const receipt = await (steering ? onSteer! : onSend)(message);

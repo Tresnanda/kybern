@@ -1,5 +1,7 @@
 //! Domain model shared by daemon and clients.
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -271,6 +273,11 @@ pub struct Project {
     /// index of its notes at session start (not only the Coordinator's children).
     #[serde(default)]
     pub brief_in_all_threads: bool,
+    /// This project's overrides of the Coordinator settings in
+    /// [`OrchestrationSettings`]. Absent fields fall back to the global value;
+    /// see [`OrchestrationSettings::effective_for`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinator: Option<CoordinatorOverrides>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -339,7 +346,7 @@ pub struct Thread {
 }
 
 /// What the delegating agent asked this child to be.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DelegationRole {
     Implementation,
@@ -454,6 +461,19 @@ pub struct DelegationConflict {
     pub at: DateTime<Utc>,
 }
 
+/// A Coordinator delegation that used another harness or model than the
+/// default configured for its role. `provider` and `model` are the default that
+/// was set aside (the child's own are on its thread), so a client can write
+/// "Claude Opus 5.5 · instead of the Sonnet default: <reason>".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DefaultOverride {
+    pub provider: ProviderInstance,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The Coordinator's reason, as it passed it in `override_reason`.
+    pub reason: String,
+}
+
 /// Delegation metadata carried by a child [`Thread`] created with
 /// `kybern_agent_delegate`. Refreshed through `thread_updated`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -470,6 +490,10 @@ pub struct DelegationInfo {
     pub role: DelegationRole,
     #[serde(default)]
     pub workspace: DelegationWorkspace,
+    /// Set when a Coordinator chose another harness or model than the default
+    /// configured for this child's role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_override: Option<DefaultOverride>,
     /// Globs relative to the checkout root this child owns (shared only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub owns: Vec<String>,
@@ -785,6 +809,24 @@ pub enum ContentPart {
     AgentResults {
         items: Vec<AgentResultItem>,
     },
+    /// A row Kybern itself adds to a conversation, such as "Setup started".
+    /// Clients draw it as a small system row, never a user bubble; it may sit in
+    /// front of the user's own parts. Providers never receive it as written:
+    /// the daemon swaps in its own instructions for the provider's copy, and a
+    /// driver that meets one flattens `text`.
+    SystemRow {
+        kind: SystemRowKind,
+        text: String,
+    },
+}
+
+/// What a [`ContentPart::SystemRow`] announces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemRowKind {
+    /// The Coordinator's setup interview began (a new Coordinator without a
+    /// brief, or "Redo setup").
+    CoordinatorSetup,
 }
 
 impl ContentPart {
@@ -798,6 +840,7 @@ impl ContentPart {
                 Some(thread_message_text(*message_id, *from_thread_id, from_title, *purpose, *reply_to, body))
             }
             ContentPart::AgentResults { items } => Some(agent_results_text(items)),
+            ContentPart::SystemRow { text, .. } => Some(text.clone()),
             _ => None,
         }
     }
@@ -940,6 +983,7 @@ impl UserMessage {
                     out.push_str(&thread_message_text(*message_id, *from_thread_id, from_title, *purpose, *reply_to, body));
                 }
                 ContentPart::AgentResults { items } => out.push_str(&agent_results_text(items)),
+                ContentPart::SystemRow { text, .. } => out.push_str(text),
                 ContentPart::Image { .. } => out.push_str("[image]"),
                 ContentPart::Attachment { name, .. } => {
                     out.push('[');
@@ -1198,12 +1242,67 @@ pub struct SecretRequestInput {
     pub placeholder: Option<String>,
 }
 
+/// `tool_name` of the daemon-raised approval behind `kybern_coordinator_propose_brief`:
+/// the card "Save this as the project brief?" holds the Coordinator's proposed
+/// text, which the user can edit. This card is the only way agent text reaches
+/// the project brief.
+///
+/// `input` is a [`BriefProposalInput`]. The answer is
+/// `ApprovalDecision::Submit { response: {"text": "<the user's final wording>"} }`
+/// (non-empty, at most [`MAX_BRIEF_BYTES`]) or `Deny`.
+pub const COORDINATOR_BRIEF_TOOL: &str = "kybern_coordinator_brief";
+/// `tool_name` of the daemon-raised approval behind
+/// `kybern_coordinator_propose_settings`: the card "Apply these Coordinator
+/// settings?" lists each proposed change as old → new, and the user can untick rows.
+///
+/// `input` is a [`SettingsProposalInput`]. The answer is
+/// `ApprovalDecision::Submit { response: {"accepted": ["<change path>", ...]} }`
+/// (at least one path from `input.changes`) or `Deny`.
+pub const COORDINATOR_SETTINGS_TOOL: &str = "kybern_coordinator_settings";
+/// Longest project brief, in bytes.
+pub const MAX_BRIEF_BYTES: usize = 16 * 1024;
+
+/// The `input` of a [`COORDINATOR_BRIEF_TOOL`] approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BriefProposalInput {
+    /// The proposed brief, markdown.
+    pub text: String,
+    /// The project already has a brief that saving replaces.
+    pub replaces: bool,
+}
+
+/// One proposed change in a [`SettingsProposalInput`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SettingChange {
+    /// Stable id of the field, and the value `accepted` lists: `lead_autonomy`,
+    /// `lead_workspace`, `lead_push_without_asking`, `lead_max_children` or
+    /// `role_defaults.<role>` (research, implementation, review, design, test).
+    pub path: String,
+    /// Short label for the row, e.g. `Autonomy`.
+    pub label: String,
+    /// The effective value today. Enum fields are their snake_case strings; a
+    /// role default is a [`RoleDefault`] object, or `null` when none is set.
+    pub old: Value,
+    /// The proposed value, in the same shape.
+    pub new: Value,
+}
+
+/// The `input` of a [`COORDINATOR_SETTINGS_TOOL`] approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SettingsProposalInput {
+    /// Why the Coordinator proposes these, in its words.
+    pub reason: String,
+    pub changes: Vec<SettingChange>,
+}
+
 impl ApprovalRequest {
     pub fn is_user_input(&self) -> bool {
         matches!(
             self.tool_name.as_str(),
             "AskUserQuestion"
                 | SECRET_REQUEST_TOOL
+                | COORDINATOR_BRIEF_TOOL
+                | COORDINATOR_SETTINGS_TOOL
                 | "request_user_input"
                 | "opencode_question"
                 | "mcp_elicitation"
@@ -1281,6 +1380,29 @@ impl ApprovalRequest {
                 let secret = response.get("secret").and_then(Value::as_str);
                 if !secret.is_some_and(|secret| !secret.is_empty() && secret.len() <= MAX_SECRET_BYTES && !secret.contains('\0')) {
                     return Err(format!("Enter a value of up to {} KiB, or decline.", MAX_SECRET_BYTES / 1024));
+                }
+            }
+            COORDINATOR_BRIEF_TOOL => {
+                let text = response.get("text").and_then(Value::as_str).map(str::trim);
+                if !text.is_some_and(|text| !text.is_empty() && text.len() <= MAX_BRIEF_BYTES) {
+                    return Err(format!("Write a brief of up to {} KiB, or decline.", MAX_BRIEF_BYTES / 1024));
+                }
+            }
+            COORDINATOR_SETTINGS_TOOL => {
+                let known: Vec<&str> = self
+                    .input
+                    .get("changes")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|change| change.get("path").and_then(Value::as_str))
+                    .collect();
+                let accepted = response.get("accepted").and_then(Value::as_array);
+                let valid = accepted.is_some_and(|accepted| {
+                    !accepted.is_empty() && accepted.iter().all(|path| path.as_str().is_some_and(|path| known.contains(&path)))
+                });
+                if !valid {
+                    return Err("Keep at least one change ticked, or decline.".into());
                 }
             }
             // Kybern's computer-use consent: `{"scope":"always"}` remembers the app.
@@ -1645,11 +1767,157 @@ pub struct OrchestrationSettings {
     pub lead_max_children: u32,
     /// Deepest chain of delegation: 1 means only top-level threads delegate (1..=4).
     pub max_depth: u32,
+    /// The harness, model and effort a Coordinator uses for a kind of work when
+    /// it does not ask for another. Keys: research, implementation, review,
+    /// design and test (`general` has no default). Projects override per role.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub role_defaults: BTreeMap<DelegationRole, RoleDefault>,
+    /// How freely the Coordinator acts. Projects can override it.
+    pub lead_autonomy: LeadAutonomy,
+    /// Where the Coordinator's children work when it does not say.
+    pub lead_workspace: DelegationWorkspace,
+    /// Let the Coordinator push and open pull requests without asking first.
+    /// Merging a pull request always asks.
+    pub lead_push_without_asking: bool,
 }
 
 impl Default for OrchestrationSettings {
     fn default() -> Self {
-        Self { max_active_children: 4, lead_max_children: 6, max_depth: 2 }
+        Self {
+            max_active_children: 4,
+            lead_max_children: 6,
+            max_depth: 2,
+            role_defaults: BTreeMap::new(),
+            lead_autonomy: LeadAutonomy::default(),
+            lead_workspace: DelegationWorkspace::Shared,
+            lead_push_without_asking: false,
+        }
+    }
+}
+
+/// How freely a Coordinator acts before asking the user.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LeadAutonomy {
+    /// Acts on its own judgment and reports.
+    Act,
+    /// Acts on small work; proposes a plan first for anything large or risky.
+    #[default]
+    ProposeLarge,
+    /// Proposes a plan before every piece of work.
+    ProposeFirst,
+}
+
+impl LeadAutonomy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LeadAutonomy::Act => "act",
+            LeadAutonomy::ProposeLarge => "propose_large",
+            LeadAutonomy::ProposeFirst => "propose_first",
+        }
+    }
+
+    /// The label users see.
+    pub fn label(self) -> &'static str {
+        match self {
+            LeadAutonomy::Act => "Act",
+            LeadAutonomy::ProposeLarge => "Propose large changes",
+            LeadAutonomy::ProposeFirst => "Propose first",
+        }
+    }
+}
+
+/// The harness, model and effort used for one kind of delegated work. Every
+/// field is optional: an unset one follows the delegating thread.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RoleDefault {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ProviderInstance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
+/// A project's overrides of the Coordinator settings. Absent fields fall back
+/// to [`OrchestrationSettings`]. `role_defaults` replaces the global entry of
+/// each role it lists.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CoordinatorOverrides {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub role_defaults: BTreeMap<DelegationRole, RoleDefault>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead_autonomy: Option<LeadAutonomy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead_workspace: Option<DelegationWorkspace>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead_push_without_asking: Option<bool>,
+    /// Most delegated children the Coordinator may have running (1..=16).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead_max_children: Option<u32>,
+}
+
+impl CoordinatorOverrides {
+    /// Whether nothing is overridden.
+    pub fn is_empty(&self) -> bool {
+        self.role_defaults.is_empty()
+            && self.lead_autonomy.is_none()
+            && self.lead_workspace.is_none()
+            && self.lead_push_without_asking.is_none()
+            && self.lead_max_children.is_none()
+    }
+
+    /// Why these overrides cannot be saved, if they cannot.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.role_defaults.contains_key(&DelegationRole::General) {
+            return Err("The general role has no default model. Remove it and save again.".into());
+        }
+        if self.lead_max_children.is_some_and(|children| !(1..=16).contains(&children)) {
+            return Err("Active agents per Coordinator must be between 1 and 16. Change the value and save again.".into());
+        }
+        for (role, default) in &self.role_defaults {
+            if default.model.as_deref().is_some_and(|model| model.trim().is_empty() || model.len() > 256)
+                || default.effort.as_deref().is_some_and(|effort| effort.trim().is_empty() || effort.len() > 128)
+            {
+                return Err(format!("The {role} default has an empty or oversized model or effort. Fix it and save again."));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The Coordinator settings in force for one project: its overrides, then the
+/// global values, then the built-in defaults.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct EffectiveCoordinatorSettings {
+    pub role_defaults: BTreeMap<DelegationRole, RoleDefault>,
+    pub lead_autonomy: LeadAutonomy,
+    pub lead_workspace: DelegationWorkspace,
+    pub lead_push_without_asking: bool,
+    pub lead_max_children: u32,
+}
+
+impl OrchestrationSettings {
+    /// Resolve the settings for a project: its override, else the global value.
+    pub fn effective_for(&self, project: Option<&CoordinatorOverrides>) -> EffectiveCoordinatorSettings {
+        let mut role_defaults = self.role_defaults.clone();
+        if let Some(project) = project {
+            for (role, default) in &project.role_defaults {
+                role_defaults.insert(*role, default.clone());
+            }
+        }
+        EffectiveCoordinatorSettings {
+            role_defaults,
+            lead_autonomy: project.and_then(|p| p.lead_autonomy).unwrap_or(self.lead_autonomy),
+            lead_workspace: project.and_then(|p| p.lead_workspace).unwrap_or(self.lead_workspace),
+            lead_push_without_asking: project.and_then(|p| p.lead_push_without_asking).unwrap_or(self.lead_push_without_asking),
+            lead_max_children: project.and_then(|p| p.lead_max_children).unwrap_or(self.lead_max_children),
+        }
+    }
+
+    /// Why these settings cannot be saved, if they cannot.
+    pub fn validate_coordinator(&self) -> Result<(), String> {
+        CoordinatorOverrides { role_defaults: self.role_defaults.clone(), ..Default::default() }.validate()
     }
 }
 
@@ -2139,11 +2407,157 @@ mod orchestration_tests {
 
     #[test]
     fn orchestration_settings_default_and_partial_parse() {
-        assert_eq!(Settings::default().orchestration, OrchestrationSettings { max_active_children: 4, lead_max_children: 6, max_depth: 2 });
+        assert_eq!(
+            Settings::default().orchestration,
+            OrchestrationSettings { max_active_children: 4, lead_max_children: 6, max_depth: 2, ..Default::default() }
+        );
         let settings: Settings = serde_json::from_value(serde_json::json!({ "orchestration": { "max_depth": 3 } })).unwrap();
-        assert_eq!(settings.orchestration, OrchestrationSettings { max_active_children: 4, lead_max_children: 6, max_depth: 3 });
+        assert_eq!(
+            settings.orchestration,
+            OrchestrationSettings { max_active_children: 4, lead_max_children: 6, max_depth: 3, ..Default::default() }
+        );
         let legacy: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(legacy.orchestration, OrchestrationSettings::default());
+    }
+
+    fn role(kind: ProviderKind, model: &str) -> RoleDefault {
+        RoleDefault { provider: Some(ProviderInstance::default_for(kind)), model: Some(model.into()), effort: None }
+    }
+
+    #[test]
+    fn coordinator_settings_default_and_resolve_project_then_global_then_builtin() {
+        let builtin = OrchestrationSettings::default().effective_for(None);
+        assert_eq!(builtin.lead_autonomy, LeadAutonomy::ProposeLarge);
+        assert_eq!(builtin.lead_workspace, DelegationWorkspace::Shared);
+        assert!(!builtin.lead_push_without_asking && builtin.role_defaults.is_empty());
+        assert_eq!(builtin.lead_max_children, 6);
+
+        // Old settings files have none of the new fields.
+        let global: OrchestrationSettings = serde_json::from_value(serde_json::json!({
+            "lead_autonomy": "propose_first",
+            "lead_max_children": 4,
+            "role_defaults": { "research": { "provider": { "kind": "codex", "instance": "default" }, "model": "fast" }, "review": { "model": "m" } }
+        }))
+        .unwrap();
+        assert_eq!(global.lead_workspace, DelegationWorkspace::Shared, "an absent field takes its default");
+        let project = CoordinatorOverrides {
+            lead_autonomy: Some(LeadAutonomy::Act),
+            lead_push_without_asking: Some(true),
+            role_defaults: [(DelegationRole::Research, role(ProviderKind::ClaudeCode, "opus"))].into_iter().collect(),
+            ..Default::default()
+        };
+        let effective = global.effective_for(Some(&project));
+        assert_eq!(effective.lead_autonomy, LeadAutonomy::Act, "project beats global");
+        assert_eq!(effective.lead_max_children, 4, "unset project fields fall back to the global value");
+        assert!(effective.lead_push_without_asking);
+        assert_eq!(
+            effective.role_defaults[&DelegationRole::Research],
+            role(ProviderKind::ClaudeCode, "opus"),
+            "a project role replaces the global entry"
+        );
+        assert_eq!(effective.role_defaults[&DelegationRole::Review].model.as_deref(), Some("m"), "other roles keep the global entry");
+        assert_eq!(global.effective_for(None).lead_autonomy, LeadAutonomy::ProposeFirst);
+    }
+
+    #[test]
+    fn coordinator_overrides_validate_and_round_trip_without_empty_fields() {
+        assert!(CoordinatorOverrides::default().is_empty());
+        assert_eq!(serde_json::to_value(CoordinatorOverrides::default()).unwrap(), serde_json::json!({}));
+        let general = CoordinatorOverrides {
+            role_defaults: [(DelegationRole::General, role(ProviderKind::Codex, "x"))].into_iter().collect(),
+            ..Default::default()
+        };
+        assert!(general.validate().unwrap_err().contains("general"));
+        assert!(CoordinatorOverrides { lead_max_children: Some(0), ..Default::default() }.validate().is_err());
+        assert!(CoordinatorOverrides { lead_max_children: Some(17), ..Default::default() }.validate().is_err());
+        let blank = CoordinatorOverrides {
+            role_defaults: [(DelegationRole::Test, RoleDefault { model: Some("  ".into()), ..Default::default() })].into_iter().collect(),
+            ..Default::default()
+        };
+        assert!(blank.validate().is_err());
+        let ok =
+            CoordinatorOverrides { lead_workspace: Some(DelegationWorkspace::Worktree), lead_max_children: Some(3), ..Default::default() };
+        assert!(ok.validate().is_ok() && !ok.is_empty());
+        assert_eq!(serde_json::from_value::<CoordinatorOverrides>(serde_json::to_value(&ok).unwrap()).unwrap(), ok);
+    }
+
+    fn card(tool_name: &str, input: serde_json::Value) -> ApprovalRequest {
+        ApprovalRequest {
+            id: Uuid::nil(),
+            thread_id: Uuid::nil(),
+            turn_id: Uuid::nil(),
+            tool_call_id: None,
+            tool_name: tool_name.into(),
+            input,
+            summary: String::new(),
+            suggestions: vec![],
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn proposal_cards_only_accept_their_own_kind_of_answer() {
+        let brief = card(COORDINATOR_BRIEF_TOOL, serde_json::json!({ "text": "Draft", "replaces": false }));
+        assert!(brief.is_user_input());
+        assert!(brief.validate_decision(&ApprovalDecision::Submit { response: serde_json::json!({ "text": " Final wording " }) }).is_ok());
+        assert!(brief.validate_decision(&ApprovalDecision::Deny { reason: None }).is_ok());
+        for bad in [
+            serde_json::json!({}),
+            serde_json::json!({ "text": "" }),
+            serde_json::json!({ "text": "  " }),
+            serde_json::json!({ "text": 5 }),
+            serde_json::json!({ "text": "x".repeat(MAX_BRIEF_BYTES + 1) }),
+        ] {
+            assert!(brief.validate_decision(&ApprovalDecision::Submit { response: bad }).is_err());
+        }
+        assert!(brief.validate_decision(&ApprovalDecision::AllowOnce).is_err(), "a proposal needs a wording or a decline");
+        assert_eq!(
+            brief.redacted_decision(&ApprovalDecision::Submit { response: serde_json::json!({ "text": "t" }) }),
+            ApprovalDecision::Submit { response: serde_json::json!({ "text": "t" }) }
+        );
+
+        let settings = card(
+            COORDINATOR_SETTINGS_TOOL,
+            serde_json::json!({ "reason": "r", "changes": [
+                { "path": "lead_autonomy", "label": "Autonomy", "old": "propose_large", "new": "act" },
+                { "path": "role_defaults.research", "label": "Research model", "old": null, "new": { "model": "m" } }
+            ] }),
+        );
+        assert!(settings.is_user_input());
+        assert!(
+            settings
+                .validate_decision(&ApprovalDecision::Submit { response: serde_json::json!({ "accepted": ["role_defaults.research"] }) })
+                .is_ok()
+        );
+        assert!(
+            settings
+                .validate_decision(&ApprovalDecision::Submit {
+                    response: serde_json::json!({ "accepted": ["lead_autonomy", "role_defaults.research"] })
+                })
+                .is_ok()
+        );
+        for bad in [
+            serde_json::json!({}),
+            serde_json::json!({ "accepted": [] }),
+            serde_json::json!({ "accepted": ["lead_workspace"] }),
+            serde_json::json!({ "accepted": [3] }),
+            serde_json::json!({ "accepted": "lead_autonomy" }),
+        ] {
+            assert!(settings.validate_decision(&ApprovalDecision::Submit { response: bad }).is_err());
+        }
+        assert!(settings.validate_decision(&ApprovalDecision::AllowAlways).is_err());
+    }
+
+    #[test]
+    fn a_system_row_flattens_to_its_text_and_parses_back() {
+        let row = ContentPart::SystemRow { kind: SystemRowKind::CoordinatorSetup, text: "Setup started".into() };
+        assert_eq!(
+            serde_json::to_value(&row).unwrap(),
+            serde_json::json!({ "type": "system_row", "kind": "coordinator_setup", "text": "Setup started" })
+        );
+        let message = UserMessage { parts: vec![row.clone(), ContentPart::Text { text: " and my words".into() }] };
+        assert_eq!(message.plain_text(), "Setup started and my words");
+        assert_eq!(row.orchestration_text().as_deref(), Some("Setup started"));
     }
 }
 

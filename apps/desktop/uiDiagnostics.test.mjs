@@ -3,7 +3,7 @@ import test from "node:test"
 
 import { installRuntimeErrorReporting, isResizeObserverNotice } from "./src/lib/runtimeErrors.ts"
 import { observeResizeFrame } from "./src/lib/resizeObserver.ts"
-import { bindingLimit, contextUsage, limitLabel, limitLeftLabel, limitPace, limitTone, limitUsed, reportedPercent, resetIn, staleReason } from "./src/lib/providerUsage.ts"
+import { bindingLimit, contextUsage, limitLabel, limitLeftLabel, limitPace, limitTone, limitUsed, limitsStale, reportedPercent, resetIn, staleCaption, staleReason } from "./src/lib/providerUsage.ts"
 
 test("native resize notifications do not become interface errors; real exceptions still do", () => {
   const target = new EventTarget()
@@ -126,8 +126,13 @@ test("a window that reset since its reading has no number, and stale values say 
   assert.equal(bindingLimit([passed], now), null)
 
   assert.equal(staleReason({ provider: "claude-code" }, now), null)
-  assert.equal(staleReason({ provider: "claude-code", stale: "login_refresh" }, now), "Updates after your next Claude turn")
-  assert.match(staleReason({ provider: "claude-code", stale: "throttled", retry_at: new Date(now + 5 * 60_000).toISOString() }, now), /^Claude is limiting usage checks\. Next check at /)
-  assert.equal(staleReason({ provider: "claude-code", stale: "throttled", retry_at: new Date(now - 1000).toISOString() }, now), "Claude is limiting usage checks. Kybern will try again shortly")
-  assert.equal(staleReason({ provider: "codex", stale: "unavailable" }, now), "Couldn’t read usage. Check that Codex is signed in")
+  assert.equal(staleReason({ provider: "claude-code", stale: "login_refresh" }, now), "Waiting for Claude Code to refresh its sign-in.")
+  assert.match(staleReason({ provider: "claude-code", stale: "throttled", retry_at: new Date(now + 5 * 60_000).toISOString() }, now), /^Couldn’t read the latest limits\. Next check at /)
+  assert.equal(staleReason({ provider: "claude-code", stale: "throttled", retry_at: new Date(now - 1000).toISOString() }, now), "Couldn’t read the latest limits.")
+  assert.equal(staleReason({ provider: "codex", stale: "unavailable" }, now), "Couldn’t read the latest limits.")
+  assert.equal(staleReason({ provider: "codex", stale: "from_last_run" }, now), "From the last time Kybern ran.")
+  const twoHoursAgo = new Date(now - 2 * 3_600_000).toISOString()
+  assert.equal(staleCaption({ provider: "claude-code", stale: "login_refresh", updated_at: twoHoursAgo }, now), "Last updated 2 h ago. Waiting for Claude Code to refresh its sign-in.")
+  assert.equal(staleCaption({ provider: "claude-code", updated_at: twoHoursAgo }, now), null)
+  assert.equal(limitsStale({ stale: "from_last_run", updated_at: new Date(now).toISOString(), source: "live" }, now), true, "a stale reason dims even recent values")
 })

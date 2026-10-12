@@ -1700,7 +1700,7 @@ fn prompt_text(message: &UserMessage) -> String {
                 out.push_str(name);
                 out.push(']');
             }
-            ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } => {
+            ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } | ContentPart::SystemRow { .. } => {
                 if let Some(text) = part.orchestration_text() {
                     out.push_str(&text);
                 }

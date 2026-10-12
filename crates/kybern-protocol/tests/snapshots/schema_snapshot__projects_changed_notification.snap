@@ -56,6 +56,17 @@ expression: schema_for!(ProjectsChangedNotification)
           "type": "boolean",
           "default": false
         },
+        "coordinator": {
+          "description": "This project's overrides of the Coordinator settings in\n[`OrchestrationSettings`]. Absent fields fall back to the global value;\nsee [`OrchestrationSettings::effective_for`].",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoordinatorOverrides"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "created_at": {
           "type": "string",
           "format": "date-time"
@@ -72,6 +83,162 @@ expression: schema_for!(ProjectsChangedNotification)
         "is_git",
         "created_at",
         "updated_at"
+      ]
+    },
+    "CoordinatorOverrides": {
+      "description": "A project's overrides of the Coordinator settings. Absent fields fall back\nto [`OrchestrationSettings`]. `role_defaults` replaces the global entry of\neach role it lists.",
+      "type": "object",
+      "properties": {
+        "role_defaults": {
+          "type": "object",
+          "properties": {
+            "design": {
+              "$ref": "#/$defs/RoleDefault"
+            },
+            "general": {
+              "$ref": "#/$defs/RoleDefault"
+            },
+            "implementation": {
+              "$ref": "#/$defs/RoleDefault"
+            },
+            "research": {
+              "$ref": "#/$defs/RoleDefault"
+            },
+            "review": {
+              "$ref": "#/$defs/RoleDefault"
+            },
+            "test": {
+              "$ref": "#/$defs/RoleDefault"
+            }
+          },
+          "additionalProperties": false
+        },
+        "lead_autonomy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LeadAutonomy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lead_workspace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DelegationWorkspace"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lead_push_without_asking": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "lead_max_children": {
+          "description": "Most delegated children the Coordinator may have running (1..=16).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      }
+    },
+    "RoleDefault": {
+      "description": "The harness, model and effort used for one kind of delegated work. Every\nfield is optional: an unset one follows the delegating thread.",
+      "type": "object",
+      "properties": {
+        "provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderInstance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ProviderInstance": {
+      "description": "A configured account/instance of a provider. `default` is created implicitly.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "instance": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "instance"
+      ]
+    },
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    },
+    "LeadAutonomy": {
+      "description": "How freely a Coordinator acts before asking the user.",
+      "oneOf": [
+        {
+          "description": "Acts on its own judgment and reports.",
+          "type": "string",
+          "const": "act"
+        },
+        {
+          "description": "Acts on small work; proposes a plan first for anything large or risky.",
+          "type": "string",
+          "const": "propose_large"
+        },
+        {
+          "description": "Proposes a plan before every piece of work.",
+          "type": "string",
+          "const": "propose_first"
+        }
+      ]
+    },
+    "DelegationWorkspace": {
+      "description": "Where a delegated child works.",
+      "oneOf": [
+        {
+          "description": "The parent's checkout and branch.",
+          "type": "string",
+          "const": "shared"
+        },
+        {
+          "description": "Its own git worktree on `kybern/<child-id>`, seeded from the parent's\ncurrent uncommitted state.",
+          "type": "string",
+          "const": "worktree"
+        }
       ]
     }
   }

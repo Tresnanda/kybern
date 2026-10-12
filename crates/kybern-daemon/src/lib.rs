@@ -17,6 +17,7 @@ mod github_review;
 mod harness_updates;
 mod http;
 mod integrations;
+mod lead_git;
 mod maintenance;
 mod native_tools_mcp;
 mod orchestrator;

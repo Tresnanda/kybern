@@ -56,13 +56,17 @@ pub enum CoordinatorCmd {
         effort: Option<String>,
         #[arg(long, value_parser = crate::parse_mode)]
         mode: Option<PermissionMode>,
-        /// The project brief, saved as the pinned brief note when the project has none.
-        #[arg(long, conflicts_with = "brief_file")]
-        brief: Option<String>,
-        /// Read the project brief from a file (`-` reads standard input).
-        #[arg(long)]
-        brief_file: Option<String>,
+        /// Your opening words, the first answer in the Coordinator's setup interview.
+        /// A new Coordinator in a project without a brief starts that interview;
+        /// the words are never saved as the brief.
+        #[arg(long, alias = "brief", conflicts_with = "message_file")]
+        message: Option<String>,
+        /// Read the opening message from a file (`-` reads standard input).
+        #[arg(long, alias = "brief-file")]
+        message_file: Option<String>,
     },
+    /// Redo the setup interview on the project's Coordinator. It must be idle.
+    Setup { project: Uuid },
     /// Move an idle Coordinator to another harness or model; its conversation stays.
     SwitchHarness {
         project: Uuid,
@@ -109,12 +113,13 @@ pub async fn coordinator(client: &Client, cmd: CoordinatorCmd) -> Result<()> {
         CoordinatorCmd::Get { project } => {
             serde_json::to_value(client.call::<CoordinatorGet>(CoordinatorGetParams { project_id: project }).await?)?
         }
-        CoordinatorCmd::Open { project, provider: kind, model, effort, mode, brief, brief_file } => {
-            let initial_brief = match (brief, brief_file) {
+        CoordinatorCmd::Open { project, provider: kind, model, effort, mode, message, message_file } => {
+            let opening_message = match (message, message_file) {
                 (Some(text), _) => Some(text),
                 (None, Some(path)) if path == "-" => {
                     let mut text = String::new();
-                    std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut text).context("read the brief from standard input")?;
+                    std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut text)
+                        .context("read the opening message from standard input")?;
                     Some(text)
                 }
                 (None, Some(path)) => Some(std::fs::read_to_string(&path).with_context(|| format!("read {path}"))?),
@@ -127,10 +132,14 @@ pub async fn coordinator(client: &Client, cmd: CoordinatorCmd) -> Result<()> {
                     model,
                     effort,
                     permission_mode: mode,
-                    initial_brief,
+                    opening_message,
+                    initial_brief: None,
                 })
                 .await?;
             serde_json::to_value(opened)?
+        }
+        CoordinatorCmd::Setup { project } => {
+            serde_json::to_value(client.call::<CoordinatorSetup>(CoordinatorSetupParams { project_id: project }).await?)?
         }
         CoordinatorCmd::SwitchHarness { project, provider: kind, model, effort, mode } => serde_json::to_value(
             client

@@ -244,8 +244,9 @@ impl AgentDriver for ClaudeDriver {
     }
 }
 
-/// Built-in tools a project Coordinator keeps: reading, searching and web lookups.
-const CLAUDE_READ_ONLY_TOOLS: &str = "Read,Grep,Glob,WebSearch,WebFetch";
+/// Built-in tools a project Coordinator keeps: reading, searching and web lookups,
+/// plus asking the user a question and running a skill. None of them edits a file.
+const CLAUDE_READ_ONLY_TOOLS: &str = "Read,Grep,Glob,WebSearch,WebFetch,AskUserQuestion,Skill";
 
 impl ClaudeDriver {
     async fn probe_context(&self, context: &ProbeContext) -> ProviderStatus {
@@ -1786,7 +1787,7 @@ fn content_blocks(message: &UserMessage) -> Vec<Value> {
                 }
             }
             ContentPart::Skill { .. } => unreachable!(),
-            ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } => {
+            ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } | ContentPart::SystemRow { .. } => {
                 if let Some(text) = part.orchestration_text() {
                     trailing.push('\n');
                     trailing.push_str(&text);
@@ -1819,7 +1820,7 @@ fn claude_block(part: &ContentPart) -> Option<Value> {
                 .then(|| json!({ "type": "image", "source": { "type": "base64", "media_type": media_type, "data": data } }))
         }
         ContentPart::Attachment { name, .. } => Some(json!({ "type": "text", "text": format!("[attached file: {name}]") })),
-        ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } => {
+        ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } | ContentPart::SystemRow { .. } => {
             part.orchestration_text().map(|text| json!({ "type": "text", "text": text }))
         }
     }
@@ -2404,7 +2405,7 @@ mod tests {
         use crate::{AgentDriver, SessionConfig};
         use std::os::unix::fs::PermissionsExt;
         for (enforced, read_only, expected) in
-            [(true, true, Some("Read,Grep,Glob,WebSearch,WebFetch")), (true, false, Some("")), (false, true, None)]
+            [(true, true, Some("Read,Grep,Glob,WebSearch,WebFetch,AskUserQuestion,Skill")), (true, false, Some("")), (false, true, None)]
         {
             let root = tempfile::tempdir().unwrap();
             let binary = root.path().join("claude-fixture");

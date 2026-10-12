@@ -4,7 +4,7 @@ import { emptyThreadState } from "../src/state/transcript"
 import type { ApprovalDecision, Note, NoteSummary, Thread, UserMessage } from "../src/protocol"
 
 export * from "../src/state/rpc"
-export const chatFixture = { calls: [] as { method: string; params: any }[], sent: [] as { threadId: string; message: UserMessage; messageId?: string }[], coordinatorCreates: 0, notes: new Map<string, Note>() }
+export const chatFixture = { calls: [] as { method: string; params: any }[], sent: [] as { threadId: string; message: UserMessage; messageId?: string }[], coordinatorCreates: 0, notes: new Map<string, Note>(), failProjectUpdate: false, setupBusy: false }
 const coordinators = new Map<string, Thread>()
 const at = "2026-09-14T10:00:00Z"
 const connection = { call, onNotification: () => () => {}, onStatus: () => () => {} }
@@ -12,7 +12,7 @@ const runtime = { rpc, loadThread }
 export function rpc() { return connection }
 export function activeRuntime() { return runtime }
 export async function searchFiles() { return [] }
-export async function listSkills() { return [] }
+export async function listSkills() { return [{ name: "review", description: "Review the change", path: "/skills/review", scope: "user", enabled: true }] }
 export async function loadDiff() {}
 export async function loadGitStatus() {}
 export async function loadFileDiff() {}
@@ -56,6 +56,13 @@ async function call(method: string, params: any): Promise<any> {
     coordinators.set(params.project_id, thread); chatFixture.coordinatorCreates += 1
     return { thread, created: true }
   }
+  if (method === "coordinator.setup") {
+    // The daemon refuses while the Coordinator runs a turn, in these words.
+    if (chatFixture.setupBusy) throw new Error("Wait for the Coordinator to finish, then try again.")
+    const current = coordinators.get(params.project_id)
+    if (!current) throw new Error("Open the project's Coordinator before redoing its setup.")
+    return current
+  }
   if (method === "coordinator.switch_harness") {
     const current = coordinators.get(params.project_id)
     if (!current) throw new Error("Open the Coordinator before changing its harness.")
@@ -75,7 +82,9 @@ async function call(method: string, params: any): Promise<any> {
   if (method === "git.branches") return { current: "main", branches: [] }
   if (method === "notes.search") return { results: [] }
   if (method === "approvals.respond") {
-    const stored: ApprovalDecision = params.decision === "submit" ? { decision: "submit", response: { secret: "[redacted]" } } : { decision: params.decision, ...(params.reason ? { reason: params.reason } : {}) } as ApprovalDecision
+    // A secret answer is stored redacted; every other answer as given.
+    const response = params.response && typeof params.response === "object" && "secret" in params.response ? { secret: "[redacted]" } : params.response
+    const stored: ApprovalDecision = params.decision === "submit" ? { decision: "submit", response } : { decision: params.decision, ...(params.reason ? { reason: params.reason } : {}) } as ApprovalDecision
     state.set((current) => {
       const transcripts = { ...current.transcripts }
       for (const [id, transcript] of Object.entries(transcripts)) {
@@ -87,9 +96,15 @@ async function call(method: string, params: any): Promise<any> {
     return {}
   }
   if (method === "projects.update") {
+    if (chatFixture.failProjectUpdate) throw new Error("The general role has no default model. Remove it and save again.")
     const project = state.projects[params.project_id]
-    return { ...project, ...(params.brief_in_all_threads === undefined ? {} : { brief_in_all_threads: params.brief_in_all_threads }) }
+    // `coordinator`: absent keeps the overrides, null clears them, an object replaces them.
+    const coordinator = "coordinator" in params ? { coordinator: params.coordinator ?? undefined } : {}
+    return { ...project, ...(params.brief_in_all_threads === undefined ? {} : { brief_in_all_threads: params.brief_in_all_threads }), ...coordinator }
   }
+  if (method === "settings.update") return params.settings
+  if (method === "usage.limits") return { providers: [] }
+  if (method === "providers.accounts.list") return { accounts: [] }
   if (method === "notes.list") return { notes: [...chatFixture.notes.values()].map(summary) }
   if (method === "notes.get") return { note: chatFixture.notes.get(params.id) ?? null }
   if (method === "notes.create") {

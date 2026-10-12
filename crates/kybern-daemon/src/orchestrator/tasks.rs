@@ -1053,7 +1053,7 @@ fn followup_saved_text(message: &UserMessage) -> Result<String> {
             ContentPart::ThreadReference { thread_id, title, .. } => {
                 text.push_str(&format!("\u{201c}{title}\u{201d} (thread {thread_id})"))
             }
-            ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } => {
+            ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } | ContentPart::SystemRow { .. } => {
                 return invalid(
                     "Messages from other agents cannot be saved as a task follow-up. Remove them to save this follow-up for the next run.",
                 );

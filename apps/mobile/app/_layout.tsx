@@ -349,6 +349,16 @@ function Navigation() {
           }}
         />
         <Stack.Screen
+          name="coordinator-model"
+          options={{
+            title: "Model",
+            presentation: "formSheet",
+            sheetAllowedDetents: sheetDetents,
+            sheetGrabberVisible: true,
+            ...androidSheet,
+          }}
+        />
+        <Stack.Screen
           name="note-move"
           options={{
             title: "Move note",

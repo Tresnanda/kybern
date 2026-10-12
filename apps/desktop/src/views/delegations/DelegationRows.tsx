@@ -21,6 +21,7 @@ import {
   type ChildPhase,
 } from "../../../../../packages/kybern-client/src/delegations.ts"
 import { delegateTitle, parseDelegateInput, parseDelegateResult } from "../../../../../packages/kybern-client/src/orchestrationTools.ts"
+import { defaultOverrideText } from "../../../../../packages/kybern-client/src/coordinatorSettings.ts"
 import type { Block } from "../../../../../packages/kybern-client/src/transcript.ts"
 import { ProviderMark } from "@/components/kybern/bits"
 import { ElapsedText } from "@/components/kybern/ElapsedText"
@@ -157,6 +158,10 @@ export const DelegationLaunchRow = memo(function DelegationLaunchRow({ block, le
   const [launch] = useLaunches(blocks)
   const parentKind = useParentProvider()
   const model = useLaunchModel(launch!, parentKind)
+  const providers = useStore((state) => state.providers)
+  const override = launch?.thread?.delegation?.default_override
+  // "Instead of the Sonnet 5.5 default: <reason>", when the Coordinator set its role's default aside.
+  const overrideText = useMemo(() => (override ? defaultOverrideText(override, providers) : null), [override, providers])
   if (!launch) return legacy
   const conflicts = conflictCount(launch)
   const span = clock(launch)
@@ -191,6 +196,9 @@ export const DelegationLaunchRow = memo(function DelegationLaunchRow({ block, le
         </span>
         {launch.threadId && <ChevronRightIcon className="size-3.5 shrink-0 text-foreground/40 transition-colors group-hover/dl:text-foreground" />}
       </button>
+      {overrideText && (
+        <p data-default-override="" className="sa-secondary -mt-0.5 ps-[30px] pe-1.5 pb-0.5 text-xs leading-[1.45] text-pretty text-foreground/45">{overrideText}</p>
+      )}
     </div>
   )
 })

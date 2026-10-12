@@ -49,6 +49,8 @@ import { setAskBeforeClose, useAskBeforeClose } from "@/state/closeGuard"
 import { errorText, refreshProviders, rpc } from "@/state/rpc"
 import { activeEnvironment } from "@/state/environments"
 import { useStore } from "@/state/store"
+import { AutonomyControl, PushField, RoleModelChip, WorkspaceControl } from "./coordinator/CoordinatorControls"
+import { COORDINATOR_ROLES, COORDINATOR_SETTINGS_COPY, autonomyHint, effectiveCoordinatorSettings, roleChip, withGlobalRoleDefault } from "../../../../packages/kybern-client/src/coordinatorSettings"
 
 type Tab = "general" | "agents" | "accounts" | "integrations" | "computer" | "appearance" | "notifications" | "background" | "about"
 
@@ -76,7 +78,7 @@ const SEARCH_TERMS: Record<Tab, string> = {
   general: "default agent permissions worktree thread titles close workspace notes global shared separate",
   notifications: "alerts sound permission work finishes fails input",
   background: "idle memory warm shells daemon battery power activity",
-  agents: "provider harness install updates claude codex cursor opencode pi omp profiles directory sdk",
+  agents: "provider harness install updates claude codex cursor opencode pi omp profiles directory sdk delegation coordinator autonomy models push pull request worktree",
   accounts: "accounts sign in sign out email plan default project override color usage claude codex cursor omp opencode pi work personal",
   integrations: "plugins connectors tools mcp skills sign in authentication",
   computer: "computer use cuadriver screen apps click type accessibility screen recording permissions cursor",
@@ -852,6 +854,7 @@ function AgentSettings() {
     </Section>
     {settings && <OmpProfiles settings={settings} update={update} />}
     {settings && <DelegationSection orchestration={settings.orchestration} onChange={(orchestration) => void update({ orchestration })} />}
+    {settings && <CoordinatorDefaultsSection settings={settings} onChange={(orchestration) => update({ orchestration })} />}
     <Section title="Installed agents">
       {providers.map((provider) => {
         const result = updates.find((item) => item.kind === provider.kind)
@@ -879,6 +882,53 @@ function DelegationSection({ orchestration, onChange }: { orchestration: Orchest
       <Row title="Delegation depth" description="1 lets only top-level threads delegate. 2 also lets their agents delegate again.">
         <LimitField label="Delegation depth" unit="levels" step={1} min={1} max={4} value={current.max_depth} onCommit={(value) => onChange({ ...current, max_depth: value })} />
       </Row>
+    </Section>
+  )
+}
+
+const DELEGATION_DEFAULTS: OrchestrationSettings = { max_active_children: 4, lead_max_children: 6, max_depth: 2 }
+
+/**
+ * The global Coordinator defaults: how freely it acts, where its agents work, whether it
+ * pushes without asking, and a model per kind of work. Each project can override them in
+ * its Project tab. Model chips say "Same as the Coordinator" when nothing is set.
+ */
+export function CoordinatorDefaultsSection({ settings, onChange }: { settings: Settings; onChange: (next: OrchestrationSettings) => Promise<void> }) {
+  const providers = useStore((s) => s.providers)
+  const current: OrchestrationSettings = { ...DELEGATION_DEFAULTS, ...settings.orchestration }
+  const effective = effectiveCoordinatorSettings(current, null)
+  const fallback = { kind: settings.default_provider, instance: "default" }
+  // Read the saved value when the change lands, so quick edits build on each other.
+  const latest = (): OrchestrationSettings => ({ ...DELEGATION_DEFAULTS, ...(useStore.getState().settings?.orchestration ?? current) })
+  return (
+    <Section title={COORDINATOR_SETTINGS_COPY.defaultsSection}>
+      <Row anchor="coordinator-defaults" title={COORDINATOR_SETTINGS_COPY.autonomy} description={autonomyHint(effective.lead_autonomy)}>
+        <AutonomyControl fill={false} value={effective.lead_autonomy} onChange={(lead_autonomy) => void onChange({ ...latest(), lead_autonomy })} />
+      </Row>
+      <Row title={COORDINATOR_SETTINGS_COPY.workspace} description="Where the Coordinator's agents edit when it doesn't choose. An own worktree keeps parallel work apart.">
+        <WorkspaceControl fill={false} value={effective.lead_workspace} onChange={(lead_workspace) => void onChange({ ...latest(), lead_workspace })} />
+      </Row>
+      <div className={cn(SETTINGS_CARD_ROW_CLASS_NAME, "settings-row py-4!")}>
+        <PushField checked={effective.lead_push_without_asking} onChange={(lead_push_without_asking) => void onChange({ ...latest(), lead_push_without_asking })} />
+      </div>
+      <Row title={COORDINATOR_SETTINGS_COPY.models} description="When the Coordinator delegates without choosing a model. Each project can override these in its Project tab." />
+      {COORDINATOR_ROLES.map(({ role, label }) => (
+        <Row key={role} title={label}>
+          <RoleModelChip
+            role={role}
+            roleLabel={label}
+            chip={roleChip(role, current, undefined, providers, "global")}
+            value={current.role_defaults?.[role] ?? null}
+            fallbackProvider={fallback}
+            defaultHint="Agents use the Coordinator's own harness and model"
+            className="max-w-64"
+            onChange={async (value) => {
+              await onChange(withGlobalRoleDefault(latest(), role, value))
+              return true
+            }}
+          />
+        </Row>
+      ))}
     </Section>
   )
 }

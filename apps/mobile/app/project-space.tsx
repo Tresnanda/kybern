@@ -7,7 +7,7 @@ import { useApp } from "../src/state/runtime";
 import { Empty, IconButton } from "../src/ui/primitives";
 import { useTheme } from "../src/ui/theme";
 
-/** The Coordinator's Project sheet: brief, setup, memory, and the brief switch. */
+/** The Coordinator's Project sheet: brief, setup, memory, Coordinator settings and the brief switch. */
 export default function ProjectSpaceScreen() {
   const { projectId } = useLocalSearchParams<{ projectId?: string }>();
   const app = useApp();

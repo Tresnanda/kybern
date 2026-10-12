@@ -463,6 +463,17 @@ expression: schema_for!(Thread)
           "$ref": "#/$defs/DelegationWorkspace",
           "default": "shared"
         },
+        "default_override": {
+          "description": "Set when a Coordinator chose another harness or model than the default\nconfigured for this child's role.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DefaultOverride"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "owns": {
           "description": "Globs relative to the checkout root this child owns (shared only).",
           "type": "array",
@@ -592,6 +603,29 @@ expression: schema_for!(Thread)
           "type": "string",
           "const": "worktree"
         }
+      ]
+    },
+    "DefaultOverride": {
+      "description": "A Coordinator delegation that used another harness or model than the\ndefault configured for its role. `provider` and `model` are the default that\nwas set aside (the child's own are on its thread), so a client can write\n\"Claude Opus 5.5 · instead of the Sonnet default: <reason>\".",
+      "type": "object",
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/ProviderInstance"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "The Coordinator's reason, as it passed it in `override_reason`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "reason"
       ]
     },
     "DelegationStatus": {

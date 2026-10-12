@@ -8,6 +8,8 @@ import { computerConsent, connectorApproval, isUserInput, notesTasksConsent, par
 import { agentItemLabel, agentItemResultText, agentItemTool, agentItemWriteResult, parseAgentItemResult, placeItemCards, type AgentItemTool, type AgentItemWrite } from "@/lib/agentItemTools"
 import { VisualReply } from "./VisualReply"
 import { SecretRequestLine } from "./SecretRequestPanel"
+import { CoordinatorCardLine, SystemRowLine } from "./coordinator/CoordinatorRows"
+import { coordinatorCardKind, coordinatorCardLine } from "../../../../packages/kybern-client/src/coordinatorCards"
 import { secretRequestInput } from "../../../../packages/kybern-client/src/secretRequest"
 import { AgentItemCard } from "./AgentItemCard"
 import { openNote } from "@/state/notes"
@@ -1089,7 +1091,9 @@ function UserBubble({ message, at, attribution, clampLines }: { message: { parts
   const resultItems = agentResultItems(message.parts)
   if (resultItems) return <AgentResultsCard items={resultItems} at={at} />
   const clampedNow = !!clampLines && !expanded && overflowing
-  return (
+  // Kybern's own row ("Setup started") sits above the user's words, never inside a bubble.
+  const systemRow = message.parts.find((part): part is Extract<ContentPart, { type: "system_row" }> => part.type === "system_row")
+  const bubble = (
     <div className={cn("flex w-full justify-end", fresh && "chat-message-send-enter")}>
       <div className="group relative flex max-w-[80%] flex-col items-end gap-px">
           {attribution && (
@@ -1144,6 +1148,13 @@ function UserBubble({ message, at, attribution, clampLines }: { message: { parts
             </div>
           </div>
       </div>
+    </div>
+  )
+  if (!systemRow) return bubble
+  return (
+    <div className="flex flex-col gap-5">
+      <SystemRowLine text={systemRow.text} kind={systemRow.kind} />
+      {(text || files.length > 0) && bubble}
     </div>
   )
 }
@@ -1527,6 +1538,9 @@ const WorkRow = memo(function WorkRow({
       {
         const secret = secretRequestInput(block.approval)
         if (secret) return <SecretRequestLine input={secret} decision={block.decision} style={CHAT_FONT} />
+        const cardKind = coordinatorCardKind(block.approval)
+        const cardLine = cardKind ? coordinatorCardLine(block.approval, block.decision) : null
+        if (cardKind && cardLine) return <CoordinatorCardLine kind={cardKind} parts={cardLine} decision={block.decision} style={CHAT_FONT} />
         const text = approvalRowText(block.approval, block.decision)
         return (
           <div className="rounded-lg py-1">

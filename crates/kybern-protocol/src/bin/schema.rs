@@ -141,6 +141,7 @@ fn main() {
     method::<DelegationsWorktreeRemove>(&mut methods);
     method::<CoordinatorGet>(&mut methods);
     method::<CoordinatorOpen>(&mut methods);
+    method::<CoordinatorSetup>(&mut methods);
     method::<CoordinatorSwitchHarness>(&mut methods);
     method::<TasksList>(&mut methods);
     method::<TaskStop>(&mut methods);

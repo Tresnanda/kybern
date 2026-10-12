@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -8,6 +9,7 @@ use chrono::{DateTime, Utc};
 use kybern_drivers::registry::DriverRegistry;
 use kybern_protocol::{ProviderStatus, ThreadEvent};
 use kybern_store::Store;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, broadcast};
 use tokio_util::sync::CancellationToken;
 
@@ -166,9 +168,108 @@ const MAX_PROVIDER_CATALOGS: usize = 32;
 pub struct ProviderCatalogCache {
     entries: Mutex<HashMap<String, CachedProviderCatalog>>,
     refresh: Mutex<()>,
+    last_known: std::sync::Mutex<LastKnown>,
+}
+
+/// Most projects whose last catalog is kept on disk.
+const MAX_KNOWN_CATALOGS: usize = 16;
+
+/// The last catalog that listed models for a project, kept across restarts so a
+/// slow probe can still be answered (see [`ProviderCatalogCache::last_known`]).
+#[derive(Default)]
+struct LastKnown {
+    file: Option<PathBuf>,
+    loaded: bool,
+    projects: HashMap<String, KnownCatalog>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct KnownCatalog {
+    saved_at: DateTime<Utc>,
+    providers: Vec<ProviderStatus>,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct KnownCatalogsFile {
+    #[serde(default)]
+    projects: HashMap<String, KnownCatalog>,
+}
+
+/// Write `saved` to `file` through a temporary file, so a crash never leaves half of it.
+fn write_known_catalogs(file: &std::path::Path, saved: &KnownCatalogsFile) -> Result<()> {
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let temporary = file.with_extension(format!("json.tmp-{}", uuid::Uuid::now_v7().simple()));
+    std::fs::write(&temporary, serde_json::to_vec(saved)?)?;
+    std::fs::rename(&temporary, file).inspect_err(|_| {
+        let _ = std::fs::remove_file(&temporary);
+    })?;
+    Ok(())
 }
 
 impl ProviderCatalogCache {
+    /// A cache that also keeps each project's last good catalog in `file`.
+    pub fn with_disk(file: PathBuf) -> Self {
+        Self { last_known: std::sync::Mutex::new(LastKnown { file: Some(file), ..Default::default() }), ..Default::default() }
+    }
+
+    fn known(&self) -> std::sync::MutexGuard<'_, LastKnown> {
+        let mut known = self.last_known.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !known.loaded {
+            known.loaded = true;
+            if let Some(file) = known.file.clone() {
+                match std::fs::read(&file) {
+                    Ok(bytes) => match serde_json::from_slice::<KnownCatalogsFile>(&bytes) {
+                        Ok(saved) => known.projects = saved.projects,
+                        Err(error) => tracing::warn!(%error, file = %file.display(), "ignoring an unreadable provider catalog cache"),
+                    },
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => tracing::warn!(%error, file = %file.display(), "could not read the provider catalog cache"),
+                }
+            }
+        }
+        known
+    }
+
+    /// Keep `providers` as the project's last good catalog. A probe that found
+    /// no harness with models (everything still loading, or all failed) never
+    /// replaces a catalog that had some.
+    pub fn remember(&self, project_key: &str, providers: &[ProviderStatus]) {
+        if !providers.iter().any(|status| status.available && !status.models.is_empty()) {
+            return;
+        }
+        let (file, saved) = {
+            let mut known = self.known();
+            known.projects.insert(project_key.to_owned(), KnownCatalog { saved_at: Utc::now(), providers: providers.to_vec() });
+            while known.projects.len() > MAX_KNOWN_CATALOGS {
+                let Some(oldest) = known.projects.iter().min_by_key(|(_, catalog)| catalog.saved_at).map(|(key, _)| key.clone()) else {
+                    break;
+                };
+                known.projects.remove(&oldest);
+            }
+            (known.file.clone(), KnownCatalogsFile { projects: known.projects.clone() })
+        };
+        let Some(file) = file else { return };
+        let write = move || {
+            if let Err(error) = write_known_catalogs(&file, &saved) {
+                tracing::warn!(%error, file = %file.display(), "could not save the provider catalog cache");
+            }
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn_blocking(write);
+            }
+            Err(_) => write(),
+        }
+    }
+
+    /// The project's last good catalog and when it was taken, from this run or
+    /// an earlier one.
+    pub fn last_known(&self, project_key: &str) -> Option<(Vec<ProviderStatus>, DateTime<Utc>)> {
+        self.known().projects.get(project_key).map(|catalog| (catalog.providers.clone(), catalog.saved_at))
+    }
+
     pub async fn invalidate(&self) {
         self.entries.lock().await.clear();
     }

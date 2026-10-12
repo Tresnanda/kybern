@@ -18,6 +18,8 @@ import { splitChecklistPreview } from "@/lib/agentItemTools"
 import { UserInputPanel } from "./UserInputPanel"
 import { SecretRequestPanel } from "./SecretRequestPanel"
 import { secretRequestInput } from "../../../../packages/kybern-client/src/secretRequest"
+import { BriefProposalPanel, GitApprovalPanel, SettingsProposalPanel } from "./coordinator/CoordinatorCards"
+import { briefProposalInput, leadGitCardInput, settingsProposalInput } from "../../../../packages/kybern-client/src/coordinatorCards"
 import { TextSwap } from "@/components/kybern/motion"
 // Thread route: Header (provider glyph, title, Hand off,
 // actions, dock toggle), the transcript scrolling under the frosted composer,
@@ -275,11 +277,18 @@ export function ThreadView({
   const connector = approval ? connectorApproval(approval) : null
   // A secret request has its own field; the digit shortcuts never answer it.
   const secretRequest = approval ? secretRequestInput(approval) : null
+  // The Coordinator's brief and settings proposals are forms of their own, like a secret request.
+  const briefProposal = approval ? briefProposalInput(approval) : null
+  const settingsProposal = approval ? settingsProposalInput(approval) : null
+  const gitCard = approval ? leadGitCardInput(approval) : null
+  const ownForm = !!secretRequest || !!briefProposal || !!settingsProposal
   // A subagent thread is read-only; the subagent page replaces the composer with its own bar.
-  const hideInput = (!!approval && ((isUserInput(approval) && !connector) || !!secretRequest)) || !!thread?.subagent
+  const hideInput = (!!approval && ((isUserInput(approval) && !connector) || ownForm)) || !!thread?.subagent
 
   const answer = (n: number): boolean => {
-    if (!approval || secretRequest || (isUserInput(approval) && !connector) || (approval.tool_name === "ExitPlanMode" && n === 2)) return false
+    if (!approval || ownForm || (isUserInput(approval) && !connector) || (approval.tool_name === "ExitPlanMode" && n === 2)) return false
+    // Each git card covers one action: no "for this session", and a merge only from its own button.
+    if (gitCard && (n === 2 || (n === 1 && gitCard.op === "merge_pr"))) return false
     const decision = connector
       ? n === 1
         ? ({ decision: "submit", response: connectorApprovalResponse(connector.persist.includes("session") ? "session" : null) } as const)
@@ -494,7 +503,11 @@ export function ThreadView({
                   {queued.length > 0 && <QueuedPanel threadId={threadId} />}
                   {!approval && questions[0] && <AsyncQuestionPanel key={questions[0].id} threadId={threadId} request={questions[0]} count={questions.length} />}
                   {approval && (
-                    secretRequest ? <SecretRequestPanel key={approval.id} approval={approval} input={secretRequest} count={pending.length} /> : connector ? <ConnectorApprovalPanel key={approval.id} approval={approval} connector={connector} count={pending.length} onChoose={answer} /> : notesTasksConsent(approval) ? <NotesTasksApprovalPanel key={approval.id} consent={notesTasksConsent(approval)!} count={pending.length} onChoose={answer} /> : computerConsent(approval) ? <ComputerApprovalPanel key={approval.id} consent={computerConsent(approval)!} count={pending.length} onChoose={answer} onAlways={() => respondApproval(approval.id, { decision: "submit", response: { scope: "always" } }).catch((e) => toast.error("Unable to respond", { description: errorText(e) }))} /> : isUserInput(approval) ? <UserInputPanel key={approval.id} approval={approval} count={pending.length} /> : <ApprovalPanel key={approval.id} approval={approval} count={pending.length} onChoose={answer} />
+                    secretRequest ? <SecretRequestPanel key={approval.id} approval={approval} input={secretRequest} count={pending.length} />
+                      : briefProposal ? <BriefProposalPanel key={approval.id} approval={approval} input={briefProposal} count={pending.length} />
+                      : settingsProposal ? <SettingsProposalPanel key={approval.id} approval={approval} input={settingsProposal} count={pending.length} />
+                      : gitCard ? <GitApprovalPanel key={approval.id} approval={approval} input={gitCard} count={pending.length} onChoose={answer} />
+                      : connector ? <ConnectorApprovalPanel key={approval.id} approval={approval} connector={connector} count={pending.length} onChoose={answer} /> : notesTasksConsent(approval) ? <NotesTasksApprovalPanel key={approval.id} consent={notesTasksConsent(approval)!} count={pending.length} onChoose={answer} /> : computerConsent(approval) ? <ComputerApprovalPanel key={approval.id} consent={computerConsent(approval)!} count={pending.length} onChoose={answer} onAlways={() => respondApproval(approval.id, { decision: "submit", response: { scope: "always" } }).catch((e) => toast.error("Unable to respond", { description: errorText(e) }))} /> : isUserInput(approval) ? <UserInputPanel key={approval.id} approval={approval} count={pending.length} /> : <ApprovalPanel key={approval.id} approval={approval} count={pending.length} onChoose={answer} />
                   )}
                 </ComposerPanelStack>
               }

@@ -26,6 +26,8 @@ mod accounts;
 mod agent_items;
 mod delegation;
 mod lead;
+mod lead_git;
+mod lead_proposals;
 mod messaging;
 mod notes;
 mod omp_recovery;
@@ -72,6 +74,7 @@ impl Orchestrator {
         let settings = self.inner.settings.get();
         let cache_key = serde_json::to_string(&(Some(project_id), Some(&cwd), &settings.providers))?;
         let drivers = self.inner.drivers.clone();
+        let catalogs = self.inner.provider_catalogs.clone();
         Ok(self
             .inner
             .provider_catalogs
@@ -105,7 +108,10 @@ impl Orchestrator {
                         }
                     }
                 });
-                futures::future::join_all(probes).await
+                let statuses = futures::future::join_all(probes).await;
+                // Keep it for a slow probe later, and across restarts.
+                catalogs.remember(&project_id.to_string(), &statuses);
+                statuses
             })
             .await)
     }
@@ -279,6 +285,12 @@ impl Orchestrator {
             }
             if crate::secrets::is_tool(name) {
                 return self.execute_request_secret(&thread, turn_id, &live, arguments).await;
+            }
+            if crate::lead_git::is_tool(name) {
+                return self.execute_lead_git(&thread, turn_id, &live, arguments).await;
+            }
+            if lead_proposals::is_tool(name) {
+                return self.execute_lead_tool(&thread, turn_id, &live, name, arguments).await;
             }
             if agent_items::is_tool(name) {
                 return self.execute_notes_tasks_tool(&thread, turn_id, &live, name, arguments).await;
@@ -461,6 +473,8 @@ struct Inner {
     delegation: delegation::DelegationState,
     /// Orchestrator V2 messaging engine state (blocked askers, owed answers, edit guards).
     messaging: messaging::MessagingState,
+    /// Test hooks for the Coordinator's git tool (the `gh` program, git environment).
+    lead_git: crate::lead_git::LeadGitConfig,
 }
 
 struct LiveSession {
@@ -507,6 +521,8 @@ struct LiveSession {
     app_tool_permits: Arc<Semaphore>,
     /// Project brief revision this session's instructions carry; only a Coordinator tracks it.
     brief_revision: Mutex<Option<i64>>,
+    /// The Coordinator settings this session was last told; only a Coordinator tracks them.
+    lead_settings: Mutex<Option<EffectiveCoordinatorSettings>>,
 }
 
 struct DaemonApproval {
@@ -692,6 +708,7 @@ impl Orchestrator {
     ) -> Self {
         let app_tools = crate::app_tools::AppTools::new(store.clone(), crate::terminal::TerminalManager::default());
         let computer = crate::computer::ComputerUse::new(settings.clone());
+        let catalog_file = paths.root.join("cache").join("provider-catalogs.json");
         let usage = crate::usage::UsageMonitor::new(store.clone(), settings.clone());
         let task_threads = store.task_run_thread_ids().map(|ids| ids.into_iter().collect::<HashSet<_>>()).unwrap_or_else(|error| {
             tracing::warn!(%error, "could not load the threads that run tasks");
@@ -710,7 +727,7 @@ impl Orchestrator {
                 events,
                 paths,
                 settings,
-                provider_catalogs: Arc::new(crate::state::ProviderCatalogCache::default()),
+                provider_catalogs: Arc::new(crate::state::ProviderCatalogCache::with_disk(catalog_file)),
                 app_tools,
                 native_tools: None,
                 computer,
@@ -734,6 +751,7 @@ impl Orchestrator {
                 subagents: std::sync::Mutex::new(Default::default()),
                 delegation: Default::default(),
                 messaging: Default::default(),
+                lead_git: Default::default(),
             }),
         }
     }
@@ -1166,6 +1184,7 @@ impl Orchestrator {
             worktrees_default: None,
             task_prefix: None,
             brief_in_all_threads: false,
+            coordinator: None,
             created_at: now,
             updated_at: now,
         };
@@ -1389,6 +1408,7 @@ impl Orchestrator {
             worktrees_default: Some(false),
             task_prefix: None,
             brief_in_all_threads: false,
+            coordinator: None,
             created_at: now,
             updated_at: now,
         };
@@ -1901,14 +1921,35 @@ impl Orchestrator {
                         tracing::warn!(thread_id = %thread.id, %error, "could not check the project brief for changes");
                         None
                     });
-                    let provider_message = self.provider_message(&workspace_message, &live);
-                    let provider_message = match &brief_update {
-                        Some((_, update)) => std::borrow::Cow::Owned(lead::with_brief_update(&provider_message, update)),
-                        None => provider_message,
+                    // The same goes for a change to the Coordinator's settings.
+                    let settings_update = self.lead_settings_update(&thread, &live).await.unwrap_or_else(|error| {
+                        tracing::warn!(thread_id = %thread.id, %error, "could not check the Coordinator settings for changes");
+                        None
+                    });
+                    // A setup kickoff is a row for clients; the provider gets the script.
+                    let kickoff = self.setup_provider_message(&thread, &workspace_message).unwrap_or_else(|error| {
+                        tracing::warn!(thread_id = %thread.id, %error, "could not prepare the setup kickoff");
+                        None
+                    });
+                    let provider_message = self.provider_message(kickoff.as_ref().unwrap_or(&workspace_message), &live);
+                    let updates: Vec<&str> =
+                        [brief_update.as_ref().map(|(_, text)| text.as_str()), settings_update.as_ref().map(|(_, text)| text.as_str())]
+                            .into_iter()
+                            .flatten()
+                            .collect();
+                    let provider_message = if updates.is_empty() {
+                        provider_message
+                    } else {
+                        std::borrow::Cow::Owned(lead::with_brief_update(&provider_message, &updates.join("\n\n")))
                     };
                     let sent = live.session.send_message(&message_id.to_string(), &provider_message).await;
-                    if let (Ok(()), Some((revision, _))) = (&sent, brief_update) {
-                        self.lead_brief_seen(&live, revision).await;
+                    if sent.is_ok() {
+                        if let Some((revision, _)) = brief_update {
+                            self.lead_brief_seen(&live, revision).await;
+                        }
+                        if let Some((settings, _)) = settings_update {
+                            self.lead_settings_seen(&live, settings).await;
+                        }
                     }
                     sent
                 }
@@ -2744,6 +2785,7 @@ impl Orchestrator {
         let restrictions = self.native_tool_restrictions(thread)?;
         let instructions = self.session_instructions(thread)?;
         let brief_revision = instructions.as_ref().map(|instructions| instructions.brief_revision);
+        let lead_settings = instructions.as_ref().and_then(|instructions| instructions.lead_settings.clone());
         let coordinator_instructions = instructions.map(|instructions| instructions.text);
         let computer_tools = self.computer_tools_offered(thread, &restrictions);
         let native_tool_bridge = self
@@ -2752,8 +2794,15 @@ impl Orchestrator {
             .as_ref()
             .map(|gateway| {
                 let mut tools = crate::app_tools::native_tool_definitions();
+                if thread.coordinator_project_id.is_some() {
+                    // Only the project Coordinator is offered the git tool.
+                    tools.push(crate::lead_git::tool_definition());
+                }
                 if self.inner.computer.offered_to(thread.provider.kind) {
                     tools.extend(crate::computer::ComputerUse::tool_definitions());
+                }
+                if thread.coordinator_project_id.is_some() {
+                    tools.extend(lead_proposals::tool_definitions());
                 }
                 let guide = self.agent_guide(&tools, &restrictions);
                 gateway.register_coordinator(thread.id, session_instance_id, tools, restrictions, coordinator_instructions, guide)
@@ -2810,6 +2859,7 @@ impl Orchestrator {
             app_tool_requests: Mutex::new(HashSet::new()),
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
             brief_revision: Mutex::new(None),
+            lead_settings: Mutex::new(None),
         });
         self.inner.store.meta_set_many(&[
             (&format!("live_fingerprint:{}", thread.id), &self.environment_fingerprint(thread)?),
@@ -2817,6 +2867,7 @@ impl Orchestrator {
             (&format!("live_owner:{}", thread.id), &serde_json::to_string(&thread.provider)?),
         ])?;
         *live.brief_revision.lock().await = brief_revision;
+        *live.lead_settings.lock().await = lead_settings;
         self.inner.sessions.lock().await.insert(thread.id, live.clone());
         let this = self.clone();
         let thread_id = thread.id;
@@ -3226,7 +3277,9 @@ impl Orchestrator {
             let mut result = if this.owns_app_tool_turn(thread_id, &live, Some(turn_id)).await.is_none() {
                 Err("app tool request is stale".to_string())
             } else {
-                let timeout = if let Some(budget) = crate::secrets::call_budget(&name, &arguments) {
+                let timeout = if let Some(budget) =
+                    crate::secrets::call_budget(&name, &arguments).or_else(|| crate::lead_git::call_budget(&name, &arguments))
+                {
                     budget
                 } else if delegation::BLOCKING_TOOLS.contains(&name.as_str())
                     || (name == "kybern_thread_send" && arguments.get("wait_for_reply").and_then(serde_json::Value::as_bool) == Some(true))
@@ -4303,6 +4356,7 @@ mod tests {
             worktrees_default: None,
             task_prefix: None,
             brief_in_all_threads: false,
+            coordinator: None,
             created_at: now,
             updated_at: now,
         };
@@ -4393,6 +4447,7 @@ mod tests {
             app_tool_requests: Mutex::new(HashSet::new()),
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
             brief_revision: Mutex::new(None),
+            lead_settings: Mutex::new(None),
         });
         orchestrator
             .handle_driver_event(
@@ -4676,6 +4731,7 @@ mod tests {
                 worktrees_default: None,
                 task_prefix: None,
                 brief_in_all_threads: false,
+                coordinator: None,
                 created_at: now,
                 updated_at: now,
             };
@@ -4752,6 +4808,7 @@ mod tests {
                 app_tool_requests: Mutex::new(HashSet::new()),
                 app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
                 brief_revision: Mutex::new(None),
+                lead_settings: Mutex::new(None),
             });
             self.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
             (live, closes, messages)
@@ -4785,6 +4842,7 @@ mod tests {
                 app_tool_requests: Mutex::new(HashSet::new()),
                 app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
                 brief_revision: Mutex::new(None),
+                lead_settings: Mutex::new(None),
             });
             self.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
             self.orchestrator.send(thread.id, UserMessage::text("inspect workspace")).await.unwrap();
@@ -7265,6 +7323,7 @@ for line in sys.stdin:
             app_tool_requests: Mutex::new(HashSet::new()),
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
             brief_revision: Mutex::new(None),
+            lead_settings: Mutex::new(None),
         });
         fixture.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
         fixture.orchestrator.send(thread.id, UserMessage::text("delegate")).await.unwrap();
@@ -7318,7 +7377,10 @@ for line in sys.stdin:
 
     include!("orchestrator/delegation_tests.rs");
     include!("orchestrator/secret_tests.rs");
+    include!("orchestrator/lead_git_tests.rs");
+    include!("orchestrator/capabilities_tests.rs");
     include!("orchestrator/lead_tests.rs");
+    include!("orchestrator/lead_setup_tests.rs");
     include!("orchestrator/messaging_tests.rs");
     include!("orchestrator/account_tests.rs");
     include!("orchestrator/worktree_tests.rs");

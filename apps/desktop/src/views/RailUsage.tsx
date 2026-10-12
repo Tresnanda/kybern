@@ -21,7 +21,7 @@ import { accountsOfKind, limitsForAccount } from "@/lib/accountUi"
 import { CLI_INSTANCE, isCliInstance } from "@/lib/accounts"
 import { useNow } from "@/lib/hooks"
 import { CheckIcon, PlusIcon } from "@/lib/kit/icons"
-import { PROVIDER_NAMES, bindingLimit, limitLabel, limitLeftLabel, limitPace, limitTone, limitUsed, limitsStale, resetIn, staleReason, updatedAgo } from "@/lib/providerUsage"
+import { PROVIDER_NAMES, bindingLimit, limitLabel, limitLeftLabel, limitPace, limitTone, limitUsed, limitsStale, resetIn, staleCaption, updatedAgo } from "@/lib/providerUsage"
 import { cn } from "@/lib/utils"
 import type { AccountSummary, ProviderKind, ProviderLimits } from "@/protocol"
 import { refreshAccounts, updateProviderSettings, useAccounts, useDefaultAccount } from "@/state/accounts"
@@ -41,6 +41,8 @@ export function RailUsage() {
     <div role="group" aria-label="Plan usage" className="flex flex-col items-center gap-1.5">
       {glance.map(({ entry, used }) => {
         const name = PROVIDER_NAMES[entry.provider] ?? entry.provider
+        // A stale ring stays, dimmed, and says why; the card repeats it on hover.
+        const caption = staleCaption(entry, now)
         return (
           <PopoverTrigger
             key={entry.provider}
@@ -52,13 +54,13 @@ export function RailUsage() {
             render={
               <button
                 type="button"
-                aria-label={used === null ? `${name}: not read since reset` : `${name}: ${Math.round(100 - used)}% left`}
+                aria-label={`${used === null ? `${name}: not read since reset` : `${name}: ${Math.round(100 - used)}% left`}${caption ? `. ${caption}` : ""}`}
                 data-testid={`rail-usage-${entry.provider}`}
                 className="press relative inline-flex size-9 cursor-pointer items-center justify-center rounded-[10px] outline-hidden hover:bg-[var(--app-rail-hover)] focus-visible:ring-1 focus-visible:ring-ring data-popup-open:bg-[var(--app-rail-hover)]"
               />
             }
           >
-            <DefaultRing kind={entry.provider} left={used === null ? null : 100 - used} tone={limitTone(used)} stale={used === null || limitsStale(entry, now)} />
+            <DefaultRing kind={entry.provider} left={used === null ? null : 100 - used} tone={limitTone(used)} stale={used === null || limitsStale(entry, now)} reason={entry.stale ?? null} />
           </PopoverTrigger>
         )
       })}
@@ -74,14 +76,14 @@ export function RailUsage() {
 }
 
 /** The ring of the default account; a colored default also wears its dot. */
-function DefaultRing({ kind, left, tone, stale }: { kind: ProviderKind; left: number | null; tone: ReturnType<typeof limitTone>; stale: boolean }) {
+function DefaultRing({ kind, left, tone, stale, reason }: { kind: ProviderKind; left: number | null; tone: ReturnType<typeof limitTone>; stale: boolean; reason?: string | null }) {
   const color = useDefaultAccount(kind)?.color
-  return <UsageRing kind={kind} left={left} tone={tone} stale={stale} color={color} />
+  return <UsageRing kind={kind} left={left} tone={tone} stale={stale} reason={reason} color={color} />
 }
 
-function UsageRing({ kind, left, tone, stale, color }: { kind: ProviderKind; left: number | null; tone: ReturnType<typeof limitTone>; stale: boolean; color?: string | null }) {
+function UsageRing({ kind, left, tone, stale, reason, color }: { kind: ProviderKind; left: number | null; tone: ReturnType<typeof limitTone>; stale: boolean; reason?: string | null; color?: string | null }) {
   return (
-    <span className="rail-usage-ring" data-usage-tone={tone} data-stale={stale || undefined}>
+    <span className="rail-usage-ring" data-usage-tone={tone} data-stale={stale || undefined} data-stale-reason={reason || undefined}>
       <svg aria-hidden viewBox="0 0 24 24" className="size-6 -rotate-90" fill="none">
         <circle cx="12" cy="12" r="10.25" strokeWidth="2" className="rail-usage-track" />
         {left !== null && <circle cx="12" cy="12" r="10.25" strokeWidth="2" pathLength="100" strokeDasharray="100 100" strokeDashoffset={100 - left} strokeLinecap="round" className="rail-usage-arc" />}
@@ -128,7 +130,7 @@ function AccountsUsageCard({ kind }: { kind: ProviderKind }) {
     }
   }
   const name = PROVIDER_NAMES[kind] ?? kind
-  const reason = entry ? staleReason(entry, now) : null
+  const caption = entry ? staleCaption(entry, now) : null
   return (
     <div className="provider-usage-content flex flex-col gap-3">
       <div className="flex items-center gap-2">
@@ -151,8 +153,7 @@ function AccountsUsageCard({ kind }: { kind: ProviderKind }) {
       )}
       {entry && (
         <div className="flex flex-col gap-0.5 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground" aria-live="polite">
-          <p>{freshness(entry, refreshing, now)}</p>
-          {!refreshing && reason && <p>{reason}</p>}
+          <p data-limits-caption="">{!refreshing && caption ? caption : freshness(entry, refreshing, now)}</p>
         </div>
       )}
       <div aria-hidden className="-mx-1 h-px bg-[color-mix(in_srgb,var(--foreground)_7%,transparent)]" />

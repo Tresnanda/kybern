@@ -14,7 +14,12 @@ import { useEnvironments } from "../src/state/environments"
 import { emptyThreadState } from "../src/state/transcript"
 import { chatFixture, fixtureConnection } from "./chat-coordinator-rpc"
 import { attachEnvFeed } from "../src/state/notes"
-import type { ApprovalRequest, Note, Thread, Project, ProviderStatus } from "../src/protocol"
+import { CoordinatorDefaultsSection, useSettings } from "../src/views/SettingsScreen"
+import { RailUsage } from "../src/views/RailUsage"
+import { Toaster } from "../src/components/ui/sonner"
+import { toast } from "sonner"
+import { useUsageLimits } from "../src/state/usageLimits"
+import type { ApprovalRequest, Note, Thread, Project, ProviderStatus, Settings } from "../src/protocol"
 import "../src/index.css"
 
 const query = new URLSearchParams(location.search)
@@ -27,6 +32,8 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 const results = (value: unknown) => {
   const target = window as unknown as { __chatCoordinatorResults?: unknown[]; webkit?: { messageHandlers?: { bench?: { postMessage: (value: string) => void } } } }
   ;(target.__chatCoordinatorResults ??= []).push(value)
+  // A browser without the native bench handler reads the outcome from the page.
+  document.documentElement.dataset.fixtureResults = JSON.stringify(target.__chatCoordinatorResults)
   target.webkit?.messageHandlers?.bench?.postMessage(JSON.stringify(value))
 }
 const sampleMemory = (stage: string) => new Promise<void>((resolve) => {
@@ -42,7 +49,19 @@ const shot = (name: string) => new Promise<void>((resolve) => {
   }
   const target = window as unknown as { __screenshotContinue?: () => void; webkit?: { messageHandlers?: { bench?: { postMessage: (value: string) => void } } } }
   target.__screenshotContinue = resolve
-  if (!target.webkit?.messageHandlers?.bench) return resolve()
+  if (!target.webkit?.messageHandlers?.bench) {
+    // `?shots=1` in a plain browser: name the shot on the page and wait for a driver to
+    // take it and press the continue control (headless runs while macOS is locked).
+    if (query.get("shots") !== "1") return resolve()
+    document.documentElement.dataset.shot = `${name}-${theme}`
+    const next = document.createElement("button")
+    next.id = "fixture-continue"
+    next.textContent = "Continue"
+    next.style.cssText = "position:fixed;right:0;bottom:0;width:4px;height:4px;opacity:0.01;z-index:2147483647;padding:0;border:0"
+    next.onclick = () => { next.remove(); delete document.documentElement.dataset.shot; resolve() }
+    document.body.append(next)
+    return
+  }
   target.webkit.messageHandlers.bench.postMessage(JSON.stringify({ screenshot: `${name}-${theme}` }))
 })
 const projectNote = (id: string, title: string, body: string, updated: string, extra: Partial<Note> = {}): Note => ({ id, scope: "project", project_id: "project-0", title, body, preview: body.replace(/[#*`]/g, "").slice(0, 240), checklist: { done: 0, total: 0 }, pinned: false, revision: 1, created_at: updated, updated_at: updated, ...extra })
@@ -62,7 +81,7 @@ const threads: Record<string, Thread> = {
   other: thread("other", "Authentication decisions", { project_id: "project-1", provider: { kind: "codex", instance: "default" } }),
 }
 const providers: ProviderStatus[] = [
-  { kind: "claude-code", display_name: "Claude Code", available: true, supported_permission_modes: ["supervised", "full-access"], supports_fork: true, supports_model_switch: true, instances: ["default"], models: [{ id: "default", display_name: "Default model", is_default: true }] },
+  { kind: "claude-code", display_name: "Claude Code", available: true, supported_permission_modes: ["supervised", "full-access"], supports_fork: true, supports_model_switch: true, instances: ["default"], models: [{ id: "default", display_name: "Default model", is_default: true }, { id: "claude-opus-5-5", display_name: "Opus 5.5", efforts: ["medium", "high"] }, { id: "claude-sonnet-5-5", display_name: "Sonnet 5.5" }] },
   { kind: "codex", display_name: "Codex", available: true, supported_permission_modes: ["supervised", "full-access"], supports_fork: true, supports_model_switch: true, instances: ["default"], models: [{ id: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", is_default: true }] },
   { kind: "cursor", display_name: "Cursor", available: true, supported_permission_modes: ["supervised", "full-access"], supports_fork: true, supports_model_switch: true, instances: ["default"], models: [{ id: "auto", display_name: "Auto", is_default: true }] },
   { kind: "opencode", display_name: "OpenCode", available: true, supported_permission_modes: ["supervised", "full-access"], supports_fork: true, supports_model_switch: true, instances: ["default"], models: [{ id: "default", display_name: "Default model", is_default: true }] },
@@ -84,7 +103,7 @@ function Shell() {
   const selected = useStore((state) => state.selected)
   const rightOpen = useStore((state) => state.rightOpen)
   const id = selected.kind === "thread" ? selected.id : null
-  return <ThemeProviderContext value={{ theme, translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><SidebarProvider><Sidebar><ThreadSidebar /></Sidebar><main className="flex h-screen min-w-0 flex-1 flex-col">{selected.kind === "draft" ? <Draft key={`${selected.draft.projectId}:${selected.draft.purpose}`} projectId={selected.draft.projectId} purpose={selected.draft.purpose} /> : <ThreadView key={id ?? "main"} threadId={id ?? "main"} />}</main>{rightOpen && <aside className="h-screen w-[440px] border-s border-[color:var(--app-surface-divider)]"><RightPanel threadId={id} /></aside>}</SidebarProvider></ThemeProviderContext>
+  return <ThemeProviderContext value={{ theme, translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><Toaster /><SidebarProvider><Sidebar><ThreadSidebar /></Sidebar><main className="flex h-screen min-w-0 flex-1 flex-col">{selected.kind === "draft" ? <Draft key={`${selected.draft.projectId}:${selected.draft.purpose}`} projectId={selected.draft.projectId} purpose={selected.draft.purpose} /> : <ThreadView key={id ?? "main"} threadId={id ?? "main"} />}</main>{rightOpen && <aside className="h-screen w-[440px] border-s border-[color:var(--app-surface-divider)]"><RightPanel threadId={id} /></aside>}</SidebarProvider></ThemeProviderContext>
 }
 async function run() {
   const root = document.documentElement
@@ -224,7 +243,7 @@ async function run() {
   if (findButton("Create coordinator")) await click("Create coordinator")
   else useStore.getState().selectDraft("project-0", "coordinator")
   await sleep(850)
-  const coordinatorDraftInert = document.body.textContent?.includes("What should we work on in") && document.body.textContent?.includes("Your first message becomes the project brief") && chatFixture.coordinatorCreates === 0 && chatFixture.sent.length === 1
+  const coordinatorDraftInert = document.body.textContent?.includes("What should we work on in") && document.body.textContent?.includes("Tell the Coordinator about this project. It asks a few questions to set itself up.") && chatFixture.coordinatorCreates === 0 && chatFixture.sent.length === 1
   const settledSidebarRowsCrisp = Array.from(document.querySelectorAll<HTMLElement>("[data-marquee-host]")).every((row) => getComputedStyle(row).filter === "none")
   if (preview === "coordinator-draft") return results({ preview, pass: coordinatorDraftInert && settledSidebarRowsCrisp, settledSidebarRowsCrisp })
   await click("Change model and reasoning"); await sleep(120)
@@ -237,8 +256,9 @@ async function run() {
   const coordinator = useStore.getState().threads["project-coordinator"]
   const coordinatorOpensChat = (useStore.getState().selected as { id: string }).id === coordinator?.id && !!document.querySelector('[data-testid="composer-editor"]')
   const editsNotBlockedPill = !!Array.from(document.querySelectorAll<HTMLElement>('main span, [data-slot="badge"]')).find((element) => element.textContent?.trim() === "Edits not blocked on Codex")
-  const initialBriefPreserved = chatFixture.calls.some((call) => call.method === "coordinator.open" && call.params.initial_brief === "Plan and ship the local coordinator experience.")
-  const stableFirstMessageId = !!chatFixture.sent[1]?.messageId
+  // The first message opens the setup with it; the daemon sends it, so the client sends nothing more.
+  const openingMessageSent = chatFixture.calls.some((call) => call.method === "coordinator.open" && call.params.opening_message === "Plan and ship the local coordinator experience." && !("initial_brief" in call.params))
+  const noSecondSend = !chatFixture.calls.some((call) => call.method === "threads.send" && call.params.thread_id === coordinator?.id)
   await click("Change model and reasoning"); await sleep(100); await click("Claude Code"); await sleep(250)
   const harnessSwitched = useStore.getState().threads["project-coordinator"]?.provider.kind === "claude-code" && chatFixture.calls.some((call) => call.method === "coordinator.switch_harness")
   const editsPillGoneOnClaude = !Array.from(document.querySelectorAll<HTMLElement>('main span, [data-slot="badge"]')).some((element) => element.textContent?.includes("Edits not blocked"))
@@ -253,8 +273,9 @@ async function run() {
   })()
   const projectSpace = await checkProjectSpace()
   const secretRequest = await checkSecretRequest(coordinator.id)
+  const coordinatorSetup = await checkCoordinatorSetup(coordinator.id)
   const horizontalOverflow = Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth)
-  const checks = { ...projectSpace, ...secretRequest, ...dockChecks, initialHasNoSetup, composerSingleLineEditorInTwoLineFrame, blankComposerAreaFocusesEditor, childReturn, titleOnlyReference, referenceDidNotWake, typedReferenceSent, coordinatorDraftInert, settledSidebarRowsCrisp, allHarnessesVisible, editsNotBlockedTooltip, coordinatorOpensChat, editsNotBlockedPill, initialBriefPreserved, stableFirstMessageId, harnessSwitched, editsPillGoneOnClaude, oneCoordinatorCreated, projectTabOnlyForCoordinator, noHorizontalOverflow: horizontalOverflow <= 1 }
+  const checks = { ...projectSpace, ...secretRequest, ...coordinatorSetup, ...dockChecks, initialHasNoSetup, composerSingleLineEditorInTwoLineFrame, blankComposerAreaFocusesEditor, childReturn, titleOnlyReference, referenceDidNotWake, typedReferenceSent, coordinatorDraftInert, settledSidebarRowsCrisp, allHarnessesVisible, editsNotBlockedTooltip, coordinatorOpensChat, editsNotBlockedPill, openingMessageSent, noSecondSend, harnessSwitched, editsPillGoneOnClaude, oneCoordinatorCreated, projectTabOnlyForCoordinator, noHorizontalOverflow: horizontalOverflow <= 1 }
   results({ fixture: "chat-coordinator", pass: Object.values(checks).every(Boolean), checks, horizontalOverflow })
 }
 /** The Coordinator's Project tab: brief, setup, memory, the switch, editing and the empty project. */
@@ -267,7 +288,8 @@ async function checkProjectSpace() {
     && memoryTitles.join("|") === "Native WebKit fixtures need the production CSP|Prefers squash merges and small PRs|Mobile export takes about four minutes"
     && panel().querySelector('section[aria-label="Memory"] h3 + span')?.textContent === "3"
   await shot("project-tab")
-  panel().querySelector<HTMLElement>('[role="switch"]')!.click(); await sleep(200)
+  // The brief switch is the panel's last; the Coordinator section has its own above it.
+  Array.from(panel().querySelectorAll<HTMLElement>('[role="switch"]')).at(-1)!.click(); await sleep(200)
   const projectSwitch = chatFixture.calls.some((call) => call.method === "projects.update" && call.params.brief_in_all_threads === true) && useStore.getState().projects["project-0"]?.brief_in_all_threads === true
   await click("Edit the brief"); await sleep(900)
   const briefEditor = panel().querySelector<HTMLElement>('[contenteditable="true"]')
@@ -344,6 +366,241 @@ async function checkSecretRequest(threadId: string) {
   const secretNeverRendered = !document.body.textContent?.includes("sk_test_1234")
   await shot("secret-settled")
   return { secretFieldFocused, secretFieldHardened, secretCopy, digitsIgnored, secretRevealed, secretSubmitted, secretReplaceCopy, secretDeclined, secretSettledLines, secretNeverRendered }
+}
+
+const claudeDefault = { kind: "claude-code" as const, instance: "default" }
+const sonnet = { provider: claudeDefault, model: "claude-sonnet-5-5" }
+const opusHigh = { provider: claudeDefault, model: "claude-opus-5-5", effort: "high" }
+const debug = (value: unknown) => {
+  const target = window as unknown as { __chatCoordinatorDebug?: unknown[]; webkit?: { messageHandlers?: { bench?: { postMessage: (value: string) => void } } } }
+  ;(target.__chatCoordinatorDebug ??= []).push(value)
+  document.documentElement.dataset.fixtureDebug = JSON.stringify(target.__chatCoordinatorDebug)
+  target.webkit?.messageHandlers?.bench?.postMessage(JSON.stringify({ stage: "debug", value }))
+}
+const lastCall = (method: string) => [...chatFixture.calls].reverse().find((call) => call.method === method)
+const within = (root: ParentNode | null | undefined, selector: string, label: string) =>
+  Array.from(root?.querySelectorAll<HTMLElement>(selector) ?? []).find((element) => visible(element) && (element.getAttribute("aria-label") === label || element.textContent?.trim() === label || element.textContent?.trim().startsWith(label)))
+const key = (target: EventTarget, init: KeyboardEventInit) => target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init }))
+const responses = (id: string) => chatFixture.calls.filter((call) => call.method === "approvals.respond" && call.params.approval_id === id)
+
+/**
+ * 0.9.1: the Coordinator that sets itself up. Its cards (brief, settings, git), typed
+ * /skills, the Setup started row, the default a delegation set aside, the Project tab's
+ * Coordinator section, Settings defaults, and a stale plan-usage ring.
+ */
+async function checkCoordinatorSetup(threadId: string) {
+  const turnId = "secret-turn"
+  const state = () => useStore.getState()
+  const show = (approval: ApprovalRequest) => {
+    const current = state().transcript(threadId)
+    state().set({ transcripts: { ...state().transcripts, [threadId]: { ...current, loaded: true, pendingApprovals: [approval], blocks: [...current.blocks, { kind: "approval", id: `approval:${approval.id}`, turnId, at, seq: 400 + current.blocks.length, approval, decision: null }] } } })
+  }
+  const request = (id: string, tool_name: string, input: Record<string, unknown>, summary = ""): ApprovalRequest => ({ id, thread_id: threadId, turn_id: turnId, tool_call_id: null, tool_name, input: input as never, summary, suggestions: [], created_at: at })
+  const card = (kind: string) => document.querySelector<HTMLElement>(`[data-coordinator-card="${kind}"]`)
+  const composerShown = () => { const editor = document.querySelector<HTMLElement>('[data-testid="composer-editor"]'); return !!editor && visible(editor) && !editor.closest('[aria-hidden="true"], [inert]') }
+
+  // ---- brief proposal: prefilled, editable, digits never answer it, ⌘↵ saves the edited text ----
+  show(request("brief-1", "kybern_coordinator_brief", { text: "Kybern: desktop, daemon and mobile client for coding agents. Ship small PRs against main, one task each.\n\nPropose a plan before protocol changes, new dependencies or releases. Opus designs and reviews; Sonnet builds.", replaces: false })); await sleep(450)
+  const briefField = card("brief")?.querySelector<HTMLTextAreaElement>("textarea")
+  const briefPrefilled = !!briefField && briefField.value.startsWith("Kybern: desktop") && document.activeElement === briefField && card("brief")!.textContent!.includes("Save this as the project brief?")
+  const briefHidesComposer = !composerShown()
+  key(window, { key: "1" }); key(briefField!, { key: "3" }); await sleep(120)
+  const briefDigitsIgnored = responses("brief-1").length === 0
+  briefField!.focus(); briefField!.setSelectionRange(briefField!.value.length, briefField!.value.length)
+  document.execCommand("insertText", false, " Check UI in light and dark.")
+  await sleep(120)
+  await shot("card-brief")
+  key(briefField!, { key: "Enter", metaKey: true }); await sleep(300)
+  const briefSaved = responses("brief-1")[0]?.params.decision === "submit" && String(responses("brief-1")[0]?.params.response?.text).endsWith("Opus designs and reviews; Sonnet builds. Check UI in light and dark.") && !card("brief")
+
+  // ---- settings proposal: old → new, untick one, apply the rest ----
+  show(request("settings-1", "kybern_coordinator_settings", { reason: "From your answers: plans before larger work, Opus for design, Sonnet to build.", changes: [
+    { path: "lead_autonomy", label: "Before starting work", old: "act", new: "propose_large" },
+    { path: "role_defaults.design", label: "Design model", old: null, new: opusHigh },
+    { path: "role_defaults.implementation", label: "Implementation model", old: null, new: sonnet },
+    { path: "lead_workspace", label: "Agents work in", old: "shared", new: "worktree" },
+  ] })); await sleep(450)
+  const settingsCard = card("settings")
+  const settingsRows = Array.from(settingsCard?.querySelectorAll<HTMLElement>("[data-setting-change]") ?? []).map((row) => row.textContent)
+  const settingsReadable = settingsRows.length === 4 && settingsRows[0] === "Before starting workAct→toPropose large" && settingsRows[1] === "Design modelDefault→toOpus 5.5 · high"
+    && !!settingsCard?.querySelector("s") && getComputedStyle(settingsCard.querySelector("s")!).textDecorationLine.includes("line-through")
+  settingsCard?.querySelector<HTMLElement>('[data-setting-change="lead_workspace"] [role="checkbox"]')?.click(); await sleep(150)
+  await sleep(300)
+  const applyButton = within(settingsCard, "button", "Apply")
+  const applyCount = !!applyButton?.textContent?.includes("Apply 3 changes")
+  await shot("card-settings")
+  applyButton?.click(); await sleep(300)
+  const settingsAnswer = responses("settings-1")[0]?.params
+  const settingsPartial = applyCount && settingsAnswer?.decision === "submit" && JSON.stringify(settingsAnswer.response?.accepted) === JSON.stringify(["lead_autonomy", "role_defaults.design", "role_defaults.implementation"])
+
+  // ---- git: push answers like a permission; no "for this session" ----
+  show(request("git-push", "kybern_git", { op: "push", remote: "origin", branch: "fix/settings-sheet-rotation", ahead: 3 }, "Push fix/settings-sheet-rotation to origin (3 commits to send)")); await sleep(450)
+  const pushCopy = card("git-push")?.textContent?.includes("Push fix/settings-sheet-rotation?") && card("git-push")?.textContent?.includes("3 commits to send to origin.")
+  const pushKeepsComposer = composerShown()
+  document.querySelector<HTMLElement>('[data-testid="composer-editor"]')?.blur()
+  await shot("card-git-push")
+  key(window, { key: "2" }); await sleep(120)
+  const pushNoSessionAllow = responses("git-push").length === 0
+  key(window, { key: "1" }); await sleep(300)
+  const pushAllowed = responses("git-push")[0]?.params.decision === "allow_once"
+
+  // ---- git: open a pull request, declined ----
+  show(request("git-pr", "kybern_git", { op: "open_pr", remote: "origin", branch: "fix/settings-sheet-rotation", ahead: 3, title: "Fix settings sheet crash on iPad rotation", body: "Keeps the sheet's detent when the size class changes and adds a rotation test.", base: "main" })); await sleep(450)
+  const prPreview = !!card("git-open_pr")?.textContent?.includes("Fix settings sheet crash on iPad rotation") && !!card("git-open_pr")?.textContent?.includes("3 commits ahead of main on origin.") && !!within(card("git-open_pr"), "button", "Push and open PR")
+  within(card("git-open_pr"), "button", "Decline")?.click(); await sleep(300)
+  const prDeclined = responses("git-pr")[0]?.params.decision === "deny"
+
+  // ---- git: merge a PR; no digit, a destructive button ----
+  show(request("git-merge", "kybern_git", { op: "merge_pr", number: 106, title: "Fix settings sheet crash on iPad rotation", checks: { total: 6, passed: 6, failed: 0, pending: 0, skipped: 0 }, method: "squash" })); await sleep(450)
+  const mergeCard = card("git-merge_pr")
+  key(window, { key: "1" }); await sleep(150)
+  const mergeDigitIgnored = responses("git-merge").length === 0
+  const mergeButton = within(mergeCard, "button", "Merge PR")
+  const mergeCopy = !!mergeCard?.textContent?.includes("Squash-merge PR #106?") && !!mergeCard.textContent.includes("6 checks passed") && !!mergeCard.textContent.includes("This can't be undone from Kybern.") && !!mergeButton?.className.includes("bg-destructive")
+  await shot("card-git-merge")
+  mergeButton?.click(); await sleep(300)
+  const mergeAllowed = responses("git-merge")[0]?.params.decision === "allow_once"
+  const lines = Array.from(document.querySelectorAll<HTMLElement>("[data-coordinator-card-outcome]")).map((line) => line.textContent)
+  const cardLinesSettled = ["Saved the project brief", "Applied 3 Coordinator settings", "Pushed fix/settings-sheet-rotation", "Declined opening a pull request for fix/settings-sheet-rotation", "Merged PR #106"].every((line) => lines.includes(line))
+
+  // ---- a typed /skill sends as the skill ----
+  write("please /review the sign-in flow"); await sleep(200)
+  key(document.querySelector<HTMLElement>('[data-testid="composer-editor"]')!, { key: "Enter" }); await sleep(300)
+  const slashParts = chatFixture.sent.at(-1)?.message.parts
+  debug({ slashParts, sentCount: chatFixture.sent.length })
+  const typedSlashSkill = JSON.stringify(slashParts) === JSON.stringify([{ type: "text", text: "please " }, { type: "skill", name: "review", path: "/skills/review" }, { type: "text", text: " the sign-in flow" }])
+
+  // ---- Setup started, then the user's own words as their bubble ----
+  const setupTurn = "setup-turn"
+  const child: Thread = thread("override-child", "Fix settings sheet crash", { parent_thread_id: threadId, model: "claude-opus-5-5", status: "running", delegation: { task_id: "task-override", operation_id: "op-override", parent_thread_id: threadId, depth: 1, role: "implementation", workspace: "worktree", status: "running", started_at: at, default_override: { provider: claudeDefault, model: "claude-sonnet-5-5", reason: "The crash repro needs deeper reasoning across iPad layouts." } } })
+  {
+    const current = state().transcript(threadId)
+    state().set({ threads: { ...state().threads, [child.id]: child }, transcripts: { ...state().transcripts, [threadId]: { ...current, pendingApprovals: [], blocks: [...current.blocks,
+      { kind: "user", id: "setup-user", turnId: setupTurn, at, seq: 900, message: { parts: [{ type: "system_row", kind: "coordinator_setup", text: "Setup started" }, { type: "text", text: "we're building kybern, I mostly want small PRs and Opus for design" }] } },
+      { kind: "assistant", id: "setup-answer#0", messageId: "setup-answer", segment: 0, thinking: "", turnId: setupTurn, at, seq: 901, origin: { kind: "root" }, text: "Thanks. I've read `AGENTS.md` and `CLAUDE.md`, so I'll skip what they already cover. A research agent is learning how to build and test the repo in the meantime.", complete: true },
+    ] } } })
+  }
+  await sleep(500)
+  const systemRow = document.querySelector<HTMLElement>('[data-system-row="coordinator_setup"]')
+  const userBubbles = Array.from(document.querySelectorAll<HTMLElement>('[data-message-role="user"] [data-slot="message-content"]')).map((bubble) => bubble.textContent ?? "")
+  const setupRowShown = !!systemRow && systemRow.textContent === "Setup started" && userBubbles.some((text) => text.includes("we're building kybern")) && !userBubbles.some((text) => text.includes("Setup started"))
+  await shot("setup-row")
+
+  // ---- the default a delegation set aside ----
+  {
+    const current = state().transcript(threadId)
+    state().set({ transcripts: { ...state().transcripts, [threadId]: { ...current, blocks: [...current.blocks,
+      { kind: "tool", id: "tool:delegate-override", turnId: setupTurn, at, seq: 902, origin: { kind: "root" }, call: { id: "delegate-override", name: "mcp__kybern__kybern_agent_delegate", input: { task: "Fix the settings sheet crash on rotation", title: child.title, role: "implementation", workspace: "worktree", provider: "claude-code", model: "claude-opus-5-5", override_reason: "The crash repro needs deeper reasoning across iPad layouts." } }, stream: "", isError: false, complete: true, output: { content: [{ type: "text", text: JSON.stringify({ task_id: "task-override", thread_id: child.id, title: child.title, provider: "claude-code", model: "claude-opus-5-5", workspace: "worktree", status: "running" }) }] } },
+    ] } } })
+  }
+  await sleep(500)
+  const overrideLine = document.querySelector<HTMLElement>("[data-default-override]")
+  const launchOverride = overrideLine?.textContent === "Instead of the Sonnet 5.5 default: The crash repro needs deeper reasoning across iPad layouts."
+    && !!overrideLine.closest("[data-delegation-launch]")?.textContent?.includes("Opus 5.5")
+  await shot("launch-override")
+
+  // ---- the Project tab's Coordinator section ----
+  const settings = { default_provider: "claude-code", default_permission_mode: "supervised", worktrees_default: false, generate_titles: true, providers: {}, notifications: true, auto_update_harnesses: false, auto_update_daemon: false, tell_agents_about_kybern: true, orchestration: { max_active_children: 4, lead_max_children: 6, max_depth: 2, lead_autonomy: "propose_large", lead_workspace: "shared", lead_push_without_asking: false, role_defaults: { research: sonnet } } } as unknown as Settings
+  state().set({ settings, rightOpen: true, rightTabs: ["agents", "project"], rightTab: "project" }); await sleep(450)
+  const section = () => document.querySelector<HTMLElement>("[data-coordinator-section]")
+  section()?.scrollIntoView({ block: "start" }); await sleep(100)
+  const radio = (label: string) => within(section(), '[role="radio"]', label)
+  const chip = (role: string) => section()?.querySelector<HTMLElement>(`[data-role-chip="${role}"]`)
+  const hint = () => section()?.querySelector("[data-autonomy-hint]")?.textContent
+  const sectionInitial = radio("Propose large")?.getAttribute("aria-checked") === "true" && hint() === "Small fixes start right away. Larger work and protocol changes get a plan first."
+    && radio("This checkout")?.getAttribute("aria-checked") === "true"
+    && chip("research")?.textContent === "Default · Sonnet 5.5" && chip("research")?.dataset.roleChipKind === "inherited"
+    && chip("implementation")?.textContent === "Same as the Coordinator"
+    && !!section()?.textContent?.includes("Merging a pull request always asks.") && !!section()?.textContent?.includes("Defaults come from Settings › Delegation")
+  await shot("project-coordinator-section")
+  const updates = () => chatFixture.calls.filter((call) => call.method === "projects.update" && "coordinator" in call.params)
+  radio("Act")?.click(); await sleep(250)
+  const autonomyWrite = JSON.stringify(updates().at(-1)?.params.coordinator) === JSON.stringify({ lead_autonomy: "act" }) && hint() === "Starts work right away and reports when it's done."
+  radio("Own worktree")?.click(); await sleep(250)
+  const workspaceWrite = JSON.stringify(updates().at(-1)?.params.coordinator) === JSON.stringify({ lead_autonomy: "act", lead_workspace: "worktree" })
+  section()?.querySelector<HTMLElement>('[role="switch"]')?.click(); await sleep(250)
+  debug({ updates: updates().map((call) => call.params), hint: hint() })
+  const pushWrite = JSON.stringify(updates().at(-1)?.params.coordinator) === JSON.stringify({ lead_autonomy: "act", lead_workspace: "worktree", lead_push_without_asking: true })
+  chip("implementation")?.click(); await sleep(350)
+  const pickerDefaultRow = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).some((option) => visible(option) && option.textContent?.startsWith("Use the default"))
+  Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find((option) => visible(option) && option.textContent?.startsWith("Opus 5.5"))?.click(); await sleep(350)
+  const roleWritten = updates().at(-1)?.params.coordinator?.role_defaults?.implementation
+  const roleWrite = roleWritten?.model === "claude-opus-5-5" && roleWritten?.provider?.kind === "claude-code" && updates().at(-1)?.params.coordinator?.lead_push_without_asking === true
+    && chip("implementation")?.dataset.roleChipKind === "set" && !!chip("implementation")?.textContent?.startsWith("Opus 5.5")
+  chip("implementation")?.click(); await sleep(350)
+  Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find((option) => visible(option) && option.textContent?.startsWith("Use the default"))?.click(); await sleep(350)
+  const roleReset = !updates().at(-1)?.params.coordinator?.role_defaults && chip("implementation")?.textContent === "Same as the Coordinator"
+  // A refused write rolls back and says what to do next.
+  chatFixture.failProjectUpdate = true
+  radio("Propose all")?.click(); await sleep(400)
+  chatFixture.failProjectUpdate = false
+  const writeRollsBack = radio("Act")?.getAttribute("aria-checked") === "true" && !!document.body.textContent?.includes("Unable to save the Coordinator settings. Check the connection and try again.")
+  // Reset asks first, then clears every override.
+  within(section(), "button", "Reset")?.click(); await sleep(300)
+  const resetConfirm = within(document.querySelector('[data-slot="popover-popup"]'), "button", "Reset")
+  const resetAsks = !!document.querySelector('[data-slot="popover-popup"]')?.textContent?.includes("Reset this project's Coordinator settings?")
+  resetConfirm?.click(); await sleep(350)
+  const resetWrite = resetAsks && updates().at(-1)?.params.coordinator === null && radio("Propose large")?.getAttribute("aria-checked") === "true"
+  // Redo setup asks, then starts the interview; while the Coordinator works it says to wait.
+  within(section()?.closest("section"), "button", "Redo setup")?.click(); await sleep(300)
+  const redoAsks = !!document.querySelector('[data-slot="popover-popup"]')?.textContent?.includes("The Coordinator will interview you again. Your brief stays until you save a new one.")
+  within(document.querySelector('[data-slot="popover-popup"]'), "button", "Redo setup")?.click(); await sleep(300)
+  const redoCalled = redoAsks && lastCall("coordinator.setup")?.params.project_id === "project-0"
+  chatFixture.setupBusy = true
+  within(section()?.closest("section"), "button", "Redo setup")?.click(); await sleep(300)
+  within(document.querySelector('[data-slot="popover-popup"]'), "button", "Redo setup")?.click(); await sleep(500)
+  chatFixture.setupBusy = false
+  const redoBusyToast = !!document.body.textContent?.includes("Wait for the Coordinator to finish, then try again.")
+  state().set({ rightOpen: false }); await sleep(200)
+
+  // ---- Settings › Delegation: Coordinator defaults ----
+  toast.dismiss(); await sleep(300)
+  const overlay = document.createElement("div")
+  overlay.setAttribute("data-fixture-overlay", "")
+  overlay.style.cssText = "position:fixed;inset:0;z-index:40;overflow:auto;background:var(--background)"
+  document.body.append(overlay)
+  const overlayRoot = createRoot(overlay)
+  function SettingsOverlay() {
+    const { settings: current, update } = useSettings()
+    return current ? <div className="settings-page mx-auto max-w-[720px] px-8 py-8 font-system-ui"><CoordinatorDefaultsSection settings={current} onChange={(orchestration) => update({ orchestration })} /></div> : null
+  }
+  flushSync(() => overlayRoot.render(<ThemeProviderContext value={{ theme, translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><SettingsOverlay /></ThemeProviderContext>))
+  await sleep(400)
+  const defaults = () => overlay
+  const defaultsShown = within(defaults(), '[role="radio"]', "Propose large")?.getAttribute("aria-checked") === "true"
+    && defaults().querySelector<HTMLElement>('[data-role-chip="research"]')?.textContent === "Sonnet 5.5"
+    && defaults().querySelector<HTMLElement>('[data-role-chip="review"]')?.textContent === "Same as the Coordinator"
+  await shot("settings-defaults")
+  within(defaults(), '[role="radio"]', "Propose all")?.click(); await sleep(300)
+  const savedSettings = lastCall("settings.update")?.params.settings?.orchestration
+  debug({ savedSettings, settingsCalls: chatFixture.calls.filter((call) => call.method === "settings.update").length, radios: Array.from(defaults().querySelectorAll('[role="radio"]')).map((r) => `${r.textContent}:${r.getAttribute("aria-checked")}`) })
+  const settingsDefaultsWrite = savedSettings?.lead_autonomy === "propose_first" && savedSettings?.role_defaults?.research?.model === "claude-sonnet-5-5" && savedSettings?.max_depth === 2
+  overlayRoot.unmount(); overlay.remove()
+
+  // ---- a stale plan-usage ring stays, dimmed, and says why ----
+  const rail = document.createElement("div")
+  rail.style.cssText = "position:fixed;inset:0;z-index:40;background:var(--background);display:flex;align-items:flex-end;padding:24px"
+  document.body.append(rail)
+  const railRoot = createRoot(rail)
+  const twoHoursAgo = new Date(Date.now() - 2 * 3_600_000).toISOString()
+  const resetsAt = Date.now() / 1000 + 3 * 3600
+  useUsageLimits.setState({ ownerKey: state().environmentId, loaded: true, refreshing: [], accounts: [], providers: [
+    { provider: "claude-code", limits: [{ name: "Current session", used_percent: 42, window_minutes: 300, resets_at: resetsAt }], updated_at: twoHoursAgo, source: "live", stale: "login_refresh" },
+    { provider: "codex", limits: [{ name: "Current session", used_percent: 18, window_minutes: 300, resets_at: resetsAt }], updated_at: new Date().toISOString(), source: "live" },
+  ] as never })
+  flushSync(() => railRoot.render(<ThemeProviderContext value={{ theme, translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><div className="flex w-14 flex-col items-center rounded-xl bg-[var(--app-rail-background,transparent)] py-2"><RailUsage /></div></ThemeProviderContext>))
+  await sleep(300)
+  const claudeRing = rail.querySelector<HTMLElement>('[data-testid="rail-usage-claude-code"] .rail-usage-ring')
+  const codexRing = rail.querySelector<HTMLElement>('[data-testid="rail-usage-codex"] .rail-usage-ring')
+  const staleRingDimmed = !!claudeRing && !!codexRing && claudeRing.hasAttribute("data-stale") && getComputedStyle(claudeRing).opacity === "0.5" && getComputedStyle(codexRing).opacity === "1"
+    && getComputedStyle(claudeRing.querySelector(".rail-usage-arc")!).stroke === getComputedStyle(codexRing.querySelector(".rail-usage-arc")!).stroke
+    && rail.querySelector('[data-testid="rail-usage-claude-code"]')?.getAttribute("aria-label") === "Claude Code: 58% left. Last updated 2 h ago. Waiting for Claude Code to refresh its sign-in."
+  rail.querySelector<HTMLElement>('[data-testid="rail-usage-claude-code"]')?.click(); await sleep(450)
+  const staleCaptionShown = document.querySelector("[data-limits-caption]")?.textContent === "Last updated 2 h ago. Waiting for Claude Code to refresh its sign-in."
+  await shot("stale-ring")
+  railRoot.unmount(); rail.remove()
+
+  return { briefPrefilled, briefHidesComposer, briefDigitsIgnored, briefSaved, settingsReadable, settingsPartial, pushCopy, pushKeepsComposer, pushNoSessionAllow, pushAllowed, prPreview, prDeclined, mergeDigitIgnored, mergeCopy, mergeAllowed, cardLinesSettled, typedSlashSkill, setupRowShown, launchOverride, sectionInitial, autonomyWrite, workspaceWrite, pushWrite, pickerDefaultRow, roleWrite, roleReset, writeRollsBack, resetWrite, redoCalled, redoBusyToast, defaultsShown, settingsDefaultsWrite, staleRingDimmed, staleCaptionShown }
 }
 
 window.addEventListener("unhandledrejection", (event) => results({ pass: false, error: String(event.reason), stack: String(event.reason?.stack ?? "") }))

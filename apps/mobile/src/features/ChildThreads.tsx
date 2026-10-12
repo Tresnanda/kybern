@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ScrollView, View } from "react-native";
 import type { Thread } from "../state/protocol";
 import { childIsRunning, childStatusWord, sortChildren } from "../state/orchestration";
+import { defaultOverrideText } from "../../../../packages/kybern-client/src/coordinatorSettings";
 import { rpc, useApp } from "../state/runtime";
 import { Icon, T, Tap, styles } from "../ui/primitives";
 import { ProviderMark } from "../ui/ProviderMark";
@@ -105,6 +106,11 @@ export function ChildThreads({ thread, active = true }: { thread?: Thread | null
                 <T variant="caption" tone="secondary" numberOfLines={1}>
                   {childStatusWord(child)}
                 </T>
+                {child.delegation?.default_override && (
+                  <T variant="caption" tone="muted" numberOfLines={2}>
+                    {defaultOverrideText(child.delegation.default_override, app.providers)}
+                  </T>
+                )}
               </View>
               <Icon name="chevron.right" size={11} color={colors.muted} />
             </Tap>

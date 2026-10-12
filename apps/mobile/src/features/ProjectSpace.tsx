@@ -1,6 +1,7 @@
 // The Coordinator's project space on the phone: the brief (read, or edited in place;
 // the first character creates it), the setup note, memory notes, and the switch that
-// gives every new thread in the project the brief. Shown in the Project sheet.
+// gives every new thread in the project the brief, then the project's Coordinator settings.
+// Shown in the Project sheet.
 import { router } from "expo-router";
 import { memo, useMemo, useState } from "react";
 import { View } from "react-native";
@@ -19,6 +20,7 @@ import { ErrorBanner, T, Tap, styles } from "../ui/primitives";
 import { Toggle } from "../ui/Toggle";
 import { useTheme } from "../ui/theme";
 import { NoteView, Pill } from "./NoteView";
+import { ProjectCoordinatorSection } from "./ProjectCoordinator";
 
 /** Rows shown before "Show all in Notes", like the desktop dock. */
 const MEMORY_LIMIT = 50;
@@ -66,6 +68,7 @@ export function ProjectSpace({ projectId }: { projectId: string }) {
       ) : (
         <T variant="caption" tone="muted">{PROJECT_SPACE_COPY.memoryEmpty}</T>
       )}
+      <ProjectCoordinatorSection projectId={projectId} />
       <BriefSwitch projectId={projectId} />
       <Tap
         label="Show all in Notes"

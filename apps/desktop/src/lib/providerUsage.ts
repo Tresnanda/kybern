@@ -140,27 +140,39 @@ export function updatedAgo(updatedAt: string | undefined, now: number): string |
 /** Values older than this are shown as possibly out of date. */
 export const LIMITS_STALE_MS = 10 * 60_000
 
-export function limitsStale(entry: Pick<ProviderLimits, "updated_at" | "source">, now: number): boolean {
+/**
+ * Values that may be out of date: from the last daemon run, a failed or limited read, or
+ * simply old. Stale rings stay on screen, dimmed; a provider with values is never hidden.
+ */
+export function limitsStale(entry: Pick<ProviderLimits, "updated_at" | "source" | "stale">, now: number): boolean {
   const time = entry.updated_at ? Date.parse(entry.updated_at) : Number.NaN
-  return entry.source === "stored" || !Number.isFinite(time) || now - time > LIMITS_STALE_MS
+  return !!entry.stale || entry.source === "stored" || !Number.isFinite(time) || now - time > LIMITS_STALE_MS
 }
 
-const PROVIDER_SHORT_NAMES: Record<string, string> = { "claude-code": "Claude", codex: "Codex", cursor: "Cursor" }
-
-/** Why a provider's values are not current, and what brings them back; null while reads succeed. */
+/** Why a provider's values are not current; null while reads succeed. */
 export function staleReason(entry: Pick<ProviderLimits, "provider" | "stale" | "retry_at">, now: number): string | null {
-  const name = PROVIDER_SHORT_NAMES[entry.provider] ?? PROVIDER_NAMES[entry.provider] ?? entry.provider
+  const name = PROVIDER_NAMES[entry.provider] ?? entry.provider
   switch (entry.stale) {
     case "login_refresh":
-      return `Updates after your next ${name} turn`
+      return `Waiting for ${name} to refresh its sign-in.`
     case "throttled": {
       const at = entry.retry_at ? Date.parse(entry.retry_at) : Number.NaN
-      if (!Number.isFinite(at) || at <= now) return `${name} is limiting usage checks. Kybern will try again shortly`
-      return `${name} is limiting usage checks. Next check at ${new Date(at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`
+      if (!Number.isFinite(at) || at <= now) return "Couldn’t read the latest limits."
+      return `Couldn’t read the latest limits. Next check at ${new Date(at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}.`
     }
     case "unavailable":
-      return `Couldn’t read usage. Check that ${name} is signed in`
+      return "Couldn’t read the latest limits."
+    case "from_last_run":
+      return "From the last time Kybern ran."
     default:
       return null
   }
+}
+
+/** "Last updated 2 h ago. Waiting for Claude Code to refresh its sign-in.": the caption of a stale ring. */
+export function staleCaption(entry: Pick<ProviderLimits, "provider" | "stale" | "retry_at" | "updated_at">, now: number): string | null {
+  const reason = staleReason(entry, now)
+  if (!reason) return null
+  const ago = updatedAgo(entry.updated_at, now)
+  return ago ? `Last updated ${ago}. ${reason}` : reason
 }
