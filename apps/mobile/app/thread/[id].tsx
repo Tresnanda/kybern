@@ -19,7 +19,7 @@ import { Composer } from "../../src/features/Composer";
 import { InspectorColumn } from "../../src/features/Inspector";
 import { TranscriptBlock } from "../../src/features/Transcript";
 import { WorkspaceMenu, WorkspacePill } from "../../src/features/WorkspaceMenu";
-import { CollaborationStrip } from "../../src/features/CollaborationStrip";
+import { BackToMain } from "../../src/features/BackToMain";
 import { ChildThreads } from "../../src/features/ChildThreads";
 import { useLayout } from "../../src/state/layout";
 import {
@@ -538,7 +538,7 @@ export default function ThreadScreen() {
           onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
           style={{ position: "absolute", bottom: 0, left: 0, right: 0 }}
         >
-          <CollaborationStrip thread={thread} />
+          <BackToMain thread={thread} />
           <ChildThreads thread={thread} active={focused} />
           <WorkspacePill
             threadId={id}

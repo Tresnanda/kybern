@@ -15,9 +15,9 @@ import { detail, reviewFixture } from "./pr-review-rpc"
 import "../src/index.css"
 
 declare const __ORCH_THEME__: "light" | "dark"
-declare const __COLLAB_STRESS__: string
+declare const __FIXTURE_STRESS__: string
 const theme = __ORCH_THEME__
-const stress = __COLLAB_STRESS__
+const stress = __FIXTURE_STRESS__
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const post = (value: unknown) =>
   (

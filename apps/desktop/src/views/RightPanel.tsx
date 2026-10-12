@@ -28,8 +28,8 @@ import { diffKey, isRuntimeTaskActive, useStore, type RightTab } from "@/state/s
 import { ActivityPane } from "./Activity"
 import { restorePreviewFocus } from "./visualFrameSupport"
 import { DockPreviewPane } from "./dock/VisualPreviewPanel"
-import { CollaborationPane } from "./Collaboration"
 import { LineagePane } from "./lineage/LineagePane"
+import { ProjectDockPanel } from "./dock/ProjectDockPanel"
 import { ExplorerPane } from "./Explorer"
 import { TerminalWorkspace } from "./Terminal"
 import { NotesDockPanel } from "./dock/NotesDockPanel"
@@ -39,7 +39,9 @@ import { CHAT_SURFACE_CHIP_CLASS_NAME, CHAT_SURFACE_HEADER_ROW_CLASS_NAME, DOCK_
 const DOCK_TAB_CHIP = `${CHAT_SURFACE_CHIP_CLASS_NAME} dock-tab-shape inline-flex min-w-0 items-center !gap-0 !px-0`
 const DOCK_TAB_ACTIVE = "text-[var(--color-text-foreground)]"
 const DOCK_PANELS = [
-  { id: "collaboration", label: "Agents", Icon: UsersIcon },
+  { id: "agents", label: "Agents", Icon: UsersIcon },
+  // Coordinator threads only (see `addablePanels`): the project brief, setup note and memory.
+  { id: "project", label: "Project", Icon: NoteIcon },
   { id: "activity", label: "Activity", Icon: WorkflowIcon },
   { id: "changes", label: "Diff", Icon: DiffIcon },
   { id: "review", label: "Review", Icon: GitPullRequestIcon },
@@ -51,7 +53,6 @@ const DOCK_PANELS = [
   // Opened from content (a visual reply, an .html file, the agent) or added here for web pages.
   { id: "preview", label: "Preview", Icon: WindowIcon },
 ] as const
-const ADDABLE_PANELS = DOCK_PANELS
 /** Panes that follow the project (or Global) rather than a thread, so they work on Home too. */
 const THREADLESS_TABS: readonly RightTab[] = ["notes", "tasks"]
 
@@ -63,15 +64,17 @@ const ENV_SECTION_LABEL = `${ENV_LABEL} text-[length:var(--app-font-size-ui-sm,1
 const DIFF_FILES_BATCH = 50
 
 export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
-  const tab = useStore((s) => s.rightTab)
+  const chosenTab = useStore((s) => s.rightTab)
   const workspaceActive = useStore((s) => !s.settingsOpen)
-  const tabs = useStore((s) => s.rightTabs)
+  const openTabs = useStore((s) => s.rightTabs)
   const set = useStore((s) => s.set)
   const diff = useStore((s) => (threadId ? s.diffs[diffKey(threadId)] : undefined))
   const projectId = useStore((s) => (threadId ? s.threads[threadId]?.project_id : undefined) ?? (s.selected.kind === "draft" ? s.selected.draft.projectId : undefined))
-  const projectCoordinator = useStore((s) => !!(threadId && s.threads[threadId]?.coordinator_project_id))
-  // Coordinators and the members of a coordinator group keep the collaboration pane; every other thread shows its Lineage.
-  const collaborationThread = useStore((s) => !!(threadId && (s.threads[threadId]?.coordinator_project_id || s.threads[threadId]?.collaboration_group_id)))
+  // The "Project" tab belongs to the project's Coordinator; every other thread never shows it.
+  const coordinatorProjectId = useStore((s) => (threadId ? s.threads[threadId]?.coordinator_project_id : undefined)) ?? null
+  const tabs = useMemo(() => openTabs.filter((id) => id !== "project" || coordinatorProjectId), [openTabs, coordinatorProjectId])
+  const tab = chosenTab === "project" && !coordinatorProjectId ? tabs[0] ?? null : chosenTab
+  const addablePanels = useMemo(() => DOCK_PANELS.filter(({ id }) => id !== "project" || coordinatorProjectId), [coordinatorProjectId])
   const [adds, dels] = useMemo(() => [diff?.files.reduce((n, f) => n + f.additions, 0) ?? 0, diff?.files.reduce((n, f) => n + f.deletions, 0) ?? 0], [diff])
   // An agent opened a page while another tab was showing: a dot on the tab until it is shown.
   const previewUnseen = useStore((s) => { const preview = threadId ? s.previews[threadId] : undefined; return preview?.kind === "web" && !!preview.unseen })
@@ -111,7 +114,7 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
           {tab && <span aria-hidden className="t-tabs-pill dock-tab-shape z-0 bg-[var(--color-background-button-secondary)]" style={pillStyle} data-ready={pillReady} />}
           {tabs.map((id) => {
             const { label, Icon } = DOCK_PANELS.find((panel) => panel.id === id)!
-            return <DockTab key={id} active={workspaceActive && tab === id} onClick={() => set({ rightTab: id })} onClose={() => closeTab(id)} icon={<Icon className="size-3.5 shrink-0 opacity-70" />} label={id === "collaboration" && projectCoordinator ? "Project" : label}>
+            return <DockTab key={id} active={workspaceActive && tab === id} onClick={() => set({ rightTab: id })} onClose={() => closeTab(id)} icon={<Icon className="size-3.5 shrink-0 opacity-70" />} label={label}>
               {id === "preview" && previewUnseen && tab !== "preview" && <span aria-label="New page" className="ml-0.5 size-1.5 shrink-0 rounded-full bg-[var(--color-text-accent)]" />}
               {id === "activity" && activeTasks > 0 && <span key={activeTasks} className="t-pop ml-0.5 min-w-3 text-center text-[10px] tabular-nums text-muted-foreground/70">{activeTasks}</span>}
               {id === "changes" && adds + dels > 0 && <span key={`${adds}:${dels}`} className="t-pop inline-flex"><DiffStat additions={adds} deletions={dels} className="ml-1 font-system-ui text-[length:var(--app-font-size-ui-xs,10px)] font-normal" /></span>}
@@ -128,10 +131,10 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
             </MenuTrigger>
             <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
               <MenuGroup>
-                {ADDABLE_PANELS.map(({ id, label, Icon }) => (
+                {addablePanels.map(({ id, label, Icon }) => (
                   <MenuItem key={id} onClick={() => set({ rightTab: id })}>
                     <Icon className="size-3.5 shrink-0" />
-                    <span>{id === "collaboration" && projectCoordinator ? "Project" : label}</span>
+                    <span>{label}</span>
                     {tabs.includes(id) && <span className="ml-auto text-xs text-muted-foreground">Open</span>}
                   </MenuItem>
                 ))}
@@ -162,10 +165,11 @@ export function RightPanel({ threadId }: { threadId: ThreadId | null }) {
         )}
         {tabs.length > 0 && threadId && (
           <>
-            {tabs.includes("collaboration") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "collaboration" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "collaboration"} aria-hidden={tab !== "collaboration"}>
-              {collaborationThread
-                ? <CollaborationPane key={threadId} threadId={threadId} active={workspaceActive && tab === "collaboration"} />
-                : <LineagePane key={threadId} threadId={threadId} active={workspaceActive && tab === "collaboration"} />}
+            {tabs.includes("agents") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "agents" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "agents"} aria-hidden={tab !== "agents"}>
+              <LineagePane key={threadId} threadId={threadId} active={workspaceActive && tab === "agents"} />
+            </div>}
+            {coordinatorProjectId && tabs.includes("project") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "project" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "project"} aria-hidden={tab !== "project"}>
+              <ProjectDockPanel key={threadId} threadId={threadId} projectId={coordinatorProjectId} active={workspaceActive && tab === "project"} />
             </div>}
             {tabs.includes("review") && <div className={cn("t-pane absolute inset-0 flex min-h-0 w-full", tab === "review" ? "z-[1]" : "z-0")} data-active={workspaceActive && tab === "review"} aria-hidden={tab !== "review"}>
               <PrReviewDock key={threadId} threadId={threadId} active={workspaceActive && tab === "review"} />

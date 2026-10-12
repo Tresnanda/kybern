@@ -1,10 +1,12 @@
 import { router } from "expo-router";
-import { useEffect, useState } from "react";
+import { randomUUID } from "expo-crypto";
+import { useEffect, useRef, useState } from "react";
 import { Linking, View } from "react-native";
 import { Alert } from "../src/ui/Alert";
-import { setDraft } from "../src/state/draft";
+import { setDraft, useDraft } from "../src/state/draft";
+import { createCoordinatorStarter } from "../../../packages/kybern-client/src/coordinator";
 import { type Project, type PullRequest, type Thread } from "../src/state/protocol";
-import { errorText, refresh, rpc, useApp } from "../src/state/runtime";
+import { activeEnvironment, activeConnectionEpoch, ensureThread, errorText, refresh, rpc, useApp } from "../src/state/runtime";
 import {
   Button,
   Empty,
@@ -18,6 +20,9 @@ import { useTheme } from "../src/ui/theme";
 
 export default function Projects() {
   const app = useApp();
+  const draft = useDraft();
+  const [opening, setOpening] = useState(false);
+  const starter = useRef<ReturnType<typeof createCoordinatorStarter> | null>(null);
   const { colors } = useTheme();
   const [selected, setSelected] = useState<Project>();
   const [prs, setPrs] = useState<PullRequest[]>([]);
@@ -38,9 +43,9 @@ export default function Projects() {
       return;
     }
     setCoordinator(undefined);
-    void rpc("collaboration.coordinator.get", { project_id: selected.id })
+    void rpc("coordinator.get", { project_id: selected.id })
       .then((result) => {
-        if (alive) setCoordinator(result?.thread ?? null);
+        if (alive) setCoordinator(result ?? null);
       })
       .catch((cause) => {
         if (alive) setError(errorText(cause));
@@ -49,6 +54,45 @@ export default function Projects() {
       alive = false;
     };
   }, [selected?.id, app.activeId]);
+  /** Open the project's Coordinator, creating it with the draft's harness when the project has none. */
+  async function openCoordinator(project: Project) {
+    if (opening) return;
+    if (coordinator) {
+      router.push({ pathname: "/thread/[id]", params: { id: coordinator.id } });
+      return;
+    }
+    const provider = app.providers.find((item) => item.kind === draft.provider && item.available)
+      ?? app.providers.find((item) => item.available);
+    if (!provider) {
+      setError("Install a coding agent on your computer, then try again.");
+      return;
+    }
+    const environmentId = activeEnvironment()?.id;
+    const epoch = activeConnectionEpoch();
+    const changed = () => activeEnvironment()?.id !== environmentId || activeConnectionEpoch() !== epoch;
+    setOpening(true);
+    setError("");
+    try {
+      starter.current ??= createCoordinatorStarter((method, params) => rpc(method, params), randomUUID);
+      const result = await starter.current.start({
+        projectId: project.id,
+        provider,
+        instance: provider.kind === draft.provider ? draft.instance : undefined,
+        model: provider.kind === draft.provider ? draft.model || undefined : undefined,
+        effort: provider.kind === draft.provider ? draft.effort || undefined : undefined,
+        permissionMode: provider.kind === draft.provider ? draft.permission : undefined,
+      });
+      if (changed()) throw new Error("The connected computer changed. Open the Coordinator from that project again.");
+      setCoordinator(result.thread);
+      void refresh();
+      await ensureThread(result.thread.id).catch(() => {});
+      router.push({ pathname: "/thread/[id]", params: { id: result.thread.id } });
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setOpening(false);
+    }
+  }
   async function loadPullRequests() {
     if (!selected) return;
     setLoadingPrs(true);
@@ -103,31 +147,18 @@ export default function Projects() {
                 coordinator === undefined
                   ? "Coordinator"
                   : coordinator
-                    ? "Open coordinator"
-                    : "Create coordinator"
+                    ? "Open Coordinator"
+                    : "Create Coordinator"
               }
               detail={
                 coordinator === undefined
                   ? "Checking this project…"
                   : coordinator
                   ? coordinator.title
-                  : "A persistent chat that can delegate helpers for this project."
+                  : "A persistent chat that plans the work and delegates it to other agents."
               }
               icon="person.2"
-              onPress={
-                coordinator === undefined
-                  ? undefined
-                  : () =>
-                      coordinator
-                        ? router.push({
-                            pathname: "/thread/[id]",
-                            params: { id: coordinator.id },
-                          })
-                        : router.push({
-                            pathname: "/coordinator",
-                            params: { projectId: selected.id },
-                          })
-              }
+              onPress={coordinator === undefined || opening ? undefined : () => void openCoordinator(selected)}
             />
             <Row
               title="Tasks"

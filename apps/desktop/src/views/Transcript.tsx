@@ -1,5 +1,4 @@
 import { useFollowingHistory } from "@/lib/useFollowingHistory"
-import { collaborationPreview } from "../../../../packages/kybern-client/src/collaboration"
 import { useEarlierHistory } from "@/lib/useEarlierHistory"
 import { ImageThreadContext } from "@/lib/imageThread"
 import { ResponseImage } from "@/components/kybern/ResponseImage"
@@ -490,7 +489,7 @@ export function Transcript({
                     What should we work on in {coordinatorProjectName ?? "this project"}?
                   </p>
                   <p className="mt-1 text-xs leading-relaxed text-muted-foreground/50">
-                    I can delegate work, consult earlier threads, and keep project context here.
+                    I plan the work, hand it to other agents and review what they send back.
                   </p>
                 </div>
               ) : (
@@ -1004,22 +1003,6 @@ async function openThreadReference(threadId: ThreadId) {
   }
 }
 
-function CollaborationMessageNotice({ text }: { text: string }) {
-  const preview = collaborationPreview(text)!
-  const sender = useStore(state => preview.senderId ? state.threads[preview.senderId]?.title || "Helper" : "You")
-  const [open, setOpen] = useTranscriptRowState("collaboration-message", false)
-  return <div className="my-3 min-w-0 rounded-lg bg-muted/30 px-3">
-    <button type="button" aria-expanded={open} onClick={() => setOpen(value => !value)}
-      className="flex min-h-10 w-full items-center gap-2 py-2 text-start text-sm text-muted-foreground hover:text-foreground">
-      <DisclosureChevron open={open} /><span className="min-w-0 break-words">{preview.purpose} · {sender}</span>
-    </button>
-    <DisclosureRegion open={open}>
-      <div className="max-w-prose pb-3 text-sm leading-relaxed"><Markdown text={preview.body} /></div>
-      <details className="pb-3 text-xs text-muted-foreground"><summary className="cursor-pointer">Message metadata</summary><pre className="whitespace-pre-wrap break-words pt-2">{text}</pre></details>
-    </DisclosureRegion>
-  </div>
-}
-
 /** A sent note or task chip opens its page; plugins and `@Computer` are plain chips. */
 function mentionToken(part: Extract<ContentPart, { type: "mention" }>): InlineTokenValue {
   const target = parseKybernMention(part.path)
@@ -1091,7 +1074,6 @@ function UserBubble({ message, at, attribution, clampLines }: { message: { parts
   if (inbound) return <InboundMessageRow part={inbound} at={at} threadId={threadId} />
   const resultItems = agentResultItems(message.parts)
   if (resultItems) return <AgentResultsCard items={resultItems} at={at} />
-  if (files.length === 0 && tokens.size === 0 && collaborationPreview(text)) return <CollaborationMessageNotice text={text} />
   const clampedNow = !!clampLines && !expanded && overflowing
   return (
     <div className={cn("flex w-full justify-end", fresh && "chat-message-send-enter")}>

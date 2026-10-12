@@ -140,7 +140,7 @@ jobs:
               for width in 1100 480; do
                 log="$RUNNER_TEMP/native-feature-ui/$fixture-$theme-$width.log"
                 echo "::group::Native WebKit $fixture ($theme, ${width}px)"
-                KYBERN_COLLAB_THEME="$theme" KYBERN_ORCH_THEME="$theme" KYBERN_PERF_WIDTH="$width" \
+                KYBERN_FIXTURE_THEME="$theme" KYBERN_ORCH_THEME="$theme" KYBERN_PERF_WIDTH="$width" \
                   node scripts/check-rendering.mjs "$fixture" | tee "$log"
                 node --input-type=module - "$fixture" "$theme" "$width" "$log" <<'NODE'
           import { readFileSync } from 'node:fs';

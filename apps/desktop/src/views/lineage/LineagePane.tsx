@@ -1,7 +1,7 @@
-// Lineage: the "Agents" dock tab of an ordinary thread. A tree of the agents this thread started:
-// Kybern-delegated children (writable), harness-native subagents (read-only) and legacy helper
-// threads. Coordinator threads keep CollaborationPane. The pane does nothing while its tab is not
-// the active one: no subscriptions, no loads, no rows.
+// Lineage: the "Agents" dock tab of every thread, the Coordinator included. A tree of the agents
+// this thread started: Kybern-delegated children (writable), harness-native subagents (read-only)
+// and helper threads. The pane does nothing while its tab is not the active one: no
+// subscriptions, no loads, no rows.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 

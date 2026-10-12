@@ -82,7 +82,7 @@ export type Connection =
   | { state: "reconnecting"; detail?: string }
   | { state: "failed"; detail: string }
 
-export type RightTab = "collaboration" | "activity" | "changes" | "terminal" | "explorer" | "artifacts" | "notes" | "tasks" | "review" | "preview"
+export type RightTab = "agents" | "project" | "activity" | "changes" | "terminal" | "explorer" | "artifacts" | "notes" | "tasks" | "review" | "preview"
 
 /** A resolved web preview address. File targets carry the daemon's canonical path and serving root. */
 export type PreviewTarget =

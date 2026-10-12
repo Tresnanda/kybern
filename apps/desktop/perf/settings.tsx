@@ -8,9 +8,9 @@ import { useStore } from "../src/state/store"
 import { useEnvironments } from "../src/state/environments"
 import { settingsFixture } from "./settings-rpc"
 import "../src/index.css"
-declare const __COLLAB_THEME__: "dark" | "light"
-declare const __COLLAB_VIEW__: string
-declare const __COLLAB_STRESS__: string
+declare const __FIXTURE_THEME__: "dark" | "light"
+declare const __FIXTURE_VIEW__: string
+declare const __FIXTURE_STRESS__: string
 declare const __UPDATE_REDUCED_MOTION__: boolean
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 function report(value: unknown) { (window as any).webkit?.messageHandlers?.bench?.postMessage(JSON.stringify(value)) }
@@ -36,10 +36,10 @@ async function run() {
     settings: { default_provider: "codex", default_permission_mode: "supervised", worktrees_default: true, generate_titles: true, providers: {}, notifications: true, auto_update_harnesses: false, auto_update_daemon: false, background: { session_idle_minutes: 15, max_idle_sessions: 3, terminal_idle_minutes: 30, daemon_idle_exit_minutes: 0, save_power_on_battery: true }, access: { tailscale: false } },
     providers: [{ kind: "codex", display_name: "Codex", available: true, instances: ["default"], models: [], supported_permission_modes: ["supervised"], supports_fork: true, supports_model_switch: true }],
   })
-  flushSync(() => createRoot(document.getElementById("root")!).render(<ThemeProvider defaultTheme={__COLLAB_THEME__} storageKey="fixture.theme"><TooltipProvider><App /></TooltipProvider></ThemeProvider>))
+  flushSync(() => createRoot(document.getElementById("root")!).render(<ThemeProvider defaultTheme={__FIXTURE_THEME__} storageKey="fixture.theme"><TooltipProvider><App /></TooltipProvider></ThemeProvider>))
   await sleep(500)
-  if (__COLLAB_STRESS__ === 'rtl') document.documentElement.dir = 'rtl'
-  if (__COLLAB_STRESS__ === 'large-text') { const style = document.createElement('style'); style.textContent = '.settings-screen { --app-font-size-ui: 16px; }'; document.head.append(style) }
+  if (__FIXTURE_STRESS__ === 'rtl') document.documentElement.dir = 'rtl'
+  if (__FIXTURE_STRESS__ === 'large-text') { const style = document.createElement('style'); style.textContent = '.settings-screen { --app-font-size-ui: 16px; }'; document.head.append(style) }
   const workspace = document.querySelector('.settings-workspace')
   const trigger = button('Settings')
   const openSettings = async () => {
@@ -61,13 +61,13 @@ async function run() {
     })
     check(`sidebar icons share label centers (max ${Math.max(...offsets).toFixed(2)}px)`, offsets.every(offset => offset < 1))
   }
-  if (__COLLAB_VIEW__ === 'general') return report({ pass: true, checks })
+  if (__FIXTURE_VIEW__ === 'general') return report({ pass: true, checks })
   const input = document.querySelector<HTMLInputElement>('[aria-label="Search settings"]')!
   write(input, 'glass'); await sleep(100)
   check('search finds appearance', button('Appearance') && !button('General'))
   await click('Appearance')
   check('theme cards', document.querySelectorAll('.settings-theme-choice').length === 3)
-  if (__COLLAB_VIEW__ === 'appearance') return report({ pass: true, checks })
+  if (__FIXTURE_VIEW__ === 'appearance') return report({ pass: true, checks })
   if (!__UPDATE_REDUCED_MOTION__) {
     button('General').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })); await sleep(30)
     for (const animation of document.querySelector('.settings-section-content')!.getAnimations()) animation.playbackRate = 0.1
@@ -86,9 +86,9 @@ async function run() {
   worktree.click(); await sleep(100)
   check('settings still save', useStore.getState().settings?.worktrees_default === false)
   await click('Appearance')
-  await click('Dark'); check('theme changes', document.documentElement.classList.contains('dark')); if (__COLLAB_THEME__ === 'light') await click('Light')
+  await click('Dark'); check('theme changes', document.documentElement.classList.contains('dark')); if (__FIXTURE_THEME__ === 'light') await click('Light')
   await click('Usage'); check('usage totals', document.querySelector('.usage-stat dd')?.textContent === '$17.64')
-  if (__COLLAB_VIEW__ === 'usage') { check(`usage fits viewport (${document.querySelector('.settings-scroll')!.scrollWidth}/${document.querySelector('.settings-scroll')!.clientWidth})`, document.querySelector('.settings-scroll')!.scrollWidth <= document.querySelector('.settings-scroll')!.clientWidth); return report({ pass: true, checks }) }
+  if (__FIXTURE_VIEW__ === 'usage') { check(`usage fits viewport (${document.querySelector('.settings-scroll')!.scrollWidth}/${document.querySelector('.settings-scroll')!.clientWidth})`, document.querySelector('.settings-scroll')!.scrollWidth <= document.querySelector('.settings-scroll')!.clientWidth); return report({ pass: true, checks }) }
   settingsFixture.delay = 600
   button('Model').click(); await sleep(40); settingsFixture.delay = 20; button('Day').click(); await sleep(750)
   check('latest filter wins', document.querySelector('.usage-table th')?.textContent === 'Day (UTC)' && !document.querySelector('.usage-table')?.textContent?.includes('claude-sonnet'))

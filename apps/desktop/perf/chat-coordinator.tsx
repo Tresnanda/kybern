@@ -12,20 +12,20 @@ import { buildThemeCssVariables, DEFAULT_THEME_STATE } from "../src/lib/kit/them
 import { useStore } from "../src/state/store"
 import { useEnvironments } from "../src/state/environments"
 import { emptyThreadState } from "../src/state/transcript"
-import { chatFixture } from "./chat-collaboration-rpc"
+import { chatFixture } from "./chat-coordinator-rpc"
 import type { Thread, Project, ProviderStatus } from "../src/protocol"
 import "../src/index.css"
 
 const query = new URLSearchParams(location.search)
-declare const __COLLAB_THEME__: "dark" | "light"
-declare const __COLLAB_VIEW__: string
-const theme = (query.get("theme") ?? __COLLAB_THEME__) === "light" ? "light" : "dark"
-const preview = query.get("view") ?? __COLLAB_VIEW__
+declare const __FIXTURE_THEME__: "dark" | "light"
+declare const __FIXTURE_VIEW__: string
+const theme = (query.get("theme") ?? __FIXTURE_THEME__) === "light" ? "light" : "dark"
+const preview = query.get("view") ?? __FIXTURE_VIEW__
 const at = "2026-09-14T10:00:00Z"
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 const results = (value: unknown) => {
-  const target = window as unknown as { __chatCollaborationResults?: unknown[]; webkit?: { messageHandlers?: { bench?: { postMessage: (value: string) => void } } } }
-  ;(target.__chatCollaborationResults ??= []).push(value)
+  const target = window as unknown as { __chatCoordinatorResults?: unknown[]; webkit?: { messageHandlers?: { bench?: { postMessage: (value: string) => void } } } }
+  ;(target.__chatCoordinatorResults ??= []).push(value)
   target.webkit?.messageHandlers?.bench?.postMessage(JSON.stringify(value))
 }
 const sampleMemory = (stage: string) => new Promise<void>((resolve) => {
@@ -36,9 +36,9 @@ const sampleMemory = (stage: string) => new Promise<void>((resolve) => {
 const projects: Record<string, Project> = Object.fromEntries(["Kybern", "Website"].map((name, index) => [`project-${index}`, { id: `project-${index}`, name, path: "/project", is_git: true, created_at: at, updated_at: at }]))
 const thread = (id: string, title: string, extra: Partial<Thread> = {}): Thread => ({ id, title, project_id: "project-0", provider: { kind: "claude-code", instance: "default" }, permission_mode: "supervised", status: "idle", cwd: "/project", pinned: false, created_at: at, updated_at: at, last_seq: 0, ...extra })
 const threads: Record<string, Thread> = {
-  main: thread("main", "Improve sign-in", { collaboration_group_id: "work-group" }),
-  worker: thread("worker", "Implement sign-in", { parent_thread_id: "main", collaboration_group_id: "work-group", status: "running", provider: { kind: "codex", instance: "default" } }),
-  reviewer: thread("reviewer", "Review sign-in", { parent_thread_id: "main", collaboration_group_id: "work-group", status: "running" }),
+  main: thread("main", "Improve sign-in"),
+  worker: thread("worker", "Implement sign-in", { parent_thread_id: "main", status: "running", provider: { kind: "codex", instance: "default" } }),
+  reviewer: thread("reviewer", "Review sign-in", { parent_thread_id: "main", status: "running" }),
   previous: thread("previous", "Authentication decisions"),
   other: thread("other", "Authentication decisions", { project_id: "project-1", provider: { kind: "codex", instance: "default" } }),
 }
@@ -95,10 +95,10 @@ async function run() {
     return results({ preview, pass: true, editorHeight: editor.getBoundingClientRect().height, frameHeight: frame.getBoundingClientRect().height, lineHeight })
   }
   if (preview === "dock-memory") {
-    useStore.getState().set({ rightOpen: true, rightTabs: ["collaboration"], rightTab: "collaboration" })
+    useStore.getState().set({ rightOpen: true, rightTabs: ["agents"], rightTab: "agents" })
     await sleep(500)
     await sampleMemory("dock-one-panel")
-    useStore.getState().set({ rightTabs: ["collaboration", "activity", "changes", "terminal", "artifacts", "explorer"], rightTab: "collaboration" })
+    useStore.getState().set({ rightTabs: ["agents", "activity", "changes", "terminal", "artifacts", "explorer"], rightTab: "agents" })
     await sleep(500)
     await sampleMemory("dock-six-panels")
     return results({ preview, pass: document.querySelectorAll(".t-pane").length === 6 && document.querySelectorAll('.t-pane[data-active="false"]').length === 5 })
@@ -129,26 +129,22 @@ async function run() {
     sidebarDisclosure &&= helperRows().length === 0 && helperToggle.getAttribute("aria-expanded") === "false"
   }
   const messageId = "01a0a0e6-85d2-7c01-adfc-8ce6a93c5b0e"
-  const agentMessage = { parts: [{ type: "text" as const, text: `Kybern collaboration Result from thread ${messageId} (message ${messageId}, reply_to None):\nReviewed sign-in. All checks passed.` }] }
+  const agentMessage = { parts: [{ type: "thread_message" as const, message_id: messageId, from_thread_id: "reviewer", from_title: "Review sign-in", purpose: "reply" as const, reply_to: null, body: "Reviewed sign-in. All checks passed." }] }
   useStore.getState().set({ queued: { main: [{ id: messageId, message: agentMessage }] } }); await sleep(150)
   const queueToggle = findButton("1 agent update waiting")
   const updatesInitiallyCollapsed = !!queueToggle && !document.querySelector('[data-testid="queued-follow-up-row"]')
   queueToggle?.click(); await sleep(150)
   const updateRow = document.querySelector('[data-testid="queued-follow-up-row"]')
-  const updatesReadable = updateRow?.textContent?.includes("Result · Helper") && !updateRow?.textContent?.includes(messageId)
+  const updatesReadable = updateRow?.textContent?.includes("Reply from Review sign-in") && !updateRow?.textContent?.includes(messageId)
   const originalTranscript = useStore.getState().transcripts.main
   useStore.getState().set({ transcripts: { ...useStore.getState().transcripts, main: { ...originalTranscript, blocks: [
     ...originalTranscript.blocks,
     { kind: "user", id: "agent-update", turnId: "update-turn", at, seq: 4, message: agentMessage },
     { kind: "turn_end", id: "update-end", turnId: "update-turn", at, seq: 5, stopReason: "completed", usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 }, costUsd: null, durationMs: 0, terminalMessageId: null, error: null },
   ] } } }); await sleep(300)
-  const notice = Array.from(document.querySelectorAll<HTMLButtonElement>('button[aria-expanded]')).find(button => button.textContent?.trim() === "Result · Helper" && !button.closest('[data-testid="queued-follow-up-row"]'))
-  const messageInitiallyCollapsed = !!notice && notice.getAttribute("aria-expanded") === "false"
-  notice?.click(); await sleep(500)
-  const messageReadable = document.body.textContent?.includes("Reviewed sign-in. All checks passed.") && !!document.querySelector('details summary')
-  if (preview === "disclosure") return results({ preview, pass: sidebarDisclosure && updatesInitiallyCollapsed && updatesReadable && messageInitiallyCollapsed && messageReadable })
-  notice?.click(); await sleep(320)
-  const messageUnmounted = !document.body.textContent?.includes("Reviewed sign-in. All checks passed.")
+  const inbound = document.querySelector('[data-inbound-message="reply"]')
+  const messageReadable = !!inbound && !!inbound.textContent?.includes("Reviewed sign-in. All checks passed.") && !inbound.textContent?.includes(messageId)
+  if (preview === "disclosure") return results({ preview, pass: sidebarDisclosure && updatesInitiallyCollapsed && updatesReadable && messageReadable })
   useStore.getState().set({ queued: {}, transcripts: { ...useStore.getState().transcripts, main: originalTranscript } }); await sleep(100)
   if (preview === "chat") return results({ preview, pass: initialHasNoSetup && sidebarDisclosure && updatesInitiallyCollapsed && updatesReadable })
   useStore.getState().set({ rightOpen: true }); await sleep(220)
@@ -166,10 +162,10 @@ async function run() {
   await addPanel("Diff")
   if (preview === "dock-panels") return results({ preview, pass: firstPanel && dock().querySelectorAll(".t-pane").length === 2 })
   await addPanel("Agents")
-  const noDuplicatePanels = dock().querySelectorAll("[data-tab-active]").length === 2 && useStore.getState().rightTab === "collaboration"
+  const noDuplicatePanels = dock().querySelectorAll("[data-tab-active]").length === 2 && useStore.getState().rightTab === "agents"
   await click("Collapse panel")
   useStore.getState().set({ rightOpen: true }); await sleep(220)
-  const dockReopensChoices = dock().querySelectorAll("[data-tab-active]").length === 2 && useStore.getState().rightTab === "collaboration"
+  const dockReopensChoices = dock().querySelectorAll("[data-tab-active]").length === 2 && useStore.getState().rightTab === "agents"
   await click("Close Agents panel")
   const closeSelectsNeighbor = useStore.getState().rightTab === "changes" && dock().querySelectorAll(".t-pane").length === 1
   await click("Close Diff panel")
@@ -180,7 +176,7 @@ async function run() {
   const terminalShapeMatches = parseFloat(activePill.borderTopLeftRadius) > 0 && activePill.borderRadius === terminalTab.borderRadius && activePill.getPropertyValue("corner-shape") === terminalTab.getPropertyValue("corner-shape")
   if (preview === "terminal-shape") return results({ preview, pass: terminalShapeMatches, radius: activePill.borderRadius, corner: activePill.getPropertyValue("corner-shape") })
   await click("Close Terminal panel")
-  const dockChecks = { messageInitiallyCollapsed, messageReadable, messageUnmounted, sidebarDisclosure, updatesInitiallyCollapsed, updatesReadable, emptyDock, firstPanel, noDuplicatePanels, dockReopensChoices, closeSelectsNeighbor, closeLastEmptiesDock, terminalShapeMatches }
+  const dockChecks = { messageReadable, sidebarDisclosure, updatesInitiallyCollapsed, updatesReadable, emptyDock, firstPanel, noDuplicatePanels, dockReopensChoices, closeSelectsNeighbor, closeLastEmptiesDock, terminalShapeMatches }
   await click("Collapse panel")
   await click(findButton("Implement sign-in") ? "Implement sign-in" : "Implement sign-inWorking")
   const back = findButton("Main thread") ?? findButton("Back to Improve sign-in")
@@ -202,62 +198,41 @@ async function run() {
   if (!findButton("Create coordinator") && !preview.startsWith("coordinator-")) {
     const horizontalOverflow = Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth)
     const checks = { ...dockChecks, initialHasNoSetup, childReturn, titleOnlyReference, referenceDidNotWake, typedReferenceSent, noHorizontalOverflow: horizontalOverflow <= 1 }
-    return results({ fixture: "chat-collaboration", pass: Object.values(checks).every(Boolean), checks, horizontalOverflow, coordinatorTest: "Covered in the wide sidebar fixture" })
+    return results({ fixture: "chat-coordinator", pass: Object.values(checks).every(Boolean), checks, horizontalOverflow, coordinatorTest: "Covered in the wide sidebar fixture" })
   }
   if (findButton("Create coordinator")) await click("Create coordinator")
   else useStore.getState().selectDraft("project-0", "coordinator")
   await sleep(850)
-  const coordinatorDraftInert = document.body.textContent?.includes("What should we work on in") && document.body.textContent?.includes("Project coordinator") && chatFixture.coordinatorCreates === 0 && chatFixture.sent.length === 1
+  const coordinatorDraftInert = document.body.textContent?.includes("What should we work on in") && document.body.textContent?.includes("Your first message becomes the project brief") && chatFixture.coordinatorCreates === 0 && chatFixture.sent.length === 1
   const settledSidebarRowsCrisp = Array.from(document.querySelectorAll<HTMLElement>("[data-marquee-host]")).every((row) => getComputedStyle(row).filter === "none")
   if (preview === "coordinator-draft") return results({ preview, pass: coordinatorDraftInert && settledSidebarRowsCrisp, settledSidebarRowsCrisp })
   await click("Change model and reasoning"); await sleep(120)
   const allHarnessesVisible = ["Claude Code", "Codex", "Cursor", "OpenCode", "Pi", "Oh My Pi"].every((label) => !!findButton(label))
   if (preview === "coordinator-harness") return results({ preview, pass: allHarnessesVisible })
   await click("Codex"); await sleep(120)
-  const advisoryRestrictionVisible = !!document.querySelector('[title*="coordination-only role is advisory"]')
+  const editsNotBlockedTooltip = !!document.querySelector('[title*="can\'t block file edits"]')
   write("Plan and ship the local coordinator experience.")
   document.querySelector<HTMLTextAreaElement>('[data-testid="composer-editor"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); await sleep(350)
   const coordinator = useStore.getState().threads["project-coordinator"]
   const coordinatorOpensChat = (useStore.getState().selected as { id: string }).id === coordinator?.id && !!document.querySelector('[data-testid="composer-editor"]')
-  const initialGoalPreserved = chatFixture.calls.some((call) => call.method === "collaboration.coordinator.get_or_create" && call.params.initial_goal === "Plan and ship the local coordinator experience.")
-  const setupVisible = document.body.textContent?.includes("Project setup")
-  chatFixture.completeSetup(); await sleep(250)
-  const setupCompletes = document.body.textContent?.includes("Setup complete")
+  const editsNotBlockedPill = !!Array.from(document.querySelectorAll<HTMLElement>('[data-slot="badge"]')).find((element) => element.textContent?.trim() === "Edits not blocked on Codex")
+  const initialBriefPreserved = chatFixture.calls.some((call) => call.method === "coordinator.open" && call.params.initial_brief === "Plan and ship the local coordinator experience.")
   const stableFirstMessageId = !!chatFixture.sent[1]?.messageId
   await click("Change model and reasoning"); await sleep(100); await click("Claude Code"); await sleep(250)
-  const harnessSwitched = useStore.getState().threads["project-coordinator"]?.provider.kind === "claude-code" && chatFixture.calls.some((call) => call.method === "collaboration.coordinator.switch_harness")
-  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await sleep(250)
-  await click("Knowledge"); await sleep(900)
-  document.querySelectorAll<HTMLElement>('[data-slot="tooltip-positioner"],[role="tooltip"]').forEach((element) => { element.style.display = "none" })
-  const projectKnowledgeVisible = document.body.textContent?.includes("Current plan") && document.body.textContent?.includes("Confirm the local workflow") && document.body.textContent?.includes("The draft stays inert until Send")
-  if (preview === "coordinator-knowledge") return results({ preview, pass: projectKnowledgeVisible })
-  await click("Results"); await sleep(700)
-  const resultsVisible = document.body.textContent?.includes("Review coordinator integration") && document.body.textContent?.includes("Verified the inert draft")
-  if (preview === "coordinator-results") return results({ preview, pass: resultsVisible })
+  const harnessSwitched = useStore.getState().threads["project-coordinator"]?.provider.kind === "claude-code" && chatFixture.calls.some((call) => call.method === "coordinator.switch_harness")
+  const editsPillGoneOnClaude = !Array.from(document.querySelectorAll<HTMLElement>('[data-slot="badge"]')).some((element) => element.textContent?.includes("Edits not blocked"))
   const oneCoordinatorCreated = chatFixture.coordinatorCreates === 1
-  await click("More agent actions"); await sleep(150)
-  const deleteMenu = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((element) => visible(element) && element.textContent?.includes("Delete coordinator"))
-  if (!deleteMenu) throw new Error("Missing coordinator deletion action")
-  deleteMenu.click(); await sleep(250)
-  const deleteCopyClear = document.querySelector('[role="dialog"]')?.textContent?.includes("new coordinator starts with fresh knowledge")
-  if (preview === "coordinator-delete") return results({ preview, pass: !!deleteCopyClear })
-  await click("Cancel")
-  const cancelledDeletionInert = !chatFixture.calls.some((call) => call.method === "collaboration.coordinator.delete")
-  await click("More agent actions"); await sleep(120)
-  Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((element) => visible(element) && element.textContent?.includes("Delete coordinator"))!.click(); await sleep(200)
-  chatFixture.deleteError = true
-  await click("Delete coordinator")
-  const deleteErrorVisible = document.querySelector('[role="alert"]')?.textContent?.includes("Stop agents")
-  chatFixture.deleteError = false
-  await click("Delete coordinator"); await sleep(350)
-  const deletionCalls = chatFixture.calls.filter((call) => call.method === "collaboration.coordinator.delete")
-  const retryPreservesIdentity = deletionCalls.length === 2 && deletionCalls[0].params.operation_id === deletionCalls[1].params.operation_id && deletionCalls[1].params.thread_id === coordinator.id
-  const coordinatorRemoved = useStore.getState().threads[coordinator.id]?.status === "archived" && !useStore.getState().threads[coordinator.id]?.coordinator_project_id && !!findButton("Create coordinator")
-  await click("Create coordinator"); await sleep(250)
-  const recreationDraftInert = chatFixture.coordinatorCreates === 1 && !!document.querySelector('[data-testid="composer-editor"]')
+  const projectTabOnlyForCoordinator = await (async () => {
+    useStore.getState().set({ rightOpen: true, rightTabs: ["agents", "project"], rightTab: "project" }); await sleep(300)
+    const coordinatorHasProject = !!document.querySelector("[data-project-panel]")
+    useStore.getState().selectThread("main"); await sleep(300)
+    const ordinaryHasNone = !document.querySelector("[data-project-panel]") && useStore.getState().rightTab === "project"
+    useStore.getState().selectThread(coordinator.id); await sleep(200)
+    return coordinatorHasProject && ordinaryHasNone
+  })()
   const horizontalOverflow = Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth)
-  const checks = { ...dockChecks, initialHasNoSetup, composerSingleLineEditorInTwoLineFrame, blankComposerAreaFocusesEditor, childReturn, titleOnlyReference, referenceDidNotWake, typedReferenceSent, coordinatorDraftInert, settledSidebarRowsCrisp, allHarnessesVisible, advisoryRestrictionVisible, coordinatorOpensChat, initialGoalPreserved, stableFirstMessageId, harnessSwitched, projectKnowledgeVisible, resultsVisible, oneCoordinatorCreated, setupVisible, setupCompletes, deleteCopyClear, cancelledDeletionInert, deleteErrorVisible, retryPreservesIdentity, coordinatorRemoved, recreationDraftInert, noHorizontalOverflow: horizontalOverflow <= 1 }
-  results({ fixture: "chat-collaboration", pass: Object.values(checks).every(Boolean), checks, horizontalOverflow })
+  const checks = { ...dockChecks, initialHasNoSetup, composerSingleLineEditorInTwoLineFrame, blankComposerAreaFocusesEditor, childReturn, titleOnlyReference, referenceDidNotWake, typedReferenceSent, coordinatorDraftInert, settledSidebarRowsCrisp, allHarnessesVisible, editsNotBlockedTooltip, coordinatorOpensChat, editsNotBlockedPill, initialBriefPreserved, stableFirstMessageId, harnessSwitched, editsPillGoneOnClaude, oneCoordinatorCreated, projectTabOnlyForCoordinator, noHorizontalOverflow: horizontalOverflow <= 1 }
+  results({ fixture: "chat-coordinator", pass: Object.values(checks).every(Boolean), checks, horizontalOverflow })
 }
 window.addEventListener("unhandledrejection", (event) => results({ pass: false, error: String(event.reason) }))
-run().catch((error) => results({ fixture: "chat-collaboration", pass: false, error: String(error) }))
+run().catch((error) => results({ fixture: "chat-coordinator", pass: false, error: String(error) }))

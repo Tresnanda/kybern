@@ -865,13 +865,16 @@ function AgentSettings() {
 }
 
 
-/** How far one thread may fan out when an agent delegates work to other agents. */
+/** How far one thread, or a project's Coordinator, may fan out when an agent delegates work to other agents. */
 function DelegationSection({ orchestration, onChange }: { orchestration: OrchestrationSettings | undefined; onChange: (next: OrchestrationSettings) => void }) {
-  const current: OrchestrationSettings = { max_active_children: 4, max_depth: 2, ...orchestration }
+  const current: OrchestrationSettings = { max_active_children: 4, lead_max_children: 6, max_depth: 2, ...orchestration }
   return (
     <Section title="Delegation">
       <Row title="Active agents per thread" description="How many delegated agents one thread can have working at once. At the limit, the thread waits for one to finish before delegating again.">
         <LimitField label="Active agents per thread" unit="agents" step={1} min={1} max={16} value={current.max_active_children} onCommit={(value) => onChange({ ...current, max_active_children: value })} />
+      </Row>
+      <Row title="Active agents per Coordinator" description="The same limit for a project's Coordinator, which usually runs more agents at once than an ordinary thread.">
+        <LimitField label="Active agents per Coordinator" unit="agents" step={1} min={1} max={16} value={current.lead_max_children} onCommit={(value) => onChange({ ...current, lead_max_children: value })} />
       </Row>
       <Row title="Delegation depth" description="1 lets only top-level threads delegate. 2 also lets their agents delegate again.">
         <LimitField label="Delegation depth" unit="levels" step={1} min={1} max={4} value={current.max_depth} onCommit={(value) => onChange({ ...current, max_depth: value })} />
