@@ -66,6 +66,7 @@ const APP_TOOL_NAMES = new Set([
   "kybern_task_create",
   "kybern_task_update",
   "kybern_task_claim",
+  "kybern_request_secret",
 ]);
 // Delegation can wait on a child agent (up to 60 s) and send/wait tools can
 // block on a reply. HTML preparation and preview rendering can also outlast
@@ -86,6 +87,13 @@ const APPROVAL_TOOL_NAMES = new Set([
   "kybern_task_update",
   "kybern_task_claim",
 ]);
+// kybern_request_secret waits for the user for up to timeout_seconds (default
+// 600, at most 3600), plus the daemon's slack.
+const SECRET_TOOL_NAME = "kybern_request_secret";
+function secretToolTimeoutMs(args) {
+  const seconds = Number.isFinite(args?.timeout_seconds) ? Math.min(Math.max(args.timeout_seconds, 10), 3600) : 600;
+  return seconds * 1000 + 30 * 1000;
+}
 function configuredToolSet(environmentName) {
   if (process.env[environmentName] === undefined) return new Set();
   try {
@@ -305,7 +313,9 @@ async function executeAppTool(name, toolCallId, args, signal, ctx) {
   const encodedResult = await ctx.ui.input(title, "Kybern app tool bridge", {
     signal,
     timeout:
-      name.startsWith("kybern_computer_") || APPROVAL_TOOL_NAMES.has(name) || LONG_TOOL_NAMES.has(name)
+      name === SECRET_TOOL_NAME
+        ? secretToolTimeoutMs(args)
+        : name.startsWith("kybern_computer_") || APPROVAL_TOOL_NAMES.has(name) || LONG_TOOL_NAMES.has(name)
         ? COMPUTER_TOOL_TIMEOUT_MS
         : APP_TOOL_TIMEOUT_MS,
   });

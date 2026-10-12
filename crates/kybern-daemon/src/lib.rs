@@ -29,6 +29,7 @@ mod provider_assets;
 #[cfg(test)]
 mod remote_tests;
 mod rpc;
+mod secrets;
 mod self_update;
 mod settings;
 mod skills;

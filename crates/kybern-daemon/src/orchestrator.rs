@@ -28,6 +28,7 @@ mod delegation;
 mod messaging;
 mod notes;
 mod omp_recovery;
+mod secret_request;
 mod subagent_messaging;
 mod subagents;
 mod tasks;
@@ -2222,6 +2223,9 @@ impl Orchestrator {
                     consent: &consent,
                 };
                 return self.inner.computer.execute(ctx, name, arguments).await;
+            }
+            if crate::secrets::is_tool(name) {
+                return self.execute_request_secret(&thread, turn_id, &live, arguments).await;
             }
             if agent_items::is_tool(name) {
                 return self.execute_notes_tasks_tool(&thread, turn_id, &live, name, arguments).await;
@@ -4886,6 +4890,24 @@ impl Orchestrator {
         summary: String,
         operation: Option<Uuid>,
     ) -> Result<(ApprovalId, DaemonAnswer)> {
+        self.ask_daemon_approval_within(thread_id, turn_id, live, key, tool_name, input, summary, operation, crate::computer::CONSENT_WAIT)
+            .await
+    }
+
+    /// [`Self::ask_daemon_approval`] with its own wait before the answer is `Pending`.
+    #[allow(clippy::too_many_arguments)]
+    async fn ask_daemon_approval_within(
+        &self,
+        thread_id: ThreadId,
+        turn_id: TurnId,
+        live: &Arc<LiveSession>,
+        key: String,
+        tool_name: &str,
+        input: serde_json::Value,
+        summary: String,
+        operation: Option<Uuid>,
+        wait: Duration,
+    ) -> Result<(ApprovalId, DaemonAnswer)> {
         let (card, mut receiver) = {
             let mut approvals = live.daemon_approvals.lock().await;
             let reusable = approvals.iter().find(|(_, entry)| {
@@ -4923,7 +4945,7 @@ impl Orchestrator {
                 }
             }
         };
-        let decision = tokio::time::timeout(crate::computer::CONSENT_WAIT, receiver.wait_for(Option::is_some)).await;
+        let decision = tokio::time::timeout(wait, receiver.wait_for(Option::is_some)).await;
         let answer = match decision {
             Ok(Ok(decision)) => match decision.clone() {
                 Some(decision) => DaemonAnswer::Decided(decision),
@@ -5879,7 +5901,9 @@ impl Orchestrator {
             let mut result = if this.owns_app_tool_turn(thread_id, &live, Some(turn_id)).await.is_none() {
                 Err("app tool request is stale".to_string())
             } else {
-                let timeout = if name == "kybern_collaboration_wait"
+                let timeout = if let Some(budget) = crate::secrets::call_budget(&name, &arguments) {
+                    budget
+                } else if name == "kybern_collaboration_wait"
                     || delegation::BLOCKING_TOOLS.contains(&name.as_str())
                     || (name == "kybern_thread_send" && arguments.get("wait_for_reply").and_then(serde_json::Value::as_bool) == Some(true))
                     || matches!(name.as_str(), "kybern_html_preview" | "kybern_html_publish")
@@ -6702,6 +6726,8 @@ mod tests {
         broken_interrupt: bool,
         reject_permission: bool,
         stopped_tasks: Arc<Mutex<Vec<String>>>,
+        /// What the session was told to do with each permission request.
+        permission_responses: Arc<Mutex<Vec<ApprovalDecision>>>,
     }
 
     #[async_trait::async_trait]
@@ -6750,7 +6776,8 @@ mod tests {
             Ok(())
         }
 
-        async fn respond_permission(&self, _request_id: &str, _decision: &ApprovalDecision) -> kybern_drivers::Result<()> {
+        async fn respond_permission(&self, _request_id: &str, decision: &ApprovalDecision) -> kybern_drivers::Result<()> {
+            self.permission_responses.lock().await.push(decision.clone());
             Ok(())
         }
 
@@ -7302,10 +7329,19 @@ mod tests {
         }
 
         fn with_drivers_and_gateway(drivers: DriverRegistry, gateway: Option<crate::native_tools_mcp::NativeToolsGateway>) -> Self {
+            Self::build(drivers, gateway, false)
+        }
+
+        /// A fixture whose database is a real SQLite file (and WAL) under its data directory.
+        fn on_disk() -> Self {
+            Self::build(DriverRegistry::default(), None, true)
+        }
+
+        fn build(drivers: DriverRegistry, gateway: Option<crate::native_tools_mcp::NativeToolsGateway>, on_disk: bool) -> Self {
             let root = std::env::temp_dir().join(format!("kybern-orchestrator-test-{}", Uuid::now_v7()));
             let paths = Paths::resolve(Some(root.clone())).unwrap();
             let settings = SettingsStore::load(&paths.settings).unwrap();
-            let store = Store::open_in_memory().unwrap();
+            let store = if on_disk { Store::open(&root.join("state.sqlite")).unwrap() } else { Store::open_in_memory().unwrap() };
             let now = chrono::Utc::now();
             let project = Project {
                 id: Uuid::now_v7(),
@@ -7397,9 +7433,15 @@ mod tests {
 
         async fn active_app_tool_session(&self, thread: &Thread) -> (Arc<LiveSession>, CapturedAppToolResponses) {
             let responses = Arc::new(Mutex::new(Vec::new()));
+            let live = self.active_session(thread, TestSession { app_tool_responses: responses.clone(), ..Default::default() }).await;
+            (live, responses)
+        }
+
+        /// A live session around `session` with an active turn.
+        async fn active_session(&self, thread: &Thread, session: TestSession) -> Arc<LiveSession> {
             let live = Arc::new(LiveSession {
                 session_instance_id: Uuid::now_v7(),
-                session: Box::new(TestSession { app_tool_responses: responses.clone(), ..Default::default() }),
+                session: Box::new(session),
                 computer_tools: false,
                 last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
                 released: AtomicBool::new(false),
@@ -7420,7 +7462,7 @@ mod tests {
             self.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
             self.orchestrator.send(thread.id, UserMessage::text("inspect workspace")).await.unwrap();
             live.turn_ready.notified().await;
-            (live, responses)
+            live
         }
 
         async fn has_session(&self, thread: &Thread) -> bool {
@@ -10712,6 +10754,7 @@ for line in sys.stdin:
     }
 
     include!("orchestrator/delegation_tests.rs");
+    include!("orchestrator/secret_tests.rs");
     include!("orchestrator/messaging_tests.rs");
     include!("orchestrator/account_tests.rs");
     include!("orchestrator/worktree_tests.rs");
