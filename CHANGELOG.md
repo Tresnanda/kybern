@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.1
+
+<!-- kybern-release-title: A Coordinator that sets itself up -->
+<!-- kybern-release-summary: A new Coordinator interviews you to set up its brief and settings, lands work with its own git tool, and follows per-project model defaults. -->
+
+- Let a new Coordinator set itself up. It interviews you in a few rounds, with question cards where the harness has them, while a research agent writes the setup note. Your first message in Draft becomes your first answer instead of the brief. The interview ends with a brief you can reword before saving and the settings it proposes, which you can untick row by row. **Redo setup** in the Project tab runs it again.
+- Add Coordinator settings: whether to act or propose before starting work, where agents work, a harness and model for each kind of work, and whether pushing and opening pull requests need your approval. Set defaults in Settings › Delegation and override them per project in the Project tab. When the Coordinator picks a different model, the agent's row shows why.
+- Give the Coordinator a git tool instead of a shell: branches, commits and merging an agent's worktree branch run directly; pushing and opening a pull request ask unless you allow them; merging a pull request always asks. Agents still never commit.
+- Let the Coordinator ask question cards and use skills, and turn a typed `/skill` anywhere in a message into the skill instead of plain text.
+- Keep plan usage rings after the daemon restarts. A ring waiting on a sign-in refresh or a failed read stays visible, dimmed, with when it was last updated.
+- Show the last known models to agents choosing a harness when a model list is slow to load.
+
 ## 0.9.0
 
 <!-- kybern-release-title: A Coordinator that delegates, and secrets kept out of chat -->

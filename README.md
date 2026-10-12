@@ -639,6 +639,30 @@ gets the new text with its next message. Turn on **Give every thread in this
 project the brief** (`brief_in_all_threads`) to give every new thread in the
 project the same brief and index.
 
+A new Coordinator sets itself up. Kybern starts it with a short interview in
+rounds (question cards where the harness has them), while a research agent
+writes the setup note. Your first message in Draft becomes your first answer.
+The interview ends with two cards: the brief, which you can reword before
+saving, and the Coordinator settings it proposes, which you can untick row by
+row. Use **Redo setup** in the Project tab to run it again.
+
+Coordinator settings live in **Settings › Delegation** as defaults, and each
+project can override them in its Project tab:
+
+- **Before starting work**: **Act**, **Propose large** (small fixes start right
+  away, larger or protocol work gets a plan first) or **Propose all**.
+- **Agents work in**: this checkout or their own worktree.
+- **Models for each kind of work**: harness, model and effort for research,
+  implementation, review, design and test. The Coordinator may pick another,
+  and the agent's row then shows its reason.
+- **Push and open pull requests without asking**.
+
+The Coordinator has no shell. It lands work with `kybern_git`: status, log,
+diff, branches, commits and merging an agent's worktree branch need no
+approval; pushing and opening a pull request ask unless the setting above
+allows them; merging a pull request always asks. Agents never commit; the
+Coordinator reviews their changes and commits them.
+
 When the Coordinator is idle, or after a failed turn, use the normal harness
 picker in its composer to change harness, model, or effort. Kybern keeps the
 same conversation and notes; the selected harness begins with a fresh provider
@@ -647,7 +671,8 @@ before switching.
 
 Coordinators created before the Coordinator became a lead thread were archived
 when the daemon upgraded. Their latest project brief was saved as the pinned
-brief note, and their worker threads stay available as history.
+brief note, their overview and setup log became memory notes, and their worker
+threads stay available as history.
 
 The desktop right sidebar starts empty. Use **+** to add the panels you need
 and **×** to close them; Kybern remembers your choices for each environment.
@@ -657,7 +682,8 @@ The CLI exposes the Coordinator and read-only history:
 
 ```sh
 kybern coordinator get <project-id>
-kybern coordinator open <project-id> --provider claude-code --brief-file brief.md
+kybern coordinator open <project-id> --provider claude-code --message "We build Kybern; small PRs"
+kybern coordinator setup <project-id>
 kybern coordinator switch-harness <project-id> --provider codex --model gpt-5.6-sol
 kybern history search --all-projects --query authentication
 kybern history read <thread-id> --limit 50
@@ -665,9 +691,9 @@ kybern history read <thread-id> --limit 50
 
 `coordinator get` prints the Coordinator thread, or `null`. `coordinator open`
 is idempotent: a project has at most one Coordinator, so it returns the existing
-thread with `"created": false`. `--brief` and `--brief-file` (`-` reads standard
-input) save the brief note when the project has none; opening does not start a
-turn. `history read` returns bounded pages; continue with `--before-seq`,
+thread with `"created": false`. `--message` and `--message-file` (`-` reads
+standard input) give the opening message: a project without a brief starts the
+setup interview with it. `coordinator setup` runs the interview again. `history read` returns bounded pages; continue with `--before-seq`,
 `--message-seq` and `--text-offset`.
 
 ### Asking for secrets
