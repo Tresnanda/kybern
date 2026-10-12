@@ -257,7 +257,6 @@ impl Orchestrator {
                     last_seq: 0,
                     parent_thread_id: Some(parent),
                     coordinator_project_id: None,
-                    collaboration_group_id: None,
                     subagent: Some(info.clone()),
                     delegation: None,
                 };

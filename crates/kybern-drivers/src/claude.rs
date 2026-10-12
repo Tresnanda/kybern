@@ -175,9 +175,11 @@ impl AgentDriver for ClaudeDriver {
                 // Claude's `--tools` set is the native built-in catalog. An
                 // empty set leaves the session MCP server available while
                 // preventing shell, file, web, and other built-in tools from
-                // bypassing the coordinator policy. Strict MCP config also
-                // prevents unrelated project/user servers from widening it.
-                cmd.args(["--tools", "", "--strict-mcp-config"]);
+                // bypassing the coordinator policy. A lead keeps only the
+                // read-only ones. Strict MCP config also prevents unrelated
+                // project/user servers from widening it.
+                let builtins = if bridge.restrictions.allow_read_only_builtins { CLAUDE_READ_ONLY_TOOLS } else { "" };
+                cmd.args(["--tools", builtins, "--strict-mcp-config"]);
             }
         }
         if config.permission_mode == PermissionMode::FullAccess {
@@ -241,6 +243,9 @@ impl AgentDriver for ClaudeDriver {
         Ok(SpawnedSession { session: Box::new(SessionHandle(session, lifetime)), events: rx })
     }
 }
+
+/// Built-in tools a project Coordinator keeps: reading, searching and web lookups.
+const CLAUDE_READ_ONLY_TOOLS: &str = "Read,Grep,Glob,WebSearch,WebFetch";
 
 impl ClaudeDriver {
     async fn probe_context(&self, context: &ProbeContext) -> ProviderStatus {
@@ -468,10 +473,11 @@ fn write_claude_mcp_config(bridge: &NativeToolBridge) -> Result<NativeMcpConfig>
     let endpoint = bridge
         .endpoint
         .as_deref()
-        .ok_or_else(|| DriverError::Unsupported("Claude Code native collaboration tools require a daemon MCP endpoint".into()))?;
-    let authorization = bridge.authorization.as_deref().ok_or_else(|| {
-        DriverError::Unsupported("Claude Code native collaboration tools require a scoped MCP authorization capability".into())
-    })?;
+        .ok_or_else(|| DriverError::Unsupported("Claude Code Kybern tools require a daemon MCP endpoint".into()))?;
+    let authorization = bridge
+        .authorization
+        .as_deref()
+        .ok_or_else(|| DriverError::Unsupported("Claude Code Kybern tools require a scoped MCP authorization capability".into()))?;
     let config = json!({
         "mcpServers": {
             bridge.server_name.clone(): {
@@ -2390,6 +2396,65 @@ mod tests {
                 !args.iter().any(|arg| ["--system-prompt", "--tools", "--strict-mcp-config"].contains(&arg.as_str())),
                 "ordinary MCP availability must not replace system prompts or disable native plugins"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_lead_gets_only_the_read_only_builtins_and_everyone_else_loses_them_all_when_enforced() {
+        use crate::{AgentDriver, SessionConfig};
+        use std::os::unix::fs::PermissionsExt;
+        for (enforced, read_only, expected) in
+            [(true, true, Some("Read,Grep,Glob,WebSearch,WebFetch")), (true, false, Some("")), (false, true, None)]
+        {
+            let root = tempfile::tempdir().unwrap();
+            let binary = root.path().join("claude-fixture");
+            std::fs::write(&binary, "#!/usr/bin/env python3\nimport json,pathlib,sys\ntmp=pathlib.Path('argv.tmp')\ntmp.write_text(json.dumps(sys.argv[1:]))\ntmp.rename('argv.json')\nfor line in sys.stdin: pass\n").unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let bridge = NativeToolBridge {
+                server_name: "kybern".into(),
+                endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
+                authorization: Some("fixture-capability".into()),
+                coordinator_instructions: Some("LEAD".into()),
+                guide: None,
+                tools: vec![crate::NativeToolDefinition {
+                    name: "kybern_thread_read".into(),
+                    description: "x".into(),
+                    input_schema: json!({"type":"object"}),
+                }],
+                restrictions: crate::NativeToolRestrictions {
+                    require_enforcement: enforced,
+                    allow_read_only_builtins: read_only,
+                    ..Default::default()
+                },
+            };
+            let spawned = super::ClaudeDriver::default()
+                .spawn(SessionConfig {
+                    cwd: root.path().into(),
+                    model: None,
+                    effort: None,
+                    permission_mode: kybern_protocol::PermissionMode::FullAccess,
+                    native_tool_bridge: Some(bridge),
+                    resume_session_id: None,
+                    fork: false,
+                    rewind: None,
+                    binary: Some(binary),
+                    env: Default::default(),
+                })
+                .await
+                .unwrap();
+            let argv_path = root.path().join("argv.json");
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                while !argv_path.exists() {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let args: Vec<String> = serde_json::from_slice(&std::fs::read(argv_path).unwrap()).unwrap();
+            spawned.session.close().await.unwrap();
+            let tools = args.iter().position(|arg| arg == "--tools").map(|index| args[index + 1].as_str());
+            assert_eq!(tools, expected, "enforced={enforced} read_only={read_only}");
+            assert_eq!(args.iter().any(|arg| arg == "--strict-mcp-config"), enforced);
         }
     }
 

@@ -30,7 +30,7 @@ pub const APP_TOOL_TITLE_PREFIX: &str = "kybern_app_tool_request:";
 pub const ALLOW_ONCE: &str = "Allow once";
 pub const ALLOW_ALWAYS: &str = "Always allow this exact call";
 pub const DENY: &str = "Deny";
-pub const APP_TOOL_NAMES: [&str; 42] = [
+pub const APP_TOOL_NAMES: [&str; 34] = [
     "kybern_thread_context",
     "kybern_workspace_diff",
     "kybern_read_file",
@@ -49,14 +49,6 @@ pub const APP_TOOL_NAMES: [&str; 42] = [
     "kybern_agent_cancel",
     "kybern_agent_wait",
     "kybern_thread_interrupt",
-    "kybern_collaboration_spawn",
-    "kybern_collaboration_send",
-    "kybern_collaboration_read",
-    "kybern_collaboration_wait",
-    "kybern_collaboration_report",
-    "kybern_collaboration_cancel",
-    "kybern_collaboration_context_read",
-    "kybern_collaboration_context_put",
     "kybern_computer_apps",
     "kybern_computer_observe",
     "kybern_computer_act",
@@ -142,6 +134,7 @@ impl StagedExtension {
         command.env_remove("KYBERN_PI_SYSTEM_PROMPT");
         command.env_remove("KYBERN_PI_NO_BOOTSTRAP");
         command.env_remove("KYBERN_PI_COORDINATOR_ONLY");
+        command.env_remove("KYBERN_PI_READ_ONLY_BUILTINS");
         command.env_remove("KYBERN_PI_DENIED_TOOLS");
         if let Some(bridge) = bridge {
             if let Some(instructions) = bridge.provider_instructions() {
@@ -164,6 +157,9 @@ impl StagedExtension {
             command.env("KYBERN_PI_APP_TOOLS", serde_json::to_string(&tools).unwrap_or_else(|_| "[]".into()));
             if bridge.restrictions.require_enforcement {
                 command.env("KYBERN_PI_COORDINATOR_ONLY", "1");
+                if bridge.restrictions.allow_read_only_builtins {
+                    command.env("KYBERN_PI_READ_ONLY_BUILTINS", "1");
+                }
             }
             if !bridge.restrictions.denied_tools.is_empty() {
                 command.env(
@@ -209,9 +205,7 @@ impl StagedExtension {
         if !expected.is_empty() && expected.iter().all(|name| advertised.contains(name.as_str())) {
             Ok(())
         } else {
-            Err(DriverError::Protocol(
-                "OMP did not load Kybern's configured collaboration tools; fix the extension error and send again".into(),
-            ))
+            Err(DriverError::Protocol("OMP did not load Kybern's configured tools; fix the extension error and send again".into()))
         }
     }
 }
@@ -404,12 +398,12 @@ mod tests {
     #[test]
     fn omp_handshake_requires_every_configured_bridge_tool() {
         let staged = StagedExtension::new(PermissionMode::Supervised).unwrap();
-        let expected = HashSet::from(["kybern_thread_context".to_string(), "kybern_collaboration_read".to_string()]);
+        let expected = HashSet::from(["kybern_thread_context".to_string(), "kybern_thread_read".to_string()]);
         staged
             .verify_omp_tools(
                 &json!({"dumpTools": [
                     {"name": "kybern_thread_context"},
-                    {"name": "kybern_collaboration_read"}
+                    {"name": "kybern_thread_read"}
                 ]}),
                 &expected,
             )
@@ -452,6 +446,7 @@ mod tests {
                 allowed_tools: vec!["kybern_threads_search".into(), "unsupported_daemon_tool".into()],
                 denied_tools: vec!["bash".into()],
                 require_enforcement: true,
+                allow_read_only_builtins: false,
             },
         };
         let mut command = Command::new("pi");
@@ -470,6 +465,32 @@ mod tests {
         assert_eq!(command_env(&command, "KYBERN_PI_SYSTEM_PROMPT").unwrap().unwrap(), "COORDINATOR ROLE SENTINEL");
         assert_eq!(command_env(&command, "KYBERN_PI_COORDINATOR_ONLY").unwrap().unwrap(), "1");
         assert_eq!(command_env(&command, "KYBERN_PI_DENIED_TOOLS").unwrap().unwrap(), r#"["bash"]"#);
+    }
+
+    #[test]
+    fn a_lead_may_keep_read_only_builtins_only_while_enforced() {
+        let staged = StagedExtension::new(PermissionMode::Supervised).unwrap();
+        for (enforced, read_only, expected) in [(true, true, Some("1")), (true, false, None), (false, true, None)] {
+            let bridge = NativeToolBridge {
+                server_name: "kybern".into(),
+                endpoint: None,
+                authorization: None,
+                coordinator_instructions: Some("LEAD".into()),
+                guide: None,
+                tools: vec![],
+                restrictions: NativeToolRestrictions {
+                    allowed_tools: vec![],
+                    denied_tools: vec![],
+                    require_enforcement: enforced,
+                    allow_read_only_builtins: read_only,
+                },
+            };
+            let mut command = Command::new("pi");
+            command.env("KYBERN_PI_READ_ONLY_BUILTINS", "stale");
+            staged.configure(&mut command, Some(&bridge));
+            let value = command_env(&command, "KYBERN_PI_READ_ONLY_BUILTINS").unwrap().map(|value| value.to_str().unwrap().to_owned());
+            assert_eq!(value.as_deref(), expected, "enforced={enforced} read_only={read_only}");
+        }
     }
 
     #[test]

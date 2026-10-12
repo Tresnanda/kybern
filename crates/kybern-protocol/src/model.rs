@@ -267,6 +267,10 @@ pub struct Project {
     /// project name when it is added; editable through `projects.update`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_prefix: Option<String>,
+    /// When on, every new thread in the project also gets the project brief and an
+    /// index of its notes at session start (not only the Coordinator's children).
+    #[serde(default)]
+    pub brief_in_all_threads: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -314,12 +318,10 @@ pub struct Thread {
     /// Immutable parent for a Kybern-managed helper thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_thread_id: Option<ThreadId>,
-    /// Set when this thread is the persistent coordinator for a project.
+    /// Set when this thread is the project's Coordinator, the lead thread that
+    /// plans and delegates. At most one non-archived thread per project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coordinator_project_id: Option<ProjectId>,
-    /// Active collaboration membership, denormalized for efficient navigation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub collaboration_group_id: Option<crate::GroupId>,
     /// Set when this thread mirrors one provider-native subagent. Such a thread
     /// is read-only: it records what the subagent said and did, and its
     /// `parent_thread_id` is the thread (or subagent thread) that launched it.
@@ -1639,13 +1641,15 @@ pub struct Settings {
 pub struct OrchestrationSettings {
     /// Most delegated children one thread may have running at once (1..=16).
     pub max_active_children: u32,
+    /// The same limit when the delegating thread is a project's Coordinator (1..=16).
+    pub lead_max_children: u32,
     /// Deepest chain of delegation: 1 means only top-level threads delegate (1..=4).
     pub max_depth: u32,
 }
 
 impl Default for OrchestrationSettings {
     fn default() -> Self {
-        Self { max_active_children: 4, max_depth: 2 }
+        Self { max_active_children: 4, lead_max_children: 6, max_depth: 2 }
     }
 }
 
@@ -2135,9 +2139,9 @@ mod orchestration_tests {
 
     #[test]
     fn orchestration_settings_default_and_partial_parse() {
-        assert_eq!(Settings::default().orchestration, OrchestrationSettings { max_active_children: 4, max_depth: 2 });
+        assert_eq!(Settings::default().orchestration, OrchestrationSettings { max_active_children: 4, lead_max_children: 6, max_depth: 2 });
         let settings: Settings = serde_json::from_value(serde_json::json!({ "orchestration": { "max_depth": 3 } })).unwrap();
-        assert_eq!(settings.orchestration, OrchestrationSettings { max_active_children: 4, max_depth: 3 });
+        assert_eq!(settings.orchestration, OrchestrationSettings { max_active_children: 4, lead_max_children: 6, max_depth: 3 });
         let legacy: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(legacy.orchestration, OrchestrationSettings::default());
     }

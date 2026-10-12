@@ -51,6 +51,11 @@ expression: schema_for!(ProjectsChangedNotification)
             "null"
           ]
         },
+        "brief_in_all_threads": {
+          "description": "When on, every new thread in the project also gets the project brief and an\nindex of its notes at session start (not only the Coordinator's children).",
+          "type": "boolean",
+          "default": false
+        },
         "created_at": {
           "type": "string",
           "format": "date-time"

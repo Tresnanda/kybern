@@ -1,5 +1,5 @@
 mod accounts;
-mod collaboration;
+mod coordinator;
 mod render;
 
 use std::path::PathBuf;
@@ -116,10 +116,15 @@ enum Cmd {
         #[command(subcommand)]
         cmd: CursorCmd,
     },
-    /// Coordinate agent threads, assignments, messages, and shared context.
-    Collaboration {
+    /// Open, show or move a project's Coordinator, the lead thread that plans and delegates.
+    Coordinator {
         #[command(subcommand)]
-        cmd: collaboration::CollaborationCmd,
+        cmd: coordinator::CoordinatorCmd,
+    },
+    /// Find threads and read their saved messages without waking them.
+    History {
+        #[command(subcommand)]
+        cmd: coordinator::HistoryCmd,
     },
     /// Show daemon info.
     Info,
@@ -1079,7 +1084,8 @@ pub async fn run() -> Result<()> {
 
     match cli.cmd {
         Cmd::Cursor { .. } => unreachable!("local Cursor setup handled before connecting"),
-        Cmd::Collaboration { cmd } => collaboration::run(&client, cmd).await?,
+        Cmd::Coordinator { cmd } => coordinator::coordinator(&client, cmd).await?,
+        Cmd::History { cmd } => coordinator::history(&client, cmd).await?,
         Cmd::Info => {
             let info = client.call::<DaemonInfoMethod>(Empty {}).await?;
             if json { println!("{}", serde_json::to_string_pretty(&info)?) } else { render::info(&info) }
@@ -2115,6 +2121,7 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
                     project_id,
                     title,
                     body: file.as_deref().map(read_input).transpose()?,
+                    project_role: None,
                 })
                 .await?;
             if json {

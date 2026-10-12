@@ -122,18 +122,14 @@ impl NativeToolsGateway {
 }
 
 /// Brief MCP metadata only. Do not copy this into provider prompts or user
-/// messages; native-tool providers already receive the tool descriptions.
+/// messages; native-tool providers already receive the tool descriptions. A
+/// lead's role and a thread's project brief reach the provider through its own
+/// instructions channel, so repeating them here would only double their cost.
 fn mcp_instructions(bridge: &NativeToolBridge) -> Option<String> {
-    if let Some(instructions) = &bridge.coordinator_instructions {
-        return Some(instructions.clone());
-    }
     bridge.tools().next()?;
     let mut parts = vec!["Kybern tools are scoped to this conversation and its permissions."];
     if bridge.has_tool("kybern_thread_read") {
         parts.push("Read conversation references with kybern_thread_read.");
-    }
-    if bridge.has_tool("kybern_collaboration_spawn") {
-        parts.push("Create managed Kybern child chats with kybern_collaboration_spawn.");
     }
     if bridge.has_tool("kybern_computer_act") {
         parts.push("Use and open apps on the user's Mac with kybern_computer_apps, observe and act, not shell commands.");
@@ -402,12 +398,12 @@ mod tests {
         let state = AppState::initialize(&paths).unwrap();
         state.native_tools.set_endpoint("127.0.0.1:4199".parse().unwrap());
         for allow_spawn in [true, false] {
-            let tools = ["kybern_thread_read", "kybern_collaboration_spawn"]
+            let tools = ["kybern_thread_read", "kybern_computer_act"]
                 .into_iter()
                 .map(|name| NativeToolDefinition { name: name.into(), description: name.into(), input_schema: json!({"type":"object"}) })
                 .collect();
             let restrictions = NativeToolRestrictions {
-                denied_tools: if allow_spawn { vec![] } else { vec!["kybern_collaboration_spawn".into()] },
+                denied_tools: if allow_spawn { vec![] } else { vec!["kybern_computer_act".into()] },
                 ..Default::default()
             };
             let bridge = state.native_tools.register(Uuid::new_v4(), Uuid::new_v4(), tools, restrictions).unwrap();
@@ -432,7 +428,7 @@ mod tests {
             let body: Value = serde_json::from_slice(&bytes).unwrap();
             let instructions = body["result"]["instructions"].as_str().expect("MCP initialization must explain host routing");
             assert!(instructions.contains("kybern_thread_read"));
-            assert_eq!(instructions.contains("kybern_collaboration_spawn"), allow_spawn);
+            assert_eq!(instructions.contains("kybern_computer_apps"), allow_spawn);
             assert!(instructions.len() <= 400, "MCP metadata should stay brief");
             assert!(!instructions.contains(bridge.authorization.as_deref().unwrap()));
             let response = handle(
@@ -450,7 +446,7 @@ mod tests {
             let body: Value = serde_json::from_slice(&bytes).unwrap();
             let names: Vec<_> = body["result"]["tools"].as_array().unwrap().iter().filter_map(|tool| tool["name"].as_str()).collect();
             assert!(names.contains(&"kybern_thread_read"));
-            assert_eq!(names.contains(&"kybern_collaboration_spawn"), allow_spawn);
+            assert_eq!(names.contains(&"kybern_computer_act"), allow_spawn);
         }
         drop(state);
         let _ = std::fs::remove_dir_all(root);

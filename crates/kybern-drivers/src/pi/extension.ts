@@ -23,6 +23,9 @@ const ALLOW_ALWAYS = "Always allow this exact call";
 const DENY = "Deny";
 
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
+// What a project Coordinator may still call besides Kybern's tools: the read-only
+// built-ins of Pi and Oh My Pi (glob and web_search exist only in Oh My Pi).
+const LEAD_READ_ONLY_TOOLS = new Set([...READ_ONLY_TOOLS, "glob", "web_search"]);
 const EDIT_TOOLS = new Set(["edit", "write"]);
 const APP_TOOL_NAMES = new Set([
   "kybern_thread_context",
@@ -43,14 +46,6 @@ const APP_TOOL_NAMES = new Set([
   "kybern_agent_cancel",
   "kybern_agent_wait",
   "kybern_thread_interrupt",
-  "kybern_collaboration_spawn",
-  "kybern_collaboration_send",
-  "kybern_collaboration_read",
-  "kybern_collaboration_wait",
-  "kybern_collaboration_report",
-  "kybern_collaboration_cancel",
-  "kybern_collaboration_context_read",
-  "kybern_collaboration_context_put",
   "kybern_computer_apps",
   "kybern_computer_observe",
   "kybern_computer_act",
@@ -349,6 +344,7 @@ export default function kybernExtension(pi) {
   const appToolNames = new Set(configuredTools.map((tool) => tool.name));
   const deniedTools = configuredToolSet("KYBERN_PI_DENIED_TOOLS");
   const coordinatorOnly = process.env.KYBERN_PI_COORDINATOR_ONLY === "1";
+  const leadReadOnlyBuiltins = process.env.KYBERN_PI_READ_ONLY_BUILTINS === "1";
   const coordinatorInstructions = process.env.KYBERN_PI_SYSTEM_PROMPT || "";
   // A guide-only session (no coordinator role) adds the text to the system
   // prompt each turn and skips the persisted bootstrap message, which would
@@ -428,8 +424,8 @@ export default function kybernExtension(pi) {
       if (deniedTools.has(toolName)) {
         return { block: true, reason: `Kybern coordinator policy denied ${toolName}.` };
       }
-      if (coordinatorOnly && !appToolNames.has(toolName)) {
-        return { block: true, reason: "Kybern coordinator policy permits only collaboration tools." };
+      if (coordinatorOnly && !appToolNames.has(toolName) && !(leadReadOnlyBuiltins && LEAD_READ_ONLY_TOOLS.has(toolName))) {
+        return { block: true, reason: "Kybern coordinator policy permits only Kybern tools and read-only file tools." };
       }
       if (isAllowedWithoutPrompt(mode, toolName, appToolNames)) return;
 

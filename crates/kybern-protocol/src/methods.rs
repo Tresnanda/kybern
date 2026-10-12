@@ -8,9 +8,9 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::Scope;
-use crate::collaboration::*;
 use crate::event::ThreadEvent;
 use crate::model::*;
+use crate::thread_read::*;
 
 /// Static description of a method, used for auth checks and docs.
 pub trait Method {
@@ -443,6 +443,10 @@ pub struct ProjectsUpdateParams {
     /// Absent or `null` leaves the prefix as it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_prefix: Option<String>,
+    /// When true, every new thread in the project also gets the project brief and
+    /// an index of its notes at session start. Absent leaves the switch as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief_in_all_threads: Option<bool>,
 }
 method!(ProjectsUpdate, "projects.update", Some(Scope::OrchestrationOperate), ProjectsUpdateParams, Project);
 
@@ -788,45 +792,22 @@ method!(
     Thread
 );
 
-// ---- daemon-owned collaboration ----
+// ---- project coordinator (the lead thread) ----
 
+/// The project's Coordinator thread, if it has one.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationGroupsCreateParams {
-    pub operation_id: OperationId,
-    pub project_id: ProjectId,
-    pub coordinator_thread_id: ThreadId,
-    pub objective: String,
-    #[serde(default)]
-    pub success_criteria: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub coordinator_mode: Option<CoordinatorMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub policy: Option<CollaborationPolicy>,
-}
-method!(
-    CollaborationGroupsCreate,
-    "collaboration.groups.create",
-    Some(Scope::OrchestrationOperate),
-    CollaborationGroupsCreateParams,
-    CollaborationGroup
-);
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationCoordinatorGetParams {
+pub struct CoordinatorGetParams {
     pub project_id: ProjectId,
 }
-method!(
-    CollaborationCoordinatorGet,
-    "collaboration.coordinator.get",
-    Some(Scope::OrchestrationRead),
-    CollaborationCoordinatorGetParams,
-    Option<ProjectCoordinator>
-);
+method!(CoordinatorGet, "coordinator.get", Some(Scope::OrchestrationRead), CoordinatorGetParams, Option<Thread>);
 
+/// Open the project's Coordinator, creating it when the project has none. Idempotent:
+/// a project has at most one Coordinator, so a retry or a second client gets the same
+/// thread back with `created: false`. Archiving the Coordinator frees the slot.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationCoordinatorGetOrCreateParams {
-    pub operation_id: OperationId,
+pub struct CoordinatorOpenParams {
     pub project_id: ProjectId,
+    /// Used only when the Coordinator is created.
     pub provider: ProviderInstance,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -834,40 +815,22 @@ pub struct CollaborationCoordinatorGetOrCreateParams {
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<PermissionMode>,
+    /// The user's brief. When the project has no brief note yet it becomes the
+    /// brief note; creating the Coordinator does not submit it as a provider turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub coordinator_mode: Option<CoordinatorMode>,
-    /// The user's authoritative project brief. Persisted as project knowledge;
-    /// creating the coordinator does not submit this as a provider turn.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub initial_goal: Option<String>,
+    pub initial_brief: Option<String>,
 }
-method!(
-    CollaborationCoordinatorGetOrCreate,
-    "collaboration.coordinator.get_or_create",
-    Some(Scope::OrchestrationOperate),
-    CollaborationCoordinatorGetOrCreateParams,
-    ProjectCoordinator
-);
-
-/// Remove the current coordinator identity, retaining its archived history.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationCoordinatorDeleteParams {
-    pub operation_id: OperationId,
-    pub project_id: ProjectId,
-    /// Compare against the coordinator the user reviewed, never a replacement.
-    pub thread_id: ThreadId,
+pub struct CoordinatorOpenResult {
+    pub thread: Thread,
+    pub created: bool,
 }
-method!(
-    CollaborationCoordinatorDelete,
-    "collaboration.coordinator.delete",
-    Some(Scope::OrchestrationOperate),
-    CollaborationCoordinatorDeleteParams,
-    crate::Thread
-);
+method!(CoordinatorOpen, "coordinator.open", Some(Scope::OrchestrationOperate), CoordinatorOpenParams, CoordinatorOpenResult);
 
+/// Move the Coordinator to another harness, model or account. Its session restarts
+/// with the same lead instructions; the thread and its history stay.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationCoordinatorSwitchHarnessParams {
-    pub operation_id: OperationId,
+pub struct CoordinatorSwitchHarnessParams {
     pub project_id: ProjectId,
     pub provider: ProviderInstance,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -877,367 +840,7 @@ pub struct CollaborationCoordinatorSwitchHarnessParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<PermissionMode>,
 }
-method!(
-    CollaborationCoordinatorSwitchHarness,
-    "collaboration.coordinator.switch_harness",
-    Some(Scope::OrchestrationOperate),
-    CollaborationCoordinatorSwitchHarnessParams,
-    ProjectCoordinator
-);
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationGroupsGetParams {
-    pub group_id: GroupId,
-}
-method!(
-    CollaborationGroupsGet,
-    "collaboration.groups.get",
-    Some(Scope::OrchestrationRead),
-    CollaborationGroupsGetParams,
-    CollaborationGroupDetail
-);
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationGroupsListParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub project_id: Option<ProjectId>,
-    #[serde(default)]
-    pub include_stopped: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<String>,
-    #[serde(default = "default_collaboration_limit")]
-    pub limit: u32,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationGroupsListResult {
-    pub groups: Vec<CollaborationGroup>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub next_cursor: Option<String>,
-}
-method!(
-    CollaborationGroupsList,
-    "collaboration.groups.list",
-    Some(Scope::OrchestrationRead),
-    CollaborationGroupsListParams,
-    CollaborationGroupsListResult
-);
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationGroupsUpdateParams {
-    pub operation_id: OperationId,
-    pub group_id: GroupId,
-    pub expected_revision: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub objective: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub success_criteria: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub coordinator_thread_id: Option<ThreadId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub coordinator_mode: Option<CoordinatorMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub policy: Option<CollaborationPolicy>,
-}
-method!(
-    CollaborationGroupsUpdate,
-    "collaboration.groups.update",
-    Some(Scope::OrchestrationOperate),
-    CollaborationGroupsUpdateParams,
-    CollaborationGroup
-);
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum CollaborationGroupControlAction {
-    Pause,
-    Stop,
-    Resume,
-    Complete,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationGroupsControlParams {
-    pub operation_id: OperationId,
-    pub group_id: GroupId,
-    pub action: CollaborationGroupControlAction,
-}
-method!(
-    CollaborationGroupsControl,
-    "collaboration.groups.control",
-    Some(Scope::OrchestrationOperate),
-    CollaborationGroupsControlParams,
-    CollaborationGroup
-);
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationMembersAttachParams {
-    pub operation_id: OperationId,
-    pub group_id: GroupId,
-    pub thread_id: ThreadId,
-    pub role: GroupMemberRole,
-}
-method!(
-    CollaborationMembersAttach,
-    "collaboration.members.attach",
-    Some(Scope::OrchestrationOperate),
-    CollaborationMembersAttachParams,
-    GroupMember
-);
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationMembersDetachParams {
-    pub operation_id: OperationId,
-    pub group_id: GroupId,
-    pub thread_id: ThreadId,
-}
-method!(
-    CollaborationMembersDetach,
-    "collaboration.members.detach",
-    Some(Scope::OrchestrationOperate),
-    CollaborationMembersDetachParams,
-    Empty
-);
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationAssignmentsCreateParams {
-    pub operation_id: OperationId,
-    pub group_id: GroupId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_assignment_id: Option<AssignmentId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner_thread_id: Option<ThreadId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub child: Option<CollaborationChildSpec>,
-    pub title: String,
-    pub instructions: String,
-    pub kind: AssignmentKind,
-}
-method!(
-    CollaborationAssignmentsCreate,
-    "collaboration.assignments.create",
-    Some(Scope::OrchestrationOperate),
-    CollaborationAssignmentsCreateParams,
-    CollaborationAssignment
-);
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationAssignmentsGetParams {
-    pub assignment_id: AssignmentId,
-}
-method!(
-    CollaborationAssignmentsGet,
-    "collaboration.assignments.get",
-    Some(Scope::OrchestrationRead),
-    CollaborationAssignmentsGetParams,
-    CollaborationAssignment
-);
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationAssignmentsListParams {
-    pub group_id: GroupId,
-    #[serde(default)]
-    pub include_finished: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<String>,
-    #[serde(default = "default_collaboration_limit")]
-    pub limit: u32,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationAssignmentsListResult {
-    pub assignments: Vec<CollaborationAssignment>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub next_cursor: Option<String>,
-}
-method!(
-    CollaborationAssignmentsList,
-    "collaboration.assignments.list",
-    Some(Scope::OrchestrationRead),
-    CollaborationAssignmentsListParams,
-    CollaborationAssignmentsListResult
-);
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationAssignmentsUpdateParams {
-    pub operation_id: OperationId,
-    pub assignment_id: AssignmentId,
-    pub expected_revision: i64,
-    pub status: AssignmentStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub uncertainty: Option<String>,
-}
-method!(
-    CollaborationAssignmentsUpdate,
-    "collaboration.assignments.update",
-    Some(Scope::OrchestrationOperate),
-    CollaborationAssignmentsUpdateParams,
-    CollaborationAssignment
-);
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationAssignmentsCompleteParams {
-    pub operation_id: OperationId,
-    pub assignment_id: AssignmentId,
-    pub result: AssignmentResult,
-}
-method!(
-    CollaborationAssignmentsComplete,
-    "collaboration.assignments.complete",
-    Some(Scope::OrchestrationOperate),
-    CollaborationAssignmentsCompleteParams,
-    CollaborationAssignment
-);
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationAssignmentsCancelParams {
-    pub operation_id: OperationId,
-    pub assignment_id: AssignmentId,
-    #[serde(default)]
-    pub reason: Option<String>,
-}
-method!(
-    CollaborationAssignmentsCancel,
-    "collaboration.assignments.cancel",
-    Some(Scope::OrchestrationOperate),
-    CollaborationAssignmentsCancelParams,
-    CollaborationAssignment
-);
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationMessagesSendParams {
-    pub operation_id: OperationId,
-    pub group_id: GroupId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub assignment_id: Option<AssignmentId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub from_thread_id: Option<ThreadId>,
-    pub to_thread_id: ThreadId,
-    pub purpose: CollaborationMessagePurpose,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reply_to: Option<CollaborationMessageId>,
-    pub body: String,
-}
-method!(
-    CollaborationMessagesSend,
-    "collaboration.messages.send",
-    Some(Scope::OrchestrationOperate),
-    CollaborationMessagesSendParams,
-    CollaborationMessage
-);
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationMessagesListParams {
-    pub group_id: GroupId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_id: Option<ThreadId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub assignment_id: Option<AssignmentId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<String>,
-    #[serde(default = "default_collaboration_limit")]
-    pub limit: u32,
-}
-fn default_collaboration_limit() -> u32 {
-    100
-}
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationMessagesListResult {
-    pub messages: Vec<CollaborationMessage>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub next_cursor: Option<String>,
-}
-method!(
-    CollaborationMessagesList,
-    "collaboration.messages.list",
-    Some(Scope::OrchestrationRead),
-    CollaborationMessagesListParams,
-    CollaborationMessagesListResult
-);
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationContextPutParams {
-    pub operation_id: OperationId,
-    pub group_id: GroupId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub entry_id: Option<ContextEntryId>,
-    pub key: String,
-    pub kind: ContextEntryKind,
-    pub body: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub author_thread_id: Option<ThreadId>,
-    #[serde(default)]
-    pub user_authored: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected_revision: Option<i64>,
-    #[serde(default)]
-    pub source_refs: Vec<String>,
-}
-method!(
-    CollaborationContextPut,
-    "collaboration.context.put",
-    Some(Scope::OrchestrationOperate),
-    CollaborationContextPutParams,
-    ContextEntry
-);
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationContextListParams {
-    pub group_id: GroupId,
-    #[serde(default)]
-    pub keys: Vec<String>,
-    #[serde(default)]
-    pub kinds: Vec<ContextEntryKind>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<String>,
-    #[serde(default = "default_collaboration_limit")]
-    pub limit: u32,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationContextListResult {
-    pub entries: Vec<ContextEntry>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub next_cursor: Option<String>,
-}
-method!(
-    CollaborationContextList,
-    "collaboration.context.list",
-    Some(Scope::OrchestrationRead),
-    CollaborationContextListParams,
-    CollaborationContextListResult
-);
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationContextHistoryParams {
-    pub entry_id: ContextEntryId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub before_revision: Option<i64>,
-    #[serde(default = "default_collaboration_limit")]
-    pub limit: u32,
-}
-method!(
-    CollaborationContextHistoryMethod,
-    "collaboration.context.history",
-    Some(Scope::OrchestrationRead),
-    CollaborationContextHistoryParams,
-    ContextEntryHistory
-);
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationWaitParams {
-    pub group_id: GroupId,
-    #[serde(default)]
-    pub assignment_ids: Vec<AssignmentId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<String>,
-    #[serde(default = "default_wait_timeout_ms")]
-    pub timeout_ms: u32,
-}
-fn default_wait_timeout_ms() -> u32 {
-    30_000
-}
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CollaborationWaitResult {
-    pub cursor: String,
-    pub timed_out: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub group: Option<CollaborationGroup>,
-    #[serde(default)]
-    pub members: Vec<GroupMember>,
-    pub assignments: Vec<CollaborationAssignment>,
-    pub messages: Vec<CollaborationMessage>,
-    pub context_entries: Vec<ContextEntry>,
-}
-method!(CollaborationWait, "collaboration.wait", Some(Scope::OrchestrationRead), CollaborationWaitParams, CollaborationWaitResult);
+method!(CoordinatorSwitchHarness, "coordinator.switch_harness", Some(Scope::OrchestrationOperate), CoordinatorSwitchHarnessParams, Thread);
 
 // ---- daemon-owned follow-ups ----
 
@@ -2631,6 +2234,25 @@ pub struct NoteChecklist {
     pub total: u32,
 }
 
+/// What a project note is for. The brief is the user's own instructions for the
+/// project; the setup note records how to build, run and test it and is kept by the
+/// project's Coordinator. Ordinary notes (memory) have no role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectNoteRole {
+    Brief,
+    Setup,
+}
+
+impl ProjectNoteRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProjectNoteRole::Brief => "brief",
+            ProjectNoteRole::Setup => "setup",
+        }
+    }
+}
+
 /// A note without its body, as listed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct NoteSummary {
@@ -2662,6 +2284,10 @@ pub struct NoteSummary {
     /// notes the user wrote; agents may only append to those.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by_thread: Option<ThreadId>,
+    /// Set on a project's brief and setup notes (one of each per project). Only the
+    /// user edits the brief; only the project's Coordinator writes the setup note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_role: Option<ProjectNoteRole>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -2703,6 +2329,10 @@ pub struct NotesCreateParams {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    /// Creates the project's pinned brief or setup note (scope `project` with a
+    /// `project_id`). A project has at most one of each. Absent for an ordinary note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_role: Option<ProjectNoteRole>,
 }
 method!(NotesCreate, "notes.create", Some(Scope::OrchestrationOperate), NotesCreateParams, Note);
 
@@ -3268,29 +2898,9 @@ registry!(
     ThreadMessagesDeliver,
     ThreadMessagesDismiss,
     DelegationsWorktreeRemove,
-    CollaborationGroupsCreate,
-    CollaborationCoordinatorGet,
-    CollaborationCoordinatorGetOrCreate,
-    CollaborationCoordinatorSwitchHarness,
-    CollaborationCoordinatorDelete,
-    CollaborationGroupsGet,
-    CollaborationGroupsList,
-    CollaborationGroupsUpdate,
-    CollaborationGroupsControl,
-    CollaborationMembersAttach,
-    CollaborationMembersDetach,
-    CollaborationAssignmentsCreate,
-    CollaborationAssignmentsGet,
-    CollaborationAssignmentsList,
-    CollaborationAssignmentsUpdate,
-    CollaborationAssignmentsComplete,
-    CollaborationAssignmentsCancel,
-    CollaborationMessagesSend,
-    CollaborationMessagesList,
-    CollaborationContextPut,
-    CollaborationContextList,
-    CollaborationContextHistoryMethod,
-    CollaborationWait,
+    CoordinatorGet,
+    CoordinatorOpen,
+    CoordinatorSwitchHarness,
     TasksList,
     TaskStop,
     TaskBackground,
