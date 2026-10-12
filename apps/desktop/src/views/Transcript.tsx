@@ -717,13 +717,13 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity, 
   }, [canLoadDiff, group.end, group.turnId, threadId, diff])
   const selectTasks = useMemo(() => createTurnTasksSelector(threadId, group.turnId), [threadId, group.turnId])
   const launchedTasks = useStore(selectTasks)
+  const liveWork = useLiveWork(group, launchedTasks)
   const settledWork = useMemo(
     () => settledWorkPresentation(group.work, launchedTasks),
     [group.work, launchedTasks],
   )
   // A note or task the answer links to is a chip there; its card stays in the fold.
   const itemCards = useMemo(() => placeItemCards(settledWork.itemWrites, group.answer?.text), [settledWork.itemWrites, group.answer?.text])
-  const hasWork = group.work.length > 0
   const hasPrimaryAgentActivity = settledWork.agentBlocks.length > 0
   const hasDisclosedWork = settledWork.disclosureBlocks.length > 0
   const hasSettledActivity = hasPrimaryAgentActivity || hasDisclosedWork
@@ -738,6 +738,11 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity, 
     )
   const settled = !group.running
   const open = group.running || !!expanded
+  const thinkingRow = !hasLiveWork && (
+    <div className="chat-paint-host t-row-enter mt-1.5 font-system-ui text-muted-foreground" style={CHAT_FONT} data-timeline-row-kind="working">
+      <span className="t-shimmer" data-text="Thinking">Thinking</span>
+    </div>
+  )
 
   return (
     <>
@@ -750,23 +755,18 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity, 
       {group.running && (
         <div className={cn(ROW, "pb-2")} data-timeline-row-kind="live-work">
           <WorkingHeader since={group.user?.at ?? ""} />
-          {hasWork && (
+          {liveWork.before.length > 0 && (
             <div className="mt-1 space-y-0.5" data-timeline-row-kind="work">
               {/* Every live event stays at its sequence position. Only the tail
                   assistant segment streams; earlier prose never gets reparented.
                   VirtualRows owns the bounded paint host for every item. This
                   growing list must not become one tiled compositing layer. */}
-              <WorkList blocks={group.work} tasks={launchedTasks} tone="bright" liveTextId={group.liveTextId} liveThinkingId={group.liveThinkingId} onOpenAgentActivity={onOpenAgentActivity} />
+              <LiveWorkRows compact blocks={liveWork.before} tasksByToolCall={liveWork.tasksByToolCall} childrenByParent={liveWork.childrenByParent} tone="bright" liveTextId={group.liveTextId} liveThinkingId={group.liveThinkingId} onOpenAgentActivity={onOpenAgentActivity} />
             </div>
           )}
-          {!hasLiveWork && (
-            <div className="chat-paint-host t-row-enter mt-1.5 font-system-ui text-muted-foreground" style={CHAT_FONT} data-timeline-row-kind="working">
-              <span className="t-shimmer" data-text="Thinking">Thinking</span>
-            </div>
-          )}
+          {!liveWork.split && thinkingRow}
         </div>
       )}
-
 
       {settled && (
         <div className={ROW} data-timeline-row-kind="settled-work">
@@ -823,6 +823,18 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity, 
       )}
 
       {!!group.visuals?.length && <div className={ROW} data-timeline-row-kind="visuals">{group.visuals.map(block => <VisualReply key={block.id} threadId={threadId} visual={block.visual} />)}</div>}
+
+      {/* After the visuals slot in both states, so the visuals row is reconciled in place when the turn settles. */}
+      {group.running && liveWork.split && (liveWork.after.length > 0 || !hasLiveWork) && (
+        <div className={cn(ROW, "pb-2")} data-timeline-row-kind="live-work-after">
+          {liveWork.after.length > 0 && (
+            <div className="mt-1 space-y-0.5" data-timeline-row-kind="work-after">
+              <LiveWorkRows compact blocks={liveWork.after} tasksByToolCall={liveWork.tasksByToolCall} childrenByParent={liveWork.childrenByParent} tone="bright" liveTextId={group.liveTextId} liveThinkingId={group.liveThinkingId} onOpenAgentActivity={onOpenAgentActivity} />
+            </div>
+          )}
+          {thinkingRow}
+        </div>
+      )}
 
       {settled && (
         <div className={cn(ROW, "group/assistant pb-2")} data-timeline-row-kind="message" data-message-role="assistant" data-slot="message" data-from="assistant">
@@ -1331,10 +1343,33 @@ function patchChunksTail(previous: WorkChunk[], change: TailChange<Block>): Work
   return null
 }
 
-function WorkList({ blocks, tasks = EMPTY_RUNTIME_TASKS, tone = "muted", liveTextId = null, liveThinkingId = null, onOpenAgentActivity }: { blocks: readonly Block[]; tasks?: readonly RuntimeTask[]; tone?: WorkTone; liveTextId?: string | null; liveThinkingId?: string | null; onOpenAgentActivity: OpenAgentActivity }) {
+const EMPTY_BLOCKS: readonly Block[] = []
+
+/** Rows of a running turn's live work. A turn whose first visual is already published splits them
+ * around the visuals row, so the visual sits where it was published and later rows render below it.
+ * The hierarchy is derived once over the whole list: a tool launched before the visual keeps the
+ * children that arrive after it, and the two halves share one task map. */
+function useLiveWork(group: TurnGroup, tasks: readonly RuntimeTask[]) {
+  const running = group.running
   const tasksByToolCall = useMemo(() => new Map(tasks.flatMap((task) => (task.tool_call_id ? [[task.tool_call_id, task] as const] : []))), [tasks])
-  const hierarchy = useTailDerived(blocks, buildWorkHierarchy, patchHierarchyTail)
-  return <WorkRows compact blocks={hierarchy.roots} tasksByToolCall={tasksByToolCall} childrenByParent={hierarchy.childrenByParent} tone={tone} liveTextId={liveTextId} liveThinkingId={liveThinkingId} onOpenAgentActivity={onOpenAgentActivity} />
+  const hierarchy = useTailDerived(running ? group.work : EMPTY_BLOCKS, buildWorkHierarchy, patchHierarchyTail)
+  const { roots } = hierarchy
+  const split = running && group.visuals?.length ? group.visualsAt ?? null : null
+  // `roots` is `work` without the blocks nested under a tool, in the same order and by reference.
+  let cut = 0
+  if (split !== null) for (let index = 0; index < split && cut < roots.length; index++) if (group.work[index] === roots[cut]) cut++
+  // A settled prefix keeps its identity while the tail streams, so its rows do not render again.
+  const [prefix, setPrefix] = useState<readonly Block[]>(EMPTY_BLOCKS)
+  let before: readonly Block[] = roots
+  if (split !== null) {
+    if (prefix.length === cut && prefix.every((block, index) => block === roots[index])) before = prefix
+    else {
+      before = roots.slice(0, cut)
+      setPrefix(before)
+    }
+  }
+  const after = useMemo(() => (split !== null ? roots.slice(cut) : EMPTY_BLOCKS), [roots, split, cut])
+  return { split: split !== null, before, after, tasksByToolCall, childrenByParent: hierarchy.childrenByParent }
 }
 
 type WorkTone = "bright" | "muted"
@@ -1398,6 +1433,9 @@ function WorkRows({
     )
   }</VirtualRows>
 }
+
+/** Live rows re-render only when their own rows, tasks or live ids change. */
+const LiveWorkRows = memo(WorkRows)
 
 const ToolGroupRow = memo(function ToolGroupRow({
   blocks,
