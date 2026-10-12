@@ -139,15 +139,39 @@ test("published visuals keep their measured heights through events and reload, a
   const old = applyEvent(emptyThreadState(),event(1,"html_published",{visual}))
   assert.equal(group(old.blocks)[0].visuals[0].visual.heights,undefined)
 })
-function bootstrap(parent) {
+function bootstrap(parent, { rootHeight = 10, hash = "", observed = [], windowListeners = new Map(), style = { textContent: "" }, writes = [] } = {}) {
   const messages = [], listeners = new Map()
-  const window = { parent: parent ?? null, postMessage: message => messages.push(message), requestAnimationFrame: callback => { callback(0); return 1 }, cancelAnimationFrame() {}, setInterval: () => 2, clearInterval() {}, addEventListener() {}, dispatchEvent() {} }
+  const window = { parent: parent ?? null, postMessage: message => messages.push(message), requestAnimationFrame: callback => { callback(0); return 1 }, cancelAnimationFrame() {}, setInterval: () => 2, clearInterval() {}, addEventListener: (kind, callback) => windowListeners.set(kind, callback), dispatchEvent() {} }
   if (!parent) window.parent = window; else parent.postMessage = message => messages.push(message)
-  const document = { documentElement: { dataset: {} }, body: { scrollHeight: 10, getBoundingClientRect: () => ({ height: 10 }) }, getElementById: () => ({ textContent: "" }), createElement: () => ({ textContent: "" }), head: { appendChild() {} }, getAnimations: () => [], querySelectorAll: () => [], addEventListener: (kind, callback) => listeners.set(kind, callback) }
-  runInNewContext(readFileSync(new URL("../../crates/kybern-daemon/src/visuals/bootstrap.js", import.meta.url), "utf8"), { document, window, location: { hash: "" }, ResizeObserver: class { observe() {} }, CustomEvent: class {} })
+  Object.defineProperty(style, "textContent", { get() { return this.value ?? "" }, set(value) { this.value = value; writes.push(value) } })
+  const document = { documentElement: { dataset: {}, getBoundingClientRect: () => ({ height: rootHeight }) }, body: { scrollHeight: 10, getBoundingClientRect: () => ({ height: 10 }) }, getElementById: () => style, createElement: () => ({ textContent: "" }), head: { appendChild() {} }, getAnimations: () => [], querySelectorAll: () => [], addEventListener: (kind, callback) => listeners.set(kind, callback) }
+  runInNewContext(readFileSync(new URL("../../crates/kybern-daemon/src/visuals/bootstrap.js", import.meta.url), "utf8"), { document, window, location: { hash }, ResizeObserver: class { observe(element) { observed.push(element) } }, CustomEvent: class {} })
   listeners.get("DOMContentLoaded")()
   return messages
 }
+test("a page is measured as a whole document, including margins that collapse through body", () => {
+  const observed = []
+  const messages = bootstrap({}, { rootHeight: 90, observed })
+  assert.deepEqual(messages.filter(message => message.kind === "kybern-visual-size").map(message => message.height), [90])
+  assert.equal(observed.length, 2, "both the root and body are observed")
+})
+test("the theme is written once, a repeat of the same theme is not, and scrollbars follow the app's look", () => {
+  const theme = { appearance: "dark", variables: { "--foreground": "#eee", "--background": "#111" } }
+  const writes = [], windowListeners = new Map(), parent = {}
+  bootstrap(parent, { hash: `#kybern-theme=${encodeURIComponent(JSON.stringify(theme))}`, writes, windowListeners })
+  assert.equal(writes.length, 1)
+  const send = value => windowListeners.get("message")({ source: parent, data: { kind: "kybern-visual-host", theme: value, visible: true } })
+  send(theme); send(JSON.parse(JSON.stringify(theme))); send(undefined)
+  assert.equal(writes.length, 1, "the same theme, however often it is re-sent, is not rewritten")
+  send({ ...theme, variables: { ...theme.variables, "--foreground": "#fff" } })
+  assert.equal(writes.length, 2, "a changed theme is written")
+  assert.match(writes[0], /\*::-webkit-scrollbar\{width:10px;height:10px\}/)
+  assert.match(writes[0], /\*::-webkit-scrollbar-thumb\{background-color:color-mix\(in srgb,var\(--foreground\) 7%,transparent\)/)
+  assert.doesNotMatch(writes[0], /scrollbar-(width|color):(?!none)/, "no standard scrollbar properties that would override the page's own")
+  const light = [], lightListeners = new Map()
+  bootstrap({}, { hash: `#kybern-theme=${encodeURIComponent(JSON.stringify({ ...theme, appearance: "light" }))}`, writes: light, windowListeners: lightListeners })
+  assert.match(light[0], /var\(--foreground\) 10%,transparent/)
+})
 test("a framed page announces readiness once and a top-level page stays silent", () => {
   const framed = bootstrap({}), ready = framed.filter(message => message.kind === "kybern-visual-ready")
   assert.equal(ready.length,1)
