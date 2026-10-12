@@ -710,8 +710,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     [segments],
   )
 
-  const buildParts = (): ContentPart[] => {
-    const skillItems = [...skills, ...selectedSkills.current.values()]
+  const buildParts = (catalog: readonly SkillInfo[] = skills): ContentPart[] => {
+    const skillItems = [...catalog, ...selectedSkills.current.values()]
     // A skill typed as `/name` (not picked from the list) is sent as that skill.
     const parts = convertTypedSlashSkills(buildStructuredTextParts(text, mentioned.current, skillItems, selectedThreadReferences.current, attachmentReferences, selectedMentionReferences.current), skillItems)
     // Attachments the prompt never mentions keep their old place at the end.
@@ -733,7 +733,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     }
     setSending(true)
     try {
-      await (running && delivery === "steer" && onSteer ? onSteer : onSend)({ parts: buildParts() })
+      // A skill typed as `/name` needs the catalog, which otherwise loads only with a menu.
+      let catalog: readonly SkillInfo[] = skills
+      if (projectId && provider && skillCatalog.key !== skillCatalogKey && /(^|\s)\/[^\s/]+/.test(text)) {
+        catalog = await listSkills(projectId, provider.kind, accountInstance).catch(() => [])
+        setSkillCatalog({ key: skillCatalogKey, skills: [...catalog] })
+      }
+      await (running && delivery === "steer" && onSteer ? onSteer : onSend)({ parts: buildParts(catalog) })
       if (props.draftKey) ownerStore.getState().set((state) => {
         const composerDrafts = { ...state.composerDrafts }
         delete composerDrafts[props.draftKey!]

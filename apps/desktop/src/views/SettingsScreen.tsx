@@ -921,6 +921,7 @@ export function CoordinatorDefaultsSection({ settings, onChange }: { settings: S
             value={current.role_defaults?.[role] ?? null}
             fallbackProvider={fallback}
             defaultHint="Agents use the Coordinator's own harness and model"
+            className="max-w-64"
             onChange={async (value) => {
               await onChange(withGlobalRoleDefault(latest(), role, value))
               return true

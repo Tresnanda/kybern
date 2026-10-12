@@ -42,7 +42,7 @@ export const CoordinatorCardLine = memo(function CoordinatorCardLine({ parts, de
     <div className="rounded-lg py-1" data-coordinator-card-outcome={outcome}>
       <div className="flex w-full min-w-0 items-center gap-2">
         <span className={cn("flex size-5 shrink-0 items-center justify-center", outcome === "declined" ? "text-destructive/85" : "text-muted-foreground")}>
-          {outcome === "done" ? <CheckIcon className="t-success size-4" /> : outcome === "declined" || outcome === "ended" ? <CircleAlertIcon className="size-4" /> : lineIcon(text)}
+          {outcome === "done" ? <CheckIcon className="size-4 text-[var(--color-success)]" /> : outcome === "declined" || outcome === "ended" ? <CircleAlertIcon className="size-4" /> : lineIcon(text)}
         </span>
         <p className={cn("min-w-0 truncate leading-6", outcome === "declined" ? "text-destructive/85" : outcome === "done" ? "text-foreground/80" : "text-muted-foreground")} style={style} title={text}>
           <CardText parts={parts} />

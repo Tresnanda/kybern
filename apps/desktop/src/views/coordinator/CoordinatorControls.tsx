@@ -31,6 +31,8 @@ export const COORDINATOR_FIELD_LABEL_CLASS = "mb-1.5 text-[length:var(--app-font
 export const COORDINATOR_HINT_CLASS = "mt-1.5 text-[length:var(--app-font-size-ui-sm,11px)] leading-[1.4] text-pretty text-muted-foreground/65"
 
 /** Equal segments across the full width; the kit control sizes to its labels otherwise. */
+/** The dock and Settings set their own body size; segments stay at the UI size. */
+const SEGMENT_TEXT = "text-[length:var(--app-font-size-ui,12px)]"
 const FULL_WIDTH_SEGMENTS = "flex w-full [&>button]:min-w-0 [&>button]:flex-1 [&>button]:truncate"
 
 export function AutonomyControl({ value, onChange, busy, labelledBy, fill = true }: { value: LeadAutonomy; onChange: (value: LeadAutonomy) => void; busy?: boolean; labelledBy?: string; fill?: boolean }) {
@@ -42,7 +44,7 @@ export function AutonomyControl({ value, onChange, busy, labelledBy, fill = true
       value={value}
       busy={busy}
       onChange={(next) => onChange(next as LeadAutonomy)}
-      className={cn(fill && FULL_WIDTH_SEGMENTS)}
+      className={cn(SEGMENT_TEXT, fill && FULL_WIDTH_SEGMENTS)}
     />
   )
 }
@@ -56,7 +58,7 @@ export function WorkspaceControl({ value, onChange, busy, labelledBy, fill = tru
       value={value}
       busy={busy}
       onChange={(next) => onChange(next as DelegationWorkspace)}
-      className={cn(fill && FULL_WIDTH_SEGMENTS)}
+      className={cn(SEGMENT_TEXT, fill && FULL_WIDTH_SEGMENTS)}
     />
   )
 }
@@ -112,6 +114,7 @@ export function RoleModelChip({
   defaultHint,
   onChange,
   busy,
+  className,
 }: {
   role: CoordinatorRole
   roleLabel: string
@@ -124,6 +127,8 @@ export function RoleModelChip({
   defaultHint: string
   onChange: (value: RoleDefault | null) => Promise<boolean>
   busy?: boolean
+  /** Width limits for where the chip sits; the dock list caps it beside its label. */
+  className?: string
 }) {
   const providers = useStore((s) => s.providers)
   const accounts = useAccounts()
@@ -159,7 +164,8 @@ export function RoleModelChip({
           aria-label={`${roleLabel} model: ${chip.label}. Change`}
           title={chip.label}
           className={cn(
-            "ms-auto min-w-0 max-w-[62%] justify-start font-normal",
+            "ms-auto min-w-0 justify-start font-normal",
+            className ?? "max-w-[62%]",
             !own && "border border-dashed border-[color:var(--color-border)] text-muted-foreground",
           )}
         >
