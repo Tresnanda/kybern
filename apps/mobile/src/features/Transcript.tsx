@@ -1,5 +1,5 @@
 import * as Clipboard from "expo-clipboard";
-import { memo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { Image, Share, View } from "react-native";
 import { Alert } from "../ui/Alert";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
@@ -20,8 +20,22 @@ import { TaskRow } from "./Tasks";
 import { ApprovalPanel } from "./Approvals";
 import { SecretRequestLine } from "./SecretRequest";
 import { secretRequestInput } from "../../../../packages/kybern-client/src/secretRequest";
+import { coordinatorCardLine } from "../../../../packages/kybern-client/src/coordinatorCards";
+import { CoordinatorCardLine, SystemRowLine } from "./CoordinatorCards";
 import { MessagePart } from "./MessagePart";
 import { hasOrchestrationParts } from "../state/orchestration";
+
+/** Kybern's own row ("Setup started") above the user's words, which keep their bubble. */
+function SystemRowMessage({ block, threadId }: { block: Extract<Block, { kind: "user" }>; threadId: string }) {
+  const rows = block.message.parts.flatMap((part) => (part.type === "system_row" ? [part] : []));
+  const own = useMemo(() => ({ ...block, message: { ...block.message, parts: block.message.parts.filter((part) => part.type !== "system_row") } }), [block]);
+  return (
+    <View>
+      {rows.map((row, index) => <SystemRowLine key={index} text={row.text} />)}
+      {own.message.parts.length > 0 && <UserMessageBubble block={own} threadId={threadId} />}
+    </View>
+  );
+}
 
 function toolSummary(block: Extract<Block, { kind: "tool" }>) {
   const input =
@@ -73,6 +87,7 @@ export const TranscriptBlock = memo(function TranscriptBlock({
             ))}
           </View>
         );
+      if (block.message.parts.some((part) => part.type === "system_row")) return <SystemRowMessage block={block} threadId={threadId} />;
       return <UserMessageBubble block={block} threadId={threadId} />;
     }
     case "assistant":
@@ -195,6 +210,8 @@ export const TranscriptBlock = memo(function TranscriptBlock({
     case "approval": {
       const secret = secretRequestInput(block.approval);
       if (secret && block.decision) return <SecretRequestLine input={secret} decision={block.decision} />;
+      const cardLine = block.decision ? coordinatorCardLine(block.approval, block.decision) : null;
+      if (cardLine) return <CoordinatorCardLine parts={cardLine} decision={block.decision} />;
       return block.decision ? (
         <View style={[styles.line, { paddingVertical: 8 }]}>
           <Icon

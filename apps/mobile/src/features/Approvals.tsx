@@ -21,6 +21,8 @@ import { errorText, loadThread, refresh, rpc } from "../state/runtime";
 import { ApprovalCard, QuestionChoices } from "../components/beui/ApprovalCard";
 import { secretRequestInput } from "../../../../packages/kybern-client/src/secretRequest";
 import { SecretRequestCard } from "./SecretRequest";
+import { briefProposalInput, leadGitCardInput, settingsProposalInput } from "../../../../packages/kybern-client/src/coordinatorCards";
+import { BriefProposalCard, GitApprovalCard, SettingsProposalCard } from "./CoordinatorCards";
 export { QuestionChoices } from "../components/beui/ApprovalCard";
 import { Code } from "../ui/Markdown";
 import {
@@ -106,6 +108,13 @@ export function ApprovalPanel({ approval }: { approval: ApprovalRequest }) {
   // A secret request has its own card: a masked field, and the value never stays here.
   const secret = secretRequestInput(approval);
   if (secret) return <SecretRequestCard approval={approval} input={secret} />;
+  // The Coordinator's own cards: the brief and settings proposals, and git approvals.
+  const brief = briefProposalInput(approval);
+  if (brief) return <BriefProposalCard approval={approval} input={brief} />;
+  const settings = settingsProposalInput(approval);
+  if (settings) return <SettingsProposalCard approval={approval} input={settings} />;
+  const git = leadGitCardInput(approval);
+  if (git) return <GitApprovalCard approval={approval} input={git} />;
   return <DecisionPanel approval={approval} />;
 }
 function DecisionPanel({ approval }: { approval: ApprovalRequest }) {

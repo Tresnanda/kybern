@@ -4,6 +4,7 @@ import { httpBase, type ContentPart } from "../state/protocol";
 import { activeEnvironment } from "../state/runtime";
 import { Icon, T, Tap, styles } from "../ui/primitives";
 import { AgentResultsList, ThreadMessageCard } from "./OrchestrationParts";
+import { SystemRowLine } from "./CoordinatorCards";
 import { threadReferenceLabel } from "../../../../packages/kybern-client/src/threadReferences";
 
 export function imageSource(part: ContentPart, localUri?: string) {
@@ -52,6 +53,7 @@ export function MessagePart({
   if (part.type === "image") return null;
   if (part.type === "thread_message") return <ThreadMessageCard part={part} />;
   if (part.type === "agent_results") return <AgentResultsList items={part.items} />;
+  if (part.type === "system_row") return <SystemRowLine text={part.text} />;
   if (part.type === "thread_reference")
     return (
       <Tap
