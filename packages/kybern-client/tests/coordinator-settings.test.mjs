@@ -148,3 +148,9 @@ test("unknown slash words, paths, URLs, disabled skills and plugins stay text", 
   const attachment = { type: "attachment", asset_id: "a", name: "x.png", media_type: "image/png", size: 1 };
   assert.deepEqual(convertTypedSlashSkills([{ type: "text", text: "look " }, attachment], skills), [{ type: "text", text: "look " }, attachment]);
 });
+
+test("only a standalone /name waits for the skill catalog, never a path", async () => {
+  const { hasTypedSlashCandidate } = await import("../src/composerTokens.ts");
+  for (const text of ["/review this", "please /grilling", "run /deploy.", "/qa"]) assert.equal(hasTypedSlashCandidate(text), true, text);
+  for (const text of ["see /project/docs/routing.md", "/usr/bin/env", "a/b", "no slash", "open /tmp/"]) assert.equal(hasTypedSlashCandidate(text), false, text);
+});

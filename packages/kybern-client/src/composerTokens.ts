@@ -212,6 +212,12 @@ export function nextAttachmentLabel(mediaType: string, taken: Iterable<string>):
  * part where it stood, and the token leaves the text. Unknown `/words`, paths and URLs
  * stay text. Plugins are `@` mentions, never slash commands.
  */
+/** Whether `text` has a standalone `/name` token that could be a typed skill. Paths such as
+ * `/src/app.ts` do not count, so sending them never waits on the skill catalog. */
+export function hasTypedSlashCandidate(text: string): boolean {
+  return /(^|\s)\/[A-Za-z0-9][\w.:-]*(?=[\s,;!?]|[.:](?:\s|$)|$)/.test(text)
+}
+
 export function convertTypedSlashSkills(parts: readonly ContentPart[], skillItems: readonly SkillInfo[]): ContentPart[] {
   const skills = new Map<string, SkillInfo>()
   for (const item of skillItems) {

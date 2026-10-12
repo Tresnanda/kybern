@@ -45,7 +45,7 @@ import {
 import { Kbd } from "@/components/kit/kbd"
 import { Menu, MenuGroup, MenuItem, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
-import { buildStructuredTextParts, convertTypedSlashSkills, createComposerMentionReference, nextAttachmentLabel, structuredSegments, type AttachmentReference, type ComposerMentionReference } from "@/lib/composerTokens"
+import { buildStructuredTextParts, convertTypedSlashSkills, hasTypedSlashCandidate, createComposerMentionReference, nextAttachmentLabel, structuredSegments, type AttachmentReference, type ComposerMentionReference } from "@/lib/composerTokens"
 import { createComposerThreadReference, type ComposerThreadReference } from "../../../../packages/kybern-client/src/threadReferences"
 import { PROVIDER_LABEL, basename, formatEffort, isMac, mod } from "@/lib/format"
 import { ChevronDownIcon, ClockIcon, ComposerSendArrowIcon, MessageCircleIcon, NoteIcon, PaperclipIcon, PencilIcon, PlusIcon, PluginIcon, DeviceLaptopIcon,
@@ -735,7 +735,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     try {
       // A skill typed as `/name` needs the catalog, which otherwise loads only with a menu.
       let catalog: readonly SkillInfo[] = skills
-      if (projectId && provider && skillCatalog.key !== skillCatalogKey && /(^|\s)\/[^\s/]+/.test(text)) {
+      if (projectId && provider && skillCatalog.key !== skillCatalogKey && hasTypedSlashCandidate(text)) {
         catalog = await listSkills(projectId, provider.kind, accountInstance).catch(() => [])
         setSkillCatalog({ key: skillCatalogKey, skills: [...catalog] })
       }
