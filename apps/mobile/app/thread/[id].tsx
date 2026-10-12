@@ -1,4 +1,5 @@
 import { createHistoryPagingGate, HISTORY_PREFETCH_SCREENS } from "../../../../packages/kybern-client/src/historyPaging";
+import { isCoordinatorThread } from "../../../../packages/kybern-client/src/coordinator";
 import { ChatFileContext } from "../../src/state/chatFileContext";
 import { QueuedPrompts } from "../../src/features/QueuedPrompts";
 import { BlurTargetView } from "expo-blur";
@@ -510,6 +511,32 @@ export default function ThreadScreen() {
                 {thread?.worktree ? ` · ${thread.worktree.branch}` : ""}
               </T>
             </Tap>
+            {isCoordinatorThread(thread) && thread && (
+              <Tap
+                label="Project brief, setup and memory"
+                onPress={() =>
+                  router.push({
+                    pathname: "/project-space",
+                    params: { projectId: thread.coordinator_project_id! },
+                  })
+                }
+                style={{ alignItems: "center" }}
+              >
+                <View
+                  style={{
+                    height: 32,
+                    paddingHorizontal: 12,
+                    borderRadius: 16,
+                    justifyContent: "center",
+                    backgroundColor: colors.raised,
+                  }}
+                >
+                  <T variant="caption" style={{ fontWeight: "500" }}>
+                    Project
+                  </T>
+                </View>
+              </Tap>
+            )}
             {regular && (
               <IconButton
                 name="sidebar.right"

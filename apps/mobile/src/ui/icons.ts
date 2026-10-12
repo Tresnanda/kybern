@@ -48,6 +48,7 @@ export const androidIcons = {
   hammer: "construction",
   "hand.raised": "pan_tool",
   italic: "format_italic",
+  key: "key",
   keyboard: "keyboard",
   "keyboard.chevron.compact.down": "keyboard_hide",
   laptopcomputer: "laptop_mac",

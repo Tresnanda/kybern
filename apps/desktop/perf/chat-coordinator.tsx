@@ -12,8 +12,9 @@ import { buildThemeCssVariables, DEFAULT_THEME_STATE } from "../src/lib/kit/them
 import { useStore } from "../src/state/store"
 import { useEnvironments } from "../src/state/environments"
 import { emptyThreadState } from "../src/state/transcript"
-import { chatFixture } from "./chat-coordinator-rpc"
-import type { Thread, Project, ProviderStatus } from "../src/protocol"
+import { chatFixture, fixtureConnection } from "./chat-coordinator-rpc"
+import { attachEnvFeed } from "../src/state/notes"
+import type { ApprovalRequest, Note, Thread, Project, ProviderStatus } from "../src/protocol"
 import "../src/index.css"
 
 const query = new URLSearchParams(location.search)
@@ -33,7 +34,25 @@ const sampleMemory = (stage: string) => new Promise<void>((resolve) => {
   target.__memoryContinue = resolve
   target.webkit?.messageHandlers?.bench?.postMessage(JSON.stringify({ stage, memory: true }))
 })
-const projects: Record<string, Project> = Object.fromEntries(["Kybern", "Website"].map((name, index) => [`project-${index}`, { id: `project-${index}`, name, path: "/project", is_git: true, created_at: at, updated_at: at }]))
+const projects: Record<string, Project> = Object.fromEntries(["Kybern", "Website"].map((name, index) => [`project-${index}`, { id: `project-${index}`, name, path: "/project", is_git: true, brief_in_all_threads: false, created_at: at, updated_at: at }]))
+/** Ask the native runner for a named screenshot (KYBERN_PERF_SHOTS_DIR); it resumes the page once written. */
+const shot = (name: string) => new Promise<void>((resolve) => {
+  for (const animation of document.getAnimations()) {
+    try { if (animation.effect?.getComputedTiming().iterations !== Infinity) animation.finish() } catch { /* not finishable */ }
+  }
+  const target = window as unknown as { __screenshotContinue?: () => void; webkit?: { messageHandlers?: { bench?: { postMessage: (value: string) => void } } } }
+  target.__screenshotContinue = resolve
+  if (!target.webkit?.messageHandlers?.bench) return resolve()
+  target.webkit.messageHandlers.bench.postMessage(JSON.stringify({ screenshot: `${name}-${theme}` }))
+})
+const projectNote = (id: string, title: string, body: string, updated: string, extra: Partial<Note> = {}): Note => ({ id, scope: "project", project_id: "project-0", title, body, preview: body.replace(/[#*`]/g, "").slice(0, 240), checklist: { done: 0, total: 0 }, pinned: false, revision: 1, created_at: updated, updated_at: updated, ...extra })
+const seededNotes = [
+  projectNote("brief", "Project brief", "Kybern: desktop, daemon and mobile client for coding agents. Ship small PRs against main, one task each.\n\nPropose threads for anything that touches the protocol before starting them. Use the iPad 27 device for mobile checks.", "2026-09-14T08:00:00Z", { project_role: "brief", pinned: true }),
+  projectNote("setup", "How to build, run and test", "cargo build -p kybern, a scratch daemon on 4199, then pnpm tauri dev with KYBERN_DATA_DIR.", "2026-09-14T08:00:00Z", { project_role: "setup", pinned: true, created_by_thread: "main" }),
+  projectNote("memory-1", "Native WebKit fixtures need the production CSP", "Run check-rendering so iframes load under the shipped policy.", "2026-09-14T09:00:00Z", { created_by_thread: "worker" }),
+  projectNote("memory-2", "Prefers squash merges and small PRs", "One task per PR; bump the version inside the PR.", "2026-09-14T07:00:00Z", { created_by_thread: "main" }),
+  projectNote("memory-3", "Mobile export takes about four minutes", "Run both platform exports only at the end.", "2026-09-13T10:00:00Z"),
+]
 const thread = (id: string, title: string, extra: Partial<Thread> = {}): Thread => ({ id, title, project_id: "project-0", provider: { kind: "claude-code", instance: "default" }, permission_mode: "supervised", status: "idle", cwd: "/project", pinned: false, created_at: at, updated_at: at, last_seq: 0, ...extra })
 const threads: Record<string, Thread> = {
   main: thread("main", "Improve sign-in"),
@@ -80,7 +99,9 @@ async function run() {
     { kind: "turn_end", id: "end-1", turnId: "turn-1", at, seq: 3, stopReason: "completed", usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 }, costUsd: null, durationMs: 4000, terminalMessageId: "assistant-1", error: null },
   ]
   useStore.getState().set({ projects, threads, providers, selected: { kind: "thread", id: "main" }, splitView: null, transcripts, composerDrafts: {}, connection: { state: "open" }, rightOpen: false, rightTabs: [], rightTab: null, envOpen: false })
-  flushSync(() => createRoot(document.getElementById("root")!, { onUncaughtError: (error) => results({ pass: false, error: String(error) }) }).render(<Shell />))
+  for (const note of seededNotes) chatFixture.notes.set(note.id, note)
+  attachEnvFeed(fixtureConnection as never, "fixture")
+  flushSync(() => createRoot(document.getElementById("root")!, { onUncaughtError: (error) => results({ pass: false, error: String(error), stack: String((error as Error)?.stack ?? "") }) }).render(<Shell />))
   await sleep(650)
   if (preview === "composer-caret-before") {
     const baseline = document.createElement("style")
@@ -212,15 +233,15 @@ async function run() {
   await click("Codex"); await sleep(120)
   const editsNotBlockedTooltip = !!document.querySelector('[title*="can\'t block file edits"]')
   write("Plan and ship the local coordinator experience.")
-  document.querySelector<HTMLTextAreaElement>('[data-testid="composer-editor"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); await sleep(350)
+  await sleep(150); await click("Send message"); await sleep(350)
   const coordinator = useStore.getState().threads["project-coordinator"]
   const coordinatorOpensChat = (useStore.getState().selected as { id: string }).id === coordinator?.id && !!document.querySelector('[data-testid="composer-editor"]')
-  const editsNotBlockedPill = !!Array.from(document.querySelectorAll<HTMLElement>('[data-slot="badge"]')).find((element) => element.textContent?.trim() === "Edits not blocked on Codex")
+  const editsNotBlockedPill = !!Array.from(document.querySelectorAll<HTMLElement>('main span, [data-slot="badge"]')).find((element) => element.textContent?.trim() === "Edits not blocked on Codex")
   const initialBriefPreserved = chatFixture.calls.some((call) => call.method === "coordinator.open" && call.params.initial_brief === "Plan and ship the local coordinator experience.")
   const stableFirstMessageId = !!chatFixture.sent[1]?.messageId
   await click("Change model and reasoning"); await sleep(100); await click("Claude Code"); await sleep(250)
   const harnessSwitched = useStore.getState().threads["project-coordinator"]?.provider.kind === "claude-code" && chatFixture.calls.some((call) => call.method === "coordinator.switch_harness")
-  const editsPillGoneOnClaude = !Array.from(document.querySelectorAll<HTMLElement>('[data-slot="badge"]')).some((element) => element.textContent?.includes("Edits not blocked"))
+  const editsPillGoneOnClaude = !Array.from(document.querySelectorAll<HTMLElement>('main span, [data-slot="badge"]')).some((element) => element.textContent?.includes("Edits not blocked"))
   const oneCoordinatorCreated = chatFixture.coordinatorCreates === 1
   const projectTabOnlyForCoordinator = await (async () => {
     useStore.getState().set({ rightOpen: true, rightTabs: ["agents", "project"], rightTab: "project" }); await sleep(300)
@@ -230,9 +251,100 @@ async function run() {
     useStore.getState().selectThread(coordinator.id); await sleep(200)
     return coordinatorHasProject && ordinaryHasNone
   })()
+  const projectSpace = await checkProjectSpace()
+  const secretRequest = await checkSecretRequest(coordinator.id)
   const horizontalOverflow = Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth)
-  const checks = { ...dockChecks, initialHasNoSetup, composerSingleLineEditorInTwoLineFrame, blankComposerAreaFocusesEditor, childReturn, titleOnlyReference, referenceDidNotWake, typedReferenceSent, coordinatorDraftInert, settledSidebarRowsCrisp, allHarnessesVisible, editsNotBlockedTooltip, coordinatorOpensChat, editsNotBlockedPill, initialBriefPreserved, stableFirstMessageId, harnessSwitched, editsPillGoneOnClaude, oneCoordinatorCreated, projectTabOnlyForCoordinator, noHorizontalOverflow: horizontalOverflow <= 1 }
+  const checks = { ...projectSpace, ...secretRequest, ...dockChecks, initialHasNoSetup, composerSingleLineEditorInTwoLineFrame, blankComposerAreaFocusesEditor, childReturn, titleOnlyReference, referenceDidNotWake, typedReferenceSent, coordinatorDraftInert, settledSidebarRowsCrisp, allHarnessesVisible, editsNotBlockedTooltip, coordinatorOpensChat, editsNotBlockedPill, initialBriefPreserved, stableFirstMessageId, harnessSwitched, editsPillGoneOnClaude, oneCoordinatorCreated, projectTabOnlyForCoordinator, noHorizontalOverflow: horizontalOverflow <= 1 }
   results({ fixture: "chat-coordinator", pass: Object.values(checks).every(Boolean), checks, horizontalOverflow })
 }
-window.addEventListener("unhandledrejection", (event) => results({ pass: false, error: String(event.reason) }))
+/** The Coordinator's Project tab: brief, setup, memory, the switch, editing and the empty project. */
+async function checkProjectSpace() {
+  useStore.getState().set({ rightOpen: true, rightTabs: ["agents", "project"], rightTab: "project" }); await sleep(400)
+  const panel = () => document.querySelector<HTMLElement>("[data-project-panel]")!
+  const text = () => panel().textContent ?? ""
+  const memoryTitles = Array.from(panel().querySelectorAll<HTMLElement>('section[aria-label="Memory"] button')).map((row) => row.title)
+  const projectSections = text().includes("Propose threads for anything") && text().includes("Only you can change the brief. Agents suggest edits in chat.") && text().includes("How to build, run and test")
+    && memoryTitles.join("|") === "Native WebKit fixtures need the production CSP|Prefers squash merges and small PRs|Mobile export takes about four minutes"
+    && panel().querySelector('section[aria-label="Memory"] h3 + span')?.textContent === "3"
+  await shot("project-tab")
+  panel().querySelector<HTMLElement>('[role="switch"]')!.click(); await sleep(200)
+  const projectSwitch = chatFixture.calls.some((call) => call.method === "projects.update" && call.params.brief_in_all_threads === true) && useStore.getState().projects["project-0"]?.brief_in_all_threads === true
+  await click("Edit the brief"); await sleep(900)
+  const briefEditor = panel().querySelector<HTMLElement>('[contenteditable="true"]')
+  const briefEditsInPlace = !!briefEditor && document.activeElement === briefEditor
+  await shot("project-brief-editing")
+  briefEditor?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await sleep(250)
+  const briefEscapeCloses = !panel().querySelector('[contenteditable="true"]')
+  // A project with no brief, setup or memory yet.
+  for (const id of [...chatFixture.notes.keys()]) chatFixture.notes.delete(id)
+  attachEnvFeed(fixtureConnection as never, "fixture-empty"); await sleep(300)
+  const projectEmpty = text().includes("The Coordinator writes this on its first research pass") && text().includes("Agents save what they learn here") && !!findButton("Write the brief")
+  await shot("project-empty")
+  await click("Write the brief"); await sleep(900)
+  const emptyEditor = panel().querySelector<HTMLElement>('[contenteditable="true"]')!
+  emptyEditor.focus()
+  document.execCommand("insertText", false, "Ship the iPad layout first.")
+  await sleep(900)
+  const briefCreated = chatFixture.calls.some((call) => call.method === "notes.create" && call.params.project_role === "brief" && String(call.params.body).includes("Ship the iPad layout first."))
+  emptyEditor.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await sleep(300)
+  const briefShownAfterCreate = text().includes("Ship the iPad layout first.")
+  useStore.getState().set({ rightOpen: false }); await sleep(200)
+  return { projectSections, projectSwitch, briefEditsInPlace, briefEscapeCloses, projectEmpty, briefCreated, briefShownAfterCreate }
+}
+
+/** The secret card: masked field, no digit shortcuts, Enter saves, Decline, and the settled lines. */
+async function checkSecretRequest(threadId: string) {
+  const turnId = "secret-turn"
+  const request = (id: string, input: Record<string, unknown>): ApprovalRequest => ({ id, thread_id: threadId, turn_id: turnId, tool_call_id: null, tool_name: "kybern_request_secret", input: input as never, summary: `Provide ${input.label}`, suggestions: [], created_at: at })
+  const fresh = request("secret-1", { label: "Stripe test secret key", reason: "Needed to run the checkout tests against Stripe’s test mode. Find it under Developers → API keys.", env_key: "STRIPE_SECRET_KEY", file: ".env", replaces: false, placeholder: null })
+  const replacing = request("secret-2", { label: "OpenAI API key", reason: "The embeddings script needs a key with access to text-embedding-3.", env_key: "OPENAI_API_KEY", file: "apps/api/.env.local", replaces: true, placeholder: "sk-…" })
+  const show = (approval: ApprovalRequest) => {
+    const state = useStore.getState()
+    const current = state.transcript(threadId)
+    const user = { kind: "user" as const, id: "secret-user", turnId, at, seq: 200, message: { parts: [{ type: "text" as const, text: "Run the checkout tests." }] } }
+    const blocks = current.blocks.some((block) => block.id === user.id) ? current.blocks : [...current.blocks, user]
+    state.set({ transcripts: { ...state.transcripts, [threadId]: { ...current, loaded: true, thread: state.threads[threadId], pendingApprovals: [approval], blocks: [...blocks, { kind: "approval", id: `approval:${approval.id}`, turnId, at, seq: 201 + blocks.length, approval, decision: null }] } } })
+  }
+  show(fresh); await sleep(400)
+  const field = () => document.querySelector<HTMLInputElement>("[data-secret-request] input")
+  const input = field()!
+  const secretFieldFocused = document.activeElement === input
+  const secretFieldHardened = input.type === "text" && input.autocomplete === "off" && input.getAttribute("autocorrect") === "off" && input.spellcheck === false
+    && input.hasAttribute("data-1p-ignore") && input.getAttribute("data-lpignore") === "true" && input.hasAttribute("data-bwignore")
+    && getComputedStyle(input).getPropertyValue("-webkit-text-security") === "disc"
+  const card = () => document.querySelector("[data-secret-request]")?.textContent ?? ""
+  const secretCopy = card().includes("Saves to .env as STRIPE_SECRET_KEY") && card().includes("Kybern writes it to the file. The agent never sees it.")
+  input.focus()
+  document.execCommand("insertText", false, "sk_test_1234")
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true }))
+  input.blur()
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true })); await sleep(120)
+  const digitsIgnored = !chatFixture.calls.some((call) => call.method === "approvals.respond") && field()?.value === "sk_test_1234"
+  input.focus()
+  await shot("secret-new")
+  await click("Show the value")
+  const secretRevealed = getComputedStyle(field()!).getPropertyValue("-webkit-text-security") === "none" && document.activeElement === field()
+  await click("Hide the value")
+  field()!.form!.requestSubmit(); await sleep(250)
+  const saved = chatFixture.calls.find((call) => call.method === "approvals.respond" && call.params.approval_id === "secret-1")
+  const secretSubmitted = saved?.params.decision === "submit" && saved.params.response?.secret === "sk_test_1234" && !document.querySelector("[data-secret-request]")
+  show(replacing); await sleep(400)
+  const secretReplaceCopy = card().includes("Replaces the current value of OPENAI_API_KEY in apps/api/.env.local") && field()?.placeholder === "sk-…"
+  await shot("secret-replace")
+  await click("Decline")
+  const secretDeclined = chatFixture.calls.some((call) => call.method === "approvals.respond" && call.params.approval_id === "secret-2" && call.params.decision === "deny")
+  // A third request that ended with the turn, as the daemon closes it.
+  const ended = request("secret-3", { label: "Sentry token", reason: "", env_key: "SENTRY_AUTH_TOKEN", file: ".env", replaces: false })
+  const state = useStore.getState()
+  const current = state.transcript(threadId)
+  state.set({ transcripts: { ...state.transcripts, [threadId]: { ...current, loaded: true, blocks: [...current.blocks, { kind: "approval", id: "approval:secret-3", turnId, at, seq: 300, approval: ended, decision: { decision: "deny", reason: "turn ended" } }] } } })
+  await sleep(300)
+  const lines = Array.from(document.querySelectorAll<HTMLElement>("[data-secret-outcome]")).map((line) => line.textContent)
+  const secretSettledLines = lines.includes("Saved to .env as STRIPE_SECRET_KEY") && lines.includes("Declined OPENAI_API_KEY") && lines.includes("Request ended: the agent stopped before you answered")
+  const secretNeverRendered = !document.body.textContent?.includes("sk_test_1234")
+  await shot("secret-settled")
+  return { secretFieldFocused, secretFieldHardened, secretCopy, digitsIgnored, secretRevealed, secretSubmitted, secretReplaceCopy, secretDeclined, secretSettledLines, secretNeverRendered }
+}
+
+window.addEventListener("unhandledrejection", (event) => results({ pass: false, error: String(event.reason), stack: String(event.reason?.stack ?? "") }))
 run().catch((error) => results({ fixture: "chat-coordinator", pass: false, error: String(error) }))

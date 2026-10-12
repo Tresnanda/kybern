@@ -7,6 +7,8 @@ import { surfaceOutputText, surfaceHasOutputText, toolSurface, type ToolSurface 
 import { computerConsent, connectorApproval, isUserInput, notesTasksConsent, parseKybernMention } from "@/lib/userInput"
 import { agentItemLabel, agentItemResultText, agentItemTool, agentItemWriteResult, parseAgentItemResult, placeItemCards, type AgentItemTool, type AgentItemWrite } from "@/lib/agentItemTools"
 import { VisualReply } from "./VisualReply"
+import { SecretRequestLine } from "./SecretRequestPanel"
+import { secretRequestInput } from "../../../../packages/kybern-client/src/secretRequest"
 import { AgentItemCard } from "./AgentItemCard"
 import { openNote } from "@/state/notes"
 import { openTask } from "@/state/tasks"
@@ -1523,6 +1525,8 @@ const WorkRow = memo(function WorkRow({
     }
     case "approval":
       {
+        const secret = secretRequestInput(block.approval)
+        if (secret) return <SecretRequestLine input={secret} decision={block.decision} style={CHAT_FONT} />
         const text = approvalRowText(block.approval, block.decision)
         return (
           <div className="rounded-lg py-1">

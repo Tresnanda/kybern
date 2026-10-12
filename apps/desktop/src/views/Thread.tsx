@@ -16,6 +16,8 @@ import { Markdown } from "@/components/kybern/Markdown"
 import { computerConsent, connectorApproval, connectorApprovalResponse, isUserInput, notesTasksConsent, type ConnectorApproval, type NotesTasksConsent } from "@/lib/userInput"
 import { splitChecklistPreview } from "@/lib/agentItemTools"
 import { UserInputPanel } from "./UserInputPanel"
+import { SecretRequestPanel } from "./SecretRequestPanel"
+import { secretRequestInput } from "../../../../packages/kybern-client/src/secretRequest"
 import { TextSwap } from "@/components/kybern/motion"
 // Thread route: Header (provider glyph, title, Hand off,
 // actions, dock toggle), the transcript scrolling under the frosted composer,
@@ -271,11 +273,13 @@ export function ThreadView({
   const canSwitchCoordinator = !!thread?.coordinator_project_id && (thread.status === "idle" || thread.status === "failed")
   const approval = pending[0] ?? null
   const connector = approval ? connectorApproval(approval) : null
+  // A secret request has its own field; the digit shortcuts never answer it.
+  const secretRequest = approval ? secretRequestInput(approval) : null
   // A subagent thread is read-only; the subagent page replaces the composer with its own bar.
-  const hideInput = (!!approval && isUserInput(approval) && !connector) || !!thread?.subagent
+  const hideInput = (!!approval && ((isUserInput(approval) && !connector) || !!secretRequest)) || !!thread?.subagent
 
   const answer = (n: number): boolean => {
-    if (!approval || (isUserInput(approval) && !connector) || (approval.tool_name === "ExitPlanMode" && n === 2)) return false
+    if (!approval || secretRequest || (isUserInput(approval) && !connector) || (approval.tool_name === "ExitPlanMode" && n === 2)) return false
     const decision = connector
       ? n === 1
         ? ({ decision: "submit", response: connectorApprovalResponse(connector.persist.includes("session") ? "session" : null) } as const)
@@ -490,7 +494,7 @@ export function ThreadView({
                   {queued.length > 0 && <QueuedPanel threadId={threadId} />}
                   {!approval && questions[0] && <AsyncQuestionPanel key={questions[0].id} threadId={threadId} request={questions[0]} count={questions.length} />}
                   {approval && (
-                    connector ? <ConnectorApprovalPanel key={approval.id} approval={approval} connector={connector} count={pending.length} onChoose={answer} /> : notesTasksConsent(approval) ? <NotesTasksApprovalPanel key={approval.id} consent={notesTasksConsent(approval)!} count={pending.length} onChoose={answer} /> : computerConsent(approval) ? <ComputerApprovalPanel key={approval.id} consent={computerConsent(approval)!} count={pending.length} onChoose={answer} onAlways={() => respondApproval(approval.id, { decision: "submit", response: { scope: "always" } }).catch((e) => toast.error("Unable to respond", { description: errorText(e) }))} /> : isUserInput(approval) ? <UserInputPanel key={approval.id} approval={approval} count={pending.length} /> : <ApprovalPanel key={approval.id} approval={approval} count={pending.length} onChoose={answer} />
+                    secretRequest ? <SecretRequestPanel key={approval.id} approval={approval} input={secretRequest} count={pending.length} /> : connector ? <ConnectorApprovalPanel key={approval.id} approval={approval} connector={connector} count={pending.length} onChoose={answer} /> : notesTasksConsent(approval) ? <NotesTasksApprovalPanel key={approval.id} consent={notesTasksConsent(approval)!} count={pending.length} onChoose={answer} /> : computerConsent(approval) ? <ComputerApprovalPanel key={approval.id} consent={computerConsent(approval)!} count={pending.length} onChoose={answer} onAlways={() => respondApproval(approval.id, { decision: "submit", response: { scope: "always" } }).catch((e) => toast.error("Unable to respond", { description: errorText(e) }))} /> : isUserInput(approval) ? <UserInputPanel key={approval.id} approval={approval} count={pending.length} /> : <ApprovalPanel key={approval.id} approval={approval} count={pending.length} onChoose={answer} />
                   )}
                 </ComposerPanelStack>
               }

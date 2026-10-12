@@ -232,6 +232,24 @@ test("a new note is created on the first non-empty save, never before", async ()
   assert.equal(update.params.expected_revision, 1);
 });
 
+test("a brief is created as the project's brief on its first text and keeps its title", async () => {
+  noteDrafts.clear();
+  const daemon = fakeDaemon();
+  const session = new NoteSession({ kind: "new", projectId: "p1", role: "brief" }, daemon.deps);
+  session.setBody("   ");
+  await session.flush();
+  assert.equal(daemon.calls.length, 0);
+  session.setBody("Ship small PRs.");
+  await session.flush();
+  const create = daemon.calls.find((c) => c.method === "notes.create");
+  assert.deepEqual(create.params, { scope: "project", project_id: "p1", title: "Project brief", body: "Ship small PRs.", project_role: "brief" });
+  session.setBody("Ship small PRs. One task each.");
+  await session.flush();
+  const update = daemon.calls.find((c) => c.method === "notes.update");
+  assert.equal(update.params.id, "created");
+  assert.equal("title" in update.params, false);
+});
+
 test("a thread note saves its text only, creating the note at revision 0", async () => {
   noteDrafts.clear();
   const daemon = fakeDaemon(null);

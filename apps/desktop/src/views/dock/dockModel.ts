@@ -14,6 +14,7 @@ import {
 } from "@/lib/kit/sidebarRowStyles"
 import { cn } from "@/lib/utils"
 import { isFreeChatProject, type NoteId, type NoteSummary, type ProjectId, type TaskItem, type TaskItemId, type TaskStatus, type ThreadId } from "@/protocol"
+import { chooseFilter } from "@/state/notesDisplay"
 import { isEmptyThreadNote } from "@/state/notesModel"
 import { useStore } from "@/state/store"
 import { isOpenStatus, sortTasks } from "@/state/tasksModel"
@@ -74,6 +75,14 @@ export function useMinuteNow(active: boolean): number {
 }
 
 // ---- notes ----
+
+/** "Show all in Notes": the Notes page filtered to the project (or Global). */
+export function showAllNotes(projectId: ProjectId | null) {
+  const store = useStore.getState()
+  store.set({ settingsOpen: false })
+  chooseFilter(projectId ? { kind: "project", projectId } : { kind: "global" })
+  store.selectNotes()
+}
 
 const byRecent = (a: NoteSummary, b: NoteSummary) => b.updated_at.localeCompare(a.updated_at)
 
