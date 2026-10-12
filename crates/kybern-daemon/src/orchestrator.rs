@@ -73,6 +73,7 @@ impl Orchestrator {
         let settings = self.inner.settings.get();
         let cache_key = serde_json::to_string(&(Some(project_id), Some(&cwd), &settings.providers))?;
         let drivers = self.inner.drivers.clone();
+        let catalogs = self.inner.provider_catalogs.clone();
         Ok(self
             .inner
             .provider_catalogs
@@ -106,7 +107,10 @@ impl Orchestrator {
                         }
                     }
                 });
-                futures::future::join_all(probes).await
+                let statuses = futures::future::join_all(probes).await;
+                // Keep it for a slow probe later, and across restarts.
+                catalogs.remember(&project_id.to_string(), &statuses);
+                statuses
             })
             .await)
     }
@@ -698,6 +702,7 @@ impl Orchestrator {
     ) -> Self {
         let app_tools = crate::app_tools::AppTools::new(store.clone(), crate::terminal::TerminalManager::default());
         let computer = crate::computer::ComputerUse::new(settings.clone());
+        let catalog_file = paths.root.join("cache").join("provider-catalogs.json");
         let usage = crate::usage::UsageMonitor::new(store.clone(), settings.clone());
         let task_threads = store.task_run_thread_ids().map(|ids| ids.into_iter().collect::<HashSet<_>>()).unwrap_or_else(|error| {
             tracing::warn!(%error, "could not load the threads that run tasks");
@@ -716,7 +721,7 @@ impl Orchestrator {
                 events,
                 paths,
                 settings,
-                provider_catalogs: Arc::new(crate::state::ProviderCatalogCache::default()),
+                provider_catalogs: Arc::new(crate::state::ProviderCatalogCache::with_disk(catalog_file)),
                 app_tools,
                 native_tools: None,
                 computer,
@@ -7332,6 +7337,7 @@ for line in sys.stdin:
     include!("orchestrator/delegation_tests.rs");
     include!("orchestrator/secret_tests.rs");
     include!("orchestrator/lead_git_tests.rs");
+    include!("orchestrator/capabilities_tests.rs");
     include!("orchestrator/lead_tests.rs");
     include!("orchestrator/messaging_tests.rs");
     include!("orchestrator/account_tests.rs");

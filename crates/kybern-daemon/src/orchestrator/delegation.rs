@@ -65,6 +65,9 @@ const PREVIEW_CHARS: usize = 500;
 /// Rescans of a stopped thread's descendants before giving up.
 const STOP_PASSES: usize = 5;
 const DEFAULT_DEBOUNCE_MS: u64 = 1_500;
+/// How long `kybern_agent_capabilities` waits for a fresh catalog before it
+/// answers from the last one it has.
+const CATALOG_BUDGET_MS: u64 = 10_000;
 const STATUS_LIMIT: usize = 20;
 
 /// Harnesses whose sessions accept a message inside a running turn.
@@ -87,6 +90,8 @@ pub(super) struct DelegationState {
     /// Threads being stopped or archived: they may not delegate any more work.
     stopping: std::sync::Mutex<HashMap<ThreadId, usize>>,
     debounce_ms: std::sync::atomic::AtomicU64,
+    /// How long `kybern_agent_capabilities` waits for a fresh harness catalog.
+    catalog_budget_ms: std::sync::atomic::AtomicU64,
 }
 
 impl Default for DelegationState {
@@ -98,6 +103,7 @@ impl Default for DelegationState {
             create: Default::default(),
             stopping: Default::default(),
             debounce_ms: std::sync::atomic::AtomicU64::new(DEFAULT_DEBOUNCE_MS),
+            catalog_budget_ms: std::sync::atomic::AtomicU64::new(CATALOG_BUDGET_MS),
         }
     }
 }
@@ -409,6 +415,12 @@ impl Orchestrator {
         self.inner.delegation.debounce_ms.store(delay.as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Shorten the wait for a fresh harness catalog (tests only).
+    #[cfg(test)]
+    pub(crate) fn set_catalog_budget(&self, budget: Duration) {
+        self.inner.delegation.catalog_budget_ms.store(budget.as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+
     // ---- stopping and per-parent creation ----
 
     /// Flag `thread_id` as stopping: from now on it cannot delegate. The flag
@@ -504,13 +516,36 @@ impl Orchestrator {
     // ---- kybern_agent_capabilities ----
 
     async fn agent_capabilities(&self, caller: &Thread) -> Result<Value> {
+        let mut catalog_note: Option<String> = None;
         let cached = self.cached_provider_statuses(caller.project_id).await?;
         let (statuses, catalog_state) = match cached {
             Some(statuses) => (statuses, "cached"),
-            None => match tokio::time::timeout(Duration::from_secs(10), self.refresh_provider_statuses(caller.project_id)).await {
-                Ok(Ok(statuses)) => (statuses, "fresh"),
-                _ => (Vec::new(), "loading"),
-            },
+            None => {
+                // The refresh keeps running in the background if it outlasts the
+                // budget, so the next call finds it done.
+                let this = self.clone();
+                let project_id = caller.project_id;
+                let refresh = tokio::spawn(async move { this.refresh_provider_statuses(project_id).await });
+                let budget = Duration::from_millis(self.inner.delegation.catalog_budget_ms.load(std::sync::atomic::Ordering::Relaxed));
+                match tokio::time::timeout(budget, refresh).await {
+                    Ok(Ok(Ok(statuses))) => (statuses, "fresh"),
+                    _ => match self.inner.provider_catalogs.last_known(&caller.project_id.to_string()) {
+                        Some((statuses, saved_at)) => {
+                            catalog_note = Some(format!(
+                                "The fresh catalog is still loading, so this is the last one Kybern saved ({}). Models may have changed; call kybern_agent_capabilities again in a minute for the current list.",
+                                saved_at.format("%Y-%m-%d %H:%M UTC")
+                            ));
+                            (statuses, "cached")
+                        }
+                        None => {
+                            catalog_note = Some(
+                                "No harness catalog has been loaded yet and the first one is still loading. Call kybern_agent_capabilities again in a minute to see the models; until then delegate with the harness defaults.".into(),
+                            );
+                            (Vec::new(), "loading")
+                        }
+                    },
+                }
+            }
         };
         let settings = self.inner.settings.get();
         let mut harnesses: Vec<Value> = statuses
@@ -551,7 +586,15 @@ impl Orchestrator {
             harnesses = ProviderKind::ALL
                 .into_iter()
                 .filter(|kind| self.inner.drivers.get(*kind).is_some())
-                .map(|kind| json!({"provider": kind, "available": null, "supports_steer": harness_supports_steer(kind), "models": []}))
+                .map(|kind| {
+                    json!({
+                        "provider": kind,
+                        "available": null,
+                        "unavailable_reason": "the harness catalog has not loaded yet",
+                        "supports_steer": harness_supports_steer(kind),
+                        "models": [],
+                    })
+                })
                 .collect();
         }
         let (max_children, max_depth) = self.orchestration_limits(caller);
@@ -560,6 +603,7 @@ impl Orchestrator {
         Ok(json!({
             "harnesses": harnesses,
             "catalog_state": catalog_state,
+            "catalog_note": catalog_note,
             "you": {
                 "provider": caller.provider.kind,
                 "model": caller.model,
