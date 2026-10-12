@@ -99,6 +99,11 @@ interface ModelPickerProps {
   onReload: () => void
   /** Open setup for an agent that can't run yet. */
   onSetUpProvider?: (kind: ProviderKind) => void
+  /** The first row's words when it means something other than the agent's own default, e.g. "Use the default". */
+  defaultRow?: { title: string; hint: string }
+  /** Where the panel opens from its trigger; the composer opens it upward. */
+  side?: "top" | "bottom"
+  align?: "start" | "end"
 }
 
 export function ModelPicker(props: ModelPickerProps) {
@@ -114,7 +119,7 @@ export function ModelPicker(props: ModelPickerProps) {
     >
       <PopoverPrimitive.Trigger render={props.trigger} />
       <PopoverPrimitive.Portal>
-        <PopoverPrimitive.Positioner side="top" align="end" sideOffset={6} collisionPadding={8} className="z-50">
+        <PopoverPrimitive.Positioner side={props.side ?? "top"} align={props.align ?? "end"} sideOffset={6} collisionPadding={8} className="z-50">
           <PopoverPrimitive.Popup
             aria-label="Agent and model"
             initialFocus={inputRef}
@@ -152,6 +157,7 @@ function ModelPickerPanel({
   onAccountChange,
   onReload,
   onSetUpProvider,
+  defaultRow,
   inputRef,
   close,
 }: ModelPickerProps & { inputRef: React.RefObject<HTMLInputElement | null>; close: () => void }) {
@@ -206,7 +212,7 @@ function ModelPickerPanel({
     if (search) {
       const shown = results.slice(0, SEARCH_RESULT_LIMIT)
       const out: Block[] = []
-      if ("agent default".includes(search.toLowerCase())) out.push({ key: "default", label: null, rows: [{ kind: "default", key: "default" }] })
+      if ((defaultRow?.title ?? "agent default").toLowerCase().includes(search.toLowerCase())) out.push({ key: "default", label: null, rows: [{ kind: "default", key: "default" }] })
       const sections: ModelSection<ProviderModel>[] = multiBackend
         ? modelSections(shown)
         : [{ key: "results", label: null, models: shown }]
@@ -244,7 +250,7 @@ function ModelPickerPanel({
       out.push({ key: section.key, label: section.label, rows })
     }
     return out
-  }, [canPickProvider, catalog, current, expanded, favorites, large, model, multiBackend, provider.kind, provider.instance, providers, instances, query, recents, results, showFavorites])
+  }, [canPickProvider, catalog, current, defaultRow?.title, expanded, favorites, large, model, multiBackend, provider.kind, provider.instance, providers, instances, query, recents, results, showFavorites])
 
   const isSelected = (row: Row) =>
     row.kind === "default" ? !selectedId
@@ -436,6 +442,7 @@ function ModelPickerPanel({
                     id={`${listId}-${row.key}`}
                     row={row}
                     agentName={agentName}
+                    defaultRow={defaultRow}
                     active={row === activeRow}
                     shortcut={row.kind === "model" && shortcutRows.includes(row) ? shortcutRows.indexOf(row) + 1 : undefined}
                     selected={isSelected(row)}
@@ -877,6 +884,7 @@ function PickerRow({
   id,
   row,
   agentName,
+  defaultRow,
   active,
   shortcut,
   selected,
@@ -889,6 +897,7 @@ function PickerRow({
   id: string
   row: Row
   agentName: string
+  defaultRow?: { title: string; hint: string }
   active: boolean
   /** 1 to 9: picks this row with the mod key. */
   shortcut?: number
@@ -918,8 +927,8 @@ function PickerRow({
   let description: string | null = null
   let hint: string | undefined
   if (row.kind === "default") {
-    title = "Agent default"
-    hint = `Uses the model set in ${agentName}`
+    title = defaultRow?.title ?? "Agent default"
+    hint = defaultRow?.hint ?? `Uses the model set in ${agentName}`
   } else if (row.kind === "custom") {
     title = row.id
     detail = selected ? "Custom ID" : "Use as model ID"

@@ -10,7 +10,7 @@ import { LimitMeter } from "@/components/kybern/LimitMeter"
 import { ChevronDownIcon, RefreshCwIcon } from "@/lib/kit/icons"
 import { tokens, usd } from "@/lib/format"
 import { useNow } from "@/lib/hooks"
-import { PROVIDER_NAMES, limitLabel, limitLeftLabel, limitPace, limitTone, limitUsed, limitsStale, resetIn, staleReason, updatedAgo } from "@/lib/providerUsage"
+import { PROVIDER_NAMES, limitLabel, limitLeftLabel, limitPace, limitTone, limitUsed, limitsStale, resetIn, staleCaption, updatedAgo } from "@/lib/providerUsage"
 import { errorText, rpc } from "@/state/rpc"
 import { useStore } from "@/state/store"
 import { refreshAccounts, takeUsageAnchor, useAccounts, usageAnchorId } from "@/state/accounts"
@@ -124,7 +124,7 @@ export function UsagePage() {
             {group.cards.map(({ entry, account }) => {
               const kind = entry.provider
               const ago = limitsStale(entry, now) ? updatedAgo(entry.updated_at, now) : null
-              const reason = staleReason(entry, now)
+              const caption = staleCaption(entry, now)
               const plan = entry.plan ?? account?.identity?.plan
               return <div key={account?.provider.instance ?? "default"} id={usageAnchorId(kind, account?.provider.instance ?? "default")} className="usage-limit-card scroll-mt-4">
                 <div className="usage-limit-provider">
@@ -143,8 +143,7 @@ export function UsagePage() {
                     <p className="usage-limit-reset flex justify-between gap-3"><span>{resetIn(limit.resets_at, now)}</span>{pace && <span data-pace-short={pace.short || undefined}>{pace.label}</span>}</p>
                   </div>
                 })}
-                {ago && <p className="usage-limit-reset">Last updated {ago}</p>}
-                {reason && <p className="usage-limit-reset">{reason}</p>}
+                {caption ? <p className="usage-limit-reset">{caption}</p> : ago && <p className="usage-limit-reset">Last updated {ago}</p>}
               </div>
             })}
           </div>

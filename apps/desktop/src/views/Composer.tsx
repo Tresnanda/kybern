@@ -45,7 +45,7 @@ import {
 import { Kbd } from "@/components/kit/kbd"
 import { Menu, MenuGroup, MenuItem, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
-import { buildStructuredTextParts, createComposerMentionReference, nextAttachmentLabel, structuredSegments, type AttachmentReference, type ComposerMentionReference } from "@/lib/composerTokens"
+import { buildStructuredTextParts, convertTypedSlashSkills, createComposerMentionReference, nextAttachmentLabel, structuredSegments, type AttachmentReference, type ComposerMentionReference } from "@/lib/composerTokens"
 import { createComposerThreadReference, type ComposerThreadReference } from "../../../../packages/kybern-client/src/threadReferences"
 import { PROVIDER_LABEL, basename, formatEffort, isMac, mod } from "@/lib/format"
 import { ChevronDownIcon, ClockIcon, ComposerSendArrowIcon, MessageCircleIcon, NoteIcon, PaperclipIcon, PencilIcon, PlusIcon, PluginIcon, DeviceLaptopIcon,
@@ -712,7 +712,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   const buildParts = (): ContentPart[] => {
     const skillItems = [...skills, ...selectedSkills.current.values()]
-    const parts = buildStructuredTextParts(text, mentioned.current, skillItems, selectedThreadReferences.current, attachmentReferences, selectedMentionReferences.current)
+    // A skill typed as `/name` (not picked from the list) is sent as that skill.
+    const parts = convertTypedSlashSkills(buildStructuredTextParts(text, mentioned.current, skillItems, selectedThreadReferences.current, attachmentReferences, selectedMentionReferences.current), skillItems)
     // Attachments the prompt never mentions keep their old place at the end.
     const placed = new Set(parts.flatMap((part) => (part.type === "attachment" ? [part.asset_id] : [])))
     for (const a of attachments) if (!placed.has(a.id)) parts.push(attachmentPart(a))

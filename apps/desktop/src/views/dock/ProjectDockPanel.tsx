@@ -1,6 +1,7 @@
 // The Coordinator's "Project" dock tab: the project's brief (edited in place, created
 // on the first character typed), its setup note, its memory notes, and the switch that
-// gives every new thread in the project the brief. RightPanel mounts this only for the
+// gives every new thread in the project the brief, then the project's Coordinator settings
+// (ProjectCoordinatorSection). RightPanel mounts this only for the
 // project's Coordinator. Rows and copy are shared with the Notes pane and with mobile.
 import { memo, useId, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
@@ -17,18 +18,19 @@ import { NoteEditor } from "../notes/NoteEditor"
 import { DockFooterLink, DockHint, DockScopeHeader, DockSectionLabel } from "./DockParts"
 import { DOCK_ROW_LIMIT, showAllNotes, useMinuteNow, useShownOnce } from "./dockModel"
 import { NoteRow } from "./NotesDockPanel"
+import { ProjectCoordinatorSection } from "./ProjectCoordinatorSection"
 
 /** The quiet text action at the end of a section label ("Edit", "Done"). */
 const SECTION_ACTION_CLASS =
   "press flex h-5 items-center rounded-md px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/70 outline-hidden transition-colors hover:bg-[var(--sidebar-accent)] hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
 
-export function ProjectDockPanel({ projectId, active }: { threadId: ThreadId; projectId: ProjectId; active: boolean }) {
+export function ProjectDockPanel({ threadId, projectId, active }: { threadId: ThreadId; projectId: ProjectId; active: boolean }) {
   const shown = useShownOnce(active)
   if (!shown) return null
-  return <ProjectDockContent projectId={projectId} active={active} />
+  return <ProjectDockContent threadId={threadId} projectId={projectId} active={active} />
 }
 
-const ProjectDockContent = memo(function ProjectDockContent({ projectId, active }: { projectId: ProjectId; active: boolean }) {
+const ProjectDockContent = memo(function ProjectDockContent({ threadId, projectId, active }: { threadId: ThreadId; projectId: ProjectId; active: boolean }) {
   const all = useAllNotes()
   const ready = useNotesReady()
   const { brief, setup, memory } = useMemo(() => projectSpaceNotes(all, projectId), [all, projectId])
@@ -78,6 +80,7 @@ const ProjectDockContent = memo(function ProjectDockContent({ projectId, active 
       <DockScopeHeader projectId={projectId} />
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-1">
         {sections}
+        <ProjectCoordinatorSection projectId={projectId} threadId={threadId} />
         {/* The switch and the way out sit at the bottom while the lists are short. */}
         <div className="min-h-3 flex-1" aria-hidden="true" />
         <BriefSwitch projectId={projectId} />

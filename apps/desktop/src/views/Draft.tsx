@@ -17,7 +17,7 @@ import type { PaneId } from "@/state/splitView"
 import type { GitBranchesResult, PermissionMode, ProjectId, ProviderInstance } from "@/protocol"
 import { activeRuntime, createThread, rpc } from "@/state/rpc"
 import { selectAvailableProviders, useStore } from "@/state/store"
-import { COORDINATOR_EDITS_NOT_BLOCKED_HINT, coordinatorEditsEnforced, createCoordinatorStarter } from "../../../../packages/kybern-client/src/coordinator"
+import { COORDINATOR_DRAFT_HINT, COORDINATOR_EDITS_NOT_BLOCKED_HINT, coordinatorEditsEnforced, createCoordinatorStarter } from "../../../../packages/kybern-client/src/coordinator"
 
 import { Composer, LandingTray, type ComposerHandle, type SlashCommand } from "./Composer"
 import { CHAT_COLUMN_GUTTER } from "./chatLayout"
@@ -141,7 +141,7 @@ export function Draft({ projectId, paneId, onProjectChange, purpose = "thread" }
             </h2>
             {coordinatorDraft && (
               <p style={{ "--i": 2 } as CSSProperties} className="max-w-[58ch] text-pretty text-[length:var(--app-font-size-ui,12px)] leading-relaxed text-muted-foreground/75">
-                The Coordinator plans the work and delegates it to other agents. Your first message becomes the project brief.
+                {COORDINATOR_DRAFT_HINT}
               </p>
             )}
           </div>

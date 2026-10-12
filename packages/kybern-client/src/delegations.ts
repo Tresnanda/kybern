@@ -428,6 +428,8 @@ export function structuredMessageSummary(message: Pick<UserMessage, "parts">): s
   if (inbound) return `${purposeLabel(inbound.purpose)} from ${messageSenderName(inbound)}`;
   const items = agentResultItems(message.parts);
   if (items) return items.length === 1 ? "Result from 1 agent" : `Results from ${items.length} agents`;
+  // Kybern's own row ("Setup started") when the message has no words of the user's.
+  for (const part of message.parts) if (part.type === "system_row") return part.text;
   return null;
 }
 
