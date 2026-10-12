@@ -7,7 +7,7 @@ import { spawn, spawnSync } from "node:child_process"
 
 const desktop = fileURLToPath(new URL("../", import.meta.url))
 const fixture = process.argv[2] ?? "rendering"
-if (!["draft-accounts", "accounts", "native-subagents", "visuals", "theme-provider", "real-session", "live-tool-memory", "usage", "tool-leases", "settings", "history-retention", "terminal-memory", "tool-memory", "image-memory", "app-update", "chat-collaboration", "collaboration", "markdown-memory", "worker-lifecycle", "profiles", "mermaid", "composer-stack", "scrolling", "work-shell", "work-stream", "history", "rendering", "materials", "scaling", "interaction", "questions", "artifacts", "memory", "continuation", "sessions", "chat-fixes", "activity", "prompts", "integrations", "icon-swap", "free-chat", "orchestrator", "pr-review", "preview"].includes(fixture)) throw new Error("Unknown rendering fixture")
+if (!["draft-accounts", "accounts", "native-subagents", "visuals", "visuals-bounce", "theme-provider", "real-session", "live-tool-memory", "usage", "tool-leases", "settings", "history-retention", "terminal-memory", "tool-memory", "image-memory", "app-update", "chat-collaboration", "collaboration", "markdown-memory", "worker-lifecycle", "profiles", "mermaid", "composer-stack", "scrolling", "work-shell", "work-stream", "history", "rendering", "materials", "scaling", "interaction", "questions", "artifacts", "memory", "continuation", "sessions", "chat-fixes", "activity", "prompts", "integrations", "icon-swap", "free-chat", "orchestrator", "pr-review", "preview"].includes(fixture)) throw new Error("Unknown rendering fixture")
 const scratch = mkdtempSync(path.join(tmpdir(), "kybern-rendering-"))
 let daemon
 const cleanups = []
@@ -111,6 +111,14 @@ c.commit()`,path.join(dataDir,"state.sqlite"),thread.id],{encoding:"utf8"})
     const fixed = call("threads.visuals.publish",{thread_id:thread.id,html:fixedHtml,title:"Fixed layout",height:600}).visual
     rmSync(image)
     process.env.KYBERN_VISUAL_FIXTURE = JSON.stringify({url:`ws://127.0.0.1:${port}/ws`,http_base:`http://127.0.0.1:${port}`,token:readFileSync(path.join(dataDir,"daemon.token"),"utf8").trim(),thread_id:thread.id,visual,unmeasured,fixed})
+  }
+  if (fixture === "visuals-bounce") {
+    // Frame documents exactly as the daemon serves a ticket (its CSP and bootstrap), without a daemon
+    // or an installed preview browser: this fixture is about the host's scroll and the frame's layout.
+    const server = spawn("node", [path.join(desktop, "scripts/visual-frame-server.mjs")], { stdio: ["ignore", "pipe", "inherit"] })
+    const { port } = await new Promise((resolve, reject) => { let text = ""; server.stdout.on("data", chunk => { text += chunk; if (text.includes("\n")) resolve(JSON.parse(text.trim())) }); server.on("exit", () => reject(new Error("Visual frame server exited"))) })
+    cleanups.push(() => server.kill("SIGTERM"))
+    process.env.KYBERN_VISUAL_BOUNCE = JSON.stringify({ base: `http://127.0.0.1:${port}` })
   }
   if (fixture === "integrations") {
     const repo = path.resolve(desktop, "../..")

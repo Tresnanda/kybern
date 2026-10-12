@@ -6,6 +6,7 @@ export default mergeConfig(base, {
   define: {
     __PREVIEW_FIXTURE__: process.env.KYBERN_PREVIEW_FIXTURE ?? "null",
     __VISUAL_FIXTURE__: process.env.KYBERN_VISUAL_FIXTURE ?? "null",
+    __VISUAL_BOUNCE__: process.env.KYBERN_VISUAL_BOUNCE ?? "null",
     __TOOL_LEASE_ENDPOINT__: process.env.KYBERN_TOOL_LEASE_ENDPOINT ?? "null",
     __TERMINAL_RETAIN__: JSON.stringify(process.env.KYBERN_TERMINAL_RETAIN === "1"),
     __INTEGRATION_PREVIEW_URLS__: process.env.KYBERN_INTEGRATION_PREVIEW_URLS ?? "[]",
@@ -49,6 +50,13 @@ export default mergeConfig(base, {
     transform(code, id) {
       if (!id.endsWith("/views/VisualReply.tsx") && !id.endsWith("/views/dock/VisualPreviewPanel.tsx")) return
       return code.replace(/"@\/state\/rpc"|"@\/lib\/tauri"/g, JSON.stringify(path.resolve(import.meta.dirname, "visuals-rpc.ts")))
+    },
+  }] : process.env.KYBERN_PERF_FIXTURE === "visuals-bounce" ? [{
+    name: "visuals-bounce-fixture-transport",
+    enforce: "pre",
+    transform(code, id) {
+      if (!id.endsWith("/views/VisualReply.tsx")) return
+      return code.replace(/"@\/state\/rpc"|"@\/lib\/tauri"/g, JSON.stringify(path.resolve(import.meta.dirname, "visuals-bounce-rpc.ts")))
     },
   }] : process.env.KYBERN_PERF_FIXTURE === "pr-review" ? [{
     name: "pr-review-fixture-transport",
