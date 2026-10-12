@@ -26,6 +26,7 @@ mod accounts;
 mod agent_items;
 mod delegation;
 mod lead;
+mod lead_git;
 mod messaging;
 mod notes;
 mod omp_recovery;
@@ -280,6 +281,9 @@ impl Orchestrator {
             if crate::secrets::is_tool(name) {
                 return self.execute_request_secret(&thread, turn_id, &live, arguments).await;
             }
+            if crate::lead_git::is_tool(name) {
+                return self.execute_lead_git(&thread, turn_id, &live, arguments).await;
+            }
             if agent_items::is_tool(name) {
                 return self.execute_notes_tasks_tool(&thread, turn_id, &live, name, arguments).await;
             }
@@ -461,6 +465,8 @@ struct Inner {
     delegation: delegation::DelegationState,
     /// Orchestrator V2 messaging engine state (blocked askers, owed answers, edit guards).
     messaging: messaging::MessagingState,
+    /// Test hooks for the Coordinator's git tool (the `gh` program, git environment).
+    lead_git: crate::lead_git::LeadGitConfig,
 }
 
 struct LiveSession {
@@ -734,6 +740,7 @@ impl Orchestrator {
                 subagents: std::sync::Mutex::new(Default::default()),
                 delegation: Default::default(),
                 messaging: Default::default(),
+                lead_git: Default::default(),
             }),
         }
     }
@@ -2752,6 +2759,10 @@ impl Orchestrator {
             .as_ref()
             .map(|gateway| {
                 let mut tools = crate::app_tools::native_tool_definitions();
+                if thread.coordinator_project_id.is_some() {
+                    // Only the project Coordinator is offered the git tool.
+                    tools.push(crate::lead_git::tool_definition());
+                }
                 if self.inner.computer.offered_to(thread.provider.kind) {
                     tools.extend(crate::computer::ComputerUse::tool_definitions());
                 }
@@ -3226,7 +3237,9 @@ impl Orchestrator {
             let mut result = if this.owns_app_tool_turn(thread_id, &live, Some(turn_id)).await.is_none() {
                 Err("app tool request is stale".to_string())
             } else {
-                let timeout = if let Some(budget) = crate::secrets::call_budget(&name, &arguments) {
+                let timeout = if let Some(budget) =
+                    crate::secrets::call_budget(&name, &arguments).or_else(|| crate::lead_git::call_budget(&name, &arguments))
+                {
                     budget
                 } else if delegation::BLOCKING_TOOLS.contains(&name.as_str())
                     || (name == "kybern_thread_send" && arguments.get("wait_for_reply").and_then(serde_json::Value::as_bool) == Some(true))
@@ -7318,6 +7331,7 @@ for line in sys.stdin:
 
     include!("orchestrator/delegation_tests.rs");
     include!("orchestrator/secret_tests.rs");
+    include!("orchestrator/lead_git_tests.rs");
     include!("orchestrator/lead_tests.rs");
     include!("orchestrator/messaging_tests.rs");
     include!("orchestrator/account_tests.rs");

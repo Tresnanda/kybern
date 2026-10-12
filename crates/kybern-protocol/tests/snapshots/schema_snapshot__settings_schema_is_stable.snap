@@ -115,7 +115,8 @@ expression: schema_for!(Settings)
       "default": {
         "max_active_children": 4,
         "lead_max_children": 6,
-        "max_depth": 2
+        "max_depth": 2,
+        "lead_push_without_asking": false
       }
     },
     "tell_agents_about_kybern": {
@@ -374,6 +375,11 @@ expression: schema_for!(Settings)
           "format": "uint32",
           "minimum": 0,
           "default": 2
+        },
+        "lead_push_without_asking": {
+          "description": "Let a project's Coordinator push branches and open pull requests without\nasking first. Merging a pull request always asks. Off by default.",
+          "type": "boolean",
+          "default": false
         }
       }
     }

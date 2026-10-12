@@ -423,7 +423,7 @@ async fn switching_the_coordinators_harness_keeps_the_thread_restarts_the_sessio
 async fn the_coordinator_has_its_own_child_limit_and_other_threads_keep_theirs() {
     let t = Delegating::new().await;
     let mut settings = t.fixture.orchestrator.inner.settings.get();
-    settings.orchestration = OrchestrationSettings { max_active_children: 3, lead_max_children: 1, max_depth: 2 };
+    settings.orchestration = OrchestrationSettings { max_active_children: 3, lead_max_children: 1, max_depth: 2, ..Default::default() };
     t.fixture.orchestrator.inner.settings.set(settings.clone()).unwrap();
 
     // The parent becomes its project's Coordinator.

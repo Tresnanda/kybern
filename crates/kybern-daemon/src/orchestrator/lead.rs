@@ -79,6 +79,8 @@ const LEAD_TOOLS: &[&str] = &[
     "kybern_html_publish",
     "kybern_preview_open",
     "kybern_request_secret",
+    // Git: inspect, branch, commit and land work (push, pull requests and merging ask the user).
+    "kybern_git",
 ];
 
 /// Whether a harness can hold the lead to its read-only tool set. Codex and

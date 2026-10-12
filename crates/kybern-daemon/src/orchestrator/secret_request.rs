@@ -103,7 +103,7 @@ impl Orchestrator {
 
     /// The wait ran out. Close the card as timed out, unless the user answered
     /// in the same instant: then that answer is returned to be saved.
-    async fn close_unanswered_secret_card(
+    pub(super) async fn close_unanswered_secret_card(
         &self,
         thread_id: ThreadId,
         turn_id: TurnId,

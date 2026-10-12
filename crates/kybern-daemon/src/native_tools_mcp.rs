@@ -275,7 +275,9 @@ async fn handle(State(state): State<AppState>, headers: HeaderMap, body: Bytes) 
             let Ok(_permit) = session.permits.try_acquire() else {
                 return rpc_error(id, -32000, "Too many concurrent tool requests", StatusCode::TOO_MANY_REQUESTS);
             };
-            let budget = crate::secrets::call_budget(name, &arguments).unwrap_or(Duration::from_secs(65));
+            let budget = crate::secrets::call_budget(name, &arguments)
+                .or_else(|| crate::lead_git::call_budget(name, &arguments))
+                .unwrap_or(Duration::from_secs(65));
             let response = tokio::time::timeout(
                 budget,
                 state.orchestrator.execute_native_app_tool_call(

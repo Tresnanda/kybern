@@ -1645,11 +1645,14 @@ pub struct OrchestrationSettings {
     pub lead_max_children: u32,
     /// Deepest chain of delegation: 1 means only top-level threads delegate (1..=4).
     pub max_depth: u32,
+    /// Let a project's Coordinator push branches and open pull requests without
+    /// asking first. Merging a pull request always asks. Off by default.
+    pub lead_push_without_asking: bool,
 }
 
 impl Default for OrchestrationSettings {
     fn default() -> Self {
-        Self { max_active_children: 4, lead_max_children: 6, max_depth: 2 }
+        Self { max_active_children: 4, lead_max_children: 6, max_depth: 2, lead_push_without_asking: false }
     }
 }
 
@@ -2139,9 +2142,15 @@ mod orchestration_tests {
 
     #[test]
     fn orchestration_settings_default_and_partial_parse() {
-        assert_eq!(Settings::default().orchestration, OrchestrationSettings { max_active_children: 4, lead_max_children: 6, max_depth: 2 });
+        assert_eq!(
+            Settings::default().orchestration,
+            OrchestrationSettings { max_active_children: 4, lead_max_children: 6, max_depth: 2, lead_push_without_asking: false }
+        );
         let settings: Settings = serde_json::from_value(serde_json::json!({ "orchestration": { "max_depth": 3 } })).unwrap();
-        assert_eq!(settings.orchestration, OrchestrationSettings { max_active_children: 4, lead_max_children: 6, max_depth: 3 });
+        assert_eq!(
+            settings.orchestration,
+            OrchestrationSettings { max_active_children: 4, lead_max_children: 6, max_depth: 3, lead_push_without_asking: false }
+        );
         let legacy: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(legacy.orchestration, OrchestrationSettings::default());
     }

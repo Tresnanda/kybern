@@ -62,6 +62,7 @@ const APP_TOOL_NAMES = new Set([
   "kybern_task_update",
   "kybern_task_claim",
   "kybern_request_secret",
+  "kybern_git",
 ]);
 // Delegation can wait on a child agent (up to 60 s) and send/wait tools can
 // block on a reply. HTML preparation and preview rendering can also outlast
@@ -88,6 +89,13 @@ const SECRET_TOOL_NAME = "kybern_request_secret";
 function secretToolTimeoutMs(args) {
   const seconds = Number.isFinite(args?.timeout_seconds) ? Math.min(Math.max(args.timeout_seconds, 10), 3600) : 600;
   return seconds * 1000 + 30 * 1000;
+}
+// kybern_git push, open_pr and merge_pr wait for the user's card for up to 10
+// minutes, plus the daemon's slack. Its other ops fit the long tool budget.
+const GIT_TOOL_NAME = "kybern_git";
+const GIT_ASKING_OPS = new Set(["push", "open_pr", "merge_pr"]);
+function gitToolTimeoutMs(args) {
+  return GIT_ASKING_OPS.has(args?.op) ? 690 * 1000 : COMPUTER_TOOL_TIMEOUT_MS;
 }
 function configuredToolSet(environmentName) {
   if (process.env[environmentName] === undefined) return new Set();
@@ -310,6 +318,8 @@ async function executeAppTool(name, toolCallId, args, signal, ctx) {
     timeout:
       name === SECRET_TOOL_NAME
         ? secretToolTimeoutMs(args)
+        : name === GIT_TOOL_NAME
+        ? gitToolTimeoutMs(args)
         : name.startsWith("kybern_computer_") || APPROVAL_TOOL_NAMES.has(name) || LONG_TOOL_NAMES.has(name)
         ? COMPUTER_TOOL_TIMEOUT_MS
         : APP_TOOL_TIMEOUT_MS,
