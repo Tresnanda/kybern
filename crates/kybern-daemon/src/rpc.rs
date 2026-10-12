@@ -198,6 +198,9 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             if let Some(w) = p.worktrees_default {
                 project.worktrees_default = w;
             }
+            if let Some(brief_everywhere) = p.brief_in_all_threads {
+                project.brief_in_all_threads = brief_everywhere;
+            }
             project.updated_at = chrono::Utc::now();
             if let Some(prefix) = &p.task_prefix {
                 // Validated first, so a bad prefix leaves the other edits unsaved too.
@@ -480,65 +483,12 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: DelegationsWorktreeRemoveParams = parse(params)?;
             ok(state.orchestrator.delegation_worktree_remove(p.thread_id, p.force).await.map_err(bad)?)
         }
-        CollaborationGroupsCreate::NAME => ok(state.orchestrator.collaboration_group_create(parse(params)?).map_err(bad)?),
-        CollaborationCoordinatorGet::NAME => {
-            let p: CollaborationCoordinatorGetParams = parse(params)?;
-            ok(state.orchestrator.project_coordinator_get(p.project_id).map_err(bad)?)
+        CoordinatorGet::NAME => {
+            let p: CoordinatorGetParams = parse(params)?;
+            ok(state.orchestrator.coordinator_get(p.project_id).map_err(bad)?)
         }
-        CollaborationCoordinatorGetOrCreate::NAME => {
-            ok(state.orchestrator.project_coordinator_get_or_create(parse(params)?).await.map_err(bad)?)
-        }
-        CollaborationCoordinatorDelete::NAME => ok(state.orchestrator.project_coordinator_delete(parse(params)?).await.map_err(bad)?),
-        CollaborationCoordinatorSwitchHarness::NAME => {
-            ok(state.orchestrator.project_coordinator_switch_harness(parse(params)?).await.map_err(bad)?)
-        }
-        CollaborationGroupsGet::NAME => {
-            let p: CollaborationGroupsGetParams = parse(params)?;
-            ok(state.orchestrator.collaboration_group_detail(p.group_id).map_err(bad)?)
-        }
-        CollaborationGroupsList::NAME => ok(state.orchestrator.collaboration_groups_list(parse(params)?).map_err(bad)?),
-        CollaborationGroupsUpdate::NAME => ok(state.orchestrator.collaboration_group_update(parse(params)?).map_err(bad)?),
-        CollaborationGroupsControl::NAME => ok(state.orchestrator.collaboration_group_control(parse(params)?).await.map_err(bad)?),
-        CollaborationMembersAttach::NAME => ok(state.orchestrator.collaboration_member_attach(parse(params)?).map_err(bad)?),
-        CollaborationMembersDetach::NAME => {
-            state.orchestrator.collaboration_member_detach(parse(params)?).map_err(bad)?;
-            ok(Empty {})
-        }
-        CollaborationAssignmentsCreate::NAME => {
-            ok(state.orchestrator.collaboration_assignment_create(parse(params)?, None, None).await.map_err(bad)?)
-        }
-        CollaborationAssignmentsGet::NAME => {
-            let p: CollaborationAssignmentsGetParams = parse(params)?;
-            ok(state
-                .store
-                .collaboration_assignment_get(p.assignment_id)
-                .map_err(internal)?
-                .ok_or_else(|| RpcError::not_found("assignment"))?)
-        }
-        CollaborationAssignmentsList::NAME => ok(state.orchestrator.collaboration_assignments_list(parse(params)?).map_err(bad)?),
-        CollaborationAssignmentsUpdate::NAME => {
-            ok(state.orchestrator.collaboration_assignment_update(parse(params)?, None).map_err(bad)?)
-        }
-        CollaborationAssignmentsComplete::NAME => {
-            ok(state.orchestrator.collaboration_assignment_complete(parse(params)?, None).map_err(bad)?)
-        }
-        CollaborationAssignmentsCancel::NAME => {
-            ok(state.orchestrator.collaboration_assignment_cancel(parse(params)?, None, None).await.map_err(bad)?)
-        }
-        CollaborationMessagesSend::NAME => ok(state.orchestrator.collaboration_message_send(parse(params)?, None).map_err(bad)?),
-        CollaborationMessagesList::NAME => ok(state.orchestrator.collaboration_messages_list(parse(params)?).map_err(bad)?),
-        CollaborationContextPut::NAME => {
-            let mut p: CollaborationContextPutParams = parse(params)?;
-            p.author_thread_id = None;
-            p.user_authored = true;
-            ok(state.orchestrator.collaboration_context_put(p, None).map_err(bad)?)
-        }
-        CollaborationContextList::NAME => ok(state.orchestrator.collaboration_context_list(parse(params)?).map_err(bad)?),
-        CollaborationContextHistoryMethod::NAME => {
-            let p: CollaborationContextHistoryParams = parse(params)?;
-            ok(state.orchestrator.collaboration_context_history(p).map_err(bad)?)
-        }
-        CollaborationWait::NAME => ok(state.orchestrator.collaboration_wait(parse(params)?).await.map_err(bad)?),
+        CoordinatorOpen::NAME => ok(state.orchestrator.coordinator_open(parse(params)?).await.map_err(bad)?),
+        CoordinatorSwitchHarness::NAME => ok(state.orchestrator.coordinator_switch_harness(parse(params)?).await.map_err(bad)?),
         TasksList::NAME => {
             let p: TasksListParams = parse(params)?;
             let mut tasks = state.store.runtime_tasks_for_thread(p.thread_id).map_err(internal)?;

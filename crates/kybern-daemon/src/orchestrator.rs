@@ -25,6 +25,7 @@ use crate::settings::SettingsStore;
 mod accounts;
 mod agent_items;
 mod delegation;
+mod lead;
 mod messaging;
 mod notes;
 mod omp_recovery;
@@ -141,22 +142,6 @@ impl Orchestrator {
         Ok(())
     }
 
-    fn validate_external_delivery_authority(&self, from_thread_id: ThreadId, to_thread_id: ThreadId) -> Result<()> {
-        let actor = self.inner.store.thread_get(from_thread_id)?.ok_or_else(|| anyhow!("caller thread not found"))?;
-        let recipient = self.inner.store.thread_get(to_thread_id)?.ok_or_else(|| anyhow!("recipient thread not found"))?;
-        if actor.worktree.is_some() && recipient.worktree.is_none() {
-            return Err(anyhow!(
-                "an isolated worker cannot wake a main-checkout thread; return the result to its coordinator or ask the user to message that thread"
-            ));
-        }
-        if messaging::permission_rule(&actor, &recipient).is_err() {
-            return Err(anyhow!(
-                "recipient permission mode is not a conservative subset of the caller; ask the user to message that thread directly or lower its permission mode"
-            ));
-        }
-        Ok(())
-    }
-
     fn set_thread_relationships(
         &self,
         thread_id: ThreadId,
@@ -166,27 +151,6 @@ impl Orchestrator {
         self.inner.store.thread_set_relationships(thread_id, parent_thread_id, coordinator_project_id)?;
         let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread disappeared while updating relationships"))?;
         self.update_thread(thread)
-    }
-
-    async fn require_live_native_actor(&self, thread_id: ThreadId, session_instance_id: Uuid) -> Result<TurnId> {
-        let live = self
-            .inner
-            .sessions
-            .lock()
-            .await
-            .get(&thread_id)
-            .cloned()
-            .ok_or_else(|| anyhow!("native tool caller session is no longer active"))?;
-        if live.session_instance_id != session_instance_id {
-            return Err(anyhow!("native tool credential belongs to a replaced session"));
-        }
-        live.turn
-            .lock()
-            .await
-            .as_ref()
-            .filter(|turn| !turn.completed)
-            .map(|turn| turn.id)
-            .ok_or_else(|| anyhow!("native tool caller turn has ended"))
     }
 
     pub fn execute_native_app_tool_call<'a>(
@@ -228,7 +192,7 @@ impl Orchestrator {
         thread_id: ThreadId,
         session_instance_id: Uuid,
         name: &'a str,
-        mut arguments: serde_json::Value,
+        arguments: serde_json::Value,
     ) -> futures::future::BoxFuture<'a, Result<serde_json::Value>> {
         Box::pin(async move {
             let live = self
@@ -412,14 +376,6 @@ impl Orchestrator {
 
 }
 
-fn take_required<T: serde::de::DeserializeOwned>(object: &mut serde_json::Map<String, serde_json::Value>, key: &str) -> Result<T> {
-    serde_json::from_value(object.remove(key).ok_or_else(|| anyhow!("{key} is required"))?).map_err(Into::into)
-}
-
-fn take_default<T: serde::de::DeserializeOwned + Default>(object: &mut serde_json::Map<String, serde_json::Value>, key: &str) -> Result<T> {
-    object.remove(key).map(serde_json::from_value).transpose().map(|value| value.unwrap_or_default()).map_err(Into::into)
-}
-
 fn derived_operation_id(base: Uuid, discriminator: u8) -> Uuid {
     let mut bytes = *base.as_bytes();
     bytes[0] ^= discriminator;
@@ -443,21 +399,6 @@ fn truncate_utf8(text: &mut String, max_bytes: usize) {
 /// git-only behavior also use this fallback to pick up a later `git init`.
 fn project_path_is_git(project_path: &str) -> bool {
     std::path::Path::new(project_path).join(".git").exists()
-}
-
-async fn resolve_git_revision(project_path: &str, revision: &str) -> Result<String> {
-    let output = tokio::process::Command::new("git")
-        .args(["-C", project_path, "rev-parse", "--verify", &format!("{revision}^{{commit}}")])
-        .output()
-        .await?;
-    if !output.status.success() {
-        return Err(anyhow!("base_revision `{revision}` does not name a commit in the group project"));
-    }
-    let oid = String::from_utf8(output.stdout)?.trim().to_owned();
-    if oid.len() < 40 || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(anyhow!("git returned an invalid commit id for base_revision"));
-    }
-    Ok(oid)
 }
 
 type RetainedSessions = HashMap<(ThreadId, String), (ProviderInstance, Arc<LiveSession>)>;
@@ -560,6 +501,8 @@ struct LiveSession {
     /// provider session from monopolizing daemon read work.
     app_tool_requests: Mutex<HashSet<String>>,
     app_tool_permits: Arc<Semaphore>,
+    /// Project brief revision this session's instructions carry; only a Coordinator tracks it.
+    brief_revision: Mutex<Option<i64>>,
 }
 
 struct DaemonApproval {
@@ -1216,6 +1159,7 @@ impl Orchestrator {
             path,
             worktrees_default: None,
             task_prefix: None,
+            brief_in_all_threads: false,
             created_at: now,
             updated_at: now,
         };
@@ -1438,6 +1382,7 @@ impl Orchestrator {
             is_git: false,
             worktrees_default: Some(false),
             task_prefix: None,
+            brief_in_all_threads: false,
             created_at: now,
             updated_at: now,
         };
@@ -1944,7 +1889,22 @@ impl Orchestrator {
             match self.portable_message(&thread, &message).and_then(|portable| self.workspace_transition_message(&thread, &portable)) {
                 Ok((workspace_message, transition)) => {
                     workspace_transition = transition;
-                    live.session.send_message(&message_id.to_string(), &self.provider_message(&workspace_message, &live)).await
+                    // A brief the user changed since this Coordinator's session began
+                    // rides in front of the next message, in the provider's copy only.
+                    let brief_update = self.lead_brief_update(&thread, &live).await.unwrap_or_else(|error| {
+                        tracing::warn!(thread_id = %thread.id, %error, "could not check the project brief for changes");
+                        None
+                    });
+                    let provider_message = self.provider_message(&workspace_message, &live);
+                    let provider_message = match &brief_update {
+                        Some((_, update)) => std::borrow::Cow::Owned(lead::with_brief_update(&provider_message, update)),
+                        None => provider_message,
+                    };
+                    let sent = live.session.send_message(&message_id.to_string(), &provider_message).await;
+                    if let (Ok(()), Some((revision, _))) = (&sent, brief_update) {
+                        self.lead_brief_seen(&live, revision).await;
+                    }
+                    sent
                 }
                 Err(error) => Err(kybern_drivers::DriverError::Unsupported(error.to_string())),
             }
@@ -2758,7 +2718,9 @@ impl Orchestrator {
         }
         let session_instance_id = Uuid::now_v7();
         let restrictions = self.native_tool_restrictions(thread)?;
-        let coordinator_instructions = self.coordinator_instructions(thread)?;
+        let instructions = self.session_instructions(thread)?;
+        let brief_revision = instructions.as_ref().map(|instructions| instructions.brief_revision);
+        let coordinator_instructions = instructions.map(|instructions| instructions.text);
         let computer_tools = self.computer_tools_offered(thread, &restrictions);
         let native_tool_bridge = self
             .inner
@@ -2766,11 +2728,6 @@ impl Orchestrator {
             .as_ref()
             .map(|gateway| {
                 let mut tools = crate::app_tools::native_tool_definitions();
-                // Ordinary threads delegate with kybern_agent_*; the collaboration
-                // tools are for project coordinators and their workers only.
-                if !self.collaboration_tools_enabled(thread).unwrap_or(false) {
-                    tools.retain(|tool| !tool.name.starts_with("kybern_collaboration_"));
-                }
                 if self.inner.computer.offered_to(thread.provider.kind) {
                     tools.extend(crate::computer::ComputerUse::tool_definitions());
                 }
@@ -2828,12 +2785,14 @@ impl Orchestrator {
             daemon_approvals: Mutex::new(HashMap::new()),
             app_tool_requests: Mutex::new(HashSet::new()),
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
+            brief_revision: Mutex::new(None),
         });
         self.inner.store.meta_set_many(&[
             (&format!("live_fingerprint:{}", thread.id), &self.environment_fingerprint(thread)?),
             (&format!("live_identity:{}", thread.id), &self.session_identity(thread)?),
             (&format!("live_owner:{}", thread.id), &serde_json::to_string(&thread.provider)?),
         ])?;
+        *live.brief_revision.lock().await = brief_revision;
         self.inner.sessions.lock().await.insert(thread.id, live.clone());
         let this = self.clone();
         let thread_id = thread.id;
@@ -2851,57 +2810,6 @@ impl Orchestrator {
             && !restrictions.denied_tools.iter().any(|tool| tool == PROBE)
     }
 
-    fn native_tool_restrictions(&self, thread: &Thread) -> Result<kybern_drivers::NativeToolRestrictions> {
-        let group_id = thread
-            .collaboration_group_id
-            .or_else(|| {
-                thread
-                    .coordinator_project_id
-                    .and_then(|project_id| self.inner.store.project_coordinator(project_id).ok().flatten().map(|(_, group_id)| group_id))
-            })
-            .or(self.inner.store.collaboration_group_for_thread(thread.id)?);
-        let Some(group_id) = group_id else { return Ok(Default::default()) };
-        let group = self.inner.store.collaboration_group_get(group_id)?.ok_or_else(|| anyhow!("collaboration group not found"))?;
-        if group.coordinator_mode != CoordinatorMode::Dedicated || group.coordinator_thread_id != thread.id {
-            return Ok(Default::default());
-        }
-        Ok(kybern_drivers::NativeToolRestrictions {
-            allowed_tools: vec![
-                "kybern_thread_context",
-                "kybern_read_file",
-                "kybern_list_files",
-                "kybern_workspace_diff",
-                "kybern_html_preview",
-                "kybern_html_publish",
-                "kybern_preview_open",
-                "kybern_threads_search",
-                "kybern_thread_read",
-                "kybern_thread_send",
-                "kybern_collaboration_spawn",
-                "kybern_collaboration_send",
-                "kybern_collaboration_read",
-                "kybern_collaboration_wait",
-                "kybern_collaboration_cancel",
-                "kybern_collaboration_context_read",
-                "kybern_collaboration_context_put",
-                "kybern_notes_search",
-                "kybern_note_read",
-                "kybern_note_create",
-                "kybern_note_append",
-                "kybern_note_update",
-                "kybern_tasks_list",
-                "kybern_task_read",
-                "kybern_task_create",
-                "kybern_task_update",
-            ]
-            .into_iter()
-            .map(str::to_owned)
-            .collect(),
-            denied_tools: vec!["kybern_collaboration_report".into()],
-            require_enforcement: true,
-        })
-    }
-
     /// The "Working in Kybern" guide for a session with these tools, or `None`
     /// when the user turned "Tell agents about Kybern" off.
     fn agent_guide(
@@ -2916,26 +2824,6 @@ impl Orchestrator {
         let guide = crate::agent_guide::render(&crate::agent_guide::GuideTools::from_names(names));
         tracing::debug!(version = crate::agent_guide::GUIDE_VERSION, bytes = guide.len(), "attaching the Kybern guide to a new session");
         Some(guide)
-    }
-
-    fn coordinator_instructions(&self, thread: &Thread) -> Result<Option<String>> {
-        let Some(project_id) = thread.coordinator_project_id else { return Ok(None) };
-        let Some((coordinator_thread_id, group_id)) = self.inner.store.project_coordinator(project_id)? else { return Ok(None) };
-        if coordinator_thread_id != thread.id {
-            return Ok(None);
-        }
-        // Keep the provider's system/developer prefix stable across idle
-        // releases and resumes. Live project data belongs in tool responses,
-        // after the cached prefix, and is available after a harness switch too.
-        let mut instructions = format!(
-            "You are Kybern's persistent coordinator for project {project_id}, collaboration group {group_id}.\n\
-             Plan work from the user's brief, delegate every editing and integration task through Kybern collaboration assignments, inspect and review worker results, maintain the project plan and durable project knowledge, and return a clear review to the user. Do not edit or integrate code yourself. Use explicit assignment boundaries and provenance. At session start, each new objective, and before delegating, use kybern_collaboration_read for the current objective and assignment state, and kybern_collaboration_context_read for the current plan, project.setup, and user-authored corrections. If conversation context is missing after a harness switch, use kybern_thread_read for this coordinator thread's saved conversation. Fetch additional pages as needed; never treat absent context as permission to start over. When spawning a child, omit permission_mode unless the user specifically requested an override so Kybern inherits the coordinator's existing authority. If a worker is blocked on approval, preserve it and report or resolve that approval; never cancel and recreate a worker to bypass approval. Persist the working plan as kind `plan`, update its status as progress arrives, and update it again with completion or remaining work after reviewing results. Save each reusable verified fact such as architecture notes and test commands as kind `research`, project choices as kind `decision`, and reviewed assignment outcomes as kind `result_reference` with kybern_collaboration_context_put. Record useful findings before reporting completion. Treat user-authored briefs and instructions as authoritative; never replace them with agent-authored claims. Review worker claims and artifacts before presenting them as complete. Some harnesses enforce the non-editing role by restricting tools; for harnesses without enforceable restrictions, this instruction still defines the coordinator role.\n\
-             Read changing project knowledge and assignment results through these tools; they are intentionally not embedded in this stable role instruction.\n"
-        );
-
-        instructions.push_str("\nCheck whether first-time setup is required before implementation: if project.setup already exists, reuse it and continue without repeating setup. Otherwise, tell the user you are learning the project first. Delegate a research-only assignment to inspect repository instructions, architecture and entry points, development/test commands, and constraints relevant to the user's brief. For an empty project, record what exists and what is missing rather than inventing conventions. Do not edit files or run installation/setup commands during this research. Review the worker's successful result; save a concise verified overview with kybern_collaboration_context_put using key `project.setup`, kind `research`, and source_refs containing the successful research assignment's exact UUID. This records setup completion durably and unlocks editing/integration assignments. If research fails or needs input, explain the blocker and resume setup on the next turn; never claim readiness prematurely. After saving the overview, tell the user setup is complete, persist the task plan, and continue their original request without asking them to repeat it.\n");
-
-        Ok(Some(instructions))
     }
 
     async fn persist_runtime_task_start(
@@ -4386,6 +4274,7 @@ mod tests {
             is_git: false,
             worktrees_default: None,
             task_prefix: None,
+            brief_in_all_threads: false,
             created_at: now,
             updated_at: now,
         };
@@ -4475,6 +4364,7 @@ mod tests {
             daemon_approvals: Mutex::new(HashMap::new()),
             app_tool_requests: Mutex::new(HashSet::new()),
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
+            brief_revision: Mutex::new(None),
         });
         orchestrator
             .handle_driver_event(
@@ -4748,6 +4638,7 @@ mod tests {
                 is_git: false,
                 worktrees_default: None,
                 task_prefix: None,
+                brief_in_all_threads: false,
                 created_at: now,
                 updated_at: now,
             };
@@ -4823,6 +4714,7 @@ mod tests {
                 daemon_approvals: Mutex::new(HashMap::new()),
                 app_tool_requests: Mutex::new(HashSet::new()),
                 app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
+                brief_revision: Mutex::new(None),
             });
             self.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
             (live, closes, messages)
@@ -4849,6 +4741,7 @@ mod tests {
                 daemon_approvals: Mutex::new(HashMap::new()),
                 app_tool_requests: Mutex::new(HashSet::new()),
                 app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
+                brief_revision: Mutex::new(None),
             });
             self.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
             self.orchestrator.send(thread.id, UserMessage::text("inspect workspace")).await.unwrap();
@@ -4969,6 +4862,7 @@ mod tests {
                 project_id: Some(fixture.project.id),
                 title: Some("Plan".into()),
                 body: Some("Ship it".into()),
+                project_role: None,
             })
             .unwrap();
         let error = fixture
@@ -6230,6 +6124,7 @@ mod tests {
                 project_id: Some(fixture.project.id),
                 title: Some("Plan".into()),
                 body: Some("- [ ] ship".into()),
+                project_role: None,
             })
             .unwrap();
         assert_eq!(changes.try_recv().unwrap().note.unwrap().id, note.summary.id);
@@ -6267,6 +6162,7 @@ mod tests {
                 project_id: Some(fixture.project.id),
                 title: Some("Plan".into()),
                 body: None,
+                project_role: None,
             })
             .unwrap();
         fixture
@@ -7325,6 +7221,7 @@ for line in sys.stdin:
             daemon_approvals: Mutex::new(HashMap::new()),
             app_tool_requests: Mutex::new(HashSet::new()),
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
+            brief_revision: Mutex::new(None),
         });
         fixture.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
         fixture.orchestrator.send(thread.id, UserMessage::text("delegate")).await.unwrap();
@@ -7377,6 +7274,7 @@ for line in sys.stdin:
     }
 
     include!("orchestrator/delegation_tests.rs");
+    include!("orchestrator/lead_tests.rs");
     include!("orchestrator/messaging_tests.rs");
     include!("orchestrator/account_tests.rs");
     include!("orchestrator/worktree_tests.rs");

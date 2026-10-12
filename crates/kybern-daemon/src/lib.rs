@@ -6,8 +6,6 @@ mod app_tools;
 mod artifacts;
 mod auth;
 mod bounded_broadcast;
-#[cfg(test)]
-mod collaboration_tests;
 mod computer;
 mod config;
 mod cursor_setup;
@@ -185,15 +183,7 @@ pub async fn run() -> Result<()> {
                     true
                 }
             };
-            let collaboration_waiting = match queue_state.orchestrator.drain_collaboration_assignments().await {
-                Ok(waiting) => waiting,
-                Err(error) => {
-                    tracing::error!(%error, "could not dispatch collaboration assignment");
-                    true
-                }
-            };
-            let fallback =
-                if waiting || collaboration_waiting { std::time::Duration::from_secs(2) } else { std::time::Duration::from_secs(60) };
+            let fallback = if waiting { std::time::Duration::from_secs(2) } else { std::time::Duration::from_secs(60) };
             tokio::select! {
                 _ = queue_state.shutdown.cancelled() => break,
                 _ = queue_state.orchestrator.queue_changed() => {}

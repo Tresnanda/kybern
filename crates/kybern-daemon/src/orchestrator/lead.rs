@@ -1,0 +1,375 @@
+//! The project Coordinator: an ordinary Orchestrator V2 thread with a lead role.
+//!
+//! A project has at most one Coordinator, marked by `Thread::coordinator_project_id`
+//! (unique per project; archiving the thread frees the slot). It plans, routes and
+//! reviews: its children are ordinary delegated threads made with the
+//! `kybern_agent_*` tools, and it never edits files itself. Where a harness can
+//! enforce that, the session starts with a read-only tool set.
+//!
+//! The project space is project-scoped notes: the user's pinned brief, the
+//! Coordinator's setup note and any number of memory notes. The brief and an index
+//! of the notes reach the lead and every thread delegated from it at session
+//! start (a stable prefix), and every thread in the project when the project's
+//! `brief_in_all_threads` switch is on. A brief that changes after the lead's
+//! session started is prepended once to its next message instead.
+
+use anyhow::{Result, anyhow, ensure};
+use kybern_drivers::NativeToolRestrictions;
+use kybern_protocol::methods::{self, Note, ProjectNoteRole};
+use kybern_protocol::*;
+use uuid::Uuid;
+
+use super::{LiveSession, Orchestrator, default_provider_permission};
+
+/// The lead's role, injected only into the Coordinator. Part of the cached system
+/// prefix, so it stays short and byte-stable.
+pub(super) const LEAD_ROLE: &str = "You are this project's Coordinator. You plan, route and review; other agents do the work.\n\
+1. For each user message pick one: answer here, start a new child with kybern_agent_delegate, or send to an existing child with kybern_thread_send. Say which and why in one line.\n\
+2. Never edit files or run mutating commands. All edits go to children.\n\
+3. If the project has no setup note, first delegate a research child to learn how to build, run and test the project, then save the result with kybern_note_create using project_role \"setup\".\n\
+4. Brief children with pointers (notes, files, commits), not pasted content.\n\
+5. Tell every child: if something is missing, say exactly what and stop; do not mock, substitute or guess.\n\
+6. After each child result, consider whether a memory note or the setup note should change so the next child starts better.\n\
+7. Follow any working policy written in the project brief (for example \"propose first\").\n\
+If your conversation context is missing, read this thread with kybern_thread_read.";
+
+/// Most notes the index lists; the rest are found with `kybern_notes_search`.
+const INDEX_MAX_NOTES: usize = 40;
+/// Longest first line shown for a note in the index.
+const INDEX_LINE_CHARS: usize = 100;
+/// Longest brief placed in a session prefix.
+const BRIEF_MAX_BYTES: usize = 16 * 1024;
+/// Delegation hops followed when asking whether a thread descends from the lead.
+const LEAD_CHAIN_MAX_HOPS: usize = 8;
+
+/// Bridge tools a Coordinator keeps. Everything that changes the checkout, runs
+/// commands or drives the computer is left out.
+const LEAD_TOOLS: &[&str] = &[
+    // Read.
+    "kybern_thread_context",
+    "kybern_read_file",
+    "kybern_list_files",
+    "kybern_list_terminals",
+    "kybern_read_terminal",
+    "kybern_workspace_diff",
+    "kybern_runtime_tasks",
+    // Notes and tasks.
+    "kybern_notes_search",
+    "kybern_note_read",
+    "kybern_note_create",
+    "kybern_note_append",
+    "kybern_note_update",
+    "kybern_tasks_list",
+    "kybern_task_read",
+    "kybern_task_create",
+    "kybern_task_update",
+    "kybern_task_claim",
+    // Delegation and other threads.
+    "kybern_agent_capabilities",
+    "kybern_agent_delegate",
+    "kybern_agent_status",
+    "kybern_agent_cancel",
+    "kybern_agent_wait",
+    "kybern_thread_send",
+    "kybern_thread_read",
+    "kybern_thread_interrupt",
+    "kybern_threads_search",
+    // Showing things to the user.
+    "kybern_html_preview",
+    "kybern_html_publish",
+    "kybern_preview_open",
+    "kybern_request_secret",
+];
+
+/// Whether a harness can hold the lead to its read-only tool set. Codex and
+/// Cursor cannot, so their Coordinator runs on instructions alone and clients
+/// say that edits are not blocked there.
+pub fn lead_restrictions_enforced(kind: ProviderKind) -> bool {
+    matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Opencode | ProviderKind::Pi | ProviderKind::Omp)
+}
+
+pub(super) fn lead_restrictions(kind: ProviderKind) -> NativeToolRestrictions {
+    NativeToolRestrictions {
+        allowed_tools: LEAD_TOOLS.iter().map(|name| (*name).to_owned()).collect(),
+        denied_tools: Vec::new(),
+        require_enforcement: lead_restrictions_enforced(kind),
+        allow_read_only_builtins: true,
+    }
+}
+
+/// What a session receives besides the guide, and the brief revision it embeds.
+pub(super) struct SessionInstructions {
+    pub text: String,
+    /// Revision of the brief note the text carries (0 when the project has none).
+    pub brief_revision: i64,
+}
+
+impl Orchestrator {
+    /// The project's Coordinator thread, if it has one.
+    pub fn coordinator_get(&self, project_id: ProjectId) -> Result<Option<Thread>> {
+        self.inner.store.project_coordinator_thread(project_id)
+    }
+
+    /// Open the project's Coordinator, creating it when there is none. A project
+    /// has one at a time, so a retry or a second client gets the same thread back.
+    pub async fn coordinator_open(&self, params: methods::CoordinatorOpenParams) -> Result<methods::CoordinatorOpenResult> {
+        let _lead = self.inner.lead_commands.lock().await;
+        ensure!(!is_free_chat_project(params.project_id), "Chats without a project have no Coordinator. Choose a project.");
+        let project = self.inner.store.project_get(params.project_id)?.ok_or_else(|| anyhow!("Project not found. Choose another project."))?;
+        if let Some(thread) = self.coordinator_get(project.id)? {
+            self.save_initial_brief(project.id, params.initial_brief.as_deref())?;
+            return Ok(methods::CoordinatorOpenResult { thread, created: false });
+        }
+        let created = self
+            .create_thread_with_id(
+                methods::ThreadsCreateParams {
+                    pin_account: false,
+                    project_id: Some(project.id),
+                    provider: params.provider.clone(),
+                    model: params.model.clone(),
+                    effort: params.effort.clone(),
+                    permission_mode: params.permission_mode,
+                    use_worktree: Some(false),
+                    base_branch: None,
+                    title: Some(format!("{} coordinator", project.name)),
+                    message: None,
+                },
+                Uuid::now_v7(),
+            )
+            .await?;
+        // The marker is set right away and published as an update, so clients see
+        // the Coordinator before anyone can send it a message.
+        let thread = self.set_thread_relationships(created.id, None, Some(project.id))?;
+        self.save_initial_brief(project.id, params.initial_brief.as_deref())?;
+        Ok(methods::CoordinatorOpenResult { thread, created: true })
+    }
+
+    /// Keep the user's first words as the pinned brief note, unless the project
+    /// already has one.
+    fn save_initial_brief(&self, project_id: ProjectId, brief: Option<&str>) -> Result<()> {
+        let Some(brief) = brief.map(str::trim).filter(|brief| !brief.is_empty()) else { return Ok(()) };
+        if self.inner.store.note_for_project_role(project_id, ProjectNoteRole::Brief)?.is_some() {
+            return Ok(());
+        }
+        let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
+        let note = self.inner.store.note_create_project_role(project_id, ProjectNoteRole::Brief, "Project brief", brief, None)?;
+        self.publish_note(note.summary);
+        Ok(())
+    }
+
+    /// Move the Coordinator to another harness, model or account. The session
+    /// restarts with the same lead instructions; the thread and its history stay.
+    pub async fn coordinator_switch_harness(&self, params: methods::CoordinatorSwitchHarnessParams) -> Result<Thread> {
+        let _lead = self.inner.lead_commands.lock().await;
+        let current = self
+            .coordinator_get(params.project_id)?
+            .ok_or_else(|| anyhow!("Open the project's Coordinator before switching its harness."))?;
+        let busy = || anyhow!("The Coordinator must be idle before switching its harness. Wait for its turn to end, then try again.");
+        if !matches!(current.status, ThreadStatus::Idle | ThreadStatus::Failed) {
+            return Err(busy());
+        }
+        if self.inner.store.runtime_tasks_for_thread(current.id)?.iter().any(|task| task.status.is_active()) {
+            return Err(anyhow!("The Coordinator has background work running. Wait for it to finish, then switch its harness."));
+        }
+        let parked_live = self.inner.sessions.lock().await.get(&current.id).cloned();
+        if let Some(live) = parked_live.as_deref()
+            && !self.session_parked(current.id, live).await?
+        {
+            return Err(busy());
+        }
+
+        let settings = self.inner.settings.get();
+        let model =
+            params.model.clone().or_else(|| settings.providers.get(&params.provider.kind).and_then(|provider| provider.model.clone()));
+        self.validate_provider_selection(params.project_id, &params.provider, model.as_deref(), params.effort.as_deref()).await?;
+        let permission_mode =
+            params.permission_mode.unwrap_or_else(|| default_provider_permission(params.provider.kind, settings.default_permission_mode));
+        let (thread, released) = {
+            // `commands` excludes a send between the final idle check, live
+            // credential revocation, and the durable provider change.
+            let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
+            let mut thread = self.inner.store.thread_get(current.id)?.ok_or_else(|| anyhow!("The Coordinator thread was not found."))?;
+            if !matches!(thread.status, ThreadStatus::Idle | ThreadStatus::Failed) || thread.coordinator_project_id != Some(params.project_id) {
+                return Err(busy());
+            }
+            let retry = || anyhow!("The Coordinator session is changing. Try the harness switch again in a moment.");
+            let mut sessions = self.inner.sessions.try_lock().map_err(|_| retry())?;
+            if let Some(expected) = parked_live.as_ref()
+                && !sessions.get(&thread.id).is_some_and(|live| std::sync::Arc::ptr_eq(live, expected))
+            {
+                return Err(retry());
+            }
+            let mut releasing = if parked_live.is_some() { Some(self.inner.releasing.try_lock().map_err(|_| retry())?) } else { None };
+            let released = sessions.remove(&thread.id);
+            thread.provider = params.provider.clone();
+            thread.model = model;
+            thread.effort = params.effort.clone();
+            thread.permission_mode = permission_mode;
+            thread.provider_session_id = None;
+            thread.status = ThreadStatus::Idle;
+            let thread = match self.update_thread(thread) {
+                Ok(thread) => thread,
+                Err(error) => {
+                    if let Some(live) = released {
+                        sessions.insert(current.id, live);
+                    }
+                    return Err(error);
+                }
+            };
+            if let Some(live) = released.as_deref() {
+                live.mark_released();
+                self.revoke_native_session(live);
+            }
+            let released = released.map(|live| {
+                let (done, waiting) = tokio::sync::watch::channel(());
+                releasing.as_mut().expect("a live session reserves a release barrier").insert(thread.id, waiting);
+                (live, done)
+            });
+            (thread, released)
+        };
+        self.inner.pending_rewinds.lock().await.remove(&thread.id);
+        if let Some((live, done)) = released {
+            let close = live.session.close().await;
+            self.inner.releasing.lock().await.remove(&thread.id);
+            drop(done);
+            close?;
+            self.emit(thread.id, None, EventPayload::ProviderSessionReleased { reason: SessionReleaseReason::Manual })?;
+        }
+        Ok(thread)
+    }
+
+    /// Bridge-tool and built-in restrictions for a session of `thread`: a
+    /// Coordinator is held to its read-only set; every other thread is unrestricted.
+    pub(super) fn native_tool_restrictions(&self, thread: &Thread) -> Result<NativeToolRestrictions> {
+        if thread.coordinator_project_id.is_none() {
+            return Ok(NativeToolRestrictions::default());
+        }
+        Ok(lead_restrictions(thread.provider.kind))
+    }
+
+    /// Whether `thread` descends from its project's Coordinator through delegation.
+    pub(super) fn rooted_at_lead(&self, thread: &Thread) -> Result<bool> {
+        let mut cursor = thread.clone();
+        for _ in 0..LEAD_CHAIN_MAX_HOPS {
+            if cursor.coordinator_project_id.is_some() {
+                return Ok(true);
+            }
+            let (Some(_), Some(parent_id)) = (cursor.delegation.as_ref(), cursor.parent_thread_id) else { return Ok(false) };
+            let Some(parent) = self.inner.store.thread_get(parent_id)? else { return Ok(false) };
+            cursor = parent;
+        }
+        Ok(false)
+    }
+
+    /// The text a new session of `thread` receives next to the guide: the lead role
+    /// for a Coordinator, and the project brief with a notes index for the lead,
+    /// everything delegated from it, and every thread of a project that shares its
+    /// brief. `None` for any other thread.
+    pub(super) fn session_instructions(&self, thread: &Thread) -> Result<Option<SessionInstructions>> {
+        if is_free_chat_project(thread.project_id) {
+            return Ok(None);
+        }
+        let lead = thread.coordinator_project_id.is_some();
+        let project = self.inner.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("Project not found"))?;
+        if !(lead || project.brief_in_all_threads || self.rooted_at_lead(thread)?) {
+            return Ok(None);
+        }
+        let notes = self.inner.store.project_notes(project.id)?;
+        let brief = notes.iter().find(|note| note.summary.project_role == Some(ProjectNoteRole::Brief));
+        let mut text = String::new();
+        if lead {
+            text.push_str(LEAD_ROLE);
+            text.push_str("\n\n");
+        }
+        text.push_str(&project_context(brief, &notes));
+        Ok(Some(SessionInstructions { text, brief_revision: brief.map_or(0, |note| note.summary.revision) }))
+    }
+
+    /// For the Coordinator: a "Project brief updated" block when the brief changed
+    /// after its session started, with the revision to remember once it is sent.
+    pub(super) async fn lead_brief_update(&self, thread: &Thread, live: &LiveSession) -> Result<Option<(i64, String)>> {
+        let Some(project_id) = thread.coordinator_project_id else { return Ok(None) };
+        let Some(seen) = *live.brief_revision.lock().await else { return Ok(None) };
+        let brief = self.inner.store.note_for_project_role(project_id, ProjectNoteRole::Brief)?;
+        let revision = brief.as_ref().map_or(0, |note| note.summary.revision);
+        if revision == seen {
+            return Ok(None);
+        }
+        let mut body = brief.map(|note| note.body.trim().to_owned()).unwrap_or_default();
+        if body.is_empty() {
+            body = "(The brief is now empty.)".into();
+        }
+        super::truncate_utf8(&mut body, BRIEF_MAX_BYTES);
+        Ok(Some((revision, format!("Project brief updated:\n{body}"))))
+    }
+
+    /// Record that the Coordinator's session has now seen this brief revision.
+    pub(super) async fn lead_brief_seen(&self, live: &LiveSession, revision: i64) {
+        *live.brief_revision.lock().await = Some(revision);
+    }
+}
+
+/// `message` with a "Project brief updated" block in front, for the provider's copy only.
+pub(super) fn with_brief_update(message: &UserMessage, update: &str) -> UserMessage {
+    let mut parts = vec![ContentPart::Text { text: format!("{update}\n\n") }];
+    parts.extend(message.parts.iter().cloned());
+    UserMessage { parts }
+}
+
+/// The brief and the index of the project's notes, followed by the standing rule
+/// for anything that is missing.
+fn project_context(brief: Option<&Note>, notes: &[Note]) -> String {
+    let mut out = String::from("Project brief (the user's; to change it, suggest the edit in chat):\n");
+    match brief.map(|note| note.body.trim()).filter(|body| !body.is_empty()) {
+        Some(body) => {
+            let mut body = body.to_owned();
+            super::truncate_utf8(&mut body, BRIEF_MAX_BYTES);
+            out.push_str(&body);
+        }
+        None => out.push_str("(No brief yet.)"),
+    }
+    out.push_str("\n\nProject notes (read one with kybern_note_read):\n");
+    let mut listed = 0;
+    let mut hidden = 0;
+    // The setup note first, then the most recently edited notes.
+    let ordered = notes
+        .iter()
+        .filter(|note| note.summary.project_role == Some(ProjectNoteRole::Setup))
+        .chain(notes.iter().filter(|note| note.summary.project_role.is_none()));
+    for note in ordered {
+        if listed == INDEX_MAX_NOTES {
+            hidden += 1;
+            continue;
+        }
+        listed += 1;
+        let title = note.summary.title.trim();
+        let title = if title.is_empty() { "Untitled" } else { title };
+        let label = if note.summary.project_role == Some(ProjectNoteRole::Setup) { "Setup note: " } else { "" };
+        let first_line = first_line(&note.body);
+        let id = note.summary.id;
+        if first_line.is_empty() {
+            out.push_str(&format!("- {label}{title} ({id})\n"));
+        } else {
+            out.push_str(&format!("- {label}{title}: {first_line} ({id})\n"));
+        }
+    }
+    if listed == 0 {
+        out.push_str("(No notes yet.)\n");
+    }
+    if hidden > 0 {
+        out.push_str(&format!("({hidden} more; find them with kybern_notes_search.)\n"));
+    }
+    out.push_str("\nIf something you need is missing, say exactly what and stop; do not mock, substitute or guess.");
+    out
+}
+
+/// The first non-empty line of a note body, shortened for the index.
+fn first_line(body: &str) -> String {
+    let line = body.lines().map(|line| line.trim_start_matches(['#', '>', '-', '*', ' ', '\t']).trim()).find(|line| !line.is_empty()).unwrap_or("");
+    if line.chars().count() <= INDEX_LINE_CHARS {
+        return line.to_owned();
+    }
+    let mut short: String = line.chars().take(INDEX_LINE_CHARS).collect();
+    short.push('…');
+    short
+}
