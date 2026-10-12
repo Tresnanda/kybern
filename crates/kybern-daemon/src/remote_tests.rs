@@ -51,7 +51,6 @@ impl Host {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
-            collaboration_group_id: None,
             subagent: None,
             delegation: None,
         };
@@ -555,6 +554,7 @@ async fn notes_round_trip_over_rpc_and_conflicts_use_the_conflict_code() {
             project_id: Some(thread.project_id),
             title: Some("Release plan".into()),
             body: Some("# Plan\n- [x] tag\n- [ ] ship".into()),
+            project_role: None,
         })
         .await
         .unwrap();
@@ -658,6 +658,7 @@ async fn removing_a_project_over_rpc_keeps_its_notes_in_recently_deleted() {
             project_id: Some(thread.project_id),
             title: Some("Plan".into()),
             body: None,
+            project_role: None,
         })
         .await
         .unwrap();
@@ -703,7 +704,13 @@ async fn note_notifications_reach_only_clients_that_can_read_orchestration() {
     let blind = connect_with(&[Scope::ReviewWrite]).await;
     let writer = host.client().await;
     writer
-        .call::<NotesCreate>(NotesCreateParams { scope: NoteScope::Global, project_id: None, title: Some("Hello".into()), body: None })
+        .call::<NotesCreate>(NotesCreateParams {
+            scope: NoteScope::Global,
+            project_id: None,
+            title: Some("Hello".into()),
+            body: None,
+            project_role: None,
+        })
         .await
         .unwrap();
     assert_eq!(next_notes_changed(&reader).await.note.unwrap().title, "Hello");
@@ -715,7 +722,13 @@ async fn note_notifications_reach_only_clients_that_can_read_orchestration() {
     assert!(reader.call::<NotesList>(Empty {}).await.is_ok());
     assert!(
         reader
-            .call::<NotesCreate>(NotesCreateParams { scope: NoteScope::Global, project_id: None, title: None, body: None })
+            .call::<NotesCreate>(NotesCreateParams {
+                scope: NoteScope::Global,
+                project_id: None,
+                title: None,
+                body: None,
+                project_role: None
+            })
             .await
             .unwrap_err()
             .to_string()
@@ -769,6 +782,7 @@ async fn project_changes_reach_every_client() {
             name: Some("Storefront".into()),
             worktrees_default: None,
             task_prefix: None,
+            brief_in_all_threads: None,
         })
         .await
         .unwrap();
@@ -972,6 +986,7 @@ async fn project_task_prefixes_are_assigned_edited_and_validated_over_rpc() {
         name: None,
         worktrees_default: None,
         task_prefix: Some(prefix.into()),
+        brief_in_all_threads: None,
     };
     let renamed = client.call::<ProjectsUpdate>(update(a.id, "mob")).await.unwrap();
     assert_eq!(renamed.task_prefix.as_deref(), Some("MOB"));
@@ -989,6 +1004,7 @@ async fn project_task_prefixes_are_assigned_edited_and_validated_over_rpc() {
             name: Some("Renamed".into()),
             worktrees_default: None,
             task_prefix: None,
+            brief_in_all_threads: None,
         })
         .await
         .unwrap();
@@ -1813,4 +1829,70 @@ async fn previews_open_serve_grant_and_close_over_rpc_and_http() {
     assert!(!refused.is_empty());
     let _ = std::fs::remove_dir_all(&project);
     let _ = std::fs::remove_dir_all(&outside);
+}
+
+#[tokio::test]
+async fn the_coordinator_and_project_brief_work_over_rpc() {
+    let host = Host::start().await;
+    let project_id = host.thread().project_id;
+    let client = host.client().await;
+    assert!(client.call::<CoordinatorGet>(CoordinatorGetParams { project_id }).await.unwrap().is_none());
+
+    let open = |brief: Option<&str>| CoordinatorOpenParams {
+        project_id,
+        provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
+        model: None,
+        effort: None,
+        permission_mode: None,
+        initial_brief: brief.map(str::to_owned),
+    };
+    let opened = client.call::<CoordinatorOpen>(open(Some("Ship it carefully."))).await.unwrap();
+    assert!(opened.created && opened.thread.coordinator_project_id == Some(project_id));
+    let again = client.call::<CoordinatorOpen>(open(None)).await.unwrap();
+    assert!(!again.created && again.thread.id == opened.thread.id);
+    assert_eq!(client.call::<CoordinatorGet>(CoordinatorGetParams { project_id }).await.unwrap().unwrap().id, opened.thread.id);
+
+    // The brief is a pinned project note with a role; the user edits it through the notes RPCs.
+    let notes = client.call::<NotesList>(Empty {}).await.unwrap().notes;
+    let brief = notes.iter().find(|note| note.project_role == Some(ProjectNoteRole::Brief)).expect("the brief note");
+    assert!(brief.pinned && brief.project_id == Some(project_id) && brief.created_by_thread.is_none());
+    let second = client
+        .call::<NotesCreate>(NotesCreateParams {
+            scope: NoteScope::Project,
+            project_id: Some(project_id),
+            title: None,
+            body: Some("Another".into()),
+            project_role: Some(ProjectNoteRole::Brief),
+        })
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(second.contains("already has that note"), "{second}");
+    let edited = client
+        .call::<NotesUpdate>(NotesUpdateParams {
+            id: Some(brief.id),
+            thread_id: None,
+            expected_revision: brief.revision,
+            title: None,
+            body: Some("Ship it carefully, and propose first.".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(edited.summary.project_role, Some(ProjectNoteRole::Brief));
+    let delete = client.call::<NotesDelete>(NotesIdParams { id: brief.id }).await.unwrap_err().to_string();
+    assert!(delete.contains("cannot be deleted"), "{delete}");
+
+    // The switch that shares the brief with every thread.
+    let update = |on| ProjectsUpdateParams { project_id, name: None, worktrees_default: None, task_prefix: None, brief_in_all_threads: on };
+    assert!(!client.call::<ProjectsUpdate>(update(None)).await.unwrap().brief_in_all_threads);
+    assert!(client.call::<ProjectsUpdate>(update(Some(true))).await.unwrap().brief_in_all_threads);
+    assert!(client.call::<ProjectsUpdate>(update(None)).await.unwrap().brief_in_all_threads, "absent leaves the switch alone");
+    assert!(!client.call::<ProjectsUpdate>(update(Some(false))).await.unwrap().brief_in_all_threads);
+
+    // Archiving the Coordinator frees the slot; the old collaboration methods are gone.
+    client.call::<ThreadsArchive>(ThreadsArchiveParams { thread_id: opened.thread.id }).await.unwrap();
+    assert!(client.call::<CoordinatorGet>(CoordinatorGetParams { project_id }).await.unwrap().is_none());
+    let gone =
+        client.call_raw("collaboration.coordinator.get", serde_json::json!({"project_id": project_id})).await.unwrap_err().to_string();
+    assert!(gone.contains("-32601") || gone.to_lowercase().contains("method"), "{gone}");
 }

@@ -63,7 +63,7 @@ test("registers the handshake, mode control, and thread-scoped tools", () => {
   ]);
 });
 
-test("native collaboration tools are exposed only for a configured bridge", () => {
+test("native Kybern tools are exposed only for a configured bridge", () => {
   const definitions = [
     {
       name: "kybern_threads_search",
@@ -91,12 +91,12 @@ test("native collaboration tools are exposed only for a configured bridge", () =
       },
     },
     {
-      name: "kybern_collaboration_spawn",
+      name: "kybern_agent_delegate",
       description: "Delegate bounded work.",
       parameters: {
         type: "object",
-        properties: { assignment: { type: "string", minLength: 1 }, provider: { enum: ["pi", "omp"] } },
-        required: ["assignment"],
+        properties: { task: { type: "string", minLength: 1 }, provider: { enum: ["pi", "omp"] } },
+        required: ["task"],
         additionalProperties: false,
       },
     },
@@ -227,14 +227,14 @@ test("routing guidance does not change supervised tool permissions", async () =>
 test("coordinator policy blocks third-party extension tools", async () => {
   const harness = fakePi(
     "full_access",
-    [{ name: "kybern_collaboration_read", description: "Read", parameters: { type: "object" } }],
+    [{ name: "kybern_thread_read", description: "Read", parameters: { type: "object" } }],
     { coordinatorOnly: true },
   );
   const blocked = await harness.handlers.get("tool_call")(
     { toolName: "third_party_extension", toolCallId: "extension-1", input: {} },
     context(async () => "Deny"),
   );
-  assert.deepEqual(blocked, { block: true, reason: "Kybern coordinator policy permits only collaboration tools." });
+  assert.deepEqual(blocked, { block: true, reason: "Kybern coordinator policy permits only Kybern tools and read-only file tools." });
 });
 
 test("supervised gates shell and remembers only an exact always grant", async () => {

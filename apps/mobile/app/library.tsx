@@ -1,5 +1,4 @@
-import { collaborationThreadRows } from "../../../packages/kybern-client/src/collaboration";
-import { confirmDeleteCoordinator } from "../src/features/deleteCoordinator";
+import { nestedThreadRows } from "../../../packages/kybern-client/src/threadRows";
 import Animated, {
   useSharedValue,
   useAnimatedScrollHandler,
@@ -63,7 +62,7 @@ export default function Library() {
   const [expandedThreads, setExpandedThreads] = useState<Record<string, boolean>>({});
   const visibleRows = useMemo(() => query.trim() || filter !== "All"
     ? rows.map(thread => ({ thread, depth: 0, childCount: 0, open: false }))
-    : collaborationThreadRows(rows, expandedThreads), [rows, expandedThreads, query, filter]);
+    : nestedThreadRows(rows, expandedThreads), [rows, expandedThreads, query, filter]);
   const offset = useSharedValue(0);
   const onScroll = useAnimatedScrollHandler({
     onScroll: (event) => {
@@ -95,8 +94,7 @@ export default function Library() {
             .catch((e) => setError(errorText(e)));
         },
       },
-      ...(t.coordinator_project_id ? [{ text: "Delete coordinator", style: "destructive" as const, onPress: () => confirmDeleteCoordinator(t) }] : []),
-      ...(t.status !== "archived" && !t.coordinator_project_id
+      ...(t.status !== "archived"
         ? [
             {
               text: "Archive thread",

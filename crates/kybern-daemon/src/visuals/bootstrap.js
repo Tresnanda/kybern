@@ -1,11 +1,25 @@
 (function () {
   const style = document.getElementById("kybern-visual-theme");
   const base = "html{background:var(--background);color:var(--foreground);font:14px/1.5 var(--font-sans);-webkit-font-smoothing:antialiased;scrollbar-width:none}html::-webkit-scrollbar{display:none}body{margin:0}code,pre,kbd{font-family:var(--font-mono)}";
+  // The app's own scrollbars (styles/kit.css): 10px track, transparent, a 6px rounded thumb that
+  // floats 2px from the edge and darkens on hover. Only `*::-webkit-*` rules and no standard
+  // `scrollbar-*` property, so any scrollbar styling in the page itself wins at equal specificity
+  // (the page's styles come later) and an explicit `scrollbar-width`/`scrollbar-color` replaces it.
+  function scrollbars(light) {
+    const thumb = "color-mix(in srgb,var(--foreground) " + (light ? 10 : 7) + "%,transparent)", hover = "color-mix(in srgb,var(--foreground) " + (light ? 18 : 14) + "%,transparent)";
+    return "*::-webkit-scrollbar{width:10px;height:10px}*::-webkit-scrollbar-track,*::-webkit-scrollbar-corner{background:transparent}*::-webkit-scrollbar-thumb{background-color:" + thumb + ";border:2px solid transparent;background-clip:padding-box;border-radius:999px}*::-webkit-scrollbar-thumb:hover{background-color:" + hover + "}";
+  }
+  // The theme is re-sent whenever the host re-checks visibility; identical CSS is not rewritten, so
+  // the page's style observers, restyles and charts that re-read colors stay quiet.
+  let applied = "";
   function theme(value) {
     if (!value || !value.variables || typeof value.variables !== "object") return;
     let css = ":root{color-scheme:" + (value.appearance === "light" ? "light" : "dark") + ";";
     for (const key in value.variables) if (/^--[a-z0-9-]+$/.test(key) && typeof value.variables[key] === "string") css += key + ":" + value.variables[key].replace(/[;{}<>]/g, "") + ";";
-    style.textContent = css + "}" + base;
+    css += "}" + base + scrollbars(value.appearance === "light");
+    if (css === applied) return;
+    applied = css;
+    style.textContent = css;
   }
   try { const match = /[#&]kybern-theme=([^&]*)/.exec(location.hash); if (match) theme(JSON.parse(decodeURIComponent(match[1]))); } catch (_) {}
   let active = true;
@@ -68,9 +82,12 @@
     try { const url = new URL(link.getAttribute("href"), location.href); if (!/^https?:$/.test(url.protocol) || url.username || url.password) return; e.preventDefault(); window.parent.postMessage({ kind: "kybern-visual-link", url: url.href }, "*"); } catch (_) {}
   }, true);
   let height = 0, scheduled = false;
-  function measure() { scheduled = false; const body = document.body; if (!body) return; const next = Math.ceil(Math.max(body.scrollHeight, body.getBoundingClientRect().height)); if (next > 0 && next !== height) { height = next; window.parent.postMessage({ kind: "kybern-visual-size", height }, "*"); } }
+  // The whole document, not just body: a first or last child's margin collapses through body, so
+  // body's own box is short by it and the page would scroll inside its frame. The root's auto height
+  // contains those margins and, unlike its scrollHeight, is never raised to the frame's height.
+  function measure() { scheduled = false; const body = document.body; if (!body) return; const next = Math.ceil(Math.max(document.documentElement.getBoundingClientRect().height, body.scrollHeight, body.getBoundingClientRect().height)); if (next > 0 && next !== height) { height = next; window.parent.postMessage({ kind: "kybern-visual-size", height }, "*"); } }
   function schedule() { if (!scheduled) { scheduled = true; nativeRaf(measure); } }
   const observer = new ResizeObserver(schedule);
-  document.addEventListener("DOMContentLoaded", () => { if (document.body) observer.observe(document.body); schedule(); if (window.parent !== window) window.parent.postMessage({ kind: "kybern-visual-ready" }, "*"); });
+  document.addEventListener("DOMContentLoaded", () => { observer.observe(document.documentElement); if (document.body) observer.observe(document.body); schedule(); if (window.parent !== window) window.parent.postMessage({ kind: "kybern-visual-ready" }, "*"); });
   window.addEventListener("load", schedule);
 })();

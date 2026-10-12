@@ -108,18 +108,28 @@ export const VisualFrame = memo(function VisualFrame({ threadId, visual, mode = 
     let intersects = false, frame = 0, pendingHeight: number | null = null, lastVisible: boolean | undefined
     const ancestors: HTMLElement[] = []; let ancestor: HTMLElement | null = element.parentElement
     while (ancestor) { ancestors.push(ancestor); ancestor = ancestor.parentElement }
-    const send = () => {
+    // What the page last received. Ancestor churn (the composer overlay rewrites padding and a CSS
+    // variable many times a second) and repeated visibility checks usually change neither, and a page
+    // that re-reads its theme on every message would restyle and redraw for nothing.
+    let sentTheme = "", sentVisible: boolean | undefined, mutationFrame = 0
+    const send = (force = false) => {
       const visible = active && intersects && !document.hidden && !ancestors.some(parent => getComputedStyle(parent).opacity === "0")
       lastVisible = visible
       const theme = currentTheme()
-      element.contentWindow?.postMessage({ kind: "kybern-visual-host", theme, visible }, "*")
+      const key = JSON.stringify(theme)
+      const themeChanged = force || key !== sentTheme
+      if (!themeChanged && visible === sentVisible) return
+      sentTheme = key; sentVisible = visible
+      // A message without a theme only updates visibility.
+      element.contentWindow?.postMessage({ kind: "kybern-visual-host", theme: themeChanged ? theme : undefined, visible }, "*")
       // The page flips its own scheme first; the frame's follows next frame so no opaque canvas shows between.
-      if (statusRef.current === "ready") requestAnimationFrame(() => { element.style.colorScheme = theme.appearance })
+      if (themeChanged && statusRef.current === "ready") requestAnimationFrame(() => { element.style.colorScheme = theme.appearance })
     }
-    post.current = send
+    // A new document (first load, retry) knows nothing yet: always send in full.
+    post.current = () => send(true)
     const observer = new IntersectionObserver(entries => { intersects = entries.some(entry => entry.isIntersecting && entry.intersectionRatio > 0); send() })
     observer.observe(element)
-    const mutations = new MutationObserver(send)
+    const mutations = new MutationObserver(() => { if (!mutationFrame) mutationFrame = requestAnimationFrame(() => { mutationFrame = 0; send() }) })
     // The box is skipped: its style changes with every posted height, which is not a theme change.
     for (const parent of ancestors) if (parent !== box && parent !== hostRef.current) mutations.observe(parent, { attributes: true, attributeFilter: ["class", "style", "data-theme-variant"] })
     const apply = () => {
@@ -147,8 +157,9 @@ export const VisualFrame = memo(function VisualFrame({ threadId, visual, mode = 
         const link = visualLink(event.data.url); if (link) void openExternal(link).catch(failure => { setError(errorText(failure)) })
       }
     }
-    window.addEventListener("message", message); document.addEventListener("visibilitychange", send); send()
-    return () => { observer.disconnect(); mutations.disconnect(); window.removeEventListener("message", message); document.removeEventListener("visibilitychange", send); cancelAnimationFrame(frame); post.current = () => {}; element.contentWindow?.postMessage({ kind: "kybern-visual-host", visible: false }, "*") }
+    const visibility = () => send()
+    window.addEventListener("message", message); document.addEventListener("visibilitychange", visibility); send(true)
+    return () => { observer.disconnect(); mutations.disconnect(); window.removeEventListener("message", message); document.removeEventListener("visibilitychange", visibility); cancelAnimationFrame(frame); cancelAnimationFrame(mutationFrame); post.current = () => {}; element.contentWindow?.postMessage({ kind: "kybern-visual-host", visible: false }, "*") }
   }, [url, active, panel, visual, cacheKey, settle])
 
   // Hand the canvas its real scheme once the page is painted (see the no-flash note in the spec).

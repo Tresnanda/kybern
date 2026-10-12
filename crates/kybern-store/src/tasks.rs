@@ -1134,6 +1134,7 @@ mod tests {
             is_git: false,
             worktrees_default: None,
             task_prefix: None,
+            brief_in_all_threads: false,
             created_at: now,
             updated_at: now,
         };
@@ -1161,7 +1162,6 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
-            collaboration_group_id: None,
             subagent: None,
             delegation: None,
         };

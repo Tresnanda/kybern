@@ -25,9 +25,11 @@ use crate::settings::SettingsStore;
 mod accounts;
 mod agent_items;
 mod delegation;
+mod lead;
 mod messaging;
 mod notes;
 mod omp_recovery;
+mod secret_request;
 mod subagent_messaging;
 mod subagents;
 mod tasks;
@@ -38,7 +40,7 @@ pub struct Orchestrator {
     inner: Arc<Inner>,
 }
 
-/// A rejected send, before any turn was accepted. Assignment dispatch may retry
+/// A rejected send, before any turn was accepted. Thread messaging may retry
 /// this condition; provider/startup failures must still surface for inspection.
 #[derive(Debug)]
 struct ThreadBusy;
@@ -51,63 +53,7 @@ impl std::fmt::Display for ThreadBusy {
 
 impl std::error::Error for ThreadBusy {}
 
-/// Keep the task's constraints and current plan ahead of archived worker reports.
-/// Reports stay in durable context and are fetched selectively by key when needed.
-fn assignment_shared_context(mut context: Vec<ContextEntry>) -> String {
-    context.sort_by_key(|entry| {
-        let priority = if entry.user_authored {
-            0
-        } else {
-            match entry.kind {
-                ContextEntryKind::Brief | ContextEntryKind::Instruction | ContextEntryKind::Plan => 1,
-                _ if entry.key == "project.setup" => 2,
-                ContextEntryKind::Decision => 3,
-                ContextEntryKind::Research => 4,
-                ContextEntryKind::ResultReference => 5,
-            }
-        };
-        (priority, entry.key.clone())
-    });
-    let mut shared = String::new();
-    let mut omitted = 0usize;
-    let mut reports = 0usize;
-    for entry in context {
-        if !entry.user_authored && entry.kind == ContextEntryKind::ResultReference {
-            reports += 1;
-            continue;
-        }
-        let author = entry.author_thread_id.map_or_else(|| "user".into(), |id| format!("thread:{id}"));
-        let mut line = format!(
-            "\n- [{} {:?} r{} author={author} sources={}] {}",
-            entry.key,
-            entry.kind,
-            entry.revision,
-            entry.source_refs.join(","),
-            entry.body
-        );
-        truncate_utf8(&mut line, 8 * 1024);
-        if shared.len() + line.len() > 16 * 1024 {
-            omitted += 1;
-            continue;
-        }
-        shared.push_str(&line);
-    }
-    if reports > 0 {
-        shared.push_str(&format!("\n- [{reports} archived result reports available through kybern_collaboration_context_read; retrieve only reports relevant to this assignment]"));
-    }
-    if omitted > 0 {
-        shared.push_str(&format!(
-            "\n- [{omitted} context entries omitted by prompt byte limit; use kybern_collaboration_context_read for selective retrieval]"
-        ));
-    }
-    shared
-}
-
 impl Orchestrator {
-    fn supports_dedicated_coordinator(kind: ProviderKind) -> bool {
-        matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Opencode | ProviderKind::Pi | ProviderKind::Omp)
-    }
-
     pub(crate) fn provider_catalog_cache(&self) -> Arc<crate::state::ProviderCatalogCache> {
         self.inner.provider_catalogs.clone()
     }
@@ -196,1909 +142,15 @@ impl Orchestrator {
         Ok(())
     }
 
-    fn validate_external_delivery_authority(&self, from_thread_id: ThreadId, to_thread_id: ThreadId) -> Result<()> {
-        let actor = self.inner.store.thread_get(from_thread_id)?.ok_or_else(|| anyhow!("caller thread not found"))?;
-        let recipient = self.inner.store.thread_get(to_thread_id)?.ok_or_else(|| anyhow!("recipient thread not found"))?;
-        if actor.worktree.is_some() && recipient.worktree.is_none() {
-            return Err(anyhow!(
-                "an isolated worker cannot wake a main-checkout thread; return the result to its coordinator or ask the user to message that thread"
-            ));
-        }
-        if messaging::permission_rule(&actor, &recipient).is_err() {
-            return Err(anyhow!(
-                "recipient permission mode is not a conservative subset of the caller; ask the user to message that thread directly or lower its permission mode"
-            ));
-        }
-        Ok(())
-    }
-
     fn set_thread_relationships(
         &self,
         thread_id: ThreadId,
         parent_thread_id: Option<ThreadId>,
         coordinator_project_id: Option<ProjectId>,
-        collaboration_group_id: Option<GroupId>,
     ) -> Result<Thread> {
-        self.inner.store.thread_set_relationships(thread_id, parent_thread_id, coordinator_project_id, collaboration_group_id)?;
+        self.inner.store.thread_set_relationships(thread_id, parent_thread_id, coordinator_project_id)?;
         let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread disappeared while updating relationships"))?;
         self.update_thread(thread)
-    }
-
-    pub fn project_coordinator_get(&self, project_id: ProjectId) -> Result<Option<ProjectCoordinator>> {
-        let Some((thread_id, group_id)) = self.inner.store.project_coordinator(project_id)? else { return Ok(None) };
-        let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("project coordinator thread is missing"))?;
-        let group = self.inner.store.collaboration_group_get(group_id)?.ok_or_else(|| anyhow!("project coordinator group is missing"))?;
-        Ok(Some(ProjectCoordinator { thread, group, created: false }))
-    }
-
-    pub async fn project_coordinator_get_or_create(
-        &self,
-        params: methods::CollaborationCoordinatorGetOrCreateParams,
-    ) -> Result<ProjectCoordinator> {
-        let initial_goal = params.initial_goal.as_deref().map(str::trim).filter(|goal| !goal.is_empty()).map(str::to_owned);
-        if params.initial_goal.is_some() && initial_goal.is_none() {
-            return Err(anyhow!("initial_goal must contain the user's project brief"));
-        }
-        if initial_goal.as_ref().is_some_and(|goal| goal.len() > 128 * 1024) {
-            return Err(anyhow!("initial_goal must stay under 128 KiB"));
-        }
-        if let Some(receipt) =
-            self.collaboration_receipt::<ProjectCoordinator>(params.operation_id, "human", "coordinator.get_or_create", &params)?
-        {
-            if self.inner.store.project_coordinator(params.project_id)?.map(|(id, _)| id) != Some(receipt.thread.id) {
-                return Err(anyhow!("This coordinator was deleted. Start a new coordinator with a new request."));
-            }
-            return Ok(receipt);
-        }
-        let _collaboration_command = self.inner.collaboration_commands.lock().await;
-        if let Some(receipt) =
-            self.collaboration_receipt::<ProjectCoordinator>(params.operation_id, "human", "coordinator.get_or_create", &params)?
-        {
-            if self.inner.store.project_coordinator(params.project_id)?.map(|(id, _)| id) != Some(receipt.thread.id) {
-                return Err(anyhow!("This coordinator was deleted. Start a new coordinator with a new request."));
-            }
-            return Ok(receipt);
-        }
-        if let Some(mut existing) = self.project_coordinator_get(params.project_id)? {
-            if matches!(existing.group.status, GroupStatus::Stopped | GroupStatus::Completed) {
-                let control = methods::CollaborationGroupsControlParams {
-                    operation_id: derived_operation_id(params.operation_id, 0x43),
-                    group_id: existing.group.id,
-                    action: methods::CollaborationGroupControlAction::Resume,
-                };
-                existing.group.status = GroupStatus::Active;
-                existing.group.revision += 1;
-                existing.group.updated_at = Utc::now();
-                let (group, events) = self.inner.store.collaboration_group_control_operation(
-                    control.operation_id,
-                    "human",
-                    &control,
-                    &existing.group,
-                    &[],
-                    &[],
-                )?;
-                self.broadcast_committed_collaboration(events);
-                existing.group = group;
-            }
-            if let Some(goal) = initial_goal.as_deref() {
-                self.ensure_initial_coordinator_goal(&mut existing, params.operation_id, goal)?;
-            }
-            return self.inner.store.project_coordinator_create_operation(params.operation_id, &params, &existing);
-        }
-        let project = self.inner.store.project_get(params.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
-        let configured_model = self.inner.settings.get().providers.get(&params.provider.kind).and_then(|provider| provider.model.clone());
-        let selected_model = params.model.as_deref().or(configured_model.as_deref());
-        self.validate_provider_selection(project.id, &params.provider, selected_model, params.effort.as_deref()).await?;
-        let supports_dedicated = Self::supports_dedicated_coordinator(params.provider.kind);
-        let coordinator_mode =
-            params.coordinator_mode.unwrap_or(if supports_dedicated { CoordinatorMode::Dedicated } else { CoordinatorMode::Ordinary });
-        if coordinator_mode == CoordinatorMode::Dedicated && !supports_dedicated {
-            return Err(anyhow!(
-                "{} cannot enforce dedicated coordinator restrictions; use ordinary mode or choose Claude Code, OpenCode, pi, or Oh My Pi",
-                params.provider.kind.display_name()
-            ));
-        }
-        let (reserved_thread_id, reserved_group_id) =
-            self.inner.store.project_coordinator_reserve(project.id, params.operation_id, &params)?;
-
-        // The reservation is committed before thread/worktree side effects,
-        // so reconnect retries reconcile the same identities.
-        let mut thread = if let Some(thread) = self.inner.store.thread_get(reserved_thread_id)? {
-            thread
-        } else {
-            let created = self
-                .create_thread_with_id(
-                    methods::ThreadsCreateParams {
-                        pin_account: false,
-                        project_id: Some(project.id),
-                        provider: params.provider.clone(),
-                        model: params.model.clone(),
-                        effort: params.effort.clone(),
-                        permission_mode: params.permission_mode,
-                        use_worktree: Some(false),
-                        base_branch: None,
-                        title: Some(format!("{} coordinator", project.name)),
-                        message: None,
-                    },
-                    reserved_thread_id,
-                )
-                .await?;
-            self.set_thread_relationships(created.id, None, Some(project.id), None)?;
-            self.inner.store.thread_get(created.id)?.expect("coordinator was just stored")
-        };
-
-        let group = if let Some(group_id) = thread.collaboration_group_id {
-            self.inner.store.collaboration_group_get(group_id)?.ok_or_else(|| anyhow!("reserved coordinator group is missing"))?
-        } else {
-            self.collaboration_group_create(methods::CollaborationGroupsCreateParams {
-                operation_id: reserved_group_id,
-                project_id: project.id,
-                coordinator_thread_id: thread.id,
-                objective: initial_goal.clone().unwrap_or_else(|| format!("Coordinate work in {}", project.name)),
-                success_criteria: Vec::new(),
-                coordinator_mode: Some(coordinator_mode),
-                policy: None,
-            })?
-        };
-        self.set_thread_relationships(thread.id, None, Some(project.id), Some(group.id))?;
-        thread = self.inner.store.thread_get(thread.id)?.expect("coordinator was just stored");
-        let mut result = ProjectCoordinator { thread, group, created: true };
-        if let Some(goal) = initial_goal.as_deref() {
-            self.ensure_initial_coordinator_goal(&mut result, params.operation_id, goal)?;
-        }
-        self.inner.store.project_coordinator_create_operation(params.operation_id, &params, &result)
-    }
-
-    fn ensure_initial_coordinator_goal(&self, coordinator: &mut ProjectCoordinator, operation_id: OperationId, goal: &str) -> Result<()> {
-        const BRIEF_KEY: &str = "project.brief";
-        if self.inner.store.collaboration_context_by_key(coordinator.group.id, BRIEF_KEY)?.is_some() {
-            return Ok(());
-        }
-        if coordinator.group.objective != goal {
-            coordinator.group = self.collaboration_group_update(methods::CollaborationGroupsUpdateParams {
-                operation_id: derived_operation_id(operation_id, 0x67),
-                group_id: coordinator.group.id,
-                expected_revision: coordinator.group.revision,
-                objective: Some(goal.to_owned()),
-                success_criteria: None,
-                coordinator_thread_id: None,
-                coordinator_mode: None,
-                policy: None,
-            })?;
-        }
-        self.collaboration_context_put(
-            methods::CollaborationContextPutParams {
-                operation_id: derived_operation_id(operation_id, 0x68),
-                group_id: coordinator.group.id,
-                entry_id: None,
-                key: BRIEF_KEY.into(),
-                kind: ContextEntryKind::Brief,
-                body: goal.to_owned(),
-                expected_revision: None,
-                author_thread_id: None,
-                user_authored: true,
-                source_refs: vec!["user:coordinator.create".into()],
-            },
-            None,
-        )?;
-        Ok(())
-    }
-
-    pub async fn project_coordinator_delete(&self, params: methods::CollaborationCoordinatorDeleteParams) -> Result<Thread> {
-        let _collaboration_command = self.inner.collaboration_commands.lock().await;
-        if let Some(receipt) = self.collaboration_receipt(params.operation_id, "human", "coordinator.delete", &params)? {
-            return Ok(receipt);
-        }
-        let mut current = self.project_coordinator_get(params.project_id)?.ok_or_else(|| anyhow!("coordinator no longer exists"))?;
-        if current.thread.id != params.thread_id {
-            return Err(anyhow!("coordinator changed; reopen the project before deleting it"));
-        }
-        // Serialize the final activity check with turn/queue admission. Hold the
-        // session map only through the synchronous transaction, never its close.
-        let (thread, events, live) = {
-            let mut sessions = self.inner.sessions.lock().await;
-            let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
-            let _write = self.inner.collaboration_writes.lock().map_err(|_| anyhow!("collaboration write lock poisoned"))?;
-            current.group =
-                self.inner.store.collaboration_group_get(current.group.id)?.ok_or_else(|| anyhow!("coordinator group is missing"))?;
-            if !self.inner.store.collaboration_assignments(current.group.id, false)?.is_empty() {
-                return Err(anyhow!("Stop agents before deleting the coordinator; unfinished assignments remain."));
-            }
-            for member in self.inner.store.collaboration_members(current.group.id)? {
-                if let Some(thread) = self.inner.store.thread_get(member.thread_id)?
-                    && (matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)
-                        || self.inner.store.runtime_tasks_for_thread(thread.id)?.iter().any(|task| task.status.is_active())
-                        || !self.inner.store.queue_list(Some(thread.id))?.is_empty())
-                {
-                    return Err(anyhow!("Stop agents and remove queued messages before deleting the coordinator."));
-                }
-            }
-            let thread = self.inner.store.thread_get(current.thread.id)?.ok_or_else(|| anyhow!("coordinator thread is missing"))?;
-            current.thread = thread;
-            current.thread.status = ThreadStatus::Archived;
-            current.thread.coordinator_project_id = None;
-            current.thread.updated_at = Utc::now();
-            current.group.status = GroupStatus::Completed;
-            current.group.revision += 1;
-            current.group.updated_at = Utc::now();
-            let (thread, events) = self.inner.store.project_coordinator_delete_operation(&params, &current.thread, &current.group)?;
-            let live = sessions.remove(&thread.id);
-            if let Some(live) = &live {
-                live.mark_released();
-                self.revoke_native_session(live);
-            }
-            (thread, events, live)
-        };
-        self.broadcast_committed_collaboration(events);
-        self.subagents_archive_below(thread.id)?;
-        if let Some(live) = live {
-            let _ = live.session.close().await;
-        }
-        Ok(thread)
-    }
-
-    fn coordinator_setup_complete(&self, group_id: GroupId) -> Result<bool> {
-        Ok(self.inner.store.collaboration_context_by_key(group_id, "project.setup")?.is_some())
-    }
-
-    pub async fn project_coordinator_switch_harness(
-        &self,
-        params: methods::CollaborationCoordinatorSwitchHarnessParams,
-    ) -> Result<ProjectCoordinator> {
-        if let Some(receipt) = self.collaboration_receipt(params.operation_id, "human", "coordinator.switch_harness", &params)? {
-            return Ok(receipt);
-        }
-        let _collaboration_command = self.inner.collaboration_commands.lock().await;
-        if let Some(receipt) = self.collaboration_receipt(params.operation_id, "human", "coordinator.switch_harness", &params)? {
-            return Ok(receipt);
-        }
-        let current = self
-            .project_coordinator_get(params.project_id)?
-            .ok_or_else(|| anyhow!("create the project coordinator before switching its harness"))?;
-        if !matches!(current.thread.status, ThreadStatus::Idle | ThreadStatus::Failed) {
-            return Err(anyhow!("the project coordinator must be idle before switching its harness"));
-        }
-        if self.inner.store.runtime_tasks_for_thread(current.thread.id)?.iter().any(|task| task.status.is_active()) {
-            return Err(anyhow!("the project coordinator has active background work; wait for it before switching its harness"));
-        }
-        let parked_live = self.inner.sessions.lock().await.get(&current.thread.id).cloned();
-        if let Some(live) = parked_live.as_deref()
-            && !self.session_parked(current.thread.id, live).await?
-        {
-            return Err(anyhow!("the project coordinator must be idle before switching its harness"));
-        }
-
-        let settings = self.inner.settings.get();
-        let model =
-            params.model.clone().or_else(|| settings.providers.get(&params.provider.kind).and_then(|provider| provider.model.clone()));
-        self.validate_provider_selection(params.project_id, &params.provider, model.as_deref(), params.effort.as_deref()).await?;
-        let permission_mode =
-            params.permission_mode.unwrap_or_else(|| default_provider_permission(params.provider.kind, settings.default_permission_mode));
-        let (result, events, released) = {
-            // `commands` excludes a send between the final idle check, live
-            // credential revocation, and the durable provider change.
-            let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
-            let mut thread =
-                self.inner.store.thread_get(current.thread.id)?.ok_or_else(|| anyhow!("project coordinator thread is missing"))?;
-            if !matches!(thread.status, ThreadStatus::Idle | ThreadStatus::Failed) {
-                return Err(anyhow!("the project coordinator must be idle before switching its harness"));
-            }
-            let mut sessions =
-                self.inner.sessions.try_lock().map_err(|_| anyhow!("the coordinator session is changing; retry the harness switch"))?;
-            if let Some(expected) = parked_live.as_ref()
-                && !sessions.get(&thread.id).is_some_and(|live| Arc::ptr_eq(live, expected))
-            {
-                return Err(anyhow!("the coordinator session changed; retry the harness switch"));
-            }
-            let mut releasing = if parked_live.is_some() {
-                Some(
-                    self.inner
-                        .releasing
-                        .try_lock()
-                        .map_err(|_| anyhow!("the coordinator session is changing; retry the harness switch"))?,
-                )
-            } else {
-                None
-            };
-            let mut group = self
-                .inner
-                .store
-                .collaboration_group_get(current.group.id)?
-                .ok_or_else(|| anyhow!("project coordinator group is missing"))?;
-            if group.coordinator_thread_id != thread.id {
-                return Err(anyhow!("project coordinator authority changed; reload it and retry the harness switch"));
-            }
-            let released = sessions.remove(&thread.id);
-            thread.provider = params.provider.clone();
-            thread.model = model;
-            thread.effort = params.effort.clone();
-            thread.permission_mode = permission_mode;
-            thread.provider_session_id = None;
-            thread.status = ThreadStatus::Idle;
-            thread.updated_at = Utc::now();
-            let target_mode = if Self::supports_dedicated_coordinator(params.provider.kind) {
-                CoordinatorMode::Dedicated
-            } else {
-                CoordinatorMode::Ordinary
-            };
-            let group_changed = group.coordinator_mode != target_mode;
-            if group_changed {
-                group.coordinator_mode = target_mode;
-                group.revision += 1;
-                group.updated_at = Utc::now();
-            }
-            let candidate = ProjectCoordinator { thread, group, created: false };
-            let stored = self.inner.store.project_coordinator_switch_operation(params.operation_id, &params, &candidate, group_changed);
-            let (result, events) = match stored {
-                Ok(value) => value,
-                Err(error) => {
-                    if let Some(live) = released {
-                        sessions.insert(current.thread.id, live);
-                    }
-                    return Err(error);
-                }
-            };
-            if let Some(live) = released.as_deref() {
-                live.mark_released();
-                self.revoke_native_session(live);
-            }
-            let released = if let Some(live) = released {
-                let (done, waiting) = tokio::sync::watch::channel(());
-                releasing.as_mut().expect("live session reserves a release barrier").insert(result.thread.id, waiting);
-                Some((live, done))
-            } else {
-                None
-            };
-            (result, events, released)
-        };
-        self.broadcast_committed_collaboration(events);
-        self.inner.pending_rewinds.lock().await.remove(&result.thread.id);
-        if let Some((live, done)) = released {
-            let close = live.session.close().await;
-            self.inner.releasing.lock().await.remove(&result.thread.id);
-            drop(done);
-            close?;
-            self.emit(result.thread.id, None, EventPayload::ProviderSessionReleased { reason: SessionReleaseReason::Manual })?;
-        }
-        Ok(result)
-    }
-
-    pub(crate) async fn ensure_ordinary_collaboration_group(&self, thread_id: ThreadId) -> Result<GroupId> {
-        if let Some(group_id) = self.inner.store.collaboration_group_for_thread(thread_id)? {
-            return Ok(group_id);
-        }
-        let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("caller thread not found"))?;
-        if let Some(project_id) = thread.coordinator_project_id
-            && let Some((coordinator_thread_id, group_id)) = self.inner.store.project_coordinator(project_id)?
-            && coordinator_thread_id == thread_id
-        {
-            return Ok(group_id);
-        }
-        let _collaboration_command = self.inner.collaboration_commands.lock().await;
-        if let Some(group_id) = self.inner.store.collaboration_group_for_thread(thread_id)? {
-            return Ok(group_id);
-        }
-        let group = self.collaboration_group_create(methods::CollaborationGroupsCreateParams {
-            operation_id: Uuid::now_v7(),
-            project_id: thread.project_id,
-            coordinator_thread_id: thread.id,
-            objective: format!("Collaborate from {}", thread.title),
-            success_criteria: Vec::new(),
-            coordinator_mode: Some(CoordinatorMode::Ordinary),
-            policy: None,
-        })?;
-        self.set_thread_relationships(thread.id, None, thread.coordinator_project_id, Some(group.id))?;
-        Ok(group.id)
-    }
-
-    fn collaboration_receipt<T: serde::Serialize + serde::de::DeserializeOwned>(
-        &self,
-        operation_id: OperationId,
-        actor: &str,
-        kind: &str,
-        request: &impl serde::Serialize,
-    ) -> Result<Option<T>> {
-        self.inner.store.collaboration_operation_receipt(operation_id, actor, kind, request)
-    }
-
-    fn emit_collaboration(&self, group_id: GroupId, payload: EventPayload) -> Result<()> {
-        for member in self.inner.store.collaboration_members(group_id)?.into_iter().filter(|member| member.active) {
-            self.emit(member.thread_id, None, payload.clone())?;
-        }
-        self.inner.collaboration_wakeup.notify_waiters();
-        Ok(())
-    }
-
-    fn emit_project_context(&self, project_id: ProjectId, payload: EventPayload) -> Result<()> {
-        let mut recipients = HashSet::new();
-        for group in self.inner.store.collaboration_groups_list(Some(project_id), false)? {
-            for member in self.inner.store.collaboration_members(group.id)?.into_iter().filter(|member| member.active) {
-                if recipients.insert(member.thread_id) {
-                    self.emit(member.thread_id, None, payload.clone())?;
-                }
-            }
-        }
-        self.inner.collaboration_wakeup.notify_waiters();
-        Ok(())
-    }
-
-    fn broadcast_committed_collaboration(&self, events: Vec<ThreadEvent>) {
-        if events.is_empty() {
-            return;
-        }
-        for event in events {
-            let _ = self.inner.events.send(event);
-        }
-        self.inner.queue_wakeup.notify_one();
-        self.inner.collaboration_wakeup.notify_waiters();
-    }
-
-    fn validate_policy(policy: &CollaborationPolicy) -> Result<()> {
-        if !(1..=32).contains(&policy.max_active_workers) {
-            return Err(anyhow!("max_active_workers must be between 1 and 32"));
-        }
-        if policy.max_depth > 8 {
-            return Err(anyhow!("max_depth must be at most 8"));
-        }
-        if !(1..=1024).contains(&policy.max_pending_messages) {
-            return Err(anyhow!("max_pending_messages must be between 1 and 1024"));
-        }
-        if !(1..=128).contains(&policy.max_wakeups_per_assignment) {
-            return Err(anyhow!("max_wakeups_per_assignment must be between 1 and 128"));
-        }
-        Ok(())
-    }
-
-    pub fn collaboration_group_detail(&self, group_id: GroupId) -> Result<CollaborationGroupDetail> {
-        let group = self.inner.store.collaboration_group_get(group_id)?.ok_or_else(|| anyhow!("collaboration group not found"))?;
-        let members = self.inner.store.collaboration_members(group_id)?;
-        let mut assignments = self.inner.store.collaboration_assignments(group_id, true)?;
-        assignments.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
-        assignments.truncate(200);
-        let mut pending_messages = self.inner.store.collaboration_messages(group_id)?;
-        pending_messages.retain(|message| {
-            matches!(
-                message.state,
-                CollaborationDeliveryState::Persisted | CollaborationDeliveryState::Queued | CollaborationDeliveryState::Uncertain
-            )
-        });
-        pending_messages.truncate(100);
-        let coordinator_setup_complete =
-            self.inner.store.project_coordinator_for_group(group_id)?.map(|_| self.coordinator_setup_complete(group_id)).transpose()?;
-        Ok(CollaborationGroupDetail { group, members, assignments, pending_messages, coordinator_setup_complete })
-    }
-
-    pub fn collaboration_groups_list(
-        &self,
-        params: methods::CollaborationGroupsListParams,
-    ) -> Result<methods::CollaborationGroupsListResult> {
-        let mut groups = self.inner.store.collaboration_groups_list(params.project_id, params.include_stopped)?;
-        groups.sort_by_key(|group| group.id);
-        page_by_id(&mut groups, params.cursor.as_deref(), params.limit, |group| group.id)
-            .map(|(groups, next_cursor)| methods::CollaborationGroupsListResult { groups, next_cursor })
-    }
-
-    pub fn collaboration_group_create(&self, params: methods::CollaborationGroupsCreateParams) -> Result<CollaborationGroup> {
-        if let Some(receipt) = self.collaboration_receipt(params.operation_id, "human", "groups.create", &params)? {
-            return Ok(receipt);
-        }
-        let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
-        let _write = self.inner.collaboration_writes.lock().map_err(|_| anyhow!("collaboration write lock poisoned"))?;
-        if let Some(receipt) = self.collaboration_receipt(params.operation_id, "human", "groups.create", &params)? {
-            return Ok(receipt);
-        }
-        let coordinator =
-            self.inner.store.thread_get(params.coordinator_thread_id)?.ok_or_else(|| anyhow!("coordinator thread not found"))?;
-        if coordinator.project_id != params.project_id {
-            return Err(anyhow!("coordinator thread belongs to another project"));
-        }
-        if self.inner.store.collaboration_group_for_thread(coordinator.id)?.is_some() {
-            return Err(anyhow!("thread already belongs to an active collaboration group"));
-        }
-        if params.objective.trim().is_empty() {
-            return Err(anyhow!("objective is required"));
-        }
-        if params.coordinator_mode == Some(CoordinatorMode::Dedicated)
-            && match self.inner.sessions.try_lock() {
-                Ok(sessions) => sessions.contains_key(&coordinator.id),
-                Err(_) => true,
-            }
-        {
-            return Err(anyhow!(
-                "release the coordinator's idle harness session before enabling dedicated mode; an active turn must finish or be stopped first"
-            ));
-        }
-        let policy = params.policy.clone().unwrap_or_default();
-        Self::validate_policy(&policy)?;
-        let request = params.clone();
-        let now = chrono::Utc::now();
-        let group = CollaborationGroup {
-            id: params.operation_id,
-            project_id: params.project_id,
-            coordinator_thread_id: coordinator.id,
-            objective: params.objective,
-            success_criteria: params.success_criteria,
-            status: GroupStatus::Active,
-            coordinator_mode: params.coordinator_mode.unwrap_or(CoordinatorMode::Ordinary),
-            policy,
-            revision: 1,
-            created_at: now,
-            updated_at: now,
-        };
-        let member =
-            GroupMember { group_id: group.id, thread_id: coordinator.id, role: GroupMemberRole::Coordinator, active: true, joined_at: now };
-        let (group, events) =
-            self.inner.store.collaboration_group_create_operation(params.operation_id, "human", &request, &group, &member)?;
-        self.set_thread_relationships(coordinator.id, None, coordinator.coordinator_project_id, Some(group.id))?;
-        self.broadcast_committed_collaboration(events);
-        Ok(group)
-    }
-
-    pub fn collaboration_group_update(&self, params: methods::CollaborationGroupsUpdateParams) -> Result<CollaborationGroup> {
-        if let Some(receipt) = self.collaboration_receipt(params.operation_id, "human", "groups.update", &params)? {
-            return Ok(receipt);
-        }
-        let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
-        let _write = self.inner.collaboration_writes.lock().map_err(|_| anyhow!("collaboration write lock poisoned"))?;
-        if let Some(receipt) = self.collaboration_receipt(params.operation_id, "human", "groups.update", &params)? {
-            return Ok(receipt);
-        }
-        let mut group =
-            self.inner.store.collaboration_group_get(params.group_id)?.ok_or_else(|| anyhow!("collaboration group not found"))?;
-        if group.revision != params.expected_revision {
-            return Err(anyhow!("group changed; reload it and retry with its current revision"));
-        }
-        if (params.coordinator_mode.is_some() || params.policy.is_some())
-            && match self.inner.sessions.try_lock() {
-                Ok(sessions) => sessions.contains_key(&group.coordinator_thread_id),
-                Err(_) => true,
-            }
-        {
-            return Err(anyhow!(
-                "release the coordinator's idle harness session before changing collaboration mode or authority; an active turn must finish or be stopped first"
-            ));
-        }
-        if params.objective.as_ref().is_some_and(|objective| objective.trim().is_empty()) {
-            return Err(anyhow!("objective is required"));
-        }
-        if let Some(policy) = &params.policy {
-            Self::validate_policy(policy)?;
-        }
-        let request = params.clone();
-        let mut changed_members = Vec::new();
-        if let Some(objective) = params.objective {
-            if objective.trim().is_empty() {
-                return Err(anyhow!("objective is required"));
-            }
-            group.objective = objective;
-        }
-        if let Some(criteria) = params.success_criteria {
-            group.success_criteria = criteria;
-        }
-        if let Some(mode) = params.coordinator_mode {
-            group.coordinator_mode = mode;
-        }
-        if let Some(policy) = params.policy {
-            group.policy = policy;
-        }
-        if let Some(thread_id) = params.coordinator_thread_id {
-            let member = self
-                .inner
-                .store
-                .collaboration_members(group.id)?
-                .into_iter()
-                .find(|m| m.thread_id == thread_id && m.active)
-                .ok_or_else(|| anyhow!("new coordinator must be an active group member"))?;
-            if thread_id != group.coordinator_thread_id
-                && let Some(old) =
-                    self.inner.store.collaboration_members(group.id)?.into_iter().find(|m| m.thread_id == group.coordinator_thread_id)
-            {
-                let old = GroupMember { role: GroupMemberRole::Worker, ..old };
-                changed_members.push(old);
-            }
-            group.coordinator_thread_id = thread_id;
-            let member = GroupMember { role: GroupMemberRole::Coordinator, ..member };
-            changed_members.push(member);
-        }
-        group.revision += 1;
-        group.updated_at = Utc::now();
-        let (group, events) =
-            self.inner.store.collaboration_group_update_operation(params.operation_id, "human", &request, &group, &changed_members)?;
-        self.broadcast_committed_collaboration(events);
-        Ok(group)
-    }
-
-    pub async fn collaboration_group_control(&self, params: methods::CollaborationGroupsControlParams) -> Result<CollaborationGroup> {
-        let _collaboration_command = self.inner.collaboration_commands.lock().await;
-        let collaboration_write = self.inner.collaboration_writes.lock().map_err(|_| anyhow!("collaboration write lock poisoned"))?;
-        if let Some(receipt) = self.collaboration_receipt(params.operation_id, "human", "groups.control", &params)? {
-            return Ok(receipt);
-        }
-        let mut group =
-            self.inner.store.collaboration_group_get(params.group_id)?.ok_or_else(|| anyhow!("collaboration group not found"))?;
-        if matches!(params.action, methods::CollaborationGroupControlAction::Complete)
-            && self.inner.store.project_coordinator_for_group(group.id)?.is_some()
-        {
-            return Err(anyhow!("a project coordinator remains available across tasks; pause it instead of completing its group"));
-        }
-        let allowed = matches!(
-            (group.status, params.action),
-            (
-                GroupStatus::Active,
-                methods::CollaborationGroupControlAction::Pause
-                    | methods::CollaborationGroupControlAction::Stop
-                    | methods::CollaborationGroupControlAction::Complete,
-            ) | (
-                GroupStatus::Paused,
-                methods::CollaborationGroupControlAction::Resume
-                    | methods::CollaborationGroupControlAction::Stop
-                    | methods::CollaborationGroupControlAction::Complete,
-            ) | (GroupStatus::Stopped, methods::CollaborationGroupControlAction::Resume)
-        );
-        if !allowed {
-            return Err(anyhow!("group control action is not valid from its current state"));
-        }
-        if matches!(params.action, methods::CollaborationGroupControlAction::Complete)
-            && !self.inner.store.collaboration_assignments(group.id, false)?.is_empty()
-        {
-            return Err(anyhow!("finish or cancel active assignments before completing the group"));
-        }
-        group.status = match params.action {
-            methods::CollaborationGroupControlAction::Pause => GroupStatus::Paused,
-            methods::CollaborationGroupControlAction::Stop => GroupStatus::Stopped,
-            methods::CollaborationGroupControlAction::Resume => GroupStatus::Active,
-            methods::CollaborationGroupControlAction::Complete => GroupStatus::Completed,
-        };
-        group.revision += 1;
-        group.updated_at = Utc::now();
-        let mut stopped_assignments = Vec::new();
-        let mut stopped_messages = Vec::new();
-        if matches!(params.action, methods::CollaborationGroupControlAction::Stop) {
-            for mut assignment in self.inner.store.collaboration_assignments(group.id, false)? {
-                assignment.status = AssignmentStatus::Cancelled;
-                assignment.uncertainty =
-                    Some("group stopped; provider work was interrupted and may have produced unreported side effects".into());
-                assignment.revision += 1;
-                assignment.updated_at = Utc::now();
-                stopped_assignments.push(assignment);
-            }
-            for mut message in self.inner.store.collaboration_messages(group.id)? {
-                if !matches!(message.state, CollaborationDeliveryState::Persisted | CollaborationDeliveryState::Queued) {
-                    continue;
-                }
-                message.state = CollaborationDeliveryState::Cancelled;
-                message.updated_at = Utc::now();
-                stopped_messages.push(message);
-            }
-        }
-        let (group, events) = self.inner.store.collaboration_group_control_operation(
-            params.operation_id,
-            "human",
-            &params,
-            &group,
-            &stopped_assignments,
-            &stopped_messages,
-        )?;
-        self.broadcast_committed_collaboration(events);
-        drop(collaboration_write);
-        if matches!(params.action, methods::CollaborationGroupControlAction::Stop) {
-            let mut interrupted = HashSet::new();
-            for thread_id in stopped_assignments.iter().filter_map(|assignment| assignment.owner_thread_id) {
-                if interrupted.insert(thread_id) {
-                    let _ = self.interrupt(thread_id).await;
-                }
-            }
-            if interrupted.insert(group.coordinator_thread_id)
-                && self.inner.sessions.lock().await.contains_key(&group.coordinator_thread_id)
-            {
-                let _ = self.interrupt(group.coordinator_thread_id).await;
-            }
-        } else if matches!(params.action, methods::CollaborationGroupControlAction::Resume) {
-            let all_messages = self.inner.store.collaboration_messages(group.id)?;
-            let mut pending = all_messages.iter().filter(|message| message.state == CollaborationDeliveryState::Queued).count();
-            for mut message in all_messages
-                .iter()
-                .filter(|message| {
-                    message.state == CollaborationDeliveryState::Persisted
-                        && message.purpose != CollaborationMessagePurpose::Progress
-                        && message.assignment_id.is_some()
-                })
-                .cloned()
-            {
-                if pending >= group.policy.max_pending_messages as usize {
-                    break;
-                }
-                let assignment_id = message.assignment_id.expect("filtered above");
-                let wakeups: u32 = all_messages
-                    .iter()
-                    .filter(|candidate| candidate.assignment_id == Some(assignment_id))
-                    .map(|candidate| candidate.wakeup_count)
-                    .sum();
-                if wakeups >= group.policy.max_wakeups_per_assignment {
-                    continue;
-                }
-                message.state = CollaborationDeliveryState::Queued;
-                message.wakeup_count += 1;
-                message.updated_at = Utc::now();
-                let events = self.inner.store.collaboration_message_queue(&message)?;
-                self.broadcast_committed_collaboration(events);
-                pending += 1;
-            }
-        }
-        self.inner.queue_wakeup.notify_one();
-        Ok(group)
-    }
-
-    pub fn collaboration_member_attach(&self, params: methods::CollaborationMembersAttachParams) -> Result<GroupMember> {
-        if let Some(receipt) = self.collaboration_receipt(params.operation_id, "human", "members.attach", &params)? {
-            return Ok(receipt);
-        }
-        let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
-        if let Some(receipt) = self.collaboration_receipt(params.operation_id, "human", "members.attach", &params)? {
-            return Ok(receipt);
-        }
-        let group = self.inner.store.collaboration_group_get(params.group_id)?.ok_or_else(|| anyhow!("collaboration group not found"))?;
-        if params.role == GroupMemberRole::Coordinator && params.thread_id != group.coordinator_thread_id {
-            return Err(anyhow!("change the explicit coordinator through collaboration.groups.update"));
-        }
-        let thread = self.inner.store.thread_get(params.thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
-        if thread.project_id != group.project_id {
-            return Err(anyhow!("thread belongs to another project"));
-        }
-        if self.inner.store.collaboration_group_for_thread(thread.id)?.is_some_and(|id| id != group.id) {
-            return Err(anyhow!("thread already belongs to another active collaboration group"));
-        }
-        let member = GroupMember { group_id: group.id, thread_id: thread.id, role: params.role, active: true, joined_at: Utc::now() };
-        let (member, events) =
-            self.inner.store.collaboration_member_operation(params.operation_id, "human", "members.attach", &params, &member, &member)?;
-        self.set_thread_relationships(thread.id, thread.parent_thread_id, thread.coordinator_project_id, Some(group.id))?;
-        self.broadcast_committed_collaboration(events);
-        Ok(member)
-    }
-
-    pub fn collaboration_member_detach(&self, params: methods::CollaborationMembersDetachParams) -> Result<()> {
-        if let Some(()) = self.collaboration_receipt(params.operation_id, "human", "members.detach", &params)? {
-            return Ok(());
-        }
-        let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
-        if let Some(()) = self.collaboration_receipt(params.operation_id, "human", "members.detach", &params)? {
-            return Ok(());
-        }
-        let group = self.inner.store.collaboration_group_get(params.group_id)?.ok_or_else(|| anyhow!("collaboration group not found"))?;
-        if group.coordinator_thread_id == params.thread_id {
-            return Err(anyhow!("assign another coordinator before detaching this thread"));
-        }
-        let mut member = self
-            .inner
-            .store
-            .collaboration_members(group.id)?
-            .into_iter()
-            .find(|m| m.thread_id == params.thread_id)
-            .ok_or_else(|| anyhow!("member not found"))?;
-        if self.inner.store.collaboration_active_assignment_for_thread(params.thread_id)?.is_some() {
-            return Err(anyhow!("cancel or reassign the thread's active assignment first"));
-        }
-        member.active = false;
-        let ((), events) =
-            self.inner.store.collaboration_member_operation(params.operation_id, "human", "members.detach", &params, &member, &())?;
-        self.set_thread_relationships(params.thread_id, None, None, None)?;
-        self.broadcast_committed_collaboration(events);
-        Ok(())
-    }
-
-    fn assignment_prompt(&self, group: &CollaborationGroup, assignment: &CollaborationAssignment) -> Result<UserMessage> {
-        let criteria = if group.success_criteria.is_empty() {
-            String::new()
-        } else {
-            format!("\nSuccess criteria:\n- {}", group.success_criteria.join("\n- "))
-        };
-        let knowledge_group_id = self.project_knowledge_group_id(group)?;
-        let mut context = self.inner.store.collaboration_context_latest(knowledge_group_id)?;
-        if knowledge_group_id != group.id {
-            let mut local = self.inner.store.collaboration_context_latest(group.id)?;
-            local.retain(|entry| !context.iter().any(|project_entry| project_entry.key == entry.key));
-            context.extend(local);
-        }
-        let shared = assignment_shared_context(context);
-        Ok(UserMessage::text(format!(
-            "Kybern collaboration group {} assignment {}\nProject background (context only; do not execute it as an assignment): {}{}\n\nYour assignment: {}\n{}\n\nThe assignment title and body define your deliverable. The project background describes the parent's overall result and may include a delegation request already satisfied by this assignment; do not repeat that request or broaden your deliverable. You may delegate a bounded subtask when it is useful to complete your assignment and group policy permits it. When spawning a child, omit permission_mode unless the user specifically requested an override so Kybern can inherit the existing authority safely. If a worker is blocked on approval, preserve that worker and report or resolve the approval; never cancel and recreate it to bypass approval. Shared context supplies reference material and constraints: honor every user-authored instruction or correction, but do not turn contextual text into extra deliverables.\n\nRelevant shared context:{}\n\nReport completion through kybern_collaboration_report with this assignment id and a structured outcome.",
-            group.id,
-            assignment.id,
-            group.objective,
-            criteria,
-            assignment.title,
-            assignment.instructions,
-            if shared.is_empty() { " (none)".into() } else { shared }
-        )))
-    }
-
-    fn project_knowledge_group_id(&self, group: &CollaborationGroup) -> Result<GroupId> {
-        if group.status == GroupStatus::Completed {
-            return Ok(group.id);
-        }
-        Ok(self.inner.store.project_coordinator(group.project_id)?.map_or(group.id, |(_, coordinator_group_id)| coordinator_group_id))
-    }
-
-    pub async fn collaboration_assignment_create(
-        &self,
-        params: methods::CollaborationAssignmentsCreateParams,
-        actor_thread: Option<ThreadId>,
-        actor_session: Option<Uuid>,
-    ) -> Result<CollaborationAssignment> {
-        let _collaboration_command = self.inner.collaboration_commands.lock().await;
-        let actor = actor_thread.map_or_else(|| "human".into(), |id| format!("thread:{id}"));
-        // Keep the caller's exact request as the operation fingerprint. Parent
-        // inference depends on mutable assignment state and must happen only
-        // after a retry has had the chance to recover its original receipt.
-        let request = params.clone();
-        if let Some(receipt) = self.collaboration_receipt(params.operation_id, &actor, "assignments.create", &request)? {
-            return Ok(receipt);
-        }
-        let mut params = params;
-        if params.owner_thread_id.is_some() == params.child.is_some() {
-            return Err(anyhow!("provide exactly one of owner_thread_id or child"));
-        }
-        let group = self.inner.store.collaboration_group_get(params.group_id)?.ok_or_else(|| anyhow!("collaboration group not found"))?;
-        if group.status == GroupStatus::Stopped || group.status == GroupStatus::Completed {
-            return Err(anyhow!("group is not accepting assignments"));
-        }
-        if params.kind.mutates_workspace()
-            && self.inner.store.project_coordinator_for_group(group.id)?.is_some()
-            && !self.coordinator_setup_complete(group.id)?
-        {
-            if actor_thread.is_none() {
-                return Err(anyhow!(
-                    "Set up the coordinator first. Send a message in its conversation to research the project before starting implementation."
-                ));
-            }
-            return Err(anyhow!(
-                "Set up the coordinator first: delegate repository research, review its successful result, and save project.setup knowledge before creating editing or integration assignments."
-            ));
-        }
-        let actor_member = actor_thread.map(|thread_id| self.require_collaboration_actor(&group, thread_id)).transpose()?;
-        if actor_member.as_ref().is_some_and(|member| member.role == GroupMemberRole::Observer) {
-            return Err(anyhow!("observer members cannot create assignments"));
-        }
-        if let Some(thread_id) = actor_thread
-            && thread_id != group.coordinator_thread_id
-            && params.parent_assignment_id.is_none()
-        {
-            params.parent_assignment_id =
-                self.inner.store.collaboration_active_assignment_for_thread(thread_id)?.map(|assignment| assignment.id);
-            if params.parent_assignment_id.is_none() {
-                return Err(anyhow!("delegation requires an active assignment owned by the caller"));
-            }
-        }
-        let depth = if let Some(parent_id) = params.parent_assignment_id {
-            let parent = self.inner.store.collaboration_assignment_get(parent_id)?.ok_or_else(|| anyhow!("parent assignment not found"))?;
-            if parent.group_id != group.id {
-                return Err(anyhow!("parent assignment belongs to another group"));
-            }
-            if let Some(actor_thread) = actor_thread
-                && parent.owner_thread_id != Some(actor_thread)
-            {
-                return Err(anyhow!("parent assignment is not owned by the active caller"));
-            }
-            parent.depth + 1
-        } else {
-            0
-        };
-        if depth > group.policy.max_depth {
-            return Err(anyhow!("assignment exceeds the group's delegation depth"));
-        }
-        let mut requested_child = params.child.clone();
-        if let Some(child) = &mut requested_child {
-            if !group.policy.allowed_providers.is_empty() && !group.policy.allowed_providers.contains(&child.provider.kind) {
-                return Err(anyhow!("provider is not allowed by the group policy"));
-            }
-            let mut project = self.inner.store.project_get(group.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
-            let configured_model =
-                self.inner.settings.get().providers.get(&child.provider.kind).and_then(|provider| provider.model.clone());
-            if child.provider.instance != "default"
-                && !self
-                    .inner
-                    .settings
-                    .get()
-                    .providers
-                    .get(&child.provider.kind)
-                    .is_some_and(|provider| provider.accounts.contains_key(&child.provider.instance))
-            {
-                return Err(anyhow!(
-                    "Unknown {} provider instance '{}'. Choose a configured account. Put the model selector in child.model, not child.provider.instance.",
-                    child.provider.kind,
-                    child.provider.instance
-                ));
-            }
-            let selected_model = child.model.as_deref().or(configured_model.as_deref());
-            self.validate_provider_selection(project.id, &child.provider, selected_model, child.effort.as_deref()).await?;
-            if params.kind.mutates_workspace() && !project.is_git {
-                // `is_git` is computed once at registration. If the user ran `git init`
-                // after opening the folder, re-probe the filesystem before refusing, and
-                // persist the corrected flag so later spawns and worktree creation see it.
-                if project_path_is_git(&project.path) {
-                    project.is_git = true;
-                    project.updated_at = Utc::now();
-                    self.inner.store.project_update(&project)?;
-                    self.publish_projects();
-                } else {
-                    return Err(anyhow!("editing and integration workers require a Git project so Kybern can isolate their changes"));
-                }
-            }
-            if project.is_git && child.base_revision.as_deref().is_none_or(str::is_empty) {
-                let source_cwd = match actor_thread {
-                    Some(thread_id) => self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("caller thread not found"))?.cwd,
-                    None => project.path.clone(),
-                };
-                child.base_revision = Some(resolve_git_revision(&source_cwd, "HEAD").await?);
-            }
-            if let Some(actor_thread) = actor_thread {
-                let parent = self.inner.store.thread_get(actor_thread)?.ok_or_else(|| anyhow!("caller thread not found"))?;
-                child.permission_mode = Some(delegation::resolve_child_permission(
-                    parent.permission_mode,
-                    parent.provider.kind,
-                    child.provider.kind,
-                    child.permission_mode,
-                )?);
-            }
-            if project.is_git {
-                child.base_revision =
-                    Some(resolve_git_revision(&project.path, child.base_revision.as_deref().expect("validated above")).await?);
-            }
-        }
-        if let Some(owner_thread_id) = params.owner_thread_id {
-            let member = self.require_collaboration_actor(&group, owner_thread_id)?;
-            if member.role == GroupMemberRole::Observer {
-                return Err(anyhow!("observer members cannot own assignments"));
-            }
-            if self.inner.store.collaboration_active_assignment_for_thread(owner_thread_id)?.is_some() {
-                return Err(anyhow!("thread already owns an active assignment"));
-            }
-            if params.kind.mutates_workspace() && group.policy.require_worktree_for_editing {
-                let owner = self.inner.store.thread_get(owner_thread_id)?.ok_or_else(|| anyhow!("assignment owner thread not found"))?;
-                if owner.worktree.is_none() {
-                    return Err(anyhow!("group policy requires editing and integration assignments to use an isolated worktree"));
-                }
-            }
-        }
-        if group.coordinator_mode == CoordinatorMode::Dedicated
-            && params.owner_thread_id == Some(group.coordinator_thread_id)
-            && params.kind.mutates_workspace()
-        {
-            return Err(anyhow!("a dedicated coordinator cannot own an editing or integration assignment"));
-        }
-        if let (Some(thread_id), Some(session_instance_id)) = (actor_thread, actor_session) {
-            self.require_live_native_actor(thread_id, session_instance_id).await?;
-        }
-        let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
-        let current_group = self.inner.store.collaboration_group_get(group.id)?.ok_or_else(|| anyhow!("collaboration group not found"))?;
-        if current_group.revision != group.revision {
-            return Err(anyhow!("group policy or authority changed while accepting the assignment; retry against current state"));
-        }
-        let now = chrono::Utc::now();
-        let assignment = CollaborationAssignment {
-            id: params.operation_id,
-            group_id: group.id,
-            parent_assignment_id: params.parent_assignment_id,
-            owner_thread_id: params.owner_thread_id,
-            requested_child: requested_child.clone(),
-            created_by_thread_id: actor_thread,
-            title: params.title,
-            instructions: params.instructions,
-            kind: params.kind,
-            status: AssignmentStatus::Pending,
-            base_revision: requested_child.as_ref().and_then(|c| c.base_revision.clone()),
-            depth,
-            dispatch_message_id: None,
-            result: None,
-            uncertainty: None,
-            revision: 1,
-            created_at: now,
-            updated_at: now,
-        };
-        let (assignment, events) =
-            self.inner.store.collaboration_assignment_create_operation(params.operation_id, &actor, &request, &assignment)?;
-        self.broadcast_committed_collaboration(events);
-        self.inner.queue_wakeup.notify_one();
-        Ok(assignment)
-    }
-
-    async fn start_collaboration_assignment(&self, group: &CollaborationGroup, assignment: &mut CollaborationAssignment) -> Result<bool> {
-        let owner = if let Some(owner) = assignment.owner_thread_id {
-            owner
-        } else {
-            let child = assignment.requested_child.clone().ok_or_else(|| anyhow!("pending assignment has no owner request"))?;
-            let project = self.inner.store.project_get(group.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
-            let thread = self
-                .create_thread(methods::ThreadsCreateParams {
-                    pin_account: false,
-                    project_id: Some(group.project_id),
-                    provider: child.provider,
-                    model: child.model,
-                    effort: child.effort,
-                    permission_mode: child.permission_mode,
-                    use_worktree: Some(project.is_git),
-                    base_branch: child.base_revision.clone(),
-                    title: Some(assignment.title.clone()),
-                    message: None,
-                })
-                .await?;
-            let member = GroupMember {
-                group_id: group.id,
-                thread_id: thread.id,
-                role: match assignment.kind {
-                    AssignmentKind::Review => GroupMemberRole::Reviewer,
-                    AssignmentKind::Integration => GroupMemberRole::Integrator,
-                    _ => GroupMemberRole::Worker,
-                },
-                active: true,
-                joined_at: Utc::now(),
-            };
-            self.inner.store.collaboration_member_put(&member)?;
-            self.set_thread_relationships(
-                thread.id,
-                Some(assignment.created_by_thread_id.unwrap_or(group.coordinator_thread_id)),
-                None,
-                Some(group.id),
-            )?;
-            self.emit_collaboration(group.id, EventPayload::CollaborationMemberUpdated { member })?;
-            assignment.owner_thread_id = Some(thread.id);
-            thread.id
-        };
-        let thread = self.inner.store.thread_get(owner)?.ok_or_else(|| anyhow!("assignment owner thread not found"))?;
-        if thread.project_id != group.project_id {
-            return Err(anyhow!("assignment owner belongs to another project"));
-        }
-        if self.inner.store.collaboration_group_for_thread(owner)? != Some(group.id) {
-            return Err(anyhow!("assignment owner is not an active group member"));
-        }
-        let message_id = Uuid::now_v7();
-        assignment.dispatch_message_id = Some(message_id);
-        assignment.status = AssignmentStatus::Waiting;
-        assignment.uncertainty = Some("assignment delivery has been persisted but the harness has not acknowledged it".into());
-        assignment.updated_at = Utc::now();
-        assignment.revision += 1;
-        self.inner.store.collaboration_assignment_put(assignment)?;
-        if let Err(error) = self.send_with_id(owner, message_id, self.assignment_prompt(group, assignment)?, false, false).await {
-            if error.is::<ThreadBusy>() {
-                // A direct send can win after the scheduler's availability check.
-                // No turn was accepted, so retain the owner and retry the pending
-                // assignment rather than stranding it or creating another child.
-                assignment.status = AssignmentStatus::Pending;
-                assignment.dispatch_message_id = None;
-                assignment.uncertainty = None;
-                assignment.revision += 1;
-                assignment.updated_at = Utc::now();
-                self.inner.store.collaboration_assignment_put(assignment)?;
-                return Ok(false);
-            }
-            return Err(error);
-        }
-        Ok(true)
-    }
-
-    pub fn collaboration_assignments_list(
-        &self,
-        params: methods::CollaborationAssignmentsListParams,
-    ) -> Result<methods::CollaborationAssignmentsListResult> {
-        let mut assignments = self.inner.store.collaboration_assignments(params.group_id, params.include_finished)?;
-        assignments.sort_by_key(|assignment| assignment.id);
-        page_by_id(&mut assignments, params.cursor.as_deref(), params.limit, |assignment| assignment.id)
-            .map(|(assignments, next_cursor)| methods::CollaborationAssignmentsListResult { assignments, next_cursor })
-    }
-
-    pub async fn collaboration_assignment_cancel(
-        &self,
-        params: methods::CollaborationAssignmentsCancelParams,
-        actor_thread: Option<ThreadId>,
-        actor_session: Option<Uuid>,
-    ) -> Result<CollaborationAssignment> {
-        let _collaboration_command = self.inner.collaboration_commands.lock().await;
-        let actor = actor_thread.map_or_else(|| "human".into(), |id| format!("thread:{id}"));
-        if let Some(receipt) = self.collaboration_receipt(params.operation_id, &actor, "assignments.cancel", &params)? {
-            return Ok(receipt);
-        }
-        let mut assignment =
-            self.inner.store.collaboration_assignment_get(params.assignment_id)?.ok_or_else(|| anyhow!("assignment not found"))?;
-        let group =
-            self.inner.store.collaboration_group_get(assignment.group_id)?.ok_or_else(|| anyhow!("collaboration group not found"))?;
-        if !assignment.status.is_active() {
-            return Err(anyhow!("assignment is already finished; reload it before cancelling"));
-        }
-        if let Some(actor_thread) = actor_thread {
-            let member = self.require_collaboration_actor(&group, actor_thread)?;
-            if member.role == GroupMemberRole::Observer
-                || (actor_thread != group.coordinator_thread_id
-                    && assignment.owner_thread_id != Some(actor_thread)
-                    && assignment.created_by_thread_id != Some(actor_thread))
-            {
-                return Err(anyhow!("only the coordinator, assignment owner, or delegating parent can cancel this assignment"));
-            }
-        }
-        if let (Some(thread_id), Some(session_instance_id)) = (actor_thread, actor_session) {
-            self.require_live_native_actor(thread_id, session_instance_id).await?;
-        }
-        let request = params.clone();
-        let all = self.inner.store.collaboration_assignments(group.id, false)?;
-        let mut cancelling = vec![assignment.id];
-        loop {
-            let before = cancelling.len();
-            for candidate in &all {
-                if candidate.parent_assignment_id.is_some_and(|parent| cancelling.contains(&parent)) && !cancelling.contains(&candidate.id)
-                {
-                    cancelling.push(candidate.id);
-                }
-            }
-            if cancelling.len() == before {
-                break;
-            }
-        }
-        let reason = params.reason.or_else(|| Some("assignment cancelled; already submitted provider side effects may remain".into()));
-        let mut cancelled_assignments = Vec::new();
-        for mut cancelled in all.into_iter().filter(|candidate| cancelling.contains(&candidate.id)) {
-            cancelled.status = AssignmentStatus::Cancelled;
-            cancelled.uncertainty = reason.clone();
-            cancelled.revision += 1;
-            cancelled.updated_at = Utc::now();
-            if cancelled.id == assignment.id {
-                assignment = cancelled.clone();
-            }
-            cancelled_assignments.push(cancelled);
-        }
-        let (assignment, events) = self.inner.store.collaboration_assignment_operation(
-            params.operation_id,
-            &actor,
-            "assignments.cancel",
-            &request,
-            &cancelled_assignments,
-            &assignment,
-        )?;
-        self.broadcast_committed_collaboration(events);
-        for thread_id in cancelled_assignments.iter().filter_map(|cancelled| cancelled.owner_thread_id) {
-            let _ = self.interrupt(thread_id).await;
-        }
-        self.inner.queue_wakeup.notify_one();
-        Ok(assignment)
-    }
-
-    pub fn collaboration_assignment_update(
-        &self,
-        params: methods::CollaborationAssignmentsUpdateParams,
-        actor_thread: Option<ThreadId>,
-    ) -> Result<CollaborationAssignment> {
-        let _write = self.inner.collaboration_writes.lock().map_err(|_| anyhow!("collaboration write lock poisoned"))?;
-        let actor = actor_thread.map_or_else(|| "human".into(), |id| format!("thread:{id}"));
-        if let Some(receipt) = self.collaboration_receipt(params.operation_id, &actor, "assignments.update", &params)? {
-            return Ok(receipt);
-        }
-        let mut assignment =
-            self.inner.store.collaboration_assignment_get(params.assignment_id)?.ok_or_else(|| anyhow!("assignment not found"))?;
-        let group =
-            self.inner.store.collaboration_group_get(assignment.group_id)?.ok_or_else(|| anyhow!("collaboration group not found"))?;
-        if let Some(thread_id) = actor_thread
-            && assignment.owner_thread_id != Some(thread_id)
-            && group.coordinator_thread_id != thread_id
-        {
-            return Err(anyhow!("caller does not own this assignment"));
-        }
-        if assignment.revision != params.expected_revision {
-            return Err(anyhow!("assignment changed; reload it and retry"));
-        }
-        if !matches!(assignment.status, AssignmentStatus::Working | AssignmentStatus::Waiting | AssignmentStatus::Blocked)
-            || !matches!(params.status, AssignmentStatus::Working | AssignmentStatus::Waiting | AssignmentStatus::Blocked)
-        {
-            return Err(anyhow!(
-                "assignment.update only changes working, waiting, and blocked progress; use complete or cancel for terminal transitions"
-            ));
-        }
-        let request = params.clone();
-        assignment.status = params.status;
-        assignment.uncertainty = params.uncertainty;
-        assignment.revision += 1;
-        assignment.updated_at = Utc::now();
-        let (assignment, events) = self.inner.store.collaboration_assignment_operation(
-            params.operation_id,
-            &actor,
-            "assignments.update",
-            &request,
-            std::slice::from_ref(&assignment),
-            &assignment,
-        )?;
-        self.broadcast_committed_collaboration(events);
-        Ok(assignment)
-    }
-
-    pub fn collaboration_assignment_complete(
-        &self,
-        mut params: methods::CollaborationAssignmentsCompleteParams,
-        actor_thread: Option<ThreadId>,
-    ) -> Result<CollaborationAssignment> {
-        let _write = self.inner.collaboration_writes.lock().map_err(|_| anyhow!("collaboration write lock poisoned"))?;
-        let actor = actor_thread.map_or_else(|| "human".into(), |id| format!("thread:{id}"));
-        let mut fingerprint = params.clone();
-        fingerprint.result.completed_at = chrono::DateTime::<Utc>::UNIX_EPOCH;
-        if let Some(receipt) = self.collaboration_receipt(params.operation_id, &actor, "assignments.complete", &fingerprint)? {
-            if let Err(error) = self.record_assignment_result_reference(&receipt) {
-                tracing::warn!(assignment_id = %receipt.id, %error, "could not persist assignment result reference");
-            }
-            return Ok(receipt);
-        }
-        let mut assignment =
-            self.inner.store.collaboration_assignment_get(params.assignment_id)?.ok_or_else(|| anyhow!("assignment not found"))?;
-        let group =
-            self.inner.store.collaboration_group_get(assignment.group_id)?.ok_or_else(|| anyhow!("collaboration group not found"))?;
-        if let Some(thread_id) = actor_thread
-            && assignment.owner_thread_id != Some(thread_id)
-        {
-            return Err(anyhow!("only the assignment owner can report its result"));
-        }
-        let late_after_stop = assignment.status == AssignmentStatus::Cancelled && group.status == GroupStatus::Stopped;
-        if !assignment.status.is_active() && !late_after_stop {
-            return Err(anyhow!("assignment already has a terminal outcome"));
-        }
-        if !late_after_stop
-            && self
-                .inner
-                .store
-                .collaboration_assignments(group.id, false)?
-                .iter()
-                .any(|candidate| candidate.parent_assignment_id == Some(assignment.id))
-        {
-            return Err(anyhow!("finish or cancel active child assignments before completing their parent"));
-        }
-        if !late_after_stop
-            && let Some(owner_thread_id) = assignment.owner_thread_id
-            && self.inner.store.collaboration_messages(group.id)?.iter().any(|message| {
-                message.assignment_id == Some(assignment.id)
-                    && message.to_thread_id == owner_thread_id
-                    && message.from_thread_id != Some(owner_thread_id)
-                    && message.state == CollaborationDeliveryState::Queued
-            })
-        {
-            return Err(anyhow!("assignment has unread collaboration instructions; read them before reporting completion"));
-        }
-        params.result.completed_at = Utc::now();
-        if !late_after_stop {
-            assignment.status = match params.result.outcome {
-                AssignmentOutcome::Success | AssignmentOutcome::Partial => AssignmentStatus::Completed,
-                AssignmentOutcome::Failed => AssignmentStatus::Failed,
-            };
-            assignment.uncertainty = None;
-        } else {
-            assignment.uncertainty = Some("late result retained after the group stopped; assignment remains cancelled".into());
-        }
-        assignment.result = Some(params.result);
-        assignment.revision += 1;
-        assignment.updated_at = Utc::now();
-        let result_recipient = assignment
-            .created_by_thread_id
-            .filter(|thread_id| {
-                self.inner
-                    .store
-                    .collaboration_members(group.id)
-                    .is_ok_and(|members| members.into_iter().any(|member| member.active && member.thread_id == *thread_id))
-            })
-            .unwrap_or(group.coordinator_thread_id);
-        let notification = if matches!(group.status, GroupStatus::Active | GroupStatus::Paused)
-            && assignment.owner_thread_id.is_some_and(|owner| owner != result_recipient)
-        {
-            let result = assignment.result.as_ref().expect("result was just stored");
-            let notification_id = derived_operation_id(params.operation_id, 0x52);
-            let body = format!("Assignment {} finished with {:?}: {}", assignment.id, result.outcome, result.summary);
-            let notification_params = methods::CollaborationMessagesSendParams {
-                operation_id: notification_id,
-                group_id: group.id,
-                assignment_id: Some(assignment.id),
-                from_thread_id: assignment.owner_thread_id,
-                to_thread_id: result_recipient,
-                purpose: CollaborationMessagePurpose::Result,
-                reply_to: None,
-                body,
-            };
-            let existing = self.inner.store.collaboration_messages(group.id)?;
-            let pending = existing.iter().filter(|message| message.state == CollaborationDeliveryState::Queued).count();
-            let wakeups: u32 =
-                existing.iter().filter(|message| message.assignment_id == Some(assignment.id)).map(|message| message.wakeup_count).sum();
-            let should_wake = group.status == GroupStatus::Active
-                && pending < group.policy.max_pending_messages as usize
-                && wakeups < group.policy.max_wakeups_per_assignment;
-            let now = Utc::now();
-            let message = CollaborationMessage {
-                id: notification_id,
-                operation_id: notification_id,
-                group_id: group.id,
-                assignment_id: Some(assignment.id),
-                from_thread_id: assignment.owner_thread_id,
-                to_thread_id: result_recipient,
-                external_recipient: false,
-                purpose: CollaborationMessagePurpose::Result,
-                reply_to: None,
-                body: notification_params.body.clone(),
-                state: if should_wake { CollaborationDeliveryState::Queued } else { CollaborationDeliveryState::Persisted },
-                delivery_turn_id: None,
-                wakeup_count: u32::from(should_wake),
-                created_at: now,
-                updated_at: now,
-            };
-            let notification_actor = assignment.owner_thread_id.map_or_else(|| "human".into(), |id| format!("thread:{id}"));
-            Some((notification_actor, serde_json::to_string(&notification_params)?, message, should_wake))
-        } else {
-            None
-        };
-        let notification_ref = notification
-            .as_ref()
-            .map(|(actor, request, message, should_wake)| (actor.as_str(), request.as_str(), message, should_wake.then_some(message.id)));
-        let (assignment, events) = self.inner.store.collaboration_assignment_complete_operation(
-            params.operation_id,
-            &actor,
-            &fingerprint,
-            &assignment,
-            notification_ref,
-        )?;
-        self.broadcast_committed_collaboration(events);
-        if let Err(error) = self.record_assignment_result_reference(&assignment) {
-            tracing::warn!(assignment_id = %assignment.id, %error, "could not persist assignment result reference");
-        }
-        Ok(assignment)
-    }
-
-    fn record_assignment_result_reference(&self, assignment: &CollaborationAssignment) -> Result<()> {
-        let Some(result) = assignment.result.as_ref() else { return Ok(()) };
-        let Some(author_thread_id) = assignment.owner_thread_id else { return Ok(()) };
-        let mut body = format!("{:?}: {}", result.outcome, result.summary);
-        if !result.changes.is_empty() {
-            body.push_str("\nChanges: ");
-            body.push_str(&result.changes.join("; "));
-        }
-        if !result.checks.is_empty() {
-            body.push_str("\nChecks: ");
-            body.push_str(&result.checks.join("; "));
-        }
-        if !result.artifacts.is_empty() {
-            body.push_str("\nArtifacts: ");
-            body.push_str(&result.artifacts.join("; "));
-        }
-        if !result.unresolved.is_empty() {
-            body.push_str("\nUnresolved: ");
-            body.push_str(&result.unresolved.join("; "));
-        }
-        truncate_utf8(&mut body, 120 * 1024);
-        self.collaboration_context_put(
-            methods::CollaborationContextPutParams {
-                operation_id: derived_operation_id(assignment.id, 0x6b),
-                group_id: assignment.group_id,
-                entry_id: None,
-                key: format!("assignment.result.{}", assignment.id),
-                kind: ContextEntryKind::ResultReference,
-                body,
-                expected_revision: None,
-                author_thread_id: Some(author_thread_id),
-                user_authored: false,
-                source_refs: vec![format!("assignment:{}", assignment.id), format!("thread:{author_thread_id}")],
-            },
-            Some(author_thread_id),
-        )?;
-        Ok(())
-    }
-
-    fn require_collaboration_actor(&self, group: &CollaborationGroup, thread_id: ThreadId) -> Result<GroupMember> {
-        self.inner
-            .store
-            .collaboration_members(group.id)?
-            .into_iter()
-            .find(|m| m.thread_id == thread_id && m.active)
-            .ok_or_else(|| anyhow!("active caller is not a participant in this collaboration group"))
-    }
-
-    async fn require_live_native_actor(&self, thread_id: ThreadId, session_instance_id: Uuid) -> Result<TurnId> {
-        let live = self
-            .inner
-            .sessions
-            .lock()
-            .await
-            .get(&thread_id)
-            .cloned()
-            .ok_or_else(|| anyhow!("native tool caller session is no longer active"))?;
-        if live.session_instance_id != session_instance_id {
-            return Err(anyhow!("native tool credential belongs to a replaced session"));
-        }
-        live.turn
-            .lock()
-            .await
-            .as_ref()
-            .filter(|turn| !turn.completed)
-            .map(|turn| turn.id)
-            .ok_or_else(|| anyhow!("native tool caller turn has ended"))
-    }
-
-    pub fn collaboration_message_send(
-        &self,
-        params: methods::CollaborationMessagesSendParams,
-        actor_thread: Option<ThreadId>,
-    ) -> Result<CollaborationMessage> {
-        let _write = self.inner.collaboration_writes.lock().map_err(|_| anyhow!("collaboration write lock poisoned"))?;
-        let actor = actor_thread.map_or_else(|| "human".into(), |id| format!("thread:{id}"));
-        if let Some(receipt) = self.collaboration_receipt(params.operation_id, &actor, "messages.send", &params)? {
-            return Ok(receipt);
-        }
-        let group = self.inner.store.collaboration_group_get(params.group_id)?.ok_or_else(|| anyhow!("collaboration group not found"))?;
-        let reply_target = params
-            .reply_to
-            .map(|id| self.inner.store.collaboration_message_get(id)?.ok_or_else(|| anyhow!("reply target not found")))
-            .transpose()?;
-        let from_thread_id = match actor_thread {
-            Some(id) => {
-                let member =
-                    self.inner.store.collaboration_members(group.id)?.into_iter().find(|member| member.thread_id == id && member.active);
-                if let Some(member) = member {
-                    if member.role == GroupMemberRole::Observer {
-                        return Err(anyhow!("observer members are reference-only and cannot send collaboration messages"));
-                    }
-                } else if reply_target.as_ref().is_none_or(|original| !original.external_recipient || original.to_thread_id != id) {
-                    return Err(anyhow!("caller is neither an active group member nor the addressed external recipient"));
-                }
-                Some(id)
-            }
-            None => {
-                if params.from_thread_id.is_some() {
-                    return Err(anyhow!("client requests cannot impersonate an agent thread"));
-                }
-                None
-            }
-        };
-        let recipient = self
-            .inner
-            .store
-            .collaboration_members(group.id)?
-            .into_iter()
-            .find(|member| member.thread_id == params.to_thread_id && member.active);
-        let external_recipient = recipient.is_none();
-        let recipient_thread = self.inner.store.thread_get(params.to_thread_id)?.ok_or_else(|| anyhow!("recipient thread not found"))?;
-        let route_is_external = external_recipient || reply_target.as_ref().is_some_and(|message| message.external_recipient);
-        if route_is_external && recipient_thread.status == ThreadStatus::Archived && params.purpose != CollaborationMessagePurpose::Progress
-        {
-            return Err(anyhow!("recipient thread is archived; open or unarchive it before sending a message that wakes it"));
-        }
-        let recipient_group_status = if route_is_external {
-            recipient_thread
-                .collaboration_group_id
-                .or(self.inner.store.collaboration_group_for_thread(recipient_thread.id)?)
-                .map(|id| self.inner.store.collaboration_group_get(id))
-                .transpose()?
-                .flatten()
-                .map(|group| group.status)
-        } else {
-            None
-        };
-        if matches!(recipient_group_status, Some(GroupStatus::Stopped | GroupStatus::Completed)) {
-            return Err(anyhow!("recipient collaboration group is not accepting messages"));
-        }
-        if route_is_external && let Some(actor_thread_id) = actor_thread {
-            if params.purpose == CollaborationMessagePurpose::Reply
-                && let Some(original) = reply_target.as_ref().filter(|message| message.external_recipient)
-            {
-                if let Some(initiator) = original.from_thread_id {
-                    self.validate_external_delivery_authority(initiator, original.to_thread_id)?;
-                }
-            } else {
-                self.validate_external_delivery_authority(actor_thread_id, recipient_thread.id)?;
-            }
-        }
-        if recipient.is_some_and(|recipient| recipient.role == GroupMemberRole::Observer)
-            && params.purpose != CollaborationMessagePurpose::Progress
-        {
-            return Err(anyhow!("observer members are reference-only and cannot receive collaboration wakeups"));
-        }
-        if matches!(group.status, GroupStatus::Stopped | GroupStatus::Completed) {
-            return Err(anyhow!("group is not accepting messages"));
-        }
-        let assignment = params
-            .assignment_id
-            .map(|assignment_id| {
-                self.inner.store.collaboration_assignment_get(assignment_id)?.ok_or_else(|| anyhow!("message assignment not found"))
-            })
-            .transpose()?;
-        if assignment.as_ref().is_some_and(|assignment| assignment.group_id != group.id) {
-            return Err(anyhow!("message assignment belongs to another group"));
-        }
-        if params.purpose != CollaborationMessagePurpose::Progress
-            && assignment.is_none()
-            && !external_recipient
-            && params.reply_to.is_none()
-        {
-            return Err(anyhow!("messages that can wake an agent must name an assignment"));
-        }
-        let existing_messages = self.inner.store.collaboration_messages(group.id)?;
-        let pending = existing_messages.iter().filter(|m| m.state == CollaborationDeliveryState::Queued).count();
-        if external_recipient {
-            let recipient_pending = self
-                .inner
-                .store
-                .collaboration_pending_messages()?
-                .into_iter()
-                .filter(|message| message.to_thread_id == params.to_thread_id && message.state == CollaborationDeliveryState::Queued)
-                .count();
-            if recipient_pending >= group.policy.max_pending_messages as usize {
-                return Err(anyhow!("recipient has reached its pending external message limit"));
-            }
-        }
-        let terminal_notification = matches!(params.purpose, CollaborationMessagePurpose::Result | CollaborationMessagePurpose::Failure);
-        if pending >= group.policy.max_pending_messages as usize && !terminal_notification {
-            return Err(anyhow!("group has reached its pending message limit"));
-        }
-        if params.reply_to.is_some() {
-            let original = reply_target.as_ref().expect("reply target loaded above");
-            if original.group_id != group.id {
-                return Err(anyhow!("reply target belongs to another group"));
-            }
-            if original.assignment_id != params.assignment_id {
-                return Err(anyhow!("reply must preserve the original assignment correlation"));
-            }
-            if params.purpose == CollaborationMessagePurpose::Reply
-                && !matches!(original.purpose, CollaborationMessagePurpose::Question | CollaborationMessagePurpose::ChangeRequest)
-            {
-                return Err(anyhow!("reply_to must identify a directed question or change request"));
-            }
-            let correctly_addressed = original.to_thread_id == from_thread_id.unwrap_or(params.to_thread_id)
-                && original.from_thread_id == Some(params.to_thread_id);
-            if !correctly_addressed {
-                return Err(anyhow!("reply sender and recipient do not match the original message"));
-            }
-        } else if params.purpose == CollaborationMessagePurpose::Reply {
-            return Err(anyhow!("reply messages must name reply_to"));
-        }
-        let now = Utc::now();
-        let request = params.clone();
-        let assignment_is_terminal = assignment.as_ref().is_some_and(|assignment| {
-            matches!(assignment.status, AssignmentStatus::Completed | AssignmentStatus::Failed | AssignmentStatus::Cancelled)
-        });
-        let terminal_recovery = assignment.as_ref().is_some_and(|assignment| {
-            params.purpose == CollaborationMessagePurpose::Result && params.operation_id == derived_operation_id(assignment.id, 0x72)
-        });
-        let duplicate_result = assignment_is_terminal
-            && from_thread_id.is_some()
-            && params.purpose == CollaborationMessagePurpose::Result
-            && !terminal_recovery
-            && existing_messages.iter().any(|message| {
-                message.assignment_id == params.assignment_id
-                    && message.from_thread_id == from_thread_id
-                    && message.to_thread_id == params.to_thread_id
-                    && message.purpose == params.purpose
-                    && message.reply_to == params.reply_to
-                    && message.body == params.body
-                    && !matches!(message.state, CollaborationDeliveryState::Failed | CollaborationDeliveryState::Uncertain)
-            });
-        let mut should_wake = group.status == GroupStatus::Active
-            && recipient_group_status != Some(GroupStatus::Paused)
-            && params.purpose != CollaborationMessagePurpose::Progress
-            && !duplicate_result;
-        if pending >= group.policy.max_pending_messages as usize && terminal_notification {
-            should_wake = false;
-        }
-        if should_wake && let Some(assignment_id) = params.assignment_id {
-            let used: u32 = existing_messages
-                .iter()
-                .filter(|message| message.assignment_id == Some(assignment_id))
-                .map(|message| message.wakeup_count)
-                .sum();
-            if used >= group.policy.max_wakeups_per_assignment {
-                if matches!(params.purpose, CollaborationMessagePurpose::Result | CollaborationMessagePurpose::Failure) {
-                    should_wake = false;
-                } else {
-                    return Err(anyhow!("assignment has reached its automatic wakeup limit"));
-                }
-            }
-        }
-        if should_wake && route_is_external {
-            let initiator = reply_target
-                .as_ref()
-                .filter(|message| message.external_recipient)
-                .and_then(|message| message.from_thread_id)
-                .or(actor_thread);
-            let peer = actor_thread.unwrap_or(params.to_thread_id);
-            let reset_at = initiator.map(|thread_id| self.inner.store.thread_latest_human_turn_at(thread_id)).transpose()?.flatten();
-            let used: u32 = existing_messages
-                .iter()
-                .filter(|message| {
-                    message.assignment_id.is_none()
-                        && reset_at.is_none_or(|reset_at| message.created_at >= reset_at)
-                        && ((message.from_thread_id == Some(peer) && message.to_thread_id == params.to_thread_id)
-                            || (message.from_thread_id == Some(params.to_thread_id) && message.to_thread_id == peer))
-                })
-                .map(|message| message.wakeup_count)
-                .sum();
-            if used >= group.policy.max_wakeups_per_assignment {
-                if terminal_notification {
-                    should_wake = false;
-                } else {
-                    return Err(anyhow!("external thread route has reached its automatic wakeup limit"));
-                }
-            }
-        }
-        let message = CollaborationMessage {
-            id: params.operation_id,
-            operation_id: params.operation_id,
-            group_id: group.id,
-            assignment_id: params.assignment_id,
-            from_thread_id,
-            to_thread_id: params.to_thread_id,
-            external_recipient,
-            purpose: params.purpose,
-            reply_to: params.reply_to,
-            body: params.body,
-            state: if should_wake { CollaborationDeliveryState::Queued } else { CollaborationDeliveryState::Persisted },
-            delivery_turn_id: None,
-            wakeup_count: u32::from(should_wake),
-            created_at: now,
-            updated_at: now,
-        };
-        let mut answered = None;
-        if message.purpose == CollaborationMessagePurpose::Reply
-            && let Some(reply_to) = message.reply_to
-            && let Some(mut original) = self.inner.store.collaboration_message_get(reply_to)?
-            && original.purpose == CollaborationMessagePurpose::Question
-        {
-            original.state = CollaborationDeliveryState::Answered;
-            original.updated_at = Utc::now();
-            answered = Some(original);
-        }
-        let (message, events) = self.inner.store.collaboration_message_create_operation(
-            params.operation_id,
-            &actor,
-            &request,
-            &message,
-            should_wake.then_some(message.id),
-            answered.as_ref(),
-        )?;
-        self.broadcast_committed_collaboration(events);
-        Ok(message)
-    }
-
-    pub fn collaboration_messages_list(
-        &self,
-        params: methods::CollaborationMessagesListParams,
-    ) -> Result<methods::CollaborationMessagesListResult> {
-        let mut messages = self.inner.store.collaboration_messages(params.group_id)?;
-        messages.retain(|message| {
-            params.thread_id.is_none_or(|id| message.from_thread_id == Some(id) || message.to_thread_id == id)
-                && params.assignment_id.is_none_or(|id| message.assignment_id == Some(id))
-        });
-        messages.sort_by_key(|message| message.id);
-        page_by_id(&mut messages, params.cursor.as_deref(), params.limit, |message| message.id)
-            .map(|(messages, next_cursor)| methods::CollaborationMessagesListResult { messages, next_cursor })
-    }
-
-    pub fn collaboration_context_put(
-        &self,
-        params: methods::CollaborationContextPutParams,
-        actor_thread: Option<ThreadId>,
-    ) -> Result<ContextEntry> {
-        let actor = actor_thread.map_or_else(|| "human".into(), |id| format!("thread:{id}"));
-        if let Some(receipt) = self.collaboration_receipt(params.operation_id, &actor, "context.put", &params)? {
-            return Ok(receipt);
-        }
-        let request = params.clone();
-        let group = self.inner.store.collaboration_group_get(params.group_id)?.ok_or_else(|| anyhow!("collaboration group not found"))?;
-        if params.key.trim().is_empty() || params.body.len() > 128 * 1024 {
-            return Err(anyhow!("context key is required and body must stay under 128 KiB"));
-        }
-        let author_thread_id = match actor_thread {
-            Some(id) => {
-                let member = self.require_collaboration_actor(&group, id)?;
-                if member.role == GroupMemberRole::Observer {
-                    return Err(anyhow!("observer members are reference-only and cannot author shared context"));
-                }
-                if matches!(params.kind, ContextEntryKind::Brief | ContextEntryKind::Instruction) {
-                    return Err(anyhow!("agents cannot author group briefs or instructions"));
-                }
-                Some(id)
-            }
-            None => {
-                if params.author_thread_id.is_some() {
-                    return Err(anyhow!("client requests cannot impersonate an agent thread"));
-                }
-                None
-            }
-        };
-        let knowledge_group_id = self.project_knowledge_group_id(&group)?;
-        let key = params.key.trim().to_owned();
-        let previous = self.inner.store.collaboration_context_by_key(knowledge_group_id, &key)?;
-        let correcting_setup = key == "project.setup" && previous.is_some() && actor_thread.is_none();
-        if key == "project.setup" && !correcting_setup {
-            if self.inner.store.project_coordinator_for_group(group.id)?.is_none()
-                || actor_thread != Some(group.coordinator_thread_id)
-                || params.kind != ContextEntryKind::Research
-                || params.body.trim().is_empty()
-            {
-                return Err(anyhow!("Only the current coordinator can complete setup by saving a reviewed research overview."));
-            }
-            let researched = self.inner.store.collaboration_assignments(group.id, true)?.iter().any(|assignment| {
-                assignment.kind == AssignmentKind::Research
-                    && assignment.owner_thread_id.is_some_and(|id| id != group.coordinator_thread_id)
-                    && assignment.status == AssignmentStatus::Completed
-                    && assignment.result.as_ref().is_some_and(|result| result.outcome == AssignmentOutcome::Success)
-                    && params.source_refs.contains(&assignment.id.to_string())
-            });
-            if !researched {
-                return Err(anyhow!(
-                    "Review a successful research assignment first, then include its assignment ID in source_refs when saving project.setup."
-                ));
-            }
-        }
-        if let Some(previous) = &previous {
-            if params.entry_id.is_some_and(|id| id != previous.id) {
-                return Err(anyhow!("context key belongs to another entry id"));
-            }
-            if params.expected_revision != Some(previous.revision) {
-                return Err(anyhow!("context changed; reload its history and retry with the current revision"));
-            }
-            if actor_thread.is_some() && previous.user_authored {
-                return Err(anyhow!("agents cannot overwrite user-authored context"));
-            }
-        } else if params.expected_revision.is_some() {
-            return Err(anyhow!("new context entries must omit expected_revision"));
-        }
-        let now = Utc::now();
-        let entry = ContextEntry {
-            id: previous.as_ref().map_or(params.entry_id.unwrap_or(params.operation_id), |entry| entry.id),
-            group_id: knowledge_group_id,
-            key,
-            kind: params.kind,
-            body: params.body,
-            author_thread_id,
-            user_authored: actor_thread.is_none(),
-            revision: previous.as_ref().map_or(1, |entry| entry.revision + 1),
-            source_refs: if correcting_setup { previous.as_ref().expect("existing setup").source_refs.clone() } else { params.source_refs },
-            created_at: previous.as_ref().map_or(now, |entry| entry.created_at),
-            updated_at: now,
-        };
-        let entry =
-            self.inner.store.collaboration_context_operation(params.operation_id, &actor, &request, &entry, params.expected_revision)?;
-        self.emit_project_context(group.project_id, EventPayload::CollaborationContextUpdated { entry: entry.clone() })?;
-        Ok(entry)
-    }
-
-    pub fn collaboration_context_list(
-        &self,
-        params: methods::CollaborationContextListParams,
-    ) -> Result<methods::CollaborationContextListResult> {
-        let group = self.inner.store.collaboration_group_get(params.group_id)?.ok_or_else(|| anyhow!("collaboration group not found"))?;
-        let knowledge_group_id = self.project_knowledge_group_id(&group)?;
-        let mut entries = self.inner.store.collaboration_context_latest(knowledge_group_id)?;
-        if knowledge_group_id != group.id {
-            let mut local = self.inner.store.collaboration_context_latest(group.id)?;
-            local.retain(|entry| !entries.iter().any(|project_entry| project_entry.key == entry.key));
-            entries.extend(local);
-        }
-        entries.retain(|entry| {
-            (params.keys.is_empty() || params.keys.contains(&entry.key)) && (params.kinds.is_empty() || params.kinds.contains(&entry.kind))
-        });
-        entries.sort_by_key(|entry| entry.id);
-        page_by_id(&mut entries, params.cursor.as_deref(), params.limit, |entry| entry.id)
-            .map(|(entries, next_cursor)| methods::CollaborationContextListResult { entries, next_cursor })
-    }
-
-    pub fn collaboration_context_history(&self, params: methods::CollaborationContextHistoryParams) -> Result<ContextEntryHistory> {
-        let entry_id = params.entry_id;
-        let mut revisions = self.inner.store.collaboration_context_history(entry_id)?;
-        if revisions.is_empty() {
-            return Err(anyhow!("context entry not found"));
-        }
-        revisions.retain(|entry| params.before_revision.is_none_or(|before| entry.revision < before));
-        revisions.sort_by_key(|entry| std::cmp::Reverse(entry.revision));
-        let limit = params.limit.clamp(1, 200) as usize;
-        let has_more = revisions.len() > limit;
-        revisions.truncate(limit);
-        let next_before_revision = has_more.then(|| revisions.last().map(|entry| entry.revision)).flatten();
-        Ok(ContextEntryHistory { entry_id, revisions, next_before_revision })
-    }
-
-    fn collaboration_changes_since(
-        &self,
-        group_id: GroupId,
-        after: EventSeq,
-        assignment_ids: &[AssignmentId],
-    ) -> Result<methods::CollaborationWaitResult> {
-        let events = self.inner.store.collaboration_events_after(group_id, after, 200, 192 * 1024)?;
-        let mut cursor = after;
-        let mut group = None;
-        let mut members = std::collections::BTreeMap::new();
-        let mut assignments = std::collections::BTreeMap::new();
-        let mut messages = std::collections::BTreeMap::new();
-        let mut context_entries = std::collections::BTreeMap::new();
-        for event in events {
-            cursor = event.seq;
-            match event.payload {
-                EventPayload::CollaborationGroupUpdated { group: changed } => {
-                    let current = self.inner.store.collaboration_group_get(changed.id)?;
-                    if assignment_ids.is_empty() || current.as_ref().is_some_and(|group| group.status != GroupStatus::Active) {
-                        group = current;
-                    }
-                }
-                EventPayload::CollaborationMemberUpdated { member } if assignment_ids.is_empty() => {
-                    if let Some(current) =
-                        self.inner.store.collaboration_members(group_id)?.into_iter().find(|current| current.thread_id == member.thread_id)
-                    {
-                        members.insert(member.thread_id, current);
-                    }
-                }
-                EventPayload::CollaborationAssignmentUpdated { assignment }
-                    if assignment_ids.is_empty() || assignment_ids.contains(&assignment.id) =>
-                {
-                    if let Some(current) = self.inner.store.collaboration_assignment_get(assignment.id)? {
-                        assignments.insert(assignment.id, current);
-                    }
-                }
-                EventPayload::CollaborationMessageUpdated { message }
-                    if assignment_ids.is_empty() || message.assignment_id.is_some_and(|id| assignment_ids.contains(&id)) =>
-                {
-                    if let Some(current) = self.inner.store.collaboration_message_get(message.id)? {
-                        messages.insert(message.id, current);
-                    }
-                }
-                EventPayload::CollaborationContextUpdated { entry } if assignment_ids.is_empty() => {
-                    if let Some(current) = self.inner.store.collaboration_context_by_key(entry.group_id, &entry.key)? {
-                        context_entries.insert(entry.id, current);
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(methods::CollaborationWaitResult {
-            cursor: format_change_cursor(group_id, cursor),
-            timed_out: false,
-            group,
-            members: members.into_values().collect(),
-            assignments: assignments.into_values().collect(),
-            messages: messages.into_values().collect(),
-            context_entries: context_entries.into_values().collect(),
-        })
-    }
-
-    pub async fn collaboration_wait(&self, params: methods::CollaborationWaitParams) -> Result<methods::CollaborationWaitResult> {
-        self.inner.store.collaboration_group_get(params.group_id)?.ok_or_else(|| anyhow!("collaboration group not found"))?;
-        for assignment_id in &params.assignment_ids {
-            if self
-                .inner
-                .store
-                .collaboration_assignment_get(*assignment_id)?
-                .is_none_or(|assignment| assignment.group_id != params.group_id)
-            {
-                return Err(anyhow!("wait assignment belongs to another group or no longer exists"));
-            }
-        }
-        let mut after = params.cursor.as_deref().map(|cursor| parse_change_cursor(params.group_id, cursor)).transpose()?.unwrap_or(0);
-        if after > self.inner.store.events_head_seq()? {
-            return Err(anyhow!("collaboration cursor is ahead of this daemon's event history"));
-        }
-        let deadline = tokio::time::Instant::now() + Duration::from_millis(u64::from(params.timeout_ms.min(60_000)));
-        loop {
-            // Register before querying. A result arriving between the read and
-            // await must wake every waiter without consuming scheduler signals.
-            let notified = self.inner.collaboration_wakeup.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            let mut result = self.collaboration_changes_since(params.group_id, after, &params.assignment_ids)?;
-            if result.group.is_some()
-                || !result.members.is_empty()
-                || !result.assignments.is_empty()
-                || !result.messages.is_empty()
-                || !result.context_entries.is_empty()
-            {
-                return Ok(result);
-            }
-            let next = parse_change_cursor(params.group_id, &result.cursor)?;
-            if tokio::time::Instant::now() >= deadline {
-                result.timed_out = true;
-                return Ok(result);
-            }
-            if next > after {
-                after = next;
-                continue;
-            }
-            // On timeout, query once more before returning so a boundary race
-            // does not turn an already-persisted result into a stale timeout.
-            let _ = tokio::time::timeout_at(deadline, notified).await;
-        }
     }
 
     pub fn execute_native_app_tool_call<'a>(
@@ -2140,7 +192,7 @@ impl Orchestrator {
         thread_id: ThreadId,
         session_instance_id: Uuid,
         name: &'a str,
-        mut arguments: serde_json::Value,
+        arguments: serde_json::Value,
     ) -> futures::future::BoxFuture<'a, Result<serde_json::Value>> {
         Box::pin(async move {
             let live = self
@@ -2159,7 +211,9 @@ impl Orchestrator {
             if (!restrictions.allowed_tools.is_empty() && !restrictions.allowed_tools.iter().any(|allowed| allowed == name))
                 || restrictions.denied_tools.iter().any(|denied| denied == name)
             {
-                return Err(anyhow!("This tool is unavailable to the project coordinator. Delegate the task to a worker."));
+                return Err(anyhow!(
+                    "This tool is unavailable to a project Coordinator. Delegate the task to a child with kybern_agent_delegate."
+                ));
             }
             let turn_id = live
                 .turn
@@ -2223,6 +277,9 @@ impl Orchestrator {
                 };
                 return self.inner.computer.execute(ctx, name, arguments).await;
             }
+            if crate::secrets::is_tool(name) {
+                return self.execute_request_secret(&thread, turn_id, &live, arguments).await;
+            }
             if agent_items::is_tool(name) {
                 return self.execute_notes_tasks_tool(&thread, turn_id, &live, name, arguments).await;
             }
@@ -2231,201 +288,6 @@ impl Orchestrator {
             }
             if messaging::is_tool(name) {
                 return self.execute_messaging_tool(&thread, turn_id, &live, name, arguments).await;
-            }
-            if name.starts_with("kybern_collaboration_") && !self.collaboration_tools_enabled(&thread)? {
-                return Err(anyhow!(
-                    "The kybern_collaboration_* tools are only for project coordinators and their workers. To hand work to another agent use kybern_agent_delegate; to message another thread use kybern_thread_send."
-                ));
-            }
-            if name.starts_with("kybern_collaboration_") {
-                let object = arguments.as_object_mut().ok_or_else(|| anyhow!("tool arguments must be a JSON object"))?;
-                let existing_group = self.inner.store.collaboration_group_for_thread(thread_id)?;
-                if existing_group.is_none() && name == "kybern_collaboration_context_read" {
-                    let Some((_, group_id)) = self.inner.store.project_coordinator(thread.project_id)? else {
-                        object.insert("group_id".into(), serde_json::to_value(Uuid::nil())?);
-                        let _params: methods::CollaborationContextListParams = crate::app_tools::parse(arguments)?;
-                        return Ok(serde_json::to_value(methods::CollaborationContextListResult {
-                            entries: Vec::new(),
-                            next_cursor: None,
-                        })?);
-                    };
-                    object.insert("group_id".into(), serde_json::to_value(group_id)?);
-                    let params: methods::CollaborationContextListParams = crate::app_tools::parse(arguments)?;
-                    return Ok(serde_json::to_value(self.collaboration_context_list(params)?)?);
-                }
-                if existing_group.is_none() && name == "kybern_collaboration_read" {
-                    let target = object.remove("thread_id");
-                    let _transcript_limit = object.remove("transcript_limit");
-                    if target.is_some() || !object.is_empty() {
-                        return Err(anyhow!("there is no collaboration group to read; use kybern_thread_read for an existing thread"));
-                    }
-                    return Ok(serde_json::json!({
-                        "group": null,
-                        "members": [],
-                        "assignments": [],
-                        "pending_messages": [],
-                        "caller": {"thread_id":thread_id,"group_id":null,"assignment":null}
-                    }));
-                }
-                let group_id = if name == "kybern_collaboration_send" {
-                    match object.get("reply_to").filter(|value| !value.is_null()) {
-                        Some(value) => {
-                            let reply_to: CollaborationMessageId = serde_json::from_value(value.clone())?;
-                            self.inner.store.collaboration_message_get(reply_to)?.ok_or_else(|| anyhow!("reply target not found"))?.group_id
-                        }
-                        None => self.ensure_ordinary_collaboration_group(thread_id).await?,
-                    }
-                } else if matches!(name, "kybern_collaboration_spawn" | "kybern_collaboration_context_put") {
-                    self.ensure_ordinary_collaboration_group(thread_id).await?
-                } else {
-                    existing_group.ok_or_else(|| anyhow!("caller is not in an active collaboration group"))?
-                };
-                let value = match name {
-                    "kybern_collaboration_spawn" => {
-                        object.insert("group_id".into(), serde_json::to_value(group_id)?);
-                        serde_json::to_value(
-                            self.collaboration_assignment_create(
-                                crate::app_tools::parse(arguments)?,
-                                Some(thread_id),
-                                Some(session_instance_id),
-                            )
-                            .await?,
-                        )?
-                    }
-                    "kybern_collaboration_send" => {
-                        object.insert("group_id".into(), serde_json::to_value(group_id)?);
-                        object.insert("from_thread_id".into(), serde_json::to_value(thread_id)?);
-                        let guard = live.turn.lock().await;
-                        if guard.as_ref().is_none_or(|turn| turn.id != turn_id || turn.completed) {
-                            return Err(anyhow!("native tool caller turn ended before mutation reservation"));
-                        }
-                        let value =
-                            serde_json::to_value(self.collaboration_message_send(crate::app_tools::parse(arguments)?, Some(thread_id))?)?;
-                        drop(guard);
-                        value
-                    }
-                    "kybern_collaboration_read" => {
-                        let target: Option<ThreadId> = object.remove("thread_id").map(serde_json::from_value).transpose()?;
-                        let transcript_limit: usize =
-                            object.remove("transcript_limit").map(serde_json::from_value).transpose()?.unwrap_or(50usize).clamp(1, 100);
-                        if !object.is_empty() {
-                            return Err(anyhow!("unknown collaboration read fields"));
-                        }
-                        let mut detail = self.collaboration_group_detail(group_id)?;
-                        // The UI projection is group-wide, but an agent inbox must
-                        // filter by recipient before applying its bound. Otherwise
-                        // old updates to peers can crowd out this caller's new work.
-                        detail.pending_messages = self.inner.store.collaboration_pending_messages_for_thread(group_id, thread_id, 100)?;
-                        let mut value = serde_json::to_value(&detail)?;
-                        let caller_assignment = self.inner.store.collaboration_active_assignment_for_thread(thread_id)?;
-                        value.as_object_mut().expect("detail serializes as object").insert(
-                            "caller".into(),
-                            serde_json::json!({"thread_id":thread_id,"group_id":group_id,"assignment":caller_assignment}),
-                        );
-                        if let Some(target) = target {
-                            let group = self.inner.store.collaboration_group_get(group_id)?.ok_or_else(|| anyhow!("group not found"))?;
-                            self.require_collaboration_actor(&group, target)?;
-                            let thread = self.inner.store.thread_get(target)?.ok_or_else(|| anyhow!("participant thread not found"))?;
-                            let events = self.inner.store.events_for_thread_recent(target, 1000)?;
-                            let mut transcript = kybern_store::project_transcript(&events);
-                            if transcript.len() > transcript_limit {
-                                transcript.drain(..transcript.len() - transcript_limit);
-                            }
-                            let assignments: Vec<_> = self
-                                .inner
-                                .store
-                                .collaboration_assignments(group_id, true)?
-                                .into_iter()
-                                .filter(|assignment| assignment.owner_thread_id == Some(target))
-                                .collect();
-                            value.as_object_mut().expect("detail serializes as object").insert("participant".into(), serde_json::json!({"thread":thread,"transcript":transcript,"assignments":assignments,"diff_reference":{"thread_id":target,"worktree":thread.worktree}}));
-                        }
-                        // A successful agent read delivers exactly the messages in this
-                        // bounded snapshot. UI reads remain read-only; other recipients and
-                        // messages arriving after the snapshot must keep their wakeups.
-                        let guard = live.turn.lock().await;
-                        if guard.as_ref().is_none_or(|turn| turn.id != turn_id || turn.completed) {
-                            return Err(anyhow!("native tool caller turn ended before read delivery acknowledgement"));
-                        }
-                        self.observe_collaboration_messages(thread_id, turn_id, &mut detail.pending_messages)?;
-                        self.observe_collaboration_assignment_results(thread_id, turn_id, &detail.assignments)?;
-                        value["pending_messages"] = serde_json::to_value(detail.pending_messages)?;
-                        drop(guard);
-                        value
-                    }
-                    "kybern_collaboration_wait" => {
-                        object.insert("group_id".into(), serde_json::to_value(group_id)?);
-                        cap_native_collaboration_wait(object);
-                        let mut result = self.collaboration_wait(crate::app_tools::parse(arguments)?).await?;
-                        let guard = live.turn.lock().await;
-                        if guard.as_ref().is_none_or(|turn| turn.id != turn_id || turn.completed) {
-                            return Err(anyhow!("native tool caller turn ended before wait delivery acknowledgement"));
-                        }
-                        self.observe_collaboration_messages(thread_id, turn_id, &mut result.messages)?;
-                        self.observe_collaboration_assignment_results(thread_id, turn_id, &result.assignments)?;
-                        drop(guard);
-                        serde_json::to_value(result)?
-                    }
-                    "kybern_collaboration_report" => {
-                        let operation_id: OperationId = take_required(object, "operation_id")?;
-                        let assignment_id: AssignmentId = take_required(object, "assignment_id")?;
-                        let outcome: AssignmentOutcome = take_required(object, "outcome")?;
-                        let summary: String = take_required(object, "summary")?;
-                        let changes = take_default(object, "changes")?;
-                        let checks = take_default(object, "checks")?;
-                        let artifacts = take_default(object, "artifacts")?;
-                        let unresolved = take_default(object, "unresolved")?;
-                        if !object.is_empty() {
-                            return Err(anyhow!("unknown report fields"));
-                        }
-                        let params = methods::CollaborationAssignmentsCompleteParams {
-                            operation_id,
-                            assignment_id,
-                            result: AssignmentResult { outcome, summary, changes, checks, artifacts, unresolved, completed_at: Utc::now() },
-                        };
-                        let guard = live.turn.lock().await;
-                        if guard.as_ref().is_none_or(|turn| turn.id != turn_id || turn.completed) {
-                            return Err(anyhow!("native tool caller turn ended before mutation reservation"));
-                        }
-                        let value = serde_json::to_value(self.collaboration_assignment_complete(params, Some(thread_id))?)?;
-                        drop(guard);
-                        value
-                    }
-                    "kybern_collaboration_cancel" => serde_json::to_value(
-                        self.collaboration_assignment_cancel(
-                            crate::app_tools::parse(arguments)?,
-                            Some(thread_id),
-                            Some(session_instance_id),
-                        )
-                        .await?,
-                    )?,
-                    "kybern_collaboration_context_read" => {
-                        object.insert("group_id".into(), serde_json::to_value(group_id)?);
-                        serde_json::to_value(self.collaboration_context_list(crate::app_tools::parse(arguments)?)?)?
-                    }
-                    "kybern_collaboration_context_put" => {
-                        object.insert("group_id".into(), serde_json::to_value(group_id)?);
-                        object.insert("author_thread_id".into(), serde_json::to_value(thread_id)?);
-                        object.insert("user_authored".into(), serde_json::Value::Bool(false));
-                        let guard = live.turn.lock().await;
-                        if guard.as_ref().is_none_or(|turn| turn.id != turn_id || turn.completed) {
-                            return Err(anyhow!("native tool caller turn ended before mutation reservation"));
-                        }
-                        let value =
-                            serde_json::to_value(self.collaboration_context_put(crate::app_tools::parse(arguments)?, Some(thread_id))?)?;
-                        drop(guard);
-                        value
-                    }
-                    _ => return Err(anyhow!("unknown Kybern collaboration tool: {name}")),
-                };
-                let current = self.inner.sessions.lock().await.get(&thread_id).cloned();
-                if current.as_ref().is_none_or(|current| current.session_instance_id != session_instance_id) {
-                    return Err(anyhow!("native tool caller session ended before its result was delivered"));
-                }
-                if current.unwrap().turn.lock().await.as_ref().is_none_or(|turn| turn.id != turn_id || turn.completed) {
-                    return Err(anyhow!("native tool caller turn ended before its result was delivered"));
-                }
-                return Ok(value);
             }
             let mut value = self.inner.app_tools.execute(thread_id, name, arguments).await?;
             if name == "kybern_thread_context" {
@@ -2516,193 +378,6 @@ impl Orchestrator {
             Ok(value)
         })
     }
-
-    /// Acknowledge the bounded inbox returned to an active agent tool call.
-    fn observe_collaboration_messages(&self, thread_id: ThreadId, turn_id: TurnId, messages: &mut [CollaborationMessage]) -> Result<()> {
-        for message in messages.iter_mut().filter(|message| {
-            message.to_thread_id == thread_id
-                && matches!(message.state, CollaborationDeliveryState::Persisted | CollaborationDeliveryState::Queued)
-        }) {
-            message.state = CollaborationDeliveryState::Submitted;
-            message.delivery_turn_id = Some(turn_id);
-            message.updated_at = Utc::now();
-            let events = self.inner.store.collaboration_message_observed(message, turn_id)?;
-            if events.is_empty()
-                && let Some(current) = self.inner.store.collaboration_message_get(message.id)?
-            {
-                *message = current;
-            }
-            self.broadcast_committed_collaboration(events);
-        }
-        Ok(())
-    }
-
-    /// A structured terminal assignment returned by read/wait carries the same
-    /// information as its queued result notification. Consume that exact class
-    /// of wakeup even when bounded message pagination omitted it; questions,
-    /// change requests, replies, failures, and unrelated results remain queued.
-    fn observe_collaboration_assignment_results(
-        &self,
-        thread_id: ThreadId,
-        turn_id: TurnId,
-        assignments: &[CollaborationAssignment],
-    ) -> Result<()> {
-        let surfaced = assignments
-            .iter()
-            .filter_map(|assignment| {
-                assignment.result.as_ref().map(|result| {
-                    (
-                        assignment.id,
-                        (
-                            assignment.owner_thread_id,
-                            format!("Assignment {} finished with {:?}: {}", assignment.id, result.outcome, result.summary),
-                        ),
-                    )
-                })
-            })
-            .collect::<HashMap<_, _>>();
-        if surfaced.is_empty() {
-            return Ok(());
-        }
-        let Some(group_id) = assignments.first().map(|assignment| assignment.group_id) else { return Ok(()) };
-        let mut messages = self.inner.store.collaboration_queued_results(group_id, thread_id)?;
-        messages.retain(|message| {
-            message
-                .assignment_id
-                .and_then(|id| surfaced.get(&id))
-                .is_some_and(|(owner, body)| message.from_thread_id == *owner && message.reply_to.is_none() && message.body == *body)
-        });
-        self.observe_collaboration_messages(thread_id, turn_id, &mut messages)
-    }
-
-    /// Called only after the native harness accepted a persisted message.
-    fn collaboration_delivery_submitted(&self, thread_id: ThreadId, turn_id: TurnId, message_id: MessageId) -> Result<()> {
-        if let Some(mut assignment) = self.inner.store.collaboration_assignment_for_dispatch(message_id)?
-            && assignment.owner_thread_id == Some(thread_id)
-            && assignment.status == AssignmentStatus::Waiting
-        {
-            assignment.status = AssignmentStatus::Working;
-            assignment.uncertainty = None;
-            assignment.revision += 1;
-            assignment.updated_at = Utc::now();
-            self.inner.store.collaboration_assignment_put(&assignment)?;
-            self.emit_collaboration(assignment.group_id, EventPayload::CollaborationAssignmentUpdated { assignment })?;
-        }
-        if let Some(mut message) = self.inner.store.collaboration_message_for_delivery(message_id)?
-            && message.to_thread_id == thread_id
-            && message.state == CollaborationDeliveryState::Queued
-        {
-            message.state = CollaborationDeliveryState::Submitted;
-            message.delivery_turn_id = Some(turn_id);
-            message.updated_at = Utc::now();
-            self.inner.store.collaboration_message_put(&message, Some(message_id))?;
-            self.emit_collaboration(message.group_id, EventPayload::CollaborationMessageUpdated { message })?;
-        }
-        Ok(())
-    }
-
-    pub async fn drain_collaboration_assignments(&self) -> Result<bool> {
-        let _collaboration_command = self.inner.collaboration_commands.lock().await;
-        let mut waiting = false;
-        for group in self.inner.store.collaboration_groups_list(None, false)? {
-            if group.status != GroupStatus::Active {
-                continue;
-            }
-            let mut assignments = self.inner.store.collaboration_assignments(group.id, false)?;
-            let active = assignments
-                .iter()
-                .filter(|a| {
-                    a.owner_thread_id.is_some()
-                        && matches!(a.status, AssignmentStatus::Working | AssignmentStatus::Waiting)
-                        && !(a.owner_thread_id == Some(group.coordinator_thread_id) && a.kind == AssignmentKind::Coordination)
-                })
-                .count();
-            let mut slots = group.policy.max_active_workers.saturating_sub(active as u32);
-            for assignment in assignments.iter_mut().filter(|a| a.status == AssignmentStatus::Pending) {
-                if let Some(owner) = assignment.owner_thread_id
-                    && let Some(thread) = self.inner.store.thread_get(owner)?
-                    && (matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)
-                        || (thread.status != ThreadStatus::Archived
-                            && self.inner.store.runtime_tasks_for_thread(owner)?.iter().any(|task| task.status.is_active())))
-                {
-                    // Reporting an assignment can finish before the native turn
-                    // or its background tasks settle. Do not consume a worker
-                    // slot or publish repeated state changes while it is busy.
-                    waiting = true;
-                    continue;
-                }
-                if slots == 0 {
-                    waiting = true;
-                    break;
-                }
-                let dispatched = match self.start_collaboration_assignment(&group, assignment).await {
-                    Ok(dispatched) => dispatched,
-                    Err(error) => {
-                        assignment.status = AssignmentStatus::AttentionNeeded;
-                        assignment.uncertainty = Some(format!("could not start assignment: {error}"));
-                        assignment.revision += 1;
-                        assignment.updated_at = Utc::now();
-                        self.inner.store.collaboration_assignment_put(assignment)?;
-                        false
-                    }
-                };
-                self.emit_collaboration(group.id, EventPayload::CollaborationAssignmentUpdated { assignment: assignment.clone() })?;
-                if dispatched {
-                    slots -= 1;
-                } else if assignment.status == AssignmentStatus::Pending {
-                    waiting = true;
-                }
-            }
-        }
-        Ok(waiting)
-    }
-}
-
-fn page_by_id<T>(
-    items: &mut Vec<T>,
-    cursor: Option<&str>,
-    requested_limit: u32,
-    id: impl Fn(&T) -> Uuid,
-) -> Result<(Vec<T>, Option<String>)> {
-    let cursor = cursor.map(str::parse::<Uuid>).transpose().map_err(|_| anyhow!("invalid collaboration cursor"))?;
-    if let Some(cursor) = cursor {
-        items.retain(|item| id(item) > cursor);
-    }
-    let limit = requested_limit.clamp(1, 200) as usize;
-    let has_more = items.len() > limit;
-    items.truncate(limit);
-    let next = has_more.then(|| items.last().map(|item| id(item).to_string())).flatten();
-    Ok((std::mem::take(items), next))
-}
-
-fn parse_change_cursor(group_id: GroupId, cursor: &str) -> Result<EventSeq> {
-    let (group, sequence) = cursor.split_once(':').ok_or_else(|| anyhow!("invalid collaboration wait cursor"))?;
-    let parsed_group: GroupId = group.parse().map_err(|_| anyhow!("invalid collaboration wait cursor"))?;
-    let sequence: EventSeq = sequence.parse().map_err(|_| anyhow!("invalid collaboration wait cursor"))?;
-    if parsed_group != group_id || sequence < 0 {
-        return Err(anyhow!("collaboration cursor belongs to another group or is invalid"));
-    }
-    Ok(sequence)
-}
-
-fn format_change_cursor(group_id: GroupId, sequence: EventSeq) -> String {
-    format!("{group_id}:{sequence}")
-}
-
-const NATIVE_COLLABORATION_WAIT_MAX_MS: u64 = 30_000;
-
-fn cap_native_collaboration_wait(object: &mut serde_json::Map<String, serde_json::Value>) {
-    if object.get("timeout_ms").and_then(serde_json::Value::as_u64).is_some_and(|timeout| timeout > NATIVE_COLLABORATION_WAIT_MAX_MS) {
-        object.insert("timeout_ms".into(), NATIVE_COLLABORATION_WAIT_MAX_MS.into());
-    }
-}
-
-fn take_required<T: serde::de::DeserializeOwned>(object: &mut serde_json::Map<String, serde_json::Value>, key: &str) -> Result<T> {
-    serde_json::from_value(object.remove(key).ok_or_else(|| anyhow!("{key} is required"))?).map_err(Into::into)
-}
-
-fn take_default<T: serde::de::DeserializeOwned + Default>(object: &mut serde_json::Map<String, serde_json::Value>, key: &str) -> Result<T> {
-    object.remove(key).map(serde_json::from_value).transpose().map(|value| value.unwrap_or_default()).map_err(Into::into)
 }
 
 fn derived_operation_id(base: Uuid, discriminator: u8) -> Uuid {
@@ -2730,30 +405,14 @@ fn project_path_is_git(project_path: &str) -> bool {
     std::path::Path::new(project_path).join(".git").exists()
 }
 
-async fn resolve_git_revision(project_path: &str, revision: &str) -> Result<String> {
-    let output = tokio::process::Command::new("git")
-        .args(["-C", project_path, "rev-parse", "--verify", &format!("{revision}^{{commit}}")])
-        .output()
-        .await?;
-    if !output.status.success() {
-        return Err(anyhow!("base_revision `{revision}` does not name a commit in the group project"));
-    }
-    let oid = String::from_utf8(output.stdout)?.trim().to_owned();
-    if oid.len() < 40 || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(anyhow!("git returned an invalid commit id for base_revision"));
-    }
-    Ok(oid)
-}
-
 type RetainedSessions = HashMap<(ThreadId, String), (ProviderInstance, Arc<LiveSession>)>;
 
 struct Inner {
     commands: std::sync::Mutex<()>,
     session_admission: Mutex<HashMap<ThreadId, Arc<Mutex<()>>>>,
     workspace_ops: Mutex<()>,
-    collaboration_writes: std::sync::Mutex<()>,
     question_answers: Mutex<()>,
-    collaboration_commands: Mutex<()>,
+    lead_commands: Mutex<()>,
     thread_updates: std::sync::Mutex<()>,
     store: Store,
     drivers: DriverRegistry,
@@ -2773,7 +432,6 @@ struct Inner {
     /// Woken whenever a queued follow-up may have become dispatchable, so the
     /// queue worker sleeps instead of polling the store.
     queue_wakeup: Notify,
-    collaboration_wakeup: Notify,
     /// Note changes, forwarded to clients as `notes.changed`.
     notes_changed: tokio::sync::broadcast::Sender<methods::NotesChangedNotification>,
     /// Task changes, forwarded to clients as `tasks.items.changed`.
@@ -2847,6 +505,8 @@ struct LiveSession {
     /// provider session from monopolizing daemon read work.
     app_tool_requests: Mutex<HashSet<String>>,
     app_tool_permits: Arc<Semaphore>,
+    /// Project brief revision this session's instructions carry; only a Coordinator tracks it.
+    brief_revision: Mutex<Option<i64>>,
 }
 
 struct DaemonApproval {
@@ -3042,9 +702,8 @@ impl Orchestrator {
                 commands: std::sync::Mutex::new(()),
                 session_admission: Mutex::new(HashMap::new()),
                 workspace_ops: Mutex::new(()),
-                collaboration_writes: std::sync::Mutex::new(()),
                 question_answers: Mutex::new(()),
-                collaboration_commands: Mutex::new(()),
+                lead_commands: Mutex::new(()),
                 thread_updates: std::sync::Mutex::new(()),
                 store,
                 drivers,
@@ -3061,7 +720,6 @@ impl Orchestrator {
                 harness_gates: ProviderKind::ALL.into_iter().map(|kind| (kind, Arc::new(tokio::sync::RwLock::new(())))).collect(),
                 pending_rewinds: Mutex::new(HashMap::new()),
                 queue_wakeup: Notify::new(),
-                collaboration_wakeup: Notify::new(),
                 notes_changed: tokio::sync::broadcast::channel(1024).0,
                 tasks_changed: tokio::sync::broadcast::channel(1024).0,
                 projects_changed: tokio::sync::broadcast::channel(64).0,
@@ -3386,79 +1044,6 @@ impl Orchestrator {
         }
         self.delegation_recover_after_restart()?;
         self.messaging_recover_after_restart().await?;
-        for group in self.inner.store.collaboration_groups_list(None, true)? {
-            for mut assignment in self.inner.store.collaboration_assignments(group.id, false)? {
-                if matches!(assignment.status, AssignmentStatus::Waiting | AssignmentStatus::Working)
-                    && assignment.dispatch_message_id.is_some()
-                {
-                    assignment.status = AssignmentStatus::AttentionNeeded;
-                    assignment.uncertainty = Some(
-                        "daemon restarted while assignment execution or delivery was in flight; inspect the owner thread before retrying"
-                            .into(),
-                    );
-                    assignment.revision += 1;
-                    assignment.updated_at = Utc::now();
-                    self.inner.store.collaboration_assignment_put(&assignment)?;
-                    self.emit_collaboration(group.id, EventPayload::CollaborationAssignmentUpdated { assignment })?;
-                }
-            }
-            for mut message in self.inner.store.collaboration_messages(group.id)? {
-                if message.state == CollaborationDeliveryState::Queued
-                    && message.external_recipient
-                    && self.inner.store.thread_get(message.to_thread_id)?.is_some_and(|thread| thread.status == ThreadStatus::Failed)
-                {
-                    message.state = CollaborationDeliveryState::Uncertain;
-                    message.updated_at = Utc::now();
-                    self.inner.store.collaboration_message_put(&message, Some(message.id))?;
-                    self.emit(message.to_thread_id, None, EventPayload::MessageRemoved { message_id: message.id })?;
-                    self.emit_collaboration(group.id, EventPayload::CollaborationMessageUpdated { message })?;
-                    continue;
-                }
-                if message.state == CollaborationDeliveryState::Queued && !self.inner.store.queue_is_pending(message.id)? {
-                    message.state = CollaborationDeliveryState::Uncertain;
-                    message.updated_at = Utc::now();
-                    self.inner.store.collaboration_message_put(&message, Some(message.id))?;
-                    self.emit_collaboration(group.id, EventPayload::CollaborationMessageUpdated { message })?;
-                }
-            }
-            if matches!(group.status, GroupStatus::Active | GroupStatus::Paused) {
-                let messages = self.inner.store.collaboration_messages(group.id)?;
-                for assignment in self.inner.store.collaboration_assignments(group.id, true)? {
-                    let Some(result) = assignment.result.as_ref() else { continue };
-                    if assignment.owner_thread_id.is_none_or(|owner| owner == group.coordinator_thread_id)
-                        || messages.iter().any(|message| {
-                            message.assignment_id == Some(assignment.id)
-                                && message.purpose == CollaborationMessagePurpose::Result
-                                && !matches!(
-                                    message.state,
-                                    CollaborationDeliveryState::Uncertain
-                                        | CollaborationDeliveryState::Failed
-                                        | CollaborationDeliveryState::Cancelled
-                                )
-                        })
-                    {
-                        continue;
-                    }
-                    let operation_id = derived_operation_id(assignment.id, 0x72);
-                    self.collaboration_message_send(
-                        methods::CollaborationMessagesSendParams {
-                            operation_id,
-                            group_id: group.id,
-                            assignment_id: Some(assignment.id),
-                            from_thread_id: assignment.owner_thread_id,
-                            to_thread_id: group.coordinator_thread_id,
-                            purpose: CollaborationMessagePurpose::Result,
-                            reply_to: None,
-                            body: format!(
-                                "Recovered result notification for assignment {} ({:?}): {}",
-                                assignment.id, result.outcome, result.summary
-                            ),
-                        },
-                        assignment.owner_thread_id,
-                    )?;
-                }
-            }
-        }
         Ok(())
     }
 
@@ -3476,10 +1061,6 @@ impl Orchestrator {
     // ---- persistence helpers ----
 
     pub(crate) fn emit(&self, thread_id: ThreadId, turn_id: Option<TurnId>, payload: EventPayload) -> Result<ThreadEvent> {
-        let collaboration_failure = match &payload {
-            EventPayload::TurnFailed { error } => Some(error.clone()),
-            _ => None,
-        };
         // For a task run's thread the task lock spans the append and the task update,
         // so its events reach the task in the order they were stored.
         let task_order = self.task_event_guard(thread_id, &payload);
@@ -3495,89 +1076,7 @@ impl Orchestrator {
             self.track_task_run(&ev);
         }
         drop(task_order);
-        if let Some(error) = collaboration_failure {
-            self.record_collaboration_turn_failure(thread_id, &error)?;
-        }
         Ok(ev)
-    }
-
-    fn broadcast_collaboration_direct(&self, group_id: GroupId, payload: EventPayload) -> Result<()> {
-        for member in self.inner.store.collaboration_members(group_id)?.into_iter().filter(|member| member.active) {
-            let event = self.inner.store.event_append(member.thread_id, None, payload.clone())?;
-            let _ = self.inner.events.send(event);
-        }
-        Ok(())
-    }
-
-    fn record_collaboration_turn_failure(&self, thread_id: ThreadId, error: &str) -> Result<()> {
-        let Some(mut assignment) = self.inner.store.collaboration_active_assignment_for_thread(thread_id)? else { return Ok(()) };
-        if !matches!(assignment.status, AssignmentStatus::Working | AssignmentStatus::Waiting) {
-            return Ok(());
-        }
-        let group =
-            self.inner.store.collaboration_group_get(assignment.group_id)?.ok_or_else(|| anyhow!("collaboration group not found"))?;
-        assignment.status = AssignmentStatus::AttentionNeeded;
-        assignment.uncertainty = Some(format!("owner turn failed: {error}. Inspect its thread and worktree before retrying."));
-        assignment.revision += 1;
-        assignment.updated_at = Utc::now();
-        self.inner.store.collaboration_assignment_put(&assignment)?;
-        self.broadcast_collaboration_direct(group.id, EventPayload::CollaborationAssignmentUpdated { assignment: assignment.clone() })?;
-        let failure_recipient = assignment
-            .created_by_thread_id
-            .filter(|candidate| {
-                self.inner
-                    .store
-                    .collaboration_members(group.id)
-                    .is_ok_and(|members| members.into_iter().any(|member| member.active && member.thread_id == *candidate))
-            })
-            .unwrap_or(group.coordinator_thread_id);
-        if matches!(group.status, GroupStatus::Active | GroupStatus::Paused) && failure_recipient != thread_id {
-            let now = Utc::now();
-            let id = Uuid::now_v7();
-            let used: u32 = self
-                .inner
-                .store
-                .collaboration_messages(group.id)?
-                .iter()
-                .filter(|message| message.assignment_id == Some(assignment.id))
-                .map(|message| message.wakeup_count)
-                .sum();
-            let should_wake = used < group.policy.max_wakeups_per_assignment;
-            let message = CollaborationMessage {
-                id,
-                operation_id: id,
-                group_id: group.id,
-                assignment_id: Some(assignment.id),
-                from_thread_id: Some(thread_id),
-                to_thread_id: failure_recipient,
-                external_recipient: false,
-                purpose: CollaborationMessagePurpose::Failure,
-                reply_to: None,
-                body: assignment.uncertainty.clone().unwrap_or_else(|| error.into()),
-                state: if should_wake { CollaborationDeliveryState::Queued } else { CollaborationDeliveryState::Persisted },
-                delivery_turn_id: None,
-                wakeup_count: u32::from(should_wake),
-                created_at: now,
-                updated_at: now,
-            };
-            self.inner.store.collaboration_message_put(&message, should_wake.then_some(id))?;
-            if should_wake {
-                let queued = methods::QueuedMessage {
-                    id,
-                    thread_id: failure_recipient,
-                    message: UserMessage::text(format!(
-                        "Kybern assignment {} needs attention after its owner turn failed:\n{}",
-                        assignment.id, message.body
-                    )),
-                };
-                let queued_event =
-                    self.inner.store.event_append(failure_recipient, None, EventPayload::MessageQueued { message: queued })?;
-                let _ = self.inner.events.send(queued_event);
-            }
-            self.broadcast_collaboration_direct(group.id, EventPayload::CollaborationMessageUpdated { message })?;
-            self.inner.queue_wakeup.notify_one();
-        }
-        Ok(())
     }
 
     fn update_thread(&self, thread: Thread) -> Result<Thread> {
@@ -3594,6 +1093,8 @@ impl Orchestrator {
             // daemon queue worker to resume it while its session is being closed.
             if current.status == ThreadStatus::Archived {
                 thread.status = ThreadStatus::Archived;
+                // Archiving freed a Coordinator's slot; a stale copy must not take it back.
+                thread.coordinator_project_id = current.coordinator_project_id;
             }
             if keep_stored_delegation {
                 thread.delegation = current.delegation;
@@ -3664,6 +1165,7 @@ impl Orchestrator {
             path,
             worktrees_default: None,
             task_prefix: None,
+            brief_in_all_threads: false,
             created_at: now,
             updated_at: now,
         };
@@ -3764,7 +1266,6 @@ impl Orchestrator {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
-            collaboration_group_id: None,
             subagent: None,
             delegation: None,
         };
@@ -3855,7 +1356,6 @@ impl Orchestrator {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
-            collaboration_group_id: None,
             subagent: None,
             delegation: None,
         };
@@ -3888,6 +1388,7 @@ impl Orchestrator {
             is_git: false,
             worktrees_default: Some(false),
             task_prefix: None,
+            brief_in_all_threads: false,
             created_at: now,
             updated_at: now,
         };
@@ -3935,10 +1436,7 @@ impl Orchestrator {
     /// Archive a thread and, with it, every agent it delegated work to. Running
     /// children are stopped first; delegated worktrees are removed when safe.
     pub async fn archive_thread(&self, thread_id: ThreadId) -> Result<()> {
-        let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
-        if thread.coordinator_project_id.is_some() {
-            return Err(anyhow!("Use Delete coordinator to remove a project coordinator, or pause its agents temporarily."));
-        }
+        self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
         // The parent goes first (flagged, then archived with its session closed) so
         // it cannot delegate more; then the cascade, rescanned until nothing runs.
         let _stopping = self.delegation_flag_stopping(thread_id);
@@ -3965,9 +1463,8 @@ impl Orchestrator {
         {
             let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
             let mut t = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
-            if t.coordinator_project_id.is_some() {
-                return Err(anyhow!("Use Delete coordinator to remove a project coordinator, or pause its agents temporarily."));
-            }
+            // Archiving a project's Coordinator frees its slot: a new one can be created.
+            t.coordinator_project_id = None;
             t.status = ThreadStatus::Archived;
             self.update_thread(t)?;
             self.inner.previews.revoke_thread(thread_id);
@@ -3984,28 +1481,14 @@ impl Orchestrator {
     }
 
     pub async fn send(&self, thread_id: ThreadId, message: UserMessage) -> Result<(TurnId, MessageId)> {
-        let redirect = (!is_compact_message(&message)).then(|| title_from_message(&message));
-        let (turn_id, message_id, accepted) = self.send_with_id(thread_id, Uuid::now_v7(), message, false, false).await?;
-        if let Some(summary) = redirect
-            && accepted
-            && let Err(error) = self.record_user_redirect(thread_id, &summary)
-        {
-            tracing::warn!(%thread_id, %error, "could not notify collaboration coordinator of direct user message");
-        }
+        let (turn_id, message_id, _accepted) = self.send_with_id(thread_id, Uuid::now_v7(), message, false, false).await?;
         Ok((turn_id, message_id))
     }
 
     pub async fn send_client_message(&self, params: methods::ThreadsSendParams) -> Result<methods::ThreadsSendResult> {
         let retryable = params.message_id.is_some();
         let message_id = params.message_id.unwrap_or_else(Uuid::now_v7);
-        let redirect = (!is_compact_message(&params.message)).then(|| title_from_message(&params.message));
-        let (turn_id, message_id, accepted) = self.send_with_id(params.thread_id, message_id, params.message, false, retryable).await?;
-        if accepted
-            && let Some(summary) = redirect
-            && let Err(error) = self.record_user_redirect(params.thread_id, &summary)
-        {
-            tracing::warn!(thread_id = %params.thread_id, %error, "could not notify collaboration coordinator of direct user message");
-        }
+        let (turn_id, message_id, _accepted) = self.send_with_id(params.thread_id, message_id, params.message, false, retryable).await?;
         Ok(methods::ThreadsSendResult { turn_id, message_id })
     }
 
@@ -4208,7 +1691,6 @@ impl Orchestrator {
     /// serializes retries, so a lost RPC reply does not send the prompt twice.
     pub async fn steer(&self, mut params: methods::QueuedMessage) -> Result<methods::ThreadsSendResult> {
         self.ensure_not_subagent(params.thread_id)?;
-        let redirect_summary = title_from_message(&params.message);
         self.resolve_attachments(&mut params.message);
         let receipt = || -> Result<Option<methods::ThreadsSendResult>> {
             let Some((thread, turn_id, message)) =
@@ -4303,33 +1785,7 @@ impl Orchestrator {
         live.touch();
         live.session.steer(&params.id.to_string(), &self.provider_message(&params.message, &live)).await?;
         self.emit(params.thread_id, Some(active.id), EventPayload::MessageSteered { message_id: params.id, message: params.message })?;
-        if let Err(error) = self.record_user_redirect(params.thread_id, &redirect_summary) {
-            tracing::warn!(thread_id = %params.thread_id, %error, "could not notify collaboration coordinator of direct user steering");
-        }
         Ok(methods::ThreadsSendResult { turn_id: active.id, message_id: params.id })
-    }
-
-    fn record_user_redirect(&self, thread_id: ThreadId, summary: &str) -> Result<()> {
-        let Some(assignment) = self.inner.store.collaboration_active_assignment_for_thread(thread_id)? else { return Ok(()) };
-        let group =
-            self.inner.store.collaboration_group_get(assignment.group_id)?.ok_or_else(|| anyhow!("collaboration group not found"))?;
-        if group.coordinator_thread_id == thread_id || matches!(group.status, GroupStatus::Stopped | GroupStatus::Completed) {
-            return Ok(());
-        }
-        self.collaboration_message_send(
-            methods::CollaborationMessagesSendParams {
-                operation_id: Uuid::now_v7(),
-                group_id: group.id,
-                assignment_id: Some(assignment.id),
-                from_thread_id: None,
-                to_thread_id: group.coordinator_thread_id,
-                purpose: CollaborationMessagePurpose::Redirect,
-                reply_to: None,
-                body: format!("The user directly redirected thread {thread_id}: {summary}"),
-            },
-            None,
-        )?;
-        Ok(())
     }
 
     /// One daemon-owned worker consumes accepted follow-ups, independently of clients.
@@ -4340,77 +1796,8 @@ impl Orchestrator {
     pub async fn drain_queues(&self) -> Result<bool> {
         let mut waiting = false;
         for queued in self.inner.store.queue_list(None)? {
-            if let Some(message) = self.inner.store.collaboration_message_for_delivery(queued.id)? {
-                let group = self.inner.store.collaboration_group_get(message.group_id)?;
-                if group.as_ref().is_some_and(|group| group.status != GroupStatus::Active) {
-                    continue;
-                }
-                let sender_is_member = match message.from_thread_id {
-                    Some(sender) => self
-                        .inner
-                        .store
-                        .collaboration_members(message.group_id)?
-                        .into_iter()
-                        .any(|member| member.active && member.thread_id == sender),
-                    None => true,
-                };
-                let external_authority = if message.purpose == CollaborationMessagePurpose::Reply {
-                    message
-                        .reply_to
-                        .map(|reply_to| self.inner.store.collaboration_message_get(reply_to))
-                        .transpose()?
-                        .flatten()
-                        .filter(|original| original.external_recipient)
-                        .and_then(|original| original.from_thread_id.map(|initiator| (initiator, original.to_thread_id)))
-                } else if message.external_recipient || !sender_is_member {
-                    message.from_thread_id.map(|sender| (sender, message.to_thread_id))
-                } else {
-                    None
-                };
-                if let Some((authority_from, authority_to)) = external_authority
-                    && let Err(error) = self.validate_external_delivery_authority(authority_from, authority_to)
-                {
-                    let mut failed = message;
-                    failed.state = CollaborationDeliveryState::Failed;
-                    failed.updated_at = Utc::now();
-                    self.inner.store.collaboration_message_put(&failed, Some(failed.id))?;
-                    self.emit(failed.to_thread_id, None, EventPayload::MessageRemoved { message_id: failed.id })?;
-                    self.emit_collaboration(failed.group_id, EventPayload::CollaborationMessageUpdated { message: failed })?;
-                    tracing::warn!(%error, "external collaboration delivery authority changed before dispatch");
-                    continue;
-                }
-                if message.external_recipient
-                    && let Some(recipient_group_id) = self
-                        .inner
-                        .store
-                        .thread_get(message.to_thread_id)?
-                        .and_then(|thread| thread.collaboration_group_id)
-                        .or(self.inner.store.collaboration_group_for_thread(message.to_thread_id)?)
-                    && let Some(recipient_group) = self.inner.store.collaboration_group_get(recipient_group_id)?
-                {
-                    if recipient_group.status == GroupStatus::Paused {
-                        continue;
-                    }
-                    if matches!(recipient_group.status, GroupStatus::Stopped | GroupStatus::Completed) {
-                        let mut cancelled = message;
-                        cancelled.state = CollaborationDeliveryState::Cancelled;
-                        cancelled.updated_at = Utc::now();
-                        self.inner.store.collaboration_message_put(&cancelled, Some(cancelled.id))?;
-                        self.emit(cancelled.to_thread_id, None, EventPayload::MessageRemoved { message_id: cancelled.id })?;
-                        self.emit_collaboration(cancelled.group_id, EventPayload::CollaborationMessageUpdated { message: cancelled })?;
-                        continue;
-                    }
-                }
-            }
             let Some(thread) = self.inner.store.thread_get(queued.thread_id)? else { continue };
             if thread.status == ThreadStatus::Archived {
-                if let Some(mut message) = self.inner.store.collaboration_message_for_delivery(queued.id)? {
-                    message.state = CollaborationDeliveryState::Cancelled;
-                    message.updated_at = Utc::now();
-                    self.inner.store.collaboration_message_put(&message, Some(message.id))?;
-                    self.emit(message.to_thread_id, None, EventPayload::MessageRemoved { message_id: message.id })?;
-                    self.emit_collaboration(message.group_id, EventPayload::CollaborationMessageUpdated { message })?;
-                }
                 continue;
             }
             if thread.status != ThreadStatus::Idle {
@@ -4508,7 +1895,22 @@ impl Orchestrator {
             match self.portable_message(&thread, &message).and_then(|portable| self.workspace_transition_message(&thread, &portable)) {
                 Ok((workspace_message, transition)) => {
                     workspace_transition = transition;
-                    live.session.send_message(&message_id.to_string(), &self.provider_message(&workspace_message, &live)).await
+                    // A brief the user changed since this Coordinator's session began
+                    // rides in front of the next message, in the provider's copy only.
+                    let brief_update = self.lead_brief_update(&thread, &live).await.unwrap_or_else(|error| {
+                        tracing::warn!(thread_id = %thread.id, %error, "could not check the project brief for changes");
+                        None
+                    });
+                    let provider_message = self.provider_message(&workspace_message, &live);
+                    let provider_message = match &brief_update {
+                        Some((_, update)) => std::borrow::Cow::Owned(lead::with_brief_update(&provider_message, update)),
+                        None => provider_message,
+                    };
+                    let sent = live.session.send_message(&message_id.to_string(), &provider_message).await;
+                    if let (Ok(()), Some((revision, _))) = (&sent, brief_update) {
+                        self.lead_brief_seen(&live, revision).await;
+                    }
+                    sent
                 }
                 Err(error) => Err(kybern_drivers::DriverError::Unsupported(error.to_string())),
             }
@@ -4529,7 +1931,6 @@ impl Orchestrator {
                 self.workspace_transition_delivered(thread.id, sequence)?;
             }
         }
-        self.collaboration_delivery_submitted(thread.id, turn_id, message_id)?;
         tracing::info!(
             target: "kybern::turn_startup",
             thread_id = %thread.id,
@@ -4886,6 +2287,24 @@ impl Orchestrator {
         summary: String,
         operation: Option<Uuid>,
     ) -> Result<(ApprovalId, DaemonAnswer)> {
+        self.ask_daemon_approval_within(thread_id, turn_id, live, key, tool_name, input, summary, operation, crate::computer::CONSENT_WAIT)
+            .await
+    }
+
+    /// [`Self::ask_daemon_approval`] with its own wait before the answer is `Pending`.
+    #[allow(clippy::too_many_arguments)]
+    async fn ask_daemon_approval_within(
+        &self,
+        thread_id: ThreadId,
+        turn_id: TurnId,
+        live: &Arc<LiveSession>,
+        key: String,
+        tool_name: &str,
+        input: serde_json::Value,
+        summary: String,
+        operation: Option<Uuid>,
+        wait: Duration,
+    ) -> Result<(ApprovalId, DaemonAnswer)> {
         let (card, mut receiver) = {
             let mut approvals = live.daemon_approvals.lock().await;
             let reusable = approvals.iter().find(|(_, entry)| {
@@ -4923,7 +2342,7 @@ impl Orchestrator {
                 }
             }
         };
-        let decision = tokio::time::timeout(crate::computer::CONSENT_WAIT, receiver.wait_for(Option::is_some)).await;
+        let decision = tokio::time::timeout(wait, receiver.wait_for(Option::is_some)).await;
         let answer = match decision {
             Ok(Ok(decision)) => match decision.clone() {
                 Some(decision) => DaemonAnswer::Decided(decision),
@@ -5323,7 +2742,9 @@ impl Orchestrator {
         }
         let session_instance_id = Uuid::now_v7();
         let restrictions = self.native_tool_restrictions(thread)?;
-        let coordinator_instructions = self.coordinator_instructions(thread)?;
+        let instructions = self.session_instructions(thread)?;
+        let brief_revision = instructions.as_ref().map(|instructions| instructions.brief_revision);
+        let coordinator_instructions = instructions.map(|instructions| instructions.text);
         let computer_tools = self.computer_tools_offered(thread, &restrictions);
         let native_tool_bridge = self
             .inner
@@ -5331,11 +2752,6 @@ impl Orchestrator {
             .as_ref()
             .map(|gateway| {
                 let mut tools = crate::app_tools::native_tool_definitions();
-                // Ordinary threads delegate with kybern_agent_*; the collaboration
-                // tools are for project coordinators and their workers only.
-                if !self.collaboration_tools_enabled(thread).unwrap_or(false) {
-                    tools.retain(|tool| !tool.name.starts_with("kybern_collaboration_"));
-                }
                 if self.inner.computer.offered_to(thread.provider.kind) {
                     tools.extend(crate::computer::ComputerUse::tool_definitions());
                 }
@@ -5393,12 +2809,14 @@ impl Orchestrator {
             daemon_approvals: Mutex::new(HashMap::new()),
             app_tool_requests: Mutex::new(HashSet::new()),
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
+            brief_revision: Mutex::new(None),
         });
         self.inner.store.meta_set_many(&[
             (&format!("live_fingerprint:{}", thread.id), &self.environment_fingerprint(thread)?),
             (&format!("live_identity:{}", thread.id), &self.session_identity(thread)?),
             (&format!("live_owner:{}", thread.id), &serde_json::to_string(&thread.provider)?),
         ])?;
+        *live.brief_revision.lock().await = brief_revision;
         self.inner.sessions.lock().await.insert(thread.id, live.clone());
         let this = self.clone();
         let thread_id = thread.id;
@@ -5416,57 +2834,6 @@ impl Orchestrator {
             && !restrictions.denied_tools.iter().any(|tool| tool == PROBE)
     }
 
-    fn native_tool_restrictions(&self, thread: &Thread) -> Result<kybern_drivers::NativeToolRestrictions> {
-        let group_id = thread
-            .collaboration_group_id
-            .or_else(|| {
-                thread
-                    .coordinator_project_id
-                    .and_then(|project_id| self.inner.store.project_coordinator(project_id).ok().flatten().map(|(_, group_id)| group_id))
-            })
-            .or(self.inner.store.collaboration_group_for_thread(thread.id)?);
-        let Some(group_id) = group_id else { return Ok(Default::default()) };
-        let group = self.inner.store.collaboration_group_get(group_id)?.ok_or_else(|| anyhow!("collaboration group not found"))?;
-        if group.coordinator_mode != CoordinatorMode::Dedicated || group.coordinator_thread_id != thread.id {
-            return Ok(Default::default());
-        }
-        Ok(kybern_drivers::NativeToolRestrictions {
-            allowed_tools: vec![
-                "kybern_thread_context",
-                "kybern_read_file",
-                "kybern_list_files",
-                "kybern_workspace_diff",
-                "kybern_html_preview",
-                "kybern_html_publish",
-                "kybern_preview_open",
-                "kybern_threads_search",
-                "kybern_thread_read",
-                "kybern_thread_send",
-                "kybern_collaboration_spawn",
-                "kybern_collaboration_send",
-                "kybern_collaboration_read",
-                "kybern_collaboration_wait",
-                "kybern_collaboration_cancel",
-                "kybern_collaboration_context_read",
-                "kybern_collaboration_context_put",
-                "kybern_notes_search",
-                "kybern_note_read",
-                "kybern_note_create",
-                "kybern_note_append",
-                "kybern_note_update",
-                "kybern_tasks_list",
-                "kybern_task_read",
-                "kybern_task_create",
-                "kybern_task_update",
-            ]
-            .into_iter()
-            .map(str::to_owned)
-            .collect(),
-            denied_tools: vec!["kybern_collaboration_report".into()],
-            require_enforcement: true,
-        })
-    }
-
     /// The "Working in Kybern" guide for a session with these tools, or `None`
     /// when the user turned "Tell agents about Kybern" off.
     fn agent_guide(
@@ -5481,26 +2848,6 @@ impl Orchestrator {
         let guide = crate::agent_guide::render(&crate::agent_guide::GuideTools::from_names(names));
         tracing::debug!(version = crate::agent_guide::GUIDE_VERSION, bytes = guide.len(), "attaching the Kybern guide to a new session");
         Some(guide)
-    }
-
-    fn coordinator_instructions(&self, thread: &Thread) -> Result<Option<String>> {
-        let Some(project_id) = thread.coordinator_project_id else { return Ok(None) };
-        let Some((coordinator_thread_id, group_id)) = self.inner.store.project_coordinator(project_id)? else { return Ok(None) };
-        if coordinator_thread_id != thread.id {
-            return Ok(None);
-        }
-        // Keep the provider's system/developer prefix stable across idle
-        // releases and resumes. Live project data belongs in tool responses,
-        // after the cached prefix, and is available after a harness switch too.
-        let mut instructions = format!(
-            "You are Kybern's persistent coordinator for project {project_id}, collaboration group {group_id}.\n\
-             Plan work from the user's brief, delegate every editing and integration task through Kybern collaboration assignments, inspect and review worker results, maintain the project plan and durable project knowledge, and return a clear review to the user. Do not edit or integrate code yourself. Use explicit assignment boundaries and provenance. At session start, each new objective, and before delegating, use kybern_collaboration_read for the current objective and assignment state, and kybern_collaboration_context_read for the current plan, project.setup, and user-authored corrections. If conversation context is missing after a harness switch, use kybern_thread_read for this coordinator thread's saved conversation. Fetch additional pages as needed; never treat absent context as permission to start over. When spawning a child, omit permission_mode unless the user specifically requested an override so Kybern inherits the coordinator's existing authority. If a worker is blocked on approval, preserve it and report or resolve that approval; never cancel and recreate a worker to bypass approval. Persist the working plan as kind `plan`, update its status as progress arrives, and update it again with completion or remaining work after reviewing results. Save each reusable verified fact such as architecture notes and test commands as kind `research`, project choices as kind `decision`, and reviewed assignment outcomes as kind `result_reference` with kybern_collaboration_context_put. Record useful findings before reporting completion. Treat user-authored briefs and instructions as authoritative; never replace them with agent-authored claims. Review worker claims and artifacts before presenting them as complete. Some harnesses enforce the non-editing role by restricting tools; for harnesses without enforceable restrictions, this instruction still defines the coordinator role.\n\
-             Read changing project knowledge and assignment results through these tools; they are intentionally not embedded in this stable role instruction.\n"
-        );
-
-        instructions.push_str("\nCheck whether first-time setup is required before implementation: if project.setup already exists, reuse it and continue without repeating setup. Otherwise, tell the user you are learning the project first. Delegate a research-only assignment to inspect repository instructions, architecture and entry points, development/test commands, and constraints relevant to the user's brief. For an empty project, record what exists and what is missing rather than inventing conventions. Do not edit files or run installation/setup commands during this research. Review the worker's successful result; save a concise verified overview with kybern_collaboration_context_put using key `project.setup`, kind `research`, and source_refs containing the successful research assignment's exact UUID. This records setup completion durably and unlocks editing/integration assignments. If research fails or needs input, explain the blocker and resume setup on the next turn; never claim readiness prematurely. After saving the overview, tell the user setup is complete, persist the task plan, and continue their original request without asking them to repeat it.\n");
-
-        Ok(Some(instructions))
     }
 
     async fn persist_runtime_task_start(
@@ -5879,8 +3226,9 @@ impl Orchestrator {
             let mut result = if this.owns_app_tool_turn(thread_id, &live, Some(turn_id)).await.is_none() {
                 Err("app tool request is stale".to_string())
             } else {
-                let timeout = if name == "kybern_collaboration_wait"
-                    || delegation::BLOCKING_TOOLS.contains(&name.as_str())
+                let timeout = if let Some(budget) = crate::secrets::call_budget(&name, &arguments) {
+                    budget
+                } else if delegation::BLOCKING_TOOLS.contains(&name.as_str())
                     || (name == "kybern_thread_send" && arguments.get("wait_for_reply").and_then(serde_json::Value::as_bool) == Some(true))
                     || matches!(name.as_str(), "kybern_html_preview" | "kybern_html_publish")
                     || crate::computer::ComputerUse::is_tool(&name)
@@ -6702,6 +4050,8 @@ mod tests {
         broken_interrupt: bool,
         reject_permission: bool,
         stopped_tasks: Arc<Mutex<Vec<String>>>,
+        /// What the session was told to do with each permission request.
+        permission_responses: Arc<Mutex<Vec<ApprovalDecision>>>,
     }
 
     #[async_trait::async_trait]
@@ -6750,7 +4100,8 @@ mod tests {
             Ok(())
         }
 
-        async fn respond_permission(&self, _request_id: &str, _decision: &ApprovalDecision) -> kybern_drivers::Result<()> {
+        async fn respond_permission(&self, _request_id: &str, decision: &ApprovalDecision) -> kybern_drivers::Result<()> {
+            self.permission_responses.lock().await.push(decision.clone());
             Ok(())
         }
 
@@ -6951,6 +4302,7 @@ mod tests {
             is_git: false,
             worktrees_default: None,
             task_prefix: None,
+            brief_in_all_threads: false,
             created_at: now,
             updated_at: now,
         };
@@ -6973,7 +4325,6 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
-            collaboration_group_id: None,
             subagent: None,
             delegation: None,
         };
@@ -7041,6 +4392,7 @@ mod tests {
             daemon_approvals: Mutex::new(HashMap::new()),
             app_tool_requests: Mutex::new(HashSet::new()),
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
+            brief_revision: Mutex::new(None),
         });
         orchestrator
             .handle_driver_event(
@@ -7302,10 +4654,19 @@ mod tests {
         }
 
         fn with_drivers_and_gateway(drivers: DriverRegistry, gateway: Option<crate::native_tools_mcp::NativeToolsGateway>) -> Self {
+            Self::build(drivers, gateway, false)
+        }
+
+        /// A fixture whose database is a real SQLite file (and WAL) under its data directory.
+        fn on_disk() -> Self {
+            Self::build(DriverRegistry::default(), None, true)
+        }
+
+        fn build(drivers: DriverRegistry, gateway: Option<crate::native_tools_mcp::NativeToolsGateway>, on_disk: bool) -> Self {
             let root = std::env::temp_dir().join(format!("kybern-orchestrator-test-{}", Uuid::now_v7()));
             let paths = Paths::resolve(Some(root.clone())).unwrap();
             let settings = SettingsStore::load(&paths.settings).unwrap();
-            let store = Store::open_in_memory().unwrap();
+            let store = if on_disk { Store::open(&root.join("state.sqlite")).unwrap() } else { Store::open_in_memory().unwrap() };
             let now = chrono::Utc::now();
             let project = Project {
                 id: Uuid::now_v7(),
@@ -7314,6 +4675,7 @@ mod tests {
                 is_git: false,
                 worktrees_default: None,
                 task_prefix: None,
+                brief_in_all_threads: false,
                 created_at: now,
                 updated_at: now,
             };
@@ -7350,7 +4712,6 @@ mod tests {
                 last_seq: 0,
                 parent_thread_id: None,
                 coordinator_project_id: None,
-                collaboration_group_id: None,
                 subagent: None,
                 delegation: None,
             };
@@ -7390,6 +4751,7 @@ mod tests {
                 daemon_approvals: Mutex::new(HashMap::new()),
                 app_tool_requests: Mutex::new(HashSet::new()),
                 app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
+                brief_revision: Mutex::new(None),
             });
             self.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
             (live, closes, messages)
@@ -7397,9 +4759,15 @@ mod tests {
 
         async fn active_app_tool_session(&self, thread: &Thread) -> (Arc<LiveSession>, CapturedAppToolResponses) {
             let responses = Arc::new(Mutex::new(Vec::new()));
+            let live = self.active_session(thread, TestSession { app_tool_responses: responses.clone(), ..Default::default() }).await;
+            (live, responses)
+        }
+
+        /// A live session around `session` with an active turn.
+        async fn active_session(&self, thread: &Thread, session: TestSession) -> Arc<LiveSession> {
             let live = Arc::new(LiveSession {
                 session_instance_id: Uuid::now_v7(),
-                session: Box::new(TestSession { app_tool_responses: responses.clone(), ..Default::default() }),
+                session: Box::new(session),
                 computer_tools: false,
                 last_activity: std::sync::Mutex::new(SessionActivityTime::now()),
                 released: AtomicBool::new(false),
@@ -7416,11 +4784,12 @@ mod tests {
                 daemon_approvals: Mutex::new(HashMap::new()),
                 app_tool_requests: Mutex::new(HashSet::new()),
                 app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
+                brief_revision: Mutex::new(None),
             });
             self.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
             self.orchestrator.send(thread.id, UserMessage::text("inspect workspace")).await.unwrap();
             live.turn_ready.notified().await;
-            (live, responses)
+            live
         }
 
         async fn has_session(&self, thread: &Thread) -> bool {
@@ -7536,6 +4905,7 @@ mod tests {
                 project_id: Some(fixture.project.id),
                 title: Some("Plan".into()),
                 body: Some("Ship it".into()),
+                project_role: None,
             })
             .unwrap();
         let error = fixture
@@ -8051,639 +5421,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dedicated_coordinator_cannot_bypass_catalog_restrictions_with_a_raw_tool_call() {
-        let fixture = Fixture::new();
-        let thread = fixture.thread(ThreadStatus::Idle);
-        fixture
-            .orchestrator
-            .collaboration_group_create(methods::CollaborationGroupsCreateParams {
-                operation_id: Uuid::now_v7(),
-                project_id: thread.project_id,
-                coordinator_thread_id: thread.id,
-                objective: "Delegate research".into(),
-                success_criteria: vec![],
-                coordinator_mode: Some(CoordinatorMode::Dedicated),
-                policy: None,
-            })
-            .unwrap();
-        let (live, _) = fixture.active_app_tool_session(&thread).await;
-        let error = fixture
-            .orchestrator
-            .execute_native_app_tool_call(
-                thread.id,
-                live.session_instance_id,
-                "denied-read",
-                "kybern_read_terminal",
-                json!({"terminal_id":Uuid::now_v7()}),
-            )
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("Delegate the task to a worker"));
-        std::fs::write(fixture.root.join("review.txt"), "worker evidence").unwrap();
-        fixture
-            .orchestrator
-            .execute_native_app_tool_call(
-                thread.id,
-                live.session_instance_id,
-                "allowed-source-read",
-                "kybern_read_file",
-                json!({"path":"review.txt"}),
-            )
-            .await
-            .unwrap();
-        fixture
-            .orchestrator
-            .execute_native_app_tool_call(thread.id, live.session_instance_id, "allowed-context", "kybern_thread_context", json!({}))
-            .await
-            .unwrap();
-        // A visual is part of the coordinator's reply, not an edit to project code.
-        let turn_id = live.turn.lock().await.as_ref().unwrap().id;
-        let published = fixture
-            .orchestrator
-            .execute_native_app_tool_call(
-                thread.id,
-                live.session_instance_id,
-                "allowed-visual",
-                "kybern_html_publish",
-                json!({"html": "<button>Review findings</button>", "title": "Review", "height": 240}),
-            )
-            .await
-            .unwrap();
-        let visual_id: Uuid = serde_json::from_value(published["visual"]["id"].clone()).unwrap();
-        let events = fixture.store.events_for_thread(thread.id).unwrap();
-        assert!(events.iter().any(|event| event.turn_id == Some(turn_id)
-            && matches!(&event.payload, EventPayload::HtmlPublished { visual } if visual.id == visual_id)));
-        assert!(fixture.store.visual_read(thread.id, visual_id).unwrap().unwrap().contains("Review findings"));
-        assert!(fixture.store.visual_read(fixture.thread(ThreadStatus::Idle).id, visual_id).unwrap().is_none());
-        assert!(live.daemon_approvals.lock().await.is_empty(), "Publishing a reply needs no notes/tasks write approval");
-        for name in ["kybern_html_preview", "kybern_html_publish"] {
-            let error = fixture
-                .orchestrator
-                .execute_native_app_tool_call(
-                    thread.id,
-                    live.session_instance_id,
-                    "wrong-visual-owner",
-                    name,
-                    json!({"thread_id": Uuid::now_v7(), "html": "<p>Wrong owner</p>", "title": "Review", "height": 240}),
-                )
-                .await
-                .unwrap_err();
-            assert!(error.to_string().contains("bound to the current thread"), "{name}: {error}");
-        }
-    }
-
-    #[tokio::test]
-    async fn collaboration_read_consumes_only_returned_inbox_for_every_harness() {
-        for provider in [
-            ProviderKind::Codex,
-            ProviderKind::ClaudeCode,
-            ProviderKind::Opencode,
-            ProviderKind::Pi,
-            ProviderKind::Omp,
-            ProviderKind::Cursor,
-        ] {
-            for coordinator in [false, true] {
-                let fixture = Fixture::new();
-                let mut thread = fixture.thread_with_provider(ThreadStatus::Idle, provider);
-                let group = fixture
-                    .orchestrator
-                    .collaboration_group_create(methods::CollaborationGroupsCreateParams {
-                        operation_id: Uuid::now_v7(),
-                        project_id: thread.project_id,
-                        coordinator_thread_id: thread.id,
-                        objective: "Read helper results".into(),
-                        success_criteria: vec![],
-                        coordinator_mode: Some(if coordinator && !matches!(provider, ProviderKind::Codex | ProviderKind::Cursor) {
-                            CoordinatorMode::Dedicated
-                        } else {
-                            CoordinatorMode::Ordinary
-                        }),
-                        policy: None,
-                    })
-                    .unwrap();
-                fixture.store.project_coordinator_put(thread.project_id, thread.id, group.id).unwrap();
-                if coordinator {
-                    thread.coordinator_project_id = Some(thread.project_id);
-                    thread.collaboration_group_id = Some(group.id);
-                    fixture.store.thread_upsert(&thread).unwrap();
-                }
-                let peer = fixture.thread_with_provider(ThreadStatus::Idle, provider);
-                // Fill the bounded read snapshot and leave a later message outside it.
-                let mut messages = Vec::new();
-                for i in 0..102 {
-                    let now = chrono::Utc::now();
-                    let message = CollaborationMessage {
-                        id: Uuid::now_v7(),
-                        operation_id: Uuid::now_v7(),
-                        group_id: group.id,
-                        assignment_id: None,
-                        from_thread_id: Some(peer.id),
-                        to_thread_id: if i == 0 { peer.id } else { thread.id },
-                        external_recipient: false,
-                        purpose: CollaborationMessagePurpose::Result,
-                        reply_to: None,
-                        body: format!("Result {i}"),
-                        state: CollaborationDeliveryState::Queued,
-                        delivery_turn_id: None,
-                        wakeup_count: 1,
-                        created_at: now,
-                        updated_at: now,
-                    };
-                    fixture.store.collaboration_message_put(&message, Some(message.id)).unwrap();
-                    fixture.store.collaboration_message_queue(&message).unwrap();
-                    messages.push(message);
-                }
-                // Desktop/mobile inspection must never consume agent delivery.
-                fixture.orchestrator.collaboration_group_detail(group.id).unwrap();
-                assert!(fixture.store.queue_is_pending(messages[1].id).unwrap());
-                let (live, _) = fixture.active_app_tool_session(&thread).await;
-                let invalid = fixture
-                    .orchestrator
-                    .execute_native_app_tool_call(
-                        thread.id,
-                        live.session_instance_id,
-                        "invalid-participant",
-                        "kybern_collaboration_read",
-                        json!({"thread_id":Uuid::now_v7()}),
-                    )
-                    .await;
-                assert!(invalid.is_err());
-                assert!(fixture.store.queue_is_pending(messages[1].id).unwrap(), "failed reads cannot consume delivery");
-                let result = fixture
-                    .orchestrator
-                    .execute_native_app_tool_call(thread.id, live.session_instance_id, "read-inbox", "kybern_collaboration_read", json!({}))
-                    .await
-                    .unwrap();
-                assert_eq!(result["pending_messages"].as_array().unwrap().len(), 100);
-                assert!(fixture.store.queue_is_pending(messages[0].id).unwrap(), "other recipient");
-                for message in &messages[1..=100] {
-                    assert!(!fixture.store.queue_is_pending(message.id).unwrap(), "{provider:?}, coordinator={coordinator}");
-                    let stored = fixture.store.collaboration_message_get(message.id).unwrap().unwrap();
-                    assert_eq!(stored.state, CollaborationDeliveryState::Submitted);
-                    assert!(stored.delivery_turn_id.is_some());
-                }
-                assert!(fixture.store.queue_is_pending(messages[101].id).unwrap(), "outside snapshot");
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn assignment_dispatch_busy_race_returns_to_pending_without_accepting_turn() {
-        let fixture = Fixture::new();
-        let mut thread = fixture.thread(ThreadStatus::Idle);
-        let group = fixture
-            .orchestrator
-            .collaboration_group_create(methods::CollaborationGroupsCreateParams {
-                operation_id: Uuid::now_v7(),
-                project_id: thread.project_id,
-                coordinator_thread_id: thread.id,
-                objective: "Retry a busy assignment".into(),
-                success_criteria: vec![],
-                coordinator_mode: Some(CoordinatorMode::Ordinary),
-                policy: None,
-            })
-            .unwrap();
-        let mut assignment = fixture
-            .orchestrator
-            .collaboration_assignment_create(
-                methods::CollaborationAssignmentsCreateParams {
-                    operation_id: Uuid::now_v7(),
-                    group_id: group.id,
-                    parent_assignment_id: None,
-                    owner_thread_id: Some(thread.id),
-                    child: None,
-                    title: "Follow-up".into(),
-                    instructions: "Read the result".into(),
-                    kind: AssignmentKind::Research,
-                },
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        // Another send won after the scheduler observed an idle owner.
-        thread.status = ThreadStatus::Running;
-        fixture.store.thread_upsert(&thread).unwrap();
-        assert!(!fixture.orchestrator.start_collaboration_assignment(&group, &mut assignment).await.unwrap());
-        let pending = fixture.store.collaboration_assignment_get(assignment.id).unwrap().unwrap();
-        assert_eq!(pending.status, AssignmentStatus::Pending);
-        assert_eq!(pending.owner_thread_id, Some(thread.id));
-        assert!(pending.dispatch_message_id.is_none());
-        assert!(pending.uncertainty.is_none());
-        assert!(
-            fixture
-                .store
-                .events_for_thread(thread.id)
-                .unwrap()
-                .iter()
-                .all(|event| !matches!(event.payload, EventPayload::TurnStarted { .. }))
-        );
-    }
-
-    #[tokio::test]
-    async fn collaboration_read_consumes_result_notification_omitted_by_message_pagination() {
-        let fixture = Fixture::new();
-        let thread = fixture.thread(ThreadStatus::Idle);
-        let group = fixture
-            .orchestrator
-            .collaboration_group_create(methods::CollaborationGroupsCreateParams {
-                operation_id: Uuid::now_v7(),
-                project_id: thread.project_id,
-                coordinator_thread_id: thread.id,
-                objective: "Read a structured assignment result".into(),
-                success_criteria: vec![],
-                coordinator_mode: Some(CoordinatorMode::Ordinary),
-                policy: None,
-            })
-            .unwrap();
-        fixture.store.project_coordinator_put(thread.project_id, thread.id, group.id).unwrap();
-        let worker = fixture.thread(ThreadStatus::Idle);
-        fixture
-            .store
-            .collaboration_member_put(&GroupMember {
-                group_id: group.id,
-                thread_id: worker.id,
-                role: GroupMemberRole::Worker,
-                active: true,
-                joined_at: chrono::Utc::now(),
-            })
-            .unwrap();
-        let now = chrono::Utc::now();
-        let assignment = CollaborationAssignment {
-            id: Uuid::now_v7(),
-            group_id: group.id,
-            parent_assignment_id: None,
-            owner_thread_id: Some(worker.id),
-            requested_child: None,
-            created_by_thread_id: Some(thread.id),
-            title: "Finished work".into(),
-            instructions: "Return one durable result".into(),
-            kind: AssignmentKind::Research,
-            status: AssignmentStatus::Completed,
-            dispatch_message_id: None,
-            base_revision: None,
-            depth: 0,
-            result: Some(AssignmentResult {
-                outcome: AssignmentOutcome::Success,
-                summary: "The structured result surfaced".into(),
-                changes: Vec::new(),
-                checks: Vec::new(),
-                artifacts: Vec::new(),
-                unresolved: Vec::new(),
-                completed_at: now,
-            }),
-            uncertainty: None,
-            revision: 2,
-            created_at: now,
-            updated_at: now,
-        };
-        fixture.store.collaboration_assignment_put(&assignment).unwrap();
-
-        let mut unrelated = Vec::new();
-        for index in 0..101 {
-            let message = CollaborationMessage {
-                id: Uuid::now_v7(),
-                operation_id: Uuid::now_v7(),
-                group_id: group.id,
-                assignment_id: None,
-                from_thread_id: Some(worker.id),
-                to_thread_id: thread.id,
-                external_recipient: false,
-                purpose: CollaborationMessagePurpose::Question,
-                reply_to: None,
-                body: format!("unrelated question {index}"),
-                state: CollaborationDeliveryState::Queued,
-                delivery_turn_id: None,
-                wakeup_count: 1,
-                created_at: now,
-                updated_at: now,
-            };
-            fixture.store.collaboration_message_put(&message, Some(message.id)).unwrap();
-            fixture.store.collaboration_message_queue(&message).unwrap();
-            unrelated.push(message);
-        }
-        let result_notification = CollaborationMessage {
-            id: Uuid::now_v7(),
-            operation_id: Uuid::now_v7(),
-            group_id: group.id,
-            assignment_id: Some(assignment.id),
-            from_thread_id: Some(worker.id),
-            to_thread_id: thread.id,
-            external_recipient: false,
-            purpose: CollaborationMessagePurpose::Result,
-            reply_to: None,
-            body: format!("Assignment {} finished with Success: The structured result surfaced", assignment.id),
-            state: CollaborationDeliveryState::Queued,
-            delivery_turn_id: None,
-            wakeup_count: 1,
-            created_at: now,
-            updated_at: now,
-        };
-        fixture.store.collaboration_message_put(&result_notification, Some(result_notification.id)).unwrap();
-        fixture.store.collaboration_message_queue(&result_notification).unwrap();
-        let actionable = CollaborationMessage {
-            id: Uuid::now_v7(),
-            operation_id: Uuid::now_v7(),
-            group_id: group.id,
-            assignment_id: Some(assignment.id),
-            from_thread_id: Some(worker.id),
-            to_thread_id: thread.id,
-            external_recipient: false,
-            purpose: CollaborationMessagePurpose::ChangeRequest,
-            reply_to: None,
-            body: "Do not consume this actionable follow-up".into(),
-            state: CollaborationDeliveryState::Queued,
-            delivery_turn_id: None,
-            wakeup_count: 1,
-            created_at: now,
-            updated_at: now,
-        };
-        fixture.store.collaboration_message_put(&actionable, Some(actionable.id)).unwrap();
-        fixture.store.collaboration_message_queue(&actionable).unwrap();
-
-        let fresh_result = CollaborationMessage {
-            id: Uuid::now_v7(),
-            operation_id: Uuid::now_v7(),
-            purpose: CollaborationMessagePurpose::Result,
-            body: "A new follow-up commit that is not in the old structured report".into(),
-            ..actionable.clone()
-        };
-        fixture.store.collaboration_message_put(&fresh_result, Some(fresh_result.id)).unwrap();
-        fixture.store.collaboration_message_queue(&fresh_result).unwrap();
-        let (live, _) = fixture.active_app_tool_session(&thread).await;
-        let value = fixture
-            .orchestrator
-            .execute_native_app_tool_call(
-                thread.id,
-                live.session_instance_id,
-                "read-structured-result",
-                "kybern_collaboration_read",
-                json!({}),
-            )
-            .await
-            .unwrap();
-        assert_eq!(value["pending_messages"].as_array().unwrap().len(), 100);
-        assert_eq!(value["assignments"][0]["result"]["summary"], "The structured result surfaced");
-        assert!(!fixture.store.queue_is_pending(result_notification.id).unwrap(), "surfaced structured result consumes its wakeup");
-        assert!(fixture.store.queue_is_pending(unrelated[100].id).unwrap(), "unrelated message outside the page stays queued");
-        assert!(fixture.store.queue_is_pending(actionable.id).unwrap(), "actionable same-assignment follow-up stays queued");
-        assert!(
-            fixture.store.queue_is_pending(fresh_result.id).unwrap(),
-            "an unseen follow-up result is not represented by an older report"
-        );
-    }
-
-    #[tokio::test]
-    async fn collaboration_read_scopes_recipient_before_bounding_and_consumes_own_result() {
-        let fixture = Fixture::new();
-        let thread = fixture.thread(ThreadStatus::Idle);
-        let group = fixture
-            .orchestrator
-            .collaboration_group_create(methods::CollaborationGroupsCreateParams {
-                operation_id: Uuid::now_v7(),
-                project_id: thread.project_id,
-                coordinator_thread_id: thread.id,
-                objective: "Read a structured assignment result".into(),
-                success_criteria: vec![],
-                coordinator_mode: Some(CoordinatorMode::Ordinary),
-                policy: None,
-            })
-            .unwrap();
-        fixture.store.project_coordinator_put(thread.project_id, thread.id, group.id).unwrap();
-        let worker = fixture.thread(ThreadStatus::Idle);
-        fixture
-            .store
-            .collaboration_member_put(&GroupMember {
-                group_id: group.id,
-                thread_id: worker.id,
-                role: GroupMemberRole::Worker,
-                active: true,
-                joined_at: chrono::Utc::now(),
-            })
-            .unwrap();
-        let now = chrono::Utc::now();
-        let assignment = CollaborationAssignment {
-            id: Uuid::now_v7(),
-            group_id: group.id,
-            parent_assignment_id: None,
-            owner_thread_id: Some(worker.id),
-            requested_child: None,
-            created_by_thread_id: Some(thread.id),
-            title: "Finished work".into(),
-            instructions: "Return one durable result".into(),
-            kind: AssignmentKind::Research,
-            status: AssignmentStatus::Completed,
-            dispatch_message_id: None,
-            base_revision: None,
-            depth: 0,
-            result: Some(AssignmentResult {
-                outcome: AssignmentOutcome::Success,
-                summary: "The structured result surfaced".into(),
-                changes: Vec::new(),
-                checks: Vec::new(),
-                artifacts: Vec::new(),
-                unresolved: Vec::new(),
-                completed_at: now,
-            }),
-            uncertainty: None,
-            revision: 2,
-            created_at: now,
-            updated_at: now,
-        };
-        fixture.store.collaboration_assignment_put(&assignment).unwrap();
-
-        let mut peer_progress = Vec::new();
-        for index in 0..101 {
-            let message = CollaborationMessage {
-                id: Uuid::now_v7(),
-                operation_id: Uuid::now_v7(),
-                group_id: group.id,
-                assignment_id: None,
-                from_thread_id: Some(worker.id),
-                to_thread_id: worker.id,
-                external_recipient: false,
-                purpose: CollaborationMessagePurpose::Progress,
-                reply_to: None,
-                body: format!("old peer progress {index}"),
-                state: CollaborationDeliveryState::Persisted,
-                delivery_turn_id: None,
-                wakeup_count: 0,
-                created_at: now,
-                updated_at: now,
-            };
-            fixture.store.collaboration_message_put(&message, None).unwrap();
-            peer_progress.push(message);
-        }
-        let result_notification = CollaborationMessage {
-            id: Uuid::now_v7(),
-            operation_id: Uuid::now_v7(),
-            group_id: group.id,
-            assignment_id: Some(assignment.id),
-            from_thread_id: Some(worker.id),
-            to_thread_id: thread.id,
-            external_recipient: false,
-            purpose: CollaborationMessagePurpose::Result,
-            reply_to: None,
-            body: "Assignment finished".into(),
-            state: CollaborationDeliveryState::Queued,
-            delivery_turn_id: None,
-            wakeup_count: 1,
-            created_at: now,
-            updated_at: now,
-        };
-        fixture.store.collaboration_message_put(&result_notification, Some(result_notification.id)).unwrap();
-        fixture.store.collaboration_message_queue(&result_notification).unwrap();
-
-        let (live, _) = fixture.active_app_tool_session(&thread).await;
-        let value = fixture
-            .orchestrator
-            .execute_native_app_tool_call(
-                thread.id,
-                live.session_instance_id,
-                "read-structured-result",
-                "kybern_collaboration_read",
-                json!({}),
-            )
-            .await
-            .unwrap();
-        let inbox = value["pending_messages"].as_array().unwrap();
-        assert_eq!(inbox.len(), 1);
-        assert_eq!(inbox[0]["id"], result_notification.id.to_string());
-        assert_eq!(inbox[0]["state"], "submitted");
-        assert_eq!(value["assignments"][0]["result"]["summary"], "The structured result surfaced");
-        assert!(!fixture.store.queue_is_pending(result_notification.id).unwrap(), "surfaced structured result consumes its wakeup");
-        for message in peer_progress {
-            assert_eq!(
-                fixture.store.collaboration_message_get(message.id).unwrap().unwrap().state,
-                CollaborationDeliveryState::Persisted,
-                "another recipient's inbox remains untouched"
-            );
-        }
-    }
-
-    #[test]
-    fn assignment_prompt_keeps_project_objective_as_background() {
-        let fixture = Fixture::new();
-        let thread = fixture.thread(ThreadStatus::Idle);
-        let group = fixture
-            .orchestrator
-            .collaboration_group_create(methods::CollaborationGroupsCreateParams {
-                operation_id: Uuid::now_v7(),
-                project_id: thread.project_id,
-                coordinator_thread_id: thread.id,
-                objective: "Have a worker inspect the README".into(),
-                success_criteria: vec![],
-                coordinator_mode: Some(CoordinatorMode::Ordinary),
-                policy: None,
-            })
-            .unwrap();
-        let now = chrono::Utc::now();
-        let assignment = CollaborationAssignment {
-            id: Uuid::now_v7(),
-            group_id: group.id,
-            parent_assignment_id: None,
-            owner_thread_id: Some(thread.id),
-            requested_child: None,
-            created_by_thread_id: Some(thread.id),
-            title: "Inspect the README".into(),
-            instructions: "Return the exact test command".into(),
-            kind: AssignmentKind::Research,
-            status: AssignmentStatus::Pending,
-            dispatch_message_id: None,
-            base_revision: None,
-            depth: 0,
-            result: None,
-            uncertainty: None,
-            revision: 1,
-            created_at: now,
-            updated_at: now,
-        };
-        let prompt = fixture.orchestrator.assignment_prompt(&group, &assignment).unwrap().plain_text();
-        assert!(prompt.contains("Project background (context only; do not execute it as an assignment)"));
-        assert!(prompt.contains("Your assignment: Inspect the README"));
-        assert!(prompt.contains("do not repeat that request or broaden your deliverable"));
-        assert!(prompt.contains("You may delegate a bounded subtask"));
-        assert!(prompt.contains("honor every user-authored instruction or correction"));
-        assert!(prompt.contains("omit permission_mode unless the user specifically requested an override"));
-        assert!(prompt.contains("never cancel and recreate it to bypass approval"));
-    }
-
-    #[test]
-    fn native_collaboration_wait_is_capped_below_client_deadline() {
-        let mut arguments = json!({"timeout_ms":60_000}).as_object().unwrap().clone();
-        super::cap_native_collaboration_wait(&mut arguments);
-        assert_eq!(arguments["timeout_ms"], 30_000);
-
-        let mut shorter = json!({"timeout_ms":5_000}).as_object().unwrap().clone();
-        super::cap_native_collaboration_wait(&mut shorter);
-        assert_eq!(shorter["timeout_ms"], 5_000);
-    }
-
-    #[tokio::test]
-    async fn native_context_write_retries_without_uuid_preserve_one_revision() {
-        let fixture = Fixture::new();
-        let coordinator = fixture
-            .orchestrator
-            .project_coordinator_get_or_create(methods::CollaborationCoordinatorGetOrCreateParams {
-                operation_id: Uuid::now_v7(),
-                project_id: fixture.project.id,
-                provider: ProviderInstance::default_for(ProviderKind::Codex),
-                model: None,
-                effort: None,
-                permission_mode: Some(PermissionMode::Supervised),
-                coordinator_mode: Some(CoordinatorMode::Ordinary),
-                initial_goal: Some("Remember project facts".into()),
-            })
-            .await
-            .unwrap();
-        let thread = coordinator.thread;
-        let (live, _) = fixture.active_app_tool_session(&thread).await;
-        let arguments =
-            json!({"request_key":"remember-test-command", "key":"test-command", "kind":"research", "body":"Run cargo test -p sample."});
-        let first = fixture
-            .orchestrator
-            .execute_native_app_tool_call(
-                thread.id,
-                live.session_instance_id,
-                "first-call",
-                "kybern_collaboration_context_put",
-                arguments.clone(),
-            )
-            .await
-            .unwrap();
-        let retry = fixture
-            .orchestrator
-            .execute_native_app_tool_call(
-                thread.id,
-                live.session_instance_id,
-                "new-call-after-lost-response",
-                "kybern_collaboration_context_put",
-                arguments.clone(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(first, retry);
-        assert!(first["operation_id"].as_str().is_some_and(|id| Uuid::parse_str(id).is_ok()));
-        let group = fixture.store.collaboration_group_for_thread(thread.id).unwrap().unwrap();
-        let entries: Vec<_> =
-            fixture.store.collaboration_context_latest(group).unwrap().into_iter().filter(|entry| entry.key == "test-command").collect();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].revision, 1);
-        let mut changed = arguments;
-        changed["body"] = json!("a different request");
-        let error = fixture
-            .orchestrator
-            .execute_native_app_tool_call(thread.id, live.session_instance_id, "third-call", "kybern_collaboration_context_put", changed)
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("operation id already belongs"));
-        assert_eq!(
-            fixture.store.collaboration_context_latest(group).unwrap().into_iter().find(|entry| entry.key == "test-command").unwrap().body,
-            "Run cargo test -p sample."
-        );
-    }
-
-    #[tokio::test]
     async fn thread_context_starts_catalog_refresh_without_waiting_for_probes() {
         let fixture = Fixture::new();
         let thread = fixture.thread(ThreadStatus::Idle);
@@ -8719,107 +5456,6 @@ mod tests {
         .unwrap();
         assert_eq!(cached["providers"].as_array().unwrap().len(), ProviderKind::ALL.len());
         assert!(cached["providers"].as_array().unwrap().iter().all(|provider| provider["models"].is_array()));
-    }
-
-    #[test]
-    fn assignment_context_prioritizes_constraints_and_defers_archived_reports() {
-        let entry = |key: &str, kind, body: String, user_authored| ContextEntry {
-            id: Uuid::now_v7(),
-            group_id: Uuid::now_v7(),
-            key: key.into(),
-            kind,
-            body,
-            author_thread_id: None,
-            user_authored,
-            revision: 1,
-            source_refs: vec![],
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-        };
-        let mut context: Vec<_> = (0..40)
-            .map(|index| {
-                entry(
-                    &format!("assignment.result.{index}"),
-                    ContextEntryKind::ResultReference,
-                    "old detailed worker report ".repeat(400),
-                    false,
-                )
-            })
-            .collect();
-        context.push(entry("z.user", ContextEntryKind::ResultReference, "Preserve the user's correction".into(), true));
-        context.push(entry("plan", ContextEntryKind::Plan, "Current work only".into(), false));
-        context.push(entry("project.setup", ContextEntryKind::Research, "Build commands and architecture".into(), false));
-        let shared = super::assignment_shared_context(context);
-        assert!(shared.contains("Preserve the user's correction"));
-        assert!(shared.contains("Current work only"));
-        assert!(shared.contains("Build commands and architecture"));
-        assert!(shared.contains("40 archived result reports"));
-        assert!(!shared.contains("old detailed worker report"));
-        assert!(shared.find("z.user").unwrap() < shared.find("plan").unwrap());
-        assert!(shared.len() < 1024, "archived reports should not inflate every new worker prompt");
-    }
-
-    #[tokio::test]
-    async fn ordinary_thread_is_refused_project_knowledge_and_the_role_prefix_stays_stable() {
-        let fixture = Fixture::new();
-        let thread = fixture.thread(ThreadStatus::Idle);
-        let coordinator = fixture
-            .orchestrator
-            .project_coordinator_get_or_create(methods::CollaborationCoordinatorGetOrCreateParams {
-                operation_id: Uuid::now_v7(),
-                project_id: thread.project_id,
-                provider: ProviderInstance::default_for(ProviderKind::Codex),
-                model: None,
-                effort: None,
-                permission_mode: Some(PermissionMode::Supervised),
-                coordinator_mode: Some(CoordinatorMode::Ordinary),
-                initial_goal: Some("Keep reusable project facts".into()),
-            })
-            .await
-            .unwrap();
-        let role_before = fixture.orchestrator.coordinator_instructions(&coordinator.thread).unwrap().unwrap();
-        assert!(role_before.contains("kybern_collaboration_read"));
-        assert!(role_before.contains("kybern_collaboration_context_read"));
-        assert!(role_before.contains("kybern_thread_read"));
-        fixture
-            .orchestrator
-            .collaboration_context_put(
-                methods::CollaborationContextPutParams {
-                    operation_id: Uuid::now_v7(),
-                    group_id: coordinator.group.id,
-                    entry_id: None,
-                    key: "shared.fact".into(),
-                    kind: ContextEntryKind::Decision,
-                    body: "The project uses a scratch daemon for tests.".into(),
-                    author_thread_id: None,
-                    user_authored: true,
-                    expected_revision: None,
-                    source_refs: vec!["user:test".into()],
-                },
-                None,
-            )
-            .unwrap();
-        let (live, _) = fixture.active_app_tool_session(&thread).await;
-        // Orchestrator V2: an ordinary thread is not offered the collaboration tools.
-        let refused = fixture
-            .orchestrator
-            .execute_native_app_tool_call(
-                thread.id,
-                live.session_instance_id,
-                "read-project-knowledge",
-                "kybern_collaboration_context_read",
-                json!({"keys":["shared.fact"], "limit":10}),
-            )
-            .await
-            .unwrap_err();
-        assert!(refused.to_string().contains("only for project coordinators") && refused.to_string().contains("kybern_agent_delegate"));
-        assert_eq!(fixture.store.collaboration_group_for_thread(thread.id).unwrap(), None);
-        let role_after = fixture.orchestrator.coordinator_instructions(&coordinator.thread).unwrap().unwrap();
-        assert_eq!(role_before, role_after, "changing project knowledge must not replace the cached system prefix");
-        assert!(!role_after.contains("The project uses a scratch daemon"), "live knowledge belongs in tool responses");
-        let mut resumed = coordinator.thread.clone();
-        resumed.provider_session_id = Some("saved-provider-session".into());
-        assert_eq!(fixture.orchestrator.coordinator_instructions(&resumed).unwrap().as_deref(), Some(role_before.as_str()));
     }
 
     /// Records the bridge each spawned session is given.
@@ -8891,40 +5527,6 @@ mod tests {
         assert_eq!(off.guide(), None);
         assert_eq!(off.provider_instructions(), None);
         assert!(off.tools().next().is_some(), "turning the guide off leaves the tools alone");
-    }
-
-    #[tokio::test]
-    async fn a_coordinator_gets_the_guide_for_its_restricted_tools_then_its_stable_role() {
-        let (fixture, bridges) = capture_fixture(ProviderKind::ClaudeCode);
-        let coordinator = fixture
-            .orchestrator
-            .project_coordinator_get_or_create(methods::CollaborationCoordinatorGetOrCreateParams {
-                operation_id: Uuid::now_v7(),
-                project_id: fixture.project.id,
-                provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
-                model: None,
-                effort: None,
-                permission_mode: Some(PermissionMode::Supervised),
-                coordinator_mode: Some(CoordinatorMode::Dedicated),
-                initial_goal: Some("Coordinate".into()),
-            })
-            .await
-            .unwrap();
-        let live = fixture.orchestrator.spawn_session(&coordinator.thread, None).await.unwrap();
-        fixture.orchestrator.revoke_native_session(&live);
-        let bridge = bridges.lock().unwrap().last().cloned().flatten().expect("bridge");
-        let role = fixture.orchestrator.coordinator_instructions(&coordinator.thread).unwrap().unwrap();
-        let guide = bridge.guide().unwrap();
-        assert_eq!(bridge.provider_instructions(), Some(format!("{guide}\n{role}")));
-        assert!(guide.contains("## Notes and tasks") && guide.contains("kybern_thread_read"));
-        assert!(!guide.contains("kybern_collaboration_spawn") || bridge.has_tool("kybern_collaboration_spawn"));
-        assert!(guide.contains("## Visual replies"));
-        for name in ["kybern_html_preview", "kybern_html_publish"] {
-            assert!(bridge.has_tool(name), "Coordinators can illustrate their own review: {name}");
-        }
-        for name in ["kybern_thread_send", "kybern_workspace_diff", "kybern_html_preview", "kybern_html_publish"] {
-            assert_eq!(guide.contains(name), bridge.has_tool(name), "the guide must describe exactly the tools the session has: {name}");
-        }
     }
 
     #[tokio::test]
@@ -9565,6 +6167,7 @@ mod tests {
                 project_id: Some(fixture.project.id),
                 title: Some("Plan".into()),
                 body: Some("- [ ] ship".into()),
+                project_role: None,
             })
             .unwrap();
         assert_eq!(changes.try_recv().unwrap().note.unwrap().id, note.summary.id);
@@ -9602,6 +6205,7 @@ mod tests {
                 project_id: Some(fixture.project.id),
                 title: Some("Plan".into()),
                 body: None,
+                project_role: None,
             })
             .unwrap();
         fixture
@@ -10660,6 +7264,7 @@ for line in sys.stdin:
             daemon_approvals: Mutex::new(HashMap::new()),
             app_tool_requests: Mutex::new(HashSet::new()),
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
+            brief_revision: Mutex::new(None),
         });
         fixture.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
         fixture.orchestrator.send(thread.id, UserMessage::text("delegate")).await.unwrap();
@@ -10712,6 +7317,8 @@ for line in sys.stdin:
     }
 
     include!("orchestrator/delegation_tests.rs");
+    include!("orchestrator/secret_tests.rs");
+    include!("orchestrator/lead_tests.rs");
     include!("orchestrator/messaging_tests.rs");
     include!("orchestrator/account_tests.rs");
     include!("orchestrator/worktree_tests.rs");

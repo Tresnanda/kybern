@@ -119,6 +119,9 @@ export function NoteView({
   fill,
   autoFocusBody,
   maxEditorHeight,
+  placeholder,
+  emptyText,
+  saveFailedText,
 }: {
   s: Session;
   editing: boolean;
@@ -126,6 +129,12 @@ export function NoteView({
   fill?: boolean;
   autoFocusBody?: boolean;
   maxEditorHeight?: number;
+  /** The editor's hint while the text is empty. */
+  placeholder?: string;
+  /** What an empty note says when read. */
+  emptyText?: string;
+  /** What a failed save says, instead of the generic note message. */
+  saveFailedText?: string;
 }) {
   const { colors } = useTheme();
   const body = useRef<TextInput>(null);
@@ -151,7 +160,7 @@ export function NoteView({
       )}
       {s.status === "error" && (
         <ErrorBanner
-          error="Unable to save your changes. Check your connection. They stay on this phone."
+          error={saveFailedText ?? "Unable to save your changes. Check your connection. They stay on this phone."}
           onRetry={() => void s.session.retry()}
         />
       )}
@@ -201,7 +210,7 @@ export function NoteView({
             ref={body}
             underlineColorAndroid="transparent"
             accessibilityLabel="Note text, Markdown"
-            placeholder="Write something. Use - [ ] for a checklist."
+            placeholder={placeholder ?? "Write something. Use - [ ] for a checklist."}
             placeholderTextColor={colors.muted}
             selectionColor={colors.accent}
             multiline
@@ -246,7 +255,7 @@ export function NoteView({
             <Markdown text={s.body} />
           ) : (
             <T tone="muted">
-              {s.deleted ? "This note is empty." : "Nothing here yet. Tap Edit to start writing."}
+              {s.deleted ? "This note is empty." : emptyText ?? "Nothing here yet. Tap Edit to start writing."}
             </T>
           )}
           {s.note && (

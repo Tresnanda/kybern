@@ -114,6 +114,7 @@ expression: schema_for!(Settings)
       "$ref": "#/$defs/OrchestrationSettings",
       "default": {
         "max_active_children": 4,
+        "lead_max_children": 6,
         "max_depth": 2
       }
     },
@@ -359,6 +360,13 @@ expression: schema_for!(Settings)
           "format": "uint32",
           "minimum": 0,
           "default": 4
+        },
+        "lead_max_children": {
+          "description": "The same limit when the delegating thread is a project's Coordinator (1..=16).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 6
         },
         "max_depth": {
           "description": "Deepest chain of delegation: 1 means only top-level threads delegate (1..=4).",

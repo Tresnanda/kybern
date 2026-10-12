@@ -623,12 +623,6 @@ fn apply_transcript_event(
             | EventPayload::ThreadUpdated { .. }
             | EventPayload::MessageQueued { .. }
             | EventPayload::MessageQueueUpdated { .. }
-            | EventPayload::ProjectCoordinatorDeleted { .. }
-            | EventPayload::CollaborationGroupUpdated { .. }
-            | EventPayload::CollaborationMemberUpdated { .. }
-            | EventPayload::CollaborationAssignmentUpdated { .. }
-            | EventPayload::CollaborationMessageUpdated { .. }
-            | EventPayload::CollaborationContextUpdated { .. }
             | EventPayload::ThreadNotesUpdated { .. }
             | EventPayload::ThreadMessageHeld { .. }
             | EventPayload::ThreadMessageResolved { .. }

@@ -137,8 +137,9 @@ pub struct NativeToolBridge {
     pub server_name: String,
     pub endpoint: Option<String>,
     pub authorization: Option<String>,
-    /// Role and bounded project context for an explicitly opted-in project
-    /// coordinator. Ordinary threads always leave this unset.
+    /// Role and bounded project context: a project Coordinator's lead instructions
+    /// and the project brief and notes index for threads that carry them. Threads
+    /// without either leave this unset.
     pub coordinator_instructions: Option<String>,
     /// Kybern's "Working in Kybern" guide, rendered from this session's tools.
     /// Every thread may carry one; it is independent of the coordinator role.
@@ -182,6 +183,11 @@ pub struct NativeToolRestrictions {
     /// at the native tool boundary.  Drivers return an explicit unsupported
     /// error when their harness cannot do that.
     pub require_enforcement: bool,
+    /// With `require_enforcement`, keep the harness's read-only built-in tools
+    /// (reading, searching and listing files, and web lookups where the harness
+    /// has them) instead of switching every built-in tool off. Never a shell or
+    /// an editor. Ignored without `require_enforcement`.
+    pub allow_read_only_builtins: bool,
 }
 
 impl NativeToolRestrictions {

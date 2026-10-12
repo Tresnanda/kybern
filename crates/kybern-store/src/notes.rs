@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
-use kybern_protocol::methods::{Note, NoteChecklist, NoteId, NoteScope, NoteSearchHit, NoteSummary};
+use kybern_protocol::methods::{Note, NoteChecklist, NoteId, NoteScope, NoteSearchHit, NoteSummary, ProjectNoteRole};
 use kybern_protocol::{ProjectId, ThreadId, is_free_chat_project};
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
@@ -111,6 +111,66 @@ impl Store {
         })
     }
 
+    /// The live project-scope notes of a project (the brief and setup note included),
+    /// most recently edited first.
+    pub fn project_notes(&self, project_id: ProjectId) -> Result<Vec<Note>> {
+        self.with(|c| {
+            let mut notes =
+                query_notes(c, "WHERE n.project_id = ?1 AND n.scope = 'project' AND n.deleted_at IS NULL", [project_id.to_string()])?;
+            notes.sort_by_key(|note| std::cmp::Reverse(note.summary.updated_at));
+            Ok(notes)
+        })
+    }
+
+    /// The project's brief or setup note, if it has one.
+    pub fn note_for_project_role(&self, project_id: ProjectId, role: ProjectNoteRole) -> Result<Option<Note>> {
+        self.with(|c| fetch_note(c, "WHERE n.project_id = ?1 AND n.project_role = ?2", params![project_id.to_string(), role.as_str()]))
+    }
+
+    /// Create the project's brief or setup note: a pinned project note. The brief is
+    /// the user's own (`created_by_thread` empty); the Coordinator writes the setup
+    /// note. Fails when the project already has a note with this role.
+    pub fn note_create_project_role(
+        &self,
+        project_id: ProjectId,
+        role: ProjectNoteRole,
+        title: &str,
+        body: &str,
+        created_by_thread: Option<ThreadId>,
+    ) -> Result<Note> {
+        check_content(Some(title), Some(body))?;
+        self.with(|c| {
+            check_project(c, project_id)?;
+            let taken = c
+                .query_row(
+                    "SELECT 1 FROM notes WHERE project_id = ?1 AND project_role = ?2",
+                    params![project_id.to_string(), role.as_str()],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if taken {
+                return invalid("This project already has that note. Edit the existing one.");
+            }
+            let id = Uuid::now_v7();
+            let now = Utc::now().to_rfc3339();
+            c.execute(
+                "INSERT INTO notes(id, scope, project_id, title, body, pinned, revision, created_at, updated_at, created_by_thread_id, project_role)
+                 VALUES (?1, 'project', ?2, ?3, ?4, 1, 1, ?5, ?5, ?6, ?7)",
+                params![
+                    id.to_string(),
+                    project_id.to_string(),
+                    title,
+                    body,
+                    now,
+                    created_by_thread.map(|id| id.to_string()),
+                    role.as_str()
+                ],
+            )?;
+            expect_note(c, id)
+        })
+    }
+
     /// Save a new title and/or body. Unchanged content returns the current note
     /// without a revision bump, so a retry after a lost reply is harmless.
     pub fn note_update(&self, target: NoteTarget, expected_revision: i64, title: Option<&str>, body: Option<&str>) -> Result<Note> {
@@ -188,6 +248,9 @@ impl Store {
             if note.summary.scope == NoteScope::Thread {
                 return invalid("A thread's note stays with its thread.");
             }
+            if note.summary.project_role.is_some() {
+                return invalid("The project brief and setup note stay with their project.");
+            }
             if note.summary.deleted_at.is_some() {
                 return invalid("Restore this note before moving it.");
             }
@@ -215,6 +278,9 @@ impl Store {
             let note = expect_note(c, id)?;
             if note.summary.deleted_at.is_some() {
                 return Ok(note.summary);
+            }
+            if note.summary.project_role.is_some() {
+                return invalid("The project brief and setup note cannot be deleted. Clear the text instead.");
             }
             // The title snapshot keeps a thread note recognizable once its thread is gone.
             c.execute(
@@ -246,7 +312,7 @@ impl Store {
                 c.execute("UPDATE notes SET deleted_at = NULL, origin = NULL WHERE id = ?1", [id.to_string()])?;
             } else {
                 c.execute(
-                    "UPDATE notes SET deleted_at = NULL, scope = 'global', project_id = NULL, thread_id = NULL WHERE id = ?1",
+                    "UPDATE notes SET deleted_at = NULL, scope = 'global', project_id = NULL, thread_id = NULL, project_role = NULL WHERE id = ?1",
                     [id.to_string()],
                 )?;
             }
@@ -408,7 +474,7 @@ fn check_project(c: &Connection, id: ProjectId) -> Result<()> {
 
 const NOTE_SELECT: &str = "SELECT n.id, n.scope, n.project_id, n.thread_id,
         CASE WHEN n.scope = 'thread' THEN COALESCE(t.title, n.title) ELSE n.title END,
-        n.body, n.pinned, n.revision, n.created_at, n.updated_at, n.deleted_at, n.origin, n.created_by_thread_id
+        n.body, n.pinned, n.revision, n.created_at, n.updated_at, n.deleted_at, n.origin, n.created_by_thread_id, n.project_role
     FROM notes n LEFT JOIN threads t ON t.id = n.thread_id";
 
 fn query_notes<P: rusqlite::Params>(c: &Connection, clause: &str, params: P) -> Result<Vec<Note>> {
@@ -447,6 +513,10 @@ fn row_to_note(r: &rusqlite::Row<'_>) -> rusqlite::Result<Note> {
             deleted_at: optional_time(10)?,
             origin: r.get(11)?,
             created_by_thread: r.get::<_, Option<String>>(12)?.map(parse_uuid).transpose()?,
+            project_role: r
+                .get::<_, Option<String>>(13)?
+                .map(|role| serde_json::from_value(serde_json::Value::String(role)).map_err(other))
+                .transpose()?,
         },
         body,
     })
@@ -639,6 +709,7 @@ mod tests {
             is_git: false,
             worktrees_default: None,
             task_prefix: None,
+            brief_in_all_threads: false,
             created_at: now,
             updated_at: now,
         };
@@ -666,7 +737,6 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
-            collaboration_group_id: None,
             subagent: None,
             delegation: None,
         };

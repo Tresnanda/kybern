@@ -82,6 +82,27 @@ impl Repo {
             .unwrap_or(false)
     }
 
+    /// Whether git ignores `path` (relative to the workdir). A tracked file is
+    /// not ignored: its changes would still be committed.
+    pub async fn is_ignored(&self, path: &str) -> Result<bool> {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&self.workdir)
+            .args(["check-ignore", "-q", "--"])
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .context("run git")?;
+        match out.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(anyhow!("git check-ignore failed: {}", String::from_utf8_lossy(&out.stderr).trim())),
+        }
+    }
+
     pub async fn toplevel(&self) -> Result<PathBuf> {
         Ok(PathBuf::from(self.git(&["rev-parse", "--show-toplevel"]).await?))
     }

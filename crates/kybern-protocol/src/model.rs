@@ -267,6 +267,10 @@ pub struct Project {
     /// project name when it is added; editable through `projects.update`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_prefix: Option<String>,
+    /// When on, every new thread in the project also gets the project brief and an
+    /// index of its notes at session start (not only the Coordinator's children).
+    #[serde(default)]
+    pub brief_in_all_threads: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -314,12 +318,10 @@ pub struct Thread {
     /// Immutable parent for a Kybern-managed helper thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_thread_id: Option<ThreadId>,
-    /// Set when this thread is the persistent coordinator for a project.
+    /// Set when this thread is the project's Coordinator, the lead thread that
+    /// plans and delegates. At most one non-archived thread per project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coordinator_project_id: Option<ProjectId>,
-    /// Active collaboration membership, denormalized for efficient navigation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub collaboration_group_id: Option<crate::GroupId>,
     /// Set when this thread mirrors one provider-native subagent. Such a thread
     /// is read-only: it records what the subagent said and did, and its
     /// `parent_thread_id` is the thread (or subagent thread) that launched it.
@@ -1164,11 +1166,44 @@ pub struct ApprovalRequest {
     pub created_at: DateTime<Utc>,
 }
 
+/// `tool_name` of the daemon-raised approval behind the `kybern_request_secret`
+/// tool. The card asks the user for one secret value; the daemon writes it to a
+/// file and never returns, persists or logs it.
+///
+/// `input` is a [`SecretRequestInput`]. The answer is
+/// `ApprovalDecision::Submit { response: {"secret": "<value>"} }` or `Deny`.
+/// Stored and broadcast copies of the answer carry [`REDACTED_SECRET`] instead
+/// of the value (see [`ApprovalRequest::redacted_decision`]).
+pub const SECRET_REQUEST_TOOL: &str = "kybern_request_secret";
+/// What stored and broadcast copies of a secret answer contain instead of it.
+pub const REDACTED_SECRET: &str = "[redacted]";
+/// Longest secret, in bytes, the daemon accepts.
+pub const MAX_SECRET_BYTES: usize = 16 * 1024;
+
+/// The `input` of a [`SECRET_REQUEST_TOOL`] approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SecretRequestInput {
+    /// Short name of the secret, shown as the card title.
+    pub label: String,
+    /// Why the agent needs it, shown as the card body.
+    pub reason: String,
+    /// The variable the daemon writes, e.g. `STRIPE_KEY`.
+    pub env_key: String,
+    /// The file it is written to, relative to the thread workspace, e.g. `.env`.
+    pub file: String,
+    /// The key is already in the file, so saving replaces its current value.
+    pub replaces: bool,
+    /// Hint for the empty field, if the agent gave one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
+}
+
 impl ApprovalRequest {
     pub fn is_user_input(&self) -> bool {
         matches!(
             self.tool_name.as_str(),
             "AskUserQuestion"
+                | SECRET_REQUEST_TOOL
                 | "request_user_input"
                 | "opencode_question"
                 | "mcp_elicitation"
@@ -1242,6 +1277,12 @@ impl ApprovalRequest {
                     validate_form_value(schema, content)?;
                 }
             }
+            SECRET_REQUEST_TOOL => {
+                let secret = response.get("secret").and_then(Value::as_str);
+                if !secret.is_some_and(|secret| !secret.is_empty() && secret.len() <= MAX_SECRET_BYTES && !secret.contains('\0')) {
+                    return Err(format!("Enter a value of up to {} KiB, or decline.", MAX_SECRET_BYTES / 1024));
+                }
+            }
             // Kybern's computer-use consent: `{"scope":"always"}` remembers the app.
             "kybern_computer_use" => {
                 if response.get("scope").and_then(Value::as_str) != Some("always") {
@@ -1251,6 +1292,41 @@ impl ApprovalRequest {
             _ => return Err("This request needs a permission decision.".into()),
         }
         Ok(())
+    }
+}
+
+impl ApprovalRequest {
+    /// The decision as it may be stored, broadcast or logged. Secret answers
+    /// (a [`SECRET_REQUEST_TOOL`] value, and Codex `request_user_input` answers
+    /// to questions marked `isSecret`) are replaced by [`REDACTED_SECRET`];
+    /// everything else is returned unchanged. Only the live delivery to the
+    /// waiting tool or provider may use the original.
+    pub fn redacted_decision(&self, decision: &ApprovalDecision) -> ApprovalDecision {
+        let ApprovalDecision::Submit { response } = decision else { return decision.clone() };
+        match self.tool_name.as_str() {
+            SECRET_REQUEST_TOOL => ApprovalDecision::Submit { response: serde_json::json!({ "secret": REDACTED_SECRET }) },
+            "request_user_input" => {
+                let secret_ids: Vec<&str> = self
+                    .input
+                    .get("questions")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter(|question| question.get("isSecret").and_then(Value::as_bool) == Some(true))
+                    .filter_map(|question| question.get("id").and_then(Value::as_str))
+                    .collect();
+                let mut response = response.clone();
+                if let Some(answers) = response.get_mut("answers").and_then(Value::as_object_mut) {
+                    for (id, answer) in answers.iter_mut() {
+                        if secret_ids.contains(&id.as_str()) {
+                            *answer = serde_json::json!({ "answers": [REDACTED_SECRET] });
+                        }
+                    }
+                }
+                ApprovalDecision::Submit { response }
+            }
+            _ => decision.clone(),
+        }
     }
 }
 
@@ -1565,13 +1641,15 @@ pub struct Settings {
 pub struct OrchestrationSettings {
     /// Most delegated children one thread may have running at once (1..=16).
     pub max_active_children: u32,
+    /// The same limit when the delegating thread is a project's Coordinator (1..=16).
+    pub lead_max_children: u32,
     /// Deepest chain of delegation: 1 means only top-level threads delegate (1..=4).
     pub max_depth: u32,
 }
 
 impl Default for OrchestrationSettings {
     fn default() -> Self {
-        Self { max_active_children: 4, max_depth: 2 }
+        Self { max_active_children: 4, lead_max_children: 6, max_depth: 2 }
     }
 }
 
@@ -2061,9 +2139,9 @@ mod orchestration_tests {
 
     #[test]
     fn orchestration_settings_default_and_partial_parse() {
-        assert_eq!(Settings::default().orchestration, OrchestrationSettings { max_active_children: 4, max_depth: 2 });
+        assert_eq!(Settings::default().orchestration, OrchestrationSettings { max_active_children: 4, lead_max_children: 6, max_depth: 2 });
         let settings: Settings = serde_json::from_value(serde_json::json!({ "orchestration": { "max_depth": 3 } })).unwrap();
-        assert_eq!(settings.orchestration, OrchestrationSettings { max_active_children: 4, max_depth: 3 });
+        assert_eq!(settings.orchestration, OrchestrationSettings { max_active_children: 4, lead_max_children: 6, max_depth: 3 });
         let legacy: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(legacy.orchestration, OrchestrationSettings::default());
     }

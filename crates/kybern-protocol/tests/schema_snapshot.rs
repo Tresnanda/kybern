@@ -101,6 +101,7 @@ fn notes_wire_shape_is_stable() {
             deleted_at: None,
             origin: None,
             created_by_thread: None,
+            project_role: None,
         },
         body: "- [x] Ship it".into(),
     };
@@ -109,10 +110,19 @@ fn notes_wire_shape_is_stable() {
     assert_eq!(json["body"], "- [x] Ship it", "body sits beside the summary fields");
     assert_eq!(json["checklist"], serde_json::json!({"done": 1, "total": 3}));
     assert!(
-        json.get("thread_id").is_none() && json.get("deleted_at").is_none() && json.get("created_by_thread").is_none(),
+        json.get("thread_id").is_none()
+            && json.get("deleted_at").is_none()
+            && json.get("created_by_thread").is_none()
+            && json.get("project_role").is_none(),
         "absent options are omitted"
     );
     assert_eq!(serde_json::from_value::<Note>(json).unwrap(), note);
+    let mut brief = note.clone();
+    brief.summary.scope = NoteScope::Project;
+    brief.summary.project_role = Some(ProjectNoteRole::Brief);
+    let json = serde_json::to_value(&brief).unwrap();
+    assert_eq!(json["project_role"], "brief");
+    assert_eq!(serde_json::from_value::<Note>(json).unwrap(), brief);
     let update: NotesUpdateParams =
         serde_json::from_value(serde_json::json!({"thread_id": uuid::Uuid::nil(), "expected_revision": 0})).unwrap();
     assert!(update.id.is_none() && update.body.is_none());

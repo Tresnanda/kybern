@@ -164,11 +164,10 @@ impl AgentDriver for CursorDriver {
         // The SDK has no system channel. Refresh the current guide on this
         // runner's first ordinary prompt, including resumed conversations whose
         // saved history may contain an older guide or none at all.
-        let guide = config.native_tool_bridge.as_ref().and_then(|bridge| bridge.guide());
-        Ok(SpawnedSession {
-            session: Box::new(Session { connection, model: Mutex::new(config.model), guide: Mutex::new(guide.map(str::to_owned)) }),
-            events,
-        })
+        // A project Coordinator's lead instructions and a thread's project brief
+        // ride in the same block, since there is no system channel for them either.
+        let guide = config.native_tool_bridge.as_ref().and_then(|bridge| bridge.provider_instructions());
+        Ok(SpawnedSession { session: Box::new(Session { connection, model: Mutex::new(config.model), guide: Mutex::new(guide) }), events })
     }
 }
 
@@ -326,7 +325,7 @@ for line in sys.stdin:
                     server_name: "kybern".into(),
                     endpoint: Some("http://127.0.0.1/native-tools/mcp".into()),
                     authorization: Some("fixture-session-capability".into()),
-                    coordinator_instructions: None,
+                    coordinator_instructions: enabled.then(|| "LEAD ROLE: plan and delegate".into()),
                     guide: enabled.then(|| "CURRENT GUIDE: use kybern_html_preview when helpful".into()),
                     tools: vec![],
                     restrictions: Default::default(),
@@ -364,7 +363,7 @@ for line in sys.stdin:
             assert_eq!(sends.len(), 4);
             assert_eq!(sends[0]["message"]["text"], "/compress");
             let expected = if enabled {
-                with_guide("CURRENT GUIDE: use kybern_html_preview when helpful", "Explain the results")
+                with_guide("CURRENT GUIDE: use kybern_html_preview when helpful\nLEAD ROLE: plan and delegate", "Explain the results")
             } else {
                 "Explain the results".into()
             };

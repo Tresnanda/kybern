@@ -363,7 +363,7 @@ async fn retrying_a_delegate_call_returns_the_same_child() {
 async fn depth_and_active_children_limits_come_from_settings_and_explain_the_next_step() {
     let t = Delegating::new().await;
     let mut settings = t.fixture.orchestrator.inner.settings.get();
-    settings.orchestration = OrchestrationSettings { max_active_children: 2, max_depth: 1 };
+    settings.orchestration = OrchestrationSettings { max_active_children: 2, lead_max_children: 6, max_depth: 1 };
     t.fixture.orchestrator.inner.settings.set(settings.clone()).unwrap();
 
     let first = t.delegate(json!({"task": "one"})).await;
@@ -898,110 +898,6 @@ async fn capabilities_report_harnesses_limits_and_counts() {
     assert_eq!(claude["supports_steer"], true);
     assert!(!harnesses.iter().any(|h| h["provider"] == "opencode" && h["supports_steer"] == true));
     assert_eq!(caps["you"]["provider"], "claude-code");
-}
-
-#[tokio::test]
-async fn collaboration_tools_are_offered_only_to_coordinators_and_their_workers() {
-    let (fixture, bridges) = capture_fixture(ProviderKind::ClaudeCode);
-    let ordinary = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::ClaudeCode);
-    let live = fixture.orchestrator.spawn_session(&ordinary, None).await.unwrap();
-    fixture.orchestrator.revoke_native_session(&live);
-    let bridge = bridges.lock().unwrap().last().cloned().flatten().expect("bridge");
-    for name in [
-        "kybern_agent_capabilities",
-        "kybern_agent_delegate",
-        "kybern_agent_status",
-        "kybern_agent_cancel",
-        "kybern_agent_wait",
-        "kybern_thread_interrupt",
-        "kybern_thread_send",
-        "kybern_thread_read",
-    ] {
-        assert!(bridge.has_tool(name), "an ordinary thread gets {name}");
-    }
-    for name in [
-        "kybern_collaboration_spawn",
-        "kybern_collaboration_send",
-        "kybern_collaboration_read",
-        "kybern_collaboration_wait",
-        "kybern_collaboration_report",
-        "kybern_collaboration_cancel",
-        "kybern_collaboration_context_read",
-        "kybern_collaboration_context_put",
-    ] {
-        assert!(!bridge.has_tool(name), "an ordinary thread must not see {name}");
-    }
-
-    let coordinator = fixture
-        .orchestrator
-        .project_coordinator_get_or_create(methods::CollaborationCoordinatorGetOrCreateParams {
-            operation_id: Uuid::now_v7(),
-            project_id: fixture.project.id,
-            provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
-            model: None,
-            effort: None,
-            permission_mode: Some(PermissionMode::Supervised),
-            coordinator_mode: Some(CoordinatorMode::Ordinary),
-            initial_goal: Some("Coordinate".into()),
-        })
-        .await
-        .unwrap();
-    let live = fixture.orchestrator.spawn_session(&coordinator.thread, None).await.unwrap();
-    fixture.orchestrator.revoke_native_session(&live);
-    let bridge = bridges.lock().unwrap().last().cloned().flatten().expect("bridge");
-    assert!(bridge.has_tool("kybern_collaboration_spawn") && bridge.has_tool("kybern_agent_delegate"));
-
-    // A worker in the coordinator's group sees them too, and so does a member of an
-    // existing legacy group (its in-flight assignments must still report); a thread
-    // in no group does not.
-    let worker = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::ClaudeCode);
-    fixture
-        .store
-        .collaboration_member_put(&GroupMember {
-            group_id: coordinator.group.id,
-            thread_id: worker.id,
-            role: GroupMemberRole::Worker,
-            active: true,
-            joined_at: chrono::Utc::now(),
-        })
-        .unwrap();
-    assert!(fixture.orchestrator.collaboration_tools_enabled(&worker).unwrap());
-    assert!(fixture.orchestrator.collaboration_tools_enabled(&coordinator.thread).unwrap());
-    let loner = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::ClaudeCode);
-    let ordinary_group = fixture
-        .orchestrator
-        .collaboration_group_create(methods::CollaborationGroupsCreateParams {
-            operation_id: Uuid::now_v7(),
-            project_id: loner.project_id,
-            coordinator_thread_id: loner.id,
-            objective: "Ad hoc".into(),
-            success_criteria: vec![],
-            coordinator_mode: Some(CoordinatorMode::Ordinary),
-            policy: None,
-        })
-        .unwrap();
-    assert!(fixture.store.collaboration_group_for_thread(loner.id).unwrap() == Some(ordinary_group.id));
-    assert!(
-        fixture.orchestrator.collaboration_tools_enabled(&loner).unwrap(),
-        "a member of an active legacy group keeps the collaboration tools"
-    );
-    assert!(!fixture.orchestrator.collaboration_tools_enabled(&ordinary).unwrap(), "a thread in no group does not get them");
-    let mut stopped = fixture.store.collaboration_group_get(ordinary_group.id).unwrap().unwrap();
-    stopped.status = GroupStatus::Stopped;
-    fixture.store.collaboration_group_put(&stopped).unwrap();
-    assert!(!fixture.orchestrator.collaboration_tools_enabled(&loner).unwrap(), "a stopped group has nothing in flight");
-
-    // Dispatch refuses them for an ordinary thread, with a pointer to the right tool.
-    let (live, _) = fixture.active_app_tool_session(&ordinary).await;
-    for name in ["kybern_collaboration_spawn", "kybern_collaboration_read", "kybern_collaboration_context_put"] {
-        let error = fixture
-            .orchestrator
-            .execute_native_app_tool_call(ordinary.id, live.session_instance_id, "refused", name, json!({}))
-            .await
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("only for project coordinators") && error.contains("kybern_agent_delegate"), "{name}: {error}");
-    }
 }
 
 #[test]

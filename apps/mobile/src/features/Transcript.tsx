@@ -1,5 +1,3 @@
-import { collaborationPreview } from "../../../../packages/kybern-client/src/collaboration";
-import { promptText } from "../../../../packages/kybern-client/src/prompts";
 import * as Clipboard from "expo-clipboard";
 import { memo, useState } from "react";
 import { Image, Share, View } from "react-native";
@@ -7,7 +5,6 @@ import { Alert } from "../ui/Alert";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { httpBase } from "../state/protocol";
 import {
-  useApp,
   activeEnvironment,
   errorText,
   loadThread,
@@ -21,46 +18,16 @@ import { useTheme } from "../ui/theme";
 import { UserMessageBubble } from "./UserMessageBubble";
 import { TaskRow } from "./Tasks";
 import { ApprovalPanel } from "./Approvals";
+import { SecretRequestLine } from "./SecretRequest";
+import { secretRequestInput } from "../../../../packages/kybern-client/src/secretRequest";
 import { MessagePart } from "./MessagePart";
 import { hasOrchestrationParts } from "../state/orchestration";
-
-function CollaborationMessageNotice({ preview, text, expanded, setExpanded }: {
-  preview: NonNullable<ReturnType<typeof collaborationPreview>>; text: string; expanded: boolean; setExpanded: (value: boolean) => void;
-}) {
-  const { colors } = useTheme();
-  const app = useApp();
-      const sender = preview.senderId ? app.threads.find(thread => thread.id === preview.senderId)?.title || "Helper" : "You";
-      return <View style={{ marginVertical: 12, paddingHorizontal: 12, borderRadius: 14, backgroundColor: colors.surface }}>
-        <Tap static expanded={expanded} label={`${preview.purpose} from ${sender}. ${expanded ? "Hide" : "Show"} message`}
-          onPress={() => setExpanded(!expanded)} style={[styles.line, { minHeight: 48, paddingVertical: 10, gap: 8 }]}>
-          <Icon name={expanded ? "chevron.up" : "chevron.down"} size={12} />
-          <T variant="caption" style={{ flex: 1 }}>{preview.purpose} · {sender}</T>
-        </Tap>
-        {expanded && <View style={{ paddingBottom: 12, gap: 12 }}>
-          <Markdown chat text={preview.body} />
-          <Tap label="Copy original agent message" onPress={() => void Clipboard.setStringAsync(text)} style={{ minHeight: 48, justifyContent: "center" }}>
-            <T variant="caption" tone="secondary">Copy original message</T>
-          </Tap>
-        </View>}
-      </View>;
-}
 
 function toolSummary(block: Extract<Block, { kind: "tool" }>) {
   const input =
     block.call.input && typeof block.call.input === "object"
       ? (block.call.input as Record<string, unknown>)
       : {};
-  const collaborationLabels: Record<string, string> = {
-    kybern_collaboration_read: "Read helper updates",
-    kybern_collaboration_wait: "Wait for helpers",
-    kybern_collaboration_send: "Send an agent update",
-    kybern_collaboration_report: "Save helper result",
-    kybern_collaboration_spawn: "Start a helper",
-    kybern_collaboration_context_read: "Read project knowledge",
-    kybern_collaboration_context_put: "Update project knowledge",
-  };
-  const name = block.call.name.split("__").at(-1) ?? block.call.name;
-  if (collaborationLabels[name]) return collaborationLabels[name];
   const path =
     input.file_path ??
     input.path ??
@@ -106,10 +73,7 @@ export const TranscriptBlock = memo(function TranscriptBlock({
             ))}
           </View>
         );
-      const text = promptText(block.message);
-      const preview = block.message.parts.every(part => part.type === "text") ? collaborationPreview(text) : null;
-      if (!preview) return <UserMessageBubble block={block} threadId={threadId} />;
-      return <CollaborationMessageNotice preview={preview} text={text} expanded={expanded} setExpanded={setExpanded} />;
+      return <UserMessageBubble block={block} threadId={threadId} />;
     }
     case "assistant":
       return (
@@ -228,7 +192,9 @@ export const TranscriptBlock = memo(function TranscriptBlock({
           )}
         </View>
       );
-    case "approval":
+    case "approval": {
+      const secret = secretRequestInput(block.approval);
+      if (secret && block.decision) return <SecretRequestLine input={secret} decision={block.decision} />;
       return block.decision ? (
         <View style={[styles.line, { paddingVertical: 8 }]}>
           <Icon
@@ -251,6 +217,7 @@ export const TranscriptBlock = memo(function TranscriptBlock({
           <ApprovalPanel approval={block.approval} />
         </View>
       );
+    }
     case "notice":
       return (
         <T

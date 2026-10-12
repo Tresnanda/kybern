@@ -1,4 +1,5 @@
 import { createHistoryPagingGate, HISTORY_PREFETCH_SCREENS } from "../../../../packages/kybern-client/src/historyPaging";
+import { isCoordinatorThread } from "../../../../packages/kybern-client/src/coordinator";
 import { ChatFileContext } from "../../src/state/chatFileContext";
 import { QueuedPrompts } from "../../src/features/QueuedPrompts";
 import { BlurTargetView } from "expo-blur";
@@ -19,7 +20,7 @@ import { Composer } from "../../src/features/Composer";
 import { InspectorColumn } from "../../src/features/Inspector";
 import { TranscriptBlock } from "../../src/features/Transcript";
 import { WorkspaceMenu, WorkspacePill } from "../../src/features/WorkspaceMenu";
-import { CollaborationStrip } from "../../src/features/CollaborationStrip";
+import { BackToMain } from "../../src/features/BackToMain";
 import { ChildThreads } from "../../src/features/ChildThreads";
 import { useLayout } from "../../src/state/layout";
 import {
@@ -510,6 +511,32 @@ export default function ThreadScreen() {
                 {thread?.worktree ? ` · ${thread.worktree.branch}` : ""}
               </T>
             </Tap>
+            {isCoordinatorThread(thread) && thread && (
+              <Tap
+                label="Project brief, setup and memory"
+                onPress={() =>
+                  router.push({
+                    pathname: "/project-space",
+                    params: { projectId: thread.coordinator_project_id! },
+                  })
+                }
+                style={{ alignItems: "center" }}
+              >
+                <View
+                  style={{
+                    height: 32,
+                    paddingHorizontal: 12,
+                    borderRadius: 16,
+                    justifyContent: "center",
+                    backgroundColor: colors.raised,
+                  }}
+                >
+                  <T variant="caption" style={{ fontWeight: "500" }}>
+                    Project
+                  </T>
+                </View>
+              </Tap>
+            )}
             {regular && (
               <IconButton
                 name="sidebar.right"
@@ -538,7 +565,7 @@ export default function ThreadScreen() {
           onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
           style={{ position: "absolute", bottom: 0, left: 0, right: 0 }}
         >
-          <CollaborationStrip thread={thread} />
+          <BackToMain thread={thread} />
           <ChildThreads thread={thread} active={focused} />
           <WorkspacePill
             threadId={id}

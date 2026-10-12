@@ -460,8 +460,23 @@ export function MessageScroller({
       if (!followOutput || !followingRef.current) return;
       scrollToEnd(reduce || !smooth ? "auto" : "smooth");
     };
-    const stopContent = observeResizeFrame(content, resize);
-    const stopViewport = viewportRef.current ? observeResizeFrame(viewportRef.current, resize) : undefined;
+    // Rows above the live edge change height while the reader follows the end (a command row
+    // appears, folds, merges). The browser has already laid that out when this callback runs, so
+    // content below it would paint displaced for a frame before the deferred correction above
+    // lands. Pin the end here, before paint. Instant corrections only: a smooth glide keeps the
+    // deferred path. The deferred pass still settles virtual measurements and estimates.
+    const instant = () => reduce || !smooth || !!navigationModelRef.current;
+    const pin = () => {
+      const viewport = viewportRef.current;
+      if (!instant() || !viewport || !followOutput || !followingRef.current) return;
+      // A hidden pane measures zero; writing its scroll position would reset the reader.
+      if (viewport.clientHeight === 0) return;
+      const target = viewport.scrollHeight - viewport.clientHeight;
+      // Shrinking content is clamped by layout itself, so only growth needs a write.
+      if (target - viewport.scrollTop > 0.5) viewport.scrollTop = target;
+    };
+    const stopContent = observeResizeFrame(content, resize, { immediate: pin });
+    const stopViewport = viewportRef.current ? observeResizeFrame(viewportRef.current, resize, { immediate: pin }) : undefined;
     return () => { stopContent(); stopViewport?.(); };
   }, [followOutput, reduce, scheduleRailSync, scrollToEnd, smooth]);
 

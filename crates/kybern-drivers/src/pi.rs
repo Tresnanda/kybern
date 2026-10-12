@@ -271,7 +271,13 @@ impl AgentDriver for PiDriver {
                     cmd.args(["--resume", id]);
                 }
                 cmd.args(["--approval-mode", approval_tier(config.permission_mode)]);
-                if config.native_tool_bridge.as_ref().is_some_and(|bridge| bridge.restrictions.require_enforcement) {
+                // A lead keeps read-only built-ins; the private extension blocks every
+                // other call, and the session does not start without it.
+                if config
+                    .native_tool_bridge
+                    .as_ref()
+                    .is_some_and(|bridge| bridge.restrictions.require_enforcement && !bridge.restrictions.allow_read_only_builtins)
+                {
                     cmd.arg("--no-tools");
                 }
             }
@@ -1951,6 +1957,7 @@ mod tests {
                 allowed_tools: vec!["kybern_thread_read".into(), "kybern_thread_send".into(), "unsupported_daemon_tool".into()],
                 denied_tools: vec!["kybern_thread_send".into()],
                 require_enforcement: false,
+                allow_read_only_builtins: false,
             },
         };
         assert_eq!(configured_app_tool_names(Some(&bridge)), HashSet::from(["kybern_thread_read".into()]));

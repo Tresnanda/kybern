@@ -3,7 +3,7 @@
 import type { AppState, RightTab } from "./store"
 import { readSidebarFilter } from "./sidebarOrganize"
 
-const rightTabIds: RightTab[] = ["collaboration", "activity", "changes", "terminal", "explorer", "artifacts", "notes", "tasks", "review"]
+const rightTabIds: RightTab[] = ["agents", "project", "activity", "changes", "terminal", "explorer", "artifacts", "notes", "tasks", "review"]
 
 export const workspaceKey = (environmentId: string) =>
   `kybern.workspace.v1:${environmentId}`
@@ -52,11 +52,13 @@ export function readWorkspace(environmentId: string): Partial<AppState> {
     }
     // Earlier workspaces opened every panel automatically, so they have no
     // chosen tab list to restore. Start those workspaces with an empty dock.
+    // The Agents tab was saved as "collaboration" before the Coordinator moved onto delegations.
+    const renamed = (tab: string) => (tab === "collaboration" ? "agents" : tab) as RightTab
     result.rightTabs = Array.isArray(stored.rightTabs)
-      ? [...new Set<RightTab>(stored.rightTabs.filter((tab: RightTab) => rightTabIds.includes(tab)))]
+      ? [...new Set<RightTab>(stored.rightTabs.map(renamed).filter((tab: RightTab) => rightTabIds.includes(tab)))]
       : []
-    result.rightTab = result.rightTabs.includes(stored.rightTab)
-      ? stored.rightTab
+    result.rightTab = result.rightTabs.includes(renamed(stored.rightTab))
+      ? renamed(stored.rightTab)
       : result.rightTabs[0] ?? null
     if (typeof stored.rightOpen === "boolean")
       result.rightOpen = stored.rightOpen

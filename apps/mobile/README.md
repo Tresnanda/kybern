@@ -260,44 +260,28 @@ Task activity retains parent/child relationships, separate agent transcripts,
 live process output, status and provider-supported stop/background controls.
 Reconnecting restores task state from the daemon; foreground completion does not
 hide background activity. Work continues on the computer when the phone sleeps.
-Delegated Kybern helpers appear behind a compact **Helpers** disclosure above the
+Delegated Kybern helpers appear behind a compact agents disclosure above the
 composer. It shows active and attention counts; expand it for readable helper
 names, status, and navigation. The phone's Threads list and iPad sidebar group
 spawned conversations beneath their parent, collapsed by default. Search and
 filters continue to show matching conversations directly.
 
-Agent updates have their own collapsed queue summary. Expand an update to read
-its contents or remove it; ordinary queued prompts retain editing and attachments.
-Delivered collaboration messages appear as expandable, formatted messages with
-sender names. Copy original message preserves the complete routing metadata.
-The Agents screen keeps assignment, message, shared-context, and history controls.
+Messages from other agents and delegated results appear as their own cards in
+the conversation. Any thread another thread started shows a **Back to main
+conversation** link above its composer.
 
-An agent's successful collaboration read or wait consumes only the incoming
-messages returned to that agent. Those messages no longer run again as queued
-follow-ups. Opening the Agents screen as a user does not consume delivery.
-Unread messages still wait until the current turn and background work finish.
-This behavior is shared by every harness and project coordinators.
+Project details offer a persistent Coordinator conversation. **Create
+Coordinator** opens or creates the project's Coordinator with the harness, model,
+effort and permission you last chose for new threads; later visits reopen the
+same conversation. The Coordinator plans work and delegates it to other agents,
+which appear in the same disclosure above the composer. Archive the
+Coordinator from its conversation menu to free the slot for a new one.
 
-Project details offer a persistent coordinator conversation. Create coordinator
-opens the normal draft composer with the project, harness, model, effort, and
-permission controls. Nothing is created until the first message is sent. The
-coordinator plans work, delegates helpers, and maintains revisioned project
-knowledge; user corrections remain authoritative. Later visits reopen the same
-conversation, workers, saved knowledge, and results. Before implementation, the
-coordinator researches the project and saves a reviewed overview in Knowledge.
-Setup status appears in the conversation's agent strip and Project screen. If
-interrupted, send a follow-up to continue setup and the original task.
-
-**Delete coordinator** is available from conversation menus and Agent settings.
-Stop active agents and clear queued messages first. Deletion archives the
-coordinator and retains workers, results, files, and previous knowledge as history.
-Creating another coordinator starts with fresh knowledge and a new setup pass.
-
-The coordinator’s composer can switch harness, model, or effort while its thread
-is idle or failed. The switch keeps that conversation and project records and
-starts a fresh provider session. Claude Code, OpenCode, and Pi/OMP can enforce a
-dedicated coordination-only role. Codex and Cursor coordinate in ordinary mode;
-their native coding tools remain available, so the role restriction is advisory.
+The Coordinator's composer can switch harness, model, or effort while its thread
+is idle or failed. The switch keeps that conversation and starts a fresh
+provider session. Claude Code, OpenCode, and Pi/OMP block the Coordinator from
+editing files. Codex and Cursor cannot, so the harness list says "Edits not
+blocked on" them.
 
 Connect a computer supports live camera QR scanning, importing a QR image,
 and manual pairing. Camera permission is requested only when enabling it.

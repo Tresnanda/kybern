@@ -262,6 +262,7 @@ async fn run_native_bridge_turn(kind: ProviderKind) {
             allowed_tools: vec!["kybern_thread_context".into()],
             denied_tools: vec!["write".into(), "edit".into(), "bash".into()],
             require_enforcement: strict,
+            allow_read_only_builtins: false,
         },
     };
     let driver = DriverRegistry::with_defaults().get(kind).expect("driver registered");

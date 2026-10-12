@@ -409,31 +409,6 @@ impl Orchestrator {
         self.inner.delegation.debounce_ms.store(delay.as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Whether this thread may use the `kybern_collaboration_*` tools: project
-    /// coordinators, the members of a coordinator group, and the members of any
-    /// other collaboration group that is still active or paused (legacy groups,
-    /// whose in-flight assignments must still be able to report and send; the
-    /// desktop shows `CollaborationPane` for them too). Threads in no such group
-    /// delegate with `kybern_agent_delegate`.
-    pub(super) fn collaboration_tools_enabled(&self, thread: &Thread) -> Result<bool> {
-        if thread.coordinator_project_id.is_some() {
-            return Ok(true);
-        }
-        let group_id = match thread.collaboration_group_id {
-            Some(group_id) => Some(group_id),
-            None => self.inner.store.collaboration_group_for_thread(thread.id)?,
-        };
-        let Some(group_id) = group_id else { return Ok(false) };
-        if self.inner.store.project_coordinator_for_group(group_id)?.is_some() {
-            return Ok(true);
-        }
-        Ok(self
-            .inner
-            .store
-            .collaboration_group_get(group_id)?
-            .is_some_and(|group| matches!(group.status, GroupStatus::Active | GroupStatus::Paused)))
-    }
-
     // ---- stopping and per-parent creation ----
 
     /// Flag `thread_id` as stopping: from now on it cannot delegate. The flag
@@ -505,9 +480,12 @@ impl Orchestrator {
         Ok(())
     }
 
-    fn orchestration_limits(&self) -> (u32, u32) {
+    /// Active children one thread may have, and how deep delegation may go. A
+    /// project's Coordinator has its own child limit.
+    fn orchestration_limits(&self, delegating: &Thread) -> (u32, u32) {
         let settings = self.inner.settings.get().orchestration;
-        (settings.max_active_children.clamp(1, 16), settings.max_depth.clamp(1, 4))
+        let children = if delegating.coordinator_project_id.is_some() { settings.lead_max_children } else { settings.max_active_children };
+        (children.clamp(1, 16), settings.max_depth.clamp(1, 4))
     }
 
     /// Whether `ancestor` sits above `child` in the parent chain.
@@ -576,7 +554,7 @@ impl Orchestrator {
                 .map(|kind| json!({"provider": kind, "available": null, "supports_steer": harness_supports_steer(kind), "models": []}))
                 .collect();
         }
-        let (max_children, max_depth) = self.orchestration_limits();
+        let (max_children, max_depth) = self.orchestration_limits(caller);
         let depth = caller.delegation.as_ref().map_or(0, |info| u32::from(info.depth));
         let active = self.inner.store.delegation_active_count(caller.id)?;
         Ok(json!({
@@ -631,7 +609,7 @@ impl Orchestrator {
         ensure!(!self.delegation_is_stopping(parent.id), "This thread is being stopped, so it cannot delegate more work. End your turn.");
 
         // Limits.
-        let (max_children, max_depth) = self.orchestration_limits();
+        let (max_children, max_depth) = self.orchestration_limits(parent);
         let depth = parent.delegation.as_ref().map_or(0, |info| u32::from(info.depth)) + 1;
         ensure!(
             depth <= max_depth,
@@ -751,7 +729,6 @@ impl Orchestrator {
             last_seq: 0,
             parent_thread_id: Some(parent.id),
             coordinator_project_id: None,
-            collaboration_group_id: None,
             subagent: None,
             delegation: Some(info),
         };
@@ -1037,7 +1014,8 @@ impl Orchestrator {
             && let Some(info) = child.delegation.as_ref()
             && info.status != DelegationStatus::Running
         {
-            let (max_children, _) = self.orchestration_limits();
+            let parent = self.inner.store.thread_get(info.parent_thread_id).ok().flatten();
+            let (max_children, _) = parent.as_ref().map_or_else(|| (u32::MAX, 0), |parent| self.orchestration_limits(parent));
             if self.inner.store.delegation_active_count(info.parent_thread_id).unwrap_or(0) >= max_children {
                 tracing::info!(thread_id = %child_id, max_children, "a follow-up reopened a delegation beyond the active agent limit");
             }

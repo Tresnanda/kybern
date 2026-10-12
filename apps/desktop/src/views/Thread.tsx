@@ -1,13 +1,14 @@
 import type { ThreadTargetState, SessionTarget, ProviderStatus } from "@/protocol"
+import { Badge } from "@/components/kit/badge"
+import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { AccountMarkStack } from "@/components/kybern/accounts/AccountMark"
 import { openAddAccount } from "@/components/kybern/accounts/AddAccountSheet"
 import { accountNeedsSignIn } from "@/lib/accountUi"
 import { accountDisplayName } from "@/lib/accounts"
 import { useAccounts } from "@/state/accounts"
 import { offerWorktreeCleanup } from "@/state/worktreeCleanup"
-import { collaborationPreview } from "../../../../packages/kybern-client/src/collaboration"
+import { COORDINATOR_EDITS_NOT_BLOCKED_HINT, coordinatorEditsEnforced } from "../../../../packages/kybern-client/src/coordinator"
 import { promptText, replacePromptText } from "../../../../packages/kybern-client/src/prompts"
-import { DeleteCoordinatorDialog } from "./DeleteCoordinatorDialog"
 import { Textarea } from "@/components/kit/textarea"
 import { observeResizeFrame } from "@/lib/resizeObserver"
 import { AsyncQuestionPanel } from "./AsyncQuestionPanel"
@@ -15,6 +16,8 @@ import { Markdown } from "@/components/kybern/Markdown"
 import { computerConsent, connectorApproval, connectorApprovalResponse, isUserInput, notesTasksConsent, type ConnectorApproval, type NotesTasksConsent } from "@/lib/userInput"
 import { splitChecklistPreview } from "@/lib/agentItemTools"
 import { UserInputPanel } from "./UserInputPanel"
+import { SecretRequestPanel } from "./SecretRequestPanel"
+import { secretRequestInput } from "../../../../packages/kybern-client/src/secretRequest"
 import { TextSwap } from "@/components/kybern/motion"
 // Thread route: Header (provider glyph, title, Hand off,
 // actions, dock toggle), the transcript scrolling under the frosted composer,
@@ -76,7 +79,7 @@ import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import { ConnectionClosedError, isFreeChatProject, type ApprovalRequest, type JsonValue, type RuntimeTask, type ThreadId, type UserMessage } from "@/protocol"
 import { newThread } from "@/state/nav"
-import { activeRuntime, subscribeCollaboration, archiveThread, errorText, interrupt, loadThread, respondApproval, rpc, sendMessage, queueMessage, removeQueuedMessage, updateThread } from "@/state/rpc"
+import { archiveThread, errorText, interrupt, loadThread, respondApproval, rpc, sendMessage, queueMessage, removeQueuedMessage, updateThread } from "@/state/rpc"
 import { canSplitPane, type PaneId } from "@/state/splitView"
 import { isRuntimeTaskActive, useStore } from "@/state/store"
 import { windowHoldsTranscript } from "@/state/windowSurfaceState"
@@ -120,7 +123,6 @@ export function ThreadView({
   isFocused?: boolean
 }) {
   const steeringAttempt = useRef<{ signature: string; id: string } | null>(null)
-  const coordinatorSwitchAttempt = useRef<{ fingerprint: string; operationId: string } | null>(null)
   const thread = useStore((s) => s.threads[threadId])
   const coordinatorProjectName = useStore((s) =>
     thread?.coordinator_project_id ? s.projects[thread.project_id]?.name : undefined
@@ -271,11 +273,13 @@ export function ThreadView({
   const canSwitchCoordinator = !!thread?.coordinator_project_id && (thread.status === "idle" || thread.status === "failed")
   const approval = pending[0] ?? null
   const connector = approval ? connectorApproval(approval) : null
+  // A secret request has its own field; the digit shortcuts never answer it.
+  const secretRequest = approval ? secretRequestInput(approval) : null
   // A subagent thread is read-only; the subagent page replaces the composer with its own bar.
-  const hideInput = (!!approval && isUserInput(approval) && !connector) || !!thread?.subagent
+  const hideInput = (!!approval && ((isUserInput(approval) && !connector) || !!secretRequest)) || !!thread?.subagent
 
   const answer = (n: number): boolean => {
-    if (!approval || (isUserInput(approval) && !connector) || (approval.tool_name === "ExitPlanMode" && n === 2)) return false
+    if (!approval || secretRequest || (isUserInput(approval) && !connector) || (approval.tool_name === "ExitPlanMode" && n === 2)) return false
     const decision = connector
       ? n === 1
         ? ({ decision: "submit", response: connectorApprovalResponse(connector.persist.includes("session") ? "session" : null) } as const)
@@ -331,8 +335,7 @@ export function ThreadView({
       } },
       { name: "stop", hint: "Interrupt the running turn", icon: <StopIcon className="size-4" />, run: () => void interrupt(threadId) },
       { name: "activity", hint: "Show agents and background processes", icon: <WorkflowIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "activity" }) },
-      { name: "agents", hint: "Start and coordinate helper agents", icon: <UsersIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "collaboration" }) },
-      { name: "collaboration", hint: "Open Agents", icon: <UsersIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "collaboration" }) },
+      { name: "agents", hint: "Start and coordinate helper agents", icon: <UsersIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "agents" }) },
       { name: "attach", hint: "Attach files or images", icon: <PaperclipIcon className="size-4" />, run: () => document.querySelector<HTMLInputElement>('input[type="file"]')?.click() },
       { name: "terminal", hint: "Open a terminal in this thread", icon: <TerminalIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "terminal" }) },
       ...(!freeChat ? [
@@ -350,11 +353,11 @@ export function ThreadView({
             .catch((e) => toast.error("Unable to create pull request", { description: errorText(e) })),
         },
       ] : []),
-      ...(!thread?.coordinator_project_id ? [{ name: "archive", hint: "Archive this thread", icon: <ArchiveIcon className="size-4" />, run: () => void archiveThread(threadId) }] : []),
+      { name: "archive", hint: "Archive this thread", icon: <ArchiveIcon className="size-4" />, run: () => void archiveThread(threadId) },
       { name: "settings", hint: "Open settings", icon: <SettingsIcon className="size-4" />, run: () => set({ settingsOpen: true, settingsTab: "general" }) },
       { name: "usage", hint: "Review token usage and cost", icon: <AnalyticsIcon className="size-4" />, run: () => useStore.getState().selectUsage() },
     ],
-    [threadId, thread?.project_id, thread?.coordinator_project_id, thread?.provider, freeChat, canCompact, nativeCommands, set],
+    [threadId, thread?.project_id, thread?.provider, freeChat, canCompact, nativeCommands, set],
   )
 
   if (!thread) return null
@@ -394,29 +397,23 @@ export function ThreadView({
     effort?: string,
   ) => {
     if (!thread.coordinator_project_id) return
-    if (running) throw new Error("Finish or stop the coordinator's current turn before changing its harness.")
+    if (running) throw new Error("Finish or stop the Coordinator's current turn before changing its harness.")
     const status = providers.find((item) => item.kind === provider.kind && item.available)
-    if (!status) throw new Error("Choose an available harness for the project coordinator.")
+    if (!status) throw new Error("Choose an available harness for the Coordinator.")
     const permissionMode = status.supported_permission_modes.includes(thread.permission_mode)
       ? thread.permission_mode
       : status.supported_permission_modes.includes("supervised")
         ? "supervised"
         : status.supported_permission_modes[0]
     if (!permissionMode) throw new Error("This harness does not expose a supported permission mode.")
-    const fingerprint = JSON.stringify([thread.coordinator_project_id, provider, model, effort, permissionMode])
-    if (coordinatorSwitchAttempt.current?.fingerprint !== fingerprint) {
-      coordinatorSwitchAttempt.current = { fingerprint, operationId: crypto.randomUUID() }
-    }
-    const switched = await rpc().call("collaboration.coordinator.switch_harness", {
-      operation_id: coordinatorSwitchAttempt.current.operationId,
+    const switched = await rpc().call("coordinator.switch_harness", {
       project_id: thread.coordinator_project_id,
       provider,
       ...(model ? { model } : {}),
       ...(effort ? { effort } : {}),
       permission_mode: permissionMode,
     })
-    coordinatorSwitchAttempt.current = null
-    useStore.getState().set((state) => ({ threads: { ...state.threads, [switched.thread.id]: switched.thread } }))
+    useStore.getState().set((state) => ({ threads: { ...state.threads, [switched.id]: switched } }))
   }
 
   return (
@@ -484,7 +481,6 @@ export function ThreadView({
                     </ComposerStackedPanelRow>
                   </ComposerStackedPanel>}
                   <AccountLimitRecovery threadId={threadId} provider={thread.provider} />
-                  {thread.coordinator_project_id && <CoordinatorControlsPanel key={thread.id} thread={thread} />}
                   {helperThreads.length > 0 && <HelperThreadsPanel threads={helperThreads} />}
                   <SubagentStrip
                     threadId={threadId}
@@ -498,7 +494,7 @@ export function ThreadView({
                   {queued.length > 0 && <QueuedPanel threadId={threadId} />}
                   {!approval && questions[0] && <AsyncQuestionPanel key={questions[0].id} threadId={threadId} request={questions[0]} count={questions.length} />}
                   {approval && (
-                    connector ? <ConnectorApprovalPanel key={approval.id} approval={approval} connector={connector} count={pending.length} onChoose={answer} /> : notesTasksConsent(approval) ? <NotesTasksApprovalPanel key={approval.id} consent={notesTasksConsent(approval)!} count={pending.length} onChoose={answer} /> : computerConsent(approval) ? <ComputerApprovalPanel key={approval.id} consent={computerConsent(approval)!} count={pending.length} onChoose={answer} onAlways={() => respondApproval(approval.id, { decision: "submit", response: { scope: "always" } }).catch((e) => toast.error("Unable to respond", { description: errorText(e) }))} /> : isUserInput(approval) ? <UserInputPanel key={approval.id} approval={approval} count={pending.length} /> : <ApprovalPanel key={approval.id} approval={approval} count={pending.length} onChoose={answer} />
+                    secretRequest ? <SecretRequestPanel key={approval.id} approval={approval} input={secretRequest} count={pending.length} /> : connector ? <ConnectorApprovalPanel key={approval.id} approval={approval} connector={connector} count={pending.length} onChoose={answer} /> : notesTasksConsent(approval) ? <NotesTasksApprovalPanel key={approval.id} consent={notesTasksConsent(approval)!} count={pending.length} onChoose={answer} /> : computerConsent(approval) ? <ComputerApprovalPanel key={approval.id} consent={computerConsent(approval)!} count={pending.length} onChoose={answer} onAlways={() => respondApproval(approval.id, { decision: "submit", response: { scope: "always" } }).catch((e) => toast.error("Unable to respond", { description: errorText(e) }))} /> : isUserInput(approval) ? <UserInputPanel key={approval.id} approval={approval} count={pending.length} /> : <ApprovalPanel key={approval.id} approval={approval} count={pending.length} onChoose={answer} />
                   )}
                 </ComposerPanelStack>
               }
@@ -553,53 +549,6 @@ function AccountLimitRecovery({ threadId, provider }: { threadId: string; provid
   </ComposerStackedPanelRow></ComposerStackedPanel>
 }
 
-function CoordinatorControlsPanel({ thread }: { thread: import("@/protocol").Thread }) {
-  const [setup, setSetup] = useState<boolean | undefined>(undefined)
-  useEffect(() => {
-    const runtime = activeRuntime()
-    let disposed = false
-    let generation = 0
-    const load = async () => {
-      if (!thread.collaboration_group_id) return
-      const request = ++generation
-      try {
-        const detail = await runtime.rpc().call("collaboration.groups.get", { group_id: thread.collaboration_group_id })
-        if (!disposed && request === generation && runtime === activeRuntime()) setSetup(detail.coordinator_setup_complete ?? undefined)
-      } catch { /* The work panel exposes connection errors and retries. */ }
-    }
-    void load()
-    const unsubscribe = subscribeCollaboration((event) => {
-      if (!event || (event.kind === "collaboration_context_updated" && event.entry.group_id === thread.collaboration_group_id && event.entry.key === "project.setup")) void load()
-    })
-    return () => { disposed = true; unsubscribe() }
-  }, [thread.collaboration_group_id])
-  const set = useStore((state) => state.set)
-  const open = (view: "work" | "context" | "results") => {
-    set({ rightOpen: true, rightTab: "collaboration" })
-    requestAnimationFrame(() => window.dispatchEvent(new CustomEvent("kybern:collaboration-view", { detail: view })))
-  }
-  return (
-    <ComposerStackedPanel>
-      {setup !== undefined && <ComposerStackedPanelRow compact>
-        <ComposerStackedPanelRowMain>
-          <span role="status" className="text-xs text-muted-foreground">{setup ? "Setup complete" : thread.status === "running" ? "Setting up project" : thread.status === "failed" ? "Setup needs attention" : "Project setup"}</span>
-        </ComposerStackedPanelRowMain>
-      </ComposerStackedPanelRow>}
-      <ComposerStackedPanelRow compact className="gap-1.5">
-        <ComposerStackedPanelRowMain>
-          <UsersIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
-          <span className="sr-only">Project coordinator controls</span>
-        </ComposerStackedPanelRowMain>
-        <div className="flex shrink-0 items-center gap-0.5">
-          <Button variant="ghost" size="chip" onClick={() => open("work")}>Workers</Button>
-          <Button variant="ghost" size="chip" onClick={() => open("context")}>Knowledge</Button>
-          <Button variant="ghost" size="chip" onClick={() => open("results")}>Results</Button>
-        </div>
-      </ComposerStackedPanelRow>
-    </ComposerStackedPanel>
-  )
-}
-
 function HelperThreadsPanel({ threads }: { threads: import("@/protocol").Thread[] }) {
   const set = useStore((state) => state.set)
   const working = threads.filter((thread) => thread.status === "running").length
@@ -622,7 +571,7 @@ function HelperThreadsPanel({ threads }: { threads: import("@/protocol").Thread[
           <span className="truncate font-medium text-foreground/85">{threads.length} {threads.length === 1 ? "helper" : "helpers"}{summary ? ` · ${summary}` : ""}</span>
           <DisclosureChevron open={open} className="shrink-0 text-muted-foreground/60" />
         </button>
-        <Button variant="ghost" size="chip" onClick={() => set({ rightOpen: true, rightTab: "collaboration" })}>Details</Button>
+        <Button variant="ghost" size="chip" onClick={() => set({ rightOpen: true, rightTab: "agents" })}>Details</Button>
       </ComposerStackedPanelRow>
       <DisclosureRegion open={open}>
         <div className={cn("max-h-44 overflow-y-auto", COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME)}>
@@ -677,8 +626,8 @@ function RuntimeActivityPanel({ tasks }: { tasks: RuntimeTask[] }) {
 export function QueuedPanel({ threadId }: { threadId: ThreadId }) {
   const queued = useStore((s) => s.queued[threadId] ?? EMPTY)
   const [expanded, setExpanded] = useState(false)
-  // Updates from other agents (legacy collaboration text, messages from threads, delegated results) wait behind one row.
-  const isUpdate = (q: { message: UserMessage }) => !!collaborationPreview(promptText(q.message)) || !!structuredMessageSummary(q.message)
+  // Updates from other agents (messages from threads, delegated results) wait behind one row.
+  const isUpdate = (q: { message: UserMessage }) => !!structuredMessageSummary(q.message)
   const updates = queued.filter(isUpdate)
   const prompts = queued.filter(q => !isUpdate(q))
   return <ComposerStackedPanel className="composer-queue-panel flex max-h-64 flex-col overflow-y-auto">
@@ -694,11 +643,9 @@ export function QueuedPanel({ threadId }: { threadId: ThreadId }) {
 
 function QueuedRow({ item, divided }: { item: import("@/protocol").QueuedMessage; divided: boolean }) {
   const [entered, setEntered] = useState(false)
-  const legacy = collaborationPreview(promptText(item.message))
   // A message from another thread or a batch of delegated results reads from its parts, not from prompt text.
   const structured = structuredMessageSummary(item.message)
-  const preview = legacy ?? (structured ? { purpose: structured, senderId: null, body: structuredMessageBody(item.message) ?? "" } : null)
-  const sender = useStore(state => legacy?.senderId ? state.threads[legacy.senderId]?.title || "Helper" : "You")
+  const preview = structured ? { purpose: structured, body: structuredMessageBody(item.message) ?? "" } : null
   const [showBody, setShowBody] = useState(false)
   const connected = useStore((s) => s.connection.state === "open")
   const [edit, setEdit] = useState<string | null>(null)
@@ -719,7 +666,7 @@ function QueuedRow({ item, divided }: { item: import("@/protocol").QueuedMessage
       <SteerIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
       <div className="min-w-0 flex-1">
         {edit === null ? <button type="button" aria-expanded={showBody} onClick={() => setShowBody(value => !value)} className="w-full text-start">
-          <span className="flex min-w-0 items-center gap-2"><span className={cn(COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME, "min-w-0 flex-1")}>{structured ? structured : preview ? `${preview.purpose} · ${sender}` : promptText(item.message) || "Queued follow-up"}</span><DisclosureChevron open={showBody} /></span>
+          <span className="flex min-w-0 items-center gap-2"><span className={cn(COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME, "min-w-0 flex-1")}>{structured ?? (promptText(item.message) || "Queued follow-up")}</span><DisclosureChevron open={showBody} /></span>
           {showBody && <span className="block whitespace-pre-wrap break-words py-2 text-sm font-normal leading-relaxed">{preview?.body ?? promptText(item.message)}</span>}
         </button>
           : <Textarea aria-label="Edit queued prompt" value={edit} disabled={busy} onChange={(e) => setEdit(e.target.value)} size="sm" />}
@@ -980,7 +927,6 @@ function ApprovalActions({ primaryLabel, primaryShortcut, sessionShortcut, sessi
 }
 
 function Header({ threadId, splitPaneId }: { threadId: ThreadId; splitPaneId?: PaneId }) {
-  const [deleting, setDeleting] = useState(false)
   const thread = useStore((s) => s.threads[threadId])
   // The chain above this thread, topmost first. Child progress never re-renders the header.
   const ancestors = useAncestors(threadId)
@@ -1012,7 +958,6 @@ function Header({ threadId, splitPaneId }: { threadId: ThreadId; splitPaneId?: P
       inline={!!splitPaneId}
       trailing={
         <>
-      {deleting && thread && <DeleteCoordinatorDialog thread={thread} onClose={() => setDeleting(false)} />}
           {!thread.subagent && others.length > 0 && (
             <Menu>
               <MenuTrigger render={<ChatHeaderButton type="button" tone="outline" className="gap-1.5" />}>
@@ -1092,12 +1037,12 @@ function Header({ threadId, splitPaneId }: { threadId: ThreadId; splitPaneId?: P
                   </MenuGroup>
                 </>
               )}
-              {!thread.coordinator_project_id && !thread.subagent && (
+              {!thread.subagent && (
                 <>
                   <MenuSeparator />
                   <MenuGroup>
-                    <MenuItem variant="destructive" onClick={() => thread.coordinator_project_id ? setDeleting(true) : void archiveThread(threadId).catch((error) => toast.error(errorText(error)))}>
-                      <ArchiveIcon /> {thread.coordinator_project_id ? "Delete coordinator" : "Archive"}
+                    <MenuItem variant="destructive" onClick={() => void archiveThread(threadId).catch((error) => toast.error(errorText(error)))}>
+                      <ArchiveIcon /> Archive
                     </MenuItem>
                     {thread.worktree && !thread.delegation && !thread.subagent && <MenuItem onClick={() => offerWorktreeCleanup(threadId)}>Remove worktree…</MenuItem>}
                   </MenuGroup>
@@ -1158,6 +1103,14 @@ function Header({ threadId, splitPaneId }: { threadId: ThreadId; splitPaneId?: P
               </h2>
             )}
             {thread.coordinator_project_id && <span className="shrink-0 text-[10px] font-medium text-muted-foreground/60">Project coordinator</span>}
+            {thread.coordinator_project_id && !coordinatorEditsEnforced(thread.provider.kind) && (
+              <Tooltip>
+                <TooltipTrigger render={<Badge size="sm" variant="warning" className="[-webkit-app-region:no-drag]" />}>
+                  Edits not blocked on {PROVIDER_LABEL[thread.provider.kind]}
+                </TooltipTrigger>
+                <TooltipPopup side="bottom">{COORDINATOR_EDITS_NOT_BLOCKED_HINT}</TooltipPopup>
+              </Tooltip>
+            )}
             <ThreadTaskChips threadId={threadId} />
           </div>
         </div>

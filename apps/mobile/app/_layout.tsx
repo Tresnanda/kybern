@@ -266,11 +266,6 @@ function Navigation() {
           }}
         />
         <Stack.Screen name="tasks" options={{ title: "Agents & processes" }} />
-        <Stack.Screen name="collaboration" options={{ title: "Agents" }} />
-        <Stack.Screen
-          name="coordinator"
-          options={{ title: "Project coordinator" }}
-        />
         <Stack.Screen
           name="thread-picker"
           options={{
@@ -337,6 +332,16 @@ function Navigation() {
           name="todo-send"
           options={{
             title: "Send to agent",
+            presentation: "formSheet",
+            sheetAllowedDetents: sheetDetents,
+            sheetGrabberVisible: true,
+            ...androidSheet,
+          }}
+        />
+        <Stack.Screen
+          name="project-space"
+          options={{
+            title: "Project",
             presentation: "formSheet",
             sheetAllowedDetents: sheetDetents,
             sheetGrabberVisible: true,

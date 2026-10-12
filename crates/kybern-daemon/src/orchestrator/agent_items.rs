@@ -5,6 +5,8 @@
 //! The user owns these items. Agents fully edit only what an agent created
 //! (`created_by_thread`); on the user's own items they may only append, tick
 //! criteria and change priority. Nothing here deletes an item or closes a task.
+//! Two project notes have a role: the user's brief, which agents only read, and
+//! the setup note, which only the project's Coordinator writes.
 //! Writes ask the user through a daemon-owned approval card in supervised modes
 //! (the computer-use pattern) and record an operation receipt, so a retried
 //! call returns the first result instead of filing twice.
@@ -14,8 +16,8 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow, bail, ensure};
 use kybern_protocol::methods::{
-    Note, NoteId, NoteScope, NoteSummary, NotesUpdateParams, TaskItem, TaskItemId, TaskItemsUpdateParams, TaskRunState, TaskScope,
-    TaskStatus,
+    Note, NoteId, NoteScope, NoteSummary, NotesUpdateParams, ProjectNoteRole, TaskItem, TaskItemId, TaskItemsUpdateParams, TaskRunState,
+    TaskScope, TaskStatus,
 };
 use kybern_protocol::*;
 use kybern_store::{NewTask, NoteError, TaskRunPatch, TaskStatusChange};
@@ -99,7 +101,7 @@ struct Write {
 }
 
 enum Action {
-    CreateNote { scope: NoteScope, project_id: Option<ProjectId>, title: String, body: String },
+    CreateNote { scope: NoteScope, project_id: Option<ProjectId>, role: Option<ProjectNoteRole>, title: String, body: String },
     AppendNote { target: Option<NoteId>, text: String },
     UpdateNote { id: NoteId, title: Option<String>, body: Option<String>, expected_revision: i64 },
     CreateTask(Box<NewTask>),
@@ -130,7 +132,7 @@ impl Orchestrator {
         ensure!(WRITE_TOOLS.contains(&name), "unknown Kybern notes and tasks tool: {name}");
         let actor = format!("thread:{}", thread.id);
         if let Some(id) = operation_id
-            && let Some(receipt) = self.inner.store.collaboration_operation_receipt::<Value>(id, &actor, name, &arguments)?
+            && let Some(receipt) = self.inner.store.operation_receipt::<Value>(id, &actor, name, &arguments)?
         {
             return Ok(receipt);
         }
@@ -139,8 +141,8 @@ impl Orchestrator {
         let reservation = if name == "kybern_task_create" { Some(self.reserve_task_create(thread.id, turn_id)?) } else { None };
         let write = match name {
             "kybern_note_create" => self.plan_note_create(thread, parse(arguments.clone())?)?,
-            "kybern_note_append" => self.plan_note_append(parse(arguments.clone())?)?,
-            "kybern_note_update" => self.plan_note_update(parse(arguments.clone())?)?,
+            "kybern_note_append" => self.plan_note_append(thread, parse(arguments.clone())?)?,
+            "kybern_note_update" => self.plan_note_update(thread, parse(arguments.clone())?)?,
             "kybern_task_create" => self.plan_task_create(thread, parse(arguments.clone())?)?,
             "kybern_task_update" => self.plan_task_update(thread, parse(arguments.clone())?)?,
             "kybern_task_claim" => self.plan_task_claim(thread, parse(arguments.clone())?)?,
@@ -155,7 +157,7 @@ impl Orchestrator {
             // One write at a time, so a transport retry waits for the first call's receipt.
             let _ops = self.inner.agent_item_ops.lock().await;
             if let Some(id) = operation_id
-                && let Some(receipt) = self.inner.store.collaboration_operation_receipt::<Value>(id, &actor, name, &arguments)?
+                && let Some(receipt) = self.inner.store.operation_receipt::<Value>(id, &actor, name, &arguments)?
             {
                 return Ok(receipt);
             }
@@ -169,12 +171,12 @@ impl Orchestrator {
                 bail!("The turn ended before this change was made. Nothing was saved.");
             }
             if let Some(id) = operation_id {
-                self.inner.store.collaboration_operation_begin(id, &actor, name, &arguments)?;
+                self.inner.store.operation_begin(id, &actor, name, &arguments)?;
             }
             let result = self.apply_write(thread, write.action);
             match (&result, operation_id) {
-                (Ok(value), Some(id)) => self.inner.store.collaboration_operation_complete(id, value)?,
-                (Err(_), Some(id)) => self.inner.store.collaboration_operation_abandon(id)?,
+                (Ok(value), Some(id)) => self.inner.store.operation_complete(id, value)?,
+                (Err(_), Some(id)) => self.inner.store.operation_abandon(id)?,
                 _ => {}
             }
             if result.is_ok()
@@ -315,29 +317,47 @@ impl Orchestrator {
 
     fn plan_note_create(&self, thread: &Thread, args: NoteCreateArgs) -> Result<Write> {
         ensure!(!args.title.trim().is_empty(), "Give the note a title.");
-        let (scope, project_id) = match resolve_scope(thread, args.scope, None)? {
-            Some(project_id) => (NoteScope::Project, Some(project_id)),
-            None => (NoteScope::Global, None),
+        if let Some(role) = args.project_role {
+            ensure!(
+                role == ProjectNoteRole::Setup,
+                "Only the user writes the project brief. Suggest the change in chat and the user will edit it."
+            );
+            ensure!(
+                thread.coordinator_project_id == Some(thread.project_id),
+                "Only the project's Coordinator saves the setup note. Ask the Coordinator, or the user, to record it."
+            );
+            ensure!(args.scope != Some(ItemScope::Global), "The setup note belongs to the project. Drop scope or use scope project.");
+            ensure!(
+                self.inner.store.note_for_project_role(thread.project_id, role)?.is_none(),
+                "This project already has a setup note. Read it with kybern_notes_search and change it with kybern_note_update."
+            );
+        }
+        let (scope, project_id) = match (args.project_role, resolve_scope(thread, args.scope, None)?) {
+            (Some(_), _) => (NoteScope::Project, Some(thread.project_id)),
+            (None, Some(project_id)) => (NoteScope::Project, Some(project_id)),
+            (None, None) => (NoteScope::Global, None),
         };
         let place = self.place_label(project_id);
         let title = args.title.trim().to_owned();
         Ok(Write {
-            summary: match &place {
-                Some(name) => format!("Create note '{title}' in {name}"),
-                None => format!("Create global note '{title}'"),
+            summary: match (&place, args.project_role) {
+                (Some(name), Some(_)) => format!("Save the setup note '{title}' in {name}"),
+                (Some(name), None) => format!("Create note '{title}' in {name}"),
+                (None, _) => format!("Create global note '{title}'"),
             },
             input: json!({
                 "action": "create_note", "kind": "note", "title": title, "project": place, "preview": preview(&args.body),
             }),
-            action: Action::CreateNote { scope, project_id, title, body: args.body },
+            action: Action::CreateNote { scope, project_id, role: args.project_role, title, body: args.body },
         })
     }
 
-    fn plan_note_append(&self, args: NoteAppendArgs) -> Result<Write> {
+    fn plan_note_append(&self, thread: &Thread, args: NoteAppendArgs) -> Result<Write> {
         ensure!(!args.text.trim().is_empty(), "Pass the text to append.");
         let (summary, target) = match args.note_id {
             Some(id) => {
                 let note = self.live_note(id)?;
+                Self::check_role_write(thread, &note)?;
                 (format!("Append to note '{}'", display_title(&note.summary.title)), json!({ "id": id, "title": note.summary.title }))
             }
             None => ("Append to this chat's note".to_owned(), Value::Null),
@@ -349,9 +369,11 @@ impl Orchestrator {
         })
     }
 
-    fn plan_note_update(&self, args: NoteUpdateArgs) -> Result<Write> {
+    fn plan_note_update(&self, thread: &Thread, args: NoteUpdateArgs) -> Result<Write> {
         let note = self.live_note(args.note_id)?;
-        if note.summary.created_by_thread.is_none() {
+        Self::check_role_write(thread, &note)?;
+        // The Coordinator keeps the setup note up to date even when another thread saved it first.
+        if note.summary.created_by_thread.is_none() && note.summary.project_role != Some(ProjectNoteRole::Setup) {
             bail!("The user wrote this note, so you can only append to it with kybern_note_append. Ask the user before changing it.");
         }
         if note.summary.scope == NoteScope::Thread && args.title.is_some() {
@@ -383,6 +405,20 @@ impl Orchestrator {
             }),
             action: Action::UpdateNote { id: note.summary.id, title: args.title, body: args.body, expected_revision },
         })
+    }
+
+    /// The write rules of the two project roles: the brief is the user's alone, and
+    /// only the project's Coordinator writes the setup note.
+    fn check_role_write(thread: &Thread, note: &Note) -> Result<()> {
+        match note.summary.project_role {
+            Some(ProjectNoteRole::Brief) => {
+                bail!("This is the project brief, which only the user edits. Suggest the change in chat and the user will make it.")
+            }
+            Some(ProjectNoteRole::Setup) if thread.coordinator_project_id != note.summary.project_id => {
+                bail!("This is the project's setup note, which only its Coordinator updates. Tell the Coordinator what should change.")
+            }
+            _ => Ok(()),
+        }
     }
 
     fn plan_task_create(&self, thread: &Thread, args: TaskCreateArgs) -> Result<Write> {
@@ -682,10 +718,15 @@ impl Orchestrator {
 
     fn apply_write(&self, thread: &Thread, action: Action) -> Result<Value> {
         match action {
-            Action::CreateNote { scope, project_id, title, body } => {
+            Action::CreateNote { scope, project_id, role, title, body } => {
                 let note = {
                     let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
-                    let note = self.inner.store.note_create_by(scope, project_id, &title, &body, Some(thread.id))?;
+                    let note = match (role, project_id) {
+                        (Some(role), Some(project_id)) => {
+                            self.inner.store.note_create_project_role(project_id, role, &title, &body, Some(thread.id))?
+                        }
+                        _ => self.inner.store.note_create_by(scope, project_id, &title, &body, Some(thread.id))?,
+                    };
                     self.publish_note(note.summary.clone());
                     note
                 };
@@ -907,6 +948,9 @@ struct NoteCreateArgs {
     body: String,
     #[serde(default)]
     scope: Option<ItemScope>,
+    /// `setup` saves the project's setup note; only its Coordinator may.
+    #[serde(default)]
+    project_role: Option<ProjectNoteRole>,
 }
 
 #[derive(Deserialize)]
@@ -1029,7 +1073,8 @@ fn note_row(note: &NoteSummary) -> Value {
         "project_id": note.project_id,
         "thread_id": note.thread_id,
         "created_by_thread": note.created_by_thread,
-        "agent_editable": note.created_by_thread.is_some(),
+        "agent_editable": note.created_by_thread.is_some() && note.project_role != Some(ProjectNoteRole::Brief),
+        "project_role": note.project_role,
         "revision": note.revision,
         "updated_at": note.updated_at,
         "link": format!("{NOTE_MENTION_PREFIX}{}", note.id),

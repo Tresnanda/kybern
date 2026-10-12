@@ -436,6 +436,72 @@ const MIGRATIONS: &[&str] = &[
     "CREATE INDEX subagent_messages_pending_child ON subagent_messages(thread_id) WHERE status = 'pending';
       CREATE INDEX subagent_messages_pending_owner ON subagent_messages(session_instance_id) WHERE status = 'pending';
       CREATE INDEX subagent_messages_pending_status ON subagent_messages(status) WHERE status = 'pending';",
+    // v24: the Coordinator becomes an ordinary lead thread on Orchestrator V2. Project
+    // notes gain a role (the user's brief, the Coordinator's setup note), projects get
+    // a switch to share the brief with every thread, and the collaboration system is
+    // removed. Each project's latest `project.brief` becomes its pinned brief note and
+    // its `project.setup` the setup note; the old Coordinator's overview and setup log
+    // become ordinary memory notes credited to it;
+    // old coordinators and their workers are archived (start fresh); old
+    // collaboration events are deleted because they can no longer be decoded. The operation
+    // receipts of the agents' note and task tools survive as `tool_operations`.
+    "
+    BEGIN;
+    ALTER TABLE notes ADD COLUMN project_role TEXT;
+    CREATE UNIQUE INDEX notes_project_role ON notes(project_id, project_role) WHERE project_role IS NOT NULL;
+    ALTER TABLE projects ADD COLUMN brief_in_all_threads INTEGER NOT NULL DEFAULT 0;
+    INSERT INTO notes(id, scope, project_id, title, body, pinned, revision, created_at, updated_at, project_role)
+    SELECT
+        lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-'
+            || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6))),
+        'project', pc.project_id, 'Project brief', e.body, 1, 1, e.at, e.at, 'brief'
+    FROM project_coordinators pc
+    JOIN (
+        SELECT group_id,
+               json_extract(payload, '$.body') AS body,
+               COALESCE(json_extract(payload, '$.updated_at'), strftime('%Y-%m-%dT%H:%M:%SZ', 'now')) AS at,
+               ROW_NUMBER() OVER (PARTITION BY group_id ORDER BY revision DESC) AS rn
+        FROM collaboration_context_revisions
+        WHERE key = 'project.brief'
+    ) e ON e.group_id = pc.group_id AND e.rn = 1
+    WHERE trim(COALESCE(e.body, '')) != '';
+    INSERT INTO notes(id, scope, project_id, title, body, pinned, revision, created_at, updated_at, project_role, created_by_thread_id)
+    SELECT
+        lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-'
+            || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6))),
+        'project', pc.project_id,
+        CASE e.key WHEN 'project.setup' THEN 'How to build, run and test' WHEN 'project-overview' THEN 'Project overview' ELSE 'Coordinator setup log' END,
+        e.body, e.key = 'project.setup', 1, e.at, e.at,
+        CASE e.key WHEN 'project.setup' THEN 'setup' END,
+        pc.thread_id
+    FROM project_coordinators pc
+    JOIN (
+        SELECT group_id, key,
+               json_extract(payload, '$.body') AS body,
+               COALESCE(json_extract(payload, '$.updated_at'), strftime('%Y-%m-%dT%H:%M:%SZ', 'now')) AS at,
+               ROW_NUMBER() OVER (PARTITION BY group_id, key ORDER BY revision DESC) AS rn
+        FROM collaboration_context_revisions
+        WHERE key IN ('project.setup', 'project-overview', 'coordinator-setup')
+    ) e ON e.group_id = pc.group_id AND e.rn = 1
+    WHERE trim(COALESCE(e.body, '')) != '';
+    UPDATE queued_messages SET pending = 0
+      WHERE thread_id IN (SELECT id FROM threads WHERE coordinator_project_id IS NOT NULL OR collaboration_group_id IS NOT NULL);
+    UPDATE threads SET status = 'archived', coordinator_project_id = NULL
+      WHERE coordinator_project_id IS NOT NULL OR collaboration_group_id IS NOT NULL;
+    DELETE FROM events WHERE kind IN ('project_coordinator_deleted', 'collaboration_group_updated', 'collaboration_member_updated',
+      'collaboration_assignment_updated', 'collaboration_message_updated', 'collaboration_context_updated');
+    DELETE FROM collaboration_operations WHERE substr(operation_kind, 1, 7) != 'kybern_';
+    ALTER TABLE collaboration_operations RENAME TO tool_operations;
+    DROP TABLE collaboration_context_revisions;
+    DROP TABLE collaboration_messages;
+    DROP TABLE collaboration_assignments;
+    DROP TABLE collaboration_members;
+    DROP TABLE project_coordinator_reservations;
+    DROP TABLE project_coordinators;
+    DROP TABLE collaboration_groups;
+    ALTER TABLE threads DROP COLUMN collaboration_group_id;
+    COMMIT;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

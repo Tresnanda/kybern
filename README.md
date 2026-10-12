@@ -577,11 +577,11 @@ phone’s JavaScript does not add the corresponding daemon support.
 ### Working with other threads
 
 Start an ordinary chat and ask for help: “Have Codex implement this and Claude
-review it.” Kybern creates the collaboration group when the agent first delegates.
-Helpers appear beside the composer and as child conversations in the sidebar.
-Open a helper to follow its work or give it direction, then use **Main thread**
-to return. Each helper is a real, resumable conversation and can use a different
-installed harness.
+review it.” The agent delegates with Kybern's own tools. Each helper appears in
+the **Agents** panel beside the conversation and as a child conversation in the
+sidebar. Open a helper to follow its work or give it direction, then use **Main
+thread** to return. Each helper is a real, resumable conversation and can use a
+different installed harness.
 
 Use **@** in the desktop composer, or add a conversation from the mobile
 composer, to reference an earlier thread. Agents can also search and read past
@@ -590,111 +590,97 @@ reference does not start a turn in that thread. Asking an agent to contact it
 sends an attributed question; a busy recipient receives queued work and replies
 return to the requesting conversation.
 Sends respect permission boundaries: an isolated worker cannot wake a thread
-in the main checkout and should return its work through the coordinator.
+in the main checkout and should return its work through the thread that started it.
 
-Each project also offers **Create coordinator**. It opens the same draft composer
-used for an ordinary chat, with the full installed harness, model, effort, and
-permission controls. Describe the goal and send it when ready. Leaving the draft
-does not create a coordinator or start work. The first send creates or reopens
-the project's coordinator and preserves that goal as its original brief.
+New children start from the source thread's current Git commit unless the agent
+specifies another revision. Editing workers use isolated Git worktrees, and
+parent uncommitted changes are not copied into a child. Research and review
+workers can also run in projects without Git. Review a worker's changes before
+integrating them into another workspace. Settings > Agents sets how many
+delegated agents one thread can run at once (four by default), how many a
+project's Coordinator can run at once (six by default), and how deep delegation
+can nest (two levels by default).
 
-Before implementation, the coordinator delegates research of the repository's
-instructions, architecture, development/test commands, and relevant constraints.
-It reviews a successful research result and saves a project overview in
-**Knowledge** before editing or integration assignments are accepted. The chat
-shows **Setting up project** / **Project setup**, then **Setup complete**. It
-continues the original request after setup; you do not need to send it again.
-If setup is interrupted or blocked, send a follow-up to resume it. Existing
-coordinators without an overview complete this step on their next provider session;
-previous project knowledge remains available. Setup is research, not dependency
-installation or environment provisioning, and an empty repository is supported.
+#### The project Coordinator
 
-Use **Delete coordinator** from its sidebar menu, chat menu, or Project panel.
-Stop active agents and clear queued messages first. Deletion archives the
-coordinator conversation and retires its group. Worker conversations, files,
-results, and old knowledge remain available as history. **Create coordinator**
-then starts a fresh coordinator with fresh knowledge and a new setup pass.
-Deletion retries target the exact coordinator reviewed, never a replacement.
+Each project can have one **Coordinator**: a persistent, resumable chat that
+plans work, hands it to other agents, and reviews what comes back. It is an
+ordinary thread with a lead role, so it delegates with the same tools as any
+other thread and its helpers appear in **Agents**. Use **Create coordinator**
+in the sidebar (or on a project on mobile) to open it. On desktop the draft
+composer has the usual harness, model, effort and permission controls; your
+first message becomes the project's **brief** and is sent as its first turn.
+Leaving the draft creates nothing. Archiving the Coordinator frees the slot for
+a new one.
 
-The coordinator remains one normal, resumable chat for the project. **Workers**,
-**Project knowledge**, and **Results** stay beside its composer while the chat
-remains the main surface. Project knowledge includes the coordinator's current
-plan, useful findings, decisions, learned commands, and references to returned
-work. Expand any saved item to see its source and revision history. You can add
-instructions or correct an agent-authored item; your correction becomes the
-authoritative user revision while the earlier version remains in history.
+For each message the Coordinator answers in the conversation, starts a new
+child, or sends the work to an existing child, and says which and why. It does
+not edit files or run mutating commands; every edit goes to a child. If the
+project has no setup note, it first delegates research on how to build, run and
+test the project and saves the result as the **setup note**. Children get
+pointers to notes, files and commits instead of pasted context, and are told to
+stop and say exactly what is missing rather than mock or guess.
 
-Groups belong to one project and daemon. The default policy permits four active
-worker assignments and two levels of nested delegation. New children start from
-the source thread's current Git commit unless the agent specifies another
-revision. Editing and integration workers use isolated Git worktrees, and parent
-uncommitted changes are not copied into a child. Research and review workers can
-also run in projects without Git.
-Review the worker's changes before integrating them into another workspace.
+Claude Code, OpenCode and Pi/OMP enforce the read-only role by restricting the
+Coordinator's native tools to read-only inspection. Codex and Cursor cannot
+select tools, so their Coordinator follows its instructions only; the header
+then shows **Edits not blocked on Codex** (or Cursor).
 
-When the coordinator is idle, or after a failed turn, use the normal harness
+The project's shared space is made of project notes:
+
+- **Brief**: a pinned note you write and edit. Agents read it but cannot change it.
+- **Setup**: a pinned note only the Coordinator writes.
+- **Memory**: ordinary project notes. Agents fully edit only notes they created
+  and append to the others.
+
+The Coordinator and every thread delegated from it start with the brief and an
+index of the project's notes. If you change the brief later, the Coordinator
+gets the new text with its next message. Turn on **Give every thread in this
+project the brief** (`brief_in_all_threads`) to give every new thread in the
+project the same brief and index.
+
+When the Coordinator is idle, or after a failed turn, use the normal harness
 picker in its composer to change harness, model, or effort. Kybern keeps the
-same conversation, collaboration group, workers, project knowledge, and results;
-the selected harness begins with a fresh provider session. Finish or stop a
-running turn before switching.
+same conversation and notes; the selected harness begins with a fresh provider
+session with the same Coordinator instructions. Finish or stop a running turn
+before switching.
+
+Coordinators created before the Coordinator became a lead thread were archived
+when the daemon upgraded. Their latest project brief was saved as the pinned
+brief note, and their worker threads stay available as history.
 
 The desktop right sidebar starts empty. Use **+** to add the panels you need
 and **×** to close them; Kybern remembers your choices for each environment.
 Conversation shortcuts also open their corresponding panel.
 
-Project coordinators plan work, delegate implementation, and review results.
-Claude Code, OpenCode, and Pi/OMP enforce this role by restricting native tools
-to coordination and read-only inspection. Codex and Cursor follow the same role
-through guidance, but their native coding tools remain available, so Kybern does
-not claim the same strict non-coding guarantee. Agents receive native collaboration tools for
-spawning workers, reading peers, sending questions and replies, waiting for
-updates, reporting structured results, and maintaining shared context. User
-instructions and corrections retain authorship and revision checks.
-
-**Pause** holds new work while running turns finish. **Stop** cancels outstanding
-assignments and interrupts group work; **Resume** explicitly reopens a stopped
-group. **Complete** closes an ordinary objective after its assignments finish;
-a persistent project coordinator stays reusable and uses **Pause** instead. Individual
-assignments also have a cancellation control. After a restart, execution that
-cannot be confirmed is shown as needing attention instead of silently repeated.
-
-The CLI exposes the same operations. Mutation commands accept a JSON request
-file matching the RPC schema; use `--input -` for standard input.
+The CLI exposes the Coordinator and read-only history:
 
 ```sh
-kybern collaboration threads search --all-projects --query authentication
-kybern collaboration threads read <thread-id>
-kybern collaboration coordinator get <project-id>
-kybern collaboration coordinator switch-harness --input coordinator-harness.json
-kybern collaboration coordinator delete --input coordinator-delete.json
-kybern collaboration groups list
-kybern collaboration groups create --input group.json
-kybern collaboration assignments create --input assignment.json
-kybern collaboration assignments list <group-id> --include-finished
-kybern collaboration messages list <group-id>
-kybern collaboration context history <entry-id>
-kybern collaboration wait <group-id> --timeout-seconds 30
+kybern coordinator get <project-id>
+kybern coordinator open <project-id> --provider claude-code --brief-file brief.md
+kybern coordinator switch-harness <project-id> --provider codex --model gpt-5.6-sol
+kybern history search --all-projects --query authentication
+kybern history read <thread-id> --limit 50
 ```
 
-`coordinator-delete.json` contains `operation_id` (a retry UUID), `project_id`,
-and `thread_id` (the coordinator being deleted).
+`coordinator get` prints the Coordinator thread, or `null`. `coordinator open`
+is idempotent: a project has at most one Coordinator, so it returns the existing
+thread with `"created": false`. `--brief` and `--brief-file` (`-` reads standard
+input) save the brief note when the project has none; opening does not start a
+turn. `history read` returns bounded pages; continue with `--before-seq`,
+`--message-seq` and `--text-offset`.
 
-For example, `group.json` contains the existing project and coordinator IDs:
+### Asking for secrets
 
-```json
-{
-  "project_id": "<project-uuid>",
-  "coordinator_thread_id": "<thread-uuid>",
-  "objective": "Add export support",
-  "success_criteria": ["Exports preserve all records", "Relevant checks pass"]
-}
-```
-
-The CLI prints an operation ID before sending each mutation. Preserve that ID
-in the request file or pass `--operation-id` when retrying after a lost response.
-List commands accept cursors for older records. Collaboration requires a daemon
-and client containing these additive RPCs; recurring triggers and coordination
-across separate daemons are not included.
+Agents never ask for API keys in chat. `kybern_request_secret` shows a card in
+the conversation with the label and reason the agent gave and a masked field.
+**Save securely** writes the value to a git-ignored file in the thread's
+workspace (`.env` by default) as the variable the agent named, replacing the
+existing value and keeping every other line. **Decline** tells the agent no. The
+agent only learns whether it was saved; the value is never returned to it and is
+never stored in Kybern's history, which keeps `[redacted]` in its place. If the
+file is in a Git project and not ignored, the request fails with a note to add
+it to `.gitignore` first.
 
 ### Background behaviour
 

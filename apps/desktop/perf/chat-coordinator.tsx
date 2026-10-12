@@ -12,20 +12,21 @@ import { buildThemeCssVariables, DEFAULT_THEME_STATE } from "../src/lib/kit/them
 import { useStore } from "../src/state/store"
 import { useEnvironments } from "../src/state/environments"
 import { emptyThreadState } from "../src/state/transcript"
-import { chatFixture } from "./chat-collaboration-rpc"
-import type { Thread, Project, ProviderStatus } from "../src/protocol"
+import { chatFixture, fixtureConnection } from "./chat-coordinator-rpc"
+import { attachEnvFeed } from "../src/state/notes"
+import type { ApprovalRequest, Note, Thread, Project, ProviderStatus } from "../src/protocol"
 import "../src/index.css"
 
 const query = new URLSearchParams(location.search)
-declare const __COLLAB_THEME__: "dark" | "light"
-declare const __COLLAB_VIEW__: string
-const theme = (query.get("theme") ?? __COLLAB_THEME__) === "light" ? "light" : "dark"
-const preview = query.get("view") ?? __COLLAB_VIEW__
+declare const __FIXTURE_THEME__: "dark" | "light"
+declare const __FIXTURE_VIEW__: string
+const theme = (query.get("theme") ?? __FIXTURE_THEME__) === "light" ? "light" : "dark"
+const preview = query.get("view") ?? __FIXTURE_VIEW__
 const at = "2026-09-14T10:00:00Z"
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 const results = (value: unknown) => {
-  const target = window as unknown as { __chatCollaborationResults?: unknown[]; webkit?: { messageHandlers?: { bench?: { postMessage: (value: string) => void } } } }
-  ;(target.__chatCollaborationResults ??= []).push(value)
+  const target = window as unknown as { __chatCoordinatorResults?: unknown[]; webkit?: { messageHandlers?: { bench?: { postMessage: (value: string) => void } } } }
+  ;(target.__chatCoordinatorResults ??= []).push(value)
   target.webkit?.messageHandlers?.bench?.postMessage(JSON.stringify(value))
 }
 const sampleMemory = (stage: string) => new Promise<void>((resolve) => {
@@ -33,12 +34,30 @@ const sampleMemory = (stage: string) => new Promise<void>((resolve) => {
   target.__memoryContinue = resolve
   target.webkit?.messageHandlers?.bench?.postMessage(JSON.stringify({ stage, memory: true }))
 })
-const projects: Record<string, Project> = Object.fromEntries(["Kybern", "Website"].map((name, index) => [`project-${index}`, { id: `project-${index}`, name, path: "/project", is_git: true, created_at: at, updated_at: at }]))
+const projects: Record<string, Project> = Object.fromEntries(["Kybern", "Website"].map((name, index) => [`project-${index}`, { id: `project-${index}`, name, path: "/project", is_git: true, brief_in_all_threads: false, created_at: at, updated_at: at }]))
+/** Ask the native runner for a named screenshot (KYBERN_PERF_SHOTS_DIR); it resumes the page once written. */
+const shot = (name: string) => new Promise<void>((resolve) => {
+  for (const animation of document.getAnimations()) {
+    try { if (animation.effect?.getComputedTiming().iterations !== Infinity) animation.finish() } catch { /* not finishable */ }
+  }
+  const target = window as unknown as { __screenshotContinue?: () => void; webkit?: { messageHandlers?: { bench?: { postMessage: (value: string) => void } } } }
+  target.__screenshotContinue = resolve
+  if (!target.webkit?.messageHandlers?.bench) return resolve()
+  target.webkit.messageHandlers.bench.postMessage(JSON.stringify({ screenshot: `${name}-${theme}` }))
+})
+const projectNote = (id: string, title: string, body: string, updated: string, extra: Partial<Note> = {}): Note => ({ id, scope: "project", project_id: "project-0", title, body, preview: body.replace(/[#*`]/g, "").slice(0, 240), checklist: { done: 0, total: 0 }, pinned: false, revision: 1, created_at: updated, updated_at: updated, ...extra })
+const seededNotes = [
+  projectNote("brief", "Project brief", "Kybern: desktop, daemon and mobile client for coding agents. Ship small PRs against main, one task each.\n\nPropose threads for anything that touches the protocol before starting them. Use the iPad 27 device for mobile checks.", "2026-09-14T08:00:00Z", { project_role: "brief", pinned: true }),
+  projectNote("setup", "How to build, run and test", "cargo build -p kybern, a scratch daemon on 4199, then pnpm tauri dev with KYBERN_DATA_DIR.", "2026-09-14T08:00:00Z", { project_role: "setup", pinned: true, created_by_thread: "main" }),
+  projectNote("memory-1", "Native WebKit fixtures need the production CSP", "Run check-rendering so iframes load under the shipped policy.", "2026-09-14T09:00:00Z", { created_by_thread: "worker" }),
+  projectNote("memory-2", "Prefers squash merges and small PRs", "One task per PR; bump the version inside the PR.", "2026-09-14T07:00:00Z", { created_by_thread: "main" }),
+  projectNote("memory-3", "Mobile export takes about four minutes", "Run both platform exports only at the end.", "2026-09-13T10:00:00Z"),
+]
 const thread = (id: string, title: string, extra: Partial<Thread> = {}): Thread => ({ id, title, project_id: "project-0", provider: { kind: "claude-code", instance: "default" }, permission_mode: "supervised", status: "idle", cwd: "/project", pinned: false, created_at: at, updated_at: at, last_seq: 0, ...extra })
 const threads: Record<string, Thread> = {
-  main: thread("main", "Improve sign-in", { collaboration_group_id: "work-group" }),
-  worker: thread("worker", "Implement sign-in", { parent_thread_id: "main", collaboration_group_id: "work-group", status: "running", provider: { kind: "codex", instance: "default" } }),
-  reviewer: thread("reviewer", "Review sign-in", { parent_thread_id: "main", collaboration_group_id: "work-group", status: "running" }),
+  main: thread("main", "Improve sign-in"),
+  worker: thread("worker", "Implement sign-in", { parent_thread_id: "main", status: "running", provider: { kind: "codex", instance: "default" } }),
+  reviewer: thread("reviewer", "Review sign-in", { parent_thread_id: "main", status: "running" }),
   previous: thread("previous", "Authentication decisions"),
   other: thread("other", "Authentication decisions", { project_id: "project-1", provider: { kind: "codex", instance: "default" } }),
 }
@@ -80,7 +99,9 @@ async function run() {
     { kind: "turn_end", id: "end-1", turnId: "turn-1", at, seq: 3, stopReason: "completed", usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 }, costUsd: null, durationMs: 4000, terminalMessageId: "assistant-1", error: null },
   ]
   useStore.getState().set({ projects, threads, providers, selected: { kind: "thread", id: "main" }, splitView: null, transcripts, composerDrafts: {}, connection: { state: "open" }, rightOpen: false, rightTabs: [], rightTab: null, envOpen: false })
-  flushSync(() => createRoot(document.getElementById("root")!, { onUncaughtError: (error) => results({ pass: false, error: String(error) }) }).render(<Shell />))
+  for (const note of seededNotes) chatFixture.notes.set(note.id, note)
+  attachEnvFeed(fixtureConnection as never, "fixture")
+  flushSync(() => createRoot(document.getElementById("root")!, { onUncaughtError: (error) => results({ pass: false, error: String(error), stack: String((error as Error)?.stack ?? "") }) }).render(<Shell />))
   await sleep(650)
   if (preview === "composer-caret-before") {
     const baseline = document.createElement("style")
@@ -95,10 +116,10 @@ async function run() {
     return results({ preview, pass: true, editorHeight: editor.getBoundingClientRect().height, frameHeight: frame.getBoundingClientRect().height, lineHeight })
   }
   if (preview === "dock-memory") {
-    useStore.getState().set({ rightOpen: true, rightTabs: ["collaboration"], rightTab: "collaboration" })
+    useStore.getState().set({ rightOpen: true, rightTabs: ["agents"], rightTab: "agents" })
     await sleep(500)
     await sampleMemory("dock-one-panel")
-    useStore.getState().set({ rightTabs: ["collaboration", "activity", "changes", "terminal", "artifacts", "explorer"], rightTab: "collaboration" })
+    useStore.getState().set({ rightTabs: ["agents", "activity", "changes", "terminal", "artifacts", "explorer"], rightTab: "agents" })
     await sleep(500)
     await sampleMemory("dock-six-panels")
     return results({ preview, pass: document.querySelectorAll(".t-pane").length === 6 && document.querySelectorAll('.t-pane[data-active="false"]').length === 5 })
@@ -129,26 +150,22 @@ async function run() {
     sidebarDisclosure &&= helperRows().length === 0 && helperToggle.getAttribute("aria-expanded") === "false"
   }
   const messageId = "01a0a0e6-85d2-7c01-adfc-8ce6a93c5b0e"
-  const agentMessage = { parts: [{ type: "text" as const, text: `Kybern collaboration Result from thread ${messageId} (message ${messageId}, reply_to None):\nReviewed sign-in. All checks passed.` }] }
+  const agentMessage = { parts: [{ type: "thread_message" as const, message_id: messageId, from_thread_id: "reviewer", from_title: "Review sign-in", purpose: "reply" as const, reply_to: null, body: "Reviewed sign-in. All checks passed." }] }
   useStore.getState().set({ queued: { main: [{ id: messageId, message: agentMessage }] } }); await sleep(150)
   const queueToggle = findButton("1 agent update waiting")
   const updatesInitiallyCollapsed = !!queueToggle && !document.querySelector('[data-testid="queued-follow-up-row"]')
   queueToggle?.click(); await sleep(150)
   const updateRow = document.querySelector('[data-testid="queued-follow-up-row"]')
-  const updatesReadable = updateRow?.textContent?.includes("Result · Helper") && !updateRow?.textContent?.includes(messageId)
+  const updatesReadable = updateRow?.textContent?.includes("Reply from Review sign-in") && !updateRow?.textContent?.includes(messageId)
   const originalTranscript = useStore.getState().transcripts.main
   useStore.getState().set({ transcripts: { ...useStore.getState().transcripts, main: { ...originalTranscript, blocks: [
     ...originalTranscript.blocks,
     { kind: "user", id: "agent-update", turnId: "update-turn", at, seq: 4, message: agentMessage },
     { kind: "turn_end", id: "update-end", turnId: "update-turn", at, seq: 5, stopReason: "completed", usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 }, costUsd: null, durationMs: 0, terminalMessageId: null, error: null },
   ] } } }); await sleep(300)
-  const notice = Array.from(document.querySelectorAll<HTMLButtonElement>('button[aria-expanded]')).find(button => button.textContent?.trim() === "Result · Helper" && !button.closest('[data-testid="queued-follow-up-row"]'))
-  const messageInitiallyCollapsed = !!notice && notice.getAttribute("aria-expanded") === "false"
-  notice?.click(); await sleep(500)
-  const messageReadable = document.body.textContent?.includes("Reviewed sign-in. All checks passed.") && !!document.querySelector('details summary')
-  if (preview === "disclosure") return results({ preview, pass: sidebarDisclosure && updatesInitiallyCollapsed && updatesReadable && messageInitiallyCollapsed && messageReadable })
-  notice?.click(); await sleep(320)
-  const messageUnmounted = !document.body.textContent?.includes("Reviewed sign-in. All checks passed.")
+  const inbound = document.querySelector('[data-inbound-message="reply"]')
+  const messageReadable = !!inbound && !!inbound.textContent?.includes("Reviewed sign-in. All checks passed.") && !inbound.textContent?.includes(messageId)
+  if (preview === "disclosure") return results({ preview, pass: sidebarDisclosure && updatesInitiallyCollapsed && updatesReadable && messageReadable })
   useStore.getState().set({ queued: {}, transcripts: { ...useStore.getState().transcripts, main: originalTranscript } }); await sleep(100)
   if (preview === "chat") return results({ preview, pass: initialHasNoSetup && sidebarDisclosure && updatesInitiallyCollapsed && updatesReadable })
   useStore.getState().set({ rightOpen: true }); await sleep(220)
@@ -166,10 +183,10 @@ async function run() {
   await addPanel("Diff")
   if (preview === "dock-panels") return results({ preview, pass: firstPanel && dock().querySelectorAll(".t-pane").length === 2 })
   await addPanel("Agents")
-  const noDuplicatePanels = dock().querySelectorAll("[data-tab-active]").length === 2 && useStore.getState().rightTab === "collaboration"
+  const noDuplicatePanels = dock().querySelectorAll("[data-tab-active]").length === 2 && useStore.getState().rightTab === "agents"
   await click("Collapse panel")
   useStore.getState().set({ rightOpen: true }); await sleep(220)
-  const dockReopensChoices = dock().querySelectorAll("[data-tab-active]").length === 2 && useStore.getState().rightTab === "collaboration"
+  const dockReopensChoices = dock().querySelectorAll("[data-tab-active]").length === 2 && useStore.getState().rightTab === "agents"
   await click("Close Agents panel")
   const closeSelectsNeighbor = useStore.getState().rightTab === "changes" && dock().querySelectorAll(".t-pane").length === 1
   await click("Close Diff panel")
@@ -180,7 +197,7 @@ async function run() {
   const terminalShapeMatches = parseFloat(activePill.borderTopLeftRadius) > 0 && activePill.borderRadius === terminalTab.borderRadius && activePill.getPropertyValue("corner-shape") === terminalTab.getPropertyValue("corner-shape")
   if (preview === "terminal-shape") return results({ preview, pass: terminalShapeMatches, radius: activePill.borderRadius, corner: activePill.getPropertyValue("corner-shape") })
   await click("Close Terminal panel")
-  const dockChecks = { messageInitiallyCollapsed, messageReadable, messageUnmounted, sidebarDisclosure, updatesInitiallyCollapsed, updatesReadable, emptyDock, firstPanel, noDuplicatePanels, dockReopensChoices, closeSelectsNeighbor, closeLastEmptiesDock, terminalShapeMatches }
+  const dockChecks = { messageReadable, sidebarDisclosure, updatesInitiallyCollapsed, updatesReadable, emptyDock, firstPanel, noDuplicatePanels, dockReopensChoices, closeSelectsNeighbor, closeLastEmptiesDock, terminalShapeMatches }
   await click("Collapse panel")
   await click(findButton("Implement sign-in") ? "Implement sign-in" : "Implement sign-inWorking")
   const back = findButton("Main thread") ?? findButton("Back to Improve sign-in")
@@ -202,62 +219,132 @@ async function run() {
   if (!findButton("Create coordinator") && !preview.startsWith("coordinator-")) {
     const horizontalOverflow = Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth)
     const checks = { ...dockChecks, initialHasNoSetup, childReturn, titleOnlyReference, referenceDidNotWake, typedReferenceSent, noHorizontalOverflow: horizontalOverflow <= 1 }
-    return results({ fixture: "chat-collaboration", pass: Object.values(checks).every(Boolean), checks, horizontalOverflow, coordinatorTest: "Covered in the wide sidebar fixture" })
+    return results({ fixture: "chat-coordinator", pass: Object.values(checks).every(Boolean), checks, horizontalOverflow, coordinatorTest: "Covered in the wide sidebar fixture" })
   }
   if (findButton("Create coordinator")) await click("Create coordinator")
   else useStore.getState().selectDraft("project-0", "coordinator")
   await sleep(850)
-  const coordinatorDraftInert = document.body.textContent?.includes("What should we work on in") && document.body.textContent?.includes("Project coordinator") && chatFixture.coordinatorCreates === 0 && chatFixture.sent.length === 1
+  const coordinatorDraftInert = document.body.textContent?.includes("What should we work on in") && document.body.textContent?.includes("Your first message becomes the project brief") && chatFixture.coordinatorCreates === 0 && chatFixture.sent.length === 1
   const settledSidebarRowsCrisp = Array.from(document.querySelectorAll<HTMLElement>("[data-marquee-host]")).every((row) => getComputedStyle(row).filter === "none")
   if (preview === "coordinator-draft") return results({ preview, pass: coordinatorDraftInert && settledSidebarRowsCrisp, settledSidebarRowsCrisp })
   await click("Change model and reasoning"); await sleep(120)
   const allHarnessesVisible = ["Claude Code", "Codex", "Cursor", "OpenCode", "Pi", "Oh My Pi"].every((label) => !!findButton(label))
   if (preview === "coordinator-harness") return results({ preview, pass: allHarnessesVisible })
   await click("Codex"); await sleep(120)
-  const advisoryRestrictionVisible = !!document.querySelector('[title*="coordination-only role is advisory"]')
+  const editsNotBlockedTooltip = !!document.querySelector('[title*="can\'t block file edits"]')
   write("Plan and ship the local coordinator experience.")
-  document.querySelector<HTMLTextAreaElement>('[data-testid="composer-editor"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); await sleep(350)
+  await sleep(150); await click("Send message"); await sleep(350)
   const coordinator = useStore.getState().threads["project-coordinator"]
   const coordinatorOpensChat = (useStore.getState().selected as { id: string }).id === coordinator?.id && !!document.querySelector('[data-testid="composer-editor"]')
-  const initialGoalPreserved = chatFixture.calls.some((call) => call.method === "collaboration.coordinator.get_or_create" && call.params.initial_goal === "Plan and ship the local coordinator experience.")
-  const setupVisible = document.body.textContent?.includes("Project setup")
-  chatFixture.completeSetup(); await sleep(250)
-  const setupCompletes = document.body.textContent?.includes("Setup complete")
+  const editsNotBlockedPill = !!Array.from(document.querySelectorAll<HTMLElement>('main span, [data-slot="badge"]')).find((element) => element.textContent?.trim() === "Edits not blocked on Codex")
+  const initialBriefPreserved = chatFixture.calls.some((call) => call.method === "coordinator.open" && call.params.initial_brief === "Plan and ship the local coordinator experience.")
   const stableFirstMessageId = !!chatFixture.sent[1]?.messageId
   await click("Change model and reasoning"); await sleep(100); await click("Claude Code"); await sleep(250)
-  const harnessSwitched = useStore.getState().threads["project-coordinator"]?.provider.kind === "claude-code" && chatFixture.calls.some((call) => call.method === "collaboration.coordinator.switch_harness")
-  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await sleep(250)
-  await click("Knowledge"); await sleep(900)
-  document.querySelectorAll<HTMLElement>('[data-slot="tooltip-positioner"],[role="tooltip"]').forEach((element) => { element.style.display = "none" })
-  const projectKnowledgeVisible = document.body.textContent?.includes("Current plan") && document.body.textContent?.includes("Confirm the local workflow") && document.body.textContent?.includes("The draft stays inert until Send")
-  if (preview === "coordinator-knowledge") return results({ preview, pass: projectKnowledgeVisible })
-  await click("Results"); await sleep(700)
-  const resultsVisible = document.body.textContent?.includes("Review coordinator integration") && document.body.textContent?.includes("Verified the inert draft")
-  if (preview === "coordinator-results") return results({ preview, pass: resultsVisible })
+  const harnessSwitched = useStore.getState().threads["project-coordinator"]?.provider.kind === "claude-code" && chatFixture.calls.some((call) => call.method === "coordinator.switch_harness")
+  const editsPillGoneOnClaude = !Array.from(document.querySelectorAll<HTMLElement>('main span, [data-slot="badge"]')).some((element) => element.textContent?.includes("Edits not blocked"))
   const oneCoordinatorCreated = chatFixture.coordinatorCreates === 1
-  await click("More agent actions"); await sleep(150)
-  const deleteMenu = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((element) => visible(element) && element.textContent?.includes("Delete coordinator"))
-  if (!deleteMenu) throw new Error("Missing coordinator deletion action")
-  deleteMenu.click(); await sleep(250)
-  const deleteCopyClear = document.querySelector('[role="dialog"]')?.textContent?.includes("new coordinator starts with fresh knowledge")
-  if (preview === "coordinator-delete") return results({ preview, pass: !!deleteCopyClear })
-  await click("Cancel")
-  const cancelledDeletionInert = !chatFixture.calls.some((call) => call.method === "collaboration.coordinator.delete")
-  await click("More agent actions"); await sleep(120)
-  Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((element) => visible(element) && element.textContent?.includes("Delete coordinator"))!.click(); await sleep(200)
-  chatFixture.deleteError = true
-  await click("Delete coordinator")
-  const deleteErrorVisible = document.querySelector('[role="alert"]')?.textContent?.includes("Stop agents")
-  chatFixture.deleteError = false
-  await click("Delete coordinator"); await sleep(350)
-  const deletionCalls = chatFixture.calls.filter((call) => call.method === "collaboration.coordinator.delete")
-  const retryPreservesIdentity = deletionCalls.length === 2 && deletionCalls[0].params.operation_id === deletionCalls[1].params.operation_id && deletionCalls[1].params.thread_id === coordinator.id
-  const coordinatorRemoved = useStore.getState().threads[coordinator.id]?.status === "archived" && !useStore.getState().threads[coordinator.id]?.coordinator_project_id && !!findButton("Create coordinator")
-  await click("Create coordinator"); await sleep(250)
-  const recreationDraftInert = chatFixture.coordinatorCreates === 1 && !!document.querySelector('[data-testid="composer-editor"]')
+  const projectTabOnlyForCoordinator = await (async () => {
+    useStore.getState().set({ rightOpen: true, rightTabs: ["agents", "project"], rightTab: "project" }); await sleep(300)
+    const coordinatorHasProject = !!document.querySelector("[data-project-panel]")
+    useStore.getState().selectThread("main"); await sleep(300)
+    const ordinaryHasNone = !document.querySelector("[data-project-panel]") && useStore.getState().rightTab === "project"
+    useStore.getState().selectThread(coordinator.id); await sleep(200)
+    return coordinatorHasProject && ordinaryHasNone
+  })()
+  const projectSpace = await checkProjectSpace()
+  const secretRequest = await checkSecretRequest(coordinator.id)
   const horizontalOverflow = Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth)
-  const checks = { ...dockChecks, initialHasNoSetup, composerSingleLineEditorInTwoLineFrame, blankComposerAreaFocusesEditor, childReturn, titleOnlyReference, referenceDidNotWake, typedReferenceSent, coordinatorDraftInert, settledSidebarRowsCrisp, allHarnessesVisible, advisoryRestrictionVisible, coordinatorOpensChat, initialGoalPreserved, stableFirstMessageId, harnessSwitched, projectKnowledgeVisible, resultsVisible, oneCoordinatorCreated, setupVisible, setupCompletes, deleteCopyClear, cancelledDeletionInert, deleteErrorVisible, retryPreservesIdentity, coordinatorRemoved, recreationDraftInert, noHorizontalOverflow: horizontalOverflow <= 1 }
-  results({ fixture: "chat-collaboration", pass: Object.values(checks).every(Boolean), checks, horizontalOverflow })
+  const checks = { ...projectSpace, ...secretRequest, ...dockChecks, initialHasNoSetup, composerSingleLineEditorInTwoLineFrame, blankComposerAreaFocusesEditor, childReturn, titleOnlyReference, referenceDidNotWake, typedReferenceSent, coordinatorDraftInert, settledSidebarRowsCrisp, allHarnessesVisible, editsNotBlockedTooltip, coordinatorOpensChat, editsNotBlockedPill, initialBriefPreserved, stableFirstMessageId, harnessSwitched, editsPillGoneOnClaude, oneCoordinatorCreated, projectTabOnlyForCoordinator, noHorizontalOverflow: horizontalOverflow <= 1 }
+  results({ fixture: "chat-coordinator", pass: Object.values(checks).every(Boolean), checks, horizontalOverflow })
 }
-window.addEventListener("unhandledrejection", (event) => results({ pass: false, error: String(event.reason) }))
-run().catch((error) => results({ fixture: "chat-collaboration", pass: false, error: String(error) }))
+/** The Coordinator's Project tab: brief, setup, memory, the switch, editing and the empty project. */
+async function checkProjectSpace() {
+  useStore.getState().set({ rightOpen: true, rightTabs: ["agents", "project"], rightTab: "project" }); await sleep(400)
+  const panel = () => document.querySelector<HTMLElement>("[data-project-panel]")!
+  const text = () => panel().textContent ?? ""
+  const memoryTitles = Array.from(panel().querySelectorAll<HTMLElement>('section[aria-label="Memory"] button')).map((row) => row.title)
+  const projectSections = text().includes("Propose threads for anything") && text().includes("Only you can change the brief. Agents suggest edits in chat.") && text().includes("How to build, run and test")
+    && memoryTitles.join("|") === "Native WebKit fixtures need the production CSP|Prefers squash merges and small PRs|Mobile export takes about four minutes"
+    && panel().querySelector('section[aria-label="Memory"] h3 + span')?.textContent === "3"
+  await shot("project-tab")
+  panel().querySelector<HTMLElement>('[role="switch"]')!.click(); await sleep(200)
+  const projectSwitch = chatFixture.calls.some((call) => call.method === "projects.update" && call.params.brief_in_all_threads === true) && useStore.getState().projects["project-0"]?.brief_in_all_threads === true
+  await click("Edit the brief"); await sleep(900)
+  const briefEditor = panel().querySelector<HTMLElement>('[contenteditable="true"]')
+  const briefEditsInPlace = !!briefEditor && document.activeElement === briefEditor
+  await shot("project-brief-editing")
+  briefEditor?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await sleep(250)
+  const briefEscapeCloses = !panel().querySelector('[contenteditable="true"]')
+  // A project with no brief, setup or memory yet.
+  for (const id of [...chatFixture.notes.keys()]) chatFixture.notes.delete(id)
+  attachEnvFeed(fixtureConnection as never, "fixture-empty"); await sleep(300)
+  const projectEmpty = text().includes("The Coordinator writes this on its first research pass") && text().includes("Agents save what they learn here") && !!findButton("Write the brief")
+  await shot("project-empty")
+  await click("Write the brief"); await sleep(900)
+  const emptyEditor = panel().querySelector<HTMLElement>('[contenteditable="true"]')!
+  emptyEditor.focus()
+  document.execCommand("insertText", false, "Ship the iPad layout first.")
+  await sleep(900)
+  const briefCreated = chatFixture.calls.some((call) => call.method === "notes.create" && call.params.project_role === "brief" && String(call.params.body).includes("Ship the iPad layout first."))
+  emptyEditor.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await sleep(300)
+  const briefShownAfterCreate = text().includes("Ship the iPad layout first.")
+  useStore.getState().set({ rightOpen: false }); await sleep(200)
+  return { projectSections, projectSwitch, briefEditsInPlace, briefEscapeCloses, projectEmpty, briefCreated, briefShownAfterCreate }
+}
+
+/** The secret card: masked field, no digit shortcuts, Enter saves, Decline, and the settled lines. */
+async function checkSecretRequest(threadId: string) {
+  const turnId = "secret-turn"
+  const request = (id: string, input: Record<string, unknown>): ApprovalRequest => ({ id, thread_id: threadId, turn_id: turnId, tool_call_id: null, tool_name: "kybern_request_secret", input: input as never, summary: `Provide ${input.label}`, suggestions: [], created_at: at })
+  const fresh = request("secret-1", { label: "Stripe test secret key", reason: "Needed to run the checkout tests against Stripe’s test mode. Find it under Developers → API keys.", env_key: "STRIPE_SECRET_KEY", file: ".env", replaces: false, placeholder: null })
+  const replacing = request("secret-2", { label: "OpenAI API key", reason: "The embeddings script needs a key with access to text-embedding-3.", env_key: "OPENAI_API_KEY", file: "apps/api/.env.local", replaces: true, placeholder: "sk-…" })
+  const show = (approval: ApprovalRequest) => {
+    const state = useStore.getState()
+    const current = state.transcript(threadId)
+    const user = { kind: "user" as const, id: "secret-user", turnId, at, seq: 200, message: { parts: [{ type: "text" as const, text: "Run the checkout tests." }] } }
+    const blocks = current.blocks.some((block) => block.id === user.id) ? current.blocks : [...current.blocks, user]
+    state.set({ transcripts: { ...state.transcripts, [threadId]: { ...current, loaded: true, thread: state.threads[threadId], pendingApprovals: [approval], blocks: [...blocks, { kind: "approval", id: `approval:${approval.id}`, turnId, at, seq: 201 + blocks.length, approval, decision: null }] } } })
+  }
+  show(fresh); await sleep(400)
+  const field = () => document.querySelector<HTMLInputElement>("[data-secret-request] input")
+  const input = field()!
+  const secretFieldFocused = document.activeElement === input
+  const secretFieldHardened = input.type === "text" && input.autocomplete === "off" && input.getAttribute("autocorrect") === "off" && input.spellcheck === false
+    && input.hasAttribute("data-1p-ignore") && input.getAttribute("data-lpignore") === "true" && input.hasAttribute("data-bwignore")
+    && getComputedStyle(input).getPropertyValue("-webkit-text-security") === "disc"
+  const card = () => document.querySelector("[data-secret-request]")?.textContent ?? ""
+  const secretCopy = card().includes("Saves to .env as STRIPE_SECRET_KEY") && card().includes("Kybern writes it to the file. The agent never sees it.")
+  input.focus()
+  document.execCommand("insertText", false, "sk_test_1234")
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true }))
+  input.blur()
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true })); await sleep(120)
+  const digitsIgnored = !chatFixture.calls.some((call) => call.method === "approvals.respond") && field()?.value === "sk_test_1234"
+  input.focus()
+  await shot("secret-new")
+  await click("Show the value")
+  const secretRevealed = getComputedStyle(field()!).getPropertyValue("-webkit-text-security") === "none" && document.activeElement === field()
+  await click("Hide the value")
+  field()!.form!.requestSubmit(); await sleep(250)
+  const saved = chatFixture.calls.find((call) => call.method === "approvals.respond" && call.params.approval_id === "secret-1")
+  const secretSubmitted = saved?.params.decision === "submit" && saved.params.response?.secret === "sk_test_1234" && !document.querySelector("[data-secret-request]")
+  show(replacing); await sleep(400)
+  const secretReplaceCopy = card().includes("Replaces the current value of OPENAI_API_KEY in apps/api/.env.local") && field()?.placeholder === "sk-…"
+  await shot("secret-replace")
+  await click("Decline")
+  const secretDeclined = chatFixture.calls.some((call) => call.method === "approvals.respond" && call.params.approval_id === "secret-2" && call.params.decision === "deny")
+  // A third request that ended with the turn, as the daemon closes it.
+  const ended = request("secret-3", { label: "Sentry token", reason: "", env_key: "SENTRY_AUTH_TOKEN", file: ".env", replaces: false })
+  const state = useStore.getState()
+  const current = state.transcript(threadId)
+  state.set({ transcripts: { ...state.transcripts, [threadId]: { ...current, loaded: true, blocks: [...current.blocks, { kind: "approval", id: "approval:secret-3", turnId, at, seq: 300, approval: ended, decision: { decision: "deny", reason: "turn ended" } }] } } })
+  await sleep(300)
+  const lines = Array.from(document.querySelectorAll<HTMLElement>("[data-secret-outcome]")).map((line) => line.textContent)
+  const secretSettledLines = lines.includes("Saved to .env as STRIPE_SECRET_KEY") && lines.includes("Declined OPENAI_API_KEY") && lines.includes("Request ended: the agent stopped before you answered")
+  const secretNeverRendered = !document.body.textContent?.includes("sk_test_1234")
+  await shot("secret-settled")
+  return { secretFieldFocused, secretFieldHardened, secretCopy, digitsIgnored, secretRevealed, secretSubmitted, secretReplaceCopy, secretDeclined, secretSettledLines, secretNeverRendered }
+}
+
+window.addEventListener("unhandledrejection", (event) => results({ pass: false, error: String(event.reason), stack: String(event.reason?.stack ?? "") }))
+run().catch((error) => results({ fixture: "chat-coordinator", pass: false, error: String(error) }))

@@ -26,6 +26,7 @@ rendering, layout, repaint, and background work. Reuse the existing machinery.
 | Native integration | A worker dependency selected a DOM-only browser entry; a fallback made the screen look functional while formatting was broken. | Verify the production bundle, worker execution, actual formatted output, and CSP in native WebKit. A browser dev preview alone is insufficient. |
 | Oversized open tool results | A visible open `ToolResult` `<pre className="max-h-72 overflow-auto">` mounted the full string with no row virtualization. | Virtualize offscreen lines in that scroller; keep on-screen text and clipboard copy exact. No paint hosts on the result scroller. |
 | Idle shell layers | An always-mounted opacity-0 drag preview with `backdrop-filter`, a permanent sidebar `will-change`, and a whole-pane blur entry kept pane-sized layers or boot spikes with ~1,000 DOM nodes. | Mount drag previews only during a drag; no persistent `will-change` or forwards fill on entry animations; do not blur a pane whose children already animate. `real-session` asserts the idle thread view. |
+| Follow-the-end correction a frame late | A command row appearing above a visual (or any content) while following the end painted that content 34 px displaced for one frame, then snapped back (12 shifts in 6 s). | `MessageScroller` pins the end inside the ResizeObserver callback (after layout, before paint) when following with instant scrolling; the deferred pass still settles virtual measurements. Sampling must read the previous frame's painted state, as `visuals-bounce` does. |
 | Launch motion | Sidebar, home-screen and connecting-spinner animations running during the first connected paint compounded into a ~60 MiB boot peak. | Surfaces first mounted during launch appear settled (`lib/launch.ts`, read once at mount); delay connecting spinners 400 ms. Later navigation keeps its motion. |
 
 The source owns numeric queue limits, cache budgets, virtualization thresholds,
@@ -185,8 +186,7 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 | Thinking disclosure re-entry, mixed work, dynamic row heights | `node scripts/check-rendering.mjs work-stream` |
 | Store publication, sidebar, composer, background task status | `node scripts/check-rendering.mjs work-shell` |
 | Project-free draft, recents, and neutral composer controls | `node scripts/check-rendering.mjs free-chat` |
-| Collaboration group lifecycle, paging, attribution, and context revisions | `node scripts/check-rendering.mjs collaboration` |
-| Ordinary-chat delegation, child navigation, earlier-thread references, project coordinator entry, and optional dock panels | `node scripts/check-rendering.mjs chat-collaboration` |
+| Ordinary-chat delegation, child navigation, earlier-thread references, Coordinator entry and harness switch, and optional dock panels | `node scripts/check-rendering.mjs chat-coordinator` |
 | Orchestrator V2: Lineage dock, delegation and message rows, held messages, Delegation settings. `KYBERN_ORCH_THEME=light\|dark KYBERN_PERF_SHOTS_DIR=<dir> KYBERN_PERF_WIDTH=1560 KYBERN_PERF_HEIGHT=1000` also writes named screenshots | `node scripts/check-rendering.mjs orchestrator` |
 | Release announcement, release details, and sidebar update controls | `node scripts/check-rendering.mjs app-update` |
 | Context menus or popup materials | `node scripts/check-rendering.mjs materials` |
@@ -197,6 +197,7 @@ and `pnpm build` checks. Add the affected native fixtures on macOS:
 | Default/project OMP profile settings | `node scripts/check-rendering.mjs profiles` |
 | Virtualization, navigation, row state, scroll anchoring | `node scripts/check-rendering.mjs interaction` |
 | Scroll position corrections, cold history, scrolling during work | `node scripts/check-rendering.mjs scrolling` |
+| Inline visual in a running turn: no shift while live-work rows above it appear/merge, end stays pinned in the same frame, no theme re-sends, whole-document height, themed scrollbars. `KYBERN_PERF_SHOTS_DIR` saves light/dark scrollbar screenshots | `KYBERN_PERF_FOREGROUND=1 node scripts/check-rendering.mjs visuals-bounce` (no daemon; serves the daemon's real bootstrap and CSP from a local process) |
 | Question forms, multiline input, submission states | `node scripts/check-rendering.mjs questions` |
 | Combined composer panels, shared seams, constrained pane height | `node scripts/check-rendering.mjs composer-stack` |
 | Attached-image controls, user line breaks, environment menu, thumbnail original identity | `node scripts/check-rendering.mjs chat-fixes` |

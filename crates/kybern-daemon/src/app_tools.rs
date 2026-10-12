@@ -48,11 +48,6 @@ pub(crate) fn prepare_native_operation(
             | "kybern_agent_delegate"
             | "kybern_agent_cancel"
             | "kybern_thread_interrupt"
-            | "kybern_collaboration_spawn"
-            | "kybern_collaboration_send"
-            | "kybern_collaboration_report"
-            | "kybern_collaboration_cancel"
-            | "kybern_collaboration_context_put"
             | "kybern_note_create"
             | "kybern_note_append"
             | "kybern_note_update"
@@ -158,7 +153,6 @@ impl AppTools {
                 "worktree": thread.worktree,
                 "parent_thread_id": thread.parent_thread_id,
                 "coordinator_project_id": thread.coordinator_project_id,
-                "collaboration_group_id": thread.collaboration_group_id,
             },
             "project": {
                 "id": project.id,
@@ -170,9 +164,9 @@ impl AppTools {
             "notes": notes,
             "task": task,
             "tasks": tasks,
-            "collaboration": {
+            "delegation": {
                 "available": true,
-                "guidance": "Use kybern_threads_search and kybern_thread_read to inspect prior chats without waking them. Use kybern_thread_send to message another thread (queue or steer; questions get replies; held messages need the user). Use kybern_agent_delegate to hand work to an agent on any installed harness and model, and end your turn so its result wakes you. kybern_collaboration_spawn is for project coordinators and their workers. Harness-native subagents suit quick same-harness work."
+                "guidance": "Use kybern_threads_search and kybern_thread_read to inspect prior chats without waking them. Use kybern_thread_send to message another thread (queue or steer; questions get replies; held messages need the user). Use kybern_agent_delegate to hand work to an agent on any installed harness and model, and end your turn so its result wakes you. Harness-native subagents suit quick same-harness work."
             }
         }))
     }
@@ -348,29 +342,10 @@ pub(crate) fn native_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinit
             "delivery":{"enum":["queue","steer",null]}, "wait_for_reply":{"type":["boolean","null"],"description":"purpose question only: wait for the answer inside this call."},
             "timeout_ms":{"type":["integer","null"],"minimum":1000,"maximum":60000,"description":"wait_for_reply only; default 55000, at most 60000."}
         }), &["operation_id","thread_id","body"]) },
-        NativeToolDefinition { name: "kybern_collaboration_spawn".into(), description: "Spawn a Kybern helper/worker/subagent using Codex, Claude, OpenCode, pi, OMP, or Cursor, or assign an existing member. Use for managed delegation requests so the helper appears as a real child chat in Kybern. Group setup and the owned parent assignment are automatic. Read kybern_thread_context for harness/model/effort choices; preserve the requested model and effort. Omitted base_revision uses the source workspace's committed HEAD for isolated editing; research and review also work in non-Git projects.".into(), input_schema: object(json!({
-            "operation_id":{"type":"string","format":"uuid"}, "parent_assignment_id":{"type":["string","null"],"format":"uuid"},
-            "owner_thread_id":{"type":["string","null"],"format":"uuid"}, "child":{"anyOf":[{"type":"object","additionalProperties":false,"properties":{"provider":{"type":"object","additionalProperties":false,"properties":{"kind":{"enum":["claude-code","codex","opencode","pi","omp","cursor"]},"instance":{"type":"string","description":"Configured harness profile name, usually default. This is not a model name; put a model such as gpt-5.6-luna in child.model."}},"required":["kind","instance"]},"model":{"type":["string","null"],"description":"Exact model ID for the selected harness. Set this when the user requests a model; provider.instance does not select a model."},"effort":{"type":["string","null"],"description":"Reasoning effort supported by the selected model. Preserve the user requested effort; if unsupported, report the available levels instead of silently substituting."},"permission_mode":{"enum":["supervised","accept-edits","auto","full-access",null],"description":"Omit unless the user requests a different worker permission policy. Kybern inherits the parent mode for the same harness or a full-access parent; otherwise supervised. Do not broaden permissions to bypass a pending approval. Choose only permissions authorized for the delegated work."},"base_revision":{"type":["string","null"],"description":"Optional git base; defaults to the source chat workspace's committed HEAD and is resolved to a commit OID."}},"required":["provider"]},{"type":"null"}]},
-            "title":{"type":"string"}, "instructions":{"type":"string"}, "kind":{"enum":["edit","review","research","integration","coordination"]}
-        }), &["operation_id","title","instructions","kind"]) },
-        NativeToolDefinition { name: "kybern_collaboration_send".into(), description: "Send an attributed progress update, question, reply, change request, result, or failure to another group thread.".into(), input_schema: object(json!({
-            "operation_id":{"type":"string","format":"uuid"}, "assignment_id":{"type":["string","null"],"format":"uuid"}, "to_thread_id":{"type":"string","format":"uuid"},
-            "purpose":{"enum":["progress","question","reply","change_request","result","failure","redirect"]}, "reply_to":{"type":["string","null"],"format":"uuid"}, "body":{"type":"string"}
-        }), &["operation_id","to_thread_id","purpose","body"]) },
-        NativeToolDefinition { name: "kybern_collaboration_read".into(), description: "Read this caller's group and optionally a participant's bounded recent transcript, results, and worktree reference. Returned messages addressed to you count as delivered and will not wake you again.".into(), input_schema: object(json!({"thread_id":{"type":["string","null"],"format":"uuid"},"transcript_limit":{"type":"integer","minimum":1,"maximum":100}}), &[]) },
-        NativeToolDefinition { name: "kybern_collaboration_wait".into(), description: "Wait without polling for assignment, message, or shared-context changes in this caller's group. Pass the returned cursor into the next wait; assignment_ids correlates exact delegated work. A timeout is a normal empty response, not a failure.".into(), input_schema: object(json!({"assignment_ids":{"type":"array","items":{"type":"string","format":"uuid"}},"cursor":{"type":["string","null"]},"timeout_ms":{"type":"integer","minimum":1,"maximum":30000}}), &[]) },
-        NativeToolDefinition { name: "kybern_collaboration_report".into(), description: "Explicitly finish an owned assignment with a structured success, partial, or failed result.".into(), input_schema: object(json!({
-            "operation_id":{"type":"string","format":"uuid"},"assignment_id":{"type":"string","format":"uuid"},"outcome":{"enum":["success","partial","failed"]},"summary":{"type":"string"},
-            "changes":{"type":"array","items":{"type":"string"}},"checks":{"type":"array","items":{"type":"string"}},"artifacts":{"type":"array","items":{"type":"string"}},"unresolved":{"type":"array","items":{"type":"string"}}
-        }), &["operation_id","assignment_id","outcome","summary"]) },
-        NativeToolDefinition { name: "kybern_collaboration_cancel".into(), description: "Cancel an assignment within the caller's group.".into(), input_schema: object(json!({"operation_id":{"type":"string","format":"uuid"},"assignment_id":{"type":"string","format":"uuid"},"reason":{"type":["string","null"]}}), &["operation_id","assignment_id"]) },
-        NativeToolDefinition { name: "kybern_collaboration_context_read".into(), description: "Selectively read current project knowledge and group notes, including the plan, user instructions, findings, and worker results.".into(), input_schema: object(json!({"keys":{"type":"array","items":{"type":"string"}},"kinds":{"type":"array","items":{"enum":["brief","plan","decision","research","instruction","result_reference"]}},"cursor":{"type":["string","null"]},"limit":{"type":"integer","minimum":1,"maximum":200}}), &[]) },
-        NativeToolDefinition { name: "kybern_collaboration_context_put".into(), description: "Add or revise project knowledge. Use plan for the current plan and completion status, research for reusable findings, decision for choices, and result_reference for evidence. Worker reports are saved automatically; curate reusable knowledge and keep plans current as work progresses. Agent callers cannot author authority-bearing briefs/instructions or overwrite user-authored entries.".into(), input_schema: object(json!({
-            "operation_id":{"type":"string","format":"uuid"},"entry_id":{"type":["string","null"],"format":"uuid"},"key":{"type":"string"},"kind":{"enum":["plan","decision","research","result_reference"]},"body":{"type":"string"},"expected_revision":{"type":["integer","null"]},"source_refs":{"type":"array","items":{"type":"string"}}
-        }), &["operation_id","key","kind","body"]) },
     ];
     definitions.extend(agent_tool_definitions());
     definitions.extend(notes_tasks_tool_definitions());
+    definitions.push(crate::secrets::tool_definition());
     for tool in &mut definitions {
         if tool.input_schema["properties"].get("operation_id").is_none() {
             continue;
@@ -482,9 +457,10 @@ fn notes_tasks_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
         NativeToolDefinition { name: "kybern_notes_search".into(), description: "Search the user's Kybern notes by title and text, or list recent notes when query is empty. Searches every project unless project_id is given. Returns ids, titles, snippets, kybern://note links, and a ready-made `markdown` link to paste into your answer; read one with kybern_note_read. Read-only.".into(), input_schema: object(json!({
             "query":{"type":["string","null"]}, "project_id": optional_uuid("Only notes of this project."), "limit":{"type":"integer","minimum":1,"maximum":50}
         }), &[]) },
-        NativeToolDefinition { name: "kybern_note_read".into(), description: "Read one Kybern note's markdown body. agent_editable is true only for notes an agent created; you may rewrite those with kybern_note_update, and only append to the user's own notes. Read-only.".into(), input_schema: object(json!({"note_id": uuid("Note id.")}), &["note_id"]) },
-        NativeToolDefinition { name: "kybern_note_create".into(), description: write("Create a Kybern note in this thread's project (a global note when the chat has no project, or with scope global)."), input_schema: object(json!({
-            "operation_id": operation, "title":{"type":"string"}, "body":{"type":"string","description":"Markdown."}, "scope":{"enum":["project","global",null]}
+        NativeToolDefinition { name: "kybern_note_read".into(), description: "Read one Kybern note's markdown body. agent_editable is true only for notes an agent created; you may rewrite those with kybern_note_update, and only append to the user's own notes. A note with project_role brief is the user's project brief: read it, but suggest changes in chat. Read-only.".into(), input_schema: object(json!({"note_id": uuid("Note id.")}), &["note_id"]) },
+        NativeToolDefinition { name: "kybern_note_create".into(), description: write("Create a Kybern note in this thread's project (a global note when the chat has no project, or with scope global). A project Coordinator saves the project's setup note with project_role setup."), input_schema: object(json!({
+            "operation_id": operation, "title":{"type":"string"}, "body":{"type":"string","description":"Markdown."}, "scope":{"enum":["project","global",null]},
+            "project_role":{"enum":["setup",null],"description":"Only a project Coordinator, once per project: how to build, run and test the project. Read it back with kybern_notes_search; change it with kybern_note_update."}
         }), &["title","body"]) },
         NativeToolDefinition { name: "kybern_note_append".into(), description: write("Append markdown to a Kybern note, a blank line after its current text. Without note_id it appends to this thread's own note, creating it if needed. Works on the user's notes too; use it to record findings or decisions the user wants kept."), input_schema: object(json!({
             "operation_id": operation, "note_id": optional_uuid("Omit for this thread's note."), "text":{"type":"string","description":"Markdown to append."}
@@ -632,13 +608,13 @@ mod tests {
         let normalize = |thread, session, turn, call, name, mut args: Value| {
             prepare_native_operation(thread, session, turn, call, name, &mut args).unwrap().unwrap()
         };
-        let name = "kybern_collaboration_report";
+        let name = "kybern_note_create";
         let first = normalize(thread, session, turn, "call-1", name, json!({"summary":"done"}));
         assert_eq!(first, normalize(thread, session, turn, "call-1", name, json!({"summary":"done"})));
         assert_ne!(first, normalize(thread, session, turn, "call-2", name, json!({"summary":"done"})));
         assert_ne!(first, normalize(thread, session, Uuid::now_v7(), "call-1", name, json!({})));
         assert_ne!(first, normalize(Uuid::now_v7(), session, turn, "call-1", name, json!({})));
-        assert_ne!(first, normalize(thread, session, turn, "call-1", "kybern_collaboration_spawn", json!({})));
+        assert_ne!(first, normalize(thread, session, turn, "call-1", "kybern_note_append", json!({})));
         let key = json!({"request_key":"report-readme"});
         let keyed = normalize(thread, session, turn, "call-2", name, key.clone());
         assert_eq!(keyed, normalize(thread, Uuid::now_v7(), Uuid::now_v7(), "retry", name, key));
@@ -679,6 +655,7 @@ mod tests {
                 is_git: false,
                 worktrees_default: None,
                 task_prefix: None,
+                brief_in_all_threads: false,
                 created_at: now,
                 updated_at: now,
             };
@@ -701,7 +678,6 @@ mod tests {
                 last_seq: 0,
                 parent_thread_id: None,
                 coordinator_project_id: None,
-                collaboration_group_id: None,
                 subagent: None,
                 delegation: None,
             };

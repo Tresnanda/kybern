@@ -184,7 +184,7 @@ pub(super) async fn measure(root: &Path, html: &str, widths: &[u32], fragment: &
     session.shutdown().await;
     Ok(heights)
 }
-const SETTLE_AND_MEASURE: &str = "document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(Math.ceil(Math.max(document.body.scrollHeight,document.body.getBoundingClientRect().height)))))))";
+const SETTLE_AND_MEASURE: &str = "document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(Math.ceil(Math.max(document.documentElement.getBoundingClientRect().height,document.body.scrollHeight,document.body.getBoundingClientRect().height)))))))";
 
 /// One headless browser, its debugging connection and a page server.
 struct Session {

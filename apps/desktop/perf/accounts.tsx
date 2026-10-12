@@ -14,8 +14,8 @@ import { accountsFixture } from "./accounts-rpc"
 import type { Settings } from "../src/protocol"
 import "../src/index.css"
 
-declare const __COLLAB_THEME__: "dark" | "light"
-const theme = __COLLAB_THEME__
+declare const __FIXTURE_THEME__: "dark" | "light"
+const theme = __FIXTURE_THEME__
 const longName = "Research and international collaboration — Asia Pacific enterprise engineering"
 const checks: Record<string, boolean> = {}
 const root = createRoot(document.getElementById("root")!)
@@ -61,7 +61,7 @@ async function run() {
   document.documentElement.dataset.windowMaterial="opaque"
   const tokens=buildThemeCssVariables({codeThemeId:DEFAULT_THEME_STATE.codeThemeIds[theme],theme:DEFAULT_THEME_STATE.chromeThemes[theme]},theme,{electron:true,isMac:true,systemUiFont:true})
   for (const [key,value] of Object.entries(tokens.variables)) document.documentElement.style.setProperty(key,value)
-  const settings: Settings = {default_provider:"claude-code",default_permission_mode:"supervised",worktrees_default:true,generate_titles:true,notifications:true,auto_update_harnesses:false,auto_update_daemon:false,tell_agents_about_kybern:true,background:{session_idle_minutes:15,max_idle_sessions:3,terminal_idle_minutes:30,daemon_idle_exit_minutes:0,save_power_on_battery:true},access:{tailscale:false},computer_use:{enabled:false,foreground:"ask"},orchestration:{max_active_children:4,max_depth:2},providers:{"claude-code":{binary:"/fixture/claude",model:"sonnet",env:{KEEP_ME:"yes"},default_account:"work",project_accounts:{},accounts:{work:{name:"Work",directory:"/fixture/data/accounts/claude-code/work",color:"blue",email:"dev@arunika.co",plan:"Max"},research:{name:longName,directory:"/fixture/existing/research",color:"green"}}}}}
+  const settings: Settings = {default_provider:"claude-code",default_permission_mode:"supervised",worktrees_default:true,generate_titles:true,notifications:true,auto_update_harnesses:false,auto_update_daemon:false,tell_agents_about_kybern:true,background:{session_idle_minutes:15,max_idle_sessions:3,terminal_idle_minutes:30,daemon_idle_exit_minutes:0,save_power_on_battery:true},access:{tailscale:false},computer_use:{enabled:false,foreground:"ask"},orchestration:{max_active_children:4,lead_max_children:6,max_depth:2},providers:{"claude-code":{binary:"/fixture/claude",model:"sonnet",env:{KEEP_ME:"yes"},default_account:"work",project_accounts:{},accounts:{work:{name:"Work",directory:"/fixture/data/accounts/claude-code/work",color:"blue",email:"dev@arunika.co",plan:"Max"},research:{name:longName,directory:"/fixture/existing/research",color:"green"}}}}}
   useStore.getState().set({settings,projects:{project:{id:"project",name:"International collaboration application",path:"/fixture/project",is_git:true,created_at:"",updated_at:""}},providers:[{kind:"claude-code",display_name:"Claude Code",available:true,instances:["default","work","research"],models:[],supports_fork:true,supports_model_switch:true,supported_permission_modes:["supervised"]}]})
   flushSync(()=>root.render(<Shell />))
   await waitFor(()=>rows().length===3,"Accounts load")

@@ -23,6 +23,9 @@ const ALLOW_ALWAYS = "Always allow this exact call";
 const DENY = "Deny";
 
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
+// What a project Coordinator may still call besides Kybern's tools: the read-only
+// built-ins of Pi and Oh My Pi (glob and web_search exist only in Oh My Pi).
+const LEAD_READ_ONLY_TOOLS = new Set([...READ_ONLY_TOOLS, "glob", "web_search"]);
 const EDIT_TOOLS = new Set(["edit", "write"]);
 const APP_TOOL_NAMES = new Set([
   "kybern_thread_context",
@@ -43,14 +46,6 @@ const APP_TOOL_NAMES = new Set([
   "kybern_agent_cancel",
   "kybern_agent_wait",
   "kybern_thread_interrupt",
-  "kybern_collaboration_spawn",
-  "kybern_collaboration_send",
-  "kybern_collaboration_read",
-  "kybern_collaboration_wait",
-  "kybern_collaboration_report",
-  "kybern_collaboration_cancel",
-  "kybern_collaboration_context_read",
-  "kybern_collaboration_context_put",
   "kybern_computer_apps",
   "kybern_computer_observe",
   "kybern_computer_act",
@@ -66,6 +61,7 @@ const APP_TOOL_NAMES = new Set([
   "kybern_task_create",
   "kybern_task_update",
   "kybern_task_claim",
+  "kybern_request_secret",
 ]);
 // Delegation can wait on a child agent (up to 60 s) and send/wait tools can
 // block on a reply. HTML preparation and preview rendering can also outlast
@@ -86,6 +82,13 @@ const APPROVAL_TOOL_NAMES = new Set([
   "kybern_task_update",
   "kybern_task_claim",
 ]);
+// kybern_request_secret waits for the user for up to timeout_seconds (default
+// 600, at most 3600), plus the daemon's slack.
+const SECRET_TOOL_NAME = "kybern_request_secret";
+function secretToolTimeoutMs(args) {
+  const seconds = Number.isFinite(args?.timeout_seconds) ? Math.min(Math.max(args.timeout_seconds, 10), 3600) : 600;
+  return seconds * 1000 + 30 * 1000;
+}
 function configuredToolSet(environmentName) {
   if (process.env[environmentName] === undefined) return new Set();
   try {
@@ -305,7 +308,9 @@ async function executeAppTool(name, toolCallId, args, signal, ctx) {
   const encodedResult = await ctx.ui.input(title, "Kybern app tool bridge", {
     signal,
     timeout:
-      name.startsWith("kybern_computer_") || APPROVAL_TOOL_NAMES.has(name) || LONG_TOOL_NAMES.has(name)
+      name === SECRET_TOOL_NAME
+        ? secretToolTimeoutMs(args)
+        : name.startsWith("kybern_computer_") || APPROVAL_TOOL_NAMES.has(name) || LONG_TOOL_NAMES.has(name)
         ? COMPUTER_TOOL_TIMEOUT_MS
         : APP_TOOL_TIMEOUT_MS,
   });
@@ -339,6 +344,7 @@ export default function kybernExtension(pi) {
   const appToolNames = new Set(configuredTools.map((tool) => tool.name));
   const deniedTools = configuredToolSet("KYBERN_PI_DENIED_TOOLS");
   const coordinatorOnly = process.env.KYBERN_PI_COORDINATOR_ONLY === "1";
+  const leadReadOnlyBuiltins = process.env.KYBERN_PI_READ_ONLY_BUILTINS === "1";
   const coordinatorInstructions = process.env.KYBERN_PI_SYSTEM_PROMPT || "";
   // A guide-only session (no coordinator role) adds the text to the system
   // prompt each turn and skips the persisted bootstrap message, which would
@@ -418,8 +424,8 @@ export default function kybernExtension(pi) {
       if (deniedTools.has(toolName)) {
         return { block: true, reason: `Kybern coordinator policy denied ${toolName}.` };
       }
-      if (coordinatorOnly && !appToolNames.has(toolName)) {
-        return { block: true, reason: "Kybern coordinator policy permits only collaboration tools." };
+      if (coordinatorOnly && !appToolNames.has(toolName) && !(leadReadOnlyBuiltins && LEAD_READ_ONLY_TOOLS.has(toolName))) {
+        return { block: true, reason: "Kybern coordinator policy permits only Kybern tools and read-only file tools." };
       }
       if (isAllowedWithoutPrompt(mode, toolName, appToolNames)) return;
 

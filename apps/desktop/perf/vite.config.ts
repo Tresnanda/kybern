@@ -6,6 +6,7 @@ export default mergeConfig(base, {
   define: {
     __PREVIEW_FIXTURE__: process.env.KYBERN_PREVIEW_FIXTURE ?? "null",
     __VISUAL_FIXTURE__: process.env.KYBERN_VISUAL_FIXTURE ?? "null",
+    __VISUAL_BOUNCE__: process.env.KYBERN_VISUAL_BOUNCE ?? "null",
     __TOOL_LEASE_ENDPOINT__: process.env.KYBERN_TOOL_LEASE_ENDPOINT ?? "null",
     __TERMINAL_RETAIN__: JSON.stringify(process.env.KYBERN_TERMINAL_RETAIN === "1"),
     __INTEGRATION_PREVIEW_URLS__: process.env.KYBERN_INTEGRATION_PREVIEW_URLS ?? "[]",
@@ -19,10 +20,9 @@ export default mergeConfig(base, {
     __SCROLL_EXTRA_CSS__: JSON.stringify(process.env.KYBERN_SCROLL_EXTRA_CSS ?? ""),
     __SCROLL_IDLE_MS__: JSON.stringify(Math.max(0, Math.min(30000, Number(process.env.KYBERN_SCROLL_IDLE_MS) || 0))),
     __COMPOSER_STACK_MODE__: JSON.stringify(process.env.KYBERN_COMPOSER_STACK_MODE ?? "queue"),
-    __COLLAB_THEME__: JSON.stringify(process.env.KYBERN_COLLAB_THEME ?? "dark"),
-    __COLLAB_REPLAY__: process.env.KYBERN_COLLAB_REPLAY ? readFileSync(process.env.KYBERN_COLLAB_REPLAY, "utf8") : "null",
-    __COLLAB_VIEW__: JSON.stringify(process.env.KYBERN_COLLAB_VIEW ?? "work"),
-    __COLLAB_STRESS__: JSON.stringify(process.env.KYBERN_COLLAB_STRESS ?? ""),
+    __FIXTURE_THEME__: JSON.stringify(process.env.KYBERN_FIXTURE_THEME ?? "dark"),
+    __FIXTURE_VIEW__: JSON.stringify(process.env.KYBERN_FIXTURE_VIEW ?? "work"),
+    __FIXTURE_STRESS__: JSON.stringify(process.env.KYBERN_FIXTURE_STRESS ?? ""),
     __ORCH_THEME__: JSON.stringify(process.env.KYBERN_ORCH_THEME ?? "dark"),
     __UPDATE_VIEW__: JSON.stringify(process.env.KYBERN_UPDATE_VIEW ?? "card"),
     __UPDATE_THEME__: JSON.stringify(process.env.KYBERN_UPDATE_THEME ?? "dark"),
@@ -49,6 +49,13 @@ export default mergeConfig(base, {
     transform(code, id) {
       if (!id.endsWith("/views/VisualReply.tsx") && !id.endsWith("/views/dock/VisualPreviewPanel.tsx")) return
       return code.replace(/"@\/state\/rpc"|"@\/lib\/tauri"/g, JSON.stringify(path.resolve(import.meta.dirname, "visuals-rpc.ts")))
+    },
+  }] : process.env.KYBERN_PERF_FIXTURE === "visuals-bounce" ? [{
+    name: "visuals-bounce-fixture-transport",
+    enforce: "pre",
+    transform(code, id) {
+      if (!id.endsWith("/views/VisualReply.tsx")) return
+      return code.replace(/"@\/state\/rpc"|"@\/lib\/tauri"/g, JSON.stringify(path.resolve(import.meta.dirname, "visuals-bounce-rpc.ts")))
     },
   }] : process.env.KYBERN_PERF_FIXTURE === "pr-review" ? [{
     name: "pr-review-fixture-transport",
@@ -108,20 +115,12 @@ export default mergeConfig(base, {
       if (!/\/(AppUpdate|Sidebar)\.tsx$/.test(id)) return
       return code.replaceAll('"@/lib/appUpdate"', JSON.stringify(path.resolve(import.meta.dirname, "app-update-transport.ts")))
     },
-  }] : ["chat-collaboration", "composer-stack"].includes(process.env.KYBERN_PERF_FIXTURE ?? "") ? [{
-    name: "chat-collaboration-fixture-transport",
+  }] : ["chat-coordinator", "composer-stack"].includes(process.env.KYBERN_PERF_FIXTURE ?? "") ? [{
+    name: "chat-coordinator-fixture-transport",
     enforce: "pre",
     transform(code, id) {
       if (!id.includes("/src/") || id.includes("/src/state/")) return
-      return code.replaceAll('"@/state/rpc"', JSON.stringify(path.resolve(import.meta.dirname, "chat-collaboration-rpc.ts")))
-    },
-  }] : process.env.KYBERN_PERF_FIXTURE === "collaboration" ? [{
-    name: "collaboration-fixture-transport",
-    enforce: "pre",
-    transform(code, id) {
-      if (!/\/Collaboration\.tsx$/.test(id)) return
-      const source = process.env.KYBERN_COLLAB_BASELINE ? readFileSync(process.env.KYBERN_COLLAB_BASELINE, "utf8") : code
-      return source.replace('"@/state/rpc"', JSON.stringify(path.resolve(import.meta.dirname, "collaboration-rpc.ts")))
+      return code.replaceAll('"@/state/rpc"', JSON.stringify(path.resolve(import.meta.dirname, "chat-coordinator-rpc.ts")))
     },
   }] : ["history", "history-retention"].includes(process.env.KYBERN_PERF_FIXTURE ?? "") ? [{
     name: "history-fixture-transport",

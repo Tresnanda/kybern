@@ -815,7 +815,7 @@ fn the_tool_is_declared_for_agents_pi_and_native_operations() {
     for phrase in ["question", "wait_for_reply", "steer", "held until the user approves", "16 messages", "reopens it"] {
         assert!(send.description.contains(phrase), "description mentions {phrase}");
     }
-    assert!(!properties.as_object().unwrap().contains_key("to_thread_id"), "the collaboration shape is gone");
+    assert!(!properties.as_object().unwrap().contains_key("to_thread_id"), "the old group shape is gone");
 
     // Mutating tools get a stable operation id; retrying a call keeps it.
     let (thread, session, turn) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
@@ -829,8 +829,8 @@ async fn thread_context_guidance_and_the_guide_describe_the_new_tools() {
     let chat = Chat::new();
     let a = chat.party("Alpha", ProviderKind::ClaudeCode, PermissionMode::Supervised, true).await;
     let context = chat.fixture.tool(&a.thread, &a.live, "ctx", "kybern_thread_context", json!({})).await.unwrap();
-    let guidance = context["collaboration"]["guidance"].as_str().unwrap();
-    for phrase in ["kybern_thread_send to message another thread", "kybern_agent_delegate to hand work", "end your turn", "project coordinators"] {
+    let guidance = context["delegation"]["guidance"].as_str().unwrap();
+    for phrase in ["kybern_thread_send to message another thread", "kybern_agent_delegate to hand work", "end your turn"] {
         assert!(guidance.contains(phrase), "guidance mentions {phrase}: {guidance}");
     }
     let golden = include_str!("../agent_guide_full.golden.txt");

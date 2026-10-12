@@ -15,7 +15,7 @@ type Shown = { text: string; trouble: boolean }
  * What to say now, or null for nothing. Quiet by design: nothing before the first edit,
  * "Saving…" only for a slow save, "Saved" for a moment, trouble until it clears.
  */
-function useStatus(snapshot: Pick<SessionSnapshot, "save" | "saveError" | "deleted" | "phase">): { shown: Shown | null; visible: boolean; everShown: boolean } {
+function useStatus(snapshot: Pick<SessionSnapshot, "save" | "saveError" | "deleted" | "phase">, failedText?: string): { shown: Shown | null; visible: boolean; everShown: boolean } {
   const [shown, setShown] = useState<Shown | null>(null)
   const [visible, setVisible] = useState(false)
   const [everShown, setEverShown] = useState(false)
@@ -53,11 +53,11 @@ function useStatus(snapshot: Pick<SessionSnapshot, "save" | "saveError" | "delet
       show(
         save === "conflict"
           ? { text: "Not saved", trouble: false }
-          : { text: save === "retrying" ? "Couldn’t save. Retrying…" : saveError ? `Couldn’t save. ${saveError}` : "Couldn’t save", trouble: true },
+          : { text: save === "retrying" ? "Couldn’t save. Retrying…" : failedText ?? (saveError ? `Couldn’t save. ${saveError}` : "Couldn’t save"), trouble: true },
       )
     }
     return () => timers.forEach(clearTimeout)
-  }, [save, saveError, deleted, phase])
+  }, [save, saveError, deleted, phase, failedText])
 
   return { shown, visible, everShown }
 }
@@ -67,8 +67,8 @@ function useStatus(snapshot: Pick<SessionSnapshot, "save" | "saveError" | "delet
  * `idle` shows in the same place while there is nothing to report;
  * `reserveSpace` keeps the line once the status has appeared.
  */
-export function SaveStatus({ snapshot, className, idle, reserveSpace }: { snapshot: SessionSnapshot; className?: string; idle?: ReactNode; reserveSpace?: boolean }) {
-  const { shown, visible, everShown } = useStatus(snapshot)
+export function SaveStatus({ snapshot, className, idle, reserveSpace, failedText }: { snapshot: SessionSnapshot; className?: string; idle?: ReactNode; reserveSpace?: boolean; failedText?: string }) {
+  const { shown, visible, everShown } = useStatus(snapshot, failedText)
   // Once the status has appeared, keep its line, so the panel does not bounce as it fades.
   if (!shown && reserveSpace && everShown) return <span aria-hidden="true" className={cn("invisible select-none text-[length:var(--app-font-size-ui-sm,11px)]", className)}>&nbsp;</span>
   if (!shown) return idle ? <span className={cn("inline-flex min-w-0 select-none text-[length:var(--app-font-size-ui-sm,11px)] tabular-nums text-muted-foreground/60", className)}>{idle}</span> : null

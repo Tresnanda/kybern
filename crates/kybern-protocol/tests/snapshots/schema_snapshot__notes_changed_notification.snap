@@ -104,6 +104,17 @@ expression: schema_for!(NotesChangedNotification)
             "null"
           ],
           "format": "uuid"
+        },
+        "project_role": {
+          "description": "Set on a project's brief and setup notes (one of each per project). Only the\nuser edits the brief; only the project's Coordinator writes the setup note.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectNoteRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -151,6 +162,14 @@ expression: schema_for!(NotesChangedNotification)
       "required": [
         "done",
         "total"
+      ]
+    },
+    "ProjectNoteRole": {
+      "description": "What a project note is for. The brief is the user's own instructions for the\nproject; the setup note records how to build, run and test it and is kept by the\nproject's Coordinator. Ordinary notes (memory) have no role.",
+      "type": "string",
+      "enum": [
+        "brief",
+        "setup"
       ]
     }
   }

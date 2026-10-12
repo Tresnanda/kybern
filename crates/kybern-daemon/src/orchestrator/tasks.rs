@@ -1297,6 +1297,7 @@ mod tests {
                     project_id: Some(self.project.id),
                     title: Some(title.into()),
                     body: Some(body.into()),
+                    project_role: None,
                 })
                 .unwrap()
         }
@@ -1338,7 +1339,6 @@ mod tests {
                 last_seq: 0,
                 parent_thread_id: None,
                 coordinator_project_id: None,
-                collaboration_group_id: None,
                 subagent: None,
                 delegation: None,
             };

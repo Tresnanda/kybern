@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0
+
+<!-- kybern-release-title: A Coordinator that delegates, and secrets kept out of chat -->
+<!-- kybern-release-summary: The project Coordinator now plans and hands work to agents, keeps a shared brief and memory in Notes, and agents can ask for API keys without seeing them. -->
+
+- Rebuild the project Coordinator as a lead chat. It answers quick questions, hands work to agents on any harness, shows them in the Agents tab and never edits files itself. Claude Code, OpenCode, Pi and Oh My Pi block its edits; on Codex and Cursor the header says edits are not blocked. A new Project tab holds your brief, the Coordinator's setup note and the memory notes agents write, with a switch to give every chat in the project the brief. Settings has a limit for active agents per Coordinator.
+- Remove the old collaboration groups, assignments and Collaboration pane. Upgrading archives old coordinator chats and their helpers and keeps their brief, setup and project overview as project notes.
+- Let agents ask for an API key or token with `kybern_request_secret`. You enter it in a private card on desktop or mobile, Kybern writes it to a git-ignored env file in the workspace, and the agent only learns the variable name. Masked answers are never stored, including Codex secret questions, which were stored in plain text before.
+- Keep inline visual replies where they were published while a turn is still running, and stop them bouncing as work rows appear. Pages are no longer clipped at the bottom, stop re-rendering their theme on unrelated changes, and use thin scrollbars that match the app.
+- Tell agents to put findings in the conversation, prefer inline pages for substantial reports, and write separate report files only when asked.
+- The CLI replaces `kybern collaboration` with `kybern coordinator get|open|switch-harness` and `kybern history search|read`.
+
 ## 0.8.1
 
 <!-- kybern-release-title: Switch accounts and expand previews directly -->

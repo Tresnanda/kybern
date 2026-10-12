@@ -63,6 +63,10 @@ fn validate_orchestration(orchestration: &kybern_protocol::OrchestrationSettings
         "Active agents per thread must be between 1 and 16. Change the value and save again."
     );
     anyhow::ensure!(
+        (1..=16).contains(&orchestration.lead_max_children),
+        "Active agents per Coordinator must be between 1 and 16. Change the value and save again."
+    );
+    anyhow::ensure!(
         (1..=4).contains(&orchestration.max_depth),
         "Delegation depth must be between 1 and 4. Change the value and save again."
     );
@@ -113,10 +117,20 @@ mod orchestration_tests {
             let error = store.set(settings.clone()).unwrap_err().to_string();
             assert!(error.contains("between"), "{error}");
         }
+        settings.orchestration.max_active_children = 4;
+        settings.orchestration.max_depth = 2;
+        for lead in [0, 17] {
+            settings.orchestration.lead_max_children = lead;
+            let error = store.set(settings.clone()).unwrap_err().to_string();
+            assert!(error.contains("Coordinator must be between 1 and 16"), "{error}");
+        }
+        settings.orchestration.lead_max_children = 6;
         assert_eq!(store.get().orchestration, kybern_protocol::OrchestrationSettings::default(), "rejected updates change nothing");
         settings.orchestration.max_active_children = 16;
         settings.orchestration.max_depth = 4;
-        assert_eq!(store.set(settings).unwrap().orchestration.max_active_children, 16);
+        settings.orchestration.lead_max_children = 16;
+        let saved = store.set(settings).unwrap().orchestration;
+        assert_eq!((saved.max_active_children, saved.lead_max_children), (16, 16));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

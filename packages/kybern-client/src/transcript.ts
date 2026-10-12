@@ -153,7 +153,6 @@ export function applyBackgroundEvent(state: ThreadState, event: ThreadEvent): Th
   if (event.seq <= state.lastSeq) return state
   const compact = compactThreadState(state)
   switch (event.kind) {
-    case "project_coordinator_deleted":
     case "thread_created": case "thread_updated": case "thread_archived":
     case "thread_notes_updated":
     case "approval_requested": case "user_input_requested": case "approval_resolved":
@@ -698,6 +697,10 @@ export interface TurnGroup {
   /** Tool calls, thinking, notices and intermediate assistant text, in order. */
   images: Extract<Block, { kind: "image" }>[]
   visuals?: Extract<Block, { kind: "visual" }>[]
+  /** How many `work` blocks preceded the first visual. A running turn renders its visuals row
+   * there, with the later work below it. Only meaningful while `running`: settlement folds
+   * the work and moves the visuals above the answer. */
+  visualsAt?: number
   work: Block[]
   /** Whole terminal root message. It is deliberately absent until settlement. */
   answer: Extract<Block, { kind: "assistant" }> | null
@@ -951,7 +954,11 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
         else g.work.push(b)
         break
       case "visual":
-        (g.visuals ??= []).push(b)
+        if (!g.visuals) {
+          g.visuals = []
+          g.visualsAt = g.work.length
+        }
+        g.visuals.push(b)
         break
       case "approval":
         g.approvals.push(b)

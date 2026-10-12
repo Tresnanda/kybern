@@ -48,80 +48,29 @@ fn snake(value: impl serde::Serialize) -> Result<String> {
     Ok(serde_json::to_value(value)?.as_str().ok_or_else(|| anyhow::anyhow!("enum did not serialize as a string"))?.to_owned())
 }
 
-fn collaboration_tx_receipt(
-    tx: &Transaction<'_>,
-    operation_id: OperationId,
-    actor: &str,
-    operation_kind: &str,
-    request: &str,
-) -> Result<Option<String>> {
-    let row = tx
-        .query_row(
-            "SELECT actor,operation_kind,request,state,response FROM collaboration_operations WHERE operation_id=?1",
-            [operation_id.to_string()],
-            |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                    r.get::<_, Option<String>>(4)?,
-                ))
-            },
-        )
-        .optional()?;
-    let Some((stored_actor, stored_kind, stored_request, state, response)) = row else {
-        return Ok(None);
-    };
-    if stored_actor != actor || stored_kind != operation_kind || stored_request != request {
-        anyhow::bail!("operation id already belongs to a different actor or request");
+/// The persistence boundary for secret answers: an `ApprovalResolved` event
+/// never stores or broadcasts the value of a secret answer, whoever emits it.
+fn redact_resolved_approval(c: &Connection, payload: &mut EventPayload) -> Result<()> {
+    let EventPayload::ApprovalResolved { approval_id, decision } = payload else { return Ok(()) };
+    if matches!(decision, ApprovalDecision::Submit { .. })
+        && let Some(approval) = approval_row(c, *approval_id)?
+    {
+        *decision = approval.0.redacted_decision(decision);
     }
-    if state != "completed" {
-        anyhow::bail!("operation outcome is uncertain; inspect collaboration state before retrying");
-    }
-    Ok(Some(response.ok_or_else(|| anyhow::anyhow!("completed operation has no response"))?))
-}
-
-fn collaboration_tx_complete(
-    tx: &Transaction<'_>,
-    operation_id: OperationId,
-    actor: &str,
-    operation_kind: &str,
-    request: &str,
-    response: &impl serde::Serialize,
-) -> Result<()> {
-    let now = Utc::now().to_rfc3339();
-    tx.execute(
-        "INSERT INTO collaboration_operations(operation_id,actor,operation_kind,request,state,response,created_at,updated_at) VALUES (?1,?2,?3,?4,'completed',?5,?6,?6)",
-        params![operation_id.to_string(), actor, operation_kind, request, serde_json::to_string(response)?, now],
-    )?;
     Ok(())
 }
 
-fn collaboration_queued_message(message: &CollaborationMessage) -> methods::QueuedMessage {
-    let response_guidance = if matches!(message.purpose, CollaborationMessagePurpose::Question | CollaborationMessagePurpose::ChangeRequest)
-    {
-        "\n\nRespond with kybern_collaboration_send and set reply_to to this message id."
-    } else {
-        "\n\nDo not send an acknowledgement wakeup. Continue only if this message gives you actual work; otherwise record progress without waking the sender."
-    };
-    methods::QueuedMessage {
-        id: message.id,
-        thread_id: message.to_thread_id,
-        message: UserMessage::text(format!(
-            "Kybern collaboration {:?} from {} (message {}, reply_to {:?}):\n{}{}",
-            message.purpose,
-            message.from_thread_id.map_or_else(|| "the user".into(), |id| format!("thread {id}")),
-            message.id,
-            message.reply_to,
-            message.body,
-            response_guidance
-        )),
-    }
+fn approval_row(c: &Connection, id: ApprovalId) -> Result<Option<(ApprovalRequest, bool)>> {
+    Ok(c.query_row("SELECT payload, resolved FROM approvals WHERE id = ?1", [id.to_string()], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?))
+    })
+    .optional()?
+    .map(|(p, resolved)| serde_json::from_str::<ApprovalRequest>(&p).map(|a| (a, resolved)))
+    .transpose()?)
 }
 
-/// Append within the caller's transaction so collaboration state, receipts,
-/// queued delivery, and their observable events share one commit boundary.
+/// Append within the caller's transaction so related state and its observable
+/// events share one commit boundary.
 fn append_event_in_transaction(
     tx: &Transaction<'_>,
     thread_id: ThreadId,
@@ -129,6 +78,7 @@ fn append_event_in_transaction(
     mut payload: EventPayload,
 ) -> Result<ThreadEvent> {
     let c = tx;
+    redact_resolved_approval(c, &mut payload)?;
     let at = Utc::now();
     let kind = payload.kind();
     let serialized = serde_json::to_string(&payload)?;
@@ -179,15 +129,6 @@ fn append_event_in_transaction(
         _ => {}
     }
     Ok(ThreadEvent { seq, thread_id, turn_id, at, payload })
-}
-
-fn append_collaboration_events_in_transaction(tx: &Transaction<'_>, group_id: GroupId, payload: EventPayload) -> Result<Vec<ThreadEvent>> {
-    let members = {
-        let mut statement =
-            tx.prepare("SELECT thread_id FROM collaboration_members WHERE group_id = ?1 AND active = 1 ORDER BY thread_id")?;
-        statement.query_map([group_id.to_string()], |row| row.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?
-    };
-    members.into_iter().map(|id| append_event_in_transaction(tx, id.parse()?, None, payload.clone())).collect()
 }
 
 /// What removing a project moved to Recently deleted.
@@ -252,9 +193,11 @@ impl Store {
         f(&conn)
     }
 
-    // ---- collaboration ----
+    // ---- tool operation receipts ----
 
-    pub fn collaboration_operation_receipt<T: serde::de::DeserializeOwned>(
+    /// The saved result of an agent tool call that carried an `operation_id`, so a
+    /// retry returns it instead of writing twice.
+    pub fn operation_receipt<T: serde::de::DeserializeOwned>(
         &self,
         operation_id: OperationId,
         actor: &str,
@@ -263,23 +206,35 @@ impl Store {
     ) -> Result<Option<T>> {
         let request = serde_json::to_string(request)?;
         self.with(|c| {
-            let row = c.query_row(
-                "SELECT actor, operation_kind, request, state, response FROM collaboration_operations WHERE operation_id = ?1",
-                [operation_id.to_string()],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?)),
-            ).optional()?;
+            let row = c
+                .query_row(
+                    "SELECT actor, operation_kind, request, state, response FROM tool_operations WHERE operation_id = ?1",
+                    [operation_id.to_string()],
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                            r.get::<_, String>(3)?,
+                            r.get::<_, Option<String>>(4)?,
+                        ))
+                    },
+                )
+                .optional()?;
             let Some((stored_actor, stored_kind, stored_request, state, response)) = row else { return Ok(None) };
             if stored_actor != actor || stored_kind != operation_kind || stored_request != request {
                 anyhow::bail!("operation id already belongs to a different actor or request");
             }
             if state != "completed" {
-                anyhow::bail!("operation outcome is uncertain after an interrupted daemon write; inspect current collaboration state before using a new operation id");
+                anyhow::bail!(
+                    "operation outcome is uncertain after an interrupted daemon write; inspect the current notes and tasks before using a new operation id"
+                );
             }
             Ok(Some(serde_json::from_str(&response.ok_or_else(|| anyhow::anyhow!("completed operation has no response"))?)?))
         })
     }
 
-    pub fn collaboration_operation_begin(
+    pub fn operation_begin(
         &self,
         operation_id: OperationId,
         actor: &str,
@@ -289,17 +244,17 @@ impl Store {
         let now = Utc::now().to_rfc3339();
         self.with(|c| {
             c.execute(
-                "INSERT INTO collaboration_operations(operation_id, actor, operation_kind, request, state, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?5)",
+                "INSERT INTO tool_operations(operation_id, actor, operation_kind, request, state, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?5)",
                 params![operation_id.to_string(), actor, operation_kind, serde_json::to_string(request)?, now],
             )?;
             Ok(())
         })
     }
 
-    pub fn collaboration_operation_complete<T: serde::Serialize>(&self, operation_id: OperationId, response: &T) -> Result<()> {
+    pub fn operation_complete<T: serde::Serialize>(&self, operation_id: OperationId, response: &T) -> Result<()> {
         self.with(|c| {
             c.execute(
-                "UPDATE collaboration_operations SET state = 'completed', response = ?2, updated_at = ?3 WHERE operation_id = ?1 AND state = 'pending'",
+                "UPDATE tool_operations SET state = 'completed', response = ?2, updated_at = ?3 WHERE operation_id = ?1 AND state = 'pending'",
                 params![operation_id.to_string(), serde_json::to_string(response)?, Utc::now().to_rfc3339()],
             )?;
             Ok(())
@@ -308,769 +263,10 @@ impl Store {
 
     /// Forget a pending operation whose write failed before changing anything, so a
     /// retry with the same id runs again instead of reporting an uncertain outcome.
-    pub fn collaboration_operation_abandon(&self, operation_id: OperationId) -> Result<()> {
+    pub fn operation_abandon(&self, operation_id: OperationId) -> Result<()> {
         self.with(|c| {
-            c.execute("DELETE FROM collaboration_operations WHERE operation_id = ?1 AND state = 'pending'", [operation_id.to_string()])?;
+            c.execute("DELETE FROM tool_operations WHERE operation_id = ?1 AND state = 'pending'", [operation_id.to_string()])?;
             Ok(())
-        })
-    }
-
-    pub fn collaboration_group_put(&self, group: &CollaborationGroup) -> Result<()> {
-        self.with(|c| {
-            c.execute(
-                "INSERT INTO collaboration_groups(id, project_id, coordinator_thread_id, status, payload) VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(id) DO UPDATE SET coordinator_thread_id=excluded.coordinator_thread_id, status=excluded.status, payload=excluded.payload",
-                params![group.id.to_string(), group.project_id.to_string(), group.coordinator_thread_id.to_string(), snake(group.status)?, serde_json::to_string(group)?],
-            )?;
-            Ok(())
-        })
-    }
-
-    /// Atomically accepts a group creation operation and its initial coordinator.
-    /// Replays return the original response even after the group is later edited.
-    pub fn collaboration_group_create_operation(
-        &self,
-        operation_id: OperationId,
-        actor: &str,
-        request: &impl serde::Serialize,
-        group: &CollaborationGroup,
-        member: &GroupMember,
-    ) -> Result<(CollaborationGroup, Vec<ThreadEvent>)> {
-        let request = serde_json::to_string(request)?;
-        self.with(|c| {
-            let tx = c.unchecked_transaction()?;
-            if let Some(response) = collaboration_tx_receipt(&tx, operation_id, actor, "groups.create", &request)? {
-                return Ok((serde_json::from_str(&response)?, Vec::new()));
-            }
-            tx.execute(
-                "INSERT INTO collaboration_groups(id,project_id,coordinator_thread_id,status,payload) VALUES (?1,?2,?3,?4,?5)",
-                params![
-                    group.id.to_string(),
-                    group.project_id.to_string(),
-                    group.coordinator_thread_id.to_string(),
-                    snake(group.status)?,
-                    serde_json::to_string(group)?
-                ],
-            )?;
-            tx.execute(
-                "INSERT INTO collaboration_members(group_id,thread_id,active,payload) VALUES (?1,?2,1,?3)",
-                params![member.group_id.to_string(), member.thread_id.to_string(), serde_json::to_string(member)?],
-            )?;
-            collaboration_tx_complete(&tx, operation_id, actor, "groups.create", &request, group)?;
-            let mut events = append_collaboration_events_in_transaction(
-                &tx,
-                group.id,
-                EventPayload::CollaborationGroupUpdated { group: group.clone() },
-            )?;
-            events.extend(append_collaboration_events_in_transaction(
-                &tx,
-                group.id,
-                EventPayload::CollaborationMemberUpdated { member: member.clone() },
-            )?);
-            tx.commit()?;
-            Ok((group.clone(), events))
-        })
-    }
-
-    pub fn collaboration_group_control_operation(
-        &self,
-        operation_id: OperationId,
-        actor: &str,
-        request: &impl serde::Serialize,
-        group: &CollaborationGroup,
-        assignments: &[CollaborationAssignment],
-        messages: &[CollaborationMessage],
-    ) -> Result<(CollaborationGroup, Vec<ThreadEvent>)> {
-        let request = serde_json::to_string(request)?;
-        self.with(|c| {
-            let tx = c.unchecked_transaction()?;
-            if let Some(response) = collaboration_tx_receipt(&tx, operation_id, actor, "groups.control", &request)? {
-                return Ok((serde_json::from_str(&response)?, Vec::new()));
-            }
-            tx.execute(
-                "UPDATE collaboration_groups SET coordinator_thread_id=?2,status=?3,payload=?4 WHERE id=?1",
-                params![group.id.to_string(), group.coordinator_thread_id.to_string(), snake(group.status)?, serde_json::to_string(group)?],
-            )?;
-            let mut events = append_collaboration_events_in_transaction(
-                &tx,
-                group.id,
-                EventPayload::CollaborationGroupUpdated { group: group.clone() },
-            )?;
-            for assignment in assignments {
-                tx.execute(
-                    "UPDATE collaboration_assignments SET owner_thread_id=?2,status=?3,kind=?4,payload=?5 WHERE id=?1",
-                    params![
-                        assignment.id.to_string(),
-                        assignment.owner_thread_id.map(|id| id.to_string()),
-                        snake(assignment.status)?,
-                        snake(assignment.kind)?,
-                        serde_json::to_string(assignment)?
-                    ],
-                )?;
-                events.extend(append_collaboration_events_in_transaction(
-                    &tx,
-                    group.id,
-                    EventPayload::CollaborationAssignmentUpdated { assignment: assignment.clone() },
-                )?);
-            }
-            for message in messages {
-                tx.execute(
-                    "UPDATE collaboration_messages SET state=?2,delivery_message_id=?3,payload=?4 WHERE id=?1",
-                    params![message.id.to_string(), snake(message.state)?, message.id.to_string(), serde_json::to_string(message)?],
-                )?;
-                events.push(append_event_in_transaction(
-                    &tx,
-                    message.to_thread_id,
-                    None,
-                    EventPayload::MessageRemoved { message_id: message.id },
-                )?);
-                events.extend(append_collaboration_events_in_transaction(
-                    &tx,
-                    group.id,
-                    EventPayload::CollaborationMessageUpdated { message: message.clone() },
-                )?);
-            }
-            collaboration_tx_complete(&tx, operation_id, actor, "groups.control", &request, group)?;
-            tx.commit()?;
-            Ok((group.clone(), events))
-        })
-    }
-
-    pub fn collaboration_group_update_operation(
-        &self,
-        operation_id: OperationId,
-        actor: &str,
-        request: &impl serde::Serialize,
-        group: &CollaborationGroup,
-        members: &[GroupMember],
-    ) -> Result<(CollaborationGroup, Vec<ThreadEvent>)> {
-        let request = serde_json::to_string(request)?;
-        self.with(|c| {
-            let tx = c.unchecked_transaction()?;
-            if let Some(response) = collaboration_tx_receipt(&tx, operation_id, actor, "groups.update", &request)? {
-                return Ok((serde_json::from_str(&response)?, Vec::new()));
-            }
-            tx.execute(
-                "UPDATE collaboration_groups SET coordinator_thread_id=?2,status=?3,payload=?4 WHERE id=?1",
-                params![group.id.to_string(), group.coordinator_thread_id.to_string(), snake(group.status)?, serde_json::to_string(group)?],
-            )?;
-            for member in members {
-                tx.execute(
-                    "INSERT INTO collaboration_members(group_id,thread_id,active,payload) VALUES (?1,?2,?3,?4) ON CONFLICT(group_id,thread_id) DO UPDATE SET active=excluded.active,payload=excluded.payload",
-                    params![member.group_id.to_string(), member.thread_id.to_string(), member.active, serde_json::to_string(member)?],
-                )?;
-            }
-            let mut events = append_collaboration_events_in_transaction(
-                &tx,
-                group.id,
-                EventPayload::CollaborationGroupUpdated { group: group.clone() },
-            )?;
-            for member in members {
-                events.extend(append_collaboration_events_in_transaction(
-                    &tx,
-                    group.id,
-                    EventPayload::CollaborationMemberUpdated { member: member.clone() },
-                )?);
-            }
-            collaboration_tx_complete(&tx, operation_id, actor, "groups.update", &request, group)?;
-            tx.commit()?;
-            Ok((group.clone(), events))
-        })
-    }
-
-    pub fn collaboration_member_operation<T: serde::Serialize + serde::de::DeserializeOwned + Clone>(
-        &self,
-        operation_id: OperationId,
-        actor: &str,
-        kind: &str,
-        request: &impl serde::Serialize,
-        member: &GroupMember,
-        response: &T,
-    ) -> Result<(T, Vec<ThreadEvent>)> {
-        let request = serde_json::to_string(request)?;
-        self.with(|c| {
-            let tx = c.unchecked_transaction()?;
-            if let Some(stored) = collaboration_tx_receipt(&tx, operation_id, actor, kind, &request)? {
-                return Ok((serde_json::from_str(&stored)?, Vec::new()));
-            }
-            tx.execute(
-                "INSERT INTO collaboration_members(group_id,thread_id,active,payload) VALUES (?1,?2,?3,?4) ON CONFLICT(group_id,thread_id) DO UPDATE SET active=excluded.active,payload=excluded.payload",
-                params![member.group_id.to_string(), member.thread_id.to_string(), member.active, serde_json::to_string(member)?],
-            )?;
-            let events = append_collaboration_events_in_transaction(
-                &tx,
-                member.group_id,
-                EventPayload::CollaborationMemberUpdated { member: member.clone() },
-            )?;
-            collaboration_tx_complete(&tx, operation_id, actor, kind, &request, response)?;
-            tx.commit()?;
-            Ok((response.clone(), events))
-        })
-    }
-
-    pub fn collaboration_group_get(&self, id: GroupId) -> Result<Option<CollaborationGroup>> {
-        self.json_optional("SELECT payload FROM collaboration_groups WHERE id = ?1", id)
-    }
-
-    pub fn collaboration_groups_list(&self, project_id: Option<ProjectId>, include_stopped: bool) -> Result<Vec<CollaborationGroup>> {
-        self.with(|c| {
-            let (sql, value) = match (project_id, include_stopped) {
-                (Some(id), true) => ("SELECT payload FROM collaboration_groups WHERE project_id = ?1 ORDER BY id", Some(id.to_string())),
-                (Some(id), false) => (
-                    "SELECT payload FROM collaboration_groups WHERE project_id = ?1 AND status NOT IN ('stopped','completed') ORDER BY id",
-                    Some(id.to_string()),
-                ),
-                (None, true) => ("SELECT payload FROM collaboration_groups ORDER BY id", None),
-                (None, false) => ("SELECT payload FROM collaboration_groups WHERE status NOT IN ('stopped','completed') ORDER BY id", None),
-            };
-            let mut st = c.prepare(sql)?;
-            let rows = if let Some(value) = value {
-                st.query_map([value], |r| r.get::<_, String>(0))?.collect::<std::result::Result<Vec<_>, _>>()?
-            } else {
-                st.query_map([], |r| r.get::<_, String>(0))?.collect::<std::result::Result<Vec<_>, _>>()?
-            };
-            rows.into_iter().map(|json| Ok(serde_json::from_str(&json)?)).collect()
-        })
-    }
-
-    pub fn collaboration_member_put(&self, member: &GroupMember) -> Result<()> {
-        self.with(|c| {
-            c.execute(
-                "INSERT INTO collaboration_members(group_id, thread_id, active, payload) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(group_id,thread_id) DO UPDATE SET active=excluded.active,payload=excluded.payload",
-                params![member.group_id.to_string(), member.thread_id.to_string(), member.active, serde_json::to_string(member)?],
-            )?;
-            Ok(())
-        })
-    }
-
-    pub fn collaboration_members(&self, group_id: GroupId) -> Result<Vec<GroupMember>> {
-        self.json_list("SELECT payload FROM collaboration_members WHERE group_id = ?1 ORDER BY rowid", group_id)
-    }
-
-    pub fn collaboration_group_for_thread(&self, thread_id: ThreadId) -> Result<Option<GroupId>> {
-        self.with(|c| {
-            Ok(c.query_row("SELECT m.group_id FROM collaboration_members m JOIN collaboration_groups g ON g.id=m.group_id WHERE m.thread_id=?1 AND m.active=1 AND g.status!='completed'", [thread_id.to_string()], |r| {
-                r.get::<_, String>(0)
-            })
-            .optional()?
-            .map(|id| id.parse())
-            .transpose()?)
-        })
-    }
-
-    pub fn collaboration_assignment_put(&self, assignment: &CollaborationAssignment) -> Result<()> {
-        self.with(|c| {
-            c.execute(
-                "INSERT INTO collaboration_assignments(id,group_id,owner_thread_id,status,kind,payload) VALUES (?1,?2,?3,?4,?5,?6)
-                 ON CONFLICT(id) DO UPDATE SET owner_thread_id=excluded.owner_thread_id,status=excluded.status,kind=excluded.kind,payload=excluded.payload",
-                params![assignment.id.to_string(), assignment.group_id.to_string(), assignment.owner_thread_id.map(|id| id.to_string()), snake(assignment.status)?, snake(assignment.kind)?, serde_json::to_string(assignment)?],
-            )?;
-            Ok(())
-        })
-    }
-
-    pub fn collaboration_assignment_create_operation(
-        &self,
-        operation_id: OperationId,
-        actor: &str,
-        request: &impl serde::Serialize,
-        assignment: &CollaborationAssignment,
-    ) -> Result<(CollaborationAssignment, Vec<ThreadEvent>)> {
-        let request = serde_json::to_string(request)?;
-        self.with(|c| {
-            let tx = c.unchecked_transaction()?;
-            if let Some(response) = collaboration_tx_receipt(&tx, operation_id, actor, "assignments.create", &request)? {
-                return Ok((serde_json::from_str(&response)?, Vec::new()));
-            }
-            tx.execute(
-                "INSERT INTO collaboration_assignments(id,group_id,owner_thread_id,status,kind,payload) VALUES (?1,?2,?3,?4,?5,?6)",
-                params![
-                    assignment.id.to_string(),
-                    assignment.group_id.to_string(),
-                    assignment.owner_thread_id.map(|id| id.to_string()),
-                    snake(assignment.status)?,
-                    snake(assignment.kind)?,
-                    serde_json::to_string(assignment)?
-                ],
-            )?;
-            collaboration_tx_complete(&tx, operation_id, actor, "assignments.create", &request, assignment)?;
-            let events = append_collaboration_events_in_transaction(
-                &tx,
-                assignment.group_id,
-                EventPayload::CollaborationAssignmentUpdated { assignment: assignment.clone() },
-            )?;
-            tx.commit()?;
-            Ok((assignment.clone(), events))
-        })
-    }
-
-    /// Commits a terminal assignment outcome and its return notification as one
-    /// unit. A queued notification's generic queue projection is included in
-    /// the same transaction, closing the crash window before coordinator wakeup.
-    pub fn collaboration_assignment_complete_operation(
-        &self,
-        operation_id: OperationId,
-        actor: &str,
-        request: &impl serde::Serialize,
-        assignment: &CollaborationAssignment,
-        notification: Option<(&str, &str, &CollaborationMessage, Option<MessageId>)>,
-    ) -> Result<(CollaborationAssignment, Vec<ThreadEvent>)> {
-        let request = serde_json::to_string(request)?;
-        self.with(|c| {
-            let tx = c.unchecked_transaction()?;
-            if let Some(response) = collaboration_tx_receipt(&tx, operation_id, actor, "assignments.complete", &request)? {
-                return Ok((serde_json::from_str(&response)?, Vec::new()));
-            }
-            tx.execute(
-                "UPDATE collaboration_assignments SET owner_thread_id=?2,status=?3,kind=?4,payload=?5 WHERE id=?1",
-                params![assignment.id.to_string(), assignment.owner_thread_id.map(|id| id.to_string()), snake(assignment.status)?, snake(assignment.kind)?, serde_json::to_string(assignment)?],
-            )?;
-            let mut events = append_collaboration_events_in_transaction(
-                &tx,
-                assignment.group_id,
-                EventPayload::CollaborationAssignmentUpdated { assignment: assignment.clone() },
-            )?;
-            // The structured terminal result is authoritative for the finished
-            // assignment. Older worker-to-recipient updates can remain queued
-            // behind a long coordinator turn and otherwise wake it one at a
-            // time after integration has already finished. Preserve every row
-            // for audit, but atomically consume only queued updates on this
-            // exact return route before enqueuing the terminal notification.
-            if let Some((_, _, terminal, _)) = notification {
-                let superseded = {
-                    let mut statement = tx.prepare(
-                        "SELECT payload FROM collaboration_messages
-                         WHERE assignment_id=?1 AND from_thread_id IS ?2 AND to_thread_id=?3
-                           AND state='queued' AND id<>?4
-                           AND json_extract(payload,'$.purpose')='result'
-                           AND EXISTS (SELECT 1 FROM queued_messages
-                             WHERE queued_messages.id=collaboration_messages.delivery_message_id
-                               AND queued_messages.pending=1)
-                         ORDER BY id",
-                    )?;
-                    statement
-                        .query_map(
-                            params![
-                                assignment.id.to_string(),
-                                terminal.from_thread_id.map(|id| id.to_string()),
-                                terminal.to_thread_id.to_string(),
-                                terminal.id.to_string()
-                            ],
-                            |row| row.get::<_, String>(0),
-                        )?
-                        .collect::<std::result::Result<Vec<_>, _>>()?
-                };
-                for payload in superseded {
-                    let mut message: CollaborationMessage = serde_json::from_str(&payload)?;
-                    message.state = CollaborationDeliveryState::Cancelled;
-                    message.updated_at = Utc::now();
-                    tx.execute(
-                        "UPDATE collaboration_messages SET state=?2,payload=?3 WHERE id=?1 AND state='queued'",
-                        params![message.id.to_string(), snake(message.state)?, serde_json::to_string(&message)?],
-                    )?;
-                    events.push(append_event_in_transaction(
-                        &tx,
-                        message.to_thread_id,
-                        None,
-                        EventPayload::MessageRemoved { message_id: message.id },
-                    )?);
-                    events.extend(append_collaboration_events_in_transaction(
-                        &tx,
-                        message.group_id,
-                        EventPayload::CollaborationMessageUpdated { message },
-                    )?);
-                }
-            }
-            if let Some((notification_actor, notification_request, message, delivery_message_id)) = notification
-                && collaboration_tx_receipt(
-                    &tx,
-                    message.operation_id,
-                    notification_actor,
-                    "messages.send",
-                    notification_request,
-                )?
-                .is_none()
-            {
-                    tx.execute(
-                        "INSERT INTO collaboration_messages(id,operation_id,group_id,assignment_id,from_thread_id,to_thread_id,state,delivery_message_id,payload) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-                        params![message.id.to_string(), message.operation_id.to_string(), message.group_id.to_string(), message.assignment_id.map(|id| id.to_string()), message.from_thread_id.map(|id| id.to_string()), message.to_thread_id.to_string(), snake(message.state)?, delivery_message_id.map(|id| id.to_string()), serde_json::to_string(message)?],
-                    )?;
-                    collaboration_tx_complete(
-                        &tx,
-                        message.operation_id,
-                        notification_actor,
-                        "messages.send",
-                        notification_request,
-                        message,
-                    )?;
-                    if delivery_message_id.is_some() {
-                        events.push(append_event_in_transaction(
-                            &tx,
-                            message.to_thread_id,
-                            None,
-                            EventPayload::MessageQueued {
-                                message: collaboration_queued_message(message),
-                            },
-                        )?);
-                    }
-                    events.extend(append_collaboration_events_in_transaction(
-                        &tx,
-                        message.group_id,
-                        EventPayload::CollaborationMessageUpdated { message: message.clone() },
-                    )?);
-            }
-            collaboration_tx_complete(&tx, operation_id, actor, "assignments.complete", &request, assignment)?;
-            tx.commit()?;
-            Ok((assignment.clone(), events))
-        })
-    }
-
-    pub fn collaboration_assignment_operation(
-        &self,
-        operation_id: OperationId,
-        actor: &str,
-        kind: &str,
-        request: &impl serde::Serialize,
-        assignments: &[CollaborationAssignment],
-        response: &CollaborationAssignment,
-    ) -> Result<(CollaborationAssignment, Vec<ThreadEvent>)> {
-        let request = serde_json::to_string(request)?;
-        self.with(|c| {
-            let tx = c.unchecked_transaction()?;
-            if let Some(stored) = collaboration_tx_receipt(&tx, operation_id, actor, kind, &request)? {
-                return Ok((serde_json::from_str(&stored)?, Vec::new()));
-            }
-            let mut events = Vec::new();
-            for assignment in assignments {
-                tx.execute(
-                    "UPDATE collaboration_assignments SET owner_thread_id=?2,status=?3,kind=?4,payload=?5 WHERE id=?1",
-                    params![
-                        assignment.id.to_string(),
-                        assignment.owner_thread_id.map(|id| id.to_string()),
-                        snake(assignment.status)?,
-                        snake(assignment.kind)?,
-                        serde_json::to_string(assignment)?
-                    ],
-                )?;
-                events.extend(append_collaboration_events_in_transaction(
-                    &tx,
-                    assignment.group_id,
-                    EventPayload::CollaborationAssignmentUpdated { assignment: assignment.clone() },
-                )?);
-            }
-            collaboration_tx_complete(&tx, operation_id, actor, kind, &request, response)?;
-            tx.commit()?;
-            Ok((response.clone(), events))
-        })
-    }
-
-    pub fn collaboration_assignment_get(&self, id: AssignmentId) -> Result<Option<CollaborationAssignment>> {
-        self.json_optional("SELECT payload FROM collaboration_assignments WHERE id = ?1", id)
-    }
-
-    pub fn collaboration_assignments(&self, group_id: GroupId, include_finished: bool) -> Result<Vec<CollaborationAssignment>> {
-        let sql = if include_finished {
-            "SELECT payload FROM collaboration_assignments WHERE group_id=?1 ORDER BY id"
-        } else {
-            "SELECT payload FROM collaboration_assignments WHERE group_id=?1 AND status IN ('pending','working','waiting','blocked','attention_needed') ORDER BY id"
-        };
-        self.json_list(sql, group_id)
-    }
-
-    pub fn collaboration_active_assignment_for_thread(&self, thread_id: ThreadId) -> Result<Option<CollaborationAssignment>> {
-        self.with(|c| Ok(c.query_row("SELECT payload FROM collaboration_assignments WHERE owner_thread_id=?1 AND status IN ('pending','working','waiting','blocked','attention_needed') ORDER BY id DESC LIMIT 1", [thread_id.to_string()], |r| r.get::<_, String>(0)).optional()?.map(|json| serde_json::from_str(&json)).transpose()?))
-    }
-
-    pub fn collaboration_assignment_for_dispatch(&self, message_id: MessageId) -> Result<Option<CollaborationAssignment>> {
-        self.with(|c| {
-            Ok(c.query_row(
-                "SELECT payload FROM collaboration_assignments WHERE json_extract(payload, '$.dispatch_message_id')=?1 LIMIT 1",
-                [message_id.to_string()],
-                |r| r.get::<_, String>(0),
-            )
-            .optional()?
-            .map(|json| serde_json::from_str(&json))
-            .transpose()?)
-        })
-    }
-
-    pub fn collaboration_message_put(&self, message: &CollaborationMessage, delivery_message_id: Option<MessageId>) -> Result<()> {
-        self.with(|c| {
-            c.execute(
-                "INSERT INTO collaboration_messages(id,operation_id,group_id,assignment_id,from_thread_id,to_thread_id,state,delivery_message_id,payload) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
-                 ON CONFLICT(id) DO UPDATE SET state=excluded.state,delivery_message_id=excluded.delivery_message_id,payload=excluded.payload",
-                params![message.id.to_string(), message.operation_id.to_string(), message.group_id.to_string(), message.assignment_id.map(|id| id.to_string()), message.from_thread_id.map(|id| id.to_string()), message.to_thread_id.to_string(), snake(message.state)?, delivery_message_id.map(|id| id.to_string()), serde_json::to_string(message)?],
-            )?;
-            Ok(())
-        })
-    }
-
-    pub fn collaboration_message_create_operation(
-        &self,
-        operation_id: OperationId,
-        actor: &str,
-        request: &impl serde::Serialize,
-        message: &CollaborationMessage,
-        delivery_message_id: Option<MessageId>,
-        answered: Option<&CollaborationMessage>,
-    ) -> Result<(CollaborationMessage, Vec<ThreadEvent>)> {
-        let request = serde_json::to_string(request)?;
-        self.with(|c| {
-            let tx = c.unchecked_transaction()?;
-            if let Some(response) = collaboration_tx_receipt(&tx, operation_id, actor, "messages.send", &request)? {
-                return Ok((serde_json::from_str(&response)?, Vec::new()));
-            }
-            tx.execute(
-                "INSERT INTO collaboration_messages(id,operation_id,group_id,assignment_id,from_thread_id,to_thread_id,state,delivery_message_id,payload) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-                params![message.id.to_string(), message.operation_id.to_string(), message.group_id.to_string(), message.assignment_id.map(|id| id.to_string()), message.from_thread_id.map(|id| id.to_string()), message.to_thread_id.to_string(), snake(message.state)?, delivery_message_id.map(|id| id.to_string()), serde_json::to_string(message)?],
-            )?;
-            let mut events = Vec::new();
-            if let Some(answered) = answered {
-                tx.execute(
-                    "UPDATE collaboration_messages SET state=?2,payload=?3 WHERE id=?1",
-                    params![answered.id.to_string(), snake(answered.state)?, serde_json::to_string(answered)?],
-                )?;
-                events.extend(append_collaboration_events_in_transaction(
-                    &tx,
-                    message.group_id,
-                    EventPayload::CollaborationMessageUpdated { message: answered.clone() },
-                )?);
-            }
-            collaboration_tx_complete(&tx, operation_id, actor, "messages.send", &request, message)?;
-            if delivery_message_id.is_some() {
-                events.push(append_event_in_transaction(
-                    &tx,
-                    message.to_thread_id,
-                    None,
-                    EventPayload::MessageQueued {
-                        message: collaboration_queued_message(message),
-                    },
-                )?);
-            }
-            events.extend(append_collaboration_events_in_transaction(
-                &tx,
-                message.group_id,
-                EventPayload::CollaborationMessageUpdated { message: message.clone() },
-            )?);
-            tx.commit()?;
-            Ok((message.clone(), events))
-        })
-    }
-
-    pub fn collaboration_message_queue(&self, message: &CollaborationMessage) -> Result<Vec<ThreadEvent>> {
-        self.with(|c| {
-            let tx = c.unchecked_transaction()?;
-            tx.execute(
-                "UPDATE collaboration_messages SET state=?2,delivery_message_id=?3,payload=?4 WHERE id=?1",
-                params![message.id.to_string(), snake(message.state)?, message.id.to_string(), serde_json::to_string(message)?],
-            )?;
-            let mut events = vec![append_event_in_transaction(
-                &tx,
-                message.to_thread_id,
-                None,
-                EventPayload::MessageQueued { message: collaboration_queued_message(message) },
-            )?];
-            events.extend(append_collaboration_events_in_transaction(
-                &tx,
-                message.group_id,
-                EventPayload::CollaborationMessageUpdated { message: message.clone() },
-            )?);
-            tx.commit()?;
-            Ok(events)
-        })
-    }
-
-    pub fn collaboration_message_observed(&self, message: &CollaborationMessage, turn_id: TurnId) -> Result<Vec<ThreadEvent>> {
-        self.with(|c| {
-            let tx = c.unchecked_transaction()?;
-            let changed = tx.execute(
-                "UPDATE collaboration_messages SET state=?2,delivery_message_id=?3,payload=?4 WHERE id=?1 AND state IN ('persisted','queued')",
-                params![message.id.to_string(), snake(message.state)?, message.id.to_string(), serde_json::to_string(message)?],
-            )?;
-            // A cancellation, answer or another delivery may have won since the
-            // snapshot was read. Never resurrect it or emit a second receipt.
-            if changed == 0 {
-                tx.commit()?;
-                return Ok(Vec::new());
-            }
-            let mut events = vec![append_event_in_transaction(
-                &tx,
-                message.to_thread_id,
-                Some(turn_id),
-                EventPayload::MessageRemoved { message_id: message.id },
-            )?];
-            events.extend(append_collaboration_events_in_transaction(
-                &tx,
-                message.group_id,
-                EventPayload::CollaborationMessageUpdated { message: message.clone() },
-            )?);
-            tx.commit()?;
-            Ok(events)
-        })
-    }
-
-    pub fn collaboration_message_get(&self, id: CollaborationMessageId) -> Result<Option<CollaborationMessage>> {
-        self.json_optional("SELECT payload FROM collaboration_messages WHERE id=?1", id)
-    }
-
-    pub fn collaboration_message_for_delivery(&self, message_id: MessageId) -> Result<Option<CollaborationMessage>> {
-        self.with(|c| {
-            Ok(c.query_row("SELECT payload FROM collaboration_messages WHERE delivery_message_id=?1", [message_id.to_string()], |r| {
-                r.get::<_, String>(0)
-            })
-            .optional()?
-            .map(|json| serde_json::from_str(&json))
-            .transpose()?)
-        })
-    }
-
-    pub fn collaboration_messages(&self, group_id: GroupId) -> Result<Vec<CollaborationMessage>> {
-        self.json_list("SELECT payload FROM collaboration_messages WHERE group_id=?1 ORDER BY id", group_id)
-    }
-
-    pub fn collaboration_pending_messages(&self) -> Result<Vec<CollaborationMessage>> {
-        self.with(|c| {
-            let mut st = c.prepare("SELECT payload FROM collaboration_messages WHERE state IN ('persisted','queued') ORDER BY id")?;
-            let rows = st.query_map([], |r| r.get::<_, String>(0))?;
-            rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
-        })
-    }
-
-    /// Bounded agent inbox. Recipient scoping belongs inside the query so a
-    /// busy group's older messages to peers cannot consume this caller's page.
-    pub fn collaboration_pending_messages_for_thread(
-        &self,
-        group_id: GroupId,
-        to_thread_id: ThreadId,
-        limit: u32,
-    ) -> Result<Vec<CollaborationMessage>> {
-        self.with(|c| {
-            let mut statement = c.prepare(
-                "SELECT payload FROM collaboration_messages
-                 WHERE group_id=?1 AND to_thread_id=?2
-                   AND state IN ('persisted','queued','uncertain')
-                 ORDER BY json_extract(payload,'$.created_at'),id LIMIT ?3",
-            )?;
-            let rows = statement
-                .query_map(params![group_id.to_string(), to_thread_id.to_string(), limit.clamp(1, 100)], |row| row.get::<_, String>(0))?;
-            rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
-        })
-    }
-
-    pub fn collaboration_queued_results(&self, group_id: GroupId, to_thread_id: ThreadId) -> Result<Vec<CollaborationMessage>> {
-        self.with(|c| {
-            let mut statement = c.prepare(
-                "SELECT payload FROM collaboration_messages
-                 WHERE group_id=?1 AND to_thread_id=?2 AND state='queued'
-                   AND json_extract(payload,'$.purpose')='result'
-                 ORDER BY id",
-            )?;
-            let rows = statement.query_map(params![group_id.to_string(), to_thread_id.to_string()], |row| row.get::<_, String>(0))?;
-            rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
-        })
-    }
-
-    pub fn collaboration_context_put_cas(&self, entry: &ContextEntry, expected_revision: Option<i64>) -> Result<()> {
-        self.with(|c| {
-            let tx = c.unchecked_transaction()?;
-            let current = tx.query_row(
-                "SELECT entry_id,revision FROM collaboration_context_revisions WHERE group_id=?1 AND key=?2 ORDER BY revision DESC LIMIT 1",
-                params![entry.group_id.to_string(), entry.key],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
-            ).optional()?;
-            match (current, expected_revision) {
-                (None, None) if entry.revision == 1 => {}
-                (Some((id, revision)), Some(expected))
-                    if id == entry.id.to_string() && revision == expected && entry.revision == expected + 1 => {}
-                _ => anyhow::bail!("context changed; reload its history and retry with the current revision"),
-            }
-            tx.execute(
-                "INSERT INTO collaboration_context_revisions(entry_id,group_id,key,revision,payload) VALUES (?1,?2,?3,?4,?5)",
-                params![entry.id.to_string(), entry.group_id.to_string(), entry.key, entry.revision, serde_json::to_string(entry)?],
-            )?;
-            tx.commit()?;
-            Ok(())
-        })
-    }
-
-    pub fn collaboration_context_operation(
-        &self,
-        operation_id: OperationId,
-        actor: &str,
-        request: &impl serde::Serialize,
-        entry: &ContextEntry,
-        expected_revision: Option<i64>,
-    ) -> Result<ContextEntry> {
-        let request = serde_json::to_string(request)?;
-        self.with(|c| {
-            let tx = c.unchecked_transaction()?;
-            if let Some((stored_actor, stored_request, state, response)) = tx.query_row(
-                "SELECT actor,request,state,response FROM collaboration_operations WHERE operation_id=?1",
-                [operation_id.to_string()],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?)),
-            ).optional()? {
-                if stored_actor != actor || stored_request != request { anyhow::bail!("operation id already belongs to a different actor or request"); }
-                if state != "completed" { anyhow::bail!("operation outcome is uncertain; inspect context history before retrying"); }
-                return Ok(serde_json::from_str(&response.ok_or_else(|| anyhow::anyhow!("completed operation has no response"))?)?);
-            }
-            let current = tx.query_row(
-                "SELECT entry_id,revision FROM collaboration_context_revisions WHERE group_id=?1 AND key=?2 ORDER BY revision DESC LIMIT 1",
-                params![entry.group_id.to_string(), entry.key],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
-            ).optional()?;
-            match (current, expected_revision) {
-                (None, None) if entry.revision == 1 => {}
-                (Some((id, revision)), Some(expected)) if id == entry.id.to_string() && revision == expected && entry.revision == expected + 1 => {}
-                _ => anyhow::bail!("context changed; reload its history and retry with the current revision"),
-            }
-            let now = Utc::now().to_rfc3339();
-            tx.execute("INSERT INTO collaboration_context_revisions(entry_id,group_id,key,revision,payload) VALUES (?1,?2,?3,?4,?5)", params![entry.id.to_string(), entry.group_id.to_string(), entry.key, entry.revision, serde_json::to_string(entry)?])?;
-            tx.execute("INSERT INTO collaboration_operations(operation_id,actor,operation_kind,request,state,response,created_at,updated_at) VALUES (?1,?2,'context.put',?3,'completed',?4,?5,?5)", params![operation_id.to_string(), actor, request, serde_json::to_string(entry)?, now])?;
-            tx.commit()?;
-            Ok(entry.clone())
-        })
-    }
-
-    pub fn collaboration_context_latest(&self, group_id: GroupId) -> Result<Vec<ContextEntry>> {
-        self.with(|c| {
-            let mut st = c.prepare("SELECT r.payload FROM collaboration_context_revisions r WHERE r.group_id=?1 AND r.revision=(SELECT MAX(x.revision) FROM collaboration_context_revisions x WHERE x.entry_id=r.entry_id) ORDER BY r.key")?;
-            let rows = st.query_map([group_id.to_string()], |r| r.get::<_, String>(0))?;
-            rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
-        })
-    }
-
-    pub fn collaboration_context_by_key(&self, group_id: GroupId, key: &str) -> Result<Option<ContextEntry>> {
-        self.with(|c| {
-            Ok(c.query_row(
-                "SELECT payload FROM collaboration_context_revisions WHERE group_id=?1 AND key=?2 ORDER BY revision DESC LIMIT 1",
-                params![group_id.to_string(), key],
-                |r| r.get::<_, String>(0),
-            )
-            .optional()?
-            .map(|json| serde_json::from_str(&json))
-            .transpose()?)
-        })
-    }
-
-    pub fn collaboration_context_history(&self, entry_id: ContextEntryId) -> Result<Vec<ContextEntry>> {
-        self.json_list("SELECT payload FROM collaboration_context_revisions WHERE entry_id=?1 ORDER BY revision", entry_id)
-    }
-
-    fn json_optional<T: serde::de::DeserializeOwned>(&self, sql: &str, id: Uuid) -> Result<Option<T>> {
-        self.with(|c| {
-            Ok(c.query_row(sql, [id.to_string()], |r| r.get::<_, String>(0))
-                .optional()?
-                .map(|value| serde_json::from_str(&value))
-                .transpose()?)
-        })
-    }
-
-    fn json_list<T: serde::de::DeserializeOwned>(&self, sql: &str, id: Uuid) -> Result<Vec<T>> {
-        self.with(|c| {
-            let mut st = c.prepare(sql)?;
-            let rows = st.query_map([id.to_string()], |r| r.get::<_, String>(0))?;
-            rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
         })
     }
 
@@ -1230,8 +426,8 @@ impl Store {
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
             tx.execute(
-                "INSERT INTO projects(id, name, path, is_git, worktrees_default, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO projects(id, name, path, is_git, worktrees_default, created_at, updated_at, brief_in_all_threads)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     p.id.to_string(),
                     p.name,
@@ -1239,7 +435,8 @@ impl Store {
                     p.is_git,
                     p.worktrees_default,
                     p.created_at.to_rfc3339(),
-                    p.updated_at.to_rfc3339()
+                    p.updated_at.to_rfc3339(),
+                    p.brief_in_all_threads
                 ],
             )?;
             // Every project gets a task prefix; an explicit one is kept when it is valid and free.
@@ -1252,8 +449,9 @@ impl Store {
     pub fn project_update(&self, p: &Project) -> Result<()> {
         self.with(|c| {
             c.execute(
-                "UPDATE projects SET name = ?2, path = ?3, is_git = ?4, worktrees_default = ?5, updated_at = ?6 WHERE id = ?1",
-                params![p.id.to_string(), p.name, p.path, p.is_git, p.worktrees_default, p.updated_at.to_rfc3339()],
+                "UPDATE projects SET name = ?2, path = ?3, is_git = ?4, worktrees_default = ?5, updated_at = ?6, brief_in_all_threads = ?7
+                 WHERE id = ?1",
+                params![p.id.to_string(), p.name, p.path, p.is_git, p.worktrees_default, p.updated_at.to_rfc3339(), p.brief_in_all_threads],
             )?;
             Ok(())
         })
@@ -1283,7 +481,7 @@ impl Store {
     pub fn project_get(&self, id: ProjectId) -> Result<Option<Project>> {
         self.with(|c| {
             Ok(c.query_row(
-                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix FROM projects WHERE id = ?1",
+                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads FROM projects WHERE id = ?1",
                 [id.to_string()],
                 row_to_project,
             )
@@ -1294,7 +492,7 @@ impl Store {
     pub fn project_by_path(&self, path: &str) -> Result<Option<Project>> {
         self.with(|c| {
             Ok(c.query_row(
-                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix FROM projects WHERE path = ?1",
+                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads FROM projects WHERE path = ?1",
                 [path],
                 row_to_project,
             )
@@ -1305,7 +503,7 @@ impl Store {
     pub fn projects_list(&self) -> Result<Vec<Project>> {
         self.with(|c| {
             let mut st = c.prepare(
-                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix
+                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads
                  FROM projects WHERE id != ?1 ORDER BY name",
             )?;
             let rows = st.query_map([FREE_CHAT_PROJECT_ID.to_string()], row_to_project)?;
@@ -1319,227 +517,27 @@ impl Store {
         self.with(|c| write_thread(c, t))
     }
 
+    /// The project's Coordinator thread. Archiving it clears the marker, so a
+    /// project's slot is free again once its Coordinator is archived.
+    pub fn project_coordinator_thread(&self, project_id: ProjectId) -> Result<Option<Thread>> {
+        self.with(|c| {
+            Ok(c.query_row(&format!("{THREAD_SELECT} WHERE coordinator_project_id = ?1"), [project_id.to_string()], row_to_thread)
+                .optional()?)
+        })
+    }
+
     pub fn thread_set_relationships(
         &self,
         thread_id: ThreadId,
         parent_thread_id: Option<ThreadId>,
         coordinator_project_id: Option<ProjectId>,
-        collaboration_group_id: Option<GroupId>,
     ) -> Result<()> {
         self.with(|c| {
             c.execute(
-                "UPDATE threads SET parent_thread_id=COALESCE(parent_thread_id,?2), coordinator_project_id=?3, collaboration_group_id=?4 WHERE id=?1",
-                params![
-                    thread_id.to_string(),
-                    parent_thread_id.map(|id| id.to_string()),
-                    coordinator_project_id.map(|id| id.to_string()),
-                    collaboration_group_id.map(|id| id.to_string()),
-                ],
+                "UPDATE threads SET parent_thread_id=COALESCE(parent_thread_id,?2), coordinator_project_id=?3 WHERE id=?1",
+                params![thread_id.to_string(), parent_thread_id.map(|id| id.to_string()), coordinator_project_id.map(|id| id.to_string()),],
             )?;
             Ok(())
-        })
-    }
-
-    pub fn project_coordinator(&self, project_id: ProjectId) -> Result<Option<(ThreadId, GroupId)>> {
-        self.with(|c| {
-            Ok(c.query_row("SELECT thread_id,group_id FROM project_coordinators WHERE project_id=?1", [project_id.to_string()], |r| {
-                Ok((parse_uuid(r.get(0)?)?, parse_uuid(r.get(1)?)?))
-            })
-            .optional()?)
-        })
-    }
-
-    pub fn project_coordinator_for_group(&self, group_id: GroupId) -> Result<Option<ProjectId>> {
-        self.with(|c| {
-            Ok(c.query_row("SELECT project_id FROM project_coordinators WHERE group_id=?1", [group_id.to_string()], |r| {
-                parse_uuid(r.get(0)?)
-            })
-            .optional()?)
-        })
-    }
-
-    pub fn project_coordinator_reserve(
-        &self,
-        project_id: ProjectId,
-        operation_id: OperationId,
-        request: &impl serde::Serialize,
-    ) -> Result<(ThreadId, GroupId)> {
-        self.with(|c| {
-            let request = serde_json::to_string(request)?;
-            let existing = c
-                .query_row(
-                    "SELECT operation_id,request,thread_id,group_id FROM project_coordinator_reservations WHERE project_id=?1",
-                    [project_id.to_string()],
-                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)),
-                )
-                .optional()?;
-            if let Some((stored_operation, stored_request, thread_id, group_id)) = existing {
-                if stored_operation != operation_id.to_string() || stored_request != request {
-                    anyhow::bail!("project coordinator creation is already reserved by a different request; inspect the project coordinator and retry with the original operation id");
-                }
-                return Ok((thread_id.parse()?, group_id.parse()?));
-            }
-            let thread_id = Uuid::now_v7();
-            let group_id = Uuid::now_v7();
-            c.execute(
-                "INSERT INTO project_coordinator_reservations(project_id,operation_id,request,thread_id,group_id,created_at) VALUES (?1,?2,?3,?4,?5,?6)",
-                params![
-                    project_id.to_string(), operation_id.to_string(), request, thread_id.to_string(), group_id.to_string(), Utc::now().to_rfc3339()
-                ],
-            )?;
-            Ok((thread_id, group_id))
-        })
-    }
-
-    pub fn project_coordinator_put(&self, project_id: ProjectId, thread_id: ThreadId, group_id: GroupId) -> Result<()> {
-        self.with(|c| {
-            c.execute(
-                "INSERT INTO project_coordinators(project_id,thread_id,group_id) VALUES (?1,?2,?3)
-                 ON CONFLICT(project_id) DO NOTHING",
-                params![project_id.to_string(), thread_id.to_string(), group_id.to_string()],
-            )?;
-            Ok(())
-        })
-    }
-
-    pub fn project_coordinator_create_operation(
-        &self,
-        operation_id: OperationId,
-        request: &impl serde::Serialize,
-        result: &ProjectCoordinator,
-    ) -> Result<ProjectCoordinator> {
-        self.with(|c| {
-            let tx = c.unchecked_transaction()?;
-            let request = serde_json::to_string(request)?;
-            if let Some(stored) = collaboration_tx_receipt(&tx, operation_id, "human", "coordinator.get_or_create", &request)? {
-                return Ok(serde_json::from_str(&stored)?);
-            }
-            tx.execute(
-                "INSERT INTO project_coordinators(project_id,thread_id,group_id) VALUES (?1,?2,?3)
-                 ON CONFLICT(project_id) DO NOTHING",
-                params![result.group.project_id.to_string(), result.thread.id.to_string(), result.group.id.to_string()],
-            )?;
-            tx.execute(
-                "UPDATE threads SET coordinator_project_id=?2, collaboration_group_id=?3 WHERE id=?1",
-                params![result.thread.id.to_string(), result.group.project_id.to_string(), result.group.id.to_string()],
-            )?;
-            collaboration_tx_complete(&tx, operation_id, "human", "coordinator.get_or_create", &request, result)?;
-            tx.commit()?;
-            Ok((*result).clone())
-        })
-    }
-
-    /// Atomically changes the harness configuration of the persistent
-    /// coordinator while retaining its Kybern thread and collaboration group.
-    pub fn project_coordinator_switch_operation(
-        &self,
-        operation_id: OperationId,
-        request: &impl serde::Serialize,
-        result: &ProjectCoordinator,
-        group_changed: bool,
-    ) -> Result<(ProjectCoordinator, Vec<ThreadEvent>)> {
-        self.with(|c| {
-            let tx = c.unchecked_transaction()?;
-            let request = serde_json::to_string(request)?;
-            if let Some(stored) = collaboration_tx_receipt(&tx, operation_id, "human", "coordinator.switch_harness", &request)? {
-                return Ok((serde_json::from_str(&stored)?, Vec::new()));
-            }
-            let mut stored = result.clone();
-            let mut events = Vec::new();
-            if group_changed {
-                tx.execute(
-                    "UPDATE collaboration_groups SET coordinator_thread_id=?2,status=?3,payload=?4 WHERE id=?1",
-                    params![
-                        stored.group.id.to_string(),
-                        stored.group.coordinator_thread_id.to_string(),
-                        snake(stored.group.status)?,
-                        serde_json::to_string(&stored.group)?
-                    ],
-                )?;
-                events.extend(append_collaboration_events_in_transaction(
-                    &tx,
-                    stored.group.id,
-                    EventPayload::CollaborationGroupUpdated { group: stored.group.clone() },
-                )?);
-            }
-            write_thread(&tx, &stored.thread)?;
-            let updated = tx.execute(
-                "UPDATE threads SET provider_kind=?2, provider_instance=?3 WHERE id=?1",
-                params![stored.thread.id.to_string(), stored.thread.provider.kind.as_str(), stored.thread.provider.instance,],
-            )?;
-            if updated != 1 {
-                return Err(anyhow::anyhow!("project coordinator thread disappeared during harness switch"));
-            }
-            let event =
-                append_event_in_transaction(&tx, stored.thread.id, None, EventPayload::ThreadUpdated { thread: stored.thread.clone() })?;
-            events.push(event.clone());
-            stored.thread.last_seq = event.seq;
-            write_thread(&tx, &stored.thread)?;
-            collaboration_tx_complete(&tx, operation_id, "human", "coordinator.switch_harness", &request, &stored)?;
-            tx.commit()?;
-            Ok((stored, events))
-        })
-    }
-
-    /// Retire a coordinator atomically. Historical events, knowledge, workers,
-    /// and worktrees remain available; a new coordinator starts with fresh IDs.
-    pub fn project_coordinator_delete_operation(
-        &self,
-        params: &methods::CollaborationCoordinatorDeleteParams,
-        thread: &Thread,
-        group: &CollaborationGroup,
-    ) -> Result<(Thread, Vec<ThreadEvent>)> {
-        self.with(|c| {
-            let tx = c.unchecked_transaction()?;
-            let request = serde_json::to_string(params)?;
-            if let Some(stored) = collaboration_tx_receipt(&tx, params.operation_id, "human", "coordinator.delete", &request)? {
-                return Ok((serde_json::from_str(&stored)?, Vec::new()));
-            }
-            let removed = tx.execute(
-                "DELETE FROM project_coordinators WHERE project_id=?1 AND thread_id=?2",
-                params![params.project_id.to_string(), params.thread_id.to_string()],
-            )?;
-            if removed != 1 {
-                anyhow::bail!("coordinator changed; reopen the project before deleting it");
-            }
-            tx.execute("DELETE FROM project_coordinator_reservations WHERE project_id=?1", [params.project_id.to_string()])?;
-            tx.execute(
-                "UPDATE collaboration_groups SET status=?2,payload=?3 WHERE id=?1",
-                params![group.id.to_string(), snake(group.status)?, serde_json::to_string(group)?],
-            )?;
-            let mut events = append_collaboration_events_in_transaction(
-                &tx,
-                group.id,
-                EventPayload::CollaborationGroupUpdated { group: group.clone() },
-            )?;
-            // Keep members for historical navigation, but revoke agent authority.
-            let members = {
-                let mut statement = tx.prepare("SELECT payload FROM collaboration_members WHERE group_id=?1")?;
-                statement.query_map([group.id.to_string()], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?
-            };
-            for payload in members {
-                let mut member: GroupMember = serde_json::from_str(&payload)?;
-                member.active = false;
-                tx.execute(
-                    "UPDATE collaboration_members SET active=0,payload=?3 WHERE group_id=?1 AND thread_id=?2",
-                    params![group.id.to_string(), member.thread_id.to_string(), serde_json::to_string(&member)?],
-                )?;
-            }
-            let mut stored = thread.clone();
-            write_thread(&tx, &stored)?;
-            for payload in [
-                EventPayload::ThreadUpdated { thread: stored.clone() },
-                EventPayload::ThreadArchived,
-                EventPayload::ProjectCoordinatorDeleted { project_id: params.project_id, coordinator_thread_id: stored.id },
-            ] {
-                let event = append_event_in_transaction(&tx, stored.id, None, payload)?;
-                stored.last_seq = event.seq;
-                events.push(event);
-            }
-            write_thread(&tx, &stored)?;
-            collaboration_tx_complete(&tx, params.operation_id, "human", "coordinator.delete", &request, &stored)?;
-            tx.commit()?;
-            Ok((stored, events))
         })
     }
 
@@ -1997,44 +995,6 @@ impl Store {
         self.with(|c| Ok(c.query_row("SELECT COALESCE(MAX(seq), 0) FROM events", [], |r| r.get(0))?))
     }
 
-    /// Sequence-bounded collaboration changes, independent of wall-clock
-    /// ordering and of which thread is currently the group's coordinator.
-    pub fn collaboration_events_after(&self, group_id: GroupId, after: EventSeq, limit: u32, max_bytes: usize) -> Result<Vec<ThreadEvent>> {
-        self.with(|c| {
-            let mut statement = c.prepare(
-                "SELECT seq, thread_id, turn_id, at, payload FROM events
-                 WHERE seq > ?1 AND kind IN (
-                   'collaboration_group_updated', 'collaboration_member_updated',
-                   'collaboration_assignment_updated', 'collaboration_message_updated',
-                   'collaboration_context_updated'
-                 ) AND (COALESCE(
-                   json_extract(payload, '$.group.id'), json_extract(payload, '$.member.group_id'),
-                   json_extract(payload, '$.assignment.group_id'), json_extract(payload, '$.message.group_id'),
-                   json_extract(payload, '$.entry.group_id')
-                 ) = ?2 OR (
-                   kind = 'collaboration_context_updated'
-                   AND json_extract(payload, '$.entry.group_id') = (
-                     SELECT pc.group_id FROM collaboration_groups requested
-                     JOIN project_coordinators pc ON pc.project_id = requested.project_id
-                     WHERE requested.id = ?2
-                   )
-                 )) ORDER BY seq LIMIT ?3",
-            )?;
-            let mut rows = statement.query(params![after, group_id.to_string(), limit.clamp(1, 200)])?;
-            let mut events = Vec::new();
-            let mut bytes = 0usize;
-            while let Some(row) = rows.next()? {
-                let size = row.get_ref(4)?.as_str()?.len();
-                if !events.is_empty() && bytes.saturating_add(size) > max_bytes {
-                    break;
-                }
-                bytes = bytes.saturating_add(size);
-                events.push(row_to_event(row)?);
-            }
-            Ok(events)
-        })
-    }
-
     /// When the most recent event was appended, if any. Every turn writes
     /// events, so this is the last time an agent did work for a client.
     pub fn events_latest_at(&self) -> Result<Option<DateTime<Utc>>> {
@@ -2190,14 +1150,13 @@ impl Store {
         })
     }
 
-    /// Latest user-authored turn, excluding collaboration deliveries. A new
-    /// human turn resets bounded automatic peer wakeups for that chat task.
+    /// Latest user-authored turn. A new human turn resets bounded automatic peer
+    /// wakeups for that chat task.
     pub fn thread_latest_human_turn_at(&self, thread_id: ThreadId) -> Result<Option<DateTime<Utc>>> {
         self.with(|c| {
             c.query_row(
                 "SELECT e.at FROM events e
-                 LEFT JOIN collaboration_messages cm ON cm.delivery_message_id=json_extract(e.payload,'$.message_id')
-                 WHERE e.thread_id=?1 AND e.kind='turn_started' AND cm.id IS NULL
+                 WHERE e.thread_id=?1 AND e.kind='turn_started'
                  ORDER BY e.seq DESC LIMIT 1",
                 [thread_id.to_string()],
                 |row| parse_time(row.get(0)?),
@@ -2207,16 +1166,15 @@ impl Store {
         })
     }
 
-    /// Latest turn a person started in `thread_id`: not a collaboration delivery,
-    /// a thread message, delegation brief or batch of agent results. Thread
+    /// Latest turn a person started in `thread_id`: not a thread message,
+    /// delegation brief or batch of agent results. Thread
     /// messaging resets its per-pair wake cap on it.
     pub fn thread_latest_person_turn_at(&self, thread_id: ThreadId) -> Result<Option<DateTime<Utc>>> {
         self.with(|c| {
             c.query_row(
                 "SELECT e.at FROM events e
-                 LEFT JOIN collaboration_messages cm ON cm.delivery_message_id=json_extract(e.payload,'$.message_id')
                  LEFT JOIN thread_messages tm ON tm.id=json_extract(e.payload,'$.message_id')
-                 WHERE e.thread_id=?1 AND e.kind='turn_started' AND cm.id IS NULL AND tm.id IS NULL
+                 WHERE e.thread_id=?1 AND e.kind='turn_started' AND tm.id IS NULL
                    AND COALESCE(json_extract(e.payload,'$.message.parts[0].type'),'') NOT IN ('thread_message','agent_results')
                  ORDER BY e.seq DESC LIMIT 1",
                 [thread_id.to_string()],
@@ -2249,8 +1207,6 @@ impl Store {
                  WHERE thread_id = ?1 AND seq <= ?2 AND kind NOT IN (
                    'async_questions_requested', 'provider_commands_updated', 'provider_usage_updated',
                    'thread_created', 'thread_updated', 'message_queued', 'message_queue_updated',
-                   'project_coordinator_deleted', 'collaboration_group_updated', 'collaboration_member_updated',
-                   'collaboration_assignment_updated', 'collaboration_message_updated', 'collaboration_context_updated',
                    'thread_notes_updated', 'message_removed', 'thread_archived', 'tool_call_output_delta', 'checkpoint_updated',
                    'thread_message_held', 'thread_message_resolved', 'thread_message_updated'
                  ) ORDER BY seq",
@@ -2511,25 +1467,24 @@ impl Store {
         })
     }
 
+    /// Record the answer. A secret answer is stored redacted (see
+    /// [`ApprovalRequest::redacted_decision`]); the caller delivers the original.
     pub fn approval_resolve(&self, id: ApprovalId, decision: &ApprovalDecision) -> Result<()> {
         self.with(|c| {
+            let stored = match approval_row(c, id)? {
+                Some((approval, _)) => approval.redacted_decision(decision),
+                None => decision.clone(),
+            };
             c.execute(
                 "UPDATE approvals SET resolved = 1, decision = ?2 WHERE id = ?1",
-                params![id.to_string(), serde_json::to_string(decision)?],
+                params![id.to_string(), serde_json::to_string(&stored)?],
             )?;
             Ok(())
         })
     }
 
     pub fn approval_get(&self, id: ApprovalId) -> Result<Option<(ApprovalRequest, bool)>> {
-        self.with(|c| {
-            Ok(c.query_row("SELECT payload, resolved FROM approvals WHERE id = ?1", [id.to_string()], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?))
-            })
-            .optional()?
-            .map(|(p, resolved)| serde_json::from_str::<ApprovalRequest>(&p).map(|a| (a, resolved)))
-            .transpose()?)
-        })
+        self.with(|c| approval_row(c, id))
     }
 
     pub fn approvals_pending(&self, thread_id: Option<ThreadId>) -> Result<Vec<ApprovalRequest>> {
@@ -2740,7 +1695,7 @@ fn stamp_runtime_task_sequence(payload: &mut EventPayload, seq: EventSeq) -> boo
 
 const THREAD_SELECT: &str = "SELECT id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode, status,
     worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq,
-    parent_thread_id, coordinator_project_id, collaboration_group_id, subagent, delegation FROM threads";
+    parent_thread_id, coordinator_project_id, subagent, delegation FROM threads";
 
 const THREAD_MESSAGE_SELECT: &str = "SELECT id, operation_id, from_thread_id, to_thread_id, purpose, reply_to, body, delivery, state,
     held_reason, created_at, updated_at FROM thread_messages";
@@ -2774,6 +1729,7 @@ fn row_to_project(r: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
         is_git: r.get(3)?,
         worktrees_default: r.get(4)?,
         task_prefix: r.get(7)?,
+        brief_in_all_threads: r.get(8)?,
         created_at: parse_time(r.get::<_, String>(5)?)?,
         updated_at: parse_time(r.get::<_, String>(6)?)?,
     })
@@ -2806,9 +1762,8 @@ fn row_to_thread(r: &rusqlite::Row<'_>) -> rusqlite::Result<Thread> {
         last_seq: r.get(16)?,
         parent_thread_id: r.get::<_, Option<String>>(17)?.map(parse_uuid).transpose()?,
         coordinator_project_id: r.get::<_, Option<String>>(18)?.map(parse_uuid).transpose()?,
-        collaboration_group_id: r.get::<_, Option<String>>(19)?.map(parse_uuid).transpose()?,
-        subagent: r.get::<_, Option<String>>(20)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
-        delegation: r.get::<_, Option<String>>(21)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
+        subagent: r.get::<_, Option<String>>(19)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
+        delegation: r.get::<_, Option<String>>(20)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
     })
 }
 
@@ -3000,8 +1955,8 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
     c.execute(
         "INSERT INTO threads(id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode,
                     status, worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq,
-                    parent_thread_id, coordinator_project_id, collaboration_group_id, subagent, delegation)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
+                    parent_thread_id, coordinator_project_id, subagent, delegation)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
                  ON CONFLICT(id) DO UPDATE SET
                     provider_kind = excluded.provider_kind, provider_instance = excluded.provider_instance,
                     title = excluded.title, model = excluded.model, effort = excluded.effort, permission_mode = excluded.permission_mode,
@@ -3010,7 +1965,6 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
                     updated_at = excluded.updated_at, last_seq = excluded.last_seq,
                     parent_thread_id = COALESCE(threads.parent_thread_id, excluded.parent_thread_id),
                     coordinator_project_id = excluded.coordinator_project_id,
-                    collaboration_group_id = excluded.collaboration_group_id,
                     subagent = COALESCE(excluded.subagent, threads.subagent),
                     delegation = COALESCE(excluded.delegation, threads.delegation)",
         params![
@@ -3033,7 +1987,6 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
             t.last_seq,
             t.parent_thread_id.map(|id| id.to_string()),
             t.coordinator_project_id.map(|id| id.to_string()),
-            t.collaboration_group_id.map(|id| id.to_string()),
             t.subagent.as_ref().map(serde_json::to_string).transpose()?,
             t.delegation.as_ref().map(serde_json::to_string).transpose()?,
         ],
@@ -3045,33 +1998,17 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn thread_updates_persist_the_admitted_harness_and_account() {
-        let (store, group) = collaboration_fixture();
-        let mut thread = store.thread_get(group.coordinator_thread_id).unwrap().unwrap();
-        let original = thread.provider.clone();
-        thread.provider = ProviderInstance { kind: ProviderKind::ClaudeCode, instance: "work".into() };
-        thread.provider_session_id = Some("work-native".into());
-        store.thread_upsert(&thread).unwrap();
-        let saved = store.thread_get(thread.id).unwrap().unwrap();
-        assert_eq!(saved.provider, thread.provider);
-        assert_eq!(saved.provider_session_id, thread.provider_session_id);
-        thread.provider = original;
-        thread.provider_session_id = Some("original-native".into());
-        store.thread_upsert(&thread).unwrap();
-        assert_eq!(store.thread_get(thread.id).unwrap().unwrap().provider, thread.provider);
-    }
-
-    fn collaboration_fixture() -> (Store, CollaborationGroup) {
+    fn thread_fixture() -> (Store, Thread) {
         let store = Store::open_in_memory().unwrap();
         let now = Utc::now();
         let project = Project {
             id: Uuid::now_v7(),
-            name: "collab".into(),
-            path: format!("/tmp/{}", Uuid::now_v7()),
+            name: "demo".into(),
+            path: "/tmp/demo".into(),
             is_git: false,
             worktrees_default: None,
             task_prefix: None,
+            brief_in_all_threads: false,
             created_at: now,
             updated_at: now,
         };
@@ -3079,8 +2016,8 @@ mod tests {
         let thread = Thread {
             id: Uuid::now_v7(),
             project_id: project.id,
-            title: "coordinator".into(),
-            provider: ProviderInstance::default_for(ProviderKind::Codex),
+            title: "hello".into(),
+            provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
             model: None,
             effort: None,
             permission_mode: PermissionMode::Supervised,
@@ -3094,69 +2031,27 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
-            collaboration_group_id: None,
             subagent: None,
             delegation: None,
         };
         store.thread_upsert(&thread).unwrap();
-        let group = CollaborationGroup {
-            id: Uuid::now_v7(),
-            project_id: project.id,
-            coordinator_thread_id: thread.id,
-            objective: "test".into(),
-            success_criteria: vec![],
-            status: GroupStatus::Active,
-            coordinator_mode: CoordinatorMode::Ordinary,
-            policy: CollaborationPolicy::default(),
-            revision: 1,
-            created_at: now,
-            updated_at: now,
-        };
-        store.collaboration_group_put(&group).unwrap();
-        (store, group)
+        (store, thread)
     }
 
     #[test]
-    fn context_compare_and_swap_and_receipt_are_one_transaction() {
-        let (store, group) = collaboration_fixture();
-        let now = Utc::now();
-        let first_op = Uuid::now_v7();
-        let first = ContextEntry {
-            id: first_op,
-            group_id: group.id,
-            key: "decision".into(),
-            kind: ContextEntryKind::Decision,
-            body: "first".into(),
-            author_thread_id: None,
-            user_authored: true,
-            revision: 1,
-            source_refs: vec![],
-            created_at: now,
-            updated_at: now,
-        };
-        let request = serde_json::json!({"operation_id": first_op, "body": "first"});
-        assert_eq!(store.collaboration_context_operation(first_op, "human", &request, &first, None).unwrap(), first);
-        assert_eq!(store.collaboration_context_operation(first_op, "human", &request, &first, None).unwrap(), first);
-
-        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
-        let attempts = ["second-a", "second-b"].map(|body| {
-            let store = store.clone();
-            let barrier = barrier.clone();
-            let mut entry = first.clone();
-            entry.body = body.into();
-            entry.revision = 2;
-            entry.updated_at = Utc::now();
-            std::thread::spawn(move || {
-                let op = Uuid::now_v7();
-                let request = serde_json::json!({"operation_id": op, "body": body});
-                barrier.wait();
-                store.collaboration_context_operation(op, "human", &request, &entry, Some(1))
-            })
-        });
-        barrier.wait();
-        let results = attempts.map(|attempt| attempt.join().unwrap());
-        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
-        assert_eq!(store.collaboration_context_history(first.id).unwrap().len(), 2);
+    fn thread_updates_persist_the_admitted_harness_and_account() {
+        let (store, mut thread) = thread_fixture();
+        let original = thread.provider.clone();
+        thread.provider = ProviderInstance { kind: ProviderKind::ClaudeCode, instance: "work".into() };
+        thread.provider_session_id = Some("work-native".into());
+        store.thread_upsert(&thread).unwrap();
+        let saved = store.thread_get(thread.id).unwrap().unwrap();
+        assert_eq!(saved.provider, thread.provider);
+        assert_eq!(saved.provider_session_id, thread.provider_session_id);
+        thread.provider = original;
+        thread.provider_session_id = Some("original-native".into());
+        store.thread_upsert(&thread).unwrap();
+        assert_eq!(store.thread_get(thread.id).unwrap().unwrap().provider, thread.provider);
     }
 
     #[test]
@@ -3170,6 +2065,7 @@ mod tests {
             is_git: false,
             worktrees_default: None,
             task_prefix: None,
+            brief_in_all_threads: false,
             created_at: now,
             updated_at: now,
         };
@@ -3192,7 +2088,6 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
-            collaboration_group_id: None,
             subagent: None,
             delegation: None,
         };
@@ -3241,6 +2136,7 @@ mod tests {
             is_git: false,
             worktrees_default: None,
             task_prefix: None,
+            brief_in_all_threads: false,
             created_at: now,
             updated_at: now,
         };
@@ -3275,6 +2171,7 @@ mod tests {
             is_git: false,
             worktrees_default: None,
             task_prefix: None,
+            brief_in_all_threads: false,
             created_at: now,
             updated_at: now,
         };
@@ -3297,7 +2194,6 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
-            collaboration_group_id: None,
             subagent: None,
             delegation: None,
         };
@@ -3346,67 +2242,6 @@ mod tests {
     }
 
     #[test]
-    fn observed_collaboration_message_acknowledges_only_intended_delivery() {
-        let (store, group) = collaboration_fixture();
-        let recipient = group.coordinator_thread_id;
-        let mut other_thread = store.thread_get(recipient).unwrap().unwrap();
-        other_thread.id = Uuid::now_v7();
-        other_thread.title = "other recipient".into();
-        store.thread_upsert(&other_thread).unwrap();
-        let now = Utc::now();
-        let make = |to_thread_id, state| CollaborationMessage {
-            id: Uuid::now_v7(),
-            operation_id: Uuid::now_v7(),
-            group_id: group.id,
-            assignment_id: None,
-            from_thread_id: None,
-            to_thread_id,
-            external_recipient: false,
-            purpose: CollaborationMessagePurpose::Result,
-            reply_to: None,
-            body: "done".into(),
-            state,
-            delivery_turn_id: None,
-            wakeup_count: 1,
-            created_at: now,
-            updated_at: now,
-        };
-        let intended = make(recipient, CollaborationDeliveryState::Queued);
-        let other = make(other_thread.id, CollaborationDeliveryState::Queued);
-        let cancelled = make(recipient, CollaborationDeliveryState::Cancelled);
-        for message in [&intended, &other, &cancelled] {
-            store.collaboration_message_put(message, Some(message.id)).unwrap();
-            if message.state == CollaborationDeliveryState::Queued {
-                store
-                    .event_append(
-                        message.to_thread_id,
-                        None,
-                        EventPayload::MessageQueued { message: collaboration_queued_message(message) },
-                    )
-                    .unwrap();
-            }
-        }
-        let turn_id = Uuid::now_v7();
-        let mut observed = intended.clone();
-        observed.state = CollaborationDeliveryState::Submitted;
-        observed.delivery_turn_id = Some(turn_id);
-        observed.updated_at = Utc::now();
-        store.collaboration_message_observed(&observed, turn_id).unwrap();
-
-        let stored = store.collaboration_message_get(intended.id).unwrap().unwrap();
-        assert_eq!(stored.state, CollaborationDeliveryState::Submitted);
-        assert_eq!(stored.delivery_turn_id, Some(turn_id));
-        assert!(store.collaboration_message_observed(&observed, turn_id).unwrap().is_empty(), "delivery is idempotent");
-        let mut stale = cancelled.clone();
-        stale.state = CollaborationDeliveryState::Submitted;
-        stale.delivery_turn_id = Some(turn_id);
-        assert!(store.collaboration_message_observed(&stale, turn_id).unwrap().is_empty(), "cancellation wins over an old read");
-        assert!(!store.queue_is_pending(intended.id).unwrap());
-        assert!(store.queue_is_pending(other.id).unwrap());
-        assert_eq!(store.collaboration_message_get(cancelled.id).unwrap().unwrap().state, CollaborationDeliveryState::Cancelled);
-    }
-
-    #[test]
     fn large_tool_outputs_stay_in_sqlite_until_a_page_asks_for_them() {
         let store = Store::open_in_memory().unwrap();
         let now = Utc::now();
@@ -3417,6 +2252,7 @@ mod tests {
             is_git: false,
             worktrees_default: None,
             task_prefix: None,
+            brief_in_all_threads: false,
             created_at: now,
             updated_at: now,
         };
@@ -3439,7 +2275,6 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
-            collaboration_group_id: None,
             subagent: None,
             delegation: None,
         };
@@ -3854,6 +2689,7 @@ mod orchestration_tests {
             is_git: true,
             worktrees_default: None,
             task_prefix: None,
+            brief_in_all_threads: false,
             created_at: now,
             updated_at: now,
         };
@@ -3881,7 +2717,6 @@ mod orchestration_tests {
             last_seq: 0,
             parent_thread_id: parent,
             coordinator_project_id: None,
-            collaboration_group_id: None,
             subagent: None,
             delegation,
         }
@@ -4124,5 +2959,237 @@ mod orchestration_tests {
 
     fn message_record_for(to: ThreadId) -> ThreadMessageRecord {
         message(to, None, ThreadMessagePurpose::Message, ThreadMessageState::Held)
+    }
+}
+
+#[cfg(test)]
+mod coordinator_upgrade_tests {
+    use super::*;
+    use kybern_protocol::methods::{NoteScope, ProjectNoteRole};
+
+    const LAST_COLLABORATION_VERSION: usize = 23;
+
+    fn insert_thread(conn: &Connection, id: Uuid, project: Uuid, title: &str, coordinator: bool, group: Option<Uuid>) {
+        conn.execute(
+            "INSERT INTO threads(id, project_id, title, provider_kind, provider_instance, permission_mode, status, cwd, pinned, created_at,
+                                 updated_at, last_seq, coordinator_project_id, collaboration_group_id)
+             VALUES (?1, ?2, ?3, 'claude-code', 'default', 'supervised', 'idle', '/tmp/demo', 0, '2026-10-01T00:00:00Z',
+                     '2026-10-01T00:00:00Z', 0, ?4, ?5)",
+            params![id.to_string(), project.to_string(), title, coordinator.then(|| project.to_string()), group.map(|g| g.to_string())],
+        )
+        .unwrap();
+    }
+
+    fn insert_event(conn: &Connection, thread: Uuid, kind: &str, payload: &str) {
+        conn.execute(
+            "INSERT INTO events(thread_id, turn_id, at, kind, payload) VALUES (?1, NULL, '2026-10-01T00:00:00Z', ?2, ?3)",
+            params![thread.to_string(), kind, payload],
+        )
+        .unwrap();
+    }
+
+    fn table_exists(conn: &Connection, name: &str) -> bool {
+        conn.query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1", [name], |_| Ok(())).optional().unwrap().is_some()
+    }
+
+    #[test]
+    fn upgrade_turns_the_latest_brief_into_a_note_archives_old_coordinators_and_drops_collaboration() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        schema::migrate_to(&conn, LAST_COLLABORATION_VERSION).unwrap();
+        assert!(schema::migration_count() > LAST_COLLABORATION_VERSION);
+
+        let project = Uuid::now_v7();
+        let other_project = Uuid::now_v7();
+        let (coordinator, worker, ordinary, quiet_coordinator) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+        let (group, quiet_group) = (Uuid::now_v7(), Uuid::now_v7());
+        for (id, path) in [(project, "/tmp/demo"), (other_project, "/tmp/quiet")] {
+            conn.execute(
+                "INSERT INTO projects(id, name, path, is_git, created_at, updated_at) VALUES (?1, 'demo', ?2, 1, '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z')",
+                params![id.to_string(), path],
+            )
+            .unwrap();
+        }
+        insert_thread(&conn, coordinator, project, "Coordinator", true, Some(group));
+        insert_thread(&conn, worker, project, "Worker", false, Some(group));
+        insert_thread(&conn, ordinary, project, "Ordinary chat", false, None);
+        insert_thread(&conn, quiet_coordinator, other_project, "Quiet coordinator", true, Some(quiet_group));
+        for (id, project_id, thread) in [(group, project, coordinator), (quiet_group, other_project, quiet_coordinator)] {
+            conn.execute(
+                "INSERT INTO collaboration_groups(id, project_id, coordinator_thread_id, status, payload) VALUES (?1, ?2, ?3, 'active', '{}')",
+                params![id.to_string(), project_id.to_string(), thread.to_string()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO project_coordinators(project_id, thread_id, group_id) VALUES (?1, ?2, ?3)",
+                params![project_id.to_string(), thread.to_string(), id.to_string()],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO collaboration_members(group_id, thread_id, active, payload) VALUES (?1, ?2, 1, '{}')",
+            params![group.to_string(), worker.to_string()],
+        )
+        .unwrap();
+        let revision = |group: Uuid, key: &str, revision: i64, body: &str| {
+            conn.execute(
+                "INSERT INTO collaboration_context_revisions(entry_id, group_id, key, revision, payload) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    Uuid::now_v7().to_string(),
+                    group.to_string(),
+                    key,
+                    revision,
+                    serde_json::json!({"body": body, "updated_at": format!("2026-10-0{revision}T00:00:00Z")}).to_string()
+                ],
+            )
+            .unwrap();
+        };
+        revision(group, "project.brief", 1, "Old brief");
+        revision(group, "project.brief", 2, "Ship the importer");
+        revision(group, "project.setup", 1, "pnpm install");
+        revision(group, "project-overview", 1, "Old overview");
+        revision(group, "project-overview", 2, "A Rust daemon and a desktop app");
+        revision(group, "coordinator-setup", 1, "Started the coordinator");
+        revision(group, "research.notes", 1, "Not carried over");
+        revision(quiet_group, "project.brief", 1, "   ");
+
+        let turn = EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("hello") };
+        insert_event(&conn, coordinator, "collaboration_group_updated", r#"{"kind":"collaboration_group_updated","group":{}}"#);
+        insert_event(&conn, coordinator, "turn_started", &serde_json::to_string(&turn).unwrap());
+        insert_event(&conn, coordinator, "collaboration_message_updated", r#"{"kind":"collaboration_message_updated","message":{}}"#);
+        insert_event(&conn, worker, "collaboration_assignment_updated", r#"{"kind":"collaboration_assignment_updated"}"#);
+        insert_event(&conn, coordinator, "project_coordinator_deleted", r#"{"kind":"project_coordinator_deleted"}"#);
+
+        for (id, kind) in [(Uuid::now_v7(), "groups.create"), (Uuid::now_v7(), "kybern_note_create")] {
+            conn.execute(
+                "INSERT INTO collaboration_operations(operation_id, actor, operation_kind, request, state, response, created_at, updated_at)
+                 VALUES (?1, 'human', ?2, '{}', 'completed', '{}', 'a', 'a')",
+                params![id.to_string(), kind],
+            )
+            .unwrap();
+        }
+
+        schema::migrate(&conn).unwrap();
+        let store = Store::init(conn).unwrap();
+
+        let brief = store.note_for_project_role(project, ProjectNoteRole::Brief).unwrap().expect("the brief becomes a note");
+        assert_eq!(brief.body, "Ship the importer");
+        assert_eq!(brief.summary.title, "Project brief");
+        assert_eq!(brief.summary.scope, NoteScope::Project);
+        assert!(brief.summary.pinned && brief.summary.created_by_thread.is_none() && brief.summary.deleted_at.is_none());
+        let setup = store.note_for_project_role(project, ProjectNoteRole::Setup).unwrap().expect("the setup entry becomes the setup note");
+        assert_eq!(setup.body, "pnpm install");
+        assert!(setup.summary.pinned && setup.summary.created_by_thread == Some(coordinator));
+        assert!(store.note_for_project_role(other_project, ProjectNoteRole::Brief).unwrap().is_none(), "a blank brief makes no note");
+        let notes = store.notes_list().unwrap();
+        assert_eq!(notes.len(), 4, "brief, setup, overview and setup log; other entries are dropped");
+        let memory = |title: &str| notes.iter().find(|note| note.title == title).unwrap_or_else(|| panic!("{title} is carried over"));
+        for (title, body_start) in [("Project overview", "A Rust daemon"), ("Coordinator setup log", "Started")] {
+            let note = memory(title);
+            assert!(note.project_role.is_none() && !note.pinned && note.created_by_thread == Some(coordinator), "{title}");
+            assert!(store.note_get(note.id).unwrap().unwrap().body.starts_with(body_start), "{title} keeps its latest revision");
+        }
+
+        for id in [coordinator, worker, quiet_coordinator] {
+            let thread = store.thread_get(id).unwrap().unwrap();
+            assert_eq!(thread.status, ThreadStatus::Archived, "{}", thread.title);
+            assert_eq!(thread.coordinator_project_id, None);
+        }
+        assert_eq!(store.thread_get(ordinary).unwrap().unwrap().status, ThreadStatus::Idle);
+        assert!(store.project_coordinator_thread(project).unwrap().is_none(), "archiving freed the slot");
+        assert!(!store.project_get(project).unwrap().unwrap().brief_in_all_threads);
+
+        store
+            .with(|c| {
+                for table in [
+                    "collaboration_groups",
+                    "collaboration_members",
+                    "collaboration_assignments",
+                    "collaboration_messages",
+                    "collaboration_context_revisions",
+                    "project_coordinators",
+                    "project_coordinator_reservations",
+                ] {
+                    assert!(!table_exists(c, table), "{table} is dropped");
+                }
+                let columns = c
+                    .prepare("SELECT name FROM pragma_table_info('threads')")?
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                assert!(!columns.iter().any(|name| name == "collaboration_group_id"));
+                let receipts = c
+                    .prepare("SELECT operation_kind FROM tool_operations")?
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                assert_eq!(receipts, ["kybern_note_create"], "agent tool receipts survive, collaboration ones do not");
+                Ok(())
+            })
+            .unwrap();
+
+        // The archived coordinator's transcript still loads, minus the collaboration rows.
+        let events = store.events_for_thread(coordinator).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0].payload, EventPayload::TurnStarted { .. }));
+        assert!(store.events_for_thread(worker).unwrap().is_empty());
+        store.project_transcript_through(coordinator, i64::MAX).unwrap();
+    }
+
+    #[test]
+    fn project_roles_are_unique_pinned_and_protected() {
+        let (store, thread) = thread_for_roles();
+        let project = thread.project_id;
+        let brief = store.note_create_project_role(project, ProjectNoteRole::Brief, "Project brief", "Be careful", None).unwrap();
+        assert!(brief.summary.pinned);
+        assert_eq!(brief.summary.project_role, Some(ProjectNoteRole::Brief));
+        let again = store.note_create_project_role(project, ProjectNoteRole::Brief, "Project brief", "Again", None).unwrap_err();
+        assert!(again.to_string().contains("already has that note"), "{again}");
+        let setup = store.note_create_project_role(project, ProjectNoteRole::Setup, "Setup", "pnpm test", Some(thread.id)).unwrap();
+        assert_eq!(setup.summary.created_by_thread, Some(thread.id));
+        for refused in
+            [store.note_delete(brief.summary.id).map(|_| ()), store.note_move(brief.summary.id, NoteScope::Global, None).map(|_| ())]
+        {
+            assert!(refused.unwrap_err().to_string().contains("project brief and setup note"));
+        }
+        assert_eq!(store.note_for_project_role(project, ProjectNoteRole::Setup).unwrap().unwrap().body, "pnpm test");
+    }
+
+    fn thread_for_roles() -> (Store, Thread) {
+        let store = Store::open_in_memory().unwrap();
+        let now = Utc::now();
+        let project = Project {
+            id: Uuid::now_v7(),
+            name: "demo".into(),
+            path: "/tmp/roles".into(),
+            is_git: false,
+            worktrees_default: None,
+            task_prefix: None,
+            brief_in_all_threads: false,
+            created_at: now,
+            updated_at: now,
+        };
+        store.project_insert(&project).unwrap();
+        let thread = Thread {
+            id: Uuid::now_v7(),
+            project_id: project.id,
+            title: "Coordinator".into(),
+            provider: ProviderInstance::default_for(ProviderKind::ClaudeCode),
+            model: None,
+            effort: None,
+            permission_mode: PermissionMode::Supervised,
+            status: ThreadStatus::Idle,
+            worktree: None,
+            cwd: project.path.clone(),
+            provider_session_id: None,
+            pinned: false,
+            created_at: now,
+            updated_at: now,
+            last_seq: 0,
+            parent_thread_id: None,
+            coordinator_project_id: Some(project.id),
+            subagent: None,
+            delegation: None,
+        };
+        store.thread_upsert(&thread).unwrap();
+        (store, thread)
     }
 }

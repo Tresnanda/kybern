@@ -10,7 +10,7 @@ import { ArrowUpRightIcon, NoteIcon, PlusIcon } from "@/lib/kit/icons"
 import { ChecklistRing } from "@/lib/kit/projectDot"
 import type { NoteSummary, ProjectId, ThreadId } from "@/protocol"
 import { openNote, refreshNotes, useAllNotes, useNotes, useNotesReady } from "@/state/notes"
-import { chooseFilter } from "@/state/notesDisplay"
+
 import { isEmptyThreadNote, noteTitle } from "@/state/notesModel"
 import { openQuickNote, useQuickNote } from "@/state/quickNote"
 import { useStore } from "@/state/store"
@@ -18,7 +18,7 @@ import { ThreadNotePanel } from "../notes/ThreadNotePanel"
 import { CreatedByThread } from "../tasks/CreatedBy"
 import { DOCK_HEADER_ICON_BUTTON_CLASS } from "../chrome"
 import { DockEmpty, DockFooterLink, DockHint, DockScopeHeader, DockSectionLabel } from "./DockParts"
-import { DOCK_META_CLASS, DOCK_PINNED_LIMIT, DOCK_ROW_LIMIT, DOCK_TWO_LINE_ROW_CLASS, dockNotes, useDockProjectId, useMinuteNow, useShownOnce } from "./dockModel"
+import { DOCK_META_CLASS, DOCK_PINNED_LIMIT, DOCK_ROW_LIMIT, DOCK_TWO_LINE_ROW_CLASS, dockNotes, showAllNotes, useDockProjectId, useMinuteNow, useShownOnce } from "./dockModel"
 
 /** Quick capture, filed in the dock's project unless a draft from last time says otherwise. */
 function newNote(projectId: ProjectId | null) {
@@ -26,13 +26,6 @@ function newNote(projectId: ProjectId | null) {
   openQuickNote()
   const { title, body } = useQuickNote.getState()
   if (!title && !body) useQuickNote.setState({ home: projectId ? { scope: "project", projectId } : { scope: "global" } })
-}
-
-function showAllNotes(projectId: ProjectId | null) {
-  const store = useStore.getState()
-  store.set({ settingsOpen: false })
-  chooseFilter(projectId ? { kind: "project", projectId } : { kind: "global" })
-  store.selectNotes()
 }
 
 export function NotesDockPanel({ threadId, active }: { threadId: ThreadId | null; active: boolean }) {
@@ -131,7 +124,8 @@ const NotesDockContent = memo(function NotesDockContent({ threadId, active }: { 
   )
 })
 
-const NoteRow = memo(function NoteRow({ note, now }: { note: NoteSummary; now: number }) {
+/** A note as a two-line dock row: title, author, checklist and time, then the preview. Opens it in Notes. */
+export const NoteRow = memo(function NoteRow({ note, now }: { note: NoteSummary; now: number }) {
   const title = noteTitle(note)
   const preview = note.preview.replace(/\s+/g, " ").trim()
   return (

@@ -129,7 +129,7 @@ impl Store {
             })?;
             let mut found = Vec::with_capacity(limit as usize + 1);
             while let Some(row) = rows.next()? {
-                found.push(SearchRow { thread: row_to_thread(row)?, rank: row.get(22)?, created_second: row.get(23)? });
+                found.push(SearchRow { thread: row_to_thread(row)?, rank: row.get(21)?, created_second: row.get(22)? });
             }
             let has_more = found.len() > limit as usize;
             found.truncate(limit as usize);
@@ -249,7 +249,7 @@ fn search_sql() -> String {
          )
          SELECT id,project_id,title,provider_kind,provider_instance,model,effort,permission_mode,status,
                 worktree_path,worktree_branch,cwd,provider_session_id,pinned,created_at,updated_at,last_seq,
-                parent_thread_id,coordinator_project_id,collaboration_group_id,subagent,delegation,preference_rank,created_second
+                parent_thread_id,coordinator_project_id,subagent,delegation,preference_rank,created_second
          FROM candidates
          WHERE (created_second<:snapshot_second OR (created_second=:snapshot_second AND id<=:snapshot_id))
            AND (:cursor_rank IS NULL OR preference_rank>:cursor_rank
@@ -362,39 +362,27 @@ fn read_sql() -> String {
     format!(
         "WITH texts AS (
           SELECT e.seq,e.turn_id,e.at,e.kind,
-            CASE WHEN cm.payload IS NOT NULL THEN COALESCE(json_extract(cm.payload,'$.body'),'')
-                 WHEN e.kind='assistant_message_completed' THEN {assistant_text}
-                 ELSE {user_text} END AS text,
-            json_extract(cm.payload,'$.from_thread_id') AS source_thread_id,
-            json_extract(cm.payload,'$.id') AS collaboration_message_id
-          FROM events e LEFT JOIN collaboration_messages cm
-            ON cm.delivery_message_id=json_extract(e.payload,'$.message_id')
+            CASE WHEN e.kind='assistant_message_completed' THEN {assistant_text}
+                 ELSE {user_text} END AS text
+          FROM events e
           WHERE e.thread_id=:thread_id AND e.kind IN ('turn_started','assistant_message_completed')
             AND e.seq<=:through_seq AND (:message_seq IS NOT NULL OR :before_seq IS NULL OR e.seq<:before_seq)
             AND (:message_seq IS NULL OR e.seq=:message_seq)
         )
         SELECT seq,turn_id,at,kind,
           CAST(substr(CAST(text AS BLOB),:text_offset+1,:chunk_bytes) AS BLOB),
-          length(CAST(text AS BLOB)),source_thread_id,collaboration_message_id
+          length(CAST(text AS BLOB))
         FROM texts ORDER BY seq DESC LIMIT :row_limit"
     )
 }
 
 fn read_message_row(row: &rusqlite::Row<'_>, thread_id: ThreadId) -> Result<MessageRow> {
     let kind: String = row.get(3)?;
-    let source_thread: Option<String> = row.get(6)?;
-    let collaboration_message: Option<String> = row.get(7)?;
     let role = if kind == "assistant_message_completed" { ThreadMessageRole::Assistant } else { ThreadMessageRole::User };
-    let attribution = if let Some(id) = collaboration_message {
-        ThreadMessageAttribution {
-            kind: ThreadMessageAttributionKind::Collaboration,
-            thread_id: source_thread.map(parse_uuid).transpose()?,
-            collaboration_message_id: Some(parse_uuid(id)?),
-        }
-    } else if role == ThreadMessageRole::Assistant {
-        ThreadMessageAttribution { kind: ThreadMessageAttributionKind::Agent, thread_id: Some(thread_id), collaboration_message_id: None }
+    let attribution = if role == ThreadMessageRole::Assistant {
+        ThreadMessageAttribution { kind: ThreadMessageAttributionKind::Agent, thread_id: Some(thread_id) }
     } else {
-        ThreadMessageAttribution { kind: ThreadMessageAttributionKind::User, thread_id: None, collaboration_message_id: None }
+        ThreadMessageAttribution { kind: ThreadMessageAttributionKind::User, thread_id: None }
     };
     Ok(MessageRow {
         seq: row.get(0)?,
@@ -532,6 +520,7 @@ mod tests {
                 is_git: false,
                 worktrees_default: Some(false),
                 task_prefix: None,
+                brief_in_all_threads: false,
                 created_at: now,
                 updated_at: now,
             })
@@ -557,7 +546,6 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
-            collaboration_group_id: None,
             subagent: None,
             delegation: None,
         }
