@@ -366,9 +366,9 @@ fn opencode_config_content(base: Option<&String>, bridge: &NativeToolBridge) -> 
     let endpoint = bridge
         .endpoint
         .as_deref()
-        .ok_or_else(|| DriverError::Unsupported("OpenCode native collaboration tools require a daemon MCP endpoint".into()))?;
+        .ok_or_else(|| DriverError::Unsupported("OpenCode Kybern tools require a daemon MCP endpoint".into()))?;
     let authorization = bridge.authorization.as_deref().ok_or_else(|| {
-        DriverError::Unsupported("OpenCode native collaboration tools require a scoped MCP authorization capability".into())
+        DriverError::Unsupported("OpenCode Kybern tools require a scoped MCP authorization capability".into())
     })?;
     let mut config = match base {
         Some(raw) => serde_json::from_str::<Value>(raw)
@@ -402,9 +402,17 @@ fn opencode_config_content(base: Option<&String>, bridge: &NativeToolBridge) -> 
         // set, so this wildcard only admits that already-filtered server.
         tool_permissions.insert("*".into(), json!(false));
         tool_permissions.insert(format!("{}_*", bridge.server_name), json!(true));
+        if bridge.restrictions.allow_read_only_builtins {
+            for tool in OPENCODE_READ_ONLY_TOOLS {
+                tool_permissions.insert((*tool).into(), json!(true));
+            }
+        }
     }
     serde_json::to_string(&config).map_err(|error| DriverError::Other(error.into()))
 }
+
+/// Built-in tools a project Coordinator keeps: reading, searching and web lookups.
+const OPENCODE_READ_ONLY_TOOLS: &[&str] = &["read", "grep", "glob", "list", "webfetch"];
 
 /// Per-session permission ruleset for a kybern mode. Last matching rule wins.
 fn ruleset(mode: PermissionMode) -> Value {
@@ -1866,6 +1874,34 @@ mod tests {
         assert_eq!(value["mcp"]["kybern"]["headers"]["Authorization"], "Bearer session-capability");
         assert_eq!(value["tools"]["*"], false);
         assert_eq!(value["tools"]["kybern_*"], true);
+    }
+
+    #[test]
+    fn a_lead_keeps_only_the_read_only_builtins() {
+        let bridge = NativeToolBridge {
+            server_name: "kybern".into(),
+            endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
+            authorization: Some("session-capability".into()),
+            coordinator_instructions: None,
+            guide: None,
+            tools: vec![],
+            restrictions: crate::NativeToolRestrictions { require_enforcement: true, allow_read_only_builtins: true, ..Default::default() },
+        };
+        let value: Value = serde_json::from_str(&opencode_config_content(None, &bridge).unwrap()).unwrap();
+        assert_eq!(value["tools"]["*"], false);
+        assert_eq!(value["tools"]["kybern_*"], true);
+        for name in ["read", "grep", "glob", "list", "webfetch"] {
+            assert_eq!(value["tools"][name], true, "{name}");
+        }
+        for name in ["bash", "edit", "write", "patch"] {
+            assert!(value["tools"].get(name).is_none(), "{name} stays behind the wildcard");
+        }
+        let without = NativeToolBridge {
+            restrictions: crate::NativeToolRestrictions { require_enforcement: false, allow_read_only_builtins: true, ..Default::default() },
+            ..bridge
+        };
+        let value: Value = serde_json::from_str(&opencode_config_content(None, &without).unwrap()).unwrap();
+        assert!(value.get("tools").is_none(), "an unenforced harness keeps all of its tools");
     }
 
     #[test]

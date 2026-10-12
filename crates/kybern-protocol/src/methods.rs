@@ -2335,6 +2335,10 @@ pub struct NotesCreateParams {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    /// Creates the project's pinned brief or setup note (scope `project` with a
+    /// `project_id`). A project has at most one of each. Absent for an ordinary note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_role: Option<ProjectNoteRole>,
 }
 method!(NotesCreate, "notes.create", Some(Scope::OrchestrationOperate), NotesCreateParams, Note);
 

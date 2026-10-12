@@ -8,7 +8,7 @@
 use anyhow::{Result, anyhow};
 use kybern_protocol::methods::{
     Note, NoteId, NoteSearchHit, NoteSummary, NotesChangedNotification, NotesCreateParams, NotesGetParams, NotesMoveParams,
-    NotesUpdateParams, ThreadNotes, ThreadNotesSetParams,
+    NotesUpdateParams, NoteScope, ProjectNoteRole, ThreadNotes, ThreadNotesSetParams,
 };
 use kybern_protocol::{ProjectId, is_free_chat_project};
 use kybern_store::{NoteError, NoteTarget};
@@ -58,12 +58,21 @@ impl Orchestrator {
 
     pub fn note_create(&self, params: NotesCreateParams) -> Result<Note> {
         let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
-        let note = self.inner.store.note_create(
-            params.scope,
-            params.project_id,
-            params.title.as_deref().unwrap_or_default(),
-            params.body.as_deref().unwrap_or_default(),
-        )?;
+        let body = params.body.as_deref().unwrap_or_default();
+        let note = match params.project_role {
+            Some(role) => {
+                let (NoteScope::Project, Some(project_id)) = (params.scope, params.project_id) else {
+                    return invalid("The project brief and setup note belong to a project. Choose scope project and a project.");
+                };
+                let default_title = match role {
+                    ProjectNoteRole::Brief => "Project brief",
+                    ProjectNoteRole::Setup => "Project setup",
+                };
+                let title = params.title.as_deref().filter(|title| !title.trim().is_empty()).unwrap_or(default_title);
+                self.inner.store.note_create_project_role(project_id, role, title, body, None)?
+            }
+            None => self.inner.store.note_create(params.scope, params.project_id, params.title.as_deref().unwrap_or_default(), body)?,
+        };
         self.publish_note(note.summary.clone());
         Ok(note)
     }

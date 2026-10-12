@@ -111,6 +111,16 @@ impl Store {
         })
     }
 
+    /// The live project-scope notes of a project (the brief and setup note included),
+    /// most recently edited first.
+    pub fn project_notes(&self, project_id: ProjectId) -> Result<Vec<Note>> {
+        self.with(|c| {
+            let mut notes = query_notes(c, "WHERE n.project_id = ?1 AND n.scope = 'project' AND n.deleted_at IS NULL", [project_id.to_string()])?;
+            notes.sort_by(|a, b| b.summary.updated_at.cmp(&a.summary.updated_at));
+            Ok(notes)
+        })
+    }
+
     /// The project's brief or setup note, if it has one.
     pub fn note_for_project_role(&self, project_id: ProjectId, role: ProjectNoteRole) -> Result<Option<Note>> {
         self.with(|c| fetch_note(c, "WHERE n.project_id = ?1 AND n.project_role = ?2", params![project_id.to_string(), role.as_str()]))
