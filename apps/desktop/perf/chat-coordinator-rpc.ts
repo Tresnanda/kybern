@@ -1,10 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useStore } from "../src/state/store"
 import { emptyThreadState } from "../src/state/transcript"
-import type { Thread, UserMessage } from "../src/protocol"
+import type { ApprovalDecision, Note, NoteSummary, Thread, UserMessage } from "../src/protocol"
 
 export * from "../src/state/rpc"
-export const chatFixture = { calls: [] as { method: string; params: any }[], sent: [] as { threadId: string; message: UserMessage; messageId?: string }[], coordinatorCreates: 0 }
+export const chatFixture = { calls: [] as { method: string; params: any }[], sent: [] as { threadId: string; message: UserMessage; messageId?: string }[], coordinatorCreates: 0, notes: new Map<string, Note>() }
 const coordinators = new Map<string, Thread>()
 const at = "2026-09-14T10:00:00Z"
 const connection = { call, onNotification: () => () => {}, onStatus: () => () => {} }
@@ -16,6 +16,9 @@ export async function listSkills() { return [] }
 export async function loadDiff() {}
 export async function loadGitStatus() {}
 export async function loadFileDiff() {}
+export async function loadLineage() {}
+export async function loadSubagents() {}
+export async function loadHeldMessages() {}
 export async function loadThread(threadId: string) {
   const state = useStore.getState()
   if (!state.transcripts[threadId]) state.set((current) => ({ transcripts: { ...current.transcripts, [threadId]: { ...emptyThreadState(), loaded: true, thread: current.threads[threadId] } } }))
@@ -30,6 +33,12 @@ function recordSent(threadId: string, message: UserMessage, messageId?: string) 
   state.set({ transcripts: { ...state.transcripts, [threadId]: { ...current, blocks: [...current.blocks, { kind: "user", id: `sent-${chatFixture.sent.length}`, turnId: "sent-turn", at, seq: 50 + chatFixture.sent.length, message }] } } })
 }
 export const queueMessage = sendMessage
+/** Answers settle the card the way the daemon does: off the pending list, onto the transcript row, value redacted. */
+export async function respondApproval(id: string, decision: ApprovalDecision) {
+  await call("approvals.respond", { approval_id: id, ...decision })
+}
+export const fixtureConnection = connection
+const summary = (note: Note): NoteSummary => { const { body, ...rest } = note; void body; return rest }
 async function call(method: string, params: any): Promise<any> {
   chatFixture.calls.push({ method, params: structuredClone(params) })
   const state = useStore.getState()
@@ -57,6 +66,43 @@ async function call(method: string, params: any): Promise<any> {
   if (method === "threads.send") {
     recordSent(params.thread_id, params.message, params.message_id)
     return { turn_id: "coordinator-turn", message_id: params.message_id }
+  }
+  if (method === "threads.target.get") {
+    const thread = state.threads[params.thread_id]
+    return { target: { provider: thread.provider, model: thread.model ?? null, effort: thread.effort ?? null }, account_override: false, effective_permission_mode: thread.permission_mode, pending_permission_mode: null, native_session_id: null }
+  }
+  if (method === "providers.accounts.catalog") return state.providers.find((provider) => provider.kind === params.provider.kind)
+  if (method === "git.branches") return { current: "main", branches: [] }
+  if (method === "notes.search") return { results: [] }
+  if (method === "approvals.respond") {
+    const stored: ApprovalDecision = params.decision === "submit" ? { decision: "submit", response: { secret: "[redacted]" } } : { decision: params.decision, ...(params.reason ? { reason: params.reason } : {}) } as ApprovalDecision
+    state.set((current) => {
+      const transcripts = { ...current.transcripts }
+      for (const [id, transcript] of Object.entries(transcripts)) {
+        if (!transcript.pendingApprovals.some((approval) => approval.id === params.approval_id)) continue
+        transcripts[id] = { ...transcript, pendingApprovals: transcript.pendingApprovals.filter((approval) => approval.id !== params.approval_id), blocks: transcript.blocks.map((block) => block.kind === "approval" && block.approval.id === params.approval_id ? { ...block, decision: stored } : block) }
+      }
+      return { transcripts }
+    })
+    return {}
+  }
+  if (method === "projects.update") {
+    const project = state.projects[params.project_id]
+    return { ...project, ...(params.brief_in_all_threads === undefined ? {} : { brief_in_all_threads: params.brief_in_all_threads }) }
+  }
+  if (method === "notes.list") return { notes: [...chatFixture.notes.values()].map(summary) }
+  if (method === "notes.get") return { note: chatFixture.notes.get(params.id) ?? null }
+  if (method === "notes.create") {
+    const note: Note = { id: `note-${chatFixture.notes.size + 1}`, scope: params.scope, project_id: params.project_id, title: params.title ?? "", body: params.body ?? "", preview: String(params.body ?? "").slice(0, 240), checklist: { done: 0, total: 0 }, pinned: !!params.project_role, revision: 1, created_at: at, updated_at: at, project_role: params.project_role ?? null }
+    chatFixture.notes.set(note.id, note)
+    return note
+  }
+  if (method === "notes.update") {
+    const current = chatFixture.notes.get(params.id)
+    if (!current) throw new Error("Missing note")
+    const note: Note = { ...current, body: params.body ?? current.body, preview: String(params.body ?? current.body).slice(0, 240), revision: current.revision + 1 }
+    chatFixture.notes.set(note.id, note)
+    return note
   }
   if (method === "skills.list") return { skills: [] }
   if (method === "providers.list") return { providers: state.providers }

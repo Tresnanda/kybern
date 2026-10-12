@@ -16,7 +16,7 @@ import { ArrowLeftIcon, ArrowUpRightIcon, MessageCircleIcon, PinFilledIcon, PinI
 import { ProjectDot } from "@/lib/kit/projectDot"
 import { observeResizeFrame } from "@/lib/resizeObserver"
 import { cn } from "@/lib/utils"
-import { isFreeChatProject, type NoteId, type NoteSummary, type ThreadId } from "@/protocol"
+import { isFreeChatProject, type NoteId, type NoteSummary, type ProjectId, type ThreadId } from "@/protocol"
 import { countWords, wordCountLabel } from "@/state/miniMarkdown"
 import { clearFocusRequest, fetchNoteImage, noteSourceOf, pinNote, restoreNote, uploadNoteImage, useNotes, useNoteSummary } from "@/state/notes"
 import { setNotesDisplay, useNotesDisplay } from "@/state/notesDisplay"
@@ -48,8 +48,10 @@ const WORD_COUNT_DELAY_MS = 400
 export interface NoteEditorProps {
   /** Open a note by id... */
   noteId?: NoteId
-  /** ...or a thread's note. Exactly one of the two. */
+  /** ...or a thread's note... */
   threadId?: ThreadId
+  /** ...or a project's brief, created on the first character typed. Exactly one of the three. */
+  briefProjectId?: ProjectId
   /** "page": the Notes page. "compact": body and status only, for panels. */
   variant?: "page" | "compact"
   /** Focus the title (page) or the body when the editor appears. */
@@ -59,11 +61,13 @@ export interface NoteEditorProps {
   className?: string
   /** Called after the note was deleted from its menu. */
   onDeleted?: () => void
+  /** Compact variant: what the status line says when a save fails, instead of the daemon's error. */
+  saveFailedText?: string
 }
 
 export function NoteEditor(props: NoteEditorProps) {
   // A different note is a different editor: its own session, its own undo history.
-  const key = props.noteId ? `note:${props.noteId}` : `thread:${props.threadId}`
+  const key = props.noteId ? `note:${props.noteId}` : props.briefProjectId ? `brief:${props.briefProjectId}` : `thread:${props.threadId}`
   return <NoteEditorInner key={key} {...props} />
 }
 
@@ -72,8 +76,8 @@ function backToGallery() {
   useStore.getState().selectNotes()
 }
 
-function NoteEditorInner({ noteId, threadId, variant = "page", autoFocus, placeholder, className, onDeleted }: NoteEditorProps) {
-  const { session, snapshot } = useNoteSession({ noteId, threadId })
+function NoteEditorInner({ noteId, threadId, briefProjectId, variant = "page", autoFocus, placeholder, className, onDeleted, saveFailedText }: NoteEditorProps) {
+  const { session, snapshot } = useNoteSession({ noteId, threadId, briefProjectId })
   const summary = useNoteSummary(snapshot.noteId ?? noteId)
   const [editor, setEditor] = useState<Editor | null>(null)
   const titleRef = useRef<HTMLTextAreaElement>(null)
@@ -201,7 +205,7 @@ function NoteEditorInner({ noteId, threadId, variant = "page", autoFocus, placeh
         {banners}
         {body}
         {/* Says nothing until the first edit. */}
-        {ready && <SaveStatus snapshot={snapshot} className="self-end" reserveSpace />}
+        {ready && <SaveStatus snapshot={snapshot} className="self-end" reserveSpace failedText={saveFailedText} />}
       </div>
     )
   }

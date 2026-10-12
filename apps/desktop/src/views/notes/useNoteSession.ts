@@ -1,13 +1,17 @@
 import { useEffect, useState, useSyncExternalStore } from "react"
 
-import type { NoteId, ThreadId } from "@/protocol"
+import type { NoteId, ProjectId, ThreadId } from "@/protocol"
 import { locateNote } from "@/state/notes"
 import { NoteSession, type NoteTarget } from "@/state/noteSession"
 
 /** One session per mounted editor: it loads the note, saves edits, and flushes on unmount. */
-export function useNoteSession(target: { noteId?: NoteId; threadId?: ThreadId }) {
+export function useNoteSession(target: { noteId?: NoteId; threadId?: ThreadId; briefProjectId?: ProjectId }) {
   const [session] = useState(() => {
-    const note: NoteTarget = target.noteId ? { kind: "note", id: target.noteId } : { kind: "thread", threadId: target.threadId! }
+    const note: NoteTarget = target.noteId
+      ? { kind: "note", id: target.noteId }
+      : target.briefProjectId
+        ? { kind: "brief", projectId: target.briefProjectId }
+        : { kind: "thread", threadId: target.threadId! }
     return new NoteSession(note, note.kind === "note" ? locateNote(note.id)?.source ?? "env" : "env")
   })
   useEffect(() => {

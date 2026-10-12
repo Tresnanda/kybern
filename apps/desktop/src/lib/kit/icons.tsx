@@ -106,6 +106,8 @@ import {
   SmartPhone01Icon as HcPhone,
   Home01Icon as HcHome,
   SquareLock02Icon as HcLock,
+  Key01Icon as HcKey,
+  SquareLock01Icon as HcPadlock,
   VolumeHighIcon as HcVolUp,
   VolumeLowIcon as HcVolDown,
   RecordIcon as HcRecord,
@@ -322,6 +324,9 @@ export const HistoryIcon = hugeIcon(HiHistory);
 export const InfoIcon = hugeIcon(HiInfo);
 export const KanbanIcon = hugeIcon(HcKanban);
 export const KeyboardIcon: LucideIcon = hugeIcon(HcKeyboard);
+// Secret requests (`kybern_request_secret`): the card's tile and its "never sees it" footnote.
+export const KeyIcon: LucideIcon = hugeIcon(HcKey);
+export const LockIcon: LucideIcon = hugeIcon(HcPadlock);
 export const ListChecksIcon = hugeIcon(HiListCheck);
 export const ListTodoIcon = hugeIcon(HiListTodo);
 export const Loader2Icon = hugeIcon(HiLoader);

@@ -9,13 +9,19 @@ import {
   type Note,
   type NoteId,
   type NoteSummary,
+  type ProjectId,
   type ThreadId,
 } from "@/protocol"
+import { BRIEF_NOTE_TITLE, projectSpaceNotes } from "../../../../packages/kybern-client/src/projectSpace"
 import { mergeNoteBodies } from "./noteLines"
 import { errorText } from "./rpc"
 import { noteClient, recordSavedNote, useNotes, type NoteSource } from "./notes"
 
-export type NoteTarget = { kind: "note"; id: NoteId } | { kind: "thread"; threadId: ThreadId }
+/**
+ * A note by id, a thread's note, or a project's brief. A thread note and a brief are
+ * created on their first non-empty save, and neither has a title of its own to edit.
+ */
+export type NoteTarget = { kind: "note"; id: NoteId } | { kind: "thread"; threadId: ThreadId } | { kind: "brief"; projectId: ProjectId }
 
 export type SaveState = "saved" | "dirty" | "saving" | "retrying" | "error" | "conflict"
 
@@ -57,7 +63,7 @@ const sameBody = (a: string, b: string) => a.trimEnd() === b.trimEnd()
 const MAX_RETRY_MS = 15_000
 
 export const draftKey = (ownerKey: string, target: NoteTarget) =>
-  `kybern.notes.draft:${ownerKey}:${target.kind === "note" ? `note:${target.id}` : `thread:${target.threadId}`}`
+  `kybern.notes.draft:${ownerKey}:${target.kind === "note" ? `note:${target.id}` : target.kind === "thread" ? `thread:${target.threadId}` : `brief:${target.projectId}`}`
 
 export class NoteSession {
   readonly target: NoteTarget
@@ -115,8 +121,9 @@ export class NoteSession {
     this.listeners.forEach((listener) => listener())
   }
 
+  /** A thread note or a brief: its title is not edited here, and it exists once it has text. */
   private get isThread() {
-    return this.target.kind === "thread"
+    return this.target.kind !== "note"
   }
 
   // ---- lifecycle ----
@@ -164,12 +171,19 @@ export class NoteSession {
 
   // ---- loading ----
 
-  private request() {
-    return this.target.kind === "note" ? { id: this.target.id } : { thread_id: this.target.threadId }
+  private request(): { id: NoteId } | { thread_id: ThreadId } | null {
+    const target = this.target
+    if (target.kind === "note") return { id: target.id }
+    if (target.kind === "thread") return { thread_id: target.threadId }
+    // The brief is found in the list; once saved, this session knows its id.
+    const id = this.base?.id ?? projectSpaceNotes(Object.values(useNotes.getState()[this.source].notes), target.projectId).brief?.id
+    return id ? { id } : null
   }
 
   private async fetchLatest(): Promise<Note | null> {
-    const { note } = await noteClient(this.source).call("notes.get", this.request())
+    const request = this.request()
+    if (!request) return null
+    const { note } = await noteClient(this.source).call("notes.get", request)
     return note ?? null
   }
 
@@ -404,11 +418,19 @@ export class NoteSession {
               ...(this.isThread ? {} : { title: draft.title }),
               body: draft.body,
             })
-          : await client.call("notes.update", {
-              thread_id: this.target.kind === "thread" ? this.target.threadId : null,
-              expected_revision: 0,
-              body: draft.body,
-            })
+          : this.target.kind === "brief"
+            ? await client.call("notes.create", {
+                scope: "project",
+                project_id: this.target.projectId,
+                project_role: "brief",
+                title: BRIEF_NOTE_TITLE,
+                body: draft.body,
+              })
+            : await client.call("notes.update", {
+                thread_id: this.target.kind === "thread" ? this.target.threadId : null,
+                expected_revision: 0,
+                body: draft.body,
+              })
       this.inFlight = false
       this.retries = 0
       this.base = { id: saved.id, revision: saved.revision, title: saved.title, body: saved.body }
