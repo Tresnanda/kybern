@@ -49,7 +49,19 @@ const shot = (name: string) => new Promise<void>((resolve) => {
   }
   const target = window as unknown as { __screenshotContinue?: () => void; webkit?: { messageHandlers?: { bench?: { postMessage: (value: string) => void } } } }
   target.__screenshotContinue = resolve
-  if (!target.webkit?.messageHandlers?.bench) return resolve()
+  if (!target.webkit?.messageHandlers?.bench) {
+    // `?shots=1` in a plain browser: name the shot on the page and wait for a driver to
+    // take it and press the continue control (headless runs while macOS is locked).
+    if (query.get("shots") !== "1") return resolve()
+    document.documentElement.dataset.shot = `${name}-${theme}`
+    const next = document.createElement("button")
+    next.id = "fixture-continue"
+    next.textContent = "Continue"
+    next.style.cssText = "position:fixed;right:0;bottom:0;width:4px;height:4px;opacity:0.01;z-index:2147483647;padding:0;border:0"
+    next.onclick = () => { next.remove(); delete document.documentElement.dataset.shot; resolve() }
+    document.body.append(next)
+    return
+  }
   target.webkit.messageHandlers.bench.postMessage(JSON.stringify({ screenshot: `${name}-${theme}` }))
 })
 const projectNote = (id: string, title: string, body: string, updated: string, extra: Partial<Note> = {}): Note => ({ id, scope: "project", project_id: "project-0", title, body, preview: body.replace(/[#*`]/g, "").slice(0, 240), checklist: { done: 0, total: 0 }, pinned: false, revision: 1, created_at: updated, updated_at: updated, ...extra })
@@ -456,7 +468,7 @@ async function checkCoordinatorSetup(threadId: string) {
   key(document.querySelector<HTMLElement>('[data-testid="composer-editor"]')!, { key: "Enter" }); await sleep(300)
   const slashParts = chatFixture.sent.at(-1)?.message.parts
   debug({ slashParts, sentCount: chatFixture.sent.length })
-  const typedSlashSkill = JSON.stringify(slashParts) === JSON.stringify([{ type: "text", text: "please " }, { type: "skill", name: "review", path: "/skills/review" }, { type: "text", text: "the sign-in flow" }])
+  const typedSlashSkill = JSON.stringify(slashParts) === JSON.stringify([{ type: "text", text: "please " }, { type: "skill", name: "review", path: "/skills/review" }, { type: "text", text: " the sign-in flow" }])
 
   // ---- Setup started, then the user's own words as their bubble ----
   const setupTurn = "setup-turn"

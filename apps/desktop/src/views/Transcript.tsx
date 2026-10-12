@@ -9,7 +9,7 @@ import { agentItemLabel, agentItemResultText, agentItemTool, agentItemWriteResul
 import { VisualReply } from "./VisualReply"
 import { SecretRequestLine } from "./SecretRequestPanel"
 import { CoordinatorCardLine, SystemRowLine } from "./coordinator/CoordinatorRows"
-import { coordinatorCardLine } from "../../../../packages/kybern-client/src/coordinatorCards"
+import { coordinatorCardKind, coordinatorCardLine } from "../../../../packages/kybern-client/src/coordinatorCards"
 import { secretRequestInput } from "../../../../packages/kybern-client/src/secretRequest"
 import { AgentItemCard } from "./AgentItemCard"
 import { openNote } from "@/state/notes"
@@ -1538,8 +1538,9 @@ const WorkRow = memo(function WorkRow({
       {
         const secret = secretRequestInput(block.approval)
         if (secret) return <SecretRequestLine input={secret} decision={block.decision} style={CHAT_FONT} />
-        const cardLine = coordinatorCardLine(block.approval, block.decision)
-        if (cardLine) return <CoordinatorCardLine parts={cardLine} decision={block.decision} style={CHAT_FONT} />
+        const cardKind = coordinatorCardKind(block.approval)
+        const cardLine = cardKind ? coordinatorCardLine(block.approval, block.decision) : null
+        if (cardKind && cardLine) return <CoordinatorCardLine kind={cardKind} parts={cardLine} decision={block.decision} style={CHAT_FONT} />
         const text = approvalRowText(block.approval, block.decision)
         return (
           <div className="rounded-lg py-1">

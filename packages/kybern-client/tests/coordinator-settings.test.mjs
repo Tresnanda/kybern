@@ -131,7 +131,7 @@ const skills = [
 test("a typed /skill becomes its skill part and leaves the text", () => {
   assert.deepEqual(convertTypedSlashSkills([{ type: "text", text: "/review the sign-in flow" }], skills), [
     { type: "skill", name: "review", path: "/skills/review" },
-    { type: "text", text: "the sign-in flow" },
+    { type: "text", text: " the sign-in flow" },
   ]);
   assert.deepEqual(convertTypedSlashSkills([{ type: "text", text: "please /Review-PR, then ship" }], skills), [
     { type: "text", text: "please " },

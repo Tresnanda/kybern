@@ -94,6 +94,15 @@ export function leadGitCardInput(approval: Card): LeadGitCardInput | null {
   }
 }
 
+export type CoordinatorCardKind = "brief" | "settings" | "push" | "open_pr" | "merge_pr";
+
+/** Which Coordinator card an approval is, for its icon; null for any other approval. */
+export function coordinatorCardKind(approval: Card): CoordinatorCardKind | null {
+  if (approval.tool_name === COORDINATOR_BRIEF_TOOL) return "brief";
+  if (approval.tool_name === COORDINATOR_SETTINGS_TOOL) return "settings";
+  return leadGitCardInput(approval)?.op ?? null;
+}
+
 /** Any of the Coordinator's own cards. */
 export function isCoordinatorCard(approval: Card): boolean {
   return approval.tool_name === COORDINATOR_BRIEF_TOOL || approval.tool_name === COORDINATOR_SETTINGS_TOOL || approval.tool_name === LEAD_GIT_TOOL;

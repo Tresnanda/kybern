@@ -239,27 +239,14 @@ export function convertTypedSlashSkills(parts: readonly ContentPart[], skillItem
     while ((match = pattern.exec(part.text))) {
       const start = match.index + match[1]!.length
       const skill = skills.get(match[2]!.toLowerCase())!
-      // The space before the token stays; the one after it goes, so no double space is left.
+      // Spaces around the token stay, as they do around a picked `$skill`: the chip and the
+      // words beside it read apart in the bubble and in the provider's copy.
       pushText(part.text.slice(last, start))
       out.push({ type: "skill", name: skill.name, path: skill.path })
       last = start + match[2]!.length + 1
-      if (part.text[last] === " ") last += 1
       converted = true
     }
     pushText(part.text.slice(last))
   }
-  if (!converted) return [...parts]
-  // Whitespace the tokens left at either end of the message, or alone between parts, goes too.
-  const trimmed: ContentPart[] = []
-  for (const [index, part] of out.entries()) {
-    if (part.type !== "text") {
-      trimmed.push(part)
-      continue
-    }
-    let value = part.text
-    if (index === 0) value = value.trimStart()
-    if (index === out.length - 1) value = value.trimEnd()
-    if (value.trim()) trimmed.push({ type: "text", text: value })
-  }
-  return trimmed
+  return converted ? out : [...parts]
 }

@@ -3,10 +3,10 @@
 // leaves behind ("Saved the project brief", "Pushed fix/x", "Merged PR #12").
 import { memo } from "react"
 
-import { CheckIcon, CircleAlertIcon, GitMergeIcon, NoteIcon, PushIcon, SettingsIcon } from "@/lib/kit/icons"
+import { CheckIcon, CircleAlertIcon, GitMergeIcon, GitPullRequestIcon, NoteIcon, PushIcon, SettingsIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { ApprovalDecision, SystemRowKind } from "@/protocol"
-import { cardPartsText, coordinatorCardOutcome, type CardTextPart } from "../../../../../packages/kybern-client/src/coordinatorCards"
+import { cardPartsText, coordinatorCardOutcome, type CardTextPart, type CoordinatorCardKind } from "../../../../../packages/kybern-client/src/coordinatorCards"
 
 // The transcript's own inline-code chip, as the secret request line uses it.
 const CARD_CODE_CLASS = "rounded-[0.4rem] bg-[var(--app-chat-code-surface)] px-[0.35em] py-px font-[family-name:var(--font-chat-code-family)] text-[0.92em] text-foreground/90"
@@ -27,22 +27,30 @@ export const SystemRowLine = memo(function SystemRowLine({ text, kind }: { text:
   )
 })
 
-function lineIcon(text: string) {
-  if (text.includes("brief")) return <NoteIcon className="size-4" />
-  if (text.includes("setting")) return <SettingsIcon className="size-4" />
-  if (text.includes("PR #")) return <GitMergeIcon className="size-4" />
-  return <PushIcon className="size-4" />
+function lineIcon(kind: CoordinatorCardKind) {
+  switch (kind) {
+    case "brief":
+      return <NoteIcon className="size-4" />
+    case "settings":
+      return <SettingsIcon className="size-4" />
+    case "open_pr":
+      return <GitPullRequestIcon className="size-4" />
+    case "merge_pr":
+      return <GitMergeIcon className="size-4" />
+    default:
+      return <PushIcon className="size-4" />
+  }
 }
 
 /** A settled Coordinator card, in the same shape as the other approval lines. */
-export const CoordinatorCardLine = memo(function CoordinatorCardLine({ parts, decision, style }: { parts: readonly CardTextPart[]; decision: ApprovalDecision | null; style?: React.CSSProperties }) {
+export const CoordinatorCardLine = memo(function CoordinatorCardLine({ kind, parts, decision, style }: { kind: CoordinatorCardKind; parts: readonly CardTextPart[]; decision: ApprovalDecision | null; style?: React.CSSProperties }) {
   const outcome = coordinatorCardOutcome(decision)
   const text = cardPartsText(parts)
   return (
     <div className="rounded-lg py-1" data-coordinator-card-outcome={outcome}>
       <div className="flex w-full min-w-0 items-center gap-2">
         <span className={cn("flex size-5 shrink-0 items-center justify-center", outcome === "declined" ? "text-destructive/85" : "text-muted-foreground")}>
-          {outcome === "done" ? <CheckIcon className="size-4 text-[var(--color-success)]" /> : outcome === "declined" || outcome === "ended" ? <CircleAlertIcon className="size-4" /> : lineIcon(text)}
+          {outcome === "done" ? <CheckIcon className="size-4 text-[var(--color-success)]" /> : outcome === "declined" || outcome === "ended" ? <CircleAlertIcon className="size-4" /> : lineIcon(kind)}
         </span>
         <p className={cn("min-w-0 truncate leading-6", outcome === "declined" ? "text-destructive/85" : outcome === "done" ? "text-foreground/80" : "text-muted-foreground")} style={style} title={text}>
           <CardText parts={parts} />
