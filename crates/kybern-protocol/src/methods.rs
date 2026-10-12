@@ -1344,6 +1344,9 @@ pub enum LimitsStale {
     Throttled,
     /// The read failed: not signed in, unreachable, or an unexpected answer.
     Unavailable,
+    /// Read from the cache file of an earlier daemon run, and no live read has
+    /// succeeded since. Shown until the first one does.
+    FromLastRun,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct UsageLimitsResult {
