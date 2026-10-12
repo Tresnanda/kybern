@@ -32,6 +32,8 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 const results = (value: unknown) => {
   const target = window as unknown as { __chatCoordinatorResults?: unknown[]; webkit?: { messageHandlers?: { bench?: { postMessage: (value: string) => void } } } }
   ;(target.__chatCoordinatorResults ??= []).push(value)
+  // A browser without the native bench handler reads the outcome from the page.
+  document.documentElement.dataset.fixtureResults = JSON.stringify(target.__chatCoordinatorResults)
   target.webkit?.messageHandlers?.bench?.postMessage(JSON.stringify(value))
 }
 const sampleMemory = (stage: string) => new Promise<void>((resolve) => {
@@ -357,7 +359,12 @@ async function checkSecretRequest(threadId: string) {
 const claudeDefault = { kind: "claude-code" as const, instance: "default" }
 const sonnet = { provider: claudeDefault, model: "claude-sonnet-5-5" }
 const opusHigh = { provider: claudeDefault, model: "claude-opus-5-5", effort: "high" }
-const debug = (value: unknown) => (window as unknown as { webkit?: { messageHandlers?: { bench?: { postMessage: (value: string) => void } } } }).webkit?.messageHandlers?.bench?.postMessage(JSON.stringify({ stage: "debug", value }))
+const debug = (value: unknown) => {
+  const target = window as unknown as { __chatCoordinatorDebug?: unknown[]; webkit?: { messageHandlers?: { bench?: { postMessage: (value: string) => void } } } }
+  ;(target.__chatCoordinatorDebug ??= []).push(value)
+  document.documentElement.dataset.fixtureDebug = JSON.stringify(target.__chatCoordinatorDebug)
+  target.webkit?.messageHandlers?.bench?.postMessage(JSON.stringify({ stage: "debug", value }))
+}
 const lastCall = (method: string) => [...chatFixture.calls].reverse().find((call) => call.method === method)
 const within = (root: ParentNode | null | undefined, selector: string, label: string) =>
   Array.from(root?.querySelectorAll<HTMLElement>(selector) ?? []).find((element) => visible(element) && (element.getAttribute("aria-label") === label || element.textContent?.trim() === label || element.textContent?.trim().startsWith(label)))
@@ -543,7 +550,7 @@ async function checkCoordinatorSetup(threadId: string) {
   const overlayRoot = createRoot(overlay)
   function SettingsOverlay() {
     const { settings: current, update } = useSettings()
-    return current ? <div className="settings-page mx-auto max-w-[720px] px-8 py-8 font-system-ui"><CoordinatorDefaultsSection settings={current} onChange={update} /></div> : null
+    return current ? <div className="settings-page mx-auto max-w-[720px] px-8 py-8 font-system-ui"><CoordinatorDefaultsSection settings={current} onChange={(orchestration) => update({ orchestration })} /></div> : null
   }
   flushSync(() => overlayRoot.render(<ThemeProviderContext value={{ theme, translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><SettingsOverlay /></ThemeProviderContext>))
   await sleep(400)
@@ -554,7 +561,7 @@ async function checkCoordinatorSetup(threadId: string) {
   await shot("settings-defaults")
   within(defaults(), '[role="radio"]', "Propose all")?.click(); await sleep(300)
   const savedSettings = lastCall("settings.update")?.params.settings?.orchestration
-  debug({ savedSettings })
+  debug({ savedSettings, settingsCalls: chatFixture.calls.filter((call) => call.method === "settings.update").length, radios: Array.from(defaults().querySelectorAll('[role="radio"]')).map((r) => `${r.textContent}:${r.getAttribute("aria-checked")}`) })
   const settingsDefaultsWrite = savedSettings?.lead_autonomy === "propose_first" && savedSettings?.role_defaults?.research?.model === "claude-sonnet-5-5" && savedSettings?.max_depth === 2
   overlayRoot.unmount(); overlay.remove()
 
