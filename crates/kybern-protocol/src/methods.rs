@@ -447,6 +447,12 @@ pub struct ProjectsUpdateParams {
     /// an index of its notes at session start. Absent leaves the switch as it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brief_in_all_threads: Option<bool>,
+    /// Replaces the project's Coordinator overrides. Absent leaves them as they
+    /// are; `null` removes every override; an object sets exactly the fields it
+    /// holds (a field left out falls back to the global setting). Send the whole
+    /// object each time.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present_or_null")]
+    pub coordinator: Option<Option<CoordinatorOverrides>>,
 }
 method!(ProjectsUpdate, "projects.update", Some(Scope::OrchestrationOperate), ProjectsUpdateParams, Project);
 
@@ -794,6 +800,16 @@ method!(
 
 // ---- project coordinator (the lead thread) ----
 
+/// Tell an absent field (`None`, via `default`) from an explicit `null`
+/// (`Some(None)`).
+fn present_or_null<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
 /// The project's Coordinator thread, if it has one.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CoordinatorGetParams {
@@ -815,8 +831,15 @@ pub struct CoordinatorOpenParams {
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<PermissionMode>,
-    /// The user's brief. When the project has no brief note yet it becomes the
-    /// brief note; creating the Coordinator does not submit it as a provider turn.
+    /// The user's opening words, their first answer in the Coordinator's setup
+    /// interview. Used only when the Coordinator is created for a project that
+    /// has no brief: the daemon then starts the setup (a "Setup started" row,
+    /// then this text as the user's own message) and the Coordinator's first
+    /// turn begins. It is never saved as the brief; only the brief proposal
+    /// card, or the user in Notes, writes the brief.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opening_message: Option<String>,
+    /// Older clients' name for [`Self::opening_message`], treated the same way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_brief: Option<String>,
 }
@@ -826,6 +849,15 @@ pub struct CoordinatorOpenResult {
     pub created: bool,
 }
 method!(CoordinatorOpen, "coordinator.open", Some(Scope::OrchestrationOperate), CoordinatorOpenParams, CoordinatorOpenResult);
+
+/// Start the setup interview again ("Redo setup"): the daemon sends the
+/// Coordinator the setup kickoff, a "Setup started" row for clients. Refused
+/// while the Coordinator is running a turn. Returns the Coordinator thread.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CoordinatorSetupParams {
+    pub project_id: ProjectId,
+}
+method!(CoordinatorSetup, "coordinator.setup", Some(Scope::OrchestrationOperate), CoordinatorSetupParams, Thread);
 
 /// Move the Coordinator to another harness, model or account. Its session restarts
 /// with the same lead instructions; the thread and its history stay.
@@ -2903,6 +2935,7 @@ registry!(
     DelegationsWorktreeRemove,
     CoordinatorGet,
     CoordinatorOpen,
+    CoordinatorSetup,
     CoordinatorSwitchHarness,
     TasksList,
     TaskStop,

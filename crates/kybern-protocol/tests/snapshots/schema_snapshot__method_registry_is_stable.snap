@@ -84,6 +84,7 @@ expression: names
 - delegations.worktree_remove
 - coordinator.get
 - coordinator.open
+- coordinator.setup
 - coordinator.switch_harness
 - tasks.list
 - tasks.stop

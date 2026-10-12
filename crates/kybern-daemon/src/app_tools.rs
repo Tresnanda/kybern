@@ -457,7 +457,7 @@ fn notes_tasks_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
         NativeToolDefinition { name: "kybern_notes_search".into(), description: "Search the user's Kybern notes by title and text, or list recent notes when query is empty. Searches every project unless project_id is given. Returns ids, titles, snippets, kybern://note links, and a ready-made `markdown` link to paste into your answer; read one with kybern_note_read. Read-only.".into(), input_schema: object(json!({
             "query":{"type":["string","null"]}, "project_id": optional_uuid("Only notes of this project."), "limit":{"type":"integer","minimum":1,"maximum":50}
         }), &[]) },
-        NativeToolDefinition { name: "kybern_note_read".into(), description: "Read one Kybern note's markdown body. agent_editable is true only for notes an agent created; you may rewrite those with kybern_note_update, and only append to the user's own notes. A note with project_role brief is the user's project brief: read it, but suggest changes in chat. Read-only.".into(), input_schema: object(json!({"note_id": uuid("Note id.")}), &["note_id"]) },
+        NativeToolDefinition { name: "kybern_note_read".into(), description: "Read one Kybern note's markdown body. agent_editable is true only for notes an agent created; you may rewrite those with kybern_note_update, and only append to the user's own notes. A note with project_role brief is the user's project brief: read it, but suggest changes in chat (a Coordinator proposes them with kybern_coordinator_propose_brief). Read-only.".into(), input_schema: object(json!({"note_id": uuid("Note id.")}), &["note_id"]) },
         NativeToolDefinition { name: "kybern_note_create".into(), description: write("Create a Kybern note in this thread's project (a global note when the chat has no project, or with scope global). A project Coordinator saves the project's setup note with project_role setup."), input_schema: object(json!({
             "operation_id": operation, "title":{"type":"string"}, "body":{"type":"string","description":"Markdown."}, "scope":{"enum":["project","global",null]},
             "project_role":{"enum":["setup",null],"description":"Only a project Coordinator, once per project: how to build, run and test the project. Read it back with kybern_notes_search; change it with kybern_note_update."}
@@ -656,6 +656,7 @@ mod tests {
                 worktrees_default: None,
                 task_prefix: None,
                 brief_in_all_threads: false,
+                coordinator: None,
                 created_at: now,
                 updated_at: now,
             };

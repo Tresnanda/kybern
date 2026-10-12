@@ -172,6 +172,7 @@ impl LeadRepo {
             started_at: chrono::Utc::now(),
             completed_at: None,
             parent_notified: true,
+            default_override: None,
         });
         self.fixture.store.thread_upsert(&child).unwrap();
         child

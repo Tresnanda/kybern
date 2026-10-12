@@ -56,8 +56,14 @@ impl Orchestrator {
     /// Whether the Coordinator of `project_id` may push and open pull requests
     /// without a card. The project's own override joins the lookup here once
     /// projects carry one (project override, then global setting, then off).
-    fn lead_pushes_without_asking(&self, _project_id: ProjectId) -> bool {
-        self.inner.settings.get().orchestration.lead_push_without_asking
+    fn lead_pushes_without_asking(&self, project_id: ProjectId) -> bool {
+        let project = self.inner.store.project_get(project_id).ok().flatten();
+        self.inner
+            .settings
+            .get()
+            .orchestration
+            .effective_for(project.as_ref().and_then(|p| p.coordinator.as_ref()))
+            .lead_push_without_asking
     }
 
     /// Test hooks for the git tool.

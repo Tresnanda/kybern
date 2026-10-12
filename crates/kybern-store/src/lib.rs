@@ -426,8 +426,8 @@ impl Store {
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
             tx.execute(
-                "INSERT INTO projects(id, name, path, is_git, worktrees_default, created_at, updated_at, brief_in_all_threads)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO projects(id, name, path, is_git, worktrees_default, created_at, updated_at, brief_in_all_threads, coordinator)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     p.id.to_string(),
                     p.name,
@@ -436,7 +436,8 @@ impl Store {
                     p.worktrees_default,
                     p.created_at.to_rfc3339(),
                     p.updated_at.to_rfc3339(),
-                    p.brief_in_all_threads
+                    p.brief_in_all_threads,
+                    coordinator_json(p)?
                 ],
             )?;
             // Every project gets a task prefix; an explicit one is kept when it is valid and free.
@@ -449,9 +450,19 @@ impl Store {
     pub fn project_update(&self, p: &Project) -> Result<()> {
         self.with(|c| {
             c.execute(
-                "UPDATE projects SET name = ?2, path = ?3, is_git = ?4, worktrees_default = ?5, updated_at = ?6, brief_in_all_threads = ?7
+                "UPDATE projects SET name = ?2, path = ?3, is_git = ?4, worktrees_default = ?5, updated_at = ?6, brief_in_all_threads = ?7,
+                 coordinator = ?8
                  WHERE id = ?1",
-                params![p.id.to_string(), p.name, p.path, p.is_git, p.worktrees_default, p.updated_at.to_rfc3339(), p.brief_in_all_threads],
+                params![
+                    p.id.to_string(),
+                    p.name,
+                    p.path,
+                    p.is_git,
+                    p.worktrees_default,
+                    p.updated_at.to_rfc3339(),
+                    p.brief_in_all_threads,
+                    coordinator_json(p)?
+                ],
             )?;
             Ok(())
         })
@@ -481,7 +492,7 @@ impl Store {
     pub fn project_get(&self, id: ProjectId) -> Result<Option<Project>> {
         self.with(|c| {
             Ok(c.query_row(
-                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads FROM projects WHERE id = ?1",
+                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads, coordinator FROM projects WHERE id = ?1",
                 [id.to_string()],
                 row_to_project,
             )
@@ -492,7 +503,7 @@ impl Store {
     pub fn project_by_path(&self, path: &str) -> Result<Option<Project>> {
         self.with(|c| {
             Ok(c.query_row(
-                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads FROM projects WHERE path = ?1",
+                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads, coordinator FROM projects WHERE path = ?1",
                 [path],
                 row_to_project,
             )
@@ -503,7 +514,7 @@ impl Store {
     pub fn projects_list(&self) -> Result<Vec<Project>> {
         self.with(|c| {
             let mut st = c.prepare(
-                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads
+                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads, coordinator
                  FROM projects WHERE id != ?1 ORDER BY name",
             )?;
             let rows = st.query_map([FREE_CHAT_PROJECT_ID.to_string()], row_to_project)?;
@@ -1721,6 +1732,17 @@ fn row_to_thread_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadMessag
     })
 }
 
+/// The stored form of a project's Coordinator overrides; none when it has no override.
+fn coordinator_json(project: &Project) -> rusqlite::Result<Option<String>> {
+    project
+        .coordinator
+        .as_ref()
+        .filter(|overrides| !overrides.is_empty())
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+}
+
 fn row_to_project(r: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
     Ok(Project {
         id: parse_uuid(r.get::<_, String>(0)?)?,
@@ -1730,6 +1752,11 @@ fn row_to_project(r: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
         worktrees_default: r.get(4)?,
         task_prefix: r.get(7)?,
         brief_in_all_threads: r.get(8)?,
+        coordinator: r
+            .get::<_, Option<String>>(9)?
+            .map(|json| serde_json::from_str(&json))
+            .transpose()
+            .map_err(|error| rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(error)))?,
         created_at: parse_time(r.get::<_, String>(5)?)?,
         updated_at: parse_time(r.get::<_, String>(6)?)?,
     })
@@ -2009,6 +2036,7 @@ mod tests {
             worktrees_default: None,
             task_prefix: None,
             brief_in_all_threads: false,
+            coordinator: None,
             created_at: now,
             updated_at: now,
         };
@@ -2066,6 +2094,7 @@ mod tests {
             worktrees_default: None,
             task_prefix: None,
             brief_in_all_threads: false,
+            coordinator: None,
             created_at: now,
             updated_at: now,
         };
@@ -2137,6 +2166,7 @@ mod tests {
             worktrees_default: None,
             task_prefix: None,
             brief_in_all_threads: false,
+            coordinator: None,
             created_at: now,
             updated_at: now,
         };
@@ -2172,6 +2202,7 @@ mod tests {
             worktrees_default: None,
             task_prefix: None,
             brief_in_all_threads: false,
+            coordinator: None,
             created_at: now,
             updated_at: now,
         };
@@ -2253,6 +2284,7 @@ mod tests {
             worktrees_default: None,
             task_prefix: None,
             brief_in_all_threads: false,
+            coordinator: None,
             created_at: now,
             updated_at: now,
         };
@@ -2690,6 +2722,7 @@ mod orchestration_tests {
             worktrees_default: None,
             task_prefix: None,
             brief_in_all_threads: false,
+            coordinator: None,
             created_at: now,
             updated_at: now,
         };
@@ -2730,6 +2763,7 @@ mod orchestration_tests {
             depth: 1,
             role: DelegationRole::Research,
             workspace: DelegationWorkspace::Worktree,
+            default_override: None,
             owns: vec!["src/**".into()],
             status,
             result: None,
@@ -3164,6 +3198,7 @@ mod coordinator_upgrade_tests {
             worktrees_default: None,
             task_prefix: None,
             brief_in_all_threads: false,
+            coordinator: None,
             created_at: now,
             updated_at: now,
         };

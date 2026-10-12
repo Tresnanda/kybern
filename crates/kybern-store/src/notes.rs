@@ -710,6 +710,7 @@ mod tests {
             worktrees_default: None,
             task_prefix: None,
             brief_in_all_threads: false,
+            coordinator: None,
             created_at: now,
             updated_at: now,
         };

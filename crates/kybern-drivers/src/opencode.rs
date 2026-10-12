@@ -410,8 +410,9 @@ fn opencode_config_content(base: Option<&String>, bridge: &NativeToolBridge) -> 
     serde_json::to_string(&config).map_err(|error| DriverError::Other(error.into()))
 }
 
-/// Built-in tools a project Coordinator keeps: reading, searching and web lookups.
-const OPENCODE_READ_ONLY_TOOLS: &[&str] = &["read", "grep", "glob", "list", "webfetch"];
+/// Built-in tools a project Coordinator keeps: reading, searching and web lookups,
+/// plus asking the user a question and running a skill. None of them edits a file.
+const OPENCODE_READ_ONLY_TOOLS: &[&str] = &["read", "grep", "glob", "list", "webfetch", "question", "skill"];
 
 /// Per-session permission ruleset for a kybern mode. Last matching rule wins.
 fn ruleset(mode: PermissionMode) -> Value {
@@ -1314,7 +1315,7 @@ fn parts(message: &UserMessage) -> Vec<Value> {
                 json!({ "type": "file", "mime": media_type, "url": format!("data:{media_type};base64,{data}"), "filename": "image" }),
             ),
             ContentPart::Attachment { name, .. } => out.push(json!({ "type": "text", "text": format!("[attached file: {name}]") })),
-            ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } => {
+            ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } | ContentPart::SystemRow { .. } => {
                 if let Some(text) = part.orchestration_text() {
                     out.push(json!({ "type": "text", "text": text }));
                 }
@@ -1365,7 +1366,7 @@ fn skill_command(message: &UserMessage) -> Option<SkillCommand> {
                 json!({ "type": "file", "mime": media_type, "url": format!("data:{media_type};base64,{data}"), "filename": "image" }),
             ),
             ContentPart::Attachment { name, .. } => arguments.push_str(&format!("[attached file: {name}]")),
-            ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } => {
+            ContentPart::ThreadMessage { .. } | ContentPart::AgentResults { .. } | ContentPart::SystemRow { .. } => {
                 if let Some(text) = part.orchestration_text() {
                     arguments.push('\n');
                     arguments.push_str(&text);
@@ -1889,7 +1890,7 @@ mod tests {
         let value: Value = serde_json::from_str(&opencode_config_content(None, &bridge).unwrap()).unwrap();
         assert_eq!(value["tools"]["*"], false);
         assert_eq!(value["tools"]["kybern_*"], true);
-        for name in ["read", "grep", "glob", "list", "webfetch"] {
+        for name in ["read", "grep", "glob", "list", "webfetch", "question", "skill"] {
             assert_eq!(value["tools"][name], true, "{name}");
         }
         for name in ["bash", "edit", "write", "patch"] {

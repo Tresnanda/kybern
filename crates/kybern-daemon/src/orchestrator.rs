@@ -27,6 +27,7 @@ mod agent_items;
 mod delegation;
 mod lead;
 mod lead_git;
+mod lead_proposals;
 mod messaging;
 mod notes;
 mod omp_recovery;
@@ -288,6 +289,9 @@ impl Orchestrator {
             if crate::lead_git::is_tool(name) {
                 return self.execute_lead_git(&thread, turn_id, &live, arguments).await;
             }
+            if lead_proposals::is_tool(name) {
+                return self.execute_lead_tool(&thread, turn_id, &live, name, arguments).await;
+            }
             if agent_items::is_tool(name) {
                 return self.execute_notes_tasks_tool(&thread, turn_id, &live, name, arguments).await;
             }
@@ -517,6 +521,8 @@ struct LiveSession {
     app_tool_permits: Arc<Semaphore>,
     /// Project brief revision this session's instructions carry; only a Coordinator tracks it.
     brief_revision: Mutex<Option<i64>>,
+    /// The Coordinator settings this session was last told; only a Coordinator tracks them.
+    lead_settings: Mutex<Option<EffectiveCoordinatorSettings>>,
 }
 
 struct DaemonApproval {
@@ -1178,6 +1184,7 @@ impl Orchestrator {
             worktrees_default: None,
             task_prefix: None,
             brief_in_all_threads: false,
+            coordinator: None,
             created_at: now,
             updated_at: now,
         };
@@ -1401,6 +1408,7 @@ impl Orchestrator {
             worktrees_default: Some(false),
             task_prefix: None,
             brief_in_all_threads: false,
+            coordinator: None,
             created_at: now,
             updated_at: now,
         };
@@ -1913,14 +1921,35 @@ impl Orchestrator {
                         tracing::warn!(thread_id = %thread.id, %error, "could not check the project brief for changes");
                         None
                     });
-                    let provider_message = self.provider_message(&workspace_message, &live);
-                    let provider_message = match &brief_update {
-                        Some((_, update)) => std::borrow::Cow::Owned(lead::with_brief_update(&provider_message, update)),
-                        None => provider_message,
+                    // The same goes for a change to the Coordinator's settings.
+                    let settings_update = self.lead_settings_update(&thread, &live).await.unwrap_or_else(|error| {
+                        tracing::warn!(thread_id = %thread.id, %error, "could not check the Coordinator settings for changes");
+                        None
+                    });
+                    // A setup kickoff is a row for clients; the provider gets the script.
+                    let kickoff = self.setup_provider_message(&thread, &workspace_message).unwrap_or_else(|error| {
+                        tracing::warn!(thread_id = %thread.id, %error, "could not prepare the setup kickoff");
+                        None
+                    });
+                    let provider_message = self.provider_message(kickoff.as_ref().unwrap_or(&workspace_message), &live);
+                    let updates: Vec<&str> =
+                        [brief_update.as_ref().map(|(_, text)| text.as_str()), settings_update.as_ref().map(|(_, text)| text.as_str())]
+                            .into_iter()
+                            .flatten()
+                            .collect();
+                    let provider_message = if updates.is_empty() {
+                        provider_message
+                    } else {
+                        std::borrow::Cow::Owned(lead::with_brief_update(&provider_message, &updates.join("\n\n")))
                     };
                     let sent = live.session.send_message(&message_id.to_string(), &provider_message).await;
-                    if let (Ok(()), Some((revision, _))) = (&sent, brief_update) {
-                        self.lead_brief_seen(&live, revision).await;
+                    if sent.is_ok() {
+                        if let Some((revision, _)) = brief_update {
+                            self.lead_brief_seen(&live, revision).await;
+                        }
+                        if let Some((settings, _)) = settings_update {
+                            self.lead_settings_seen(&live, settings).await;
+                        }
                     }
                     sent
                 }
@@ -2756,6 +2785,7 @@ impl Orchestrator {
         let restrictions = self.native_tool_restrictions(thread)?;
         let instructions = self.session_instructions(thread)?;
         let brief_revision = instructions.as_ref().map(|instructions| instructions.brief_revision);
+        let lead_settings = instructions.as_ref().and_then(|instructions| instructions.lead_settings.clone());
         let coordinator_instructions = instructions.map(|instructions| instructions.text);
         let computer_tools = self.computer_tools_offered(thread, &restrictions);
         let native_tool_bridge = self
@@ -2770,6 +2800,9 @@ impl Orchestrator {
                 }
                 if self.inner.computer.offered_to(thread.provider.kind) {
                     tools.extend(crate::computer::ComputerUse::tool_definitions());
+                }
+                if thread.coordinator_project_id.is_some() {
+                    tools.extend(lead_proposals::tool_definitions());
                 }
                 let guide = self.agent_guide(&tools, &restrictions);
                 gateway.register_coordinator(thread.id, session_instance_id, tools, restrictions, coordinator_instructions, guide)
@@ -2826,6 +2859,7 @@ impl Orchestrator {
             app_tool_requests: Mutex::new(HashSet::new()),
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
             brief_revision: Mutex::new(None),
+            lead_settings: Mutex::new(None),
         });
         self.inner.store.meta_set_many(&[
             (&format!("live_fingerprint:{}", thread.id), &self.environment_fingerprint(thread)?),
@@ -2833,6 +2867,7 @@ impl Orchestrator {
             (&format!("live_owner:{}", thread.id), &serde_json::to_string(&thread.provider)?),
         ])?;
         *live.brief_revision.lock().await = brief_revision;
+        *live.lead_settings.lock().await = lead_settings;
         self.inner.sessions.lock().await.insert(thread.id, live.clone());
         let this = self.clone();
         let thread_id = thread.id;
@@ -4321,6 +4356,7 @@ mod tests {
             worktrees_default: None,
             task_prefix: None,
             brief_in_all_threads: false,
+            coordinator: None,
             created_at: now,
             updated_at: now,
         };
@@ -4411,6 +4447,7 @@ mod tests {
             app_tool_requests: Mutex::new(HashSet::new()),
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
             brief_revision: Mutex::new(None),
+            lead_settings: Mutex::new(None),
         });
         orchestrator
             .handle_driver_event(
@@ -4694,6 +4731,7 @@ mod tests {
                 worktrees_default: None,
                 task_prefix: None,
                 brief_in_all_threads: false,
+                coordinator: None,
                 created_at: now,
                 updated_at: now,
             };
@@ -4770,6 +4808,7 @@ mod tests {
                 app_tool_requests: Mutex::new(HashSet::new()),
                 app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
                 brief_revision: Mutex::new(None),
+                lead_settings: Mutex::new(None),
             });
             self.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
             (live, closes, messages)
@@ -4803,6 +4842,7 @@ mod tests {
                 app_tool_requests: Mutex::new(HashSet::new()),
                 app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
                 brief_revision: Mutex::new(None),
+                lead_settings: Mutex::new(None),
             });
             self.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
             self.orchestrator.send(thread.id, UserMessage::text("inspect workspace")).await.unwrap();
@@ -7283,6 +7323,7 @@ for line in sys.stdin:
             app_tool_requests: Mutex::new(HashSet::new()),
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
             brief_revision: Mutex::new(None),
+            lead_settings: Mutex::new(None),
         });
         fixture.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
         fixture.orchestrator.send(thread.id, UserMessage::text("delegate")).await.unwrap();
@@ -7339,6 +7380,7 @@ for line in sys.stdin:
     include!("orchestrator/lead_git_tests.rs");
     include!("orchestrator/capabilities_tests.rs");
     include!("orchestrator/lead_tests.rs");
+    include!("orchestrator/lead_setup_tests.rs");
     include!("orchestrator/messaging_tests.rs");
     include!("orchestrator/account_tests.rs");
     include!("orchestrator/worktree_tests.rs");
