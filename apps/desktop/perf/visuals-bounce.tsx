@@ -2,6 +2,9 @@
 // live-work rows above it appear, merge and disappear, and inline frames must not be re-themed
 // or clipped without cause. Production Transcript + VisualReply + the daemon's bootstrap.
 //
+// It also covers where a visual sits while its turn runs: later rows render below it, it never
+// moves or reloads when they arrive or when the turn settles, and the settled layout is unchanged.
+//
 // Positions are sampled at the top of each animation frame, before this fixture's own updates for
 // that frame, so a sample is exactly what the previous frame painted. A correction deferred to the
 // next frame therefore shows up as a one-sample displacement; a same-frame one never does.
@@ -47,11 +50,12 @@ function answer(turn: string, text: string) {
 function agentTask(turn: string, n: number, extra: Partial<RuntimeTask> = {}): RuntimeTask {
   return { id: "agent-task", thread_id: T, origin_turn_id: turn, started_seq: 1, updated_seq: seq + 1, kind: "agent", status: "running", title: "Routing review", detail: `Step ${n}`, provider_type: "sub_agent", tool_call_id: "agent-task-call", provider_thread_id: "agent-task-child", backgrounded: true, last_tool_name: n % 2 ? "Read" : "Search", stats: { tool_uses: n }, capabilities: { stop: true, background: false }, started_at: "2026-10-12T00:00:00Z", updated_at: at(), ...extra } as unknown as RuntimeTask
 }
-/** Live work in a running turn: a root command row appears, completes and folds into "Ran N commands",
- * and the background agent's row alternates between a short and a wrapped detail. */
+/** Live work above the visual that changes after it was published: a command that was still running completes and
+ * folds into "Ran N commands", and the background agent's row alternates between a short and a wrapped detail.
+ * Nothing is appended below the visual here, so its place in the viewport is fixed by the pinned end. */
+const RUNNING_COMMANDS = 20
 function agentStep(turn: string, n: number) {
-  if (n % 2) publish({ kind: "tool_call_started", turn_id: turn, origin: { kind: "root" }, call: { id: `cmd-${n}`, name: "Bash", input: { command: "sleep 1" }, parent_id: null } } as never)
-  else publish({ kind: "tool_call_completed", turn_id: turn, tool_call_id: `cmd-${n - 1}`, output: { content: "ok" }, is_error: false } as never)
+  if (n % 2 === 0 && n / 2 <= RUNNING_COMMANDS) publish({ kind: "tool_call_completed", turn_id: turn, tool_call_id: `cmd-${n / 2}`, output: { content: "ok" }, is_error: false } as never)
   if (n % 4 === 0) publish({ kind: "runtime_task_updated", turn_id: turn, task: agentTask(turn, n, n % 8 ? { detail: null, last_tool_name: null } : { detail: `Reading file${n}.ts with a longer description that may wrap across lines in the row` }) } as never)
 }
 function appearance(variant: "dark" | "light") {
@@ -131,6 +135,11 @@ async function probe(page: string) {
   while (!frameReports.has(page) && performance.now() < until) await sleep(20)
   return frameReports.get(page)
 }
+/** Every frame load and bootstrap `ready` signal, per iframe element and per window. A remount or reload shows up as a second one. */
+const frameLoads = new WeakMap<Element, number>()
+document.addEventListener("load", event => { if (event.target instanceof HTMLIFrameElement) frameLoads.set(event.target, (frameLoads.get(event.target) ?? 0) + 1) }, true)
+const readySignals = new WeakMap<object, number>()
+window.addEventListener("message", event => { if (event.data?.kind === "kybern-visual-ready" && event.source) readySignals.set(event.source, (readySignals.get(event.source) ?? 0) + 1) })
 function reset() {
   state = { ...emptyThreadState(), loaded: true }; seq = 0
   flushSync(() => useStore.getState().set({ transcripts: { [T]: state }, runtimeTasks: {} }))
@@ -151,13 +160,14 @@ async function run() {
   userTurn(turn, PROMPT)
   publish({ kind: "tool_call_started", turn_id: turn, origin: { kind: "root" }, call: { id: "agent-task-call", name: "Agent", input: { prompt: "Inspect", description: "Review routing" }, parent_id: null } } as never)
   publish({ kind: "runtime_task_started", turn_id: turn, task: agentTask(turn, 0) } as never)
+  for (let i = 1; i <= RUNNING_COMMANDS; i++) publish({ kind: "tool_call_started", turn_id: turn, origin: { kind: "root" }, call: { id: `cmd-${i}`, name: "Bash", input: { command: "sleep 1" }, parent_id: null } } as never)
   publish({ kind: "html_published", turn_id: turn, visual: { id: "run-basic", title: "Visual basic", height: 600 } } as never)
   await waitReady(); await sleep(900)
   const view = scroller()
   restGap = view.scrollHeight - view.scrollTop - view.clientHeight
   report({ stage: "geometry", scrollTop: view.scrollTop, scrollHeight: view.scrollHeight, clientHeight: view.clientHeight, restGap })
 
-  // 1. Following the end while live-work rows above the visual appear, fold and merge every ~450 ms.
+  // 1. Following the end while live-work rows above the visual change height, fold and merge every ~450 ms.
   let step = 0, next = 0
   const work = (elapsed: number) => { if (elapsed >= next) { next = elapsed + 450; agentStep(turn, ++step) } }
   const following = await phase("following", 6000, null, work)
@@ -170,6 +180,7 @@ async function run() {
   view.scrollTop = Math.max(0, view.scrollTop - 180)
   await sleep(300)
   next = 0
+  expect(!!userMessage(PROMPT), "the prompt is mounted while a reader scrolls")
   const reading = await phase("reading", 4000, PROMPT, work)
   expect(reading.anchorJumps === 0, `earlier content stays put while reading (jumps ${reading.anchorJumps}, max ${reading.anchorMax.toFixed(1)}px)`)
 
@@ -240,6 +251,76 @@ async function run() {
   await screenshot("scrollbars-light")
   appearance("dark"); await sleep(300)
 
-  return { pass: failures.length === 0, failures, following: { jumps: following.visualJumps, max: following.visualMax, frames: following.frames, offEnd: following.endGapFrames }, background: { jumps: background.visualJumps, max: background.visualMax }, reading: { jumps: reading.anchorJumps, frames: reading.frames } }
+
+  // 8. A visual sits at its chronological position while its turn runs (a background agent keeps it
+  // running for a long time): rows that arrive later render below it, it neither moves nor reloads, and
+  // the settled layout stays the same.
+  reset(); await sleep(50); mount()
+  for (let i = 0; i < 3; i++) { const earlier = uid(ids++); userTurn(earlier, `Earlier question ${i}`); answer(earlier, `Earlier answer ${i}. `.repeat(30)) }
+  const ordered = uid(ids++)
+  userTurn(ordered, "Order check")
+  publish({ kind: "tool_call_started", turn_id: ordered, origin: { kind: "root" }, call: { id: "ord-agent-call", name: "Agent", input: { prompt: "Inspect", description: "Review ordering" }, parent_id: null } } as never)
+  publish({ kind: "tool_call_started", turn_id: ordered, origin: { kind: "root" }, call: { id: "ord-cmd-before", name: "Bash", input: { command: "echo marker-before-chart" }, parent_id: null } } as never)
+  publish({ kind: "tool_call_completed", turn_id: ordered, tool_call_id: "ord-cmd-before", output: { content: "ok" }, is_error: false } as never)
+  publish({ kind: "assistant_message_completed", turn_id: ordered, message_id: uid(ids++), origin: { kind: "root" }, text: "Text before the chart.", thinking: null } as never)
+  publish({ kind: "html_published", turn_id: ordered, visual: { id: "ord-basic", title: "Visual basic", height: 600 } } as never)
+  await waitReady(); await sleep(700)
+  const liveFrame = document.querySelector<HTMLIFrameElement>("[data-visual-reply] iframe")!
+  const contentTop = (element: Element) => element.getBoundingClientRect().top - scroller().getBoundingClientRect().top + scroller().scrollTop
+  const firstTop = contentTop(visualBox()!)
+  const textNode = (text: string) => { const walker = document.createTreeWalker(scroller(), NodeFilter.SHOW_TEXT); for (let node = walker.nextNode(); node; node = walker.nextNode()) if (node.textContent?.includes(text)) return node.parentElement; return null }
+  const follows = (later: Element | null, earlier: Element | null) => !!later && !!earlier && !!(earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING)
+
+  // Rows keep arriving after the visual: a command, streamed text, a child of the agent launched before the visual, a
+  // second visual, and more commands. Sampled each frame in content space (the viewport scrolls while following).
+  const later: Array<() => void> = [
+    () => publish({ kind: "tool_call_started", turn_id: ordered, origin: { kind: "root" }, call: { id: "ord-cmd-after", name: "Bash", input: { command: "echo marker-after-chart" }, parent_id: null } } as never),
+    () => publish({ kind: "tool_call_completed", turn_id: ordered, tool_call_id: "ord-cmd-after", output: { content: "ok" }, is_error: false } as never),
+    () => publish({ kind: "assistant_text_delta", turn_id: ordered, message_id: "ord-stream", origin: { kind: "root" }, delta: "Streaming text after the chart " } as never),
+    () => publish({ kind: "assistant_text_delta", turn_id: ordered, message_id: "ord-stream", origin: { kind: "root" }, delta: "continues here with more words." } as never),
+    () => publish({ kind: "tool_call_started", turn_id: ordered, origin: { kind: "root" }, call: { id: "ord-child", name: "Bash", input: { command: "echo marker-agent-child" }, parent_id: "ord-agent-call" } } as never),
+    () => publish({ kind: "html_published", turn_id: ordered, visual: { id: "ord-margins", title: "Visual margins", height: 600 } } as never),
+    () => publish({ kind: "tool_call_completed", turn_id: ordered, tool_call_id: "ord-child", output: { content: "ok" }, is_error: false } as never),
+    () => publish({ kind: "assistant_message_completed", turn_id: ordered, message_id: "ord-stream", origin: { kind: "root" }, text: "Streaming text after the chart continues here with more words.", thinking: null } as never),
+    () => publish({ kind: "tool_call_started", turn_id: ordered, origin: { kind: "root" }, call: { id: "ord-cmd-last", name: "Bash", input: { command: "echo marker-last" }, parent_id: null } } as never),
+    () => publish({ kind: "tool_call_completed", turn_id: ordered, tool_call_id: "ord-cmd-last", output: { content: "ok" }, is_error: false } as never),
+  ]
+  let laterIndex = 0, laterNext = 0, minTop = firstTop, maxTop = firstTop
+  const appended = await phase("rows-after-visual", 4800, null, elapsed => {
+    if (laterIndex < later.length && elapsed >= laterNext) { laterNext = elapsed + 400; later[laterIndex++]!() }
+    const top = contentTop(visualBox()!); minTop = Math.min(minTop, top); maxTop = Math.max(maxTop, top)
+  })
+  await waitReady(2); await sleep(500)
+  const visual = visualBox()!
+  const beforeRow = textNode("marker-before-chart"), beforeText = textNode("Text before the chart."), afterRow = textNode("marker-after-chart")
+  const afterText = textNode("Streaming text after the chart"), lastRow = textNode("marker-last")
+  const kinds = () => [...scroller().querySelectorAll<HTMLElement>("[data-timeline-row-kind]")].map(element => element.dataset.timelineRowKind).slice(-9)
+  report({ stage: "order-running", kinds: kinds(), first: firstTop, min: minTop, max: maxTop, loads: frameLoads.get(liveFrame), readies: readySignals.get(liveFrame.contentWindow!) })
+  expect(follows(visual, beforeRow) && follows(visual, beforeText), "live rows from before the visual render above it")
+  expect(follows(afterRow, visual) && follows(afterText, visual) && follows(lastRow, visual), "tool rows and assistant text published after the visual render below it")
+  expect(follows(afterText, afterRow) && follows(lastRow, afterText), "rows after the visual keep their order")
+  expect(!textNode("marker-agent-child"), "a child of an agent launched before the visual stays nested in its parent, not a row below the visual")
+  expect(document.querySelectorAll("[data-visual-reply]").length === 2 && document.querySelectorAll('[data-timeline-row-kind="visuals"]').length === 1, "several visuals share one row at the first visual's position")
+  expect(maxTop - minTop < .5, `the visual does not move while rows are appended after it (range ${(maxTop - minTop).toFixed(2)}px)`)
+  expect(appended.heightChanges >= 4, `rows after the visual change the content height (${appended.heightChanges} changes)`)
+  await screenshot("running-turn")
+
+  answer(ordered, "Both charts are above.")
+  await sleep(900)
+  const settledFrame = document.querySelector<HTMLIFrameElement>("[data-visual-reply] iframe")
+  report({ stage: "order-settled", kinds: kinds(), loads: frameLoads.get(liveFrame), readies: readySignals.get(liveFrame.contentWindow!) })
+  expect(settledFrame === liveFrame && liveFrame.isConnected, "the same iframe element survives settlement")
+  expect(frameLoads.get(liveFrame) === 1, `the frame loads once across live rows and settlement (${frameLoads.get(liveFrame)} loads)`)
+  expect(readySignals.get(liveFrame.contentWindow!) === 1, `the page's bootstrap reports ready once (${readySignals.get(liveFrame.contentWindow!)})`)
+  const secondFrame = document.querySelector<HTMLIFrameElement>("iframe[title='Visual margins']")!
+  expect(frameLoads.get(secondFrame) === 1 && readySignals.get(secondFrame.contentWindow!) === 1, `the visual published later loads once (${frameLoads.get(secondFrame)} loads, ${readySignals.get(secondFrame.contentWindow!)} ready)`)
+  // Settled layout: prompt, folded work, visuals, then the answer.
+  const settledUser = userMessage("Order check")!
+  const settledWork = [...scroller().querySelectorAll('[data-timeline-row-kind="settled-work"]')].filter(element => follows(element, settledUser)).at(0) ?? null
+  const settledAnswer = textNode("Both charts are above.")
+  expect(follows(settledWork, settledUser) && follows(visualBox(), settledWork) && follows(settledAnswer, visualBox()), "settled layout: prompt, folded work, visuals, answer")
+  expect(!textNode("marker-after-chart") && !textNode("Streaming text after the chart"), "the settled turn folds the work that ran after the visual")
+
+  return { pass: failures.length === 0, failures, following: { jumps: following.visualJumps, max: following.visualMax, frames: following.frames, offEnd: following.endGapFrames }, background: { jumps: background.visualJumps, max: background.visualMax }, reading: { jumps: reading.anchorJumps, frames: reading.frames }, ordering: { range: maxTop - minTop } }
 }
 run().then(report).catch(error => report({ pass: false, error: String(error), stack: error?.stack }))

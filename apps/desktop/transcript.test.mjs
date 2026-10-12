@@ -870,3 +870,34 @@ test("an account transition clears the old account's limits until the new owner 
   assert.equal(state.providerUsage.context.used_tokens, 200)
   assert.deepEqual(state.providerUsage.limits, [], "unknown account usage has no inherited quota windows after sparse context updates")
 })
+
+test("a running turn records where its first visual was published; later work keeps its place after it", () => {
+  const visual = (id) => ({ id, title: id, height: 400 })
+  const events = [
+    { ...start, turn_id: T },
+    { kind: "tool_call_started", turn_id: T, origin: ROOT, call: readTool("a") },
+    { kind: "tool_call_completed", turn_id: T, tool_call_id: "a", output: { content: "ok" }, is_error: false },
+    { kind: "html_published", turn_id: T, visual: visual("v1") },
+    { kind: "tool_call_started", turn_id: T, origin: ROOT, call: readTool("b") },
+    { kind: "html_published", turn_id: T, visual: visual("v2") },
+    { kind: "tool_call_started", turn_id: T, origin: ROOT, call: readTool("c") },
+  ]
+  const grouper = createTurnGrouper()
+  let state = emptyThreadState()
+  let groups
+  events.forEach((event, index) => {
+    state = applyEvent(state, { seq: index + 1, thread_id: "thread", at: AT, ...event })
+    groups = grouper(state.blocks)
+  })
+  const [group] = groups
+  assert.equal(group.running, true)
+  assert.deepEqual(group.visuals.map((block) => block.id), ["v1", "v2"])
+  assert.equal(group.visualsAt, 1, "one work block preceded the first visual")
+  assert.deepEqual(group.work.map((block) => block.id), ["tool:a", "tool:b", "tool:c"])
+  assert.equal(groupTurns(state.blocks)[0].visualsAt, 1, "the incremental grouper and a full rebuild agree")
+})
+
+test("a turn without visuals has no visual position", () => {
+  const state = applyEvent(emptyThreadState(), { ...start, turn_id: T, seq: 1, thread_id: "thread", at: AT })
+  assert.equal(groupTurns(state.blocks)[0].visualsAt, undefined)
+})
