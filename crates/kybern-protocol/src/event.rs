@@ -6,7 +6,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::collaboration::*;
 use crate::model::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -62,25 +61,6 @@ pub enum EventPayload {
     },
     ThreadNotesUpdated {
         notes: crate::methods::ThreadNotes,
-    },
-    ProjectCoordinatorDeleted {
-        project_id: crate::ProjectId,
-        coordinator_thread_id: ThreadId,
-    },
-    CollaborationGroupUpdated {
-        group: CollaborationGroup,
-    },
-    CollaborationMemberUpdated {
-        member: GroupMember,
-    },
-    CollaborationAssignmentUpdated {
-        assignment: CollaborationAssignment,
-    },
-    CollaborationMessageUpdated {
-        message: CollaborationMessage,
-    },
-    CollaborationContextUpdated {
-        entry: ContextEntry,
     },
     /// A message another thread sent this one is waiting for the user to
     /// deliver or dismiss. Emitted on the recipient thread.
@@ -272,12 +252,6 @@ impl EventPayload {
             Self::SubagentMessageUpdated { .. } => "subagent_message_updated",
             Self::MessageSteered { .. } => "message_steered",
             Self::ThreadNotesUpdated { .. } => "thread_notes_updated",
-            Self::ProjectCoordinatorDeleted { .. } => "project_coordinator_deleted",
-            Self::CollaborationGroupUpdated { .. } => "collaboration_group_updated",
-            Self::CollaborationMemberUpdated { .. } => "collaboration_member_updated",
-            Self::CollaborationAssignmentUpdated { .. } => "collaboration_assignment_updated",
-            Self::CollaborationMessageUpdated { .. } => "collaboration_message_updated",
-            Self::CollaborationContextUpdated { .. } => "collaboration_context_updated",
             Self::ThreadMessageHeld { .. } => "thread_message_held",
             Self::ThreadMessageResolved { .. } => "thread_message_resolved",
             Self::ThreadMessageUpdated { .. } => "thread_message_updated",

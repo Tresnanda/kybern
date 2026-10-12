@@ -85,15 +85,7 @@ expression: schema_for!(Thread)
       "format": "uuid"
     },
     "coordinator_project_id": {
-      "description": "Set when this thread is the persistent coordinator for a project.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "format": "uuid"
-    },
-    "collaboration_group_id": {
-      "description": "Active collaboration membership, denormalized for efficient navigation.",
+      "description": "Set when this thread is the project's Coordinator, the lead thread that\nplans and delegates. At most one non-archived thread per project.",
       "type": [
         "string",
         "null"
