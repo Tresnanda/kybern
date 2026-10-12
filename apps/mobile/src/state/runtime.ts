@@ -82,7 +82,6 @@ let providerRefreshPromise: Promise<void> | null = null;
 const snapshots = new ThreadCache<ThreadState>();
 const empty = emptyThreadState();
 const threadListeners = new Map<string, Set<() => void>>();
-const collaborationListeners = new Set<(event: ThreadEvent | null) => void>();
 const hydrating = new Map<string, ThreadEvent[]>();
 const loads = new Map<string, Promise<void>>();
 const historyLoads = new Map<
@@ -165,14 +164,6 @@ export function useThreadValue<T>(
       void ensureThread(id).catch((e) => publish({ error: errorText(e) }));
   }, [id, state.status]);
   return snapshot;
-}
-export function subscribeCollaboration(
-  listener: (event: ThreadEvent | null) => void,
-) {
-  collaborationListeners.add(listener);
-  return () => {
-    collaborationListeners.delete(listener);
-  };
 }
 export function rpc<M extends MethodName>(
   method: M,
@@ -448,8 +439,6 @@ export function connect(id: string | null) {
       if (indexEvents) indexEvents.push(event);
       const nextIndex = applyIndexEvent(state, event);
       if (nextIndex !== state) publish(nextIndex);
-      if (event.kind.startsWith("collaboration_"))
-        collaborationListeners.forEach((listener) => listener(event));
       if (event.kind === "workspace_reverted") {
         snapshots.invalidate(event.thread_id);
         if (threadListeners.has(event.thread_id))
@@ -467,7 +456,6 @@ export function connect(id: string | null) {
       snapshots.cancelReplay();
       snapshots.invalidateAll();
       subscriptionReady = true;
-      collaborationListeners.forEach((listener) => listener(null));
       if (!appliedDefaults) {
         appliedDefaults = true;
         void next
@@ -503,7 +491,6 @@ export function connect(id: string | null) {
       if (generation !== thisGeneration || !resumed) return;
       snapshots.finishReplay();
       subscriptionReady = true;
-      collaborationListeners.forEach((listener) => listener(null));
       void refresh().catch((e) => {
         if (generation === thisGeneration) publish({ error: errorText(e) });
       });

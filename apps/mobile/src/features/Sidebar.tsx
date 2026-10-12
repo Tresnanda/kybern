@@ -1,5 +1,4 @@
-import { collaborationThreadRows } from "../../../../packages/kybern-client/src/collaboration";
-import { confirmDeleteCoordinator } from "./deleteCoordinator";
+import { nestedThreadRows } from "../../../../packages/kybern-client/src/threadRows";
 import * as Haptics from "expo-haptics";
 import { router, useGlobalSearchParams } from "expo-router";
 import { useMemo, useState } from "react";
@@ -105,7 +104,7 @@ function ProjectGroup({
   const [showAll, setShowAll] = useState(false);
   const open = collapsed && !hasActive ? false : true;
   const [expandedThreads, setExpandedThreads] = useState<Record<string, boolean>>({});
-  const rows = disclose ? collaborationThreadRows(threads, expandedThreads, activeId) : threads.map(thread => ({ thread, depth: 0, childCount: 0, open: false }));
+  const rows = disclose ? nestedThreadRows(threads, expandedThreads, activeId) : threads.map(thread => ({ thread, depth: 0, childCount: 0, open: false }));
   const shown = showAll ? rows : rows.slice(0, MAX_PROJECT_THREADS);
   const hidden = rows.length - shown.length;
   return (
@@ -225,8 +224,7 @@ export function Sidebar() {
             .catch(() => {});
         },
       },
-      ...(t.coordinator_project_id ? [{ text: "Delete coordinator", style: "destructive" as const, onPress: () => confirmDeleteCoordinator(t) }] : []),
-      ...(t.status !== "archived" && !t.coordinator_project_id
+      ...(t.status !== "archived"
         ? [
             {
               text: "Archive thread",

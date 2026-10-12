@@ -1,4 +1,3 @@
-import { confirmDeleteCoordinator } from "../src/features/deleteCoordinator";
 import { Stack, router, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import { View } from "react-native";
@@ -130,14 +129,6 @@ export default function Workspace() {
           {tab === "More" && thread && (
             <>
               <Group title="Conversation">
-                <Row
-                  title="Agents"
-                  detail="Start helper agents and open their threads."
-                  icon="person.2"
-                  onPress={() =>
-                    router.push({ pathname: "/collaboration", params: { threadId: thread.id } })
-                  }
-                />
                 <Field
                   label="Thread title"
                   value={title}
@@ -213,11 +204,9 @@ export default function Workspace() {
                   }
                 />
                 <Row
-                  title={thread.coordinator_project_id ? "Delete coordinator" : "Archive thread"}
+                  title="Archive thread"
                   icon="archivebox"
-                  onPress={() => thread.coordinator_project_id
-                    ? confirmDeleteCoordinator(thread, () => router.dismissTo("/library"))
-                    : Alert.alert(
+                  onPress={() => Alert.alert(
                       "Archive this thread?",
                       "You can find it in the Archived filter in Threads.",
                       [

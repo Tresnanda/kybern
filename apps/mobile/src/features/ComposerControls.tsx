@@ -1,11 +1,10 @@
-import { useRef, useState, type ReactNode } from "react";
-import { randomUUID } from "expo-crypto";
+import { useState, type ReactNode } from "react";
 import { Keyboard, View } from "react-native";
 import Svg, { Circle } from "react-native-svg";
 import { router } from "expo-router";
 import { setDraft, useDraft } from "../state/draft";
-import type { PermissionMode, ProjectCoordinatorSwitchHarnessParams, ProviderStatus, Thread } from "../state/protocol";
-import { projectCoordinatorMode } from "../../../../packages/kybern-client/src/projectCoordinator";
+import type { CoordinatorSwitchHarnessParams, PermissionMode, ProviderStatus, Thread } from "../state/protocol";
+import { coordinatorEditsEnforced } from "../../../../packages/kybern-client/src/coordinator";
 import { PROVIDER_DISPLAY_NAME } from "../state/protocol";
 import {
   errorText,
@@ -213,7 +212,6 @@ export function ComposerOptions({
   const [choosing, setChoosing] = useState<"agent" | "effort" | null>(null);
   const [error, setError] = useState("");
   const [modelQuery, setModelQuery] = useState("");
-  const switchAttempt = useRef<{ fingerprint: string; request: ProjectCoordinatorSwitchHarnessParams } | null>(null);
   const coordinator = !!thread?.coordinator_project_id;
   const canSwitchHarness = !thread || (coordinator && (thread.status === "idle" || thread.status === "failed"));
   const { models: visibleModels, customId } = modelChoices(
@@ -223,20 +221,10 @@ export function ComposerOptions({
   );
   // One harness can route the same model name through several backends.
   const multiBackend = catalogBackends(provider?.models ?? []).length > 1;
-  async function switchCoordinator(request: Omit<ProjectCoordinatorSwitchHarnessParams, "operation_id" | "project_id">) {
-    if (!thread?.coordinator_project_id || !canSwitchHarness) throw new Error("Finish or stop the current turn before changing the coordinator’s harness.");
-    const fingerprint = JSON.stringify([thread.coordinator_project_id, request]);
-    if (switchAttempt.current?.fingerprint !== fingerprint) switchAttempt.current = {
-      fingerprint,
-      request: {
-        operation_id: randomUUID(),
-        project_id: thread.coordinator_project_id,
-        ...request,
-      },
-    };
-    await rpc("collaboration.coordinator.switch_harness", switchAttempt.current.request);
+  async function switchCoordinator(request: Omit<CoordinatorSwitchHarnessParams, "project_id">) {
+    if (!thread?.coordinator_project_id || !canSwitchHarness) throw new Error("Finish or stop the current turn before changing the Coordinator’s harness.");
+    await rpc("coordinator.switch_harness", { project_id: thread.coordinator_project_id, ...request });
     await Promise.all([refresh(), loadThread(thread.id)]);
-    switchAttempt.current = null;
   }
   async function chooseProvider(next: ProviderStatus) {
     if (busy || !canSwitchHarness) return;
@@ -414,7 +402,7 @@ export function ComposerOptions({
                       <View style={{ flex: 1, paddingVertical: 10 }}>
                         <T>{p.display_name}</T>
                         {coordinator && <T variant="caption" tone="secondary">
-                          {projectCoordinatorMode(p.kind) === "dedicated" ? "Coordination tools only" : "Native coding tools remain available"}
+                          {coordinatorEditsEnforced(p.kind) ? "Can't edit files; delegates edits" : `Edits not blocked on ${p.display_name}`}
                         </T>}
                       </View>
                       {kind === p.kind && <Icon name="checkmark" size={16} />}
@@ -424,7 +412,7 @@ export function ComposerOptions({
             </Group>
           )}
           {coordinator && <T variant="caption" tone="secondary" style={{ marginVertical: 12 }}>
-            {canSwitchHarness ? "Changing harnesses keeps this conversation, workers, and project knowledge." : "Finish or stop the current turn before changing the coordinator’s harness."}
+            {canSwitchHarness ? "Changing harnesses keeps this conversation and its agents." : "Finish or stop the current turn before changing the Coordinator’s harness."}
           </T>}
           {choosing === "effort" && (
             <Group title="Choose reasoning effort">
