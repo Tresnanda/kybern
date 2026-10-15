@@ -1,3 +1,4 @@
+import '../native/backdrop.ts'
 import { useGpuix, type PublicInstance, type EventPayload } from '@gpuix/react'
 import { observeElementBounds, type LayoutRect } from '../native/layout.ts'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
@@ -62,7 +63,7 @@ export function Floating({ storageKey, width, height, testId, children, insetEnd
   const vertical = corner.startsWith('top') ? { top: 12 } : { bottom: 12 + insetBottom }
   return <div ref={container} testId={`${testId}-bounds`} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' }}>
     <div style={{ position: 'absolute', width, height, ...(drag ? { left: drag.left + drag.dx, top: drag.top + drag.dy } : { ...horizontal, ...vertical }), pointerEvents: 'none' }}>
-    <anchored side="bottom" align="start" gap={-height} deferred priority={0} occlude snapMargin={8}
+    <anchored backdrop={{blur:0}} side="bottom" align="start" gap={-height} deferred priority={0} occlude snapMargin={8}
       {...(!drag && snap && !REDUCED_MOTION ? { motion: { generation: snap.generation, isExit: false, initial: { translateX: snap.x, translateY: snap.y }, animate: { translateX: 0, translateY: 0 }, transition: { type: 'spring', duration: 0.4, bounce: 0, velocityX: snap.vx, velocityY: snap.vy } } } as object : !drag && !entered.current ? { motion: { generation: 0, isExit: false, initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.fast, ease: [...EASE.smoothOut] } } } as object : {})}
       onMotionComplete={() => { entered.current = true }}
       style={{ borderRadius: 16 }}>

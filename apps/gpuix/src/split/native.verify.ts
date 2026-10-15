@@ -19,9 +19,16 @@ for (const theme of ['dark', 'light']) {
     await app.getByTestId('composer').waitFor()
     await app.clock.pause()
     await app.getByTestId('fixture-child').click()
-    console.log('waiting outgoing'); await app.getByTestId('page-outgoing').waitFor()
-    const painted = (await app.call('getPaintedText', {})).text.join('\n')
-    assert.ok(painted.includes('parent') && painted.includes('child'))
+    if (process.env.KYBERN_REDUCED_MOTION === '1') {
+      assert.equal(await app.getByTestId('page-outgoing').count(), 0, 'Reduced motion has no outgoing page')
+      const painted = (await app.call('getPaintedText', {})).text.join('\n')
+      assert.ok(painted.includes('child'), 'Incoming child is present immediately')
+    } else {
+      console.log('waiting outgoing'); await app.getByTestId('page-outgoing').waitFor()
+      const painted = (await app.call('getPaintedText', {})).text.join('\n')
+      assert.ok(painted.includes('parent') && painted.includes('child'))
+    }
+    assert.equal(await app.getByTestId('error-fallback').count(), 0)
     await app.clock.fastForward(100)
     await app.screenshot({ path: `${out}/transition-${theme}.png` })
     await app.clock.fastForward(1000)
@@ -31,6 +38,7 @@ for (const theme of ['dark', 'light']) {
     await app.clock.resume()
     await click('thread-actions'); await click('header-split-right')
     const pair = await panes(); assert.equal(pair.length, 2)
+    assert.equal(await app.getByTestId('error-fallback').count(), 0)
     await click('fixture-other')
     assert.deepEqual((await panes()).map(p => p.selected).sort(), ['other', 'parent'])
     await app.screenshot({ path: `${out}/split-${theme}.png` })
@@ -142,5 +150,7 @@ for (const theme of ['dark', 'light']) {
       }
     }
     console.log(`PASS ${theme}: frozen outgoing/incoming, keyboard instant, split, focus, nested split, close`)
+    assert.equal(await app.getByTestId('error-fallback').count(), 0)
+    assert.ok(!f.diagnostics().includes('[error-boundary]'), f.diagnostics())
   } finally { console.log(f.diagnostics()); await f.close(); rmSync(scratch, { recursive: true, force: true }) }
 }

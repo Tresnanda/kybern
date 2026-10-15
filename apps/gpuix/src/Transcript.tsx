@@ -5,7 +5,7 @@ import { observeElementBounds, type LayoutRect } from './native/layout.ts'
 // day starts, a virtual list that follows the tail, earlier pages loaded when
 // the top comes into view (reading position kept), and the 32px "Scroll to
 // bottom" button while away from the tail. Rows live in `transcript/`.
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { motion, useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { createTurnGrouper, type TurnGroup } from '../../../packages/kybern-client/src/transcript.ts'
 import { calendarDateKey } from '../../desktop/src/lib/format.ts'
@@ -50,21 +50,30 @@ export function Transcript() {
   const groupTurns = useMemo(() => createTurnGrouper(), [threadId])
   const turns = useMemo(() => groupTurns(blocks), [blocks, groupTurns])
   const list = useRef<PublicInstance>(null)
+  const [viewportNode, setViewportNode] = useState<PublicInstance | null>(null)
+  const [topNode, setTopNode] = useState<PublicInstance | null>(null)
+  const [bottomNode, setBottomNode] = useState<PublicInstance | null>(null)
+  const listRef = useCallback((node: PublicInstance | null) => { list.current = node; setViewportNode(node) }, [])
+  const topRef = useCallback((node: PublicInstance | null) => setTopNode(node), [])
+  const bottomRef = useCallback((node: PublicInstance | null) => setBottomNode(node), [])
   const [atTail, setAtTail] = useState(true)
   const [overflow, setOverflow] = useState(false)
   useEffect(() => {
-    if (!loaded || !turns.length || !list.current) { setOverflow(false); return }
+    if (!loaded || !turns.length || !viewportNode) { setOverflow(false); return }
     const rects: Record<string, LayoutRect | null> = {}
-    const stops = ['transcript', 'transcript-top', 'transcript-bottom'].map(testId => observeElementBounds(renderer, testId === 'transcript' ? list.current!.id : { testId: `${testId}:${pane.id}` }, event => {
-      rects[testId] = event.rect
-      const viewport = rects.transcript, top = rects['transcript-top'], bottom = rects['transcript-bottom']
+    // A frozen outgoing page can share its pane id with the incoming transcript.
+    // Observe these instances, never globally resolved test ids. Endpoint refs
+    // also detach/rebind as the virtual list unmounts and restores its rows.
+    const nodes = { viewport: viewportNode, top: topNode, bottom: bottomNode }
+    const stops = Object.entries(nodes).flatMap(([key, node]) => node ? [observeElementBounds(renderer, node.id, event => {
+      rects[key] = event.rect
+      const { viewport, top, bottom } = rects
       if (!viewport) return
-      // An unmounted endpoint is outside the virtual list's visible history.
       if (hasEarlier || (top && bottom)) setOverflow(hasEarlier || bottom!.y + bottom!.height - top!.y > viewport.height + 1)
       else if (top || bottom) setOverflow(true)
-    }))
+    })] : [])
     return () => stops.forEach(stop => stop())
-  }, [renderer, pane.id, threadId, loaded, turns.length, hasEarlier])
+  }, [renderer, viewportNode, topNode, bottomNode, threadId, loaded, turns.length, hasEarlier])
   const [codeState, setCodeState] = useState<Record<string, { expanded: boolean; wrap: boolean }>>({})
   const [activeRow, setActiveRow] = useState(0)
   const nearTop = useRef(false)
@@ -215,7 +224,7 @@ export function Transcript() {
   return (
     <div testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
       <virtual-list
-        ref={list}
+        ref={listRef}
         testId="transcript"
         alignment="top"
         followTail
@@ -252,9 +261,9 @@ export function Transcript() {
                   </div>
                 </Row>,
               ]
-            : [<div key="__top" testId={`transcript-top:${pane.id}`} style={{ height: 16 }} />]),
+            : [<div key="__top" ref={topRef} testId={`transcript-top:${pane.id}`} style={{ height: 16 }} />]),
           ...rows.map(row => <div key={row.key} style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>{row.node}</div>),
-          <div key="__bottom" testId={`transcript-bottom:${pane.id}`} style={{ height: COMPOSER_INSET + panelHeight }} />,
+          <div key="__bottom" ref={bottomRef} testId={`transcript-bottom:${pane.id}`} style={{ height: COMPOSER_INSET + panelHeight }} />,
         ]}
       </virtual-list>
       {overflow && <MessageRail turns={turns} active={rows[activeRow]?.turn.turnId ?? null} onJump={(id) => {

@@ -1,3 +1,5 @@
+import { BACKDROP } from '../native/backdrop.ts'
+import { useBackdropMaterial, backdropTint } from '../native/backdrop-material.ts'
 // The composer's picker menus (`ComposerPickerMenuPopup` + `components/kit/menu.tsx`,
 // "normal" picker size in `kit.css:2960`): a 0.65rem-radius opaque popover with a
 // 1px border and the composer's soft shadow, 4px body padding, 26px option rows
@@ -80,6 +82,7 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
   fit?: 'snap' | 'switch'
   priority?: number
   occlude?: boolean
+  material?: 'popup' | 'none'
   still?: boolean
   fade?: { opacity?: number; rise?: number }
   /** Fill of the `<anchored>` surface itself, replacing GPUI's opaque dark backing (a translucent scrim). */
@@ -100,12 +103,15 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
     still: stillProp = false,
     fade,
     backing,
+    material = 'popup',
+    backdrop: explicitBackdrop,
     style,
     children,
     ...props
   },
   ref,
 ) {
+  const glass = useBackdropMaterial()
   const [generation] = useState(() => ++popupGeneration)
   // Decided on mount: a later change must not restart or drop the tween.
   // Reduce Motion skips the tween entirely: a zero-length native opacity motion
@@ -130,6 +136,7 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
     : { side, align, gap: sideOffset, offset: side === 'left' || side === 'right' ? { x: 0, y: alignOffset } : { x: alignOffset, y: 0 } }
   return (
     <anchored
+      backdrop={material === 'none' || !glass ? undefined : explicitBackdrop ?? {...BACKDROP.glass, radius: radius ?? 16}}
       {...((still ? {} : { motion }) as object)}
       style={{ ...(radius !== undefined ? { borderRadius: radius } : {}), ...(fade?.opacity !== undefined ? { opacity } : {}), ...(backing ? { backgroundColor: backing } : {}) }}
       {...placement}
@@ -139,7 +146,7 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
       priority={priority}
       occlude={occlude}
     >
-      <div {...props} ref={ref} style={style}>
+      <div {...props} ref={ref} style={glass && material !== 'none' && (style as StyleDesc | undefined)?.backgroundColor ? {...style as StyleDesc,backgroundColor:backdropTint((style as StyleDesc).backgroundColor!)} : style}>
         {children}
       </div>
     </anchored>

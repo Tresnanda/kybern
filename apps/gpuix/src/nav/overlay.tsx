@@ -527,6 +527,7 @@ export function Dialog({
     <>
       <PopupLayer
         still={still}
+        material="none"
         fade={{}}
         backing={`rgba(0, 0, 0, ${dim})`}
         position={{ x: 0, y: 0 }}
@@ -536,6 +537,7 @@ export function Dialog({
       />
       <PopupLayer
         still={still}
+        material={palette ? 'none' : 'popup'}
         fade={{ rise: DISTANCE.micro }}
         position={{ x: Math.round((size.width - cardWidth) / 2), y: pinTop !== undefined ? pinTop : Math.round((top + size.height - bottom) / 2) }}
         anchor={pinTop !== undefined ? 'topLeft' : 'leftCenter'}

@@ -179,7 +179,7 @@ export function markdownTheme(t: Theme, tone: 'bright' | 'muted' = 'bright') {
     border: t.border,
     codeText: text,
     codeWash: t.codeSurface,
-    markdown: transcriptMarkdownStyle(text, t.textSecondary, t.border, t.codeSurface, TEXT.size, CODE.size),
+    markdown: {...transcriptMarkdownStyle(text, t.textSecondary, t.border, t.codeSurface, TEXT.size, CODE.size),link:{color:t.v('--color-token-text-link-foreground'),underline:'hover' as const}},
     bg: t.codeSurface,
     fontSans: FONT_UI,
     fontMono: FONT_MONO,

@@ -1,3 +1,5 @@
+import { BACKDROP } from '../native/backdrop.ts'
+import { BACKDROP_ALLOWED, backdropTint } from '../native/backdrop-material.ts'
 import { Icon } from '../icons.tsx'
 import { DockSection } from '../dock/Notes.tsx'
 import { muted } from '../nav/overlay.tsx'
@@ -81,5 +83,5 @@ export function PreviewIntegration({ insetBottom = 0 }: { insetBottom?: number }
 function MiniPlayer({ threadId, insetBottom }: { threadId: string; insetBottom: number }) {
   const t = useTheme(), s = usePreview(threadId), entry = s.entries[s.index]
   if (!s.floating || !entry) return null
-  return <Floating insetBottom={insetBottom} storageKey="kybern.preview.corner" testId="preview-mini" width={320} height={158}><Section label={entry.title}><IconButton icon={N.panelRight} size={24} testId="preview-mini-return" label="Return to panel" onClick={() => { setPreview(threadId, { floating: false }); showPreview(threadId) }} /><IconButton icon={N.x} size={24} testId="preview-mini-close" label="Close preview" onClick={() => closePreview(threadId)} /></Section><Label color={t.textSecondary} size={12} truncate style={{ padding: 12 }}>{entry.address}</Label><Label color={t.textTertiary} size={11} style={{ paddingLeft: 12 }}>{s.opened ? 'Opened in browser' : 'Preview opens in your browser.'}</Label><Action testId="preview-mini-open" onClick={() => launchPreview(threadId)}>Open in browser</Action></Floating>
+  return <Floating insetBottom={insetBottom} storageKey="kybern.preview.corner" testId="preview-mini" width={320} height={158}><div backdrop={BACKDROP_ALLOWED ? BACKDROP.previewHeader : undefined} style={{backgroundColor:BACKDROP_ALLOWED ? backdropTint(t.popover) : t.popover}}><Section label={entry.title}><IconButton icon={N.panelRight} size={24} testId="preview-mini-return" label="Return to panel" onClick={() => { setPreview(threadId, { floating: false }); showPreview(threadId) }} /><IconButton icon={N.x} size={24} testId="preview-mini-close" label="Close preview" onClick={() => closePreview(threadId)} /></Section></div><Label color={t.textSecondary} size={12} truncate style={{ padding: 12 }}>{entry.address}</Label><Label color={t.textTertiary} size={11} style={{ paddingLeft: 12 }}>{s.opened ? 'Opened in browser' : 'Preview opens in your browser.'}</Label><Action testId="preview-mini-open" onClick={() => launchPreview(threadId)}>Open in browser</Action></Floating>
 }
