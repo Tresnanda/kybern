@@ -517,6 +517,8 @@ edit(i, "            for quad in prepaint.selection.drain(..) {", """           
 
 edit(i, "                    content: index.to_string(),", "                    content: index.to_string(),\n                    decorations: Vec::new(),")
 
+exec((Path(__file__).parent / "markdown_hooks.py").read_text())
+
 for path, text in pending.items():
     (src / path).write_text(text)
 print(f"hooks applied to {len(pending)} files")
