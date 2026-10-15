@@ -36,6 +36,8 @@ and behave like the desktop, and it must not make idle or animation cost worse
 - Menus, popovers and tooltips must be `<anchored>`, `SelectContent` or
   `ComboboxContent` with an opaque fill, or they paint under the transcript.
 - The `<textarea>` placeholder colour is fixed; `Composer.tsx` draws its own.
+- An `<input>` consumes Enter as its own submit action: handle Enter with `onSubmit`,
+  never `onKeyDown` (arrows and Escape do reach `onKeyDown`).
 - `motion.div` tweens width/height/top/left/opacity/borderRadius only; no springs.
 
 ## App shell (`src/shell/`)
