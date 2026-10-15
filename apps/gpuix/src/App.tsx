@@ -5,6 +5,7 @@
 import { FILL_ISLAND, ISLAND } from './MatrixLoader.tsx'
 import { motion } from '@gpuix/react'
 import { useEffect, useState, type ReactNode } from 'react'
+import { NotesPage } from './notes/NotesPage.tsx'
 import { SettingsScreen } from './settings/SettingsScreen.tsx'
 import { UsagePage } from './usage/UsagePage.tsx'
 import { PullRequestsPage } from './pulls/PullRequestsPage.tsx'
@@ -182,6 +183,7 @@ function PageView({ page }: { page: Page }) {
   switch (page) {
     case 'home':
       return <HomePage />
+    case 'notes': return <NotesPage />
     case 'usage':
       return <UsagePage />
     case 'pulls':
