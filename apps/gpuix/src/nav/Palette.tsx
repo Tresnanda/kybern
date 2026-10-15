@@ -7,6 +7,8 @@ import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { relativeTime } from '@/lib/format'
 import { isFreeChatProject } from '../../../../packages/kybern-client/src/types.ts'
+import { NotesOverlays } from '../notes/Overlays.tsx'
+import { newNote, openNote, openQuickNote, useNotes } from '../notes/store.ts'
 import { Icon } from '../icons.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
 import { getState, useApp } from '../state.ts'
@@ -28,8 +30,7 @@ interface Item {
 
 export function Palette() {
   const open = useNav((s) => s.paletteOpen)
-  if (!open) return null
-  return <PaletteDialog />
+  return <><NotesOverlays />{open && <PaletteDialog />}</>
 }
 
 /** `SearchInput`: a 36px field with the search glyph and a drawn placeholder (GPUIX fixes its own). */
@@ -80,6 +81,7 @@ export function SearchField({
 function PaletteDialog() {
   const t = useTheme()
   const { renderer } = useGpuix()
+  const notes = useNotes((s) => s.notes)
   const threads = useApp((s) => s.threads)
   const projects = useApp((s) => s.projects)
   const history = useNav((s) => s.history)
@@ -177,12 +179,17 @@ function PaletteDialog() {
         ),
         run: () => newThread(p.id),
       }))
-    const all = [...actions, ...threadItems, ...pageItems, ...projectItems]
+    const noteItems: Item[] = [
+      { id: 'note-new', label: 'New note', keywords: 'create note', group: 'Notes', icon: <Icon source={N.note} size={15} color={muted(t, 1)} />, run: () => void newNote() },
+      { id: 'note-capture', label: 'Capture note', keywords: 'quick note capture', group: 'Notes', icon: <Icon source={N.note} size={15} color={muted(t, 1)} />, meta: kbd(['⌘', '⇧', 'N']), run: openQuickNote },
+      ...notes.filter((n) => !n.deleted_at).sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 50).map((note): Item => ({ id: `note:${note.id}`, label: note.title || 'Untitled', keywords: `${note.title} ${note.preview}`, group: 'Notes', icon: <Icon source={N.note} size={15} color={muted(t, 1)} />, run: () => openNote(note.id) })),
+    ]
+    const all = [...actions, ...threadItems, ...pageItems, ...noteItems, ...projectItems]
     const q = query.trim().toLowerCase()
     const matched = q ? all.filter((item) => `${item.label} ${item.keywords}`.toLowerCase().includes(q)) : all
     const order: Item['group'][] = ['Suggested', 'Threads', 'Notes', 'Tasks', 'Projects']
     return order.map((group) => ({ group, items: matched.filter((item) => item.group === group) })).filter((g) => g.items.length > 0)
-  }, [threads, projects, history, settingsOpen, page, query, t])
+  }, [notes, threads, projects, history, settingsOpen, page, query, t])
 
   const flat = groups.flatMap((g) => g.items)
   const active = Math.min(highlight, Math.max(0, flat.length - 1))
