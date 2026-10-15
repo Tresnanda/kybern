@@ -1,33 +1,50 @@
 import { Elapsed } from './Elapsed.tsx'
 import { motion } from '@gpuix/react'
-import { useRef, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { formatTokenCount, isSubagentQueued, subagentBarState, subagentSpan, subagentThreadPhase, subagentTokenCount } from '../../../../packages/kybern-client/src/subagents.ts'
 import { useNav } from '../nav/store.ts'
 import { openThread } from '../nav/history.ts'
 import { controlSubagent } from '../requests/Activity.tsx'
-import { useApp } from '../state.ts'
+import { useApp, usePaneAccess, PaneProvider, type AppState } from '../state.ts'
 import { Button, Para, muted } from '../transcript/kit.tsx'
 import { copyText } from '../transcript/store.ts'
-import { EASE_OUT, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 
 /** Keyboard history is instant. Pointer navigation follows the parent/child
  * hierarchy with a short native left/opacity tween; no JS animation loop. */
 export function SubagentPageMotion({ children }: { children: ReactNode }) {
+  const pane = usePaneAccess()
   const id = useApp(s => s.selectedId)
-  const open = useApp(s => s.open.thread)
+  const open = useApp(s => s.open)
   const child = useNav(s => id ? s.children[id] : undefined)
   const keyboard = useNav(s => s.keyboardNav)
-  const thread = open ?? child
-  const previous = useRef<{ id: string | null; parent: string | null; subagent: boolean }>({ id: null, parent: null, subagent: false })
-  const entrance = useRef({ id, direction: 0, keyboard })
-  if (entrance.current.id !== id) {
+  const t = useTheme()
+  const live = pane.get()
+  const previous = useRef<{ id: string | null; snapshot: AppState }>({ id, snapshot: live })
+  const [exit, setExit] = useState<{ id: string | null; snapshot: AppState; direction: number; token: number } | null>(null)
+  const entrance = useRef({ id, direction: 0, token: 0 })
+  if (previous.current.id !== id) {
     const before = previous.current
-    entrance.current = { id, direction: before.subagent && before.parent === id ? -1 : thread?.subagent ? 1 : 0, keyboard }
+    const thread = open.thread ?? child
+    const direction = before.snapshot.open.thread?.subagent && before.snapshot.open.thread.parent_thread_id === id ? -1 : thread?.subagent && thread.parent_thread_id === before.id ? 1 : 0
+    const play = !keyboard && !REDUCED_MOTION && direction !== 0
+    entrance.current = { id, direction: play ? direction : 0, token: entrance.current.token + 1 }
+    setExit(play ? { ...before, direction, token: entrance.current.token } : null)
   }
-  if (thread) previous.current = { id: thread.id, parent: thread.parent_thread_id ?? null, subagent: !!thread.subagent }
-  const play = entrance.current.direction !== 0 && !entrance.current.keyboard
-  return <motion.div key={id} initial={play ? { opacity: .4, translateX: REDUCED_MOTION ? 0 : entrance.current.direction * 40 } : false} animate={{ opacity: 1, translateX: 0 }} transition={{ duration: play ? .22 : 0, ease: EASE_OUT }} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>{children}</motion.div>
+  previous.current = { id, snapshot: live }
+  const token = entrance.current.token
+  const pages = [...(exit && exit.id !== id ? [{ id: exit.id, snapshot: exit.snapshot, outgoing: true }] : []), { id, snapshot: undefined, outgoing: false }]
+  return <div testId="page-motion" style={{ display: 'flex', flexGrow: 1, minHeight: 0, position: 'relative', overflow: 'hidden' }}>
+    {pages.map(page => <motion.div key={page.id ?? 'draft'} testId={page.outgoing ? 'page-outgoing' : 'page-incoming'}
+      initial={page.outgoing || !entrance.current.direction ? false : { translateX: entrance.current.direction * 64, opacity: .4 }}
+      animate={{ translateX: page.outgoing ? -exit!.direction * 64 : 0, opacity: page.outgoing ? 0 : 1 }}
+      transition={{ type: 'spring', duration: entrance.current.direction ? .26 : 0, bounce: .08 }}
+      onMotionComplete={() => { if (page.outgoing) setExit(current => current?.token === token ? null : current) }}
+      style={{ display: 'flex', flexDirection: 'column', position: page.outgoing ? 'absolute' : 'relative', top: 0, left: 0, width: '100%', height: '100%', flexGrow: 1, minHeight: 0, backgroundColor: t.surface, pointerEvents: page.outgoing ? 'none' : 'auto' }}>
+      <PaneProvider id={pane.id} snapshot={page.snapshot}>{children}</PaneProvider>
+    </motion.div>)}
+  </div>
 }
 
 export function SubagentBar({ thread, embedded = false }: { thread: Thread; embedded?: boolean }) {

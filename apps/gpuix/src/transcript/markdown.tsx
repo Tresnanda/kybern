@@ -4,7 +4,7 @@ import { memo, useMemo, useState } from 'react'
 import { spawn } from 'node:child_process'
 import { chatLink, kybernRefsIn } from '../../../../packages/kybern-client/src/chatLinks.ts'
 import { TOOL_RESULT_CHAR_LIMIT, TOOL_RESULT_LINE_LIMIT } from '../../../desktop/src/lib/toolResultText.ts'
-import { getClient, getState } from '../state.ts'
+import { getClient, usePaneAccess } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
 import { Button, cachedMarkdownTheme, CODE, muted } from './kit.tsx'
@@ -80,6 +80,7 @@ export const CodeChunk = memo(function CodeChunk({ text, language, wrap }: { tex
 })
 
 export const Prose = memo(function Prose({ text }: { text: string }) {
+  const pane = usePaneAccess()
   const t = useTheme()
   const refs = useMemo(() => kybernRefsIn(text), [text])
   const [preview, setPreview] = useState<{ title: string; text: string; code: boolean } | null>(null)
@@ -90,7 +91,7 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
     try {
       if (link.kind === 'external') { spawn('open', [link.url]).on('error', e => reportError('Unable to open link', e)); return }
       if (link.kind === 'file') {
-        const threadId = getState().selectedId
+        const threadId = pane.get().selectedId
         if (!threadId) return
         const file = await client.call('threads.files.read', { thread_id: threadId, path: link.path })
         setPreview({ title: link.path, text: file.content, code: true })

@@ -1,3 +1,5 @@
+import { SplitWorkspace, SplitDragLayer, moveSplitDrag, finishSplitDrag, useSplitDragging } from './split/Workspace.tsx'
+import { startSplitView } from './split/store.ts'
 import { useMeasureComposerOverlay } from './composer/height.ts'
 import { CloseGuard } from './shell/CloseGuard.tsx'
 import { WorkspaceDialogs } from './dialogs/Dialogs.tsx'
@@ -45,7 +47,7 @@ import { ErrorBoundary } from './shell/ErrorBoundary.tsx'
 import { useSidebarDragging, useSidebarWidth } from './shell/layout.ts'
 import { SidebarDragLayer, SidebarResizeHandle } from './shell/ResizeHandle.tsx'
 import { Toaster } from './shell/toasts.tsx'
-import { useApp } from './state.ts'
+import { useApp, usePaneCompact } from './state.ts'
 import { COLUMN, GUTTER, Transcript } from './Transcript.tsx'
 import { ThreadRequests, useBlockingRequest } from './transcript/Requests.tsx'
 import { EASE_OUT, Label, REDUCED_MOTION, useTheme } from './ui.tsx'
@@ -63,6 +65,7 @@ export function App() {
 }
 
 function Workspace() {
+  const splitDragging = useSplitDragging()
   useTasksFeed()
   const t = useTheme()
   const page = useNav((s) => s.page)
@@ -88,6 +91,7 @@ function Workspace() {
   const edge = t.variant === 'dark' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.10)'
 
   useEffect(() => {
+    startSplitView()
     startLive()
     startAgentToasts()
     startNavHistory()
@@ -98,6 +102,8 @@ function Workspace() {
       testId="app-ready"
       // Any press makes later navigation pointer-driven again (`keyboardNav`).
       onMouseDown={pointerNav}
+      onMouseMove={splitDragging ? moveSplitDrag : undefined}
+      onMouseUp={splitDragging ? finishSplitDrag : undefined}
       style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: t.frame, position: 'relative' }}
     >
       <TitleBar panelOpen={panelOpen} />
@@ -189,6 +195,7 @@ function Workspace() {
       <SidebarDragLayer />
       <DockResizeCapture />
       <TasksDragLayer />
+      <SplitDragLayer />
     </div>
   )
 }
@@ -211,7 +218,7 @@ function PageEnter({ page, children }: { page: string; children: ReactNode }) {
 function PageView({ page }: { page: Page }) {
   switch (page) {
     case 'home':
-      return <HomePage />
+      return <SplitWorkspace><HomePage /></SplitWorkspace>
     case 'notes': return <NotesPage />
     case 'tasks': return <TasksPage />
     case 'usage':
@@ -224,18 +231,23 @@ function PageView({ page }: { page: Page }) {
 }
 
 function HomePage() {
+  return <SubagentPageMotion><ConversationPage /></SubagentPageMotion>
+}
+
+function ConversationPage() {
+  const gutter = usePaneCompact() ? 20 : GUTTER
   const measureComposerOverlay = useMeasureComposerOverlay(1)
   const thread = useApp((s) => s.open.thread)
   const selectedId = useApp((s) => s.selectedId)
   const blocking = useBlockingRequest()
   if (!selectedId) return <Draft />
   return (
-    <SubagentPageMotion>
+    <>
       <ErrorBoundary label="the transcript">
         <Transcript />
       </ErrorBoundary>
       <BottomFade />
-      <div ref={measureComposerOverlay} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, display: 'flex', justifyContent: 'center', paddingLeft: GUTTER, paddingRight: GUTTER, paddingBottom: 16 }}>
+      <div ref={measureComposerOverlay} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, display: 'flex', justifyContent: 'center', paddingLeft: gutter, paddingRight: gutter, paddingBottom: 16 }}>
         {/* Pending approvals and questions stack on the composer; a blocking one replaces it. */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: COLUMN }}>
           {!thread?.subagent && <ThreadRequests />}
@@ -246,7 +258,7 @@ function HomePage() {
           )}
         </div>
       </div>
-    </SubagentPageMotion>
+    </>
   )
 }
 

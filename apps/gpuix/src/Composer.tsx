@@ -33,7 +33,7 @@ import {
 } from '../../../packages/kybern-client/src/types.ts'
 import { Icon } from './icons.tsx'
 import { MatrixLoader } from './MatrixLoader.tsx'
-import { getClient, getState, set, useApp } from './state.ts'
+import { getClient, setThreadOpen, usePaneCompact, focusPane, getFocusedPaneId, usePaneAccess, getPane, selectPaneThread, setPane, set, useApp } from './state.ts'
 import { FONT_UI } from './theme.ts'
 import { ink, Label, useTheme } from './ui.tsx'
 import { addWindowKeyHandler } from './nav/keys.ts'
@@ -87,6 +87,7 @@ export function Composer({ thread, tray }: { thread: Thread | null; tray?: React
 // ---- wiring: an open thread ----
 
 function ThreadComposer({ thread }: { thread: Thread }) {
+  const pane = usePaneAccess()
   const threadId = thread.id
   const running = thread.status === 'running' || thread.status === 'awaiting-approval'
   const target = useComposer((d) => (d.target?.threadId === threadId ? d.target.state : null))
@@ -99,18 +100,18 @@ function ThreadComposer({ thread }: { thread: Thread }) {
   const projectName = useApp(s => s.projects.find(p => p.id === thread.coordinator_project_id)?.name)
 
   useEffect(() => {
-    void loadTarget(threadId)
-  }, [threadId, thread.status, thread.provider.instance, thread.model])
+    if (!pane.frozen) void loadTarget(threadId)
+  }, [threadId, thread.status, thread.provider.instance, thread.model, pane.frozen])
   useEffect(() => {
-    void loadQueue(threadId)
-  }, [threadId, running])
+    if (!pane.frozen) void loadQueue(threadId)
+  }, [threadId, running, pane.frozen])
 
   const provider = target?.target.provider ?? thread.provider
   const catalogKey = `${threadId}:${provider.kind}:${provider.instance}`
   useEffect(() => {
-    void loadCatalog(threadId, provider, thread.project_id, false).catch(() => {})
+    if (!pane.frozen) void loadCatalog(threadId, provider, thread.project_id, false).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [catalogKey, thread.project_id])
+  }, [catalogKey, thread.project_id, pane.frozen])
   const composerProviders = useMemo(
     () => providers.map((status) => (status.kind === provider.kind && catalog?.key === catalogKey ? catalog.status : status)),
     [providers, provider.kind, catalog, catalogKey],
@@ -135,8 +136,9 @@ function ThreadComposer({ thread }: { thread: Thread }) {
     const owner = activeEnvironment()
     const switched = await getClient()!.call('coordinator.switch_harness', { project_id: thread.coordinator_project_id!, provider: next, model, effort, permission_mode: permission })
     if (owner !== activeEnvironment()) return
-    const state = getState()
-    set({ threads: state.threads.map(t => t.id === switched.id ? switched : t), ...(state.open.thread?.id === switched.id ? { open: { ...state.open, thread: switched } } : {}) })
+    const state = pane.get()
+    set({ threads: state.threads.map(t => t.id === switched.id ? switched : t) })
+    if (state.open.thread?.id === switched.id) setThreadOpen(switched.id, { ...state.open, thread: switched })
     await loadTarget(switched.id)
   }
 
@@ -187,7 +189,7 @@ export function useDraftTarget() {
   // The most recently active thread's project, or the first project.
   const recentProject = useApp((s) => s.threads.find((th) => s.projects.some((p) => p.id === th.project_id))?.project_id ?? s.projects[0]?.id)
   const entry = useApp(s => s.draft)
-  const projectId = entry.purpose === 'coordinator' ? entry.projectId ?? null : draft.projectId === undefined ? recentProject ?? null : draft.projectId
+  const projectId = entry.projectId ? entry.projectId : draft.projectId === undefined ? recentProject ?? null : draft.projectId
   const project = projectId ? projects.find((p) => p.id === projectId) : undefined
   const available = useMemo(() => providers.filter((p) => p.available), [providers])
   const provider = useMemo<ProviderInstance | null>(() => {
@@ -212,6 +214,7 @@ export function useDraftTarget() {
 }
 
 function DraftComposer({ tray }: { tray?: ReactNode }) {
+  const pane = usePaneAccess()
   const providers = useComposer((d) => d.providers)
   const loading = useComposer((d) => d.providersLoading)
   const accounts = useComposer((d) => d.accounts)
@@ -234,10 +237,10 @@ function DraftComposer({ tray }: { tray?: ReactNode }) {
       model={choice?.model}
       effort={choice?.effort}
       onModelChange={async (model, effort) => {
-        if (provider) patchDraft({ models: { ...getData().draft.models, [provider.kind]: { model, effort } } })
+        if (provider) patchDraft({ models: { ...getData(pane.id).draft.models, [provider.kind]: { model, effort } } })
       }}
       onProviderChange={async (next, nextChoice) => {
-        const models = nextChoice ? { ...getData().draft.models, [next.kind]: nextChoice } : getData().draft.models
+        const models = nextChoice ? { ...getData(pane.id).draft.models, [next.kind]: nextChoice } : getData(pane.id).draft.models
         const nextStatus = getData().providers.find((item) => item.kind === next.kind)
         const keepMode = !nextStatus || nextStatus.supported_permission_modes.includes(mode)
         patchDraft({
@@ -253,15 +256,16 @@ function DraftComposer({ tray }: { tray?: ReactNode }) {
       onSend={async (message) => {
         if (!provider) return
         if (coordinator) {
-          const client = getClient()!, owner = activeEnvironment()
+          const client = getClient()!, owner = activeEnvironment(), generation = getPane(pane.id)?.generation
           const available = providers.find(p => p.kind === provider.kind && p.available)
           if (!projectId || !available) throw new Error('Choose a project and an available harness.')
           if (starter.current?.client !== client) starter.current = { client, controller: createCoordinatorStarter((method, params) => client.call(method, params), () => crypto.randomUUID()) }
           const result = await starter.current.controller.send({ projectId, provider: available, instance: provider.instance, model: choice?.model, effort: choice?.effort, permissionMode: mode }, message)
-          if (owner === activeEnvironment()) { const state = getState(); set({ threads: [...state.threads.filter(t => t.id !== result.thread.id), result.thread] }); openThread(result.thread.id) }
+          if (owner === activeEnvironment() && getPane(pane.id)?.generation === generation) { const state = pane.get(); set({ threads: [...state.threads.filter(t => t.id !== result.thread.id), result.thread] }); void selectPaneThread(pane.id, result.thread.id) }
           return
         }
         await createThread({
+          paneId: pane.id,
           projectId,
           provider: pinAccount ? provider : { ...provider, instance: 'default' },
           pinAccount,
@@ -335,7 +339,10 @@ export interface ComposerViewProps {
   above?: ReactNode
 }
 
-export function ComposerView(props: ComposerViewProps) {
+export function ComposerView(input: ComposerViewProps) {
+  const compact = usePaneCompact()
+  const pane = usePaneAccess()
+  const props = { ...input, draftKey: `${pane.id}:${input.draftKey}`, readOnly: input.readOnly || pane.frozen }
   const measureOverlay = useMeasureComposerOverlay()
   const t = useTheme()
   const renderer = useGpuixRequired()
@@ -416,11 +423,11 @@ export function ComposerView(props: ComposerViewProps) {
   // Scope approval shortcuts strictly to this editor. Native events cannot
   // prevent text insertion, so consume only the exact digit below.
   useEffect(() => addWindowKeyHandler((e) => {
-    if (!editor.current || renderer.getFocusedElementId?.() !== editor.current.id) return false
+    if (pane.frozen || !editor.current || renderer.getFocusedElementId?.() !== editor.current.id) return false
     const m = e.modifiers
     if (m?.cmd || m?.alt || m?.ctrl || m?.shift) return false
     if (!empty || sending || !props.currentThreadId || !/^[1-4]$/.test(e.key ?? '')) return false
-    const approval = getState().open.pendingApprovals[0]
+    const approval = pane.get().open.pendingApprovals[0]
     if (!approval) return false
     keyboardAnswer()
     if (!answerApproval(approval, props.currentThreadId, Number(e.key))) return false
@@ -525,7 +532,7 @@ export function ComposerView(props: ComposerViewProps) {
           display: 'flex',
           flexDirection: 'column',
           width: '100%',
-          borderRadius: COMPOSER_RADIUS,
+          borderRadius: compact ? 14 : COMPOSER_RADIUS,
           borderWidth: 1,
           borderColor: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.052)' : 'rgba(13, 13, 13, 0.076)',
           backgroundColor: t.variant === 'dark' ? t.composer : '#ffffff',
@@ -568,7 +575,8 @@ export function ComposerView(props: ComposerViewProps) {
               }}
               interceptKeys={['up', 'down', 'left', 'right', 'home', 'end', 'enter', 'tab', 'escape']}
               testId="composer"
-              autoFocus
+              autoFocus={!pane.frozen && getFocusedPaneId() === pane.id}
+              onFocus={() => { if (!pane.frozen) focusPane(pane.id) }}
               value={text}
               readOnly={props.readOnly}
               minRows={2}

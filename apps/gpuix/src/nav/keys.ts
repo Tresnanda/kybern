@@ -1,3 +1,4 @@
+import { splitFocusedPane } from '../split/store.ts'
 // Window shortcuts (`App.tsx` `useHotkey` + `state/navigation.ts`): ⌘N new chat,
 // ⌘B thread panel, ⌘K search, ⌘[ / ⌘] back and forward, ⌘↑ a subagent's
 // parent, ⌘, Settings. They work while typing, like the desktop's
@@ -33,6 +34,7 @@ function shortcut(event: EventPayload): boolean {
   if (!m?.cmd || m.ctrl || m.alt) return false
   const key = event.key
   const nav = getNav()
+  if (key === '\\' && nav.page === 'home' && !nav.settingsOpen) { splitFocusedPane(m.shift ? 'vertical' : 'horizontal'); return true }
   if (m.shift) return false
   switch (key) {
     case 'k':
@@ -85,4 +87,4 @@ export function onWindowKeyDown(event: EventPayload) {
   if (!shortcut(event) && !before) setNav({ keyboardNav: false })
 }
 
-const isShortcut = (event: EventPayload) => !!event.modifiers?.cmd && !event.modifiers.ctrl && !event.modifiers.alt && !event.modifiers.shift
+const isShortcut = (event: EventPayload) => !!event.modifiers?.cmd && !event.modifiers.ctrl && !event.modifiers.alt && (!event.modifiers.shift || event.key === '\\')
