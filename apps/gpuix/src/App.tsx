@@ -6,6 +6,8 @@ import { FILL_ISLAND, ISLAND } from './MatrixLoader.tsx'
 import { motion } from '@gpuix/react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { SettingsScreen } from './settings/SettingsScreen.tsx'
+import { UsagePage } from './usage/UsagePage.tsx'
+import { PullRequestsPage } from './pulls/PullRequestsPage.tsx'
 import { Composer } from './Composer.tsx'
 import { Draft } from './Draft.tsx'
 import { Icon } from './icons.tsx'
@@ -136,7 +138,7 @@ export function App() {
           >
             <PageEnter page={settingsOpen ? 'settings' : page}>
               <ErrorBoundary label="this page" key={settingsOpen ? 'settings' : page}>
-                {settingsOpen ? <SettingsScreen /> : welcome ? <Welcome kind={welcome} /> : page === 'home' ? <HomePage /> : <ElsewherePage page={page} />}
+                {settingsOpen ? <SettingsScreen /> : welcome ? <Welcome kind={welcome} /> : <PageView page={page} />}
               </ErrorBoundary>
             </PageEnter>
             <ConnectionBanner />
@@ -165,6 +167,20 @@ function PageEnter({ page, children }: { page: string; children: ReactNode }) {
       {children}
     </Rise>
   )
+}
+
+/** The rail destination's page. */
+function PageView({ page }: { page: Page }) {
+  switch (page) {
+    case 'home':
+      return <HomePage />
+    case 'usage':
+      return <UsagePage />
+    case 'pulls':
+      return <PullRequestsPage />
+    default:
+      return <ElsewherePage page={page} />
+  }
 }
 
 function HomePage() {
