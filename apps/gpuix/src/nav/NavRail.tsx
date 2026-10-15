@@ -2,6 +2,7 @@
 // Tasks, Pull requests and Usage under one sliding pill, then the plan-usage
 // rings and Settings at the foot. Every button has a tooltip on the right.
 import { FILL_ISLAND } from '../MatrixLoader.tsx'
+import { useTasks } from '../tasks/store.ts'
 import { motion } from '@gpuix/react'
 import { useEffect, useRef, useState } from 'react'
 import {
@@ -116,6 +117,7 @@ function RailButton({
           justifyContent: 'center',
           width: 36,
           height: 36,
+          position: 'relative',
           borderRadius: 10,
           cursor: 'pointer',
           ...(active && activeFill ? { backgroundColor: railActive(t) } : {}),
@@ -123,9 +125,16 @@ function RailButton({
         }}
       >
         <Icon source={icon} size={18} color={active || hover ? t.text : railIdle(t)} />
+        {testId === 'rail-tasks' && <TasksReviewDot />}
       </div>
     </Tip>
   )
+}
+
+function TasksReviewDot() {
+  const t = useTheme()
+  const needsReview = useTasks((s) => Object.values(s.tasks).some((task) => task.status === 'needs_review'))
+  return needsReview ? <div testId="tasks-review-dot" style={{ position: 'absolute', right: 5, top: 5, width: 5, height: 5, borderRadius: 3, backgroundColor: t.taskReview, pointerEvents: 'none' }} /> : null
 }
 
 // ---- plan usage rings ----

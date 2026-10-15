@@ -261,7 +261,7 @@ function uncataloguedName(model: string): string {
 /** Text and attachments kept per thread or project while the composer is away (`composerDrafts`). */
 const drafts = new Map<string, { text: string; attachments: Attachment[] }>()
 
-interface ComposerViewProps {
+export interface ComposerViewProps {
   draftKey: string
   /** Enables @ files and the skill catalog (`views/Composer.tsx` `projectId`). */
   projectId?: ProjectId

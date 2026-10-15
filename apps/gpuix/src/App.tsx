@@ -9,6 +9,10 @@ import { NotesPage } from './notes/NotesPage.tsx'
 import { SettingsScreen } from './settings/SettingsScreen.tsx'
 import { UsagePage } from './usage/UsagePage.tsx'
 import { PullRequestsPage } from './pulls/PullRequestsPage.tsx'
+import { TasksDragLayer } from './tasks/drag.tsx'
+import { TasksPage } from './tasks/TasksPage.tsx'
+import { TasksSidebar } from './tasks/TasksSidebar.tsx'
+import { useTasksFeed } from './tasks/store.ts'
 import { Composer } from './Composer.tsx'
 import { Dock, DockResizeCapture } from './dock/Dock.tsx'
 import { Draft } from './Draft.tsx'
@@ -43,6 +47,7 @@ const CARD_RADIUS = 12
 const SLIDE = { duration: 0.22, ease: EASE_OUT }
 
 export function App() {
+  useTasksFeed()
   const t = useTheme()
   const page = useNav((s) => s.page)
   const settingsOpen = useNav((s) => s.settingsOpen)
@@ -117,7 +122,7 @@ export function App() {
             >
               {panelMounted && (
                 <ErrorBoundary label="the sidebar" compact>
-                  <Sidebar />
+                  {page === 'tasks' ? <TasksSidebar /> : <Sidebar />}
                 </ErrorBoundary>
               )}
             </div>
@@ -160,6 +165,7 @@ export function App() {
       <Toaster />
       <SidebarDragLayer />
       <DockResizeCapture />
+      <TasksDragLayer />
     </div>
   )
 }
@@ -184,6 +190,7 @@ function PageView({ page }: { page: Page }) {
     case 'home':
       return <HomePage />
     case 'notes': return <NotesPage />
+    case 'tasks': return <TasksPage />
     case 'usage':
       return <UsagePage />
     case 'pulls':
