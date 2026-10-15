@@ -3,8 +3,8 @@
 // opaque list floating 8px above the card at its full width, rows at 36px
 // with a 16px icon, the title in full ink and the description muted on one
 // line, section labels between kinds. ↑/↓ move, Enter or Tab pick, Escape
-// dismisses that trigger. Composer routes native-consumed arrows through its
-// key-up handler; ⌃N/⌃P remain additional shortcuts.
+// dismisses that trigger. Native key interception handles key-down and repeat;
+// ⌃N/⌃P remain additional shortcuts.
 //
 // GPUIX's `<textarea>` reports no caret, so the trigger is read at the end of
 // the text, where typing happens. Threads, files, attachments, plugins,
@@ -284,7 +284,7 @@ export function useCompletion({
     if (!items.length) return false
     if (key === 'down' || key === 'up') {
       const step = key === 'down' ? 1 : -1
-      setSel({ sig: signature, index: (index + step + items.length) % items.length })
+      setSel(previous => ({ sig: signature, index: ((previous.sig === signature ? previous.index : 0) + step + items.length) % items.length }))
       return true
     }
     if (key === 'enter' && !shift) {
@@ -292,8 +292,8 @@ export function useCompletion({
       return true
     }
     if (key === 'tab') {
-      // The textarea still inserts its tab after this listener; pick after it.
-      setTimeout(() => pick(index), 0)
+      // Native interception cancels the tab before it reaches the edit buffer.
+      pick(index)
       return true
     }
     return false

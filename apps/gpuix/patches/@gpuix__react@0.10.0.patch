@@ -1,0 +1,36 @@
+diff --git a/dist/components/index.d.ts b/dist/components/index.d.ts
+index b67a2533955af43ac03ee03fc89ddb8693a77a63..99f3893575ca7e6673c741053ff33651a6516008 100644
+--- a/dist/components/index.d.ts
++++ b/dist/components/index.d.ts
+@@ -15,6 +15,9 @@ export declare const gpuixComponents: {
+ };
+ export type GpuixComponentType = keyof typeof gpuixComponents;
+ export interface MotionDivProps extends MotionProps {
++    windowDrag?: boolean;
++    cache?: boolean | "fill";
++    testId?: string;
+     children?: ReactNode;
+     style?: StyleDesc;
+     onClick?: Props["onClick"];
+diff --git a/dist/components/index.js b/dist/components/index.js
+index f9fdf3ff14da834fcbf0a1536ad345b9dd701aa9..5381aebd00e499d98f537e9e5e524d15a5e20f1c 100644
+--- a/dist/components/index.js
++++ b/dist/components/index.js
+@@ -14,6 +14,8 @@ function motionStyleKey(style) {
+         style.bottom,
+         style.left,
+         style.borderRadius,
++        style.translateX,
++        style.translateY,
+     ];
+ }
+ export { AnimatePresence, PresenceContext, useIsPresent, usePresence, } from "./animate-presence.js";
+@@ -44,6 +46,8 @@ const MotionDiv = forwardRef(function MotionDiv({ initial, animate, exit, transi
+         transition?.duration,
+         transition?.delay,
+         transition?.ease,
++        transition?.type,
++        transition?.bounce,
+     ]);
+     const generation = useMemo(() => ++nextMotionGeneration, [motionKey]);
+     const motionDescription = {

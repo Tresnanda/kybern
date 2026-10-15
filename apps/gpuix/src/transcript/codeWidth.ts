@@ -1,7 +1,5 @@
 // How many monospace characters fit across a transcript code block right now.
-// The desktop scrolls long code lines sideways; native <code> can neither wrap
-// nor scroll, so a block wraps (as plain text) only when its longest line would
-// otherwise be cut off, and keeps native highlighting whenever its lines fit.
+// Long lines opt into native soft wrap, preserving highlighting and selection.
 import { useRef } from 'react'
 import { dockGeometry, useDock, useDockDrag } from '../dock/store.ts'
 import { usePanelOpen } from '../nav/TitleBar.tsx'

@@ -1,3 +1,4 @@
 packages: []
 patchedDependencies:
   '@gpuix/native@0.10.0': patches/@gpuix__native@0.10.0.patch
+  '@gpuix/react@0.10.0': patches/@gpuix__react@0.10.0.patch

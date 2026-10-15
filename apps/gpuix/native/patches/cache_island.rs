@@ -321,8 +321,9 @@ impl gpui::Render for IslandView {
             .size_full()
             .child(element)
             .child(
-                // Paints after the island's elements: take their fresh bounds.
-                gpui::canvas(
+                // Deferred children paint after the ordinary island canvas. Snapshot
+                // last, after overlays too, so replay retains their hit coordinates.
+                gpui::deferred(gpui::canvas(
                     |_, _, _| (),
                     move |_, _, _, _| {
                         let mut snapshot = snapshot.borrow_mut();
@@ -331,7 +332,7 @@ impl gpui::Render for IslandView {
                     },
                 )
                 .absolute()
-                .size_0(),
+                .size_0()).with_priority(usize::MAX),
             )
             .into_any_element()
     }

@@ -1,7 +1,7 @@
 // Use the Kybern-patched GPUIX native module (apps/gpuix/native) when it has
 // been built. Imported first by main.tsx: @gpuix/native reads this variable when
-// it loads. An explicit NAPI_RS_NATIVE_LIBRARY_PATH, or KYBERN_GPUIX_NATIVE=npm,
-// keeps the stock npm binary (cached islands then render inline).
+// it loads. An explicit NAPI_RS_NATIVE_LIBRARY_PATH selects another local build;
+// KYBERN_GPUIX_NATIVE=npm disables the default override (and the island helpers).
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
@@ -11,7 +11,6 @@ export const PATCHED_NATIVE =
   process.platform === 'darwin' &&
   process.arch === 'arm64' &&
   process.env.KYBERN_GPUIX_NATIVE !== 'npm' &&
-  !process.env.NAPI_RS_NATIVE_LIBRARY_PATH &&
-  existsSync(built)
+  existsSync(process.env.NAPI_RS_NATIVE_LIBRARY_PATH ?? built)
 
-if (PATCHED_NATIVE) process.env.NAPI_RS_NATIVE_LIBRARY_PATH = built
+if (PATCHED_NATIVE && !process.env.NAPI_RS_NATIVE_LIBRARY_PATH) process.env.NAPI_RS_NATIVE_LIBRARY_PATH = built

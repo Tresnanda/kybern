@@ -1,13 +1,155 @@
+diff --git a/dist/host.d.ts b/dist/host.d.ts
+index cc6b7ef926c5c3122fff6107341913364a215710..2ea2c54b0a3976589215b6a7a6e7fc5da7261374 100644
+--- a/dist/host.d.ts
++++ b/dist/host.d.ts
+@@ -5,6 +5,8 @@ export * from "./mutations.js";
+ export * from "./renderer-state.js";
+ export type DimensionValue = number | string;
+ export interface MotionStyle {
++    translateX?: number;
++    translateY?: number;
+     width?: number;
+     height?: number;
+     opacity?: number;
+@@ -16,6 +18,9 @@ export interface MotionStyle {
+ }
+ export type MotionEase = "linear" | "ease" | "easeIn" | "easeOut" | "easeInOut" | [number, number, number, number];
+ export interface MotionTransition {
++    type?: "tween" | "spring";
++    /** Damping control from 0 (no overshoot) to 1. */
++    bounce?: number;
+     /** Duration in seconds. */
+     duration?: number;
+     /** Delay in seconds. */
+@@ -275,6 +280,9 @@ export interface HighlightSpec {
+     radius?: number;
+ }
+ export interface HostProps {
++    cache?: boolean | "fill";
++    /** Empty titlebar region; do not place on interactive controls. */
++    windowDrag?: boolean;
+     style?: StyleDesc;
+     /** Primary button only, like the DOM. Use `onAuxClick` for the others. */
+     onClick?: (event: EventPayload) => void;
+@@ -287,7 +295,7 @@ export interface HostProps {
+     onMouseMove?: (event: EventPayload) => void;
+     /** Fires when user clicks OUTSIDE this element. Use for "click outside to close". */
+     onMouseDownOutside?: (event: EventPayload) => void;
+-    onKeyDown?: (event: EventPayload) => void;
++    onKeyDown?: (event: EventPayload & { preventDefault(): void; defaultPrevented: boolean }) => void;
+     onKeyUp?: (event: EventPayload) => void;
+     onFocus?: (event: EventPayload) => void;
+     onBlur?: (event: EventPayload) => void;
+@@ -342,6 +350,10 @@ export interface HostProps {
+     motion?: MotionProps;
+ }
+ export interface InputProps extends HostProps {
++    /** Key names delivered before native editing actions, with preventDefault(). */
++    interceptKeys?: string[];
++    /** Password input: masked paint/accessibility, no copy or cut. */
++    secure?: boolean;
+     /** External editor value. Native edits apply immediately and report through onChange. */
+     value?: string;
+     placeholder?: string;
+@@ -405,6 +417,8 @@ export interface SvgProps extends HostProps {
+  * scroller, so `whiteSpace` and `overflowX` do nothing.
+  */
+ export interface CodeProps extends HostProps {
++    /** Wrap highlighted lines at the available width. */
++    softWrap?: boolean;
+     /** The source to display. Rendered one div per line at an exact line height. */
+     code?: string;
+     /** Language alias such as "ts", "rust", "bash". Beats `path` for detection. */
+@@ -468,7 +482,7 @@ export type WindowSizeHost = Pick<GpuixRenderer, "getWindowSize">;
+ export type WindowInsetsHost = Pick<GpuixRenderer, "getWindowInsets">;
+ export type SelectionHost = Pick<GpuixRenderer, "getSelectedText">;
+ /** `applyBatch` plus the live renderer methods a host may also expose. */
+-export type NativeRenderer = MutationHost & Partial<Pick<GpuixRenderer, "focusElement" | "focusNext" | "focusPrevious" | "getFocusedElementId" | "focusNextWithin" | "focusPreviousWithin" | "blur" | "setWindowKeyEvents" | "setWindowSelectionChange" | "getElementBounds" | "scrollTo" | "scrollToItem" | "scrollIntoView" | "setImage" | "setImagePixels" | "getScrollOffset" | "getListScrollTop" | "getSelectedText" | "clearSelection" | "getPaintedHighlights" | "getWindowSize" | "getWindowInsets" | "setWindowTitle" | "promptForPaths" | "activateWindow" | "minimizeWindow" | "zoomWindow" | "toggleFullscreen" | "setDebugFrameOverlay" | "getDebugFrameOverlay" | "cycleDebugFrameOverlay" | "resetDebugFrameOverlayStats" | "getDebugFrameOverlayStats">>;
++export type NativeRenderer = MutationHost & Partial<Pick<GpuixRenderer, "focusElement" | "focusNext" | "focusPrevious" | "getFocusedElementId" | "focusNextWithin" | "focusPreviousWithin" | "blur" | "resolveKeyEvent" | "setCloseGuard" | "resolveCloseRequest" | "setWindowKeyEvents" | "setWindowSelectionChange" | "getElementBounds" | "scrollTo" | "scrollToItem" | "scrollIntoView" | "setImage" | "setImagePixels" | "getScrollOffset" | "getListScrollTop" | "getSelectedText" | "clearSelection" | "getPaintedHighlights" | "getWindowSize" | "getWindowInsets" | "setWindowTitle" | "promptForPaths" | "activateWindow" | "minimizeWindow" | "zoomWindow" | "toggleFullscreen" | "setDebugFrameOverlay" | "getDebugFrameOverlay" | "cycleDebugFrameOverlay" | "resetDebugFrameOverlayStats" | "getDebugFrameOverlayStats">>;
+ /** Commit-phase mutation facade shared by framework adapters. */
+ export interface MutationRenderer {
+     createElement(id: number, elementType: string): void;
 diff --git a/dist/mutations.js b/dist/mutations.js
-index 7d0eda6cb58127462067cb9d5a442a9ea606c671..126456d6d1af3171a7391ccf09b869eab15099ff 100644
+index 7d0eda6cb58127462067cb9d5a442a9ea606c671..25786a7856241fad35c385e7338a4638b11dc3ea 100644
 --- a/dist/mutations.js
 +++ b/dist/mutations.js
-@@ -94,6 +94,8 @@ export const UNIVERSAL_PROPS = new Set([
+@@ -94,6 +94,12 @@ export const UNIVERSAL_PROPS = new Set([
      "autoFocus",
      "tabIndex",
      "motion",
-+    // Kybern patch: cached islands (apps/gpuix/native/patches).
++    // Kybern native capabilities.
 +    "cache",
++    "windowDrag",
++    "interceptKeys",
++    "secure",
++    "softWrap",
      "testId",
      "highlight",
      "role",
+diff --git a/dist/renderer-state.d.ts b/dist/renderer-state.d.ts
+index 7999b493e35e2c0c7224f1be7de1e467f6357de2..ee7cd27eb9e0b40daef0aa573fa5cc427fcd16d1 100644
+--- a/dist/renderer-state.d.ts
++++ b/dist/renderer-state.d.ts
+@@ -1,3 +1,4 @@
++export declare function setWindowCloseHandler(renderer: NativeRenderer, handler: () => boolean | Promise<boolean>): () => void;
+ import type { EventPayload } from "../index.js";
+ import type { ElementIdAllocator, EventHandlerMap, NativeRenderer, WindowKeyEventHandler } from "./host.js";
+ export interface RendererRootHandlers {
+diff --git a/dist/renderer-state.js b/dist/renderer-state.js
+index 21c90e91db66a09da919caeb990cc44225a94189..13db155595949bfd0ffd5b81f5d860621372f7e8 100644
+--- a/dist/renderer-state.js
++++ b/dist/renderer-state.js
+@@ -1,3 +1,15 @@
++/** Install a close guard. Rejections veto; repeated close attempts coalesce. */
++export function setWindowCloseHandler(renderer, handler) {
++    const state = createRendererState(renderer);
++    state.shouldClose = handler;
++    renderer.setCloseGuard(!!handler);
++    return () => {
++        if (state.shouldClose === handler) {
++            state.shouldClose = undefined;
++            renderer.setCloseGuard(false);
++        }
++    };
++}
+ const STATE_KEY = Symbol.for("@gpuix/native/renderer-states");
+ function allStates() {
+     const existing = Reflect.get(globalThis, STATE_KEY);
+@@ -39,6 +51,23 @@ export function createRendererState(renderer) {
+             return binding;
+         },
+         dispatch(event) {
++            if (event.eventType === "shouldClose") {
++                Promise.resolve().then(() => state.shouldClose?.() ?? true)
++                    .then(allow => renderer.resolveCloseRequest(event.requestId, allow === true))
++                    .catch(error => { renderer.resolveCloseRequest(event.requestId, false); console.error(error); });
++                return true;
++            }
++            if (event.eventType === "keyDown") {
++                event.defaultPrevented = false;
++                event.preventDefault = () => { event.defaultPrevented = true; };
++                if (event.requestId != null) {
++                    const handler = active?.eventHandlers.get(event.elementId)?.get("keyDown");
++                    try { handler?.(event); active?.handlers.onEvent?.(event); }
++                    catch (error) { event.preventDefault(); throw error; }
++                    finally { renderer.resolveKeyEvent(event.requestId, event.defaultPrevented); }
++                    return !!handler;
++                }
++            }
+             const root = active;
+             if (!root)
+                 return false;
+diff --git a/index.d.ts b/index.d.ts
+index 2ec4b84d0cad37c2d57585af3abaec2478518728..dbe0382494254da9596abde514d98e20be4068a6 100644
+--- a/index.d.ts
++++ b/index.d.ts
+@@ -34,6 +34,9 @@ export declare class AvailableUpdate {
+ 
+ /** The main GPUI renderer exposed to Node.js. */
+ export declare class GpuixRenderer {
++  resolveKeyEvent(token: number, prevented: boolean): void
++  setCloseGuard(enabled: boolean): void
++  resolveCloseRequest(token: number, allow: boolean): void
+   constructor(eventCallback?: (((err: Error | null, arg: EventPayload) => any)) | undefined | null)
+   /** Initialize GPUI using the native event-loop architecture for this OS. */
+   init(options?: WindowOptions | undefined | null): void

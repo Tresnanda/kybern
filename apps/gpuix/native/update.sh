@@ -9,9 +9,9 @@
 #                          packages and recreates the JS patch)
 #
 # Steps: fetch upstream at the tag → reset packages/native/src → copy
-# patches/cache_island.rs → apply patches/apply_hooks.py (fails loudly, writing
+# patches/*.rs → apply patches/apply_hooks.py (fails loudly, writing
 # nothing, if an anchor moved) → cargo build → realign + re-sign → dlopen check
-# → islands check. Output: build/gpuix-native.darwin-arm64.node, which
+# → capability checks. Output: build/gpuix-native.darwin-arm64.node, which
 # src/native/local-build.ts loads.
 set -eu
 cd "$(dirname "$0")"
@@ -31,7 +31,7 @@ git -C upstream clean -fdq packages/native/src
 git -C upstream submodule update -q --init --filter=blob:none zed
 
 echo "== patch"
-cp patches/cache_island.rs upstream/packages/native/src/
+cp patches/*.rs upstream/packages/native/src/
 python3 patches/apply_hooks.py upstream/packages/native/src
 
 echo "== build (several minutes after a version change)"
@@ -40,7 +40,7 @@ echo "== build (several minutes after a version change)"
 (
   cd upstream/packages/native
   RUSTC_WRAPPER= HOST_CC=cc HOST_CXX=c++ CC=cc CXX=c++ \
-    CARGO_TARGET_DIR="$here/build/target" cargo build --release --lib
+    CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$here/build/target" cargo +1.97.1 build --release --lib
 )
 
 echo "== package"
@@ -57,12 +57,16 @@ if [ "$version" != "$pinned" ]; then
   (
     cd "$app"
     pnpm add -E "@gpuix/react@$version" "@gpuix/native@$version"
-    rm -f "patches/@gpuix__native@$pinned.patch"
-    sed -i '' "/@gpuix\/native@$pinned/d" pnpm-workspace.yaml
+    rm -f "patches/@gpuix__native@$pinned.patch" "patches/@gpuix__react@$pinned.patch"
+    sed -i '' "/@gpuix\/native@$pinned/d; /@gpuix\/react@$pinned/d" pnpm-workspace.yaml
     edit=$(mktemp -d)
     pnpm patch "@gpuix/native@$version" --edit-dir "$edit/native" >/dev/null
     python3 "$here/patches/patch_js.py" "$edit/native"
     pnpm patch-commit "$edit/native"
+    pnpm patch "@gpuix/react@$version" --edit-dir "$edit/react" >/dev/null
+    python3 "$here/patches/patch_react.py" "$edit/react"
+    pnpm patch-commit "$edit/react"
+    rm -rf "$edit"
   )
   echo "$version" > VERSION
 fi
@@ -71,6 +75,9 @@ echo "== checks"
 (
   cd "$app"
   pnpm typecheck
-  bun scripts/island-check.ts
+  export NAPI_RS_NATIVE_LIBRARY_PATH="$here/build/gpuix-native.darwin-arm64.node"
+  for check in island-check island-overlay-check native-check secure-input-check code-wrap-check native-motion-check; do
+    bun "scripts/$check.ts"
+  done
 )
 echo "done: GPUIX $version with Kybern patches"
