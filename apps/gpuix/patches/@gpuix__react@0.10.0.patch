@@ -25,12 +25,14 @@ index f9fdf3ff14da834fcbf0a1536ad345b9dd701aa9..5381aebd00e499d98f537e9e5e524d15
      ];
  }
  export { AnimatePresence, PresenceContext, useIsPresent, usePresence, } from "./animate-presence.js";
-@@ -44,6 +46,8 @@ const MotionDiv = forwardRef(function MotionDiv({ initial, animate, exit, transi
+@@ -44,6 +46,10 @@ const MotionDiv = forwardRef(function MotionDiv({ initial, animate, exit, transi
          transition?.duration,
          transition?.delay,
          transition?.ease,
 +        transition?.type,
 +        transition?.bounce,
++        transition?.velocityX,
++        transition?.velocityY,
      ]);
      const generation = useMemo(() => ++nextMotionGeneration, [motionKey]);
      const motionDescription = {

@@ -361,6 +361,125 @@ edit(r, "    pub fn zoom_window(&self) -> Result<()> {", """    pub fn get_text_
     #[napi]
     pub fn zoom_window(&self) -> Result<()> {""")
 
+# Post-paint layout observers share the existing paint-bounds registry.
+edit("lib.rs", "mod cache_island;", "mod cache_island;\nmod layout_observer;")
+edit(r, "    pub(crate) islands: crate::cache_island::Islands,", "    pub(crate) islands: crate::cache_island::Islands,\n    layout_observers: crate::layout_observer::Shared,")
+edit(r, "            islands: Default::default(),", "            islands: Default::default(),\n            layout_observers: Default::default(),")
+edit(r, "                .child(crate::automation::bounds_frame_reset())", "                .child(crate::layout_observer::after_paint(self.layout_observers.clone(), self.tree.clone()))\n                .child(crate::automation::bounds_frame_reset())")
+edit(r, "    pub fn zoom_window(&self) -> Result<()> {", """    pub fn add_layout_observer(&self, target: serde_json::Value, callback: ThreadsafeFunction<serde_json::Value>) -> Result<u32> {
+        update_window(move |view, _, cx| {
+            let token = view.layout_observers.borrow_mut().add(target, callback, &view.tree.lock().unwrap())?;
+            cx.notify();
+            Ok(token)
+        })?
+    }
+    #[napi]
+    pub fn remove_layout_observer(&self, token: u32) -> Result<()> {
+        update_window(move |view, _, _| view.layout_observers.borrow_mut().remove(token))
+    }
+    #[napi]
+    pub fn is_layout_observer_active(&self, token: u32) -> Result<bool> {
+        update_window(move |view, _, _| view.layout_observers.borrow().contains(token))
+    }
+    #[napi]
+    pub fn zoom_window(&self) -> Result<()> {""")
+a = "automation.rs"
+edit(a, "    pub height: f64,", "    pub height: f64,\n    pub clip: Option<[f64; 4]>,")
+edit(a, "            height: f64::from(f32::from(bounds.size.height)),", "            height: f64::from(f32::from(bounds.size.height)),\n            clip: None,")
+edit(a, "el.on_painted(move |bounds, _, _| record_bounds(id, bounds))", "el.on_painted(move |bounds, window, _| record_clipped_bounds(id, bounds, window))")
+edit(a, "pub fn record_bounds(id: u64, bounds: Bounds<Pixels>) {", """fn record_clipped_bounds(id: u64, bounds: Bounds<Pixels>, window: &Window) {
+    let clipped = bounds.intersect(&window.content_mask().bounds).intersect(&Bounds { origin: point(px(0.), px(0.)), size: window.viewport_size() });
+    let mut value = ElementBounds::from_gpui(bounds);
+    if clipped.size.width > px(0.) && clipped.size.height > px(0.) {
+        let b = ElementBounds::from_gpui(clipped);
+        value.clip = Some([b.x, b.y, b.width, b.height]);
+    }
+    BOUNDS.with(|cell| { cell.borrow_mut().insert(id, value); });
+}
+pub fn record_bounds(id: u64, bounds: Bounds<Pixels>) {""")
+edit(a, "        move |bounds, _, _, _| {\n            record_bounds(id, bounds);", "        move |bounds, _, window, _| {\n            record_clipped_bounds(id, bounds, window);")
+
+# Per-axis initial velocity in logical pixels/second, including equal endpoints.
+edit(m, "    bounce: f64,", "    bounce: f64,\n    #[serde(default)]\n    velocity_x: f64,\n    #[serde(default)]\n    velocity_y: f64,")
+edit(m, "            bounce: 0.0,", "            bounce: 0.0,\n            velocity_x: 0.0,\n            velocity_y: 0.0,")
+edit(m, "        let active = self.from != self.target && raw < 1.0;", "        let has_velocity = self.transition.kind.as_deref() == Some(\"spring\") && (self.transition.velocity_x != 0.0 || self.transition.velocity_y != 0.0);\n        let active = (self.from != self.target || has_velocity) && raw < 1.0;")
+edit(m, "        (self.from.interpolate(self.target, progress), active)", """        let mut value = self.from.interpolate(self.target, progress);
+        if has_velocity {
+            value.translate_x = Some(value.translate_x.unwrap_or(0.0) + crate::spring::velocity_offset(raw, self.transition.bounce, self.transition.velocity_x, self.transition.duration));
+            value.translate_y = Some(value.translate_y.unwrap_or(0.0) + crate::spring::velocity_offset(raw, self.transition.bounce, self.transition.velocity_y, self.transition.duration));
+        }
+        (value, active)""")
+edit(m, "    Ok(description)\n}", """    if [description.transition.velocity_x, description.transition.velocity_y].iter().any(|v| !v.is_finite() || v.abs() > 1_000_000.0) {
+        return Err("Spring velocity must be finite and at most 1000000 pixels/second".into());
+    }
+    Ok(description)
+}""")
+
+# Immutable, asynchronously parsed documents shared by virtual code ranges.
+edit("lib.rs", "mod code_wrap;", "mod code_wrap;\nmod syntax_document;")
+edit(r, "    layout_observers: crate::layout_observer::Shared,", "    layout_observers: crate::layout_observer::Shared,\n    syntax_documents: crate::syntax_document::Shared,")
+edit(r, "            layout_observers: Default::default(),", "            layout_observers: Default::default(),\n            syntax_documents: Default::default(),")
+edit(r, "        window.set_window_title(&self.window_title);", "        crate::syntax_document::activate(&self.syntax_documents);\n        window.set_window_title(&self.window_title);")
+edit(r, "    pub fn zoom_window(&self) -> Result<()> {", """    pub fn create_syntax_document(&self, options: serde_json::Value) -> Result<napi::bindgen_prelude::AsyncTask<crate::syntax_document::ParseTask>> {
+        let registry = update_window(|view, _, _| view.syntax_documents.clone())?;
+        Ok(napi::bindgen_prelude::AsyncTask::new(crate::syntax_document::Registry::prepare(registry, None, options)?))
+    }
+    #[napi]
+    pub fn update_syntax_document(&self, id: String, options: serde_json::Value) -> Result<napi::bindgen_prelude::AsyncTask<crate::syntax_document::ParseTask>> {
+        let registry = update_window(|view, _, _| view.syntax_documents.clone())?;
+        Ok(napi::bindgen_prelude::AsyncTask::new(crate::syntax_document::Registry::prepare(registry, Some(id), options)?))
+    }
+    #[napi]
+    pub fn release_syntax_document(&self, id: String) -> Result<()> {
+        update_window(move |view, _, _| view.syntax_documents.lock().unwrap().release(&id))
+    }
+    #[napi]
+    pub fn zoom_window(&self) -> Result<()> {""")
+edit(c, "    soft_wrap: bool,", "    soft_wrap: bool,\n    document: Option<String>,\n    revision: u32,\n    start_line: usize,\n    end_line: Option<usize>,\n    document_lease: Option<Arc<crate::syntax_document::Document>>,")
+edit(c, "        let highlight = self.resolve_highlight();", """        if let Some(id) = &self.document {
+            if self.document_lease.as_ref().map(|d| d.revision) != Some(self.revision) {
+                self.document_lease = crate::syntax_document::lookup(id, self.revision);
+            }
+        } else { self.document_lease = None; }
+        let document = self.document_lease.clone();
+        let highlight = if self.document.is_some() { document.as_ref().and_then(|d| d.highlight.clone()) } else { self.resolve_highlight() };""")
+edit(c, "        let lines: Vec<&str> = self.code.split('\\n').collect();\n        let gutter_width = gutter_width(lines.len(), m);", """        let lines: Vec<&str> = if self.document.is_some() { Vec::new() } else { self.code.split('\\n').collect() };
+        let line_count = document.as_ref().map(|d| d.offsets.len()).unwrap_or(lines.len());
+        let start = self.start_line.min(line_count);
+        let end = self.end_line.unwrap_or(line_count).min(line_count).max(start);
+        let gutter_width = gutter_width(line_count, m);""")
+edit(c, "        for (line_ix, line) in lines.iter().enumerate() {", "        for line_ix in start..end {\n            let line = document.as_ref().map(|d| d.line(line_ix)).unwrap_or_else(|| lines[line_ix]);")
+edit(c, "            let text = ctx.text(line_ix, line.to_string(), Some(runs));", """            let text = if let Some(document) = &document {
+                crate::text::selectable_text(crate::text::SelectableText {
+                    selectable: ctx.selectable,
+                    highlight: ctx.highlight_set.clone().map(crate::text::HighlightSource::Native),
+                    ..crate::text::SelectableText::new(document.selection_id, line_ix, line.to_string().into(), Some(runs), ctx.selection.clone(), ctx.selection_wash)
+                })
+            } else { ctx.text(line_ix, line.to_string(), Some(runs)) };""")
+edit(c, '            "softWrap" =>', '''            "document" => { self.document = value.as_str().map(str::to_owned); self.document_lease = None; },
+            "revision" => self.revision = value.as_u64().unwrap_or(0) as u32,
+            "startLine" => self.start_line = value.as_u64().unwrap_or(0) as usize,
+            "endLine" => self.end_line = value.as_u64().map(|v| v as usize),
+            "softWrap" =>''')
+edit(c, '"softWrap", "theme"]', '"softWrap", "document", "revision", "startLine", "endLine", "theme"]')
+edit(c, "    fn destroy(&mut self) {}", "    fn destroy(&mut self) { self.document_lease = None; }")
+edit(r, "impl gpui::Render for GpuixView {", """impl Drop for GpuixView {
+    fn drop(&mut self) {
+        self.syntax_documents.lock().unwrap().close();
+        self.layout_observers.borrow_mut().close();
+    }
+}
+impl gpui::Render for GpuixView {""")
+edit(r, "    pub fn zoom_window(&self) -> Result<()> {", """    pub fn get_syntax_document_text(&self, id: String, revision: u32) -> Result<String> {
+        update_window(move |view, _, _| view.syntax_documents.lock().unwrap().source(&id, revision))?
+    }
+    #[napi]
+    pub fn get_syntax_document_stats(&self) -> Result<serde_json::Value> {
+        update_window(|view, _, _| view.syntax_documents.lock().unwrap().stats())
+    }
+    #[napi]
+    pub fn zoom_window(&self) -> Result<()> {""")
+
 for path, text in pending.items():
     (src / path).write_text(text)
 print(f"hooks applied to {len(pending)} files")

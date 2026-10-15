@@ -295,7 +295,9 @@ must continue to bound their React history window, not mount unlimited history.
 
 ## Verification commands
 
-`update.sh` runs typecheck and all six background-window capability scripts serially.
+`update.sh` runs typecheck, the six original background-window capability scripts,
+the input/selection/font/list check, layout/syntax checks, and the scratch full-shell
+pointer check serially.
 The physical pointer and external AX checks are separate because they require
 OS permissions. `scripts/native-perf.ts` samples one full app window against an
 explicit data directory and thread. Use the scratch daemon for writes; live
@@ -485,91 +487,148 @@ footprint/CPU, repeated dock/mini-player transitions, environment switches, bloc
 external navigation, clipping/hit testing, native keyboard editing and eventual
 process cleanup. No WKWebView prototype was added in this package.
 
-## Proposed event-driven layout API (not implemented)
+## Event-driven layout (package 2)
 
 ```ts
-type LayoutRect = { x: number; y: number; width: number; height: number }
-type ElementBoundsEvent = {
-  elementId: number
-  rect: LayoutRect | null
-  clippedRect: LayoutRect | null
-  frame: number
-}
-onWindowResize(renderer, callback: (size: {
-  width: number; height: number; scaleFactor: number; frame: number
-}) => void): () => void
-observeElementBounds(renderer, target: number | { testId: string },
-  callback: (event: ElementBoundsEvent) => void): () => void
+import { onWindowResize, observeElementBounds } from '../native/layout.ts'
+const stopSize = onWindowResize(renderer, ({ width, height, scaleFactor, frame }) => {})
+const stopBounds = observeElementBounds(renderer, { testId: 'right-dock' }, event => {})
+// target also accepts a numeric host ID or a PublicInstance { id }.
+// event: { elementId: number | null, rect, clippedRect, frame }
+stopBounds() // idempotent, suppresses already queued JS deliveries
 ```
 
-The helper returns an idempotent unsubscribe function. It subscribes to native
-window bounds/scale-factor changes, not a JS timer. Dimensions are logical pixels;
-element rectangles use the content area's top-left origin and include native
-translation. Each subscription receives its current value after the next completed
-paint, then only changed values. Changes coalesce by subscription to one delivery
-per completed frame; callbacks run after paint through the existing event bridge,
-never reentrantly during layout. A callback-triggered React update belongs to the
-next frame, preventing recursive measurement loops.
+`LayoutRect` is `{ x, y, width, height }` in logical content-area pixels, including
+native translation. Each observer receives its initial value after paint, then
+only changed values, at most once per completed observed frame. A zero-size root
+canvas defers comparison until ordinary paint, deferred overlays and cached replay
+have finished. Callback-triggered updates therefore render in a subsequent frame.
+The frame counter counts observed paints, not compositor presentations. There is
+no new timer, polling read, cache invalidation or animation-frame request.
 
-`rect: null` marks unmount or an unpainted virtual row and is emitted once per
-transition. Cached replay must restore observed bounds just as it does automation
-bounds; observing an unchanged island must neither invalidate it nor force layout.
-`clippedRect` is the intersection of the painted box with its effective clip and
-window viewport. Minimize/occlusion produces no synthetic resize; use the existing
-visibility signal. A test ID must resolve uniquely, otherwise subscription fails;
-if its node is replaced, the subscription follows the new ID. Numeric IDs stop at
-unmount and do not attach to another node. Close/unsubscribe discards queued events.
+`clippedRect` intersects the box with its effective native content mask and viewport;
+fully clipped boxes have a null clipped rect. `rect: null` denotes an unpainted
+virtual row or removed host. Cache snapshots preserve this clipping information.
+Test IDs must initially resolve uniquely. They follow a replacement host; if later
+absent or ambiguous, they produce null until unique again. Numeric IDs remain tied
+to that host, returning null after unmount. Unsubscribe is safe after window close;
+queued JS callbacks check native subscription liveness before invoking app code.
+The view drops all subscriptions on close. At most 256 observers may be active.
 
-Implementation seam: the native bounds tracker records dirty observed IDs during
-paint; a post-frame queue compares the final boxes, including island replay and
-deferred overlays, and sends one batch. Register/unregister observer tokens on the
-renderer; keep callback maps in JS, with a bounded native subscription count. This
-API would let shell/window and dock rect tracking replace polling. Required checks:
-resize, scale change, sidebar/dock motion, cached replay, clipped/virtual unmount,
-same-test-ID replacement, rapid subscribe/unsubscribe, and no idle wakeups after
-all observers detach. Current polling is unchanged in this package.
+`layout-hooks.ts` exposes `useNativeWindowSize()` and `useElementBounds(testId)`.
+The window hook performs one initial size read and then subscribes. Resize and
+scale use the native painted viewport; minimize/occlusion are not synthetic resize
+signals. Real cross-display scale changes remain unverified on this single-display
+fixture; retain the separate visibility signal for animation suspension.
 
-## Proposed whole-document syntax / virtual code API (not implemented)
+`native/layout-check.ts` checks dark/light initial values, native zoom resize,
+effective clipping (including a changed ancestor clip), unchanged cached replay,
+native translation, changed child coordinates, test-ID
+replacement, numeric unmount, virtual unpaint, duplicate rejection, rapid/idempotent
+unsubscribe and per-frame delivery identity. It also checks spring initial velocity.
 
-```ts
-type SyntaxDocument = { id: string; revision: number; lineCount: number }
-createSyntaxDocument(renderer, { text, language, path? }): Promise<SyntaxDocument>
-updateSyntaxDocument(renderer, id, {
-  expectedRevision: number, text: string
-}): Promise<SyntaxDocument>
-releaseSyntaxDocument(renderer, id): void
-// Native JSX; endLine is exclusive, offsets and line numbers are zero-based.
-// <code document={doc.id} revision={doc.revision}
-//       startLine={start} endLine={end} showLineNumbers softWrap />
+## Whole-document syntax and virtual code (package 2)
+
+```tsx
+import { createSyntaxDocument, updateSyntaxDocument, releaseSyntaxDocument,
+  getSyntaxDocumentText, VirtualCode } from '../native/syntax.tsx'
+const doc = await createSyntaxDocument(renderer, { text, language: 'typescript', path })
+// { id: string, revision: number, lineCount: number }
+const next = await updateSyntaxDocument(renderer, doc.id, {
+  expectedRevision: doc.revision, text: editedText,
+})
+<VirtualCode document={next.id} revision={next.revision}
+  startLine={64} endLine={128} showLineNumbers softWrap />
+getSyntaxDocumentText(renderer, next) // exact full source for Copy all/export
+releaseSyntaxDocument(renderer, next.id)
 ```
 
-The native document owns the full source, line index and whole-document parser /
-highlight state. Visible `<code>` ranges share it; a range must never start a fresh
-parser at `startLine`. Open strings, multiline comments, heredocs and embedded
-languages therefore retain preceding lexical context. Document creation/update is
-asynchronous and revisioned. Stale work is cancelled or discarded; a view requesting
-a newer revision may retain readable old paint until the new one is ready but may
-not label old highlighted text as the new source. An unsupported grammar falls
-back to exact plain text. Use a bounded worker queue and document cache; explicit
-release cancels pending work, and mounted views retain a lease until unmount.
+`VirtualCode` validates integer, nonnegative, non-reversed ranges and renders the
+native `<code>` document props. `endLine` is exclusive. The native adapter clamps
+valid ranges to the document's line count; use the typed wrapper rather than
+bypassing its validation with raw host props. Line numbers are absolute.
 
-Ranges clamp to `[0, lineCount]`; invalid reversed/noninteger ranges reject. Displayed
-line numbers remain absolute. The shared model provides stable selection keys and
-document offsets, so selecting/copying across adjacent virtual ranges neither loses
-nor duplicates newlines. Wrapped row heights belong to the viewport measurement
-cache keyed by document revision, width and typography; source remains immutable
-within a revision. Copy-all/export uses full document source rather than joined
-visible chunks. A document handle is renderer/environment scoped and may not be
-reused after release or environment teardown.
+One immutable native source, line-offset index and whole-document neutral syntax
+result serve every visible range. Parsing runs on the napi worker pool, never on
+the paint thread. No range starts its own parser. Theme changes recolour the shared
+spans without parsing. Mounted ranges hold an Arc lease; unmount releases it.
+Updating reserves the next revision immediately: stale expected revisions reject.
+A superseded/released/closed parse cannot publish a result. Work that already entered
+Syntect finishes in its worker and is discarded; it is not forcibly interrupted.
+The previous ready revision remains available during an update. App code should
+adopt the returned handle only after its promise resolves.
 
-Implementation seam: extract the existing code highlighter's parsed source and
-TextRuns into a renderer-owned document registry, expose only line slices to the
-code element, and keep virtual rows responsible for viewport mounting. Tests must
-split multiline comments/strings and Unicode at every range boundary and compare
-the final coloured runs with a single full-document render; also test edits before
-the viewport, cancelled parse results, selection/copy across remounts, wrapping,
-memory release and bounded work for large files. Current chunk rendering is
-unchanged; this contract does not claim cross-chunk syntax parity.
+Limits: 32 registered documents, 8 pending jobs, 2 MiB per source, 16 MiB of current
+registered source, and 200,000 highlighted spans per document. Unknown grammars or
+a span-limit/parser failure render exact plain source. Queued source copies, an
+update's previous ready revision and mounted old leases are additional bounded-by-
+caller storage; the 16 MiB limit is not a total-process-memory claim. Close/release
+remove registry ownership and reject pending results. The app must still bound
+mounted virtual rows and release handles when closing a file or environment.
+
+Selection keys use a document-revision identity plus the absolute logical line,
+so adjacent ranges and remounted ranges preserve selection and copy newlines once.
+The existing selection API reports that stable document identity in `elementId`
+and the absolute line in `sub`; it is not the transient `<code>` host ID. Offsets
+within each selected run remain UTF-16. Source indexing is native UTF-8 internally.
+Overlapping ranges should not be mounted twice in one document view. Wrapped row
+height caching remains the viewport's responsibility; fixed-height Explorer rows
+must not opt into wrapping without measuring their real heights.
+
+Checks: `syntax-check.ts` compares PNG bytes to a single full-document render at
+every line boundary for TypeScript multiline comments/strings, Python triple
+strings, Bash heredocs, embedded HTML and unknown-grammar plain text, in dark/light.
+`syntax-lifecycle-check.ts` checks exact cross-range Unicode copy, remount identity,
+full-source retrieval, edits before the viewport, stale revisions/results, document
+and queue bounds and release. `syntax-large-check.ts` mounts four rows from a
+70,003-line, >512 KiB source and checks absolute numbers and bounded painted runs.
+
+## Native spring initial velocity (package 2)
+
+`transition={{ type: 'spring', duration: 0.32, bounce: 0.12,
+velocityX: pointerPixelsPerSecondX, velocityY: pointerPixelsPerSecondY }}` adds the
+homogeneous damped-spring response for each translation axis. Units are logical
+pixels/second, not a normalized velocity, so a flick works even when source and
+target are equal. Values must be finite and within ±1,000,000 px/s. Omitted axes
+start at rest; this does not infer the velocity of a prior animation. Duration
+zero still snaps exactly. Tweens ignore velocity. React motion identity includes
+both fields, so a velocity-only change is forwarded. See `src/native/motion.ts`.
+
+Paused-clock dark/light tests verify both axes, direction, same-target motion,
+velocity-only retargeting and exact settlement. The standalone Rust spring tests
+check the initial derivative, finite output, endpoints and damping behavior.
+
+## Notifications and packaging (package 2)
+
+OS notifications remain **blocked for the unbundled Bun host**. Do not call
+`UNUserNotificationCenter.currentNotificationCenter` from that process: on this
+macOS build it aborts inside `dispatch_once` with `bundleProxyForCurrentProcess is
+nil`; an Objective-C `@catch` does not recover. Bun reports a C++ exception panic.
+The deprecated `NSUserNotificationCenter.defaultUserNotificationCenter` returns
+nil. The pinned GPUI `zed/crates/gpui_macos/src/system_notifications.rs` independently
+guards its notification center with the same missing-bundle-ID check. `native/notification-check.ts` reproduces both in separate child processes,
+then shows that the same native executable placed in a disposable `.app` with
+`CFBundleIdentifier`, `CFBundleExecutable` and package type `APPL` can create the
+modern center. The check cleans up its temporary bundle. **No authorization was
+requested and no notification was posted.**
+
+The minimal next step is an actual bundled native host or resident helper `.app`
+with a stable bundle ID, a retained `UNUserNotificationCenterDelegate`, and an IPC
+bridge carrying notification IDs back to the active environment/thread. The helper
+must own status, permission requests, posting, and click delivery across activation
+and launch. The probe establishes center creation only, not permission/display/click
+behavior. It does not establish that a production signed helper is necessary for
+local development; distribution signing belongs to packaging verification.
+
+`src/native/notifications.ts` exposes a truthful unsupported status and explicit
+errors for `requestPermission`, `post({id,title,body})` and `onClick`. It never
+requests permission or silently substitutes in-app toasts. Keep the existing
+agent toast flow until the bundled bridge has been verified. Apple references:
+[UNUserNotificationCenter](https://developer.apple.com/documentation/usernotifications/unusernotificationcenter),
+[authorization](https://developer.apple.com/documentation/usernotifications/unusernotificationcenter/requestauthorization(options:completionhandler:)),
+[response delegate](https://developer.apple.com/documentation/usernotifications/unusernotificationcenterdelegate/usernotificationcenter(_:didreceive:withcompletionhandler:)).
+
+Package 2's integration patch and final measurements are in [PACKAGE-2.md](PACKAGE-2.md).
 
 ## Package 1 validation and measurements
 
