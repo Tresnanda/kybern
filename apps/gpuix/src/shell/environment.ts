@@ -20,7 +20,7 @@ const leaving = new Set<() => void>()
 const resets = new Set<{ reset: (previous: Environment, next: Environment) => void; priority: number }>()
 let connection: { close: () => void; connect: () => void } | undefined
 export const activeEnvironment = () => active
-export const environmentKey = () => active.id === 'local' ? process.env.KYBERN_URL ?? active.dataDir : active.id
+export const environmentKey = () => active.id === 'local' ? process.env.KYBERN_URL || active.dataDir : active.id
 export const environmentEndpoint = () => profileEndpoint(profileById(active.id))
 export function useEnvironment() { return useSyncExternalStore((fn) => { listeners.add(fn); return () => { listeners.delete(fn) } }, activeEnvironment) }
 export function onEnvironmentChange(reset: (previous: Environment, next: Environment) => void, priority = 0) {

@@ -1,3 +1,4 @@
+import { setAppearance } from '../settings/appearance.ts'
 // Search palette (⌘K, the sidebar's search button): `views/Palette.tsx`. One
 // input over grouped results: suggested commands, the 40 most recent threads,
 // projects. Typing filters by label and keywords; ↑/↓ move the highlight, Enter
@@ -96,6 +97,8 @@ function PaletteDialog() {
     const kbd = (keys: string[]) => <Kbd keys={keys} />
     const projectName = (id: string) => (isFreeChatProject(id) ? 'Free chat' : (projects.find((p) => p.id === id)?.name ?? ''))
     const actions: Item[] = [
+      { id: 'theme', label: 'Toggle theme', keywords: 'appearance light dark theme', group: 'Suggested', icon: <Icon source={N.settings} size={15} color={muted(t, 1)} />, run: () => setAppearance({ theme: t.variant === 'dark' ? 'light' : 'dark' }) },
+      { id: 'theme-system', label: 'Use system theme', keywords: 'appearance automatic light dark theme', group: 'Suggested', icon: <Icon source={N.settings} size={15} color={muted(t, 1)} />, run: () => setAppearance({ theme: 'system' }) },
       {
         id: 'resume',
         label: 'Resume session',

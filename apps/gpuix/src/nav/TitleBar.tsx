@@ -56,7 +56,9 @@ function ChromeIcon({
   glyph = 16,
   pressed,
   testId,
+  decorative = false,
 }: {
+  decorative?: boolean
   icon: string
   label: string
   tooltip?: string
@@ -87,7 +89,7 @@ function ChromeIcon({
         flexShrink: 0,
         opacity: disabled ? 0.4 : 1,
         cursor: disabled ? 'default' : 'pointer',
-        pointerEvents: 'auto',
+        pointerEvents: decorative ? 'none' : 'auto',
         ...(pressed ? { backgroundColor: t.buttonSecondaryHover } : {}),
         ...(disabled ? {} : { hover: { backgroundColor: t.buttonSecondaryHover } }),
       }}
@@ -346,7 +348,7 @@ function ThreadHeader() {
           align="end"
           minWidth={208}
           testId="thread-actions"
-          trigger={(open) => <ChromeIcon icon={N.ellipsis} label="Thread actions" glyph={14} color={t.text} pressed={open} />}
+          trigger={(open) => <ChromeIcon decorative icon={N.ellipsis} label="Thread actions" glyph={14} color={t.text} pressed={open} />}
         >
           {/* Split view is not in this build yet. */}
           <MenuItem id="split-right" icon={N.splitRight} label="Split right" shortcut="⌘\" disabled onSelect={() => {}} />

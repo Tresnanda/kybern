@@ -86,9 +86,17 @@ function EnvironmentPanel({ threadId }: { threadId: string }) {
   useEffect(() => {
     let live = true
     setError('')
-    void Promise.all([getClient()!.call('git.status', { thread_id: threadId }), getClient()!.call('threads.diff', { thread_id: threadId, include_patch: false })]).then(([git, diff]) => {
-      if (live) { setGit(git); setDiff(diff) }
-    }, (e) => { if (live) setError(errorText(e)) })
+    const client = getClient()
+    if (!client) return
+    // A new thread has no checkpoint yet. Its diff failure must not hide valid
+    // repository information (branch, remotes and working-tree status).
+    void Promise.allSettled([client.call('git.status', { thread_id: threadId }), client.call('threads.diff', { thread_id: threadId, include_patch: false })]).then(([status, changes]) => {
+      if (!live) return
+      setGit(status.status === 'fulfilled' ? status.value : null)
+      setDiff(changes.status === 'fulfilled' ? changes.value : null)
+      const failures = [status, changes].filter((result) => result.status === 'rejected' && !(result === changes && errorText(result.reason).includes('thread has no checkpoints yet')))
+      setError(failures.map((result) => errorText((result as PromiseRejectedResult).reason)).join(' · '))
+    })
     return () => { live = false }
   }, [threadId, reload])
   useEffect(() => onOpenEvent((e) => { if (e.thread_id === threadId && (e.kind === 'turn_completed' || e.kind === 'turn_failed')) refresh() }), [threadId])
