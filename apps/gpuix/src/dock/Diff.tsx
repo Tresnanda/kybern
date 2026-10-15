@@ -8,7 +8,8 @@ import { errorText } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
 import { Chevron, IconButton } from '../sidebar/rows.tsx'
 import { getClient, onOpenEvent, useApp } from '../state.ts'
-import { cachedMarkdownTheme } from '../transcript/kit.tsx'
+import { desktopDiffTheme } from '../native/diff.ts'
+import { NativeDiffHeader } from '../native/DiffView.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { ErrorLine, Section } from './parts.tsx'
 
@@ -113,15 +114,11 @@ const FileDiff = memo(function FileDiff({ file, threadId }: { file: FileChange; 
     return () => { current = false }
   }, [open, patch, file.path, file.binary, threadId, reload])
   return <div style={{ paddingLeft: 8, paddingRight: 8, paddingBottom: 6 }}>
-    <div style={{ display: 'flex', flexDirection: 'column', borderWidth: 0.6, borderColor: t.borderLight, borderRadius: 8 }}>
-      <div testId={`dock-file-diff-${file.path}`} role="button" onClick={() => setOpen(!open)} style={{ display: 'flex', alignItems: 'center', gap: 6, height: 34, paddingLeft: 8, paddingRight: 8, cursor: 'pointer', borderRadius: 8, backgroundColor: t.codeSurface }}>
-        <Chevron open={open} color={t.textSecondary} size={12} />
-        <Label color={t.text} size={12} truncate style={{ flexGrow: 1 }}>{file.path}</Label>
-        <Label color={t.green} size={10}>{`+${file.additions}`}</Label><Label color={t.red} size={10}>{`−${file.deletions}`}</Label>
-      </div>
+    <div style={{ display: 'flex', flexDirection: 'column', borderWidth: 1, borderColor: t.border, borderRadius: 6, overflow: 'hidden' }}>
+      <NativeDiffHeader file={file} open={open} onToggle={() => setOpen(!open)} testId={`dock-file-diff-${file.path}`} />
       {open && <>
         <ErrorLine error={error} retry={() => setReload((n) => n + 1)} />
-        {file.binary ? <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>Binary file changed</Label> : patch === null ? !error && <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>Loading diff…</Label> : patch ? <diff testId={`dock-native-diff-${file.path}`} patch={patch} wordDiff scroll={file.additions + file.deletions > 200} style={file.additions + file.deletions > 200 ? { height: 360 } : undefined} theme={cachedMarkdownTheme(t)} /> : <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>No text changes</Label>}
+        {file.binary ? <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>Binary file changed</Label> : patch === null ? !error && <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>Loading diff…</Label> : patch ? <diff testId={`dock-native-diff-${file.path}`} patch={patch} scroll={file.additions + file.deletions > 200} style={file.additions + file.deletions > 200 ? { height: 360 } : undefined} theme={desktopDiffTheme(t, false)} /> : <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>No text changes</Label>}
         {truncated && <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>This diff is too large to show in full. Open the file in your editor to see the remaining changes.</Label>}
       </>}
     </div>

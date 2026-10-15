@@ -2,6 +2,7 @@ import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { FONT_MONO } from '../theme.ts'
 import { alpha, cachedMarkdownTheme as markdownTheme } from '../transcript/kit.tsx'
+import { DesktopDiff } from '../native/DiffView.tsx'
 import { memo, useMemo, useState } from 'react'
 import { relativeTime } from '@/lib/format'
 import { reviewDraftIsStale, toggleReviewFinding } from '@/state/prReviewModel'
@@ -29,14 +30,14 @@ export function Changes({ projectId, number, review, compact = false }: { projec
         <div style={{ ...column, flexGrow: 1, minHeight: 0 }}>
           {!file ? <Label color={t.textSecondary} size={13}>{data ? 'No changed files on this page.' : 'Loading changes…'}</Label> : <>
             <div style={{ ...row, justifyContent: 'space-between', minHeight: 32 }}><Label color={t.text} size={12} truncate>{file.path}</Label><Button onClick={() => { if (review.detail) void prFileUrl(review.detail.pull_request.url, file.path).then(openUrl) }}>Open on GitHub</Button></div>
-            {file.patch ? <diff key={file.path} testId="pr-native-diff" patch={patch} wordDiff scroll theme={{ appearance: t.variant }} onLineClick={e => {
+            {file.patch ? <DesktopDiff key={file.path} testId="pr-native-diff" patch={patch} scroll onLineClick={e => {
               if (stale) { setLineError('This draft belongs to a different commit. Resolve the previous draft before choosing a new inline anchor.'); return }
               if (pending?.body.trim()) { setLineError('Add this comment to the review or cancel it before choosing another line.'); return }
               const line = e.newLine && e.newLine > 0 ? e.newLine : e.oldLine
               if (!line || line < 1) return
               setLineError(null)
               review.updateDraft({ pendingInline: { path: file.path, line, side: e.newLine && e.newLine > 0 ? 'RIGHT' : 'LEFT', body: '' } })
-            }} style={{ flexGrow: 1, minHeight: 100, color: t.text, fontSize: 12, borderWidth: 1, borderColor: t.border, borderRadius: 8 }} /> : <Label color={t.textSecondary} size={12}>No patch available for this file.</Label>}
+            }} style={{ flexGrow: 1, minHeight: 100, color: t.text, fontSize: 12 }} /> : <Label color={t.textSecondary} size={12}>No patch available for this file.</Label>}
             {file.patch_truncated && <Label color={t.textSecondary} size={11}>GitHub omitted or truncated this patch. Open the pull request on GitHub to read the full file.</Label>}
           </>}
         </div>

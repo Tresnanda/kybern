@@ -1,3 +1,4 @@
+import { desktopDiffTheme } from '../native/diff.ts'
 import { VisualCard } from './Visual.tsx'
 import { agentItemTool, agentItemWriteResult, parseAgentItemResult, placeItemCards } from '../../../desktop/src/lib/agentItemTools.ts'
 import { AgentItemCard } from '../coordinator/AgentItem.tsx'
@@ -404,10 +405,8 @@ function EditedFileRow({ file, threadId, turnId, first, border }: { file: Diff['
             <Para color={t.red} size={11} style={{ paddingLeft: 12, paddingTop: 8, paddingBottom: 8 }}>Unable to load this file’s changes.</Para>
           ) : patch ? (
             <>
-              {/* The native diff always paints a file header; it sits clipped above the
-                  wrapper's top edge, so the card's file row stays the only header. */}
               <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
-                <diff patch={patch.text} wordDiff maxLines={400} theme={bodyDiffTheme(t)} style={{ minWidth: 0, marginTop: -DIFF_HEADER }} />
+                <diff patch={patch.text} scroll={file.additions + file.deletions > 200} theme={desktopDiffTheme(t, false)} style={file.additions + file.deletions > 200 ? { minWidth: 0, height: 360 } : { minWidth: 0 }} />
               </div>
               {patch.truncated && <Para color={muted(t, 0.75)} size={11} style={{ paddingLeft: 12, paddingTop: 6, paddingBottom: 8 }}>The patch was truncated.</Para>}
             </>
@@ -421,13 +420,3 @@ function EditedFileRow({ file, threadId, turnId, first, border }: { file: Diff['
 
 
 /** A known file-header height for the native diff, so it can be clipped exactly. */
-const DIFF_HEADER = 30
-const bodyThemes = new WeakMap<object, ReturnType<typeof cachedMarkdownTheme>>()
-function bodyDiffTheme(t: ReturnType<typeof useTheme>): ReturnType<typeof cachedMarkdownTheme> {
-  const cached = bodyThemes.get(t)
-  if (cached) return cached
-  const base = cachedMarkdownTheme(t)
-  const theme = { ...base, metrics: { ...base.metrics, diffFileHeaderHeight: DIFF_HEADER } }
-  bodyThemes.set(t, theme)
-  return theme
-}
