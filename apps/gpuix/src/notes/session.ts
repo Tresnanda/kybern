@@ -2,6 +2,7 @@
 // persistent drafts, conservative line merge and explicit conflict resolution.
 import type { Note } from '../../../../packages/kybern-client/src/types.ts'
 import { mergeNoteBodies } from '@/state/noteLines'
+import { activeEnvironment, onEnvironmentLeaving } from '../shell/environment.ts'
 import { load, save } from '../shell/persist.ts'
 import { getNotes, recordNote, rpc, subscribeNotes } from './store.ts'
 export const AUTOSAVE_MS = 500
@@ -18,16 +19,31 @@ export class NoteSession {
   private mounted = 0
   private retryDelay = 1000
   private draftKey: string
+  /** The environment this note lives in; once it is left, nothing here talks to the daemon again. */
+  private readonly environment = activeEnvironment()
+  private retired = false
+  private get live() { return !this.retired && this.environment === activeEnvironment() }
   constructor(readonly id: string) { this.draftKey = `kybern.notes.draft:env:note:${id}` }
   getSnapshot = () => this.snap
   subscribe = (l: () => void) => { this.listeners.add(l); return () => { this.listeners.delete(l) } }
   private set(patch: Partial<Snapshot>) { this.snap = { ...this.snap, ...patch }; this.listeners.forEach((l) => l()) }
   private persist() { if (this.snap.note) save(this.draftKey, { title: this.snap.title, body: this.snap.body, baseRevision: this.snap.note.revision } satisfies Draft) }
+  /** Leaving the environment: keep unsaved text as its draft (restored on return) and stop all timers. */
+  retire() {
+    if (this.retired) return
+    if (this.snap.status !== 'saved' && !this.snap.note?.deleted_at) this.persist()
+    this.retired = true
+    clearTimeout(this.timer)
+    this.off?.()
+    this.off = undefined
+  }
   attach() { if (++this.mounted > 1) return; this.off = subscribeNotes(() => void this.remote()); if (this.snap.phase !== 'ready') void this.reload(); else void this.remote() }
   detach() { if (--this.mounted > 0) return; this.off?.(); this.off = undefined; clearTimeout(this.timer); void this.flush() }
   async reload() {
+    if (!this.live) return
     try {
       const { note } = await rpc().call('notes.get', { id: this.id })
+      if (!this.live) return
       if (!note) { this.set({ phase: 'missing' }); return }
       const draft = load<Draft | null>(this.draftKey, null)
       this.adopt(note)
@@ -49,10 +65,10 @@ export class NoteSession {
   private schedule() { clearTimeout(this.timer); this.timer = setTimeout(() => void this.flush(), AUTOSAVE_MS) }
   private async remote() {
     const summary = getNotes().notes.find((n) => n.id === this.id)
-    if (!summary || !this.snap.note || this.writing || this.refreshing || this.snap.conflict) return
+    if (!this.live || !summary || !this.snap.note || this.writing || this.refreshing || this.snap.conflict) return
     if (summary.revision <= this.snap.note.revision && !!summary.deleted_at === !!this.snap.note.deleted_at) return
     this.refreshing = true
-    try { const { note } = await rpc().call('notes.get', { id: this.id }); if (note && !this.writing) this.merge(note) }
+    try { const { note } = await rpc().call('notes.get', { id: this.id }); if (this.live && note && !this.writing) this.merge(note) }
     catch { /* Reconnect or the next notification retries. */ }
     finally { this.refreshing = false }
   }
@@ -68,6 +84,7 @@ export class NoteSession {
   }
   async flush(): Promise<void> {
     clearTimeout(this.timer)
+    if (!this.live) return
     if (this.writing) { await this.writing; if (this.snap.status === 'dirty') return this.flush(); return }
     const base = this.snap.note
     if (!base || base.deleted_at || this.snap.conflict) return
@@ -78,12 +95,15 @@ export class NoteSession {
     this.writing = (async () => {
       try {
         const note = await rpc().call('notes.update', { id: this.id, expected_revision: base.revision, ...(base.scope === 'thread' ? {} : { title }), body })
+        // Saved in the environment it belongs to; don't touch the next one's state.
+        if (!this.live) return
         this.retryDelay = 1000
         this.set({ note, status: generation === this.generation ? 'saved' : 'dirty', error: null })
         if (generation === this.generation) save(this.draftKey, undefined)
         else this.persist()
         recordNote(note)
       } catch (e) {
+        if (!this.live) return
         if ((e as { code?: number }).code === -32004) {
           try { const { note } = await rpc().call('notes.get', { id: this.id }); if (note) this.merge(note); else this.set({ phase: 'missing' }) }
           catch (error) { this.set({ status: 'error', error: String(error) }) }
@@ -101,6 +121,7 @@ export class NoteSession {
     })()
     await this.writing
     this.writing = null
+    if (!this.live) return
     if (this.snap.status === 'dirty') { if (this.mounted) this.schedule(); else await this.flush() }
     if (this.mounted) void this.remote()
   }
@@ -116,3 +137,7 @@ export function noteSession(id: string) {
   if (sessions.size > 24) for (const [key, value] of sessions) { if (key !== id && value.getSnapshot().status === 'saved') { sessions.delete(key); if (sessions.size <= 24) break } }
   return session
 }
+onEnvironmentLeaving(() => {
+  for (const session of sessions.values()) session.retire()
+  sessions.clear()
+})

@@ -8,6 +8,7 @@ import type {
 } from '../../../../packages/kybern-client/src/types.ts'
 import { readTaskPrefs, type TaskViewPrefs } from '@/state/tasksModel'
 import { getClient, getState, useApp } from '../state.ts'
+import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
 import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
 
@@ -26,7 +27,7 @@ interface State {
   composer: string[] | null
   menu: 'status' | 'priority' | null
 }
-let state: State = {
+const initialState = (): State => ({
   tasks: {},
   loaded: false,
   error: null,
@@ -39,7 +40,8 @@ let state: State = {
   quick: null,
   composer: null,
   menu: null,
-}
+})
+let state: State = initialState()
 const listeners = new Set<() => void>()
 export const taskState = () => state
 export function setTasks(patch: Partial<State>) {
@@ -153,19 +155,28 @@ export function useTasksFeed() {
     }
   }, [status])
 }
+// A switch starts from the new environment's tasks and saved view; a list
+// request or queued change for the previous one is dropped.
+onEnvironmentChange(() => {
+  generation++
+  pending = null
+  setTasks(initialState())
+})
 export async function createTask(params: TaskItemsCreateParams) {
   const client = getClient()
   if (!client) throw new Error('Reconnect to add a task.')
+  const owner = activeEnvironment()
   const task = await client.call('tasks.items.create', params)
-  upsert(task)
+  if (owner === activeEnvironment()) upsert(task)
   return task
 }
 export async function updateTask(id: string, patch: Omit<TaskItemsUpdateParams, 'id'>) {
   try {
     const client = getClient()
     if (!client) throw new Error('Reconnect and try again.')
+    const owner = activeEnvironment()
     const task = await client.call('tasks.items.update', { id, ...patch })
-    upsert(task)
+    if (owner === activeEnvironment()) upsert(task)
     return task
   } catch (error) {
     toast.error('Unable to save task', { description: String(error) })
@@ -178,11 +189,15 @@ export function updateMany(ids: string[], patch: Omit<TaskItemsUpdateParams, 'id
 }
 export async function deleteTasks(ids: string[]) {
   const deleted: string[] = []
+  // One client for the whole batch: a switch midway must not send these ids to another environment.
+  const client = getClient()
+  const owner = activeEnvironment()
   for (const id of ids) {
+    if (owner !== activeEnvironment()) return
     try {
-      const client = getClient()
       if (!client) throw new Error('Reconnect and try again.')
       await client.call('tasks.items.delete', { id })
+      if (owner !== activeEnvironment()) return
       deleted.push(id)
       const tasks = { ...state.tasks }
       delete tasks[id]
@@ -202,8 +217,9 @@ export async function deleteTasks(ids: string[]) {
           void Promise.allSettled(
             deleted.map(async (id) => {
               try {
-                const task = await getClient()!.call('tasks.items.restore', { id })
-                upsert(task)
+                if (owner !== activeEnvironment() || !client) return
+                const task = await client.call('tasks.items.restore', { id })
+                if (owner === activeEnvironment()) upsert(task)
               } catch (error) {
                 toast.error('Unable to restore task', { description: String(error) })
               }

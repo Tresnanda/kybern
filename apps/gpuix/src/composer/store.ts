@@ -1,3 +1,5 @@
+import { onEnvironmentChange, onEnvironmentLeaving } from '../shell/environment.ts'
+import { load, save } from '../shell/persist.ts'
 // Composer data and actions: the agent catalog, settings and accounts, the open
 // thread's next-message target, queued follow-ups, and the home screen's draft
 // choices. Every RPC here is the one the desktop uses (`state/rpc.ts`,
@@ -54,7 +56,7 @@ export interface ComposerData {
   recents: Record<string, string[]>
 }
 
-let data: ComposerData = {
+const initialData: ComposerData = {
   providers: [],
   providersLoading: false,
   settings: null,
@@ -68,10 +70,13 @@ let data: ComposerData = {
   favorites: [],
   recents: {},
 }
+let data: ComposerData = { ...initialData, ...load<Partial<Pick<ComposerData, 'draft' | 'favorites' | 'recents'>>>('kybern.composer.choices', {}) }
 const listeners = new Set<() => void>()
 
 export function patch(next: Partial<ComposerData> | ((d: ComposerData) => Partial<ComposerData>)) {
+  const previous = data
   data = { ...data, ...(typeof next === 'function' ? next(data) : next) }
+  if (data.draft !== previous.draft || data.favorites !== previous.favorites || data.recents !== previous.recents) save('kybern.composer.choices', { draft: data.draft, favorites: data.favorites, recents: data.recents })
   for (const l of listeners) l()
 }
 
@@ -114,8 +119,9 @@ export function ensureLoaded() {
   if (!client || client === loadedFor || getState().status !== 'open') return
   loadedFor = client
   client.onNotification('settings.changed', (params) => {
+    if (getClient() !== client) return
     const settings = (params as { settings?: Settings } | null)?.settings
-    if (settings) patch({ settings })
+    if (settings && client === getClient()) patch({ settings })
     void loadProviders(false).catch(() => {})
   })
   // Like the desktop's provider cache: paint the last catalog at once, since
@@ -123,10 +129,10 @@ export function ensureLoaded() {
   const cached = readProviderCache(client.endpoint.url)
   if (cached && !data.providers.length) patch({ providers: cached })
   void loadProviders(false).catch(() => {})
-  void client.call('settings.get', {}).then((settings) => patch({ settings })).catch(() => {})
+  void client.call('settings.get', {}).then((settings) => { if (getClient() === client) patch({ settings }) }).catch(() => {})
   void client
     .call('providers.accounts.list', {})
-    .then((r) => patch({ accounts: r.accounts }))
+    .then((r) => { if (getClient() === client) patch({ accounts: r.accounts }) })
     .catch(() => {})
 }
 
@@ -134,14 +140,17 @@ let providerLoad: Promise<ProviderStatus[]> | null = null
 export function loadProviders(force: boolean, projectId?: ProjectId): Promise<ProviderStatus[]> {
   if (providerLoad && !force) return providerLoad
   patch({ providersLoading: true })
-  const request = rpc()
+  const client = rpc()
+  const request = client
     .call('providers.list', { ...(projectId ? { project_id: projectId } : {}), ...(force ? { force_refresh: true } : {}) })
     .then((r) => {
+      if (getClient() !== client) return r.providers
       patch({ providers: r.providers })
-      if (!projectId) writeProviderCache(rpc().endpoint.url, r.providers)
+      if (!projectId) writeProviderCache(client.endpoint.url, r.providers)
       return r.providers
     })
     .finally(() => {
+      if (getClient() !== client) return
       if (providerLoad === request) providerLoad = null
       patch({ providersLoading: false })
     })
@@ -199,9 +208,11 @@ export async function loadCatalog(threadId: ThreadId, provider: ProviderInstance
 
 /** `changePermission`: `threads.update`, then the target again. */
 export async function setThreadMode(threadId: ThreadId, mode: PermissionMode) {
-  await rpc().call('threads.update', { thread_id: threadId, permission_mode: mode })
+  const client = rpc()
+  await client.call('threads.update', { thread_id: threadId, permission_mode: mode })
+  if (getClient() !== client) return
   await refreshLists()
-  await loadTarget(threadId)
+  if (getClient() === client) await loadTarget(threadId)
 }
 
 /** `chooseTarget` with the thread's target and a new model/effort. */
@@ -210,19 +221,22 @@ export async function setThreadModel(threadId: ThreadId, model: string | undefin
   const thread = getState().threads.find((t) => t.id === threadId) ?? getState().open.thread
   const provider = current?.target.provider ?? thread?.provider
   if (!provider) return
-  const state = await rpc().call('threads.target.set', {
+  const client = rpc()
+  const state = await client.call('threads.target.set', {
     thread_id: threadId,
     target: { provider, model, effort },
     inherit_account: !current?.account_override,
   })
-  patch({ target: { threadId, state } })
+  if (getClient() === client) patch({ target: { threadId, state } })
 }
 
 // ---- sending ----
 
 export async function loadQueue(threadId: ThreadId) {
+  const client = rpc()
   try {
-    const r = await rpc().call('queue.list', { thread_id: threadId })
+    const r = await client.call('queue.list', { thread_id: threadId })
+    if (getClient() !== client) return
     patch((d) => ({ queued: { ...d.queued, [threadId]: r.messages.filter((m) => m.thread_id === threadId) } }))
   } catch {
     // Older daemons have no queue.
@@ -238,13 +252,15 @@ export async function sendToThread(threadId: ThreadId, message: UserMessage, del
     await rpc().call('threads.steer', { thread_id: threadId, id: crypto.randomUUID(), message })
     return
   }
-  await rpc().call('queue.add', { thread_id: threadId, id: crypto.randomUUID(), message })
-  await loadQueue(threadId)
+  const client = rpc()
+  await client.call('queue.add', { thread_id: threadId, id: crypto.randomUUID(), message })
+  if (getClient() === client) await loadQueue(threadId)
 }
 
 export async function removeQueued(threadId: ThreadId, id: string) {
-  await rpc().call('queue.remove', { thread_id: threadId, id })
-  await loadQueue(threadId)
+  const client = rpc()
+  await client.call('queue.remove', { thread_id: threadId, id })
+  if (getClient() === client) await loadQueue(threadId)
 }
 
 export async function interruptThread(threadId: ThreadId) {
@@ -263,7 +279,8 @@ export async function createThread(opts: {
   baseBranch?: string
   message: UserMessage
 }) {
-  const t = await rpc().call('threads.create', {
+  const client = rpc()
+  const t = await client.call('threads.create', {
     ...(opts.projectId ? { project_id: opts.projectId } : {}),
     provider: opts.provider,
     pin_account: opts.pinAccount,
@@ -274,16 +291,20 @@ export async function createThread(opts: {
     base_branch: opts.baseBranch,
     message: opts.message,
   })
+  if (getClient() !== client) return t.id
   await refreshLists()
-  void selectThread(t.id)
+  if (getClient() === client) void selectThread(t.id)
   return t.id
 }
 
 export async function loadBranches(projectId: ProjectId) {
+  const client = rpc()
   try {
-    const result = await rpc().call('git.branches', { project_id: projectId })
+    const result = await client.call('git.branches', { project_id: projectId })
+    if (getClient() !== client) return
     patch({ branches: { projectId, result } })
   } catch {
+    if (getClient() !== client) return
     patch({ branches: { projectId, result: { current: null, branches: [] } } })
   }
 }
@@ -323,3 +344,6 @@ export async function uploadPath(path: string): Promise<UploadedAsset> {
   }
   return (await response.json()) as UploadedAsset
 }
+
+onEnvironmentLeaving(() => save('kybern.composer.choices', { draft: data.draft, favorites: data.favorites, recents: data.recents }))
+onEnvironmentChange(() => { loadedFor = null; providerLoad = null; targetSeq++; catalogSeq++; patch({ ...initialData, ...load<Partial<Pick<ComposerData, 'draft' | 'favorites' | 'recents'>>>('kybern.composer.choices', {}) }) })

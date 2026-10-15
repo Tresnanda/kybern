@@ -1,3 +1,4 @@
+import { onEnvironmentChange } from '../shell/environment.ts'
 // The Agents pane retains completed children (unlike the sidebar's temporary
 // ChildRow). Tree ordering, phases, result clamps and workspace copy are shared.
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
@@ -183,3 +184,5 @@ const AgentRow = memo(function AgentRow({ row, detailOpen, onToggleTree, onToggl
     </div>}
   </div>
 })
+
+onEnvironmentChange(() => { choices.clear() })

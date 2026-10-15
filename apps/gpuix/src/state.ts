@@ -1,9 +1,7 @@
+import { environmentEndpoint, onEnvironmentChange, registerEnvironmentConnection } from './shell/environment.ts'
 // App state: one daemon connection, the project and thread lists, and the open
 // thread's transcript. Transport and transcript folding come from the shared
 // `packages/kybern-client` sources, the same ones desktop and mobile use.
-import { readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
-import path from 'node:path'
 import { useSyncExternalStore } from 'react'
 import { KybernClient, type ConnectionStatus } from '../../../packages/kybern-client/src/client.ts'
 import {
@@ -73,14 +71,6 @@ export function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener)
 }
 
-function endpoint() {
-  if (process.env.KYBERN_URL && process.env.KYBERN_TOKEN)
-    return { url: process.env.KYBERN_URL, token: process.env.KYBERN_TOKEN }
-  const dir = process.env.KYBERN_DATA_DIR ?? path.join(homedir(), '.kybern')
-  const port = readFileSync(path.join(dir, 'daemon.port'), 'utf8').trim()
-  const token = readFileSync(path.join(dir, 'daemon.token'), 'utf8').trim()
-  return { url: `ws://127.0.0.1:${port}/ws`, token }
-}
 
 let client: KybernClient | null = null
 /** The daemon connection, once `connect()` has run. */
@@ -89,8 +79,10 @@ let unsubscribeOpen: (() => void) | null = null
 
 /** Drop a dead client so `connect()` builds a fresh one, re-reading the port and token files. */
 export function resetClient() {
-  client?.close()
+  const previous = client
   client = null
+  clearTimeout(retryTimer); refreshing = null; refreshAgain = false
+  previous?.close()
   unsubscribeOpen?.()
   unsubscribeOpen = null
 }
@@ -99,9 +91,9 @@ export function connect() {
   if (client) return
   let ep
   try {
-    ep = endpoint()
-  } catch {
-    set({ status: 'failed', statusDetail: 'Start kybernd, then reopen this window' })
+    ep = environmentEndpoint()
+  } catch (error) {
+    set({ status: 'failed', statusDetail: error instanceof Error ? error.message : 'Start kybernd, then reconnect' })
     return
   }
   // Native sockets authenticate the upgrade with a header and use the trusted
@@ -112,7 +104,9 @@ export function connect() {
         headers: { origin: 'tauri://localhost', Authorization: `Bearer ${token}` },
       } as unknown as string[]),
   })
+  const owner = client
   client.onStatus((status, detail) => {
+    if (owner !== client) return
     set({ status, statusDetail: detail ?? null })
     if (status === 'open') void refreshLists()
   })
@@ -136,16 +130,19 @@ export function refreshLists(): Promise<void> {
     refreshAgain = true
     return refreshing
   }
+  const owner = client
   refreshing = (async () => {
     try {
       do {
         refreshAgain = false
         await loadLists()
-      } while (refreshAgain)
+      } while (refreshAgain && owner === client)
     } catch {
+      if (owner !== client) return
       clearTimeout(retryTimer)
       if (!state.listsLoaded && client?.status === 'open') retryTimer = setTimeout(() => void refreshLists(), 3000)
     } finally {
+      if (owner !== client) return
       refreshing = null
       // A request that arrived while a failing load was in flight (say, from a
       // reconnect) still runs once the connection is open.
@@ -160,10 +157,12 @@ export function refreshLists(): Promise<void> {
 
 async function loadLists() {
   if (!client) return
+  const owner = client
   const [p, t] = await Promise.all([
-    client.call('projects.list', {}),
-    client.call('threads.list', {}),
+    owner.call('projects.list', {}),
+    owner.call('threads.list', {}),
   ])
+  if (owner !== client) return
   const threads = t.threads
     .filter((th) => !isChildThread(th) && th.status !== 'archived')
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated_at.localeCompare(a.updated_at))
@@ -187,17 +186,18 @@ export async function selectThread(id: ThreadId | null) {
   unsubscribeOpen = null
   set({ selectedId: id, open: emptyThreadState() })
   if (!id || !client) return
-  const res = await client.call('threads.get', {
+  const owner = client
+  const res = await owner.call('threads.get', {
     thread_id: id,
     transcript_limit: 120,
     include_tool_output: false,
   })
-  if (state.selectedId !== id) return
+  if (owner !== client || state.selectedId !== id) return
   set({ open: seedFromGet(res) })
   const sub = client.subscribeEvents(
     { thread_id: id, after_seq: res.thread.last_seq, include_tool_output: false },
     (event) => {
-      if (state.selectedId !== id) return
+      if (owner !== client || state.selectedId !== id) return
       set({ open: applyEvent(state.open, event) })
       for (const listener of openEventListeners) listener(event)
     },
@@ -215,13 +215,15 @@ export async function send(text: string) {
   }
   // Home: start a thread in the draft's project, or a free chat (desktop `createThread`).
   const recent = state.threads[0]
-  const created = await client.call('threads.create', {
+  const owner = client
+  const created = await owner.call('threads.create', {
     ...(state.draft.projectId ? { project_id: state.draft.projectId } : {}),
     provider: recent?.provider ?? { kind: 'claude-code', instance: 'default' },
     message,
   })
+  if (owner !== client) return
   await refreshLists()
-  void selectThread(created.id)
+  if (owner === client) void selectThread(created.id)
 }
 
 /** Show the home screen for a project's new thread (or a free chat without one). */
@@ -237,3 +239,6 @@ export function toggleProject(id: string) {
 export function toggleSidebar() {
   set({ sidebarOpen: !state.sidebarOpen })
 }
+
+registerEnvironmentConnection({ close: resetClient, connect })
+onEnvironmentChange(() => { clearTimeout(retryTimer); refreshing = null; refreshAgain = false; set({ status: 'connecting', statusDetail: null, projects: [], threads: [], selectedId: null, draft: {}, open: emptyThreadState(), collapsed: {}, listsLoaded: false }) }, -60)

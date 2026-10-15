@@ -1,3 +1,4 @@
+import { onEnvironmentChange } from '../shell/environment.ts'
 import { useSyncExternalStore } from 'react'
 import { Label, useTheme } from '../ui.tsx'
 
@@ -13,3 +14,5 @@ export function SettingsBreadcrumb() {
   const current = useSyncExternalStore((listener) => { listeners.add(listener); return () => { listeners.delete(listener) } }, () => title)
   return <div style={{ position: 'absolute', left: 328, top: 0, height: 46, display: 'flex', alignItems: 'center' }}><Label color={t.textSecondary} size={12}>{`Settings  /  ${current}`}</Label></div>
 }
+
+onEnvironmentChange(() => { title = 'General' })

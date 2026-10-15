@@ -1,9 +1,11 @@
+import { showDialog } from '../dialogs/store.ts'
 // The window title bar (`views/chrome.tsx` + the thread `Header` in
 // `views/Thread.tsx`): the sidebar toggle and back/forward (or New thread while
 // the panel is closed) after the traffic lights, then the route header over the
 // content column: provider mark, title (double-click renames), Hand off, the ⋯
 // thread menu, and the panel toggles.
 import { SettingsBreadcrumb } from '../settings/Breadcrumb.tsx'
+import { EnvironmentTrigger } from '../environment/Panel.tsx'
 import { ISLAND } from '../MatrixLoader.tsx'
 import { toggleDock, useDock } from '../dock/store.ts'
 import { motion } from '@gpuix/react'
@@ -353,6 +355,7 @@ function ThreadHeader() {
               )}
             </>
           )}
+          {thread.worktree && !thread.subagent && <MenuItem id="cleanup" testId="header-worktree-cleanup" icon={N.worktree} label="Remove worktree…" onSelect={() => showDialog({ kind: 'worktree', threadId: thread.id })} />}
           {/* A subagent thread is read-only: it cannot be renamed, pinned or archived. */}
           {!thread.subagent && (
             <>
@@ -396,7 +399,7 @@ function PanelToggles() {
   const dock = useDock(threadId)
   return (
     <>
-      <ChromeIcon icon={N.window} label="Toggle environment panel" tooltip="Environment" />
+      {threadId && <EnvironmentTrigger key={threadId} threadId={threadId} />}
       <ChromeIcon icon={N.panelRight} label="Toggle right sidebar" tooltip={`${dock.open ? 'Close' : 'Open'} right sidebar (⌘J)`} pressed={dock.open} onClick={() => toggleDock()} testId="dock-toggle" />
     </>
   )

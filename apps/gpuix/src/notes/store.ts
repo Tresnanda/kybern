@@ -3,6 +3,7 @@ import type { Note, NoteSummary } from '../../../../packages/kybern-client/src/t
 import type { NotesFilter, NotesGroupBy, NotesSortBy } from '@/state/notesModel'
 import { getClient, getState, subscribe } from '../state.ts'
 import { goPage } from '../nav/history.ts'
+import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
 import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
 import { isFreeChatProject } from '../../../../packages/kybern-client/src/types.ts'
@@ -12,7 +13,8 @@ export interface Capture { text: string; threadTitle: string; threadId: string }
 interface Display { layout: 'gallery' | 'list'; group: NotesGroupBy; sort: NotesSortBy; hints: boolean; outline: boolean }
 interface State { notes: NoteSummary[]; loaded: boolean; error: string | null; selected: string | null; filter: NotesFilter; display: Display; quick: boolean; capture: Capture | null }
 const defaults: Display = { layout: 'gallery', group: 'none', sort: 'edited', hints: true, outline: true }
-let state: State = { notes: [], loaded: false, error: null, selected: load<string | null>('kybern.notes.lastOpenId', null), filter: { kind: 'all' }, display: { ...defaults, ...load<Partial<Display>>('kybern.notes.display', {}) }, quick: false, capture: null }
+const initialState = (): State => ({ notes: [], loaded: false, error: null, selected: load<string | null>('kybern.notes.lastOpenId', null), filter: { kind: 'all' }, display: { ...defaults, ...load<Partial<Display>>('kybern.notes.display', {}) }, quick: false, capture: null })
+let state: State = initialState()
 const listeners = new Set<() => void>()
 export const getNotes = () => state
 export function setNotes(patch: Partial<State>) { state = { ...state, ...patch }; listeners.forEach((l) => l()) }
@@ -39,15 +41,29 @@ let fetching: Promise<void> | null = null
 let again = false
 export function refreshNotes(): Promise<void> {
   if (fetching) { again = true; return fetching }
-  fetching = (async () => {
+  const owner = activeEnvironment()
+  const run = (async () => {
     do {
       again = false
-      try { const result = await rpc().call('notes.list', {}); setNotes({ notes: result.notes, loaded: true, error: null }) }
-      catch (e) { setNotes({ error: String(e) }) }
+      try {
+        const result = await rpc().call('notes.list', {})
+        if (owner !== activeEnvironment()) return
+        setNotes({ notes: result.notes, loaded: true, error: null })
+      } catch (e) {
+        if (owner !== activeEnvironment()) return
+        setNotes({ error: String(e) })
+      }
     } while (again)
-  })().finally(() => { fetching = null })
-  return fetching
+  })().finally(() => { if (fetching === run) fetching = null })
+  fetching = run
+  return run
 }
+// A switch starts from the new environment's notes and its saved preferences.
+onEnvironmentChange(() => {
+  fetching = null
+  again = false
+  setNotes(initialState())
+})
 /** One live feed while the app is mounted. No polling; reconnect reloads the list. */
 export function useNotesFeed() {
   useEffect(() => {

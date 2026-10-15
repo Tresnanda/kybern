@@ -1,3 +1,4 @@
+import { environmentKey, onEnvironmentChange } from '../shell/environment.ts'
 // Keeps the thread panel live, like the desktop's `state/rpc.ts`:
 //
 // - one events subscription for every thread folds `thread_created`,
@@ -129,6 +130,7 @@ function loadChildren(parentId: ThreadId): Promise<void> {
   const request = client
     .call('threads.list', { parent_thread_id: parentId })
     .then((result) => {
+      if (getClient() !== client) return
       let changed = false
       const children = { ...getNav().children }
       for (const thread of result.threads) {
@@ -170,7 +172,7 @@ async function refreshActivity() {
   if (!client) return
   try {
     const result = await client.call('threads.list', {})
-    applyActivity(result.activity)
+    if (getClient() === client) applyActivity(result.activity)
   } catch {
     // The next runtime task change tries again.
   }
@@ -180,7 +182,7 @@ export async function loadProviders(forceRefresh = false) {
   const client = getClient()
   if (!client) return []
   const result = await client.call('providers.list', forceRefresh ? { force_refresh: true } : {})
-  setNav({ providers: result.providers })
+  if (getClient() === client) setNav({ providers: result.providers })
   return result.providers
 }
 
@@ -192,16 +194,15 @@ function applyLimits(result: UsageLimitsResult) {
 export function askLimits(refresh = false) {
   const client = getClient()
   if (!client) return
-  void client.call('usage.limits', { cached: true, ...(refresh ? { refresh: true } : {}) }).then(applyLimits, () => {})
+  void client.call('usage.limits', { cached: true, ...(refresh ? { refresh: true } : {}) }).then((result) => { if (getClient() === client) applyLimits(result) }, () => {})
 }
 
 // ---- the reader's sidebar preferences, kept across launches per daemon ----
 
-const dataDir = process.env.KYBERN_URL ?? process.env.KYBERN_DATA_DIR ?? path.join(homedir(), '.kybern')
-const prefsFile = path.join(
+const prefsFile = () => path.join(
   homedir(),
   'Library/Application Support/kybern-gpuix',
-  `workspace-${createHash('sha1').update(dataDir).digest('hex').slice(0, 12)}.json`,
+  `workspace-${createHash('sha1').update(environmentKey()).digest('hex').slice(0, 12)}.json`,
 )
 
 interface Prefs {
@@ -213,7 +214,7 @@ interface Prefs {
 
 function readPrefs(): Prefs {
   try {
-    return JSON.parse(readFileSync(prefsFile, 'utf8')) as Prefs
+    return JSON.parse(readFileSync(prefsFile(), 'utf8')) as Prefs
   } catch {
     return {}
   }
@@ -221,6 +222,8 @@ function readPrefs(): Prefs {
 
 let prefsTimer: ReturnType<typeof setTimeout> | undefined
 let lastPrefs = ''
+let pendingPrefs: (() => void) | undefined
+let stops: (() => void)[] = []
 function persistPrefs() {
   const prefs: Prefs = {
     collapsed: getState().collapsed,
@@ -232,21 +235,23 @@ function persistPrefs() {
   if (text === lastPrefs) return
   lastPrefs = text
   clearTimeout(prefsTimer)
-  prefsTimer = setTimeout(() => {
+  const target = prefsFile()
+  pendingPrefs = () => {
     try {
-      mkdirSync(path.dirname(prefsFile), { recursive: true })
-      writeFileSync(prefsFile, text)
+      mkdirSync(path.dirname(target), { recursive: true })
+      writeFileSync(target, text)
     } catch {
       // Preferences are a convenience; a read-only home must not break the app.
     }
-  }, 300)
+  }
+  prefsTimer = setTimeout(() => { pendingPrefs?.(); pendingPrefs = undefined }, 300)
 }
 
 let started = false
 let limitsTimer: ReturnType<typeof setInterval> | undefined
 /** Follow a fresh client after a reconnect (`shell/connection.ts`). */
 export function restartLive() {
-  started = false
+  stopLive()
   startLive()
 }
 
@@ -261,20 +266,20 @@ export function startLive() {
   lastPrefs = JSON.stringify(prefs)
   set({ collapsed: prefs.collapsed ?? {}, ...(prefs.sidebarOpen === undefined ? {} : { sidebarOpen: prefs.sidebarOpen }) })
   setNav({ projectOrder: prefs.projectOrder ?? [], filter: prefs.filter ?? DEFAULT_FILTER })
-  subscribe(persistPrefs)
-  subscribeNav(persistPrefs)
+  stops.push(subscribe(persistPrefs), subscribeNav(persistPrefs))
 
-  client.subscribeEvents({ include_tool_output: false }, onEvent)
-  client.onNotification(USAGE_LIMITS_CHANGED_NOTIFICATION, (params) => applyLimits(params as UsageLimitsResult))
+  const events = client.subscribeEvents({ include_tool_output: false }, (event) => { if (getClient() === client) onEvent(event) })
+  stops.push(() => events.unsubscribe())
+  stops.push(client.onNotification(USAGE_LIMITS_CHANGED_NOTIFICATION, (params) => applyLimits(params as UsageLimitsResult)))
   const onOpen = () => {
     void refreshActivity()
     void loadProviders().catch(() => {})
     askLimits()
-    void client.call('daemon.info', {}).then((info) => setNav({ version: info.version ?? null }), () => {})
+    void client.call('daemon.info', {}).then((info) => { if (getClient() === client) setNav({ version: info.version ?? null }) }, () => {})
   }
-  client.onStatus((status) => {
-    if (status === 'open') onOpen()
-  })
+  stops.push(client.onStatus((status) => {
+    if (status === 'open' && getClient() === client) onOpen()
+  }))
   if (client.status === 'open') onOpen()
   // The rail rings stay current while the window is up (`usageLimits.ts` polls each minute).
   limitsTimer ??= setInterval(() => askLimits(), LIMITS_POLL_MS)
@@ -285,3 +290,12 @@ export function ensureChild(id: ThreadId) {
   const thread = getNav().children[id]
   if (thread?.parent_thread_id) void loadChildren(thread.parent_thread_id)
 }
+
+function stopLive() {
+  for (const stop of stops) stop()
+  stops = []
+  clearTimeout(prefsTimer); pendingPrefs?.(); pendingPrefs = undefined
+  clearTimeout(activityTimer); clearInterval(limitsTimer); limitsTimer = undefined
+  started = false; lastPrefs = ''; childLoads.clear(); archived.clear()
+}
+onEnvironmentChange(stopLive, -100)

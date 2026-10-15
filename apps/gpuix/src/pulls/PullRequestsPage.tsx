@@ -1,3 +1,4 @@
+import { onEnvironmentChange } from '../shell/environment.ts'
 import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { relativeTime } from '@/lib/format'
@@ -112,3 +113,5 @@ const PrRow = memo(function PrRow({ item: { pr }, selected, focused, onOpen, onF
   useEffect(() => { if (focused && ref.current) renderer?.focusElement?.(ref.current.id) }, [focused, renderer])
   return <div style={{ paddingLeft: 8, paddingRight: 8, paddingBottom: 2 }}><div ref={ref} testId={`pr-row-${pr.number}`} role="button" aria-label={`${pr.title} #${pr.number}`} tabIndex={0} onFocus={onFocus} onClick={onOpen} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onOpen(); else onKey(e.key ?? '') }} style={{ ...column, gap: 4, paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, borderRadius: 8, backgroundColor: selected || focused ? ink(t, .07) : 'transparent', hover: { backgroundColor: t.hover } }}><Label color={t.text} size={13} weight={500} lineHeight={18}>{pr.title}</Label><div style={{ ...row, gap: 6 }}><Label color={pr.state === 'MERGED' ? t.link : pr.state === 'OPEN' && !pr.is_draft ? t.green : t.textSecondary} size={11}>{pr.is_draft ? 'Draft' : pr.state === 'OPEN' ? 'Open' : pr.state === 'MERGED' ? 'Merged' : 'Closed'}</Label><Label color={t.textSecondary} size={11} truncate style={{ flexGrow: 1 }}>{`${pr.author} · ${relativeTime(pr.updated_at)}`}</Label>{pr.checks_summary && pr.checks_summary.total > 0 && <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: pr.checks_summary.failed ? t.red : pr.checks_summary.pending ? t.warning : t.green }} />}<Label color={t.textSecondary} size={11}>{`#${pr.number}`}</Label></div></div></div>
 })
+
+onEnvironmentChange(() => { cache.clear(); lastSelection = null })

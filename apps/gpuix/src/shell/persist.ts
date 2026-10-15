@@ -1,3 +1,4 @@
+import { activeEnvironment, environmentKey, onEnvironmentChange } from './environment.ts'
 // A small per-environment JSON store for UI state the desktop keeps in
 // `localStorage` (sidebar width, dock width, project order, filters, drafts).
 // Keys mirror the desktop's names (`kybern.sidebar.width`, `kybern.dock.width`)
@@ -18,9 +19,10 @@ import path from 'node:path'
 const WRITE_DELAY_MS = 400
 
 function filePath(): string {
-  const dir = process.env.KYBERN_DATA_DIR || path.join(homedir(), '.kybern')
-  if (process.env.KYBERN_URL && !process.env.KYBERN_DATA_DIR) {
-    const id = createHash('sha1').update(process.env.KYBERN_URL).digest('hex').slice(0, 12)
+  const env = activeEnvironment()
+  const dir = env.dataDir
+  if (env.id !== 'local' || (process.env.KYBERN_URL && !process.env.KYBERN_DATA_DIR)) {
+    const id = createHash('sha1').update(environmentKey()).digest('hex').slice(0, 12)
     return path.join(dir, `gpuix-ui-${id}.json`)
   }
   return path.join(dir, 'gpuix-ui.json')
@@ -90,3 +92,5 @@ export function save(key: string, value: unknown) {
 
 /** Whether the store file exists yet (first launch has nothing to restore). */
 export const hasSavedState = () => existsSync(filePath())
+
+onEnvironmentChange(() => { flush(); data = null; file = null }, -80)

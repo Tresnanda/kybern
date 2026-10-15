@@ -1,3 +1,4 @@
+import { onEnvironmentChange } from '../shell/environment.ts'
 import { useEffect, useState } from 'react'
 import {
   AUTONOMY_OPTIONS, COORDINATOR_ROLES, COORDINATOR_SETTINGS_COPY as COPY,
@@ -195,3 +196,5 @@ function NoteDialog({ summary, onClose }: { summary: NoteSummary; onClose: () =>
     </div>
   </Dialog>
 }
+
+onEnvironmentChange(() => { briefDrafts.clear() })
