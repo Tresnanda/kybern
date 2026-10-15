@@ -28,6 +28,8 @@ import { askLimits } from './live.ts'
 import { popoverStyle, PopupLayer } from '../composer/Menu.tsx'
 import { muted, Tip } from './overlay.tsx'
 import { getNav, setNav, useNav, type Page } from './store.ts'
+import { openSettingsTab } from '../settings/SettingsScreen.tsx'
+import { showDialog } from '../dialogs/store.ts'
 
 const RAIL = 52
 const RAIL_ITEMS: { page: Page; icon: string; label: string }[] = [
@@ -351,10 +353,10 @@ function UsageCard({ entry }: { entry: ProviderLimits }) {
       </Label>
       <div style={{ height: 1, marginLeft: -4, marginRight: -4, backgroundColor: ink(t, 0.07) }} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: -4, marginBottom: -4 }}>
-        <div onClick={() => setNav({ settingsOpen: true })} style={{ cursor: 'pointer' }}>
+        <div onClick={() => openSettingsTab('accounts')} style={{ cursor: 'pointer' }}>
           <Label color={small}>Manage accounts…</Label>
         </div>
-        <div onClick={() => setNav({ settingsOpen: true })} style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+        <div onClick={() => showDialog({ kind: 'account', provider: entry.provider })} style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
           <Icon source={N.plus} size={12} color={small} />
           <Label color={small}>Add account</Label>
         </div>

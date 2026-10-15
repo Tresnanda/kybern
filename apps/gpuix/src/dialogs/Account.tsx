@@ -13,11 +13,11 @@ import { Label, useTheme } from '../ui.tsx'
 
 /** One daemon-owned login attempt. Notifications drive progress; Refresh is a
  * recovery path, so a waiting sheet has no polling clock. */
-export function Account({ close }: { close: () => void }) {
+export function Account({ close, provider }: { close: () => void; provider?: ProviderKind }) {
   const t = useTheme()
   const providers = useNav((s) => s.providers)
   const [client] = useState(() => getClient()!)
-  const [kind, setKind] = useState<ProviderKind>('claude-code')
+  const [kind, setKind] = useState<ProviderKind>(provider ?? 'claude-code')
   const [login, setLogin] = useState<AccountLogin | null>(null)
   const current = useRef<AccountLogin | null>(null)
   const mounted = useRef(true)
