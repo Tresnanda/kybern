@@ -1,4 +1,4 @@
-/** Visual-only RPC boundary. Sensitive/provider/GitHub reads never reach the real machine. */
+/** Visual RPC boundary: mocked settings/provider/GitHub reads, otherwise the scratch daemon. */
 import { spawn } from 'node:child_process'
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import path from 'node:path'
@@ -83,8 +83,7 @@ if (import.meta.main && process.argv[2] === '--proxy') {
         if (req.method === 'usage.summary' && mode === 'usage-empty') { reply({ rows: [], total: { key: 'total', turns: 0, usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 }, cost_usd: 0 } }); return }
         let socket: WebSocket
         if (req.method.startsWith('github.') || req.method === 'usage.summary') socket = ws.data.fake
-        else if (/^(notes\.|tasks\.items\.|projects\.list$|threads\.(list|get|diff|worktree.inspect)$|events\.|settings\.(get|update)$|daemon\.info$|ping$)/.test(req.method)) socket = ws.data.real
-        else { ws.send(JSON.stringify({ jsonrpc: '2.0', id: req.id, error: { code: -32000, message: `Visual fixture rejects ${req.method}` } })); return }
+        else socket = ws.data.real
         if (socket.readyState === WebSocket.OPEN) socket.send(text); else ws.data.queued.push([socket, text])
       },
       close(ws) { ws.data.real.close(); ws.data.fake.close() },

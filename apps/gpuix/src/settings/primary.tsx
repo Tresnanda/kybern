@@ -1,7 +1,8 @@
 import { activeEnvironment } from '../shell/environment.ts'
 import { CursorSetup } from './Cursor.tsx'
 import { load, save } from '../shell/persist.ts'
-import { useState } from 'react'
+import { useState, useSyncExternalStore } from 'react'
+import { globalNotesHome, setGlobalNotesHome, watchGlobalNotesHome } from '../notes/home.ts'
 import { PERMISSION_HINT, PERMISSION_LABEL } from '../../../desktop/src/lib/format.ts'
 import { AUTONOMY_OPTIONS, WORKSPACE_OPTIONS, COORDINATOR_ROLES, COORDINATOR_SETTINGS_COPY as COPY, autonomyHint, effectiveCoordinatorSettings, withGlobalRoleDefault } from '../../../../packages/kybern-client/src/coordinatorSettings.ts'
 import type { PermissionMode, ProviderKind, OrchestrationSettings, RoleDefault } from '../../../../packages/kybern-client/src/types.ts'
@@ -19,6 +20,7 @@ import { useResource } from './resource.ts'
 export function General() {
   const { settings: s, saving } = useSettings()
   const providers = useNav((s) => s.providers)
+  const notesHome = useSyncExternalStore(watchGlobalNotesHome, globalNotesHome)
   const [ask, setAsk] = useState(() => load('kybern.askBeforeClose', true))
   if (!s) return null
   return <>
@@ -33,7 +35,7 @@ export function General() {
       <Row title="Tell agents about Kybern" description="Adds a short guide to new agent sessions: how to show images, link notes and tasks, and reach other threads."><Switch label="Tell agents about Kybern" checked={s.tell_agents_about_kybern ?? true} disabled={saving} onChange={(tell_agents_about_kybern) => void updateSettings({ tell_agents_about_kybern })} /></Row>
       <Row title="Ask before closing while threads work" description="Agents keep going after the window closes. The prompt lists them and offers to stop them."><Switch testId="settings-close-confirmation" label="Ask before closing while threads work" checked={ask} onChange={value => { save('kybern.askBeforeClose', value); setAsk(value) }} /></Row>
     </Section>
-    <Section title="Notes"><Row title="Global notes" description="Notes that belong to no project are stored separately on each connected machine. Shared global notes require the desktop app." /></Section>
+    <Section title="Notes"><Row title="Global notes" description="Notes that belong to no project. Shared keeps one set on this Mac for every environment window. Switching never moves or deletes a note."><Select label="Global notes" testId="settings-global-notes" value={notesHome} onChange={(value) => setGlobalNotesHome(value as 'shared' | 'separate')} options={[{ value: 'shared', label: 'Shared across environments' }, { value: 'separate', label: 'Separate per environment' }]} /></Row></Section>
     <PreviewFolders />
   </>
 }

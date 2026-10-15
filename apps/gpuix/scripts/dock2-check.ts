@@ -1,4 +1,4 @@
-import { readFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, mkdirSync, mkdtempSync, copyFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import assert from 'node:assert/strict'
 import { launch } from '@gpuix/react/automation'
@@ -16,6 +16,7 @@ const project = (await client.call('projects.list', {})).projects.find(p => p.na
 assert.ok(project)
 const thread = await client.call('threads.create', { project_id: project.id, title: 'Dock2 verification', provider: { kind: 'claude-code', instance: 'default' }, model: 'claude-haiku-5-5' })
 const notes: string[] = [], tasks: string[] = []
+const runDir = mkdtempSync(path.join(data, '../dock2-run-'))
 let pid: number | undefined
 let app: Awaited<ReturnType<typeof launch>> | undefined
 const guard = setTimeout(() => { if (pid) process.kill(pid, 'SIGTERM'); process.exit(1) }, 600_000)
@@ -24,10 +25,13 @@ try {
   for (let i = 0; i < 60; i++) { const task = await client.call('tasks.items.create', { scope: 'project', project_id: project.id, title: `Dock task ${i + 1}`, status: i % 2 ? 'todo' : 'inbox', priority: i % 5 as 0 | 1 | 2 | 3 | 4 }); tasks.push(task.id) }
   const perf = process.argv.includes('--perf')
   for (const appearance of perf ? ['dark', 'dark'] : ['dark', 'light']) {
-    app = await launch({ command: 'bun', args: [path.resolve('scripts/dock2-fixture.tsx')], env: { ...process.env, GPUIX_BACKGROUND: '1', DOCK2_NOTE_DELAY: '1', KYBERN_DATA_DIR: data, KYBERN_GPUIX_THREAD: thread.id, KYBERN_APPEARANCE: appearance } })
+    const appData = mkdtempSync(path.join(runDir, `${appearance}-`))
+    for (const file of ['daemon.port', 'daemon.token']) copyFileSync(path.join(data, file), path.join(appData, file))
+    app = await launch({ command: 'bun', args: [path.resolve('scripts/dock2-fixture.tsx')], env: { ...process.env, GPUIX_BACKGROUND: '1', DOCK2_NOTE_DELAY: '1', KYBERN_DATA_DIR: appData, KYBERN_CLIENT_CONFIG_DIR: path.join(appData, 'config'), KYBERN_GPUIX_CREDENTIALS_DIR: path.join(appData, 'credentials'), KYBERN_GPUIX_THREAD: thread.id, KYBERN_APPEARANCE: appearance } })
     pid = (await app.call('initialize', { protocolVersion: 1, client: 'dock2-check' })).pid
     await app.getByTestId('header-title').waitFor({ timeoutMs: 60000 })
-    await app.getByTestId('dock-toggle').click(); await openDock(app.getByTestId('right-dock'))
+    if (!await app.getByTestId('right-dock').count()) await app.getByTestId('dock-toggle').click()
+    await openDock(app.getByTestId('right-dock'))
     for (const tab of ['notes', 'tasks']) {
       await app.getByTestId('dock-add').click(); await app.getByTestId(`dock-add-${tab}`).click()
       await app.getByTestId(`dock-${tab}-list`).waitFor({ timeoutMs: 30000 })
@@ -57,7 +61,7 @@ try {
         await app.screenshot({ path: `${out}/${tab}-${appearance}.png` })
       }
     }
-    await app.getByTestId('dock-collapse').click(); await absent(app.getByTestId('dock-tasks'))
+    await app.getByTestId('dock-collapse').click(); await absent(app.getByTestId('dock-tasks')); await absent(app.getByTestId('right-dock'))
     await app.close(); app = undefined; pid = undefined
   }
   console.log('PASS dock Notes/Tasks, lazy thread note creation, autosave, Return task creation, unmount')
@@ -68,4 +72,5 @@ try {
   for (const id of tasks) await client.call('tasks.items.delete', { id })
   await client.call('threads.archive', { thread_id: thread.id })
   client.close(); clearTimeout(guard)
+  rmSync(runDir, { recursive: true, force: true })
 }

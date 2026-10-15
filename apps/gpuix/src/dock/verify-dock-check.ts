@@ -18,7 +18,7 @@ let pid: number | undefined
 const watchdog = setTimeout(() => { if (pid) try { process.kill(pid, 'SIGTERM') } catch {} ; process.exit(1) }, 180_000)
 const app = await launch({
   command: 'bun', args: [path.join(import.meta.dir, 'verify-fixture.tsx')],
-  env: { ...process.env, GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: variant },
+  env: { ...process.env, GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: variant, ...(narrow ? { KYBERN_WINDOW_SIZE: '980x820' } : {}) },
 })
 try {
   pid = (await app.call('initialize', { protocolVersion: 1, client: 'dock-check' })).pid
@@ -26,6 +26,9 @@ try {
   await app.getByTestId('header-title').waitFor({ timeoutMs: 60_000 })
   await app.getByTestId('dock-toggle').click()
   await openDock(app.getByTestId('right-dock'))
+  await app.getByTestId('dock-add').click()
+  await app.getByTestId('dock-add-agents').click()
+  await app.getByTestId('dock-agents-list').waitFor({ timeoutMs: 15000 })
   await app.getByTestId('dock-tabs').waitFor({ timeoutMs: 5000 })
   await app.getByTestId('app-ready').hover()
   await app.screenshot({ path: path.join(out, `01-agents-${variant}.png`) })

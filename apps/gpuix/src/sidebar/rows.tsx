@@ -1,3 +1,4 @@
+import { canSplitPane, collectThreadPanes, splitFocusedPane, useFocusedPane, useSplitRoot } from '../split/store.ts'
 import { beginThreadDrag, trackThreadDrag, consumeThreadDrag, finishSplitDrag } from '../split/Workspace.tsx'
 import { showDialog } from '../dialogs/store.ts'
 import { activeEnvironment } from '../shell/environment.ts'
@@ -501,6 +502,8 @@ export const ThreadRow = memo(function ThreadRow({
   const menu = useContextMenu()
   const [renaming, setRenaming] = useState(false)
   const [title, setTitle] = useState(thread.title)
+  const splitRoot = useSplitRoot(), focusedPane = useFocusedPane()
+  const inSplit = collectThreadPanes(splitRoot).some((pane) => pane.threadId === thread.id)
   const { renderer } = useGpuix()
   const rowRef = useRef<PublicInstance | null>(null)
   const hasGlyph = thread.status !== 'idle' || !!activity || unread
@@ -646,9 +649,8 @@ export const ThreadRow = memo(function ThreadRow({
           />
           <MenuItem id="handoff" icon={N.handoff} label="Hand off to another agent" onSelect={() => setNav({ handoff: { threadId: thread.id, target: null } })} />
           <MenuSeparator />
-          {/* Split view is not in this build yet. */}
-          <MenuItem id="right" icon={N.splitRight} label="Open to the right" disabled onSelect={() => {}} />
-          <MenuItem id="below" icon={N.splitDown} label="Open below" disabled onSelect={() => {}} />
+          <MenuItem id="right" icon={N.splitRight} label="Open to the right" disabled={inSplit || !canSplitPane(splitRoot, focusedPane, 'horizontal')} onSelect={() => { splitFocusedPane('horizontal', thread.id) }} />
+          <MenuItem id="below" icon={N.splitDown} label="Open below" disabled={inSplit || !canSplitPane(splitRoot, focusedPane, 'vertical')} onSelect={() => { splitFocusedPane('vertical', thread.id) }} />
           <MenuSeparator />
           {thread.worktree && <MenuItem id="cleanup" icon={N.worktree} label="Remove worktree…" onSelect={() => showDialog({ kind: 'worktree', threadId: thread.id })} />}
           {thread.worktree && <MenuItem id="branch" icon={N.branch} label={thread.worktree.branch} disabled onSelect={() => {}} />}

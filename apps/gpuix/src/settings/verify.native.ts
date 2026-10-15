@@ -65,6 +65,12 @@ const click=async(id:string)=>{
 const scroll=async(y:number)=>{await a.call('scrollTo',{elementId:(await a.getByTestId('settings-content').element()).id,x:0,y});await Bun.sleep(150)}
 try{
  await a.getByTestId('app-ready').waitFor({timeoutMs:60000});await click('rail-settings');await click('settings-worktrees')
+ await click('settings-global-notes');await click('settings-global-notes-separate')
+ assert.equal(JSON.parse(readFileSync(path.join(scratch,'notes-preferences.json'),'utf8')).globalHome,'separate')
+ // The Notes header and other windows publish through this same watched preference.
+ writeFileSync(path.join(scratch,'notes-preferences.json'),JSON.stringify({globalHome:'shared'}))
+ for(let i=0;i<100;i++){if((await a.getByTestId('settings-global-notes').textContent()).includes('Shared across environments'))break;await Bun.sleep(30)}
+ assert.match(await a.getByTestId('settings-global-notes').textContent(),/Shared across environments/)
  await click('settings-tab-notifications');assert.match(await a.getByTestId('page-settings').textContent(), /OS notifications require the packaged Kybern GPUIX.app/);assert.equal(await a.getByTestId('settings-notification-access').count(),1)
  if(!process.argv.includes('--about-only')) { await click('settings-tab-accounts');await click('account-actions-codex-work');await click('account-actions-codex-work-edit')
  await a.getByTestId('account-edit').press('escape');await Bun.sleep(200);assert.equal(await a.getByTestId('page-settings').count(),1);assert.equal(await a.getByTestId('account-edit').count(),0);await click('account-actions-codex-work');await click('account-actions-codex-work-edit')

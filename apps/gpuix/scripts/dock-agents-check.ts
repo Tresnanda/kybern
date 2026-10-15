@@ -1,4 +1,4 @@
-// Read-only inspection of an existing thread's populated lineage and activity.
+// Scratch-only inspection of deterministic populated lineage and activity.
 // Never clicks stop, archive, remove, or sends a message.
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
@@ -11,13 +11,16 @@ const out = '/Users/mymac/projects/ade/previews/gpuix/dock'
 mkdirSync(out, { recursive: true })
 let pid: number | undefined
 const watchdog = setTimeout(() => { if (pid) try { process.kill(pid, 'SIGTERM') } catch {}; process.exit(1) }, 180_000)
-const app = await launch({ command: 'bun', args: [path.join(import.meta.dir, '../src/main.tsx')], env: { ...process.env, GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: variant } })
+const app = await launch({ command: 'bun', args: [path.join(import.meta.dir, '../src/dock/verify-fixture.tsx')], env: { ...process.env, GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: variant } })
 try {
   pid = (await app.call('initialize', { protocolVersion: 1, client: 'dock-agents-check' })).pid
   await app.getByTestId('app-ready').waitFor({ timeoutMs: 20_000 })
   await app.getByTestId('header-title').waitFor({ timeoutMs: 60_000 })
   await app.getByTestId('dock-toggle').click()
   await openDock(app.getByTestId('right-dock'))
+  await app.getByTestId('dock-add').click()
+  await app.getByTestId('dock-add-agents').click()
+  await app.getByTestId('dock-agents-list').waitFor({ timeoutMs: 15000 })
   await app.screenshot({ path: path.join(out, `09-lineage-loading-${variant}.png`) })
   await app.getByTestId('dock-agents-list').waitFor({ timeoutMs: 60_000 })
   await app.getByTestId('app-ready').hover()
@@ -32,6 +35,7 @@ try {
   if (!row) throw new Error('Expected a populated lineage')
   await app.getByTestId(row).click()
   await until(async () => !!await app.getByText('Open').count(), 'agent detail')
+  await until(async () => (await app.call('getPaintedText', {})).text.join('\n').includes('Verified the dock fixture.'), 'agent result')
   await app.screenshot({ path: path.join(out, `10-lineage-detail-${variant}.png`) })
   await app.getByTestId('dock-add').click()
   await app.getByTestId('dock-add-activity').waitFor({ timeoutMs: 3000 })
