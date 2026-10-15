@@ -12,6 +12,7 @@ import { connect } from './state.ts'
 import { ThemeProvider, VARIANT } from './ui.tsx'
 import { startPerfProbe } from './perf/probe.ts'
 import { installDesktopMaterial } from './native/material.ts'
+import { hasSavedFrame, installWindowFrame, startWindowShell } from './shell/window.ts'
 
 const FONTS = ['CalSans-Regular.ttf', 'JetBrainsMono-Regular.ttf']
 
@@ -31,6 +32,7 @@ function Fonts({ children }: { children: ReactNode }) {
     }
     setReady(true)
     startPerfProbe(renderer)
+    startWindowShell(renderer)
     // Debug: minimize after launch to check that hidden windows stop their loops.
     if (process.env.KYBERN_DEBUG_MINIMIZE) setTimeout(() => renderer.minimizeWindow?.(), Number(process.env.KYBERN_DEBUG_MINIMIZE))
   }, [renderer])
@@ -61,10 +63,15 @@ render(
     minHeight: 600,
     // An agent checking its own work must not take the keyboard from the user.
     focus: process.env.GPUIX_BACKGROUND !== '1',
+    // A saved frame is restored before the window is shown (`shell/window.ts`).
+    show: !hasSavedFrame(),
     // Window shortcuts (⌘N, ⌘B, ⌘K, ⌘[ ⌘], ⌘↑, ⌘,): `nav/keys.ts`.
     onKeyDown: onWindowKeyDown,
   },
 )
+
+// Put the window back where it was (size and position are saved as it moves).
+installWindowFrame()
 
 // GPUI's blur is colourless; give it the desktop's vibrancy material.
 if (process.env.KYBERN_OPAQUE !== '1' && appearance().translucent) installDesktopMaterial(process.env.KYBERN_APPEARANCE || appearance().theme === 'system' ? VARIANT : appearance().theme as 'light' | 'dark')
