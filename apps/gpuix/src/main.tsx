@@ -7,6 +7,7 @@ import { render, useGpuixRequired } from '@gpuix/react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { App } from './App.tsx'
 import { onWindowKeyDown } from './nav/keys.ts'
+import { appearance } from './settings/appearance.ts'
 import { connect } from './state.ts'
 import { ThemeProvider, VARIANT } from './ui.tsx'
 import { startPerfProbe } from './perf/probe.ts'
@@ -52,7 +53,7 @@ render(
     titlebarTransparent: true,
     // The desktop's macOS window is translucent (under-window vibrancy) with
     // the frame painted at 88% over it.
-    windowBackground: process.env.KYBERN_OPAQUE === '1' ? 'opaque' : 'blurred',
+    windowBackground: process.env.KYBERN_OPAQUE === '1' || !appearance().translucent ? 'opaque' : 'blurred',
     trafficLightX: 16,
     trafficLightY: 16,
     ...(process.env.KYBERN_PERF_PROBE === '1' ? { debugFrameOverlay: 'minimal' as const } : {}),
@@ -66,7 +67,7 @@ render(
 )
 
 // GPUI's blur is colourless; give it the desktop's vibrancy material.
-if (process.env.KYBERN_OPAQUE !== '1') installDesktopMaterial(VARIANT)
+if (process.env.KYBERN_OPAQUE !== '1' && appearance().translucent) installDesktopMaterial(process.env.KYBERN_APPEARANCE || appearance().theme === 'system' ? VARIANT : appearance().theme as 'light' | 'dark')
 
 // Automation drives the app over a stdin pipe (`@gpuix/react/automation`). If the
 // driving script dies without `close()`, the pipe ends: quit instead of
