@@ -572,7 +572,7 @@ export function ComposerView(input: ComposerViewProps) {
               </div>
             )}
             <DecoratedTextarea
-              decorations={referenceDecorations(text, [...completion.tokens, ...attachmentRefs.map(r => ({ token: r.token, label: r.token.slice(1) }))], { textSecondary: t.textSecondary, accent: t.link, buttonSecondary: t.buttonSecondary })}
+              decorations={referenceDecorations(text, [...completion.tokens, ...attachmentRefs.map(r => ({ token: r.token, label: r.token.slice(1) }))], { textSecondary: t.textSecondary, accent: t.accentBlue, buttonSecondary: t.buttonSecondary })}
               ref={(el) => {
                 editor.current = el
               }}
