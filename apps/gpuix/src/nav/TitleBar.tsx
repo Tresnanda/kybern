@@ -1,4 +1,5 @@
 import { showDialog } from '../dialogs/store.ts'
+import { ThreadContextChips } from '../coordinator/Header.tsx'
 // The window title bar (`views/chrome.tsx` + the thread `Header` in
 // `views/Thread.tsx`): the sidebar toggle and back/forward (or New thread while
 // the panel is closed) after the traffic lights, then the route header over the
@@ -12,7 +13,7 @@ import { motion } from '@gpuix/react'
 import { useState, type ReactNode } from 'react'
 import { DISTANCE, DURATION, EASE, Swap } from '../motion/kit.tsx'
 import { isChildThread } from '../../../../packages/kybern-client/src/subagents.ts'
-import { subagentPhase } from '../../../../packages/kybern-client/src/subagents.ts'
+import { subagentPhase, subagentTypeLabel } from '../../../../packages/kybern-client/src/subagents.ts'
 import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { getClient, getState, set, useApp } from '../state.ts'
@@ -291,6 +292,7 @@ function ThreadHeader() {
                 </TitleSwap>
               </div>
             )}
+            <ThreadContextChips thread={thread} />
             {thread.coordinator_project_id && (
               <Label color={muted(t, 0.6)} size={10} weight={500} style={{ flexShrink: 0 }}>
                 Project coordinator
@@ -434,9 +436,9 @@ function Breadcrumb({ thread, ancestors }: { thread: Thread; ancestors: Thread[]
             </Label>
           </HeaderChip>
           {index === 0 && ancestors.length >= 3 && (
-            <Label color={t.textSecondary} style={{ paddingLeft: 6, paddingRight: 6 }}>
-              …
-            </Label>
+            <Menu minWidth={200} trigger={() => <HeaderChip onClick={() => {}}><Label color={t.textSecondary}>…</Label></HeaderChip>}>
+              {ancestors.slice(1, -1).map(parent => <MenuItem id={parent.id} key={parent.id} label={parent.title || 'Subagent'} onSelect={() => openThread(parent.id)} />)}
+            </Menu>
           )}
           <Icon source={N.chevronRight} size={12} color={ink(t, 0.32)} />
         </div>
@@ -445,6 +447,7 @@ function Breadcrumb({ thread, ancestors }: { thread: Thread; ancestors: Thread[]
         <Label color={t.text} truncate>
           {thread.title || 'Subagent'}
         </Label>
+        {subagentTypeLabel(thread.subagent?.agent_type) && <Label color={t.textSecondary} size={11} style={{ marginLeft: 8 }}>{subagentTypeLabel(thread.subagent?.agent_type)}</Label>}
       </div>
     </div>
   )

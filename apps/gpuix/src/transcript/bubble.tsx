@@ -1,3 +1,4 @@
+import { InboundMessage, DelegatedResults } from './Messages.tsx'
 // The user's message (`UserBubble` in `views/Transcript.tsx`): attachments and
 // images above an 80%-wide bubble, inline skill/mention tokens, and a hover
 // footer with the time, Copy and Save to note. Messages from other threads and
@@ -6,7 +7,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { partToken } from '../../../../packages/kybern-client/src/composerTokens.ts'
-import { agentResultItems, delegationStatusWord, messageSenderName, purposeLabel, resultPreview, threadMessagePart } from '../../../../packages/kybern-client/src/delegations.ts'
+import { agentResultItems, threadMessagePart } from '../../../../packages/kybern-client/src/delegations.ts'
 import type { ContentPart } from '../../../../packages/kybern-client/src/types.ts'
 import { clockTime } from '../../../desktop/src/lib/format.ts'
 import { Icon } from '../icons.tsx'
@@ -111,46 +112,8 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
   const inbound = threadMessagePart(parts)
   const results = agentResultItems(parts)
   const systemRow = parts.find((p): p is Extract<ContentPart, { type: 'system_row' }> => p.type === 'system_row')
-  if (inbound)
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 4, paddingBottom: 4 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Icon source={T.chatBubble} size={14} color={muted(t)} />
-          <Label color={muted(t)} lineHeight={24} truncate style={{ flexShrink: 1 }}>
-            {`${purposeLabel(inbound.purpose)} from ${messageSenderName(inbound)}`}
-          </Label>
-          <Label color={muted(t, 0.55)} size={11}>
-            {clockTime(at)}
-          </Label>
-        </div>
-        <div style={{ display: 'flex', marginLeft: 20 }}>
-          <markdown source={inbound.body} theme={cachedMarkdownTheme(t)} style={{ color: t.text, userSelect: 'text' }} />
-        </div>
-      </div>
-    )
-  if (results)
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingTop: 4, paddingBottom: 4, paddingLeft: 12, paddingRight: 12, borderRadius: 10, borderWidth: 1, borderColor: t.borderLight }}>
-        <Label color={fg(t, 0.88)} lineHeight={30}>
-          {`Results from ${results.length} delegated ${results.length === 1 ? 'agent' : 'agents'}`}
-        </Label>
-        {results.map((item) => (
-          <div key={item.task_id} style={{ display: 'flex', flexDirection: 'column', paddingTop: 4, paddingBottom: 6 }}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <Label color={t.text} size={13} truncate style={{ flexShrink: 1 }}>
-                {item.title}
-              </Label>
-              <Label color={item.status === 'failed' ? t.red : muted(t)} size={12}>
-                {delegationStatusWord(item.status)}
-              </Label>
-            </div>
-            <Label color={muted(t)} size={12} lineHeight={18} truncate>
-              {resultPreview(item)}
-            </Label>
-          </div>
-        ))}
-      </div>
-    )
+  if (inbound) return <InboundMessage part={inbound} at={at} />
+  if (results) return <DelegatedResults items={results} at={at} />
   const files = parts.filter((p): p is Extract<ContentPart, { type: 'image' | 'attachment' }> => p.type === 'image' || p.type === 'attachment')
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>

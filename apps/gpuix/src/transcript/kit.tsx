@@ -1,3 +1,4 @@
+import { keyboardAnswer } from '../requests/Panel.tsx'
 // Small transcript primitives: the desktop's chat type scale, muted tones,
 // kit buttons (`components/kit/button.tsx` sm variants) and the disclosure
 // chevron. Values cite `chatTypography.ts` and `kit.css`.
@@ -97,6 +98,9 @@ export function Button({
     <div
       testId={testId}
       role="button"
+      tabIndex={disabled ? -1 : 0}
+      aria-disabled={disabled}
+      onKeyDown={e => { if (!disabled && (e.key === 'enter' || e.key === 'space')) { keyboardAnswer(); onClick?.() } }}
       onClick={disabled ? undefined : onClick}
       style={{
         display: 'flex',

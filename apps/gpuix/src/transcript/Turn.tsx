@@ -1,7 +1,10 @@
+import { agentItemTool, agentItemWriteResult, parseAgentItemResult, placeItemCards } from '../../../desktop/src/lib/agentItemTools.ts'
+import { AgentItemCard } from '../coordinator/AgentItem.tsx'
 // One turn (`Turn` in `views/Transcript.tsx`): the user's bubble, live work
 // under "Working for", or the settled work (delegations visible, the rest
 // folded under "Worked for"), then the answer with its error/stopped lines,
 // the "Edited N files" card and the footer.
+import { SubagentDivider } from '../subagents/Page.tsx'
 import { memo, useEffect, useMemo, useState } from 'react'
 import { calendarDateKey, calendarDateLabel, clockTime, elapsedSince, plural } from '../../../desktop/src/lib/format.ts'
 import { isImageGenerationTool } from '../../../desktop/src/lib/toolActivity.ts'
@@ -71,9 +74,19 @@ function WorkingHeader({ since }: { since: string }) {
   )
 }
 
+function itemCards(group: TurnGroup) {
+  return placeItemCards(group.work.flatMap(block => {
+    if (block.kind !== 'tool' || !block.complete || block.isError || !agentItemTool(block.call.name)?.write) return []
+    const result = agentItemWriteResult(parseAgentItemResult(block.output))
+    return result ? [{ id: block.call.id, result }] : []
+  }), group.answer?.text)
+}
+
 export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning }: { group: TurnGroup; threadId: ThreadId; isLast: boolean; threadRunning: boolean }) {
   const t = useTheme()
-  const subagent = useApp(s => !!s.open.thread?.subagent)
+  const subagentThread = useApp(s => s.open.thread?.subagent ? s.open.thread : null)
+  const subagent = !!subagentThread
+  const firstUserId = useApp(s => s.open.blocks.find(b => b.kind === 'user')?.id)
   // A long live turn can start before the loaded page, so its user message (and
   // with it `running`) is missing; the thread's status still says it is live.
   const running = group.running || (threadRunning && isLast && !group.end)
@@ -85,7 +98,8 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning 
     [group.work, tasksByToolCall],
   )
   const children = useChildThreads(threadId, launches)
-  const ctx = useMemo<RowContext>(() => ({ threadId, tasksByToolCall, childrenByParent: hierarchy.childrenByParent, children }), [threadId, tasksByToolCall, hierarchy, children])
+  const cards = useMemo(() => itemCards(group), [group.work, group.answer?.text])
+  const ctx = useMemo<RowContext>(() => ({ threadId, tasksByToolCall, childrenByParent: hierarchy.childrenByParent, children, inlineItemIds: running ? undefined : cards.inlineCallIds }), [threadId, tasksByToolCall, hierarchy, children, cards, running])
   const settled = useMemo(() => {
     const agentBlocks: Block[] = []
     const disclosureBlocks: Block[] = []
@@ -111,6 +125,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning 
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
+      {subagentThread && group.user?.id === firstUserId && <SubagentDivider thread={subagentThread} />}
       {group.user && (
         <div style={{ paddingBottom: running ? 20 : 16 }}>
           <UserBubble parts={group.user.message.parts} at={group.user.at} clampLines={subagent ? 6 : undefined} />
@@ -186,9 +201,16 @@ export const AnswerImages = memo(function AnswerImages({ group, threadId }: { gr
 
 export const TurnFooter = memo(function TurnFooter({ group, threadId, isLast }: { group: TurnGroup; threadId: ThreadId; isLast: boolean }) {
   const t = useTheme()
+  const subagentThread = useApp(s => s.open.thread?.subagent ? s.open.thread : null)
   const answerText = group.answer?.text ?? ''
+  const cards = useMemo(() => itemCards(group), [group.work, group.answer?.text])
+  useEffect(() => {
+    if (!group.end) return
+    for (const block of group.work) if (block.kind === 'tool' && block.outputOmitted && agentItemTool(block.call.name)?.write) void hydrateToolOutput(threadId, block)
+  }, [threadId, group.work, group.end])
   const diff = useTurnDiff(threadId, group.turnId, !!group.end)
   return <div style={{ display: 'flex', flexDirection: 'column', paddingBottom: 10 }}>
+          {group.end && cards.below.map(card => <AgentItemCard key={card.id} result={card.result} inset={false} />)}
           {group.end?.error && (
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 8 }}>
               <Icon source={T.alert} size={14} color={t.red} style={{ marginTop: 4 }} />
@@ -215,7 +237,9 @@ export const TurnFooter = memo(function TurnFooter({ group, threadId, isLast }: 
                 </Label>
               )}
             </div>
-          )}  </div>
+          )}
+          {isLast && subagentThread && <SubagentDivider thread={subagentThread} end />}
+        </div>
 })
 
 const MAX_VISIBLE_CHANGED_FILES = 5
