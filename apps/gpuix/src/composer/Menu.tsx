@@ -105,7 +105,9 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
 ) {
   const [generation] = useState(() => ++popupGeneration)
   // Decided on mount: a later change must not restart or drop the tween.
-  const [still] = useState(stillProp)
+  // Reduce Motion skips the tween entirely: a zero-length native opacity motion
+  // can leave the popup at its initial opacity 0, so it would never show.
+  const [still] = useState(stillProp || REDUCED_MOTION)
   const { duration, ease, distance } = POPUP[kind]
   const d = REDUCED_MOTION ? 0 : distance
   const opacity = fade?.opacity ?? 1
