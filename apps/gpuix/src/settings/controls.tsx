@@ -12,14 +12,72 @@ export function Button({ children, onClick, disabled = false, testId }: { childr
 }
 
 /** Pointer toggles give state feedback in 160ms; keyboard and Reduce Motion are immediate. */
+/**
+ * The desktop's `Switch` (`components/kit/switch.tsx`): a 32×20 track, accent when
+ * on, with a white 16px thumb that slides 200 ms ease-out and stretches while
+ * pressed. Keyboard toggles and Reduce Motion change without movement.
+ */
 export function Switch({ checked, onChange, label, disabled = false, testId }: { checked: boolean; onChange: (value: boolean) => void; label: string; disabled?: boolean; testId?: string }) {
   const t = useTheme()
   const [keyboard, setKeyboard] = useState(false)
-  return <div testId={testId} role="switch" aria-label={label} aria-checked={checked} tabIndex={disabled ? -1 : 0} onClick={() => { if (!disabled) { setKeyboard(false); onChange(!checked) } }} onKeyDown={(e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) { setKeyboard(true); onChange(!checked) } }} style={{ display: 'flex', alignItems: 'center', width: 38, height: 28, flexShrink: 0, opacity: disabled ? 0.45 : 1, cursor: disabled ? 'default' : 'pointer' }}>
-    <div style={{ pointerEvents: 'none', position: 'relative', width: 36, height: 20, borderRadius: 10, backgroundColor: checked ? t.buttonPrimary : t.buttonSecondaryHover }}>
-      <motion.div initial={false} animate={{ left: checked ? 18 : 2 }} transition={{ duration: keyboard || REDUCED_MOTION ? 0 : 0.16, ease: EASE_OUT }} style={{ pointerEvents: 'none', position: 'absolute', top: 2, width: 16, height: 16, borderRadius: 8, backgroundColor: checked ? t.buttonPrimaryText : t.text }} />
+  const [pressed, setPressed] = useState(false)
+  const still = keyboard || REDUCED_MOTION
+  // The thumb widens by 2px toward the track's centre, like the desktop's scale-x 1.1.
+  const stretch = pressed && !disabled ? 2 : 0
+  return (
+    <div
+      testId={testId}
+      role="switch"
+      aria-label={label}
+      aria-checked={checked}
+      tabIndex={disabled ? -1 : 0}
+      onMouseDown={() => setPressed(true)}
+      onMouseUp={() => setPressed(false)}
+      onMouseLeave={() => setPressed(false)}
+      onClick={() => {
+        if (disabled) return
+        setKeyboard(false)
+        onChange(!checked)
+      }}
+      onKeyDown={(e) => {
+        if (disabled || (e.key !== 'enter' && e.key !== 'space')) return
+        setKeyboard(true)
+        onChange(!checked)
+      }}
+      // A 38×28 hit area around the 32×20 track.
+      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 38, height: 28, flexShrink: 0, cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.64 : 1 }}
+    >
+      <div
+        style={{
+          pointerEvents: 'none',
+          position: 'relative',
+          width: 32,
+          height: 20,
+          borderRadius: 10,
+          borderWidth: 1,
+          borderColor: checked ? t.switchOn : t.switchOffBorder,
+          backgroundColor: checked ? t.switchOn : t.switchOff,
+        }}
+      >
+        <motion.div
+          initial={false}
+          animate={{ left: checked ? 13 - stretch : 1, width: 16 + stretch }}
+          transition={{ duration: still ? 0 : 0.2, ease: EASE_OUT }}
+          style={{
+            pointerEvents: 'none',
+            position: 'absolute',
+            top: 1,
+            height: 16,
+            borderRadius: 8,
+            backgroundColor: '#ffffff',
+            borderWidth: 0.5,
+            borderColor: 'rgba(0, 0, 0, 0.05)',
+            boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 2, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.12)' },
+          }}
+        />
+      </div>
     </div>
-  </div>
+  )
 }
 
 let openSelects = 0

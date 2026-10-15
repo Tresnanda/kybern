@@ -99,6 +99,10 @@ function build(variant: ThemeVariant) {
     green: v('--color-accent-green'),
     red: v('--color-accent-red'),
     warning: v('--warning'),
+    /** Switch track (`components/kit/switch.tsx`): accent when on; ink 20% over the opaque control fill when off. */
+    switchOn: v('--color-text-accent'),
+    switchOff: resolve('color-mix(in srgb, var(--color-text-foreground) 20%, var(--color-background-control-opaque))', raw),
+    switchOffBorder: resolve('color-mix(in srgb, var(--color-text-foreground) 14%, transparent)', raw),
     /** `--runtime-full-access-accent` (`kit.css:2647-2652`). */
     fullAccess: variant === 'dark' ? '#fe8549' : '#e25505',
   }
