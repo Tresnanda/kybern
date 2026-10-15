@@ -9,6 +9,7 @@ import { SettingsScreen } from './settings/SettingsScreen.tsx'
 import { UsagePage } from './usage/UsagePage.tsx'
 import { PullRequestsPage } from './pulls/PullRequestsPage.tsx'
 import { Composer } from './Composer.tsx'
+import { Dock, DockResizeCapture } from './dock/Dock.tsx'
 import { Draft } from './Draft.tsx'
 import { Icon } from './icons.tsx'
 import { N } from './nav/glyphs.ts'
@@ -75,7 +76,7 @@ export function App() {
       testId="app-ready"
       // Any press makes later navigation pointer-driven again (`keyboardNav`).
       onMouseDown={pointerNav}
-      style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: t.frame }}
+      style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: t.frame, position: 'relative' }}
     >
       <TitleBar panelOpen={panelOpen} />
       <div style={{ display: 'flex', flexGrow: 1, minHeight: 0, paddingRight: INSET, paddingBottom: INSET }}>
@@ -136,12 +137,18 @@ export function App() {
               borderBottomLeftRadius: panelMounted ? 0 : CARD_RADIUS,
             }}
           >
+            <div style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0, position: 'relative' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, minHeight: 0 }}>
             <PageEnter page={settingsOpen ? 'settings' : page}>
               <ErrorBoundary label="this page" key={settingsOpen ? 'settings' : page}>
                 {settingsOpen ? <SettingsScreen /> : welcome ? <Welcome kind={welcome} /> : <PageView page={page} />}
               </ErrorBoundary>
             </PageEnter>
             <ConnectionBanner />
+            </div>
+            {/* Settings covers the workspace, dock included, as on the desktop. */}
+            {!settingsOpen && <Dock sidebarOpen={panelOpen} />}
+            </div>
           </div>
           {panelOpen && <SidebarResizeHandle />}
         </div>
@@ -151,6 +158,7 @@ export function App() {
       <SessionsDialog />
       <Toaster />
       <SidebarDragLayer />
+      <DockResizeCapture />
     </div>
   )
 }

@@ -551,7 +551,7 @@ const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone, live, thi
 
 // ---- runtime tasks, subagents and delegations (compact) ----
 
-function RuntimeTaskRow({ task, thread }: { task: RuntimeTask; thread?: Thread }) {
+export function RuntimeTaskRow({ task, thread }: { task: RuntimeTask; thread?: Thread }) {
   const t = useTheme()
   const active = isTaskActive(task)
   const noun = task.kind === 'agent' ? 'agent' : task.kind === 'process' ? 'process' : 'monitor'

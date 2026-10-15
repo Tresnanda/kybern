@@ -5,6 +5,7 @@
 // thread menu, and the panel toggles.
 import { SettingsBreadcrumb } from '../settings/Breadcrumb.tsx'
 import { ISLAND } from '../MatrixLoader.tsx'
+import { toggleDock, useDock } from '../dock/store.ts'
 import { motion } from '@gpuix/react'
 import { useState, type ReactNode } from 'react'
 import { DISTANCE, DURATION, EASE, Swap } from '../motion/kit.tsx'
@@ -389,12 +390,14 @@ function ThreadHeader() {
   )
 }
 
-/** The Environment card and right dock toggles; those panels are not in this build yet. */
+/** The Environment card and right dock toggles. */
 function PanelToggles() {
+  const threadId = useApp((s) => s.selectedId)
+  const dock = useDock(threadId)
   return (
     <>
       <ChromeIcon icon={N.window} label="Toggle environment panel" tooltip="Environment" />
-      <ChromeIcon icon={N.panelRight} label="Toggle right sidebar" tooltip="Open right sidebar" />
+      <ChromeIcon icon={N.panelRight} label="Toggle right sidebar" tooltip={`${dock.open ? 'Close' : 'Open'} right sidebar (⌘J)`} pressed={dock.open} onClick={() => toggleDock()} testId="dock-toggle" />
     </>
   )
 }
