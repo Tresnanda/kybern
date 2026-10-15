@@ -6,10 +6,13 @@ import { DURATION, EASE } from '../motion/kit.tsx'
 import { load, save } from '../shell/persist.ts'
 import { cornerPosition, nearestCorner } from '../../../../packages/kybern-client/src/previewMiniPlayer.ts'
 import { REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { useComposerOverlayHeight } from '../composer/height.ts'
 type Corner = 'top-end' | 'top-start' | 'bottom-end' | 'bottom-start'
 const corners: Corner[] = ['top-end', 'top-start', 'bottom-end', 'bottom-start']
 /** Shared native corner snap. The overlay exists only during the drag. */
-export function Floating({ storageKey, width, height, testId, children, insetEnd = 0, insetBottom = 0 }: { storageKey: string; width: number; height: number; testId: string; children: ReactNode; insetEnd?: number; insetBottom?: number }) {
+export function Floating({ storageKey, width, height, testId, children, insetEnd = 0, insetBottom: explicitInset = 0 }: { storageKey: string; width: number; height: number; testId: string; children: ReactNode; insetEnd?: number; insetBottom?: number }) {
+  // Bottom corners sit above the composer and its request panels, as on the desktop.
+  const insetBottom = Math.max(explicitInset, useComposerOverlayHeight())
   const t = useTheme()
   const { renderer } = useGpuix()
   const card = useRef<PublicInstance | null>(null)
