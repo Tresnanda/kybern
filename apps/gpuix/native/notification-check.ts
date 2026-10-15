@@ -30,6 +30,8 @@ try {
   assert.equal(result.exitCode, 0, result.stderr.toString())
   assert.match(result.stdout.toString(), /modern center=available/)
   assert.equal(await notifications.status(), 'unsupported')
-  await assert.rejects(notifications.post({ id: 'fixture', title: 'fixture', body: 'fixture' }), /app bundle/)
+  // The merged packaged-host adapter reports unsupported sends as false.
+  assert.equal(await notifications.post({ id: 'fixture', title: 'fixture', body: 'fixture' }), false)
+  assert.match(notifications.reason ?? '', /packaged Kybern GPUIX/)
   console.log('ok bundled center available; no authorization request or notification posted')
 } finally { rmSync(dir, { recursive: true, force: true }) }

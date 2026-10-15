@@ -410,3 +410,16 @@ impl GpuixView {
         (element, ids, revision)
     }
 }
+
+/// Pending offsets do not mutate the retained tree; wake every owning island.
+/// Called outside draw, including nested islands, before the root is invalidated.
+pub(crate) fn notify_pending_scrolls(view: &mut GpuixView, cx: &mut gpui::Context<GpuixView>) {
+    let ids = crate::renderer::pending_scroll_ids();
+    if ids.is_empty() { return; }
+    let tree = view.tree.lock().unwrap();
+    for (ancestor, entry) in &view.islands.entries {
+        if ids.iter().any(|id| is_descendant(&tree, *id, *ancestor)) {
+            gpui::App::notify(cx, entry.view.entity_id());
+        }
+    }
+}

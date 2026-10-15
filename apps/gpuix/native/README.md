@@ -706,3 +706,90 @@ data and close their own windows; no task process remained at handoff. Final
 screenshots/logs are in `/Users/mymac/projects/ade/previews/gpuix/p1/`; redundant
 task screenshots were removed from the native build directory. The installed app,
 port 4219 and normal user data were not changed.
+
+## Cached scroll requests and decorated inputs (package 3)
+
+`renderer.scrollToItem(elementId, index, offsetInItem?)` now wakes every cached
+ancestor of a pending virtual-list scroll before invalidation. Pending offsets
+survive root element construction until cached child views have built; unused
+requests are discarded by a deferred callback after the draw. Child-splice
+ordering stays unchanged. The regression nests a **48-row** virtual list under
+`cache="fill"` and a second cached island: its logical top changes from `[0, …]`
+to `[35, …]` and remains there through an unrelated update. The TaskWindow effect's
+manual `setRange({start: …, end: …})` pre-mount workaround can be removed; keep its
+normal `onVisibleRange` overscan and focused-row mounting. A declaration is in
+`src/native/api.ts` (`CachedListCapabilities`).
+
+```ts
+import { decoratedInputCapabilities, type InputDecoration } from '../native/api.ts'
+const api = decoratedInputCapabilities(renderer)
+api.setInputDecorations(inputId, [
+  { start: 6, end: 15, id: 'computer', atomic: true,
+    style: { color: '#b5d8ff', backgroundColor: '#244263', fontWeight: 600 } },
+], 'Hello @Computer') // expectedValue is required: stale effects reject
+api.hitTestInputDecoration(inputId, windowX, windowY) // string | null
+```
+
+The APIs are native renderer methods; the TS helper checks availability. All
+external ranges are ordered UTF-16 character boundaries (surrogate splits reject).
+`setInputDecorations(id, decorations, expectedValue)` replaces the entire list,
+including clearing with `[]`, without changing text or adding an undo step. It
+requires the exact current buffer. Unmounted/secure/composing editors reject.
+Read-only inputs can be decorated. Validation is all-or-nothing: nonempty ranges,
+at most 4096 spans, unique nonempty IDs when supplied, finite weights 100–900,
+valid native colors, `fontStyle: 'normal' | 'italic'`, and nonoverlapping atomic
+spans. Ordinary styling spans may overlap; later explicitly specified properties
+win. Identical updates do nothing and decoration updates preserve typing's undo
+coalescing.
+
+Supported appearance: color, **rectangular** background, font weight/style, and
+underline. Backgrounds paint before selection and glyphs using GPUI's wrapped-line
+background renderer. `borderRadius` and `paddingX` only accept zero; nonzero values
+throw. This is styled source text, not arbitrary inline React views, replacement
+labels, hidden Markdown syntax, a monospace-family override, or rounded padded
+chips. Atomic means editing as one unit; it does not make a long token unbreakable
+when wrapping. The actual buffer, copy text, accessibility text and IME text remain
+identical; no placeholder characters or separate hidden document are introduced.
+
+Caret navigation and mouse placement cannot leave the caret inside an atom.
+Movement snaps in the direction of travel; `setInputSelection` snaps an interior
+collapsed position to the end and expands partial nonempty selections outward.
+Backspace, forward delete, cut, typing over a selection and `editInput` replacement
+expand intersected atomic ranges. A native edit shifts untouched spans, discards
+spans intersected by the edit, and retains IDs. Insertion at either boundary stays
+outside the span. Undo/redo snapshots contain text, selection and decorations, so
+deleted atoms return as atoms. External replacement through the `value` prop clears
+decorations together with the upstream undo reset; normal `onChange` echoes retain
+both. Apps should derive formatting again after ordinary text edits when desired.
+
+IME: explicit decoration/selection/edit APIs reject while a marked range exists;
+atomic snapping is bypassed during composition. Initial composition replacement
+expands an intersected atom before editing, then the native marked-range pipeline
+owns subsequent replacements, selection and commit. Its underline takes priority.
+No key interception, text substitution or new composition callback is introduced.
+A real input-method candidate/commit/cancel session remains a manual integration
+check; automated key tests do not certify OS IME behavior.
+
+`hitTestInputDecoration` takes logical window content coordinates, checks the
+editor's content bounds, uses the native nearest-character hit test (including
+scroll/wrap geometry), and returns the last matching identified span. Outside the
+input or without an identified range it returns null. It is a query; it does not
+activate a reference or suppress native caret behavior. A caller must decide which
+pointer gesture should open a link.
+
+`DecoratedTextarea` in `src/native/decorated-input.tsx` preserves ordinary textarea
+props and refs, subscribes to post-paint bounds for mount/remount readiness, and
+applies current decorations after changes and key-up. Stale/composition updates
+wait for the next edit/key-up; there is no timer. `input-marks.ts` supplies a known-
+reference token adapter and a deliberately limited source-mode Markdown adapter
+(single-line backticks, `**bold**`, `*italic*`, simple links, atomic `kybern://task/`
+links). It skips code/escaped delimiters; it is not a CommonMark or rich-document
+parser. Existing editors remain responsible for their storage/serialization.
+
+`native/decoration-check.ts` runs dark/light and verifies styled runs, the mounted
+React adapter, ID hit testing, invalid/stale requests, atomic caret jumps,
+deletion, partial transaction replacement, Unicode rebase, native undo/redo and
+the nested cached-list regression. Screenshots show the actual background,
+weight, italic and underline. `update.sh` runs it with all prior capability checks.
+`app-integration-3.patch` is an **unapplied** patch for Composer, Notes, task
+descriptions and TaskWindow; see `PACKAGE-3.md` for evidence and limits.

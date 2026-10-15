@@ -480,6 +480,55 @@ edit(r, "    pub fn zoom_window(&self) -> Result<()> {", """    pub fn get_synta
     #[napi]
     pub fn zoom_window(&self) -> Result<()> {""")
 
+# Package 3: queued scrolls must survive root construction until cached views build.
+edit(r, "        PENDING_VIRTUAL_LIST_SCROLLS.with(|cell| cell.borrow_mut().clear());",
+     "        cx.defer(|_| PENDING_VIRTUAL_LIST_SCROLLS.with(|cell| cell.borrow_mut().clear()));")
+edit(r, "    update_window(|_view, window, cx| {\n        cx.notify();\n        window.refresh();",
+     "    update_window(|view, window, cx| {\n        crate::cache_island::notify_pending_scrolls(view, cx);\n        cx.notify();\n        window.refresh();")
+edit(r, "pub(crate) fn queue_virtual_list_scroll(id: u64, index: usize, offset_in_item: f32) {",
+     "pub(crate) fn pending_scroll_ids() -> Vec<u64> { PENDING_VIRTUAL_LIST_SCROLLS.with(|cell| cell.borrow().keys().copied().collect()) }\n\npub(crate) fn queue_virtual_list_scroll(id: u64, index: usize, offset_in_item: f32) {")
+
+# Decoration data belongs to the buffer and its undo snapshots.
+edit(i, 'include!("../input_api.rs");', 'include!("../input_api.rs");\ninclude!("../input_decorations.rs");')
+edit(i, "    content: String,\n", "    content: String,\n    decorations: Vec<InputDecoration>,\n", 2)
+edit(i, "                    undo_stack: VecDeque::new(),", "                    decorations: Vec::new(),\n                    undo_stack: VecDeque::new(),")
+edit(i, "            content: self.content.clone(),", "            content: self.content.clone(),\n            decorations: self.decorations.clone(),")
+edit(i, "        self.content = value;", "        self.decorations.clear();\n        self.content = value;")
+edit(i, "        self.content = snapshot.content;", "        self.decorations = snapshot.decorations;\n        self.content = snapshot.content;")
+edit(i, "        let offset = offset.min(self.content.len());", "        let offset = self.snap_atom(offset.min(self.content.len()), offset >= self.cursor_offset());", 2)
+edit(i, "        let wrap_width = self.multiline.then_some(width);", "        let runs = if !is_placeholder && !self.secure { self.decorated_runs(style, color) } else { runs };\n        let wrap_width = self.multiline.then_some(width);")
+edit(i, "        let replacement = if self.multiline {", "        let range = if self.marked_range.is_none() { self.expand_atoms(range) } else { range };\n        let replacement = if self.multiline {", 2)
+edit(i, "        self.content =\n            self.content[..range.start].to_owned() + &replacement + &self.content[range.end..];", "        self.rebase_decorations(&range, replacement.len());\n        self.content =\n            self.content[..range.start].to_owned() + &replacement + &self.content[range.end..];", 2)
+edit(r, "    pub fn zoom_window(&self) -> Result<()> {", """    pub fn set_input_decorations(&self, element_id: f64, decorations: serde_json::Value, expected_value: String) -> Result<()> {
+        let id = to_element_id(element_id)?;
+        update_window_without_view(move |_, cx| crate::custom_elements::input::set_input_decorations(id, decorations, expected_value, cx))?
+    }
+    #[napi]
+    pub fn hit_test_input_decoration(&self, element_id: f64, x: f64, y: f64) -> Result<Option<String>> {
+        let id = to_element_id(element_id)?;
+        update_window_without_view(move |_, cx| crate::custom_elements::input::hit_test_input_decoration(id, x, y, cx))?
+    }
+    #[napi]
+    pub fn zoom_window(&self) -> Result<()> {""")
+
+# Text shaping retains backgrounds, but the upstream input paints glyphs only.
+# Paint run backgrounds first, then the selection wash, then glyphs/caret.
+edit(i, "            for quad in prepaint.selection.drain(..) {", """            if self.input.read(cx).decorations.iter().any(|d| d.style.background_color.is_some()) {
+            let (background_lines, background_height, background_top, background_left) = self.input.update(cx, |input, _| (
+                std::mem::take(&mut input.last_lines), input.line_height, input.scroll_top, input.scroll_left
+            ));
+            let mut background_y = bounds.top() - px(background_top);
+            for line in &background_lines {
+                line.paint_background(point(bounds.left() - px(background_left), background_y), background_height,
+                    gpui::TextAlign::Left, Some(bounds), window, cx).ok();
+                background_y += line.size(background_height).height;
+            }
+            self.input.update(cx, |input, _| input.last_lines = background_lines);
+            }
+            for quad in prepaint.selection.drain(..) {""")
+
+edit(i, "                    content: index.to_string(),", "                    content: index.to_string(),\n                    decorations: Vec::new(),")
+
 for path, text in pending.items():
     (src / path).write_text(text)
 print(f"hooks applied to {len(pending)} files")
