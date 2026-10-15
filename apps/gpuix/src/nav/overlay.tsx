@@ -489,6 +489,9 @@ export function Dialog({
   testId,
   variant = 'dialog',
   instant = false,
+  pinTop,
+  radius,
+  dim = 0.6,
 }: {
   onClose: () => void
   width?: number
@@ -496,6 +499,11 @@ export function Dialog({
   testId?: string
   variant?: 'dialog' | 'palette'
   instant?: boolean
+  /** Pin the card's top edge this many px from the window top instead of centring it. */
+  pinTop?: number
+  radius?: number
+  /** Backdrop opacity (black). */
+  dim?: number
 }) {
   const t = useTheme()
   const size = useWindowSize({ intervalMs: 250 })
@@ -517,7 +525,7 @@ export function Dialog({
     <>
       <PopupLayer
         still={still}
-        fade={{ opacity: 0.6 }}
+        fade={{ opacity: dim }}
         position={{ x: 0, y: 0 }}
         priority={3}
         onMouseDown={pointerNav}
@@ -526,8 +534,8 @@ export function Dialog({
       <PopupLayer
         still={still}
         fade={{ rise: DISTANCE.micro }}
-        position={{ x: Math.round((size.width - cardWidth) / 2), y: Math.round((top + size.height - bottom) / 2) }}
-        anchor="leftCenter"
+        position={{ x: Math.round((size.width - cardWidth) / 2), y: pinTop !== undefined ? pinTop : Math.round((top + size.height - bottom) / 2) }}
+        anchor={pinTop !== undefined ? 'topLeft' : 'leftCenter'}
         priority={4}
         testId={testId}
         tabIndex={0}
@@ -542,7 +550,7 @@ export function Dialog({
           flexDirection: 'column',
           width: cardWidth,
           maxHeight: palette ? 420 : size.height - 32,
-          borderRadius: palette ? 16 : 24,
+          borderRadius: radius ?? (palette ? 16 : 24),
           borderWidth: 1,
           borderColor: t.borderLight,
           backgroundColor: t.popover,

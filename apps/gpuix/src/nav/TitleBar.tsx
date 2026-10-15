@@ -1,3 +1,7 @@
+import { TasksBar } from '../tasks/Header.tsx'
+import { NoteEditorBar } from '../notes/EditorBar.tsx'
+import { NotesHeaderActions, NotesHeaderTitle } from '../notes/Header.tsx'
+import { useNotes } from '../notes/store.ts'
 import { showDialog } from '../dialogs/store.ts'
 import { ThreadContextChips } from '../coordinator/Header.tsx'
 // The window title bar (`views/chrome.tsx` + the thread `Header` in
@@ -155,7 +159,24 @@ export function TitleBar({ panelOpen }: { panelOpen: boolean }) {
         style={{ position: 'absolute', top: 0, right: 8, height: TITLEBAR, display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 20, paddingRight: 12 }}
       >
         {!settingsOpen && page === 'home' && <ThreadHeader />}
+        {!settingsOpen && page === 'notes' && <NotesBar />}
+        {!settingsOpen && page === 'tasks' && <TasksBar />}
       </motion.div>
+    </div>
+  )
+}
+
+/** The gallery's title-bar row; an open note draws its own header. */
+function NotesBar() {
+  const selected = useNotes((s) => s.selected)
+  const loaded = useNotes((s) => s.loaded)
+  const exists = useNotes((s) => !!s.selected && s.notes.some((n) => n.id === s.selected))
+  if (selected && (!loaded || exists)) return exists ? <NoteEditorBar id={selected} /> : null
+  return (
+    <div style={{ display: 'flex', flexGrow: 1, alignItems: 'center', gap: 8, paddingLeft: 12, paddingRight: 8 }}>
+      <NotesHeaderTitle />
+      <div style={{ flexGrow: 1 }} />
+      <NotesHeaderActions />
     </div>
   )
 }

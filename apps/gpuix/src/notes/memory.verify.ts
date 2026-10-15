@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { launch } from '@gpuix/react/automation'
 import { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
-const data = '/Users/mymac/projects/ade-gpuix-scratch/data'
+const data = process.env.KYBERN_DATA_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/data'
 const port = readFileSync(path.join(data, 'daemon.port'), 'utf8').trim()
 const token = readFileSync(path.join(data, 'daemon.token'), 'utf8').trim()
 const client = new KybernClient({ url: `ws://127.0.0.1:${port}/ws`, token }, { createSocket: (url, key) => new WebSocket(url, { headers: { origin: 'tauri://localhost', Authorization: `Bearer ${key}` } } as unknown as string[]) })
@@ -24,6 +24,7 @@ try {
     await app.getByTestId('app-ready').waitFor({ timeoutMs: 30000 }); await pause(2000)
     const { pid } = await app.call('initialize', { protocolVersion: 1, client: 'Notes memory verification' })
     async function sample(scene: string) {
+      await pause(10000)
       console.log(`RUN ${run} ${scene}`)
       const proc = Bun.spawn(['bun', 'perf/sample.ts', '15', `GPUIX=${pid}`], { stdout: 'pipe', stderr: 'pipe' })
       console.log(await new Response(proc.stdout).text())
@@ -38,7 +39,7 @@ try {
     await app.getByTestId('rail-home').click(); await pause(700)
     await sample('back Home, Notes unmounted')
     // A separate diagnostic for native PNG allocation, after the comparison.
-    if (run === 1) {
+    if (run === 1 && process.env.NOTES_CAPTURE_DIAGNOSTIC) {
       for (let i = 0; i < 4; i++) await app.screenshot({ path: '/Users/mymac/projects/ade/previews/gpuix/notes/memory-capture.png' })
       await sample('Home after four screenshots')
     }

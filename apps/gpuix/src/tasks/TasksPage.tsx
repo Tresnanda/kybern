@@ -1,3 +1,4 @@
+import { SelectionBar } from './SelectionBar.tsx'
 import { useEffect, useMemo } from 'react'
 import {
   boardColumns,
@@ -15,7 +16,6 @@ import { Menu, MenuItem, MenuSeparator } from '../nav/overlay.tsx'
 import { useApp } from '../state.ts'
 import { Button, Segmented, selectOwnsEscape } from '../settings/controls.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
-import { Rise } from '../motion/kit.tsx'
 import { cancelTaskDrag, draggingTask } from './drag.tsx'
 import { TaskList, TaskBoard } from './TaskList.tsx'
 import { TaskDetail } from './TaskDetail.tsx'
@@ -185,22 +185,6 @@ export function TasksPage() {
         <TaskDetail key={task.id} task={task} sequence={sequence} />
       ) : (
         <>
-          <div style={{ display: 'flex', alignItems: 'center', height: 48, flexShrink: 0, paddingLeft: 20, paddingRight: 20, gap: 12 }}>
-            <Label color={t.text} size={13} weight={500} style={{ flexGrow: 1 }}>
-              {filterLabel(s.prefs.filter, (id) => projects.find((p) => p.id === id)?.name)}
-            </Label>
-            <Segmented
-              value={s.prefs.view}
-              onChange={(value) => prefs({ view: value as 'list' | 'board' })}
-              options={[
-                { value: 'list', label: 'List' },
-                { value: 'board', label: 'Board' },
-              ]}
-              label="Task view"
-              width={52}
-            />
-            <DisplayMenu />
-          </div>
           {s.error && (
             <div style={{ padding: 20, display: 'flex', gap: 12 }}>
               <Label color={t.red} size={13}>
@@ -234,43 +218,13 @@ export function TasksPage() {
           ) : (
             <TaskList groups={groups} sequence={sequence} projectName={projectName} />
           )}
-          {selected.length > 0 && !s.composer && (
-            <Rise kind="section" play={!getNav().keyboardNav} style={{ flexShrink: 0 }}>
-              <div
-                testId="task-selection"
-                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12, backgroundColor: ink(t, 0.04) }}
-              >
-                <Label color={t.text} size={13}>{`${selected.length} selected`}</Label>
-                <Button testId="task-batch-open" onClick={() => setTasks({ composer: selected })}>
-                  Send to agent
-                </Button>
-                <TaskMenus ids={selected} property="status" label="Status" />
-                <TaskMenus ids={selected} property="priority" label="Priority" />
-                <Button
-                  testId="task-selection-delete"
-                  onClick={() => {
-                    void deleteTasks(selected)
-                  }}
-                >
-                  Delete
-                </Button>
-                <Button onClick={() => setTasks({ selected: new Set() })}>Clear</Button>
-              </div>
-            </Rise>
-          )}
+          <SelectionBar ids={selected} show={selected.length > 0 && !s.composer} hints={s.prefs.showHints} />
           {!selected.length && s.focused && s.menu && (
             <div style={{ display: 'flex', padding: 8 }}>
               <TaskMenus ids={[s.focused]} property={s.menu} />
             </div>
           )}
-          {s.prefs.showHints && (
-            <div style={{ display: 'flex', alignItems: 'center', height: 36, paddingLeft: 20, paddingRight: 20, gap: 16 }}>
-              <Label color={t.textTertiary} size={12} style={{ flexGrow: 1 }}>
-                C New task ↑ ↓ Navigate ↵ Open X Select S Status P Priority ⌘↵ Send
-              </Label>
-              <Button onClick={() => prefs({ showHints: false })}>×</Button>
-            </div>
-          )}
+          {s.prefs.showHints && <Hints selecting={selected.length > 0} />}
         </>
       )}
       {s.composer && <RunComposer key={s.composer.join(',')} ids={s.composer} />}
@@ -278,19 +232,42 @@ export function TasksPage() {
   )
 }
 
-function DisplayMenu() {
+function Hints({ selecting }: { selecting: boolean }) {
+  const t = useTheme()
+  const keys: [string, string][] = selecting
+    ? [['S', 'Status'], ['P', 'Priority'], ['⌘↵', 'Send to agent'], ['⌘⌫', 'Delete'], ['⌘A', 'Select all'], ['Esc', 'Clear']]
+    : [['↑↓', 'Move'], ['↵', 'Open'], ['S', 'Status'], ['P', 'Priority'], ['⌘↵', 'Send to agent']]
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 20, height: 36, flexShrink: 0, paddingLeft: 20, paddingRight: 20 }}>
+      {keys.map(([key, label]) => (
+        <div key={key} style={{ display: 'flex', gap: 5 }}>
+          <Label color={ink(t, 0.6)} size={12} lineHeight={18} weight={500}>{key}</Label>
+          <Label color={t.textTertiary} size={12} lineHeight={18}>{label}</Label>
+        </div>
+      ))}
+      <div style={{ flexGrow: 1 }} />
+      <div testId="task-hide-hints" onClick={() => prefs({ showHints: false })} style={{ cursor: 'pointer' }}>
+        <Label color={ink(t, 0.22)} size={12} lineHeight={18}>Hide hints</Label>
+      </div>
+    </div>
+  )
+}
+
+export function DisplayMenu({ trigger }: { trigger?: () => React.ReactNode } = {}) {
   const t = useTheme(),
     p = useTasks((s) => s.prefs)
   return (
     <Menu
       testId="task-display"
-      trigger={() => (
+      align="end"
+      sideOffset={6}
+      trigger={trigger ?? (() => (
         <div style={{ padding: 8, pointerEvents: 'none' }}>
           <Label color={t.textSecondary} size={13}>
             Display
           </Label>
         </div>
-      )}
+      ))}
     >
       <MenuItem id="group-label" label="Group by" disabled onSelect={() => {}} />
       {(['status', 'project', 'priority'] as TaskGrouping[]).map((grouping) => (

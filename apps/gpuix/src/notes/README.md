@@ -134,3 +134,24 @@ After the four-scene comparison, four screenshots of the same Home raised run
 1 from 189 to 256 MiB (2.67% CPU, 0.4 ms GPU). Capture allocation explains much
 of the initial 280–298 MiB measurement. The numbers above compare the existing
 implementation before/after opening Notes, not an invented optimization delta.
+
+## Visual parity with the desktop
+
+`visual/README.md` describes the side-by-side tool. The gallery, list, editor
+chrome and the Tasks screens were matched to desktop measurements:
+
+- The title bar carries the surface header (`nav/TitleBar.tsx` → `notes/Header.tsx`,
+  `notes/EditorBar.tsx`, `tasks/Header.tsx`), as `SurfaceHeader` does on the
+  desktop; the search text lives in the Notes store (`query`) so the header can own
+  the field.
+- Gallery tokens are `notes/kit.tsx` (`--n-*` mixes of the ink, `ProjectDot`,
+  `Ring`). Thumbnails (`NoteThumb.tsx`, `thumbs.ts`) draw the desktop's pure
+  `miniMarkdown` blocks at `--n-read` (16.15 px) times 0.6 / 0.66 / 0.74 / 0.8.
+- The editor column is 640 px with the desktop's `.note-prose` rhythm: .93 em
+  between blocks, 2.25 / 2 em (of the 18.3 px heading) above h1 / h2, 1.6 em above
+  h3, .53 em below a heading.
+
+Not expressible without native work (GPUIX 0.10.0 markdown theme): list marker
+colour/size and indent (desktop 22.6 px, dim 5 px dot / dim ordinal), a flat
+block quote (2 px bar, no fill), hiding the code block header, letter-spacing
+(`-0.022em` titles) and inline `strong`/`code` spans inside thumbnails.

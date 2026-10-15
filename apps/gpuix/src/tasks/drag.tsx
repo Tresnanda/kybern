@@ -1,3 +1,5 @@
+import { isWindowVisible } from '../native/visibility.ts'
+import { useLoaderStep } from '../MatrixLoader.tsx'
 import { useEffect, useSyncExternalStore } from 'react'
 import { motion, type ElementBounds, type EventPayload, type NativeRenderer, type PublicInstance } from '@gpuix/react'
 import { dropAction } from '@/state/tasksModel'
@@ -21,6 +23,13 @@ type Drag = {
   select: boolean
   range: boolean
   sequence: string[]
+}
+const scrollLists = new Map<number, { node: PublicInstance; count: number; mount?: (index: number) => void }>()
+let dragRenderer: NativeRenderer | null = null
+/** `mount` mounts the rows around an index; edge scrolling calls it first, because a native scroll does not report a new visible range until a later frame. */
+export function taskScrollRef(node: PublicInstance | null, previous: PublicInstance | null, count: number, mount?: (index: number) => void) {
+  if (previous) scrollLists.delete(previous.id)
+  if (node) scrollLists.set(node.id, { node, count, mount })
 }
 const rows = new Map<string, PublicInstance>()
 const regions = new Map<string, Region>()
@@ -67,10 +76,9 @@ export function taskVisible(id: string, renderer: NativeRenderer) {
     frame = viewport && renderer.getElementBounds?.(viewport.id)
   return !!box && !!frame && box.height > 0 && box.y >= frame.y && box.y + box.height <= frame.y + frame.height
 }
-export function beginTaskDrag(id: string, event: EventPayload, renderer: NativeRenderer, sequence: string[]) {
-  if (event.button !== 0 || event.x === undefined || event.y === undefined) return
+function measureTargets(renderer: NativeRenderer, sequence: string[]) {
   const frame = viewport && renderer.getElementBounds?.(viewport.id)
-  if (!frame) return
+  if (!frame) return null
   const visible = [...regions.values()]
     .flatMap((region) => {
       const bounds = renderer.getElementBounds?.(region.node.id)
@@ -102,6 +110,13 @@ export function beginTaskDrag(id: string, event: EventPayload, renderer: NativeR
   visible.forEach((region, i) => {
     if (!region.board) region.bounds.height = (visible[i + 1]?.bounds.y ?? frame.y + frame.height) - region.bounds.y
   })
+  return { regions: visible, rows: boxes }
+}
+export function beginTaskDrag(id: string, event: EventPayload, renderer: NativeRenderer, sequence: string[]) {
+  if (event.button !== 0 || event.x === undefined || event.y === undefined) return
+  const targets = measureTargets(renderer, sequence)
+  if (!targets) return
+  dragRenderer = renderer
   pending = {
     id,
     startX: event.x,
@@ -110,8 +125,7 @@ export function beginTaskDrag(id: string, event: EventPayload, renderer: NativeR
     y: event.y,
     active: false,
     target: null,
-    regions: visible,
-    rows: boxes,
+    ...targets,
     select: !!(event.modifiers?.cmd || event.modifiers?.ctrl || event.modifiers?.shift),
     range: !!event.modifiers?.shift,
     sequence,
@@ -136,6 +150,10 @@ export function endPendingDrag() {
 function move(event: EventPayload) {
   if (!current) return
   if (event.pressedButton !== 0) return cancelTaskDrag()
+  if (dragRenderer) {
+    const targets = measureTargets(dragRenderer, current.sequence)
+    if (targets) { current.regions = targets.regions; current.rows = targets.rows }
+  }
   const x = event.x ?? current.x,
     y = event.y ?? current.y
   const active = current.active || Math.hypot(x - current.startX, y - current.startY) >= 5
@@ -169,6 +187,38 @@ function move(event: EventPayload) {
   }
   publish({ ...current, x, y, active, target })
 }
+let lastScroll = 0
+function scrollEdge() {
+    if (!current?.active || !dragRenderer || !isWindowVisible() || performance.now() - lastScroll < 100) return
+    for (const { node, count, mount } of scrollLists.values()) {
+      // A native virtual list reports no bounds of its own; the list view's viewport wrapper is the same rectangle.
+      const box = dragRenderer.getElementBounds?.(node.id) ?? (scrollLists.size === 1 && viewport ? dragRenderer.getElementBounds?.(viewport.id) : null)
+      if (!box || current.x < box.x || current.x > box.x + box.width) continue
+      const direction = current.y >= box.y - 12 && current.y < box.y + 36 ? -1 : current.y > box.y + box.height - 36 && current.y <= box.y + box.height + 12 ? 1 : 0
+      if (!direction) continue
+      lastScroll = performance.now()
+      const anchor = dragRenderer.getListScrollTop?.(node.id)
+      if (anchor) {
+        const index = Math.max(0, Math.min(count - 1, (anchor[0] ?? 0) + direction))
+        mount?.(index)
+        dragRenderer.scrollToItem?.(node.id, index)
+      }
+      move({ elementId: node.id, eventType: 'mouseMove', x: current.x, y: current.y, pressedButton: 0 })
+      break
+    }
+}
+function EdgeScroll() {
+  const step = useLoaderStep()
+  useEffect(scrollEdge, [step])
+  // Autoscroll is functional interaction, so it remains available with Reduce Motion.
+  useEffect(() => {
+    if (!REDUCED_MOTION) return
+    const timer = setInterval(scrollEdge, 200)
+    return () => clearInterval(timer)
+  }, [])
+  return null
+}
+
 function finish() {
   const drag = current
   cancelTaskDrag()
@@ -218,11 +268,12 @@ export function TasksDragLayer() {
   return (
     <div
       testId="task-drag-layer"
-      onMouseMove={move}
+      onMouseMove={(event) => { move(event); if (REDUCED_MOTION) scrollEdge() }}
       onMouseUp={finish}
       onMouseLeave={cancelTaskDrag}
       style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', cursor: drag.active ? 'grabbing' : 'pointer' }}
     >
+      <EdgeScroll />
       {drag.active && (
         <>
           {drag.target && (

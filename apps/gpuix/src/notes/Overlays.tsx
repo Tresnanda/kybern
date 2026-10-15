@@ -3,12 +3,15 @@ import { noteMatchesQuery, noteTitle, savedMessageMarkdown, titleFromText } from
 import { isFreeChatProject } from '../../../../packages/kybern-client/src/types.ts'
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { getNav, setNav } from '../nav/store.ts'
-import { Dialog } from '../nav/overlay.tsx'
+import { Dialog, Menu, MenuItem } from '../nav/overlay.tsx'
+import { Icon } from '../icons.tsx'
+import { N } from '../nav/glyphs.ts'
+import { NOTES_META, ProjectDot, notesTokens } from './kit.tsx'
 import { Button, Select, TextField } from '../settings/controls.tsx'
 import { getState, useApp } from '../state.ts'
 import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
-import { Label, useTheme } from '../ui.tsx'
+import { ink, Label, useTheme } from '../ui.tsx'
 import { createNote, currentNoteHome, getNotes, newNote, openNote, openQuickNote, recordNote, rpc, setNotes, useNotes, useNotesFeed, type Capture } from './store.ts'
 
 /** Mounted with the palette; the editor and picker themselves unmount when closed. */
@@ -44,12 +47,27 @@ function QuickNote() {
     if (!note) return
     save(QUICK_KEY, undefined); setNotes({ quick: false }); toast('Note saved', { action: { label: 'Open', onClick: () => openNote(note.id) } })
   }
-  return <Dialog testId="quick-note" instant={getNav().keyboardNav} width={560} onClose={() => void finish()}>
-    <div onKeyDown={(e) => { if (e.modifiers?.cmd && e.key === 'enter') void finish() }} style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 24 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><Label color={t.textSecondary} size={12}>New note in</Label><Select label="Note location" value={draft.project} onChange={(project) => update({ project })} options={[{ value: '', label: 'Global' }, ...projects.filter((p) => !isFreeChatProject(p.id)).map((p) => ({ value: p.id, label: p.name }))]} /></div>
-      <input testId="quick-note-title" aria-label="Title" autoFocus placeholder="Untitled" value={draft.title} onChange={(e) => update({ title: (e.value ?? '').slice(0, 300) })} style={{ height: 36, fontSize: 24, fontWeight: 600, color: t.text, backgroundColor: t.popover }} />
-      <textarea testId="quick-note-body" aria-label="Note" placeholder="Write something…" value={draft.body} minRows={6} maxRows={14} onChange={(e) => update({ body: e.value ?? '' })} theme={{ text: t.text, caret: t.text }} style={{ fontSize: 15, lineHeight: 25, color: t.text, backgroundColor: t.popover }} />
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}><Label color={t.textSecondary} size={12} style={{ flexGrow: 1 }}>⌘ ↵ Save note</Label><Button testId="quick-note-save" disabled={busy} onClick={() => void finish()}>{busy ? 'Saving…' : 'Save note'}</Button></div>
+  const k = notesTokens(t)
+  const scope = projects.find((p) => p.id === draft.project)?.name ?? 'Global'
+  const discard = () => { save(QUICK_KEY, undefined); setNotes({ quick: false }) }
+  // `.quick-note` (notes.css): 576px card, 16/20/14 padding, scope row, 18.3px title, 16.15/25.85 body, 28px foot.
+  return <Dialog testId="quick-note" instant={getNav().keyboardNav} width={576} pinTop={169} radius={18} dim={t.variant === 'dark' ? 0.5 : 0.34} onClose={() => void finish()}>
+    <div onKeyDown={(e) => { if (e.modifiers?.cmd && e.key === 'enter') void finish() }} style={{ display: 'flex', flexDirection: 'column', paddingTop: 16, paddingLeft: 20, paddingRight: 20, paddingBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 19.5, marginBottom: 10 }}>
+        <Label color={k.fg3} size={NOTES_META} lineHeight={19.5}>New note in</Label>
+        <Menu testId="quick-note-scope" align="start" sideOffset={6} trigger={() => <div style={{ display: 'flex', alignItems: 'center', gap: 7, pointerEvents: 'none' }}><ProjectDot projectId={draft.project || null} /><Label color={k.fg2} size={NOTES_META} lineHeight={19.5}>{scope}</Label><Icon source={N.chevronDown} size={10} color={k.fg3} /></div>}>
+          {[{ id: '', name: 'Global' }, ...projects.filter((p) => !isFreeChatProject(p.id))].map((p) => <MenuItem key={p.id} id={p.id || 'global'} label={p.name} checked={draft.project === p.id} onSelect={() => update({ project: p.id })} />)}
+        </Menu>
+      </div>
+      <input testId="quick-note-title" aria-label="Title" autoFocus placeholder="Untitled" value={draft.title} onChange={(e) => update({ title: (e.value ?? '').slice(0, 300) })} style={{ height: 23.8, fontSize: 18.31, fontWeight: 650, color: t.text, backgroundColor: 'transparent', borderWidth: 0 }} />
+      <div style={{ marginTop: 6, minHeight: 96 }}>
+        <textarea testId="quick-note-body" aria-label="Note" placeholder="Write something. Type / for formatting" value={draft.body} minRows={3} maxRows={12} onChange={(e) => update({ body: e.value ?? '' })} theme={{ text: k.fg1, caret: t.text }} style={{ fontSize: 16.15, lineHeight: 25.846, color: k.fg1, backgroundColor: 'transparent' }} />
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, height: 28 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexGrow: 1 }}><Label color={k.fg2} size={NOTES_META} lineHeight={19.5} weight={500}>Esc</Label><Label color={k.fg3} size={NOTES_META} lineHeight={19.5}>saves and closes</Label></div>
+        <div testId="quick-note-discard" tabIndex={0} aria-label="Discard" onClick={discard} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') discard() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 28, paddingLeft: 11.5, paddingRight: 11.5, borderRadius: 10, cursor: 'pointer', hover: { backgroundColor: k.hover } }}><Label color={ink(t, 0.58)} size={14} lineHeight={21} weight={500}>Discard</Label></div>
+        <div testId="quick-note-save" tabIndex={busy ? -1 : 0} aria-label="Save note" onClick={() => { if (!busy) void finish() }} onKeyDown={(e) => { if (!busy && (e.key === 'enter' || e.key === 'space')) void finish() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 28, paddingLeft: 11.5, paddingRight: 11.5, borderRadius: 10, backgroundColor: t.buttonPrimary, opacity: busy ? 0.6 : 1, cursor: 'pointer' }}><Label color={t.buttonPrimaryText} size={14} lineHeight={21} weight={500}>{busy ? 'Saving…' : 'Save note'}</Label></div>
+      </div>
     </div>
   </Dialog>
 }
@@ -73,9 +91,9 @@ function SaveToNote({ capture }: { capture: Capture }) {
         note = await createNote(body, titleFromText(capture.text), projectId && !isFreeChatProject(projectId) ? projectId : undefined)
         if (!note) return
       } else {
-        const current = (await rpc().call('notes.get', { id })).note
+        const current = (await rpc(id).call('notes.get', { id })).note
         if (!current || current.deleted_at) throw new Error('This note is unavailable. Choose another note.')
-        note = await rpc().call('notes.update', { id, expected_revision: current.revision, body: `${current.body.trimEnd()}${current.body.trim() ? '\n\n' : ''}${body}` })
+        note = await rpc(id).call('notes.update', { id, expected_revision: current.revision, body: `${current.body.trimEnd()}${current.body.trim() ? '\n\n' : ''}${body}` })
       }
       recordNote(note); setNotes({ capture: null }); const savedId = note.id
       toast('Saved to note', { action: { label: 'Open', onClick: () => openNote(savedId) } })

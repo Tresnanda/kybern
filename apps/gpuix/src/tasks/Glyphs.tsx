@@ -1,3 +1,4 @@
+import { ISLAND, useLoaderStep } from '../MatrixLoader.tsx'
 import { motion } from '@gpuix/react'
 import type { TaskPriority, TaskStatus } from '../../../../packages/kybern-client/src/types.ts'
 import { EASE_OUT, ink, REDUCED_MOTION, useTheme } from '../ui.tsx'
@@ -29,6 +30,7 @@ export function StatusGlyph({ status, mono = false }: { status: TaskStatus; mono
       : status === 'canceled'
         ? '<defs><mask id="cross"><rect width="14" height="14" fill="white"/><path d="M5 5l4 4M9 5 5 9" stroke="black" stroke-width="1.5" stroke-linecap="round"/></mask></defs><circle cx="7" cy="7" r="6.5" fill="currentColor" mask="url(#cross)"/>'
         : `${ring}${status === 'running' ? '<path d="M7 7V3.6A3.4 3.4 0 0 1 7 10.4Z" fill="currentColor"/>' : status === 'needs_review' ? '<path d="M7 7V3.6A3.4 3.4 0 1 1 3.6 7Z" fill="currentColor"/>' : ''}`
+  if (status === 'running' && !mono) return <RunningGlyph source={wrap(body)} color={color} />
   return <svg source={wrap(body)} style={{ width: 14, height: 14, color, flexShrink: 0, pointerEvents: 'none' }} />
 }
 export function PriorityGlyph({ priority }: { priority: TaskPriority }) {
@@ -67,29 +69,19 @@ export function Check({ checked, onClick, testId }: { checked: boolean; onClick:
       }}
       style={{ width: 26, height: 30, display: 'flex', alignItems: 'center', cursor: 'pointer' }}
     >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: 15,
-          height: 15,
-          borderWidth: 1,
-          borderColor: ink(t, 0.3),
-          borderRadius: 4,
-          backgroundColor: checked ? ink(t, 0.36) : 'transparent',
-          pointerEvents: 'none',
-        }}
-      >
-        <motion.div
-          initial={false}
-          animate={{ opacity: checked ? 1 : 0 }}
-          transition={{ duration: keyboard || REDUCED_MOTION ? 0 : 0.15, ease: EASE_OUT }}
-          style={{ width: 12, height: 12, pointerEvents: 'none' }}
-        >
-          <Icon source={N.check} size={12} color={t.text} />
-        </motion.div>
-      </div>
+      {/* `TaskCheckBox`: a 14px box, 1.5 stroke, filled with the foreground and a surface-coloured tick once picked. */}
+      <svg
+        source={checked
+          ? '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14"><defs><mask id="tick"><rect width="14" height="14" fill="white"/><path d="M4.3 7.2 6.1 9 9.7 5.2" fill="none" stroke="black" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></mask></defs><rect x="1.25" y="1.25" width="11.5" height="11.5" rx="3.25" fill="currentColor" stroke="currentColor" stroke-width="1.5" mask="url(#tick)"/></svg>'
+          : '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14"><rect x="1.25" y="1.25" width="11.5" height="11.5" rx="3.25" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>'}
+        style={{ width: 14, height: 14, color: checked ? t.text : ink(t, 0.4), pointerEvents: 'none' }}
+      />
     </div>
   )
+}
+
+function RunningGlyph({ source, color }: { source: string; color: string }) {
+  const step = useLoaderStep()
+  const opacity = REDUCED_MOTION ? 1 : 0.55 + 0.45 * (1 - Math.cos(step * Math.PI / 4)) / 2
+  return <div {...ISLAND} style={{ width: 14, height: 14, flexShrink: 0, pointerEvents: 'none' }}><svg source={source} style={{ width: 14, height: 14, color, opacity, pointerEvents: 'none' }} /></div>
 }

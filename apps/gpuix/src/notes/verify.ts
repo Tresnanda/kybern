@@ -20,7 +20,13 @@ const pause = (ms: number) => new Promise((r) => setTimeout(r, ms))
 async function click(id: string) {
   console.log('Click', id)
   await app!.getByTestId(id).waitFor({ timeoutMs: 15000 })
-  await app!.getByTestId(id).click()
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const bounds = await app!.getByTestId(id).bounds().catch(() => null)
+    if (bounds && bounds.width > 0 && bounds.height > 0) { await app!.getByTestId(id).click(); return }
+    if (id.startsWith('note-card-')) await app!.getByTestId('notes-gallery').wheel(0, -300)
+    await pause(100)
+  }
+  throw Error(`No painted bounds: ${id}`)
 }
 const watchdog = setTimeout(() => { console.error('Verification timed out'); void app?.close() }, 240_000)
 // Recover fixtures left by an interrupted prior run, matching both our title and
@@ -37,6 +43,7 @@ if (process.env.NOTES_CLEANUP_FIXTURES === '1') {
   }
 }
 const ids: string[] = []
+const taskIds: string[] = []
 const bodies = [
   '# A quieter workspace\n\nA place for ideas, decisions, and the details worth remembering.\n\n## Next steps\n\n- [ ] Try the native Notes editor\n- [x] Keep the original Markdown\n\n```ts\nconst idea = "make room"\n\nconsole.log(idea)\n```\n',
   'A focused document with clear typography, a small outline, and just enough structure.\n\n## Reading list\n\n[GPUIX](https://github.com/remorses/gpuix)\n',
@@ -50,6 +57,13 @@ try {
     ids.push(note.id)
     if (i < 2) await client.call('notes.pin', { id: note.id, pinned: true })
   }
+  const linked = await client.call('tasks.items.create', { scope: 'global', title: 'Check image and task references', status: 'todo' })
+  taskIds.push(linked.id)
+  const upload = await fetch(`http://127.0.0.1:${port}/assets`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'image/png', 'x-kybern-filename': 'reference.png' }, body: await Bun.file('../desktop/public/release-background.png').arrayBuffer() })
+  assert.equal(upload.ok, true)
+  const asset = await upload.json() as { id: string }
+  const media = await client.call('notes.create', { scope: 'global', title: 'Inline reference verification', body: `![Reference artwork](kybern://asset/${asset.id})\n\n[${linked.key}](kybern://task/${linked.id})\n` })
+  ids.push(media.id)
   for (const appearance of ['dark', 'light']) {
     app = await launch({ command: 'bun', args: [path.resolve('src/main.tsx')], env: { GPUIX_BACKGROUND: '1', KYBERN_DATA_DIR: data, KYBERN_APPEARANCE: appearance, NAPI_RS_NATIVE_LIBRARY_PATH: process.env.NAPI_RS_NATIVE_LIBRARY_PATH! } })
     await app.getByTestId('app-ready').waitFor({ timeoutMs: 30000 }); await pause(1500)
@@ -57,7 +71,7 @@ try {
     if (await app.getByTestId('notes-back').count()) { await click('notes-back'); await pause(300) }
     await app.screenshot({ path: `${out}/gallery-${appearance}.png` })
     console.log('open document', appearance)
-    await app.getByTestId(`note-card-${ids[0]}`).click(); await pause(500)
+    await click(`note-card-${ids[0]}`); await pause(500)
     await app.screenshot({ path: `${out}/document-${appearance}.png` })
     if (appearance === 'dark' && !process.env.NOTES_SCREENSHOTS_ONLY) {
       console.log('edit native block')
@@ -80,15 +94,14 @@ try {
       await app.screenshot({ path: `${out}/list-dark.png` })
       await app.getByTestId('notes-search').fill('Autosave verified'); await pause(500)
       assert.equal(await app.getByTestId(`note-card-${ids[0]}`).count(), 1)
-      await app.getByTestId(`note-card-${ids[0]}`).click(); await pause(300)
-      await click('note-menu'); await pause(150)
+      await click(`note-card-${ids[0]}`); await pause(300)
       await click('note-pin'); await pause(300)
       assert.equal((await client.call('notes.get', { id: ids[0] })).note!.pinned, false)
-      await click('note-menu'); await pause(150)
+      await click('note-menu-more'); await pause(150)
       await click('note-delete'); await pause(300)
       assert.ok((await client.call('notes.get', { id: ids[0] })).note!.deleted_at)
       await click('notes-filter-deleted'); await pause(300)
-      await app.getByTestId(`note-card-${ids[0]}`).click(); await pause(300)
+      await click(`note-card-${ids[0]}`); await pause(300)
       await click('note-restore'); await pause(400)
       assert.ok(!(await client.call('notes.get', { id: ids[0] })).note!.deleted_at)
       await click('notes-back'); await pause(250)
@@ -117,7 +130,7 @@ try {
         const sampler = Bun.spawn(['bun', 'perf/sample.ts', '15', `GPUIX=${pid}`], { stdout: 'pipe', stderr: 'pipe' })
         console.log(await new Response(sampler.stdout).text()); assert.equal(await sampler.exited, 0)
         console.log('open document', appearance)
-    await app.getByTestId(`note-card-${ids[0]}`).click(); await pause(500)
+    await click(`note-card-${ids[0]}`); await pause(500)
         console.log('document idle sample')
         const doc = Bun.spawn(['bun', 'perf/sample.ts', '15', `GPUIX=${pid}`], { stdout: 'pipe', stderr: 'pipe' })
         console.log(await new Response(doc.stdout).text()); assert.equal(await doc.exited, 0)
@@ -128,11 +141,18 @@ try {
         console.log(await new Response(active.stdout).text()); assert.equal(await active.exited, 0)
       }
     }
+    if (await app.getByTestId('notes-back').count()) await click('notes-back')
+    await app.getByTestId('notes-search').fill('Inline reference verification'); await pause(500)
+    await click(`note-card-${media.id}`)
+    await app.getByTestId('note-image').waitFor({ timeoutMs: 15000 })
+    await app.getByTestId(`note-inline-task-${linked.id}`).waitFor({ timeoutMs: 15000 })
+    await app.screenshot({ path: `${out}/image-task-${appearance}.png` })
     await app.close(); app = undefined
   }
   console.log('PASS: lossless blocks, native gallery/document, autosave, unmount flush, quick capture, palette')
 } finally {
   if (app) await app.close()
   for (const id of ids) { await client.call('notes.delete', { id }); await client.call('notes.purge', { id }) }
+  for (const id of taskIds) await client.call('tasks.items.delete', { id })
   client.close(); clearTimeout(watchdog)
 }
