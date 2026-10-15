@@ -22,7 +22,7 @@ export function openLink(href: string) {
   if (thread) { openThread(thread[1]!); return }
   if (/^(https?:|mailto:|tel:)/i.test(href)) { const child = spawn('open', [href], { stdio: 'ignore' }); child.on('error', () => {}) }
 }
-export function NoteEditor({ id }: { id: string }) {
+export function NoteEditor({ id, compact = false }: { id: string; compact?: boolean }) {
   const t = useTheme()
   const { renderer } = useGpuix()
   const size = useWindowSize({ intervalMs: 300 })
@@ -51,8 +51,8 @@ export function NoteEditor({ id }: { id: string }) {
   useEffect(() => addWindowKeyHandler((e) => {
     if (getNav().paletteOpen || getNav().settingsOpen || getNotes().quick || getNotes().capture) return
     if (e.modifiers?.cmd && e.key === 's') { void session.flush(); return true }
-    if (e.key === 'escape' && active === null) { gallery(); return true }
-  }), [session, active])
+    if (!compact && e.key === 'escape' && active === null) { gallery(); return true }
+  }), [session, active, compact])
   const update = (index: number, value: string) => { const next = [...blocks]; next[index] = value; setBlocks(next); session.edit({ body: next.join('') }) }
   const finish = () => { setActive(null); setBlocks(splitBlocks(session.getSnapshot().body)); void session.flush() }
   const format = (kind: string) => {
@@ -72,6 +72,10 @@ export function NoteEditor({ id }: { id: string }) {
   const note = summary ?? snap.note
   const deleted = !!(summary ? summary.deleted_at : snap.note?.deleted_at)
   const status = snap.status === 'saved' ? (note ? editedAgo(note.updated_at) : 'Saved') : snap.status === 'dirty' ? 'Unsaved changes' : snap.status === 'saving' ? 'Saving…' : snap.status === 'conflict' ? 'Choose a version' : 'Couldn’t save · Retry'
+  if (compact) return <div testId="thread-note-editor" style={{ display: 'flex', flexDirection: 'column', height: 200, padding: 10, gap: 6, borderRadius: 8, backgroundColor: t.buttonSecondary }}>
+    {snap.phase === 'ready' ? <textarea testId="thread-note-body" aria-label="Thread note" value={snap.body} minRows={4} maxRows={6} readOnly={deleted} placeholder="Ideas, reminders, to-dos. Write Markdown here" onChange={(e) => session.edit({ body: e.value ?? '' })} onBlur={() => void session.flush()} theme={{ text: t.text, caret: t.text }} style={{ flexGrow: 1, width: '100%', fontSize: 12, lineHeight: 20, color: t.text, backgroundColor: t.buttonSecondary }} /> : <Label color={t.textSecondary} size={12}>{snap.phase === 'loading' ? 'Loading note…' : snap.error ?? 'This note is unavailable.'}</Label>}
+    {snap.conflict ? <div style={{ display: 'flex', gap: 6 }}><Button onClick={() => session.useTheirs()}>Use theirs</Button><Button onClick={() => session.keepMine()}>Keep mine</Button></div> : <div onClick={() => void session.flush()}><Label color={snap.status === 'error' ? t.red : t.textSecondary} size={11}>{status}</Label></div>}
+  </div>
   return <div testId="note-editor" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, height: 44, paddingLeft: 16, paddingRight: 16, flexShrink: 0 }}>
       <Button testId="notes-back" onClick={gallery}>‹ Notes</Button><Label color={t.textSecondary}>/</Label><Label color={t.text} size={13} truncate style={{ flexGrow: 1 }}>{snap.title || 'Untitled'}</Label>

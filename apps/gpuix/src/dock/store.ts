@@ -3,7 +3,7 @@
 import { useSyncExternalStore } from 'react'
 import { getState } from '../state.ts'
 
-export type DockTab = 'agents' | 'activity' | 'changes' | 'explorer' | 'project'
+export type DockTab = 'agents' | 'activity' | 'changes' | 'explorer' | 'project' | 'notes' | 'tasks' | 'review' | 'artifacts' | 'terminal' | 'preview'
 export interface DockState {
   open: boolean
   tabs: DockTab[]

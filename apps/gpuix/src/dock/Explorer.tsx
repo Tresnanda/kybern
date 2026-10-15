@@ -136,7 +136,7 @@ function FileViewer({ projectId, path, onClose }: { projectId: string; path: str
 // GPUIX 0.10 eagerly lays out all lines in a native code node. Small fixed-height
 // chunks keep natural scrolling and syntax highlighting while bounding layout.
 // files.read has no offset/range support: keep one bounded read, released on close.
-function FileCode({ content, path }: { content: string; path: string }) {
+export function FileCode({ content, path }: { content: string; path: string }) {
   const chunks = useMemo(() => {
     const lines = content.split('\n')
     return Array.from({ length: Math.ceil(lines.length / 64) }, (_, index) => ({

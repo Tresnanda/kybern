@@ -17,6 +17,12 @@ import { Agents } from './Agents.tsx'
 import { DiffPane } from './Diff.tsx'
 import { Explorer } from './Explorer.tsx'
 import { ProjectPane } from './Project.tsx'
+import { PreviewPane } from '../preview/Preview.tsx'
+import { TerminalPane } from '../terminal/Terminal.tsx'
+import { ReviewPane } from './Review.tsx'
+import { ArtifactsPane } from './Artifacts.tsx'
+import { NotesPane } from './Notes.tsx'
+import { TasksPane } from './Tasks.tsx'
 import { DockEmpty } from './parts.tsx'
 import { chooseTab, closeTab, dockGeometry, finishDockDrag, moveDockDrag, setDock, startDockDrag, useDock, useDockDrag, type DockTab } from './store.ts'
 
@@ -26,7 +32,13 @@ const PANELS: { id: DockTab; label: string; icon: string; width: number }[] = [
   { id: 'project', label: 'Project', icon: N.note, width: 104 },
   { id: 'activity', label: 'Activity', icon: N.usage, width: 104 },
   { id: 'changes', label: 'Diff', icon: N.branch, width: 80 },
+  { id: 'review', label: 'Review', icon: N.pullRequest, width: 100 },
+  { id: 'terminal', label: 'Terminal', icon: N.laptop, width: 112 },
+  { id: 'artifacts', label: 'Artifacts', icon: N.window, width: 110 },
   { id: 'explorer', label: 'Explorer', icon: N.folder, width: 110 },
+  { id: 'notes', label: 'Notes', icon: N.note, width: 96 },
+  { id: 'tasks', label: 'Tasks', icon: N.tasks, width: 96 },
+  { id: 'preview', label: 'Preview', icon: N.globe, width: 110 },
 ]
 
 export function Dock({ sidebarOpen }: { sidebarOpen: boolean }) {
@@ -96,6 +108,12 @@ function ThreadDock({ thread, width }: { thread: Thread; width: number }) {
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', borderBottomRightRadius: 12 }}>
       {tab === null ? <DockEmpty icon={N.plus} title="Add a panel with +." />
         : tab === 'agents' ? <Agents thread={thread} />
+        : tab === 'preview' ? <PreviewPane threadId={thread.id} />
+        : tab === 'terminal' ? <TerminalPane threadId={thread.id} width={width} />
+        : tab === 'review' ? <ReviewPane thread={thread} width={width} />
+        : tab === 'artifacts' ? <ArtifactsPane thread={thread} />
+        : tab === 'notes' ? <NotesPane thread={thread} />
+        : tab === 'tasks' ? <TasksPane thread={thread} />
         : tab === 'activity' ? <Activity {...tasks} />
         : tab === 'changes' ? <DiffPane thread={thread} onStats={onStats} />
         : tab === 'explorer' ? <Explorer key={thread.project_id} projectId={thread.project_id} width={width} />

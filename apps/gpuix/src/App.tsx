@@ -14,6 +14,8 @@ import { TasksPage } from './tasks/TasksPage.tsx'
 import { TasksSidebar } from './tasks/TasksSidebar.tsx'
 import { useTasksFeed } from './tasks/store.ts'
 import { Composer } from './Composer.tsx'
+import { PreviewIntegration } from './preview/Preview.tsx'
+import { ComputerLiveView } from './live/ComputerLiveView.tsx'
 import { Dock, DockResizeCapture } from './dock/Dock.tsx'
 import { Draft } from './Draft.tsx'
 import { Icon } from './icons.tsx'
@@ -154,6 +156,8 @@ export function App() {
             </div>
             {/* Settings covers the workspace, dock included, as on the desktop. */}
             {!settingsOpen && <Dock sidebarOpen={panelOpen} />}
+            {!settingsOpen && page === 'home' && <ComputerLiveView />}
+            <PreviewIntegration />
             </div>
           </div>
           {panelOpen && <SidebarResizeHandle />}
