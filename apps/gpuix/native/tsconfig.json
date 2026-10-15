@@ -1,0 +1,5 @@
+{
+  "extends": "../tsconfig.json",
+  "include": ["capability-check.ts", "capability-lab.tsx", "list-perf.ts", "fixture.ts"],
+  "exclude": ["build", "upstream"]
+}

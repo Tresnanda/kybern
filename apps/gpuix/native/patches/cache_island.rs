@@ -12,12 +12,10 @@
 //!   both, it is built inline like any other element. `cache="fill"` instead
 //!   trusts the parent to size it (flex-grow, stretch): its box takes the
 //!   element's layout style as-is.
-//! - Islands inside `<virtual-list>` rows render inline: GPUI's `list` rolls
-//!   back speculative prepaint passes, which leaves a cached view replaying
-//!   discarded output. Put the island around the list instead.
+//! - Virtual rows establish full width before measuring percentage islands.
 //! - Margins and position insets do not belong on the island itself; put them
 //!   on a parent.
-//! - Selectable text inside an island loses selection on frames it is reused.
+//! - Ordinary selectable text registries replay with the cached scene.
 //!
 //! Invalidation: every root render compares the island's `subtree_revision`
 //! (bumped by the retained tree on any change below it) with the revision it
@@ -41,9 +39,16 @@ use crate::automation::{get_bounds, insert_bounds, ElementBounds};
 use crate::renderer::{build_element, BuildCtx, GpuixView, Inherited};
 use crate::retained_tree::{RetainedElement, RetainedTree};
 use crate::style::{DimensionValue, StyleDesc};
+use crate::text::paint::{SelectionSnapshot, selection_cursor, selection_snapshot, replay_selection};
 
 fn debug() -> bool {
     std::env::var_os("KYBERN_DEBUG_ISLANDS").is_some()
+}
+
+// Diagnostic A/B switch; default remains cached. Read once, no per-frame env work.
+fn inline_list_islands() -> bool {
+    static INLINE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *INLINE.get_or_init(|| std::env::var_os("KYBERN_INLINE_LIST_ISLANDS").is_some())
 }
 
 /// The custom prop that marks an island.
@@ -58,6 +63,7 @@ pub(crate) struct IslandView {
     /// The subtree revision this view last rendered.
     rendered: Rc<Cell<u64>>,
     snapshot: Snapshot,
+    painted: Rc<Cell<bool>>,
 }
 
 struct IslandEntry {
@@ -67,6 +73,8 @@ struct IslandEntry {
     rendered_revision: Rc<Cell<u64>>,
     motion_was_active: bool,
     snapshot: Snapshot,
+    painted: Rc<Cell<bool>>,
+    selection_snapshot: Rc<RefCell<SelectionSnapshot>>,
 }
 
 /// Live islands, keyed by retained element id. Owned by `GpuixView`.
@@ -159,7 +167,7 @@ pub(crate) fn island_element(
     _window: &mut gpui::Window,
     cx: &mut gpui::Context<GpuixView>,
 ) -> Option<AnyElement> {
-    if ctx.island_root == Some(id) || ctx.in_virtual_row {
+    if ctx.island_root == Some(id) || (ctx.in_virtual_row && inline_list_islands()) {
         return None;
     }
     let fill = fills_parent(element);
@@ -211,6 +219,10 @@ pub(crate) fn island_element(
     entry.motion_was_active = motion_active;
 
     let replay = entry.snapshot.clone();
+    let painted = entry.painted.clone();
+    let selection = entry.selection_snapshot.clone();
+    let cursor = Rc::new(Cell::new(Default::default()));
+    let before = cursor.clone();
     // The view fills its box through flexbox, not `size_full()`: a percentage of
     // a stretched or flex-grown parent does not resolve in Taffy, and the island
     // would collapse to nothing.
@@ -222,7 +234,15 @@ pub(crate) fn island_element(
         .flex()
         .flex_col()
         .relative()
+        .child(gpui::canvas(|_, _, _| (), move |_, _, _, _| before.set(selection_cursor())).absolute().size_0())
         .child(cached)
+        .child(gpui::canvas(|_, _, _| (), move |_, _, _, _| {
+            if painted.replace(false) {
+                *selection.borrow_mut() = selection_snapshot(cursor.get());
+            } else {
+                replay_selection(&selection.borrow());
+            }
+        }).absolute().size_0())
         .child(
             gpui::canvas(
                 |_, _, _| (),
@@ -259,12 +279,14 @@ fn create_pending_islands(view: &mut GpuixView, cx: &mut gpui::Context<GpuixView
         // Never matches a real revision until the view renders.
         let rendered = Rc::new(Cell::new(u64::MAX));
         let gpuix = cx.weak_entity();
+        let painted = Rc::new(Cell::new(false));
         let island = cx.new(|_| IslandView {
             node_id: id,
             gpuix,
             inherited: inherited.clone(),
             rendered: rendered.clone(),
             snapshot: snapshot.clone(),
+            painted: painted.clone(),
         });
         view.islands.entries.insert(
             id,
@@ -274,6 +296,8 @@ fn create_pending_islands(view: &mut GpuixView, cx: &mut gpui::Context<GpuixView
                 rendered_revision: rendered,
                 motion_was_active: false,
                 snapshot,
+                painted,
+                selection_snapshot: Default::default(),
             },
         );
     }
@@ -318,6 +342,7 @@ impl gpui::Render for IslandView {
             view.build_island_subtree(node_id, inherited, window, cx)
         });
         self.rendered.set(revision);
+        self.painted.set(true);
         let snapshot = self.snapshot.clone();
         // A row, so the island's root stretches to the cached box's height (the
         // cross axis) and keeps its own width, flex-grow or percentage width.
