@@ -13,7 +13,7 @@ export interface Registry { selected_id: string; environments: EnvironmentProfil
 export const localDataDir = process.env.KYBERN_DATA_DIR ?? path.join(homedir(), '.kybern')
 const configuredUrl = process.env.KYBERN_URL
 const configuredToken = process.env.KYBERN_TOKEN
-export const localProfile: EnvironmentProfile = { id: 'local', name: configuredUrl ? 'Configured environment' : 'This Mac', local: !configuredUrl, url: configuredUrl }
+export const localProfile: EnvironmentProfile = { id: 'local', name: process.env.KYBERN_ENVIRONMENT_NAME ?? (configuredUrl ? 'Configured environment' : 'This Mac'), local: !configuredUrl, url: configuredUrl }
 export const configDir = () => process.env.KYBERN_CLIENT_CONFIG_DIR ?? path.join(homedir(), 'Library/Application Support/dev.kybern.desktop')
 export function readRegistry(): Registry {
   try {

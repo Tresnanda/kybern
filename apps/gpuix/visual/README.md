@@ -82,3 +82,14 @@ bun scripts/visual-pair.ts --down                               # stop the scrat
 - A screen can launch another entry: export `entries: Record<screen, { entry, env? }>` from `screens/<area>.gpuix.ts`.
 - GPUIX runs with `KYBERN_CLIENT_CONFIG_DIR`/`KYBERN_GPUIX_CREDENTIALS_DIR` under the scratch dir, reset per screen.
 - Light theme: with `KYBERN_OPAQUE=1` the root puts the 88% frame on white (GPUI clears an opaque window dark), which removed the ~13% light-theme offset.
+
+## Shell screens, fixtures and dialog backdrop
+
+- `screens/shell.*`: `shell-home`, `shell-sidebar-*`, `thread-header`, `env-panel`, `split-empty`, `split-two`, `split-drop` (drag a sidebar row over the pane), `banner-reconnecting`, `banner-failed`, `toasts` and `close-guard`.
+- Chrome that automation cannot cause is raised by the app itself under `KYBERN_PREVIEW=<banner-reconnecting|banner-failed|toasts>` (`src/shell/preview.ts`) and `KYBERN_PREVIEW_CLOSE_GUARD=1` (`CloseGuard.tsx`); both are `entries` of `shell.gpuix.ts`. The reference fakes the matching state: store `connection`, sonner's toast (found through Vite's prebundled dependency URL) and, for the close guard, a mocked `__TAURI_INTERNALS__` (endpoint, environment registry and the `tauri://close-requested` listener) before a reload.
+- GPUIX runs with `KYBERN_ENVIRONMENT_NAME='Development environment'` so the environment label matches the web reference's profile name.
+- `VISUAL_OUT=<dir> bun scripts/visual-crop.ts ...` crops from another output dir. `scripts/backdrop-lab-run.ts <out.png> light` renders a scrim over a white page (`BACKDROP_MODE=dialog|new|old|raw|rawBg`, `BACKDROP_DIM`) for pixel sampling.
+- `--fresh` now stops the previous run's Vite (its process group and whatever still listens on its port).
+- `measure.mjs` reads this checkout's state file, but the Settings fixture's proxy port dies with the pair run, so measure right after `--keep` runs only works for screens that don't need the proxy.
+- Light dialogs: GPUI paints an opaque dark backing under every `<anchored>` layer and composites an opacity tween over it ~2x too dark on light pages (0.6 over white gave 61, the web gives 121). A scrim now fills the anchored surface itself (`PopupLayer backing=rgba(0,0,0,dim)`), which gives 121 exactly. Under Reduce Motion only; with motion the headless tween of a layer opacity stalls part-way (also before this change), so a native fix to the anchored layer's opacity composition is still wanted.
+- The desktop's real type scale (base 14): ui 14, ui-lg 15, ui-sm 13, ui-xs/meta 12, ui-timestamp 10. The `var(--app-font-size-ui…, 12px)` fallbacks in the CSS are not what renders.

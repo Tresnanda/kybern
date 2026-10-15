@@ -1,4 +1,9 @@
 import { setAppearance } from '../settings/appearance.ts'
+import { StatusGlyph } from '../tasks/Glyphs.tsx'
+import { quickAdd, openTask, useTasks } from '../tasks/store.ts'
+import { toggleDock } from '../dock/store.ts'
+import { splitFocusedPane } from '../split/store.ts'
+import { STATUS_LABEL } from '@/state/tasksModel'
 // Search palette (⌘K, the sidebar's search button): `views/Palette.tsx`. One
 // input over grouped results: suggested commands, the 40 most recent threads,
 // projects. Typing filters by label and keywords; ↑/↓ move the highlight, Enter
@@ -23,7 +28,7 @@ interface Item {
   id: string
   label: string
   keywords: string
-  group: 'Suggested' | 'Threads' | 'Notes' | 'Tasks' | 'Projects'
+  group: 'Suggested' | 'Threads' | 'Notes' | 'Tasks' | 'Projects' | 'Themes'
   icon: ReactNode
   meta?: ReactNode
   run: () => void
@@ -88,6 +93,8 @@ function PaletteDialog() {
   const history = useNav((s) => s.history)
   const settingsOpen = useNav((s) => s.settingsOpen)
   const page = useNav((s) => s.page)
+  const taskMap = useTasks((s) => s.tasks)
+  const selectedId = useApp((s) => s.selectedId)
   const [query, setQuery] = useState('')
   const [highlight, setHighlight] = useState(0)
   const rowRefs = useRef(new Map<number, PublicInstance>())
@@ -97,8 +104,6 @@ function PaletteDialog() {
     const kbd = (keys: string[]) => <Kbd keys={keys} />
     const projectName = (id: string) => (isFreeChatProject(id) ? 'Free chat' : (projects.find((p) => p.id === id)?.name ?? ''))
     const actions: Item[] = [
-      { id: 'theme', label: 'Toggle theme', keywords: 'appearance light dark theme', group: 'Suggested', icon: <Icon source={N.settings} size={15} color={muted(t, 1)} />, run: () => setAppearance({ theme: t.variant === 'dark' ? 'light' : 'dark' }) },
-      { id: 'theme-system', label: 'Use system theme', keywords: 'appearance automatic light dark theme', group: 'Suggested', icon: <Icon source={N.settings} size={15} color={muted(t, 1)} />, run: () => setAppearance({ theme: 'system' }) },
       {
         id: 'resume',
         label: 'Resume session',
@@ -120,6 +125,13 @@ function PaletteDialog() {
         meta: page === 'notes' ? undefined : kbd(['⌘', 'N']),
         run: () => newThread(),
       },
+      // Notes and Tasks have no dock.
+      ...(page === 'notes' || page === 'tasks'
+        ? []
+        : [{ id: 'dock', label: 'Toggle right sidebar', keywords: 'panel dock changes terminal', group: 'Suggested' as const, icon: <Icon source={N.panelRight} size={15} color={muted(t, 1)} />, meta: kbd(['⌘', 'J']), run: () => toggleDock() }]),
+      ...(selectedId && page === 'home'
+        ? [{ id: 'split', label: 'Split right', keywords: 'split pane thread column', group: 'Suggested' as const, icon: <Icon source={N.splitRight} size={15} color={muted(t, 1)} />, meta: kbd(['⌘', '\\']), run: () => void splitFocusedPane('horizontal') }]
+        : []),
       ...(settingsOpen || canMoveNavHistory(history, -1, isNavEntryValid)
         ? [{ id: 'go-back', label: 'Go back', keywords: 'back previous history navigate return', group: 'Suggested' as const, icon: <Icon source={N.arrowLeft} size={15} color={muted(t, 1)} />, meta: kbd(['⌘', '[']), run: () => void goBack() }]
         : []),
@@ -161,9 +173,32 @@ function PaletteDialog() {
         ),
         run: () => openThread(thread.id),
       }))
-    const pageItems: Item[] = [
-      { id: 'note-open', label: 'Open Notes', keywords: 'notes open list pages', group: 'Notes', icon: <Icon source={N.note} size={15} color={muted(t, 1)} />, run: () => goPage('notes') },
+    const taskItems: Item[] = [
+      { id: 'task-new', label: 'New task', keywords: 'new task create todo add', group: 'Tasks', icon: <Icon source={N.plus} size={15} color={muted(t, 1)} />, run: () => { goPage('tasks'); quickAdd() } },
       { id: 'task-open', label: 'Open Tasks', keywords: 'tasks open list board todo', group: 'Tasks', icon: <Icon source={N.tasks} size={15} color={muted(t, 1)} />, run: () => goPage('tasks') },
+      ...Object.values(taskMap)
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+        .slice(0, 50)
+        .map((task): Item => ({
+          id: `task:${task.id}`,
+          label: task.title || 'Untitled',
+          keywords: `${task.key} ${task.key.replace('-', ' ')} ${STATUS_LABEL[task.status]}`,
+          group: 'Tasks',
+          icon: <StatusGlyph status={task.status} />,
+          meta: <Label color={muted(t, 0.79)} size={10}>{task.key}</Label>,
+          run: () => { goPage('tasks'); openTask(task.id) },
+        })),
+    ]
+    const themeItems: Item[] = [
+      {
+        id: 'theme',
+        label: 'Toggle theme',
+        keywords: 'theme dark light appearance switch mode toggle',
+        group: 'Themes',
+        icon: <Icon source={t.variant === 'dark' ? N.sun : N.moon} size={15} color={muted(t, 1)} />,
+        meta: <Label color={muted(t, 0.79)} size={10}>{t.variant === 'dark' ? 'Switch to light' : 'Switch to dark'}</Label>,
+        run: () => setAppearance({ theme: t.variant === 'dark' ? 'light' : 'dark' }),
+      },
     ]
     const projectItems: Item[] = projects
       .filter((p) => !isFreeChatProject(p.id))
@@ -183,16 +218,17 @@ function PaletteDialog() {
         run: () => newThread(p.id),
       }))
     const noteItems: Item[] = [
-      { id: 'note-new', label: 'New note', keywords: 'create note', group: 'Notes', icon: <Icon source={N.note} size={15} color={muted(t, 1)} />, run: () => void newNote() },
-      { id: 'note-capture', label: 'Capture note', keywords: 'quick note capture', group: 'Notes', icon: <Icon source={N.note} size={15} color={muted(t, 1)} />, meta: kbd(['⌘', '⇧', 'N']), run: openQuickNote },
+      { id: 'note-new', label: 'New note', keywords: 'new note create write notes', group: 'Notes', icon: <Icon source={N.plus} size={15} color={muted(t, 1)} />, meta: page === 'notes' ? kbd(['⌘', 'N']) : undefined, run: () => void newNote() },
+      { id: 'note-capture', label: 'Capture note…', keywords: 'quick note capture jot write notes', group: 'Notes', icon: <Icon source={N.pencil} size={15} color={muted(t, 1)} />, meta: kbd(['⌘', '⇧', 'N']), run: openQuickNote },
+      { id: 'note-open', label: 'Open Notes', keywords: 'notes open list pages', group: 'Notes', icon: <Icon source={N.note} size={15} color={muted(t, 1)} />, run: () => goPage('notes') },
       ...notes.filter((n) => !n.deleted_at).sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 50).map((note): Item => ({ id: `note:${note.id}`, label: note.title || 'Untitled', keywords: `${note.title} ${note.preview}`, group: 'Notes', icon: <Icon source={N.note} size={15} color={muted(t, 1)} />, run: () => openNote(note.id) })),
     ]
-    const all = [...actions, ...threadItems, ...pageItems, ...noteItems, ...projectItems]
+    const all = [...actions, ...threadItems, ...noteItems, ...taskItems, ...projectItems, ...themeItems]
     const q = query.trim().toLowerCase()
     const matched = q ? all.filter((item) => `${item.label} ${item.keywords}`.toLowerCase().includes(q)) : all
-    const order: Item['group'][] = ['Suggested', 'Threads', 'Notes', 'Tasks', 'Projects']
+    const order: Item['group'][] = ['Suggested', 'Threads', 'Notes', 'Tasks', 'Projects', 'Themes']
     return order.map((group) => ({ group, items: matched.filter((item) => item.group === group) })).filter((g) => g.items.length > 0)
-  }, [notes, threads, projects, history, settingsOpen, page, query, t])
+  }, [notes, threads, projects, taskMap, selectedId, history, settingsOpen, page, query, t])
 
   const flat = groups.flatMap((g) => g.items)
   const active = Math.min(highlight, Math.max(0, flat.length - 1))
@@ -222,7 +258,7 @@ function PaletteDialog() {
           <SearchField
             value={query}
             testId="palette-input"
-            placeholder="Search threads, projects, and commands"
+            placeholder="Search threads, notes, tasks, projects, and commands"
             onChange={(value) => {
               setQuery(value)
               setHighlight(0)
@@ -243,7 +279,7 @@ function PaletteDialog() {
           <div testId="palette-list" style={{ display: 'flex', flexDirection: 'column', maxHeight: 384, overflowY: 'scroll', paddingLeft: 6, paddingRight: 6, paddingBottom: 6 }}>
             {groups.map((group, groupIndex) => (
               <div key={group.group} style={{ display: 'flex', flexDirection: 'column' }}>
-                {groupIndex > 0 && <div style={{ height: 1, marginTop: 8, marginBottom: 8, marginLeft: 8, marginRight: 8, backgroundColor: t.border }} />}
+                {groupIndex > 0 && <div style={{ height: 1, marginTop: 5, marginBottom: 5, marginLeft: 8, marginRight: 8, backgroundColor: t.border }} />}
                 <div style={{ display: 'flex', paddingLeft: 12, paddingTop: groupIndex === 0 ? 0 : 6, paddingBottom: 6 }}>
                   <Label color={muted(t, 1)} size={12} weight={500}>
                     {group.group}
@@ -279,7 +315,7 @@ function PaletteDialog() {
                       }}
                     >
                       <div style={{ display: 'flex', width: 20, height: 20, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{item.icon}</div>
-                      <Label color={t.text} truncate style={{ flexGrow: 1 }}>
+                      <Label color={t.text} lineHeight={20} truncate style={{ flexGrow: 1 }}>
                         {item.label}
                       </Label>
                       {item.meta}

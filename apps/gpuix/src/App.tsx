@@ -21,6 +21,7 @@ import { PullRequestsPage } from './pulls/PullRequestsPage.tsx'
 import { TasksDragLayer } from './tasks/drag.tsx'
 import { TasksPage } from './tasks/TasksPage.tsx'
 import { TasksSidebar } from './tasks/TasksSidebar.tsx'
+import { startPreview } from './shell/preview.ts'
 import { useTasksFeed } from './tasks/store.ts'
 import { NativeSubagentComposer } from './subagents/Composer.tsx'
 import { SubagentBar, SubagentPageMotion } from './subagents/Page.tsx'
@@ -103,6 +104,7 @@ function Workspace() {
     startLive()
     startAgentToasts()
     startNavHistory()
+    startPreview()
   }, [])
 
   return (

@@ -12,7 +12,7 @@ import { spawn } from 'node:child_process'
 import { mkdirSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { launch } from '@gpuix/react/automation'
-import { CLIENT_DIR, CREDS_DIR, DATA_DIR, connect, freePort, readState, seed, startDaemon, stopPid, writeState } from '../visual/fixture.ts'
+import { CLIENT_DIR, CREDS_DIR, DATA_DIR, connect, freePort, readState, seed, startDaemon, stopPid, stopVite, writeState } from '../visual/fixture.ts'
 import { type Fixture } from '../visual/screens.gpuix.ts'
 import { devWindowPid, tauriWindowShot, tauriWindowUp, tauriWindowDown } from '../visual/tauri-window.ts'
 import { loadAreaFixtures, loadGpuixEntries, loadGpuixScreens } from '../visual/load.ts'
@@ -36,7 +36,7 @@ mkdirSync(out, { recursive: true })
 
 async function down() {
   const s = readState()
-  if (s) { stopPid(s.vitePid); stopPid(s.daemonPid) }
+  if (s) { stopVite(s); stopPid(s.daemonPid) }
 }
 if (flag('down')) { await down(); tauriWindowDown(); process.exit(0) }
 
@@ -89,7 +89,7 @@ try {
       const app = await launch({
         command: 'bun',
         args: [path.resolve(here, '..', gpuixEntries[name]?.entry ?? 'src/main.tsx')],
-        env: { ...(gpuixEntries[name]?.env ?? {}), GPUIX_BACKGROUND: '1', KYBERN_OPAQUE: '1', KYBERN_APPEARANCE: theme, KYBERN_DATA_DIR: DATA_DIR, KYBERN_CLIENT_CONFIG_DIR: CLIENT_DIR, KYBERN_GPUIX_CREDENTIALS_DIR: CREDS_DIR, KYBERN_REDUCED_MOTION: '1', ...(winSize ? { KYBERN_WINDOW_SIZE: winSize } : {}), ...(process.env.KYBERN_SIDEBAR_WIDTH ? { KYBERN_SIDEBAR_WIDTH: process.env.KYBERN_SIDEBAR_WIDTH } : {}) },
+        env: { ...(gpuixEntries[name]?.env ?? {}), GPUIX_BACKGROUND: '1', KYBERN_OPAQUE: '1', KYBERN_ENVIRONMENT_NAME: 'Development environment', KYBERN_APPEARANCE: theme, KYBERN_DATA_DIR: DATA_DIR, KYBERN_CLIENT_CONFIG_DIR: CLIENT_DIR, KYBERN_GPUIX_CREDENTIALS_DIR: CREDS_DIR, KYBERN_REDUCED_MOTION: '1', ...(winSize ? { KYBERN_WINDOW_SIZE: winSize } : {}), ...(process.env.KYBERN_SIDEBAR_WIDTH ? { KYBERN_SIDEBAR_WIDTH: process.env.KYBERN_SIDEBAR_WIDTH } : {}) },
       })
       try {
         await app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })

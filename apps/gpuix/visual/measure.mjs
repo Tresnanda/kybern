@@ -1,17 +1,21 @@
 // node measure.mjs <screen> <theme> <css selector>... — prints rect (CSS px) and key computed styles
 // of matching elements in the Tauri reference, after running the screen's steps.
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 const { webkit } = await import(process.env.PLAYWRIGHT_CORE ?? '/Users/mymac/projects/component-kit/node_modules/playwright-core/index.mjs')
-const { screens } = await import(path.join(import.meta.dirname, 'screens.tauri.mjs'))
-const state = JSON.parse(readFileSync('/Users/mymac/projects/ade-gpuix-scratch/visual-pair/state.json', 'utf8'))
+const { screens: base } = await import(path.join(import.meta.dirname, 'screens.tauri.mjs'))
+const screens = { ...base }
+const sub = path.join(import.meta.dirname, 'screens')
+for (const f of readdirSync(sub).filter((x) => x.endsWith('.tauri.mjs')).sort()) Object.assign(screens, (await import(path.join(sub, f))).screens)
+const state = JSON.parse(readFileSync(path.join(process.env.VISUAL_SCRATCH ?? `/Users/mymac/projects/ade-gpuix-scratch/visual-pair-${process.env.GPUIX_VISUAL_SLOT ?? createHash('sha1').update(path.resolve(import.meta.dirname, '../../..')).digest('hex').slice(0, 8)}`, 'state.json'), 'utf8'))
 const [screen, theme, ...sels] = process.argv.slice(2)
 const browser = await webkit.launch()
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 820 }, deviceScaleFactor: 2, colorScheme: theme })
 const page = await ctx.newPage()
 await page.goto(`http://localhost:${state.vitePort}/?url=ws://127.0.0.1:${state.port}/ws&token=${state.token}`)
 await page.waitForSelector('button[aria-label="Notes"]')
-await page.waitForTimeout(1200)
+await page.waitForTimeout(6000)
 await page.addStyleTag({ content: '*::-webkit-scrollbar{display:none}' })
 await screens[screen](page)
 for (const sel of sels) {
