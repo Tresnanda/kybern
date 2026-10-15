@@ -121,34 +121,40 @@ function StackedPanel({ children, closed }: { children: ReactNode; closed: boole
   )
 }
 
+/** The same numbered choices for the card and the empty composer. */
+export function answerApproval(approval: ApprovalRequest, threadId: ThreadId, n: number): boolean {
+  const connector = connectorApproval(approval)
+  if (ownForm(approval) || (isUserInput(approval) && !connector)) return false
+  const gitCard = leadGitCardInput(approval)
+  if (approval.tool_name === 'ExitPlanMode' && n === 2) return false
+  if (gitCard && (n === 2 || (n === 1 && gitCard.op === 'merge_pr'))) return false
+  const decision: ApprovalDecision | null = connector
+    ? n === 1
+      ? { decision: 'submit', response: connectorApprovalResponse(connector.persist.includes('session') ? 'session' : null) }
+      : n === 2
+        ? { decision: 'submit', response: connectorApprovalResponse(null) }
+        : n === 3
+          ? { decision: 'deny' }
+          : null
+    : n === 1
+      ? { decision: 'allow_once' }
+      : n === 2
+        ? { decision: 'allow_always' }
+        : n === 3
+          ? { decision: 'deny' }
+          : null
+  if (!decision) {
+    if (n === 4) interrupt(threadId).catch((e) => reportError('Unable to stop the turn', e))
+    return n === 4
+  }
+  respondApproval(approval.id, decision).catch((e) => reportError('Unable to respond', e))
+
+  return true
+}
+
 function ApprovalRequestCard({ threadId, approval, count }: { threadId: ThreadId; approval: ApprovalRequest; count: number }) {
   const connector = connectorApproval(approval)
-  const gitCard = leadGitCardInput(approval)
-  // Thread.tsx `answer(n)`: 1 primary, 2 for the session, 3 decline, 4 cancel the turn.
-  const answer = (n: number) => {
-    if (approval.tool_name === 'ExitPlanMode' && n === 2) return
-    if (gitCard && (n === 2 || (n === 1 && gitCard.op === 'merge_pr'))) return
-    const decision: ApprovalDecision | null = connector
-      ? n === 1
-        ? { decision: 'submit', response: connectorApprovalResponse(connector.persist.includes('session') ? 'session' : null) }
-        : n === 2
-          ? { decision: 'submit', response: connectorApprovalResponse(null) }
-          : n === 3
-            ? { decision: 'deny' }
-            : null
-      : n === 1
-        ? { decision: 'allow_once' }
-        : n === 2
-          ? { decision: 'allow_always' }
-          : n === 3
-            ? { decision: 'deny' }
-            : null
-    if (!decision) {
-      if (n === 4) interrupt(threadId).catch((e) => reportError('Unable to stop the turn', e))
-      return
-    }
-    respondApproval(approval.id, decision).catch((e) => reportError('Unable to respond', e))
-  }
+  const answer = (n: number) => { answerApproval(approval, threadId, n) }
   if (secretRequestInput(approval) || briefProposalInput(approval) || settingsProposalInput(approval))
     return <DesktopOnlyPanel approval={approval} count={count} />
   if (connector) return <ConnectorApprovalPanel approval={approval} connector={connector} count={count} onChoose={answer} />

@@ -101,7 +101,7 @@ export function ModelPicker(props: ModelPickerProps) {
     if (triggerRef.current) renderer?.focusElement?.(triggerRef.current.id)
   }
   return (
-    <div style={{ display: 'flex', position: 'relative', minWidth: 0, flexShrink: 1 }}>
+    <div style={{ display: 'flex', position: 'relative', minWidth: 164, flexShrink: 1 }}>
       <div
         ref={(el) => {
           triggerRef.current = el
@@ -1096,9 +1096,9 @@ export function ModelTriggerLabel({
 }) {
   const t = useTheme()
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1, overflow: 'hidden' }}>
       <ProviderMark kind={kind} size={14} />
-      <Label color={t.text} lineHeight={16} truncate>
+      <Label color={t.text} lineHeight={16} truncate style={{ minWidth: 64 }}>
         {model}
       </Label>
       {qualifier && (

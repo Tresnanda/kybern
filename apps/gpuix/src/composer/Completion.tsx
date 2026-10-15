@@ -3,8 +3,8 @@
 // opaque list floating 8px above the card at its full width, rows at 36px
 // with a 16px icon, the title in full ink and the description muted on one
 // line, section labels between kinds. ↑/↓ move, Enter or Tab pick, Escape
-// dismisses that trigger. ↑/↓ never reach GPUIX's textarea listeners, so ⌃N/⌃P
-// move the highlight instead.
+// dismisses that trigger. Composer routes native-consumed arrows through its
+// key-up handler; ⌃N/⌃P remain additional shortcuts.
 //
 // GPUIX's `<textarea>` reports no caret, so the trigger is read at the end of
 // the text, where typing happens. Threads, files, attachments, plugins,
@@ -275,7 +275,7 @@ export function useCompletion({
   /** Keys the textarea forwards while the list is up; true when handled. */
   const onKey = (raw: string, shift: boolean, ctrl = false): boolean => {
     if (!open) return false
-    // GPUIX's textarea keeps ↑/↓ for its caret, so ⌃N/⌃P move the list too.
+    // ⌃N/⌃P are additional shortcuts for moving the list.
     const key = ctrl && raw === 'n' ? 'down' : ctrl && raw === 'p' ? 'up' : raw
     if (key === 'escape') {
       setDismissed(menuKey)
@@ -432,6 +432,7 @@ function CompletionList({
               )}
               <div
                 testId={`completion-${i}`}
+                aria-selected={active}
                 onMouseMove={() => !active && onHover(i)}
                 onClick={() => onPick(i)}
                 style={{
@@ -454,7 +455,7 @@ function CompletionList({
                 ) : (
                   <Icon name="file" size={16} color={t.text} style={{ opacity: active ? 1 : 0.85 }} />
                 )}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexGrow: 1, minWidth: 0, overflow: 'hidden' }}>
+                <div testId={active ? 'completion-selected' : undefined} style={{ display: 'flex', alignItems: 'center', gap: 8, flexGrow: 1, minWidth: 0, overflow: 'hidden' }}>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexGrow: 1, minWidth: 0, overflow: 'hidden' }}>
                     <Label color={t.text} truncate style={{ flexShrink: 0, maxWidth: '60%' }}>
                       {title}

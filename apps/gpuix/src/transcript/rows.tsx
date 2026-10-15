@@ -19,6 +19,8 @@ import { findSubagentFor, subagentCounts, subagentGroupDefaultOpen, subagentGrou
 import { launchCounts, launchGroupDefaultOpen, launchGroupTitle, launchState } from '../../../../packages/kybern-client/src/delegations.ts'
 import type { ApprovalDecision, ApprovalRequest, JsonValue, RuntimeTask, Thread, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { selectThread } from '../state.ts'
+import { TOOL_RESULT_CHAR_LIMIT, TOOL_RESULT_LINE_LIMIT } from '../../../desktop/src/lib/toolResultText.ts'
+import { BoundedMarkdown, TextDetail } from './markdown.tsx'
 import { Icon } from '../icons.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
 import { FONT_UI } from '../theme.ts'
@@ -412,9 +414,9 @@ const ToolRow = memo(function ToolRow({ block, ctx }: { block: ToolBlock; ctx: R
 })
 
 /** Lines a collapsed result shows: the desktop's `max-h-72` (288px) at 21px rows. */
-const PREVIEW_LINES = 13
+const PREVIEW_LINES = TOOL_RESULT_LINE_LIMIT
 /** Lines an expanded result mounts at most; `<code>` builds one row per line. */
-const MAX_LINES = 2000
+
 
 function languageFor(path: string | undefined): string | undefined {
   if (!path) return undefined
@@ -438,7 +440,8 @@ function ToolResult({ block, threadId, surface, item, screenshots }: { block: To
   const lines = useMemo(() => out.replace(/\n+$/, '').split('\n'), [out])
   if ((block.outputOmitted || block.streamOmitted) && !out.trim() && screenshots.length === 0)
     return <Para color={muted(t, 0.7)} size={13} lineHeight={19.5}>Loading the saved result.</Para>
-  const shown = all ? lines.slice(0, MAX_LINES) : lines.slice(0, PREVIEW_LINES)
+  const shown = lines.slice(0, PREVIEW_LINES)
+  const preview = shown.join('\n').slice(0, TOOL_RESULT_CHAR_LIMIT)
   const hidden = lines.length - shown.length
   const path = (() => {
     const input = block.call.input as Record<string, unknown> | null
@@ -468,7 +471,7 @@ function ToolResult({ block, threadId, surface, item, screenshots }: { block: To
           }}
         >
           <code
-            code={shown.join('\n')}
+            code={preview}
             path={path}
             language={path ? languageFor(path) : 'text'}
             theme={cachedMarkdownTheme(t)}
@@ -484,7 +487,8 @@ function ToolResult({ block, threadId, surface, item, screenshots }: { block: To
               userSelect: 'text',
             }}
           />
-          {(hidden > 0 || all) && lines.length > PREVIEW_LINES && (
+          {all && <TextDetail text={out} title="Tool output" code onClose={() => setAll(false)} />}
+          {(hidden > 0 || out.length > TOOL_RESULT_CHAR_LIMIT) && (
             <div
               testId="tool-result-more"
               onClick={() => setAll(!all)}
@@ -492,7 +496,7 @@ function ToolResult({ block, threadId, surface, item, screenshots }: { block: To
             >
               <Chevron open={all} color={muted(t, 0.7)} size={12} />
               <Label color={muted(t)} size={12} lineHeight={18} style={{ hover: { color: t.text } }}>
-                {all ? (hidden > 0 ? `Show less · ${hidden} more lines not shown` : 'Show less') : `Show all ${lines.length} lines`}
+                Show more
               </Label>
             </div>
           )}
@@ -542,7 +546,7 @@ const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone, live, thi
       )}
       {showText && (
         <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: 2, paddingRight: 2 }}>
-          <markdown source={text} theme={cachedMarkdownTheme(t, tone)} style={{ color: tone === 'bright' ? t.text : muted(t), userSelect: 'text' }} />
+          <BoundedMarkdown text={text} tone={tone} />
         </div>
       )}
     </>

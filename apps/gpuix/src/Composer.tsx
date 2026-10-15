@@ -24,9 +24,11 @@ import {
 } from '../../../packages/kybern-client/src/types.ts'
 import { Icon } from './icons.tsx'
 import { MatrixLoader } from './MatrixLoader.tsx'
-import { getClient, useApp } from './state.ts'
+import { getClient, getState, useApp } from './state.ts'
 import { FONT_UI } from './theme.ts'
 import { ink, Label, useTheme } from './ui.tsx'
+import { addWindowKeyHandler } from './nav/keys.ts'
+import { answerApproval } from './transcript/Requests.tsx'
 import { FooterChip } from './composer/chips.tsx'
 import { G } from './composer/glyphs.ts'
 import { muted, PickerItem, PickerMenu } from './composer/Menu.tsx'
@@ -286,7 +288,7 @@ interface ComposerViewProps {
   above?: ReactNode
 }
 
-function ComposerView(props: ComposerViewProps) {
+export function ComposerView(props: ComposerViewProps) {
   const t = useTheme()
   const renderer = useGpuixRequired()
   const { running, provider, providers, model, effort, mode } = props
@@ -304,6 +306,7 @@ function ComposerView(props: ComposerViewProps) {
   const steerPressed = useRef(0)
   const completionPicked = useRef(0)
   const lastModelRefresh = useRef(0)
+  const approvalDigit = useRef<string | null>(null)
   const steering = !!running && !!props.canSteer && promptMode === 'steer'
 
   useEffect(() => {
@@ -339,6 +342,25 @@ function ComposerView(props: ComposerViewProps) {
     attachments: attachmentRefs,
     commands: [{ name: 'attach', hint: 'Attach files or images', icon: G.paperclip, run: () => void addFiles() }],
   })
+
+  // Scope approval shortcuts strictly to this editor. Native events cannot
+  // prevent text insertion, so consume only the exact digit below.
+  useEffect(() => addWindowKeyHandler((e) => {
+    if (!editor.current || renderer.getFocusedElementId?.() !== editor.current.id) return false
+    const m = e.modifiers
+    if (m?.cmd || m?.alt || m?.ctrl || m?.shift) return false
+    if (!empty || sending || !props.currentThreadId || !/^[1-4]$/.test(e.key ?? '')) return false
+    const approval = getState().open.pendingApprovals[0]
+    if (!approval || !answerApproval(approval, props.currentThreadId, Number(e.key))) return false
+    approvalDigit.current = e.key!
+    // GPUIX 0.10 delivers events asynchronously and cannot prevent native text
+    // insertion. Remove only the exact consumed digit, never subsequent typing.
+    setTimeout(() => {
+      setText((value) => value === e.key ? '' : value)
+      approvalDigit.current = null
+    }, 0)
+    return true
+  }), [renderer, completion, empty, sending, props.currentThreadId])
 
   const buildParts = (): ContentPart[] => {
     const parts = completion.buildParts()
@@ -459,7 +481,7 @@ function ComposerView(props: ComposerViewProps) {
           <div style={{ position: 'relative', display: 'flex' }}>
             {/* GPUIX paints its own placeholder in a fixed grey; this one is the kit's muted × 40%. */}
             {!text && (
-              <div style={{ position: 'absolute', top: 0, left: 0, right: 0, pointerEvents: 'none' }}>
+              <div testId="composer-placeholder" style={{ position: 'absolute', top: 0, left: 0, right: 0, pointerEvents: 'none' }}>
                 <Label color={muted(t, 0.4)} lineHeight={19.6} truncate>
                   {props.placeholder ?? DEFAULT_PLACEHOLDER}
                 </Label>
@@ -475,19 +497,26 @@ function ComposerView(props: ComposerViewProps) {
               minRows={2}
               maxRows={10}
               onChange={(e) => {
-                setText(e.value ?? '')
+                if (approvalDigit.current && e.value === approvalDigit.current) setText('')
+                else setText(e.value ?? '')
                 if (error) setError(null)
               }}
               onKeyDown={(e) => {
-                if (completion.onKey(e.key ?? '', !!e.modifiers?.shift, !!e.modifiers?.ctrl)) {
-                  if (e.key === 'enter') completionPicked.current = Date.now()
-                  return
-                }
-                // ⌘↵ steers a running turn (`Composer.tsx:839`) and sends otherwise.
+                // ⌘↵ steers even when a completion menu is open.
                 if (e.key === 'enter' && e.modifiers?.cmd && !e.modifiers.shift) {
                   steerPressed.current = Date.now()
                   void submit(running ? 'steer' : promptMode)
+                  return
                 }
+                if (e.key === 'up' || e.key === 'down') return
+                if (completion.onKey(e.key ?? '', !!e.modifiers?.shift, !!e.modifiers?.ctrl)) {
+                  if (e.key === 'enter') completionPicked.current = Date.now()
+                }
+              }}
+              onKeyUp={(e) => {
+                // GPUI native caret actions consume keyDown, including the
+                // window listener. keyUp is delivered after those actions.
+                if ((e.key === 'up' || e.key === 'down') && !e.modifiers?.cmd && !e.modifiers?.alt && !e.modifiers?.ctrl && !e.modifiers?.shift) completion.onKey(e.key, false)
               }}
               onSubmit={() => {
                 // ⌘↵ also reaches here; the key handler already steered.
@@ -510,7 +539,7 @@ function ComposerView(props: ComposerViewProps) {
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4, paddingLeft: 12, paddingRight: 12, paddingBottom: 12, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 1, minWidth: 64 }}>
             <PickerMenu
               testId="composer-plus"
               side="top"
@@ -528,7 +557,7 @@ function ComposerView(props: ComposerViewProps) {
             </PickerMenu>
             <PermissionPicker mode={mode} kind={provider?.kind} status={status} onChange={props.onModeChange} />
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4, flexGrow: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4, flexGrow: 1, minWidth: 200 }}>
             {provider && (
               <ModelPicker
                 provider={provider}

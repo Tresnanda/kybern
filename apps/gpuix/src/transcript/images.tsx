@@ -3,9 +3,11 @@
 // box, so the size comes from the image header (PNG, JPEG, GIF, WebP) read once
 // per source.
 import { closeSync, openSync, readSync } from 'node:fs'
-import { useMemo } from 'react'
+import { useMemo, useRef, useState } from 'react'
+import { motion, useGpuixRequired, type PublicInstance } from '@gpuix/react'
+import { Dialog, DialogHeader } from '../nav/overlay.tsx'
 import { imageSource } from '../../../desktop/src/lib/responseImages.ts'
-import { useTheme } from '../ui.tsx'
+import { EASE_OUT, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { alpha, muted, Para } from './kit.tsx'
 
 const sizes = new Map<string, { width: number; height: number } | null>()
@@ -65,8 +67,13 @@ export function imageSize(source: string): { width: number; height: number } | n
   if (sizes.has(source)) return sizes.get(source)!
   const bytes = headerBytes(source)
   const size = bytes ? parseSize(bytes) : null
-  sizes.set(source, size && size.width > 0 && size.height > 0 ? size : null)
-  return sizes.get(source)!
+  const valid = size && size.width > 0 && size.height > 0 ? size : null
+  // Do not pin large data URLs in a module cache after their row unmounts.
+  if (source.length <= 8192) {
+    if (sizes.size >= 128) sizes.delete(sizes.keys().next().value!)
+    sizes.set(source, valid)
+  }
+  return valid
 }
 
 function srcFor(source: string): string | null {
@@ -77,6 +84,9 @@ function srcFor(source: string): string | null {
 
 export function ResponseImage({ source, label = 'Agent image', compact = false, thumbnail = false }: { source: string; label?: string; compact?: boolean; thumbnail?: boolean }) {
   const t = useTheme()
+  const renderer = useGpuixRequired()
+  const trigger = useRef<PublicInstance | null>(null)
+  const [open, setOpen] = useState(false)
   const size = useMemo(() => imageSize(source), [source])
   const src = srcFor(source)
   const outline = alpha(t.variant === 'dark' ? '#ffffff' : '#000000', 0.1)
@@ -86,16 +96,48 @@ export function ResponseImage({ source, label = 'Agent image', compact = false, 
         <Para color={muted(t)} size={14}>Preview unavailable</Para>
       </div>
     )
-  if (thumbnail)
-    return <img src={src} alt={label} objectFit="cover" style={{ width: 64, height: 64, borderRadius: 12, borderWidth: 1, borderColor: outline, flexShrink: 0 }} />
-  const width = Math.min(280, size?.width ?? 280)
-  const height = size ? Math.round((width * size.height) / size.width) : 210
+  const width = thumbnail ? 64 : Math.min(280, size?.width ?? 280)
+  const height = thumbnail ? 64 : size ? Math.round((width * size.height) / size.width) : 210
   return (
+    <>
     <img
+      ref={(node) => { trigger.current = node }}
+      testId="response-image"
+      onClick={() => setOpen(true)}
       src={src}
       alt={label}
-      objectFit="contain"
-      style={{ width, height, borderRadius: compact ? 8 : 12, borderWidth: 1, borderColor: outline, marginTop: compact ? 0 : 12, marginBottom: compact ? 0 : 12, flexShrink: 0 }}
+      objectFit={thumbnail ? "cover" : "contain"}
+      style={{ width, height, cursor: 'pointer', borderRadius: compact ? 8 : 12, borderWidth: 1, borderColor: outline, marginTop: compact || thumbnail ? 0 : 12, marginBottom: compact || thumbnail ? 0 : 12, flexShrink: 0 }}
     />
+    {open && <ImageLightbox src={src} label={label} size={size} onClose={() => {
+      setOpen(false)
+      if (trigger.current) renderer.focusElement?.(trigger.current.id)
+    }} />}
+    </>
   )
+}
+
+/** Native motion has no transform scale; keep the fade and a 4px entrance
+ * offset. No JS animation loop; Reduce Motion is opacity only. */
+function ImageLightbox({ src, label, size, onClose }: { src: string; label: string; size: { width: number; height: number } | null; onClose: () => void }) {
+  const renderer = useGpuixRequired()
+  const window = renderer.getWindowSize?.() ?? { width: 900, height: 600 }
+  const maxWidth = Math.min(1000, window.width - 80)
+  const maxHeight = window.height - 140
+  const ratio = size ? Math.min(maxWidth / size.width, maxHeight / size.height, 1) : 1
+  const width = size ? Math.round(size.width * ratio) : maxWidth
+  const height = size ? Math.round(size.height * ratio) : maxHeight
+  const [closing, setClosing] = useState(false)
+  return <Dialog width={width + 32} onClose={() => setClosing(true)} testId="image-lightbox" instant>
+    <motion.div
+      initial={{ opacity: 0, top: REDUCED_MOTION ? 0 : 4 }}
+      animate={{ opacity: closing ? 0 : 1, top: closing && !REDUCED_MOTION ? 4 : 0 }}
+      transition={{ duration: closing ? 0.15 : 0.2, ease: EASE_OUT }}
+      onMotionComplete={() => { if (closing) onClose() }}
+      style={{ display: 'flex', flexDirection: 'column', position: 'relative' }}
+    >
+      <DialogHeader title={label} onClose={() => setClosing(true)} />
+      <div style={{ padding: 16, paddingTop: 0 }}><img src={src} alt={label} objectFit="contain" style={{ width, height, borderRadius: 8 }} /></div>
+    </motion.div>
+  </Dialog>
 }
