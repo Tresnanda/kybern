@@ -32,10 +32,11 @@ function Lab() {
     if (reject) throw new Error('Expected close rejection in native-check')
     return allow
   }), [renderer, allow, reject])
-  return <div testId="app-ready" style={{ width: '100%', height: '100%', backgroundColor: '#202020', display: 'flex', flexDirection: 'column', gap: 16, padding: 16, color: '#eeeeee' }}>
-    <div windowDrag testId="drag" style={{ width: '100%', height: 40, backgroundColor: '#333333' }}>
+  return <div testId="app-ready" style={{ width: '100%', height: '100%', backgroundColor: '#202020', display: 'flex', flexDirection: 'column', gap: 0, padding: 0, color: '#eeeeee' }}>
+    <div windowDrag testId="drag" style={{ width: '100%', height: 46, backgroundColor: '#333333' }}>
       <div testId="button" onClick={() => setClicks(n => n + 1)} style={{ width: 100, height: 30, backgroundColor: '#555555', pointerEvents: 'auto' }}><text>{`Clicks ${clicks}`}</text></div>
     </div>
+    <div testId="below-titlebar" onClick={() => setClicks(n => n + 1)} style={{ width: 200, height: 24 }}><text>Just below titlebar</text></div>
     <textarea testId="editor" value={value} minRows={3} maxRows={5} interceptKeys={['up', 'down', 'enter', 'tab', 'escape']} onChange={e => setValue(e.value ?? '')} onSubmit={() => setSubmitted(n => n + 1)} onKeyDown={e => {
       setKeys(`${e.key}:${e.isHeld ? 'repeat' : 'press'}`)
       if (!e.modifiers?.shift) e.preventDefault()

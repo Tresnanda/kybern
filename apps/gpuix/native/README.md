@@ -167,9 +167,25 @@ bounds") and clicks could not target them. The snapshot is now itself deferred
 at the last priority, after the island's overlays. GPUI still owns hitbox replay;
 our snapshot restores the retained-tree bounds used by automation.
 
-`cache_island.rs` → `IslandView::render`, no new upstream hook.
+The replay canvas must only restore **missing** bounds. On a changed island,
+ordinary children have already painted their new coordinates, but the deferred
+snapshot has not run yet. Unconditionally restoring the previous snapshot here
+overwrote those new coordinates and captured the stale values again. The full
+shell's Settings switch then received automation clicks at its old position;
+Space still worked, and dock entrance checks read stale widths. This was an
+automation-bounds regression, not the title-bar drag hook swallowing input.
+
+The isolated bisect retained every other native extension: restoring the original
+non-deferred snapshot made Settings clicks pass (but lost overlay bounds). The
+focused regression moves a cached child 40px: the broken extension build reports
+x=0 instead of x=40. Filling missing entries only preserves both fresh ordinary
+bounds and deferred overlay replay. No hit-testing, drag, key, or motion behavior
+was disabled.
+
+`cache_island.rs` → `IslandView::render` and the replay canvas in `island_element`,
+no new upstream hook.
 `island-overlay-check.ts` first reproduced the missing bounds, then passed
-three outside updates/cached replays and overlay clicks. The normal five
+three outside updates/cached replays, moved child coordinates/clicks, and overlay clicks. The normal five
 island checks still pass. Their animation fixture uses a controlled clock so
 another window covering the lab does not suppress the test animation. Overlays need not move to the app root solely to
 avoid this failure. Selection-in-replayed-island limitations remain.
@@ -312,3 +328,48 @@ Reproduce the controlled scene with `KYBERN_DATA_DIR`, `KYBERN_GPUIX_THREAD`,
 `bun scripts/native-perf.ts <label>`. Omit the two fixture/active flags for idle.
 Physical footprint is not RSS. Commit time, input latency and energy were not
 measured. The optional selection-range API was not implemented.
+
+
+## Pointer regression verification (2026-10-15)
+
+`combined-pointer-check.ts` reproduces full-shell Settings pointer/Space input
+against an explicit scratch `KYBERN_DATA_DIR`. Set `KYBERN_GPUIX_THREAD` to a
+scratch thread to also check sidebar selection, titlebar dock toggle, completed
+dock entrance, adding Notes, and collapse. `native-check.ts` additionally checks
+an excluded titlebar button and a direct pointer click at y=47, one pixel below
+the 46px drag region. These are GPUI automation events; OS event-posting and
+physical window movement retain the manual-verification limitation above.
+
+The fixed build passes all six scripts run by `update.sh`, including the island
+pixel/hover/animation comparisons, and `pnpm typecheck`. `bun test ./src` passes
+15 app tests / 54 assertions. Bare `bun test` also discovers the retained
+`native/upstream` checkout: that unrelated suite fails on missing upstream
+packages (including `goke`) and updater executable-symlink checks. No upstream
+dependencies were installed to hide that distinction.
+
+Controlled active-scene comparison on Apple M1, macOS 27.0, Bun 1.4.0,
+GPUIX 0.10.0, 1280×820 background window: the full merged app with a scratch
+thread, one user message, one live tool row, and two 5 Hz indicators through
+`native-perf-fixture.tsx`. Each independent launch warmed for 10 seconds, then
+sampled for 15 seconds. Before is the reproduced broken extensions build;
+after changes only the missing-bounds replay guard. One fixture window at a time.
+
+| Sample | CPU | Physical footprint | Process Metal GPU time |
+|---|---:|---:|---:|
+| Before 1 | 7.00% | 167 MiB | 81.2 ms |
+| Before 2 | 9.20% | 169 MiB | 78.3 ms |
+| After 1 | 8.73% | 171 MiB | 71.8 ms |
+| After 2 | 9.33% | 186 MiB | 76.5 ms |
+
+Mean CPU changed by +0.93 percentage points (8.10% → 9.03%), within the
+existing 3-point noise threshold. GPU time is similar; this does not demonstrate
+a speedup. Footprint was higher by 2–19 MiB across runs; two short samples do
+not establish memory equivalence or a leak. Concurrent system work and window
+occlusion limit precision. Commit timing, input latency, and energy were not
+measured. The guard adds no timer, retained allocation, or cache entry.
+
+Free disk was 73 GiB before and after. The requested incremental build directory
+(1.9 GiB) and upstream checkout (186 MiB) remain for integration; temporary A/B
+binaries and source copies, scratch data, daemon, and fixture windows were
+removed/stopped. The signed, load-checked deliverable is
+`build/gpuix-native.darwin-arm64.node`.
