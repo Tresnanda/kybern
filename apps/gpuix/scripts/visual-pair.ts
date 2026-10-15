@@ -12,8 +12,13 @@ import { spawn } from 'node:child_process'
 import { mkdirSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { launch } from '@gpuix/react/automation'
-import { DATA_DIR, connect, readState, seed, startDaemon, stopPid, writeState } from '../visual/fixture.ts'
-import { screens as gpuixScreens, type Fixture } from '../visual/screens.gpuix.ts'
+import { CLIENT_DIR, CREDS_DIR, DATA_DIR, connect, freePort, readState, seed, startDaemon, stopPid, writeState } from '../visual/fixture.ts'
+import { type Fixture } from '../visual/screens.gpuix.ts'
+import { devWindowPid, tauriWindowShot, tauriWindowUp, tauriWindowDown } from '../visual/tauri-window.ts'
+import { loadAreaFixtures, loadGpuixEntries, loadGpuixScreens } from '../visual/load.ts'
+
+const gpuixScreens = await loadGpuixScreens()
+const gpuixEntries = await loadGpuixEntries()
 
 const args = process.argv.slice(2)
 const flag = (n: string) => args.includes(`--${n}`)
@@ -23,6 +28,7 @@ const themeArg = opt('theme') ?? 'dark'
 const themes = themeArg === 'both' ? ['dark', 'light'] : [themeArg]
 const valueArgs = new Set(['--out', '--theme'])
 const wanted = args.filter((a, i) => !a.startsWith('--') && !valueArgs.has(args[i - 1] ?? ''))
+if (flag('list')) { console.log(Object.keys(gpuixScreens).join('\n')); process.exit(0) }
 const names = wanted.length ? wanted : Object.keys(gpuixScreens)
 const here = import.meta.dir
 const desktop = path.resolve(here, '../../desktop')
@@ -32,12 +38,12 @@ async function down() {
   const s = readState()
   if (s) { stopPid(s.vitePid); stopPid(s.daemonPid) }
 }
-if (flag('down')) { await down(); process.exit(0) }
+if (flag('down')) { await down(); tauriWindowDown(); process.exit(0) }
 
 let state = await startDaemon(flag('fresh'))
 if (!state.seeded) { await seed(state); state = readState()! }
 if (!state.vitePid) {
-  const vitePort = 14321
+  const vitePort = await freePort()
   const child = spawn('pnpm', ['exec', 'vite', '--port', String(vitePort), '--strictPort'], { cwd: desktop, stdio: 'ignore', detached: true })
   child.unref()
   for (let i = 0; i < 100; i++) { try { if ((await fetch(`http://localhost:${vitePort}/`)).ok) break } catch {} await Bun.sleep(200) }
@@ -51,7 +57,9 @@ async function fixtureIds(): Promise<Fixture> {
   try {
     const notes = (await client.call('notes.list', {})).notes
     const tasks = (await client.call('tasks.items.list', {})).tasks
-    return { notes: Object.fromEntries(notes.map((n) => [n.title, n.id])), tasks: Object.fromEntries(tasks.map((x) => [x.title, x.id])), taskKeys: Object.fromEntries(tasks.map((x) => [x.key, x.id])) }
+    const extra: Fixture['extra'] = {}
+    for (const [area, f] of Object.entries(await loadAreaFixtures())) if (f.ids) extra[area] = await f.ids(client)
+    return { extra, notes: Object.fromEntries(notes.map((n) => [n.title, n.id])), tasks: Object.fromEntries(tasks.map((x) => [x.title, x.id])), taskKeys: Object.fromEntries(tasks.map((x) => [x.key, x.id])) }
   } finally { client.close?.() }
 }
 function run(cmd: string[], opts: { env?: Record<string, string> } = {}) {
@@ -63,17 +71,25 @@ function run(cmd: string[], opts: { env?: Record<string, string> } = {}) {
 const fixture = await fixtureIds()
 try {
   for (const theme of themes) {
-    if (!flag('gpuix-only')) console.log(run(['node', path.join(here, '../visual/tauri-shot.mjs'), JSON.stringify({ port: state.port, token: state.token, vite: state.vitePort, theme, screens: names, out })]).trim())
+    // --tauri-window: the reference is a screenshot of the real Tauri dev window (material,
+    // title bar, traffic lights). Only screens reachable without driving the window work;
+    // the window follows the system appearance, so it only matches that theme.
+    const winSize = flag('tauri-window') ? process.env.KYBERN_WINDOW_SIZE ?? '1440x900' : undefined
+    if (flag('tauri-window')) {
+      const pid = await tauriWindowUp()
+      for (const name of names) { tauriWindowShot(pid, path.join(out, `${name}-${theme}-tauri.png`)); console.log(`[tauri-window] ${name}`) }
+    } else if (!flag('gpuix-only')) console.log(run(['node', path.join(here, '../visual/tauri-shot.mjs'), JSON.stringify({ port: state.port, token: state.token, vite: state.vitePort, theme, screens: names, out })]).trim())
     // A fresh app per screen: an open note, task or menu must not leak into the next one.
     for (const name of names) {
       const step = gpuixScreens[name]
       if (!step) { console.log(`[gpuix] no step for ${name}`); continue }
       // Persisted UI state (last open note, layout, filters) must not leak between screens.
       rmSync(path.join(DATA_DIR, 'gpuix-ui.json'), { force: true })
+      rmSync(CLIENT_DIR, { recursive: true, force: true })
       const app = await launch({
         command: 'bun',
-        args: [path.join(here, '../src/main.tsx')],
-        env: { GPUIX_BACKGROUND: '1', KYBERN_OPAQUE: '1', KYBERN_APPEARANCE: theme, KYBERN_DATA_DIR: DATA_DIR, KYBERN_REDUCED_MOTION: '1' },
+        args: [path.resolve(here, '..', gpuixEntries[name]?.entry ?? 'src/main.tsx')],
+        env: { ...(gpuixEntries[name]?.env ?? {}), GPUIX_BACKGROUND: '1', KYBERN_OPAQUE: '1', KYBERN_APPEARANCE: theme, KYBERN_DATA_DIR: DATA_DIR, KYBERN_CLIENT_CONFIG_DIR: CLIENT_DIR, KYBERN_GPUIX_CREDENTIALS_DIR: CREDS_DIR, KYBERN_REDUCED_MOTION: '1', ...(winSize ? { KYBERN_WINDOW_SIZE: winSize } : {}), ...(process.env.KYBERN_SIDEBAR_WIDTH ? { KYBERN_SIDEBAR_WIDTH: process.env.KYBERN_SIDEBAR_WIDTH } : {}) },
       })
       try {
         await app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })

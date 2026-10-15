@@ -7,7 +7,7 @@ import { useSyncExternalStore } from 'react'
 
 export type Appearance = 'light' | 'dark' | 'system'
 const file = () => path.join(process.env.KYBERN_CLIENT_CONFIG_DIR ?? path.join(homedir(), 'Library/Application Support/kybern-gpuix'), `appearance-${createHash('sha1').update(environmentKey()).digest('hex').slice(0, 12)}.json`)
-let prefs: { theme: Appearance; translucent: boolean } = { theme: 'system', translucent: true }
+let prefs: { theme: Appearance; translucent: boolean } = { theme: 'system', translucent: false }
 try {
   const saved = JSON.parse(readFileSync(file(), 'utf8'))
   if (['light', 'dark', 'system'].includes(saved.theme)) prefs.theme = saved.theme
@@ -27,7 +27,7 @@ export function useAppearance() {
 }
 
 onEnvironmentChange(() => {
-  prefs = { theme: 'system', translucent: true }
+  prefs = { theme: 'system', translucent: false }
   try { const saved = JSON.parse(readFileSync(file(), 'utf8')); if (['light', 'dark', 'system'].includes(saved.theme)) prefs.theme = saved.theme; if (typeof saved.translucent === 'boolean') prefs.translucent = saved.translucent } catch { /* First use on this machine. */ }
   for (const listener of listeners) listener()
 })

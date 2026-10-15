@@ -1,15 +1,16 @@
+import { Button as ActionButton } from '../usage/controls.tsx'
 import { execFile } from 'node:child_process'
 import { useEffect, useRef, useState } from 'react'
 import type { AccountLogin, AccountLoginMode, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { acceptLoginUpdate, initialLoginMode, supportsDeviceCode, supportsPasteCode } from '@/lib/accounts'
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
-import { Button, Select, Switch, TextField } from '../settings/controls.tsx'
+import { Button, Switch, TextField } from '../settings/controls.tsx'
 import { activeEnvironment } from '../shell/environment.ts'
 import { getClient } from '../state.ts'
 import { useNav } from '../nav/store.ts'
 import { errorText } from '../nav/actions.ts'
 import { copyText } from '../transcript/store.ts'
-import { Label, useTheme } from '../ui.tsx'
+import { Label, ProviderMark, useTheme } from '../ui.tsx'
 
 /** One daemon-owned login attempt. Notifications drive progress; Refresh is a
  * recovery path, so a waiting sheet has no polling clock. */
@@ -17,7 +18,7 @@ export function Account({ close, provider }: { close: () => void; provider?: Pro
   const t = useTheme()
   const providers = useNav((s) => s.providers)
   const [client] = useState(() => getClient()!)
-  const [kind, setKind] = useState<ProviderKind>(provider ?? 'claude-code')
+  const [kind, setKind] = useState<ProviderKind>(provider ?? providers.find(p=>p.available)?.kind ?? 'claude-code')
   const [login, setLogin] = useState<AccountLogin | null>(null)
   const current = useRef<AccountLogin | null>(null)
   const mounted = useRef(true)
@@ -56,10 +57,11 @@ export function Account({ close, provider }: { close: () => void; provider?: Pro
     finished.current = true; close()
   }
   const dismiss = () => { if (busy) return; if (login?.phase === 'signed_in' && !login.duplicate_of && !login.instance) void run(finish); else close() }
-  return <Dialog onClose={dismiss} width={512} testId="add-account"><DialogHeader title={login?.phase === 'signed_in' ? 'Account connected' : 'Add account'} description={`Sign in on ${activeEnvironment().name}.`} onClose={dismiss} />
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 20 }}>
-      {!login && <><Label color={t.text} size={12}>Agent</Label><Select testId="account-provider" label="Agent" value={kind} disabled={busy} options={providers.map((p) => ({ value: p.kind, label: p.display_name, disabled: !p.available }))} onChange={(value) => setKind(value as ProviderKind)} />
-        {mode === 'terminal' ? <Label color={t.textSecondary} size={13} lineHeight={18}>This agent signs in through an interactive terminal. Use Kybern desktop’s Add account sheet to finish terminal sign-in.</Label> : <Button testId="account-start" disabled={busy} onClick={() => begin(mode)}>{busy ? 'Starting…' : 'Continue to sign in'}</Button>}
+  return <Dialog onClose={dismiss} width={448} testId="add-account"><DialogHeader title={login?.phase === 'signed_in' ? 'Account connected' : 'Add an account'} description={login ? `Sign in on ${activeEnvironment().name}.` : 'Sign in with another account. Your current sign-ins stay as they are.'} onClose={dismiss} />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, paddingLeft: 16, paddingRight: 16, paddingBottom: 16 }}>
+      {!login && <><div testId="account-provider" role="radiogroup" aria-label="Agent" style={{display:'flex',flexWrap:'wrap',gap:8}}>{providers.filter(p=>p.available).map(p=><div key={p.kind} testId={`account-provider-${p.kind}`} role="radio" aria-checked={kind===p.kind} tabIndex={busy?-1:0} onClick={()=>!busy&&setKind(p.kind)} onKeyDown={e=>{if(!busy&&(e.key==='enter'||e.key==='space'))setKind(p.kind)}} style={{display:'flex',flexDirection:'column',gap:8,width:130,height:72,padding:12,borderWidth:1,borderColor:kind===p.kind?t.border:'transparent',borderRadius:12,hover:{backgroundColor:t.hover}}}><ProviderMark kind={p.kind} size={18}/><Label color={t.text} size={14} weight={500}>{p.display_name}</Label></div>)}</div>
+        {mode === 'terminal' && <Label color={t.textSecondary} size={13} lineHeight={18}>This agent signs in through an interactive terminal. Use Kybern desktop’s Add account sheet to finish terminal sign-in.</Label>}
+        <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:12}}><ActionButton onClick={dismiss} disabled={busy}>Cancel</ActionButton><ActionButton testId="account-start" primary disabled={busy||mode==='terminal'||!providers.some(p=>p.available&&p.kind===kind)} onClick={()=>begin(mode)}>{busy?'Starting…':'Continue'}</ActionButton></div>
       </>}
       {login && <>
         {login.error && <Label color={t.red} size={13} lineHeight={18}>{login.error}</Label>}
