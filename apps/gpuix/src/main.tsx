@@ -11,7 +11,7 @@ import { connect } from './state.ts'
 import { ThemeProvider, VARIANT } from './ui.tsx'
 import { startPerfProbe } from './perf/probe.ts'
 import { installDesktopMaterial } from './native/material.ts'
-import { installWindowFrame, startWindowShell } from './shell/window.ts'
+import { hasSavedFrame, installWindowFrame, startWindowShell } from './shell/window.ts'
 
 const FONTS = ['CalSans-Regular.ttf', 'JetBrainsMono-Regular.ttf']
 
@@ -62,6 +62,8 @@ render(
     minHeight: 600,
     // An agent checking its own work must not take the keyboard from the user.
     focus: process.env.GPUIX_BACKGROUND !== '1',
+    // A saved frame is restored before the window is shown (`shell/window.ts`).
+    show: !hasSavedFrame(),
     // Window shortcuts (⌘N, ⌘B, ⌘K, ⌘[ ⌘], ⌘↑, ⌘,): `nav/keys.ts`.
     onKeyDown: onWindowKeyDown,
   },

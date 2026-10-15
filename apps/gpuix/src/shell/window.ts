@@ -26,8 +26,8 @@ const mac = process.platform === 'darwin'
 /** Saving waits until a saved frame has been restored, or it would overwrite it with the default. */
 let frameReady = !mac || !load<string | null>(FRAME_KEY, null)
 
-/** The app's window: the first on-screen (or minimized) NSWindow that is not an AppKit helper. */
-function appWindow(o: Objc): Pointer | null {
+/** The app's window: the first on-screen (or minimized) NSWindow; `hidden` also accepts one not shown yet. */
+function appWindow(o: Objc, hidden = false): Pointer | null {
   const app = nsApp()
   if (!app) return null
   let found: Pointer | null = null
@@ -35,23 +35,38 @@ function appWindow(o: Objc): Pointer | null {
     if (found) return
     const minimized = (Number(o.msgU64(window, sel(o, 'isMiniaturized'))) & 0xff) !== 0
     const onScreen = (Number(o.msgU64(window, sel(o, 'isVisible'))) & 0xff) !== 0
-    if (minimized || onScreen) found = window
+    if (minimized || onScreen || (hidden && o.msg(window, sel(o, 'contentView')))) found = window
   })
   return found
 }
 
 const nsString = (o: Objc, text: string) => o.msgPtrArg(cls(o, 'NSString'), sel(o, 'stringWithUTF8String:'), cstr(text)) as Pointer
 
-/** Put the window back where it was; false when nothing is saved or the window is not up yet. */
+/** Whether there is a saved frame to restore: `main.tsx` then opens the window hidden. */
+export const hasSavedFrame = () => mac && !!load<string | null>(FRAME_KEY, null)
+
+/**
+ * Put the window back where it was, then show it. The window opens hidden when
+ * a frame is saved (`show: false`), so it never flashes at the default place;
+ * a window that was shown anyway is just moved. False when it is not up yet.
+ */
 export function restoreWindowFrame(): boolean {
   if (!mac) return true
   const saved = load<string | null>(FRAME_KEY, null)
   if (!saved) return true
   try {
     const o = getObjc()
-    const window = appWindow(o)
+    const window = appWindow(o, true)
     if (!window) return false
     o.msgSetPtr(window, sel(o, 'setFrameFromString:'), nsString(o, saved))
+    if ((Number(o.msgU64(window, sel(o, 'isVisible'))) & 0xff) === 0) {
+      // Automation runs (`GPUIX_BACKGROUND`) must not take the keyboard.
+      if (process.env.GPUIX_BACKGROUND === '1') o.msgSetPtr(window, sel(o, 'orderFront:'), null as unknown as Pointer)
+      else {
+        o.msgSetBool(nsApp()!, sel(o, 'activateIgnoringOtherApps:'), true)
+        o.msgSetPtr(window, sel(o, 'makeKeyAndOrderFront:'), null as unknown as Pointer)
+      }
+    }
     return true
   } catch {
     return true

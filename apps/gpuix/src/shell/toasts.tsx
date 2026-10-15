@@ -232,7 +232,7 @@ function ToastLayer({ item, x, y, lift }: { item: Item; x: number; y: number; li
   const card = useRef<PublicInstance>(null)
   const move = REDUCED_MOTION ? 0 : 12
   // What the layer is doing: arriving, gliding after the stack moved, or leaving.
-  const [motion, setMotion] = useState<Motion>(() => ({ generation: ++generation, initial: { opacity: 0, top: move }, animate: { opacity: 1, top: 0 }, ease: EASE.smoothOut, duration: ENTER }))
+  const [motion, setMotion] = useState<Motion>(() => ({ generation: ++generation, initial: { opacity: 0, top: move }, animate: { opacity: 1, top: 0 }, ease: EASE.smoothOut, duration: REDUCED_MOTION ? 0.12 : ENTER }))
   const last = useRef({ lift, leaving: item.leaving })
   if (last.current.leaving !== item.leaving && item.leaving) {
     last.current = { lift, leaving: true }
