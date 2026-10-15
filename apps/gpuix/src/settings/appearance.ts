@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import { useSyncExternalStore } from 'react'
 
 export type Appearance = 'light' | 'dark' | 'system'
-const file = () => path.join(homedir(), 'Library/Application Support/kybern-gpuix', `appearance-${createHash('sha1').update(environmentKey()).digest('hex').slice(0, 12)}.json`)
+const file = () => path.join(process.env.KYBERN_CLIENT_CONFIG_DIR ?? path.join(homedir(), 'Library/Application Support/kybern-gpuix'), `appearance-${createHash('sha1').update(environmentKey()).digest('hex').slice(0, 12)}.json`)
 let prefs: { theme: Appearance; translucent: boolean } = { theme: 'system', translucent: true }
 try {
   const saved = JSON.parse(readFileSync(file(), 'utf8'))
