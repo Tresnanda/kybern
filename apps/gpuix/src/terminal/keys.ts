@@ -10,3 +10,8 @@ export function terminalKey(event: Pick<EventPayload, 'key' | 'keyChar' | 'modif
   value = keys[key] ?? event.keyChar ?? (key.length === 1 ? (m?.shift ? key.toUpperCase() : key) : undefined)
   return value === undefined ? null : (m?.alt ? '\x1b' : '') + value
 }
+
+/** Bracket delimiters are terminal protocol, never part of the pasted text. */
+export function terminalPaste(text: string, bracketed: boolean): string {
+  return bracketed ? `\x1b[200~${text.replaceAll('\x1b', '')}\x1b[201~` : text
+}

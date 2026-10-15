@@ -70,7 +70,7 @@ function DockShell({ threadId, open, mounted, setMounted, sidebarOpen, still, ba
   threadId: string | null; open: boolean; mounted: boolean; setMounted: (value: boolean) => void; sidebarOpen: boolean; still: boolean; background: string
 }) {
   const t = useTheme()
-  // The shell's window poller supplies the width; the dock adds no poll of its own.
+  // The shell's native resize subscription supplies width; geometry stays derived.
   const windowWidth = useWindowWidth()
   const sidebarWidth = useSidebarWidth()
   const dock = useDock(threadId)

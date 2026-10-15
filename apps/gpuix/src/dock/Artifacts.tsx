@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { artifactView, publishArtifactPrompt, type ArtifactView } from '../../../../packages/kybern-client/src/artifacts.ts'
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import type { ArtifactTool, FilesReadResult, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { getClient } from '../state.ts'
+import { launchBrowser } from '../preview/browser.ts'
 import { openUrl } from '../pulls/PrStates.tsx'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { TaskWindow, type TaskWindowEntry } from '../tasks/TaskWindow.tsx'
@@ -52,7 +53,7 @@ export function ArtifactsPane({ thread }: { thread: Thread }) {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>{artifact.path && <Action onClick={() => setSelected(artifact)}>Preview</Action>}{artifact.url && <Action onClick={() => openUrl(artifact.url!)}>Open in Claude</Action>}{artifact.path && artifact.status !== 'publishing' && <Action disabled={busy} onClick={() => void publish(artifact)}>{artifact.url ? 'Ask to update publication' : 'Check publishing options'}</Action>}</div>
     </div> }] : []
   })
-  if (selected) return <ArtifactPreview thread={thread} artifact={selected} close={() => setSelected(null)} />
+  if (selected) return <ArtifactPreview key={`${thread.id}:${selected.path}`} thread={thread} artifact={selected} close={() => setSelected(null)} />
   return <div testId="dock-artifacts" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
     <Section label="Artifacts"><Action disabled={busy} onClick={() => setRefresh(n => n + 1)}>Refresh</Action></Section>
     <ErrorLine error={error} />{notice && <Section label={notice} />}
@@ -67,15 +68,22 @@ function ArtifactPreview({ thread, artifact, close }: { thread: Thread; artifact
   const [error, setError] = useState<string | null>(null)
   const [source, setSource] = useState(false)
   const [revision, reload] = useState(0)
+  const [opened, setOpened] = useState(false)
+  const [opening, setOpening] = useState(false)
+  const alive = useRef(true)
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
   useEffect(() => {
     let alive = true
+    setFile(null); setError(null); setOpened(false)
     void getClient()!.call('threads.artifacts.read', { thread_id: thread.id, path: artifact.path! }).then(result => { if (alive) { if (result.binary || result.truncated) setError('This file is binary or larger than 1 MB. Open the hosted artifact instead.'); else { setFile(result); setError(null) } } }, e => { if (alive) setError(String(e)) })
     return () => { alive = false }
   }, [thread.id, artifact.path, revision])
   const browser = async () => {
-    try { const client = getClient()!; const result = await client.call('threads.artifacts.preview', { thread_id: thread.id, path: artifact.path! }); openUrl(`${httpBase(client.endpoint.url)}/artifact-preview/${encodeURIComponent(result.ticket)}`) }
-    catch (e) { setError(String(e)) }
+    if (opening) return
+    setOpening(true); setError(null)
+    try { const client = getClient()!; const result = await client.call('threads.artifacts.preview', { thread_id: thread.id, path: artifact.path! }); if (!alive.current) return; await launchBrowser(`${httpBase(client.endpoint.url)}/artifact-preview/${encodeURIComponent(result.ticket)}`); if (alive.current) setOpened(true) }
+    catch (e) { if (alive.current) setError(String(e)) } finally { if (alive.current) setOpening(false) }
   }
   const markdown = /\.(md|markdown)$/i.test(artifact.path ?? '') && (file?.content.length ?? 0) < 96 * 1024
-  return <div testId="artifact-file-preview" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}><Section label={artifact.title}><Action onClick={close}>Back</Action><Action onClick={() => setSource(!source)}>{source ? 'Preview' : 'Source'}</Action></Section><ErrorLine error={error} retry={() => reload(n => n + 1)} />{file && (markdown && !source ? <div style={{ overflow: 'scroll', flexGrow: 1, padding: 12 }}><markdown source={file.content} theme={cachedMarkdownTheme(t)} /></div> : source || markdown ? <FileCode content={file.content} path={artifact.path!} /> : <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 20 }}><Label color={t.textSecondary} size={12} lineHeight={20}>Open this local preview in your browser.</Label><Action testId="artifact-open-browser" onClick={() => void browser()}>Open in browser</Action></div>)}</div>
+  return <div testId="artifact-file-preview" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}><Section label={artifact.title}><Action onClick={close}>Back</Action><Action onClick={() => setSource(!source)}>{source ? 'Preview' : 'Source'}</Action></Section><ErrorLine error={error} retry={() => reload(n => n + 1)} />{file && (markdown && !source ? <div style={{ overflow: 'scroll', flexGrow: 1, padding: 12 }}><markdown source={file.content} theme={cachedMarkdownTheme(t)} /></div> : source || markdown ? <FileCode content={file.content} path={artifact.path!} /> : <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 20 }}><Label color={t.textSecondary} size={12} lineHeight={20}>{opened ? 'Opened in browser. Return here to inspect the source or choose another artifact.' : 'Open this local preview in your browser.'}</Label><Action disabled={opening} testId="artifact-open-browser" onClick={() => void browser()}>Open in browser</Action></div>)}</div>
 }
