@@ -9,13 +9,23 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { deflateSync } from 'node:zlib'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { KybernClient } from '../../../packages/kybern-client/src/client.ts'
 
-export const SCRATCH = process.env.VISUAL_SCRATCH ?? '/Users/mymac/projects/ade-gpuix-scratch/visual-pair'
+/**
+ * One scratch tree per checkout (hash of the repo root) so parallel worktrees
+ * never share a daemon, data dir or Vite server; `GPUIX_VISUAL_SLOT` overrides the hash.
+ */
+const SLOT = process.env.GPUIX_VISUAL_SLOT ?? createHash('sha1').update(path.resolve(import.meta.dir, '../../..')).digest('hex').slice(0, 8)
+export const SCRATCH = process.env.VISUAL_SCRATCH ?? `/Users/mymac/projects/ade-gpuix-scratch/visual-pair-${SLOT}`
 export const DATA_DIR = path.join(SCRATCH, 'data')
+/** GPUIX appearance prefs and credentials live here, never in ~/Library (a guard refuses anything outside the scratch dir). */
+export const CLIENT_DIR = path.join(SCRATCH, 'client')
+export const CREDS_DIR = path.join(SCRATCH, 'credentials')
 export const DAEMON_BIN = process.env.KYBERND ?? '/Applications/kybern.app/Contents/MacOS/kybernd'
 const STATE = path.join(SCRATCH, 'state.json')
 
+for (const d of [DATA_DIR, CLIENT_DIR, CREDS_DIR]) if (!path.resolve(d).startsWith(path.resolve(SCRATCH) + path.sep)) throw new Error(`${d} is outside the scratch dir`)
 if (!SCRATCH.includes('gpuix-scratch')) throw new Error('VISUAL_SCRATCH must contain gpuix-scratch')
 
 export type RunState = { daemonPid: number; port: number; token: string; vitePid?: number; vitePort?: number; seeded: boolean }
@@ -224,6 +234,8 @@ export async function seed(state: RunState) {
       }
       await Bun.sleep(30)
     }
+    const { loadAreaFixtures } = await import('./load.ts')
+    for (const area of Object.values(await loadAreaFixtures())) await area.seed?.(client, { state, scratch: SCRATCH, projects })
     writeState({ ...state, seeded: true })
   } finally {
     client.close?.()

@@ -2,8 +2,8 @@
 // a fresh navigation (the previous screen's state is reset first).
 import type { App } from '@gpuix/react/automation'
 
-export type Fixture = { notes: Record<string, string>; tasks: Record<string, string>; taskKeys: Record<string, string> }
-type Step = (app: App, fx: Fixture) => Promise<void>
+export type Fixture = { notes: Record<string, string>; tasks: Record<string, string>; taskKeys: Record<string, string>; /** Per-area ids from `fixture.<area>.ts` `ids()`. */ extra: Record<string, Record<string, unknown>> }
+export type Step = (app: App, fx: Fixture) => Promise<void>
 
 export const settle = (ms = 900) => new Promise((r) => setTimeout(r, ms))
 /** Move the pointer onto the window's bottom-right corner, clear of hover and tooltips. */
@@ -11,11 +11,11 @@ export async function park(app: App) {
   await app.mouse.move({ x: 1275, y: 815 })
   await settle(300)
 }
-async function click(app: App, testId: string) {
+export async function click(app: App, testId: string) {
   await app.getByTestId(testId).click()
   await settle(400)
 }
-async function go(app: App, page: string) {
+export async function go(app: App, page: string) {
   await click(app, 'rail-home')
   // Leave any open note or task, and put the Tasks view back to the list.
 

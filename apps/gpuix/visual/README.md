@@ -25,11 +25,11 @@ bun scripts/visual-pair.ts --down                               # stop the scrat
 ## How it works
 
 - `fixture.ts` starts `/Applications/kybern.app/Contents/MacOS/kybernd` on a free
-  port with a data dir under `ade-gpuix-scratch/visual-pair/data` (never
+  port with a data dir under `ade-gpuix-scratch/visual-pair-<hash of the checkout>/data` (`GPUIX_VISUAL_SLOT` overrides the hash; `--down` stops only that checkout's daemon and Vite) (never
   `~/.kybern`, never port 4219) and seeds it over RPC only: two projects, nine
   notes (pinned, headings, lists, code, an image asset, task links) and 25 tasks.
   Running and needs-review tasks need a live agent run, so they are not seeded.
-- The reference is the desktop web build under `pnpm exec vite` (port 14321),
+- The reference is the desktop web build under `pnpm exec vite` (a free port per run),
   opened in Playwright WebKit (the engine Tauri's WKWebView uses) at 1280×820 and
   2×. The Playwright package is imported from `PLAYWRIGHT_CORE`
   (default `/Users/mymac/projects/component-kit/node_modules/playwright-core`);
@@ -74,3 +74,11 @@ bun scripts/visual-pair.ts --down                               # stop the scrat
 
 `verify-daemon.ts up|down` starts a second scratch daemon with the
 `scratch-project` the Notes and Tasks verify scripts expect.
+
+## Real Tauri window and per-screen entries
+
+- `--tauri-window` (needs a seeded scratch daemon, i.e. one run without it first): runs `pnpm tauri dev` from this checkout with `CARGO_TARGET_DIR=<checkout>/target`, the scratch data dir and `KYBERN_NO_ACTIVATE=1`, finds the dev process's window by pid (`window-id.swift`; the installed app has the same process name) and captures it with `screencapture -l`. GPUIX launches at the window's size (`KYBERN_WINDOW_SIZE`, default 1440x900). Only screens reachable without driving the window work (accessibility is not granted); the window follows the system appearance. It holds the real material, title bar, traffic lights and Tauri-only rows. The window may carry its own stored sidebar width: pass `KYBERN_SIDEBAR_WIDTH=208` to match. `--down` stops it; delete `target/` afterwards.
+- `real-gpuix.sh <out.png> [theme]` captures a real (non-automation) GPUIX window the same way.
+- A screen can launch another entry: export `entries: Record<screen, { entry, env? }>` from `screens/<area>.gpuix.ts`.
+- GPUIX runs with `KYBERN_CLIENT_CONFIG_DIR`/`KYBERN_GPUIX_CREDENTIALS_DIR` under the scratch dir, reset per screen.
+- Light theme: with `KYBERN_OPAQUE=1` the root puts the 88% frame on white (GPUI clears an opaque window dark), which removed the ~13% light-theme offset.

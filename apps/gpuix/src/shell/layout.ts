@@ -23,7 +23,9 @@ const KEY = 'kybern.sidebar.width'
 const clamp = (w: number) => Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Math.round(w)))
 
 const saved = Number(load<number>(KEY, SIDEBAR_DEFAULT))
-let stored = saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX ? saved : SIDEBAR_DEFAULT
+// `KYBERN_SIDEBAR_WIDTH` lets the pair tool match the reference window's stored width.
+const forced = Number(process.env.KYBERN_SIDEBAR_WIDTH)
+let stored = forced >= SIDEBAR_MIN && forced <= SIDEBAR_MAX ? forced : saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX ? saved : SIDEBAR_DEFAULT
 /** 0 until the first window-size reading: no narrow-window shrink before it. */
 let windowWidth = 0
 let dragging = false
