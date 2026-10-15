@@ -81,5 +81,11 @@ echo "== checks"
   done
   pnpm exec tsc -p native/tsconfig.json
   bun native/capability-check.ts
+  for check in layout-check syntax-check syntax-lifecycle-check syntax-large-check; do
+    bun "native/$check.ts"
+  done
+  bun native/fixture.ts bun scripts/combined-pointer-check.ts
+  rustc --test native/patches/spring.rs -o native/build/spring-tests
+  native/build/spring-tests
 )
 echo "done: GPUIX $version with Kybern patches"

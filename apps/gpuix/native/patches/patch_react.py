@@ -9,7 +9,7 @@ def edit(name, old, new):
         raise SystemExit(f"{name}: moved anchor; nothing written: {old}")
     pending[name] = text.replace(old, new)
 edit('dist/components/index.js', '        style.borderRadius,', '        style.borderRadius,\n        style.translateX,\n        style.translateY,')
-edit('dist/components/index.js', '        transition?.ease,', '        transition?.ease,\n        transition?.type,\n        transition?.bounce,')
+edit('dist/components/index.js', '        transition?.ease,', '        transition?.ease,\n        transition?.type,\n        transition?.bounce,\n        transition?.velocityX,\n        transition?.velocityY,')
 edit('dist/components/index.d.ts', 'export interface MotionDivProps extends MotionProps {', 'export interface MotionDivProps extends MotionProps {\n    windowDrag?: boolean;\n    cache?: boolean | "fill";\n    testId?: string;')
 for name, text in pending.items():
     (root / name).write_text(text)

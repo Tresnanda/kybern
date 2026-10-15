@@ -11,17 +11,20 @@ index cc6b7ef926c5c3122fff6107341913364a215710..2ea2c54b0a3976589215b6a7a6e7fc5d
      width?: number;
      height?: number;
      opacity?: number;
-@@ -16,6 +18,9 @@ export interface MotionStyle {
+@@ -16,6 +18,12 @@ export interface MotionStyle {
  }
  export type MotionEase = "linear" | "ease" | "easeIn" | "easeOut" | "easeInOut" | [number, number, number, number];
  export interface MotionTransition {
 +    type?: "tween" | "spring";
 +    /** Damping control from 0 (no overshoot) to 1. */
 +    bounce?: number;
++    /** Translation velocity in logical pixels per second. */
++    velocityX?: number;
++    velocityY?: number;
      /** Duration in seconds. */
      duration?: number;
      /** Delay in seconds. */
-@@ -275,6 +280,9 @@ export interface HighlightSpec {
+@@ -275,6 +283,9 @@ export interface HighlightSpec {
      radius?: number;
  }
  export interface HostProps {
@@ -31,7 +34,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..2ea2c54b0a3976589215b6a7a6e7fc5d
      style?: StyleDesc;
      /** Primary button only, like the DOM. Use `onAuxClick` for the others. */
      onClick?: (event: EventPayload) => void;
-@@ -287,7 +295,7 @@ export interface HostProps {
+@@ -287,7 +298,7 @@ export interface HostProps {
      onMouseMove?: (event: EventPayload) => void;
      /** Fires when user clicks OUTSIDE this element. Use for "click outside to close". */
      onMouseDownOutside?: (event: EventPayload) => void;
@@ -40,7 +43,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..2ea2c54b0a3976589215b6a7a6e7fc5d
      onKeyUp?: (event: EventPayload) => void;
      onFocus?: (event: EventPayload) => void;
      onBlur?: (event: EventPayload) => void;
-@@ -342,6 +350,10 @@ export interface HostProps {
+@@ -342,6 +353,10 @@ export interface HostProps {
      motion?: MotionProps;
  }
  export interface InputProps extends HostProps {
@@ -51,7 +54,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..2ea2c54b0a3976589215b6a7a6e7fc5d
      /** External editor value. Native edits apply immediately and report through onChange. */
      value?: string;
      placeholder?: string;
-@@ -405,6 +417,8 @@ export interface SvgProps extends HostProps {
+@@ -405,6 +420,8 @@ export interface SvgProps extends HostProps {
   * scroller, so `whiteSpace` and `overflowX` do nothing.
   */
  export interface CodeProps extends HostProps {
@@ -60,7 +63,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..2ea2c54b0a3976589215b6a7a6e7fc5d
      /** The source to display. Rendered one div per line at an exact line height. */
      code?: string;
      /** Language alias such as "ts", "rust", "bash". Beats `path` for detection. */
-@@ -468,7 +482,7 @@ export type WindowSizeHost = Pick<GpuixRenderer, "getWindowSize">;
+@@ -468,7 +485,7 @@ export type WindowSizeHost = Pick<GpuixRenderer, "getWindowSize">;
  export type WindowInsetsHost = Pick<GpuixRenderer, "getWindowInsets">;
  export type SelectionHost = Pick<GpuixRenderer, "getSelectedText">;
  /** `applyBatch` plus the live renderer methods a host may also expose. */

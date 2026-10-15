@@ -51,7 +51,7 @@ edit('dist/renderer-state.d.ts', 'import type { EventPayload }', 'export declare
 edit('dist/host.d.ts', '"setWindowKeyEvents" |', '"resolveKeyEvent" | "setCloseGuard" | "resolveCloseRequest" | "setWindowKeyEvents" |')
 edit('dist/host.d.ts', 'export interface CodeProps extends HostProps {', 'export interface CodeProps extends HostProps {\n    /** Wrap highlighted lines at the available width. */\n    softWrap?: boolean;')
 edit('dist/host.d.ts', 'export interface MotionStyle {', 'export interface MotionStyle {\n    translateX?: number;\n    translateY?: number;')
-edit('dist/host.d.ts', 'export interface MotionTransition {', 'export interface MotionTransition {\n    type?: "tween" | "spring";\n    /** Damping control from 0 (no overshoot) to 1. */\n    bounce?: number;')
+edit('dist/host.d.ts', 'export interface MotionTransition {', 'export interface MotionTransition {\n    type?: "tween" | "spring";\n    /** Damping control from 0 (no overshoot) to 1. */\n    bounce?: number;\n    /** Translation velocity in logical pixels per second. */\n    velocityX?: number;\n    velocityY?: number;')
 for name, text in pending.items():
     (root / name).write_text(text)
 print(f"JS patch applied to {len(pending)} files")

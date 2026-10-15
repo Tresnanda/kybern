@@ -1,0 +1,216 @@
+--- a/apps/gpuix/src/shell/window.ts
++++ b/apps/gpuix/src/shell/window.ts
+@@ -1,25 +1,25 @@
+ // Window behaviour GPUIX 0.10.0 does not expose, through the Objective-C runtime
+-// (`native/objc.ts`) and one poll:
++// (`native/objc.ts`) and native layout events:
+ //
+ // - the frame (size and position) is saved and restored via AppKit's own frame
+ //   string (`stringWithSavedFrame` / `setFrameFromString:`), which survives a
+ //   changed screen layout; both take and return pointers, so no struct FFI;
+-// - the window's width feeds the thread panel's narrow-window rule (`layout.ts`);
++// - native resize events feed the thread panel/dock narrow-window rules;
+ // - macOS Light/Dark is read from `NSApp.effectiveAppearance` and reported to
+ //   `appearance.ts`, which re-themes the app live.
+ //
+-// One 300 ms timer covers all three. A tick that changes nothing costs one
+-// native size read; the frame string and appearance are read every third tick.
++// One 900 ms timer reads position and appearance; it never reads window size.
+ // Every failure falls back to GPUI's default (the window just keeps its size).
+ import type { Pointer } from 'bun:ffi'
+ import type { NativeRenderer } from '@gpuix/react'
+ import { cls, cstr, each, getObjc, nsApp, sel, type Objc } from '../native/objc.ts'
++import { onWindowResize } from '../native/layout.ts'
+ import { readSystemVariant, setSystemVariant } from './appearance.ts'
+ import { setWindowWidth } from './layout.ts'
+ import { load, save } from './persist.ts'
+ 
+ const FRAME_KEY = 'kybern.window.frame'
+-const POLL_MS = 300
++const POLL_MS = 900
+ 
+ const mac = process.platform === 'darwin'
+ 
+@@ -105,26 +105,14 @@
+ }
+ 
+ let started = false
+-/** Start the poll. Called once, after the renderer exists. */
++/** Size is event-driven; position/appearance retain their existing AppKit read. */
+ export function startWindowShell(renderer: NativeRenderer) {
+   if (started) return
+   started = true
+-  let width = 0
+-  let height = 0
+-  let beat = 0
+   let lastFrame = ''
+-  const tick = () => {
++  const readPlatformState = () => {
++    if (!mac) return
+     try {
+-      const size = renderer.getWindowSize?.()
+-      const resized = !!size && (size.width !== width || size.height !== height)
+-      if (size) {
+-        width = size.width
+-        height = size.height
+-        setWindowWidth(width)
+-      }
+-      if (!mac) return
+-      // The frame (position moves without resizing) and the OS appearance: every third tick.
+-      if (++beat % 3 !== 1 && !resized) return
+       const o = getObjc()
+       const window = appWindow(o)
+       if (!window) return
+@@ -135,10 +123,12 @@
+       }
+       const variant = readSystemVariant()
+       if (variant) setSystemVariant(variant)
+-    } catch {
+-      // Keep polling; a failed read changes nothing.
+-    }
++    } catch { /* Retry the platform-only read on the next tick. */ }
+   }
+-  tick()
+-  setInterval(tick, POLL_MS)
++  onWindowResize(renderer, ({ width }) => {
++    setWindowWidth(width)
++    readPlatformState()
++  })
++  readPlatformState()
++  setInterval(readPlatformState, POLL_MS)
+ }
+--- a/apps/gpuix/src/dock/Dock.tsx
++++ b/apps/gpuix/src/dock/Dock.tsx
+@@ -70,7 +70,7 @@
+   threadId: string | null; open: boolean; mounted: boolean; setMounted: (value: boolean) => void; sidebarOpen: boolean; still: boolean; background: string
+ }) {
+   const t = useTheme()
+-  // The shell's window poller supplies the width; the dock adds no poll of its own.
++  // The shell's native resize subscription supplies width; geometry stays derived.
+   const windowWidth = useWindowWidth()
+   const sidebarWidth = useSidebarWidth()
+   const dock = useDock(threadId)
+--- a/apps/gpuix/src/dock/Explorer.tsx
++++ b/apps/gpuix/src/dock/Explorer.tsx
+@@ -1,3 +1,5 @@
++import { useGpuixRequired } from '@gpuix/react'
++import { createSyntaxDocument, releaseSyntaxDocument, VirtualCode, type SyntaxDocument } from '../native/syntax.tsx'
+ import { activeEnvironment } from '../shell/environment.ts'
+ import { spawn } from 'node:child_process'
+ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+@@ -134,26 +136,38 @@
+   </>
+ }
+ 
+-// GPUIX 0.10 eagerly lays out all lines in a native code node. Small fixed-height
+-// chunks keep natural scrolling and syntax highlighting while bounding layout.
+-// files.read has no offset/range support: keep one bounded read, released on close.
++// Share one whole-document parse across the bounded native rows.
+ export function FileCode({ content, path }: { content: string; path: string }) {
+-  const chunks = useMemo(() => {
+-    const lines = content.split('\n')
+-    return Array.from({ length: Math.ceil(lines.length / 64) }, (_, index) => ({
+-      start: index * 64,
+-      lines: lines.slice(index * 64, (index + 1) * 64),
+-    }))
+-  }, [content])
++  const renderer = useGpuixRequired()
++  const [ready, setReady] = useState<{ content: string; path: string; document: SyntaxDocument } | null>(null)
++  const [error, setError] = useState<string | null>(null)
++  const [retry, setRetry] = useState(0)
++  useEffect(() => {
++    let live = true
++    let document: SyntaxDocument | undefined
++    setError(null)
++    void createSyntaxDocument(renderer, { text: content, path }).then(next => {
++      document = next
++      if (live) setReady({ content, path, document: next })
++      else releaseSyntaxDocument(renderer, next.id)
++    }, error => { if (live) setError(String(error)) })
++    return () => { live = false; if (document) releaseSyntaxDocument(renderer, document.id) }
++  }, [renderer, content, path, retry])
++  const document = ready?.content === content && ready.path === path ? ready.document : null
++  const chunks = useMemo(() => document ? Array.from({ length: Math.ceil(document.lineCount / 64) }, (_, index) => ({
++    start: index * 64, end: Math.min(document.lineCount, (index + 1) * 64),
++  })) : [], [document])
++  const t = useTheme()
++  if (error) return <ErrorLine error={error} retry={() => setRetry(n => n + 1)} />
++  if (!document) return <Label color={t.textSecondary} size={12} style={{ padding: 12 }}>Loading source…</Label>
+   return <virtual-list testId="dock-file-content" estimatedItemHeight={1280} overdraw={0} style={{ flexGrow: 1, minHeight: 0, width: '100%' }}>
+-    {chunks.map((chunk) => <CodeChunk key={chunk.start} path={path} start={chunk.start} lines={chunk.lines} />)}
++    {chunks.map(chunk => <CodeChunk key={chunk.start} document={document} start={chunk.start} end={chunk.end} />)}
+   </virtual-list>
+ }
+-
+-const CodeChunk = memo(function CodeChunk({ path, start, lines }: { path: string; start: number; lines: string[] }) {
++const CodeChunk = memo(function CodeChunk({ document, start, end }: { document: SyntaxDocument; start: number; end: number }) {
+   const t = useTheme()
+-  return <div testId={`dock-code-chunk-${start}`} style={{ display: 'flex', height: lines.length * 20, width: '100%', minWidth: 0 }}>
+-    <text style={{ width: 44, flexShrink: 0, paddingRight: 10, fontFamily: FONT_MONO, fontSize: 12, lineHeight: 20, color: t.textTertiary, textAlign: 'right', userSelect: 'none' }}>{lines.map((_, i) => String(start + i + 1)).join('\n')}</text>
+-    <code code={lines.join('\n')} path={path} theme={cachedMarkdownTheme(t)} style={{ flexGrow: 1, minWidth: 0, fontFamily: FONT_MONO, fontSize: 12, lineHeight: 20 }} />
++  return <div testId={`dock-code-chunk-${start}`} style={{ display: 'flex', height: (end - start) * 20, width: '100%', minWidth: 0 }}>
++    <text style={{ width: 44, flexShrink: 0, paddingRight: 10, fontFamily: FONT_MONO, fontSize: 12, lineHeight: 20, color: t.textTertiary, textAlign: 'right', userSelect: 'none' }}>{Array.from({ length: end - start }, (_, i) => String(start + i + 1)).join('\n')}</text>
++    <VirtualCode document={document.id} revision={document.revision} startLine={start} endLine={end} theme={cachedMarkdownTheme(t)} style={{ flexGrow: 1, minWidth: 0, fontFamily: FONT_MONO, fontSize: 12, lineHeight: 20 }} />
+   </div>
+ })
+--- a/apps/gpuix/src/live/Floating.tsx
++++ b/apps/gpuix/src/live/Floating.tsx
+@@ -1,5 +1,6 @@
+-import { useGpuix, type PublicInstance } from '@gpuix/react'
+-import { useRef, useState, type ReactNode } from 'react'
++import { observeElementBounds, type LayoutRect } from '../native/layout.ts'
++import { motion, useGpuix, type PublicInstance } from '@gpuix/react'
++import { useEffect, useRef, useState, type ReactNode } from 'react'
+ import { getNav } from '../nav/store.ts'
+ import { load, save } from '../shell/persist.ts'
+ import { PopupLayer } from '../composer/Menu.tsx'
+@@ -14,24 +15,45 @@
+   const container = useRef<PublicInstance | null>(null)
+   const [corner, setCorner] = useState<Corner>(() => { const saved = load<Corner>(storageKey, 'top-end'); return corners.includes(saved) ? saved : 'top-end' })
+   const [drag, setDrag] = useState<{ x: number; y: number; left: number; top: number; dx: number; dy: number; parentX: number; parentY: number; parentWidth: number; parentHeight: number } | null>(null)
++  const [parent, setParent] = useState<LayoutRect | null>(null)
++  const sample = useRef({ x: 0, y: 0, at: 0, vx: 0, vy: 0 })
++  const [snap, setSnap] = useState<{ vx: number; vy: number; width: number; height: number } | null>(null)
++  useEffect(() => {
++    if (!renderer || !container.current) return
++    return observeElementBounds(renderer, container.current.id, event => setParent(event.rect))
++  }, [renderer])
+   const finish = () => {
+     if (!drag) return
+     const next: Corner = `${drag.top + drag.dy + height / 2 < drag.parentHeight / 2 ? 'top' : 'bottom'}-${drag.left + drag.dx + width / 2 < drag.parentWidth / 2 ? 'start' : 'end'}`
++    const moving = performance.now() - sample.current.at < 100
++    setSnap({ vx: moving ? sample.current.vx : 0, vy: moving ? sample.current.vy : 0, width: drag.parentWidth, height: drag.parentHeight })
+     setCorner(next); save(storageKey, next); setDrag(null)
+   }
+   const horizontal = corner.endsWith('end') ? { right: 12 + insetEnd } : { left: 12 }
+   const vertical = corner.startsWith('top') ? { top: 12 } : { bottom: 12 }
++  const still = REDUCED_MOTION || getNav().keyboardNav || !!drag
++  const translating = parent !== null
++  const x = drag ? drag.left + drag.dx : corner.endsWith('end') ? Math.max(12, (parent?.width ?? 0) - width - 12 - insetEnd) : 12
++  const y = drag ? drag.top + drag.dy : corner.startsWith('top') ? 12 : Math.max(12, (parent?.height ?? 0) - height - 12)
++  const spring = snap && !still && parent?.width === snap.width && parent?.height === snap.height
+   return <div ref={container} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' }}>
+-    <div style={{ position: 'absolute', width, height, ...(drag ? { left: drag.left + drag.dx, top: drag.top + drag.dy } : { ...horizontal, ...vertical }), pointerEvents: 'none' }}>
+-    <PopupLayer key={corner} ref={card} testId={testId} side="bottom" sideOffset={-height} still={REDUCED_MOTION || getNav().keyboardNav} fade={{}} priority={0} style={{ display: 'flex', flexDirection: 'column', width, height, borderRadius: 16, backgroundColor: t.popover, borderWidth: 0.6, borderColor: t.border, overflow: 'hidden', pointerEvents: 'auto', boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: 'rgba(0,0,0,0.2)' } }}>
++    <motion.div initial={false} animate={{ translateX: translating ? x : 0, translateY: translating ? y : 0 }} transition={spring ? { type: 'spring', duration: 0.32, bounce: 0.12, velocityX: snap.vx, velocityY: snap.vy } : { duration: 0 }} onMotionComplete={() => setSnap(null)} style={{ position: 'absolute', width, height, ...(translating ? { left: 0, top: 0 } : { ...horizontal, ...vertical }), pointerEvents: 'none' }}>
++    <PopupLayer ref={card} testId={testId} side="bottom" sideOffset={-height} still={REDUCED_MOTION || getNav().keyboardNav} fade={{}} priority={0} style={{ display: 'flex', flexDirection: 'column', width, height, borderRadius: 16, backgroundColor: t.popover, borderWidth: 0.6, borderColor: t.border, overflow: 'hidden', pointerEvents: 'auto', boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: 'rgba(0,0,0,0.2)' } }}>
+       <div testId={`${testId}-drag`} aria-label="Move preview" onMouseDown={e => {
+         if (e.button !== 0 || e.x === undefined || e.y === undefined || !card.current || !container.current) return
++        setSnap(null)
++        sample.current = { x: e.x, y: e.y, at: performance.now(), vx: 0, vy: 0 }
+         const b = renderer?.getElementBounds?.(card.current.id), p = renderer?.getElementBounds?.(container.current.id)
+         if (b && p) setDrag({ x: e.x, y: e.y, left: b.x - p.x, top: b.y - p.y, dx: 0, dy: 0, parentX: p.x, parentY: p.y, parentWidth: p.width, parentHeight: p.height })
+       }} style={{ height: 10, flexShrink: 0, cursor: 'grab', backgroundColor: t.buttonSecondary }} />
+       {children}
+     </PopupLayer>
+-    </div>
+-    {drag && <div testId={`${testId}-capture`} onMouseMove={e => { if (e.pressedButton !== 0) finish(); else if (e.x !== undefined && e.y !== undefined) setDrag({ ...drag, dx: e.x - drag.x, dy: e.y - drag.y }) }} onMouseUp={finish} onMouseDownOutside={finish} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'auto', cursor: 'grabbing' }} />}
++    </motion.div>
++    {drag && <div testId={`${testId}-capture`} onMouseMove={e => { if (e.pressedButton !== 0) finish(); else if (e.x !== undefined && e.y !== undefined) {
++      const at = performance.now(), dt = at - sample.current.at
++      const speed = (delta: number) => dt > 0 && dt < 100 ? Math.max(-8000, Math.min(8000, delta * 1000 / dt)) : 0
++      sample.current = { x: e.x, y: e.y, at, vx: speed(e.x - sample.current.x), vy: speed(e.y - sample.current.y) }
++      setDrag({ ...drag, dx: e.x - drag.x, dy: e.y - drag.y })
++    } }} onMouseUp={finish} onMouseDownOutside={finish} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'auto', cursor: 'grabbing' }} />}
+   </div>
+ }
