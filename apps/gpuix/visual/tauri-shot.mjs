@@ -1,8 +1,12 @@
 // node tauri-shot.mjs '<json spec>' — captures the desktop web build in WebKit
 // (the same engine as Tauri's WKWebView) at 1280x820 @2x, one image per screen.
 import path from 'node:path'
+import { readdirSync } from 'node:fs'
 const { webkit } = await import(process.env.PLAYWRIGHT_CORE ?? '/Users/mymac/projects/component-kit/node_modules/playwright-core/index.mjs')
-const { screens } = await import(path.join(import.meta.dirname, 'screens.tauri.mjs'))
+const { screens: base } = await import(path.join(import.meta.dirname, 'screens.tauri.mjs'))
+const screens = { ...base }
+const sub = path.join(import.meta.dirname, 'screens')
+for (const f of readdirSync(sub).filter((x) => x.endsWith('.tauri.mjs')).sort()) Object.assign(screens, (await import(path.join(sub, f))).screens)
 const spec = JSON.parse(process.argv[2])
 const browser = await webkit.launch()
 const fresh = () => browser.newContext({ viewport: { width: 1280, height: 820 }, deviceScaleFactor: 2, colorScheme: spec.theme })

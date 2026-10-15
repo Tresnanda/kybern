@@ -50,8 +50,9 @@ render(
   {
     title: 'Kybern',
     appName: 'Kybern',
-    width: 1280,
-    height: 820,
+    // `KYBERN_WINDOW_SIZE=WxH` lets the pair tool match a real Tauri window's size.
+    width: Number(process.env.KYBERN_WINDOW_SIZE?.split('x')[0]) || 1280,
+    height: Number(process.env.KYBERN_WINDOW_SIZE?.split('x')[1]) || 820,
     titlebarTransparent: true,
     // The desktop's macOS window is translucent (under-window vibrancy) with
     // the frame painted at 88% over it.

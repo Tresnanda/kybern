@@ -125,7 +125,8 @@ export function startWindowShell(renderer: NativeRenderer) {
       if (variant) setSystemVariant(variant)
     } catch { /* Retry the platform-only read on the next tick. */ }
   }
-  onWindowResize(renderer, ({ width }) => {
+  onWindowResize(renderer, ({ width, height }) => {
+    if (process.env.KYBERN_DEBUG_SIZE) console.log('[window-size]', width, height)
     setWindowWidth(width)
     readPlatformState()
   })

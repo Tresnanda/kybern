@@ -51,6 +51,12 @@ import { useApp, usePaneCompact } from './state.ts'
 import { COLUMN, GUTTER, Transcript } from './Transcript.tsx'
 import { ThreadRequests, useBlockingRequest } from './transcript/Requests.tsx'
 import { EASE_OUT, Label, REDUCED_MOTION, useTheme } from './ui.tsx'
+import { over } from './theme.ts'
+import { TITLEBAR } from './nav/TitleBar.tsx'
+
+// Capture mode (`KYBERN_OPAQUE=1`): GPUI clears an opaque window dark, which turns the
+// 88% light frame ~13% darker than over the desktop's light glass. Put the frame on white.
+const OPAQUE_CAPTURE = process.env.KYBERN_OPAQUE === '1'
 
 const INSET = 8
 const CARD_RADIUS = 12
@@ -104,10 +110,10 @@ function Workspace() {
       onMouseDown={pointerNav}
       onMouseMove={splitDragging ? trackThreadDrag : undefined}
       onMouseUp={splitDragging ? finishSplitDrag : undefined}
-      style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: t.frame, position: 'relative' }}
+      style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: OPAQUE_CAPTURE && t.variant === 'light' ? over(t.frame, '#ffffff') : t.frame, position: 'relative' }}
     >
       <TitleBar panelOpen={panelOpen} />
-      <div style={{ display: 'flex', flexGrow: 1, minHeight: 0, paddingRight: INSET, paddingBottom: INSET }}>
+      <div style={{ display: 'flex', position: 'absolute', left: 0, right: 0, bottom: 0, top: TITLEBAR, paddingRight: INSET, paddingBottom: INSET }}>
         <NavRail />
         {/* GPUI clips overflow to a rectangle, so each surface rounds its own
             corners like the desktop: the panel takes the leading pair, the content
