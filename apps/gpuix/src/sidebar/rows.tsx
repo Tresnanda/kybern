@@ -1,4 +1,4 @@
-import { beginThreadDrag, trackThreadDrag, consumeThreadDrag, cancelPendingThreadDrag, finishSplitDrag } from '../split/Workspace.tsx'
+import { beginThreadDrag, trackThreadDrag, consumeThreadDrag, finishSplitDrag } from '../split/Workspace.tsx'
 import { showDialog } from '../dialogs/store.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 // Thread panel rows (`views/Sidebar.tsx`, `views/subagents/SubagentSidebarRow.tsx`,
@@ -521,10 +521,10 @@ export const ThreadRow = memo(function ThreadRow({
           onMouseMove={trackThreadDrag}
           onMouseUp={finishSplitDrag}
           {...bind}
-          onMouseLeave={() => { bind.onMouseLeave(); cancelPendingThreadDrag() }}
+          onMouseLeave={bind.onMouseLeave}
           onAuxClick={menu.onAuxClick}
           onClick={() => {
-            if (!consumeThreadDrag() && !renaming) openThread(thread.id)
+            if (!consumeThreadDrag(thread.id) && !renaming) openThread(thread.id)
           }}
           style={{
             display: 'flex',
@@ -724,9 +724,9 @@ export const ChildRow = memo(function ChildRow({
           onMouseMove={trackThreadDrag}
           onMouseUp={finishSplitDrag}
           {...bind}
-          onMouseLeave={() => { bind.onMouseLeave(); cancelPendingThreadDrag() }}
+          onMouseLeave={bind.onMouseLeave}
           onAuxClick={menu.onAuxClick}
-          onClick={() => { if (!consumeThreadDrag()) openThread(thread.id) }}
+          onClick={() => { if (!consumeThreadDrag(thread.id)) openThread(thread.id) }}
           style={{
             display: 'flex',
             alignItems: 'center',

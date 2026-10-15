@@ -8,7 +8,7 @@ import path from 'node:path'
 import {spawn} from 'node:child_process'
 import {Database} from 'bun:sqlite'
 import {KybernClient} from '../../../packages/kybern-client/src/client.ts'
-const root=path.resolve(import.meta.dir,'../../..'),bin=path.join(root,'target/debug/kybernd')
+const root=path.resolve(import.meta.dir,'../../..'),bin=process.env.KYBERN_TEST_DAEMON ?? path.join(root,'target/debug/kybernd')
 if(!existsSync(bin))throw Error('Build this checkout’s kybernd first, with its own CARGO_TARGET_DIR')
 const args=process.argv.slice(2).filter((arg,index)=>index!==0||arg!=='--')
 if(!args.length)throw Error('Pass a verification command')

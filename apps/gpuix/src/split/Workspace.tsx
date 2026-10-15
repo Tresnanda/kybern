@@ -1,13 +1,17 @@
+import { Icon } from '../icons.tsx'
+import { N } from '../nav/glyphs.ts'
 import { ThreadHeader } from '../nav/TitleBar.tsx'
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
-import { useGpuixRequired, type PublicInstance, type EventPayload } from '@gpuix/react'
+import { motion, AnimatePresence, useGpuixRequired, type PublicInstance, type EventPayload } from '@gpuix/react'
 import { dropZoneAt, splitForZone, type DropZone } from './geometry.ts'
 import { clampSplitRatioForWidth, shouldStackHorizontalSplit } from '../../../desktop/src/state/splitView.ts'
 import { PaneProvider, focusPane, getPane, selectPaneThread, useApp } from '../state.ts'
 import { observeElementBounds, type LayoutRect } from '../native/layout.ts'
-import { Label, useTheme } from '../ui.tsx'
+import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { Button, Para, alpha } from '../transcript/kit.tsx'
 import { addWindowKeyHandler } from '../nav/keys.ts'
+import { watchPointerRelease } from './release.ts'
+import { cls, getObjc, nsApp, sel } from '../native/objc.ts'
 import { onEnvironmentChange } from '../shell/environment.ts'
 import { canSplitPane, collectThreadPanes, closePane, getSplitRoot, resizePane, splitPane, useFocusedPane, useSplitRoot, type Pane } from './store.ts'
 
@@ -16,26 +20,46 @@ type Drag = { kind: 'resize'; id: string; horizontal: boolean; rect: LayoutRect 
 let drag: Drag | null = null
 let pending: { id: string; x: number; y: number } | null = null
 let stopSelection: (() => void) | undefined
-let suppressedUntil = 0
+let suppressedThread: string | null = null
+let stopReleaseWatch: (() => void) | undefined
+// Hover-leave is emitted during held-button gestures too. Physical AppKit
+// state completes cancellation even when no element receives the outside up.
+function watchRelease() {
+  stopReleaseWatch?.()
+  if (process.platform !== 'darwin') return
+  const o = getObjc(), app = nsApp()
+  stopReleaseWatch = watchPointerRelease(() => ({
+    pressed: (Number(o.msgU64(cls(o, 'NSEvent'), sel(o, 'pressedMouseButtons'))) & 1) !== 0,
+    active: !!app && Number(o.msgU64(app, sel(o, 'isActive'))) !== 0,
+  }), cancel)
+}
 const listeners = new Set<() => void>()
 function publish(next: Drag | null) { drag = next; for (const listener of listeners) listener() }
-export const useSplitDragging = () => useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener) } }, () => drag !== null)
+export const useSplitDragging = () => useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener) } }, () => drag !== null || pending !== null)
 const useDrag = () => useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener) } }, () => drag)
 export function beginThreadDrag(id: string, e: EventPayload, clearSelection?: () => void) {
-  if (e.button === 0 && e.x != null && e.y != null) { pending = { id, x: e.x, y: e.y }; stopSelection = clearSelection }
+  if (e.button === 0 && e.x != null && e.y != null) { suppressedThread = null; pending = { id, x: e.x, y: e.y }; stopSelection = clearSelection; watchRelease(); publish(null) }
 }
 export function trackThreadDrag(e: EventPayload) {
   if (drag) { moveSplitDrag(e); return }
   if (!pending) return
-  if (e.pressedButton !== 0) { pending = null; return }
+  if (e.pressedButton !== 0) { cancel(); return }
   if (Math.hypot((e.x ?? 0) - pending.x, (e.y ?? 0) - pending.y) < 6) return
   stopSelection?.()
-  publish({ kind: 'thread', ...pending }); pending = null
+  const start = pending; pending = null; publish({ kind: 'thread', ...start }); moveSplitDrag(e)
 }
-export function cancelPendingThreadDrag() { pending = null }
-export function consumeThreadDrag() { pending = null; return Date.now() < suppressedUntil }
-function cancel() { pending = null; publish(null) }
-onEnvironmentChange(() => { cancel(); bounds.clear() })
+export function consumeThreadDrag(id: string) {
+  pending = null
+  // Native click and mouse-up are separately queued. Suppress the source click
+  // on either side of release; the next row press starts a fresh gesture.
+  return (drag?.kind === 'thread' && drag.id === id) || suppressedThread === id
+}
+function cancel() {
+  if (drag?.kind === 'thread') suppressedThread = drag.id
+  stopReleaseWatch?.(); stopReleaseWatch = undefined
+  pending = null; stopSelection?.(); stopSelection = undefined; publish(null)
+}
+onEnvironmentChange(() => { cancel(); suppressedThread = null; bounds.clear() })
 
 export function SplitWorkspace({ children }: { children: ReactNode }) {
   const root = useSplitRoot()
@@ -120,28 +144,41 @@ export function moveSplitDrag(e: EventPayload) {
     }
   }
 
-export function finishSplitDrag() {
+export function finishSplitDrag(e?: EventPayload) {
+  // Re-evaluate at release, not the last move (including releases off target).
+  if (e && e.button !== 0) return
+  if (e) moveSplitDrag(e)
   const current = drag
-  if (!current) { pending = null; return }
-  const target = current.kind === 'thread' ? current.target : undefined
+  if (!current) { cancel(); return }
+  const target = current?.kind === 'thread' ? current.target : undefined
     if (current.kind === 'thread' && target) {
       if (!getPane(target.id)?.selectedId) { focusPane(target.id); void selectPaneThread(target.id, current.id) }
       else { const { direction, side } = splitForZone(target.zone); splitPane(target.id, direction, current.id, side) }
-      suppressedUntil = Date.now() + 250
     }
     cancel()
 
 }
 export function SplitDragLayer() {
+  const renderer = useGpuixRequired()
+  const [anchor, setAnchor] = useState<PublicInstance | null>(null)
+  const [originY, setOriginY] = useState(0)
+  useEffect(() => anchor ? observeElementBounds(renderer, anchor.id, e => setOriginY(e.rect?.y ?? 0)) : undefined, [anchor, renderer])
   const current = useDrag(), t = useTheme()
   useEffect(() => addWindowKeyHandler(e => { if (e.key === 'escape' && (drag || pending)) { cancel(); return true } }), [])
-  if (!current) return null
-  const target = current.kind === 'thread' ? current.target : undefined
+  const target = current?.kind === 'thread' ? current.target : undefined
   const rect = target ? bounds.get(target.id) : undefined
   const whole = target && !getPane(target.id)?.selectedId
   const zone = target?.zone
-  return <div key={current.kind} testId="split-drag-layer" onMouseEnter={moveSplitDrag} onMouseMove={moveSplitDrag} onMouseLeave={cancel} onMouseUp={finishSplitDrag} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'auto', userSelect: 'none', cursor: current.kind === 'resize' ? current.horizontal ? 'col-resize' : 'row-resize' : 'grabbing' }}>
-    {current.kind === 'thread' && <div style={{ position: 'absolute', left: current.x + 12, top: current.y + 12, width: 240, padding: 10, borderRadius: 10, backgroundColor: t.surface, borderWidth: 1, borderColor: t.border, pointerEvents: 'none' }}><Label color={t.text} size={12}>Move conversation</Label></div>}
-    {rect && zone && <div testId="pane-drop-highlight" style={{ position: 'absolute', left: rect.x + 8 + (!whole && zone === 'right' ? rect.width / 2 : 0), top: rect.y + 8 + (!whole && zone === 'bottom' ? rect.height / 2 : 0), width: rect.width / (!whole && (zone === 'left' || zone === 'right') ? 2 : 1) - 16, height: rect.height / (!whole && (zone === 'top' || zone === 'bottom') ? 2 : 1) - 16, borderRadius: 10, borderWidth: 1, borderColor: t.link, backgroundColor: t.buttonSecondary, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}><Label color={t.text} weight={500}>{whole ? 'Open here' : ({ left: 'Split left', right: 'Split right', top: 'Split above', bottom: 'Split below' })[zone]}</Label></div>}
-  </div>
+  return <> <div ref={setAnchor} style={{ position: 'absolute', left: 0, top: 0, width: 0, height: 0, pointerEvents: 'none' }} />{current && <div key={current.kind} testId="split-drag-layer" onMouseEnter={moveSplitDrag} onMouseMove={moveSplitDrag} onMouseUp={finishSplitDrag} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'auto', userSelect: 'none', cursor: current.kind === 'resize' ? current.horizontal ? 'col-resize' : 'row-resize' : 'grabbing' }}>
+    {current.kind === 'thread' && <div style={{ position: 'absolute', left: current.x + 12, top: current.y - originY + 12, width: 240, padding: 10, borderRadius: 10, backgroundColor: t.surface, borderWidth: 1, borderColor: t.border, pointerEvents: 'none' }}><Label color={t.text} size={12}>Move conversation</Label></div>}
+  </div>}
+    <AnimatePresence>{rect && zone && <motion.div key={`${target!.id}-${zone}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: REDUCED_MOTION ? 0 : .15, ease: [.22, 1, .36, 1] }} style={{ position: 'absolute', left: rect.x, top: rect.y - originY, width: rect.width, height: rect.height, pointerEvents: 'none', backgroundColor: alpha(t.surface, .22) }}>
+      {!whole && <div style={{ position: 'absolute', ...(zone === 'left' || zone === 'right' ? { left: rect.width / 2, top: 8, bottom: 8, width: 1 } : { top: rect.height / 2, left: 8, right: 8, height: 1 }), backgroundColor: alpha(t.v('--color-border-focus'), .58), pointerEvents: 'none' }} />}
+      <div testId="pane-drop-highlight" style={{ position: 'absolute', left: !whole && zone === 'right' ? rect.width / 2 + 4 : 8, top: !whole && zone === 'bottom' ? rect.height / 2 + 4 : 8, width: rect.width / (!whole && (zone === 'left' || zone === 'right') ? 2 : 1) - (!whole && (zone === 'left' || zone === 'right') ? 12 : 16), height: rect.height / (!whole && (zone === 'top' || zone === 'bottom') ? 2 : 1) - (!whole && (zone === 'top' || zone === 'bottom') ? 12 : 16), borderRadius: 10, borderWidth: 1, borderColor: alpha(t.v('--color-border-focus'), .64), backgroundColor: alpha(t.surface, .38), boxShadow: { offsetX: 0, offsetY: 12, blurRadius: 36, spreadRadius: 0, color: 'rgba(0,0,0,.12)' }, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+        {/* GPUIX chooses backgroundColor over background; paint the gradient separately. */}
+        <div style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', borderRadius: 10, pointerEvents: 'none', background: { type: 'linear-gradient', angle: 180, stops: [{ color: alpha(t.v('--color-background-accent'), .18), position: 0 }, { color: alpha(t.v('--color-background-accent'), .08), position: 1 }] } }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, borderRadius: 8, borderWidth: 1, borderColor: alpha(t.v('--color-border-focus'), .42), backgroundColor: alpha(t.popover, .88), pointerEvents: 'none' }}><Icon source={whole || zone === 'left' || zone === 'right' ? N.splitRight : N.splitDown} size={16} color={t.text} /><Label color={t.text} size={12} weight={500}>{whole ? 'Open here' : ({ left: 'Split left', right: 'Split right', top: 'Split above', bottom: 'Split below' })[zone]}</Label></div>
+      </div>
+    </motion.div>}</AnimatePresence>
+  </>
 }

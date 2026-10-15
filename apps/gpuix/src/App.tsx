@@ -1,4 +1,4 @@
-import { SplitWorkspace, SplitDragLayer, moveSplitDrag, finishSplitDrag, useSplitDragging } from './split/Workspace.tsx'
+import { SplitWorkspace, SplitDragLayer, trackThreadDrag, finishSplitDrag, useSplitDragging } from './split/Workspace.tsx'
 import { startSplitView } from './split/store.ts'
 import { useMeasureComposerOverlay } from './composer/height.ts'
 import { CloseGuard } from './shell/CloseGuard.tsx'
@@ -102,7 +102,7 @@ function Workspace() {
       testId="app-ready"
       // Any press makes later navigation pointer-driven again (`keyboardNav`).
       onMouseDown={pointerNav}
-      onMouseMove={splitDragging ? moveSplitDrag : undefined}
+      onMouseMove={splitDragging ? trackThreadDrag : undefined}
       onMouseUp={splitDragging ? finishSplitDrag : undefined}
       style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: t.frame, position: 'relative' }}
     >

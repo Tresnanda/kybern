@@ -8,7 +8,7 @@ import { setNav } from '../nav/store.ts'
 import { onWindowKeyDown } from '../nav/keys.ts'
 import { emptyThreadState, type Block } from '../../../../packages/kybern-client/src/transcript.ts'
 import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
-import { useSplitRoot, collectThreadPanes } from './store.ts'
+import { useSplitRoot, collectThreadPanes, maximizePane } from './store.ts'
 import { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import { writeFileSync } from 'node:fs'
 writeFileSync(process.env.KYBERN_DATA_DIR! + '/daemon.port', '1')
@@ -47,7 +47,7 @@ function Fixture() {
   const focused = useApp(s => s.selectedId)
   return <div testId="split-fixture" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: t.frame }}>
     <div style={{ display: 'flex', height: 30, flexShrink: 0, alignItems: 'center', gap: 8 }}>
-      <Button testId="fixture-parent" onClick={() => choose('parent')}>Parent</Button><Button testId="fixture-child" onClick={() => choose('child')}>Child</Button><Button testId="fixture-other" onClick={() => choose('other')}>Other</Button><Button testId="fixture-keyboard" onClick={() => choose('parent', true)}>Keyboard parent</Button>
+      <Button testId="fixture-reset" onClick={() => { maximizePane('main'); void choose('parent') }}>Reset panes</Button><Button testId="fixture-parent" onClick={() => choose('parent')}>Parent</Button><Button testId="fixture-child" onClick={() => choose('child')}>Child</Button><Button testId="fixture-other" onClick={() => choose('other')}>Other</Button><Button testId="fixture-keyboard" onClick={() => choose('parent', true)}>Keyboard parent</Button>
       <text testId="fixture-panes" style={{ color: t.text, fontSize: 8 }}>{JSON.stringify(collectThreadPanes(root).map(p => ({ id: p.id, selected: getPaneState(p.id).selectedId })))}</text>
       <text testId="fixture-focused" style={{ color: t.text }}>{focused ?? 'draft'}</text>
     </div><App />

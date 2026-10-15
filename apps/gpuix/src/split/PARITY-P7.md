@@ -63,17 +63,52 @@ performance guidance and P2/P3 reports supplied the references.
 
 ## Outstanding acceptance / limitations
 
-**11.2 remains partial.** Sidebar drag initiation and edge highlighting are wired.
-Native mouse movement originating in a cached sidebar did not reach a newly
-mounted capture layer, so active drags now also route through the App root.
-The extended `bun src/split/native.verify.ts --drag` check demonstrated highlighting
-and Escape cancellation but failed to clear capture after a committed release.
-Root/source release handlers were added afterward; the extended path has not
-subsequently been certified. Do not mark drag/drop complete. The ordinary native
-verification intentionally excludes that extended path and still tests resizing.
+**11.2 follow-up (integration checkout, October 15).** A sidebar row's hover
+leave cancelled a pending drag even while the mouse button remained held.
+Pending and active gestures now route through the stable App root, and hover
+leave only updates row hover. Root handlers mount only during a gesture:
+unconditional handlers interfered with normal full-shell pointer routing.
+Release re-evaluates the target at its final coordinates. Escape and source
+release clear capture; click suppression is scoped to the source row until a
+fresh press. The AppKit watchdog cancels missed outside releases and deactivation,
+and runs only for physical gestures. Its four unit tests cover release grace,
+deactivation, disposal, and synthetic input. Physical outside-window verification
+remains opt-in (`--drag --physical`): Accessibility preflight returns false here,
+so no physical events were posted and that acceptance item remains unverified.
 
-The native drop preview uses the theme's opaque surface and focus stroke; it does
-not reproduce the desktop's backdrop blur/saturation material. The existing
+Follow-up validation in `/Users/mymac/projects/ade-gpuix`:
+
+- `bun run typecheck`: exit 0.
+- `bun test ./src`: 41 pass, 0 fail, 395 assertions across 14 files.
+- `bun src/split/native.verify.ts --drag`: exit 0. Both dark and light each
+  pass three consecutive Escape/source-release/bottom-drop trials and three
+  rounds of left/right/top/bottom/center/empty drops (54 drag scenarios total).
+  No stuck capture/highlight; pane contents and directional placement asserted.
+  The same run verifies retained navigation, keyboard instant navigation,
+  resizing, focus, nested splits and close. AppKit emitted non-fatal "Window move
+  completed without beginning" warnings; no assertion or renderer exception.
+- `bun src/split/narrow.verify.ts`: exit 0; reduced-motion navigation, split
+  shortcut, and narrow vertical fallback pass.
+- Combined full-shell pointer verifier: settings pointer/Space, sidebar,
+  titlebar and dock entrance/tab/collapse pass with the installed daemon in a
+  fresh `gpuix-scratch` directory on an OS-assigned port.
+- Screenshot/log evidence: `/Users/mymac/projects/ade/previews/gpuix/split-drag/`.
+  Dark/light target screenshots visually reviewed. Top fixture toolbar is test UI.
+
+The drop preview follows `components/kybern/ChatPaneDropOverlay.tsx` and
+`styles/kybern.css` (the rules are not in `kit.css`): 8px outer inset, half-pane
+minus 12px dimensions, 10px target radius, 22% surface scrim, 38% surface target,
+18%→8% accent gradient, 64% focus border, and 150ms cubic-bezier(.22,1,.36,1)
+opacity fade. The gradient uses a separate child because GPUIX gives
+`backgroundColor` precedence over `background`. Empty panes show "Open here";
+occupied center drops retain the existing thread and choose a split direction.
+The overlay's window-coordinate origin accounts for the fixture toolbar.
+
+Visual parity remains partial: GPUIX styles do not expose desktop backdrop
+blur/saturation. Divider and label borders use alpha rather than the desktop's
+mix with a second base color; divider glow, label inset/drop shadows, target
+scale-in, and source-row dimming are not reproduced. This work does not claim
+pixel-identical materials. The existing
 `Draft.tsx` is outside this package's ownership and retains its single-page gutter
 when New thread opens a split draft. Full visual parity therefore remains open.
 Pane-scoped metadata and the outgoing transcript are frozen, but external activity
@@ -110,3 +145,10 @@ node_modules for the ongoing worktree. Scratch directories created by fixture
 wrappers were cleaned; unrelated scratch daemons were left running. Final free
 space remains approximately 70 GiB (no claim that APFS immediately reclaimed all
 removed blocks). Source, tests, report, screenshots and logs remain available.
+
+Follow-up cleanup: stopped only the cancelled/resumed task's fixtures and queued
+verifier, removed their abandoned scratch directories after checking open files,
+and let successful fixture wrappers remove their own data. No native build or
+dependency install was needed; no native source was edited. The orchestrator's
+`native/decorated-input.tsx` patch was left untouched. Free space was 69 GiB
+before and after; the pre-existing 264 MiB node_modules remains for ongoing work.
