@@ -1,0 +1,382 @@
+{
+  "1.10": {
+    "status": "Partial",
+    "evidence": "src/shell/window.ts and scripts/window-drag-check.ts: draggable regions are wired; physical AppKit movement requires Accessibility permission and remains unverified."
+  },
+  "2.8": {
+    "status": "Partial",
+    "evidence": "src/nav/NavRail.tsx: limit hover card explicitly uses the default account; Manage/Add actions exist, but complete per-account/default/sign-in controls do not."
+  },
+  "2.9": {
+    "status": "Missing",
+    "evidence": "src/nav/NavRail.tsx and src/settings/About.tsx: no download-progress/release-announcement rail flow; About only checks releases."
+  },
+  "3.18": {
+    "status": "Partial",
+    "evidence": "src/sidebar/rows.tsx ProjectHeader: persisted Move up/down actions exist; project rows have no reorder-drag handlers."
+  },
+  "3.27": {
+    "status": "Partial",
+    "evidence": "src/sidebar/rows.tsx:650: Open to the right and Open below remain disabled no-op menu items; cleanup/rename/archive work."
+  },
+  "3.29": {
+    "status": "Missing",
+    "evidence": "src/sidebar/rows.tsx ThreadRow truncates title; no title marquee implementation."
+  },
+  "4.2": {
+    "status": "Partial",
+    "evidence": "src/environments/actions.ts openEnvironmentWindow spawns a Bun process; registry/Keychain code exists, but one-window ownership and real Keychain/multiwindow behavior are not certified."
+  },
+  "27.8": {
+    "status": "Partial",
+    "evidence": "src/environments/actions.ts openEnvironmentWindow spawns a Bun process; registry/Keychain code exists, but one-window ownership and real Keychain/multiwindow behavior are not certified."
+  },
+  "4.3": {
+    "status": "Missing",
+    "evidence": "src/shell/platform.ts contains tested SSH plans only; no executor, tunnel lifecycle, pairing/bootstrap UI."
+  },
+  "27.9": {
+    "status": "Missing",
+    "evidence": "src/shell/platform.ts contains tested SSH plans only; no executor, tunnel lifecycle, pairing/bootstrap UI."
+  },
+  "4.6": {
+    "status": "Partial",
+    "evidence": "src/environments/Dialogs.tsx: pairing, device revoke and Tailscale controls exist; external Tailscale reachability and full device round-trip are not certified here."
+  },
+  "4.7": {
+    "status": "Partial",
+    "evidence": "src/environments/actions.ts accepts verified address/pairing environments; SSH connection remains unavailable."
+  },
+  "5.12": {
+    "status": "Partial",
+    "evidence": "src/Composer.tsx supplies local attach command and harness catalog; complete local resume/sessions/settings/usage draft dispatch is absent."
+  },
+  "7.17": {
+    "status": "Partial",
+    "evidence": "src/transcript/markdown.tsx, src/native/markdown.ts: copy/wrap/highlighting/tables/links exist; Mermaid is source fallback and note/task links are separate chips."
+  },
+  "7.27": {
+    "status": "Partial",
+    "evidence": "src/transcript/Visual.tsx, src/dock/Artifacts.tsx and src/preview/Preview.tsx: receipts/source/browser opening exist; no embedded interactive HTML host."
+  },
+  "12.9": {
+    "status": "Partial",
+    "evidence": "src/transcript/Visual.tsx, src/dock/Artifacts.tsx and src/preview/Preview.tsx: receipts/source/browser opening exist; no embedded interactive HTML host."
+  },
+  "12.14": {
+    "status": "Partial",
+    "evidence": "src/transcript/Visual.tsx, src/dock/Artifacts.tsx and src/preview/Preview.tsx: receipts/source/browser opening exist; no embedded interactive HTML host."
+  },
+  "9.8": {
+    "status": "Partial",
+    "evidence": "src/Composer.tsx and src/native/decorated-input.tsx: native UTF-16 transactions/undo and decorations exist; token chips sit above input, not rich inline atoms; hardware IME remains untested."
+  },
+  "9.10": {
+    "status": "Partial",
+    "evidence": "src/composer/Completion.tsx: threads/files/notes/tasks completion exists; desktop filter-chip UI is incomplete."
+  },
+  "9.16": {
+    "status": "Partial",
+    "evidence": "src/Composer.tsx: asset upload/file drop/text-paste feedback exist; clipboard image extraction is missing."
+  },
+  "9.21": {
+    "status": "Missing",
+    "evidence": "src/Composer.tsx: no native drag-enter attachment highlight path."
+  },
+  "12.6": {
+    "status": "Done",
+    "evidence": "src/dock/Diff.tsx implements per-file diffs, commit and PR actions. Commit calls the same git.commit RPC as desktop RightPanel.tsx; missing push is a shared desktop/daemon limitation, not a port-specific gap."
+  },
+  "13.2": {
+    "status": "Partial",
+    "evidence": "src/environment/Panel.tsx implements all named rows; compact source-note editor and PR handoff differ. Commit uses the same desktop git.commit RPC; no push is a shared baseline limitation."
+  },
+  "12.8": {
+    "status": "Partial",
+    "evidence": "src/terminal/vt.ts and Terminal.tsx: native scrollback/search/selection/copy/keyboard and 200k-line workload pass. VT parser still ignores designated character sets and has no xterm mouse-reporting mode handling, so full desktop terminal parity is incomplete."
+  },
+  "12.10": {
+    "status": "Done",
+    "evidence": "src/dock/Explorer.tsx implements searchable tree, arrow/Home/End/Page navigation and native code viewer; verify-explorer.ts passes dark/light in normal/reduced modes with an isolated Git fixture, including expand/open/collapse and horizontal source scrolling. File reads retain the desktop 256 KiB limit."
+  },
+  "28.13": {
+    "status": "Done",
+    "evidence": "src/dock/Explorer.tsx implements searchable tree, arrow/Home/End/Page navigation and native code viewer; verify-explorer.ts passes dark/light in normal/reduced modes with an isolated Git fixture, including expand/open/collapse and horizontal source scrolling. File reads retain the desktop 256 KiB limit."
+  },
+  "12.11": {
+    "status": "Partial",
+    "evidence": "src/dock/Notes.tsx and src/notes/NoteEditor.tsx: decorated Markdown source input; no full rich editor."
+  },
+  "12.13": {
+    "status": "Partial",
+    "evidence": "src/preview/Preview.tsx and src/preview/store.ts: tickets/address/history/float controls work; content opens externally instead of staying embedded."
+  },
+  "12.15": {
+    "status": "Partial",
+    "evidence": "src/preview/Preview.tsx and src/preview/store.ts: tickets/address/history/float controls work; content opens externally instead of staying embedded."
+  },
+  "24.10": {
+    "status": "Partial",
+    "evidence": "src/preview/Preview.tsx and src/preview/store.ts: tickets/address/history/float controls work; content opens externally instead of staying embedded."
+  },
+  "14.1": {
+    "status": "Partial",
+    "evidence": "src/live/ComputerLiveView.tsx: visibility-aware frame polling/crossfade/hover/snap exist; masked backdrop and shimmer differ at the audited commit."
+  },
+  "16.5": {
+    "status": "Partial",
+    "evidence": "src/notes/NoteEditor.tsx: breadcrumb/toolbar/meta/links and outline navigation exist, but outline active marker is always first heading (i === 0)."
+  },
+  "16.6": {
+    "status": "Partial",
+    "evidence": "src/notes/NoteEditor.tsx and Toolbar.tsx: slash/format/link controls operate on source blocks; not the desktop transaction editor/selection bubble."
+  },
+  "16.7": {
+    "status": "Partial",
+    "evidence": "src/notes/NoteEditor.tsx and NoteBlock.tsx: images upload/render and task status chips exist; inline task atoms remain a separate chip row and source URL."
+  },
+  "21.6": {
+    "status": "Partial",
+    "evidence": "src/dialogs/Account.tsx: browser/paste/device-code login supported; terminal account sign-in still hands off to desktop."
+  },
+  "22.4": {
+    "status": "Partial",
+    "evidence": "src/main.tsx selects blurred/opaque window at launch; src/shell/appearance.ts synchronizes theme/material, but does not replace window backing for runtime translucency toggles."
+  },
+  "26.4": {
+    "status": "Partial",
+    "evidence": "src/main.tsx selects blurred/opaque window at launch; src/shell/appearance.ts synchronizes theme/material, but does not replace window backing for runtime translucency toggles."
+  },
+  "27.5": {
+    "status": "Partial",
+    "evidence": "src/main.tsx selects blurred/opaque window at launch; src/shell/appearance.ts synchronizes theme/material, but does not replace window backing for runtime translucency toggles."
+  },
+  "22.5": {
+    "status": "Partial",
+    "evidence": "src/native/notifications.ts and src/shell/agentToasts.ts are integrated; this audit observed granted permission and successful posts from the existing packaged app. No notification click was observed during the 90 s check, so click/navigation remains unverified."
+  },
+  "23.3": {
+    "status": "Partial",
+    "evidence": "src/native/notifications.ts and src/shell/agentToasts.ts are integrated; this audit observed granted permission and successful posts from the existing packaged app. No notification click was observed during the 90 s check, so click/navigation remains unverified."
+  },
+  "27.12": {
+    "status": "Partial",
+    "evidence": "src/native/notifications.ts and src/shell/agentToasts.ts are integrated; this audit observed granted permission and successful posts from the existing packaged app. No notification click was observed during the 90 s check, so click/navigation remains unverified."
+  },
+  "22.7": {
+    "status": "Partial",
+    "evidence": "src/settings/Accounts.tsx: edit/default/project/sign-out/remove controls exist; grouped account usage/avatar presentation differs from desktop."
+  },
+  "22.8": {
+    "status": "Partial",
+    "evidence": "src/settings/secondary.tsx: catalog actions and selected-conversation terminal login are wired; end-to-end connector OAuth completion not certified."
+  },
+  "22.9": {
+    "status": "Partial",
+    "evidence": "src/settings/secondary.tsx and ComputerNotes.tsx: setup/revoke/note edits exist; actual setup/OS permission lifecycle not certified and requires manual refresh."
+  },
+  "22.11": {
+    "status": "Partial",
+    "evidence": "src/settings/About.tsx: versions/release check/explicit CLI symlink paths exist; automatic signed update and bundled CLI discovery are absent."
+  },
+  "24.12": {
+    "status": "Partial",
+    "evidence": "src/nav/keys.ts and surface handlers: local searches exist; complete global/thread search parity is not implemented."
+  },
+  "24.15": {
+    "status": "Partial",
+    "evidence": "src/composer/Completion.tsx: atomic completion undo/redo and menu keys work; full rich-editor and hardware IME behavior remain incomplete/unverified."
+  },
+  "24.16": {
+    "status": "Partial",
+    "evidence": "src/composer/ModelPicker.tsx: command digits and picker navigation exist; complete native focus/keyboard parity has no independent complete verifier."
+  },
+  "25.8": {
+    "status": "Partial",
+    "evidence": "src/transcript/motion.tsx and reveal.ts implement paced word-boundary reveal and exact settlement; desktop streaming caret is absent."
+  },
+  "25.11": {
+    "status": "Partial",
+    "evidence": "src/motion/kit.tsx and row entrances: entrance motion exists; full desktop attention-pop behavior remains missing."
+  },
+  "25.12": {
+    "status": "Partial",
+    "evidence": "src/sidebar/rows.tsx: hover actions reveal; truncated title marquee is missing."
+  },
+  "25.16": {
+    "status": "Missing",
+    "evidence": "src/shell/appearance.ts explicitly switches the live theme immediately; no retained-scene cross-fade."
+  },
+  "25.17": {
+    "status": "Partial",
+    "evidence": "src/motion/kit.tsx, composer/Menu.tsx and shell/toasts.tsx: press/check/toast feedback exists; complete stroke-draw/check timing parity differs."
+  },
+  "26.5": {
+    "status": "Missing",
+    "evidence": "src/native/backdrop-material.ts reads flags but has no consumers at this snapshot; no active full-app reduced-transparency/increased-contrast handling."
+  },
+  "27.1": {
+    "status": "Partial",
+    "evidence": "src/environments/registry.ts and main.tsx resolve existing endpoints; no shipped daemon spawn/incompatible restart owner."
+  },
+  "27.4": {
+    "status": "Partial",
+    "evidence": "src/main.tsx sets trafficLightX/Y to 16; exact 46px-bar centering has not been independently certified."
+  },
+  "27.7": {
+    "status": "Partial",
+    "evidence": "src/native/visibility.ts pauses loops; no transcript compaction on occlusion/minimize."
+  },
+  "27.10": {
+    "status": "Missing",
+    "evidence": "src/preview/browser.ts uses an external browser; no native preview loopback relay."
+  },
+  "27.11": {
+    "status": "Partial",
+    "evidence": "src/notes/NoteMenu.tsx exports via folder selection; complete native save dialog and copy-image parity absent."
+  },
+  "27.13": {
+    "status": "Missing",
+    "evidence": "src/shell/platform.ts checkRelease returns installable:false; no signed GPUIX update artifact or installer."
+  },
+  "27.15": {
+    "status": "Partial",
+    "evidence": "src/settings/About.tsx and src/shell/platform.ts support explicit-path symlink install/uninstall; automatic bundled executable discovery/platform PATH handling incomplete."
+  },
+  "28.1": {
+    "status": "Partial",
+    "evidence": "src/composer/Menu.tsx: groups/radio/check/destructive items exist; nested submenus absent."
+  },
+  "28.3": {
+    "status": "Partial",
+    "evidence": "src/nav/overlay.tsx: dialogs and close guard exist; complete sheet/alert semantics differ."
+  },
+  "28.4": {
+    "status": "Partial",
+    "evidence": "src/nav/overlay.tsx, nav/NavRail.tsx and subagents/Hover.tsx: concrete popovers/hover cards exist; full generic hover-card behavior not established."
+  },
+  "28.7": {
+    "status": "Partial",
+    "evidence": "src/settings/controls.tsx and composer/Completion.tsx: command/select/autocomplete exist; complete combobox semantics differ."
+  },
+  "28.8": {
+    "status": "Partial",
+    "evidence": "src/settings/controls.tsx: segmented/switch/check controls exist; full time-picker primitive absent."
+  },
+  "28.14": {
+    "status": "Partial",
+    "evidence": "src/ui.tsx and MatrixLoader.tsx: spinner/empty/badge states exist; complete desktop skeleton set absent."
+  },
+  "29.6": {
+    "status": "Partial",
+    "evidence": "src/shell/persist.ts, composer/store.ts, notes/home.ts and split/store.ts persist environment data. Isolated environment cross-talk checks pass normal/reduced, but verify.ts dark/normal reports note draft not persisted; the other three variants retain environment-toggle after switching. Draft loading/editability timing and restart coverage remain unresolved."
+  },
+  "1.7": {
+    "status": "Done",
+    "evidence": "src/split/Workspace.tsx/store.ts and nav/TitleBar.tsx: per-pane headers, focus, empty panes, split/resize/close/expand and shortcut topology are implemented; native split verifier covers behavior."
+  },
+  "6.4": {
+    "status": "Done",
+    "evidence": "src/split/Workspace.tsx/store.ts and nav/TitleBar.tsx: per-pane headers, focus, empty panes, split/resize/close/expand and shortcut topology are implemented; native split verifier covers behavior."
+  },
+  "11.1": {
+    "status": "Done",
+    "evidence": "src/split/Workspace.tsx/store.ts and nav/TitleBar.tsx: per-pane headers, focus, empty panes, split/resize/close/expand and shortcut topology are implemented; native split verifier covers behavior."
+  },
+  "11.3": {
+    "status": "Done",
+    "evidence": "src/split/Workspace.tsx/store.ts and nav/TitleBar.tsx: per-pane headers, focus, empty panes, split/resize/close/expand and shortcut topology are implemented; native split verifier covers behavior."
+  },
+  "11.4": {
+    "status": "Done",
+    "evidence": "src/split/Workspace.tsx/store.ts and nav/TitleBar.tsx: per-pane headers, focus, empty panes, split/resize/close/expand and shortcut topology are implemented; native split verifier covers behavior."
+  },
+  "24.7": {
+    "status": "Done",
+    "evidence": "src/split/Workspace.tsx/store.ts and nav/TitleBar.tsx: per-pane headers, focus, empty panes, split/resize/close/expand and shortcut topology are implemented; native split verifier covers behavior."
+  },
+  "3.28": {
+    "status": "Done",
+    "evidence": "src/sidebar/rows.tsx and split/Workspace.tsx: thread drag routes to directional split targets; split/native.verify.ts --drag covers synthetic cancellation and placement. Physical outside-window release remains unverified."
+  },
+  "11.2": {
+    "status": "Done",
+    "evidence": "src/sidebar/rows.tsx and split/Workspace.tsx: thread drag routes to directional split targets; split/native.verify.ts --drag covers synthetic cancellation and placement. Physical outside-window release remains unverified."
+  },
+  "5.9": {
+    "status": "Done",
+    "evidence": "src/Composer.tsx: coordinator.setup path and explicit connection/provider/permission/upload/empty disabled-send reasons; conversation.verify.ts covers Coordinator behavior."
+  },
+  "5.13": {
+    "status": "Done",
+    "evidence": "src/Composer.tsx: coordinator.setup path and explicit connection/provider/permission/upload/empty disabled-send reasons; conversation.verify.ts covers Coordinator behavior."
+  },
+  "7.8": {
+    "status": "Done",
+    "evidence": "src/transcript/store.ts and motion.tsx: bounded paced live blocks, word-boundary reveal and exact final text."
+  },
+  "7.24": {
+    "status": "Done",
+    "evidence": "src/transcript/Turn.tsx: edited-review opens changes dock; stats/per-file diffs/Undo are implemented."
+  },
+  "8.8": {
+    "status": "Done",
+    "evidence": "src/requests/Secret.tsx and requests/verify.ts: masked native field, secure transport response and hidden-paint assertion; physical AX lifecycle remains a separate native-verification limit."
+  },
+  "9.11": {
+    "status": "Done",
+    "evidence": "src/composer/Completion.tsx: Computer catalog completion produces a mention part; conversation.verify.ts asserts wire payload."
+  },
+  "10.5": {
+    "status": "Done",
+    "evidence": "src/composer/ModelPicker.tsx: idle Coordinator switch and ordinary target switching; running state blocks unsafe switch."
+  },
+  "10.6": {
+    "status": "Done",
+    "evidence": "src/composer/StatusGlyph.tsx: context ring/cache dot/limit tone/popover using shared desktop providerUsage and accountUi logic."
+  },
+  "16.12": {
+    "status": "Done",
+    "evidence": "src/notes/home.ts/store.ts: shared vs separate global-note client routing, preference watching and no silent remote fallback; home.verify.ts uses two scratch daemons."
+  },
+  "20.3": {
+    "status": "Done",
+    "evidence": "src/nav/Palette.tsx: Notes/Tasks and Toggle theme/Use system theme commands are implemented."
+  },
+  "21.4": {
+    "status": "Done",
+    "evidence": "src/shell/CloseGuard.tsx: close veto, waiting/running summaries, cancel/keep/stop-and-close, remembered setting and partial errors; Command-Q is outside native hook coverage."
+  },
+  "22.3": {
+    "status": "Partial",
+    "evidence": "src/settings/primary.tsx: General controls work, but Global notes still falsely says sharing requires desktop. Sharing is implemented in notes/home.ts and exposed in notes/Header.tsx, not the matching General settings control."
+  },
+  "22.6": {
+    "status": "Done",
+    "evidence": "src/settings/secondary.tsx and Cursor.tsx: harness updates, profiles, delegation, Coordinator defaults, installed agents and Cursor setup/status controls; writes are mock-tested."
+  },
+  "25.2": {
+    "status": "Done",
+    "evidence": "src/motion/kit.tsx, dock/Dock.tsx, settings/controls.tsx and pulls/PrTabs.tsx: native sliding pills with immediate keyboard/reduced-motion paths."
+  },
+  "25.5": {
+    "status": "Done",
+    "evidence": "src/MatrixLoader.tsx explicitly implements scan/twinkle/orbit/pulse variants on shared visibility-aware clock."
+  },
+  "25.18": {
+    "status": "Done",
+    "evidence": "src/live/Floating.tsx and preview/Preview.tsx: projected snap/corner positioning and native spring motion; behavior verified by dock runtime checks."
+  },
+  "26.6": {
+    "status": "Done",
+    "evidence": "src/main.tsx Fonts registers bundled Cal Sans/JetBrains Mono; native/capability-check.ts asserts changed shaped font metrics."
+  },
+  "29.3": {
+    "status": "Done",
+    "evidence": "src/state.ts and nav/live.ts: generation-guarded hydration, workspace events and reconnect replay; shell/verify.replay.ts asserts no duplicate changes."
+  },
+  "18.2": {
+    "status": "Partial",
+    "evidence": "src/pulls/PullRequestsPage.tsx implements filters/search/grouping/refresh. Normal usage/native verifier passes, but its reduced-motion PR sequence leaves the stale list after Enter on Refresh (line 88); keyboard refresh after overlays remains an unresolved runtime validation gap."
+  }
+}
