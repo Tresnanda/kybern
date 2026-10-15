@@ -79,5 +79,7 @@ echo "== checks"
   for check in island-check island-overlay-check native-check secure-input-check code-wrap-check native-motion-check; do
     bun "scripts/$check.ts"
   done
+  pnpm exec tsc -p native/tsconfig.json
+  bun native/capability-check.ts
 )
 echo "done: GPUIX $version with Kybern patches"

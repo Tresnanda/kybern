@@ -76,7 +76,7 @@ edit(r, "    highlight_events: &'a mut Vec<(u64, usize)>,\n}",
      "    pub(crate) highlight_events: &'a mut Vec<(u64, usize)>,\n"
      "    /// Kybern patch: the island this build renders, if any.\n"
      "    pub(crate) island_root: Option<u64>,\n"
-     "    /// Kybern patch: building a `<virtual-list>` row (islands render inline).\n"
+     "    /// Kybern patch: building a `<virtual-list>` row (diagnostic inline override).\n"
      "    pub(crate) in_virtual_row: bool,\n"
      "    pub(crate) islands: &'a mut crate::cache_island::Islands,\n}")
 
@@ -265,6 +265,101 @@ edit(r, "    ctx.inherited = parent_inherited;\n    built", """    ctx.inherited
     if let Some(motion) = translated {
         crate::translate::apply(built, motion.translate_x.unwrap_or(0.0), motion.translate_y.unwrap_or(0.0))
     } else { built }""")
+
+# Explicit startup font registration through GPUI's platform text system.
+edit(r, "    pub fn zoom_window(&self) -> Result<()> {", """    pub fn register_font(&self, data: napi::bindgen_prelude::Buffer) -> Result<()> {
+        let bytes = data.to_vec();
+        #[cfg(target_os = "macos")]
+        return update_window_without_view(move |window, cx| {
+            cx.text_system().add_fonts(vec![std::borrow::Cow::Owned(bytes)])
+                .map_err(|error| Error::from_reason(error.to_string()))?;
+            window.refresh();
+            Ok(())
+        })?;
+        #[cfg(not(target_os = "macos"))]
+        Err(Error::from_reason("Font registration is currently macOS-only"))
+    }
+
+    #[napi]
+    pub fn zoom_window(&self) -> Result<()> {""")
+
+# A list row must establish the available width before percentage-sized islands
+# are measured: cached views intentionally have no intrinsic content width.
+edit(r, "        let Some(focus_handle) = row_focus_handle else {\n            return child;\n        };", "        let Some(focus_handle) = row_focus_handle else {\n            return gpui::div().w_full().child(child).into_any_element();\n        };")
+
+# Selection and atomic editor transactions use the mounted native edit model.
+edit(i, "impl TextEditorState {", 'include!("../input_api.rs");\n\nimpl TextEditorState {')
+edit(i, "        let prop_changed = self.last_prop_value.as_ref() != Some(&self.value);", "        remember_editor(ctx.id, &state);\n        let prop_changed = self.last_prop_value.as_ref() != Some(&self.value);")
+edit(r, "    pub fn zoom_window(&self) -> Result<()> {", """    pub fn get_input_selection(&self, element_id: f64) -> Result<serde_json::Value> {
+        let id = to_element_id(element_id)?;
+        #[cfg(target_os = "macos")]
+        return update_window_without_view(move |_, cx| crate::custom_elements::input::input_selection(id, cx))?;
+        #[cfg(not(target_os = "macos"))]
+        Err(Error::from_reason("Input selection is currently macOS-only"))
+    }
+
+    #[napi]
+    pub fn set_input_selection(&self, element_id: f64, start: f64, end: f64, reversed: bool) -> Result<()> {
+        let id = to_element_id(element_id)?;
+        let start = crate::custom_elements::input::utf16_offset(start)?;
+        let end = crate::custom_elements::input::utf16_offset(end)?;
+        #[cfg(target_os = "macos")]
+        return update_window_without_view(move |_, cx| crate::custom_elements::input::select_input(id, start, end, reversed, cx))?;
+        #[cfg(not(target_os = "macos"))]
+        Err(Error::from_reason("Input selection is currently macOS-only"))
+    }
+
+    #[napi]
+    pub fn edit_input(&self, element_id: f64, edit: serde_json::Value) -> Result<()> {
+        let id = to_element_id(element_id)?;
+        #[cfg(target_os = "macos")]
+        return update_window_without_view(move |window, cx| crate::custom_elements::input::edit_input(id, edit, window, cx))?;
+        #[cfg(not(target_os = "macos"))]
+        Err(Error::from_reason("Input transactions are currently macOS-only"))
+    }
+
+    #[napi]
+    pub fn zoom_window(&self) -> Result<()> {""")
+
+# Cached paint must restore selection geometry and text inspection, too.
+edit("text/paint.rs", "struct RegEntry {", "#[derive(Clone)]\nstruct RegEntry {")
+edit("text/paint.rs", "struct StartRegion {", "#[derive(Clone)]\nstruct StartRegion {")
+edit("text/paint.rs", "pub type SharedSelection = Arc<Mutex<SelectionState>>;", 'pub type SharedSelection = Arc<Mutex<SelectionState>>;\ninclude!("../selection_cache.rs");')
+
+edit("text/selection.rs", "    pub fn clear(&mut self) {", """    pub(crate) fn ranges(&self) -> serde_json::Value {
+        serde_json::Value::Array(self.spans.iter().filter(|span| !span.range.is_empty()).map(|span| {
+            let (id, sub) = span.key.split_once(':').unwrap_or(("0", "0"));
+            serde_json::json!({"elementId": id.parse::<u64>().unwrap_or(0), "sub": sub.parse::<u32>().unwrap_or(0),
+                "start": span.text[..span.range.start].encode_utf16().count(),
+                "end": span.text[..span.range.end].encode_utf16().count(), "text": span.text})
+        }).collect())
+    }
+
+    pub fn clear(&mut self) {""")
+edit(r, "    pub fn zoom_window(&self) -> Result<()> {", """    pub fn get_text_selection(&self) -> serde_json::Value {
+        self.selection.lock().ranges()
+    }
+
+    #[napi]
+    pub fn set_text_selection(&self, element_id: f64, sub: f64, start: f64, end: f64) -> Result<()> {
+        let id = to_element_id(element_id)?;
+        let selection = self.selection.clone();
+        let tree = self.tree.clone();
+        let sub = crate::custom_elements::input::utf16_offset(sub)?;
+        let start = crate::custom_elements::input::utf16_offset(start)?;
+        let end = crate::custom_elements::input::utf16_offset(end)?;
+        #[cfg(target_os = "macos")]
+        return update_window_without_view(move |window, _cx| {
+            crate::text::paint::select_text(&selection, &tree.lock().unwrap(), id, sub, start, end)?;
+            window.refresh();
+            Ok(())
+        })?;
+        #[cfg(not(target_os = "macos"))]
+        Err(Error::from_reason("Text selection is currently macOS-only"))
+    }
+
+    #[napi]
+    pub fn zoom_window(&self) -> Result<()> {""")
 
 for path, text in pending.items():
     (src / path).write_text(text)

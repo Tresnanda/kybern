@@ -26,24 +26,24 @@ thread panel and content card are islands; 15 s samples, 2026-10-15):
 | That running thread open | 10 | 10.7% | 9.9% |
 | That running thread open | 5 | 6.0% | 6.0% |
 
-The open-thread case gains little because its loaders sit inside two virtual
-lists (sidebar row, transcript "Working" row), and islands inside list rows
-render inline (below), so each tick still rebuilds both regions.
+These historical measurements predate virtual-row cache support. Current list-row
+measurements and the resolved width-measurement issue are recorded below.
 
 ## Island rules
 
 - **Definite size:** `width` and `height` in pixels or percent. Without both the
   element renders inline (no caching, no error). `cache="fill"` (`FILL_ISLAND`)
   is for a box its parent sizes (flex-grow, stretch).
-- **Not inside `<virtual-list>` rows.** GPUI's `list` lays out rows in ways a
-  cached view does not survive (rows paint blank), so islands there render
-  inline automatically. Put the island around the list instead.
+- **Virtual-list rows are supported.** Every native row establishes full width
+  before measuring percentage-sized islands; the cache still needs definite height.
 - **No margins or position insets on the island itself;** put them on a parent.
   The island keeps its declared size (it does not flex-shrink).
 - **Unchanged islands replay.** Any change inside (props, text, children, style,
   a running `motion.div`) re-renders that island only, in the same frame.
-- **Text selection** inside an island is lost on frames it is replayed; do not
-  make selectable text (transcript prose) an island.
+- **Text selection** and painted-text inspection are restored in document order
+  on cached replay. Selection changes refresh the native paint, including the wash.
+  Deferred overlay text is not included in these ordinary-paint snapshots; keep
+  selectable overlay content outside a cached ancestor.
 - **Automation** (`getByTestId`, bounds) keeps working: islands snapshot their
   bounds and re-record them when replayed.
 - **New islands render inline on their first frame;** their view is created
@@ -188,7 +188,7 @@ no new upstream hook.
 three outside updates/cached replays, moved child coordinates/clicks, and overlay clicks. The normal five
 island checks still pass. Their animation fixture uses a controlled clock so
 another window covering the lab does not suppress the test animation. Overlays need not move to the app root solely to
-avoid this failure. Selection-in-replayed-island limitations remain.
+avoid this failure. Ordinary text selection now survives replay (see selection API below).
 
 ## Secure single-line input
 
@@ -274,15 +274,24 @@ inconsistent. A faithful implementation needs coordinated scene + clip + input
 support in GPUI. Use translation with opacity, or layout-changing width/height
 where that behavior is intended; neither is presented as scale.
 
-## Virtual-list islands investigation
+## Virtual-list cache ownership
 
-Removing the `in_virtual_row` fallback still produces blank rows, even with
-the deferred-overlay fix. The list measures elements via `layout_as_root` with
-available-item space; `ViewElement::cached` requires a definite box and caches
-its own layout/prepaint ranges. The existing nested wrapper does not survive
-that measurement/repaint lifecycle. A correct solution needs row-level cache
-ownership coordinated with list measurement and invalidation in the Zed fork.
-The inline fallback is retained; no list-row CPU improvement is claimed.
+The previously suspected speculative-prepaint fault was a width-measurement bug.
+A cached view deliberately has no intrinsic content width. An unfocused list row
+returned its child directly, so percentage-sized islands in an auto-width row
+resolved to zero. `build_virtual_child` now gives these rows the same full-width
+container already used for focusable rows. No GPUI fork changes are required.
+The native entity remains owned by the island registry, keyed by retained node ID;
+changed subtree revisions notify it before drawing. The inline-first-frame rule
+and row identities remain intact. `KYBERN_INLINE_LIST_ISLANDS=1` restores the
+old inline path for diagnostic A/B measurements; it is off by default.
+
+`native/capability-check.ts` verifies changed row text, stable nonzero width after
+scrolling, and selection across replay in both appearances. The existing island
+check compares the whole virtual list pixel-for-pixel with inline rendering.
+Its old output label still says "inline fallback"; the current default does not
+use that fallback. The registry is pruned when retained nodes unmount; callers
+must continue to bound their React history window, not mount unlimited history.
 
 ## Verification commands
 
@@ -373,3 +382,268 @@ Free disk was 73 GiB before and after. The requested incremental build directory
 binaries and source copies, scratch data, daemon, and fixture windows were
 removed/stopped. The signed, load-checked deliverable is
 `build/gpuix-native.darwin-arm64.node`.
+
+## Native API additions (package 1, 2026-10-15)
+
+Import `nativeCapabilities` from `src/native/api.ts` and pass the renderer from
+`useGpuixRequired()`. It checks the actual binary and throws a named capability
+error for an older/stock module. These additions are macOS-only. No npm dependency
+or lockfile change is needed; the interface is owned by this client.
+
+```ts
+const native = nativeCapabilities(renderer)
+native.getInputSelection(id) // { start, end, reversed, composing }
+native.setInputSelection(id, start, end, reversed)
+native.editInput(id, { start, end, text, expectedValue })
+native.getTextSelection() // [{ elementId, sub, start, end, text }]
+native.setTextSelection(id, sub, start, end)
+native.registerFont(Buffer.from(fontBytes))
+```
+
+All offsets are **UTF-16 code units**, matching JavaScript string slicing. Negative,
+fractional, out-of-range and split-surrogate positions throw. IDs are mounted
+native host IDs (input refs), not test IDs. Selection direction is represented by
+`reversed`; `start <= end` always. A selection read exposes no password text.
+Selecting an input does not focus it; call the existing `focusElement` when desired.
+Unmounted editors throw rather than silently retaining a detached edit model.
+The weak editor registry prunes dead entries on subsequent input renders.
+
+`editInput` synchronously checks `expectedValue` against the current native buffer,
+replaces that range, places the caret at the inserted text's end, emits the normal
+`onChange`, and creates exactly one native undo step. It preserves earlier undo
+history and clears redo. The controlled React `value` must adopt `onChange`; use
+the existing native echo handling rather than replacing the whole prop to format
+a selection. Explicit edits reject read-only, secure and composing editors.
+This is not a rich-document model or a multi-edit transaction group. A real IME
+session and application menu integration still need their own verification.
+
+Prose ranges contain the full text of each run, so selected text is
+`range.text.slice(range.start, range.end)`. `getSelectedText()` still provides the
+joined copy text. `setTextSelection` selects one painted run; for a host `<text>`
+it selects the `sub`th descendant run, while code/Markdown use their native run
+sub-index. It throws when the run is not painted. Ranges retain their text snapshot
+across virtualization; consumers should not treat IDs as persistent document IDs.
+Ordinary cached paint now restores text layout, start regions, painted text and
+highlight inspection in order. Selection changes use GPUI refresh so cached wash
+paint cannot remain stale. Deferred overlay text remains outside this snapshot;
+do not wrap selectable overlay content in a cached ancestor.
+
+Register fonts **before first use of their family**: GPUI caches font resolution.
+The existing `main.tsx` `Fonts` gate already loads both bundled TTFs before mounting
+App, so this native method enables it without an App/TitleBar patch. The optional
+`registerBrandFonts(renderer)` helper performs that registration once per renderer.
+Invalid font data propagates the native error. Registration is process-local;
+it does not install fonts into macOS. The fixture changes from Helvetica to
+Cal Sans and asserts different shaped glyph metrics.
+
+`native/capability-check.ts` runs dark and light windows and checks Unicode ranges,
+selection direction, native undo and redo, stale-edit rejection, font metrics,
+prose range retention through three unrelated frames, changed virtual row text,
+and scrolling to a previously unseen cached row. Run it after the existing six
+capability scripts. `pnpm exec tsc -p native/tsconfig.json` checks these fixtures
+without including the disposable upstream checkout.
+
+## Frame scheduling and subtree scale
+
+The pinned GPUI already implements `Window::request_animation_frame()` through
+`on_next_frame`/`schedule_frame`, with `gpui_macos/src/display_link.rs` supplying
+CVDisplayLink pacing and idle suspension. Native motion uses this path. The shared
+JS loader clock still deliberately samples at 5 Hz and stops while hidden; making
+that clock run at display rate would increase work, not fix frame presentation.
+No additional timer or GPUI scheduler patch was added. This source inspection is
+not a frame-interval or energy measurement.
+
+Faithful subtree scale remains unsupported for the reasons in the native springs
+section: quads, paths, masks, glyphs and hitboxes need one coordinated GPUI scene
+transform. Translation is not presented as scale.
+
+## Proposed embedded browser host contract (not implemented)
+
+`src/native/webview-contract.ts` is the concrete TypeScript proposal for package 5.
+It does **not** enable browser UI or claim that WKWebView is available. A native
+implementation must attach one WKWebView per document to the GPUI content view,
+keep its identity while moving between dock and mini-player, and cap live hosts
+at two. `place` uses logical top-left coordinates and a clipping rectangle; the
+native side converts to AppKit coordinates and applies coalesced frame/visibility
+updates. Native browser views must not cover GPUI menus or dialogs; the integration
+needs an explicit overlay/occlusion policy before it can ship.
+
+URLs come from the existing authorized preview ticket/loopback relay flow. A
+WKNavigationDelegate checks initial navigation, redirects, popups and downloads
+against the allowed origins; external navigation is an event for app policy.
+Never inject daemon bearer credentials into page JavaScript. The contract has no
+arbitrary JS evaluation bridge. Per-environment nonpersistent website data stores
+prevent session/cookie crossover; file pages still rely on the daemon's sandbox
+CSP and canonical-root checks. A stale generation may not update new navigation.
+
+Hidden hosts must lose keyboard focus, stop loading and cease presentation work;
+the implementation must separately verify media/timer suspension, since hiding an
+NSView alone is insufficient. Destruction removes navigation/message delegates,
+event observers and views, cancels pending work, and is idempotent. A process-crash
+event leaves retry UI to the app. Verification must include WebKit subprocess
+footprint/CPU, repeated dock/mini-player transitions, environment switches, blocked
+external navigation, clipping/hit testing, native keyboard editing and eventual
+process cleanup. No WKWebView prototype was added in this package.
+
+## Proposed event-driven layout API (not implemented)
+
+```ts
+type LayoutRect = { x: number; y: number; width: number; height: number }
+type ElementBoundsEvent = {
+  elementId: number
+  rect: LayoutRect | null
+  clippedRect: LayoutRect | null
+  frame: number
+}
+onWindowResize(renderer, callback: (size: {
+  width: number; height: number; scaleFactor: number; frame: number
+}) => void): () => void
+observeElementBounds(renderer, target: number | { testId: string },
+  callback: (event: ElementBoundsEvent) => void): () => void
+```
+
+The helper returns an idempotent unsubscribe function. It subscribes to native
+window bounds/scale-factor changes, not a JS timer. Dimensions are logical pixels;
+element rectangles use the content area's top-left origin and include native
+translation. Each subscription receives its current value after the next completed
+paint, then only changed values. Changes coalesce by subscription to one delivery
+per completed frame; callbacks run after paint through the existing event bridge,
+never reentrantly during layout. A callback-triggered React update belongs to the
+next frame, preventing recursive measurement loops.
+
+`rect: null` marks unmount or an unpainted virtual row and is emitted once per
+transition. Cached replay must restore observed bounds just as it does automation
+bounds; observing an unchanged island must neither invalidate it nor force layout.
+`clippedRect` is the intersection of the painted box with its effective clip and
+window viewport. Minimize/occlusion produces no synthetic resize; use the existing
+visibility signal. A test ID must resolve uniquely, otherwise subscription fails;
+if its node is replaced, the subscription follows the new ID. Numeric IDs stop at
+unmount and do not attach to another node. Close/unsubscribe discards queued events.
+
+Implementation seam: the native bounds tracker records dirty observed IDs during
+paint; a post-frame queue compares the final boxes, including island replay and
+deferred overlays, and sends one batch. Register/unregister observer tokens on the
+renderer; keep callback maps in JS, with a bounded native subscription count. This
+API would let shell/window and dock rect tracking replace polling. Required checks:
+resize, scale change, sidebar/dock motion, cached replay, clipped/virtual unmount,
+same-test-ID replacement, rapid subscribe/unsubscribe, and no idle wakeups after
+all observers detach. Current polling is unchanged in this package.
+
+## Proposed whole-document syntax / virtual code API (not implemented)
+
+```ts
+type SyntaxDocument = { id: string; revision: number; lineCount: number }
+createSyntaxDocument(renderer, { text, language, path? }): Promise<SyntaxDocument>
+updateSyntaxDocument(renderer, id, {
+  expectedRevision: number, text: string
+}): Promise<SyntaxDocument>
+releaseSyntaxDocument(renderer, id): void
+// Native JSX; endLine is exclusive, offsets and line numbers are zero-based.
+// <code document={doc.id} revision={doc.revision}
+//       startLine={start} endLine={end} showLineNumbers softWrap />
+```
+
+The native document owns the full source, line index and whole-document parser /
+highlight state. Visible `<code>` ranges share it; a range must never start a fresh
+parser at `startLine`. Open strings, multiline comments, heredocs and embedded
+languages therefore retain preceding lexical context. Document creation/update is
+asynchronous and revisioned. Stale work is cancelled or discarded; a view requesting
+a newer revision may retain readable old paint until the new one is ready but may
+not label old highlighted text as the new source. An unsupported grammar falls
+back to exact plain text. Use a bounded worker queue and document cache; explicit
+release cancels pending work, and mounted views retain a lease until unmount.
+
+Ranges clamp to `[0, lineCount]`; invalid reversed/noninteger ranges reject. Displayed
+line numbers remain absolute. The shared model provides stable selection keys and
+document offsets, so selecting/copying across adjacent virtual ranges neither loses
+nor duplicates newlines. Wrapped row heights belong to the viewport measurement
+cache keyed by document revision, width and typography; source remains immutable
+within a revision. Copy-all/export uses full document source rather than joined
+visible chunks. A document handle is renderer/environment scoped and may not be
+reused after release or environment teardown.
+
+Implementation seam: extract the existing code highlighter's parsed source and
+TextRuns into a renderer-owned document registry, expose only line slices to the
+code element, and keep virtual rows responsible for viewport mounting. Tests must
+split multiline comments/strings and Unicode at every range boundary and compare
+the final coloured runs with a single full-document render; also test edits before
+the viewport, cancelled parse results, selection/copy across remounts, wrapping,
+memory release and bounded work for large files. Current chunk rendering is
+unchanged; this contract does not claim cross-chunk syntax parity.
+
+## Package 1 validation and measurements
+
+Full-shell `combined-pointer-check.ts` passes Settings pointer and Space, sidebar
+thread selection, titlebar dock toggle, completed dock entrance, Notes addition
+and collapse. `settings-check.ts` passes dark and light: switch RPC/event adoption,
+numeric clamp/save, every section, search, Escape, shortcut and Back. Neither run
+reproduced the old `Window move completed without beginning` warning. That does
+not certify a physical AppKit drag: synthetic events do not supply a real NSEvent,
+and the OS-authorized physical gesture check remains outstanding. No speculative
+drag-hook change was made.
+
+All six existing native checks pass after the final native rebuild; the new
+dark/light capability check also passes. Application typecheck, native-fixture
+typecheck and `bun test ./src` pass (15 tests, 54 assertions). The build is signed
+and load-checked at `native/build/gpuix-native.darwin-arm64.node`.
+
+Apple M1, macOS 27.0, Bun 1.4.0, GPUIX 0.10.0, background windows, 10-second warmup
+and 15-second sample per independent launch. CPU is process CPU-time delta,
+memory is `footprint` physical footprint, GPU is process Metal accumulated time.
+Concurrent workers and occlusion caused substantial run-to-run variation; these
+are not exclusive-machine benchmarks, energy or frame-latency measurements.
+
+| Running full-app fixture | CPU | Footprint | GPU / 15 s |
+| --- | ---: | ---: | ---: |
+| Before 1 | 7.53% | 176 MiB | 75.1 ms |
+| Before 2 | 4.67% | 174 MiB | 72.7 ms |
+| After 1 | 9.33% | 172 MiB | 75.0 ms |
+| After 2 | 6.00% | 179 MiB | 61.5 ms |
+
+The existing deterministic running-thread fixture has one live tool row and two
+5 Hz indicators, not sustained token streaming. Mean CPU is +1.57 points, within
+the prior report's 3-point noise threshold; mean footprint is +0.5 MiB. This does
+not establish a speedup or prove exact equivalence. The fixture mounts App directly
+and does not exercise startup font registration; the full-shell Settings checks do.
+
+The isolated `native/list-perf.ts` A/B uses the **same final binary**, 300 virtual
+rows and one 10 Hz row loader (plus its outside reference loader), toggling only
+the diagnostic inline-row path. This avoids changes in other native capabilities.
+
+| Virtual-list fixture | CPU | Footprint | GPU / 15 s |
+| --- | ---: | ---: | ---: |
+| Inline 1 | 16.13% | 171 MiB | 102.4 ms |
+| Inline 2 | 9.33% | 171 MiB | 71.0 ms |
+| Cached 1 | 11.73% | 170 MiB | 91.3 ms |
+| Cached 2 | 13.00% | 172 MiB | 92.8 ms |
+
+Mean CPU is 12.73% inline versus 12.37% cached, footprint is 171 MiB for both;
+GPU is 86.7 versus 92.1 ms. Variation dominates the small mean differences. The
+rendering correctness fix is established; a meaningful CPU saving is not.
+
+Affected issue #108 statuses:
+
+| Line | Status | Evidence / remaining work |
+| --- | --- | --- |
+| 1.9 | Done | Full-shell dock toggle/entrance passes. |
+| 1.10 | Partial | Native drag hook retained; warning not reproduced, physical gesture unverified. |
+| 9.8 | Partial | Input selection/atomic undo API available; rich tokens and real IME integration belong to composer. |
+| 16.6 | Partial | Selection formatting transactions available; Notes UI must consume them. |
+| 22.1, 22.3 | Done | Full Settings dark/light interaction and RPC/event checks pass. |
+| 24.15 | Partial | Unicode transaction undo/redo passes; rich editor/IME/menu integration still pending. |
+| 25.4 | Done | Shared loader clock preserved; list-row caching now works. |
+| 26.6 | Done | Native registration loads both bundled fonts through existing startup gate. |
+| 28.11 | Done | Virtual rows, cached updates and newly scrolled rows pass. |
+
+No App.tsx or TitleBar.tsx patch is required. Embedded WKWebView, event-driven
+layout and virtual whole-document syntax are proposals only. Native notifications
+were not part of the implementation brief handled here and were not added.
+
+Free workspace-volume space was 73 GiB before and 72 GiB after, with other workers
+active. The requested pre-existing incremental build (1.9 GiB), upstream checkout
+(186 MiB), and reused dependencies (283 MiB) remain for integration. No second
+build directory or daemon build was created. Scratch fixtures remove their daemon
+data and close their own windows; no task process remained at handoff. Final
+screenshots/logs are in `/Users/mymac/projects/ade/previews/gpuix/p1/`; redundant
+task screenshots were removed from the native build directory. The installed app,
+port 4219 and normal user data were not changed.
