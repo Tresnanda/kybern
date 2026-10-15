@@ -1,3 +1,5 @@
+import { DecoratedTextarea } from './native/decorated-input.tsx'
+import { referenceDecorations } from './native/input-marks.ts'
 import { nativeCapabilities, type InputSelection } from './native/api.ts'
 export { useComposerOverlayHeight, useMeasureComposerOverlay } from './composer/height.ts'
 import { useMeasureComposerOverlay } from './composer/height.ts'
@@ -569,7 +571,8 @@ export function ComposerView(input: ComposerViewProps) {
                 </Label>
               </div>
             )}
-            <textarea
+            <DecoratedTextarea
+              decorations={referenceDecorations(text, [...completion.tokens, ...attachmentRefs.map(r => ({ token: r.token, label: r.token.slice(1) }))], { textSecondary: t.textSecondary, accent: t.link, buttonSecondary: t.buttonSecondary })}
               ref={(el) => {
                 editor.current = el
               }}
