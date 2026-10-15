@@ -67,6 +67,11 @@ function build(variant: ThemeVariant) {
   const v = (name: string) => resolve(raw[name] ?? 'transparent', raw)
   return {
     variant,
+    // Task status colours, desktop styles/tasks.css:17–20 and 53–56.
+    taskRun: variant === 'dark' ? 'oklch(0.72 0.13 255)' : 'oklch(0.55 0.17 258)',
+    taskReview: variant === 'dark' ? 'oklch(0.8 0.13 78)' : 'oklch(0.68 0.15 68)',
+    taskDone: variant === 'dark' ? 'oklch(0.7 0.1 152)' : 'oklch(0.58 0.12 152)',
+    taskUrgent: variant === 'dark' ? 'oklch(0.7 0.15 42)' : 'oklch(0.62 0.17 40)',
     raw,
     v,
     frame: v('--app-frame-surface'),

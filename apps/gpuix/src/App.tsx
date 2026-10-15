@@ -6,6 +6,10 @@ import { FILL_ISLAND, ISLAND } from './MatrixLoader.tsx'
 import { motion } from '@gpuix/react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { SettingsScreen } from './settings/SettingsScreen.tsx'
+import { TasksDragLayer } from './tasks/drag.tsx'
+import { TasksPage } from './tasks/TasksPage.tsx'
+import { TasksSidebar } from './tasks/TasksSidebar.tsx'
+import { useTasksFeed } from './tasks/store.ts'
 import { Composer } from './Composer.tsx'
 import { Draft } from './Draft.tsx'
 import { Icon } from './icons.tsx'
@@ -39,6 +43,7 @@ const CARD_RADIUS = 12
 const SLIDE = { duration: 0.22, ease: EASE_OUT }
 
 export function App() {
+  useTasksFeed()
   const t = useTheme()
   const page = useNav((s) => s.page)
   const settingsOpen = useNav((s) => s.settingsOpen)
@@ -113,7 +118,7 @@ export function App() {
             >
               {panelMounted && (
                 <ErrorBoundary label="the sidebar" compact>
-                  <Sidebar />
+                  {page === 'tasks' ? <TasksSidebar /> : <Sidebar />}
                 </ErrorBoundary>
               )}
             </div>
@@ -136,7 +141,7 @@ export function App() {
           >
             <PageEnter page={settingsOpen ? 'settings' : page}>
               <ErrorBoundary label="this page" key={settingsOpen ? 'settings' : page}>
-                {settingsOpen ? <SettingsScreen /> : welcome ? <Welcome kind={welcome} /> : page === 'home' ? <HomePage /> : <ElsewherePage page={page} />}
+                {settingsOpen ? <SettingsScreen /> : welcome ? <Welcome kind={welcome} /> : page === 'home' ? <HomePage /> : page === 'tasks' ? <TasksPage /> : <ElsewherePage page={page} />}
               </ErrorBoundary>
             </PageEnter>
             <ConnectionBanner />
@@ -149,6 +154,7 @@ export function App() {
       <SessionsDialog />
       <Toaster />
       <SidebarDragLayer />
+      <TasksDragLayer />
     </div>
   )
 }

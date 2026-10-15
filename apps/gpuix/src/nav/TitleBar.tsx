@@ -36,7 +36,7 @@ export function usePanelOpen(): boolean {
   const sidebarOpen = useApp((s) => s.sidebarOpen)
   const page = useNav((s) => s.page)
   const peek = useNav((s) => s.pullsPeek)
-  if (page === 'notes' || page === 'tasks') return false
+  if (page === 'notes') return false
   if (page === 'pulls') return peek
   return sidebarOpen
 }
