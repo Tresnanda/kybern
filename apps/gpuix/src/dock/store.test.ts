@@ -3,9 +3,9 @@ import { chooseTab, closeTab, dockGeometry, getDock, setDock } from './store.ts'
 
 describe('dock layout and thread choices', () => {
   test('reserves 320px for chat and overlays below 736px of available space', () => {
-    expect(dockGeometry(1280, true, 900)).toEqual({ overlay: false, max: 644, width: 644 })
-    expect(dockGeometry(980, true, 900)).toEqual({ overlay: true, max: 664, width: 664 })
-    expect(dockGeometry(980, false, 200)).toEqual({ overlay: false, max: 600, width: 416 })
+    expect(dockGeometry(1280, 256, 900)).toEqual({ overlay: false, max: 644, width: 644 })
+    expect(dockGeometry(980, 256, 900)).toEqual({ overlay: true, max: 664, width: 664 })
+    expect(dockGeometry(980, 0, 200)).toEqual({ overlay: false, max: 600, width: 416 })
   })
   test('closing the active tab chooses its neighbour, then leaves a real empty strip', () => {
     const id = 'dock-test-close'

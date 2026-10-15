@@ -14,6 +14,7 @@ import { Label, REDUCED_MOTION, useTheme } from './ui.tsx'
 import { DISTANCE, DURATION, EASE } from './motion/kit.tsx'
 import { CodeChunk, CodeHeader, markdownParts, Prose, textChunks } from './transcript/markdown.tsx'
 import { MessageRail } from './transcript/rail.tsx'
+import { longestLine, useCodeColumns } from './transcript/codeWidth.ts'
 import { T } from './transcript/glyphs.ts'
 import { alpha, muted, Para } from './transcript/kit.tsx'
 import { over } from './theme.ts'
@@ -49,6 +50,7 @@ export function Transcript() {
   const [atTail, setAtTail] = useState(true)
   const [codeState, setCodeState] = useState<Record<string, { expanded: boolean; wrap: boolean }>>({})
   const [activeRow, setActiveRow] = useState(0)
+  const codeColumns = useCodeColumns(threadId ?? null, GUTTER, COLUMN)
   const nearTop = useRef(false)
 
   useEffect(() => {
@@ -77,7 +79,8 @@ export function Transcript() {
       const partKey = `${key}:answer:${part.key}`
       const chunks = textChunks(part.text)
       if (part.kind === 'code') {
-        const state = codeState[partKey] ?? { expanded: false, wrap: true }
+        // Wrap only when a line would be cut off; the Wrap button overrides either way.
+        const state = codeState[partKey] ?? { expanded: false, wrap: longestLine(part.text) > codeColumns }
         const update = (patch: Partial<typeof state>) => setCodeState(value => ({ ...value, [partKey]: { ...state, ...patch } }))
         result.push({ key: partKey, turn, node: <Row><CodeHeader part={part} {...state} onWrap={() => update({ wrap: !state.wrap })} onExpand={chunks.length > 1 ? () => update({ expanded: !state.expanded }) : undefined} /></Row> })
         for (const [chunkIndex, chunk] of (state.expanded ? chunks : chunks.slice(0, 1)).entries()) {
@@ -90,7 +93,7 @@ export function Transcript() {
     }
     result.push({ key: `${key}:footer`, turn, node: <Row><TurnFooter group={turn} threadId={threadId!} isLast={i === turns.length - 1} /></Row> })
     return result
-  }), [turns, hasEarlier, threadId, threadRunning, codeState])
+  }), [turns, hasEarlier, threadId, threadRunning, codeState, codeColumns])
   // A top spacer is present even without earlier history.
   const lead = 1
   const count = lead + rows.length + 1

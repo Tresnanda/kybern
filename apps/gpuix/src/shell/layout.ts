@@ -58,9 +58,22 @@ export function useSidebarDragging(): boolean {
 /** Called by the window poller whenever the window's width changes. */
 export function setWindowWidth(width: number) {
   if (width === windowWidth) return
-  const before = effectiveSidebarWidth()
   windowWidth = width
-  if (effectiveSidebarWidth() !== before) emit()
+  // Subscribers select their own value, so only those whose value changed re-render.
+  emit()
+}
+
+/** The window's width from the shell's poller; 0 before the first reading. */
+export const getWindowWidth = () => windowWidth
+
+export function useWindowWidth(): number {
+  return useSyncExternalStore(
+    (l) => {
+      listeners.add(l)
+      return () => listeners.delete(l)
+    },
+    getWindowWidth,
+  )
 }
 
 /** Follow the pointer; the width is saved when the drag ends. */

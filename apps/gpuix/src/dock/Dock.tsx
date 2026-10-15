@@ -1,6 +1,7 @@
 // Native right dock. Only the chosen pane is mounted; the shell keeps it through
 // the 220 ms exit, just like App's thread panel. Each painted edge owns its radii.
-import { motion, useGpuix, useWindowSize, type PublicInstance } from '@gpuix/react'
+import { motion, useGpuix, type PublicInstance } from '@gpuix/react'
+import { useSidebarWidth, useWindowWidth } from '../shell/layout.ts'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
@@ -49,8 +50,6 @@ export function Dock({ sidebarOpen }: { sidebarOpen: boolean }) {
     const timer = setTimeout(() => setMounted(false), 260)
     return () => clearTimeout(timer)
   }, [open, mounted, still, threadId])
-  // 0.10 exposes window geometry only through a sampled native getter. Read it
-  // only while the dock is mounted; there are no geometry polls while closed.
   if (!mounted && !open) return null
   return <DockShell key={threadId ?? 'home'} threadId={threadId} open={open} mounted={mounted} setMounted={setMounted} sidebarOpen={sidebarOpen} still={still} background={t.surface} />
 }
@@ -59,9 +58,11 @@ function DockShell({ threadId, open, mounted, setMounted, sidebarOpen, still, ba
   threadId: string | null; open: boolean; mounted: boolean; setMounted: (value: boolean) => void; sidebarOpen: boolean; still: boolean; background: string
 }) {
   const t = useTheme()
-  const size = useWindowSize({ intervalMs: 250 })
+  // The shell's window poller supplies the width; the dock adds no poll of its own.
+  const windowWidth = useWindowWidth()
+  const sidebarWidth = useSidebarWidth()
   const dock = useDock(threadId)
-  const geometry = dockGeometry(size.width, sidebarOpen, dock.width)
+  const geometry = dockGeometry(windowWidth, sidebarOpen ? sidebarWidth : 0, dock.width)
   const thread = useApp((s) => s.open.thread?.id === threadId ? s.open.thread : s.threads.find((th) => th.id === threadId))
   return <motion.div {...{ testId: 'right-dock' }} initial={still ? false : { width: 0 }} animate={{ width: open ? geometry.width : 0 }} transition={still ? { duration: 0 } : SLIDE}
     onMotionComplete={() => setMounted(open)}

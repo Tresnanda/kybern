@@ -1,0 +1,42 @@
+// How many monospace characters fit across a transcript code block right now.
+// The desktop scrolls long code lines sideways; native <code> can neither wrap
+// nor scroll, so a block wraps (as plain text) only when its longest line would
+// otherwise be cut off, and keeps native highlighting whenever its lines fit.
+import { useRef } from 'react'
+import { dockGeometry, useDock, useDockDrag } from '../dock/store.ts'
+import { usePanelOpen } from '../nav/TitleBar.tsx'
+import { useSidebarDragging, useSidebarWidth, useWindowWidth } from '../shell/layout.ts'
+import { CODE } from './kit.tsx'
+
+/** The 52px rail and the 8px frame inset (`App.tsx`). */
+const CHROME = 52 + 8
+/** Menlo's advance width at the code size. */
+const CHAR = CODE.size * 0.602
+/** `CodeChunk`'s 12px side padding. */
+const PADDING = 24
+
+/** Columns available to a code block in the chat column; Infinity before the window is measured. */
+export function useCodeColumns(threadId: string | null, gutter: number, column: number): number {
+  const windowWidth = useWindowWidth()
+  const sidebarWidth = useSidebarWidth()
+  const panelOpen = usePanelOpen()
+  const dock = useDock(threadId)
+  const resizing = useSidebarDragging() || !!useDockDrag()
+  const last = useRef(Infinity)
+  // Hold the value while a panel is dragged, so a drag never rebuilds the transcript's rows.
+  if (resizing || !windowWidth) return last.current
+  const panel = panelOpen ? sidebarWidth : 0
+  const geometry = dockGeometry(windowWidth, panel, dock.width)
+  const dockWidth = dock.open && !geometry.overlay ? geometry.width : 0
+  const content = windowWidth - CHROME - panel - dockWidth
+  const width = Math.min(column, content - 2 * gutter) - PADDING
+  last.current = Math.max(20, Math.floor(width / CHAR))
+  return last.current
+}
+
+/** The longest line, in characters (tabs count as two, as the code font renders them). */
+export function longestLine(text: string): number {
+  let longest = 0
+  for (const line of text.split('\n')) longest = Math.max(longest, line.replace(/\t/g, '  ').length)
+  return longest
+}

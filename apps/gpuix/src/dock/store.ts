@@ -39,8 +39,9 @@ export function closeTab(id: string | null, tab: DockTab) {
 }
 
 export const DOCK_MIN = 416 // desktop App.tsx: RIGHT_DOCK_MIN_WIDTH
-export function dockGeometry(windowWidth: number, sidebarOpen: boolean, preferred: number) {
-  const available = Math.max(0, windowWidth - 52 - 8 - (sidebarOpen ? 256 : 0))
+/** `sidebarWidth` is the thread panel's current width, 0 while it is closed. */
+export function dockGeometry(windowWidth: number, sidebarWidth: number, preferred: number) {
+  const available = Math.max(0, windowWidth - 52 - 8 - sidebarWidth)
   const overlay = available < DOCK_MIN + 320
   const max = Math.max(0, overlay ? available : available - 320)
   return { overlay, max, width: Math.min(max, Math.max(DOCK_MIN, preferred)) }
