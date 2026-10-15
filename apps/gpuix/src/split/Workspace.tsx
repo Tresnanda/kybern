@@ -4,7 +4,7 @@ import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { ThreadHeader } from '../nav/TitleBar.tsx'
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
-import { motion, AnimatePresence, useGpuixRequired, type PublicInstance, type EventPayload } from '@gpuix/react'
+import { motion, useGpuixRequired, type PublicInstance, type EventPayload } from '@gpuix/react'
 import { dropZoneAt, splitForZone, type DropZone } from './geometry.ts'
 import { clampSplitRatioForWidth, shouldStackHorizontalSplit } from '../../../desktop/src/state/splitView.ts'
 import { PaneProvider, focusPane, getPane, selectPaneThread, useApp } from '../state.ts'
@@ -12,6 +12,9 @@ import { observeElementBounds, type LayoutRect } from '../native/layout.ts'
 import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { Button, Para, alpha } from '../transcript/kit.tsx'
 import { addWindowKeyHandler } from '../nav/keys.ts'
+import { usePacing } from '../drag/pacing.ts'
+import { DragGhost, type Settle } from '../drag/Ghost.tsx'
+import { createVelocityTracker } from '../drag/velocity.ts'
 import { watchPointerRelease } from './release.ts'
 import { cls, getObjc, nsApp, sel } from '../native/objc.ts'
 import { onEnvironmentChange } from '../shell/environment.ts'
@@ -23,12 +26,13 @@ const ROW_LEFT = 58
 const ROW_WIDTH = 244
 const bounds = new Map<string, LayoutRect>()
 type Source = { title: string; kind: string; bounds: () => { x: number; y: number; width: number; height: number } | null }
-type Ghost = { title: string; kind: string; offX: number; offY: number; width: number; height: number }
-type Drag = { kind: 'resize'; id: string; horizontal: boolean; rect: LayoutRect } | { kind: 'thread'; id: string; x: number; y: number; ghost?: Ghost; target?: { id: string; zone: DropZone } }
+type Ghost = { title: string; kind: string; offX: number; offY: number; width: number; height: number; homeY: number }
+type Drag = { kind: 'resize'; id: string; horizontal: boolean; rect: LayoutRect } | { kind: 'thread'; id: string; x: number; y: number; ghost?: Ghost; target?: { id: string; zone: DropZone }; settle?: Settle }
 let drag: Drag | null = null
 let pending: { id: string; x: number; y: number; ghost?: Ghost } | null = null
 let stopSelection: (() => void) | undefined
 let suppressedThread: string | null = null
+const velocity = createVelocityTracker()
 let stopReleaseWatch: (() => void) | undefined
 // Hover-leave is emitted during held-button gestures too. Physical AppKit
 // state completes cancellation even when no element receives the outside up.
@@ -39,7 +43,7 @@ function watchRelease() {
   stopReleaseWatch = watchPointerRelease(() => ({
     pressed: (Number(o.msgU64(cls(o, 'NSEvent'), sel(o, 'pressedMouseButtons'))) & 1) !== 0,
     active: !!app && Number(o.msgU64(app, sel(o, 'isActive'))) !== 0,
-  }), cancel)
+  }), () => (drag?.kind === 'thread' ? settleHome() : cancel()))
 }
 const listeners = new Set<() => void>()
 function publish(next: Drag | null) { drag = next; for (const listener of listeners) listener() }
@@ -49,7 +53,7 @@ export function beginThreadDrag(id: string, e: EventPayload, clearSelection?: ()
   if (e.button === 0 && e.x != null && e.y != null) {
     // The desktop drags a clone of the pressed row, held where it was grabbed.
     const b = source?.bounds()
-    const ghost = source && b ? { title: source.title, kind: source.kind, offX: e.x - ROW_LEFT, offY: e.y - b.y, width: ROW_WIDTH, height: b.height } : undefined
+    const ghost = source && b ? { title: source.title, kind: source.kind, offX: e.x - ROW_LEFT, offY: e.y - b.y, width: ROW_WIDTH, height: b.height, homeY: b.y } : undefined
     suppressedThread = null; pending = { id, x: e.x, y: e.y, ghost }; stopSelection = clearSelection; watchRelease(); publish(null) }
 }
 export function trackThreadDrag(e: EventPayload) {
@@ -58,13 +62,23 @@ export function trackThreadDrag(e: EventPayload) {
   if (e.pressedButton !== 0) { cancel(); return }
   if (Math.hypot((e.x ?? 0) - pending.x, (e.y ?? 0) - pending.y) < 6) return
   stopSelection?.()
-  const start = pending; pending = null; publish({ kind: 'thread', ...start }); moveSplitDrag(e)
+  const start = pending; pending = null; velocity.reset(e.x ?? start.x, e.y ?? start.y); publish({ kind: 'thread', ...start }); moveSplitDrag(e)
 }
 export function consumeThreadDrag(id: string) {
   pending = null
   // Native click and mouse-up are separately queued. Suppress the source click
   // on either side of release; the next row press starts a fresh gesture.
   return (drag?.kind === 'thread' && drag.id === id) || suppressedThread === id
+}
+/** Escape, a release off target or a lost button: the held row springs back to where it was picked up. Reduce Motion drops it at once. */
+function settleHome(carry = 0) {
+  const current = drag
+  if (current?.kind !== 'thread' || !current.ghost || current.settle || REDUCED_MOTION) return cancel()
+  suppressedThread = current.id
+  stopReleaseWatch?.(); stopReleaseWatch = undefined
+  pending = null; stopSelection?.(); stopSelection = undefined
+  const v = velocity.velocity()
+  publish({ ...current, target: undefined, settle: { to: { x: ROW_LEFT, y: current.ghost.homeY }, vx: v.x * carry, vy: v.y * carry, home: true } })
 }
 function cancel() {
   if (drag?.kind === 'thread') suppressedThread = drag.id
@@ -172,8 +186,8 @@ function PaneHeader({ id }: { id: string }) {
 }
 export function moveSplitDrag(e: EventPayload) {
   const current = drag
-  if (!current) return
-    if (e.eventType === 'mouseMove' && e.pressedButton !== 0) return cancel()
+  if (!current || (current.kind === 'thread' && current.settle)) return
+    if (e.eventType === 'mouseMove' && e.pressedButton !== 0) return current.kind === 'thread' ? settleHome() : cancel()
     if (e.x == null || e.y == null) return
     const x = e.x ?? 0, y = e.y ?? 0
     if (current.kind === 'resize') {
@@ -185,6 +199,7 @@ export function moveSplitDrag(e: EventPayload) {
         const zone = dropZoneAt({ left: b.x, top: b.y, width: b.width, height: b.height }, x, y, direction => !getPane(id)?.selectedId || canSplitPane(getSplitRoot(), id, direction))
         if (zone) { next = { id, zone }; break }
       }
+      velocity.push(x, y)
       publish({ ...current, x, y, target: next })
     }
   }
@@ -195,12 +210,14 @@ export function finishSplitDrag(e?: EventPayload) {
   if (e) moveSplitDrag(e)
   const current = drag
   if (!current) { cancel(); return }
+  if (current.kind === 'thread' && current.settle) return
   const target = current?.kind === 'thread' ? current.target : undefined
     if (current.kind === 'thread' && target) {
       if (!getPane(target.id)?.selectedId) { focusPane(target.id); void selectPaneThread(target.id, current.id) }
       else { const { direction, side } = splitForZone(target.zone); splitPane(target.id, direction, current.id, side) }
-    }
-    cancel()
+      cancel()
+    } else if (current.kind === 'thread') settleHome(0.4)
+    else cancel()
 
 }
 export function SplitDragLayer() {
@@ -209,23 +226,49 @@ export function SplitDragLayer() {
   const [originY, setOriginY] = useState(0)
   useEffect(() => anchor ? observeElementBounds(renderer, anchor.id, e => setOriginY(e.rect?.y ?? 0)) : undefined, [anchor, renderer])
   const current = useDrag(), t = useTheme()
-  useEffect(() => addWindowKeyHandler(e => { if (e.key === 'escape' && (drag || pending)) { cancel(); return true } }), [])
+  const pacing = usePacing('split')
+  useEffect(() => addWindowKeyHandler(e => { if (e.key === 'escape' && (drag || pending)) { drag?.kind === 'thread' ? settleHome() : cancel(); return true } }), [])
   const target = current?.kind === 'thread' ? current.target : undefined
   const rect = target ? bounds.get(target.id) : undefined
   const whole = target && !getPane(target.id)?.selectedId
   const zone = target?.zone
   return <> <div ref={setAnchor} style={{ position: 'absolute', left: 0, top: 0, width: 0, height: 0, pointerEvents: 'none' }} />{current && <div key={current.kind} testId="split-drag-layer" onMouseEnter={moveSplitDrag} onMouseMove={moveSplitDrag} onMouseUp={finishSplitDrag} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'auto', userSelect: 'none', cursor: current.kind === 'resize' ? current.horizontal ? 'col-resize' : 'row-resize' : 'grabbing' }}>
   </div>}
-    <AnimatePresence>{rect && zone && <motion.div key={`${target!.id}-${zone}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: REDUCED_MOTION ? 0 : .15, ease: [.22, 1, .36, 1] }} style={{ position: 'absolute', left: rect.x, top: rect.y - originY, width: rect.width, height: rect.height, pointerEvents: 'none', backgroundColor: alpha(t.surface, .22) }}>
-      {!whole && <div style={{ position: 'absolute', ...(zone === 'left' || zone === 'right' ? { left: rect.width / 2, top: 8, bottom: 8, width: 1 } : { top: rect.height / 2, left: 8, right: 8, height: 1 }), backgroundColor: alpha(t.v('--color-border-focus'), .58), pointerEvents: 'none' }} />}
-      <div backdrop={BACKDROP_ALLOWED ? BACKDROP.drop : undefined} testId="pane-drop-highlight" style={{ position: 'absolute', left: !whole && zone === 'right' ? rect.width / 2 + 4 : 8, top: !whole && zone === 'bottom' ? rect.height / 2 + 4 : 8, width: rect.width / (!whole && (zone === 'left' || zone === 'right') ? 2 : 1) - (!whole && (zone === 'left' || zone === 'right') ? 12 : 16), height: rect.height / (!whole && (zone === 'top' || zone === 'bottom') ? 2 : 1) - (!whole && (zone === 'top' || zone === 'bottom') ? 12 : 16), borderRadius: 10, borderWidth: 1, borderColor: alpha(t.v('--color-border-focus'), .64), backgroundColor: alpha(t.surface, .38), boxShadow: { offsetX: 0, offsetY: 12, blurRadius: 36, spreadRadius: 0, color: 'rgba(0,0,0,.12)' }, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-        {/* GPUIX chooses backgroundColor over background; paint the gradient separately. */}
-        <div style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', borderRadius: 10, pointerEvents: 'none', background: { type: 'linear-gradient', angle: 180, stops: [{ color: alpha(t.v('--color-background-accent'), .18), position: 0 }, { color: alpha(t.v('--color-background-accent'), .08), position: 1 }] } }} />
-        <div backdrop={BACKDROP_ALLOWED ? BACKDROP.dropLabel : undefined} style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, borderRadius: 8, borderWidth: 1, borderColor: alpha(t.v('--color-border-focus'), .42), backgroundColor: alpha(t.popover, .88), pointerEvents: 'none' }}><Icon source={whole || zone === 'left' || zone === 'right' ? N.splitRight : N.splitDown} size={16} color={t.text} /><Label color={t.text} size={12} weight={500}>{whole ? 'Open here' : ({ left: 'Split left', right: 'Split right', top: 'Split above', bottom: 'Split below' })[zone]}</Label></div>
-      </div>
-    </motion.div>}</AnimatePresence>
+    {rect && zone && <DropOverlay key={`${target!.id}-${whole ? 'whole' : 'zone'}`} rect={{ x: rect.x, y: rect.y - originY, width: rect.width, height: rect.height }} zone={zone} whole={!!whole} />}
   {current?.kind === 'thread' && <div style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
-    {current.kind === 'thread' && <div style={{ position: 'absolute', display: 'flex', alignItems: 'center', gap: 8, left: current.x - (current.ghost?.offX ?? -12), top: current.y - originY - (current.ghost?.offY ?? -12), width: current.ghost?.width ?? 240, height: current.ghost?.height ?? 29, paddingLeft: 10, paddingRight: 10, borderRadius: 10, backgroundColor: t.surface, borderWidth: 1, borderColor: t.border, boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.2)' }, pointerEvents: 'none' }}>{current.ghost ? <><ProviderMark kind={current.ghost.kind} size={14} /><Label color={t.text} size={14} truncate>{current.ghost.title}</Label></> : <Label color={t.text} size={12}>Move conversation</Label>}</div>}
+    {current.ghost
+      ? <DragGhost rect={{ x: ROW_LEFT, y: current.ghost.homeY - originY, width: current.ghost.width, height: current.ghost.height }} grab={{ x: current.ghost.offX, y: current.ghost.offY }} x={current.x} y={current.y - originY} settle={current.settle ?? null} onSettled={() => { if (drag?.kind === 'thread' && drag.settle) publish(null) }} pacing={pacing as never} radius={10}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 10, paddingRight: 10, height: '100%' }}><ProviderMark kind={current.ghost.kind} size={14} /><Label color={t.text} size={14} truncate>{current.ghost.title}</Label></div>
+        </DragGhost>
+      : <div ref={pacing} style={{ position: 'absolute', display: 'flex', alignItems: 'center', gap: 8, left: current.x + 12, top: current.y - originY + 12, width: 240, height: 29, paddingLeft: 10, paddingRight: 10, borderRadius: 10, backgroundColor: t.surface, borderWidth: 1, borderColor: t.border, boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.2)' }, pointerEvents: 'none' }}><Label color={t.text} size={12}>Move conversation</Label></div>}
   </div>}
   </>
+}
+type Box = { x: number; y: number; width: number; height: number }
+/** The drop target: the pane dims, the highlight fades and grows in, and it springs when the zone changes. Reduce Motion paints the final state with no tween (a zero-length tween leaves it invisible). */
+function DropOverlay({ rect, zone, whole }: { rect: Box; zone: DropZone; whole: boolean }) {
+  const t = useTheme()
+  const side = !whole && (zone === 'left' || zone === 'right'), stack = !whole && (zone === 'top' || zone === 'bottom')
+  const hl = {
+    left: !whole && zone === 'right' ? rect.width / 2 + 4 : 8,
+    top: !whole && zone === 'bottom' ? rect.height / 2 + 4 : 8,
+    width: rect.width / (side ? 2 : 1) - (side ? 12 : 16),
+    height: rect.height / (stack ? 2 : 1) - (stack ? 12 : 16),
+  }
+  const line = !whole && <div style={{ position: 'absolute', ...(side ? { left: rect.width / 2, top: 8, bottom: 8, width: 1 } : { top: rect.height / 2, left: 8, right: 8, height: 1 }), backgroundColor: alpha(t.v('--color-border-focus'), .58), pointerEvents: 'none' }} />
+  const body = <>
+    {/* GPUIX chooses backgroundColor over background; paint the gradient separately. */}
+    <div style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', borderRadius: 10, pointerEvents: 'none', background: { type: 'linear-gradient', angle: 180, stops: [{ color: alpha(t.v('--color-background-accent'), .18), position: 0 }, { color: alpha(t.v('--color-background-accent'), .08), position: 1 }] } }} />
+    <div backdrop={BACKDROP_ALLOWED ? BACKDROP.dropLabel : undefined} style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, borderRadius: 8, borderWidth: 1, borderColor: alpha(t.v('--color-border-focus'), .42), backgroundColor: alpha(t.popover, .88), pointerEvents: 'none' }}><Icon source={whole || side ? N.splitRight : N.splitDown} size={16} color={t.text} /><Label color={t.text} size={12} weight={500}>{whole ? 'Open here' : ({ left: 'Split left', right: 'Split right', top: 'Split above', bottom: 'Split below' })[zone]}</Label></div>
+  </>
+  const box = { position: 'absolute' as const, borderRadius: 10, borderWidth: 1, borderColor: alpha(t.v('--color-border-focus'), .64), backgroundColor: alpha(t.surface, .38), boxShadow: { offsetX: 0, offsetY: 12, blurRadius: 36, spreadRadius: 0, color: 'rgba(0,0,0,.12)' }, display: 'flex' as const, alignItems: 'center' as const, justifyContent: 'center' as const, pointerEvents: 'none' as const }
+  const frame = { position: 'absolute' as const, left: rect.x, top: rect.y, width: rect.width, height: rect.height, pointerEvents: 'none' as const, backgroundColor: alpha(t.surface, .22) }
+  if (REDUCED_MOTION) return <div style={frame}>{line}<div backdrop={BACKDROP_ALLOWED ? BACKDROP.drop : undefined} testId="pane-drop-highlight" style={{ ...box, ...hl }}>{body}</div></div>
+  const spring = { type: 'spring' as const, duration: 0.3, bounce: 0.05 }
+  return <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: .15, ease: [.22, 1, .36, 1] }} style={frame}>
+    {line}
+    <motion.div initial={{ opacity: 0, left: hl.left + 6, top: hl.top + 6, width: hl.width - 12, height: hl.height - 12 }} animate={{ opacity: 1, ...hl }} transition={spring} style={{ position: 'absolute', pointerEvents: 'none' }}>
+      <div backdrop={BACKDROP_ALLOWED ? BACKDROP.drop : undefined} testId="pane-drop-highlight" style={{ ...box, left: 0, top: 0, width: '100%', height: '100%' }}>{body}</div>
+    </motion.div>
+  </motion.div>
 }

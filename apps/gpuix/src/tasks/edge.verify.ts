@@ -56,6 +56,7 @@ try {
   await app.getByTestId('app-ready').press('escape')
   await app.mouse.up(edge)
   await app.getByTestId('task-list').waitFor()
+  for (let n = 0; n < 40 && await app.getByTestId('task-drag-layer').count(); n++) await Bun.sleep(50) // the ghost springs home first
   assert.equal(await app.getByTestId('task-drag-layer').count(), 0)
   console.log('PASS 48-row drag edge autoscroll and Escape release without opening a task')
 } finally {
