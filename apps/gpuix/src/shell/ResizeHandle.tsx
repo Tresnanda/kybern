@@ -9,7 +9,8 @@
 // content. The width lives outside App's render: a drag updates one number
 // (`layout.ts`) and the frame re-lays out; nothing in the transcript is rebuilt.
 import { useState } from 'react'
-import { useTheme } from '../ui.tsx'
+import { motion } from '@gpuix/react'
+import { REDUCED_MOTION, useTheme } from '../ui.tsx'
 import {
   dragSidebarTo,
   effectiveSidebarWidth,
@@ -33,7 +34,7 @@ export function SidebarResizeHandle() {
   const dragging = useSidebarDragging()
   const [hover, setHover] = useState(false)
   // `bg-sidebar-border` (`--sidebar-border` = `--color-border`).
-  const line = hover || dragging ? t.border : 'transparent'
+  const shown = hover || dragging
   return (
     <div
       testId="sidebar-resize"
@@ -46,7 +47,7 @@ export function SidebarResizeHandle() {
       }}
       style={{ position: 'absolute', left: width - 8, top: 0, bottom: 0, width: 16, cursor: 'col-resize' }}
     >
-      <div style={{ position: 'absolute', left: 7, top: 0, bottom: 0, width: 2, backgroundColor: line, pointerEvents: 'none' }} />
+      <motion.div initial={false} animate={{ opacity: shown ? 1 : 0 }} transition={{ duration: REDUCED_MOTION ? 0 : shown ? 0.12 : 0.2, ease: [0.23, 1, 0.32, 1] }} style={{ position: 'absolute', left: 7, top: 0, bottom: 0, width: 2, backgroundColor: t.border, pointerEvents: 'none' }} />
     </div>
   )
 }

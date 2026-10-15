@@ -53,6 +53,13 @@ export function closeTab(id: string | null, tab: DockTab) {
   setDock(id, { tabs, tab: current.tab === tab ? tabs[Math.min(current.tabs.indexOf(tab), tabs.length - 1)] ?? null : current.tab })
 }
 
+export function moveTab(id: string | null, tab: DockTab, to: number) {
+  const current = getDock(id)
+  const tabs = current.tabs.filter((t) => t !== tab)
+  tabs.splice(Math.max(0, Math.min(tabs.length, to)), 0, tab)
+  setDock(id, { tabs })
+}
+
 export const DOCK_MIN = 416 // desktop App.tsx: RIGHT_DOCK_MIN_WIDTH
 /** `sidebarWidth` is the thread panel's current width, 0 while it is closed. */
 export function dockGeometry(windowWidth: number, sidebarWidth: number, preferred: number) {

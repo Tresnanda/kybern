@@ -6,6 +6,7 @@
 // GPUI lays out every built element on every frame, so the project list is a
 // `<virtual-list>`: only rows near the viewport are built while a loader ticks.
 import { useCallback, useMemo, useState } from 'react'
+import type { PublicInstance } from '@gpuix/react'
 import { Icon } from './icons.tsx'
 import { loadProviders } from './nav/live.ts'
 import { N } from './nav/glyphs.ts'
@@ -14,6 +15,7 @@ import { ContextMenu, Kbd, Menu, MenuItem, MenuLabel, MenuSeparator, muted } fro
 import { getNav, setNav, useNav } from './nav/store.ts'
 import { EnvironmentSwitcher } from './sidebar/EnvironmentSwitcher.tsx'
 import { attentionItems, buildRows, type AttentionKind, type Row } from './sidebar/model.ts'
+import { BlockRow, inProjectBlock, setReorderContext } from './sidebar/reorder.tsx'
 import { DisclosureGroup, diffRows, liveGroups, markDisclosure, withGroups, type Group } from './sidebar/motion.tsx'
 import { Rise } from './motion/kit.tsx'
 import {
@@ -103,6 +105,9 @@ export function Sidebar() {
     if (change.risen.length || stillRisen.length !== risen.size) setRisen(new Set([...stillRisen, ...change.risen]))
   }
   const finish = useCallback((id: number) => setGroups((gs) => gs.filter((g) => g.id !== id)), [])
+  const [listNode, setListNode] = useState<PublicInstance | null>(null)
+  const [boxNode, setBoxNode] = useState<PublicInstance | null>(null)
+  setReorderContext(rows, listNode, boxNode)
   const ctx = { selectedId: onHome ? selectedId : null, activity, unread, composerDrafts, toggleChildren, toggleMore }
 
   return (
@@ -121,26 +126,28 @@ export function Sidebar() {
         />
         <PrimaryAction icon={N.clock} label="Resume session" onClick={() => openSessions()} testId="resume-session" />
       </div>
-      <virtual-list estimatedItemHeight={30} overdraw={OVERDRAW} style={{ flexGrow: 1, minHeight: 0 }} testId="thread-list">
+      <div ref={setBoxNode} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
+      <virtual-list ref={setListNode} estimatedItemHeight={30} overdraw={OVERDRAW} style={{ flexGrow: 1, minHeight: 0 }} testId="thread-list">
         {[
           ...withGroups(rows, groups).map((item) =>
             item.kind === 'group' ? (
               <div key={`group:${item.group.id}`}>
                 <DisclosureGroup mode={item.group.mode} height={item.group.height} onDone={() => finish(item.group.id)}>
-                  {item.rows.map((row) => renderRow(row, ctx))}
+                  {item.rows.map((row) => blockRow(row, ctx))}
                 </DisclosureGroup>
               </div>
             ) : risen.has(item.row.key) ? (
               <Rise key={item.row.key} kind="row">
-                {renderRow(item.row, ctx)}
+                {blockRow(item.row, ctx)}
               </Rise>
             ) : (
-              renderRow(item.row, ctx)
+              blockRow(item.row, ctx)
             ),
           ),
           <div key="__end" style={{ height: 6 }} />,
         ]}
       </virtual-list>
+      </div>
     </div>
   )
 }
@@ -151,6 +158,11 @@ export function openSessions() {
   const thread = state.selectedId ? state.threads.find((t) => t.id === state.selectedId) : undefined
   const projectId = state.selectedId ? (thread && !isFreeChatProject(thread.project_id) ? thread.project_id : null) : (state.draft.projectId ?? null)
   setNav({ sessions: { projectId } })
+}
+
+/** Project rows slide as a block while a project is dragged (`sidebar/reorder.tsx`). */
+function blockRow(row: Row, ctx: Parameters<typeof renderRow>[1]) {
+  return inProjectBlock(row) ? <BlockRow key={row.key} id={row.key}>{renderRow(row, ctx)}</BlockRow> : renderRow(row, ctx)
 }
 
 function renderRow(

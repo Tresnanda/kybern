@@ -51,7 +51,7 @@ function QuickNote() {
   const scope = projects.find((p) => p.id === draft.project)?.name ?? 'Global'
   const discard = () => { save(QUICK_KEY, undefined); setNotes({ quick: false }) }
   // `.quick-note` (notes.css): 576px card, 16/20/14 padding, scope row, 18.3px title, 16.15/25.85 body, 28px foot.
-  return <Dialog testId="quick-note" instant={getNav().keyboardNav} width={576} pinTop={169} radius={18} dim={t.variant === 'dark' ? 0.5 : 0.34} onClose={() => void finish()}>
+  return <Dialog testId="quick-note" instant={getNav().keyboardNav} width={576} pinTop={169} radius={18} dim={0.6} onClose={() => void finish()}>
     <div onKeyDown={(e) => { if (e.modifiers?.cmd && e.key === 'enter') void finish() }} style={{ display: 'flex', flexDirection: 'column', paddingTop: 16, paddingLeft: 20, paddingRight: 20, paddingBottom: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 19.5, marginBottom: 10 }}>
         <Label color={k.fg3} size={NOTES_META} lineHeight={19.5}>New note in</Label>

@@ -16,7 +16,7 @@ import { Menu, MenuItem, MenuSeparator } from '../nav/overlay.tsx'
 import { useApp } from '../state.ts'
 import { Button, Segmented, selectOwnsEscape } from '../settings/controls.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
-import { cancelTaskDrag, draggingTask } from './drag.tsx'
+import { cancelTaskDrag, draggingTask, escapeTaskDrag } from './drag.tsx'
 import { TaskList, TaskBoard } from './TaskList.tsx'
 import { TaskDetail } from './TaskDetail.tsx'
 import { TaskMenus } from './TaskMenus.tsx'
@@ -88,7 +88,7 @@ export function TasksPage() {
           key = event.key,
           cmd = event.modifiers?.cmd || event.modifiers?.ctrl
         if (draggingTask()) {
-          if (key === 'escape') cancelTaskDrag()
+          if (key === 'escape') escapeTaskDrag()
           return true
         }
         if (cmd && key === 'n') {

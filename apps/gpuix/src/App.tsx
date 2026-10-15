@@ -19,6 +19,8 @@ import { SettingsScreen } from './settings/SettingsScreen.tsx'
 import { UsagePage } from './usage/UsagePage.tsx'
 import { PullRequestsPage } from './pulls/PullRequestsPage.tsx'
 import { TasksDragLayer } from './tasks/drag.tsx'
+import { TabDragLayer } from './dock/reorder.tsx'
+import { ProjectDragLayer } from './sidebar/reorder.tsx'
 import { TasksPage } from './tasks/TasksPage.tsx'
 import { TasksSidebar } from './tasks/TasksSidebar.tsx'
 import { startPreview } from './shell/preview.ts'
@@ -205,6 +207,8 @@ function Workspace() {
       <SidebarDragLayer />
       <DockResizeCapture />
       <TasksDragLayer />
+      <ProjectDragLayer />
+<TabDragLayer />
       <SplitDragLayer />
     </div>
   )

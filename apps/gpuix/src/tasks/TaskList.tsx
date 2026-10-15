@@ -1,7 +1,8 @@
 import { memo, useState } from 'react'
 import { useGpuixRequired, useWindowSize } from '@gpuix/react'
 import { useSidebarWidth } from '../shell/layout.ts'
-import { beginTaskDrag, trackTaskDrag, endPendingDrag, regionRef, rowRef, useTaskLift, viewportRef } from './drag.tsx'
+import { beginTaskDrag, trackTaskDrag, endPendingDrag, regionRef, rowRef, taskShift, useTaskLift, viewportRef } from './drag.tsx'
+import { ShiftRow } from '../drag/shift.tsx'
 import { TaskWindow, type TaskWindowEntry } from './TaskWindow.tsx'
 import { isGroupCollapsed, isOpenStatus, latestRun, runOutcome, STATUS_LABEL, type TaskGroup } from '@/state/tasksModel'
 import { relativeTime } from '@/lib/format'
@@ -151,7 +152,10 @@ export const TaskRow = memo(function TaskRow({
   const [menuOpen, setMenuOpen] = useState(false)
   const run = latestRun(task)
   const detail = run && (task.status === 'running' || task.status === 'needs_review') ? run.activity || runOutcome(run, Date.now()) : ''
-  const background = selected ? ink(t, 0.095) : focused ? ink(t, 0.075) : 'transparent'
+  // tasks.css: selected+hover > selected > focused > hover, each a step brighter; selected+focused adds a 2px ring.
+  const strong = t.variant === 'dark'
+  const rowAlpha = selected && hover ? (strong ? 0.12 : 0.105) : selected ? (strong ? 0.095 : 0.08) : focused ? (strong ? 0.075 : 0.06) : hover ? (strong ? 0.035 : 0.03) : 0
+  const background = rowAlpha ? ink(t, rowAlpha) : 'transparent'
   if (card) {
     const dark = t.variant === 'dark'
     const base = dark ? over(ink(t, 0.03), t.surface) : t.surface
@@ -159,6 +163,7 @@ export const TaskRow = memo(function TaskRow({
     const fill = dark ? (raised ? over(ink(t, 0.055), t.surface) : base) : base
     const closed = !isOpenStatus(task.status)
     return (
+      <ShiftRow store={taskShift} id={task.id}>
       <div style={{ paddingBottom: 8 }}>
         <div
           ref={(node) => rowRef(task.id, node)}
@@ -175,7 +180,7 @@ export const TaskRow = memo(function TaskRow({
             if (e.modifiers?.cmd || e.modifiers?.ctrl || e.modifiers?.shift) pick(task.id, sequence, !!e.modifiers?.shift)
             else openTask(task.id)
           }}
-          style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: cardHeight(task, lines) - 8, paddingTop: 11, paddingBottom: 12, paddingLeft: 12, paddingRight: 12, borderRadius: 10, backgroundColor: fill, userSelect: 'none', opacity: lifted ? 0.35 : 1, boxShadow: dark ? { offsetX: 0, offsetY: raised ? 6 : 1, blurRadius: raised ? 18 : 2, spreadRadius: raised ? -6 : 0, color: raised ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.25)' } : { offsetX: 0, offsetY: raised ? 4 : 1, blurRadius: raised ? 14 : 2, spreadRadius: raised ? -4 : 0, color: raised ? 'rgba(0, 0, 0, 0.12)' : 'rgba(0, 0, 0, 0.05)' }, borderWidth: dark ? 0 : 0.5, borderColor: 'rgba(0, 0, 0, 0.09)', ...(focused ? { borderWidth: 1.5, borderColor: ink(t, 0.14) } : {}) }}
+          style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: cardHeight(task, lines) - 8, paddingTop: 11, paddingBottom: 12, paddingLeft: 12, paddingRight: 12, borderRadius: 10, backgroundColor: fill, userSelect: 'none', opacity: lifted ? 0 : 1, boxShadow: dark ? { offsetX: 0, offsetY: raised ? 6 : 1, blurRadius: raised ? 18 : 2, spreadRadius: raised ? -6 : 0, color: raised ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.25)' } : { offsetX: 0, offsetY: raised ? 4 : 1, blurRadius: raised ? 14 : 2, spreadRadius: raised ? -4 : 0, color: raised ? 'rgba(0, 0, 0, 0.12)' : 'rgba(0, 0, 0, 0.05)' }, borderWidth: dark ? 0 : 0.5, borderColor: 'rgba(0, 0, 0, 0.09)', ...(focused ? { borderWidth: 1.5, borderColor: ink(t, 0.14) } : {}) }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, height: 16, flexShrink: 0 }}>
             <ProjectDot projectId={task.scope === 'project' ? task.project_id ?? null : null} />
@@ -189,9 +194,11 @@ export const TaskRow = memo(function TaskRow({
           {!!detail && <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 10 }}><Label color={ink(t, 0.6)} size={12} lineHeight={16} truncate style={{ pointerEvents: 'none' }}>{detail}</Label></div>}
         </div>
       </div>
+      </ShiftRow>
     )
   }
   return (
+    <ShiftRow store={taskShift} id={task.id}>
     <div style={{ paddingLeft: card ? 2 : 0, paddingRight: card ? 2 : 0, paddingBottom: card ? 8 : 0 }}>
       <div
         ref={(node) => rowRef(task.id, node)}
@@ -215,11 +222,11 @@ export const TaskRow = memo(function TaskRow({
           borderRadius: card ? 8 : 0,
           backgroundColor: background,
           userSelect: 'none',
-          opacity: lifted ? 0.35 : 1,
+          opacity: lifted ? 0 : 1,
           gap: card ? 8 : 0,
-          hover: { backgroundColor: ink(t, 0.05) },
         }}
       >
+        {selected && focused && <div style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, borderWidth: 2, borderColor: ink(t, 0.14), borderRadius: card ? 8 : 0, pointerEvents: 'none' }} />}
         <div onClick={() => openTask(task.id)} style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
           <div style={{ width: 28, pointerEvents: 'none', userSelect: 'none' }}>
             <PriorityGlyph priority={task.priority} />
@@ -298,6 +305,7 @@ export const TaskRow = memo(function TaskRow({
         )}
       </div>
     </div>
+    </ShiftRow>
   )
 })
 

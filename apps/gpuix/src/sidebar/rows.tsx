@@ -25,6 +25,7 @@ import { DEFAULT_FILTER, getNav, setNav, useNav } from '../nav/store.ts'
 import { getClient, getState, toggleProject as toggleProjectState } from '../state.ts'
 import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
 import type { Theme } from '../theme.ts'
+import { beginProjectDrag, consumeProjectDrag, endProjectPending, trackProjectDrag } from './reorder.tsx'
 import { filterSummary, isFiltering, providerLabel, threadAgents } from './model.ts'
 import { FadeBack, Leave, markDisclosure, PadTween, Reveal, TitleSwap } from './motion.tsx'
 
@@ -370,6 +371,8 @@ export const ProjectHeader = memo(function ProjectHeader({
   const t = useTheme()
   const { hover, bind, keep } = useHover()
   const menu = useContextMenu()
+  const { renderer } = useGpuix()
+  const headerRef = useRef<PublicInstance | null>(null)
   const move = (offset: -1 | 1) => {
     const visible = getState()
       .projects.map((p) => p.id)
@@ -387,9 +390,15 @@ export const ProjectHeader = memo(function ProjectHeader({
       <div style={{ position: 'relative' }}>
         <div
           testId={`project-${project.id}`}
+          ref={headerRef}
           {...bind}
+          onMouseDown={(e) => beginProjectDrag(project.id, e, renderer, (headerRef.current && renderer?.getElementBounds?.(headerRef.current.id)) || null)}
+          onMouseMove={trackProjectDrag}
+          onMouseUp={endProjectPending}
+          onMouseLeave={(e) => { trackProjectDrag(e, true); endProjectPending(); bind.onMouseLeave() }}
           onAuxClick={menu.onAuxClick}
           onClick={() => {
+            if (consumeProjectDrag(project.id)) return
             if (active) toggleProject(project.id)
             else newThread(project.id)
           }}

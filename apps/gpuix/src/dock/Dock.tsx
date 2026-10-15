@@ -25,6 +25,7 @@ import { ArtifactsPane } from './Artifacts.tsx'
 import { NotesPane } from './Notes.tsx'
 import { TasksPane } from './Tasks.tsx'
 import { DockEmpty } from './parts.tsx'
+import { beginTabDrag, isDraggingTab, consumeTabDrag, endTabPending, setTabContext, TabSlot, trackTabDrag } from './reorder.tsx'
 import { chooseTab, closeTab, dockGeometry, finishDockDrag, moveDockDrag, setDock, startDockDrag, useDock, useDockDrag, type DockTab } from './store.ts'
 
 const SLIDE = { duration: 0.22, ease: EASE_OUT }
@@ -131,6 +132,7 @@ function TabStrip({ threadId, width, coordinator, activeTasks, stats }: { thread
   const { renderer } = useGpuix()
   const scroll = useRef<PublicInstance | null>(null)
   const tabRefs = useRef(new Map<DockTab, PublicInstance>())
+  const rowRef = useRef<PublicInstance | null>(null)
   const panels = PANELS.filter((panel) => panel.id !== 'project' || coordinator)
   const tabs = dock.tabs.flatMap((id) => { const panel = panels.find((p) => p.id === id); return panel ? [panel] : [] })
   const tab = dock.tab === 'project' && !coordinator ? tabs[0]?.id ?? null : dock.tab
@@ -138,6 +140,7 @@ function TabStrip({ threadId, width, coordinator, activeTasks, stats }: { thread
   const index = tabs.findIndex((p) => p.id === tab)
   const left = widths.slice(0, Math.max(0, index)).reduce((n, value) => n + value + 4, 0)
   const selectedWidth = widths[index] ?? 0
+  setTabContext({ threadId, ids: tabs.map((p) => p.id), widths, icons: tabs.map((p) => p.icon), labels: tabs.map((p) => p.label), scroll: scroll.current, row: rowRef.current })
   const select = (id: DockTab, instant = false) => { setDock(threadId, { instant }); chooseTab(threadId, id) }
   useEffect(() => {
     // One post-commit scroll so a newly added chip is brought into view.
@@ -146,11 +149,13 @@ function TabStrip({ threadId, width, coordinator, activeTasks, stats }: { thread
   }, [left, selectedWidth, width, renderer])
   return <div {...ISLAND} testId="dock-tabs" style={{ display: 'flex', width: '100%', height: 46, alignItems: 'center', gap: 4, paddingLeft: 6, paddingRight: 6, flexShrink: 0, backgroundColor: t.surface, borderTopRightRadius: 12 }}>
     <div ref={scroll} style={{ display: 'flex', alignItems: 'center', flexGrow: 1, minWidth: 0, height: 32, overflowX: 'scroll', overflowY: 'hidden' }}>
-      <div style={{ display: 'flex', alignItems: 'center', position: 'relative', gap: 4, height: 28, flexShrink: 0 }}>
+      <div ref={rowRef} style={{ display: 'flex', alignItems: 'center', position: 'relative', gap: 4, height: 28, flexShrink: 0 }}>
         {tab && <motion.div initial={false} animate={{ left, width: selectedWidth }} transition={REDUCED_MOTION || keyboard || dock.instant ? { duration: 0 } : SLIDE}
           style={{ position: 'absolute', top: 0, height: 28, borderRadius: 8, backgroundColor: t.buttonSecondary, pointerEvents: 'none' }} />}
-        {tabs.map((panel, i) => <div key={panel.id} style={{ display: 'flex', alignItems: 'center', height: 28, width: widths[i], flexShrink: 0, borderRadius: 8 }}>
-          <div ref={(node) => { if (node) tabRefs.current.set(panel.id, node); else tabRefs.current.delete(panel.id) }} testId={`dock-tab-${panel.id}`} role="tab" aria-selected={panel.id === tab} tabIndex={panel.id === tab ? 0 : -1} onClick={() => select(panel.id)}
+        {tabs.map((panel, i) => <TabSlot key={panel.id} id={panel.id}><div style={{ display: 'flex', alignItems: 'center', height: 28, width: widths[i], flexShrink: 0, borderRadius: 8, hover: { backgroundColor: t.buttonSecondaryHover } }}>
+          <div ref={(node) => { if (node) tabRefs.current.set(panel.id, node); else tabRefs.current.delete(panel.id) }} testId={`dock-tab-${panel.id}`} role="tab" aria-selected={panel.id === tab} tabIndex={panel.id === tab ? 0 : -1} onClick={() => { if (!consumeTabDrag(panel.id)) select(panel.id) }}
+            onMouseDown={(e) => { const node = tabRefs.current.get(panel.id); beginTabDrag(panel.id, e, renderer, node && renderer?.getElementBounds?.(node.id) ? { ...renderer.getElementBounds(node.id)!, width: widths[i]!, height: 28 } : null) }}
+            onMouseMove={trackTabDrag} onMouseUp={endTabPending} onMouseLeave={(e) => { if (!isDraggingTab()) trackTabDrag(e, true); endTabPending() }}
             onKeyDown={(event) => {
               if (event.key === 'left' || event.key === 'right') {
                 const next = tabs[(i + (event.key === 'left' ? tabs.length - 1 : 1)) % tabs.length]!.id
@@ -160,14 +165,14 @@ function TabStrip({ threadId, width, coordinator, activeTasks, stats }: { thread
               }
               if (event.key === 'enter' || event.key === 'space') select(panel.id, true)
             }}
-            style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, minWidth: 0, height: 28, paddingLeft: 6, cursor: 'pointer', borderRadius: 8, hover: { backgroundColor: t.buttonSecondaryHover } }}>
+            style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, minWidth: 0, height: 28, paddingLeft: 6, cursor: 'pointer', borderRadius: 8 }}>
             <Icon source={panel.icon} size={14} color={t.textSecondary} />
             <Label color={panel.id === tab ? t.text : t.textSecondary} size={13}>{panel.label}</Label>
             {panel.id === 'activity' && activeTasks > 0 && <Label color={t.textSecondary} size={10}>{String(activeTasks)}</Label>}
             {panel.id === 'changes' && stats[0] + stats[1] > 0 && <div style={{ display: 'flex', gap: 3 }}><Label color={t.green} size={10}>{`+${stats[0]}`}</Label><Label color={t.red} size={10}>{`−${stats[1]}`}</Label></div>}
           </div>
           <IconButton icon={N.x} glyph={12} size={24} label={`Close ${panel.label} panel`} onClick={() => closeTab(threadId, panel.id)} testId={`dock-tab-close-${panel.id}`} />
-        </div>)}
+        </div></TabSlot>)}
       </div>
     </div>
     <Menu align="end" minWidth={176} testId="dock-add" trigger={() => <IconButton icon={N.plus} size={28} label="Add panel" />}>
