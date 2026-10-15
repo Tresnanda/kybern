@@ -9,6 +9,7 @@ import { responseImages } from '../../../desktop/src/lib/responseImages.ts'
 import { isAgentLaunchBlock, isDelegationLaunchBlock, isOrchestrationBlock } from '../../../desktop/src/lib/workChunks.ts'
 import { buildWorkHierarchy, shouldRevealLiveText, type Block, type TurnGroup } from '../../../../packages/kybern-client/src/transcript.ts'
 import type { Diff, RuntimeTask, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
+import { useApp } from '../state.ts'
 import { Icon } from '../icons.tsx'
 import { MatrixLoader, useLoaderStep } from '../MatrixLoader.tsx'
 import { clockDuration, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
@@ -72,6 +73,7 @@ function WorkingHeader({ since }: { since: string }) {
 
 export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning }: { group: TurnGroup; threadId: ThreadId; isLast: boolean; threadRunning: boolean }) {
   const t = useTheme()
+  const subagent = useApp(s => !!s.open.thread?.subagent)
   // A long live turn can start before the loaded page, so its user message (and
   // with it `running`) is missing; the thread's status still says it is live.
   const running = group.running || (threadRunning && isLast && !group.end)
@@ -98,20 +100,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning 
     }
     return { agentBlocks, disclosureBlocks }
   }, [hierarchy, tasksByToolCall])
-  const imageTools = useMemo(() => group.work.filter((b): b is ToolBlock => b.kind === 'tool' && b.origin.kind === 'root' && isImageGenerationTool(b.call)), [group.work])
-  const images = useMemo(() => {
-    if (running) return []
-    const all = [...group.images.map((image) => ({ source: image.source, label: 'Agent image' })), ...imageTools.flatMap((b) => responseImages(b.output))]
-    return [...new Map(all.map((image) => [image.source, image])).values()]
-  }, [group.images, imageTools, running])
-  // Generated images are answer content even while the fold is closed
-  // (`GeneratedImageOutputLease`): fetch their omitted results once settled.
-  useEffect(() => {
-    if (running) return
-    for (const block of imageTools) if (block.outputOmitted) void hydrateToolOutput(threadId, block)
-  }, [imageTools, running, threadId])
   const [expanded, setExpanded] = useRowState(`work:${group.turnId}`, false)
-  const diff = useTurnDiff(threadId, group.turnId, !running && !!group.end)
   const hasLiveWork = group.work.some(
     (b) =>
       (b.kind === 'tool' && !b.complete) ||
@@ -119,13 +108,12 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning 
       (b.kind === 'assistant' && !b.complete && (b.id === group.liveThinkingId || shouldRevealLiveText(b.text, b.complete))) ||
       (b.kind === 'approval' && !b.decision),
   )
-  const answerText = group.answer?.text ?? ''
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
       {group.user && (
         <div style={{ paddingBottom: running ? 20 : 16 }}>
-          <UserBubble parts={group.user.message.parts} at={group.user.at} />
+          <UserBubble parts={group.user.message.parts} at={group.user.at} clampLines={subagent ? 6 : undefined} />
         </div>
       )}
 
@@ -169,8 +157,23 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning 
         </div>
       )}
 
-      {!running && (
-        <div testId="answer" style={{ display: 'flex', flexDirection: 'column', paddingTop: 2, paddingBottom: 10 }}>
+    </div>
+  )
+})
+
+export const AnswerImages = memo(function AnswerImages({ group, threadId }: { group: TurnGroup; threadId: ThreadId }) {
+  const t = useTheme()
+  const imageTools = useMemo(() => group.work.filter((b): b is ToolBlock => b.kind === 'tool' && b.origin.kind === 'root' && isImageGenerationTool(b.call)), [group.work])
+  const images = useMemo(() => {
+    const all = [...group.images.map((image) => ({ source: image.source, label: 'Agent image' })), ...imageTools.flatMap((b) => responseImages(b.output))]
+    return [...new Map(all.map((image) => [image.source, image])).values()]
+  }, [group.images, imageTools])
+  // Generated images are answer content even while the fold is closed
+  // (`GeneratedImageOutputLease`): fetch their omitted results once settled.
+  useEffect(() => {
+    for (const block of imageTools) if (block.outputOmitted) void hydrateToolOutput(threadId, block)
+  }, [imageTools, threadId])
+  return <div style={{ display: 'flex', flexDirection: 'column' }}>
           {images.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               {images.map((image) => (
@@ -178,7 +181,14 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning 
               ))}
             </div>
           )}
-          {group.answer && <markdown source={answerText} theme={cachedMarkdownTheme(t)} style={{ color: t.text, userSelect: 'text' }} />}
+  </div>
+})
+
+export const TurnFooter = memo(function TurnFooter({ group, threadId, isLast }: { group: TurnGroup; threadId: ThreadId; isLast: boolean }) {
+  const t = useTheme()
+  const answerText = group.answer?.text ?? ''
+  const diff = useTurnDiff(threadId, group.turnId, !!group.end)
+  return <div style={{ display: 'flex', flexDirection: 'column', paddingBottom: 10 }}>
           {group.end?.error && (
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 8 }}>
               <Icon source={T.alert} size={14} color={t.red} style={{ marginTop: 4 }} />
@@ -204,11 +214,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning 
                 </Label>
               )}
             </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
+          )}  </div>
 })
 
 const MAX_VISIBLE_CHANGED_FILES = 5

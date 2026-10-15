@@ -7,7 +7,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import { prependThreadHistory, type Block } from '../../../../packages/kybern-client/src/transcript.ts'
 import { EARLIER_HISTORY_ENTRIES } from '../../../../packages/kybern-client/src/historyPaging.ts'
 import type { ApprovalDecision, Diff, Thread, ThreadEvent, ThreadId, TurnId } from '../../../../packages/kybern-client/src/types.ts'
-import { getClient, getState, onOpenEvent, selectThread, set, subscribe } from '../state.ts'
+import { getClient, getState, onOpenEvent, selectThread, set, subscribe, useApp } from '../state.ts'
 
 export type ToolBlock = Extract<Block, { kind: 'tool' }>
 
@@ -149,10 +149,11 @@ const diffLoads = new Set<string>()
 export function useTurnDiff(threadId: ThreadId, turnId: TurnId, enabled: boolean): Diff | undefined {
   useSyncExternalStore(diffCell.subscribe, diffCell.get)
   const key = `${threadId}:${turnId}`
-  if (enabled && !diffs.has(key) && !diffLoads.has(key)) {
+  const client = getClient()
+  if (enabled && client && !diffs.has(key) && !diffLoads.has(key)) {
     diffLoads.add(key)
     queueMicrotask(() => {
-      rpc()
+      client
         .call('threads.diff', { thread_id: threadId, turn_id: turnId, include_patch: false })
         .then((d) => diffs.set(key, d))
         .catch(() => diffs.set(key, null)) // no git, no diff
@@ -260,7 +261,8 @@ export const useRequestPanelHeight = () => useSyncExternalStore(requestPanelHeig
 export const PACE_MS = 66
 
 export function usePacedBlocks(): Block[] {
-  const [blocks, setBlocks] = useState(() => getState().open.blocks)
+  const threadId = useApp(s => s.selectedId)
+  const [frame, setFrame] = useState(() => ({ threadId: getState().selectedId, blocks: getState().open.blocks }))
   useEffect(() => {
     let shown = getState().open.blocks
     let last = 0
@@ -269,7 +271,7 @@ export function usePacedBlocks(): Block[] {
       timer = undefined
       last = Date.now()
       shown = getState().open.blocks
-      setBlocks(shown)
+      setFrame({ threadId: getState().selectedId, blocks: shown })
     }
     const stop = subscribe(() => {
       if (getState().open.blocks === shown || timer) return
@@ -283,7 +285,8 @@ export function usePacedBlocks(): Block[] {
       clearTimeout(timer)
     }
   }, [])
-  return blocks
+  // Never paint a previous thread’s paced frame under the next thread’s id.
+  return frame.threadId === threadId ? frame.blocks : getState().open.blocks
 }
 
 // ---- child threads (subagents and delegations a thread launched) ----

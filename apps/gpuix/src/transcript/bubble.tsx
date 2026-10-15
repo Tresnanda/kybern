@@ -3,7 +3,8 @@
 // footer with the time, Copy and Save to note. Messages from other threads and
 // delegated results are rows of their own (`views/delegations/ThreadMessageRows.tsx`),
 // shown here in compact form.
-import { memo, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { partToken } from '../../../../packages/kybern-client/src/composerTokens.ts'
 import { agentResultItems, delegationStatusWord, messageSenderName, purposeLabel, resultPreview, threadMessagePart } from '../../../../packages/kybern-client/src/delegations.ts'
 import type { ContentPart } from '../../../../packages/kybern-client/src/types.ts'
@@ -16,7 +17,7 @@ import { ResponseImage } from './images.tsx'
 import { cachedMarkdownTheme, fg, META, muted, TEXT } from './kit.tsx'
 import { FONT_UI } from '../theme.ts'
 import { Rise } from '../motion/kit.tsx'
-import { copyText } from './store.ts'
+import { copyText, useRowState } from './store.ts'
 import { SwapOnChange, useFresh } from './motion.tsx'
 
 /** `MessageActionButton` + `CopyAction`: a 2em square, copy glyph swapping to a
@@ -65,13 +66,27 @@ function messageText(parts: ContentPart[]): string {
   return text
 }
 
-export const UserBubble = memo(function UserBubble({ parts, at, pending = false }: { parts: ContentPart[]; at: string; pending?: boolean }) {
+export const UserBubble = memo(function UserBubble({ parts, at, pending = false, clampLines }: { parts: ContentPart[]; at: string; pending?: boolean; clampLines?: number }) {
   const t = useTheme()
   const [hover, setHover] = useState(false)
+  const renderer = useGpuixRequired()
+  const body = useRef<PublicInstance | null>(null)
+  const [expanded, setExpanded] = useRowState(`prompt:${at}`, false)
+  const [overflowing, setOverflowing] = useState(false)
   // Decided once on mount: only a bubble sent just now plays the send animation.
   const fresh = useFresh(at)
   const text = useMemo(() => messageText(parts), [parts])
   const plainText = useMemo(() => parts.map((p) => (p.type === 'text' ? p.text : '')).join(''), [parts])
+  useEffect(() => {
+    if (!clampLines || expanded) return
+    // One post-layout read, never per-frame measurement or polling.
+    const timer = setTimeout(() => {
+      if (!body.current) return
+      const bounds = renderer.getElementBounds?.(body.current.id)
+      if (bounds) setOverflowing(bounds.height >= TEXT.lineHeight * clampLines - 1)
+    }, 30)
+    return () => clearTimeout(timer)
+  }, [text, clampLines, expanded, renderer])
   const inbound = threadMessagePart(parts)
   const results = agentResultItems(parts)
   const systemRow = parts.find((p): p is Extract<ContentPart, { type: 'system_row' }> => p.type === 'system_row')
@@ -171,13 +186,13 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false 
               >
                 {/* Plain text, not <markdown>: native markdown has no intrinsic width, and the
                     bubble must hug short messages (`w-max max-w-full`). */}
-                {text.split('\n').map((line, i) => (
-                  <text key={i} style={{ color: t.text, fontSize: TEXT.size, lineHeight: TEXT.lineHeight, fontFamily: FONT_UI, userSelect: 'text' }}>
-                    {line || ' '}
-                  </text>
-                ))}
+                <text ref={body} style={{ color: t.text, fontSize: TEXT.size, lineHeight: TEXT.lineHeight, fontFamily: FONT_UI, userSelect: 'text', ...(clampLines && !expanded ? { lineClamp: clampLines } : {}) }}>{text}</text>
               </div>
             )}
+            {clampLines && (overflowing || expanded) && <div testId="subagent-prompt-toggle" role="button" onClick={() => setExpanded(!expanded)} style={{ paddingTop: 4, paddingBottom: 4, cursor: 'pointer' }}>
+              <Label color={muted(t)} size={12}>{expanded ? 'Show less' : 'Show full prompt'}</Label>
+            </div>}
+
             {/* Hover footer below the bubble (`absolute top-full right-0 pt-1`). */}
             <div
               style={{
