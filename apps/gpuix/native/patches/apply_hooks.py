@@ -511,20 +511,8 @@ edit(r, "    pub fn zoom_window(&self) -> Result<()> {", """    pub fn set_input
     #[napi]
     pub fn zoom_window(&self) -> Result<()> {""")
 
-# Text shaping retains backgrounds, but the upstream input paints glyphs only.
-# Paint run backgrounds first, then the selection wash, then glyphs/caret.
-edit(i, "            for quad in prepaint.selection.drain(..) {", """            if self.input.read(cx).decorations.iter().any(|d| d.style.background_color.is_some()) {
-            let (background_lines, background_height, background_top, background_left) = self.input.update(cx, |input, _| (
-                std::mem::take(&mut input.last_lines), input.line_height, input.scroll_top, input.scroll_left
-            ));
-            let mut background_y = bounds.top() - px(background_top);
-            for line in &background_lines {
-                line.paint_background(point(bounds.left() - px(background_left), background_y), background_height,
-                    gpui::TextAlign::Left, Some(bounds), window, cx).ok();
-                background_y += line.size(background_height).height;
-            }
-            self.input.update(cx, |input, _| input.last_lines = background_lines);
-            }
+# Paint input-local backgrounds before selection, preserving all editor geometry.
+edit(i, "            for quad in prepaint.selection.drain(..) {", """            self.input.read(cx).paint_decoration_backgrounds(bounds, window);
             for quad in prepaint.selection.drain(..) {""")
 
 edit(i, "                    content: index.to_string(),", "                    content: index.to_string(),\n                    decorations: Vec::new(),")

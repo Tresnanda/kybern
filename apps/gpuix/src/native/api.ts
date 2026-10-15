@@ -50,8 +50,10 @@ export interface InputDecoration {
     fontWeight?: number
     fontStyle?: 'normal' | 'italic'
     underline?: boolean
-    /** Only zero is currently supported. */
-    borderRadius?: 0
+    /** Visual radius in pixels; wrapped spans round only their external ends. */
+    borderRadius?: number
+    /** Visual-only outset, clamped to half the adjacent whitespace and input edges. */
+    backgroundOutsetX?: number
     /** Only zero is currently supported. */
     paddingX?: 0
   }
