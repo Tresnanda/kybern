@@ -8,6 +8,8 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { SettingsScreen } from './settings/SettingsScreen.tsx'
 import { UsagePage } from './usage/UsagePage.tsx'
 import { PullRequestsPage } from './pulls/PullRequestsPage.tsx'
+import { NativeSubagentComposer } from './subagents/Composer.tsx'
+import { SubagentBar, SubagentPageMotion } from './subagents/Page.tsx'
 import { Composer } from './Composer.tsx'
 import { Dock, DockResizeCapture } from './dock/Dock.tsx'
 import { Draft } from './Draft.tsx'
@@ -197,7 +199,7 @@ function HomePage() {
   const blocking = useBlockingRequest()
   if (!selectedId) return <Draft />
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+    <SubagentPageMotion>
       <ErrorBoundary label="the transcript">
         <Transcript />
       </ErrorBoundary>
@@ -205,15 +207,15 @@ function HomePage() {
       <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, display: 'flex', justifyContent: 'center', paddingLeft: GUTTER, paddingRight: GUTTER, paddingBottom: 16 }}>
         {/* Pending approvals and questions stack on the composer; a blocking one replaces it. */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: COLUMN }}>
-          <ThreadRequests />
+          {!thread?.subagent && <ThreadRequests />}
           {!blocking && (
             <ErrorBoundary label="the composer" compact>
-              <Composer thread={thread} />
+              {thread?.subagent ? thread.provider.kind === 'claude-code' ? <NativeSubagentComposer key={thread.id} thread={thread} /> : <SubagentBar thread={thread} /> : <Composer thread={thread} />}
             </ErrorBoundary>
           )}
         </div>
       </div>
-    </div>
+    </SubagentPageMotion>
   )
 }
 

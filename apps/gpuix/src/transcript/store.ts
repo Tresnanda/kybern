@@ -3,10 +3,11 @@
 // earlier history pages, and per-row disclosure state that must survive a row
 // being unmounted by the virtual list.
 import { spawn } from 'node:child_process'
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useMemo, useEffect, useState, useSyncExternalStore } from 'react'
 import { prependThreadHistory, type Block } from '../../../../packages/kybern-client/src/transcript.ts'
 import { EARLIER_HISTORY_ENTRIES } from '../../../../packages/kybern-client/src/historyPaging.ts'
 import type { ApprovalDecision, Diff, Thread, ThreadEvent, ThreadId, TurnId } from '../../../../packages/kybern-client/src/types.ts'
+import { useNav } from '../nav/store.ts'
 import { getClient, getState, onOpenEvent, selectThread, set, subscribe, useApp } from '../state.ts'
 
 export type ToolBlock = Extract<Block, { kind: 'tool' }>
@@ -303,6 +304,7 @@ const CHILDREN_STALE_MS = 5000
 export function useChildThreads(parentId: ThreadId, enabled: boolean): Thread[] {
   useSyncExternalStore(childCell.subscribe, childCell.get)
   const cached = childThreads.get(parentId)
+  const live = useNav(s => s.children)
   useEffect(() => {
     if (!enabled || childLoads.has(parentId)) return
     const current = childThreads.get(parentId)
@@ -317,5 +319,9 @@ export function useChildThreads(parentId: ThreadId, enabled: boolean): Thread[] 
         childCell.set(childCell.get() + 1)
       })
   }, [parentId, enabled])
-  return cached?.threads ?? EMPTY_THREADS
+  return useMemo(() => {
+    const merged = new Map((cached?.threads ?? EMPTY_THREADS).map(child => [child.id, child]))
+    for (const child of Object.values(live)) if (child.parent_thread_id === parentId) merged.set(child.id, child)
+    return [...merged.values()].filter(child => child.status !== 'archived')
+  }, [cached, live, parentId])
 }

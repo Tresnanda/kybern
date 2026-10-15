@@ -147,3 +147,9 @@ export function MatrixLoader({
 export function useLoaderStep(): number {
   return useSyncExternalStore(subscribe, () => Math.floor(now / 200) % 8)
 }
+
+/** Seconds for visible elapsed labels. Shares the loader clock, but only commits
+ * when a second changes; settled labels never subscribe. */
+export function useLoaderSecond(active: boolean): number {
+  return useSyncExternalStore(active ? subscribe : () => () => {}, () => active ? Math.floor(now / 1000) : 0)
+}

@@ -1,3 +1,10 @@
+import { PanelPresence, PanelEnter } from '../requests/Panel.tsx'
+import { LaunchMember } from '../subagents/Launch.tsx'
+import { AgentItemCard } from '../coordinator/AgentItem.tsx'
+import { SentToRow } from './Messages.tsx'
+import { openThread } from '../nav/history.ts'
+import { secretRequestInput, secretOutcomeLine, secretPartsText } from '../../../../packages/kybern-client/src/secretRequest.ts'
+import { coordinatorCardLine, cardPartsText } from '../../../../packages/kybern-client/src/coordinatorCards.ts'
 // Work rows inside a turn (`views/Transcript.tsx` WorkRows → ToolRow/WorkRow):
 // tool calls with their expandable result, runs of settled tools folded into
 // one summary row (`chunkWork` + `summarizeToolCalls`), nested child calls
@@ -9,16 +16,15 @@ import { toolLine, toolVisualKind, summarizeToolCalls, type ToolVisualKind } fro
 import { toolSurface, surfaceHasOutputText, surfaceOutputText, type ToolSurface } from '../../../desktop/src/lib/toolSurface.ts'
 import { hasOutputText, outputText } from '../../../desktop/src/lib/format.ts'
 import { responseImages } from '../../../desktop/src/lib/responseImages.ts'
-import { agentItemLabel, agentItemResultText, agentItemTool, parseAgentItemResult } from '../../../desktop/src/lib/agentItemTools.ts'
+import { agentItemWriteResult, agentItemLabel, agentItemResultText, agentItemTool, parseAgentItemResult } from '../../../desktop/src/lib/agentItemTools.ts'
 import { chunkKey, chunkWork, isAgentLaunchBlock, isDelegationLaunchBlock, type WorkChunk } from '../../../desktop/src/lib/workChunks.ts'
-import { orchestrationLabel, orchestrationTool, parseDelegateInput, parseDelegateResult } from '../../../../packages/kybern-client/src/orchestrationTools.ts'
+import { orchestrationLabel, orchestrationTool, parseDelegateInput, parseDelegateResult, parseSendInput } from '../../../../packages/kybern-client/src/orchestrationTools.ts'
 import { isPreviewOpenTool, previewToolLabel } from '../../../../packages/kybern-client/src/previewTool.ts'
 import { computerConsent, connectorApproval, isUserInput, notesTasksConsent } from '../../../../packages/kybern-client/src/userInput.ts'
 import { shouldRevealLiveText, type Block } from '../../../../packages/kybern-client/src/transcript.ts'
 import { findSubagentFor, subagentCounts, subagentGroupDefaultOpen, subagentGroupTitle, subagentPhase, subagentStatusSegments, subagentThreadPhase, type SubagentPhase } from '../../../../packages/kybern-client/src/subagents.ts'
 import { launchCounts, launchGroupDefaultOpen, launchGroupTitle, launchState } from '../../../../packages/kybern-client/src/delegations.ts'
 import type { ApprovalDecision, ApprovalRequest, JsonValue, RuntimeTask, Thread, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
-import { selectThread } from '../state.ts'
 import { TOOL_RESULT_CHAR_LIMIT, TOOL_RESULT_LINE_LIMIT } from '../../../desktop/src/lib/toolResultText.ts'
 import { BoundedMarkdown, TextDetail } from './markdown.tsx'
 import { Icon } from '../icons.tsx'
@@ -35,6 +41,7 @@ import { hydrateToolOutput, useRowState, type ToolBlock } from './store.ts'
 
 export interface RowContext {
   threadId: ThreadId
+  inlineItemIds?: ReadonlySet<string>
   tasksByToolCall: ReadonlyMap<string, RuntimeTask>
   childrenByParent: ReadonlyMap<string, ToolBlock[]>
   /** Subagent and delegated threads this thread launched (`threads.list { parent_thread_id }`). */
@@ -119,7 +126,11 @@ function surfaceLabel(surface: ToolSurface, input: JsonValue, complete: boolean,
   return complete ? `Used ${target}` : `Using ${target}`
 }
 
-export function approvalRowText(approval: ApprovalRequest, decision: ApprovalDecision | null): string {
+export function approvalRowText(approval: ApprovalRequest, decision: ApprovalDecision | null, live = true): string {
+  const secret = secretRequestInput(approval)
+  if (secret) return secretPartsText(secretOutcomeLine(secret, decision, live))
+  const coordinator = coordinatorCardLine(approval, decision, live)
+  if (coordinator) return cardPartsText(coordinator)
   const connector = connectorApproval(approval)
   if (connector) {
     const target = connector.app ? `${connector.connector} to use ${connector.app}` : connector.connector
@@ -288,11 +299,13 @@ export const WorkRow = memo(function WorkRow({
     case 'runtime_task':
       return <RuntimeTaskRow task={block.task} thread={block.task.kind === 'agent' ? launchThread(block, ctx) : undefined} />
     case 'approval': {
-      const text = approvalRowText(block.approval, block.decision)
+      const text = approvalRowText(block.approval, block.decision, live)
       const denied = block.decision?.decision === 'deny'
       const color = denied ? destructive(t, 0.85) : block.decision ? fg(t, 0.8) : muted(t)
+      const secret = secretRequestInput(block.approval)
+      const coordinator = coordinatorCardLine(block.approval, block.decision, live)
       const userInput = isUserInput(block.approval)
-      const icon = userInput ? (
+      const icon = secret || coordinator ? <RowIcon box={20} size={16} source={block.decision?.decision === 'submit' || block.decision?.decision === 'allow_once' ? T.check : secret ? T.key : T.note} color={block.decision?.decision === 'submit' ? t.green : muted(t)} /> : userInput ? (
         <RowIcon box={20} size={16} source={!block.decision ? T.question : denied ? T.alert : T.checkSquare} color={denied ? destructive(t, 0.85) : block.decision ? fg(t, 0.75) : muted(t)} />
       ) : block.decision ? (
         <RowIcon box={20} size={16} source={T.check} color={fg(t, 0.75)} />
@@ -304,7 +317,7 @@ export const WorkRow = memo(function WorkRow({
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 4, paddingBottom: 4, minWidth: 0 }}>
           {/* `IconSwap` loader → check once the request is answered. */}
-          {userInput ? icon : <SwapOnChange active={block.decision ? 'done' : 'waiting'} style={{ flexShrink: 0 }}>{icon}</SwapOnChange>}
+          {userInput || secret || coordinator ? icon : <SwapOnChange active={block.decision ? 'done' : 'waiting'} style={{ flexShrink: 0 }}>{icon}</SwapOnChange>}
           <Label color={color} lineHeight={ROW_LINE} truncate>
             {text}
           </Label>
@@ -355,7 +368,7 @@ const ToolRow = memo(function ToolRow({ block, ctx }: { block: ToolBlock; ctx: R
             ? surfaceLabel(surface, block.call.input, complete, block.isError)
             : workLabel(activity, block.call.name, complete, block.isError)
     const hasOutput = hasText || screenshots.length > 0 || !!block.outputOmitted || !!block.streamOmitted
-    return { activity, visual, surface, item, screenshots, label, hasOutput }
+    return { activity, visual, surface, item, itemResult, screenshots, label, hasOutput }
   }, [block, active])
   const children = ctx.childrenByParent.get(block.call.id) ?? []
   // A launch whose child thread is known opens it (`SubagentLaunchRow`, `DelegationLaunchRow`).
@@ -366,6 +379,8 @@ const ToolRow = memo(function ToolRow({ block, ctx }: { block: ToolBlock; ctx: R
   const nested = view.activity.kind === 'delegate' ? 'Subagent activity' : 'Nested activity'
   // Decided once on mount: only a row that just arrived plays `t-row-enter`.
   const fresh = useFresh(block.at)
+  if (isAgentLaunchBlock(block, task) || isDelegationLaunchBlock(block)) return <LaunchMember block={block} thread={child} task={task} delegated={isDelegationLaunchBlock(block)} />
+  if (orchestrationTool(block.call.name) === 'thread_send' && parseSendInput(block.call.input).threadId) return <SentToRow block={block} threadId={ctx.threadId} />
   return (
     <Rise kind="row" play={fresh} style={{ paddingTop: 4, paddingBottom: 4, minWidth: 0 }}>
       <RowLine
@@ -383,8 +398,9 @@ const ToolRow = memo(function ToolRow({ block, ctx }: { block: ToolBlock; ctx: R
           ) : undefined
         }
         chevron={opensActivity ? 'forward' : canExpand ? (open ? 'open' : 'closed') : undefined}
-        onClick={child ? () => void selectThread(child.id) : canExpand ? () => setOpen(!open) : undefined}
+        onClick={child ? () => openThread(child.id) : canExpand ? () => setOpen(!open) : undefined}
       />
+      {view.item?.write && agentItemWriteResult(view.itemResult) && (!ctx.inlineItemIds || ctx.inlineItemIds.has(block.call.id)) && <AgentItemCard result={agentItemWriteResult(view.itemResult)!} />}
       {canExpand && (
         <Collapse open={open} testId={`tool-panel-${block.call.id}`}>
         <div style={{ display: 'flex', flexDirection: 'column', marginLeft: 22, paddingTop: 6, minWidth: 0 }}>
@@ -573,7 +589,7 @@ export function RuntimeTaskRow({ task, thread }: { task: RuntimeTask; thread?: T
           </Label>
         }
         chevron={task.kind === 'agent' ? 'forward' : undefined}
-        onClick={thread ? () => void selectThread(thread.id) : undefined}
+        onClick={thread ? () => openThread(thread.id) : undefined}
       />
     </div>
   )
@@ -595,7 +611,7 @@ const LaunchGroupRow = memo(function LaunchGroupRow({ kind, blocks, ctx }: { kin
           const state = launchState(thread, call)
           phase = state.phase === 'working' || state.phase === 'waiting' ? 'working' : state.phase === 'failed' ? 'failed' : state.phase === 'stopped' ? 'stopped' : 'done'
         }
-        return { key: block.id, title, phase, threadId: thread?.id }
+        return { key: block.id, title, phase, threadId: thread?.id, block, thread, task }
       }),
     [blocks, ctx, kind],
   )
@@ -625,46 +641,13 @@ const LaunchGroupRow = memo(function LaunchGroupRow({ kind, blocks, ctx }: { kin
         </div>
         <Chevron open={expanded} color={fg(t, 0.55)} size={12} />
       </div>
-      {/* Members are 32px rows 1px apart, so the panel height is known up front. */}
-      <Collapse open={expanded} height={members.length * 33 - 1 + 4}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 1, marginLeft: 34, paddingBottom: 4 }}>
-          {members.map((member) => (
-            <div
-              key={member.key}
-              testId={`launch-member-${member.key}`}
-              onClick={member.threadId ? () => void selectThread(member.threadId!) : undefined}
-              style={{ display: 'flex', alignItems: 'center', gap: 8, height: 32, marginLeft: -8, paddingLeft: 8, paddingRight: 8, borderRadius: 8, minWidth: 0, cursor: member.threadId ? 'pointer' : 'default', ...(member.threadId ? { hover: { backgroundColor: t.buttonSecondaryHover } } : {}) }}
-            >
-              <PhaseDot phase={member.phase} />
-              <Label color={fg(t, 0.9)} size={13} truncate style={{ flexShrink: 1 }}>
-                {member.title}
-              </Label>
-              <Label color={member.phase === 'failed' ? destructive(t, 0.85) : fg(t, 0.45)} size={12}>
-                {member.phase === 'working' ? 'Working' : member.phase === 'done' ? 'Done' : member.phase === 'failed' ? 'Failed' : 'Stopped'}
-              </Label>
-              <div style={{ flexGrow: 1 }} />
-              {member.threadId && <Icon source={T.chevronRight} size={14} color={fg(t, 0.4)} />}
-            </div>
-          ))}
+      <PanelPresence show={expanded}><PanelEnter>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 1, marginLeft: 28, paddingBottom: 4 }}>
+          {members.map(member => <LaunchMember key={member.key} block={member.block} thread={member.thread} task={member.task} delegated={kind === 'delegations'} />)}
         </div>
-      </Collapse>
+      </PanelEnter></PanelPresence>
     </div>
   )
 })
-
-function PhaseDot({ phase }: { phase: SubagentPhase }) {
-  const t = useTheme()
-  if (phase === 'working')
-    return (
-      <div style={{ display: 'flex', width: 16, justifyContent: 'center', flexShrink: 0 }}>
-        <MatrixLoader />
-      </div>
-    )
-  return (
-    <div style={{ display: 'flex', width: 16, justifyContent: 'center', flexShrink: 0 }}>
-      <Icon source={phase === 'done' ? T.check : T.alert} size={13} color={phase === 'failed' ? t.red : muted(t)} />
-    </div>
-  )
-}
 
 export { isDelegationLaunchBlock }

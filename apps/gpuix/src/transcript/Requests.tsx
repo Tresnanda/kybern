@@ -27,7 +27,10 @@ import { secretRequestInput } from '../../../../packages/kybern-client/src/secre
 import { briefProposalInput, leadGitCardInput, settingsProposalInput } from '../../../../packages/kybern-client/src/coordinatorCards.ts'
 import type { ApprovalDecision, ApprovalRequest, AsyncQuestionRequest, JsonValue, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
-import { Rise } from '../motion/kit.tsx'
+import { PanelEnter, PanelPresence } from '../requests/Panel.tsx'
+import { SecretRequestPanel } from '../requests/Secret.tsx'
+import { ActivityPanels, useRequestActivity } from '../requests/Activity.tsx'
+import { CoordinatorCard } from '../coordinator/Cards.tsx'
 import { useApp } from '../state.ts'
 import { FONT_MONO, FONT_UI, over } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
@@ -54,30 +57,35 @@ const ownForm = (a: ApprovalRequest) => !!secretRequestInput(a) || !!briefPropos
 /** The open thread's pending approval or question, or nothing. */
 export function ThreadRequests() {
   const threadId = useApp((s) => s.selectedId)
+  return threadId ? <RequestStack key={threadId} threadId={threadId} /> : null
+}
+
+function RequestStack({ threadId }: { threadId: string }) {
   const pending = useApp((s) => s.open.pendingApprovals ?? EMPTY)
   const questions = useApp((s) => s.open.pendingQuestions ?? EMPTY)
   const approval = pending[0] ?? null
-  if (!threadId) return null
-  if (!approval && !questions[0]) return null
+  const activity = useRequestActivity(threadId)
+  const visible = !!(approval || questions[0] || activity.visible)
   const closed = !!approval && ((isUserInput(approval) && !connectorApproval(approval)) || ownForm(approval))
   return (
-    <StackedPanel closed={closed}>
+    <PanelPresence show={visible}><StackedPanel closed={closed}>
       {/* `t-panel-enter`: each request rises into the stack as it arrives. */}
-      <Rise kind="panel" key={approval ? approval.id : questions[0]!.id}>
+      <ActivityPanels threadId={threadId} data={activity} />
+      {(approval || questions[0]) && <PanelEnter key={approval ? approval.id : questions[0]!.id}>
         {approval ? (
           <ApprovalRequestCard threadId={threadId} approval={approval} count={pending.length} />
         ) : (
           <AsyncQuestionPanel threadId={threadId} request={questions[0]!} count={questions.length} />
         )}
-      </Rise>
-    </StackedPanel>
+      </PanelEnter>}
+    </StackedPanel></PanelPresence>
   )
 }
 
 /** `chat-composer-stacked-top`: the composer's glass at half strength, top corners
  *  rounded, inset by the composer radius, open at the bottom where the input
  *  continues it. Painted opaque: GPUIX has no backdrop blur behind it. */
-function StackedPanel({ children, closed }: { children: ReactNode; closed: boolean }) {
+export function StackedPanel({ children, closed }: { children: ReactNode; closed: boolean }) {
   const t = useTheme()
   const renderer = useGpuixRequired()
   const ref = useRef<PublicInstance>(null)
@@ -155,8 +163,9 @@ export function answerApproval(approval: ApprovalRequest, threadId: ThreadId, n:
 function ApprovalRequestCard({ threadId, approval, count }: { threadId: ThreadId; approval: ApprovalRequest; count: number }) {
   const connector = connectorApproval(approval)
   const answer = (n: number) => { answerApproval(approval, threadId, n) }
-  if (secretRequestInput(approval) || briefProposalInput(approval) || settingsProposalInput(approval))
-    return <DesktopOnlyPanel approval={approval} count={count} />
+  const secret = secretRequestInput(approval)
+  if (secret) return <SecretRequestPanel approval={approval} input={secret} count={count} />
+  if (briefProposalInput(approval) || settingsProposalInput(approval) || leadGitCardInput(approval)) return <CoordinatorCard approval={approval} count={count} />
   if (connector) return <ConnectorApprovalPanel approval={approval} connector={connector} count={count} onChoose={answer} />
   const notes = notesTasksConsent(approval)
   if (notes) return <NotesTasksApprovalPanel consent={notes} count={count} onChoose={answer} />
@@ -249,7 +258,7 @@ function approvalPrompt(a: ApprovalRequest): string {
 }
 
 /** 14×12 padding (`px-3.5 py-3`). */
-function PanelBody({ children, testId }: { children: ReactNode; testId?: string }) {
+export function PanelBody({ children, testId }: { children: ReactNode; testId?: string }) {
   return (
     <div testId={testId} style={{ display: 'flex', flexDirection: 'column', paddingLeft: 14, paddingRight: 14, paddingTop: 12, paddingBottom: 12, minWidth: 0 }}>
       {children}
@@ -258,7 +267,7 @@ function PanelBody({ children, testId }: { children: ReactNode; testId?: string 
 }
 
 /** Prompt (13px medium, text-foreground/90) with the tool's name and the queue count. */
-function PromptLine({ prompt, aside, count }: { prompt: string; aside?: string; count: number }) {
+export function PromptLine({ prompt, aside, count }: { prompt: string; aside?: string; count: number }) {
   const t = useTheme()
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, minWidth: 0 }}>
@@ -308,7 +317,7 @@ function ConnectorApprovalPanel({ approval, connector, count, onChoose }: { appr
   )
 }
 
-function Tile({ source }: { source: string }) {
+export function Tile({ source }: { source: string }) {
   const t = useTheme()
   return (
     <div style={{ display: 'flex', width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 8, flexShrink: 0, backgroundColor: t.v('--color-background-elevated-secondary') }}>
@@ -406,26 +415,7 @@ function NotesTasksApprovalPanel({ consent, count, onChoose }: { consent: NotesT
   )
 }
 
-/** Secret requests and the Coordinator's brief and settings proposals are forms the
- *  GPUIX build does not have yet; the reader can still decline here. */
-function DesktopOnlyPanel({ approval, count }: { approval: ApprovalRequest; count: number }) {
-  const t = useTheme()
-  return (
-    <PanelBody testId="approval-panel">
-      <PromptLine prompt={approval.summary || 'Input needed'} count={count} />
-      <Para color={muted(t, 0.65)} size={12} lineHeight={19.5} style={{ marginTop: 8 }}>
-        Answer this request in the Kybern desktop app, or decline it here.
-      </Para>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
-        <Button variant="chrome-outline" onClick={() => respondApproval(approval.id, { decision: 'deny' }).catch((e) => reportError('Unable to respond', e))}>
-          Decline
-        </Button>
-      </div>
-    </PanelBody>
-  )
-}
 
-/** `ApprovalActions`: the common decision visible, scope and stop actions in a menu. */
 function ApprovalActions({
   primaryLabel,
   primaryShortcut,

@@ -28,6 +28,8 @@ import { getClient, getState, useApp } from './state.ts'
 import { FONT_UI } from './theme.ts'
 import { ink, Label, useTheme } from './ui.tsx'
 import { addWindowKeyHandler } from './nav/keys.ts'
+import { keyboardAnswer } from './requests/Panel.tsx'
+import { isUserInput, connectorApproval } from '../../../packages/kybern-client/src/userInput.ts'
 import { answerApproval } from './transcript/Requests.tsx'
 import { FooterChip } from './composer/chips.tsx'
 import { G } from './composer/glyphs.ts'
@@ -84,7 +86,8 @@ function ThreadComposer({ thread }: { thread: Thread }) {
   const catalog = useComposer((d) => d.catalog)
   const catalogLoading = useComposer((d) => d.catalogLoading)
   const queued = useComposer((d) => d.queued[threadId])
-  const approvals = useApp((s) => (s.open.thread?.id === threadId ? s.open.pendingApprovals.length : 0))
+  const approval = useApp((s) => (s.open.thread?.id === threadId ? s.open.pendingApprovals[0] : null))
+  const projectName = useApp(s => s.projects.find(p => p.id === thread.coordinator_project_id)?.name)
 
   useEffect(() => {
     void loadTarget(threadId)
@@ -119,12 +122,12 @@ function ThreadComposer({ thread }: { thread: Thread }) {
       projectId={isFreeChatProject(thread.project_id) ? undefined : thread.project_id}
       currentThreadId={threadId}
       placeholder={
-        approvals > 0
-          ? 'Resolve this approval request to continue'
+        approval
+          ? isUserInput(approval) && !connectorApproval(approval) ? 'Answer the questions above' : 'Resolve this approval request to continue'
           : running
             ? 'Ask for follow-up changes'
             : coordinator
-              ? 'What should we work on in this project?'
+              ? `What should we work on in ${projectName ?? 'this project'}?`
               : undefined
       }
       running={running}
@@ -272,6 +275,8 @@ interface ComposerViewProps {
   onSend: (message: UserMessage, delivery: 'send' | 'queue' | 'steer') => Promise<void>
   canSteer?: boolean
   sendDisabled?: boolean
+  readOnly?: boolean
+  lockMode?: boolean
   mode: PermissionMode
   onModeChange: (mode: PermissionMode) => void
   provider: ProviderInstance | null
@@ -351,7 +356,9 @@ export function ComposerView(props: ComposerViewProps) {
     if (m?.cmd || m?.alt || m?.ctrl || m?.shift) return false
     if (!empty || sending || !props.currentThreadId || !/^[1-4]$/.test(e.key ?? '')) return false
     const approval = getState().open.pendingApprovals[0]
-    if (!approval || !answerApproval(approval, props.currentThreadId, Number(e.key))) return false
+    if (!approval) return false
+    keyboardAnswer()
+    if (!answerApproval(approval, props.currentThreadId, Number(e.key))) return false
     approvalDigit.current = e.key!
     // GPUIX 0.10 delivers events asynchronously and cannot prevent native text
     // insertion. Remove only the exact consumed digit, never subsequent typing.
@@ -494,6 +501,7 @@ export function ComposerView(props: ComposerViewProps) {
               testId="composer"
               autoFocus
               value={text}
+              readOnly={props.readOnly}
               minRows={2}
               maxRows={10}
               onChange={(e) => {
@@ -555,7 +563,7 @@ export function ComposerView(props: ComposerViewProps) {
                 <Label color={t.text}>Add files</Label>
               </PickerItem>
             </PickerMenu>
-            <PermissionPicker mode={mode} kind={provider?.kind} status={status} onChange={props.onModeChange} />
+            <PermissionPicker locked={props.lockMode} mode={mode} kind={provider?.kind} status={status} onChange={props.onModeChange} />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4, flexGrow: 1, minWidth: 200 }}>
             {provider && (
