@@ -1,25 +1,25 @@
 // Window behaviour GPUIX 0.10.0 does not expose, through the Objective-C runtime
-// (`native/objc.ts`) and one poll:
+// (`native/objc.ts`) and native layout events:
 //
 // - the frame (size and position) is saved and restored via AppKit's own frame
 //   string (`stringWithSavedFrame` / `setFrameFromString:`), which survives a
 //   changed screen layout; both take and return pointers, so no struct FFI;
-// - the window's width feeds the thread panel's narrow-window rule (`layout.ts`);
+// - native resize events feed the thread panel/dock narrow-window rules;
 // - macOS Light/Dark is read from `NSApp.effectiveAppearance` and reported to
 //   `appearance.ts`, which re-themes the app live.
 //
-// One 300 ms timer covers all three. A tick that changes nothing costs one
-// native size read; the frame string and appearance are read every third tick.
+// One 900 ms timer reads position and appearance; it never reads window size.
 // Every failure falls back to GPUI's default (the window just keeps its size).
 import type { Pointer } from 'bun:ffi'
 import type { NativeRenderer } from '@gpuix/react'
 import { cls, cstr, each, getObjc, nsApp, sel, type Objc } from '../native/objc.ts'
+import { onWindowResize } from '../native/layout.ts'
 import { readSystemVariant, setSystemVariant } from './appearance.ts'
 import { setWindowWidth } from './layout.ts'
 import { load, save } from './persist.ts'
 
 const FRAME_KEY = 'kybern.window.frame'
-const POLL_MS = 300
+const POLL_MS = 900
 
 const mac = process.platform === 'darwin'
 
@@ -105,26 +105,14 @@ export function isWindowFocused(): boolean {
 }
 
 let started = false
-/** Start the poll. Called once, after the renderer exists. */
+/** Size is event-driven; position/appearance retain their existing AppKit read. */
 export function startWindowShell(renderer: NativeRenderer) {
   if (started) return
   started = true
-  let width = 0
-  let height = 0
-  let beat = 0
   let lastFrame = ''
-  const tick = () => {
+  const readPlatformState = () => {
+    if (!mac) return
     try {
-      const size = renderer.getWindowSize?.()
-      const resized = !!size && (size.width !== width || size.height !== height)
-      if (size) {
-        width = size.width
-        height = size.height
-        setWindowWidth(width)
-      }
-      if (!mac) return
-      // The frame (position moves without resizing) and the OS appearance: every third tick.
-      if (++beat % 3 !== 1 && !resized) return
       const o = getObjc()
       const window = appWindow(o)
       if (!window) return
@@ -135,10 +123,12 @@ export function startWindowShell(renderer: NativeRenderer) {
       }
       const variant = readSystemVariant()
       if (variant) setSystemVariant(variant)
-    } catch {
-      // Keep polling; a failed read changes nothing.
-    }
+    } catch { /* Retry the platform-only read on the next tick. */ }
   }
-  tick()
-  setInterval(tick, POLL_MS)
+  onWindowResize(renderer, ({ width }) => {
+    setWindowWidth(width)
+    readPlatformState()
+  })
+  readPlatformState()
+  setInterval(readPlatformState, POLL_MS)
 }
