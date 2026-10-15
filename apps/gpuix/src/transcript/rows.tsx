@@ -1,3 +1,4 @@
+import { ProviderMark } from '../ui.tsx'
 import { PanelPresence, PanelEnter } from '../requests/Panel.tsx'
 import { LaunchMember } from '../subagents/Launch.tsx'
 import { AgentItemCard } from '../coordinator/AgentItem.tsx'
@@ -625,7 +626,7 @@ const LaunchGroupRow = memo(function LaunchGroupRow({ kind, blocks, ctx }: { kin
     <div style={{ display: 'flex', flexDirection: 'column', marginTop: 4, marginBottom: 4 }}>
       <div testId={`launch-group-${blocks[0]!.id}`} onClick={() => setChosen(!expanded)} style={{ display: 'flex', alignItems: 'center', gap: 10, paddingTop: 6, paddingBottom: 6, paddingRight: 6, cursor: 'pointer' }}>
         <div style={{ display: 'flex', width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: t.buttonSecondary, flexShrink: 0 }}>
-          <Icon source={T.robot} size={13} color={muted(t)} />
+          {kind === 'subagents' && members[0]?.thread ? <ProviderMark kind={members[0].thread.provider.kind} size={13} /> : <Icon source={T.robot} size={13} color={muted(t)} />}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}>
           <Label color={fg(t, 0.88)} lineHeight={20} style={{ hover: { color: t.text } }}>
@@ -643,7 +644,7 @@ const LaunchGroupRow = memo(function LaunchGroupRow({ kind, blocks, ctx }: { kin
       </div>
       <PanelPresence show={expanded}><PanelEnter>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 1, marginLeft: 28, paddingBottom: 4 }}>
-          {members.map(member => <LaunchMember key={member.key} block={member.block} thread={member.thread} task={member.task} delegated={kind === 'delegations'} />)}
+          {members.map(member => <LaunchMember grouped key={member.key} block={member.block} thread={member.thread} task={member.task} delegated={kind === 'delegations'} />)}
         </div>
       </PanelEnter></PanelPresence>
     </div>

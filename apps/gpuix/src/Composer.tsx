@@ -1,3 +1,4 @@
+import { StatusGlyph } from './composer/StatusGlyph.tsx'
 import { DecoratedTextarea } from './native/decorated-input.tsx'
 import { referenceDecorations } from './native/input-marks.ts'
 import { nativeCapabilities, type InputSelection } from './native/api.ts'
@@ -482,7 +483,6 @@ export function ComposerView(input: ComposerViewProps) {
     for (const path of paths) {
       try {
         const info = await uploadPath(path)
-        setFeedback(`Attached ${info.name}`)
         setAttachments((list) => [...list, { ...info, path, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }])
       } catch (e) {
         setError(`Unable to attach ${path.split('/').pop()}: ${errorText(e)}`)
@@ -651,6 +651,7 @@ export function ComposerView(input: ComposerViewProps) {
             <PermissionPicker locked={props.lockMode} mode={mode} kind={provider?.kind} status={status} onChange={props.onModeChange} />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4, flexGrow: 1, minWidth: 200 }}>
+            {provider && props.currentThreadId && <StatusGlyph provider={provider} running={running} />}
             {provider && (
               <ModelPicker
                 provider={provider}
@@ -682,6 +683,7 @@ export function ComposerView(input: ComposerViewProps) {
                 label={(color) => (
                   <ModelTriggerLabel
                     kind={provider.kind}
+                    account={provider.instance !== 'default' ? props.accounts.find(a => a.provider.kind === provider.kind && a.provider.instance === provider.instance) ?? null : null}
                     model={modelName}
                     qualifier={qualifier}
                     fast={traits.fast}

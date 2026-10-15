@@ -1,3 +1,4 @@
+import { MatrixLoader } from '../MatrixLoader.tsx'
 import type { Block } from '../../../../packages/kybern-client/src/transcript.ts'
 import type { ProviderKind, RuntimeTask, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { delegateTitle, parseDelegateInput, parseDelegateResult } from '../../../../packages/kybern-client/src/orchestrationTools.ts'
@@ -14,7 +15,7 @@ import { Para, muted } from '../transcript/kit.tsx'
 import { SubagentHover } from './Hover.tsx'
 import { Elapsed } from './Elapsed.tsx'
 const providers: readonly string[] = ['claude-code', 'codex', 'cursor', 'opencode', 'pi', 'omp']
-export function LaunchMember({ block, thread, task, delegated = false }: { block: Block; thread?: Thread; task?: RuntimeTask; delegated?: boolean }) {
+export function LaunchMember({ block, thread, task, delegated = false, grouped = false }: { block: Block; thread?: Thread; task?: RuntimeTask; delegated?: boolean; grouped?: boolean }) {
   const t = useTheme(), catalog = useNav(s => s.providers)
   const call = block.kind === 'tool' ? block : null
   const input = call && delegated ? parseDelegateInput(call.call.input) : null
@@ -28,6 +29,17 @@ export function LaunchMember({ block, thread, task, delegated = false }: { block
   const meta = [delegated ? delegationRoleLabel(info?.role ?? input?.role ?? 'general') : subagentTypeLabel(thread?.subagent?.agent_type), thread?.model ?? result?.model ?? input?.model, delegated ? info ? workspaceLabel(info) : (result?.workspace ?? input?.workspace) === 'worktree' ? 'Own worktree' : 'Shared checkout' : null].filter(Boolean).join(' · ')
   const start = thread?.subagent ? subagentSpan(thread) : thread ? { startedAt: childStartedAt(thread), endedAt: childEndedAt(thread) } : state.phase === 'working' ? { startedAt: Date.parse(block.at), endedAt: null } : null
   const override = info?.default_override ? defaultOverrideText(info.default_override, catalog) : null
+  if (!delegated) {
+    const row = <div testId={`launch-member-${block.id}`} role="button" aria-label={`${id ? 'Open ' : ''}${title}, ${state.word}`} tabIndex={0} onClick={id ? () => openThread(id) : undefined} onKeyDown={event => { if (id && (event.key === 'enter' || event.key === 'space')) openThread(id) }} style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, height: grouped ? 32 : 40, paddingLeft: 6, paddingRight: 6, borderRadius: 8, minWidth: 0, cursor: id ? 'pointer' : 'default', hover: { backgroundColor: t.buttonSecondaryHover } }}>
+      {grouped ? state.phase === 'working' ? <MatrixLoader /> : <Icon source={state.phase === 'failed' ? T.alert : T.check} size={14} color={muted(t)} /> : <ProviderMark kind={provider} size={12} />}
+      <Label color={t.text} size={13} truncate style={{ maxWidth: '55%', flexShrink: 0 }}>{title}</Label>
+      <Label color={muted(t)} size={12} truncate style={{ flexGrow: 1, minWidth: 0 }}>{grouped ? [subagentTypeLabel(thread?.subagent?.agent_type), thread?.subagent?.detail].filter(Boolean).join(' · ') : meta}</Label>
+      {start?.startedAt && <Elapsed startedAt={start.startedAt} endedAt={start.endedAt} />}
+      {!grouped && state.phase === 'working' && <MatrixLoader />}
+      <Icon source={T.chevronRight} size={14} color={muted(t)} />
+    </div>
+    return <div style={{ display: 'flex', width: '100%', minWidth: 0 }}>{thread?.subagent ? <SubagentHover thread={thread}>{row}</SubagentHover> : row}</div>
+  }
   const row = <div testId={`launch-member-${block.id}`} role="button" aria-label={`${id ? 'Open ' : ''}${title}, ${state.word}`} tabIndex={0} onClick={id ? () => openThread(id) : undefined} style={{ display: 'flex', gap: 8, alignItems: 'center', minHeight: 40, paddingLeft: 6, paddingRight: 6, borderRadius: 8, minWidth: 0, cursor: id ? 'pointer' : 'default', hover: { backgroundColor: t.buttonSecondaryHover } }}>
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 12, backgroundColor: t.buttonSecondary, flexShrink: 0 }}><ProviderMark kind={provider} size={12} /></div>
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={13} truncate>{title}</Label>{meta && <Label color={muted(t)} size={11} truncate>{meta}</Label>}</div>

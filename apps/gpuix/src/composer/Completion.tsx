@@ -145,7 +145,9 @@ export function useCompletion({
   const [found, setFound] = useState<{ query: string; threads: { thread: Thread; snippet?: string | null }[] }>({ query: '', threads: [] })
   const [catalog, setCatalog] = useState<{ key: string; skills: SkillInfo[] }>({ key: '', skills: [] })
 
+  const [category, setCategory] = useState('All')
   const mention = useMemo(() => mentionAtCaret(text, caret), [text, caret])
+  useEffect(() => { setCategory('All') }, [mention?.start, !!mention])
   const term = mention ? parseMentionQuery(mention.query).term : null
   const slash = useMemo(() => {
     const start = text.lastIndexOf('/', caret - 1)
@@ -223,13 +225,15 @@ export function useCompletion({
   const items = useMemo<Item[]>(() => {
     if (mention && term !== null) {
       const references: Item[] = [
-        ...notes.filter(n => !n.deleted_at && (!n.project_id || n.project_id === projectId) && fuzzyScore(n.title, term) != null).slice(0, 12).map(n => ({ id: `note:${n.id}`, type: 'reference' as const, label: n.title || 'Untitled', path: `kybern://note/${n.id}`, section: 'Notes' as const })),
-        ...Object.values(tasks).filter(task => (!task.project_id || task.project_id === projectId) && fuzzyScore(`${task.key} ${task.title}`, term) != null).slice(0, 12).map(task => ({ id: `task:${task.id}`, type: 'reference' as const, label: `${task.key} ${task.title}`, path: `kybern://task/${task.id}`, section: 'Tasks' as const })),
+        ...notes.filter(n => !n.deleted_at && fuzzyScore(n.title, term) != null).slice(0, 12).map(n => ({ id: `note:${n.id}`, type: 'reference' as const, label: n.title || 'Untitled', path: `kybern://note/${n.id}`, section: 'Notes' as const })),
+        ...Object.values(tasks).filter(task => fuzzyScore(`${task.key} ${task.title}`, term) != null).slice(0, 12).map(task => ({ id: `task:${task.id}`, type: 'reference' as const, label: `${task.key} ${task.title}`, path: `kybern://task/${task.id}`, section: 'Tasks' as const })),
         ...(skills.some(s => s.path === 'kybern://computer' && s.enabled) && fuzzyScore('Computer', term) != null ? [{ id: 'computer', type: 'reference' as const, label: 'Computer', path: 'kybern://computer', section: 'Computer' as const }] : []),
       ]
       const byKind: Item[][] = [
-        references,
         threadHits.map((hit) => ({ id: `thread:${hit.thread.id}`, type: 'thread' as const, ...hit })),
+        references.filter(item => item.type === 'reference' && item.section === 'Notes'),
+        references.filter(item => item.type === 'reference' && item.section === 'Tasks'),
+        references.filter(item => item.type === 'reference' && item.section === 'Computer'),
         (files.query === term ? files.files : []).map((path) => ({ id: `file:${path}`, type: 'file' as const, path })),
         rankSkills(skills, term, 12, 'plugin').map((s) => ({ id: `plugin:${s.path}`, type: 'plugin' as const, skill: s })),
       ]
@@ -238,9 +242,10 @@ export function useCompletion({
         .map((a) => ({ label: a.token.slice(1), name: a.part.type === 'attachment' ? a.part.name : '' }))
         .filter((a) => fuzzyScore(a.label, term) != null || fuzzyScore(a.name, term) != null)
         .map((a) => ({ id: `attachment:${a.label}`, type: 'attachment' as const, ...a }))
-      const filled = byKind.filter((list) => list.length > 0).length + (attached.length ? 1 : 0)
+      const scoped = category === 'All' ? byKind : byKind.map(list => list.filter(item => sectionOf(item) === category))
+      const filled = scoped.filter((list) => list.length > 0).length + (attached.length ? 1 : 0)
       const cap = filled > 1 ? MENTION_ALL_PER_KIND : Infinity
-      return [...attached, ...byKind.flatMap((list) => list.slice(0, cap))]
+      return [...(category === 'All' ? attached : []), ...scoped.flatMap((list) => list.slice(0, category === 'All' ? cap : Infinity))]
     }
     if (skill) return rankSkills(skills, skill.query).map((s) => ({ id: `skill:${s.name}`, type: 'skill' as const, skill: s }))
     if (!slash) return []
@@ -255,7 +260,7 @@ export function useCompletion({
           .map(({ command }) => ({ id: `command:${command.name}`, type: 'command' as const, command }))
     const skillItems = rankSkills(skills, slash.query).map((s) => ({ id: `skill:${s.name}`, type: 'skill' as const, skill: s }))
     return [...commandItems, ...skillItems].slice(0, 16)
-  }, [mention, term, threadHits, files, skills, attachments, skill, slash, commands, notes, tasks, projectId])
+  }, [mention, term, threadHits, files, skills, attachments, skill, slash, commands, notes, tasks, projectId, category])
 
   const menuKey = mention ? `@${mention.start}` : skill ? `$${skill.start}` : slash ? `/${slash.start}` : null
   const open = !composing && !!menuKey && dismissed !== menuKey
@@ -354,6 +359,8 @@ export function useCompletion({
       items={items}
       index={index}
       grouped={true}
+      category={mention ? category : undefined}
+      onCategory={setCategory}
       empty={empty}
       projects={projects}
       onHover={(i) => setSel({ sig: signature, index: i })}
@@ -390,6 +397,8 @@ function CompletionList({
   items,
   index,
   grouped,
+  category,
+  onCategory,
   empty,
   projects,
   onHover,
@@ -399,6 +408,8 @@ function CompletionList({
   items: Item[]
   index: number
   grouped: boolean
+  category?: string
+  onCategory: (category: string) => void
   empty: string
   projects: { id: string; name: string }[]
   onHover: (i: number) => void
@@ -414,6 +425,9 @@ function CompletionList({
       testId="completion"
       style={{ ...popoverStyle(t), borderRadius: PICKER_RADIUS, display: 'flex', flexDirection: 'column', width, maxHeight: 352, padding: 6, overflowY: 'scroll' }}
     >
+      {category && <div style={{ display: 'flex', gap: 4, padding: 2, paddingBottom: 8, flexShrink: 0 }}>
+        {['All', 'Threads', 'Notes', 'Tasks', 'Files'].map(label => <div key={label} testId={`completion-category-${label.toLowerCase()}`} role="button" aria-selected={category === label} onClick={() => onCategory(label)} style={{ paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 4, borderRadius: 6, cursor: 'pointer', backgroundColor: category === label ? t.buttonSecondary : undefined, hover: { backgroundColor: t.buttonSecondaryHover } }}><Label size={12} color={category === label ? t.text : t.textSecondary}>{label}</Label></div>)}
+      </div>}
       {items.length === 0 ? (
         <div style={{ display: 'flex', paddingLeft: 10, paddingRight: 10, paddingTop: 8, paddingBottom: 8 }}>
           <Label color={muted(t, 0.6)} size={13} lineHeight={20}>

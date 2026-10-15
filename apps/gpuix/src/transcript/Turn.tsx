@@ -1,3 +1,6 @@
+import { chooseTab, setDock } from '../dock/store.ts'
+import { getFileIconName } from '../../../desktop/src/lib/kit/fileIcons.ts'
+import { diffFileIcons } from '../native/diff-file-icons.ts'
 import { desktopDiffTheme } from '../native/diff.ts'
 import { VisualCard } from './Visual.tsx'
 import { agentItemTool, agentItemWriteResult, parseAgentItemResult, placeItemCards } from '../../../desktop/src/lib/agentItemTools.ts'
@@ -22,7 +25,7 @@ import { clockDuration, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { CopyAction, SaveToNoteAction, UserBubble } from './bubble.tsx'
 import { T } from './glyphs.ts'
 import { ResponseImage } from './images.tsx'
-import { alpha, cachedMarkdownTheme, Chevron, fg, META, muted, Para, ROW_LINE, RowIcon, TEXT } from './kit.tsx'
+import { alpha, Button, cachedMarkdownTheme, Chevron, fg, META, muted, Para, ROW_LINE, RowIcon, TEXT } from './kit.tsx'
 import { over } from '../theme.ts'
 import { Collapse, Rise } from '../motion/kit.tsx'
 import { Shimmer } from './motion.tsx'
@@ -282,7 +285,7 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
     }
   }
   return (
-    <div testId="edited-files" style={{ display: 'flex', flexDirection: 'column', marginTop: 8, marginBottom: 4, borderRadius: radius, borderWidth: 1, borderColor: border }}>
+    <div testId="edited-files" style={{ display: 'flex', flexDirection: 'column', marginTop: 8, marginBottom: 4, borderRadius: radius, overflow: 'hidden', borderWidth: 1, borderColor: border }}>
       <div
         style={{
           display: 'flex',
@@ -319,6 +322,7 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
               {reverting ? <MatrixLoader /> : <Icon source={T.undo} size={12} color={muted(t)} />}
             </div>
           )}
+          <Button testId="edited-review" variant="chrome-outline" onClick={() => { chooseTab(threadId, 'changes'); setDock(threadId, { open: true }) }}>Review</Button>
           <div testId="edited-files-toggle" onClick={() => setExpanded(!expanded)} style={{ display: 'flex', padding: 4, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
             <Chevron open={expanded} color={muted(t, t.variant === 'dark' ? 0.5 : 0.7)} />
           </div>
@@ -382,17 +386,18 @@ function EditedFileRow({ file, threadId, turnId, first, border }: { file: Diff['
   return (
     <div style={{ display: 'flex', flexDirection: 'column', ...(first ? {} : { borderTopWidth: 1, borderColor: border }) }}>
       <div
-        testId={`edited-file-${file.path}`}
-        onClick={toggle}
         style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 12, paddingRight: 8, paddingTop: 10, paddingBottom: 10, minWidth: 0, cursor: 'pointer', hover: { backgroundColor: t.variant === 'dark' ? 'rgba(0, 0, 0, 0)' : t.buttonSecondaryHover } }}
       >
+        <div testId={`edited-file-${file.path}`} onClick={toggle} style={{ display: 'flex', alignItems: 'center', gap: 8, flexGrow: 1, minWidth: 0 }}>
         <Chevron open={open} color={muted(t, 0.6)} />
-        <Icon source={T.file} size={16} color={t.text} style={{ opacity: t.variant === 'dark' ? 0.8 : 0.7 }} />
+        <Icon source={diffFileIcons[getFileIconName(file.path)] ?? T.file} size={16} color={t.text} style={{ opacity: t.variant === 'dark' ? 0.8 : 0.7 }} />
         <Label color={t.text} lineHeight={TEXT.lineHeight} truncate style={{ flexShrink: 1, hover: { textDecoration: 'underline' } }}>
           {file.path}
         </Label>
         <div style={{ flexGrow: 1 }} />
         <DiffStat additions={file.additions} deletions={file.deletions} />
+        </div>
+        <div testId={`edited-review-${file.path}`} role="button" aria-label={`Open ${file.path} in the diff panel`} onClick={() => { chooseTab(threadId, 'changes'); setDock(threadId, { open: true }) }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 6, flexShrink: 0, hover: { backgroundColor: t.buttonSecondaryHover } }}><Icon source={T.panelRight} size={14} color={muted(t, 0.6)} /></div>
       </div>
       <Collapse open={open && ready}>
         <div style={{ display: 'flex', flexDirection: 'column', borderTopWidth: 1, borderColor: border, backgroundColor: t.v('--background') }}>

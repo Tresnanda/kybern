@@ -174,8 +174,8 @@ export function markdownTheme(t: Theme, tone: 'bright' | 'muted' = 'bright') {
     textMuted: t.textSecondary,
     textFaint: t.textTertiary,
     textDim: t.textSecondary,
-    // Native markdown tints list markers with `accent`; desktop markers use the text colour.
-    accent: text,
+    // List markers have their own Markdown token; links use the accent.
+    accent: t.link,
     border: t.border,
     codeText: text,
     codeWash: t.codeSurface,
