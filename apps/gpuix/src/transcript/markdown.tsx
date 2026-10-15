@@ -74,12 +74,8 @@ export const CodeHeader = memo(function CodeHeader({ part, expanded, wrap, onExp
 
 export const CodeChunk = memo(function CodeChunk({ text, language, wrap }: { text: string; language?: string; wrap: boolean }) {
   const t = useTheme()
-  // Native <code> never wraps (host.d.ts). A single native text node supplies
-  // wrapping by default so narrow panes never hide long lines. Turning Wrap
-  // off restores native syntax highlighting until native code supports wrapping.
   return <div style={{ display: 'flex', flexDirection: 'column', padding: 12, paddingTop: 4, paddingBottom: 4, backgroundColor: t.codeSurface, minWidth: 0 }}>
-    {wrap ? <text style={{ color: t.text, fontFamily: CODE.font, fontSize: CODE.size, lineHeight: CODE.lineHeight, userSelect: 'text', minWidth: 0 }}>{text.replace(/\n$/, '')}</text>
-      : <code code={text.replace(/\n$/, '')} language={language} theme={cachedMarkdownTheme(t)} style={{ minWidth: 0, userSelect: 'text' }} />}
+    <code softWrap={wrap} code={text.replace(/\n$/, '')} language={language} theme={cachedMarkdownTheme(t)} style={{ minWidth: 0, userSelect: 'text' }} />
   </div>
 })
 

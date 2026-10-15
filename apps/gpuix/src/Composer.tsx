@@ -491,6 +491,7 @@ export function ComposerView(props: ComposerViewProps) {
               ref={(el) => {
                 editor.current = el
               }}
+              interceptKeys={['up', 'down', 'enter', 'tab', 'escape']}
               testId="composer"
               autoFocus
               value={text}
@@ -504,19 +505,16 @@ export function ComposerView(props: ComposerViewProps) {
               onKeyDown={(e) => {
                 // ⌘↵ steers even when a completion menu is open.
                 if (e.key === 'enter' && e.modifiers?.cmd && !e.modifiers.shift) {
+                  e.preventDefault()
                   steerPressed.current = Date.now()
                   void submit(running ? 'steer' : promptMode)
                   return
                 }
-                if (e.key === 'up' || e.key === 'down') return
+                if ((e.key === 'up' || e.key === 'down') && (e.modifiers?.cmd || e.modifiers?.alt || e.modifiers?.ctrl || e.modifiers?.shift)) return
                 if (completion.onKey(e.key ?? '', !!e.modifiers?.shift, !!e.modifiers?.ctrl)) {
+                  e.preventDefault()
                   if (e.key === 'enter') completionPicked.current = Date.now()
                 }
-              }}
-              onKeyUp={(e) => {
-                // GPUI native caret actions consume keyDown, including the
-                // window listener. keyUp is delivered after those actions.
-                if ((e.key === 'up' || e.key === 'down') && !e.modifiers?.cmd && !e.modifiers?.alt && !e.modifiers?.ctrl && !e.modifiers?.shift) completion.onKey(e.key, false)
               }}
               onSubmit={() => {
                 // ⌘↵ also reaches here; the key handler already steered.

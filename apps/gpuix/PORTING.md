@@ -36,7 +36,9 @@ and behave like the desktop, and it must not make idle or animation cost worse
 - Menus, popovers and tooltips must be `<anchored>`, `SelectContent` or
   `ComboboxContent` with an opaque fill, or they paint under the transcript.
 - The `<textarea>` placeholder colour is fixed; `Composer.tsx` draws its own.
-- `motion.div` tweens width/height/top/left/opacity/borderRadius only; no springs.
+- The patched `motion.div` adds native springs and layout-neutral translateX/translateY
+  to width/height/top/left/opacity/borderRadius. True subtree scale remains unsupported.
+  See `native/README.md` for key interception, secure inputs, close hooks, and code wrap.
 
 ## App shell (`src/shell/`)
 

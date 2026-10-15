@@ -84,6 +84,7 @@ function ChromeIcon({
         flexShrink: 0,
         opacity: disabled ? 0.4 : 1,
         cursor: disabled ? 'default' : 'pointer',
+        pointerEvents: 'auto',
         ...(pressed ? { backgroundColor: t.buttonSecondaryHover } : {}),
         ...(disabled ? {} : { hover: { backgroundColor: t.buttonSecondaryHover } }),
       }}
@@ -118,7 +119,7 @@ export function TitleBar({ panelOpen }: { panelOpen: boolean }) {
   }
   return (
     // A cached island (native/README.md): replays while the rest of the window animates.
-    <div {...ISLAND} style={{ display: 'flex', width: '100%', height: TITLEBAR, flexShrink: 0, position: 'relative' }}>
+    <div {...ISLAND} windowDrag testId="titlebar-drag" style={{ display: 'flex', width: '100%', height: TITLEBAR, flexShrink: 0, position: 'relative' }}>
       {!panelless && !settingsOpen && (
         <div style={{ position: 'absolute', left: LEADING_X, top: 0, height: TITLEBAR, display: 'flex', alignItems: 'center' }}>
           <ChromeIcon icon={N.layoutSidebar} label="Toggle thread sidebar" tooltip="Toggle sidebar (⌘B)" onClick={toggle} testId="sidebar-toggle" />
@@ -142,6 +143,7 @@ export function TitleBar({ panelOpen }: { panelOpen: boolean }) {
       )}
       {settingsOpen && <SettingsBreadcrumb />}
       <motion.div
+        windowDrag
         initial={false}
         animate={{ left: panelless ? LEADING_X : titleStart }}
         transition={REDUCED_MOTION || instant || resizing ? { duration: 0 } : SLIDE}
@@ -229,7 +231,7 @@ function ThreadHeader() {
     // Home: only the panel toggles (`SurfaceHeader minimal`).
     return (
       <>
-        <div style={{ flexGrow: 1 }} />
+        <div windowDrag style={{ flexGrow: 1, height: '100%' }} />
         <PanelToggles />
       </>
     )
@@ -280,7 +282,7 @@ function ThreadHeader() {
                     setRenaming(true)
                   }
                 }}
-                style={{ display: 'flex', minWidth: 0, flexShrink: 1 }}
+                style={{ display: 'flex', minWidth: 0, flexShrink: 1, pointerEvents: 'auto' }}
               >
                 <TitleSwap threadId={thread.id} title={thread.title || 'Untitled'}>
                   <Label color={t.text} truncate>
@@ -316,6 +318,7 @@ function ThreadHeader() {
                   borderWidth: 1,
                   borderColor: t.border,
                   cursor: 'pointer',
+                  pointerEvents: 'auto',
                   hover: { backgroundColor: t.buttonSecondaryHover },
                 }}
               >
@@ -409,7 +412,7 @@ function HeaderChip({ children, onClick, testId }: { children: ReactNode; onClic
     <div
       testId={testId}
       onClick={onClick}
-      style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, maxWidth: 176, paddingLeft: 6, paddingRight: 6, borderRadius: 8, cursor: 'pointer', flexShrink: 0, hover: { backgroundColor: t.buttonSecondaryHover } }}
+      style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, maxWidth: 176, paddingLeft: 6, paddingRight: 6, borderRadius: 8, cursor: 'pointer', pointerEvents: 'auto', flexShrink: 0, hover: { backgroundColor: t.buttonSecondaryHover } }}
     >
       {children}
     </div>
