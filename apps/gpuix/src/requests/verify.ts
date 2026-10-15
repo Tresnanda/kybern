@@ -1,0 +1,70 @@
+import { launchFixture, waitForPainted } from './harness.ts'
+import { mkdirSync } from 'node:fs'
+import path from 'node:path'
+const out = '/Users/mymac/projects/ade/previews/gpuix/requests'
+mkdirSync(out, { recursive: true })
+for (const variant of ['dark', 'light']) {
+  const fixture = await launchFixture(path.join(import.meta.dir, 'parity.fixture.tsx'), { GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: variant, KYBERN_DATA_DIR: '/Users/mymac/projects/ade-gpuix-scratch/requests-fixture', NAPI_RS_NATIVE_LIBRARY_PATH: '/Users/mymac/projects/ade-gpuix/apps/gpuix/native/build/gpuix-native.darwin-arm64.node' })
+  const app = fixture.app
+  try {
+    await app.getByTestId('secret-request-panel').waitFor({ timeoutMs: 60_000 })
+    await app.clock.fastForward(250)
+    await app.screenshot({ path: `${out}/secret-${variant}.png` })
+    if (variant === 'dark') await app.getByTestId('secret-decline').press('enter')
+    else await app.getByTestId('secret-decline').click()
+    await app.getByTestId('rpc-approvals.respond').waitFor({ timeoutMs: 5000 })
+    for (const [mode, control] of [['activity', 'held-deliver-held-1'], ['permissions', 'permission-apply'], ['limit', 'usage-switch-continue'], ['brief', 'coordinator-accept'], ['settings', 'coordinator-accept'], ['merge', 'coordinator-accept']]) {
+      await app.getByTestId(`fixture-${mode}`).click()
+      await app.getByTestId(control!).waitFor({ timeoutMs: 10000 })
+      await app.clock.fastForward(250)
+      await app.screenshot({ path: `${out}/${mode}-${variant}.png` })
+      if (mode === 'activity') {
+        await app.getByTestId('subagent-open-native-child').hover()
+        await app.getByTestId('subagent-hover').waitFor({ timeoutMs: 5000 })
+        await app.screenshot({ path: `${out}/hover-${variant}.png` })
+      }
+      await app.getByTestId(control!).click()
+      if (mode === 'activity') await app.getByTestId('rpc-threads.messages.deliver').waitFor({ timeoutMs: 5000 })
+      if (['brief', 'settings', 'merge'].includes(mode!)) await app.getByTestId('rpc-approvals.respond').waitFor({ timeoutMs: 5000 })
+      if (mode === 'permissions') await app.getByTestId('rpc-threads.permissions.apply').waitFor({ timeoutMs: 5000 })
+      if (mode === 'limit') await app.getByTestId('rpc-threads.switch_continue').waitFor({ timeoutMs: 5000 })
+    }
+    await app.getByTestId('fixture-native-live').click()
+    await app.getByTestId('composer').waitFor({ timeoutMs: 10000 })
+    await app.getByTestId('composer').fill('Please check cancellation as well.')
+    await app.getByTestId('send').click()
+    await app.getByTestId('subagent-message-pending').waitFor({ timeoutMs: 10000 })
+    await app.screenshot({ path: `${out}/native-live-${variant}.png` })
+    await app.getByTestId('subagent-run-background').click()
+    await app.getByTestId('rpc-tasks.background').waitFor({ timeoutMs: 5000 })
+    await app.getByTestId('fixture-native-failed').click()
+    await app.getByTestId('subagent-forward-undelivered').waitFor({ timeoutMs: 10000 })
+    await app.screenshot({ path: `${out}/native-failed-${variant}.png` })
+    await app.getByTestId('subagent-forward-undelivered').click()
+    await app.getByText('Queued for parent').waitFor({ timeoutMs: 10000 })
+    await app.getByTestId('fixture-readonly').click()
+    await app.getByTestId('subagent-stop').waitFor({ timeoutMs: 10000 })
+    await app.screenshot({ path: `${out}/readonly-${variant}.png` })
+    await app.getByTestId('subagent-stop').click()
+    await app.getByTestId('rpc-tasks.stop').waitFor({ timeoutMs: 5000 })
+    await app.getByTestId('fixture-details').click()
+    await app.getByTestId('result-toggle-result').waitFor({ timeoutMs: 10000 })
+    await app.getByTestId('result-toggle-result').click()
+    await app.getByTestId('result-open-result').waitFor({ timeoutMs: 10000 })
+    await app.clock.fastForward(250)
+    await waitForPainted(app, 'Ownership conflict:')
+    await app.screenshot({ path: `${out}/details-${variant}.png` })
+    await app.getByTestId('result-toggle-result').wheel(0, -450)
+    await app.screenshot({ path: `${out}/details-bottom-${variant}.png` })
+    await app.getByTestId('fixture-item').click()
+    await app.getByTestId('item-undo-note').waitFor({ timeoutMs: 10000 })
+    await app.screenshot({ path: `${out}/item-${variant}.png` })
+    await app.getByTestId('item-undo-note').click()
+    await app.getByTestId('item-restore-note').waitFor({ timeoutMs: 10000 })
+    await app.getByTestId('item-restore-note').click()
+    await app.getByTestId('item-open-note').waitFor({ timeoutMs: 10000 })
+    await app.getByTestId('item-open-note').click()
+    await app.getByTestId('text-detail').waitFor({ timeoutMs: 10000 })
+    console.log(`Verified ${variant}: request actions, native subagent send/background/stop/forwarding, formatted result expansion, item Undo/Restore/Open.`)
+  } finally { console.log(fixture.diagnostics()); await fixture.close() }
+}
