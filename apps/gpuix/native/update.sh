@@ -84,6 +84,7 @@ echo "== checks"
   bun native/decoration-check.ts
   bun native/rounded-check.ts
   bun native/markdown-check.ts
+  bun native/diff-check.ts
   for check in layout-check syntax-check syntax-lifecycle-check syntax-large-check; do
     bun "native/$check.ts"
   done

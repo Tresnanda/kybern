@@ -859,3 +859,11 @@ search, reflow, hard breaks, code wrapping and reaching the end of a large docum
 It runs in `native/update.sh`. `native/markdown-webkit.*` render the actual desktop
 Markdown component for the same sample. See `PACKAGE-5.md` for the audited CSS
 values, images, measurements, remaining differences and unapplied integration.
+
+
+## Diff style controls (package 6)
+
+`theme.diff`, `desktopDiffTheme`, `NativeDiffHeader`, and `DesktopDiff` match the
+desktop plain unified diff while preserving native virtual rows. See
+[PACKAGE-6.md](PACKAGE-6.md) for the API, refreshed unapplied integration patch,
+dark/light WebKit pairs, bounded-paint checks, performance evidence and limits.
