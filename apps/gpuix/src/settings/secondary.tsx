@@ -1,3 +1,4 @@
+import { showDialog } from '../dialogs/store.ts'
 import { useState } from 'react'
 import type { BackgroundSettings, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { getClient, useApp } from '../state.ts'
@@ -37,7 +38,7 @@ export function Background() {
 export function Accounts() {
   const accounts = useResource('providers.accounts.list', {})
   const [page, setPage] = useState(0)
-  return <Section title="Accounts"><Row title="Connected accounts" description={accounts.error || 'Sign-in, sign-out, default account and project overrides can be managed in the desktop app.'}><Button onClick={accounts.refresh}>Refresh</Button></Row>{accounts.loading ? <Row title="Reading accounts…" /> : !accounts.data?.accounts.length ? <Row title="No accounts found" description="Add an account in the desktop app’s Settings → Accounts." /> : accounts.data.accounts.slice(page * 8, page * 8 + 8).map((account) => <Row key={`${account.provider.kind}:${account.provider.instance}`} title={`${account.name}${account.is_default ? ' · Default' : ''}`} description={`${account.provider.kind} · ${account.status}${account.identity?.email ? ` · ${account.identity.email}` : ''}${account.projects.length ? ` · ${account.projects.length} projects` : ''}`} />)}<Pages page={page} count={accounts.data?.accounts.length ?? 0} onChange={setPage} /></Section>
+  return <Section title="Accounts"><Row title="Connected accounts" description={accounts.error || 'Add an account here. Manage sign-out and project overrides in the desktop app.'}><Button testId="account-add" onClick={() => showDialog({ kind: 'account' })}>Add account</Button><Button onClick={accounts.refresh}>Refresh</Button></Row>{accounts.loading ? <Row title="Reading accounts…" /> : !accounts.data?.accounts.length ? <Row title="No accounts found" description="Choose Add account to connect an agent." /> : accounts.data.accounts.slice(page * 8, page * 8 + 8).map((account) => <Row key={`${account.provider.kind}:${account.provider.instance}`} title={`${account.name}${account.is_default ? ' · Default' : ''}`} description={`${account.provider.kind} · ${account.status}${account.identity?.email ? ` · ${account.identity.email}` : ''}${account.projects.length ? ` · ${account.projects.length} projects` : ''}`} />)}<Pages page={page} count={accounts.data?.accounts.length ?? 0} onChange={setPage} /></Section>
 }
 
 export function Integrations() {

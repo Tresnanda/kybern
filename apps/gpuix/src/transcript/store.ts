@@ -1,3 +1,4 @@
+import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
 // Transcript-side state and actions, mirroring `apps/desktop/src/state/rpc.ts`
 // for the parts the transcript owns: approvals, saved tool output, turn diffs,
 // earlier history pages, and per-row disclosure state that must survive a row
@@ -108,6 +109,7 @@ export async function hydrateToolOutput(threadId: ThreadId, block: ToolBlock) {
   const key = `${threadId}:${block.call.id}:${block.seq}`
   if (hydrating.has(key) || getState().selectedId !== threadId) return
   hydrating.add(key)
+  const owner = activeEnvironment()
   try {
     const result = await rpc().call('threads.tool_output', {
       thread_id: threadId,
@@ -116,8 +118,9 @@ export async function hydrateToolOutput(threadId: ThreadId, block: ToolBlock) {
       through_seq: getState().open.lastSeq,
       include_tool_stream: !!block.streamOmitted,
     })
+    if (owner !== activeEnvironment()) return
     const open = getState().open
-    if (getState().selectedId !== threadId) return
+    if (owner !== activeEnvironment() || getState().selectedId !== threadId) return
     const index = open.blocks.findIndex(
       (b) => b.kind === 'tool' && b.call.id === block.call.id && b.seq === block.seq && (b.outputOmitted || b.streamOmitted),
     )
@@ -134,9 +137,10 @@ export async function hydrateToolOutput(threadId: ThreadId, block: ToolBlock) {
     }
     set({ open: { ...open, blocks } })
   } catch (error) {
+    if (owner !== activeEnvironment()) return
     reportError('Unable to load tool result', error)
   } finally {
-    hydrating.delete(key)
+    if (owner === activeEnvironment()) hydrating.delete(key)
   }
 }
 
@@ -151,12 +155,15 @@ export function useTurnDiff(threadId: ThreadId, turnId: TurnId, enabled: boolean
   const key = `${threadId}:${turnId}`
   if (enabled && !diffs.has(key) && !diffLoads.has(key)) {
     diffLoads.add(key)
+    const owner = activeEnvironment()
     queueMicrotask(() => {
+      if (owner !== activeEnvironment()) return
       rpc()
         .call('threads.diff', { thread_id: threadId, turn_id: turnId, include_patch: false })
-        .then((d) => diffs.set(key, d))
-        .catch(() => diffs.set(key, null)) // no git, no diff
+        .then((d) => { if (owner === activeEnvironment()) diffs.set(key, d) })
+        .catch(() => { if (owner === activeEnvironment()) diffs.set(key, null) }) // no git, no diff
         .finally(() => {
+          if (owner !== activeEnvironment()) return
           diffLoads.delete(key)
           diffCell.set(diffCell.get() + 1)
         })
@@ -187,14 +194,17 @@ const patchKey = (threadId: ThreadId, turnId: TurnId, path: string) => `${thread
 export const filePatch = (threadId: ThreadId, turnId: TurnId, path: string): FilePatch | null => patches.get(patchKey(threadId, turnId, path)) ?? null
 
 export async function loadFilePatch(threadId: ThreadId, path: string, turnId: TurnId): Promise<FilePatch> {
+  const owner = activeEnvironment()
   const result = await loadFileDiff(threadId, path, turnId)
   const patch = { text: hunksOnly(result.patch ?? ''), truncated: !!result.patch_truncated }
-  patches.set(patchKey(threadId, turnId, path), patch)
+  if (owner === activeEnvironment()) patches.set(patchKey(threadId, turnId, path), patch)
   return patch
 }
 
 export async function revertTo(threadId: ThreadId, turnId: TurnId) {
+  const owner = activeEnvironment()
   await rpc().call('threads.revert', { thread_id: threadId, turn_id: turnId })
+  if (owner !== activeEnvironment()) return
   for (const key of [...diffs.keys()]) if (key.startsWith(`${threadId}:`)) diffs.delete(key)
   for (const key of [...patches.keys()]) if (key.startsWith(`${threadId}:`)) patches.delete(key)
   diffCell.set(diffCell.get() + 1)
@@ -214,6 +224,7 @@ export function loadEarlier(): Promise<void> {
   const threadId = getState().selectedId
   const base = getState().open
   if (!threadId || !base.loaded || base.nextBeforeSeq == null || base.loadingEarlier) return Promise.resolve()
+  const owner = activeEnvironment()
   const events: ThreadEvent[] = []
   const stop = onOpenEvent((event) => events.push(event))
   earlierError.set(null)
@@ -228,18 +239,18 @@ export function loadEarlier(): Promise<void> {
       through_seq: base.lastSeq,
     })
     .then((page) => {
-      if (getState().selectedId !== threadId) return
+      if (owner !== activeEnvironment() || getState().selectedId !== threadId) return
       const replay = events.filter((event) => event.seq > base.lastSeq)
       set({ open: prependThreadHistory(base, page, replay, getState().open) })
     })
     .catch((error) => {
-      if (getState().selectedId !== threadId) return
+      if (owner !== activeEnvironment() || getState().selectedId !== threadId) return
       earlierError.set(errorText(error))
       set({ open: { ...getState().open, loadingEarlier: false } })
     })
     .finally(() => {
       stop()
-      earlierLoad = null
+      if (owner === activeEnvironment()) earlierLoad = null
     })
   return earlierLoad
 }
@@ -305,14 +316,18 @@ export function useChildThreads(parentId: ThreadId, enabled: boolean): Thread[] 
     const current = childThreads.get(parentId)
     if (current && Date.now() - current.at < CHILDREN_STALE_MS) return
     childLoads.add(parentId)
+    const owner = activeEnvironment()
     rpc()
       .call('threads.list', { parent_thread_id: parentId })
-      .then((result) => childThreads.set(parentId, { at: Date.now(), threads: result.threads }))
+      .then((result) => { if (owner === activeEnvironment()) childThreads.set(parentId, { at: Date.now(), threads: result.threads }) })
       .catch(() => {})
       .finally(() => {
+        if (owner !== activeEnvironment()) return
         childLoads.delete(parentId)
         childCell.set(childCell.get() + 1)
       })
   }, [parentId, enabled])
   return cached?.threads ?? EMPTY_THREADS
 }
+
+onEnvironmentChange(() => { resetRowState(); diffs.clear(); diffLoads.clear(); hydrating.clear(); childThreads.clear(); childLoads.clear(); earlierLoad = null; clearTimeout(actionErrorTimer); actionError.set(null); earlierError.set(null); requestPanelHeight.set(0) })

@@ -1,3 +1,5 @@
+import { load, save } from '../shell/persist.ts'
+import { onEnvironmentChange, onEnvironmentLeaving } from '../shell/environment.ts'
 // Dock choices belong to the selected thread; closing a tab discards its content.
 // Bounded session storage keeps revisiting threads cheap without persisting user data.
 import { useSyncExternalStore } from 'react'
@@ -12,7 +14,7 @@ export interface DockState {
   instant: boolean
 }
 const DEFAULT: DockState = { open: false, tabs: ['agents'], tab: 'agents', width: 538, instant: false }
-const choices = new Map<string, DockState>()
+const choices = new Map<string, DockState>(load('kybern.dock.choices', []))
 const listeners = new Set<() => void>()
 const emit = () => { for (const listener of listeners) listener() }
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } }
@@ -54,3 +56,6 @@ export function useDockDrag() { return useSyncExternalStore(subscribe, () => dra
 export function moveDockDrag(x: number) {
   if (drag) setDock(drag.id, { width: Math.min(drag.max, Math.max(DOCK_MIN, drag.width + drag.x - x)) })
 }
+
+onEnvironmentLeaving(() => save('kybern.dock.choices', [...choices]))
+onEnvironmentChange(() => { choices.clear(); for (const [id, value] of load<[string, DockState][]>('kybern.dock.choices', [])) choices.set(id, value); drag = null; emit() })

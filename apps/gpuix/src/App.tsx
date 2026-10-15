@@ -1,7 +1,12 @@
+import { WorkspaceDialogs } from './dialogs/Dialogs.tsx'
+import { EnvironmentMenu } from './sidebar/EnvironmentSwitcher.tsx'
+import { EnvironmentDialogs } from './environments/Dialogs.tsx'
+import { useEnvironment } from './shell/environment.ts'
 // The window shell (`App.tsx`, `views/chrome.tsx`): a 46px title bar and a 52px
 // rail painted on the frame surface, and one 12px-radius card holding the thread
 // panel and the page. All geometry follows the desktop. The title bar, rail,
 // palette and dialogs live in `nav/`; the thread panel in `Sidebar.tsx`.
+import { EnvironmentOverlay } from './environment/Panel.tsx'
 import { FILL_ISLAND, ISLAND } from './MatrixLoader.tsx'
 import { motion } from '@gpuix/react'
 import { useEffect, useState, type ReactNode } from 'react'
@@ -42,6 +47,11 @@ const CARD_RADIUS = 12
 const SLIDE = { duration: 0.22, ease: EASE_OUT }
 
 export function App() {
+  const env = useEnvironment()
+  return <Workspace key={`${env.id}:${env.revision}`} />
+}
+
+function Workspace() {
   const t = useTheme()
   const page = useNav((s) => s.page)
   const settingsOpen = useNav((s) => s.settingsOpen)
@@ -156,6 +166,10 @@ export function App() {
       <Palette />
       <HandoffDialog />
       <SessionsDialog />
+      <EnvironmentOverlay />
+      <EnvironmentDialogs />
+      <EnvironmentMenu />
+      <WorkspaceDialogs />
       <Toaster />
       <SidebarDragLayer />
       <DockResizeCapture />

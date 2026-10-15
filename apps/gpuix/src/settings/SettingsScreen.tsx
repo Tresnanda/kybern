@@ -1,3 +1,4 @@
+import { onEnvironmentChange } from '../shell/environment.ts'
 import { motion, useGpuix } from '@gpuix/react'
 import { useEffect, useState } from 'react'
 import { setSettingsTitle } from './Breadcrumb.tsx'
@@ -70,3 +71,5 @@ export function SettingsScreen() {
     </div>
   </div>
 }
+
+onEnvironmentChange(() => { lastTab = 'general' })

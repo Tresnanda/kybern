@@ -1,3 +1,4 @@
+import { onEnvironmentChange } from './environment.ts'
 // Toasts (issue #108 §23): the desktop's sonner `Toaster` at the bottom right
 // (`components/ui/sonner.tsx`, `views/AppUpdate.tsx`), on GPUIX.
 //
@@ -371,3 +372,5 @@ function ToastCard({ item }: { item: Item }) {
     </div>
   )
 }
+
+onEnvironmentChange(() => { for (const item of items) clearTimeout(item.timer); items = []; hovered = false; commit() })

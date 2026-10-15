@@ -1,3 +1,4 @@
+import { onEnvironmentChange } from '../shell/environment.ts'
 import { useEffect, useSyncExternalStore } from 'react'
 import type { Settings } from '../../../../packages/kybern-client/src/types.ts'
 import { getClient, useApp } from '../state.ts'
@@ -16,11 +17,13 @@ export async function updateSettings(patch: Partial<Settings>) {
   emit({ saving: true, error: '' })
   try {
     const saved = await client.call('settings.update', { settings: { ...state.settings, ...patch } })
+    if (getClient() !== client) return
     revision++
     emit({ settings: saved })
   } catch (error) {
+    if (getClient() !== client) return
     emit({ error: `Unable to save settings. Check the connection and try again. ${String(error)}` })
-  } finally { emit({ saving: false }) }
+  } finally { if (getClient() === client) emit({ saving: false }) }
 }
 
 export function useSettings() { return useSyncExternalStore(subscribe, () => state) }
@@ -43,3 +46,5 @@ export function useSettingsConnection() {
     return () => { live = false; off() }
   }, [status])
 }
+
+onEnvironmentChange(() => { revision++; emit({ settings: null, error: '', saving: false }) })

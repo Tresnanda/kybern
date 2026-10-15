@@ -1,3 +1,4 @@
+import { useEnvironment } from './environment.ts'
 // Connection chrome (`App.tsx` `ConnectionBanner` and `Welcome` in the desktop):
 //
 // - the banner over the content card while the daemon connection is lost:
@@ -19,7 +20,7 @@ import { useLoaderStep } from '../MatrixLoader.tsx'
 import { connect, getClient, getState, resetClient, selectThread, set, useApp } from '../state.ts'
 import { ink, Label, LOGO_SVG, REDUCED_MOTION, useTheme } from '../ui.tsx'
 
-const NAME = process.env.KYBERN_URL ? 'Remote environment' : 'This Mac'
+
 
 /** Reconnect after the transport gave up: a fresh client re-reads the port and token (the daemon may have restarted). */
 export function reconnect() {
@@ -52,6 +53,7 @@ type Phase = 'out' | 'in' | 'leaving'
 
 /** Mount once inside the content card; it overlays the top of the card. */
 export function ConnectionBanner() {
+  const { name: NAME } = useEnvironment()
   const t = useTheme()
   const status = useApp((s) => s.status)
   const detail = useApp((s) => s.statusDetail)
@@ -161,6 +163,7 @@ export function useWelcome(): WelcomeKind | null {
 
 /** The first line of a fresh window: before the daemon answers, and before any project exists. */
 export function Welcome({ kind }: { kind: WelcomeKind }) {
+  const { name: NAME } = useEnvironment()
   const t = useTheme()
   const [shown, setShown] = useState(false)
   // `DelayedSpinner`: a quick connection never flashes a spinner.

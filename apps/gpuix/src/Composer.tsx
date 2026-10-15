@@ -1,3 +1,5 @@
+import { onEnvironmentChange, onEnvironmentLeaving } from './shell/environment.ts'
+import { load as loadEnvironmentPreference, save as saveEnvironmentPreference } from './shell/persist.ts'
 // The composer (`views/Composer.tsx`, `composerPickerStyles.ts`): a 19.2px-radius
 // card with the editor on top and a footer of 28px chips (+ menu, permission
 // mode, model and effort), then the 32px round send button, which becomes the
@@ -257,7 +259,9 @@ function uncataloguedName(model: string): string {
 }
 
 /** Text and attachments kept per thread or project while the composer is away (`composerDrafts`). */
-const drafts = new Map<string, { text: string; attachments: Attachment[] }>()
+const drafts = new Map<string, { text: string; attachments: Attachment[] }>(loadEnvironmentPreference('kybern.composer.drafts', []))
+onEnvironmentLeaving(() => saveEnvironmentPreference('kybern.composer.drafts', [...drafts].slice(-100)))
+onEnvironmentChange(() => { drafts.clear(); for (const [key, value] of loadEnvironmentPreference<[string, { text: string; attachments: Attachment[] }][] >('kybern.composer.drafts', [])) drafts.set(key, value) })
 
 interface ComposerViewProps {
   draftKey: string
@@ -309,6 +313,7 @@ function ComposerView(props: ComposerViewProps) {
   useEffect(() => {
     if (text || attachments.length) drafts.set(props.draftKey, { text, attachments })
     else drafts.delete(props.draftKey)
+    saveEnvironmentPreference('kybern.composer.drafts', [...drafts].slice(-100))
   }, [text, attachments, props.draftKey])
 
   // Automation: the native file picker cannot be driven, so a test run can name

@@ -1,3 +1,4 @@
+import { activeEnvironment } from '../shell/environment.ts'
 import { spawn } from 'node:child_process'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FileEntry, FilesReadResult } from '../../../../packages/kybern-client/src/types.ts'
@@ -119,7 +120,7 @@ function FileViewer({ projectId, path, onClose }: { projectId: string; path: str
         <MenuItem id="relative" label="Copy relative path" onSelect={() => copyText(path)} />
         <MenuItem id="absolute" label="Copy absolute path" disabled={!absolutePath} onSelect={() => { if (absolutePath) copyText(absolutePath) }} />
         <MenuItem id="contents" label="Copy contents" disabled={!file || file.binary} onSelect={() => { if (file && !file.binary) copyText(file.content) }} />
-        <MenuItem id="reveal" label="Reveal in Finder" icon={N.folder} disabled={!absolutePath || !!process.env.KYBERN_URL} onSelect={() => { if (absolutePath && !process.env.KYBERN_URL) spawn('open', ['-R', absolutePath], { stdio: 'ignore' }).on('error', () => {}) }} />
+        <MenuItem id="reveal" label="Reveal in Finder" icon={N.folder} disabled={!absolutePath || !activeEnvironment().local} onSelect={() => { if (absolutePath && activeEnvironment().local) spawn('open', ['-R', absolutePath], { stdio: 'ignore' }).on('error', () => {}) }} />
       </Menu>
       <IconButton icon={N.x} size={28} label="Close file" onClick={onClose} testId="dock-file-close" />
     </div>

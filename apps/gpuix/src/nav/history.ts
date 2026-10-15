@@ -1,3 +1,4 @@
+import { onEnvironmentChange } from '../shell/environment.ts'
 // Back and forward through the main views (`state/navHistory.ts` and
 // `state/navigation.ts`). The stack rules below are the desktop's, line for line:
 // its module type-imports the desktop store, which this app's typecheck cannot
@@ -155,12 +156,12 @@ function clearUnread(id: string) {
 }
 
 let started = false
+let stops: (() => void)[] = []
 /** Start recording history. Called once by the app shell. */
 export function startNavHistory() {
   if (started) return
   started = true
-  subscribe(record)
-  subscribeNav(record)
+  stops.push(subscribe(record), subscribeNav(record))
   // Boot picks the first project's draft (desktop `hydrate`); it is not a step to come back to.
   const stopBoot = subscribe(() => {
     const s = getState()
@@ -170,6 +171,7 @@ export function startNavHistory() {
     const first = s.projects[0]
     if (first) replaceNavigation(() => selectDraft(first.id))
   })
+  stops.push(stopBoot)
   record()
 }
 
@@ -267,3 +269,5 @@ export function goPage(page: Page) {
   if (s.selectedId && !s.threads.some((t) => t.id === s.selectedId) && !getNav().children[s.selectedId]) selectDraft()
   setNav({ page: 'home' })
 }
+
+onEnvironmentChange(() => { for (const stop of stops) stop(); stops = []; started = false; lastKey = null; restoring = false; nextMode = 'push' }, -100)

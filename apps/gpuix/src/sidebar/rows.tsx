@@ -1,3 +1,5 @@
+import { showDialog } from '../dialogs/store.ts'
+import { activeEnvironment } from '../shell/environment.ts'
 // Thread panel rows (`views/Sidebar.tsx`, `views/subagents/SubagentSidebarRow.tsx`,
 // `lib/kit/sidebarRowStyles.ts`). Rows are 28px with an 8px radius, 14px text,
 // `--sidebar-accent` on hover and `--sidebar-accent-active` when selected.
@@ -244,6 +246,7 @@ export function useAddProject() {
   const { renderer } = useGpuix()
   return async () => {
     if (getState().status !== 'open') return
+    if (!activeEnvironment().local) return showDialog({ kind: 'project' })
     const paths = await renderer?.promptForPaths?.({ directories: true, files: false, prompt: 'Add project' })
     if (paths?.[0]) await addProject(paths[0]).catch((e) => console.error('[sidebar] Unable to add project:', errorText(e)))
   }
@@ -638,6 +641,7 @@ export const ThreadRow = memo(function ThreadRow({
           <MenuItem id="right" icon={N.splitRight} label="Open to the right" disabled onSelect={() => {}} />
           <MenuItem id="below" icon={N.splitDown} label="Open below" disabled onSelect={() => {}} />
           <MenuSeparator />
+          {thread.worktree && <MenuItem id="cleanup" icon={N.worktree} label="Remove worktree…" onSelect={() => showDialog({ kind: 'worktree', threadId: thread.id })} />}
           {thread.worktree && <MenuItem id="branch" icon={N.branch} label={thread.worktree.branch} disabled onSelect={() => {}} />}
           <MenuItem id="archive" icon={N.archive} label="Archive" destructive onSelect={() => void archiveThread(thread.id)} />
         </ContextMenu>

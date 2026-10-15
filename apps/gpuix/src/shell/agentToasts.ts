@@ -1,3 +1,4 @@
+import { onEnvironmentChange } from './environment.ts'
 // Agent event toasts (desktop `state/rpc.ts` `announce`): a turn that finishes or
 // fails, or an agent that needs an approval or an answer, while the reader is not
 // looking at that thread. Finished and failed toasts last 6 s; approval and
@@ -18,6 +19,7 @@ import { toast } from './toasts.tsx'
 const DONE_MS = 6000
 
 let started = false
+let stops: (() => void)[] = []
 /** Follow the daemon's events. Called once by the app shell, after `startLive()`. */
 export function startAgentToasts() {
   if (started) return
@@ -33,13 +35,14 @@ export function startAgentToasts() {
     if (settings) enabled = settings.notifications !== false
   }
   const load = () => void client.call('settings.get', {}).then(readSettings, () => {})
-  client.onNotification('settings.changed', (params) => readSettings((params as { settings?: Settings } | null)?.settings))
-  client.onStatus((status) => {
+  stops.push(client.onNotification('settings.changed', (params) => readSettings((params as { settings?: Settings } | null)?.settings)))
+  stops.push(client.onStatus((status) => {
     if (status === 'open') load()
-  })
+  }))
   if (client.status === 'open') load()
 
-  onLiveEvent((event: ThreadEvent) => {
+  stops.push(onLiveEvent((event: ThreadEvent) => {
+    if (getClient() !== client) return
     if (event.kind === 'approval_resolved') return toast.dismiss(`agent-input:${event.approval_id}`)
     const kind =
       event.kind === 'turn_failed'
@@ -80,5 +83,7 @@ export function startAgentToasts() {
         action: open,
       })
     }
-  })
+  }))
 }
+
+onEnvironmentChange(() => { for (const stop of stops) stop(); stops = []; started = false }, -100)
