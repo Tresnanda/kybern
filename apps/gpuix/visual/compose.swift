@@ -16,6 +16,7 @@ func save(_ c: CGContext, _ p: String) {
 func ctx(_ w: Int, _ h: Int) -> CGContext {
   CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
 }
+let threshold = CommandLine.arguments.count > 5 ? Int(CommandLine.arguments[5])! : 24
 let a = load(CommandLine.arguments[1]), b = load(CommandLine.arguments[2])
 let w = a.width, h = a.height
 // Normalise GPUIX to the Tauri pixel size (both are 1280x820 logical).
@@ -35,7 +36,7 @@ for y in 0..<h { for x in 0..<w {
   let i = y * ra + x * 4, o = y * rd + x * 4
   let diff = max(abs(Int(pa[i]) - Int(pb[i])), abs(Int(pa[i+1]) - Int(pb[i+1])), abs(Int(pa[i+2]) - Int(pb[i+2])))
   let g = Int(pa[i]) / 4 + 20
-  if diff > 24 { over += 1; pd[o] = 255; pd[o+1] = UInt8(max(0, 200 - diff)); pd[o+2] = 40; pd[o+3] = 255 }
+  if diff > threshold { over += 1; pd[o] = 255; pd[o+1] = UInt8(max(0, 200 - diff)); pd[o+2] = 40; pd[o+3] = 255 }
   else { pd[o] = UInt8(g); pd[o+1] = UInt8(g); pd[o+2] = UInt8(g); pd[o+3] = 255 }
 } }
 save(d, CommandLine.arguments[4])

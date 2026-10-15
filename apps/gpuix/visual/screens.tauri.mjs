@@ -7,7 +7,7 @@ const card = (p, title) => p.locator(`[data-note-card][aria-label="${title}"]`).
 export const screens = {
   'notes-gallery': async (p) => { await notes(p) },
   'notes-list': async (p) => { await notes(p); await p.getByRole('button', { name: 'Display' }).click(); await p.getByRole('menuitemradio', { name: 'List' }).click(); await p.keyboard.press('Escape'); await settle(p, 500); await park(p) },
-  'notes-hover': async (p) => { await notes(p); await card(p, 'Moodboard').hover(); await settle(p, 500) },
+  'notes-hover': async (p) => { await notes(p); await card(p, 'Project brief').hover(); await settle(p, 500) },
   'notes-search-empty': async (p) => { await notes(p); await p.getByPlaceholder('Search notes').fill('zzzz'); await settle(p, 700); await park(p) },
   'tasks-board': async (p) => { await rail('Tasks')(p); await settle(p, 800); await p.getByRole('button', { name: 'Board' }).click(); await settle(p, 800); await park(p) },
   'tasks-detail': async (p) => { await rail('Tasks')(p); await settle(p, 800); await p.getByText('Ship notes image blocks').first().click(); await settle(p, 1200); await park(p) },

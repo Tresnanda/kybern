@@ -36,6 +36,30 @@ export async function loadGpuixScreens(): Promise<Record<string, Step>> {
       all[name] = step as Step
     }
   }
+  for (const name of ['blur-dialog', 'blur-palette', 'blur-popover']) {
+    all[`${name}-base`] = async (app, fx) => {
+      await all[name]!(app, fx)
+      await app.getByTestId('app-ready').press('escape')
+      const { park } = await import('./screens.gpuix.ts')
+      await park(app)
+    }
+  }
+  all['tasks-hover'] = async (app, fx) => {
+    await all['tasks-list']!(app, fx)
+    await app.getByTestId(`task-row-${fx.tasks['Fix sidebar collapse jitter on resize']}`).hover()
+    await new Promise(r => setTimeout(r, 500))
+  }
+  all['dock-tab-hover'] = async (app, fx) => {
+    await all['dock-agents']!(app, fx)
+    await app.getByTestId('dock-tab-agents').hover()
+    await new Promise(r => setTimeout(r, 500))
+  }
+  all['dock-base'] = async (app, fx) => {
+    const { click, park, settle } = await import('./screens.gpuix.ts')
+    await click(app, `thread-${fx.extra.dock!.thread}`)
+    if (!await app.getByTestId('dock-tabs').count()) await click(app, 'dock-toggle')
+    await settle(600); await park(app)
+  }
   return all
 }
 
@@ -48,6 +72,7 @@ export async function loadGpuixEntries(): Promise<Record<string, ScreenEntry>> {
     const mod = await import(path.join(sub, f))
     for (const [name, e] of Object.entries(mod.entries ?? {})) all[name] = e as ScreenEntry
   }
+  for (const name of ['blur-dialog', 'blur-palette', 'blur-popover']) if (all[name]) all[`${name}-base`] = all[name]!
   return all
 }
 
@@ -60,3 +85,13 @@ export async function loadAreaFixtures(): Promise<Record<string, AreaFixture>> {
 }
 
 export type { Fixture }
+
+export async function loadStateBases(): Promise<Record<string, string>> {
+  const { stateBases } = await import('./state-bases.ts')
+  const bases = { ...stateBases }
+  for (const f of readdirSync(path.join(dir, 'screens')).filter(x => x.endsWith('.gpuix.ts')).sort()) {
+    const mod = await import(path.join(dir, 'screens', f))
+    Object.assign(bases, mod.bases ?? {})
+  }
+  return bases
+}

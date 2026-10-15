@@ -93,3 +93,54 @@ bun scripts/visual-pair.ts --down                               # stop the scrat
 - `measure.mjs` reads this checkout's state file, but the Settings fixture's proxy port dies with the pair run, so measure right after `--keep` runs only works for screens that don't need the proxy.
 - Light dialogs: GPUI paints an opaque dark backing under every `<anchored>` layer and composites an opacity tween over it ~2x too dark on light pages (0.6 over white gave 61, the web gives 121). A scrim now fills the anchored surface itself (`PopupLayer backing=rgba(0,0,0,dim)`), which gives 121 exactly. Under Reduce Motion only; with motion the headless tween of a layer opacity stalls part-way (also before this change), so a native fix to the anchored layer's opacity composition is still wanted.
 - The desktop's real type scale (base 14): ui 14, ui-lg 15, ui-sm 13, ui-xs/meta 12, ui-timestamp 10. The `var(--app-font-size-ui…, 12px)` fallbacks in the CSS are not what renders.
+
+## State-delta checks
+
+The default full-screen score is unchanged. `--threshold 6` lowers its RGB
+threshold from 24; it still cannot certify that a state exists. Use:
+
+```sh
+bun scripts/visual-pair.ts settings-hover settings-focus pulls-hover --state-delta --theme both --fresh
+bun scripts/visual-pair.ts --rescore --theme both --out /path/to/existing/pairs
+bun scripts/visual-delta-check.ts
+```
+
+`--state-delta` also captures each requested state’s base. Bases are declared in
+`state-bases.ts`, with optional per-area `bases: Record<string, string>` exports
+from `screens/<area>.gpuix.ts`. A base must use the same fixture and layout,
+immediately before the interaction. New states need explicit base declarations;
+name guessing cannot distinguish an unrelated page from the correct base.
+`--rescore` uses existing captures without launching servers/apps. Missing inputs
+are `MISSING`, never passes. Uniform blank UI captures and dimension mismatches
+are `INVALID_CAPTURE`. Use captures from one revision and one fixture run;
+rescore cannot make historical screenshots current.
+
+For each pixel/channel, let T = Tauri(state) − Tauri(base) and G = GPUIX(state) −
+GPUIX(base). The score is `100 × (1 − Σ|T−G| / Σ(|T|+|G|))`.
+Unchanged pixels do not inflate it. Matching signed changes score 100; missing,
+wrong-sign and disjoint changes score zero. Half-strength changes score 66.7.
+Every RGB step counts, including changes below the legacy threshold.
+
+The same calculation runs in 128×128 physical-pixel tiles. A provisional PASS
+requires global score ≥85 and every active tile ≥70. Tiles with fewer than 16
+changed pixels or less than 96 total RGB energy are reported in the global score
+but excluded from the regional verdict to limit isolated caret/raster noise.
+A reference with less than 96 RGB energy is INCONCLUSIVE, even if both captures
+look identical. These are strict diagnostic gates, not perceptual-equivalence
+claims: moving text, timestamps, asynchronous loads and layout offsets can fail
+and require inspection. Dimensions must match exactly; the delta metric refuses
+resizing because interpolation would invent changes.
+
+Outputs: `<screen>-<theme>-delta.png` (red missing, blue unexpected, orange wrong
+magnitude/color, green exact), matching `-delta.json` (tile rectangles, energy,
+missing/unexpected counts), and `state-deltas.json` (all results). Console output
+is a Markdown table. Pair and ordinary diff images retain their original names.
+The regional score keeps a large correct menu from concealing a missing small
+focus or hover change elsewhere.
+
+Focus callbacks require an active native window on macOS. Use `--foreground`
+for focus-state captures; this explicitly activates each GPUIX window. The
+default remains background. A zero background focus score is not proof that
+foreground focus styling is absent. `scripts/visual-focus-check.ts --foreground`
+(with `KYBERN_DATA_DIR` and `KYBERN_VERIFY_OUTPUT` set to scratch paths) checks
+click, renderer focus, Tab navigation and blur using the actual border pixels.
