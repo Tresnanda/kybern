@@ -37,6 +37,7 @@ export const screens: Record<string, Step> = {
 }
 
 export const entries = {
+  'dock-changes': { entry: 'visual/screens/dock.entry.tsx', env: { DOCK_VISUAL_STATE: 'changes' } },
   'dock-preview': { entry: 'visual/screens/dock.entry.tsx', env: { DOCK_VISUAL_STATE: 'servers' } },
   'dock-narrow': { entry: 'src/main.tsx', env: { KYBERN_WINDOW_SIZE: '980x820' } },
   'dock-live': { entry: 'scripts/dock2-fixture.tsx', env: { DOCK2_LIVE: '1' } },

@@ -11,6 +11,7 @@ client.call = (async (method: string, params: Record<string, unknown>) => {
     { url: 'http://localhost:5173', port: 5173, host: 'localhost', process_name: 'node', cwd: '/workspace/kybern-app', title: 'Kybern', in_project: true },
     { url: 'http://localhost:3000', port: 3000, host: 'localhost', process_name: 'node', cwd: '/workspace/docs-site', title: 'Documentation', in_project: false },
   ], scanned_at: '2026-10-15T12:00:00Z', method: 'fixture' }
+  if ((mode === 'diff' || mode === 'changes') && method === 'git.status') return { is_git: false }
   if (mode === 'diff' && method === 'threads.diff') return {
     patch: 'diff --git a/src/dock-example.ts b/src/dock-example.ts\n--- a/src/dock-example.ts\n+++ b/src/dock-example.ts\n@@ -1 +1,2 @@\n export const example = 1;\n+export const next = 2;',
     files: [{ path: 'src/dock-example.ts', status: 'modified', additions: 1, deletions: 0, patch: '@@ -1 +1,2 @@\n export const example = 1;\n+export const next = 2;' }],

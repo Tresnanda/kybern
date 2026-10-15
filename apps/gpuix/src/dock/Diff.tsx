@@ -6,12 +6,11 @@ import { Icon } from '../icons.tsx'
 import { ISLAND } from '../MatrixLoader.tsx'
 import { errorText } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
-import { Chevron, IconButton } from '../sidebar/rows.tsx'
 import { getClient, onOpenEvent, useApp } from '../state.ts'
 import { desktopDiffTheme } from '../native/diff.ts'
 import { NativeDiffHeader } from '../native/DiffView.tsx'
 import { Label, useTheme } from '../ui.tsx'
-import { ErrorLine, Section } from './parts.tsx'
+import { ErrorLine } from './parts.tsx'
 
 export function openWeb(url: string) {
   // Only web links from daemon records; never hand arbitrary schemes to macOS.
@@ -86,10 +85,12 @@ export function DiffPane({ thread, onStats }: { thread: Thread; onStats: (adds: 
     <ErrorLine error={error} retry={refresh} />
     {notice && <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>{notice}</Label>}
     {!files.length ? loaded && !error ? <div style={{ display: 'flex', flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingLeft: 20, paddingRight: 20 }}><Label color={t.textSecondary} size={12} style={{ textAlign: 'center', opacity: 0.7 }}>No changes yet. Files the agent edits in this thread show up here with their diff.</Label></div> : null : <>
-      <Section label={`${files.length} ${files.length === 1 ? 'file' : 'files'} changed`}>
+      <div style={{ display: 'flex', height: 38, flexShrink: 0, alignItems: 'center', gap: 6, paddingLeft: 14, paddingRight: 6 }}>
+        <Icon source={N.pencil} size={14} color={t.text} />
+        <Label color={t.text} size={14} lineHeight={21} style={{ flexGrow: 1 }}>{`${files.length} ${files.length === 1 ? 'file' : 'files'} changed`}</Label>
         <Label color={t.green} size={11}>{`+${files.reduce((n, f) => n + f.additions, 0)}`}</Label>
         <Label color={t.red} size={11}>{`−${files.reduce((n, f) => n + f.deletions, 0)}`}</Label>
-      </Section>
+      </div>
       <virtual-list testId="dock-diff-list" style={{ flexGrow: 1, minHeight: 0, width: '100%' }}>
         {files.map((file) => <FileDiff key={`${diff?.to}:${generation}:${file.path}`} file={file} threadId={thread.id} />)}
       </virtual-list>
