@@ -818,3 +818,44 @@ inline code. Tauri composer reference chips and resting task atoms have no fill:
 `noteInputMarkColors(t)` resolves Notes' foreground/transparent mixes (4% light,
 5% dark code fill; 60% task text). Native source-mode editors still show Markdown
 syntax and cannot reproduce Tauri's icons, replacement labels or per-run font size.
+
+
+## Markdown style controls (package 5)
+
+`theme.markdown` adds optional table grids, cell padding, quote paint/spacing,
+list gutters/markers, heading rhythm, fenced-code wrapping, and mixed-size padded
+inline-code boxes. Import `withMarkdownStyle`, `transcriptMarkdownStyle` or
+`notesMarkdownStyle` from `src/native/markdown.ts`; the structural helper carries
+the new fields through the existing theme prop. Importing the adapter also
+augments `GpuixTheme` with the optional field; no npm declarations are replaced.
+The native renderer reads them from its normal theme override, with no extra bridge.
+
+```tsx
+<markdown source={source} theme={withMarkdownStyle(theme, {
+  tableGrid: true, tablePaddingX: 7.2, tablePaddingY: 5.6,
+  tableBorder: border, quoteBorder: border, quoteBackground: 'transparent',
+  quoteText: muted, quotePaddingLeft: 12.8, quotePaddingY: 0,
+  inlineCodePaddingX: 5.6, inlineCodePaddingY: 1.6,
+  inlineCodeSizeRatio: 13 / 14, codeWrap: wrap,
+})} />
+```
+
+Inline radius and fill remain `metrics.mdInlineCodeRadius` and `codeWash`.
+`inlineCodePaddingX` reserves real width; it is unrelated to the input decoration
+API's zero-only `paddingX`. The mixed-font flow measures source ranges first,
+creates GPUI fragments only inside the viewport, and retains original bytes,
+links, paragraph-wide search and one selection group. Fragment identities use
+source offsets, so reflow retains selection. No synthetic padding characters,
+per-frame timer, new parser, highlighting worker or global cache was added.
+
+For mixed-direction paragraphs the renderer deliberately retains its original
+whole-paragraph shaping path; padded/smaller code is not yet supported there.
+Whitespace-containing code spans use an inline box (wrapping within that box when
+wider than the viewport), not WebKit's full inline-fragment line-breaking algorithm.
+Neither limitation should be described as full CSS layout parity.
+
+`native/markdown-check.ts` covers dark/light pixels, Unicode selection, paragraph
+search, reflow, hard breaks, code wrapping and reaching the end of a large document.
+It runs in `native/update.sh`. `native/markdown-webkit.*` render the actual desktop
+Markdown component for the same sample. See `PACKAGE-5.md` for the audited CSS
+values, images, measurements, remaining differences and unapplied integration.
