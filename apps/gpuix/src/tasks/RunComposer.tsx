@@ -15,7 +15,7 @@ import { getClient, useApp } from '../state.ts'
 import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
 import { Label, useTheme } from '../ui.tsx'
-import { setTasks, taskState, upsert, useTasks } from './store.ts'
+import { setTasks, taskState, upsert, useTasks, updateTask, openTask } from './store.ts'
 
 interface SendPrefs {
   provider?: ProviderInstance
@@ -101,6 +101,8 @@ export function RunComposer({ ids }: { ids: string[] }) {
     if (!provider) throw new Error('Install a coding agent, then try again.')
     if (needsProject && !projectId) throw new Error('Choose a project to run these tasks in.')
     if (incompatible) throw new Error('Combined tasks must belong to the same project. Choose separate runs.')
+    const pending = single?.pending_followup?.trim()
+    const runMessage = pending ? { ...message, parts: [{ type: 'text' as const, text: pending }, ...message.parts] } : message
     const common = {
       provider,
       model,
@@ -109,7 +111,7 @@ export function RunComposer({ ids }: { ids: string[] }) {
       use_worktree: worktree,
       base_branch: worktree ? choices.baseBranch : null,
       project_id: projectId || null,
-      message,
+      message: runMessage,
       note_ids: notes,
     }
     if (single) {
@@ -160,6 +162,13 @@ export function RunComposer({ ids }: { ids: string[] }) {
           Hide
         </Button>
       </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {picked.map((task) => <Button key={task.id} testId={`task-run-reference-${task.id}`} onClick={() => openTask(task.id)}>{`${task.key} · ${task.title}`}</Button>)}
+      </div>
+      {!followup && single?.pending_followup?.trim() && <div testId="task-pending-followup" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Label color={t.textSecondary} size={12} truncate style={{ flexGrow: 1 }}>{`Next run includes: ${single.pending_followup.trim()}`}</Label>
+        <Button onClick={() => void updateTask(single.id, { pending_followup: '' }).catch(() => {})}>Clear</Button>
+      </div>}
       {!followup && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
           {needsProject && (

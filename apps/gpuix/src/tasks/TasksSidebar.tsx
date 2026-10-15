@@ -1,12 +1,12 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { arrangeTaskProjects, countTasks, filterLabel, type TaskFilter } from '@/state/tasksModel'
 import { useApp } from '../state.ts'
 import { useAddProject } from '../sidebar/rows.tsx'
 import { useNav } from '../nav/store.ts'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
-import { Menu, MenuItem } from '../nav/overlay.tsx'
-import { TextField, Button } from '../settings/controls.tsx'
+import { ContextMenu, MenuItem, Tip } from '../nav/overlay.tsx'
+import { ProjectDot } from '../notes/kit.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { StatusGlyph } from './Glyphs.tsx'
 import { chooseFilter, taskTyping, prefs, quickAdd, setTasks, useTasks } from './store.ts'
@@ -19,6 +19,8 @@ export function TasksSidebar() {
   const query = useTasks((s) => s.query)
   const projects = useApp((s) => s.projects)
   const order = useNav((s) => s.projectOrder)
+  const [hover, setHover] = useState(false)
+  const [menu, setMenu] = useState<{ id: string; at: { x: number; y: number } } | null>(null)
   const counts = useMemo(() => countTasks(Object.values(tasks), Date.now()), [tasks])
   const sorted = useMemo(
     () =>
@@ -37,7 +39,7 @@ export function TasksSidebar() {
     p.projectsCollapsed,
     p.filter.startsWith('project:') ? p.filter.slice(8) : null,
   ).filter((r) => r.visible)
-  const row = (filter: TaskFilter, label: string, count: number, glyph: React.ReactNode) => (
+  const row = (filter: TaskFilter, label: string, count: number, glyph: React.ReactNode, trailing?: React.ReactNode) => (
     <div
       testId={`task-filter-${filter}`}
       onClick={() => chooseFilter(filter)}
@@ -58,36 +60,41 @@ export function TasksSidebar() {
       <Label color={t.text} size={13} truncate style={{ flexGrow: 1, pointerEvents: 'none' }}>
         {label}
       </Label>
+      {trailing}
       <Label color={t.textTertiary} size={12} style={{ pointerEvents: 'none' }}>
         {String(count)}
       </Label>
     </div>
   )
   return (
-    <div testId="tasks-sidebar" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: 0 }}>
+    <div testId="tasks-sidebar" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', height: 48, paddingLeft: 16, paddingRight: 10, gap: 8 }}>
         <Label color={t.text} size={15} weight={600} style={{ flexGrow: 1 }}>
           Tasks
         </Label>
-        <Button testId="task-new" onClick={() => quickAdd()}>
-          +
-        </Button>
+        <Tip label="New task · C" side="bottom">
+          <div testId="task-new" onClick={() => quickAdd()} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 7, cursor: 'pointer', hover: { backgroundColor: ink(t, 0.05) } }}>
+            <Icon source={N.newThread} size={16} color={ink(t, 0.6)} />
+          </div>
+        </Tip>
       </div>
       <div style={{ paddingLeft: 10, paddingRight: 10, paddingBottom: 10 }}>
-        <TextField
-          testId="task-search"
-          onFocus={() => taskTyping(true)}
-          onBlur={() => taskTyping(false)}
-          label="Search tasks"
-          placeholder="Search"
-          value={query}
-          onChange={(query) => setTasks({ query, openId: null, quick: null })}
-          width="100%"
-          onKeyDown={(e) => {
-            if (e.key === 'escape') setTasks({ query: '' })
-          }}
-          style={{ height: 28, borderWidth: 0, backgroundColor: ink(t, 0.05) }}
-        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, height: 28, paddingLeft: 9, paddingRight: 9, borderRadius: 8, backgroundColor: ink(t, t.variant === 'dark' ? 0.05 : 0.04) }}>
+          <Icon source={N.search} size={14} color={ink(t, 0.4)} />
+          <input
+            testId="task-search"
+            aria-label="Search tasks"
+            placeholder="Search"
+            value={query}
+            onFocus={() => taskTyping(true)}
+            onBlur={() => taskTyping(false)}
+            onChange={(e) => setTasks({ query: e.value ?? '', openId: null, quick: null })}
+            onKeyDown={(e) => {
+              if (e.key === 'escape') setTasks({ query: '' })
+            }}
+            style={{ flexGrow: 1, minWidth: 0, height: 28, fontSize: 13, color: t.text, backgroundColor: 'transparent', borderWidth: 0 }}
+          />
+        </div>
       </div>
       <virtual-list style={{ flexGrow: 1, minHeight: 0, width: '100%' }}>
         {(['all', 'inbox', 'running', 'needs_review', 'done', 'global'] as const).map((filter) => (
@@ -96,57 +103,39 @@ export function TasksSidebar() {
               filter,
               filterLabel(filter, () => undefined),
               counts[filter],
-              filter === 'all' || filter === 'global' ? (
-                <Icon source={filter === 'all' ? N.tasks : N.folder} size={14} color={t.textSecondary} />
+              filter === 'all' ? (
+                <Icon source={N.tasks} size={16} color={t.textSecondary} />
+              ) : filter === 'global' ? (
+                <div style={{ display: 'flex', justifyContent: 'center' }}><ProjectDot projectId={null} /></div>
               ) : (
                 <StatusGlyph status={filter} mono />
               ),
             )}
           </div>
         ))}
-        <div key="heading" style={{ display: 'flex', height: 42, paddingLeft: 16, paddingRight: 10, alignItems: 'center' }}>
-          <div onClick={() => prefs({ projectsCollapsed: !p.projectsCollapsed })} style={{ flexGrow: 1, cursor: 'pointer' }}>
-            <Label color={t.textTertiary} size={12} style={{ pointerEvents: 'none' }}>
-              {p.projectsCollapsed ? 'Projects ›' : 'Projects ⌄'}
-            </Label>
+        <div key="heading" style={{ display: 'flex', height: 42, paddingLeft: 16, paddingRight: 10, paddingBottom: 6, alignItems: 'flex-end' }}>
+          <div onClick={() => prefs({ projectsCollapsed: !p.projectsCollapsed })} style={{ display: 'flex', alignItems: 'center', gap: 4, height: 20, marginLeft: -4, paddingLeft: 4, paddingRight: 4, cursor: 'pointer' }}>
+            <Label color={t.textTertiary} size={12} lineHeight={18} weight={500} style={{ pointerEvents: 'none' }}>Projects</Label>
+            <Icon source={p.projectsCollapsed ? N.chevronRight : N.chevronDown} size={12} color={t.textTertiary} />
           </div>
-          <Button
-            testId="task-add-project"
-            onClick={() => {
-              void addProject()
-            }}
-          >
-            +
-          </Button>
+          <div style={{ flexGrow: 1 }} />
+          <Tip label="Add project" side="right">
+            <div testId="task-add-project" onClick={() => { void addProject() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, marginRight: -4, marginBottom: -3, borderRadius: 6, opacity: hover || !rows.length ? 1 : 0, cursor: 'pointer', hover: { backgroundColor: ink(t, 0.05) } }}>
+              <Icon source={N.plus} size={14} color={t.textTertiary} />
+            </div>
+          </Tip>
         </div>
         {rows.map(({ project, pinned }) => (
           <div key={project.id} style={{ display: 'flex', paddingLeft: 8, paddingRight: 8 }}>
-            <div style={{ flexGrow: 1, minWidth: 0 }}>
+            <div style={{ flexGrow: 1, minWidth: 0 }} onAuxClick={(e) => { if (e.isRightClick || e.button === 2) setMenu({ id: project.id, at: { x: e.x ?? 0, y: e.y ?? 0 } }) }}>
               {row(
                 `project:${project.id}`,
                 project.name,
                 counts.projects[project.id] ?? 0,
-                <Icon source={N.folder} size={14} color={t.textSecondary} />,
+                <div style={{ display: 'flex', justifyContent: 'center' }}><ProjectDot projectId={project.id} /></div>,
+                pinned ? <Icon source={N.pin} size={12} color={ink(t, 0.28)} style={{ marginRight: -3 }} /> : undefined,
               )}
             </div>
-            <Menu
-              testId={`task-project-menu-${project.id}`}
-              trigger={() => (
-                <div style={{ padding: 6, pointerEvents: 'none' }}>
-                  <Label color={t.textTertiary} size={12}>
-                    {pinned ? '⌖' : '⋯'}
-                  </Label>
-                </div>
-              )}
-            >
-              <MenuItem
-                id="pin"
-                label={pinned ? 'Unpin' : 'Pin'}
-                onSelect={() =>
-                  prefs({ pinnedProjects: pinned ? p.pinnedProjects.filter((id) => id !== project.id) : [...p.pinnedProjects, project.id] })
-                }
-              />
-            </Menu>
           </div>
         ))}
       </virtual-list>
@@ -162,6 +151,14 @@ export function TasksSidebar() {
               : `${counts.needs_review} waiting for review`}
           </Label>
         </div>
+      )}
+      {menu && (
+        <ContextMenu at={menu.at} onClose={() => setMenu(null)} testId="task-project-menu" width={176}>
+          {(() => {
+            const pinned = p.pinnedProjects.includes(menu.id)
+            return <MenuItem id="pin" icon={N.pin} label={pinned ? 'Unpin' : 'Pin'} onSelect={() => prefs({ pinnedProjects: pinned ? p.pinnedProjects.filter((id) => id !== menu.id) : [...p.pinnedProjects, menu.id] })} />
+          })()}
+        </ContextMenu>
       )}
     </div>
   )

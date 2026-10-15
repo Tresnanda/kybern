@@ -5,7 +5,7 @@ import { load, save, flush } from '../shell/persist.ts'
 import { NoteSession } from './session.ts'
 import { splitBlocks } from './blocks.ts'
 
-assert.ok(process.env.KYBERN_DATA_DIR?.includes('gpuix-scratch') || process.env.KYBERN_DATA_DIR?.endsWith('/apps/gpuix/.combined/data'), 'Use an isolated scratch data directory')
+assert.ok(process.env.KYBERN_DATA_DIR?.includes('gpuix-scratch') || process.env.KYBERN_DATA_DIR?.endsWith('/apps/gpuix/.combined/data') || process.env.KYBERN_DATA_DIR?.endsWith('/ade-gpuix-notes/.p4/data'), 'Use an isolated scratch data directory')
 for (const source of ['', '\n\n', '# Title\n\nBody\n', '```js\n\ncode\n```\n\nTail', 'a\r\n\r\nb\r\n', '~~~\n\n~~~\n\n', '    code\n\n    more\n']) assert.equal(splitBlocks(source).join(''), source)
 connect()
 await new Promise<void>((resolve) => { if (getState().status === 'open') return resolve(); const off = subscribe(() => { if (getState().status === 'open') { off(); resolve() } }) })

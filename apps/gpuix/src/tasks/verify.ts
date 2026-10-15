@@ -4,8 +4,8 @@ import path from 'node:path'
 import { launch, type App, type Locator } from '@gpuix/react/automation'
 import { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 
-const scratch = (process.env.KYBERN_DATA_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/data')
-if (!scratch.includes('gpuix-scratch') && !scratch.endsWith('/apps/gpuix/.combined/data')) throw new Error('This check writes fixtures: set KYBERN_DATA_DIR to the GPUIX scratch daemon.')
+const scratch = path.resolve(process.env.KYBERN_DATA_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/data')
+if (!scratch.includes('gpuix-scratch') && !scratch.endsWith('/apps/gpuix/.combined/data') && !scratch.endsWith('/ade-gpuix-notes/.p4/data')) throw new Error('This check writes fixtures: set KYBERN_DATA_DIR to the GPUIX scratch daemon.')
 const port = readFileSync(path.join(scratch, 'daemon.port'), 'utf8').trim()
 const token = readFileSync(path.join(scratch, 'daemon.token'), 'utf8').trim()
 const client = new KybernClient(
@@ -168,7 +168,7 @@ try {
   await app.getByTestId('tasks-sidebar').waitFor()
   await app.getByTestId(`task-filter-project:${project.id}`).waitFor()
   await click(app.getByTestId(`task-filter-project:${project.id}`))
-  if (await app.getByTestId('task-board').count()) await click(app.getByText('List'))
+  if (await app.getByTestId('task-board').count()) await click(app.getByTestId('task-view-list'))
   await app.getByTestId('task-list').waitFor()
   await app.getByTestId(`task-row-${ids[0]}`).waitFor()
   await app.screenshot({ path: path.join(out, `list-${process.argv.includes('--light') ? 'light' : 'dark'}.png`) })
@@ -182,16 +182,16 @@ try {
   } else if (process.argv.includes('--screens')) {
     await click(app.getByTestId(`task-row-${ids[0]}`))
     await app.getByTestId('task-detail').waitFor()
-    await app.screenshot({ path: path.join(out, 'detail-dark.png') })
+    await app.screenshot({ path: path.join(out, `detail-${process.argv.includes('--light') ? 'light' : 'dark'}.png`) })
     await click(app.getByTestId('task-back'))
-    await click(app.getByText('Board'))
+    await click(app.getByTestId('task-view-board'))
     await app.getByTestId('task-board').waitFor()
-    await app.screenshot({ path: path.join(out, 'board-dark.png') })
-    await click(app.getByText('List'))
+    await app.screenshot({ path: path.join(out, `board-${process.argv.includes('--light') ? 'light' : 'dark'}.png`) })
+    await click(app.getByTestId('task-view-list'))
     await click(app.getByTestId(`task-row-${ids[0]}`))
     await click(app.getByTestId('task-send-open'))
     await app.getByTestId('composer').waitFor()
-    await app.screenshot({ path: path.join(out, 'composer-dark.png') })
+    await app.screenshot({ path: path.join(out, `composer-${process.argv.includes('--light') ? 'light' : 'dark'}.png`) })
   } else {
     if (!process.argv.includes('--send-only')) {
       await app.getByTestId('task-search').fill('criteria')
@@ -227,6 +227,12 @@ try {
         'linked note content',
       )
       console.log('LINKED NOTE OK')
+      await click(app.getByTestId(`task-detach-${note.id}`))
+      await until(() => client.call('tasks.items.get', { id: ids[0]! }), (r) => !r.task!.note_ids.includes(note.id), 'note detached')
+      await click(app.getByTestId('task-attach-note'))
+      await click(app.getByTestId(`task-attach-${note.id}`))
+      await until(() => client.call('tasks.items.get', { id: ids[0]! }), (r) => r.task!.note_ids.includes(note.id), 'note attached')
+      console.log('NOTE ATTACHMENT EDITING OK')
       await app.getByTestId('task-criterion-0').waitFor()
       await click(app.getByTestId('task-criterion-0'))
       await until(
@@ -245,6 +251,15 @@ try {
         (r) => r.task?.body.startsWith('Autosaved description.') ?? false,
         'description autosaved',
       )
+      await click(app.getByTestId('note-format-bold'))
+      await until(() => client.call('tasks.items.get', { id: ids[0]! }), (r) => r.task!.body.startsWith('**Autosaved description.**'), 'description formatting')
+      const base = (await client.call('tasks.items.get', { id: ids[0]! })).task!
+      await app.getByTestId('task-edit-body').press('x')
+      await client.call('tasks.items.update', { id: base.id, expected_revision: base.revision, body: 'Remote description.' })
+      await app.getByTestId('task-keep-mine').waitFor({ timeoutMs: 15000 })
+      await click(app.getByTestId('task-keep-mine'))
+      await until(() => client.call('tasks.items.get', { id: base.id }), (r) => r.task!.body.includes('Autosaved description.'), 'conflict keeps draft')
+      console.log('DESCRIPTION FORMATTING AND CONFLICT RECOVERY OK')
       await click(app.getByTestId('task-edit-done'))
       await until(
         () => client.call('tasks.items.get', { id: ids[0]! }),
@@ -258,6 +273,7 @@ try {
       await app.getByTestId(`task-row-${ids[0]}`).hover()
       await app.getByTestId(`task-select-${ids[0]}`).waitFor()
       await click(app.getByTestId(`task-select-${ids[0]}`))
+      await app.getByTestId(`task-row-${ids[1]}`).hover()
       await app.getByTestId(`task-select-${ids[1]}`).waitFor()
       await click(app.getByTestId(`task-select-${ids[1]}`))
       await app.getByTestId('task-selection').waitFor()
@@ -305,7 +321,7 @@ try {
         'new-task shortcut escaped',
       )
       console.log('TASK CMD-N OK')
-      await click(app.getByText('Board'))
+      await click(app.getByTestId('task-view-board'))
       await app.getByTestId('task-board').waitFor()
       const todo = await app.getByTestId('task-column-todo').bounds()
       await dragTo(ids[2]!, { x: todo.x + todo.width / 2, y: todo.y + 65 }, true)
@@ -318,7 +334,7 @@ try {
       )
       console.log('BOARD DRAG AND CANCEL OK')
       await app.screenshot({ path: path.join(out, `board-${process.argv.includes('--light') ? 'light' : 'dark'}.png`) })
-      await click(app.getByText('List'))
+      await click(app.getByTestId('task-view-list'))
       await app.getByTestId('task-list').waitFor()
     }
     await app.getByTestId(`task-row-${ids[0]}`).waitFor()
