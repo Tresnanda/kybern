@@ -12,7 +12,7 @@ import { environmentKey, onEnvironmentChange } from '../shell/environment.ts'
 // - plan limits follow `usage.limits` and `usage.limits.changed`.
 //
 // Text deltas cost one switch here and nothing else: no state changes, no render.
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
@@ -210,6 +210,8 @@ interface Prefs {
   projectOrder?: string[]
   filter?: NavState['filter']
   sidebarOpen?: boolean
+  unread?: NavState['unread']
+  attentionDismissals?: NavState['attentionDismissals']
 }
 
 function readPrefs(): Prefs {
@@ -230,6 +232,8 @@ function persistPrefs() {
     projectOrder: getNav().projectOrder,
     filter: getNav().filter,
     sidebarOpen: getState().sidebarOpen,
+    unread: getNav().unread,
+    attentionDismissals: getNav().attentionDismissals,
   }
   const text = JSON.stringify(prefs)
   if (text === lastPrefs) return
@@ -239,13 +243,17 @@ function persistPrefs() {
   pendingPrefs = () => {
     try {
       mkdirSync(path.dirname(target), { recursive: true })
-      writeFileSync(target, text)
+      const temp = `${target}.${process.pid}.tmp`
+      writeFileSync(temp, text)
+      renameSync(temp, target)
     } catch {
       // Preferences are a convenience; a read-only home must not break the app.
     }
   }
   prefsTimer = setTimeout(() => { pendingPrefs?.(); pendingPrefs = undefined }, 300)
 }
+
+process.on('exit', () => pendingPrefs?.())
 
 let started = false
 let limitsTimer: ReturnType<typeof setInterval> | undefined
@@ -265,7 +273,7 @@ export function startLive() {
   const prefs = readPrefs()
   lastPrefs = JSON.stringify(prefs)
   set({ collapsed: prefs.collapsed ?? {}, ...(prefs.sidebarOpen === undefined ? {} : { sidebarOpen: prefs.sidebarOpen }) })
-  setNav({ projectOrder: prefs.projectOrder ?? [], filter: prefs.filter ?? DEFAULT_FILTER })
+  setNav({ projectOrder: prefs.projectOrder ?? [], filter: prefs.filter ?? DEFAULT_FILTER, unread: prefs.unread ?? {}, attentionDismissals: prefs.attentionDismissals ?? {} })
   stops.push(subscribe(persistPrefs), subscribeNav(persistPrefs))
 
   const events = client.subscribeEvents({ include_tool_output: false }, (event) => { if (getClient() === client) onEvent(event) })

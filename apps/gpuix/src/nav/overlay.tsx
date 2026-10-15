@@ -499,6 +499,11 @@ export function Dialog({
 }) {
   const t = useTheme()
   const size = useWindowSize({ intervalMs: 250 })
+  const { renderer } = useGpuix()
+  const [returnFocus] = useState(() => renderer?.getFocusedElementId?.())
+  useLayoutEffect(() => () => {
+    if (returnFocus != null) queueMicrotask(() => { try { renderer?.focusElement?.(returnFocus) } catch { /* Window closed. */ } })
+  }, [renderer, returnFocus])
   const palette = variant === 'palette'
   // Decided once: a later change must not restart the entrance.
   const [still] = useState(instant)

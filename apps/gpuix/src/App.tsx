@@ -1,3 +1,4 @@
+import { CloseGuard } from './shell/CloseGuard.tsx'
 import { WorkspaceDialogs } from './dialogs/Dialogs.tsx'
 import { EnvironmentMenu } from './sidebar/EnvironmentSwitcher.tsx'
 import { EnvironmentDialogs } from './environments/Dialogs.tsx'
@@ -182,6 +183,7 @@ function Workspace() {
       <EnvironmentDialogs />
       <EnvironmentMenu />
       <WorkspaceDialogs />
+      <CloseGuard />
       <Toaster />
       <SidebarDragLayer />
       <DockResizeCapture />

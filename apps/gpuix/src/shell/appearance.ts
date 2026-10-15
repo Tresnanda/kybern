@@ -20,7 +20,7 @@
 import type { Pointer } from 'bun:ffi'
 import { useEffect, useSyncExternalStore } from 'react'
 import { applyDesktopMaterial } from '../native/material.ts'
-import { getObjc, nsApp, sel } from '../native/objc.ts'
+import { cls, cstr, each, getObjc, nsApp, sel } from '../native/objc.ts'
 
 export type Variant = 'dark' | 'light'
 
@@ -59,18 +59,40 @@ const subscribe = (l: () => void) => {
 /** `launch` is the variant read at startup (`VARIANT` in `ui.tsx`), used until the first poll. */
 export const useSystemVariant = (launch: Variant): Variant => useSyncExternalStore(subscribe, getSystemVariant) ?? launch
 
-let applied: Variant | null = null
-/**
- * Give the window the app's appearance and re-apply the desktop vibrancy
- * material (it resolves against the window's appearance). The first call only
- * records the variant: `main.tsx` installs the material at launch.
- */
+/** Keep even opaque windows' native controls in the selected appearance. */
+export function syncWindowAppearance(variant: Variant): boolean {
+  if (process.platform !== 'darwin') return true
+  try {
+    const o = getObjc(), app = nsApp()
+    if (!app) return false
+    const name = o.msgPtrArg(cls(o, 'NSString'), sel(o, 'stringWithUTF8String:'), cstr(variant === 'dark' ? 'NSAppearanceNameDarkAqua' : 'NSAppearanceNameAqua')) as Pointer
+    const appearance = o.msgPtrArg(cls(o, 'NSAppearance'), sel(o, 'appearanceNamed:'), name) as Pointer
+    let found = false
+    each(o, o.msg(app, sel(o, 'windows')) as Pointer, (window) => {
+      if (!o.msg(window, sel(o, 'contentView'))) return
+      o.msgSetPtr(window, sel(o, 'setAppearance:'), appearance)
+      found = true
+    })
+    return found
+  } catch { return true }
+}
+
+let materialInstalledFor: Variant | null = null
 export function useSyncWindowAppearance(variant: Variant, enabled = true) {
   useEffect(() => {
-    const first = applied === null
-    const changed = applied !== variant
-    applied = variant
-    if (first || !changed || !enabled || process.env.KYBERN_OPAQUE === '1') return
-    applyDesktopMaterial(variant)
+    const first = materialInstalledFor === null
+    materialInstalledFor = variant
+    // main.tsx already installs the launch material; avoid redundant native
+    // appearance and material work during the first scene.
+    if (first && enabled && process.env.KYBERN_OPAQUE !== '1') return
+    let attempts = 0
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const apply = () => {
+      const ready = syncWindowAppearance(variant)
+      if (enabled && process.env.KYBERN_OPAQUE !== '1') applyDesktopMaterial(variant)
+      if (!ready && ++attempts < 40) timer = setTimeout(apply, 50)
+    }
+    apply()
+    return () => clearTimeout(timer)
   }, [variant, enabled])
 }

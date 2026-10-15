@@ -76,9 +76,11 @@ let client: KybernClient | null = null
 /** The daemon connection, once `connect()` has run. */
 export const getClient = () => client
 let unsubscribeOpen: (() => void) | null = null
+let selectionGeneration = 0
 
 /** Drop a dead client so `connect()` builds a fresh one, re-reading the port and token files. */
 export function resetClient() {
+  selectionGeneration++
   const previous = client
   client = null
   clearTimeout(retryTimer); refreshing = null; refreshAgain = false
@@ -182,6 +184,7 @@ export function onOpenEvent(listener: (event: ThreadEvent) => void): () => void 
 }
 
 export async function selectThread(id: ThreadId | null) {
+  const generation = ++selectionGeneration
   unsubscribeOpen?.()
   unsubscribeOpen = null
   set({ selectedId: id, open: emptyThreadState() })
@@ -192,12 +195,12 @@ export async function selectThread(id: ThreadId | null) {
     transcript_limit: 120,
     include_tool_output: false,
   })
-  if (owner !== client || state.selectedId !== id) return
+  if (owner !== client || state.selectedId !== id || generation !== selectionGeneration) return
   set({ open: seedFromGet(res) })
   const sub = client.subscribeEvents(
     { thread_id: id, after_seq: res.thread.last_seq, include_tool_output: false },
     (event) => {
-      if (owner !== client || state.selectedId !== id) return
+      if (owner !== client || state.selectedId !== id || generation !== selectionGeneration) return
       set({ open: applyEvent(state.open, event) })
       for (const listener of openEventListeners) listener(event)
     },
