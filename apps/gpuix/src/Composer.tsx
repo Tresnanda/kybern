@@ -1,3 +1,10 @@
+import { nativeCapabilities, type InputSelection } from './native/api.ts'
+export { useComposerOverlayHeight, useMeasureComposerOverlay } from './composer/height.ts'
+import { useMeasureComposerOverlay } from './composer/height.ts'
+import { createCoordinatorStarter } from '../../../packages/kybern-client/src/coordinator.ts'
+import { openThread } from './nav/history.ts'
+import { activeEnvironment } from './shell/environment.ts'
+import { Tip } from './nav/overlay.tsx'
 import { onEnvironmentChange, onEnvironmentLeaving } from './shell/environment.ts'
 import { load as loadEnvironmentPreference, save as saveEnvironmentPreference } from './shell/persist.ts'
 // The composer (`views/Composer.tsx`, `composerPickerStyles.ts`): a 19.2px-radius
@@ -26,7 +33,7 @@ import {
 } from '../../../packages/kybern-client/src/types.ts'
 import { Icon } from './icons.tsx'
 import { MatrixLoader } from './MatrixLoader.tsx'
-import { getClient, getState, useApp } from './state.ts'
+import { getClient, getState, set, useApp } from './state.ts'
 import { FONT_UI } from './theme.ts'
 import { ink, Label, useTheme } from './ui.tsx'
 import { addWindowKeyHandler } from './nav/keys.ts'
@@ -118,6 +125,21 @@ function ThreadComposer({ thread }: { thread: Thread }) {
     patch({ target: { threadId, state } })
   }
 
+  const switchHarness = async (next: ProviderInstance, model?: string, effort?: string) => {
+    if (running) throw new Error("Finish or stop the Coordinator's current turn before changing its harness.")
+    const available = providers.find(p => p.kind === next.kind && p.available)
+    if (!available) throw new Error('Choose an available harness for the Coordinator.')
+    const modes = available.supported_permission_modes
+    const permission = modes.includes(thread.permission_mode) ? thread.permission_mode : modes.includes('supervised') ? 'supervised' : modes[0]
+    if (!permission) throw new Error('This harness does not expose a supported permission mode.')
+    const owner = activeEnvironment()
+    const switched = await getClient()!.call('coordinator.switch_harness', { project_id: thread.coordinator_project_id!, provider: next, model, effort, permission_mode: permission })
+    if (owner !== activeEnvironment()) return
+    const state = getState()
+    set({ threads: state.threads.map(t => t.id === switched.id ? switched : t), ...(state.open.thread?.id === switched.id ? { open: { ...state.open, thread: switched } } : {}) })
+    await loadTarget(switched.id)
+  }
+
   return (
     <ComposerView
       draftKey={`thread:${threadId}`}
@@ -142,11 +164,11 @@ function ThreadComposer({ thread }: { thread: Thread }) {
       providers={composerProviders}
       accounts={accounts}
       accountFollowsDefaults={target ? !target.account_override : undefined}
-      onAccountChange={(instance) => chooseTarget({ ...provider, instance: instance ?? 'default' }, target?.target.model ?? undefined, target?.target.effort ?? undefined, instance === null)}
+      onAccountChange={coordinator ? running ? undefined : (instance) => switchHarness({ ...provider, instance: instance ?? 'default' }, thread.model ?? undefined, thread.effort ?? undefined) : (instance) => chooseTarget({ ...provider, instance: instance ?? 'default' }, target?.target.model ?? undefined, target?.target.effort ?? undefined, instance === null)}
       model={target?.target.model ?? thread.model ?? undefined}
       effort={target?.target.effort ?? thread.effort ?? undefined}
-      onModelChange={coordinator ? undefined : (model, effort) => setThreadModel(threadId, model, effort)}
-      onProviderChange={coordinator ? undefined : (next, choice) => chooseTarget(next, choice?.model, choice?.effort, !choice?.pinAccount)}
+      onModelChange={coordinator ? running ? undefined : (model, effort) => switchHarness(provider, model, effort) : (model, effort) => setThreadModel(threadId, model, effort)}
+      onProviderChange={coordinator ? running ? undefined : (next, choice) => switchHarness(next, choice?.model, choice?.effort) : (next, choice) => chooseTarget(next, choice?.model, choice?.effort, !choice?.pinAccount)}
       catalogLoading={catalogLoading === catalogKey}
       onReloadModels={(force) => loadCatalog(threadId, provider, thread.project_id, force).then(() => {})}
       above={queued?.length ? <QueuedPanel threadId={threadId} items={queued.map((q) => ({ id: q.id, message: q.message }))} /> : null}
@@ -164,7 +186,8 @@ export function useDraftTarget() {
   const projects = useApp((s) => s.projects)
   // The most recently active thread's project, or the first project.
   const recentProject = useApp((s) => s.threads.find((th) => s.projects.some((p) => p.id === th.project_id))?.project_id ?? s.projects[0]?.id)
-  const projectId = draft.projectId === undefined ? recentProject ?? null : draft.projectId
+  const entry = useApp(s => s.draft)
+  const projectId = entry.purpose === 'coordinator' ? entry.projectId ?? null : draft.projectId === undefined ? recentProject ?? null : draft.projectId
   const project = projectId ? projects.find((p) => p.id === projectId) : undefined
   const available = useMemo(() => providers.filter((p) => p.available), [providers])
   const provider = useMemo<ProviderInstance | null>(() => {
@@ -193,10 +216,14 @@ function DraftComposer({ tray }: { tray?: ReactNode }) {
   const loading = useComposer((d) => d.providersLoading)
   const accounts = useComposer((d) => d.accounts)
   const { projectId, provider, pinAccount, mode, useWorktree, choice, draft } = useDraftTarget()
+  const coordinator = useApp(s => s.draft.purpose === 'coordinator')
+  const starter = useRef<{ client: ReturnType<typeof getClient>; controller: ReturnType<typeof createCoordinatorStarter> } | null>(null)
 
   return (
     <ComposerView
-      draftKey={`project:${projectId ?? 'free'}`}
+      key={`${coordinator ? 'coordinator' : 'project'}:${projectId ?? 'free'}`}
+      draftKey={`${coordinator ? 'coordinator' : 'project'}:${projectId ?? 'free'}`}
+      placeholder={coordinator ? 'Describe the outcome, constraints, and what success looks like' : undefined}
       projectId={projectId ?? undefined}
       above={tray}
       mode={mode}
@@ -221,9 +248,19 @@ function DraftComposer({ tray }: { tray?: ReactNode }) {
       }}
       catalogLoading={loading}
       onReloadModels={(force) => loadProviders(force, projectId ?? undefined).then(() => {})}
-      sendDisabled={!provider}
+      sendDisabled={!provider || (coordinator && !projectId)}
+      sendDisabledReason={!provider ? 'Choose an available agent before sending.' : coordinator && !projectId ? 'Choose a project for the Coordinator.' : undefined}
       onSend={async (message) => {
         if (!provider) return
+        if (coordinator) {
+          const client = getClient()!, owner = activeEnvironment()
+          const available = providers.find(p => p.kind === provider.kind && p.available)
+          if (!projectId || !available) throw new Error('Choose a project and an available harness.')
+          if (starter.current?.client !== client) starter.current = { client, controller: createCoordinatorStarter((method, params) => client.call(method, params), () => crypto.randomUUID()) }
+          const result = await starter.current.controller.send({ projectId, provider: available, instance: provider.instance, model: choice?.model, effort: choice?.effort, permissionMode: mode }, message)
+          if (owner === activeEnvironment()) { const state = getState(); set({ threads: [...state.threads.filter(t => t.id !== result.thread.id), result.thread] }); openThread(result.thread.id) }
+          return
+        }
         await createThread({
           projectId,
           provider: pinAccount ? provider : { ...provider, instance: 'default' },
@@ -279,6 +316,7 @@ export interface ComposerViewProps {
   onSend: (message: UserMessage, delivery: 'send' | 'queue' | 'steer') => Promise<void>
   canSteer?: boolean
   sendDisabled?: boolean
+  sendDisabledReason?: string
   readOnly?: boolean
   lockMode?: boolean
   mode: PermissionMode
@@ -298,6 +336,7 @@ export interface ComposerViewProps {
 }
 
 export function ComposerView(props: ComposerViewProps) {
+  const measureOverlay = useMeasureComposerOverlay()
   const t = useTheme()
   const renderer = useGpuixRequired()
   const { running, provider, providers, model, effort, mode } = props
@@ -308,12 +347,27 @@ export function ComposerView(props: ComposerViewProps) {
   const [uploading, setUploading] = useState(0)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [feedback, setFeedback] = useState<string | null>(null)
+  const pastePending = useRef(false)
   const [promptMode, setPromptMode] = useState<'queue' | 'steer'>('queue')
   const [changingModel, setChangingModel] = useState(false)
   const editor = useRef<PublicInstance | null>(null)
   const card = useRef<PublicInstance | null>(null)
-  const steerPressed = useRef(0)
-  const completionPicked = useRef(0)
+  const [selection, setSelection] = useState<InputSelection>({ start: text.length, end: text.length, reversed: false, composing: false })
+  const readSelection = () => {
+    if (!editor.current) return
+    const next = nativeCapabilities(renderer).getInputSelection(editor.current.id)
+    setSelection(old => old.start === next.start && old.end === next.end && old.composing === next.composing && old.reversed === next.reversed ? old : next)
+  }
+  const edit = (start: number, end: number, replacement: string) => {
+    if (!editor.current || props.readOnly) return false
+    try {
+      nativeCapabilities(renderer).editInput(editor.current.id, { start, end, text: replacement, expectedValue: text })
+      readSelection()
+      focusEditor()
+      return true
+    } catch (e) { setError(errorText(e)); return false }
+  }
   const lastModelRefresh = useRef(0)
   const approvalDigit = useRef<string | null>(null)
   const steering = !!running && !!props.canSteer && promptMode === 'steer'
@@ -333,7 +387,9 @@ export function ComposerView(props: ComposerViewProps) {
   }, [connected])
 
   const empty = text.trim().length === 0 && attachments.length === 0
-  const canSend = connected && !props.sendDisabled && !sending && uploading === 0 && !empty
+  const permissionUnsupported = provider?.kind !== 'cursor' && !!providers.find(p => p.kind === provider?.kind && !p.supported_permission_modes.includes(mode))
+  const disabledReason = !connected ? 'Reconnect to send a message.' : props.readOnly ? 'This conversation is read-only.' : props.sendDisabled ? props.sendDisabledReason ?? 'Sending is unavailable.' : permissionUnsupported ? 'Choose a permission mode supported by this agent.' : sending ? 'Sending…' : uploading > 0 ? 'Wait for attachments to finish uploading.' : empty ? 'Write a message or attach a file.' : null
+  const canSend = !disabledReason
 
   const focusEditor = () => {
     if (editor.current) renderer.focusElement?.(editor.current.id)
@@ -344,8 +400,12 @@ export function ComposerView(props: ComposerViewProps) {
     [attachments],
   )
   const completion = useCompletion({
+    draftKey: props.draftKey,
     text,
     setText,
+    caret: selection.reversed ? selection.start : selection.end,
+    composing: selection.composing || selection.start !== selection.end,
+    edit,
     projectId: props.projectId,
     provider: provider ?? undefined,
     currentThreadId: props.currentThreadId,
@@ -383,7 +443,7 @@ export function ComposerView(props: ComposerViewProps) {
   }
 
   const submit = async (delivery: 'queue' | 'steer' = promptMode) => {
-    if (!canSend) return
+    if (!canSend || (editor.current && nativeCapabilities(renderer).getInputSelection(editor.current.id).composing)) return
     const status = provider ? providers.find((p) => p.kind === provider.kind) : undefined
     if (status && provider?.kind !== 'cursor' && !status.supported_permission_modes.includes(mode)) {
       setError('Choose a supported permission mode for the selected agent before sending.')
@@ -408,10 +468,12 @@ export function ComposerView(props: ComposerViewProps) {
   const addFiles = async (picked?: string[]) => {
     const paths = picked ?? (await renderer.promptForPaths?.({ files: true, multiple: true, prompt: 'Attach' }))
     if (!paths?.length) return
+    setFeedback(null)
     setUploading((n) => n + paths.length)
     for (const path of paths) {
       try {
         const info = await uploadPath(path)
+        setFeedback(`Attached ${info.name}`)
         setAttachments((list) => [...list, { ...info, path, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }])
       } catch (e) {
         setError(`Unable to attach ${path.split('/').pop()}: ${errorText(e)}`)
@@ -449,7 +511,7 @@ export function ComposerView(props: ComposerViewProps) {
   const modelName = current?.display_name ?? (model ? uncataloguedName(model) : provider ? PROVIDER_LABEL[provider.kind] : '')
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: 736 }}>
+    <div ref={measureOverlay} testId="composer-overlay" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: 736 }}>
       {props.above}
       <div
         ref={(el) => {
@@ -457,15 +519,7 @@ export function ComposerView(props: ComposerViewProps) {
         }}
         onFileDrop={(e) => {
           if (!e.paths?.length) return
-          setUploading((n) => n + e.paths!.length)
-          void Promise.all(
-            e.paths.map((path) =>
-              uploadPath(path)
-                .then((info) => setAttachments((list) => [...list, { ...info, path, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }]))
-                .catch((err) => setError(`Unable to attach ${path.split('/').pop()}: ${errorText(err)}`))
-                .finally(() => setUploading((n) => n - 1)),
-            ),
-          )
+          void addFiles(e.paths)
         }}
         style={{
           display: 'flex',
@@ -490,6 +544,15 @@ export function ComposerView(props: ComposerViewProps) {
               onRemove={(a) => setAttachments((list) => list.filter((item) => item.id !== a.id))}
             />
           )}
+          {!!completion.tokens.length && <div testId="composer-tokens" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingBottom: 8 }}>
+            {completion.tokens.map(token => <div key={token.token} role="button" aria-label={`Select ${token.label}`} onClick={() => {
+              if (!editor.current) return
+              const start = text.indexOf(token.token)
+              focusEditor()
+              nativeCapabilities(renderer).setInputSelection(editor.current.id, start, start + token.token.length, false)
+              readSelection()
+            }} style={{ padding: 4, paddingLeft: 8, paddingRight: 8, borderRadius: 6, backgroundColor: t.buttonSecondary, cursor: 'pointer' }}><Label color={t.text} size={12}>{token.label}</Label></div>)}
+          </div>}
           <div style={{ position: 'relative', display: 'flex' }}>
             {/* GPUIX paints its own placeholder in a fixed grey; this one is the kit's muted × 40%. */}
             {!text && (
@@ -503,44 +566,52 @@ export function ComposerView(props: ComposerViewProps) {
               ref={(el) => {
                 editor.current = el
               }}
-              interceptKeys={['up', 'down', 'enter', 'tab', 'escape']}
+              interceptKeys={['up', 'down', 'left', 'right', 'home', 'end', 'enter', 'tab', 'escape']}
               testId="composer"
               autoFocus
               value={text}
               readOnly={props.readOnly}
               minRows={2}
               maxRows={10}
+              onClick={readSelection}
               onChange={(e) => {
+                readSelection()
+                setFeedback(pastePending.current ? 'Pasted text' : null)
+                pastePending.current = false
                 if (approvalDigit.current && e.value === approvalDigit.current) setText('')
                 else setText(e.value ?? '')
                 if (error) setError(null)
               }}
               onKeyDown={(e) => {
+                readSelection()
+                if (e.modifiers?.cmd && e.key === 'v') pastePending.current = true
+                // Native navigation is applied after the key notification.
+                if (['left', 'right', 'up', 'down', 'home', 'end'].includes(e.key ?? '')) setTimeout(readSelection, 32)
+                // Marked IME input bypasses native interception. Do not turn
+                // its ordinary key notification into a completion or send.
+                if (['up', 'down', 'enter', 'tab', 'escape'].includes(e.key ?? '') && (e as typeof e & { requestId?: number }).requestId == null) return
                 // ⌘↵ steers even when a completion menu is open.
                 if (e.key === 'enter' && e.modifiers?.cmd && !e.modifiers.shift) {
                   e.preventDefault()
-                  steerPressed.current = Date.now()
                   void submit(running ? 'steer' : promptMode)
                   return
                 }
                 if ((e.key === 'up' || e.key === 'down') && (e.modifiers?.cmd || e.modifiers?.alt || e.modifiers?.ctrl || e.modifiers?.shift)) return
                 if (completion.onKey(e.key ?? '', !!e.modifiers?.shift, !!e.modifiers?.ctrl)) {
                   e.preventDefault()
-                  if (e.key === 'enter') completionPicked.current = Date.now()
+                  return
+                }
+                if (e.key === 'enter' && !e.modifiers?.shift && !e.modifiers?.alt && !e.modifiers?.ctrl) {
+                  e.preventDefault()
+                  void submit()
                 }
               }}
-              onSubmit={() => {
-                // ⌘↵ also reaches here; the key handler already steered.
-                if (Date.now() - steerPressed.current < 50) return
-                // Enter picks a completion row while the list is up.
-                if (Date.now() - completionPicked.current < 50) return
-                if (completion.onKey('enter', false)) return
-                void submit()
-              }}
+              onSubmit={() => { void submit() }}
               theme={{ caret: t.text }}
               style={{ width: '100%', fontSize: 14, lineHeight: 19.6, color: t.text, fontFamily: FONT_UI, opacity: connected ? 1 : 0.6 }}
             />
           </div>
+          {feedback && !error && <div testId="composer-feedback"><Label color={muted(t, 0.6)} size={12}>{feedback}</Label></div>}
           {error && (
             <div style={{ display: 'flex', paddingTop: 6 }}>
               <Label color={t.red} size={12} lineHeight={16}>
@@ -626,7 +697,7 @@ export function ComposerView(props: ComposerViewProps) {
                 <Icon source={G.stop} size={10} color={t.v('--color-background-elevated-primary-opaque')} />
               </RoundButton>
             ) : (
-              <RoundButton testId="send" disabled={!canSend} onClick={() => void submit()}>
+              <Tip label={disabledReason ?? (steering ? 'Steer now ⌘↵' : 'Send ↵')}><RoundButton testId="send" disabled={!canSend} onClick={() => void submit()}>
                 {/* `IconSwap` arrow ↔ spinner while sending (`Composer.tsx:1441`); the spinner is the shared-clock loader. */}
                 <SwapOnChange active={sending ? 'sending' : 'send'}>
                   {sending ? (
@@ -635,7 +706,7 @@ export function ComposerView(props: ComposerViewProps) {
                     <Icon name="send" size={20} color={t.v('--color-background-elevated-primary-opaque')} />
                   )}
                 </SwapOnChange>
-              </RoundButton>
+              </RoundButton></Tip>
             )}
           </div>
         </div>
@@ -658,6 +729,8 @@ function RoundButton({ children, disabled, onClick, testId }: { children: ReactN
   return (
     <div
       testId={testId}
+      role="button"
+      aria-disabled={disabled}
       onClick={disabled ? undefined : onClick}
       style={{
         display: 'flex',

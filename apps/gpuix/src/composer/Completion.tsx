@@ -1,3 +1,6 @@
+import { onEnvironmentChange } from '../shell/environment.ts'
+import { useNotes, refreshNotes } from '../notes/store.ts'
+import { useTasks, refreshTasks } from '../tasks/store.ts'
 // The composer's @ mention, / command and $ skill completions
 // (`views/Composer.tsx:436-682`, list styles `COMPOSER_COMMAND_MENU_*`): one
 // opaque list floating 8px above the card at its full width, rows at 36px
@@ -6,9 +9,7 @@
 // dismisses that trigger. Native key interception handles key-down and repeat;
 // ⌃N/⌃P remain additional shortcuts.
 //
-// GPUIX's `<textarea>` reports no caret, so the trigger is read at the end of
-// the text, where typing happens. Threads, files, attachments, plugins,
-// commands and skills are offered; notes and tasks wait for those surfaces.
+// Completion uses the native UTF-16 selection and one undoable edit.
 import { FloatingLayer } from '@gpuix/react/floating'
 import { useEffect, useMemo, useState } from 'react'
 import {
@@ -19,6 +20,8 @@ import {
 } from '../../../desktop/src/views/composerMentions.ts'
 import {
   buildStructuredTextParts,
+  createComposerMentionReference,
+  type ComposerMentionReference,
   convertTypedSlashSkills,
   type AttachmentReference,
 } from '../../../../packages/kybern-client/src/composerTokens.ts'
@@ -39,6 +42,7 @@ export interface SlashCommand {
 }
 
 type Item =
+  | { id: string; type: 'reference'; label: string; path: string; section: 'Notes' | 'Tasks' | 'Computer' }
   | { id: string; type: 'thread'; thread: Thread; snippet?: string | null }
   | { id: string; type: 'file'; path: string }
   | { id: string; type: 'attachment'; label: string; name: string }
@@ -91,17 +95,30 @@ function titleCase(s: string): string {
 const basename = (p: string) => p.slice(p.lastIndexOf('/') + 1)
 const parentPath = (p: string) => (p.lastIndexOf('/') === -1 ? '' : p.slice(0, p.lastIndexOf('/')))
 
+// Native text buffers remount across navigation. Keep the associated wire parts
+// with the draft, bounded independently of transcript history.
+const referenceDrafts = new Map<string, { mentioned: Set<string>; picked: Map<string, SkillInfo>; threads: ComposerThreadReference[]; mentions: ComposerMentionReference[] }>()
+onEnvironmentChange(() => referenceDrafts.clear())
+
 export function useCompletion({
+  draftKey,
   text,
   setText,
+  caret = text.length,
+  composing = false,
+  edit,
   projectId,
   provider,
   currentThreadId,
   attachments,
   commands,
 }: {
+  draftKey: string
   text: string
   setText: (text: string) => void
+  caret?: number
+  composing?: boolean
+  edit?: (start: number, end: number, replacement: string) => boolean
   projectId?: ProjectId
   provider?: { kind: ProviderKind; instance: string }
   currentThreadId?: string
@@ -110,10 +127,18 @@ export function useCompletion({
 }) {
   const threads = useApp((s) => s.threads)
   const projects = useApp((s) => s.projects)
-  const caret = text.length
-  const [mentioned, setMentioned] = useState<Set<string>>(() => new Set())
-  const [picked, setPicked] = useState<Map<string, SkillInfo>>(() => new Map())
-  const [threadRefs, setThreadRefs] = useState<ComposerThreadReference[]>([])
+  const notes = useNotes(s => s.notes)
+  const tasks = useTasks(s => s.tasks)
+  const [mentionRefs, setMentionRefs] = useState<ComposerMentionReference[]>(() => referenceDrafts.get(draftKey)?.mentions ?? [])
+  const [mentioned, setMentioned] = useState<Set<string>>(() => referenceDrafts.get(draftKey)?.mentioned ?? new Set())
+  const [picked, setPicked] = useState<Map<string, SkillInfo>>(() => referenceDrafts.get(draftKey)?.picked ?? new Map())
+  const [threadRefs, setThreadRefs] = useState<ComposerThreadReference[]>(() => referenceDrafts.get(draftKey)?.threads ?? [])
+  useEffect(() => {
+    if (!text) { referenceDrafts.delete(draftKey); return }
+    referenceDrafts.delete(draftKey)
+    referenceDrafts.set(draftKey, { mentioned, picked, threads: threadRefs, mentions: mentionRefs })
+    if (referenceDrafts.size > 100) referenceDrafts.delete(referenceDrafts.keys().next().value!)
+  }, [draftKey, text, mentioned, picked, threadRefs, mentionRefs])
   const [dismissed, setDismissed] = useState<string | null>(null)
   const [sel, setSel] = useState<{ sig: string; index: number }>({ sig: '', index: 0 })
   const [files, setFiles] = useState<{ query: string; files: string[] }>({ query: '', files: [] })
@@ -123,21 +148,21 @@ export function useCompletion({
   const mention = useMemo(() => mentionAtCaret(text, caret), [text, caret])
   const term = mention ? parseMentionQuery(mention.query).term : null
   const slash = useMemo(() => {
-    const start = text.lastIndexOf('/')
+    const start = text.lastIndexOf('/', caret - 1)
     if (start < 0 || (start > 0 && !/\s/.test(text[start - 1]!))) return null
-    const token = text.slice(start + 1)
+    const token = text.slice(start + 1, caret)
     if (/\s/.test(token)) return null
     const skillOnly = token.toLowerCase().startsWith('skill:')
     return { start, query: skillOnly ? token.slice(6) : token, skillOnly }
-  }, [text])
+  }, [text, caret])
   const skill = useMemo(() => {
     if (!projectId || !provider) return null
-    const dollar = text.lastIndexOf('$')
+    const dollar = text.lastIndexOf('$', caret - 1)
     if (dollar < 0 || (dollar > 0 && !/\s/.test(text[dollar - 1]!))) return null
-    const query = text.slice(dollar + 1)
+    const query = text.slice(dollar + 1, caret)
     if (!/^(?:[A-Za-z][A-Za-z0-9:_-]*)?$/.test(query)) return null
     return { start: dollar, query }
-  }, [text, projectId, provider])
+  }, [text, caret, projectId, provider])
 
   // Searches wait 60ms for typing to settle, as on the desktop.
   useEffect(() => {
@@ -165,6 +190,8 @@ export function useCompletion({
 
   const catalogKey = projectId && provider ? `${projectId}:${provider.kind}:${provider.instance}` : ''
   const needsSkills = !!skill || !!slash || !!mention
+  const mentionsOpen = !!mention
+  useEffect(() => { if (mentionsOpen && getClient()) { void refreshNotes(); void refreshTasks() } }, [mentionsOpen])
   useEffect(() => {
     if (!needsSkills || !projectId || !provider) return
     let live = true
@@ -195,7 +222,13 @@ export function useCompletion({
 
   const items = useMemo<Item[]>(() => {
     if (mention && term !== null) {
+      const references: Item[] = [
+        ...notes.filter(n => !n.deleted_at && (!n.project_id || n.project_id === projectId) && fuzzyScore(n.title, term) != null).slice(0, 12).map(n => ({ id: `note:${n.id}`, type: 'reference' as const, label: n.title || 'Untitled', path: `kybern://note/${n.id}`, section: 'Notes' as const })),
+        ...Object.values(tasks).filter(task => (!task.project_id || task.project_id === projectId) && fuzzyScore(`${task.key} ${task.title}`, term) != null).slice(0, 12).map(task => ({ id: `task:${task.id}`, type: 'reference' as const, label: `${task.key} ${task.title}`, path: `kybern://task/${task.id}`, section: 'Tasks' as const })),
+        ...(skills.some(s => s.path === 'kybern://computer' && s.enabled) && fuzzyScore('Computer', term) != null ? [{ id: 'computer', type: 'reference' as const, label: 'Computer', path: 'kybern://computer', section: 'Computer' as const }] : []),
+      ]
       const byKind: Item[][] = [
+        references,
         threadHits.map((hit) => ({ id: `thread:${hit.thread.id}`, type: 'thread' as const, ...hit })),
         (files.query === term ? files.files : []).map((path) => ({ id: `file:${path}`, type: 'file' as const, path })),
         rankSkills(skills, term, 12, 'plugin').map((s) => ({ id: `plugin:${s.path}`, type: 'plugin' as const, skill: s })),
@@ -222,10 +255,10 @@ export function useCompletion({
           .map(({ command }) => ({ id: `command:${command.name}`, type: 'command' as const, command }))
     const skillItems = rankSkills(skills, slash.query).map((s) => ({ id: `skill:${s.name}`, type: 'skill' as const, skill: s }))
     return [...commandItems, ...skillItems].slice(0, 16)
-  }, [mention, term, threadHits, files, skills, attachments, skill, slash, commands])
+  }, [mention, term, threadHits, files, skills, attachments, skill, slash, commands, notes, tasks, projectId])
 
   const menuKey = mention ? `@${mention.start}` : skill ? `$${skill.start}` : slash ? `/${slash.start}` : null
-  const open = !!menuKey && dismissed !== menuKey
+  const open = !composing && !!menuKey && dismissed !== menuKey
   const signature = `${menuKey}:${items.map((item) => item.id).join('|')}`
   const index = sel.sig === signature ? sel.index : 0
   const loading =
@@ -243,32 +276,35 @@ export function useCompletion({
           ? 'No matching skills'
           : 'No matching commands or skills'
 
-  const replace = (start: number, token: string) => setText(`${text.slice(0, start)}${token}`)
+  const replace = (start: number, token: string) => {
+    if (/\s/.test(text[caret] ?? '') && token.endsWith(' ')) token = token.slice(0, -1)
+    if (edit) return edit(start, caret, token)
+    setText(`${text.slice(0, start)}${token}${text.slice(caret)}`)
+    return true
+  }
 
   const pick = (i: number) => {
     const item = items[i]
     if (!item) return
-    if (item.type === 'thread' && mention) {
+    if (item.type === 'reference' && mention) {
+      const reference = createComposerMentionReference({ type: 'mention', name: item.label, path: item.path }, mentionRefs, threadRefs.map(r => r.token))
+      if (replace(mention.start, `${reference.token} `)) setMentionRefs(list => [...list.filter(r => r.part.path !== item.path), reference])
+    } else if (item.type === 'thread' && mention) {
       const project = projects.find((p) => p.id === item.thread.project_id)
       const reference = createComposerThreadReference(item.thread, threadRefs, project?.name ?? 'Free chat')
-      setThreadRefs((list) => [...list.filter((r) => r.part.thread_id !== item.thread.id), reference])
-      replace(mention.start, `${reference.token} `)
+      if (replace(mention.start, `${reference.token} `)) setThreadRefs((list) => [...list.filter((r) => r.part.thread_id !== item.thread.id), reference])
     } else if (item.type === 'file' && mention) {
-      setMentioned((set) => new Set(set).add(item.path))
-      replace(mention.start, `@${item.path} `)
+      if (replace(mention.start, `@${item.path} `)) setMentioned((set) => new Set(set).add(item.path))
     } else if (item.type === 'attachment' && mention) {
       replace(mention.start, `@${item.label} `)
     } else if (item.type === 'plugin' && mention) {
-      setPicked((map) => new Map(map).set(item.skill.path, item.skill))
-      replace(mention.start, `@${item.skill.display_name ?? item.skill.name} `)
+      if (replace(mention.start, `@${item.skill.display_name ?? item.skill.name} `)) setPicked((map) => new Map(map).set(item.skill.path, item.skill))
     } else if (item.type === 'command' && slash) {
-      replace(slash.start, '')
-      item.command.run()
+      if (replace(slash.start, '')) item.command.run()
     } else if (item.type === 'skill') {
       const trigger = skill ?? slash
       if (!trigger) return
-      setPicked((map) => new Map(map).set(item.skill.name.toLowerCase(), item.skill))
-      replace(trigger.start, `$${item.skill.name} `)
+      if (replace(trigger.start, `$${item.skill.name} `)) setPicked((map) => new Map(map).set(item.skill.name.toLowerCase(), item.skill))
     }
   }
 
@@ -301,13 +337,14 @@ export function useCompletion({
 
   const buildParts = (): ContentPart[] => {
     const skillItems = [...skills, ...picked.values()]
-    return convertTypedSlashSkills(buildStructuredTextParts(text, mentioned, skillItems, threadRefs, attachments, []), skillItems)
+    return convertTypedSlashSkills(buildStructuredTextParts(text, mentioned, skillItems, threadRefs, attachments, mentionRefs), skillItems)
   }
 
   const reset = () => {
     setMentioned(new Set())
     setPicked(new Map())
     setThreadRefs([])
+    setMentionRefs([])
   }
 
   const menu = (width: number) =>
@@ -324,11 +361,17 @@ export function useCompletion({
     />
     ) : null
 
-  return { menu, onKey, buildParts, reset, open: open && items.length > 0 }
+  const tokens = [
+    ...mentionRefs.map(r => ({ token: r.token, label: r.part.name })),
+    ...threadRefs.map(r => ({ token: r.token, label: r.token.slice(1) })),
+    ...[...mentioned].map(path => ({ token: `@${path}`, label: basename(path) })),
+  ].filter(r => text.includes(r.token))
+  return { menu, onKey, buildParts, reset, tokens, open: open && items.length > 0 }
 }
 
 function sectionOf(item: Item | undefined): string | null {
   if (!item) return null
+  if (item.type === 'reference') return item.section
   return item.type === 'thread'
     ? 'Threads'
     : item.type === 'attachment'
@@ -382,7 +425,7 @@ function CompletionList({
           const active = i === index
           const section = sectionOf(item)
           const title =
-            item.type === 'thread'
+            item.type === 'reference' ? item.label : item.type === 'thread'
               ? item.thread.title || 'Untitled thread'
               : item.type === 'attachment'
                 ? `@${item.label}`

@@ -65,7 +65,7 @@ export const CodeHeader = memo(function CodeHeader({ part, expanded, wrap, onExp
 }) {
   const t = useTheme()
   return <div testId="code-header" style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 36, paddingLeft: 12, paddingRight: 8, borderTopLeftRadius: 10, borderTopRightRadius: 10, backgroundColor: t.codeSurface, borderWidth: 1, borderColor: t.border }}>
-    <Label color={muted(t)} size={11.52} style={{ flexGrow: 1 }}>{part.language || 'text'}</Label>
+    <Label color={muted(t)} size={11.52} style={{ flexGrow: 1 }}>{part.language === 'mermaid' ? 'Mermaid source · diagram preview unavailable' : part.language || 'text'}</Label>
     {onExpand && <Button testId="code-expand" variant="ghost" onClick={onExpand}>{expanded ? 'Show less' : 'Show more'}</Button>}
     <Button testId="code-wrap" variant={wrap ? 'subtle' : 'ghost'} onClick={onWrap}>Wrap</Button>
     <CopyAction text={part.text} testId="code-copy" />
@@ -135,7 +135,7 @@ export function TextDetail({ text, title, code = false, onClose }: { text: strin
   </Dialog>
 }
 
-export function BoundedMarkdown({ text, tone = 'bright' }: { text: string; tone?: 'bright' | 'muted' }) {
+export const BoundedMarkdown = memo(function BoundedMarkdown({ text, tone = 'bright' }: { text: string; tone?: 'bright' | 'muted' }) {
   const t = useTheme()
   const chunks = useMemo(() => textChunks(text), [text])
   const [expanded, setExpanded] = useState(false)
@@ -144,4 +144,4 @@ export function BoundedMarkdown({ text, tone = 'bright' }: { text: string; tone?
     {chunks.length > 1 && <Button variant="ghost" onClick={() => setExpanded(true)}>Show more</Button>}
     {expanded && <TextDetail text={text} title="Agent response" onClose={() => setExpanded(false)} />}
   </div>
-}
+})

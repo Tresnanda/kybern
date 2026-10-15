@@ -158,7 +158,7 @@ export function loadProviders(force: boolean, projectId?: ProjectId): Promise<Pr
   return request
 }
 
-const CACHE_DIR = path.join(homedir(), 'Library', 'Caches', 'kybern-gpuix')
+const CACHE_DIR = process.env.KYBERN_CLIENT_CONFIG_DIR ? path.join(process.env.KYBERN_CLIENT_CONFIG_DIR, 'cache') : path.join(homedir(), 'Library', 'Caches', 'kybern-gpuix')
 const cacheFile = (url: string) => path.join(CACHE_DIR, `providers-${url.replace(/[^a-z0-9]+/gi, '_')}.json`)
 
 function readProviderCache(url: string): ProviderStatus[] | null {

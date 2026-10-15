@@ -6,7 +6,7 @@ const out = process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previ
 mkdirSync(out, { recursive: true })
 for (const variant of ['dark', 'light']) {
   const scratch = mkdtempSync(path.join(tmpdir(), 'gpuix-requests-'))
-  const fixture = await launchFixture(path.join(import.meta.dir, 'parity.fixture.tsx'), { GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: variant, KYBERN_DATA_DIR: scratch, KYBERN_CLIENT_CONFIG_DIR: scratch, KYBERN_GPUIX_CREDENTIALS_DIR: scratch, KYBERN_URL: '', KYBERN_TOKEN: '', KYBERN_GPUIX_ENVIRONMENT: 'local', NAPI_RS_NATIVE_LIBRARY_PATH: '/Users/mymac/projects/ade-gpuix/apps/gpuix/native/build/gpuix-native.darwin-arm64.node' })
+  const fixture = await launchFixture(path.join(import.meta.dir, 'parity.fixture.tsx'), { GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: variant, KYBERN_DATA_DIR: scratch, KYBERN_CLIENT_CONFIG_DIR: scratch, KYBERN_GPUIX_CREDENTIALS_DIR: scratch, KYBERN_URL: '', KYBERN_TOKEN: '', KYBERN_GPUIX_ENVIRONMENT: 'local', NAPI_RS_NATIVE_LIBRARY_PATH: path.resolve(import.meta.dir, '../../native/build/gpuix-native.darwin-arm64.node') })
   const app = fixture.app
   try {
     console.log('Starting', variant)

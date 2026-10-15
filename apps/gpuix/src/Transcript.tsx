@@ -59,11 +59,8 @@ export function Transcript() {
     setAtTail(threadId ? scrollAnchors.get(threadId)?.tail ?? true : true)
     nearTop.current = false
   }, [threadId])
-  // A page that leaves the top still on screen loads the next one; the list
-  // reports no new range when the rows above simply grew.
-  useEffect(() => {
-    if (!loadingEarlier && hasEarlier && nearTop.current && !earlierError) void loadEarlier()
-  }, [loadingEarlier, hasEarlier, earlierError])
+  // Consume one top-entry intent per page. Prepending or a retry must not
+  // recursively download every older page without another reading gesture.
 
   // Every answer block/chunk is a direct virtual-list item. Expanding a 5k
   // line fence never mounts 5k native rows, nor adds a nested scroller.
@@ -208,7 +205,7 @@ export function Transcript() {
           if (tail !== atTail) setAtTail(tail)
           // Prefetch while the first turns are on screen (`useEarlierHistory`).
           const top = start <= lead + 1
-          if (top && !earlierError && getState().open.nextBeforeSeq != null && !getState().open.loadingEarlier) void loadEarlier()
+          if (top && !nearTop.current && !earlierError && getState().open.nextBeforeSeq != null && !getState().open.loadingEarlier) void loadEarlier()
           nearTop.current = top
         }}
       >
