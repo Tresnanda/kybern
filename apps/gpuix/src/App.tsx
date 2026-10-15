@@ -17,8 +17,14 @@ import { Palette } from './nav/Palette.tsx'
 import { SessionsDialog } from './nav/Sessions.tsx'
 import { getNav, pointerNav, useNav, type Page } from './nav/store.ts'
 import { Rise } from './motion/kit.tsx'
-import { SIDEBAR, TitleBar, usePanelOpen } from './nav/TitleBar.tsx'
+import { TitleBar, usePanelOpen } from './nav/TitleBar.tsx'
 import { Sidebar } from './Sidebar.tsx'
+import { startAgentToasts } from './shell/agentToasts.ts'
+import { ConnectionBanner, useWelcome, Welcome } from './shell/Connection.tsx'
+import { ErrorBoundary } from './shell/ErrorBoundary.tsx'
+import { useSidebarDragging, useSidebarWidth } from './shell/layout.ts'
+import { SidebarDragLayer, SidebarResizeHandle } from './shell/ResizeHandle.tsx'
+import { Toaster } from './shell/toasts.tsx'
 import { useApp } from './state.ts'
 import { COLUMN, GUTTER, Transcript } from './Transcript.tsx'
 import { ThreadRequests, useBlockingRequest } from './transcript/Requests.tsx'
@@ -37,6 +43,16 @@ export function App() {
   const settingsOpen = useNav((s) => s.settingsOpen)
   const instant = useNav((s) => s.panelInstant)
   const panelOpen = usePanelOpen() && !settingsOpen
+  const sidebarWidth = useSidebarWidth()
+  const resizing = useSidebarDragging()
+  const welcome = useWelcome()
+  // The slide plays only when the panel opens or closes; a drag or a window resize moves it at once.
+  const [seenOpen, setSeenOpen] = useState(panelOpen)
+  const [sliding, setSliding] = useState(false)
+  if (seenOpen !== panelOpen) {
+    setSeenOpen(panelOpen)
+    setSliding(true)
+  }
   // Keep the panel's rows mounted only while it shows or animates: hidden
   // elements still cost layout on every frame in GPUI.
   const [panelMounted, setPanelMounted] = useState(panelOpen)
@@ -47,6 +63,7 @@ export function App() {
 
   useEffect(() => {
     startLive()
+    startAgentToasts()
     startNavHistory()
   }, [])
 
@@ -67,9 +84,12 @@ export function App() {
         <div style={{ display: 'flex', flexGrow: 1, minWidth: 0 }}>
           <motion.div
             initial={false}
-            animate={{ width: panelOpen ? SIDEBAR : 0 }}
-            transition={still ? { duration: 0 } : SLIDE}
-            onMotionComplete={() => setPanelMounted(panelOpen)}
+            animate={{ width: panelOpen ? sidebarWidth : 0 }}
+            transition={still || resizing || !sliding ? { duration: 0 } : SLIDE}
+            onMotionComplete={() => {
+              setPanelMounted(panelOpen)
+              setSliding(false)
+            }}
             style={{ display: 'flex', height: '100%', flexShrink: 0, overflow: 'hidden' }}
           >
             {/* Cached islands (native/README.md): the panel, the content card, the title
@@ -78,7 +98,7 @@ export function App() {
               {...ISLAND}
               style={{
                 display: 'flex',
-                width: SIDEBAR,
+                width: sidebarWidth,
                 height: '100%',
                 flexShrink: 0,
                 backgroundColor: t.sidebar,
@@ -90,7 +110,11 @@ export function App() {
                 borderColor: edge,
               }}
             >
-              {panelMounted && <Sidebar />}
+              {panelMounted && (
+                <ErrorBoundary label="the sidebar" compact>
+                  <Sidebar />
+                </ErrorBoundary>
+              )}
             </div>
           </motion.div>
           <div
@@ -110,14 +134,20 @@ export function App() {
             }}
           >
             <PageEnter page={settingsOpen ? 'settings' : page}>
-              {settingsOpen ? <ElsewherePage page="settings" /> : page === 'home' ? <HomePage /> : <ElsewherePage page={page} />}
+              <ErrorBoundary label="this page" key={settingsOpen ? 'settings' : page}>
+                {settingsOpen ? <ElsewherePage page="settings" /> : welcome ? <Welcome kind={welcome} /> : page === 'home' ? <HomePage /> : <ElsewherePage page={page} />}
+              </ErrorBoundary>
             </PageEnter>
+            <ConnectionBanner />
           </div>
         </div>
       </div>
       <Palette />
       <HandoffDialog />
       <SessionsDialog />
+      {panelOpen && <SidebarResizeHandle />}
+      <Toaster />
+      <SidebarDragLayer />
     </div>
   )
 }
@@ -143,13 +173,19 @@ function HomePage() {
   if (!selectedId) return <Draft />
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
-      <Transcript />
+      <ErrorBoundary label="the transcript">
+        <Transcript />
+      </ErrorBoundary>
       <BottomFade />
       <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, display: 'flex', justifyContent: 'center', paddingLeft: GUTTER, paddingRight: GUTTER, paddingBottom: 16 }}>
         {/* Pending approvals and questions stack on the composer; a blocking one replaces it. */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: COLUMN }}>
           <ThreadRequests />
-          {!blocking && <Composer thread={thread} />}
+          {!blocking && (
+            <ErrorBoundary label="the composer" compact>
+              <Composer thread={thread} />
+            </ErrorBoundary>
+          )}
         </div>
       </div>
     </div>

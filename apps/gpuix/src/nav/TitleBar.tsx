@@ -19,6 +19,7 @@ import { goBack, goForward, newThread, openThread, useNavigationAvailability } f
 import { Menu, MenuItem, MenuSeparator, muted, Tip } from './overlay.tsx'
 import { getNav, setNav, useNav } from './store.ts'
 import { providerLabel } from '../sidebar/model.ts'
+import { useSidebarDragging, useSidebarWidth } from '../shell/layout.ts'
 
 export const TITLEBAR = 46
 export const RAIL = 52
@@ -104,7 +105,9 @@ export function TitleBar({ panelOpen }: { panelOpen: boolean }) {
   const settingsOpen = useNav((s) => s.settingsOpen)
   const instant = useNav((s) => s.panelInstant)
   const { canBack, canForward } = useNavigationAvailability()
-  const titleStart = panelOpen ? RAIL + SIDEBAR : LEADING_X + 84
+  const sidebarWidth = useSidebarWidth()
+  const resizing = useSidebarDragging()
+  const titleStart = panelOpen ? RAIL + sidebarWidth : LEADING_X + 84
   const panelless = page === 'notes'
   const toggle = () => {
     setNav({ panelInstant: false })
@@ -133,12 +136,12 @@ export function TitleBar({ panelOpen }: { panelOpen: boolean }) {
       )}
       {panelOpen && !settingsOpen && (
         // The 1×20 tick at the content column's leading edge.
-        <div style={{ position: 'absolute', left: RAIL + SIDEBAR, top: 13, width: 1, height: 20, backgroundColor: t.variant === 'dark' ? 'rgba(255, 255, 255, 0.09)' : 'rgba(0, 0, 0, 0.10)' }} />
+        <div style={{ position: 'absolute', left: RAIL + sidebarWidth, top: 13, width: 1, height: 20, backgroundColor: t.variant === 'dark' ? 'rgba(255, 255, 255, 0.09)' : 'rgba(0, 0, 0, 0.10)' }} />
       )}
       <motion.div
         initial={false}
         animate={{ left: panelless ? LEADING_X : titleStart }}
-        transition={REDUCED_MOTION || instant ? { duration: 0 } : SLIDE}
+        transition={REDUCED_MOTION || instant || resizing ? { duration: 0 } : SLIDE}
         style={{ position: 'absolute', top: 0, right: 8, height: TITLEBAR, display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 20, paddingRight: 12 }}
       >
         {!settingsOpen && page === 'home' && <ThreadHeader />}

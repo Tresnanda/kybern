@@ -1,7 +1,7 @@
 // Minimal Objective-C runtime access through Bun FFI, for the few window
 // behaviours GPUIX 0.10.0 does not expose (material, visibility). macOS only;
 // callers treat every failure as "keep GPUI's default".
-import { dlopen, FFIType, ptr, type Pointer } from 'bun:ffi'
+import { dlopen, FFIType, ptr, read, type Pointer } from 'bun:ffi'
 
 const LIBOBJC = '/usr/lib/libobjc.A.dylib'
 
@@ -28,6 +28,7 @@ function load() {
     msgSetBool: send([FFIType.bool], FFIType.void),
     msgSetPtr: send([FFIType.ptr], FFIType.void),
     msgPtrArg: send([FFIType.ptr], FFIType.ptr),
+    msgCStr: send([], FFIType.cstring),
   }
 }
 
@@ -57,4 +58,22 @@ export function each(o: Objc, array: Pointer | null, fn: (item: Pointer) => void
   if (!array) return
   const n = Number(o.msgU64(array, sel(o, 'count')))
   for (let i = 0; i < n; i++) fn(o.msgAt(array, sel(o, 'objectAtIndex:'), BigInt(i)) as Pointer)
+}
+
+let nsAppSymbol: bigint | number | null = null
+/**
+ * The running `NSApp`, or null before the app exists. Unlike
+ * `[NSApplication sharedApplication]` this never creates it: GPUI registers its
+ * own NSApplication subclass at startup, and creating the plain class first
+ * crashes it ("Ivar platform not found"). Code that may run early uses this.
+ */
+export function nsApp(): Pointer | null {
+  if (!nsAppSymbol) {
+    // Not cached while missing: AppKit may not be loaded yet.
+    const { symbols } = dlopen('/usr/lib/libSystem.B.dylib', { dlsym: { args: [FFIType.i64, FFIType.ptr], returns: FFIType.ptr } })
+    nsAppSymbol = (symbols.dlsym(-2n, cstr('NSApp')) as unknown as number | null) ?? null
+    if (!nsAppSymbol) return null
+  }
+  const app = read.ptr(nsAppSymbol as unknown as Pointer)
+  return app ? (app as unknown as Pointer) : null
 }

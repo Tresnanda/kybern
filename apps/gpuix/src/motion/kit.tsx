@@ -125,7 +125,7 @@ export function Popup({ children, side = 'bottom', kind = 'menu', style }: { chi
  * Pass `height` when the content height is known (e.g. N sidebar rows × 30):
  * no measuring frame is needed.
  */
-export function Collapse({ open, children, height: known, testId }: { open: boolean; children: ReactNode; height?: number; testId?: string }) {
+export function Collapse({ open, children, height: known, testId, closeDuration }: { open: boolean; children: ReactNode; height?: number; testId?: string; /** Closing is faster than opening when set (toasts leave in 160 ms). */ closeDuration?: number }) {
   const renderer = useGpuixRequired()
   const inner = useRef<PublicInstance>(null)
   // 'open': natural height. 'opening'/'closing': tweening. 'closed': unmounted.
@@ -196,7 +196,7 @@ export function Collapse({ open, children, height: known, testId }: { open: bool
           ? { opacity: 1 }
           : { height: to ?? from, opacity: phase === 'opening' ? (to === null ? 0 : 1) : 0 }
       }
-      transition={tween(DISCLOSURE, EASE.out)}
+      transition={tween(phase === 'closing' && closeDuration ? closeDuration : DISCLOSURE, EASE.out)}
       onMotionComplete={() => {
         if (phase === 'opening' && to !== null) setPhase('open')
         if (phase === 'closing') setPhase('closed')

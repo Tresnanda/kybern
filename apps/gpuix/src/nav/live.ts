@@ -78,7 +78,15 @@ function upsertThread(thread: Thread) {
   set({ threads: next.sort(byRecent) })
 }
 
+/** Other surfaces that follow every thread event (agent toasts). */
+const eventTaps = new Set<(event: ThreadEvent) => void>()
+export function onLiveEvent(listener: (event: ThreadEvent) => void): () => void {
+  eventTaps.add(listener)
+  return () => eventTaps.delete(listener)
+}
+
 function onEvent(event: ThreadEvent) {
+  for (const tap of eventTaps) tap(event)
   switch (event.kind) {
     case 'thread_created':
     case 'thread_updated':
@@ -235,6 +243,13 @@ function persistPrefs() {
 }
 
 let started = false
+let limitsTimer: ReturnType<typeof setInterval> | undefined
+/** Follow a fresh client after a reconnect (`shell/connection.ts`). */
+export function restartLive() {
+  started = false
+  startLive()
+}
+
 /** Start following the daemon. Called once by the app shell, after `connect()`. */
 export function startLive() {
   if (started) return
@@ -262,7 +277,7 @@ export function startLive() {
   })
   if (client.status === 'open') onOpen()
   // The rail rings stay current while the window is up (`usageLimits.ts` polls each minute).
-  setInterval(() => askLimits(), LIMITS_POLL_MS)
+  limitsTimer ??= setInterval(() => askLimits(), LIMITS_POLL_MS)
 }
 
 /** Keep the open child thread listed even after it settles (`visibleSubagentThreads` selectedId). */

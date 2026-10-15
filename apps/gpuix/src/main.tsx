@@ -11,6 +11,7 @@ import { connect } from './state.ts'
 import { ThemeProvider, VARIANT } from './ui.tsx'
 import { startPerfProbe } from './perf/probe.ts'
 import { installDesktopMaterial } from './native/material.ts'
+import { installWindowFrame, startWindowShell } from './shell/window.ts'
 
 const FONTS = ['CalSans-Regular.ttf', 'JetBrainsMono-Regular.ttf']
 
@@ -30,6 +31,7 @@ function Fonts({ children }: { children: ReactNode }) {
     }
     setReady(true)
     startPerfProbe(renderer)
+    startWindowShell(renderer)
     // Debug: minimize after launch to check that hidden windows stop their loops.
     if (process.env.KYBERN_DEBUG_MINIMIZE) setTimeout(() => renderer.minimizeWindow?.(), Number(process.env.KYBERN_DEBUG_MINIMIZE))
   }, [renderer])
@@ -64,6 +66,9 @@ render(
     onKeyDown: onWindowKeyDown,
   },
 )
+
+// Put the window back where it was (size and position are saved as it moves).
+installWindowFrame()
 
 // GPUI's blur is colourless; give it the desktop's vibrancy material.
 if (process.env.KYBERN_OPAQUE !== '1') installDesktopMaterial(VARIANT)

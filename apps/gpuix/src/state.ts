@@ -31,6 +31,8 @@ export interface AppState {
   open: ThreadState
   collapsed: Record<string, boolean>
   sidebarOpen: boolean
+  /** The project and thread lists have arrived at least once (the Welcome screen waits for them). */
+  listsLoaded: boolean
 }
 
 let state: AppState = {
@@ -43,6 +45,7 @@ let state: AppState = {
   open: emptyThreadState(),
   collapsed: {},
   sidebarOpen: true,
+  listsLoaded: false,
 }
 const listeners = new Set<() => void>()
 
@@ -84,6 +87,14 @@ let client: KybernClient | null = null
 export const getClient = () => client
 let unsubscribeOpen: (() => void) | null = null
 
+/** Drop a dead client so `connect()` builds a fresh one, re-reading the port and token files. */
+export function resetClient() {
+  client?.close()
+  client = null
+  unsubscribeOpen?.()
+  unsubscribeOpen = null
+}
+
 export function connect() {
   if (client) return
   let ep
@@ -119,7 +130,7 @@ export async function refreshLists() {
   const threads = t.threads
     .filter((th) => !isChildThread(th) && th.status !== 'archived')
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated_at.localeCompare(a.updated_at))
-  set({ projects: p.projects, threads })
+  set({ projects: p.projects, threads, listsLoaded: true })
   const want = process.env.KYBERN_GPUIX_THREAD
   if (want && !state.selectedId) {
     const match = threads.find((th) => th.id === want || th.title.toLowerCase().includes(want.toLowerCase()))
