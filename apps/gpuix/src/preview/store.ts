@@ -5,6 +5,7 @@ import type { PreviewOpenResult } from '../../../../packages/kybern-client/src/t
 import { getClient, getState } from '../state.ts'
 import { openUrl } from '../pulls/PrStates.tsx'
 import { chooseTab, setDock } from '../dock/store.ts'
+import { onEnvironmentChange } from '../shell/environment.ts'
 export interface Entry { address: string; url: string; title: string; ticket?: string; kind: 'file' | 'server' | 'external' }
 export interface PreviewState { entries: Entry[]; index: number; floating: boolean; busy: boolean; error: string | null; permission?: { address: string; folder: string; grantable: boolean }; device: boolean; width: number; height: number; preset: string | null }
 const empty: PreviewState = { entries: [], index: -1, floating: false, busy: false, error: null, device: false, width: 390, height: 844, preset: 'iphone-12-pro' }
@@ -62,3 +63,6 @@ export function resetPreviews() {
   sessions.clear(); generations.clear(); nextGeneration++
   listeners.forEach(listener => listener())
 }
+
+// Tickets and in-flight opens belong to the old daemon; drop them before the new socket opens.
+onEnvironmentChange(resetPreviews)
