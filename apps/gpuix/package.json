@@ -8,7 +8,8 @@
     "dev": "bun --hot src/main.tsx",
     "start": "bun src/main.tsx",
     "screenshot": "bun scripts/screenshot.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "package:app": "bun scripts/package-app.ts"
   },
   "packageManager": "pnpm@11.25.0",
   "dependencies": {
