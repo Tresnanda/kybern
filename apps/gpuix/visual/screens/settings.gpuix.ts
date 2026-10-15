@@ -1,3 +1,4 @@
+import { waitForPainted } from '../../src/requests/harness.ts'
 import { type Step, click, settle, park } from '../screens.gpuix.ts'
 const tabs = ['general', 'appearance', 'notifications', 'agents', 'accounts', 'integrations', 'computer', 'background', 'about']
 export const screens: Record<string, Step> = Object.fromEntries(tabs.map(tab => [`settings-${tab}`, async (app) => { await click(app, 'rail-settings'); await click(app, `settings-tab-${tab}`); await settle(1200); await park(app) }]))
@@ -12,8 +13,8 @@ screens['pulls-list'] = async (app, fx) => { await pulls(app, fx); await park(ap
 screens['pulls-summary'] = async (app, fx) => { await detail(app, fx); await park(app) }
 screens['pulls-changes'] = async (app, fx) => { await detail(app, fx); await click(app, 'pr-tab-changes'); await park(app) }
 screens['pulls-timeline'] = async (app, fx) => { await detail(app, fx); await click(app, 'pr-tab-timeline'); await park(app) }
-screens['pulls-review'] = async (app, fx) => { await detail(app, fx); await click(app, 'pr-review'); await park(app) }
-screens['pulls-merge-menu'] = async (app, fx) => { await detail(app, fx); await click(app, 'pr-merge-menu'); await park(app) }
+screens['pulls-review'] = async (app, fx) => { await detail(app, fx); await click(app, 'pr-review'); await park(app); await waitForPainted(app, 'Drafts stay here until GitHub accepts them.') }
+screens['pulls-merge-menu'] = async (app, fx) => { await detail(app, fx); await click(app, 'pr-merge-menu'); await park(app); await waitForPainted(app, 'Close pull request') }
 screens['pulls-empty'] = async (app, fx) => { await mode(fx, 'empty'); await click(app, 'rail-pulls'); await settle(1200); await park(app) }
 screens['pulls-error'] = async (app, fx) => { await mode(fx, 'error'); await click(app, 'rail-pulls'); await settle(1200); await park(app) }
 screens['usage-empty'] = async (app, fx) => { await mode(fx, 'usage-empty'); await click(app, 'rail-usage'); await settle(1200); await park(app) }

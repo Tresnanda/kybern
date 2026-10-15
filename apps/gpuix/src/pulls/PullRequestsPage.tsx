@@ -106,7 +106,7 @@ export function PullRequestsPage() {
         </>}
       </virtual-list>
     </div>}
-    {selection ? <Detail key={`${selection.project.id}:${selection.number}`} project={selection.project} number={selection.number} onBack={back} width={windowWidth - 60 - (peek ? 256 : 0) - (wide ? 352 : 0)} onChanged={() => refresh(n => n + 1)} /> : wide && <div style={{ ...column, flexGrow: 1, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24 }}><Icon source={N.pullRequest} size={24} color={t.textSecondary}/><Label color={t.text} size={16} weight={500}>Select a pull request</Label><Label color={t.textSecondary} size={14} lineHeight={22} style={{maxWidth:300,textAlign:'center'}}>Read its summary, review changes and send findings to an agent.</Label><Label color={t.textSecondary} size={13}>↑ ↓ to move · Enter to open</Label></div>}
+    {selection ? <Detail key={`${selection.project.id}:${selection.number}`} project={selection.project} number={selection.number} onBack={back} showBack={!wide} width={windowWidth - 60 - (peek ? 256 : 0) - (wide ? 352 : 0)} onChanged={() => refresh(n => n + 1)} /> : wide && <div style={{ ...column, flexGrow: 1, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24 }}><Icon source={N.pullRequest} size={24} color={t.textSecondary}/><Label color={t.text} size={16} weight={500}>Select a pull request</Label><Label color={t.textSecondary} size={14} lineHeight={22} style={{maxWidth:300,textAlign:'center'}}>Read its summary, review changes and send findings to an agent.</Label><Label color={t.textSecondary} size={13}>↑ ↓ to move · Enter to open</Label></div>}
   </div>
 }
 

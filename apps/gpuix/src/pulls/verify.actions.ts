@@ -21,6 +21,6 @@ try{
   await click('pr-confirm-submit');assert.equal(fixture.actions.at(-1)?.action,action)
   if(action==='checkout')assert.equal(fixture.actions.at(-1)?.thread_id,'linked')
  }
- fixture.empty(true);await click('pr-back');await click('pr-refresh');assert.equal(await a.getByTestId('pr-row-108').count(),0)
+ fixture.empty(true);await click('pr-refresh');assert.equal(await a.getByTestId('pr-row-108').count(),0)
  console.log(`PASS ${mode}: all six PR actions, reviewed head, linked checkout, failed-review draft retention and empty list; mock RPC only`)
 }finally{await f.close();fixture.close()}

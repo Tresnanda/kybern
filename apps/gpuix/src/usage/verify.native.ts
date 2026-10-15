@@ -65,6 +65,9 @@ try {
   await screenshot('timeline')
   await click('pr-source-review_comments')
   await sleep(700)
+  // Pagination follows the entries, matching the desktop timeline.
+  await app.mouse.wheel({ x: 1100, y: 600 }, 0, -20000)
+  await sleep(500)
   await app.getByTestId('pr-page-next').press('enter')
   await sleep(700)
   assert.match(await app.getByTestId('pr-timeline').textContent(), /Page 2/)

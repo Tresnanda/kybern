@@ -3,7 +3,7 @@ import { Children, useEffect, useState, type ReactNode } from 'react'
 import { PickerMenu, PickerItem, CheckMark } from '../composer/Menu.tsx'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
-import { EASE_OUT, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { EASE_OUT, ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { FONT_UI } from '../theme.ts'
 
 export function Button({ children, onClick, disabled = false, testId, variant = 'outline' }: { variant?: 'outline' | 'primary' | 'destructive' | 'ghost' | 'secondary'; children: string; onClick: () => void; disabled?: boolean; testId?: string }) {
@@ -140,7 +140,7 @@ export function NumberField({ value, onCommit, label, unit = '', min = 0, max = 
     setDraft(bounded===0&&min===0?'':String(bounded))
     if (bounded !== value) onCommit(bounded)
   }
-  return <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><TextField testId={testId} label={label} placeholder={min===0?'Off':undefined} value={draft} onChange={setDraft} width={72} style={{fontSize:14,backgroundColor:'transparent'}} readOnly={disabled} onBlur={() => commit(draft)} onSubmit={() => commit(draft)} onKeyDown={(e) => { if (e.key === 'enter') commit(draft); if (e.key === 'escape') setDraft(value===0&&min===0?'':String(value)); if (e.key === 'up' || e.key === 'down') commit(String((Number(draft) || 0) + (e.key === 'up' ? 1 : -1) * step * (e.modifiers?.shift ? 10 : 1))) }} /><Label color={t.textSecondary} size={12} style={{width:44}}>{unit}</Label></div>
+  return <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><TextField testId={testId} label={label} placeholder={min===0?'Off':undefined} value={draft} onChange={setDraft} width={72} style={{fontSize:14,backgroundColor:t.variant === 'dark' ? ink(t,.016) : t.v('--background'),borderColor:ink(t,t.variant === 'dark' ? .05 : .06)}} readOnly={disabled} onBlur={() => commit(draft)} onSubmit={() => commit(draft)} onKeyDown={(e) => { if (e.key === 'enter') commit(draft); if (e.key === 'escape') setDraft(value===0&&min===0?'':String(value)); if (e.key === 'up' || e.key === 'down') commit(String((Number(draft) || 0) + (e.key === 'up' ? 1 : -1) * step * (e.modifiers?.shift ? 10 : 1))) }} /><Label color={t.textSecondary} size={12} style={{width:44, opacity: value === 0 && min === 0 ? .4 : 1}}>{unit}</Label></div>
 }
 
 export function PageBlock({ children }: { children: ReactNode }) {
