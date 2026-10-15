@@ -170,7 +170,9 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
               >
                 {/* Plain text, not <markdown>: native markdown has no intrinsic width, and the
                     bubble must hug short messages (`w-max max-w-full`). */}
-                <text ref={body} style={{ color: t.text, fontSize: TEXT.size, lineHeight: TEXT.lineHeight, fontFamily: FONT_UI, userSelect: 'text', ...(clampLines && !expanded ? { lineClamp: clampLines } : {}) }}>{text}</text>
+                <div style={{ display: 'flex', flexDirection: 'column', ...(clampLines && !expanded ? { maxHeight: TEXT.lineHeight * clampLines, overflow: 'hidden' as const } : {}) }}>
+                  <text ref={body} style={{ color: t.text, fontSize: TEXT.size, lineHeight: TEXT.lineHeight, fontFamily: FONT_UI, userSelect: 'text', ...(clampLines && !expanded ? { lineClamp: clampLines } : {}) }}>{text}</text>
+                </div>
               </div>
             )}
             {clampLines && (overflowing || expanded) && <div testId="subagent-prompt-toggle" role="button" onClick={() => setExpanded(!expanded)} style={{ paddingTop: 4, paddingBottom: 4, cursor: 'pointer' }}>

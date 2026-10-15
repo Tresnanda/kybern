@@ -14,7 +14,7 @@ import { loadTarget, useComposer } from '../composer/store.ts'
 import { Button, Para, muted } from '../transcript/kit.tsx'
 import { errorText, reportError } from '../transcript/store.ts'
 import { Label, ProviderMark, useTheme } from '../ui.tsx'
-import { PanelEnter } from './Panel.tsx'
+import { PanelEnter, PanelPresence } from './Panel.tsx'
 import { PickerMenu, PickerItem } from '../composer/Menu.tsx'
 import { Elapsed } from '../subagents/Elapsed.tsx'
 import { SubagentHover } from '../subagents/Hover.tsx'
@@ -68,20 +68,20 @@ export function ActivityPanels({ threadId, data }: { threadId: string; data: Ret
   const [stripOpen, setStripOpen] = useState(true)
   const [applying, setApplying] = useState(false)
   return <>
-    {target?.pending_permission_mode && <PanelEnter><ActivityBody testId="permission-change-panel"><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <Para color={t.textSecondary} size={12} style={{ flexGrow: 1 }}>{`${changed ? 'Selected agent uses' : 'Permissions change to'} ${target.pending_permission_mode === 'full-access' ? 'Full access' : target.pending_permission_mode} ${changed ? 'with your next message.' : 'after this turn.'}`}</Para>
+    <PanelPresence show={!!target?.pending_permission_mode}><PanelEnter><ActivityBody testId="permission-change-panel"><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <Para color={t.textSecondary} size={12} style={{ flexGrow: 1 }}>{`${changed ? 'Selected agent uses' : 'Permissions change to'} ${target?.pending_permission_mode === 'full-access' ? 'Full access' : target?.pending_permission_mode} ${changed ? 'with your next message.' : 'after this turn.'}`}</Para>
       {!changed && <Button variant="ghost" testId="permission-apply" disabled={applying} onClick={() => { setApplying(true); const owner = activeEnvironment(); const client = getClient()!; void client.call('threads.permissions.apply', { thread_id: threadId }).then(() => { if (owner === activeEnvironment()) return loadTarget(threadId) }).catch(e => { if (owner === activeEnvironment()) reportError('Unable to apply permissions', e) }).finally(() => setApplying(false)) }}>Stop and apply now</Button>}
-    </div></ActivityBody></PanelEnter>}
-    {target?.quota_limited && thread && <LimitRecovery thread={thread} />}
-    {helpers.length > 0 && <PanelEnter><ActivityBody testId="helper-threads-panel">
+    </div></ActivityBody></PanelEnter></PanelPresence>
+    <PanelPresence show={!!target?.quota_limited && !!thread}>{thread && <LimitRecovery thread={thread} />}</PanelPresence>
+    <PanelPresence show={helpers.length > 0}><PanelEnter><ActivityBody testId="helper-threads-panel">
       <div style={{ display: 'flex', justifyContent: 'space-between' }}><Button variant="ghost" onClick={() => setHelpersOpen(!helpersOpen)}>{`${helpers.length} ${helpers.length === 1 ? 'helper' : 'helpers'}${helpers.some(c => c.status === 'awaiting-approval') ? ` · ${helpers.filter(c => c.status === 'awaiting-approval').length} need approval` : helpers.some(c => c.status === 'running') ? ` · ${helpers.filter(c => c.status === 'running').length} working` : ''} ${helpersOpen ? '⌃' : '⌄'}`}</Button><Button variant="ghost" onClick={() => showDock(threadId, 'agents')}>Details</Button></div>
       {helpersOpen && <virtual-list style={{ width: '100%', height: Math.min(176, helpers.length * 32) }}>{helpers.map(child => <div key={child.id} onClick={() => openThread(child.id)} testId={`helper-${child.id}`} style={{ display: 'flex', alignItems: 'center', height: 32, gap: 8, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}><ProviderMark kind={child.provider.kind} size={12} /><Label color={t.text} size={12} truncate style={{ flexGrow: 1 }}>{child.title || 'Untitled'}</Label><Label color={child.status === 'failed' ? t.red : t.textSecondary} size={10}>{child.status === 'running' ? 'Working' : child.status === 'awaiting-approval' ? 'Needs approval' : child.status === 'failed' ? 'Failed' : 'Idle'}</Label></div>)}</virtual-list>}
-    </ActivityBody></PanelEnter>}
-    {strip && <PanelEnter><ActivityBody testId="subagent-strip"><div style={{ display: 'flex', justifyContent: 'space-between' }}><Button variant="ghost" onClick={() => setStripOpen(!stripOpen)}>{`${stripLabel(strip.rows.length, strip.working)} ${stripOpen ? '⌃' : '⌄'}`}</Button>{stoppableSubagents(strip.rows).length >= 2 && <Button variant="ghost" testId="subagents-stop-all" onClick={() => { for (const child of stoppableSubagents(strip.rows)) void controlSubagent(child, 'stop') }}>Stop all</Button>}</div>
+    </ActivityBody></PanelEnter></PanelPresence>
+    <PanelPresence show={!!strip}>{strip && <PanelEnter><ActivityBody testId="subagent-strip"><div style={{ display: 'flex', justifyContent: 'space-between' }}><Button variant="ghost" onClick={() => setStripOpen(!stripOpen)}>{`${stripLabel(strip.rows.length, strip.working)} ${stripOpen ? '⌃' : '⌄'}`}</Button>{stoppableSubagents(strip.rows).length >= 2 && <Button variant="ghost" testId="subagents-stop-all" onClick={() => { for (const child of stoppableSubagents(strip.rows)) void controlSubagent(child, 'stop') }}>Stop all</Button>}</div>
       {stripOpen && <virtual-list style={{ width: '100%', height: Math.min(176, strip.rows.length * 36) }}>{strip.rows.map(child => <SubagentRow key={child.id} thread={child} />)}</virtual-list>}
-    </ActivityBody></PanelEnter>}
-    {active.length > 0 && <PanelEnter><ActivityBody testId="runtime-activity-panel"><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Label color={t.text} size={12} truncate style={{ flexGrow: 1 }}>{`${active.filter(task => task.kind === 'agent').length ? `${active.filter(task => task.kind === 'agent').length} ${active.filter(task => task.kind === 'agent').length === 1 ? 'agent' : 'agents'} working` : `${active.length} background ${active.length === 1 ? 'task' : 'tasks'}`} · ${(active.find(task => !task.backgrounded) ?? active[0])?.title}`}</Label><Button variant="ghost" testId="runtime-view" onClick={() => showDock(threadId, 'activity')}>View activity</Button></div></ActivityBody></PanelEnter>}
-    {held.length > 0 && <PanelEnter><virtual-list testId="held-messages-panel" style={{ width: '100%', height: Math.min(256, held.length * 108) }}>{held.map(message => <HeldRow key={message.id} message={message} onDone={() => setHeld(items => items.filter(m => m.id !== message.id))} />)}</virtual-list></PanelEnter>}
+    </ActivityBody></PanelEnter>}</PanelPresence>
+    <PanelPresence show={active.length > 0}><PanelEnter><ActivityBody testId="runtime-activity-panel"><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Label color={t.text} size={12} truncate style={{ flexGrow: 1 }}>{`${active.filter(task => task.kind === 'agent').length ? `${active.filter(task => task.kind === 'agent').length} ${active.filter(task => task.kind === 'agent').length === 1 ? 'agent' : 'agents'} working` : `${active.length} background ${active.length === 1 ? 'task' : 'tasks'}`} · ${(active.find(task => !task.backgrounded) ?? active[0])?.title}`}</Label><Button variant="ghost" testId="runtime-view" onClick={() => showDock(threadId, 'activity')}>View activity</Button></div></ActivityBody></PanelEnter></PanelPresence>
+    <PanelPresence show={held.length > 0}><PanelEnter><virtual-list testId="held-messages-panel" style={{ width: '100%', height: Math.min(256, held.length * 108) }}>{held.map(message => <HeldRow key={message.id} message={message} onDone={() => setHeld(items => items.filter(m => m.id !== message.id))} />)}</virtual-list></PanelEnter></PanelPresence>
   </>
 }
 

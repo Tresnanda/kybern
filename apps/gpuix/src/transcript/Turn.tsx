@@ -1,3 +1,4 @@
+import { VisualCard } from './Visual.tsx'
 import { agentItemTool, agentItemWriteResult, parseAgentItemResult, placeItemCards } from '../../../desktop/src/lib/agentItemTools.ts'
 import { AgentItemCard } from '../coordinator/AgentItem.tsx'
 // One turn (`Turn` in `views/Transcript.tsx`): the user's bubble, live work
@@ -132,6 +133,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning 
         </div>
       )}
 
+      {group.work.filter(b => b.kind === 'visual').map(b => b.kind === 'visual' && <VisualCard key={b.id} visual={b.visual} threadId={threadId} />)}
       {running && (
         <div testId="live-work" style={{ display: 'flex', flexDirection: 'column', paddingBottom: 8 }}>
           <WorkingHeader since={group.user?.at ?? group.work[0]?.at ?? ''} />

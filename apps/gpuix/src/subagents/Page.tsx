@@ -27,7 +27,7 @@ export function SubagentPageMotion({ children }: { children: ReactNode }) {
   }
   if (thread) previous.current = { id: thread.id, parent: thread.parent_thread_id ?? null, subagent: !!thread.subagent }
   const play = entrance.current.direction !== 0 && !entrance.current.keyboard
-  return <motion.div key={id} initial={play ? { opacity: .4, left: REDUCED_MOTION ? 0 : entrance.current.direction * 40 } : false} animate={{ opacity: 1, left: 0 }} transition={{ duration: play ? .22 : 0, ease: EASE_OUT }} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>{children}</motion.div>
+  return <motion.div key={id} initial={play ? { opacity: .4, translateX: REDUCED_MOTION ? 0 : entrance.current.direction * 40 } : false} animate={{ opacity: 1, translateX: 0 }} transition={{ duration: play ? .22 : 0, ease: EASE_OUT }} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>{children}</motion.div>
 }
 
 export function SubagentBar({ thread, embedded = false }: { thread: Thread; embedded?: boolean }) {

@@ -1,3 +1,5 @@
+import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
+import { revealBoundary } from './reveal.ts'
 // Live-state motion on the shared loader clock (`MatrixLoader.tsx`): the
 // desktop's `.shimmer` / `.t-shimmer` sweep becomes a slow brightness pulse
 // (GPUIX cannot clip a moving gradient to glyphs), stepping with the loaders
@@ -8,7 +10,7 @@ import { smoothAdvance, type SmoothState } from '../../../desktop/src/lib/smooth
 import type { StyleDesc } from '@gpuix/react'
 import { useLoaderStep } from '../MatrixLoader.tsx'
 import { Swap } from '../motion/kit.tsx'
-import { Label } from '../ui.tsx'
+import { REDUCED_MOTION, Label } from '../ui.tsx'
 import { alpha, ROW_LINE } from './kit.tsx'
 import { PACE_MS } from './store.ts'
 
@@ -70,7 +72,7 @@ export function useSmoothText(target: string, live: boolean, complete: boolean):
   const loop = useRef<{ live: boolean; state: SmoothState; at: number }>({ live: false, state: { shown: target.length, vel: 0 }, at: 0 })
   const l = loop.current
   const now = performance.now()
-  if (!live) {
+  if (!live || complete || REDUCED_MOTION || !isWindowVisible()) {
     l.live = false
     l.state = { shown: target.length, vel: 0 }
   } else {
@@ -81,13 +83,17 @@ export function useSmoothText(target: string, live: boolean, complete: boolean):
     l.live = true
     l.at = now
   }
-  const shown = Math.min(target.length, Math.floor(l.state.shown))
+  const shown = !live || complete || REDUCED_MOTION || !isWindowVisible() ? target.length : revealBoundary(target, l.state.shown)
   const behind = live && shown < target.length
   // Cleared by the next render, so a paced commit within PACE_MS cancels it.
   useEffect(() => {
-    if (!behind) return
+    if (!behind || !isWindowVisible() || REDUCED_MOTION) return
     const id = setTimeout(tick, PACE_MS)
     return () => clearTimeout(id)
   })
+  useEffect(() => {
+    if (!live || REDUCED_MOTION) return
+    return onWindowVisibility(() => tick())
+  }, [live])
   return behind ? target.slice(0, shown) : target
 }

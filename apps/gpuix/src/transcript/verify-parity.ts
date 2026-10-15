@@ -1,5 +1,6 @@
+import { tmpdir } from 'node:os'
 import { launch } from '@gpuix/react/automation'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import assert from 'node:assert/strict'
@@ -19,7 +20,8 @@ async function until(label: string, condition: () => Promise<boolean>) {
 }
 
 for (const mode of process.argv[2] ? [process.argv[2]] : ['keys', 'long', 'prompt']) {
-  const app = await launch({ command: 'bun', args: [appDir + '/src/transcript/parity.fixture.tsx'], env: { ...process.env, GPUIX_BACKGROUND: '1', KYBERN_PARITY_MODE: mode } })
+  const scratch = mkdtempSync(tmpdir() + '/gpuix-p3-parity-')
+  const app = await launch({ command: 'bun', args: [appDir + '/src/transcript/parity.fixture.tsx'], env: { ...process.env, GPUIX_BACKGROUND: '1', KYBERN_PARITY_MODE: mode, KYBERN_DATA_DIR: scratch, KYBERN_CLIENT_CONFIG_DIR: scratch, KYBERN_GPUIX_CREDENTIALS_DIR: scratch, KYBERN_GPUIX_ENVIRONMENT: 'local', KYBERN_URL: '', KYBERN_TOKEN: '' } })
   try {
     await app.getByTestId('fixture-ready').waitFor({ timeoutMs: 60_000 })
     const editor = app.getByTestId('composer')
@@ -91,6 +93,8 @@ for (const mode of process.argv[2] ? [process.argv[2]] : ['keys', 'long', 'promp
       assert.equal(await app.getByTestId('subagent-prompt-toggle').textContent(), 'Show full prompt')
       await app.screenshot({ path: out + '/prompt-clamped.png' })
       await app.getByTestId('subagent-prompt-toggle').click()
+      await app.clock.fastForward(250)
+      await app.getByTestId('transcript-surface').wheel(0, 10000)
       await until('full prompt expanded', async () => await app.getByTestId('subagent-prompt-toggle').textContent() === 'Show less')
       console.log('SUBAGENT PROMPT PASSED')
     } else {
@@ -130,6 +134,7 @@ for (const mode of process.argv[2] ? [process.argv[2]] : ['keys', 'long', 'promp
     process.exitCode = 1
   } finally {
     await app.close()
+    rmSync(scratch, { recursive: true, force: true })
   }
 }
 process.exit(process.exitCode ?? 0)

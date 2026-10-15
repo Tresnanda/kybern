@@ -1,3 +1,4 @@
+import { COORDINATOR_DRAFT_HINT } from '../../../packages/kybern-client/src/coordinator.ts'
 // The home screen (`views/Draft.tsx`): the mark and "What should we do in
 // {Project}?" centred (the project name is a menu with a dotted underline),
 // then the composer with the landing tray docked on it. Sending starts a
@@ -10,7 +11,7 @@
 import { useState } from 'react'
 import { Composer, useDraftTarget } from './Composer.tsx'
 import { Icon } from './icons.tsx'
-import { useApp } from './state.ts'
+import { selectDraft, useApp } from './state.ts'
 import { COLUMN, GUTTER } from './Transcript.tsx'
 import { ink, Label, LOGO_SVG, useTheme } from './ui.tsx'
 import { G } from './composer/glyphs.ts'
@@ -35,6 +36,7 @@ function shouldEnter(): boolean {
 
 export function Draft() {
   const t = useTheme()
+  const coordinator = useApp(s => s.draft.purpose === 'coordinator')
   const projects = useApp((s) => s.projects)
   const { projectId, project, useWorktree } = useDraftTarget()
   const list = [...projects].sort((a, b) => a.name.localeCompare(b.name))
@@ -51,7 +53,7 @@ export function Draft() {
           </Rise>
           <Rise kind="stagger" index={1} play={enter} style={{ flexDirection: 'row', alignSelf: 'stretch', alignItems: 'baseline', flexWrap: 'wrap', justifyContent: 'center' }}>
             <Label color={heading} size={30} lineHeight={34.5}>
-              {project ? 'What should we do in ' : 'What can I help with?'}
+              {project ? coordinator ? 'What should we work on in ' : 'What should we do in ' : 'What can I help with?'}
             </Label>
             {project && (
               <>
@@ -63,7 +65,7 @@ export function Draft() {
                   trigger={() => <HeadingProject name={project.name} />}
                 >
                   {list.map((p) => (
-                    <PickerItem key={p.id} id={p.id} onSelect={() => patchDraft({ projectId: p.id, worktree: null, baseBranch: null })}>
+                    <PickerItem key={p.id} id={p.id} onSelect={() => { patchDraft({ projectId: p.id, worktree: null, baseBranch: null }); if (coordinator) selectDraft(p.id, 'coordinator') }}>
                       <Icon name="folder" size={18} color={t.text} style={{ opacity: 0.8 }} />
                       <Label color={t.text} truncate style={{ flexGrow: 1 }}>
                         {p.name}
@@ -78,6 +80,7 @@ export function Draft() {
               </>
             )}
           </Rise>
+          {coordinator && <Label color={ink(t, 0.6)} size={13}>{COORDINATOR_DRAFT_HINT}</Label>}
         </div>
       </div>
       <Rise kind="stagger" index={2} play={enter} style={{ flexDirection: 'row', justifyContent: 'center', paddingBottom: 16 }}>
