@@ -278,7 +278,7 @@ real-daemon measurements are read-only. Keep only one window per worktree.
 
 The generated `native/build` (about 1.9 GiB) and `native/upstream` (186 MiB)
 are retained for the integrating agent, as requested. Free disk went from
-73 GiB before the first native build to 69 GiB during validation; other agents
+73 GiB before the first native build to 68 GiB at completion; other agents
 were working concurrently, so the total change is not solely this build.
 
 ## Extension performance (2026-10-15)
