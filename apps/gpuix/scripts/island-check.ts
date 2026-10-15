@@ -22,7 +22,7 @@ async function shots(mode: string, still: boolean, list = false, hover = false) 
   const app = await launch({
     command: 'bun',
     args: [lab, mode],
-    env: { KYBERN_APPEARANCE: 'dark', KYBERN_LOADER_TICK_MS: '100', NAPI_RS_NATIVE_LIBRARY_PATH: process.env.NAPI_RS_NATIVE_LIBRARY_PATH!, ...(still ? { ISLAND_LAB_STILL: '1' } : {}), ...(list ? { ISLAND_LAB_LIST: '1' } : {}), ...(!hover ? { ISLAND_LAB_NO_HOVER: '1' } : {}) },
+    env: { ISLAND_LAB_CLOCK: '1', KYBERN_APPEARANCE: 'dark', KYBERN_LOADER_TICK_MS: '100', NAPI_RS_NATIVE_LIBRARY_PATH: process.env.NAPI_RS_NATIVE_LIBRARY_PATH!, ...(still ? { ISLAND_LAB_STILL: '1' } : {}), ...(list ? { ISLAND_LAB_LIST: '1' } : {}), ...(!hover ? { ISLAND_LAB_NO_HOVER: '1' } : {}) },
   })
   try {
     await app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })
@@ -33,8 +33,13 @@ async function shots(mode: string, still: boolean, list = false, hover = false) 
     const b = path.join(dir, `${tag}-b.png`)
     const h = path.join(dir, `${tag}-hover.png`)
     await app.screenshot({ path: a })
-    await new Promise((r) => setTimeout(r, 350))
-    await app.screenshot({ path: b })
+    const first = readFileSync(a)
+    const deadline = Date.now() + 3000
+    do {
+      await app.screenshot({ path: b })
+      if (still || !first.equals(readFileSync(b))) break
+      await new Promise(resolve => setTimeout(resolve, 50))
+    } while (Date.now() < deadline)
     await app.getByText('Thread row 3 with a reasonably long title').hover()
     await app.screenshot({ path: h })
     return { a: readFileSync(a), b: readFileSync(b), hover: readFileSync(h) }
