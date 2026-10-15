@@ -11,7 +11,7 @@
 // transitions are short bursts and loops stay on MatrixLoader's paused-when-
 // hidden clock. Reduce Motion keeps fades and drops movement, like the desktop.
 import { motion, useGpuixRequired, type PublicInstance, type StyleDesc } from '@gpuix/react'
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { REDUCED_MOTION } from '../ui.tsx'
 
 /** `--duration-*` in seconds. */
@@ -125,6 +125,7 @@ export function Popup({ children, side = 'bottom', kind = 'menu', style }: { chi
  * Pass `height` when the content height is known (e.g. N sidebar rows × 30):
  * no measuring frame is needed.
  */
+let disclosureGeneration = 2_000_000
 export function Collapse({ open, children, height: known, testId, closeDuration }: { open: boolean; children: ReactNode; height?: number; testId?: string; /** Closing is faster than opening when set (toasts leave in 160 ms). */ closeDuration?: number }) {
   const renderer = useGpuixRequired()
   const inner = useRef<PublicInstance>(null)
@@ -181,6 +182,8 @@ export function Collapse({ open, children, height: known, testId, closeDuration 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, to, generation])
 
+  const nativeGeneration = useMemo(() => ++disclosureGeneration, [phase, from, to, generation])
+  if (REDUCED_MOTION) return open ? <div testId={testId} style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>{children}</div> : null
   if (phase === 'closed') return null
   // One element carries the content from the start of an opening through its
   // whole open life, so settling never remounts the children (their state
@@ -188,16 +191,19 @@ export function Collapse({ open, children, height: known, testId, closeDuration 
   // element, which needs a numeric starting height; the content is leaving.
   const settled = phase === 'open'
   return (
-    <motion.div
-      key={generation}
-      initial={{ height: from, opacity: phase === 'opening' ? 0 : 1 }}
-      animate={
-        settled
-          ? { opacity: 1 }
-          : { height: to ?? from, opacity: phase === 'opening' ? (to === null ? 0 : 1) : 0 }
-      }
-      transition={tween(phase === 'closing' && closeDuration ? closeDuration : DISCLOSURE, EASE.out)}
-      onMotionComplete={() => {
+    <div
+      // Remove the motion descriptor when settled: the native host otherwise
+      // retains the last animated numeric height when children grow later.
+      // Keep this host and its children mounted across the whole disclosure.
+      {...((settled ? {} : { motion: {
+        generation: nativeGeneration,
+        isExit: false,
+        initial: { height: from, opacity: phase === 'opening' ? 0 : 1 },
+        animate: { height: to ?? from, opacity: phase === 'opening' ? (to === null ? 0 : 1) : 0 },
+        transition: tween(phase === 'closing' && closeDuration ? closeDuration : DISCLOSURE, EASE.out),
+      } }) as object)}
+      onMotionComplete={event => {
+        if (event.motionGeneration !== nativeGeneration) return
         if (phase === 'opening' && to !== null) setPhase('open')
         if (phase === 'closing') setPhase('closed')
       }}
@@ -206,7 +212,7 @@ export function Collapse({ open, children, height: known, testId, closeDuration 
       <div ref={inner} testId={testId} style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
         {children}
       </div>
-    </motion.div>
+    </div>
   )
 }
 

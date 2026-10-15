@@ -1076,9 +1076,13 @@ function TraitRow({
   )
 }
 
+// Desktop kit.css account palette (these static CSS tokens are not in buildThemeCssVariables).
+const accountDots: Record<string, [string, string]> = { blue: ['#0169cc', '#3386d6'], green: ['#00a240', '#2fbf63'], purple: ['#751ed9', '#b06dff'], pink: ['#c2307a', '#e86aa6'], teal: ['#0f8f86', '#33bfb3'], amber: ['#d97706', '#f5b44a'] }
+
 /** `ComposerModelTriggerLabel`: mark, model, qualifier, bolt, effort, traits, chevron. */
 export function ModelTriggerLabel({
   kind,
+  account,
   model,
   qualifier,
   fast,
@@ -1088,6 +1092,7 @@ export function ModelTriggerLabel({
   color,
 }: {
   kind: ProviderKind
+  account?: { name: string; color?: string | null } | null
   model: string
   qualifier: string | null
   fast: boolean
@@ -1100,7 +1105,9 @@ export function ModelTriggerLabel({
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1, overflow: 'hidden' }}>
       <ProviderMark kind={kind} size={14} />
-      <Label color={t.text} lineHeight={16} truncate style={{ minWidth: 64 }}>
+      {account?.color && accountDots[account.color] && <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: accountDots[account.color]![t.variant === 'dark' ? 1 : 0], marginLeft: -4, alignSelf: 'flex-start', marginTop: 2, flexShrink: 0 }} />}
+      {account && <Label color={t.textSecondary} lineHeight={16} style={{ maxWidth: 96, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{account.name}</Label>}
+      <Label color={t.text} lineHeight={16} style={{ maxWidth: 220, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
         {model}
       </Label>
       {qualifier && (

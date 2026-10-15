@@ -1,5 +1,9 @@
+import { Icon } from '../icons.tsx'
+import { G } from '../composer/glyphs.ts'
 import { accountNeedsSignIn } from '../../../desktop/src/lib/accountUi.ts'
-import { type ReactNode, memo, useEffect, useMemo, useRef, useState } from 'react'
+import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
+import { observeElementBounds } from '../native/layout.ts'
+import { type ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Thread, ThreadMessageRecord } from '../../../../packages/kybern-client/src/types.ts'
 import { heldHeadline, messageSenderName, plainLine, purposeLabel } from '../../../../packages/kybern-client/src/delegations.ts'
 import { stripSubagents, stripLabel, stoppableSubagents, subagentThreadPhase, subagentTypeLabel, subagentSpan, subagentPhaseWord } from '../../../../packages/kybern-client/src/subagents.ts'
@@ -64,7 +68,7 @@ export function ActivityPanels({ threadId, data }: { threadId: string; data: Ret
   const { held, setHeld, helpers, strip, active, target, thread } = data
   const t = useTheme()
   const changed = !!target && !!thread && (target.target.provider.kind !== thread.provider.kind || target.target.provider.instance !== thread.provider.instance)
-  const [helpersOpen, setHelpersOpen] = useState(true)
+  const [helpersOpen, setHelpersOpen] = useState(false)
   const [stripOpen, setStripOpen] = useState(true)
   const [applying, setApplying] = useState(false)
   return <>
@@ -81,7 +85,7 @@ export function ActivityPanels({ threadId, data }: { threadId: string; data: Ret
       {stripOpen && <virtual-list style={{ width: '100%', height: Math.min(176, strip.rows.length * 36) }}>{strip.rows.map(child => <SubagentRow key={child.id} thread={child} />)}</virtual-list>}
     </ActivityBody></PanelEnter>}</PanelPresence>
     <PanelPresence show={active.length > 0}><PanelEnter><ActivityBody testId="runtime-activity-panel"><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Label color={t.text} size={12} truncate style={{ flexGrow: 1 }}>{`${active.filter(task => task.kind === 'agent').length ? `${active.filter(task => task.kind === 'agent').length} ${active.filter(task => task.kind === 'agent').length === 1 ? 'agent' : 'agents'} working` : `${active.length} background ${active.length === 1 ? 'task' : 'tasks'}`} · ${(active.find(task => !task.backgrounded) ?? active[0])?.title}`}</Label><Button variant="ghost" testId="runtime-view" onClick={() => showDock(threadId, 'activity')}>View activity</Button></div></ActivityBody></PanelEnter></PanelPresence>
-    <PanelPresence show={held.length > 0}><PanelEnter><virtual-list testId="held-messages-panel" style={{ width: '100%', height: Math.min(256, held.length * 108) }}>{held.map(message => <HeldRow key={message.id} message={message} onDone={() => setHeld(items => items.filter(m => m.id !== message.id))} />)}</virtual-list></PanelEnter></PanelPresence>
+    <PanelPresence show={held.length > 0}><PanelEnter><HeldMessages messages={held} onDone={id => setHeld(items => items.filter(m => m.id !== id))} /></PanelEnter></PanelPresence>
   </>
 }
 
@@ -101,12 +105,24 @@ export const SubagentRow = memo(function SubagentRow({ thread }: { thread: Threa
     </div>
   </div>
 })
+// Measure visible rows so a short card has no blank tail; long held-message
+// lists still mount only the rows inside the capped viewport.
+function HeldMessages({ messages, onDone }: { messages: ThreadMessageRecord[]; onDone: (id: string) => void }) {
+  const [heights, setHeights] = useState<Record<string, number>>({})
+  const measure = useCallback((id: string, height: number) => setHeights(previous => previous[id] === height ? previous : { ...previous, [id]: height }), [])
+  return <virtual-list testId="held-messages-panel" style={{ width: '100%', height: Math.min(256, messages.reduce((total, message) => total + (heights[message.id] ?? 56), 0)) }}>{messages.map(message => <MeasuredHeldRow key={message.id} message={message} onDone={() => onDone(message.id)} onHeight={measure} />)}</virtual-list>
+}
+function MeasuredHeldRow({ message, onDone, onHeight }: { message: ThreadMessageRecord; onDone: () => void; onHeight: (id: string, height: number) => void }) {
+  const renderer = useGpuixRequired(), ref = useRef<PublicInstance>(null)
+  useEffect(() => ref.current ? observeElementBounds(renderer, ref.current.id, event => { if (event.rect) onHeight(message.id, Math.ceil(event.rect.height)) }) : undefined, [renderer, message.id, onHeight])
+  return <div ref={ref} style={{ display: 'flex', flexDirection: 'column', width: '100%' }}><HeldRow message={message} onDone={onDone} /></div>
+}
 const HeldRow = memo(function HeldRow({ message, onDone }: { message: ThreadMessageRecord; onDone: () => void }) {
   const t = useTheme(); const [expanded, setExpanded] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('')
   const sender = useApp(s => s.threads.find(t => t.id === message.from_thread_id)?.title)
   const name = messageSenderName({ from_thread_id: message.from_thread_id, from_title: sender ?? '' })
   const act = async (deliver: boolean) => { setBusy(true); setError(''); try { await getClient()!.call(deliver ? 'threads.messages.deliver' : 'threads.messages.dismiss', { message_id: message.id }); onDone() } catch(e) { setError(errorText(e)); setBusy(false) } }
-  return <ActivityBody testId={`held-message-${message.id}`}><div style={{ display: 'flex', gap: 8 }}><div onClick={() => setExpanded(!expanded)} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, cursor: 'pointer' }}><Para color={t.text} size={12} weight={500}>{heldHeadline(name, message.purpose)}</Para><Para color={muted(t)} size={12} style={{ lineClamp: expanded ? 8 : 2 }}>{expanded ? message.body : plainLine(message.body, 200)}</Para>{expanded && <Para color={muted(t)} size={11}>{`${purposeLabel(message.purpose)}${message.held_reason ? ` · ${message.held_reason}` : ''}`}</Para>}</div><Button variant="ghost" testId={`held-dismiss-${message.id}`} disabled={busy} onClick={() => void act(false)}>Dismiss</Button><Button variant="subtle" testId={`held-deliver-${message.id}`} disabled={busy} onClick={() => void act(true)}>Deliver</Button></div>{error && <Para color={t.red} size={11}>{error}</Para>}</ActivityBody>
+  return <ActivityBody testId={`held-message-${message.id}`}><div style={{ display: 'flex', gap: 8 }}><Icon source={G.hand} size={14} color={t.variant === 'dark' ? '#fcd34d' : '#d97706'} /><div onClick={() => setExpanded(!expanded)} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, cursor: 'pointer' }}><Para color={t.text} size={12} weight={500}>{heldHeadline(name, message.purpose)}</Para><Para color={muted(t)} size={12} style={{ lineClamp: expanded ? 8 : 2 }}>{expanded ? message.body : plainLine(message.body, 200)}</Para>{expanded && <Para color={muted(t)} size={11}>{`${purposeLabel(message.purpose)}${message.held_reason ? ` · ${message.held_reason}` : ''}`}</Para>}</div><Button variant="ghost" testId={`held-dismiss-${message.id}`} disabled={busy} onClick={() => void act(false)}>Dismiss</Button><Button variant="subtle" testId={`held-deliver-${message.id}`} disabled={busy} onClick={() => void act(true)}>Deliver</Button></div>{error && <Para color={t.red} size={11}>{error}</Para>}</ActivityBody>
 })
 function LimitRecovery({ thread }: { thread: Thread }) {
   const t = useTheme(), accounts = useComposer(d => d.accounts)
@@ -114,5 +130,5 @@ function LimitRecovery({ thread }: { thread: Thread }) {
   const [selected, setSelected] = useState(''), [busy, setBusy] = useState(false)
   const attempt = useRef<string | null>(null)
   const choice = options.find(a => a.provider.instance === selected) ?? options[0]
-  return <ActivityBody testId="usage-limit-recovery"><Para color={t.text} size={12} weight={500}>Account usage limit reached</Para><Para color={muted(t)} size={12}>Choose an account to continue the interrupted task in this conversation.</Para><div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>{choice ? <><PickerMenu trigger={() => <Button variant="ghost">{choice.name || choice.provider.instance}</Button>}>{options.map(a => <PickerItem id={a.provider.instance} key={a.provider.instance} onSelect={() => { setSelected(a.provider.instance); attempt.current = null }}><Label color={t.text} size={12}>{a.name || a.provider.instance}</Label></PickerItem>)}</PickerMenu><Button testId="usage-switch-continue" disabled={busy} onClick={() => { setBusy(true); attempt.current ??= crypto.randomUUID(); const owner = activeEnvironment(); const client = getClient()!; void client.call('threads.switch_continue', { thread_id: thread.id, provider: choice.provider, message_id: attempt.current }).then(() => { if (owner === activeEnvironment()) return loadTarget(thread.id) }).catch(e => { if (owner === activeEnvironment()) reportError('Unable to continue', e) }).finally(() => setBusy(false)) }}>Switch and continue</Button></> : <Button variant="ghost" onClick={() => setNav({ settingsOpen: true })}>Add an account in Settings</Button>}</div></ActivityBody>
+  return <ActivityBody testId="usage-limit-recovery"><div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><Para color={t.text} size={12} weight={500} style={{ width: 145, flexShrink: 0 }}>Account usage limit reached</Para><Para color={muted(t)} size={12} style={{ flexGrow: 1 }}>Choose an account to continue the interrupted task in this conversation.</Para><div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexShrink: 0 }}>{choice ? <><PickerMenu trigger={() => <Button variant="ghost">{choice.name || choice.provider.instance}</Button>}>{options.map(a => <PickerItem id={a.provider.instance} key={a.provider.instance} onSelect={() => { setSelected(a.provider.instance); attempt.current = null }}><Label color={t.text} size={12}>{a.name || a.provider.instance}</Label></PickerItem>)}</PickerMenu><Button testId="usage-switch-continue" disabled={busy} onClick={() => { setBusy(true); attempt.current ??= crypto.randomUUID(); const owner = activeEnvironment(); const client = getClient()!; void client.call('threads.switch_continue', { thread_id: thread.id, provider: choice.provider, message_id: attempt.current }).then(() => { if (owner === activeEnvironment()) return loadTarget(thread.id) }).catch(e => { if (owner === activeEnvironment()) reportError('Unable to continue', e) }).finally(() => setBusy(false)) }}>Switch and continue</Button></> : <Button variant="ghost" onClick={() => setNav({ settingsOpen: true })}>Add an account</Button>}</div></div></ActivityBody>
 }

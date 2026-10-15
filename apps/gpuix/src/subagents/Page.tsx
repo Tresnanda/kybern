@@ -1,3 +1,7 @@
+import { clockTime } from '../transcript/clock.ts'
+import { MatrixLoader } from '../MatrixLoader.tsx'
+import { Icon } from '../icons.tsx'
+import { T } from '../transcript/glyphs.ts'
 import { Elapsed } from './Elapsed.tsx'
 import { motion } from '@gpuix/react'
 import { useRef, useState, type ReactNode } from 'react'
@@ -56,6 +60,7 @@ export function SubagentBar({ thread, embedded = false }: { thread: Thread; embe
   const state = subagentBarState(thread, elapsed)
   const tokens = formatTokenCount(subagentTokenCount(thread))
   return <div testId="subagent-bar" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, width: '100%', minHeight: 48, padding: 8, paddingLeft: 16, borderRadius: embedded ? 0 : 19.2, borderWidth: embedded ? 0 : 1, borderColor: t.border, backgroundColor: embedded ? undefined : t.surface }}>
+    {phase === 'working' ? <MatrixLoader /> : <Icon source={phase === 'failed' ? T.alert : T.check} size={14} color={muted(t)} />}
     <Label color={phase === 'failed' ? t.red : t.text} size={13}>{isSubagentQueued(thread) ? 'Starting' : state.label}</Label>
     {phase === 'working' && span && !isSubagentQueued(thread) && <Elapsed startedAt={span.startedAt} endedAt={null} />}
     <div style={{ height: 16, width: 1, backgroundColor: t.border }} />
@@ -63,7 +68,7 @@ export function SubagentBar({ thread, embedded = false }: { thread: Thread; embe
     <Label color={muted(t)} size={12} truncate>{[thread.model, thread.effort, tokens].filter(Boolean).join(' · ')}</Label>
     <div style={{ flexGrow: 1 }} />
     {phase === 'failed' && (info.result || info.detail) && <Button variant="ghost" onClick={() => copyText(info.result || info.detail || '')}>Copy error</Button>}
-    {thread.parent_thread_id && <Button variant="ghost" testId="subagent-open-parent" onClick={() => openThread(thread.parent_thread_id!)}>Open parent ⌘↑</Button>}
+    {thread.parent_thread_id && <Button variant="ghost" testId="subagent-open-parent" onClick={() => openThread(thread.parent_thread_id!)}>Open parent</Button>}
     {phase === 'working' && info.capabilities?.background && !info.backgrounded && <Button variant="ghost" testId="subagent-run-background" onClick={() => void controlSubagent(thread, 'background')}>Run in background</Button>}
     {phase === 'working' && info.capabilities?.stop !== false && <Button variant="chrome-outline" testId="subagent-stop" onClick={() => void controlSubagent(thread, 'stop')}>Stop</Button>}
   </div>
@@ -77,5 +82,5 @@ export function SubagentDivider({ thread, end = false }: { thread: Thread; end?:
   const phase = subagentThreadPhase(thread)
   if (end && phase === 'working') return null
   const label = end ? phase === 'done' ? `Result returned to ${name}` : phase === 'failed' ? `Failure reported to ${name}` : 'Stopped' : `Subagent of ${name}`
-  return <div testId={end ? 'subagent-end' : 'subagent-divider'} style={{ display: 'flex', alignItems: 'center', gap: 12, paddingTop: end ? 22 : 8, paddingBottom: end ? 8 : 18 }}><div style={{ height: 1, flexGrow: 1, backgroundColor: t.border }} /><div onClick={thread.parent_thread_id ? () => openThread(thread.parent_thread_id!) : undefined} style={{ cursor: thread.parent_thread_id ? 'pointer' : 'default', maxWidth: '75%' }}><Para color={phase === 'failed' && end ? t.red : muted(t)} size={11}>{label}</Para></div><div style={{ height: 1, flexGrow: 1, backgroundColor: t.border }} /></div>
+  return <div testId={end ? 'subagent-end' : 'subagent-divider'} style={{ display: 'flex', alignItems: 'center', gap: 12, paddingTop: end ? 22 : 8, paddingBottom: end ? 8 : 18 }}><div style={{ height: 1, flexGrow: 1, backgroundColor: t.border }} /><div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>{!end && <ProviderMark kind={thread.provider.kind} size={11} />}<div onClick={thread.parent_thread_id ? () => openThread(thread.parent_thread_id!) : undefined} style={{ cursor: thread.parent_thread_id ? 'pointer' : 'default', maxWidth: '75%' }}><Para color={phase === 'failed' && end ? t.red : muted(t)} size={11}>{`${label}${!end && thread.subagent?.started_at ? ` · ${clockTime(thread.subagent.started_at)}` : ''}`}</Para></div></div><div style={{ height: 1, flexGrow: 1, backgroundColor: t.border }} /></div>
 }

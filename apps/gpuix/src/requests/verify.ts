@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict'
 import { launchFixture, waitForPainted } from './harness.ts'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -11,7 +12,14 @@ for (const variant of ['dark', 'light']) {
   try {
     console.log('Starting', variant)
     await app.getByTestId('secret-request-panel').waitFor({ timeoutMs: 60_000 })
+    await app.getByTestId('secret-input').fill('fixture-only-password')
+    assert.ok(!(await app.call('getPaintedText', {})).text.join(' ').includes('fixture-only-password'), 'Secure input must paint bullets')
+    assert.ok(!JSON.stringify(await app.getByTestId('secret-input').element()).includes('fixture-only-password'), 'Secure input must redact automation inspection')
+    await app.getByTestId('secret-reveal').click()
+    await waitForPainted(app, 'fixture-only-password')
+    await app.getByTestId('secret-reveal').click()
     await app.clock.fastForward(250)
+    assert.ok(!(await app.call('getPaintedText', {})).text.join(' ').includes('fixture-only-password'), 'Hide must restore secure paint')
     await app.screenshot({ path: `${out}/secret-${variant}.png` })
     if (variant === 'dark') await app.getByTestId('secret-decline').press('enter')
     else await app.getByTestId('secret-decline').click()

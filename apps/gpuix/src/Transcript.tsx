@@ -1,4 +1,5 @@
-import { observeElementBounds } from './native/layout.ts'
+import { SubagentDivider } from './subagents/Page.tsx'
+import { observeElementBounds, type LayoutRect } from './native/layout.ts'
 // The thread transcript (`views/Transcript.tsx`): turns grouped by the shared
 // `groupTurns`, rows centred at 736px inside 56px gutters, a date line where a
 // day starts, a virtual list that follows the tail, earlier pages loaded when
@@ -15,7 +16,6 @@ import { Label, REDUCED_MOTION, useTheme } from './ui.tsx'
 import { DISTANCE, DURATION, EASE } from './motion/kit.tsx'
 import { CodeChunk, CodeHeader, markdownParts, Prose, textChunks } from './transcript/markdown.tsx'
 import { MessageRail } from './transcript/rail.tsx'
-import { longestLine, useCodeColumns } from './transcript/codeWidth.ts'
 import { T } from './transcript/glyphs.ts'
 import { alpha, muted, Para } from './transcript/kit.tsx'
 import { over } from './theme.ts'
@@ -27,7 +27,7 @@ export { markdownTheme } from './transcript/kit.tsx'
 export const GUTTER = 56
 export const COLUMN = 736
 /** The floating composer's height plus 64 (`bottomInset + 64`, `Transcript.tsx:479`). */
-const COMPOSER_INSET = 172
+const COMPOSER_INSET = 192
 const turnKey = (group: TurnGroup, index: number) => group.turnId || group.user?.id || `turn-${index}`
 
 type SavedAnchor = { key: string; offset: number; tail: boolean; code: Record<string, { expanded: boolean; wrap: boolean }> }
@@ -35,10 +35,10 @@ const scrollAnchors = new Map<string, SavedAnchor>()
 
 export function Transcript() {
   const pane = usePaneAccess()
-  const gutter = usePaneCompact() ? 20 : GUTTER
   const t = useTheme()
   const renderer = useGpuixRequired()
   const threadId = useApp((s) => s.selectedId)
+  const thread = useApp(s => s.open.thread)
   const blocks = usePacedBlocks()
   const loaded = useApp((s) => s.open.loaded)
   const hasEarlier = useApp((s) => s.open.nextBeforeSeq != null)
@@ -51,12 +51,22 @@ export function Transcript() {
   const turns = useMemo(() => groupTurns(blocks), [blocks, groupTurns])
   const list = useRef<PublicInstance>(null)
   const [atTail, setAtTail] = useState(true)
+  const [overflow, setOverflow] = useState(false)
+  useEffect(() => {
+    if (!loaded || !turns.length || !list.current) { setOverflow(false); return }
+    const rects: Record<string, LayoutRect | null> = {}
+    const stops = ['transcript', 'transcript-top', 'transcript-bottom'].map(testId => observeElementBounds(renderer, testId === 'transcript' ? list.current!.id : { testId: `${testId}:${pane.id}` }, event => {
+      rects[testId] = event.rect
+      const viewport = rects.transcript, top = rects['transcript-top'], bottom = rects['transcript-bottom']
+      if (!viewport) return
+      // An unmounted endpoint is outside the virtual list's visible history.
+      if (hasEarlier || (top && bottom)) setOverflow(hasEarlier || bottom!.y + bottom!.height - top!.y > viewport.height + 1)
+      else if (top || bottom) setOverflow(true)
+    }))
+    return () => stops.forEach(stop => stop())
+  }, [renderer, pane.id, threadId, loaded, turns.length, hasEarlier])
   const [codeState, setCodeState] = useState<Record<string, { expanded: boolean; wrap: boolean }>>({})
   const [activeRow, setActiveRow] = useState(0)
-  const [surface, surfaceRef] = useState<PublicInstance | null>(null)
-  const [paneWidth, setPaneWidth] = useState<number | undefined>()
-  useEffect(() => surface ? observeElementBounds(renderer, surface.id, event => { if (event.rect) setPaneWidth(event.rect.width) }) : undefined, [surface, renderer])
-  const codeColumns = useCodeColumns(threadId ?? null, gutter, COLUMN, paneWidth)
   const nearTop = useRef(false)
 
   useEffect(() => {
@@ -81,8 +91,8 @@ export function Transcript() {
       const partKey = `${key}:answer:${part.key}`
       const chunks = textChunks(part.text)
       if (part.kind === 'code') {
-        // Wrap only when a line would be cut off; the Wrap button overrides either way.
-        const state = codeState[partKey] ?? { expanded: false, wrap: longestLine(part.text) > codeColumns }
+        // Desktop code starts unwrapped; horizontal scrolling preserves long lines.
+        const state = codeState[partKey] ?? { expanded: false, wrap: false }
         const update = (patch: Partial<typeof state>) => setCodeState(value => ({ ...value, [partKey]: { ...state, ...patch } }))
         result.push({ key: partKey, turn, node: <Row><CodeHeader part={part} {...state} onWrap={() => update({ wrap: !state.wrap })} onExpand={chunks.length > 1 ? () => update({ expanded: !state.expanded }) : undefined} /></Row> })
         for (const [chunkIndex, chunk] of (state.expanded ? chunks : chunks.slice(0, 1)).entries()) {
@@ -95,7 +105,7 @@ export function Transcript() {
     }
     result.push({ key: `${key}:footer`, turn, node: <Row><TurnFooter group={turn} threadId={threadId!} isLast={i === turns.length - 1} /></Row> })
     return result
-  }), [turns, hasEarlier, threadId, threadRunning, codeState, codeColumns])
+  }), [turns, hasEarlier, threadId, threadRunning, codeState])
   // A top spacer is present even without earlier history.
   const lead = 1
   const count = lead + rows.length + 1
@@ -188,8 +198,9 @@ export function Transcript() {
 
   if (turns.length === 0)
     return (
-      <div testId="transcript-empty" style={{ display: 'flex', flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: COMPOSER_INSET - 64 }}>
-        <Label color={muted(t, 0.3)}>Send a message to start the conversation.</Label>
+      <div testId="transcript-empty" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, alignItems: 'center', paddingTop: 16 }}>
+        {thread?.subagent && <div style={{ width: '100%', maxWidth: 750, paddingLeft: 24, paddingRight: 24 }}><SubagentDivider thread={thread} /></div>}
+        <Label color={muted(t, 0.3)}>{thread?.subagent ? 'Waiting for the first message.' : 'Send a message to start the conversation.'}</Label>
       </div>
     )
 
@@ -202,11 +213,11 @@ export function Transcript() {
   }
 
   return (
-    <div ref={surfaceRef} testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+    <div testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
       <virtual-list
         ref={list}
         testId="transcript"
-        alignment="bottom"
+        alignment="top"
         followTail
         estimatedItemHeight={160}
         overdraw={Number(process.env.KYBERN_OVERDRAW ?? 512)}
@@ -241,19 +252,19 @@ export function Transcript() {
                   </div>
                 </Row>,
               ]
-            : [<div key="__top" style={{ height: 16 }} />]),
+            : [<div key="__top" testId={`transcript-top:${pane.id}`} style={{ height: 16 }} />]),
           ...rows.map(row => <div key={row.key} style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>{row.node}</div>),
-          <div key="__bottom" style={{ height: COMPOSER_INSET + panelHeight }} />,
+          <div key="__bottom" testId={`transcript-bottom:${pane.id}`} style={{ height: COMPOSER_INSET + panelHeight }} />,
         ]}
       </virtual-list>
-      <MessageRail turns={turns} active={rows[activeRow]?.turn.turnId ?? null} onJump={(id) => {
+      {overflow && <MessageRail turns={turns} active={rows[activeRow]?.turn.turnId ?? null} onJump={(id) => {
         const index = rows.findIndex(row => row.turn.turnId === id)
         if (index >= 0 && list.current) {
           renderer.scrollToItem?.(list.current.id, index + lead, 0)
           setAtTail(false)
           setActiveRow(index)
         }
-      }} />
+      }} />}
       {actionError && (
         <div style={{ position: 'absolute', top: 12, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
           <div style={{ paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, borderRadius: 10, borderWidth: 1, borderColor: t.border, backgroundColor: t.popover, maxWidth: 480 }}>
