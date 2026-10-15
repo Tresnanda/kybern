@@ -1,0 +1,50 @@
+--- a/apps/gpuix/src/shell/agentToasts.ts
++++ b/apps/gpuix/src/shell/agentToasts.ts
+@@ -1,4 +1,4 @@
+-import { onEnvironmentChange } from './environment.ts'
++import { environmentKey, onEnvironmentChange } from './environment.ts'
+ // Agent event toasts (desktop `state/rpc.ts` `announce`): a turn that finishes or
+ // fails, or an agent that needs an approval or an answer, while the reader is not
+ // looking at that thread. Finished and failed toasts last 6 s; approval and
+@@ -11,6 +11,7 @@
+ import { openThread } from '../nav/history.ts'
+ import { onLiveEvent } from '../nav/live.ts'
+ import { getNav } from '../nav/store.ts'
++import { notifications } from '../native/notifications.ts'
+ import { isWindowVisible } from '../native/visibility.ts'
+ import { getClient, getState } from '../state.ts'
+ import { isWindowFocused } from './window.ts'
+@@ -29,6 +30,13 @@
+   const startedAt = Date.now()
+   const announced = new Map<ThreadId, number>()
+   const finished = new Map<ThreadId, string>()
++  const targets = new Map<string, { environment: string; thread: string }>()
++  stops.push(notifications.onClick(id => {
++    const target = targets.get(id)
++    // The native delegate activates the app/window. Never open a thread on a
++    // different daemon after an environment switch.
++    if (target?.environment === environmentKey()) openThread(target.thread)
++  }))
+   let enabled = true
+ 
+   const readSettings = (settings: Settings | undefined) => {
+@@ -67,6 +75,19 @@
+       if (event.turn_id) finished.set(event.thread_id, event.turn_id)
+     }
+     const title = thread.title || 'Thread'
++    if (!isWindowFocused()) {
++      const id = `agent:${event.thread_id}:${event.seq}`
++      targets.set(id, { environment: environmentKey(), thread: event.thread_id })
++      if (targets.size > 256) targets.delete(targets.keys().next().value!)
++      const body = event.kind === 'turn_failed' ? `Failed: ${event.error}`
++        : event.kind === 'approval_requested' ? `Needs approval: ${event.approval.summary}`
++        : event.kind === 'user_input_requested' ? 'Needs your input' : 'Finished working'
++      void notifications.requestPermission().then(status => {
++        if (status === 'granted' && getClient() === client && enabled && !isWindowFocused()) {
++          return notifications.post({ id, title, body })
++        }
++      }).catch(error => console.error('[notifications]', error))
++    }
+     const open = { label: 'Open thread', onClick: () => openThread(event.thread_id) }
+     if (event.kind === 'user_input_requested' || event.kind === 'approval_requested') {
+       toast(title, {
