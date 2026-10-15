@@ -29,6 +29,7 @@ struct InlineData {
     selection: SharedSelection,
     selectable: bool,
     selection_wash: Hsla,
+    hover_link_color: Option<Hsla>,
     on_link: Option<Arc<dyn Fn(&str)>>,
     highlight: Option<Arc<crate::text::HighlightContext>>,
 }
@@ -235,6 +236,7 @@ impl Element for InlineFlow {
                 selectable: data.selectable,
                 group: Some(data.group),
                 links,
+                hover_link_color: data.hover_link_color,
                 on_link: data.on_link.clone(),
                 extra_wash,
                 highlight: data.highlight.clone().map(|context| crate::text::HighlightSource::NativeFragment {
@@ -340,6 +342,7 @@ fn inline_element(flat: &FlatText, size: f32, line: f32, align: Option<TableAlig
             selection: ctx.selection.clone(),
             selectable: ctx.selectable,
             selection_wash: ctx.selection_wash,
+            hover_link_color: (ctx.theme.markdown.link.underline.as_deref() == Some("hover")).then(||color(&ctx.theme.markdown.link.color, ctx.theme.text)),
             on_link: ctx.on_link.clone(),
             highlight: ctx.highlight_set.clone(),
         }),

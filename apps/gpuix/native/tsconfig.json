@@ -1,5 +1,5 @@
 {
   "extends": "../tsconfig.json",
   "include": ["*.ts", "*.tsx", "../assets.d.ts"],
-  "exclude": ["build", "upstream", "markdown-webkit.tsx", "diff-webkit.tsx"]
+  "exclude": ["build", "upstream", "markdown-webkit.tsx", "diff-webkit.tsx", "surface-webkit.tsx"]
 }

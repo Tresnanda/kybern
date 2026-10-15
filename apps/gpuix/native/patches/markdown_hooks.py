@@ -108,3 +108,31 @@ edit(r, ".rounded_full()", ".rounded(px(if theme.markdown.nested_list_markers &&
 edit(r, ".items_center().justify_end()", ".items_center().when(theme.markdown.list_indent.is_some(), |el|el.justify_end())")
 edit(r, ".text_right().text_color(color(&theme.markdown.list_marker", ".when(theme.markdown.list_indent.is_some(), |el|el.text_right()).text_color(color(&theme.markdown.list_marker")
 edit(r, "                .bg(color(&theme.markdown.quote_background, opacity(theme.accent, 0.05)))", "                .bg(color(&theme.markdown.quote_background, opacity(theme.accent, 0.05)))\n                .rounded_tr(px(if theme.markdown.quote_background.is_some(){0.0}else{6.0})).rounded_br(px(if theme.markdown.quote_background.is_some(){0.0}else{6.0}))")
+
+# Package 7: link style is independent of byte ranges/click dispatch.
+edit(r, "        out.push(TextRun {", "        if run.style.link.is_some() { f.weight = FontWeight(number(theme.markdown.link.weight, f.weight.0).clamp(1.0, 1000.0)); }\n        out.push(TextRun {")
+edit(r, "            color: if run.style.code {", "            color: if run.style.link.is_some() { color(&theme.markdown.link.color, theme.text) } else if run.style.code {")
+edit(r, "underline: run.style.link.is_some().then_some(UnderlineStyle {", "underline: (run.style.link.is_some() && !matches!(theme.markdown.link.underline.as_deref(), Some(\"none\" | \"hover\"))).then_some(UnderlineStyle {")
+edit(r, "                color: Some(theme.text_muted),\n                thickness: px(1.0),", "                color: Some(color(&theme.markdown.link.color, theme.text_muted)),\n                thickness: px(1.0),")
+edit(r, "        links: flat.links.clone(),", "        hover_link_color: (ctx.theme.markdown.link.underline.as_deref() == Some(\"hover\")).then(||color(&ctx.theme.markdown.link.color, ctx.theme.text)),\n        links: flat.links.clone(),")
+edit("text/paint.rs", "    pub links: Vec<(Range<usize>, String)>,", "    pub hover_link_color: Option<Hsla>,\n    pub links: Vec<(Range<usize>, String)>,")
+edit("text/paint.rs", "            links: Vec::new(),", "            hover_link_color: None,\n            links: Vec::new(),")
+edit("text/paint.rs", "        links,\n        on_link,", "        links,\n        hover_link_color,\n        on_link,")
+edit("text/paint.rs", "            if let Some(on_link) = &on_link {", """            if let Some(color) = hover_link_color {
+                let hit = |position| layout.index_for_position(position).ok().and_then(|ix| links.iter().position(|(r,_)|r.contains(&ix)));
+                let hovered = hit(window.mouse_position());
+                if let Some(index) = hovered {
+                    for mut rect in range_rects(&layout, &links[index].0, 0.0, 0.0) {
+                        rect.origin.y += rect.size.height - gpui::px(2.0);
+                        rect.size.height = gpui::px(1.0);
+                        window.paint_quad(quad(rect, gpui::px(0.0), color, gpui::px(0.0), gpui::transparent_black(), Default::default()));
+                    }
+                }
+                let layout=layout.clone(); let links=links.clone();
+                window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, window, _cx| {
+                    if phase != gpui::DispatchPhase::Bubble { return; }
+                    let next=layout.index_for_position(event.position).ok().and_then(|ix|links.iter().position(|(r,_)|r.contains(&ix)));
+                    if next != hovered { window.refresh(); }
+                });
+            }
+            if let Some(on_link) = &on_link {""")

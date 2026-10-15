@@ -2,6 +2,7 @@ import type { GpuixTheme } from '@gpuix/react'
 /** Optional native Markdown controls. Pixels except ratios/weights. Defaults
  * preserve upstream styling; unknown/invalid colors retain their fallback. */
 export interface MarkdownStyle {
+  link?: { color?: string; underline?: 'none' | 'always' | 'hover'; weight?: number }
   strongWeight?: number
   nestedListMarkers?: boolean
   codeBorderWidth?: number
