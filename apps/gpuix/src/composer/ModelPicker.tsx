@@ -416,6 +416,8 @@ function ModelPickerPanel({
                   setActiveKey(null)
                 }}
                 onKeyDown={(e) => onKeyDown(e.key ?? '', !!e.modifiers?.cmd)}
+                // The input consumes Enter as its own submit action; it never reaches onKeyDown.
+                onSubmit={() => onKeyDown('enter', false)}
                 theme={{ caret: t.text }}
                 style={{ flexGrow: 1, minWidth: 0, height: 20, fontSize: 14, lineHeight: 20, color: t.text, fontFamily: FONT_UI }}
               />
