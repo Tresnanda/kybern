@@ -82,6 +82,7 @@ echo "== checks"
   pnpm exec tsc -p native/tsconfig.json
   bun native/capability-check.ts
   bun native/decoration-check.ts
+  bun native/rounded-check.ts
   for check in layout-check syntax-check syntax-lifecycle-check syntax-large-check; do
     bun "native/$check.ts"
   done

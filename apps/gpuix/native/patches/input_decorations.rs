@@ -16,6 +16,7 @@ struct DecorationStyle {
     underline: Option<bool>,
     border_radius: Option<f32>,
     padding_x: Option<f32>,
+    background_outset_x: Option<f32>,
 }
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -48,8 +49,11 @@ pub(crate) fn set_input_decorations(id: u64, value: serde_json::Value, expected:
                 style.font_style.as_ref().is_some_and(|v| v != "normal" && v != "italic") {
                 return Err(napi::Error::from_reason("Invalid decoration font style"));
             }
-            if style.border_radius.is_some_and(|v| v != 0.0) || style.padding_x.is_some_and(|v| v != 0.0) {
-                return Err(napi::Error::from_reason("Input runs do not support borderRadius or paddingX"));
+            if style.padding_x.is_some_and(|v| v != 0.0) {
+                return Err(napi::Error::from_reason("Input runs do not support layout paddingX"));
+            }
+            if [style.border_radius, style.background_outset_x].into_iter().flatten().any(|v| !v.is_finite() || v < 0.0) {
+                return Err(napi::Error::from_reason("Decoration radius and outset must be finite and nonnegative"));
             }
             if let Some(id) = &request.id {
                 if id.is_empty() || !ids.insert(id.clone()) { return Err(napi::Error::from_reason("Decoration IDs must be unique and nonempty")); }
@@ -112,7 +116,7 @@ impl TextEditorState {
             let mut run = TextRun { len: r[1] - r[0], font: style.font(), color, background_color: None, underline: None, strikethrough: None };
             for d in self.decorations.iter().filter(|d| d.range.start <= r[0] && r[0] < d.range.end) {
                 if let Some(c) = &d.style.color { run.color = crate::color::parse_color_rgba(c).unwrap().into(); }
-                if let Some(c) = &d.style.background_color { run.background_color = crate::color::parse_color_rgba(c).map(Into::into); }
+                // Backgrounds are painted locally, retaining decoration identity across font runs.
                 if let Some(weight) = d.style.font_weight { run.font.weight = gpui::FontWeight(weight); }
                 if let Some(s) = &d.style.font_style { run.font.style = if s == "italic" { gpui::FontStyle::Italic } else { gpui::FontStyle::Normal }; }
                 if let Some(underline) = d.style.underline { run.underline = underline.then_some(UnderlineStyle { color: Some(run.color), thickness: px(1.0), wavy: false }); }
@@ -122,5 +126,69 @@ impl TextEditorState {
             }
             run
         }).collect()
+    }
+}
+
+// Uses the exact shaped advances and wrap boundaries; never changes editor geometry.
+impl TextEditorState {
+    fn paint_decoration_backgrounds(&self, bounds: Bounds<Pixels>, window: &mut Window) {
+        if self.secure || self.display_is_placeholder || self.decorations.is_empty() { return; }
+        let mut edges = Vec::new();
+        for d in &self.decorations { if d.style.background_color.is_some() { edges.extend([d.range.start, d.range.end]); } }
+        edges.sort_unstable(); edges.dedup();
+        let mut spans: Vec<(Range<usize>, usize)> = Vec::new();
+        for edge in edges.windows(2) {
+            if let Some(owner) = self.decorations.iter().rposition(|d| d.style.background_color.is_some() && d.range.contains(&edge[0])) {
+                if let Some((range, previous)) = spans.last_mut() {
+                    if *previous == owner && range.end == edge[0] { range.end = edge[1]; continue; }
+                }
+                spans.push((edge[0]..edge[1], owner));
+            }
+        }
+        let occupied = |index| spans.iter().any(|(r, _)| r.contains(&index));
+        let mut y = bounds.top() - px(self.scroll_top);
+        for (line_ix, line) in self.last_lines.iter().enumerate() {
+            let base = self.line_starts[line_ix];
+            let layout = &line.unwrapped_layout;
+            let boundaries: Vec<usize> = std::iter::once(0).chain(line.wrap_boundaries.iter().map(|b| layout.runs[b.run_ix].glyphs[b.glyph_ix].index)).chain(std::iter::once(line.len())).collect();
+            for fragment in boundaries.windows(2) {
+                let row = base + fragment[0]..base + fragment[1];
+                let row_x = layout.x_for_index(fragment[0]);
+                let x_at = |index| bounds.left() - px(self.scroll_left) + layout.x_for_index(index - base) - row_x;
+                for (span, owner) in &spans {
+                    let start = span.start.max(row.start);
+                    let end = span.end.min(row.end);
+                    if start >= end { continue; }
+                    let d = &self.decorations[*owner];
+                    let mut left_gap = start;
+                    for (offset, c) in self.content[row.start..start].char_indices().rev() {
+                        let index = row.start + offset;
+                        if !c.is_whitespace() || occupied(index) { break; }
+                        left_gap = index;
+                    }
+                    let mut right_gap = end;
+                    for (offset, c) in self.content[end..row.end].char_indices() {
+                        let index = end + offset;
+                        if !c.is_whitespace() || occupied(index) { break; }
+                        right_gap = index + c.len_utf8();
+                    }
+                    // Each side owns at most half the whitespace: adjacent pills cannot collide.
+                    let outset = px(d.style.background_outset_x.unwrap_or(0.0));
+                    let left = (x_at(start) - outset.min((x_at(start) - x_at(left_gap)) / 2.0)).max(bounds.left());
+                    let right = (x_at(end) + outset.min((x_at(right_gap) - x_at(end)) / 2.0)).min(bounds.right());
+                    if right <= left { continue; }
+                    let radius = px(d.style.border_radius.unwrap_or(0.0)).min(self.line_height / 2.0).min((right - left) / 2.0);
+                    let mut quad = fill(Bounds::from_corners(point(left, y), point(right, y + self.line_height)), crate::color::parse_color_rgba(d.style.background_color.as_ref().unwrap()).unwrap());
+                    quad.corner_radii = gpui::Corners {
+                        top_left: if start == span.start { radius } else { px(0.0) },
+                        bottom_left: if start == span.start { radius } else { px(0.0) },
+                        top_right: if end == span.end { radius } else { px(0.0) },
+                        bottom_right: if end == span.end { radius } else { px(0.0) },
+                    };
+                    window.paint_quad(quad);
+                }
+                y += self.line_height;
+            }
+        }
     }
 }

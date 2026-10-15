@@ -742,11 +742,14 @@ spans. Ordinary styling spans may overlap; later explicitly specified properties
 win. Identical updates do nothing and decoration updates preserve typing's undo
 coalescing.
 
-Supported appearance: color, **rectangular** background, font weight/style, and
-underline. Backgrounds paint before selection and glyphs using GPUI's wrapped-line
-background renderer. `borderRadius` and `paddingX` only accept zero; nonzero values
-throw. This is styled source text, not arbitrary inline React views, replacement
-labels, hidden Markdown syntax, a monospace-family override, or rounded padded
+Supported appearance: color, background, font weight/style, and underline.
+Backgrounds paint before selection and glyphs using an input-local painter over
+GPUI's existing wrapped geometry. `borderRadius` accepts finite nonnegative pixel
+values; `backgroundOutsetX` is a finite nonnegative visual-only horizontal outset.
+It is capped to half the adjacent undecorated whitespace and the input edges.
+Adjacent same-color spans retain separate corners. Wrapped fragments round only
+the span's external ends. `paddingX` still accepts only zero; nonzero values throw. This is styled source text, not arbitrary inline React views, replacement
+labels, hidden Markdown syntax, a monospace-family override, or layout-padded
 chips. Atomic means editing as one unit; it does not make a long token unbreakable
 when wrapping. The actual buffer, copy text, accessibility text and IME text remain
 identical; no placeholder characters or separate hidden document are introduced.
@@ -793,3 +796,25 @@ the nested cached-list regression. Screenshots show the actual background,
 weight, italic and underline. `update.sh` runs it with all prior capability checks.
 `app-integration-3.patch` is an **unapplied** patch for Composer, Notes, task
 descriptions and TaskWindow; see `PACKAGE-3.md` for evidence and limits.
+
+
+## Rounded input backgrounds (package 4)
+
+See `PACKAGE-4.md` for the exact Tauri style mapping, reproducible lab, performance
+samples and unapplied integration patch. `native/rounded-check.ts` verifies actual
+pixels in dark/light: radius, adjacent same-color identity, outset clamping at
+neighbours/input edges, square continuation ends, selection over a pill and atom
+caret movement. `update.sh` includes it. No Zed/shared `TextRun` patch is needed.
+The painter does not alter glyph advances, wrapping, selection, hit tests or IME.
+
+```ts
+style: { backgroundColor: '#28517c', borderRadius: 5, backgroundOutsetX: 4 }
+```
+
+Outset borrows existing whitespace; it does not create padding. Zero is the
+integration default. Rounded backgrounds are used only for Notes/task-description
+inline code. Tauri composer reference chips and resting task atoms have no fill:
+`referenceDecorations` now uses weight 500 and no background; pass `t.accentBlue`.
+`noteInputMarkColors(t)` resolves Notes' foreground/transparent mixes (4% light,
+5% dark code fill; 60% task text). Native source-mode editors still show Markdown
+syntax and cannot reproduce Tauri's icons, replacement labels or per-run font size.
