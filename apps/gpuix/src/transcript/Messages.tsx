@@ -4,7 +4,7 @@ import { delegationState, messageSenderName, plainLine, purposeLabel, resultPrev
 import { liveSend } from '../../../../packages/kybern-client/src/messageStates.ts'
 import { parseSendInput, parseSendResult } from '../../../../packages/kybern-client/src/orchestrationTools.ts'
 import { clockTime } from '../../../desktop/src/lib/format.ts'
-import { getState, useApp } from '../state.ts'
+import { useApp } from '../state.ts'
 import { openThread } from '../nav/history.ts'
 import { useNav } from '../nav/store.ts'
 import { useMessages } from '../requests/messages.ts'
@@ -19,9 +19,10 @@ import { useRowState, type ToolBlock } from './store.ts'
 function purposeIcon(purpose: string) { return purpose === 'question' ? T.question : purpose === 'warning' ? T.alert : purpose === 'task' ? T.listChecks : purpose === 'reply' ? T.undo : T.chatBubble }
 export const InboundMessage = memo(function InboundMessage({ part, at }: { part: ThreadMessagePart; at: string }) {
   const t = useTheme()
+  const openBlocks = useApp(s => s.open.blocks)
   const sender = useApp(s => s.threads.find(th => th.id === part.from_thread_id))
   const [quoted] = useState(() => {
-    const block = getState().open.blocks.find(b => b.kind === 'tool' && b.complete && parseSendResult(b.output)?.messageId === part.reply_to)
+    const block = openBlocks.find(b => b.kind === 'tool' && b.complete && parseSendResult(b.output)?.messageId === part.reply_to)
     return block?.kind === 'tool' ? plainLine(parseSendInput(block.call.input).body, 80) : null
   })
   return <div testId="inbound-message" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, marginBottom: 12, padding: 12, borderRadius: 12, backgroundColor: t.v('--color-background-elevated-secondary') }}>

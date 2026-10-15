@@ -10,8 +10,8 @@ import { load, save } from '../shell/persist.ts'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
-import { useSyncExternalStore } from 'react'
-import { getClient, getState, refreshLists, selectThread } from '../state.ts'
+import { useRef, useSyncExternalStore } from 'react'
+import { getClient, getState, refreshLists, selectPaneThread, getFocusedPaneId, getPane, getPaneState, setPane, usePaneAccess, useApp } from '../state.ts'
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import type {
   AccountSummary,
@@ -71,28 +71,52 @@ const initialData: ComposerData = {
   recents: {},
 }
 let data: ComposerData = { ...initialData, ...load<Partial<Pick<ComposerData, 'draft' | 'favorites' | 'recents'>>>('kybern.composer.choices', {}) }
+const targets = new Map<string, NonNullable<ComposerData['target']>>()
+const catalogs = new Map<string, NonNullable<ComposerData['catalog']>>()
+const catalogLoads = new Map<string, string>()
+const paneDrafts = new Map<string, DraftChoices>()
 const listeners = new Set<() => void>()
+function scopedData(paneId: string, threadId: string | null): ComposerData {
+  if (!paneDrafts.has(paneId)) paneDrafts.set(paneId, data.draft)
+  return { ...data, draft: paneDrafts.get(paneId) ?? data.draft,
+    target: threadId ? targets.get(threadId) ?? (data.target?.threadId === threadId ? data.target : null) : null,
+    catalog: threadId ? catalogs.get(threadId) ?? null : null,
+    catalogLoading: threadId ? catalogLoads.get(threadId) ?? null : null }
+}
 
 export function patch(next: Partial<ComposerData> | ((d: ComposerData) => Partial<ComposerData>)) {
   const previous = data
   data = { ...data, ...(typeof next === 'function' ? next(data) : next) }
+  if (data.target) { targets.set(data.target.threadId, data.target); if (targets.size > 100) targets.delete(targets.keys().next().value!) }
   if (data.draft !== previous.draft || data.favorites !== previous.favorites || data.recents !== previous.recents) save('kybern.composer.choices', { draft: data.draft, favorites: data.favorites, recents: data.recents })
   for (const l of listeners) l()
 }
 
-export function patchDraft(next: Partial<DraftChoices>) {
-  patch((d) => ({ draft: { ...d.draft, ...next } }))
+export function patchDraft(next: Partial<DraftChoices>, paneId = getFocusedPaneId()) {
+  const draft = { ...(paneDrafts.get(paneId) ?? data.draft), ...next }
+  paneDrafts.set(paneId, draft)
+  if ('projectId' in next) {
+    const pane = getPane(paneId)
+    if (pane) setPane(paneId, { draft: { ...pane.draft, projectId: next.projectId ?? undefined }, generation: pane.generation + 1 })
+  }
+  if (paneDrafts.size > 100) paneDrafts.delete(paneDrafts.keys().next().value!)
+  // Keep the last choices as the defaults for future panes and legacy callers.
+  patch({ draft })
 }
 
-export const getData = () => data
+export const getData = (paneId = getFocusedPaneId()) => scopedData(paneId, getPaneState(paneId).selectedId)
 
 export function useComposer<T>(select: (d: ComposerData) => T): T {
+  const pane = usePaneAccess()
+  const threadId = useApp(s => s.selectedId)
+  const frozen = useRef(scopedData(pane.id, threadId))
+  if (!pane.frozen) frozen.current = scopedData(pane.id, threadId)
   return useSyncExternalStore(
     (l) => {
       listeners.add(l)
       return () => listeners.delete(l)
     },
-    () => select(data),
+    () => select(pane.frozen ? frozen.current : scopedData(pane.id, threadId)),
   )
 }
 
@@ -180,29 +204,34 @@ function writeProviderCache(url: string, providers: ProviderStatus[]) {
 
 // ---- the open thread's next-message target ----
 
-let targetSeq = 0
+const targetSeq = new Map<string, number>()
 export async function loadTarget(threadId: ThreadId) {
-  const seq = ++targetSeq
+  const client = rpc()
+  const seq = (targetSeq.get(threadId) ?? 0) + 1
+  targetSeq.set(threadId, seq)
   try {
-    const state = await rpc().call('threads.target.get', { thread_id: threadId })
-    if (seq === targetSeq) patch({ target: { threadId, state } })
+    const state = await client.call('threads.target.get', { thread_id: threadId })
+    if (getClient() === client && seq === targetSeq.get(threadId)) patch({ target: { threadId, state } })
   } catch {
     // An old daemon has no target API; the thread's own fields stand in.
   }
 }
 
-let catalogSeq = 0
+const catalogSeq = new Map<string, number>()
 /** `refreshAccountCatalog` in `views/Thread.tsx`. */
 export async function loadCatalog(threadId: ThreadId, provider: ProviderInstance, projectId: ProjectId, force: boolean) {
   const key = `${threadId}:${provider.kind}:${provider.instance}`
-  const seq = ++catalogSeq
+  const client = rpc()
+  const seq = (catalogSeq.get(threadId) ?? 0) + 1
+  catalogSeq.set(threadId, seq)
+  catalogLoads.set(threadId, key)
   patch({ catalogLoading: key })
   try {
-    const status = await rpc().call('providers.accounts.catalog', { provider, project_id: projectId, force_refresh: force })
-    if (seq === catalogSeq) patch({ catalog: { key, status } })
+    const status = await client.call('providers.accounts.catalog', { provider, project_id: projectId, force_refresh: force })
+    if (getClient() === client && seq === catalogSeq.get(threadId)) { catalogs.set(threadId, { key, status }); if (catalogs.size > 100) catalogs.delete(catalogs.keys().next().value!); patch({ catalog: { key, status } }) }
     return status
   } finally {
-    if (seq === catalogSeq) patch({ catalogLoading: null })
+    if (getClient() === client && seq === catalogSeq.get(threadId)) { catalogLoads.delete(threadId); patch({ catalogLoading: null }) }
   }
 }
 
@@ -269,6 +298,7 @@ export async function interruptThread(threadId: ThreadId) {
 
 /** `createThread` from the home screen, then open it. */
 export async function createThread(opts: {
+  paneId?: string
   projectId: ProjectId | null
   provider: ProviderInstance
   pinAccount: boolean
@@ -280,6 +310,8 @@ export async function createThread(opts: {
   message: UserMessage
 }) {
   const client = rpc()
+  const paneId = opts.paneId ?? getFocusedPaneId()
+  const generation = getPane(paneId)?.generation
   const t = await client.call('threads.create', {
     ...(opts.projectId ? { project_id: opts.projectId } : {}),
     provider: opts.provider,
@@ -293,7 +325,7 @@ export async function createThread(opts: {
   })
   if (getClient() !== client) return t.id
   await refreshLists()
-  if (getClient() === client) void selectThread(t.id)
+  if (getClient() === client && getPane(paneId)?.generation === generation) void selectPaneThread(paneId, t.id)
   return t.id
 }
 
@@ -346,4 +378,4 @@ export async function uploadPath(path: string): Promise<UploadedAsset> {
 }
 
 onEnvironmentLeaving(() => save('kybern.composer.choices', { draft: data.draft, favorites: data.favorites, recents: data.recents }))
-onEnvironmentChange(() => { loadedFor = null; providerLoad = null; targetSeq++; catalogSeq++; patch({ ...initialData, ...load<Partial<Pick<ComposerData, 'draft' | 'favorites' | 'recents'>>>('kybern.composer.choices', {}) }) })
+onEnvironmentChange(() => { loadedFor = null; providerLoad = null; targetSeq.clear(); catalogSeq.clear(); targets.clear(); catalogs.clear(); catalogLoads.clear(); paneDrafts.clear(); patch({ ...initialData, ...load<Partial<Pick<ComposerData, 'draft' | 'favorites' | 'recents'>>>('kybern.composer.choices', {}) }) })

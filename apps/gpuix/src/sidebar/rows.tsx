@@ -1,3 +1,4 @@
+import { beginThreadDrag, trackThreadDrag, consumeThreadDrag, cancelPendingThreadDrag, finishSplitDrag } from '../split/Workspace.tsx'
 import { showDialog } from '../dialogs/store.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 // Thread panel rows (`views/Sidebar.tsx`, `views/subagents/SubagentSidebarRow.tsx`,
@@ -500,6 +501,7 @@ export const ThreadRow = memo(function ThreadRow({
   const menu = useContextMenu()
   const [renaming, setRenaming] = useState(false)
   const [title, setTitle] = useState(thread.title)
+  const { renderer } = useGpuix()
   const hasGlyph = thread.status !== 'idle' || !!activity || unread
   const reveal = hover && !renaming
   const wasRevealed = useWasRevealed(reveal)
@@ -515,10 +517,14 @@ export const ThreadRow = memo(function ThreadRow({
         <Guides depth={depth} />
         <div
           testId={`thread-${thread.id}`}
+          onMouseDown={e => beginThreadDrag(thread.id, e, () => renderer?.clearSelection?.())}
+          onMouseMove={trackThreadDrag}
+          onMouseUp={finishSplitDrag}
           {...bind}
+          onMouseLeave={() => { bind.onMouseLeave(); cancelPendingThreadDrag() }}
           onAuxClick={menu.onAuxClick}
           onClick={() => {
-            if (!renaming) openThread(thread.id)
+            if (!consumeThreadDrag() && !renaming) openThread(thread.id)
           }}
           style={{
             display: 'flex',
@@ -529,6 +535,7 @@ export const ThreadRow = memo(function ThreadRow({
             borderRadius: 8,
             overflow: 'hidden',
             cursor: 'pointer',
+            userSelect: 'none',
             ...(selected ? { backgroundColor: accentActive(t) } : reveal ? { backgroundColor: accent(t) } : {}),
           }}
         >
@@ -554,7 +561,7 @@ export const ThreadRow = memo(function ThreadRow({
               />
             ) : (
               <TitleSwap text={thread.coordinator_project_id ? 'Open coordinator' : thread.title || 'Untitled'}>
-                <Label color={selected ? t.text : resting(t)} lineHeight={20} truncate style={{ flexGrow: 1 }}>
+                <Label color={selected ? t.text : resting(t)} lineHeight={20} truncate style={{ flexGrow: 1, pointerEvents: 'none', userSelect: 'none' }}>
                   {thread.coordinator_project_id ? 'Open coordinator' : thread.title || 'Untitled'}
                 </Label>
               </TitleSwap>
@@ -683,6 +690,7 @@ export const ChildRow = memo(function ChildRow({
   const t = useTheme()
   const { hover, bind, keep } = useHover()
   const menu = useContextMenu()
+  const { renderer } = useGpuix()
   const info = (thread.subagent ?? thread.delegation)!
   const delegated = !thread.subagent
   const phase = rowPhase(thread)
@@ -712,9 +720,13 @@ export const ChildRow = memo(function ChildRow({
         <Guides depth={level} />
         <div
           testId={`child-${thread.id}`}
+          onMouseDown={e => beginThreadDrag(thread.id, e, () => renderer?.clearSelection?.())}
+          onMouseMove={trackThreadDrag}
+          onMouseUp={finishSplitDrag}
           {...bind}
+          onMouseLeave={() => { bind.onMouseLeave(); cancelPendingThreadDrag() }}
           onAuxClick={menu.onAuxClick}
-          onClick={() => openThread(thread.id)}
+          onClick={() => { if (!consumeThreadDrag()) openThread(thread.id) }}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -733,7 +745,7 @@ export const ChildRow = memo(function ChildRow({
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, minWidth: 0 }}>
             {/* A little quieter than its parent, so the parent stays dominant. */}
-            <Label color={selected ? t.text : ink(t, 0.82)} lineHeight={20} truncate style={{ flexGrow: 1 }}>
+            <Label color={selected ? t.text : ink(t, 0.82)} lineHeight={20} truncate style={{ flexGrow: 1, pointerEvents: 'none', userSelect: 'none' }}>
               {thread.title || (delegated ? 'Agent' : 'Subagent')}
             </Label>
             {thread.status === 'awaiting-approval' && (

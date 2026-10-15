@@ -113,7 +113,7 @@ export function TitleSwap({ text, children }: { text: string; children: ReactNod
       initial={shown.play ? { opacity: 0, top: REDUCED_MOTION ? 0 : DISTANCE.micro } : false}
       animate={{ opacity: 1, top: 0 }}
       transition={tween(DURATION.fast, EASE.smoothOut)}
-      style={{ display: 'flex', position: 'relative', flexGrow: 1, minWidth: 0 }}
+      style={{ display: 'flex', position: 'relative', flexGrow: 1, minWidth: 0, pointerEvents: 'none', userSelect: 'none' }}
     >
       {children}
     </motion.div>

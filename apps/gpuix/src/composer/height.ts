@@ -1,14 +1,14 @@
+import { usePaneAccess, useApp } from '../state.ts'
 import { useGpuixRequired, type PublicInstance } from "@gpuix/react"
 import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { observeElementBounds } from "../native/layout.ts"
 
-const measurements = new Map<object, { priority: number; height: number }>()
+const measurements = new Map<object, { priority: number; height: number; pane: string }>()
 const listeners = new Set<() => void>()
 let height = 0
 function publish() {
   const priority = Math.max(-1, ...[...measurements.values()].map(value => value.priority))
   const next = Math.max(0, ...[...measurements.values()].filter(value => value.priority === priority).map(value => value.height))
-  if (height === next) return
   height = next
   for (const listener of listeners) listener()
 }
@@ -16,7 +16,13 @@ const subscribe = (listener: () => void) => { listeners.add(listener); return ()
 
 /** Zero while unmounted. No polling and safe to consume before an editor exists. */
 export function useComposerOverlayHeight(): number {
-  return useSyncExternalStore(subscribe, () => height)
+  const pane = usePaneAccess()
+  useApp(s => s.selectedId)
+  return useSyncExternalStore(subscribe, () => {
+    const own = [...measurements.values()].filter(value => value.pane === pane.id)
+    const priority = Math.max(-1, ...own.map(value => value.priority))
+    return Math.max(0, ...own.filter(value => value.priority === priority).map(value => value.height))
+  })
 }
 
 /** Attach to the card (priority 0) or complete floating stack (priority 1).
@@ -24,18 +30,19 @@ export function useComposerOverlayHeight(): number {
  * Native observers require an existing node, so the producer owns the observer.
  */
 export function useMeasureComposerOverlay(priority = 0) {
+  const pane = usePaneAccess()
   const renderer = useGpuixRequired()
   const owner = useRef({})
   const [node, setNode] = useState<PublicInstance | null>(null)
   useEffect(() => {
-    if (!node) return
+    if (!node || pane.frozen) return
     const key = owner.current
     const stop = observeElementBounds(renderer, node.id, event => {
-      if (event.rect) measurements.set(key, { priority, height: event.rect.height })
+      if (event.rect) measurements.set(key, { priority, height: event.rect.height, pane: pane.id })
       else measurements.delete(key)
       publish()
     })
     return () => { stop(); measurements.delete(key); publish() }
-  }, [renderer, node, priority])
+  }, [renderer, node, priority, pane])
   return setNode
 }

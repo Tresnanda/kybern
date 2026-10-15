@@ -9,7 +9,7 @@ import { prependThreadHistory, type Block } from '../../../../packages/kybern-cl
 import { EARLIER_HISTORY_ENTRIES } from '../../../../packages/kybern-client/src/historyPaging.ts'
 import type { ApprovalDecision, Diff, Thread, ThreadEvent, ThreadId, TurnId } from '../../../../packages/kybern-client/src/types.ts'
 import { useNav } from '../nav/store.ts'
-import { getClient, getState, onOpenEvent, selectThread, set, subscribe, useApp } from '../state.ts'
+import { getClient, getThreadSession, reloadPaneThread, getThreadOpen, setThreadOpen, getFocusedPaneId, getPane, getPaneState, onThreadEvent, subscribe, useApp, usePaneAccess, usePaneId } from '../state.ts'
 
 export type ToolBlock = Extract<Block, { kind: 'tool' }>
 
@@ -33,11 +33,14 @@ const rowState = new Map<string, unknown>()
 /** Disclosure state keyed by row identity: a row scrolled out of the virtual
  *  list and back keeps whether it was open. */
 export function useRowState<T>(key: string, initial: T): [T, (value: T) => void] {
+  key = `${usePaneId()}:${key}`
   const [value, setValue] = useState<T>(() => (rowState.has(key) ? (rowState.get(key) as T) : initial))
   return [
     value,
     (next: T) => {
+      rowState.delete(key)
       rowState.set(key, next)
+      if (rowState.size > 2000) rowState.delete(rowState.keys().next().value!)
       setValue(next)
     },
   ]
@@ -108,20 +111,21 @@ const hydrating = new Set<string>()
 export async function hydrateToolOutput(threadId: ThreadId, block: ToolBlock) {
   if (!block.outputOmitted && !block.streamOmitted) return
   const key = `${threadId}:${block.call.id}:${block.seq}`
-  if (hydrating.has(key) || getState().selectedId !== threadId) return
+  if (hydrating.has(key) || !getThreadOpen(threadId)) return
   hydrating.add(key)
+  const session = getThreadSession(threadId)
   const owner = activeEnvironment()
   try {
     const result = await rpc().call('threads.tool_output', {
       thread_id: threadId,
       tool_call_id: block.call.id,
       start_seq: block.seq,
-      through_seq: getState().open.lastSeq,
+      through_seq: getThreadOpen(threadId)!.lastSeq,
       include_tool_stream: !!block.streamOmitted,
     })
     if (owner !== activeEnvironment()) return
-    const open = getState().open
-    if (owner !== activeEnvironment() || getState().selectedId !== threadId) return
+    const open = getThreadOpen(threadId)
+    if (owner !== activeEnvironment() || getThreadSession(threadId) !== session || !open) return
     const index = open.blocks.findIndex(
       (b) => b.kind === 'tool' && b.call.id === block.call.id && b.seq === block.seq && (b.outputOmitted || b.streamOmitted),
     )
@@ -136,7 +140,7 @@ export async function hydrateToolOutput(threadId: ThreadId, block: ToolBlock) {
       outputOmitted: false,
       streamOmitted: false,
     }
-    set({ open: { ...open, blocks } })
+    setThreadOpen(threadId, { ...open, blocks })
   } catch (error) {
     if (owner !== activeEnvironment()) return
     reportError('Unable to load tool result', error)
@@ -204,57 +208,60 @@ export async function loadFilePatch(threadId: ThreadId, path: string, turnId: Tu
 }
 
 export async function revertTo(threadId: ThreadId, turnId: TurnId) {
+  const paneId = getFocusedPaneId()
+  const generation = getPane(paneId)?.generation
   const owner = activeEnvironment()
   await rpc().call('threads.revert', { thread_id: threadId, turn_id: turnId })
   if (owner !== activeEnvironment()) return
   for (const key of [...diffs.keys()]) if (key.startsWith(`${threadId}:`)) diffs.delete(key)
   for (const key of [...patches.keys()]) if (key.startsWith(`${threadId}:`)) patches.delete(key)
   diffCell.set(diffCell.get() + 1)
-  void selectThread(threadId)
+  if (getPane(paneId)?.generation === generation) void reloadPaneThread(paneId, threadId)
 }
 
 // ---- earlier history (`loadEarlier`) ----
 
 export const earlierError = createCell<string | null>(null)
-export const useEarlierError = () => useSyncExternalStore(earlierError.subscribe, earlierError.get)
-let earlierLoad: Promise<void> | null = null
-
-/** Load the page before the oldest loaded entry at a frozen sequence, replaying
- *  any live events that arrived meanwhile (`prependThreadHistory`). */
-export function loadEarlier(): Promise<void> {
-  if (earlierLoad) return earlierLoad
-  const threadId = getState().selectedId
-  const base = getState().open
-  if (!threadId || !base.loaded || base.nextBeforeSeq == null || base.loadingEarlier) return Promise.resolve()
-  const owner = activeEnvironment()
+const earlierErrors = new Map<string, ReturnType<typeof createCell<string | null>>>()
+const earlierLoads = new Map<string, Promise<void>>()
+function errorFor(id: string) {
+  let cell = earlierErrors.get(id)
+  if (!cell) { cell = createCell<string | null>(null); earlierErrors.set(id, cell) }
+  return cell
+}
+export function useEarlierError() {
+  const id = useApp(s => s.selectedId)
+  const cell = id ? errorFor(id) : earlierError
+  return useSyncExternalStore(cell.subscribe, cell.get)
+}
+/** Shared paging per thread; each pane retains its own virtual-list anchor. */
+export function loadEarlier(paneId = getFocusedPaneId()): Promise<void> {
+  const threadId = getPaneState(paneId).selectedId
+  if (!threadId) return Promise.resolve()
+  const pending = earlierLoads.get(threadId)
+  if (pending) return pending
+  const base = getThreadOpen(threadId)
+  if (!base?.loaded || base.nextBeforeSeq == null || base.loadingEarlier) return Promise.resolve()
+  const owner = activeEnvironment(), client = getClient(), session = getThreadSession(threadId)
   const events: ThreadEvent[] = []
-  const stop = onOpenEvent((event) => events.push(event))
-  earlierError.set(null)
-  set({ open: { ...base, loadingEarlier: true } })
-  earlierLoad = rpc()
-    .call('threads.get', {
-      thread_id: threadId,
-      include_tool_output: false,
-      defer_tool_stream: true,
-      transcript_limit: EARLIER_HISTORY_ENTRIES,
-      before_seq: base.nextBeforeSeq,
-      through_seq: base.lastSeq,
-    })
-    .then((page) => {
-      if (owner !== activeEnvironment() || getState().selectedId !== threadId) return
-      const replay = events.filter((event) => event.seq > base.lastSeq)
-      set({ open: prependThreadHistory(base, page, replay, getState().open) })
-    })
-    .catch((error) => {
-      if (owner !== activeEnvironment() || getState().selectedId !== threadId) return
-      earlierError.set(errorText(error))
-      set({ open: { ...getState().open, loadingEarlier: false } })
-    })
-    .finally(() => {
-      stop()
-      if (owner === activeEnvironment()) earlierLoad = null
-    })
-  return earlierLoad
+  const stop = onThreadEvent((id, event) => { if (id === threadId) events.push(event) })
+  const error = errorFor(threadId)
+  error.set(null)
+  setThreadOpen(threadId, { ...base, loadingEarlier: true })
+  const valid = () => owner === activeEnvironment() && client === getClient() && earlierLoads.get(threadId) === pendingLoad && getThreadSession(threadId) === session && !!getThreadOpen(threadId)
+  const pendingLoad = rpc().call('threads.get', {
+    thread_id: threadId, include_tool_output: false, defer_tool_stream: true,
+    transcript_limit: EARLIER_HISTORY_ENTRIES, before_seq: base.nextBeforeSeq, through_seq: base.lastSeq,
+  }).then(page => {
+    if (!valid()) return
+    setThreadOpen(threadId, prependThreadHistory(base, page, events.filter(event => event.seq > base.lastSeq), getThreadOpen(threadId)!))
+  }).catch(reason => {
+    if (!valid()) return
+    error.set(errorText(reason))
+    setThreadOpen(threadId, { ...getThreadOpen(threadId)!, loadingEarlier: false })
+  }).finally(() => { stop(); if (earlierLoads.get(threadId) === pendingLoad) earlierLoads.delete(threadId) })
+  earlierLoads.set(threadId, pendingLoad)
+  return pendingLoad
 }
 
 // ---- layout shared with the composer overlay ----
@@ -262,7 +269,17 @@ export function loadEarlier(): Promise<void> {
 /** Height of the request panel stacked on the composer, so the transcript's
  *  bottom inset grows with it like the desktop's `bottomInset`. */
 export const requestPanelHeight = createCell(0)
-export const useRequestPanelHeight = () => useSyncExternalStore(requestPanelHeight.subscribe, requestPanelHeight.get)
+const paneRequestHeights = new Map<string, ReturnType<typeof createCell<number>>>()
+function requestHeightFor(id: string) {
+  let cell = paneRequestHeights.get(id)
+  if (!cell) { cell = createCell(0); paneRequestHeights.set(id, cell) }
+  return cell
+}
+export function setRequestPanelHeight(id: string, height: number) { requestHeightFor(id).set(height) }
+export function useRequestPanelHeight() {
+  const cell = requestHeightFor(usePaneId())
+  return useSyncExternalStore(cell.subscribe, cell.get)
+}
 
 // ---- paced live updates ----
 
@@ -273,20 +290,21 @@ export const useRequestPanelHeight = () => useSyncExternalStore(requestPanelHeig
 export const PACE_MS = 66
 
 export function usePacedBlocks(): Block[] {
+  const pane = usePaneAccess()
   const threadId = useApp(s => s.selectedId)
-  const [frame, setFrame] = useState(() => ({ threadId: getState().selectedId, blocks: getState().open.blocks }))
+  const [frame, setFrame] = useState(() => ({ threadId: pane.get().selectedId, blocks: pane.get().open.blocks }))
   useEffect(() => {
-    let shown = getState().open.blocks
+    let shown = pane.get().open.blocks
     let last = 0
     let timer: ReturnType<typeof setTimeout> | undefined
     const flush = () => {
       timer = undefined
       last = Date.now()
-      shown = getState().open.blocks
-      setFrame({ threadId: getState().selectedId, blocks: shown })
+      shown = pane.get().open.blocks
+      setFrame({ threadId: pane.get().selectedId, blocks: shown })
     }
-    const stop = subscribe(() => {
-      if (getState().open.blocks === shown || timer) return
+    const stop = pane.frozen ? () => {} : subscribe(() => {
+      if (pane.get().open.blocks === shown || timer) return
       const wait = PACE_MS - (Date.now() - last)
       if (wait <= 0) flush()
       else timer = setTimeout(flush, wait)
@@ -296,9 +314,9 @@ export function usePacedBlocks(): Block[] {
       stop()
       clearTimeout(timer)
     }
-  }, [])
+  }, [pane])
   // Never paint a previous thread’s paced frame under the next thread’s id.
-  return frame.threadId === threadId ? frame.blocks : getState().open.blocks
+  return frame.threadId === threadId ? frame.blocks : pane.get().open.blocks
 }
 
 // ---- child threads (subagents and delegations a thread launched) ----
@@ -339,4 +357,4 @@ export function useChildThreads(parentId: ThreadId, enabled: boolean): Thread[] 
   }, [cached, live, parentId])
 }
 
-onEnvironmentChange(() => { resetRowState(); diffs.clear(); diffLoads.clear(); hydrating.clear(); childThreads.clear(); childLoads.clear(); earlierLoad = null; clearTimeout(actionErrorTimer); actionError.set(null); earlierError.set(null); requestPanelHeight.set(0) })
+onEnvironmentChange(() => { resetRowState(); diffs.clear(); diffLoads.clear(); hydrating.clear(); childThreads.clear(); childLoads.clear(); earlierLoads.clear(); earlierErrors.clear(); clearTimeout(actionErrorTimer); actionError.set(null); earlierError.set(null); requestPanelHeight.set(0); paneRequestHeights.clear() })

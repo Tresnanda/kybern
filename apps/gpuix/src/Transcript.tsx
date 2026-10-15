@@ -1,3 +1,4 @@
+import { observeElementBounds } from './native/layout.ts'
 // The thread transcript (`views/Transcript.tsx`): turns grouped by the shared
 // `groupTurns`, rows centred at 736px inside 56px gutters, a date line where a
 // day starts, a virtual list that follows the tail, earlier pages loaded when
@@ -9,7 +10,7 @@ import { createTurnGrouper, type TurnGroup } from '../../../packages/kybern-clie
 import { calendarDateKey } from '../../desktop/src/lib/format.ts'
 import { Icon } from './icons.tsx'
 import { MatrixLoader } from './MatrixLoader.tsx'
-import { getState, subscribe, useApp } from './state.ts'
+import { subscribe, useApp, usePaneAccess, usePaneCompact } from './state.ts'
 import { Label, REDUCED_MOTION, useTheme } from './ui.tsx'
 import { DISTANCE, DURATION, EASE } from './motion/kit.tsx'
 import { CodeChunk, CodeHeader, markdownParts, Prose, textChunks } from './transcript/markdown.tsx'
@@ -19,7 +20,7 @@ import { T } from './transcript/glyphs.ts'
 import { alpha, muted, Para } from './transcript/kit.tsx'
 import { over } from './theme.ts'
 import { AnswerImages, DateSeparator, Turn, TurnFooter, turnTimestamp } from './transcript/Turn.tsx'
-import { loadEarlier, resetRowState, useActionError, useEarlierError, usePacedBlocks, useRequestPanelHeight } from './transcript/store.ts'
+import { loadEarlier, useActionError, useEarlierError, usePacedBlocks, useRequestPanelHeight } from './transcript/store.ts'
 
 export { markdownTheme } from './transcript/kit.tsx'
 
@@ -33,6 +34,8 @@ type SavedAnchor = { key: string; offset: number; tail: boolean; code: Record<st
 const scrollAnchors = new Map<string, SavedAnchor>()
 
 export function Transcript() {
+  const pane = usePaneAccess()
+  const gutter = usePaneCompact() ? 20 : GUTTER
   const t = useTheme()
   const renderer = useGpuixRequired()
   const threadId = useApp((s) => s.selectedId)
@@ -50,13 +53,15 @@ export function Transcript() {
   const [atTail, setAtTail] = useState(true)
   const [codeState, setCodeState] = useState<Record<string, { expanded: boolean; wrap: boolean }>>({})
   const [activeRow, setActiveRow] = useState(0)
-  const codeColumns = useCodeColumns(threadId ?? null, GUTTER, COLUMN)
+  const [surface, surfaceRef] = useState<PublicInstance | null>(null)
+  const [paneWidth, setPaneWidth] = useState<number | undefined>()
+  useEffect(() => surface ? observeElementBounds(renderer, surface.id, event => { if (event.rect) setPaneWidth(event.rect.width) }) : undefined, [surface, renderer])
+  const codeColumns = useCodeColumns(threadId ?? null, gutter, COLUMN, paneWidth)
   const nearTop = useRef(false)
 
   useEffect(() => {
-    resetRowState()
-    setCodeState(threadId ? scrollAnchors.get(threadId)?.code ?? {} : {})
-    setAtTail(threadId ? scrollAnchors.get(threadId)?.tail ?? true : true)
+    setCodeState(threadId ? scrollAnchors.get(`${pane.id}:${threadId}`)?.code ?? {} : {})
+    setAtTail(threadId ? scrollAnchors.get(`${pane.id}:${threadId}`)?.tail ?? true : true)
     nearTop.current = false
   }, [threadId])
   // Consume one top-entry intent per page. Prepending or a retry must not
@@ -100,21 +105,30 @@ export function Transcript() {
   snapshot.current = { threadId, rowKeys, atTail, codeState }
   useEffect(() => subscribe(() => {
     const old = snapshot.current
-    if (!old.threadId || getState().selectedId === old.threadId || !list.current) return
+    if (!old.threadId || pane.get().selectedId === old.threadId || !list.current) return
     const anchor = renderer.getListScrollTop?.(list.current.id)
     if (!anchor || !old.rowKeys.length) return
-    scrollAnchors.delete(old.threadId)
-    scrollAnchors.set(old.threadId, { key: old.rowKeys[Math.max(0, anchor[0]! - 1)] ?? old.rowKeys[0]!, offset: anchor[1]!, tail: old.atTail, code: old.codeState })
+    scrollAnchors.delete(`${pane.id}:${old.threadId}`)
+    scrollAnchors.set(`${pane.id}:${old.threadId}`, { key: old.rowKeys[Math.max(0, anchor[0]! - 1)] ?? old.rowKeys[0]!, offset: anchor[1]!, tail: old.atTail, code: old.codeState })
     if (scrollAnchors.size > 100) scrollAnchors.delete(scrollAnchors.keys().next().value!)
     restored.current = null
-  }), [renderer])
+  }), [renderer, pane])
+  useLayoutEffect(() => {
+    const node = list.current
+    return () => {
+      const current = snapshot.current
+      if (pane.frozen || !node || !current.threadId || !current.rowKeys.length) return
+      const anchor = renderer.getListScrollTop?.(node.id)
+      if (anchor) scrollAnchors.set(`${pane.id}:${current.threadId}`, { key: current.rowKeys[Math.max(0, anchor[0]! - 1)] ?? current.rowKeys[0]!, offset: anchor[1]!, tail: current.atTail, code: current.codeState })
+    }
+  }, [renderer, pane, loaded])
   useLayoutEffect(() => {
     if (!threadId || !loaded || !list.current || restored.current === threadId) return
-    const saved = scrollAnchors.get(threadId)
+    const saved = scrollAnchors.get(`${pane.id}:${threadId}`)
     if (!saved || saved.tail) { restored.current = threadId; return }
     if (codeState !== saved.code) return
     const index = rowKeys.indexOf(saved.key)
-    if (index < 0 && hasEarlier && !loadingEarlier && !earlierError) { void loadEarlier(); return }
+    if (!pane.frozen && index < 0 && hasEarlier && !loadingEarlier && !earlierError) { void loadEarlier(pane.id); return }
     restored.current = threadId
     renderer.scrollToItem?.(list.current.id, Math.max(0, index) + 1, saved.offset)
     setAtTail(false)
@@ -188,7 +202,7 @@ export function Transcript() {
   }
 
   return (
-    <div testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+    <div ref={surfaceRef} testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
       <virtual-list
         ref={list}
         testId="transcript"
@@ -205,7 +219,7 @@ export function Transcript() {
           if (tail !== atTail) setAtTail(tail)
           // Prefetch while the first turns are on screen (`useEarlierHistory`).
           const top = start <= lead + 1
-          if (top && !nearTop.current && !earlierError && getState().open.nextBeforeSeq != null && !getState().open.loadingEarlier) void loadEarlier()
+          if (!pane.frozen && top && !nearTop.current && !earlierError && pane.get().open.nextBeforeSeq != null && !pane.get().open.loadingEarlier) void loadEarlier(pane.id)
           nearTop.current = top
         }}
       >
@@ -217,7 +231,7 @@ export function Transcript() {
                     {earlierError ? (
                       <>
                         <Label color={muted(t)} truncate style={{ flexShrink: 1 }}>{`Unable to load earlier messages. ${earlierError}`}</Label>
-                        <div onClick={() => void loadEarlier()} style={{ paddingLeft: 8, paddingRight: 8, paddingTop: 6, paddingBottom: 6, borderRadius: 6, backgroundColor: t.buttonSecondary, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
+                        <div onClick={() => void loadEarlier(pane.id)} style={{ paddingLeft: 8, paddingRight: 8, paddingTop: 6, paddingBottom: 6, borderRadius: 6, backgroundColor: t.buttonSecondary, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
                           <Label color={t.text} weight={500}>Retry</Label>
                         </div>
                       </>
@@ -254,8 +268,9 @@ export function Transcript() {
 
 /** The centred chat column (`ROW`: 736px, no inset of its own). */
 function Row({ children }: { children: React.ReactNode }) {
+  const gutter = usePaneCompact() ? 20 : GUTTER
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', width: '100%', paddingLeft: GUTTER, paddingRight: GUTTER }}>
+    <div style={{ display: 'flex', justifyContent: 'center', width: '100%', paddingLeft: gutter, paddingRight: gutter }}>
       <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, width: '100%', minWidth: 0, maxWidth: COLUMN }}>{children}</div>
     </div>
   )

@@ -1,3 +1,4 @@
+import { splitFocusedPane, splitPane, closePane, maximizePane, canSplitPane, useSplitRoot } from '../split/store.ts'
 import { showDialog } from '../dialogs/store.ts'
 import { ThreadContextChips } from '../coordinator/Header.tsx'
 // The window title bar (`views/chrome.tsx` + the thread `Header` in
@@ -16,7 +17,7 @@ import { isChildThread } from '../../../../packages/kybern-client/src/subagents.
 import { subagentPhase, subagentTypeLabel } from '../../../../packages/kybern-client/src/subagents.ts'
 import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
-import { getClient, getState, set, useApp } from '../state.ts'
+import { getClient, getState, set, useApp, usePaneAccess, focusPane } from '../state.ts'
 import { EASE_OUT, ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { archiveThread, errorText, updateThread } from './actions.ts'
 import { N } from './glyphs.ts'
@@ -108,6 +109,7 @@ function ChromeIcon({
 }
 
 export function TitleBar({ panelOpen }: { panelOpen: boolean }) {
+  const splitRoot = useSplitRoot()
   const t = useTheme()
   const page = useNav((s) => s.page)
   const settingsOpen = useNav((s) => s.settingsOpen)
@@ -154,7 +156,7 @@ export function TitleBar({ panelOpen }: { panelOpen: boolean }) {
         transition={REDUCED_MOTION || instant || resizing ? { duration: 0 } : SLIDE}
         style={{ position: 'absolute', top: 0, right: 8, height: TITLEBAR, display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 20, paddingRight: 12 }}
       >
-        {!settingsOpen && page === 'home' && <ThreadHeader />}
+        {!settingsOpen && page === 'home' && (splitRoot.kind === 'split' ? <><div style={{ flexGrow: 1 }} /><PanelToggles /></> : <ThreadHeader />)}
       </motion.div>
     </div>
   )
@@ -226,7 +228,9 @@ function ancestorsOf(thread: Thread): Thread[] {
   return chain
 }
 
-function ThreadHeader() {
+export function ThreadHeader({ paneId }: { paneId?: string } = {}) {
+  const root = useSplitRoot()
+  const split = (direction: 'horizontal' | 'vertical') => paneId ? splitPane(paneId, direction) : splitFocusedPane(direction)
   const t = useTheme()
   const thread = useSelectedThread()
   const providers = useNav((s) => s.providers)
@@ -347,12 +351,13 @@ function ThreadHeader() {
         <Menu
           align="end"
           minWidth={208}
-          testId="thread-actions"
+          testId={paneId ? `pane-actions-${paneId}` : "thread-actions"}
           trigger={(open) => <ChromeIcon decorative icon={N.ellipsis} label="Thread actions" glyph={14} color={t.text} pressed={open} />}
         >
-          {/* Split view is not in this build yet. */}
-          <MenuItem id="split-right" icon={N.splitRight} label="Split right" shortcut="⌘\" disabled onSelect={() => {}} />
-          <MenuItem id="split-down" icon={N.splitDown} label="Split down" shortcut="⌘⇧\" disabled onSelect={() => {}} />
+
+          <MenuItem id="split-right" testId={paneId ? `pane-right-${paneId}` : "header-split-right"} disabled={paneId ? !canSplitPane(root, paneId, 'horizontal') : false} icon={N.splitRight} label="Split right" shortcut="⌘\" onSelect={() => split('horizontal')} />
+          <MenuItem id="split-down" testId={paneId ? `pane-down-${paneId}` : "header-split-down"} disabled={paneId ? !canSplitPane(root, paneId, 'vertical') : false} icon={N.splitDown} label="Split down" shortcut="⌘⇧\" onSelect={() => split('vertical')} />
+          {paneId && <><MenuItem id="expand-pane" label="Expand this pane" onSelect={() => maximizePane(paneId)} /><MenuItem id="close-pane" testId={`pane-close-${paneId}`} label="Close pane" icon={N.x} onSelect={() => closePane(paneId)} /></>}
           {thread.subagent && (
             <>
               <MenuSeparator />
@@ -402,12 +407,13 @@ function ThreadHeader() {
 
 /** The Environment card and right dock toggles. */
 function PanelToggles() {
+  const pane = usePaneAccess()
   const threadId = useApp((s) => s.selectedId)
   const dock = useDock(threadId)
   return (
     <>
       {threadId && <EnvironmentTrigger key={threadId} threadId={threadId} />}
-      <ChromeIcon icon={N.panelRight} label="Toggle right sidebar" tooltip={`${dock.open ? 'Close' : 'Open'} right sidebar (⌘J)`} pressed={dock.open} onClick={() => toggleDock()} testId="dock-toggle" />
+      <ChromeIcon icon={N.panelRight} label="Toggle right sidebar" tooltip={`${dock.open ? 'Close' : 'Open'} right sidebar (⌘J)`} pressed={dock.open} onClick={() => { focusPane(pane.id); toggleDock() }} testId="dock-toggle" />
     </>
   )
 }

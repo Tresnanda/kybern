@@ -14,7 +14,7 @@ const CHAR = CODE.size * 0.602
 const PADDING = 24
 
 /** Columns available to a code block in the chat column; Infinity before the window is measured. */
-export function useCodeColumns(threadId: string | null, gutter: number, column: number): number {
+export function useCodeColumns(threadId: string | null, gutter: number, column: number, paneWidth?: number): number {
   const windowWidth = useWindowWidth()
   const sidebarWidth = useSidebarWidth()
   const panelOpen = usePanelOpen()
@@ -26,7 +26,7 @@ export function useCodeColumns(threadId: string | null, gutter: number, column: 
   const panel = panelOpen ? sidebarWidth : 0
   const geometry = dockGeometry(windowWidth, panel, dock.width)
   const dockWidth = dock.open && !geometry.overlay ? geometry.width : 0
-  const content = windowWidth - CHROME - panel - dockWidth
+  const content = paneWidth ?? windowWidth - CHROME - panel - dockWidth
   const width = Math.min(column, content - 2 * gutter) - PADDING
   last.current = Math.max(20, Math.floor(width / CHAR))
   return last.current

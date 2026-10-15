@@ -4,7 +4,7 @@ import { subagentThreadPhase } from '../../../../packages/kybern-client/src/suba
 import { ComposerView } from '../Composer.tsx'
 import { useComposer } from '../composer/store.ts'
 import { activeEnvironment } from '../shell/environment.ts'
-import { getClient, useApp } from '../state.ts'
+import { getClient, useApp, usePaneAccess } from '../state.ts'
 import { Button, Para, muted } from '../transcript/kit.tsx'
 import { errorText, reportError } from '../transcript/store.ts'
 import { useTheme } from '../ui.tsx'
@@ -12,6 +12,7 @@ import { StackedPanel } from '../transcript/Requests.tsx'
 import { SubagentBar } from './Page.tsx'
 
 export function NativeSubagentComposer({ thread }: { thread: Thread }) {
+  const pane = usePaneAccess()
   const t = useTheme()
   const providers = useComposer(d => d.providers)
   const updates = useApp(s => s.open.subagentMessages)
@@ -21,12 +22,13 @@ export function NativeSubagentComposer({ thread }: { thread: Thread }) {
   const attempt = useRef<{ fingerprint: string; id: string } | null>(null)
   const active = subagentThreadPhase(thread) === 'working'
   useEffect(() => {
+    if (pane.frozen) return
     let alive = true
     const owner = activeEnvironment()
     const client = getClient(); if (!client) return
     void client.call('subagents.messages', { thread_id: thread.id }).then(messages => { if (alive && owner === activeEnvironment()) { setSaved(messages); setError('') } }).catch(e => { if (alive && owner === activeEnvironment()) setError(errorText(e)) })
     return () => { alive = false }
-  }, [thread.id, thread.status])
+  }, [thread.id, thread.status, pane.frozen])
   const messages = useMemo(() => {
     const merged = new Map(saved.map(m => [m.id, m]))
     for (const message of updates ?? []) {

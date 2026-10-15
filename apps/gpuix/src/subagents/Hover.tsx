@@ -3,14 +3,15 @@ import { useRef, useState, type ReactElement } from 'react'
 import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { formatTokenCount, subagentTokenCount, subagentPhaseWord, subagentTypeLabel, subagentSpan } from '../../../../packages/kybern-client/src/subagents.ts'
 import { Label, ProviderMark, useTheme } from '../ui.tsx'
-import { getState } from '../state.ts'
+import { usePaneAccess } from '../state.ts'
 import { Elapsed } from './Elapsed.tsx'
 import { Para, muted } from '../transcript/kit.tsx'
 export function SubagentHover({ thread, children }: { thread: Thread; children: ReactElement }) {
+  const pane = usePaneAccess()
   const t = useTheme()
   const pointer = useRef(false), [open, setOpen] = useState(false)
   const [prompt] = useState(() => {
-    const block = getState().open.blocks.find(b => b.kind === 'tool' && b.call.id === thread.subagent?.tool_call_id)
+    const block = pane.get().open.blocks.find(b => b.kind === 'tool' && b.call.id === thread.subagent?.tool_call_id)
     if (block?.kind !== 'tool' || !block.call.input || typeof block.call.input !== 'object' || Array.isArray(block.call.input)) return null
     const input = block.call.input as Record<string, unknown>
     return typeof input.prompt === 'string' ? input.prompt : typeof input.task === 'string' ? input.task : null
