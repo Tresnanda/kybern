@@ -21,6 +21,8 @@ import { useTasksFeed } from './tasks/store.ts'
 import { NativeSubagentComposer } from './subagents/Composer.tsx'
 import { SubagentBar, SubagentPageMotion } from './subagents/Page.tsx'
 import { Composer } from './Composer.tsx'
+import { PreviewIntegration } from './preview/Preview.tsx'
+import { ComputerLiveView } from './live/ComputerLiveView.tsx'
 import { Dock, DockResizeCapture } from './dock/Dock.tsx'
 import { Draft } from './Draft.tsx'
 import { Icon } from './icons.tsx'
@@ -166,6 +168,8 @@ function Workspace() {
             </div>
             {/* Settings covers the workspace, dock included, as on the desktop. */}
             {!settingsOpen && <Dock sidebarOpen={panelOpen} />}
+            {!settingsOpen && page === 'home' && <ComputerLiveView />}
+            <PreviewIntegration />
             </div>
           </div>
           {panelOpen && <SidebarResizeHandle />}
