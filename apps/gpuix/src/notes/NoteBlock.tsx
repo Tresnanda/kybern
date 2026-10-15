@@ -1,3 +1,4 @@
+import { notesMarkdownStyle } from '../native/markdown.ts'
 import { memo, useEffect, useMemo, useState } from 'react'
 import type { TaskItem } from '../../../../packages/kybern-client/src/types.ts'
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
@@ -16,25 +17,15 @@ export const NoteBlock = memo(function NoteBlock({ body, noteId, tasks, width }:
     const fill = over(k.fill, t.surface)
     const plain: SyntaxTheme = Object.fromEntries(['comment', 'keyword', 'string', 'stringSpecial', 'escape', 'number', 'boolean', 'typeName', 'typeBuiltin', 'constructor', 'function', 'functionBuiltin', 'macroName', 'property', 'constant', 'variable', 'variableSpecial', 'parameter', 'operator', 'punctuation', 'tag', 'attribute', 'label'].map((key) => [key, k.fg1])) as unknown as SyntaxTheme
     // `.note-prose pre`: a filled card with plain ink, no border, no syntax colours (the desktop does not highlight here).
-    return { ...base, accent: t.textTertiary, bg: fill, border: fill, codeText: k.fg1, syntax: plain, text: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.86)' : 'rgba(13, 13, 13, 0.86)', metrics: { ...base.metrics, mdTextSize: 16.1538, mdLineHeight: 25.846, mdBlockGap: 15.02, mdHeadingSizes: [18.3077, 18.3077, 16.1538, 16.1538], mdHeadingLineHeights: [23.8, 23.8, 23.4, 23.4], codeTextSize: 13.46, codeLineHeight: 22.6, mdCodePaddingX: 16, mdCodePaddingY: 14, mdCodeRadius: 10, mdCodeHeaderTextSize: 0.01, mdCodeHeaderPaddingY: 0 } } }, [t])
+    return { ...base, accent: t.textTertiary, bg: fill, border: fill, codeText: k.fg, codeWash: k.fill, markdown: notesMarkdownStyle(k.fg, k.fg2, k.fg4, k.fill, 16.1538, k.fg3), syntax: plain, text: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.86)' : 'rgba(13, 13, 13, 0.86)', metrics: { ...base.metrics, mdTextSize: 16.1538, mdLineHeight: 25.846, mdBlockGap: 15.02, mdHeadingSizes: [18.3077, 18.3077, 16.1538, 16.1538], mdHeadingLineHeights: [23.8, 23.8, 23.4, 23.4], codeTextSize: 13.46, codeLineHeight: 22.6, mdCodePaddingX: 16, mdCodePaddingY: 14, mdCodeRadius: 10, mdInlineCodeRadius: 5, mdCodeHeaderTextSize: 0.01, mdCodeHeaderPaddingY: 0 } } }, [t])
   // Atom-only blocks preserve their exact Markdown in the editor. Inline references
   // keep the surrounding Markdown and gain live, actionable status chips below it.
   const image = /^!\[((?:\\.|[^\]])*)\]\((kybern:\/\/asset\/[a-f\d-]{36}|https?:\/\/[^\s)]+)\)\s*$/i.exec(body)
   if (image) return <NoteImage width={width} noteId={noteId} source={image[2]!} label={image[1]!} />
-  // `.note-prose blockquote`: a 2px rail, 16px inset and secondary ink, no wash.
-  const quoted = body.trim().split('\n').every((line) => /^\s{0,3}>/.test(line))
-  if (quoted) {
-    const k = notesTokens(t)
-    const text = body.trim().split('\n').map((line) => line.replace(/^\s{0,3}>\s?/, '')).join('\n')
-    return <div style={{ display: 'flex', flexDirection: 'row', paddingLeft: 16, position: 'relative' }}>
-      <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 2, backgroundColor: k.fg4 }} />
-      <markdown source={text} theme={{ ...theme, text: k.fg2 }} onLinkClick={(e) => { if (e.value) openLink(e.value, noteId) }} style={{ color: k.fg2, flexGrow: 1, minWidth: 0, userSelect: 'text' }} />
-    </div>
-  }
   const referenced = tasks.filter((task) => body.includes(`kybern://task/${task.id}`))
   const atomOnly = referenced.length === 1 && /^\[[^\]]+\]\(kybern:\/\/task\/[a-f\d-]{36}\)\s*$/i.test(body)
   return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-    {!atomOnly && (body.trim() ? <markdown source={body.replace(/^(\s{0,3}(?:`{3,}|~{3,}))[^\n`]+$/gm, '$1')} theme={theme} onLinkClick={(e) => { if (e.value) openLink(e.value, noteId) }} style={{ color: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.86)' : 'rgba(13, 13, 13, 0.86)', userSelect: 'text' }} /> : <Label color={t.textSecondary} size={15}>Start writing, or type / for blocks…</Label>)}
+    {!atomOnly && (body.trim() ? <markdown source={body} theme={theme} onLinkClick={(e) => { if (e.value) openLink(e.value, noteId) }} style={{ color: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.86)' : 'rgba(13, 13, 13, 0.86)', userSelect: 'text' }} /> : <Label color={t.textSecondary} size={15}>Start writing, or type / for blocks…</Label>)}
     {referenced.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{referenced.map((task) => <div key={task.id} testId={`note-inline-task-${task.id}`} tabIndex={0} onClick={() => openLink(`kybern://task/${task.id}`, noteId)} onKeyDown={(e) => { if (e.key === 'enter') openLink(`kybern://task/${task.id}`, noteId) }} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: 6, borderRadius: 6, backgroundColor: t.buttonSecondary, cursor: 'pointer' }}><StatusGlyph status={task.status} /><Label color={t.text} size={12}>{`${task.key} · ${task.title}`}</Label></div>)}</div>}
   </div>
 })

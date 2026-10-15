@@ -1,3 +1,4 @@
+import { transcriptMarkdownStyle } from '../native/markdown.ts'
 import { keyboardAnswer } from '../requests/Panel.tsx'
 // Small transcript primitives: the desktop's chat type scale, muted tones,
 // kit buttons (`components/kit/button.tsx` sm variants) and the disclosure
@@ -177,7 +178,8 @@ export function markdownTheme(t: Theme, tone: 'bright' | 'muted' = 'bright') {
     accent: text,
     border: t.border,
     codeText: text,
-    codeWash: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.06)' : 'rgba(13, 13, 13, 0.05)',
+    codeWash: t.codeSurface,
+    markdown: transcriptMarkdownStyle(text, t.textSecondary, t.border, t.codeSurface, TEXT.size, CODE.size),
     bg: t.codeSurface,
     fontSans: FONT_UI,
     fontMono: FONT_MONO,
@@ -191,11 +193,12 @@ export function markdownTheme(t: Theme, tone: 'bright' | 'muted' = 'bright') {
       mdHeadingLineHeights: [30.6, 27.1, 23.6, 21],
       mdInlineCodeRadius: 6.4,
       mdCodeRadius: 10.4,
-      mdCodePaddingX: 12,
-      mdCodePaddingY: 10,
+      mdCodePaddingX: 9.6,
+      mdCodePaddingY: 8,
+      mdCodeHeaderPaddingY: 1.6,
       mdCodeHeaderTextSize: 11.52,
       codeTextSize: CODE.size,
-      codeLineHeight: CODE.lineHeight,
+      codeLineHeight: CODE.size * 1.5,
       diffTextSize: 12,
       diffLineHeight: 19.5,
     },
