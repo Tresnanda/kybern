@@ -48,6 +48,11 @@ export const screens = {
     await p.mouse.move(1275, 815)
   },
   ...Object.fromEntries(Object.entries(labels).map(([tab, label]) => [`dock-${tab}`, async p => {
+    if (tab === 'changes') await p.evaluate(async () => {
+      const { rpc } = await import('/src/state/rpc.ts')
+      const client = rpc(), call = client.call.bind(client)
+      client.call = (method, params) => method === 'git.status' ? Promise.resolve({ is_git: false }) : call(method, params)
+    })
     await open(p)
     await p.getByRole('button', { name: 'Add panel', exact: true }).click()
     await p.getByRole('menuitem', { name: new RegExp(`^${label}`) }).click()
