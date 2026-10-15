@@ -3,7 +3,7 @@ import type { AgentResultItem, ThreadMessagePart } from '../../../../packages/ky
 import { delegationState, messageSenderName, plainLine, purposeLabel, resultPreview } from '../../../../packages/kybern-client/src/delegations.ts'
 import { liveSend } from '../../../../packages/kybern-client/src/messageStates.ts'
 import { parseSendInput, parseSendResult } from '../../../../packages/kybern-client/src/orchestrationTools.ts'
-import { clockTime } from '../../../desktop/src/lib/format.ts'
+import { clockTime } from './clock.ts'
 import { useApp } from '../state.ts'
 import { openThread } from '../nav/history.ts'
 import { useNav } from '../nav/store.ts'

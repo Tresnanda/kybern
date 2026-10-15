@@ -17,7 +17,8 @@ import { SubagentBar } from '../subagents/Page.tsx'
 import { InboundMessage, DelegatedResults, SentToRow } from '../transcript/Messages.tsx'
 import { NotesPage } from '../notes/NotesPage.tsx'
 import { TasksPage } from '../tasks/TasksPage.tsx'
-import { setTasks, taskState } from '../tasks/store.ts'
+import { setTasks, taskState, useTasksFeed } from '../tasks/store.ts'
+import { useNotesFeed } from '../notes/store.ts'
 import { ThreadContextChips } from '../coordinator/Header.tsx'
 import { useNav, setNav } from '../nav/store.ts'
 import type { TaskItem } from '../../../../packages/kybern-client/src/types.ts'
@@ -58,7 +59,7 @@ const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(req, s) { if (s
     case 'subagents.messages': result = nativeMessages; break
     case 'subagents.send': { const message = { ...failedMessage(), id: params.id, status: 'pending' as const, error: null, message: params.message }; nativeMessages = [...nativeMessages, message]; result = message; break }
     case 'subagents.send_to_parent': { const message = { ...nativeMessages[0]!, parent_queued: true }; nativeMessages = [message]; result = message; break }
-    case 'notes.list': result = { notes: [] }; break
+    case 'notes.list': result = { notes: deleted ? [] : [{ id: 'note', title: 'Permission review', body: 'Keep secrets outside transcripts. Verify cancellation and idempotent retries.', scope: 'project', project_id: 'fixture', revision: 1, created_at: at, updated_at: at }] }; break
     case 'tasks.items.get': result = { task: task() }; break
     case 'tasks.items.list': result = { tasks: [task()] }; break
     case 'notes.get': result = { note: deleted ? null : { id: 'note', title: 'Permission review', body: 'Keep secrets outside transcripts. Verify cancellation and idempotent retries.', scope: 'project', project_id: 'fixture', revision: 1, created_at: at, updated_at: at } }; break
@@ -91,6 +92,8 @@ function show(next: string) {
 }
 show(mode)
 function Fixture() {
+  useNotesFeed()
+  useTasksFeed()
   useApp(s => s.statusDetail)
   const t = useTheme(), [selected, choose] = useState(mode)
   const page = useNav(s => s.page)

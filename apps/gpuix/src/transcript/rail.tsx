@@ -31,9 +31,9 @@ export const MessageRail = memo(function MessageRail({ turns, active, onJump }: 
   const close = () => { setOpen(false); setQuery('') }
   if (items.length < 2) return null
   return <>
-    <div testId="message-rail" style={{ position: 'absolute', right: 10, top: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+    <div testId="message-rail" style={{ position: 'absolute', left: 20, top: 12, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1 }}>
       {marks.map(item => <Tip key={item.id} label={item.preview} side="left" size={28}>
-        <div testId={`message-jump-${item.id}`} role="button" tabIndex={0} aria-label={item.preview} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onJump(item.id) }} onClick={() => onJump(item.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', width: 28, height: 16, cursor: 'pointer', borderRadius: 4, hover: { backgroundColor: t.buttonSecondaryHover } }}>
+        <div testId={`message-jump-${item.id}`} role="button" tabIndex={0} aria-label={item.preview} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onJump(item.id) }} onClick={() => onJump(item.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', width: 28, height: 16, cursor: 'pointer', borderRadius: 4, hover: { backgroundColor: t.buttonSecondaryHover } }}>
           <div style={{ height: 2, width: active === item.id ? 20 : 12, borderRadius: 1, backgroundColor: active === item.id ? t.text : muted(t, 0.45) }} />
         </div>
       </Tip>)}
