@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { VT } from './vt.ts'
-import { terminalKey } from './keys.ts'
+import { terminalKey, terminalPaste } from './keys.ts'
 describe('bounded terminal', () => {
   test('carriage return, fragmented CSI, cursor and erase preserve text', () => {
     const vt = new VT(20, 3)
@@ -57,4 +57,78 @@ describe('bounded terminal', () => {
     expect(terminalKey({ key: 'enter' })).toBe('\r')
     expect(terminalKey({ key: 'a', keyChar: 'A', modifiers: { cmd: false, ctrl: false, alt: false, shift: true } })).toBe('A')
   })
+  test('origin mode addresses inside scroll margins and reset restores normal modes', () => {
+    const vt = new VT(10, 5)
+    vt.write('\x1b[2;4r\x1b[?6h\x1b[1;1HX')
+    expect(vt.screen[1]!.chars.join('')).toBe('X')
+    vt.write('\x1b[99B'); expect(vt.y).toBe(3)
+    vt.write('\x1b[99A'); expect(vt.y).toBe(1)
+    vt.write('\x1b[?25l\x1b[?2004h\x1b[?1h\x1bc\x1b[1;1HY')
+    expect(vt.screen[0]!.chars.join('')).toBe('Y')
+    expect(vt.cursorVisible).toBe(true)
+    expect(vt.bracketedPaste).toBe(false)
+    expect(vt.applicationCursor).toBe(false)
+  })
+  test('insert mode and colon-form RGB support empty color-space fields', () => {
+    const vt = new VT(10, 2)
+    vt.write('abcd\r\x1b[4hX\x1b[4lY')
+    expect(vt.screen[0]!.chars.join('')).toBe('XYbcd')
+    vt.write('\r\x1b[38:2::12:34:56mR')
+    expect(vt.runs(vt.screen[0]!)[0]!.style.fg).toBe('rgb(12,34,56)')
+  })
+
+})
+
+test('alternate-screen cursor restoration restores color and combining attaches to wide glyphs', () => {
+  const vt = new VT(20, 3)
+  vt.write('\x1b[31mA\x1b[?1049h\x1b[32mB\x1b[?1049lC界\u0301')
+  expect(vt.runs(vt.screen[0]!)[0]!.style.fg).toBe(1)
+  expect(vt.screen[0]!.chars.join('')).toBe('AC界\u0301')
+  expect(vt.screen[0]!.chars[3]).toBe('')
+})
+
+
+test('cursor modes, origin reports and fragmented bracketed paste mode', () => {
+  const replies: string[] = [], vt = new VT(20, 6, 10, 1000, value => replies.push(value))
+  vt.write('\x1b[2;5r\x1b[?6h\x1b[2d\x1b[6n')
+  expect(vt.y).toBe(2)
+  expect(replies).toEqual(['\x1b[2;1R'])
+  vt.write('\x1b[?1;25;2004'); vt.write('h')
+  expect(terminalKey({ key: 'left' }, vt.applicationCursor)).toBe('\x1bOD')
+  expect(terminalPaste('one\ntwo', vt.bracketedPaste)).toBe('\x1b[200~one\ntwo\x1b[201~')
+  expect(terminalPaste('x\x1b[201~y', true)).toBe('\x1b[200~x[201~y\x1b[201~')
+  vt.write('\x1b[?1;25;2004l')
+  expect(vt.cursorVisible).toBe(false)
+  expect(terminalPaste('plain', vt.bracketedPaste)).toBe('plain')
+})
+
+test('alternate screens preserve normal history and indexed/RGB pens after resize', () => {
+  const vt = new VT(20, 3)
+  vt.write('normal\r\n\x1b[38:5:232;48:2::1:2:3mA')
+  const history = vt.history
+  vt.write('\x1b[?1049h' + 'alternate\r\n'.repeat(20))
+  expect(vt.history).toBe(history)
+  expect(vt.history.length).toBe(0)
+  vt.resize(10, 4)
+  vt.write('\x1b[?1049lB')
+  expect(vt.screen[0]!.chars.join('')).toBe('normal')
+  expect(vt.runs(vt.screen[1]!)[0]!.style).toMatchObject({ fg: 232, bg: 'rgb(1,2,3)' })
+  expect(vt.screen[1]!.chars.join('')).toBe('AB')
+  expect(vt.screen.length).toBe(4)
+})
+
+test('legacy alternate buffer is retained while 1047 clears it', () => {
+  const vt = new VT(20, 3)
+  vt.write('normal\x1b[?47hretained\x1b[?47l')
+  expect(vt.text()).toContain('normal')
+  vt.write('\x1b[?47h')
+  expect(vt.text()).toContain('retained')
+  vt.write('\x1b[?1047l\x1b[?47h')
+  expect(vt.text().trim()).toBe('')
+})
+
+test('restoring a saved cursor does not mutate its saved color', () => {
+  const vt = new VT(10, 2)
+  vt.write('\x1b[31m\x1b7\x1b8\x1b[32mX\x1b8R')
+  expect(vt.runs(vt.screen[0]!)[0]!.style.fg).toBe(1)
 })

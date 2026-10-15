@@ -3,12 +3,12 @@ import { classifyPreviewInput, PREVIEW_REJECTED_MESSAGE } from '../../../../pack
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import type { PreviewOpenResult } from '../../../../packages/kybern-client/src/types.ts'
 import { getClient, getState } from '../state.ts'
-import { openUrl } from '../pulls/PrStates.tsx'
+import { launchBrowser } from './browser.ts'
 import { chooseTab, setDock } from '../dock/store.ts'
-import { onEnvironmentChange } from '../shell/environment.ts'
+import { onEnvironmentLeaving } from '../shell/environment.ts'
 export interface Entry { address: string; url: string; title: string; ticket?: string; kind: 'file' | 'server' | 'external' }
-export interface PreviewState { entries: Entry[]; index: number; floating: boolean; busy: boolean; error: string | null; permission?: { address: string; folder: string; grantable: boolean }; device: boolean; width: number; height: number; preset: string | null }
-const empty: PreviewState = { entries: [], index: -1, floating: false, busy: false, error: null, device: false, width: 390, height: 844, preset: 'iphone-12-pro' }
+export interface PreviewState { entries: Entry[]; index: number; floating: boolean; busy: boolean; error: string | null; permission?: { address: string; folder: string; grantable: boolean }; opened?: boolean; device: boolean; width: number; height: number; preset: string | null }
+const empty: PreviewState = { entries: [], index: -1, floating: false, opened: false, busy: false, error: null, device: false, width: 390, height: 844, preset: 'iphone-12-pro' }
 const sessions = new Map<string, PreviewState>(), generations = new Map<string, number>()
 let nextGeneration = 0
 const listeners = new Set<() => void>()
@@ -20,7 +20,7 @@ export function setPreview(id: string, patch: Partial<PreviewState>) {
   sessions.set(id, { ...previewState(id), ...patch }); listeners.forEach(l => l())
 }
 export function showPreview(id: string) { chooseTab(id, 'preview'); setDock(id, { open: true }) }
-export async function openPreview(id: string, raw: string, allowFolder = false, launch = true) {
+export async function openPreview(id: string, raw: string, allowFolder = false, launch = true, replace = false) {
   const thread = getState().threads.find(t => t.id === id)
   const project = getState().projects.find(p => p.id === thread?.project_id)
   const target = classifyPreviewInput(raw, { projectRoot: thread?.cwd ?? project?.path, projectName: project?.name })
@@ -38,23 +38,38 @@ export async function openPreview(id: string, raw: string, allowFolder = false, 
     if (!url) throw new Error('Unable to open this local file. Choose an HTML file and try again.')
     const entry: Entry = { address, url, title: result.target.kind === 'file' ? result.target.path.split('/').pop() ?? 'Preview' : new URL(address).host, ticket: result.ticket, kind: result.target.kind }
     const current = previewState(id)
-    current.entries.slice(current.index + 1).forEach(release)
-    const entries = [...current.entries.slice(0, current.index + 1), entry]
-    if (entries.length > 16) entries.splice(0, entries.length - 16).forEach(release)
-    setPreview(id, { entries, index: entries.length - 1, busy: false })
-    if (launch) openUrl(url)
+    const replacing = replace && !!current.entries[current.index]
+    let entries: Entry[]
+    if (replacing) {
+      release(current.entries[current.index]!)
+      entries = current.entries.map((old, index) => index === current.index ? entry : old)
+    } else {
+      current.entries.slice(current.index + 1).forEach(release)
+      entries = [...current.entries.slice(0, current.index + 1), entry]
+      if (entries.length > 16) entries.splice(0, entries.length - 16).forEach(release)
+    }
+    setPreview(id, { entries, index: replacing ? current.index : entries.length - 1, busy: false, opened: false })
+    if (launch) await launchPreview(id)
   } catch (e) { if (generations.get(id) === generation) setPreview(id, { busy: false, error: String(e) }) }
+}
+export async function launchPreview(id: string) {
+  const entry = previewState(id).entries[previewState(id).index]
+  if (!entry) return
+  const current = () => previewState(id).entries[previewState(id).index] === entry
+  try { await launchBrowser(entry.url); if (current()) setPreview(id, { opened: true, error: null }) }
+  catch (error) { if (current()) setPreview(id, { error: String(error) }) }
 }
 export function navigatePreview(id: string, direction: number) {
   const current = previewState(id), index = current.index + direction
   const entry = current.entries[index]
   if (!entry) return
-  setPreview(id, { index, error: null, permission: undefined }); openUrl(entry.url)
+  generations.set(id, ++nextGeneration)
+  setPreview(id, { index, busy: false, opened: false, error: null, permission: undefined }); launchPreview(id)
 }
 export function closePreview(id: string) {
   generations.set(id, ++nextGeneration)
   previewState(id).entries.forEach(release)
-  setPreview(id, { entries: [], index: -1, floating: false, busy: false, error: null, permission: undefined })
+  setPreview(id, { entries: [], index: -1, floating: false, opened: false, busy: false, error: null, permission: undefined })
 }
 
 /** Environment lifecycle hook: clear metadata and invalidate all late responses. */
@@ -65,4 +80,4 @@ export function resetPreviews() {
 }
 
 // Tickets and in-flight opens belong to the old daemon; drop them before the new socket opens.
-onEnvironmentChange(resetPreviews)
+onEnvironmentLeaving(resetPreviews)

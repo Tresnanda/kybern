@@ -1,7 +1,7 @@
 import { load, save } from '../shell/persist.ts'
 import { onEnvironmentChange, onEnvironmentLeaving } from '../shell/environment.ts'
 // Dock choices belong to the selected thread; closing a tab discards its content.
-// Bounded session storage keeps revisiting threads cheap without persisting user data.
+// Bounded per-environment layout preferences survive ordinary app exits.
 import { useSyncExternalStore } from 'react'
 import { getState } from '../state.ts'
 
@@ -14,7 +14,19 @@ export interface DockState {
   instant: boolean
 }
 const DEFAULT: DockState = { open: false, tabs: ['agents'], tab: 'agents', width: 538, instant: false }
-const choices = new Map<string, DockState>(load('kybern.dock.choices', []))
+const TABS: DockTab[] = ['agents', 'activity', 'changes', 'explorer', 'project', 'notes', 'tasks', 'review', 'artifacts', 'terminal', 'preview']
+export function restoreDockChoices(value: unknown): Map<string, DockState> {
+  const restored = new Map<string, DockState>()
+  if (!Array.isArray(value)) return restored
+  for (const entry of value.slice(-80)) {
+    if (!Array.isArray(entry) || typeof entry[0] !== 'string' || !entry[1] || typeof entry[1] !== 'object') continue
+    const [key, item] = entry
+    const tabs = Array.isArray(item.tabs) ? [...new Set(item.tabs.filter((tab: DockTab) => TABS.includes(tab)))] as DockTab[] : DEFAULT.tabs
+    restored.set(key, { open: item.open === true, tabs, tab: tabs.includes(item.tab) ? item.tab : tabs[0] ?? null, width: typeof item.width === 'number' && Number.isFinite(item.width) ? Math.max(416, Math.min(1600, item.width)) : DEFAULT.width, instant: false })
+  }
+  return restored
+}
+const choices = restoreDockChoices(load('kybern.dock.choices', []))
 const listeners = new Set<() => void>()
 const emit = () => { for (const listener of listeners) listener() }
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } }
@@ -24,6 +36,7 @@ export function setDock(id: string | null, patch: Partial<DockState>) {
   const key = id ?? 'home'
   if (!choices.has(key) && choices.size >= 80) choices.delete(choices.keys().next().value!)
   choices.set(key, { ...getDock(id), ...patch })
+  save('kybern.dock.choices', [...choices].map(([key, value]) => [key, { ...value, instant: false }]))
   emit()
 }
 export function toggleDock(instant = false) {
@@ -59,4 +72,4 @@ export function moveDockDrag(x: number) {
 }
 
 onEnvironmentLeaving(() => save('kybern.dock.choices', [...choices]))
-onEnvironmentChange(() => { choices.clear(); for (const [id, value] of load<[string, DockState][]>('kybern.dock.choices', [])) choices.set(id, value); drag = null; emit() })
+onEnvironmentChange(() => { choices.clear(); for (const [id, value] of restoreDockChoices(load('kybern.dock.choices', []))) choices.set(id, value); drag = null; emit() })
