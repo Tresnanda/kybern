@@ -519,6 +519,8 @@ edit(i, "                    content: index.to_string(),", "                    
 
 exec((Path(__file__).parent / "markdown_hooks.py").read_text())
 
+exec((Path(__file__).parent / "diff_hooks.py").read_text())
+
 for path, text in pending.items():
     (src / path).write_text(text)
 print(f"hooks applied to {len(pending)} files")
