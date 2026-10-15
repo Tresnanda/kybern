@@ -4,7 +4,7 @@ import path from 'node:path'
 import { connect, getClient, getState, refreshLists, resetClient } from '../src/state.ts'
 import { openPreview, closePreview, previewState } from '../src/preview/store.ts'
 import { until } from './dock-waits.ts'
-assert.equal(process.env.KYBERN_DATA_DIR, '/Users/mymac/projects/ade-gpuix-scratch/data')
+assert.ok(process.env.KYBERN_DATA_DIR?.includes('gpuix-scratch') || process.env.KYBERN_DATA_DIR?.endsWith('/apps/gpuix/.combined/data'), 'Use an isolated scratch data directory')
 connect()
 await until(async () => getState().status === 'open', 'scratch connection')
 await refreshLists()

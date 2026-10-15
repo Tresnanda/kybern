@@ -12,7 +12,7 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const run = promisify(execFile)
 const variant = process.argv.includes('--light') ? 'light' : 'dark'
 const narrow = process.argv.includes('--narrow')
-const out = '/Users/mymac/projects/ade/previews/gpuix/dock'
+const out = process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previews/gpuix/dock'
 mkdirSync(out, { recursive: true })
 let pid: number | undefined
 const watchdog = setTimeout(() => { if (pid) try { process.kill(pid, 'SIGTERM') } catch {} ; process.exit(1) }, 180_000)

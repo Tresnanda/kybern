@@ -37,7 +37,7 @@ try {
   const config = path.join(scratch, 'profile'), creds = path.join(scratch, 'creds'); mkdirSync(config); mkdirSync(creds)
   writeFileSync(path.join(config, 'environments.json'), JSON.stringify({ selected_id: 'local', environments: [{ id: 'scratch-b', name: 'Scratch B', local: false, url: `http://127.0.0.1:${b.port}` }] }))
   writeFileSync(path.join(creds, 'scratch-b.token'), b.token, { mode: 0o600 })
-  const env = { GPUIX_BACKGROUND: '1', KYBERN_DATA_DIR: a.dir, KYBERN_CLIENT_CONFIG_DIR: config, KYBERN_GPUIX_CREDENTIALS_DIR: creds, KYBERN_APPEARANCE: 'dark', KYBERN_URL: '', KYBERN_TOKEN: '', KYBERN_GPUIX_THREAD: '', KYBERN_GPUIX_ENVIRONMENT: 'local' }
+  const env = { GPUIX_BACKGROUND: '1', KYBERN_DATA_DIR: a.dir, KYBERN_CLIENT_CONFIG_DIR: config, KYBERN_GPUIX_CREDENTIALS_DIR: creds, KYBERN_APPEARANCE: process.env.KYBERN_APPEARANCE ?? 'dark', KYBERN_URL: '', KYBERN_TOKEN: '', KYBERN_GPUIX_THREAD: '', KYBERN_GPUIX_ENVIRONMENT: 'local' }
   fixture = await launchFixture(path.join(root, 'apps/gpuix/src/main.tsx'), env)
   const app = fixture.app
   const present = (id: string) => app.getByTestId(id).count().then(n => n > 0)

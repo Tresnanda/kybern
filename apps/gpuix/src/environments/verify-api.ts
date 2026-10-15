@@ -5,8 +5,8 @@ import { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import { pairingInvitation } from '../../../../packages/kybern-client/src/address.ts'
 import { saveEnvironment, forgetEnvironment, verifyEndpoint } from './actions.ts'
 import { readRegistry, profileEndpoint } from './registry.ts'
-if (!process.env.KYBERN_CLIENT_CONFIG_DIR?.includes('ade-gpuix-scratch') || !process.env.KYBERN_GPUIX_CREDENTIALS_DIR?.includes('ade-gpuix-scratch')) throw Error('Use isolated scratch client paths')
-const dir = '/Users/mymac/projects/ade-gpuix-scratch/environments-second'
+if (!process.env.KYBERN_CLIENT_CONFIG_DIR?.match(/ade-gpuix-scratch|apps\/gpuix\/\.combined/) || !process.env.KYBERN_GPUIX_CREDENTIALS_DIR?.match(/ade-gpuix-scratch|apps\/gpuix\/\.combined/)) throw Error('Use isolated scratch client paths')
+const dir = process.env.KYBERN_VERIFY_SECOND_DATA ?? '/Users/mymac/projects/ade-gpuix-scratch/environments-second'
 const endpoint = { url: `ws://127.0.0.1:${readFileSync(`${dir}/daemon.port`, 'utf8').trim()}/ws`, token: readFileSync(`${dir}/daemon.token`, 'utf8').trim() }
 const client = new KybernClient(endpoint, { createSocket: (url, token) => new WebSocket(url, { headers: { origin: 'tauri://localhost', Authorization: `Bearer ${token}` } } as unknown as string[]) })
 client.connect()
@@ -36,10 +36,10 @@ try {
     if (readRegistry().environments.some((p) => p.id === profile.id)) throw Error('Forget did not remove profile')
     console.log('Pairing redemption, identity verification, profile edit, device revoke and forget passed')
   } finally { writeRegistry(before) }
-  const project = await client.call('projects.add', { path: '/Users/mymac/projects/ade-gpuix-scratch/environment-project', name: 'Cleanup fixture' })
+  const project = await client.call('projects.add', { path: process.env.KYBERN_VERIFY_PROJECT ?? '/Users/mymac/projects/ade-gpuix-scratch/environment-project', name: 'Cleanup fixture' })
   const thread = await client.call('threads.create', { project_id: project.id, provider: { kind: 'claude-code', instance: 'default' }, model: 'claude-haiku-5-5', title: 'Environment cleanup verification', use_worktree: true })
   const inspection = await client.call('threads.worktree.inspect', { thread_id: thread.id })
   if (!inspection.exists || !inspection.clean || inspection.blockers.length) throw Error('Scratch worktree is not eligible')
-  writeFileSync('/Users/mymac/projects/ade/previews/gpuix/environments/worktree-fixture.json', JSON.stringify({ threadId: thread.id, projectId: project.id, path: inspection.path }))
+  writeFileSync(`${process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previews/gpuix/environments'}/worktree-fixture.json`, JSON.stringify({ threadId: thread.id, projectId: project.id, path: inspection.path }))
   console.log('Worktree cleanup fixture ready', thread.id)
 } finally { client.close() }

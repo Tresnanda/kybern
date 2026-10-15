@@ -1,9 +1,9 @@
 import { launch } from '@gpuix/react/automation'
 import { readFileSync } from 'node:fs'
-const out = '/Users/mymac/projects/ade/previews/gpuix/environments'
+const out = process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previews/gpuix/environments'
 const mode = process.argv[2] ?? 'dark'
 const fixture = JSON.parse(readFileSync(`${out}/worktree-fixture.json`, 'utf8')) as { threadId: string }
-const app = await launch({ command: 'bun', args: ['src/main.tsx'], env: { ...process.env, GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: mode, KYBERN_DATA_DIR: '/Users/mymac/projects/ade-gpuix-scratch/data', KYBERN_CLIENT_CONFIG_DIR: '/Users/mymac/projects/ade-gpuix-scratch/environment-client', KYBERN_GPUIX_CREDENTIALS_DIR: '/Users/mymac/projects/ade-gpuix-scratch/environment-credentials', KYBERN_GPUIX_ENVIRONMENT: 'scratch-second', KYBERN_GPUIX_THREAD: fixture.threadId } })
+const app = await launch({ command: 'bun', args: ['src/main.tsx'], env: { ...process.env, GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: mode, KYBERN_DATA_DIR: process.env.KYBERN_DATA_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/data', KYBERN_CLIENT_CONFIG_DIR: process.env.KYBERN_CLIENT_CONFIG_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/environment-client', KYBERN_GPUIX_CREDENTIALS_DIR: process.env.KYBERN_GPUIX_CREDENTIALS_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/environment-credentials', KYBERN_GPUIX_ENVIRONMENT: 'scratch-second', KYBERN_GPUIX_THREAD: fixture.threadId } })
 async function click(id: string) {
   const target = app.getByTestId(id)
   await target.waitFor({ timeoutMs: 30000 })
@@ -23,7 +23,7 @@ try {
   await app.getByTestId('account-provider').waitFor(); await shot('account')
   await click('dialog-close'); await click('settings-back')
   await click('app-menu'); await app.getByText('Add project').click()
-  await app.getByTestId('project-picker-path').waitFor(); await app.getByTestId('project-picker-path').fill('/Users/mymac/projects/ade-gpuix-scratch/environment-project')
+  await app.getByTestId('project-picker-path').waitFor(); await app.getByTestId('project-picker-path').fill(process.env.KYBERN_VERIFY_PROJECT ?? '/Users/mymac/projects/ade-gpuix-scratch/environment-project')
   await click('project-picker-open'); await app.getByTestId('project-picker-parent').waitFor({ timeoutMs: 15000 }); await shot('project-picker')
   await click('project-picker-add')
   await app.getByTestId('composer').waitFor({ timeoutMs: 15000 })

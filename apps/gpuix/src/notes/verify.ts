@@ -8,8 +8,8 @@ import { launch } from '@gpuix/react/automation'
 import { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import { splitBlocks } from './blocks.ts'
 
-const data = '/Users/mymac/projects/ade-gpuix-scratch/data'
-const out = '/Users/mymac/projects/ade/previews/gpuix/notes'
+const data = (process.env.KYBERN_DATA_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/data')
+const out = process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previews/gpuix/notes'
 const port = readFileSync(path.join(data, 'daemon.port'), 'utf8').trim()
 const token = readFileSync(path.join(data, 'daemon.token'), 'utf8').trim()
 const client = new KybernClient({ url: `ws://127.0.0.1:${port}/ws`, token }, { createSocket: (url, key) => new WebSocket(url, { headers: { origin: 'tauri://localhost', Authorization: `Bearer ${key}` } } as unknown as string[]) })
@@ -17,6 +17,11 @@ const ready = new Promise<void>((resolve) => client.onStatus((status) => { if (s
 client.connect(); await ready
 mkdirSync(out, { recursive: true })
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms))
+async function click(id: string) {
+  console.log('Click', id)
+  await app!.getByTestId(id).waitFor({ timeoutMs: 15000 })
+  await app!.getByTestId(id).click()
+}
 const watchdog = setTimeout(() => { console.error('Verification timed out'); void app?.close() }, 240_000)
 // Recover fixtures left by an interrupted prior run, matching both our title and
 // our distinctive body. All calls remain on the explicitly named scratch daemon.
@@ -48,15 +53,15 @@ try {
   for (const appearance of ['dark', 'light']) {
     app = await launch({ command: 'bun', args: [path.resolve('src/main.tsx')], env: { GPUIX_BACKGROUND: '1', KYBERN_DATA_DIR: data, KYBERN_APPEARANCE: appearance, NAPI_RS_NATIVE_LIBRARY_PATH: process.env.NAPI_RS_NATIVE_LIBRARY_PATH! } })
     await app.getByTestId('app-ready').waitFor({ timeoutMs: 30000 }); await pause(1500)
-    await app.getByTestId('rail-notes').click(); await pause(500)
-    if (await app.getByTestId('notes-back').count()) { await app.getByTestId('notes-back').click(); await pause(300) }
+    await click('rail-notes'); await pause(500)
+    if (await app.getByTestId('notes-back').count()) { await click('notes-back'); await pause(300) }
     await app.screenshot({ path: `${out}/gallery-${appearance}.png` })
     console.log('open document', appearance)
     await app.getByTestId(`note-card-${ids[0]}`).click(); await pause(500)
     await app.screenshot({ path: `${out}/document-${appearance}.png` })
     if (appearance === 'dark' && !process.env.NOTES_SCREENSHOTS_ONLY) {
       console.log('edit native block')
-      await app.getByTestId('note-block-0').click(); await pause(100)
+      await click('note-block-0'); await pause(100)
       const input = app.getByTestId('note-block-input-0')
       const latency: number[] = []
       for (let i = 0; i < 2; i++) { const start = performance.now(); await input.fill(`# A quieter workspace ${i}\n\n`); latency.push(performance.now() - start) }
@@ -65,37 +70,37 @@ try {
       const saved = (await client.call('notes.get', { id: ids[0] })).note!
       console.log('saved body', JSON.stringify(saved.body)); await app.screenshot({ path: `${out}/editing-dark.png` }); assert.ok(saved.body.startsWith('# A quieter workspace 1'))
       assert.ok(saved.body.includes('console.log(idea)'))
-      await app.getByTestId('note-done-editing').click()
+      await click('note-done-editing')
       await app.getByTestId('note-title').fill('Autosave verified')
-      await app.getByTestId('notes-back').click(); await pause(2000)
+      await click('notes-back'); await pause(2000)
       assert.equal((await client.call('notes.get', { id: ids[0] })).note!.title, 'Autosave verified')
       // Gallery display/search and the menu's reversible delete/restore path.
-      await app.getByTestId('notes-display').click(); await pause(150)
-      await app.getByTestId('notes-layout-list').click(); await pause(200)
+      await click('notes-display'); await pause(150)
+      await click('notes-layout-list'); await pause(200)
       await app.screenshot({ path: `${out}/list-dark.png` })
       await app.getByTestId('notes-search').fill('Autosave verified'); await pause(500)
       assert.equal(await app.getByTestId(`note-card-${ids[0]}`).count(), 1)
       await app.getByTestId(`note-card-${ids[0]}`).click(); await pause(300)
-      await app.getByTestId('note-menu').click(); await pause(150)
-      await app.getByTestId('note-pin').click(); await pause(300)
+      await click('note-menu'); await pause(150)
+      await click('note-pin'); await pause(300)
       assert.equal((await client.call('notes.get', { id: ids[0] })).note!.pinned, false)
-      await app.getByTestId('note-menu').click(); await pause(150)
-      await app.getByTestId('note-delete').click(); await pause(300)
+      await click('note-menu'); await pause(150)
+      await click('note-delete'); await pause(300)
       assert.ok((await client.call('notes.get', { id: ids[0] })).note!.deleted_at)
-      await app.getByTestId('notes-filter-deleted').click(); await pause(300)
+      await click('notes-filter-deleted'); await pause(300)
       await app.getByTestId(`note-card-${ids[0]}`).click(); await pause(300)
-      await app.getByTestId('note-restore').click(); await pause(400)
+      await click('note-restore'); await pause(400)
       assert.ok(!(await client.call('notes.get', { id: ids[0] })).note!.deleted_at)
-      await app.getByTestId('notes-back').click(); await pause(250)
-      await app.getByTestId('notes-filter-all').click()
-      await app.getByTestId('notes-display').click(); await pause(150)
-      await app.getByTestId('notes-layout-gallery').click(); await pause(200)
+      await click('notes-back'); await pause(250)
+      await click('notes-filter-all')
+      await click('notes-display'); await pause(150)
+      await click('notes-layout-gallery'); await pause(200)
       console.log('PASS gallery list/search and Pin/Delete/Restore UI')
       await app.getByTestId('app-ready').press('cmd-shift-n'); await pause(200)
       await app.getByTestId('quick-note-title').fill('Quick capture verified')
       await app.getByTestId('quick-note-body').fill('The draft survives until the daemon confirms the save.')
       await app.screenshot({ path: `${out}/quick-capture-dark.png` })
-      await app.getByTestId('quick-note-save').click(); await pause(500)
+      await click('quick-note-save'); await pause(500)
       const quick = (await client.call('notes.list', {})).notes.find((n) => n.title === 'Quick capture verified')
       assert.ok(quick); ids.push(quick.id)
       await app.getByTestId('app-ready').press('cmd-k'); await pause(200)
@@ -116,7 +121,7 @@ try {
         console.log('document idle sample')
         const doc = Bun.spawn(['bun', 'perf/sample.ts', '15', `GPUIX=${pid}`], { stdout: 'pipe', stderr: 'pipe' })
         console.log(await new Response(doc.stdout).text()); assert.equal(await doc.exited, 0)
-        await app.getByTestId('note-block-0').click(); await pause(150)
+        await click('note-block-0'); await pause(150)
         console.log('typing sample: individual native keystrokes over 15 s')
         const active = Bun.spawn(['bun', 'perf/sample.ts', '15', `GPUIX=${pid}`], { stdout: 'pipe', stderr: 'pipe' })
         const keys: number[] = []; const until = Date.now() + 15000; while (Date.now() < until) { const start = performance.now(); await app.getByTestId('note-block-input-0').press('a'); keys.push(performance.now() - start); await pause(200) }; console.log('single-key round-trip ms', JSON.stringify(keys))

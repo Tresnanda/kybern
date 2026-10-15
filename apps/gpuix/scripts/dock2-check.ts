@@ -4,8 +4,8 @@ import assert from 'node:assert/strict'
 import { launch } from '@gpuix/react/automation'
 import { KybernClient } from '../../../packages/kybern-client/src/client.ts'
 import { until, openDock, absent } from './dock-waits.ts'
-const data = '/Users/mymac/projects/ade-gpuix-scratch/data'
-const out = '/Users/mymac/projects/ade/previews/gpuix/dock2'
+const data = (process.env.KYBERN_DATA_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/data')
+const out = process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previews/gpuix/dock2'
 mkdirSync(out, { recursive: true })
 const port = readFileSync(`${data}/daemon.port`, 'utf8').trim()
 const token = readFileSync(`${data}/daemon.token`, 'utf8').trim()

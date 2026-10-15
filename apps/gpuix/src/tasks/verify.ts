@@ -4,8 +4,8 @@ import path from 'node:path'
 import { launch, type App, type Locator } from '@gpuix/react/automation'
 import { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 
-const scratch = '/Users/mymac/projects/ade-gpuix-scratch/data'
-if (process.env.KYBERN_DATA_DIR !== scratch) throw new Error('This check writes fixtures: set KYBERN_DATA_DIR to the GPUIX scratch daemon.')
+const scratch = (process.env.KYBERN_DATA_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/data')
+if (!scratch.includes('gpuix-scratch') && !scratch.endsWith('/apps/gpuix/.combined/data')) throw new Error('This check writes fixtures: set KYBERN_DATA_DIR to the GPUIX scratch daemon.')
 const port = readFileSync(path.join(scratch, 'daemon.port'), 'utf8').trim()
 const token = readFileSync(path.join(scratch, 'daemon.token'), 'utf8').trim()
 const client = new KybernClient(
@@ -25,7 +25,7 @@ await new Promise<void>((resolve, reject) => {
   })
   client.connect()
 })
-const out = '/Users/mymac/projects/ade/previews/gpuix/tasks'
+const out = process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previews/gpuix/tasks'
 mkdirSync(out, { recursive: true })
 const ids: string[] = []
 const noteIds: string[] = []
@@ -85,6 +85,7 @@ async function sendPrompt() {
 
 async function dragTo(id: string, target: { x: number; y: number }, cancel = false) {
   const source = app!.getByTestId(`task-drag-${id}`)
+  await source.waitFor({ timeoutMs: 15000 })
   const start = await source.center()
   await app!.mouse.move(start)
   await app!.mouse.down(start)

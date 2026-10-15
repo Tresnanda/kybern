@@ -8,9 +8,10 @@ import { appearance, setAppearance } from '../src/settings/appearance.ts'
 import { KybernClient } from '../../../packages/kybern-client/src/client.ts'
 
 const dir = process.env.KYBERN_DATA_DIR
-if (!dir || !dir.includes('gpuix-scratch')) throw new Error('Set KYBERN_DATA_DIR to the GPUIX scratch daemon')
+if (!dir || (!dir.includes('gpuix-scratch') && !dir.endsWith('/apps/gpuix/.combined/data'))) throw new Error('Set KYBERN_DATA_DIR to the GPUIX scratch daemon')
 const out = process.argv.slice(2).find((arg) => !arg.startsWith('--')) ?? '/Users/mymac/projects/ade/previews/gpuix/settings'
 const liveTheme = process.argv.includes('--live-theme')
+const navigationOnly = process.argv.includes('--navigation-only')
 const originalAppearance = { ...appearance() }
 const mode = process.argv.includes('--light') ? 'light' : 'dark'
 mkdirSync(out, { recursive: true })
@@ -28,20 +29,22 @@ try {
   await app.getByTestId('settings-worktrees').waitFor()
   await wait(2000)
   await app.screenshot({ path: path.join(out, `general-${mode}.png`) })
-  await app.getByTestId('settings-worktrees').click()
-  await wait(400)
-  await app.screenshot({ path: path.join(out, `after-toggle-${mode}.png`) });
-  const changed = await client.call('settings.get', {})
-  if (changed.worktrees_default === before.worktrees_default) throw new Error('Switch did not round-trip through settings.update')
-  console.log('PASS: switch round-trip')
-  await client.call('settings.update', { settings: { ...changed, worktrees_default: before.worktrees_default } })
-  await wait(400)
-  // If the notification was adopted, clicking again must invert the restored value.
-  await app.getByTestId('settings-worktrees').click()
-  await wait(400)
-  const afterEvent = await client.call('settings.get', {})
-  if (afterEvent.worktrees_default === before.worktrees_default) throw new Error('UI did not adopt settings.changed')
-  console.log('PASS: settings.changed updates the UI')
+  if (!navigationOnly) {
+    await app.getByTestId('settings-worktrees').click()
+    await wait(400)
+    await app.screenshot({ path: path.join(out, `after-toggle-${mode}.png`) });
+    const changed = await client.call('settings.get', {})
+    if (changed.worktrees_default === before.worktrees_default) throw new Error('Switch did not round-trip through settings.update')
+    console.log('PASS: switch round-trip')
+    await client.call('settings.update', { settings: { ...changed, worktrees_default: before.worktrees_default } })
+    await wait(400)
+    // If the notification was adopted, clicking again must invert the restored value.
+    await app.getByTestId('settings-worktrees').click()
+    await wait(400)
+    const afterEvent = await client.call('settings.get', {})
+    if (afterEvent.worktrees_default === before.worktrees_default) throw new Error('UI did not adopt settings.changed')
+    console.log('PASS: settings.changed updates the UI')
+  }
   for (const tab of ['appearance', 'agents', 'accounts', 'integrations', 'computer', 'background', 'notifications', 'about']) {
     await app.getByTestId(`settings-tab-${tab}`).click()
     await wait(650)

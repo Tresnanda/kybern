@@ -1,10 +1,10 @@
 import { launch } from '@gpuix/react/automation'
 import { execFileSync, spawn } from 'node:child_process'
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs'
-const out = '/Users/mymac/projects/ade/previews/gpuix/environments'
+const out = process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previews/gpuix/environments'
 mkdirSync(out, { recursive: true })
 const mode = process.argv[2] ?? 'dark'
-const app = await launch({ command: 'bun', args: ['src/main.tsx'], env: { ...process.env, GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: mode, KYBERN_DATA_DIR: '/Users/mymac/projects/ade-gpuix-scratch/data', KYBERN_CLIENT_CONFIG_DIR: '/Users/mymac/projects/ade-gpuix-scratch/environment-client', KYBERN_GPUIX_CREDENTIALS_DIR: '/Users/mymac/projects/ade-gpuix-scratch/environment-credentials', KYBERN_GPUIX_THREAD: '01a13e34-40eb-7682-81b0-7cb58da9cc63' } })
+const app = await launch({ command: 'bun', args: ['src/main.tsx'], env: { ...process.env, GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: mode, KYBERN_DATA_DIR: process.env.KYBERN_DATA_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/data', KYBERN_CLIENT_CONFIG_DIR: process.env.KYBERN_CLIENT_CONFIG_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/environment-client', KYBERN_GPUIX_CREDENTIALS_DIR: process.env.KYBERN_GPUIX_CREDENTIALS_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/environment-credentials', KYBERN_GPUIX_THREAD: process.env.KYBERN_GPUIX_THREAD ?? '01a13e34-40eb-7682-81b0-7cb58da9cc63' } })
 async function click(id: string) {
   console.log('Click', id)
   const control = app.getByTestId(id)
@@ -31,7 +31,7 @@ try {
   await app.getByTestId('composer').fill('Unsent environment A composer draft')
   await app.getByTestId('dock-toggle').waitFor()
   await switchTo('scratch-second')
-  await app.getByTestId('project-01a13e84-e91e-79c0-8e33-b6f34290a61c').waitFor({ timeoutMs: 30000 })
+  await app.getByTestId(`project-${process.env.KYBERN_VERIFY_SECOND_PROJECT ?? '01a13e84-e91e-79c0-8e33-b6f34290a61c'}`).waitFor({ timeoutMs: 30000 })
   await absent('environment-toggle')
   if ((await app.getByText('Environment A private draft').count()) || (await app.getByText('scratch-project').count())) throw Error('A data leaked into B')
   console.log('B has no A thread/project/note')
@@ -40,13 +40,13 @@ try {
   await app.getByTestId('environment-toggle').waitFor({ timeoutMs: 30000 })
   await click('environment-toggle')
   await app.getByTestId('environment-note').waitFor()
-  if (!readFileSync('/Users/mymac/projects/ade-gpuix-scratch/data/gpuix-ui.json', 'utf8').includes('Environment A private draft')) throw Error('Note draft not persisted')
+  if (!readFileSync(`${process.env.KYBERN_DATA_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/data'}/gpuix-ui.json`, 'utf8').includes('Environment A private draft')) throw Error('Note draft not persisted')
   await shot('restored-panel')
   await click('environment-toggle')
   console.log('After warmup', footprint(pid))
   const memory: (string | undefined)[] = []
   for (let n = 0; n < (process.env.FORMS_ONLY ? 0 : 5); n++) {
-    await switchTo('scratch-second'); await app.getByTestId('project-01a13e84-e91e-79c0-8e33-b6f34290a61c').waitFor({ timeoutMs: 30000 })
+    await switchTo('scratch-second'); await app.getByTestId(`project-${process.env.KYBERN_VERIFY_SECOND_PROJECT ?? '01a13e84-e91e-79c0-8e33-b6f34290a61c'}`).waitFor({ timeoutMs: 30000 })
     await switchTo('local'); await app.getByTestId('environment-toggle').waitFor({ timeoutMs: 30000 })
     memory.push(footprint(pid)); console.log(`Round trip ${n + 1}`, memory.at(-1))
   }

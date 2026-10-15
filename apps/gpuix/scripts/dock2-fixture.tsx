@@ -5,7 +5,7 @@ import { each, getObjc, nsApp, sel } from '../src/native/objc.ts'
 import { getClient, getState, set, subscribe } from '../src/state.ts'
 import { setPreview } from '../src/preview/store.ts'
 import '../src/main.tsx'
-assert.equal(process.env.KYBERN_DATA_DIR, '/Users/mymac/projects/ade-gpuix-scratch/data')
+assert.ok(process.env.KYBERN_DATA_DIR?.includes('gpuix-scratch') || process.env.KYBERN_DATA_DIR?.endsWith('/apps/gpuix/.combined/data'), 'Use an isolated scratch data directory')
 const client = getClient()!, call = client.call.bind(client)
 let frame = 0
 if (process.env.DOCK2_CONTROL_PORT) Bun.serve({ hostname: '127.0.0.1', port: Number(process.env.DOCK2_CONTROL_PORT), fetch(req) {

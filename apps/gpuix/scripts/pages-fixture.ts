@@ -1,12 +1,13 @@
 /** Deterministic, in-memory RPC fixture. No GitHub or real daemon writes. */
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { existsSync, readFileSync, unlinkSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { PROTOCOL_VERSION } from '../../../packages/kybern-client/src/types.ts'
 import type { PrDetailResult, PrFile, PrReviewEntry, PullRequest, UsageRow } from '../../../packages/kybern-client/src/types.ts'
 
 export function pagesFixture() {
+  const scratch = mkdtempSync(path.join(tmpdir(), 'gpuix-scratch-pages-'))
   const now = new Date().toISOString()
   const project = { id: 'pages-fixture', name: 'Kybern fixture', path: '/tmp/kybern-pages-fixture', is_git: true, created_at: now, updated_at: now }
   const pr: PullRequest = { number: 108, title: 'Preserve reading position while streaming', url: 'https://example.com/pull/108', state: 'OPEN', head: 'fix/reading-position', base: 'main', is_draft: false, author: 'reviewer', updated_at: now, created_at: now, additions: 240, deletions: 28, mergeable: 'MERGEABLE', review_decision: 'APPROVED', checks_summary: { total: 3, passed: 2, failed: 0, pending: 1, skipped: 0 }, labels: [{ name: 'performance', color: '4285f4' }] }
@@ -57,11 +58,12 @@ export function pagesFixture() {
     path.join(homedir(), 'Library/Caches/kybern-gpuix', `providers-${url.replace(/[^a-z0-9]+/gi, '_')}.json`),
   ].map(file => ({ file, before: existsSync(file) ? readFileSync(file) : null }))
   return {
-    env: { KYBERN_URL: url, KYBERN_TOKEN: 'local-fixture', GPUIX_BACKGROUND: '1' },
+    env: { KYBERN_URL: url, KYBERN_TOKEN: 'local-fixture', GPUIX_BACKGROUND: '1', KYBERN_DATA_DIR: scratch, KYBERN_CLIENT_CONFIG_DIR: scratch, KYBERN_GPUIX_CREDENTIALS_DIR: scratch },
     calls,
     problem: (kind: typeof problem) => { problem = kind },
     close: () => {
       server.stop(true)
+      rmSync(scratch, { recursive: true, force: true })
       // Call after closing the app so its deferred preferences cannot recreate files.
       for (const { file, before } of artifacts) {
         if (before) writeFileSync(file, before)
