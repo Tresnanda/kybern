@@ -3,6 +3,7 @@
 // the panel is closed) after the traffic lights, then the route header over the
 // content column: provider mark, title (double-click renames), Hand off, the ⋯
 // thread menu, and the panel toggles.
+import { SettingsBreadcrumb } from '../settings/Breadcrumb.tsx'
 import { ISLAND } from '../MatrixLoader.tsx'
 import { motion } from '@gpuix/react'
 import { useState, type ReactNode } from 'react'
@@ -114,7 +115,7 @@ export function TitleBar({ panelOpen }: { panelOpen: boolean }) {
   return (
     // A cached island (native/README.md): replays while the rest of the window animates.
     <div {...ISLAND} style={{ display: 'flex', width: '100%', height: TITLEBAR, flexShrink: 0, position: 'relative' }}>
-      {!panelless && (
+      {!panelless && !settingsOpen && (
         <div style={{ position: 'absolute', left: LEADING_X, top: 0, height: TITLEBAR, display: 'flex', alignItems: 'center' }}>
           <ChromeIcon icon={N.layoutSidebar} label="Toggle thread sidebar" tooltip="Toggle sidebar (⌘B)" onClick={toggle} testId="sidebar-toggle" />
           {/* `IconSwap`: back/forward give way to New thread while the panel is closed.
@@ -135,6 +136,7 @@ export function TitleBar({ panelOpen }: { panelOpen: boolean }) {
         // The 1×20 tick at the content column's leading edge.
         <div style={{ position: 'absolute', left: RAIL + SIDEBAR, top: 13, width: 1, height: 20, backgroundColor: t.variant === 'dark' ? 'rgba(255, 255, 255, 0.09)' : 'rgba(0, 0, 0, 0.10)' }} />
       )}
+      {settingsOpen && <SettingsBreadcrumb />}
       <motion.div
         initial={false}
         animate={{ left: panelless ? LEADING_X : titleStart }}

@@ -4,6 +4,7 @@
 import { spawnSync } from 'node:child_process'
 import { createContext, useContext, type ReactNode } from 'react'
 import type { StyleDesc } from '@gpuix/react'
+import { useAppearance } from './settings/appearance.ts'
 import { FONT_UI, THEMES, type Theme } from './theme.ts'
 import { Icon, type IconName } from './icons.tsx'
 import claudeSvg from './assets/claude.svg' with { type: 'text' }
@@ -28,9 +29,11 @@ export const REDUCED_MOTION = systemReducedMotion()
 export const EASE_OUT: [number, number, number, number] = [0.23, 1, 0.32, 1]
 
 const ThemeContext = createContext<Theme>(THEMES[VARIANT])
-export const ThemeProvider = ({ children }: { children: ReactNode }) => (
-  <ThemeContext.Provider value={THEMES[VARIANT]}>{children}</ThemeContext.Provider>
-)
+export const ThemeProvider = ({ children }: { children: ReactNode }) => {
+  const prefs = useAppearance()
+  const variant = process.env.KYBERN_APPEARANCE === 'light' || process.env.KYBERN_APPEARANCE === 'dark' ? VARIANT : prefs.theme === 'system' ? VARIANT : prefs.theme
+  return <ThemeContext.Provider value={THEMES[variant]}>{children}</ThemeContext.Provider>
+}
 export const useTheme = () => useContext(ThemeContext)
 
 /** The ink colour at an opacity, like Tailwind's `text-foreground/58`. */

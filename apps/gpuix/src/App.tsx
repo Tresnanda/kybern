@@ -5,6 +5,7 @@
 import { FILL_ISLAND, ISLAND } from './MatrixLoader.tsx'
 import { motion } from '@gpuix/react'
 import { useEffect, useState, type ReactNode } from 'react'
+import { SettingsScreen } from './settings/SettingsScreen.tsx'
 import { Composer } from './Composer.tsx'
 import { Draft } from './Draft.tsx'
 import { Icon } from './icons.tsx'
@@ -35,7 +36,7 @@ export function App() {
   const t = useTheme()
   const page = useNav((s) => s.page)
   const settingsOpen = useNav((s) => s.settingsOpen)
-  const instant = useNav((s) => s.panelInstant)
+  const instant = useNav((s) => s.panelInstant || s.keyboardNav)
   const panelOpen = usePanelOpen() && !settingsOpen
   // Keep the panel's rows mounted only while it shows or animates: hidden
   // elements still cost layout on every frame in GPUI.
@@ -110,7 +111,7 @@ export function App() {
             }}
           >
             <PageEnter page={settingsOpen ? 'settings' : page}>
-              {settingsOpen ? <ElsewherePage page="settings" /> : page === 'home' ? <HomePage /> : <ElsewherePage page={page} />}
+              {settingsOpen ? <SettingsScreen /> : page === 'home' ? <HomePage /> : <ElsewherePage page={page} />}
             </PageEnter>
           </div>
         </div>
