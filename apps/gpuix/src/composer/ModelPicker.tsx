@@ -479,7 +479,7 @@ function ModelPickerPanel({
             )}
             {!showFavorites && catalog.length === 0 && !query.trim() && (
               <div style={{ display: 'flex', paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 8 }}>
-                <Label color={muted(t, 0.6)} size={13}>
+                <Label color={muted(t, 0.6)} size={13} lineHeight={17.875} style={{ flexShrink: 1, minWidth: 0 }}>
                   {loading ? 'Loading models…' : `${agentName} didn’t list any models. It uses its own setting until you reload or enter an ID.`}
                 </Label>
               </div>

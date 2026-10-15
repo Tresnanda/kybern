@@ -95,6 +95,7 @@ function build(variant: ThemeVariant) {
     buttonTertiaryHover: v('--color-background-button-tertiary-hover'),
     buttonPrimary: v('--color-background-button-primary'),
     buttonPrimaryText: v('--color-text-button-primary'),
+    inputGroupFill: variant === 'dark' ? resolve('color-mix(in srgb, var(--input) 32%, transparent)', raw) : v('--background'),
     composer: v('--composer-surface'),
     composerFocusBorder: v('--app-composer-focus-border'),
     codeSurface: v('--app-chat-code-surface'),

@@ -21,7 +21,7 @@ await screens[screen](page)
 for (const sel of sels) {
   const out = await page.evaluate((s) => [...document.querySelectorAll(s)].slice(0, 6).map((e) => {
     const r = e.getBoundingClientRect(), c = getComputedStyle(e)
-    return { text: (e.textContent || '').trim().slice(0, 24), x: +r.x.toFixed(1), y: +r.y.toFixed(1), w: +r.width.toFixed(1), h: +r.height.toFixed(1), font: `${c.fontSize}/${c.lineHeight} ${c.fontWeight} ${c.letterSpacing}`, color: c.color, bg: c.backgroundColor, radius: c.borderRadius, pad: c.padding, shadow: c.boxShadow.slice(0, 80) }
+    return { text: (e.textContent || '').trim().slice(0, 24), x: +r.x.toFixed(1), y: +r.y.toFixed(1), w: +r.width.toFixed(1), h: +r.height.toFixed(1), font: `${c.fontSize}/${c.lineHeight} ${c.fontWeight} ${c.letterSpacing}`, color: c.color, bg: c.backgroundColor, radius: c.borderRadius, border: `${c.borderWidth} ${c.borderColor}`, pad: c.padding, shadow: c.boxShadow.slice(0, 80) }
   }), sel)
   console.log(sel, JSON.stringify(out, null, 0).replace(/\},\{/g, '},\n  {'))
 }

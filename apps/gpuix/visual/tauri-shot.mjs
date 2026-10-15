@@ -7,9 +7,30 @@ const { screens: base } = await import(path.join(import.meta.dirname, 'screens.t
 const screens = { ...base }
 const sub = path.join(import.meta.dirname, 'screens')
 for (const f of readdirSync(sub).filter((x) => x.endsWith('.tauri.mjs')).sort()) Object.assign(screens, (await import(path.join(sub, f))).screens)
+for (const name of ['blur-dialog', 'blur-palette', 'blur-popover']) screens[`${name}-base`] = async p => {
+  await screens[name](p)
+  await p.keyboard.press('Escape')
+  await p.waitForTimeout(600); await p.mouse.move(1275,815)
+}
+screens['tasks-hover'] = async p => {
+  await screens['tasks-list'](p)
+  await p.getByText('Fix sidebar collapse jitter on resize', {exact:true}).first().hover()
+  await p.waitForTimeout(500)
+}
+screens['dock-tab-hover'] = async p => {
+  await screens['dock-agents'](p)
+  await p.getByRole('button', {name:'Agents',exact:true}).hover()
+  await p.waitForTimeout(500)
+}
+screens['dock-base'] = async p => {
+  await p.getByText('Dock visual review', {exact:true}).first().click()
+  await p.waitForTimeout(1200)
+  if (!await p.getByRole('button', {name:'Add panel',exact:true}).count()) await p.keyboard.press('Meta+j')
+  await p.waitForTimeout(600); await p.mouse.move(1275,815)
+}
 const spec = JSON.parse(process.argv[2])
 const browser = await webkit.launch()
-const fresh = () => browser.newContext({ viewport: { width: 1280, height: 820 }, deviceScaleFactor: 2, colorScheme: spec.theme })
+const fresh = () => browser.newContext({ viewport: { width: 1280, height: 820 }, deviceScaleFactor: 2, colorScheme: spec.theme, reducedMotion: 'reduce' })
 let ctx = await fresh()
 let page = await ctx.newPage()
 const q = `?url=ws://127.0.0.1:${spec.port}/ws&token=${spec.token}`

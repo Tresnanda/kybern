@@ -39,7 +39,7 @@ async function galleryLayout(app: App) {
 export const screens: Record<string, Step> = {
   'notes-gallery': async (app) => { await notesGallery(app); await park(app) },
   'notes-list': async (app) => { await notesGallery(app); await listLayout(app); await park(app); },
-  'notes-hover': async (app, fx) => { await notesGallery(app); await settle(800); await app.getByTestId(`note-card-${fx.notes['Moodboard']}`).hover().catch(() => app.mouse.move({ x: 802, y: 508 })); await settle(500) },
+  'notes-hover': async (app, fx) => { await notesGallery(app); await settle(800); await app.getByTestId(`note-card-${fx.notes['Project brief']}`).hover(); await settle(500) },
   'notes-search-empty': async (app) => { await notesGallery(app); await app.getByTestId('notes-search').fill('zzzz'); await settle(700); await park(app) },
   'tasks-board': async (app) => { await go(app, 'tasks'); await click(app, 'task-view-board'); await park(app) },
   'tasks-detail': async (app, fx) => { await go(app, 'tasks'); await click(app, `task-drag-${fx.tasks['Ship notes image blocks']}`); await settle(1000); await park(app) },

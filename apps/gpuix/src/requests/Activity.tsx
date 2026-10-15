@@ -17,7 +17,7 @@ import { getClient, useApp } from '../state.ts'
 import { loadTarget, useComposer } from '../composer/store.ts'
 import { Button, Para, muted } from '../transcript/kit.tsx'
 import { errorText, reportError } from '../transcript/store.ts'
-import { Label, ProviderMark, useTheme } from '../ui.tsx'
+import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
 import { PanelEnter, PanelPresence } from './Panel.tsx'
 import { PickerMenu, PickerItem } from '../composer/Menu.tsx'
 import { Elapsed } from '../subagents/Elapsed.tsx'
@@ -82,7 +82,7 @@ export function ActivityPanels({ threadId, data }: { threadId: string; data: Ret
       {helpersOpen && <virtual-list style={{ width: '100%', height: Math.min(176, helpers.length * 32) }}>{helpers.map(child => <div key={child.id} onClick={() => openThread(child.id)} testId={`helper-${child.id}`} style={{ display: 'flex', alignItems: 'center', height: 32, gap: 8, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}><ProviderMark kind={child.provider.kind} size={12} /><Label color={t.text} size={12} truncate style={{ flexGrow: 1 }}>{child.title || 'Untitled'}</Label><Label color={child.status === 'failed' ? t.red : t.textSecondary} size={10}>{child.status === 'running' ? 'Working' : child.status === 'awaiting-approval' ? 'Needs approval' : child.status === 'failed' ? 'Failed' : 'Idle'}</Label></div>)}</virtual-list>}
     </ActivityBody></PanelEnter></PanelPresence>
     <PanelPresence show={!!strip}>{strip && <PanelEnter><ActivityBody testId="subagent-strip"><div style={{ display: 'flex', justifyContent: 'space-between' }}><Button variant="ghost" onClick={() => setStripOpen(!stripOpen)}>{`${stripLabel(strip.rows.length, strip.working)} ${stripOpen ? '⌃' : '⌄'}`}</Button>{stoppableSubagents(strip.rows).length >= 2 && <Button variant="ghost" testId="subagents-stop-all" onClick={() => { for (const child of stoppableSubagents(strip.rows)) void controlSubagent(child, 'stop') }}>Stop all</Button>}</div>
-      {stripOpen && <virtual-list style={{ width: '100%', height: Math.min(176, strip.rows.length * 36) }}>{strip.rows.map(child => <SubagentRow key={child.id} thread={child} />)}</virtual-list>}
+      {stripOpen && <virtual-list style={{ width: '100%', height: Math.min(176, strip.rows.length * 28) }}>{strip.rows.map(child => <SubagentRow key={child.id} thread={child} />)}</virtual-list>}
     </ActivityBody></PanelEnter>}</PanelPresence>
     <PanelPresence show={active.length > 0}><PanelEnter><ActivityBody testId="runtime-activity-panel"><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Label color={t.text} size={12} truncate style={{ flexGrow: 1 }}>{`${active.filter(task => task.kind === 'agent').length ? `${active.filter(task => task.kind === 'agent').length} ${active.filter(task => task.kind === 'agent').length === 1 ? 'agent' : 'agents'} working` : `${active.length} background ${active.length === 1 ? 'task' : 'tasks'}`} · ${(active.find(task => !task.backgrounded) ?? active[0])?.title}`}</Label><Button variant="ghost" testId="runtime-view" onClick={() => showDock(threadId, 'activity')}>View activity</Button></div></ActivityBody></PanelEnter></PanelPresence>
     <PanelPresence show={held.length > 0}><PanelEnter><HeldMessages messages={held} onDone={id => setHeld(items => items.filter(m => m.id !== id))} /></PanelEnter></PanelPresence>
@@ -93,15 +93,29 @@ export async function controlSubagent(thread: Thread, action: 'stop' | 'backgrou
   try { await getClient()!.call(action === 'stop' ? 'tasks.stop' : 'tasks.background', { thread_id: thread.id }) }
   catch (e) { reportError(`Unable to ${action === 'stop' ? 'stop subagent' : 'run in background'}`, e) }
 }
+function SubagentAction({ thread, action, visible }: { thread: Thread; action: 'stop' | 'background'; visible: boolean }) {
+  const t = useTheme()
+  const label = action === 'stop' ? `Stop ${thread.title || 'subagent'}` : `Run ${thread.title || 'subagent'} in background`
+  return <div testId={`subagent-${action}-${thread.id}`} role="button" aria-label={label} tabIndex={visible ? 0 : -1}
+    onClick={() => void controlSubagent(thread, action)} onKeyDown={event => { if (event.key === 'enter' || event.key === 'space') void controlSubagent(thread, action) }}
+    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
+    <Icon source={action === 'stop' ? G.stop : G.background} size={12} color={ink(t, .48)} />
+  </div>
+}
 export const SubagentRow = memo(function SubagentRow({ thread }: { thread: Thread }) {
   const t = useTheme(), phase = subagentThreadPhase(thread), info = thread.subagent!
   const [hover, setHover] = useState(false), span = subagentSpan(thread)
-  return <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onFocus={() => setHover(true)} onBlur={() => setHover(false)} style={{ display: 'flex', alignItems: 'center', height: 36, gap: 4 }}>
-    <SubagentHover thread={thread}><div testId={`subagent-open-${thread.id}`} role="button" tabIndex={0} onClick={() => openThread(thread.id)} style={{ display: 'flex', alignItems: 'center', gap: 8, flexGrow: 1, minWidth: 0, height: 32, cursor: 'pointer' }}><ProviderMark kind={thread.provider.kind} /><Label color={t.text} size={12} truncate>{thread.title || 'Subagent'}</Label><Label color={muted(t)} size={11} truncate>{[subagentTypeLabel(info.agent_type), thread.model, subagentPhaseWord(thread)].filter(Boolean).join(' · ')}</Label></div></SubagentHover>
-    {!hover && span && <Elapsed startedAt={span.startedAt} endedAt={span.endedAt} />}
-    <div style={{ display: 'flex', gap: 4, opacity: hover ? 1 : 0, width: hover ? undefined : 0, overflow: 'hidden', pointerEvents: hover ? undefined : 'none' }}>
-    {phase === 'working' && info.capabilities?.background && !info.backgrounded && <Button variant="ghost" testId={`subagent-background-${thread.id}`} onClick={() => void controlSubagent(thread, 'background')}>Background</Button>}
-    {phase === 'working' && info.capabilities?.stop !== false && <Button variant="ghost" testId={`subagent-stop-${thread.id}`} onClick={() => void controlSubagent(thread, 'stop')}>Stop</Button>}
+  const canBackground = phase === 'working' && info.capabilities?.background === true && !info.backgrounded
+  const canStop = phase === 'working' && info.capabilities?.stop !== false
+  const actions = (canBackground || canStop) && hover
+  return <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onFocus={() => setHover(true)} onBlur={() => setHover(false)} style={{ display: 'flex', alignItems: 'center', height: 28, borderRadius: 7, backgroundColor: hover ? t.buttonSecondaryHover : 'transparent' }}>
+    <SubagentHover thread={thread}><div testId={`subagent-open-${thread.id}`} role="button" tabIndex={0} onClick={() => openThread(thread.id)} onKeyDown={event => { if (event.key === 'enter' || event.key === 'space') openThread(thread.id) }} style={{ display: 'flex', alignItems: 'center', gap: 8, flexGrow: 1, minWidth: 0, height: 28, paddingLeft: 6, cursor: 'pointer' }}><ProviderMark kind={thread.provider.kind} size={14} /><Label color={ink(t, .85)} size={14} weight={500} truncate>{thread.title || 'Subagent'}</Label><Label color={ink(t, .45)} size={14} truncate>{[subagentTypeLabel(info.agent_type), thread.model].filter(Boolean).join(' · ')}</Label></div></SubagentHover>
+    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', minWidth: 52, paddingLeft: 8, paddingRight: 6, flexShrink: 0, height: 28 }}>
+      <div style={{ opacity: actions ? 0 : 1, pointerEvents: 'none' }}>{span && <Elapsed startedAt={span.startedAt} endedAt={span.endedAt} />}</div>
+      <div style={{ position: 'absolute', right: 2, top: 3, display: 'flex', gap: 2, opacity: actions ? 1 : 0, pointerEvents: actions ? undefined : 'none' }}>
+        {canBackground && <SubagentAction thread={thread} action="background" visible={actions} />}
+        {canStop && <SubagentAction thread={thread} action="stop" visible={actions} />}
+      </div>
     </div>
   </div>
 })

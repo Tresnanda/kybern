@@ -15,8 +15,11 @@ import { launch } from '@gpuix/react/automation'
 import { CLIENT_DIR, CREDS_DIR, DATA_DIR, connect, freePort, readState, seed, startDaemon, stopPid, stopVite, writeState } from '../visual/fixture.ts'
 import { type Fixture } from '../visual/screens.gpuix.ts'
 import { devWindowPid, tauriWindowShot, tauriWindowUp, tauriWindowDown } from '../visual/tauri-window.ts'
-import { loadAreaFixtures, loadGpuixEntries, loadGpuixScreens } from '../visual/load.ts'
+import { loadAreaFixtures, loadGpuixEntries, loadGpuixScreens, loadStateBases } from '../visual/load.ts'
 
+import { rescore } from '../visual/rescore.ts'
+
+const bases = await loadStateBases()
 const gpuixScreens = await loadGpuixScreens()
 const gpuixEntries = await loadGpuixEntries()
 
@@ -26,13 +29,25 @@ const opt = (n: string) => { const i = args.indexOf(`--${n}`); return i >= 0 ? a
 const out = opt('out') ?? '/Users/mymac/projects/ade/previews/gpuix/visual'
 const themeArg = opt('theme') ?? 'dark'
 const themes = themeArg === 'both' ? ['dark', 'light'] : [themeArg]
-const valueArgs = new Set(['--out', '--theme'])
+const valueArgs = new Set(['--out', '--theme', '--threshold'])
 const wanted = args.filter((a, i) => !a.startsWith('--') && !valueArgs.has(args[i - 1] ?? ''))
 if (flag('list')) { console.log(Object.keys(gpuixScreens).join('\n')); process.exit(0) }
-const names = wanted.length ? wanted : Object.keys(gpuixScreens)
+const requested = wanted.length ? wanted : Object.keys(gpuixScreens)
+const names: string[] = []
+function include(name: string, ancestors = new Set<string>()) {
+  if (ancestors.has(name)) throw new Error(`Cyclic state base: ${[...ancestors, name].join(' -> ')}`)
+  if (names.includes(name)) return
+  if (flag('state-delta') && bases[name]) include(bases[name]!, new Set([...ancestors, name]))
+  names.push(name)
+}
+requested.forEach(name => include(name))
+const threshold = Number(opt('threshold') ?? 24)
+if (!Number.isInteger(threshold) || threshold < 0 || threshold > 255) throw new Error('--threshold must be an integer from 0 to 255')
+for (const name of names) if (!gpuixScreens[name]) throw new Error(`Unknown screen: ${name}`)
 const here = import.meta.dir
 const desktop = path.resolve(here, '../../desktop')
 mkdirSync(out, { recursive: true })
+if (flag('rescore')) { rescore(out, themes, requested, bases); process.exit(0) }
 
 async function down() {
   const s = readState()
@@ -89,7 +104,7 @@ try {
       const app = await launch({
         command: 'bun',
         args: [path.resolve(here, '..', gpuixEntries[name]?.entry ?? 'src/main.tsx')],
-        env: { ...(gpuixEntries[name]?.env ?? {}), GPUIX_BACKGROUND: '1', KYBERN_OPAQUE: '1', KYBERN_ENVIRONMENT_NAME: 'Development environment', KYBERN_APPEARANCE: theme, KYBERN_DATA_DIR: DATA_DIR, KYBERN_CLIENT_CONFIG_DIR: CLIENT_DIR, KYBERN_GPUIX_CREDENTIALS_DIR: CREDS_DIR, KYBERN_REDUCED_MOTION: '1', ...(winSize ? { KYBERN_WINDOW_SIZE: winSize } : {}), ...(process.env.KYBERN_SIDEBAR_WIDTH ? { KYBERN_SIDEBAR_WIDTH: process.env.KYBERN_SIDEBAR_WIDTH } : {}) },
+        env: { ...(gpuixEntries[name]?.env ?? {}), GPUIX_BACKGROUND: flag('foreground') ? '0' : '1', KYBERN_OPAQUE: '1', KYBERN_ENVIRONMENT_NAME: 'Development environment', KYBERN_APPEARANCE: theme, KYBERN_DATA_DIR: DATA_DIR, KYBERN_CLIENT_CONFIG_DIR: CLIENT_DIR, KYBERN_GPUIX_CREDENTIALS_DIR: CREDS_DIR, KYBERN_REDUCED_MOTION: '1', ...(winSize ? { KYBERN_WINDOW_SIZE: winSize } : {}), ...(process.env.KYBERN_SIDEBAR_WIDTH ? { KYBERN_SIDEBAR_WIDTH: process.env.KYBERN_SIDEBAR_WIDTH } : {}) },
       })
       try {
         await app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })
@@ -100,10 +115,11 @@ try {
         await app.close()
       }
       const base = path.join(out, `${name}-${theme}`)
-      const res = run(['swift', path.join(here, '../visual/compose.swift'), `${base}-tauri.png`, `${base}-gpuix.png`, `${base}-pair.png`, `${base}-diff.png`])
+      const res = run(['swift', path.join(here, '../visual/compose.swift'), `${base}-tauri.png`, `${base}-gpuix.png`, `${base}-pair.png`, `${base}-diff.png`, String(threshold)])
       console.log(`[pair] ${name} ${theme}: ${res.trim()}`)
     }
   }
+  if (flag('state-delta')) rescore(out, themes, requested, bases)
 } finally {
   if (!flag('keep')) await down()
 }
