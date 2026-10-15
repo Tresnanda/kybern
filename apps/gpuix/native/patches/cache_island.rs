@@ -228,7 +228,13 @@ pub(crate) fn island_element(
                 |_, _, _| (),
                 move |_, _, _, _| {
                     for &(id, bounds) in replay.borrow().iter() {
-                        insert_bounds(id, bounds);
+                        // A changed island already painted fresh ordinary bounds.
+                        // Its deferred snapshot runs later, so replay must only
+                        // fill gaps; overwriting here freezes the old coordinates
+                        // into that next snapshot after layout/translation changes.
+                        if get_bounds(id).is_none() {
+                            insert_bounds(id, bounds);
+                        }
                     }
                 },
             )

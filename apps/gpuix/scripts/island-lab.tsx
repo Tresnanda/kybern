@@ -55,9 +55,13 @@ function OverlayLab() {
   const t = useTheme()
   const [outside, setOutside] = useState(0)
   const [clicks, setClicks] = useState(0)
+  const [moves, setMoves] = useState(0)
   return <div testId="app-ready" style={{ width: '100%', height: '100%', backgroundColor: t.surface }}>
     <div {...CACHE} style={{ width: 300, height: 100 }}>
       <Label color={t.text}>Cached parent</Label>
+      <div testId="island-moving" onClick={() => setMoves(n => n + 1)} style={{ width: 100, height: 28, marginLeft: outside * 40, backgroundColor: t.buttonSecondary }}>
+        <Label color={t.text}>{`Moving clicks ${moves}`}</Label>
+      </div>
       <anchored position={{ x: 400, y: 80 }} style={{ width: 200, height: 100, backgroundColor: t.surface }}>
         <div testId="island-overlay" onClick={() => setClicks(n => n + 1)} style={{ width: 200, height: 100, backgroundColor: t.buttonSecondary }}>
           <Label color={t.text}>{`Overlay clicks ${clicks}`}</Label>
