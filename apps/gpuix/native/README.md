@@ -867,3 +867,56 @@ values, images, measurements, remaining differences and unapplied integration.
 desktop plain unified diff while preserving native virtual rows. See
 [PACKAGE-6.md](PACKAGE-6.md) for the API, refreshed unapplied integration patch,
 dark/light WebKit pairs, bounded-paint checks, performance evidence and limits.
+
+
+## Package 7: link controls and scene-local backdrops
+
+```tsx
+import './native/backdrop.ts' // HostProps augmentation
+<anchored deferred backdrop={{blur:16,saturation:1.25,radius:16}}>
+  <div style={{backgroundColor:'rgba(30,32,37,.78)'}}>…</div>
+</anchored>
+<markdown theme={{...theme,markdown:{...theme.markdown,
+  link:{color:'#368ded',underline:'hover',weight:500}}}} source={source}/>
+```
+
+`theme.markdown.link` has optional `color`, `underline: 'none'|'always'|'hover'`,
+and `weight`. Omission preserves native defaults. Both ordinary shaped prose and
+mixed inline-code flow retain link byte ranges, selection, and per-link clicks.
+Hover uses native mouse events and repaints on range transitions, with no timer.
+
+`backdrop` works on ordinary elements and on the **anchored element itself**.
+The latter filters inside the deferred layer and opts out of its otherwise opaque
+fallback backing. Putting a filter on a child of an unmodified anchored surface
+would sample that opaque backing. `{blur:0}` explicitly makes that backing
+transparent without filtering. Use one filter per surface; keep fill/children above
+it. `blur` is logical pixels (clamped 0–64), `saturation` is a ratio (0–3, default
+1), `radius` clips the filtered corners, and `fadeTop` is the fraction of height
+for a linear transparent-to-full filter fade (0–1, used by the live caption).
+
+The macOS Metal backend gets an ordered scene primitive, not an AppKit subview.
+It ends the current render pass, samples the already-rendered target into a cropped
+horizontal Gaussian pass, then draws the vertical pass with saturation, content-mask
+clipping, rounded bounds and inherited opacity before the surface's fill/children.
+Scene replay retains the primitive for cached views. A draw-order barrier prevents
+primitive batching from moving preceding text after the filter.
+
+Two 49-tap separable passes approximate a Gaussian with a 3-sigma halo. One scratch
+texture per renderer grows to the largest visible cropped region and is reused
+across filters and frames on the ordered command queue. It is released when the
+scene has no filters; compiled pipeline state stays cached for the window's lifetime.
+Offscreen, unmounted and zero-opacity regions add no filter primitive. No continuous
+repaint or polling is introduced; a changed frame still recomputes its visible
+filters even when the change was elsewhere in the window.
+
+This is a **macOS-only** native build extension. It samples GPUI's scene, not other
+windows or the wallpaper under NSVisualEffectView. It does not add subtree blur,
+scale transforms, arbitrary CSS filter strings or general mask-image support.
+The Gaussian/underline rasterization is not pixel-identical to WebKit.
+
+`native/patches/backdrop_gpui.py` reconstructs the GPUI changes from the pinned
+submodule HEAD during `update.sh`, alongside the existing GPUIX hooks. No upstream
+submodule commit or npm dependency is required. See `PACKAGE-7.md` for results,
+`BACKDROP-AUDIT.md` for exact desktop values and exceptions, and the **unapplied**
+`app-integration-7.patch` for the app changes. Run `bun native/check-integration-7.ts`
+to typecheck that patch without editing app files.

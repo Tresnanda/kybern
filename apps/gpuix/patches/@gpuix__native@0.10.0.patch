@@ -76,11 +76,12 @@ diff --git a/dist/mutations.js b/dist/mutations.js
 index 7d0eda6cb58127462067cb9d5a442a9ea606c671..25786a7856241fad35c385e7338a4638b11dc3ea 100644
 --- a/dist/mutations.js
 +++ b/dist/mutations.js
-@@ -94,6 +94,12 @@ export const UNIVERSAL_PROPS = new Set([
+@@ -94,6 +94,13 @@ export const UNIVERSAL_PROPS = new Set([
      "autoFocus",
      "tabIndex",
      "motion",
 +    // Kybern native capabilities.
++    "backdrop",
 +    "cache",
 +    "windowDrag",
 +    "interceptKeys",

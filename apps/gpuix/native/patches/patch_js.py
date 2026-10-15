@@ -9,7 +9,7 @@ def edit(name, old, new):
         raise SystemExit(f"{name}: moved anchor; nothing written: {old}")
     pending[name] = text.replace(old, new)
 
-edit('dist/mutations.js', '    "motion",\n    "testId",', '    "motion",\n    // Kybern native capabilities.\n    "cache",\n    "windowDrag",\n    "interceptKeys",\n    "secure",\n    "softWrap",\n    "testId",')
+edit('dist/mutations.js', '    "motion",\n    "testId",', '    "motion",\n    // Kybern native capabilities.\n    "backdrop",\n    "cache",\n    "windowDrag",\n    "interceptKeys",\n    "secure",\n    "softWrap",\n    "testId",')
 edit('dist/host.d.ts', 'export interface HostProps {', 'export interface HostProps {\n    cache?: boolean | "fill";\n    /** Empty titlebar region; do not place on interactive controls. */\n    windowDrag?: boolean;')
 edit('dist/host.d.ts', 'export interface InputProps extends HostProps {', 'export interface InputProps extends HostProps {\n    /** Key names delivered before native editing actions, with preventDefault(). */\n    interceptKeys?: string[];\n    /** Password input: masked paint/accessibility, no copy or cut. */\n    secure?: boolean;')
 edit('index.d.ts', 'export declare class GpuixRenderer {', 'export declare class GpuixRenderer {\n  resolveKeyEvent(token: number, prevented: boolean): void\n  setCloseGuard(enabled: boolean): void\n  resolveCloseRequest(token: number, allow: boolean): void')

@@ -3,6 +3,7 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct MarkdownStyle {
+    pub link: LinkStyle,
     pub table_border_width: Option<f32>,
     pub table_header_rule_width: Option<f32>,
     pub table_padding_x: Option<f32>,
@@ -59,4 +60,12 @@ pub fn tier(values: &Option<Vec<f32>>, level: u8) -> Option<f32> {
 pub fn heading(theme: &crate::theme::Theme, level: u8) -> (f32, f32) {
     let (size, line) = theme.metrics.heading(level);
     (number(tier(&theme.markdown.heading_sizes, level), size), number(tier(&theme.markdown.heading_line_heights, level), line))
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LinkStyle {
+    pub color: Option<String>,
+    pub underline: Option<String>,
+    pub weight: Option<f32>,
 }

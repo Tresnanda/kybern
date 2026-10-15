@@ -33,6 +33,7 @@ git -C upstream submodule update -q --init --filter=blob:none zed
 echo "== patch"
 cp patches/*.rs upstream/packages/native/src/
 python3 patches/apply_hooks.py upstream/packages/native/src
+python3 patches/backdrop_gpui.py upstream/zed
 
 echo "== build (several minutes after a version change)"
 # kache (the global rustc wrapper here) is bypassed: the release link must be
@@ -85,6 +86,8 @@ echo "== checks"
   bun native/rounded-check.ts
   bun native/markdown-check.ts
   bun native/diff-check.ts
+  bun native/surface-check.ts
+  bun native/link-check.ts
   for check in layout-check syntax-check syntax-lifecycle-check syntax-large-check; do
     bun "native/$check.ts"
   done
