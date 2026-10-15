@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { createContext, useContext, type ReactNode } from 'react'
 import type { StyleDesc } from '@gpuix/react'
 import { useAppearance } from './settings/appearance.ts'
+import { useSyncWindowAppearance, useSystemVariant } from './shell/appearance.ts'
 import { FONT_UI, THEMES, type Theme } from './theme.ts'
 import { Icon, type IconName } from './icons.tsx'
 import claudeSvg from './assets/claude.svg' with { type: 'text' }
@@ -31,7 +32,11 @@ export const EASE_OUT: [number, number, number, number] = [0.23, 1, 0.32, 1]
 const ThemeContext = createContext<Theme>(THEMES[VARIANT])
 export const ThemeProvider = ({ children }: { children: ReactNode }) => {
   const prefs = useAppearance()
-  const variant = process.env.KYBERN_APPEARANCE === 'light' || process.env.KYBERN_APPEARANCE === 'dark' ? VARIANT : prefs.theme === 'system' ? VARIANT : prefs.theme
+  // "System" follows macOS live (`shell/appearance.ts`); KYBERN_APPEARANCE pins a variant.
+  const system = useSystemVariant(VARIANT)
+  const forced = process.env.KYBERN_APPEARANCE === 'light' || process.env.KYBERN_APPEARANCE === 'dark'
+  const variant = forced ? VARIANT : prefs.theme === 'system' ? system : prefs.theme
+  useSyncWindowAppearance(variant, prefs.translucent)
   return <ThemeContext.Provider value={THEMES[variant]}>{children}</ThemeContext.Provider>
 }
 export const useTheme = () => useContext(ThemeContext)
