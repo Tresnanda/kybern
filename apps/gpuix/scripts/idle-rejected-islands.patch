@@ -1,0 +1,69 @@
+diff --git a/apps/gpuix/src/sidebar/rows.tsx b/apps/gpuix/src/sidebar/rows.tsx
+index d3336fc2..d7614025 100644
+--- a/apps/gpuix/src/sidebar/rows.tsx
++++ b/apps/gpuix/src/sidebar/rows.tsx
+@@ -396,6 +396,7 @@ export const ProjectHeader = memo(function ProjectHeader({
+             display: 'flex',
+             alignItems: 'center',
+             gap: 8,
++            width: '100%',
+             height: 28,
+             paddingLeft: 8,
+             paddingRight: 8,
+@@ -517,6 +518,7 @@ export const ThreadRow = memo(function ThreadRow({
+       <div style={{ position: 'relative' }}>
+         <Guides depth={depth} />
+         <div
++          cache
+           testId={`thread-${thread.id}`}
+           ref={rowRef}
+           onMouseDown={e => beginThreadDrag(thread.id, e, () => renderer?.clearSelection?.(), { title: thread.title || 'Untitled', kind: thread.provider.kind, bounds: () => (rowRef.current ? renderer?.getElementBounds?.(rowRef.current.id) : null) ?? null })}
+@@ -532,6 +534,7 @@ export const ThreadRow = memo(function ThreadRow({
+             display: 'flex',
+             alignItems: 'center',
+             gap: 8,
++            width: '100%',
+             height: 28,
+             paddingLeft: nested ? 32 + depth * 20 : 8,
+             borderRadius: 8,
+@@ -735,6 +738,7 @@ export const ChildRow = memo(function ChildRow({
+             display: 'flex',
+             alignItems: 'center',
+             gap: 8,
++            width: '100%',
+             height: 28,
+             paddingLeft: 32 + level * 20,
+             paddingRight: 28,
+diff --git a/apps/gpuix/src/tasks/TaskList.tsx b/apps/gpuix/src/tasks/TaskList.tsx
+index 734bdb5a..e51cee00 100644
+--- a/apps/gpuix/src/tasks/TaskList.tsx
++++ b/apps/gpuix/src/tasks/TaskList.tsx
+@@ -326,6 +326,7 @@ export function TaskBoard({
+     >
+       {columns.map((column) => (
+         <div
++          cache
+           key={column.status}
+           testId={`task-column-${column.status}`}
+           onMouseEnter={() => setHoverColumn(column.status)}
+diff --git a/apps/gpuix/src/tasks/TaskWindow.tsx b/apps/gpuix/src/tasks/TaskWindow.tsx
+index f3c74368..56b89c7c 100644
+--- a/apps/gpuix/src/tasks/TaskWindow.tsx
++++ b/apps/gpuix/src/tasks/TaskWindow.tsx
+@@ -28,6 +28,7 @@ export function TaskWindow({ entries, card = false, testId }: { entries: TaskWin
+   }, [focused])
+   return (
+     <virtual-list
++      cache="fill"
+       ref={(node) => { taskScrollRef(node, list.current, entries.length, (index) => setRange((old) => { const start = Math.min(old.start, Math.max(0, index - overscan)); const end = Math.max(old.end, Math.min(entries.length, index + (card ? 8 : 24))); return start === old.start && end === old.end ? old : { start, end } })); list.current = node }}
+       testId={testId}
+       estimatedItemHeight={card ? 122 : 40}
+@@ -40,7 +41,7 @@ export function TaskWindow({ entries, card = false, testId }: { entries: TaskWin
+       style={{ flexGrow: 1, minHeight: 0, width: '100%' }}
+     >
+       {entries.map((entry, index) => (
+-        <div key={entry.key} style={{ height: entry.height, width: '100%' }}>
++        <div cache key={entry.key} style={{ height: entry.height, width: '100%' }}>
+           {entry.pinned || entry.key === focused || (index >= range.start && index < range.end) ? entry.render() : null}
+         </div>
+       ))}
