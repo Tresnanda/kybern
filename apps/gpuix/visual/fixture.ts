@@ -54,7 +54,10 @@ export async function freePort(): Promise<number> {
 export async function startDaemon(fresh: boolean): Promise<RunState> {
   const existing = readState()
   if (existing && !fresh) return existing
-  if (existing) stopPid(existing.daemonPid)
+  if (existing) {
+    stopPid(existing.daemonPid)
+    stopVite(existing)
+  }
   if (fresh) rmSync(DATA_DIR, { recursive: true, force: true })
   mkdirSync(DATA_DIR, { recursive: true })
   const port = await freePort()
@@ -71,16 +74,30 @@ export async function startDaemon(fresh: boolean): Promise<RunState> {
     await Bun.sleep(100)
   }
   const token = readFileSync(tokenFile, 'utf8').trim()
-  const state: RunState = { daemonPid: child.pid!, port, token, seeded: false }
+  // The daemon moves to another port when the one picked was taken meanwhile: trust what it wrote.
+  const actual = Number(readFileSync(portFile, 'utf8').trim()) || port
+  const state: RunState = { daemonPid: child.pid!, port: actual, token, seeded: false }
   writeState(state)
   return state
 }
 
 export function stopPid(pid?: number) {
   if (!pid) return
-  try {
-    process.kill(pid, 'SIGTERM')
-  } catch {}
+  // Detached children lead their own process group: signal the group so a wrapper's real child goes too.
+  for (const target of [-pid, pid]) {
+    try {
+      process.kill(target, 'SIGTERM')
+      return
+    } catch {}
+  }
+}
+
+/** Stop a scratch Vite server: its wrapper (and group) and whatever still listens on its port. */
+export function stopVite(s: Pick<RunState, 'vitePid' | 'vitePort'>) {
+  stopPid(s.vitePid)
+  if (!s.vitePort) return
+  const r = Bun.spawnSync(['lsof', '-ti', `tcp:${s.vitePort}`, '-sTCP:LISTEN'], { stdout: 'pipe', stderr: 'ignore' })
+  for (const pid of r.stdout.toString().split(/\s+/).filter(Boolean)) try { process.kill(Number(pid), 'SIGTERM') } catch {}
 }
 
 export async function connect(state: RunState): Promise<KybernClient> {

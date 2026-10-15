@@ -515,8 +515,10 @@ export function Dialog({
   const palette = variant === 'palette'
   // Decided once: a later change must not restart the entrance.
   const [still] = useState(instant)
-  // Two layers: an anchored layer paints an opaque backing, so the 60% black
-  // backdrop is its own layer at 0.6 opacity and the card sits on another,
+  // Two layers: an anchored layer paints an opaque dark backing unless the surface
+  // carries its own fill, so the scrim is that fill (`backing`, black at `dim`; an
+  // opacity tween over the backing composited ~2x too dark on light pages) and the
+  // card sits on another layer,
   // its left-centre point placed so the card is centred (palette: raised).
   const cardWidth = Math.min(width, size.width - 32)
   const top = palette ? Math.max(16, size.height * 0.04) : 16
@@ -525,11 +527,12 @@ export function Dialog({
     <>
       <PopupLayer
         still={still}
-        fade={{ opacity: dim }}
+        fade={{}}
+        backing={`rgba(0, 0, 0, ${dim})`}
         position={{ x: 0, y: 0 }}
         priority={3}
         onMouseDown={pointerNav}
-        style={{ width: size.width, height: size.height, backgroundColor: '#000000' }}
+        style={{ width: size.width, height: size.height }}
       />
       <PopupLayer
         still={still}

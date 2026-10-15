@@ -9,8 +9,8 @@ import { activeEnvironment } from '../shell/environment.ts'
 //
 // Each row is memoized and owns its hover state, so moving the pointer re-renders
 // one row and a list update re-renders only the rows whose props changed.
-import { useGpuix } from '@gpuix/react'
-import { memo, useEffect, useState, type ReactNode } from 'react'
+import { useGpuix, type PublicInstance } from '@gpuix/react'
+import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
 import { childState, canStopDelegation } from '../../../../packages/kybern-client/src/delegations.ts'
 import { SUBAGENT_SIDEBAR_HOLD_MS, subagentThreadPhase, type SubagentPhase } from '../../../../packages/kybern-client/src/subagents.ts'
 import { FREE_CHAT_PROJECT_ID, type Project, type Thread, type ThreadActivityState } from '../../../../packages/kybern-client/src/types.ts'
@@ -502,6 +502,7 @@ export const ThreadRow = memo(function ThreadRow({
   const [renaming, setRenaming] = useState(false)
   const [title, setTitle] = useState(thread.title)
   const { renderer } = useGpuix()
+  const rowRef = useRef<PublicInstance | null>(null)
   const hasGlyph = thread.status !== 'idle' || !!activity || unread
   const reveal = hover && !renaming
   const wasRevealed = useWasRevealed(reveal)
@@ -517,7 +518,8 @@ export const ThreadRow = memo(function ThreadRow({
         <Guides depth={depth} />
         <div
           testId={`thread-${thread.id}`}
-          onMouseDown={e => beginThreadDrag(thread.id, e, () => renderer?.clearSelection?.())}
+          ref={rowRef}
+          onMouseDown={e => beginThreadDrag(thread.id, e, () => renderer?.clearSelection?.(), { title: thread.title || 'Untitled', kind: thread.provider.kind, bounds: () => (rowRef.current ? renderer?.getElementBounds?.(rowRef.current.id) : null) ?? null })}
           onMouseMove={trackThreadDrag}
           onMouseUp={finishSplitDrag}
           {...bind}
@@ -691,6 +693,7 @@ export const ChildRow = memo(function ChildRow({
   const { hover, bind, keep } = useHover()
   const menu = useContextMenu()
   const { renderer } = useGpuix()
+  const rowRef = useRef<PublicInstance | null>(null)
   const info = (thread.subagent ?? thread.delegation)!
   const delegated = !thread.subagent
   const phase = rowPhase(thread)
@@ -720,7 +723,8 @@ export const ChildRow = memo(function ChildRow({
         <Guides depth={level} />
         <div
           testId={`child-${thread.id}`}
-          onMouseDown={e => beginThreadDrag(thread.id, e, () => renderer?.clearSelection?.())}
+          ref={rowRef}
+          onMouseDown={e => beginThreadDrag(thread.id, e, () => renderer?.clearSelection?.(), { title: thread.title || 'Untitled', kind: thread.provider.kind, bounds: () => (rowRef.current ? renderer?.getElementBounds?.(rowRef.current.id) : null) ?? null })}
           onMouseMove={trackThreadDrag}
           onMouseUp={finishSplitDrag}
           {...bind}

@@ -63,6 +63,8 @@ const WIDTH = 356
 const GAP = 14
 const OFFSET = 24
 const VISIBLE = 3
+/** How far each older card of a collapsed stack peeks above the one in front. */
+const PEEK = 12.5
 /** A one-line toast: 16px padding either side, a 20px title, the border. */
 const ESTIMATE = 54
 const DEFAULT_DURATION = 4000
@@ -206,6 +208,23 @@ function ToastStack({ list }: { list: readonly Item[] }) {
     if (!item.leaving) lift += item.height + GAP
     return entry
   })
+  // Sonner stacks collapsed until the pointer enters: the newest card in front, the older ones
+  // peeking above it, narrower by 5% per step (the cards carry no content there).
+  const live = placed.filter((p) => !p.item.leaving)
+  const collapsed = !hovered && live.length > 1
+  if (collapsed) {
+    const front = live[0]!
+    return (
+      <>
+        {placed.map(({ item, lift: above }) => {
+          if (item.leaving) return <ToastLayer key={item.id} item={item} x={size.width - OFFSET} y={size.height - OFFSET - above} lift={above} />
+          const step = live.findIndex((p) => p.item === item)
+          if (step === 0) return <ToastLayer key={item.id} item={item} x={size.width - OFFSET} y={size.height - OFFSET} lift={0} />
+          return <GhostLayer key={item.id} step={step} height={front.item.height} x={size.width - OFFSET} y={size.height - OFFSET} />
+        })}
+      </>
+    )
+  }
   return (
     <>
       {placed.map(({ item, lift: above }) => (
@@ -215,9 +234,20 @@ function ToastStack({ list }: { list: readonly Item[] }) {
   )
 }
 
+/** An older toast peeking above the front one in the collapsed stack. */
+function GhostLayer({ step, height, x, y }: { step: number; height: number; x: number; y: number }) {
+  const t = useTheme()
+  const width = WIDTH * (1 - 0.05 * step)
+  return (
+    <anchored position={{ x: x - (WIDTH - width) / 2, y: y - PEEK * step }} anchor="bottomRight" fit="snap" snapMargin={8} deferred priority={6 - step} occlude style={{ borderRadius: 10 }}>
+      <div onMouseEnter={hoverStack(true)} style={{ width, height, borderRadius: 10, borderWidth: 1, borderColor: t.border, backgroundColor: t.popover }} />
+    </anchored>
+  )
+}
+
 const hoverStack = (on: boolean) => () => {
   hovered = on
-  reconcile()
+  commit()
 }
 
 /**
@@ -311,7 +341,7 @@ function ToastCard({ item }: { item: Item }) {
           {item.title}
         </Label>
         {item.description && (
-          <Label color={t.textSecondary} size={13} lineHeight={18}>
+          <Label color={t.text} size={13} lineHeight={18}>
             {item.description}
           </Label>
         )}

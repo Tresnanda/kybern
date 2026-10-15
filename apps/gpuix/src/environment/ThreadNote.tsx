@@ -3,7 +3,7 @@ import type { Note } from '../../../../packages/kybern-client/src/types.ts'
 import { getClient } from '../state.ts'
 import { load, save } from '../shell/persist.ts'
 import { Button } from '../settings/controls.tsx'
-import { Label, useTheme } from '../ui.tsx'
+import { ink, Label, useTheme } from '../ui.tsx'
 import { FONT_UI } from '../theme.ts'
 import { errorText } from '../nav/actions.ts'
 
@@ -37,11 +37,12 @@ export function ThreadNote({ threadId }: { threadId: string }) {
       setNote(next); save(key, undefined)
     } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
   }
-  return <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 6 }}>
-    <textarea testId="environment-note" value={body} readOnly={!loaded || busy} placeholder="Ideas, reminders, to-dos."
+  const dirty = body !== (note?.body ?? '')
+  return <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 8, paddingRight: 8, paddingBottom: 8 }}>
+    <textarea testId="environment-note" value={body} readOnly={!loaded || busy} placeholder="Ideas, reminders, to-dos. Type / for formatting"
       onChange={(e) => { const value = e.value ?? ''; setBody(value); save(key, value) }}
-      style={{ height: 112, width: '100%', padding: 8, borderRadius: 8, color: t.text, backgroundColor: t.codeSurface, fontFamily: FONT_UI, fontSize: 12 }} />
+      style={{ height: 96, width: '100%', paddingLeft: 10, paddingRight: 10, paddingTop: 8, paddingBottom: 8, borderRadius: 10, color: t.text, backgroundColor: ink(t, 0.05), fontFamily: FONT_UI, fontSize: 14 }} />
     {error && <><Label color={t.red} size={11}>{error}</Label><Button onClick={() => { setError(''); setReload((n) => n + 1) }}>Reload saved revision</Button></>}
-    <div style={{ display: 'flex', justifyContent: 'flex-end' }}><Button testId="environment-note-save" disabled={!loaded || busy || body === (note?.body ?? '')} onClick={() => void commit()}>{busy ? 'Saving…' : 'Save note'}</Button></div>
+    {dirty && <div style={{ display: 'flex', justifyContent: 'flex-end' }}><Button testId="environment-note-save" disabled={!loaded || busy} onClick={() => void commit()}>{busy ? 'Saving…' : 'Save note'}</Button></div>}
   </div>
 }

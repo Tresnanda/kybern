@@ -343,8 +343,8 @@ export function ThreadHeader({ paneId }: { paneId?: string } = {}) {
                   alignItems: 'center',
                   gap: 6,
                   height: 28,
-                  paddingLeft: 10,
-                  paddingRight: 10,
+                  paddingLeft: paneId ? 9 : 10,
+                  paddingRight: paneId ? 9 : 10,
                   borderRadius: 8,
                   borderWidth: 1,
                   borderColor: t.border,
@@ -354,7 +354,7 @@ export function ThreadHeader({ paneId }: { paneId?: string } = {}) {
                 }}
               >
                 <Icon source={N.handoff} size={14} color={ink(t, 0.8)} />
-                <Label color={t.text}>Hand off</Label>
+                {!paneId && <Label color={t.text}>Hand off</Label>}
               </div>
             )}
           >

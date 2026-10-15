@@ -82,6 +82,8 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
   occlude?: boolean
   still?: boolean
   fade?: { opacity?: number; rise?: number }
+  /** Fill of the `<anchored>` surface itself, replacing GPUI's opaque dark backing (a translucent scrim). */
+  backing?: string
 }>(function PopupLayer(
   {
     side = 'bottom',
@@ -97,6 +99,7 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
     occlude = true,
     still: stillProp = false,
     fade,
+    backing,
     style,
     children,
     ...props
@@ -128,7 +131,7 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
   return (
     <anchored
       {...((still ? {} : { motion }) as object)}
-      style={{ ...(radius !== undefined ? { borderRadius: radius } : {}), ...(fade?.opacity !== undefined ? { opacity } : {}) }}
+      style={{ ...(radius !== undefined ? { borderRadius: radius } : {}), ...(fade?.opacity !== undefined ? { opacity } : {}), ...(backing ? { backgroundColor: backing } : {}) }}
       {...placement}
       fit={fit}
       snapMargin={collisionPadding}

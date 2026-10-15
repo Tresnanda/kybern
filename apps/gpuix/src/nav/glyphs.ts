@@ -44,6 +44,7 @@ import {
   SidebarRightIcon,
   SquareSplitHorizontalIcon,
   SquareSplitVerticalIcon,
+  LayoutTwoColumnIcon,
   StopIcon,
   Sun03Icon,
   Tick02Icon,
@@ -107,6 +108,8 @@ export const N = {
   stop: filled(StopIcon),
   check: glyph(Tick02Icon),
   x: glyph(Cancel01Icon),
+  /** `Columns2Icon` = LayoutTwoColumn. */
+  columns: glyph(LayoutTwoColumnIcon),
   command: glyph(CommandIcon),
   info: glyph(InformationCircleIcon),
   refresh: glyph(RefreshIcon),
