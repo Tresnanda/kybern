@@ -1,0 +1,176 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+patchedDependencies:
+  '@gpuix/native@0.10.0': 42e1999fd1cb8b49abfce7417be20c09fdf6886b656ff4095992522e7dd42d85
+
+importers:
+
+  .:
+    dependencies:
+      '@gpuix/native':
+        specifier: 0.10.0
+        version: 0.10.0(patch_hash=42e1999fd1cb8b49abfce7417be20c09fdf6886b656ff4095992522e7dd42d85)
+      '@gpuix/react':
+        specifier: 0.10.0
+        version: 0.10.0(react@19.2.8)
+      '@hugeicons/core-free-icons':
+        specifier: 4.3.3
+        version: 4.3.3
+      react:
+        specifier: 19.2.8
+        version: 19.2.8
+    devDependencies:
+      '@types/bun':
+        specifier: 1.4.3
+        version: 1.4.3
+      '@types/react':
+        specifier: 19.2.18
+        version: 19.2.18
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+
+packages:
+
+  '@gpuix/native-darwin-arm64@0.10.0':
+    resolution: {integrity: sha512-Uu1aiZsKBPuk9llFkoaFU95k1t+drG3txv97SgZZZ2x4LKqvy5c0bmklhCG1r7Ypm62qY/NKY0Sl553r/G34Tg==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@gpuix/native-linux-x64-gnu@0.10.0':
+    resolution: {integrity: sha512-HNLL+jp+FA5qvdHq52MDGnj6LmsbkVXojwalGgNYA+iJlffFGfzHkCRmoM21Z+TNKa5cvuRTPgnfP6FGr8KxIw==}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
+  '@gpuix/native-win32-x64-msvc@0.10.0':
+    resolution: {integrity: sha512-4NQ81KBzcItiSJGupmvvSpuELCF139fqjQSSscHKbYCD+mcAyhOxADr3I2BNHXWhQr42jUgXhV2n/n0udN1KMQ==}
+    cpu: [x64]
+    os: [win32]
+
+  '@gpuix/native@0.10.0':
+    resolution: {integrity: sha512-hBvQ0vT1ybOoRDQu6JASgRfdcWFbHTRQ0Fr3oiTxdclvzdR8v9fBUQVYfVtgZnnL4pl1LS02eNrQx8//E6/Xjw==}
+
+  '@gpuix/react@0.10.0':
+    resolution: {integrity: sha512-RB//IrYBghiso0K0h8V+K9huwzONtEhwdpXoCs/rZjqN1F4RGxjhaeChtAwTt/JnjTSM1rcLi5cicM1xy8kr+g==}
+    peerDependencies:
+      react: ^18.0.0 || ^19.0.0
+
+  '@hugeicons/core-free-icons@4.3.3':
+    resolution: {integrity: sha512-rpCPwJXhIjEKhMYb2AbNU6nS1HD2vXjeT65LL8SOaEHoN0cI57UTgnroU8q/TlocQQfnxeGz9C3KiyIausfzxg==}
+
+  '@types/bun@1.4.3':
+    resolution: {integrity: sha512-N67Pqy8JXbAY/j0tNraS3V5mubGvc6rrrNDmDCtZLlFzccbUJPDb0tvgUBC5q4m8ybkP93Jcn1QB+RYQ6PvBhw==}
+
+  '@types/node@26.6.5':
+    resolution: {integrity: sha512-uMzsv9stDdofIZBx4UGh4Z9ZgXnGC9seRDscilBcTHAeOFk67MZg/k9bWVfO+bk4qZmG+l52hRnLwUiH2LnJTg==}
+
+  '@types/react@19.2.18':
+    resolution: {integrity: sha512-AnzbBERsrLKtk2XSfTbYRLjQPdy116Sty4q+T+Bp3IC4l6jNBvreVPAHmpq9qhXQM7CXZPjLVmGMw9sy+hxQ3w==}
+
+  bun-types@1.4.3:
+    resolution: {integrity: sha512-tinRJNGOmUN+tEAsn2y2e942n9JHRHR42iUYzDH75NmhJqVBokGSQkkfSFdNWwsANIdrK6ACH9t01M452YyTwg==}
+
+  csstype@3.2.3:
+    resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
+
+  eventsource-parser@4.1.2:
+    resolution: {integrity: sha512-N9b0EvATDJfZj+Szg3m8WwqseQhei/mtTd6V0rCciGbI/yG24o3yBk0YVyfOZZsLVMZHWs++Zk3Aqd2y2EztnQ==}
+    engines: {node: '>=22.12'}
+
+  react-reconciler@0.31.0:
+    resolution: {integrity: sha512-7Ob7Z+URmesIsIVRjnLoDGwBEG/tVitidU0nMsqX/eeJaLY89RISO/10ERe0MqmzuKUUB1rmY+h1itMbUHg9BQ==}
+    engines: {node: '>=0.10.0'}
+    peerDependencies:
+      react: ^19.0.0
+
+  react@19.2.8:
+    resolution: {integrity: sha512-PWaYA1L/q9u2u7xYQi+Y3L3Yfnie7XyLeaJICV1MGD6LprsBxcAqGjYyr0eY3p+QdsA+x/Irkt4Qif8D63+Sbw==}
+    engines: {node: '>=0.10.0'}
+
+  scheduler@0.25.0:
+    resolution: {integrity: sha512-xFVuu11jh+xcO7JOAGJNOXld8/TcEHK/4CituBUeUb5hqxJLj9YuemAEuvm9gQ/+pgXYfbQuqAkiYu+u7YEsNA==}
+
+  typescript@6.0.3:
+    resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
+    engines: {node: '>=14.17'}
+    hasBin: true
+
+  undici-types@8.11.2:
+    resolution: {integrity: sha512-iMVNmWZ0leK/goS6eXMizSzmm9CDWtyphwbaCms3DNLqRxDL+mMoNVcZMTyyVgXP0N+Z8neAMzDoUOUJL8veKg==}
+
+  undici-types@8.9.0:
+    resolution: {integrity: sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg==}
+
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
+
+snapshots:
+
+  '@gpuix/native-darwin-arm64@0.10.0':
+    optional: true
+
+  '@gpuix/native-linux-x64-gnu@0.10.0':
+    optional: true
+
+  '@gpuix/native-win32-x64-msvc@0.10.0':
+    optional: true
+
+  '@gpuix/native@0.10.0(patch_hash=42e1999fd1cb8b49abfce7417be20c09fdf6886b656ff4095992522e7dd42d85)':
+    dependencies:
+      eventsource-parser: 4.1.2
+      zod: 4.6.7
+    optionalDependencies:
+      '@gpuix/native-darwin-arm64': 0.10.0
+      '@gpuix/native-linux-x64-gnu': 0.10.0
+      '@gpuix/native-win32-x64-msvc': 0.10.0
+
+  '@gpuix/react@0.10.0(react@19.2.8)':
+    dependencies:
+      '@gpuix/native': 0.10.0(patch_hash=42e1999fd1cb8b49abfce7417be20c09fdf6886b656ff4095992522e7dd42d85)
+      react: 19.2.8
+      react-reconciler: 0.31.0(react@19.2.8)
+
+  '@hugeicons/core-free-icons@4.3.3': {}
+
+  '@types/bun@1.4.3':
+    dependencies:
+      bun-types: 1.4.3
+
+  '@types/node@26.6.5':
+    dependencies:
+      undici-types: 8.9.0
+
+  '@types/react@19.2.18':
+    dependencies:
+      csstype: 3.2.3
+
+  bun-types@1.4.3:
+    dependencies:
+      '@types/node': 26.6.5
+      undici-types: 8.11.2
+
+  csstype@3.2.3: {}
+
+  eventsource-parser@4.1.2: {}
+
+  react-reconciler@0.31.0(react@19.2.8):
+    dependencies:
+      react: 19.2.8
+      scheduler: 0.25.0
+
+  react@19.2.8: {}
+
+  scheduler@0.25.0: {}
+
+  typescript@6.0.3: {}
+
+  undici-types@8.11.2: {}
+
+  undici-types@8.9.0: {}
+
+  zod@4.6.7: {}

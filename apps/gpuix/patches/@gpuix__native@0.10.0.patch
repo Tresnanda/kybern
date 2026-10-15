@@ -1,0 +1,13 @@
+diff --git a/dist/mutations.js b/dist/mutations.js
+index 7d0eda6cb58127462067cb9d5a442a9ea606c671..126456d6d1af3171a7391ccf09b869eab15099ff 100644
+--- a/dist/mutations.js
++++ b/dist/mutations.js
+@@ -94,6 +94,8 @@ export const UNIVERSAL_PROPS = new Set([
+     "autoFocus",
+     "tabIndex",
+     "motion",
++    // Kybern patch: cached islands (apps/gpuix/native/patches).
++    "cache",
+     "testId",
+     "highlight",
+     "role",

@@ -1,0 +1,214 @@
+// The user's message (`UserBubble` in `views/Transcript.tsx`): attachments and
+// images above an 80%-wide bubble, inline skill/mention tokens, and a hover
+// footer with the time, Copy and Save to note. Messages from other threads and
+// delegated results are rows of their own (`views/delegations/ThreadMessageRows.tsx`),
+// shown here in compact form.
+import { memo, useMemo, useState } from 'react'
+import { partToken } from '../../../../packages/kybern-client/src/composerTokens.ts'
+import { agentResultItems, delegationStatusWord, messageSenderName, purposeLabel, resultPreview, threadMessagePart } from '../../../../packages/kybern-client/src/delegations.ts'
+import type { ContentPart } from '../../../../packages/kybern-client/src/types.ts'
+import { clockTime } from '../../../desktop/src/lib/format.ts'
+import { Icon } from '../icons.tsx'
+import { useTheme } from '../ui.tsx'
+import { Label } from '../ui.tsx'
+import { T } from './glyphs.ts'
+import { ResponseImage } from './images.tsx'
+import { cachedMarkdownTheme, fg, META, muted, TEXT } from './kit.tsx'
+import { FONT_UI } from '../theme.ts'
+import { Rise } from '../motion/kit.tsx'
+import { copyText } from './store.ts'
+import { SwapOnChange, useFresh } from './motion.tsx'
+
+/** `MessageActionButton` + `CopyAction`: a 2em square, copy glyph swapping to a
+ *  green check for 1.4s through `IconSwap` (here the kit's `Swap`, 250 ms). */
+export function CopyAction({ text, testId }: { text: string; testId?: string }) {
+  const t = useTheme()
+  const [copied, setCopied] = useState(false)
+  return (
+    <div
+      testId={testId}
+      role="button"
+      aria-label="Copy message"
+      onClick={
+        text
+          ? () => {
+              copyText(text)
+              setCopied(true)
+              setTimeout(() => setCopied(false), 1400)
+            }
+          : undefined
+      }
+      style={{ display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: text ? 'pointer' : 'default', opacity: text ? 1 : 0.4 }}
+    >
+      <SwapOnChange active={copied ? 'check' : 'copy'}>
+        <Icon
+          source={copied ? T.check : T.copy}
+          size={13.5}
+          color={copied ? t.green : muted(t)}
+          style={copied || !text ? undefined : { hover: { color: t.text } }}
+        />
+      </SwapOnChange>
+    </div>
+  )
+}
+
+function messageText(parts: ContentPart[]): string {
+  let text = ''
+  for (const p of parts) {
+    if (p.type === 'text') text += p.text
+    else if (p.type === 'image' || p.type === 'attachment' || p.type === 'system_row' || p.type === 'thread_message' || p.type === 'agent_results') continue
+    else {
+      const token = partToken(p)
+      if (token) text += token
+    }
+  }
+  return text
+}
+
+export const UserBubble = memo(function UserBubble({ parts, at, pending = false }: { parts: ContentPart[]; at: string; pending?: boolean }) {
+  const t = useTheme()
+  const [hover, setHover] = useState(false)
+  // Decided once on mount: only a bubble sent just now plays the send animation.
+  const fresh = useFresh(at)
+  const text = useMemo(() => messageText(parts), [parts])
+  const plainText = useMemo(() => parts.map((p) => (p.type === 'text' ? p.text : '')).join(''), [parts])
+  const inbound = threadMessagePart(parts)
+  const results = agentResultItems(parts)
+  const systemRow = parts.find((p): p is Extract<ContentPart, { type: 'system_row' }> => p.type === 'system_row')
+  if (inbound)
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 4, paddingBottom: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Icon source={T.chatBubble} size={14} color={muted(t)} />
+          <Label color={muted(t)} lineHeight={24} truncate style={{ flexShrink: 1 }}>
+            {`${purposeLabel(inbound.purpose)} from ${messageSenderName(inbound)}`}
+          </Label>
+          <Label color={muted(t, 0.55)} size={11}>
+            {clockTime(at)}
+          </Label>
+        </div>
+        <div style={{ display: 'flex', marginLeft: 20 }}>
+          <markdown source={inbound.body} theme={cachedMarkdownTheme(t)} style={{ color: t.text, userSelect: 'text' }} />
+        </div>
+      </div>
+    )
+  if (results)
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingTop: 4, paddingBottom: 4, paddingLeft: 12, paddingRight: 12, borderRadius: 10, borderWidth: 1, borderColor: t.borderLight }}>
+        <Label color={fg(t, 0.88)} lineHeight={30}>
+          {`Results from ${results.length} delegated ${results.length === 1 ? 'agent' : 'agents'}`}
+        </Label>
+        {results.map((item) => (
+          <div key={item.task_id} style={{ display: 'flex', flexDirection: 'column', paddingTop: 4, paddingBottom: 6 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Label color={t.text} size={13} truncate style={{ flexShrink: 1 }}>
+                {item.title}
+              </Label>
+              <Label color={item.status === 'failed' ? t.red : muted(t)} size={12}>
+                {delegationStatusWord(item.status)}
+              </Label>
+            </div>
+            <Label color={muted(t)} size={12} lineHeight={18} truncate>
+              {resultPreview(item)}
+            </Label>
+          </div>
+        ))}
+      </div>
+    )
+  const files = parts.filter((p): p is Extract<ContentPart, { type: 'image' | 'attachment' }> => p.type === 'image' || p.type === 'attachment')
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {systemRow && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ height: 1, flexGrow: 1, backgroundColor: t.border }} />
+          <Label color={muted(t, 0.7)} size={12}>
+            {systemRow.text}
+          </Label>
+          <div style={{ height: 1, flexGrow: 1, backgroundColor: t.border }} />
+        </div>
+      )}
+      {(text || files.length > 0) && (
+        <Rise kind="send" play={fresh} style={{ alignItems: 'flex-end', width: '100%' }}>
+          <div
+            testId="user-bubble"
+            onMouseEnter={() => setHover(true)}
+            onMouseLeave={() => setHover(false)}
+            style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1, maxWidth: '80%', position: 'relative', opacity: pending ? 0.7 : 1 }}
+          >
+            {files.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, maxWidth: 240, marginBottom: 4 }}>
+                {files.map((p, i) =>
+                  p.type === 'image' ? (
+                    <ResponseImage key={i} source={`data:${p.media_type};base64,${p.data}`} label={`Attached image ${i + 1}`} thumbnail />
+                  ) : (
+                    <div
+                      key={i}
+                      style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, maxWidth: 256, paddingLeft: 8, paddingRight: 8, borderRadius: 14, borderWidth: 1, borderColor: t.border, backgroundColor: t.composer }}
+                    >
+                      <Icon source={T.file} size={14} color={t.text} />
+                      <Label color={t.text} size={13} weight={500} truncate>
+                        {p.name}
+                      </Label>
+                    </div>
+                  ),
+                )}
+              </div>
+            )}
+            {text && (
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  paddingLeft: 12,
+                  paddingRight: 12,
+                  paddingTop: 6,
+                  paddingBottom: 6,
+                  borderRadius: 12.8,
+                  borderWidth: 1,
+                  borderColor: 'rgba(0, 0, 0, 0)',
+                  backgroundColor: t.variant === 'dark' ? t.composer : 'rgba(255, 255, 255, 0.743)',
+                }}
+              >
+                {/* Plain text, not <markdown>: native markdown has no intrinsic width, and the
+                    bubble must hug short messages (`w-max max-w-full`). */}
+                {text.split('\n').map((line, i) => (
+                  <text key={i} style={{ color: t.text, fontSize: TEXT.size, lineHeight: TEXT.lineHeight, fontFamily: FONT_UI, userSelect: 'text' }}>
+                    {line || ' '}
+                  </text>
+                ))}
+              </div>
+            )}
+            {/* Hover footer below the bubble (`absolute top-full right-0 pt-1`). */}
+            <div
+              style={{
+                position: 'absolute',
+                right: 2,
+                bottom: -28,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                paddingTop: 4,
+                opacity: hover ? 1 : 0,
+              }}
+            >
+              <Label color={muted(t, 0.45)} size={META.size} lineHeight={META.lineHeight}>
+                {clockTime(at)}
+              </Label>
+              <CopyAction text={plainText || text} testId="user-copy" />
+            </div>
+          </div>
+        </Rise>
+      )}
+    </div>
+  )
+})
+
+/** An inline bubble for a message sent mid-turn (`WorkRow` case "user"). */
+export function MidTurnMessage({ parts, at }: { parts: ContentPart[]; at: string }) {
+  return (
+    <div style={{ paddingTop: 12, paddingBottom: 16 }}>
+      <UserBubble parts={parts} at={at} />
+    </div>
+  )
+}
+

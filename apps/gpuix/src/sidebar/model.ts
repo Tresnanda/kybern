@@ -1,0 +1,267 @@
+// The thread panel as one flat list of rows for `<virtual-list>`, built with the
+// desktop's rules (`views/Sidebar.tsx` `ThreadSidebar` + `ProjectItem`):
+// projects in the reader's order, the coordinator first, pinned then recent
+// threads, at most 8 top-level rows until "Show N more", working children
+// nested under their parents, filters and the bell's attention view, then
+// Recents (free chats).
+import { orderProjects, threadMatchesFilter } from '@/state/sidebarOrganize'
+import { nestedThreadRows } from '../../../../packages/kybern-client/src/threadRows.ts'
+import { isChildThread, visibleSubagentThreads } from '../../../../packages/kybern-client/src/subagents.ts'
+import {
+  FREE_CHAT_PROJECT_ID,
+  isFreeChatProject,
+  type Project,
+  type ProviderKind,
+  type Thread,
+  type ThreadActivityState,
+} from '../../../../packages/kybern-client/src/types.ts'
+import type { NavState, SidebarFilter } from '../nav/store.ts'
+
+export const MAX_PROJECT_THREADS = 8
+
+export type AttentionKind = 'blocked' | 'failed' | 'done'
+
+export type Row =
+  | { kind: 'label'; key: string }
+  | { kind: 'message'; key: string; text: string; clearFilter?: boolean }
+  | {
+      kind: 'project'
+      key: string
+      project: Project
+      first: boolean
+      open: boolean
+      active: boolean
+      status: 'awaiting-approval' | 'running' | 'idle' | null
+      activity: ThreadActivityState | undefined
+      hasDraft: boolean
+      canMoveUp: boolean
+      canMoveDown: boolean
+    }
+  | { kind: 'create-coordinator'; key: string; project: Project }
+  | {
+      kind: 'thread'
+      key: string
+      thread: Thread
+      depth: number
+      childCount: number
+      childrenOpen: boolean
+      nested: boolean
+    }
+  | { kind: 'child'; key: string; thread: Thread; depth: number; childCount: number; childrenOpen: boolean }
+  | { kind: 'more'; key: string; projectId: string; count: number; showAll: boolean }
+  | { kind: 'no-threads'; key: string }
+  | { kind: 'recents'; key: string; open: boolean }
+
+/** Desktop `threadAttentionKind` over this app's unread marks and dismissals. */
+export function attentionKind(thread: Thread, nav: Pick<NavState, 'unread' | 'attentionDismissals'>): AttentionKind | null {
+  if (thread.parent_thread_id || thread.subagent || thread.status === 'archived') return null
+  const kind: AttentionKind | null =
+    thread.status === 'awaiting-approval' ? 'blocked' : thread.status === 'failed' ? 'failed' : thread.status === 'idle' && nav.unread[thread.id] ? 'done' : null
+  if (!kind) return null
+  const dismissed = nav.attentionDismissals[thread.id]
+  if (kind !== 'done' && dismissed !== undefined && thread.last_seq <= dismissed) return null
+  return kind
+}
+
+const RANK: Record<AttentionKind, number> = { blocked: 0, failed: 1, done: 2 }
+
+/** Every thread that needs attention, most urgent first (`selectAttentionItems`). */
+export function attentionItems(threads: readonly Thread[], nav: Pick<NavState, 'unread' | 'attentionDismissals'>) {
+  const items: { thread: Thread; kind: AttentionKind }[] = []
+  for (const thread of threads) {
+    const kind = attentionKind(thread, nav)
+    if (kind) items.push({ thread, kind })
+  }
+  return items.sort((a, b) => RANK[a.kind] - RANK[b.kind] || b.thread.updated_at.localeCompare(a.thread.updated_at))
+}
+
+export function isFiltering(filter: SidebarFilter) {
+  return filter.threads !== 'all' || filter.agent !== null
+}
+
+const PROVIDER_LABEL: Record<string, string> = {
+  'claude-code': 'Claude Code',
+  codex: 'Codex',
+  opencode: 'OpenCode',
+  pi: 'pi',
+  omp: 'Oh My Pi',
+  cursor: 'Cursor',
+}
+export const providerLabel = (kind: string) => PROVIDER_LABEL[kind] ?? kind
+
+/** "Pinned", "Codex", or "Pinned Codex". */
+export function filterSummary(filter: SidebarFilter): string {
+  const agent = filter.agent ? providerLabel(filter.agent) : null
+  const threads = filter.threads === 'pinned' ? 'Pinned' : filter.threads === 'working' ? 'Working' : null
+  return [threads, agent].filter(Boolean).join(' ')
+}
+
+export function filterEmptyText(filter: SidebarFilter): string {
+  const agent = filter.agent ? `${providerLabel(filter.agent)} ` : ''
+  if (filter.threads === 'pinned') return `No pinned ${agent}threads`
+  if (filter.threads === 'working') return `No ${agent}threads are working`
+  return `No ${agent}threads`
+}
+
+export interface SidebarInput {
+  projects: Project[]
+  /** Top-level, unarchived threads, pinned first then most recent. */
+  threads: Thread[]
+  selectedId: string | null
+  draft: { projectId?: string; purpose?: string } | null
+  collapsed: Record<string, boolean>
+  showAll: Record<string, boolean>
+  expanded: Record<string, boolean>
+  nav: Pick<
+    NavState,
+    'children' | 'activity' | 'unread' | 'dismissed' | 'filter' | 'attentionFilter' | 'projectOrder' | 'composerDrafts' | 'attentionDismissals'
+  >
+  now: number
+}
+
+/** Agents to filter by: the ones that have threads, plus the chosen one. */
+export function threadAgents(threads: readonly Thread[], filter: SidebarFilter): ProviderKind[] {
+  const kinds = new Set<ProviderKind>()
+  for (const thread of threads) kinds.add(thread.provider.kind)
+  if (filter.agent) kinds.add(filter.agent)
+  return [...kinds].sort((a, b) => providerLabel(a).localeCompare(providerLabel(b)))
+}
+
+export function buildRows(input: SidebarInput): Row[] {
+  const { nav } = input
+  const filtering = isFiltering(nav.filter)
+  const rows: Row[] = []
+
+  // Threads the bell and the filter both allow; null when neither is on.
+  let shown: Set<string> | null = null
+  if (nav.attentionFilter || filtering) {
+    const attention = nav.attentionFilter ? new Set(attentionItems(input.threads, nav).map((i) => i.thread.id)) : null
+    shown = new Set()
+    for (const thread of input.threads) {
+      if (attention && !attention.has(thread.id)) continue
+      if (filtering && !threadMatchesFilter(thread, nav.filter, nav.activity[thread.id])) continue
+      shown.add(thread.id)
+    }
+  }
+
+  const byProject = new Map<string, Thread[]>()
+  const free: Thread[] = []
+  for (const thread of input.threads) {
+    if (isFreeChatProject(thread.project_id)) {
+      if (!shown || shown.has(thread.id)) free.push(thread)
+      continue
+    }
+    const list = byProject.get(thread.project_id) ?? []
+    list.push(thread)
+    byProject.set(thread.project_id, list)
+  }
+  const childrenByProject = new Map<string, Thread[]>()
+  for (const child of Object.values(nav.children)) {
+    const list = childrenByProject.get(child.project_id) ?? []
+    list.push(child)
+    childrenByProject.set(child.project_id, list)
+  }
+
+  const ordered = orderProjects(input.projects.filter((p) => !isFreeChatProject(p.id)), nav.projectOrder)
+  const visibleProjects = shown
+    ? ordered.filter((p) => (byProject.get(p.id) ?? []).some((t) => shown!.has(t.id)) || input.threads.some((t) => shown!.has(t.id) && t.coordinator_project_id === p.id))
+    : ordered
+
+  rows.push({ kind: 'label', key: '__projects' })
+  if (ordered.length === 0) {
+    rows.push({ kind: 'message', key: '__none', text: 'No projects yet. Add a folder to see its threads here.' })
+  } else if (shown && shown.size === 0 && nav.attentionFilter && !filtering) {
+    rows.push({ kind: 'message', key: '__caught-up', text: "You're all caught up. No threads need attention." })
+  } else if (filtering && visibleProjects.length === 0) {
+    rows.push({ kind: 'message', key: '__filtered', text: `${filterEmptyText(nav.filter)}${free.length > 0 ? ' in projects' : ''}.`, clearFilter: true })
+  } else {
+    visibleProjects.forEach((project, index) => {
+      const threads = byProject.get(project.id) ?? []
+      const coordinator = input.threads.find((t) => t.coordinator_project_id === project.id)
+      const open = shown ? true : !input.collapsed[project.id]
+      const running = threads.some((t) => t.status === 'running')
+      const waiting = threads.some((t) => t.status === 'awaiting-approval')
+      const activity = threads.some((t) => nav.activity[t.id] === 'working')
+        ? 'working'
+        : threads.some((t) => nav.activity[t.id] === 'monitoring')
+          ? 'monitoring'
+          : undefined
+      rows.push({
+        kind: 'project',
+        key: project.id,
+        project,
+        first: index === 0,
+        open,
+        active: !input.selectedId && input.draft?.projectId === project.id,
+        status: waiting ? 'awaiting-approval' : running ? 'running' : activity ? 'idle' : null,
+        activity,
+        hasDraft: Object.keys(nav.composerDrafts).some((key) => key.startsWith(`project:${project.id}:`)),
+        canMoveUp: index > 0,
+        canMoveDown: index < visibleProjects.length - 1,
+      })
+      if (!open) return
+
+      const shownChildren = visibleSubagentThreads(childrenByProject.get(project.id) ?? [], {
+        selectedId: input.selectedId,
+        dismissed: new Set(Object.keys(nav.dismissed)),
+        now: input.now,
+      })
+      const withChildren = new Set(shownChildren.map((t) => t.parent_thread_id))
+      const defaultOpen = (thread: Thread) => withChildren.has(thread.id)
+      let nested
+      if (shown) {
+        const filtered: Thread[] = threads.filter((t) => shown!.has(t.id))
+        const allowed = new Set(filtered.map((t) => t.id))
+        for (let grew = true; grew; ) {
+          grew = false
+          for (const child of shownChildren) {
+            if (!allowed.has(child.id) && child.parent_thread_id && allowed.has(child.parent_thread_id)) {
+              allowed.add(child.id)
+              filtered.push(child)
+              grew = true
+            }
+          }
+        }
+        nested = nestedThreadRows(filtered, input.expanded, input.selectedId ?? undefined, defaultOpen)
+      } else {
+        const list = coordinator ? [coordinator, ...threads.filter((t) => t.id !== coordinator.id)] : threads
+        nested = nestedThreadRows([...list, ...shownChildren], input.expanded, input.selectedId ?? undefined, defaultOpen)
+      }
+
+      if (!coordinator && !shown) rows.push({ kind: 'create-coordinator', key: `${project.id}:coordinator`, project })
+      const topRows = nested.filter((row) => !isChildThread(row.thread)).length
+      const showAll = !!input.showAll[project.id] || !!shown
+      let counted = 0
+      let cutting = false
+      for (const row of nested) {
+        if (!showAll) {
+          if (isChildThread(row.thread)) {
+            if (cutting) continue
+          } else {
+            cutting = counted >= MAX_PROJECT_THREADS
+            if (cutting) continue
+            counted += 1
+          }
+        }
+        rows.push(
+          isChildThread(row.thread)
+            ? { kind: 'child', key: row.thread.id, thread: row.thread, depth: row.depth, childCount: row.childCount, childrenOpen: row.open }
+            : { kind: 'thread', key: row.thread.id, thread: row.thread, depth: row.depth, childCount: row.childCount, childrenOpen: row.open, nested: true },
+        )
+      }
+      if (!shown && topRows > MAX_PROJECT_THREADS)
+        rows.push({ kind: 'more', key: `${project.id}:more`, projectId: project.id, count: topRows - MAX_PROJECT_THREADS, showAll: !!input.showAll[project.id] })
+      if (threads.length === 0) rows.push({ kind: 'no-threads', key: `${project.id}:empty` })
+    })
+  }
+
+  const freeDraftSelected = !input.selectedId && !!input.draft && !input.draft.projectId
+  if (free.length > 0 || (!nav.attentionFilter && freeDraftSelected)) {
+    const open = shown ? true : !input.collapsed[FREE_CHAT_PROJECT_ID]
+    rows.push({ kind: 'recents', key: '__recents', open })
+    if (open)
+      for (const thread of [...free].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, MAX_PROJECT_THREADS))
+        rows.push({ kind: 'thread', key: thread.id, thread, depth: 0, childCount: 0, childrenOpen: false, nested: false })
+  }
+  return rows
+}

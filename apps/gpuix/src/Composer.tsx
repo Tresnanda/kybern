@@ -1,0 +1,872 @@
+// The composer (`views/Composer.tsx`, `composerPickerStyles.ts`): a 19.2px-radius
+// card with the editor on top and a footer of 28px chips (+ menu, permission
+// mode, model and effort), then the 32px round send button, which becomes the
+// stop control while the thread runs. Queued follow-ups stack above the card.
+//
+// `ThreadComposer` and `DraftComposer` wire it the way `views/Thread.tsx` and
+// `views/Draft.tsx` do; the pickers and data live in `src/composer/`.
+import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { formatEffort, PROVIDER_LABEL } from '@/lib/format'
+import { nextAttachmentLabel, type AttachmentReference } from '../../../packages/kybern-client/src/composerTokens.ts'
+import { findModel, modelQualifier, selectedVariant, selectorEffort, triggerTraits, variantSelector } from '../../../packages/kybern-client/src/models.ts'
+import { promptText } from '../../../packages/kybern-client/src/prompts.ts'
+import {
+  isFreeChatProject,
+  type ContentPart,
+  type PermissionMode,
+  type ProjectId,
+  type ProviderInstance,
+  type ProviderKind,
+  type ProviderStatus,
+  type Thread,
+  type UserMessage,
+} from '../../../packages/kybern-client/src/types.ts'
+import { Icon } from './icons.tsx'
+import { MatrixLoader } from './MatrixLoader.tsx'
+import { getClient, useApp } from './state.ts'
+import { FONT_UI } from './theme.ts'
+import { ink, Label, useTheme } from './ui.tsx'
+import { FooterChip } from './composer/chips.tsx'
+import { G } from './composer/glyphs.ts'
+import { muted, PickerItem, PickerMenu } from './composer/Menu.tsx'
+import { useCompletion } from './composer/Completion.tsx'
+import { ModelPicker, ModelTriggerLabel } from './composer/ModelPicker.tsx'
+import { PermissionPicker } from './composer/PermissionPicker.tsx'
+import { Pop, SwapOnChange } from './composer/motion.tsx'
+import { Rise } from './motion/kit.tsx'
+import {
+  createThread,
+  ensureLoaded,
+  errorText,
+  getData,
+  interruptThread,
+  loadCatalog,
+  loadProviders,
+  loadQueue,
+  loadTarget,
+  patch,
+  patchDraft,
+  removeQueued,
+  sendToThread,
+  setThreadMode,
+  setThreadModel,
+  uploadPath,
+  useComposer,
+} from './composer/store.ts'
+
+export const COMPOSER_RADIUS = 19.2
+const DEFAULT_PLACEHOLDER = 'Ask anything, @ to mention, $ skills, or / commands'
+/** Agents whose running turn accepts steering (`views/Thread.tsx:388`). */
+const STEERABLE = ['claude-code', 'codex', 'pi', 'omp']
+
+export function Composer({ thread, tray }: { thread: Thread | null; tray?: ReactNode }) {
+  const status = useApp((s) => s.status)
+  useEffect(() => {
+    if (status === 'open') ensureLoaded()
+  }, [status])
+  // The open transcript folds `thread_updated` events, so its copy carries the
+  // live status; the thread list only refreshes on `projects`/list changes.
+  const live = useApp((s) => (!thread ? null : s.open.thread?.id === thread.id ? s.open.thread : s.threads.find((th) => th.id === thread.id) ?? thread))
+  return live ? <ThreadComposer key={live.id} thread={live} /> : <DraftComposer tray={tray} />
+}
+
+// ---- wiring: an open thread ----
+
+function ThreadComposer({ thread }: { thread: Thread }) {
+  const threadId = thread.id
+  const running = thread.status === 'running' || thread.status === 'awaiting-approval'
+  const target = useComposer((d) => (d.target?.threadId === threadId ? d.target.state : null))
+  const providers = useComposer((d) => d.providers)
+  const accounts = useComposer((d) => d.accounts)
+  const catalog = useComposer((d) => d.catalog)
+  const catalogLoading = useComposer((d) => d.catalogLoading)
+  const queued = useComposer((d) => d.queued[threadId])
+  const approvals = useApp((s) => (s.open.thread?.id === threadId ? s.open.pendingApprovals.length : 0))
+
+  useEffect(() => {
+    void loadTarget(threadId)
+  }, [threadId, thread.status, thread.provider.instance, thread.model])
+  useEffect(() => {
+    void loadQueue(threadId)
+  }, [threadId, running])
+
+  const provider = target?.target.provider ?? thread.provider
+  const catalogKey = `${threadId}:${provider.kind}:${provider.instance}`
+  useEffect(() => {
+    void loadCatalog(threadId, provider, thread.project_id, false).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalogKey, thread.project_id])
+  const composerProviders = useMemo(
+    () => providers.map((status) => (status.kind === provider.kind && catalog?.key === catalogKey ? catalog.status : status)),
+    [providers, provider.kind, catalog, catalogKey],
+  )
+  const targetChanged = !!target && (target.target.provider.kind !== thread.provider.kind || target.target.provider.instance !== thread.provider.instance)
+  const mode = targetChanged ? target?.pending_permission_mode ?? thread.permission_mode : thread.permission_mode
+  const coordinator = !!thread.coordinator_project_id
+  const handoffSelected =
+    !!target && (targetChanged || (target.target.model ?? null) !== (thread.model ?? null) || (target.target.effort ?? null) !== (thread.effort ?? null))
+  const chooseTarget = async (next: ProviderInstance, model?: string, effort?: string, inherit = !target?.account_override) => {
+    const state = await getClient()!.call('threads.target.set', { thread_id: threadId, target: { provider: next, model, effort }, inherit_account: inherit })
+    patch({ target: { threadId, state } })
+  }
+
+  return (
+    <ComposerView
+      draftKey={`thread:${threadId}`}
+      projectId={isFreeChatProject(thread.project_id) ? undefined : thread.project_id}
+      currentThreadId={threadId}
+      placeholder={
+        approvals > 0
+          ? 'Resolve this approval request to continue'
+          : running
+            ? 'Ask for follow-up changes'
+            : coordinator
+              ? 'What should we work on in this project?'
+              : undefined
+      }
+      running={running}
+      onStop={() => void interruptThread(threadId).catch(() => {})}
+      onSend={(message, delivery) => sendToThread(threadId, message, delivery)}
+      canSteer={handoffSelected || STEERABLE.includes(thread.provider.kind)}
+      mode={mode}
+      onModeChange={(m) => void setThreadMode(threadId, m).catch((e) => console.error('Unable to change mode:', errorText(e)))}
+      provider={provider}
+      providers={composerProviders}
+      accounts={accounts}
+      accountFollowsDefaults={target ? !target.account_override : undefined}
+      onAccountChange={(instance) => chooseTarget({ ...provider, instance: instance ?? 'default' }, target?.target.model ?? undefined, target?.target.effort ?? undefined, instance === null)}
+      model={target?.target.model ?? thread.model ?? undefined}
+      effort={target?.target.effort ?? thread.effort ?? undefined}
+      onModelChange={coordinator ? undefined : (model, effort) => setThreadModel(threadId, model, effort)}
+      onProviderChange={coordinator ? undefined : (next, choice) => chooseTarget(next, choice?.model, choice?.effort, !choice?.pinAccount)}
+      catalogLoading={catalogLoading === catalogKey}
+      onReloadModels={(force) => loadCatalog(threadId, provider, thread.project_id, force).then(() => {})}
+      above={queued?.length ? <QueuedPanel threadId={threadId} items={queued.map((q) => ({ id: q.id, message: q.message }))} /> : null}
+    />
+  )
+}
+
+// ---- wiring: the home screen ----
+
+/** The draft's agent, as `views/Draft.tsx:55-66` picks it. */
+export function useDraftTarget() {
+  const draft = useComposer((d) => d.draft)
+  const settings = useComposer((d) => d.settings)
+  const providers = useComposer((d) => d.providers)
+  const projects = useApp((s) => s.projects)
+  // The most recently active thread's project, or the first project.
+  const recentProject = useApp((s) => s.threads.find((th) => s.projects.some((p) => p.id === th.project_id))?.project_id ?? s.projects[0]?.id)
+  const projectId = draft.projectId === undefined ? recentProject ?? null : draft.projectId
+  const project = projectId ? projects.find((p) => p.id === projectId) : undefined
+  const available = useMemo(() => providers.filter((p) => p.available), [providers])
+  const provider = useMemo<ProviderInstance | null>(() => {
+    const stored = draft.provider
+    const instanceFor = (kind: ProviderKind) => {
+      const config = settings?.providers[kind]
+      return (project ? config?.project_accounts?.[project.path] : undefined) ?? config?.default_account ?? 'default'
+    }
+    if (stored && available.some((p) => p.kind === stored.kind)) {
+      if (stored.pinAccount || stored.instance !== 'default') return stored
+      return { kind: stored.kind, instance: instanceFor(stored.kind) }
+    }
+    const pick = available.find((p) => p.kind === settings?.default_provider) ?? available[0]
+    return pick ? { kind: pick.kind, instance: instanceFor(pick.kind) } : null
+  }, [draft.provider, available, settings, project])
+  const pinAccount = !!draft.provider && (draft.provider.pinAccount ?? draft.provider.instance !== 'default')
+  const preferred = draft.mode ?? settings?.default_permission_mode ?? 'supervised'
+  const status = provider ? available.find((p) => p.kind === provider.kind) : undefined
+  const mode: PermissionMode = status && !status.supported_permission_modes.includes(preferred) ? status.supported_permission_modes[0] ?? preferred : preferred
+  const useWorktree = !projectId ? false : draft.worktree ?? project?.worktrees_default ?? settings?.worktrees_default ?? false
+  return { draft, projectId, project, provider, pinAccount, mode, status, useWorktree, choice: provider ? draft.models[provider.kind] : undefined }
+}
+
+function DraftComposer({ tray }: { tray?: ReactNode }) {
+  const providers = useComposer((d) => d.providers)
+  const loading = useComposer((d) => d.providersLoading)
+  const accounts = useComposer((d) => d.accounts)
+  const { projectId, provider, pinAccount, mode, useWorktree, choice, draft } = useDraftTarget()
+
+  return (
+    <ComposerView
+      draftKey={`project:${projectId ?? 'free'}`}
+      projectId={projectId ?? undefined}
+      above={tray}
+      mode={mode}
+      onModeChange={(m) => patchDraft({ mode: m })}
+      provider={provider}
+      providers={providers}
+      accounts={accounts}
+      model={choice?.model}
+      effort={choice?.effort}
+      onModelChange={async (model, effort) => {
+        if (provider) patchDraft({ models: { ...getData().draft.models, [provider.kind]: { model, effort } } })
+      }}
+      onProviderChange={async (next, nextChoice) => {
+        const models = nextChoice ? { ...getData().draft.models, [next.kind]: nextChoice } : getData().draft.models
+        const nextStatus = getData().providers.find((item) => item.kind === next.kind)
+        const keepMode = !nextStatus || nextStatus.supported_permission_modes.includes(mode)
+        patchDraft({
+          provider: { ...next, pinAccount: nextChoice?.pinAccount ?? next.instance !== 'default' },
+          models,
+          ...(keepMode ? {} : { mode: nextStatus!.supported_permission_modes.includes('supervised') ? 'supervised' : nextStatus!.supported_permission_modes[0] ?? mode }),
+        })
+      }}
+      catalogLoading={loading}
+      onReloadModels={(force) => loadProviders(force, projectId ?? undefined).then(() => {})}
+      sendDisabled={!provider}
+      onSend={async (message) => {
+        if (!provider) return
+        await createThread({
+          projectId,
+          provider: pinAccount ? provider : { ...provider, instance: 'default' },
+          pinAccount,
+          permissionMode: mode,
+          model: choice?.model,
+          effort: choice?.effort,
+          useWorktree,
+          baseBranch: draft.baseBranch ?? undefined,
+          message,
+        })
+      }}
+    />
+  )
+}
+
+// ---- the shell ----
+
+interface Attachment {
+  id: string
+  name: string
+  media_type: string
+  size: number
+  /** Inline label (`image1`) the prompt can mention as `@image1`. */
+  label: string
+  path: string
+}
+
+/**
+ * A model id the catalog has not listed yet (it loads a few seconds after
+ * launch): `claude-fable-5-1` reads "Claude Fable 5.1", as the desktop's
+ * fallback comment in `views/Composer.tsx` intends; other ids show as they are.
+ */
+function uncataloguedName(model: string): string {
+  const claude = model.match(/^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{6,})?$/)
+  if (!claude) return model
+  return `Claude ${claude[1]![0]!.toUpperCase()}${claude[1]!.slice(1)} ${claude[2]}${claude[3] ? `.${claude[3]}` : ''}`
+}
+
+/** Text and attachments kept per thread or project while the composer is away (`composerDrafts`). */
+const drafts = new Map<string, { text: string; attachments: Attachment[] }>()
+
+interface ComposerViewProps {
+  draftKey: string
+  /** Enables @ files and the skill catalog (`views/Composer.tsx` `projectId`). */
+  projectId?: ProjectId
+  currentThreadId?: string
+  placeholder?: string
+  running?: boolean
+  onStop?: () => void
+  onSend: (message: UserMessage, delivery: 'send' | 'queue' | 'steer') => Promise<void>
+  canSteer?: boolean
+  sendDisabled?: boolean
+  mode: PermissionMode
+  onModeChange: (mode: PermissionMode) => void
+  provider: ProviderInstance | null
+  providers: ProviderStatus[]
+  accounts: import('../../../packages/kybern-client/src/types.ts').AccountSummary[]
+  accountFollowsDefaults?: boolean
+  onAccountChange?: (instance: string | null) => Promise<void>
+  model?: string | null
+  effort?: string | null
+  onModelChange?: (model: string | undefined, effort: string | undefined) => Promise<void>
+  onProviderChange?: (provider: ProviderInstance, choice?: { model?: string; effort?: string; pinAccount?: boolean }) => Promise<void>
+  catalogLoading: boolean
+  onReloadModels: (force: boolean) => Promise<void>
+  above?: ReactNode
+}
+
+function ComposerView(props: ComposerViewProps) {
+  const t = useTheme()
+  const renderer = useGpuixRequired()
+  const { running, provider, providers, model, effort, mode } = props
+  const connected = useApp((s) => s.status === 'open')
+  const saved = drafts.get(props.draftKey)
+  const [text, setText] = useState(saved?.text ?? '')
+  const [attachments, setAttachments] = useState<Attachment[]>(saved?.attachments ?? [])
+  const [uploading, setUploading] = useState(0)
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [promptMode, setPromptMode] = useState<'queue' | 'steer'>('queue')
+  const [changingModel, setChangingModel] = useState(false)
+  const editor = useRef<PublicInstance | null>(null)
+  const card = useRef<PublicInstance | null>(null)
+  const steerPressed = useRef(0)
+  const completionPicked = useRef(0)
+  const lastModelRefresh = useRef(0)
+  const steering = !!running && !!props.canSteer && promptMode === 'steer'
+
+  useEffect(() => {
+    if (text || attachments.length) drafts.set(props.draftKey, { text, attachments })
+    else drafts.delete(props.draftKey)
+  }, [text, attachments, props.draftKey])
+
+  // Automation: the native file picker cannot be driven, so a test run can name
+  // files to attach on mount (`KYBERN_GPUIX_ATTACH=/a.png,/b.pdf`).
+  useEffect(() => {
+    const preset = process.env.KYBERN_GPUIX_ATTACH
+    if (preset && connected) void addFiles(preset.split(','))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected])
+
+  const empty = text.trim().length === 0 && attachments.length === 0
+  const canSend = connected && !props.sendDisabled && !sending && uploading === 0 && !empty
+
+  const focusEditor = () => {
+    if (editor.current) renderer.focusElement?.(editor.current.id)
+  }
+
+  const attachmentRefs = useMemo<AttachmentReference[]>(
+    () => attachments.map((a) => ({ token: `@${a.label}`, part: { type: 'attachment', asset_id: a.id, name: a.name, media_type: a.media_type, size: a.size } })),
+    [attachments],
+  )
+  const completion = useCompletion({
+    text,
+    setText,
+    projectId: props.projectId,
+    provider: provider ?? undefined,
+    currentThreadId: props.currentThreadId,
+    attachments: attachmentRefs,
+    commands: [{ name: 'attach', hint: 'Attach files or images', icon: G.paperclip, run: () => void addFiles() }],
+  })
+
+  const buildParts = (): ContentPart[] => {
+    const parts = completion.buildParts()
+    // Attachments the prompt never mentions keep their place at the end.
+    const placed = new Set(parts.flatMap((part) => (part.type === 'attachment' ? [part.asset_id] : [])))
+    for (const r of attachmentRefs) if (r.part.type === 'attachment' && !placed.has(r.part.asset_id)) parts.push(r.part)
+    return parts
+  }
+
+  const submit = async (delivery: 'queue' | 'steer' = promptMode) => {
+    if (!canSend) return
+    const status = provider ? providers.find((p) => p.kind === provider.kind) : undefined
+    if (status && provider?.kind !== 'cursor' && !status.supported_permission_modes.includes(mode)) {
+      setError('Choose a supported permission mode for the selected agent before sending.')
+      return
+    }
+    setSending(true)
+    setError(null)
+    try {
+      await props.onSend({ parts: buildParts() }, running ? (delivery === 'steer' && props.canSteer ? 'steer' : 'queue') : 'send')
+      setText('')
+      setAttachments([])
+      completion.reset()
+      drafts.delete(props.draftKey)
+      focusEditor()
+    } catch (e) {
+      setError(`Unable to send: ${errorText(e)}`)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const addFiles = async (picked?: string[]) => {
+    const paths = picked ?? (await renderer.promptForPaths?.({ files: true, multiple: true, prompt: 'Attach' }))
+    if (!paths?.length) return
+    setUploading((n) => n + paths.length)
+    for (const path of paths) {
+      try {
+        const info = await uploadPath(path)
+        setAttachments((list) => [...list, { ...info, path, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }])
+      } catch (e) {
+        setError(`Unable to attach ${path.split('/').pop()}: ${errorText(e)}`)
+      } finally {
+        setUploading((n) => n - 1)
+      }
+    }
+    focusEditor()
+  }
+
+  // ---- model trigger ----
+  const status = provider ? providers.find((p) => p.kind === provider.kind) : undefined
+  const models = status?.models ?? []
+  const current = model ? findModel(models, model) : models.find((m) => m.is_default)
+  const traits = triggerTraits(current, model)
+  const qualifier = modelQualifier(models, current)
+  const effortLabel = effort ?? selectorEffort(current, model) ?? selectedVariant(current, model)?.default_effort ?? current?.default_effort ?? null
+  const canPickModel = !!props.onModelChange
+  const canReload = canPickModel && !!status?.available && status.supports_model_switch
+  const canPickProvider = !!props.onProviderChange
+  const busyRun = async (work: () => Promise<void>) => {
+    if (changingModel) return false
+    setChangingModel(true)
+    try {
+      await work()
+      return true
+    } catch (e) {
+      setError(`Unable to change model: ${errorText(e)}`)
+      return false
+    } finally {
+      setChangingModel(false)
+    }
+  }
+
+  const modelName = current?.display_name ?? (model ? uncataloguedName(model) : provider ? PROVIDER_LABEL[provider.kind] : '')
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: 736 }}>
+      {props.above}
+      <div
+        ref={(el) => {
+          card.current = el
+        }}
+        onFileDrop={(e) => {
+          if (!e.paths?.length) return
+          setUploading((n) => n + e.paths!.length)
+          void Promise.all(
+            e.paths.map((path) =>
+              uploadPath(path)
+                .then((info) => setAttachments((list) => [...list, { ...info, path, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }]))
+                .catch((err) => setError(`Unable to attach ${path.split('/').pop()}: ${errorText(err)}`))
+                .finally(() => setUploading((n) => n - 1)),
+            ),
+          )
+        }}
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          width: '100%',
+          borderRadius: COMPOSER_RADIUS,
+          borderWidth: 1,
+          borderColor: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.052)' : 'rgba(13, 13, 13, 0.076)',
+          backgroundColor: t.variant === 'dark' ? t.composer : '#ffffff',
+          boxShadow:
+            t.variant === 'dark'
+              ? { offsetX: 0, offsetY: 6, blurRadius: 24, spreadRadius: -10, color: 'rgba(0, 0, 0, 0.30)' }
+              : { offsetX: 0, offsetY: 4, blurRadius: 18, spreadRadius: -6, color: 'rgba(13, 13, 13, 0.07)' },
+        }}
+      >
+        {completion.menu((card.current && renderer.getElementBounds?.(card.current.id)?.width) || 736)}
+        <div style={{ display: 'flex', flexDirection: 'column', paddingTop: 14, paddingBottom: 8, paddingLeft: 16, paddingRight: 16 }}>
+          {(attachments.length > 0 || uploading > 0) && (
+            <Attachments
+              items={attachments}
+              uploading={uploading}
+              onRemove={(a) => setAttachments((list) => list.filter((item) => item.id !== a.id))}
+            />
+          )}
+          <div style={{ position: 'relative', display: 'flex' }}>
+            {/* GPUIX paints its own placeholder in a fixed grey; this one is the kit's muted × 40%. */}
+            {!text && (
+              <div style={{ position: 'absolute', top: 0, left: 0, right: 0, pointerEvents: 'none' }}>
+                <Label color={muted(t, 0.4)} lineHeight={19.6} truncate>
+                  {props.placeholder ?? DEFAULT_PLACEHOLDER}
+                </Label>
+              </div>
+            )}
+            <textarea
+              ref={(el) => {
+                editor.current = el
+              }}
+              testId="composer"
+              autoFocus
+              value={text}
+              minRows={2}
+              maxRows={10}
+              onChange={(e) => {
+                setText(e.value ?? '')
+                if (error) setError(null)
+              }}
+              onKeyDown={(e) => {
+                if (completion.onKey(e.key ?? '', !!e.modifiers?.shift, !!e.modifiers?.ctrl)) {
+                  if (e.key === 'enter') completionPicked.current = Date.now()
+                  return
+                }
+                // ⌘↵ steers a running turn (`Composer.tsx:839`) and sends otherwise.
+                if (e.key === 'enter' && e.modifiers?.cmd && !e.modifiers.shift) {
+                  steerPressed.current = Date.now()
+                  void submit(running ? 'steer' : promptMode)
+                }
+              }}
+              onSubmit={() => {
+                // ⌘↵ also reaches here; the key handler already steered.
+                if (Date.now() - steerPressed.current < 50) return
+                // Enter picks a completion row while the list is up.
+                if (Date.now() - completionPicked.current < 50) return
+                if (completion.onKey('enter', false)) return
+                void submit()
+              }}
+              theme={{ caret: t.text }}
+              style={{ width: '100%', fontSize: 14, lineHeight: 19.6, color: t.text, fontFamily: FONT_UI, opacity: connected ? 1 : 0.6 }}
+            />
+          </div>
+          {error && (
+            <div style={{ display: 'flex', paddingTop: 6 }}>
+              <Label color={t.red} size={12} lineHeight={16}>
+                {error}
+              </Label>
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4, paddingLeft: 12, paddingRight: 12, paddingBottom: 12, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, minWidth: 0 }}>
+            <PickerMenu
+              testId="composer-plus"
+              side="top"
+              align="start"
+              trigger={(open) => (
+                <FooterChip square pressed={open}>
+                  {() => <Icon name="plus" size={18} color={t.text} />}
+                </FooterChip>
+              )}
+            >
+              <PickerItem id="files" testId="add-files" onSelect={() => void addFiles()}>
+                <Icon source={G.paperclip} size={16} color={t.text} style={{ opacity: 0.8 }} />
+                <Label color={t.text}>Add files</Label>
+              </PickerItem>
+            </PickerMenu>
+            <PermissionPicker mode={mode} kind={provider?.kind} status={status} onChange={props.onModeChange} />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4, flexGrow: 1, minWidth: 0 }}>
+            {provider && (
+              <ModelPicker
+                provider={provider}
+                providers={providers}
+                model={model}
+                effort={effort}
+                canPickModel={canPickModel}
+                canPickProvider={canPickProvider}
+                canReload={canReload}
+                loading={props.catalogLoading}
+                busy={changingModel}
+                accounts={props.accounts}
+                accountInstance={provider.instance}
+                accountFollowsDefaults={props.accountFollowsDefaults}
+                onAccountChange={props.onAccountChange ? (instance) => busyRun(() => props.onAccountChange!(instance)) : undefined}
+                onOpenChange={(open) => {
+                  // Self-heal a stale catalog without re-probing on every open.
+                  if (!open || !canReload || Date.now() - lastModelRefresh.current < 60_000) return
+                  lastModelRefresh.current = Date.now()
+                  void props.onReloadModels(false).catch(() => {})
+                }}
+                onModelChange={(next, nextEffort) => busyRun(() => props.onModelChange!(next || undefined, nextEffort))}
+                onEffortChange={(next) => busyRun(() => props.onModelChange!(variantSelector(current, model) ?? model ?? undefined, next))}
+                onProviderChange={(next, choice) => busyRun(() => props.onProviderChange!(next, choice))}
+                onReload={() => {
+                  lastModelRefresh.current = Date.now()
+                  void props.onReloadModels(true).catch((e) => setError(`Unable to reload models: ${errorText(e)}`))
+                }}
+                label={(color) => (
+                  <ModelTriggerLabel
+                    kind={provider.kind}
+                    model={modelName}
+                    qualifier={qualifier}
+                    fast={traits.fast}
+                    effort={(current?.display_name ?? model) && effortLabel ? formatEffort(effortLabel) : null}
+                    traits={traits.labels}
+                    chevron={canPickModel || canReload || canPickProvider}
+                    color={color}
+                  />
+                )}
+              />
+            )}
+            {running && props.canSteer !== undefined && (
+              <RunningControls
+                sending={sending}
+                steering={steering}
+                canSend={canSend}
+                canSteer={!!props.canSteer}
+                onSubmit={() => void submit()}
+                onPromptMode={setPromptMode}
+              />
+            )}
+            {running ? (
+              <RoundButton testId="stop" onClick={props.onStop}>
+                <Icon source={G.stop} size={10} color={t.v('--color-background-elevated-primary-opaque')} />
+              </RoundButton>
+            ) : (
+              <RoundButton testId="send" disabled={!canSend} onClick={() => void submit()}>
+                {/* `IconSwap` arrow ↔ spinner while sending (`Composer.tsx:1441`); the spinner is the shared-clock loader. */}
+                <SwapOnChange active={sending ? 'sending' : 'send'}>
+                  {sending ? (
+                    <MatrixLoader rgb={rgbOf(t.v('--color-background-elevated-primary-opaque'))} alpha={1} gap={1.5} />
+                  ) : (
+                    <Icon name="send" size={20} color={t.v('--color-background-elevated-primary-opaque')} />
+                  )}
+                </SwapOnChange>
+              </RoundButton>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** `#rrggbb` or `rgb(r, g, b)` as a tuple (the loader's dot colour on the ink button). */
+function rgbOf(color: string): [number, number, number] {
+  const hex = color.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i)
+  if (hex) return [parseInt(hex[1]!, 16), parseInt(hex[2]!, 16), parseInt(hex[3]!, 16)]
+  const [r = 0, g = 0, b = 0] = (color.match(/[\d.]+/g) ?? []).map(Number)
+  return [r, g, b]
+}
+
+/** `COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME` on a `prominent` button: the ink circle, 30% when off. */
+function RoundButton({ children, disabled, onClick, testId }: { children: ReactNode; disabled?: boolean; onClick?: () => void; testId: string }) {
+  const t = useTheme()
+  return (
+    <div
+      testId={testId}
+      onClick={disabled ? undefined : onClick}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        flexShrink: 0,
+        backgroundColor: t.text,
+        opacity: disabled ? 0.3 : 1,
+        cursor: disabled ? 'default' : 'pointer',
+        active: disabled ? {} : { opacity: 0.8 },
+      }}
+    >
+      {children}
+    </div>
+  )
+}
+
+/** Queue / Steer now and the delivery menu (`Composer.tsx:1364-1402`). */
+function RunningControls({
+  sending,
+  steering,
+  canSend,
+  canSteer,
+  onSubmit,
+  onPromptMode,
+}: {
+  sending: boolean
+  steering: boolean
+  canSend: boolean
+  canSteer: boolean
+  onSubmit: () => void
+  onPromptMode: (mode: 'queue' | 'steer') => void
+}) {
+  const t = useTheme()
+  const [hover, setHover] = useState(false)
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+      <div
+        testId="queue"
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        onClick={canSend ? onSubmit : undefined}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+          paddingLeft: 8,
+          paddingRight: 8,
+          paddingTop: 2,
+          paddingBottom: 2,
+          borderRadius: 10,
+          backgroundColor: hover && canSend ? t.buttonSecondaryHover : t.buttonSecondary,
+          opacity: canSend ? 1 : 0.64,
+          cursor: canSend ? 'pointer' : 'default',
+        }}
+      >
+        <Label color={t.text} size={13} weight={500} lineHeight={18}>
+          {sending ? 'Sending…' : steering ? 'Steer now' : 'Queue'}
+        </Label>
+      </div>
+      {canSteer && (
+        <PickerMenu
+          testId="delivery"
+          side="top"
+          align="end"
+          width={240}
+          trigger={(open) => (
+            <FooterChip square pressed={open}>
+              {(color) => <Icon name="chevronDown" size={12} color={color} />}
+            </FooterChip>
+          )}
+        >
+          <PickerItem id="queue" onSelect={() => onPromptMode('queue')} style={{ paddingTop: 4, paddingBottom: 4 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+              <Label color={t.text}>{`Queue follow-up${!steering ? ' ✓' : ''}`}</Label>
+              <Label color={t.textSecondary} size={12}>
+                Send after the current work finishes · Enter
+              </Label>
+            </div>
+          </PickerItem>
+          <PickerItem id="steer" onSelect={() => onPromptMode('steer')} style={{ paddingTop: 4, paddingBottom: 4 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+              <Label color={t.text}>{`Steer now${steering ? ' ✓' : ''}`}</Label>
+              <Label color={t.textSecondary} size={12}>
+                Guide the current turn immediately · ⌘+Enter
+              </Label>
+            </div>
+          </PickerItem>
+        </PickerMenu>
+      )}
+    </div>
+  )
+}
+
+/** Image tiles and file cards above the editor (`Composer.tsx:1143-1171`). */
+function Attachments({ items, uploading, onRemove }: { items: Attachment[]; uploading: number; onRemove: (a: Attachment) => void }) {
+  const t = useTheme()
+  const elevated = t.v('--color-background-elevated-secondary')
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 6, marginLeft: -6, marginRight: -6, marginTop: -4, marginBottom: 8 }}>
+      {items.map((a) => (
+        // `t-pop` on each tile (`Composer.tsx:1147`); removal is instant there too.
+        <Pop key={a.id}>
+          {a.media_type.startsWith('image/') ? (
+            <div
+              testId={`attachment-${a.label}`}
+              style={{ position: 'relative', width: 64, height: 64, flexShrink: 0, borderRadius: 12, borderWidth: 1, borderColor: t.borderLight, backgroundColor: elevated, overflow: 'hidden' }}
+            >
+              <img src={a.path} objectFit="cover" style={{ width: 62, height: 62, borderRadius: 11 }} />
+              <div style={{ position: 'absolute', left: 4, bottom: 4, paddingLeft: 4, paddingRight: 4, borderRadius: 6, backgroundColor: 'rgba(0, 0, 0, 0.55)' }}>
+                <Label color="#ffffff" size={10} lineHeight={16} weight={500}>{`@${a.label}`}</Label>
+              </div>
+              <RemoveButton onClick={() => onRemove(a)} />
+            </div>
+          ) : (
+            <div
+              testId={`attachment-${a.label}`}
+              style={{
+                position: 'relative',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                height: 56,
+                width: 240,
+                paddingTop: 8,
+                paddingBottom: 8,
+                paddingLeft: 8,
+                paddingRight: 32,
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: t.borderLight,
+                backgroundColor: t.variant === 'dark' ? t.composer : '#ffffff',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, flexShrink: 0, borderRadius: 8, backgroundColor: elevated }}>
+                <Icon name="file" size={16} color={t.textSecondary} />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 2, minWidth: 0, flexGrow: 1 }}>
+                <Label color={t.text} size={13} weight={500} lineHeight={16} truncate>
+                  {a.name}
+                </Label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <Label color={t.textSecondary} size={11} weight={500} lineHeight={14}>{`@${a.label}`}</Label>
+                  <Label color={t.textSecondary} size={11} weight={500} lineHeight={14}>
+                    {(a.name.split('.').pop() ?? '').toUpperCase()}
+                  </Label>
+                </div>
+              </div>
+              <RemoveButton onClick={() => onRemove(a)} />
+            </div>
+          )}
+        </Pop>
+      ))}
+      {uploading > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 4, paddingRight: 4, height: 24 }}>
+          <MatrixLoader />
+          <Label color={t.textSecondary} size={12}>
+            Uploading…
+          </Label>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** A 20px ink disc with a 12px ×, top-right. */
+function RemoveButton({ onClick }: { onClick: () => void }) {
+  const t = useTheme()
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 20,
+        height: 20,
+        borderRadius: 10,
+        cursor: 'pointer',
+        backgroundColor: ink(t, 0.8),
+        hover: { backgroundColor: t.text },
+      }}
+    >
+      <Icon source={G.x} size={12} color={t.surface} />
+    </div>
+  )
+}
+
+/** Queued follow-ups stacked above the card (`QueuedPanel` in `views/Thread.tsx`). */
+function QueuedPanel({ threadId, items }: { threadId: string; items: { id: string; message: UserMessage }[] }) {
+  const t = useTheme()
+  const dark = t.variant === 'dark'
+  const border = dark ? 'rgba(252, 252, 252, 0.036)' : 'rgba(13, 13, 13, 0.076)'
+  return (
+    <div
+      testId="queued-panel"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        width: '93.33%',
+        marginBottom: -1,
+        borderTopLeftRadius: COMPOSER_RADIUS,
+        borderTopRightRadius: COMPOSER_RADIUS,
+        borderTopWidth: 1,
+        borderLeftWidth: 1,
+        borderRightWidth: 1,
+        borderColor: border,
+        backgroundColor: dark ? t.composer : 'rgba(255, 255, 255, 0.37)',
+        paddingBottom: 4,
+      }}
+    >
+      <div style={{ display: 'flex', paddingLeft: 12, paddingRight: 12, paddingTop: 8 }}>
+        <Label color={t.textSecondary} size={12}>{`Queued · ${items.length}`}</Label>
+      </div>
+      {/* `t-row-enter` on each row as it arrives (`QueuedRow` in `views/Thread.tsx`); rows and the panel leave instantly. */}
+      {items.map((item, i) => (
+        <Rise key={item.id} kind="row">
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              paddingLeft: 10,
+              paddingRight: 6,
+              paddingTop: 4,
+              paddingBottom: 4,
+              ...(i > 0 ? { borderTopWidth: 1, borderColor: border } : {}),
+            }}
+          >
+            <Icon source={G.clock} size={14} color={t.textSecondary} />
+            <Label color={ink(t, 0.85)} size={12} weight={500} truncate style={{ flexGrow: 1 }}>
+              {promptText(item.message) || 'Queued follow-up'}
+            </Label>
+            <div
+              onClick={() => void removeQueued(threadId, item.id).catch(() => {})}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}
+            >
+              <Icon source={G.x} size={12} color={t.textTertiary} />
+            </div>
+          </div>
+        </Rise>
+      ))}
+    </div>
+  )
+}
+
