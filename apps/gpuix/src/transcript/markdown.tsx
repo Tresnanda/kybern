@@ -9,6 +9,8 @@ import { Label, useTheme } from '../ui.tsx'
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
 import { Button, cachedMarkdownTheme, CODE, muted } from './kit.tsx'
 import { CopyAction } from './bubble.tsx'
+import { Icon } from '../icons.tsx'
+import { T } from './glyphs.ts'
 import { reportError } from './store.ts'
 
 export type MarkdownPart = { kind: 'prose' | 'code'; text: string; language?: string; key: string }
@@ -67,7 +69,9 @@ export const CodeHeader = memo(function CodeHeader({ part, expanded, wrap, onExp
   return <div testId="code-header" style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 36, paddingLeft: 12, paddingRight: 8, borderTopLeftRadius: 10, borderTopRightRadius: 10, backgroundColor: t.codeSurface, borderWidth: 1, borderColor: t.border }}>
     <Label color={muted(t)} size={11.52} style={{ flexGrow: 1 }}>{part.language === 'mermaid' ? 'Mermaid source · diagram preview unavailable' : part.language || 'text'}</Label>
     {onExpand && <Button testId="code-expand" variant="ghost" onClick={onExpand}>{expanded ? 'Show less' : 'Show more'}</Button>}
-    <Button testId="code-wrap" variant={wrap ? 'subtle' : 'ghost'} onClick={onWrap}>Wrap</Button>
+    <div testId="code-wrap" role="button" aria-label={wrap ? 'Disable line wrap' : 'Wrap lines'} onClick={onWrap} style={{ display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center', borderRadius: 6, cursor: 'pointer', backgroundColor: wrap ? t.hover : 'rgba(0, 0, 0, 0)', hover: { backgroundColor: t.hover } }}>
+      <Icon source={T.textWrap} size={12} color={wrap ? t.text : muted(t)} />
+    </div>
     <CopyAction text={part.text} testId="code-copy" />
   </div>
 })

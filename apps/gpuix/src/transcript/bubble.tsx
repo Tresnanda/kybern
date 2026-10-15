@@ -9,7 +9,7 @@ import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { partToken } from '../../../../packages/kybern-client/src/composerTokens.ts'
 import { agentResultItems, threadMessagePart } from '../../../../packages/kybern-client/src/delegations.ts'
 import type { ContentPart } from '../../../../packages/kybern-client/src/types.ts'
-import { clockTime } from '../../../desktop/src/lib/format.ts'
+import { clockTime } from './clock.ts'
 import { Icon } from '../icons.tsx'
 import { openSaveToNote } from '../notes/store.ts'
 import { useApp } from '../state.ts'
@@ -17,8 +17,8 @@ import { useTheme } from '../ui.tsx'
 import { Label } from '../ui.tsx'
 import { T } from './glyphs.ts'
 import { ResponseImage } from './images.tsx'
-import { cachedMarkdownTheme, fg, META, muted, TEXT } from './kit.tsx'
-import { FONT_UI } from '../theme.ts'
+import { cachedMarkdownTheme, CODE, fg, META, muted, TEXT } from './kit.tsx'
+import { FONT_MONO, FONT_UI } from '../theme.ts'
 import { Rise } from '../motion/kit.tsx'
 import { copyText, useRowState } from './store.ts'
 import { SwapOnChange, useFresh } from './motion.tsx'
@@ -98,6 +98,11 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
   // Decided once on mount: only a bubble sent just now plays the send animation.
   const fresh = useFresh(at)
   const text = useMemo(() => messageText(parts), [parts])
+  // Short one-line messages with `code` spans get chips like desktop's inline code.
+  const chips = useMemo(() => {
+    if (clampLines || text.length > 70 || text.includes('\n') || !/`[^`]+`/.test(text)) return null
+    return text.split(/(`[^`]+`)/).filter(Boolean).map((seg) => seg.length > 2 && seg.startsWith('`') && seg.endsWith('`') ? { code: true, text: seg.slice(1, -1) } : { code: false, text: seg })
+  }, [text, clampLines])
   const plainText = useMemo(() => parts.map((p) => (p.type === 'text' ? p.text : '')).join(''), [parts])
   useEffect(() => {
     if (!clampLines || expanded) return
@@ -171,7 +176,15 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
                 {/* Plain text, not <markdown>: native markdown has no intrinsic width, and the
                     bubble must hug short messages (`w-max max-w-full`). */}
                 <div style={{ display: 'flex', flexDirection: 'column', ...(clampLines && !expanded ? { maxHeight: TEXT.lineHeight * clampLines, overflow: 'hidden' as const } : {}) }}>
-                  <text ref={body} style={{ color: t.text, fontSize: TEXT.size, lineHeight: TEXT.lineHeight, fontFamily: FONT_UI, userSelect: 'text', ...(clampLines && !expanded ? { lineClamp: clampLines } : {}) }}>{text}</text>
+                  {chips ? (
+                    <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' }}>
+                      {chips.map((seg, i) => seg.code
+                        ? <div key={i} style={{ paddingLeft: 5.6, paddingRight: 5.6, marginLeft: 2, marginRight: 2, borderRadius: 6.4, backgroundColor: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.09)' : 'rgba(13, 13, 13, 0.09)' }}>
+                            <text style={{ color: t.text, fontSize: CODE.size, lineHeight: TEXT.lineHeight, fontFamily: FONT_MONO, userSelect: 'text' }}>{seg.text}</text>
+                          </div>
+                        : <text key={i} style={{ color: t.text, fontSize: TEXT.size, lineHeight: TEXT.lineHeight, fontFamily: FONT_UI, whiteSpace: 'nowrap', userSelect: 'text' }}>{seg.text}</text>)}
+                    </div>
+                  ) : <text ref={body} style={{ color: t.text, fontSize: TEXT.size, lineHeight: TEXT.lineHeight, fontFamily: FONT_UI, userSelect: 'text', ...(clampLines && !expanded ? { lineClamp: clampLines } : {}) }}>{text}</text>}
                 </div>
               </div>
             )}

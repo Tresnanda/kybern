@@ -32,6 +32,7 @@ import {
   Robot01Icon,
   Search01Icon,
   SidebarRightIcon,
+  TextWrapIcon,
   Tick02Icon,
 } from '@hugeicons/core-free-icons'
 import { glyph } from '../icons.tsx'
@@ -71,6 +72,7 @@ export const T = {
   checkSquare: glyph(CheckmarkSquare04Icon), // CheckmarkSquare04Icon
   panelRight: glyph(SidebarRightIcon), // PanelRightCloseIcon
   dots: glyph(MoreHorizontalIcon), // EllipsisIcon
+  textWrap: glyph(TextWrapIcon), // TextWrapIcon
   file: glyph(File01Icon),
   attachment: glyph(Attachment01Icon),
 } as const
