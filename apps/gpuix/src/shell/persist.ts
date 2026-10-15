@@ -18,6 +18,15 @@ import path from 'node:path'
 
 const WRITE_DELAY_MS = 400
 
+/** Automated runs (`GPUIX_BACKGROUND=1`) never write into the user's real `~/.kybern`; fixtures use scratch dirs. */
+export function writeAllowed(target: string, env: Record<string, string | undefined> = process.env, home = homedir()): boolean {
+  if (env.GPUIX_BACKGROUND !== '1') return true
+  const real = path.join(home, '.kybern')
+  const relative = path.relative(real, path.resolve(target))
+  return relative.startsWith('..') || path.isAbsolute(relative)
+}
+let warned = false
+
 function filePath(): string {
   const env = activeEnvironment()
   const dir = env.dataDir
@@ -51,6 +60,10 @@ export function flush() {
   timer = undefined
   if (!dirty || !data || !file) return
   dirty = false
+  if (!writeAllowed(file)) {
+    if (!warned) { warned = true; console.error(`gpuix persist: automation run, not writing ${file}`) }
+    return
+  }
   try {
     mkdirSync(path.dirname(file), { recursive: true })
     const tmp = `${file}.${process.pid}.tmp`
