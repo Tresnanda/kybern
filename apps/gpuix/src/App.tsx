@@ -6,6 +6,7 @@ import { FILL_ISLAND, ISLAND } from './MatrixLoader.tsx'
 import { motion } from '@gpuix/react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Composer } from './Composer.tsx'
+import { Dock, DockResizeCapture } from './dock/Dock.tsx'
 import { Draft } from './Draft.tsx'
 import { Icon } from './icons.tsx'
 import { N } from './nav/glyphs.ts'
@@ -55,7 +56,7 @@ export function App() {
       testId="app-ready"
       // Any press makes later navigation pointer-driven again (`keyboardNav`).
       onMouseDown={pointerNav}
-      style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: t.frame }}
+      style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: t.frame, position: 'relative' }}
     >
       <TitleBar panelOpen={panelOpen} />
       <div style={{ display: 'flex', flexGrow: 1, minHeight: 0, paddingRight: INSET, paddingBottom: INSET }}>
@@ -109,15 +110,21 @@ export function App() {
               borderBottomLeftRadius: panelMounted ? 0 : CARD_RADIUS,
             }}
           >
+            <div style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0, position: 'relative' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, minHeight: 0 }}>
             <PageEnter page={settingsOpen ? 'settings' : page}>
               {settingsOpen ? <ElsewherePage page="settings" /> : page === 'home' ? <HomePage /> : <ElsewherePage page={page} />}
             </PageEnter>
+            </div>
+            <Dock sidebarOpen={panelOpen} />
+            </div>
           </div>
         </div>
       </div>
       <Palette />
       <HandoffDialog />
       <SessionsDialog />
+      <DockResizeCapture />
     </div>
   )
 }

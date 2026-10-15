@@ -7,6 +7,7 @@
 // their own window shortcuts with `addWindowKeyHandler`; a handler that returns
 // true has consumed the event.
 import type { EventPayload } from '@gpuix/react'
+import { toggleDock } from '../dock/store.ts'
 import { getState, set } from '../state.ts'
 import { goBack, goForward, newThread, openThread } from './history.ts'
 import { getNav, setNav } from './store.ts'
@@ -48,6 +49,10 @@ function shortcut(event: EventPayload): boolean {
         setNav({ panelInstant: true })
         set({ sidebarOpen: !getState().sidebarOpen })
       }
+      return true
+    case 'j':
+      if (nav.settingsOpen || nav.page !== 'home') return false
+      toggleDock(true)
       return true
     case '[':
       if (nav.paletteOpen) return false
