@@ -8,8 +8,9 @@ export const column: StyleDesc = { display: 'flex', flexDirection: 'column', min
 
 export function Button({ children, onClick, testId, disabled, primary, style }: { children: ReactNode; onClick?: () => void; testId?: string; disabled?: boolean; primary?: boolean; style?: StyleDesc }) {
   const t = useTheme()
+  // A button drawn inside Menu's trigger is decorative. Its wrapper owns input.
   const run = () => { if (!disabled) onClick?.() }
-  return <div testId={testId} role="button" aria-label={typeof children === 'string' ? children : undefined} tabIndex={disabled ? -1 : 0} onClick={run} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') { setNav({ keyboardNav: true }); run() } }} style={{ ...row, justifyContent: 'center', height: 28, paddingLeft: 10, paddingRight: 10, borderRadius: 8, cursor: disabled ? 'default' : 'pointer', opacity: disabled ? .5 : 1, backgroundColor: primary ? t.buttonPrimary : 'transparent', hover: { backgroundColor: disabled ? 'transparent' : primary ? t.buttonPrimary : t.buttonTertiaryHover }, active: { backgroundColor: t.buttonSecondaryHover }, ...style }}><Label color={primary ? t.buttonPrimaryText : t.text} size={12}>{children}</Label></div>
+  return <div testId={testId} role="button" aria-label={typeof children === 'string' ? children : undefined} tabIndex={disabled || !onClick ? -1 : 0} onClick={onClick ? run : undefined} onKeyDown={onClick ? e => { if (e.key === 'enter' || e.key === 'space') { setNav({ keyboardNav: true }); run() } } : undefined} style={{ ...row, pointerEvents: onClick ? 'auto' : 'none', justifyContent: 'center', height: 28, paddingLeft: 10, paddingRight: 10, borderRadius: 8, cursor: disabled ? 'default' : 'pointer', opacity: disabled ? .5 : 1, backgroundColor: primary ? t.buttonPrimary : 'transparent', hover: { backgroundColor: disabled ? 'transparent' : primary ? t.buttonPrimary : t.buttonTertiaryHover }, active: { backgroundColor: t.buttonSecondaryHover }, ...style }}><Label color={primary ? t.buttonPrimaryText : t.text} size={12}>{children}</Label></div>
 }
 
 /** Fixed-width segments let the native pill move without a measurement loop. */

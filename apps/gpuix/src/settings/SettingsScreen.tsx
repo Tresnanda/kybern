@@ -4,9 +4,9 @@ import { useEffect, useState } from 'react'
 import { setSettingsTitle } from './Breadcrumb.tsx'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
-import { setNav } from '../nav/store.ts'
+import { getNav, setNav } from '../nav/store.ts'
 import { EASE_OUT, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { selectOwnsEscape, TextField } from './controls.tsx'
+import { settingsOverlayOwnsEscape, TextField } from './controls.tsx'
 import { useSettings, useSettingsConnection } from './store.ts'
 import { General, Appearance, Agents, About } from './primary.tsx'
 import { Accounts, Integrations, Computer, Background, Notifications } from './secondary.tsx'
@@ -24,6 +24,12 @@ export const TABS = [
 ] as const
 export type Tab = typeof TABS[number][0]
 let lastTab: Tab = 'general'
+const tabListeners = new Set<() => void>()
+export function openSettingsTab(tab: Tab) {
+ lastTab = tab; setSettingsTitle(TABS.find(item => item[0] === tab)![1]);
+ for (const listener of tabListeners) listener()
+ if (!getNav().settingsOpen) setNav({ settingsOpen: true })
+}
 const GROUPS = [{ label: 'Personal', ids: ['general', 'appearance', 'notifications'] }, { label: 'Coding', ids: ['agents', 'accounts', 'integrations', 'computer'] }, { label: 'System', ids: ['background', 'about'] }]
 
 export function SettingsScreen() {
@@ -32,13 +38,20 @@ export function SettingsScreen() {
   const [previousFocus] = useState(() => renderer?.getFocusedElementId?.())
   const [tab, setTab] = useState<Tab>(lastTab)
   const [query, setQuery] = useState('')
+  // Keep pointer navigation batched with its local keyboard/search state.
+  // External rail/menu entries notify this mounted screen, or seed lastTab.
+  useEffect(() => {
+    const changed = () => { setTab(lastTab); setQuery('') }
+    tabListeners.add(changed)
+    return () => { tabListeners.delete(changed) }
+  }, [])
   const [keyboard, setKeyboard] = useState(false)
   const { settings, error } = useSettings()
   useSettingsConnection()
   useEffect(() => {
     return () => { if (previousFocus != null) queueMicrotask(() => renderer?.focusElement?.(previousFocus)) }
   }, [renderer, previousFocus])
-  const select = (next: Tab, key = false) => { lastTab = next; setSettingsTitle(TABS.find((item) => item[0] === next)![1]); setTab(next); setKeyboard(key); setQuery('') }
+  const select = (next: Tab, key = false) => { openSettingsTab(next); setKeyboard(key); setQuery('') }
   const close = (fromKeyboard = false) => setNav({ settingsOpen: false, keyboardNav: fromKeyboard, panelInstant: fromKeyboard })
   const current = TABS.find((item) => item[0] === tab)!
   const matches = TABS.filter((item) => `${item[1]} ${item[2]} ${item[4]}`.toLowerCase().includes(query.trim().toLowerCase()))
@@ -49,10 +62,10 @@ export function SettingsScreen() {
   }
   const pillTop = rows.findIndex((row) => 'item' in row && row.item[0] === tab) * 32
   const content = tab === 'general' ? <General /> : tab === 'appearance' ? <Appearance /> : tab === 'agents' ? <Agents /> : tab === 'about' ? <About /> : tab === 'notifications' ? <Notifications /> : tab === 'background' ? <Background /> : tab === 'accounts' ? <Accounts /> : tab === 'integrations' ? <Integrations /> : <Computer />
-  return <div testId="page-settings" onKeyDown={(e) => { if (e.key === 'escape' && !selectOwnsEscape()) { if (query) setQuery(''); else close(true) } }} style={{ display: 'flex', flexGrow: 1, minHeight: 0 }}>
+  return <div testId="page-settings" onKeyDown={(e) => { if (e.key === 'escape' && !settingsOverlayOwnsEscape()) { if (query) setQuery(''); else close(true) } }} style={{ display: 'flex', flexGrow: 1, minHeight: 0 }}>
     <div style={{ display: 'flex', flexDirection: 'column', width: 256, flexShrink: 0, padding: 8, backgroundColor: t.sidebar, borderTopLeftRadius: 12, borderBottomLeftRadius: 12 }}>
       <div testId="settings-back" tabIndex={0} autoFocus onClick={() => close()} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') close(true) }} style={{ display: 'flex', alignItems: 'center', height: 32, gap: 10, paddingLeft: 8, borderRadius: 8, hover: { backgroundColor: t.hover } }}><Icon source={N.arrowLeft} size={16} color={t.iconSecondary} /><Label color={t.text} size={13}>Back to workspace</Label></div>
-      <div style={{ display: 'flex', paddingTop: 8, paddingBottom: 8 }}><TextField testId="settings-search" label="Search settings" placeholder="Search settings…" value={query} onChange={setQuery} width="100%" onSubmit={() => { if (matches[0]) select(matches[0][0], true) }} onKeyDown={(e) => { if (e.key === 'escape' && !selectOwnsEscape()) { if (query) setQuery(''); else close(true) } }} /></div>
+      <div style={{ display: 'flex', paddingTop: 8, paddingBottom: 8 }}><TextField testId="settings-search" label="Search settings" placeholder="Search settings…" value={query} onChange={setQuery} width="100%" onSubmit={() => { if (matches[0]) select(matches[0][0], true) }} onKeyDown={(e) => { if (e.key === 'escape' && !settingsOverlayOwnsEscape()) { if (query) setQuery(''); else close(true) } }} /></div>
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
         {!query && pillTop >= 0 && <motion.div initial={false} animate={{ top: pillTop }} transition={{ duration: keyboard || REDUCED_MOTION ? 0 : 0.22, ease: EASE_OUT }} style={{ position: 'absolute', left: 0, right: 0, height: 32, borderRadius: 8, backgroundColor: t.selected }} />}
         {rows.map((row) => 'group' in row ? <div key={row.group} style={{ display: 'flex', alignItems: 'center', height: 32, paddingLeft: 8 }}><Label color={t.textSecondary} size={11} weight={500}>{row.group}</Label></div> : <div key={row.item[0]} testId={`settings-tab-${row.item[0]}`} tabIndex={0} aria-label={row.item[1]} onClick={() => select(row.item[0])} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') select(row.item[0], true) }} style={{ display: 'flex', position: 'relative', alignItems: 'center', height: 32, paddingLeft: 8, gap: 10, borderRadius: 8, hover: { backgroundColor: row.item[0] === tab ? 'transparent' : t.hover } }}><Icon source={row.item[3]} size={16} color={row.item[0] === tab ? t.text : t.iconSecondary} /><Label color={row.item[0] === tab ? t.text : t.textSecondary} size={13}>{row.item[1]}</Label></div>)}
@@ -72,4 +85,4 @@ export function SettingsScreen() {
   </div>
 }
 
-onEnvironmentChange(() => { lastTab = 'general' })
+onEnvironmentChange(() => { lastTab = 'general'; for (const listener of tabListeners) listener() })

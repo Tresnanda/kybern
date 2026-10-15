@@ -80,10 +80,22 @@ export function Switch({ checked, onChange, label, disabled = false, testId }: {
   )
 }
 
+let openModals = 0
+let modalClosedAt = 0
+/** Keep a dialog's Escape from also dismissing its containing Settings page. */
+export function useSettingsModal(open: boolean) {
+  useEffect(() => {
+    if (!open) return
+    openModals++
+    return () => { openModals--; modalClosedAt = Date.now() }
+  }, [open])
+}
+
 let openSelects = 0
 let selectClosedAt = 0
 /** Native key events also reach ancestors; let Escape dismiss a picker first. */
 export const selectOwnsEscape = () => openSelects > 0 || Date.now() - selectClosedAt < 100
+export const settingsOverlayOwnsEscape = () => selectOwnsEscape() || openModals > 0 || Date.now() - modalClosedAt < 100
 
 export interface Option { value: string; label: string; disabled?: boolean }
 export function Select({ value, onChange, options, label, disabled, testId }: { value: string; onChange: (value: string) => void; options: readonly Option[]; label: string; disabled?: boolean; testId?: string }) {

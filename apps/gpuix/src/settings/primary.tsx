@@ -1,4 +1,5 @@
-import packageInfo from '../../package.json' with { type: 'json' }
+import { CursorSetup } from './Cursor.tsx'
+import { load, save } from '../shell/persist.ts'
 import { useState } from 'react'
 import { PERMISSION_HINT, PERMISSION_LABEL } from '../../../desktop/src/lib/format.ts'
 import { AUTONOMY_OPTIONS, WORKSPACE_OPTIONS, COORDINATOR_ROLES, COORDINATOR_SETTINGS_COPY as COPY, autonomyHint, effectiveCoordinatorSettings, withGlobalRoleDefault } from '../../../../packages/kybern-client/src/coordinatorSettings.ts'
@@ -18,6 +19,7 @@ import { useResource } from './resource.ts'
 export function General() {
   const { settings: s, saving } = useSettings()
   const providers = useNav((s) => s.providers)
+  const [ask, setAsk] = useState(() => load('kybern.askBeforeClose', true))
   if (!s) return null
   return <>
     <Section title="New threads">
@@ -29,9 +31,9 @@ export function General() {
     <Section title="Threads">
       <Row title="Generate thread titles" description="Names the thread from its first message using the agent."><Switch label="Generate thread titles" testId="settings-titles" checked={s.generate_titles} disabled={saving} onChange={(generate_titles) => void updateSettings({ generate_titles })} /></Row>
       <Row title="Tell agents about Kybern" description="Adds a short guide to new agent sessions: how to show images, link notes and tasks, and reach other threads."><Switch label="Tell agents about Kybern" checked={s.tell_agents_about_kybern ?? true} disabled={saving} onChange={(tell_agents_about_kybern) => void updateSettings({ tell_agents_about_kybern })} /></Row>
-      <Row title="Ask before closing while threads work" description="Agents keep going after the window closes. Close confirmation is available in the desktop app; GPUIX does not yet intercept window close." />
+      <Row title="Ask before closing while threads work" description="Agents keep going after the window closes. The prompt lists them and offers to stop them."><Switch testId="settings-close-confirmation" label="Ask before closing while threads work" checked={ask} onChange={value => { save('kybern.askBeforeClose', value); setAsk(value) }} /></Row>
     </Section>
-    <Section title="Notes"><Row title="Global notes" description="Notes that belong to no project. Shared and separate note storage can be configured in the desktop app." /></Section>
+    <Section title="Notes"><Row title="Global notes" description="Notes that belong to no project are stored separately on each connected machine. Shared global notes require the desktop app." /></Section>
     <PreviewFolders />
   </>
 }
@@ -59,7 +61,7 @@ export function Appearance() {
           </div><div style={{ display: 'flex', pointerEvents: 'none', gap: 7, paddingTop: 13, alignItems: 'center' }}><Icon source={value === 'system' ? N.laptop : value === 'dark' ? N.moon : N.sun} size={16} color={t.text} /><Label color={t.text} size={13}>{value[0].toUpperCase() + value.slice(1)}</Label></div>
         </div>
       })}</div>
-      <Label color={t.textSecondary} size={12}>System follows your device’s light and dark appearance at launch.</Label>
+      <Label color={t.textSecondary} size={12}>System follows your device’s light and dark appearance.</Label>
     </div></PageBlock>
     <Section title="Window material"><Row title="Use translucent surfaces" description="Let your desktop show softly through the sidebar and floating controls. Relaunch GPUIX to apply window material changes."><Switch label="Use translucent surfaces" testId="settings-translucency" checked={prefs.translucent} onChange={(translucent) => save({ translucent })} /></Row></Section>
     {error && <Label color={t.red}>{error}</Label>}
@@ -71,7 +73,6 @@ export function Agents() {
   const { settings: s, saving } = useSettings()
   const providers = useNav((s) => s.providers)
   const updates = useResource('harness_updates.list', {})
-  const cursor = useResource('cursor.status', {})
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState('')
   if (!s) return null
@@ -104,7 +105,7 @@ export function Agents() {
       {COORDINATOR_ROLES.map(({ role, label }) => <RoleRow key={role} label={label} value={current.role_defaults?.[role]} onChange={(value) => void updateSettings({ orchestration: withGlobalRoleDefault(latestSettings()!.orchestration, role, value) })} />)}
     </Section>
     <Section title="Installed agents">{providers.map((p) => <Row key={p.kind} title={p.display_name} description={[p.unavailable_reason ?? p.binary_path ?? 'Not found on PATH', updates.data?.updates.find((u) => u.kind === p.kind)?.message].filter(Boolean).join('\n')}><Label color={t.textSecondary} size={12}>{p.version ?? (p.available ? 'Installed' : 'Not installed')}</Label>{p.available && p.kind !== 'cursor' && !s.providers[p.kind]?.binary && <Button disabled={!!busy} onClick={() => void runUpdate(p.kind)}>{busy === p.kind ? 'Updating…' : 'Update now'}</Button>}</Row>)}<Row title="Update status" description={message || updates.error || 'Refresh to read the latest update status.'}><Button onClick={updates.refresh}>Refresh</Button></Row></Section>
-    <Section title="Cursor SDK"><Row title={cursor.data?.installed ? `SDK ${cursor.data.sdk_version}` : 'Cursor'} description={cursor.error || cursor.data?.problem || (cursor.data ? `${cursor.data.account.replaceAll('_', ' ')}${cursor.data.email ? ` · ${cursor.data.email}` : ''}. Install and sign in from Settings → Agent providers in the desktop app.` : 'Checking…')}><Button onClick={cursor.refresh}>Check again</Button></Row></Section>
+    <CursorSetup />
   </>
 }
 
@@ -139,7 +140,4 @@ function OmpProfiles() {
   return <Section title="OMP profiles"><Row title="Default profile" description="For new chats. Existing chats keep their profile."><ProfileField key={`default:${omp.env.OMP_PROFILE}`} value={omp.env.OMP_PROFILE} inherit="Use environment" onSave={(value) => save(value)} /></Row>{projects.length > 0 && <Row title="Project overrides" description="Also applies to this project’s worktrees."><div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}><Select label="Choose project" value={project} onChange={setProject} options={projects.map((p) => ({ value: p.path, label: p.name }))} /><ProfileField key={`${project}:${omp.project_profiles?.[project]}`} value={omp.project_profiles?.[project]} inherit="Use default above" onSave={(value) => save(value, project)} /></div></Row>}</Section>
 }
 
-export function About() {
-  const info = useResource('daemon.info', {})
-  return <><Section title="About"><Row title="Kybern" description={`GPUIX preview · ${packageInfo.version}. Use the desktop app to check for application updates.`} /><Row title="Daemon" description={info.data?.version ?? '…'} /><Row title="Protocol" description={info.data ? String(info.data.protocol_version) : '…'} /><Row title="Host" description={info.data ? `${info.data.hostname} · ${info.data.os} ${info.data.arch}` : '…'} /><Row title="Data" description={info.data?.data_dir ?? info.error ?? '…'} /></Section><Section title="Command line"><Row title="Terminal command" description="To install the kybern command on PATH, open the desktop app’s Settings → About → Command line." /></Section></>
-}
+export { About } from './About.tsx'
