@@ -13,7 +13,7 @@ export interface DockState {
   width: number
   instant: boolean
 }
-const DEFAULT: DockState = { open: false, tabs: ['agents'], tab: 'agents', width: 538, instant: false }
+const DEFAULT: DockState = { open: false, tabs: [], tab: null, width: 538, instant: false }
 const TABS: DockTab[] = ['agents', 'activity', 'changes', 'explorer', 'project', 'notes', 'tasks', 'review', 'artifacts', 'terminal', 'preview']
 export function restoreDockChoices(value: unknown): Map<string, DockState> {
   const restored = new Map<string, DockState>()

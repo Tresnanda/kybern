@@ -39,9 +39,16 @@ try {
         await control('show'); await until(async () => (await control()).frames > hidden, 'polling resumes after restore')
       }
       else { await app.screenshot({ path: `${out}/live-${appearance}.png` }); const start = await app.getByTestId('computer-live').bounds(), parent = await app.getByTestId('computer-live-bounds').bounds(); const dx = start.x > parent.x + parent.width / 2 ? -250 : 250, dy = start.y > parent.y + parent.height / 2 ? -300 : 300; await app.getByTestId('computer-live-drag').dragBy(dx, dy); await app.getByTestId('computer-live-image').waitFor({ timeoutMs: 3000 });
-        await until(async () => { const b = await app!.getByTestId('computer-live').bounds(), p = await app!.getByTestId('computer-live-bounds').bounds(); return (Math.abs(b.x - p.x - 12) < 3 || Math.abs(b.x + b.width - p.x - p.width + 12) < 3) && (Math.abs(b.y - p.y - 12) < 3 || Math.abs(b.y + b.height - p.y - p.height + 12) < 3) }, 'live corner spring settled');
+        let settledBounds: unknown
+        try {
+          await until(async () => { const b = await app!.getByTestId('computer-live').bounds(), p = await app!.getByTestId('computer-live-bounds').bounds(), composer = await app!.getByTestId('composer-overlay').bounds(); settledBounds = { card: b, parent: p, composer }; return (Math.abs(b.x - p.x - 12) < 3 || Math.abs(b.x + b.width - p.x - p.width + 12) < 3) && (Math.abs(b.y - p.y - 12) < 3 || Math.abs(b.y + b.height - composer.y + 12) < 3) }, 'live corner spring settled', 8000)
+        } catch (error) { console.log('Live snap bounds', JSON.stringify(settledBounds)); throw error }
+
         await app.screenshot({ path: `${out}/live-snap-${appearance}.png` }) }
       await control('show')
+      const liveBounds = await app.getByTestId('computer-live').bounds()
+      await app.mouse.move({ x: liveBounds.x + liveBounds.width / 2, y: liveBounds.y + liveBounds.height / 2 })
+      await Bun.sleep(100)
       let closePoint = { x: 0, y: 0 }
       await until(async () => { const b = await app!.getByTestId('computer-live-close').bounds(); closePoint = { x: b.x + b.width / 2, y: b.y + b.height / 2 }; return b.width > 0 }, 'live controls painted')
       await app.mouse.click(closePoint); await absent(app.getByTestId('computer-live'))
@@ -82,10 +89,11 @@ try {
           await until(async () => { terminalId = (await client.call('terminals.list', { thread_id: thread.id })).terminals.find(t => t.alive)?.id ?? ''; return !!terminalId }, 'terminal creation')
           if (!perf) {
             for (const key of ['p', 'w', 'd', 'enter']) await app.getByTestId('terminal-screen').press(key)
-            await until(async () => !!await app!.getByText(project.path).count(), 'native pwd output')
+            // A checkout-specific scratch path can wrap across terminal rows.
+            await until(async () => (await app!.call('getPaintedText', {})).text.join('').includes(project.path), 'native pwd output')
             await client.call('terminals.input', { terminal_id: terminalId, data: Buffer.from("printf '\\033[32mNative terminal ready\\033[0m\\n'; printf '\\033[34mANSI colors, cursor movement and bounded scrollback\\033[0m\\n'\n").toString('base64') })
             await until(async () => !!await app!.getByText('Native terminal ready').count(), 'ANSI output')
-            await app.getByTestId('terminal-find').click(); await app.getByTestId('terminal-search').fill('Native terminal ready'); await app.getByTestId('terminal-search').press('enter')
+            await app.getByTestId('terminal-screen').press('cmd-f'); await app.getByTestId('terminal-search').fill('Native terminal ready'); await app.getByTestId('terminal-search').press('enter')
             await until(async () => !await app!.getByText('No match').count(), 'terminal search result')
             await app.screenshot({ path: `${out}/terminal-search-${appearance}.png` })
             await app.getByTestId('terminal-search').press('escape')
@@ -96,7 +104,7 @@ try {
               const b: { x: number; y: number; width: number; height: number } = (await app.call('getBounds', { elementId: nodes.at(-1)!.id })).bounds!
               assert.ok(b && b.width > 0)
               await app.mouse.drag({ x: b.x, y: b.y + b.height / 2 }, { x: b.x + 6 * 7.22, y: b.y + b.height / 2 })
-              await app.getByTestId('terminal-copy').click()
+              await app.getByTestId('terminal-screen').press('cmd-c')
               await until(async () => Bun.spawnSync(['pbpaste']).stdout.toString() === 'Native', 'copy exact terminal cell selection')
             } finally { const restore = Bun.spawn(['pbcopy'], { stdin: 'pipe' }); restore.stdin.write(clipboard); restore.stdin.end(); await restore.exited }
           }
@@ -111,7 +119,7 @@ try {
             await until(async () => finished, 'high-output terminal command')
             console.log('200000 lines completed ms', performance.now() - start)
             off(); await client.call('terminals.unsubscribe', { terminal_id: terminalId }); await measure
-            await app.getByTestId('terminal-bottom').click(); await until(async () => !!await app!.getByText('__DOCK2_DONE__').count(), 'terminal final output')
+            await app.getByTestId('terminal-screen').press('cmd-end'); await until(async () => !!await app!.getByText('__DOCK2_DONE__').count(), 'terminal final output')
           }
           await app.getByTestId('terminal-screen').press('cmd-j'); await absent(app.getByTestId('dock-terminal'))
           await app.getByTestId('app-ready').press('cmd-j'); await openDock(app.getByTestId('right-dock')); await app.getByTestId('terminal-screen').waitFor({ timeoutMs: 30000 })

@@ -1,3 +1,4 @@
+import { DOCK_ICONS } from './icons.ts'
 import { spawn } from 'node:child_process'
 import { memo, useCallback, useEffect, useState } from 'react'
 import type { Diff as ThreadDiff, FileChange, GitStatus, Thread } from '../../../../packages/kybern-client/src/types.ts'
@@ -6,10 +7,10 @@ import { ISLAND } from '../MatrixLoader.tsx'
 import { errorText } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
 import { Chevron, IconButton } from '../sidebar/rows.tsx'
-import { getClient, onOpenEvent } from '../state.ts'
+import { getClient, onOpenEvent, useApp } from '../state.ts'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { Label, useTheme } from '../ui.tsx'
-import { Action, DockEmpty, ErrorLine, Section } from './parts.tsx'
+import { ErrorLine, Section } from './parts.tsx'
 
 export function openWeb(url: string) {
   // Only web links from daemon records; never hand arbitrary schemes to macOS.
@@ -18,6 +19,7 @@ export function openWeb(url: string) {
 
 export function DiffPane({ thread, onStats }: { thread: Thread; onStats: (adds: number, dels: number) => void }) {
   const t = useTheme()
+  const project = useApp(s => s.projects.find(p => p.id === thread.project_id))
   const [diff, setDiff] = useState<ThreadDiff | null>(null)
   const [git, setGit] = useState<GitStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -31,11 +33,17 @@ export function DiffPane({ thread, onStats }: { thread: Thread; onStats: (adds: 
     if (!client) return
     let current = true
     setError(null)
-    void Promise.all([client.call('threads.diff', { thread_id: thread.id, include_patch: false }), client.call('git.status', { thread_id: thread.id })]).then(([changes, status]) => {
+    void client.call('git.status', { thread_id: thread.id }).then(status => { if (current) setGit(status) }, e => { if (current) setError(errorText(e)) })
+    void client.call('threads.diff', { thread_id: thread.id, include_patch: false }).then(changes => {
       if (!current) return
-      setDiff(changes); setGit(status); setLoaded(true)
+      setDiff(changes); setLoaded(true)
       onStats(changes.files.reduce((n, f) => n + f.additions, 0), changes.files.reduce((n, f) => n + f.deletions, 0))
-    }, (e) => { if (current) { setError(errorText(e)); setLoaded(true) } })
+    }, e => {
+      if (!current) return
+      // A new thread has no checkpoint yet; its project still has git status.
+      if (!/no checkpoints yet/i.test(errorText(e))) setError(errorText(e))
+      setLoaded(true)
+    })
     return () => { current = false }
   }, [thread.id, generation, onStats])
   useEffect(() => onOpenEvent((event) => {
@@ -57,29 +65,26 @@ export function DiffPane({ thread, onStats }: { thread: Thread; onStats: (adds: 
   }
   const files = diff?.files ?? []
   return <>
-    <div {...ISLAND} style={{ display: 'flex', flexDirection: 'column', width: '100%', height: git?.is_git ? 146 : 38, flexShrink: 0 }}>
-      <Section label="Environment"><IconButton icon={N.refresh} size={28} label="Refresh diff" testId="dock-diff-refresh" onClick={refresh} /></Section>
+    <div {...ISLAND} style={{ display: 'flex', flexDirection: 'column', width: '100%', gap: 2, padding: 6, flexShrink: 0 }}>
+      <Label color={t.textSecondary} size={14} lineHeight={21} style={{ paddingLeft: 8, paddingTop: 2, paddingBottom: 2, opacity: 0.4 }}>Environment</Label>
+      <EnvironmentRow icon={N.laptop} label={project?.name ?? 'Local'} trailing="Local" />
       {git?.is_git && <>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 28, paddingLeft: 14, paddingRight: 14 }}>
-          <Icon source={N.branch} size={14} color={t.textSecondary} />
-          <Label color={t.text} size={12} truncate style={{ flexGrow: 1 }}>{git.branch ?? 'detached'}</Label>
-          <Label color={t.textSecondary} size={11}>{`${git.ahead ? `↑${git.ahead}` : ''}${git.behind ? ` ↓${git.behind}` : ''}`}</Label>
-        </div>
-        <div style={{ display: 'flex', paddingLeft: 6, gap: 4 }}>
-          {/* Match the desktop contract. git.commit currently does not push;
-              that existing daemon gap is tracked separately from this port. */}
-          <Action disabled={!!busy || git.dirty_files === 0} onClick={() => void run('commit')} testId="dock-commit">{busy === 'commit' ? 'Committing…' : 'Commit and push'}</Action>
-          {git.remote_url && <Action onClick={() => openWeb(git.remote_url!.replace(/^git@([^:]+):/, 'https://$1/').replace(/\.git$/, ''))}>Repository ↗</Action>}
-        </div>
-        <Section label="Pull request" />
-        <div style={{ display: 'flex', paddingLeft: 6 }}>
-          {git.pull_request ? <Action onClick={() => openWeb(git.pull_request!.url)}>{`#${git.pull_request.number} ${git.pull_request.title} ↗`}</Action> : <Action disabled={!!busy} onClick={() => void run('pr')} testId="dock-create-pr">{busy === 'pr' ? 'Creating…' : 'Create pull request'}</Action>}
-        </div>
+        <EnvironmentRow icon={N.branch} label={git.branch ?? 'detached'} trailing={`${git.ahead ? `↑${git.ahead}` : ''}${git.behind ? ` ↓${git.behind}` : ''}`} />
+        <EnvironmentRow icon={DOCK_ICONS.commit} label={busy === 'commit' ? 'Committing…' : 'Commit and push'} disabled={!!busy || git.dirty_files === 0} onClick={() => void run('commit')} testId="dock-commit" trailing={git.dirty_files ? String(git.dirty_files) : undefined} />
+        {git.remote_url && <>
+          <div style={{ height: 1, marginTop: 4, marginBottom: 4, backgroundColor: t.borderLight }} />
+          <Label color={t.textSecondary} size={13} lineHeight={19.5} style={{ paddingLeft: 8, paddingTop: 4, paddingBottom: 4, opacity: 0.4 }}>Repository</Label>
+          <EnvironmentRow icon={N.branch} label={git.remote_url.replace(/.*[:/](.*?\/[^/]+?)(?:\.git)?$/, '$1')} onClick={() => openWeb(git.remote_url!.replace(/^git@([^:]+):/, 'https://$1/').replace(/\.git$/, ''))} />
+        </>}
+        <div style={{ height: 1, marginTop: 4, marginBottom: 4, backgroundColor: t.borderLight }} />
+        <Label color={t.textSecondary} size={13} lineHeight={19.5} style={{ paddingLeft: 8, paddingTop: 4, paddingBottom: 4, opacity: 0.4 }}>Pull request</Label>
+        {git.pull_request ? <EnvironmentRow icon={N.pullRequest} label={`#${git.pull_request.number} ${git.pull_request.title}`} onClick={() => openWeb(git.pull_request!.url)} /> : <EnvironmentRow icon={N.pullRequest} label={busy === 'pr' ? 'Creating…' : 'Create pull request'} disabled={!!busy} onClick={() => void run('pr')} testId="dock-create-pr" />}
       </>}
     </div>
+    <div style={{ height: 1, marginLeft: 6, marginRight: 6, marginTop: 4, marginBottom: 4, backgroundColor: t.borderLight }} />
     <ErrorLine error={error} retry={refresh} />
     {notice && <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>{notice}</Label>}
-    {!files.length ? loaded && !error ? <DockEmpty icon={N.branch} title="No changes yet" body="Files the agent edits in this thread show up here with their diff." /> : null : <>
+    {!files.length ? loaded && !error ? <div style={{ display: 'flex', flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingLeft: 20, paddingRight: 20 }}><Label color={t.textSecondary} size={12} style={{ textAlign: 'center', opacity: 0.7 }}>No changes yet. Files the agent edits in this thread show up here with their diff.</Label></div> : null : <>
       <Section label={`${files.length} ${files.length === 1 ? 'file' : 'files'} changed`}>
         <Label color={t.green} size={11}>{`+${files.reduce((n, f) => n + f.additions, 0)}`}</Label>
         <Label color={t.red} size={11}>{`−${files.reduce((n, f) => n + f.deletions, 0)}`}</Label>
@@ -122,3 +127,12 @@ const FileDiff = memo(function FileDiff({ file, threadId }: { file: FileChange; 
     </div>
   </div>
 })
+
+function EnvironmentRow({ icon, label, trailing, onClick, disabled, testId }: { icon: string; label: string; trailing?: string; onClick?: () => void; disabled?: boolean; testId?: string }) {
+  const t = useTheme()
+  return <div testId={testId} role={onClick ? 'button' : undefined} tabIndex={onClick && !disabled ? 0 : -1} onClick={disabled ? undefined : onClick} onKeyDown={e => { if (!disabled && (e.key === 'enter' || e.key === 'space')) onClick?.() }} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 28, paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 4, borderRadius: 8, opacity: disabled ? 0.5 : 1, cursor: onClick && !disabled ? 'pointer' : 'default', hover: onClick && !disabled ? { backgroundColor: t.buttonSecondaryHover } : {} }}>
+    <Icon source={icon} size={16} color={t.text} />
+    <Label color={t.text} size={14} lineHeight={21} truncate style={{ flexGrow: 1 }}>{label}</Label>
+    {trailing && <Label color={t.textSecondary} size={14} lineHeight={21}>{trailing}</Label>}
+  </div>
+}

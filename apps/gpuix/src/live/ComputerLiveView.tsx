@@ -43,6 +43,7 @@ function Live({ threadId, running, insetBottom }: { threadId: string; running: b
   }, [])
   useEffect(() => { if (!previous) return; const timer = setTimeout(() => setPrevious(null), 200); return () => clearTimeout(timer) }, [imageRevision, previous])
   const [expanded, setExpanded] = useState(false)
+  const [hovered, setHovered] = useState(false)
   const [dismissed, setDismissed] = useState(false)
   useEffect(() => { if (running) { setDismissed(false); setFrame(null); setPrevious(null) } }, [running])
   useEffect(() => {
@@ -56,10 +57,13 @@ function Live({ threadId, running, insetBottom }: { threadId: string; running: b
   if (!frame || dismissed) return null
   const aspect = frame.width > 0 && frame.height > 0 ? frame.width / frame.height : 1.6
   const width = Math.max(208, Math.min(expanded ? 520 : 320, (expanded ? 480 : 360) * aspect))
-  return <Floating insetBottom={insetBottom} storageKey="kybern.computerLiveView.corner" testId="computer-live" width={width} height={width / aspect + 46} insetEnd={dock.open ? Math.min(dock.width, 538) : 0}>
-    <div style={{ position: 'relative', flexGrow: 1, minHeight: 0 }}>{previous && <motion.div key={imageRevision - 1} initial={false} animate={{ opacity: 1 }} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' }}><FrameImage frame={previous} /></motion.div>}
-      <motion.div key={imageRevision} initial={previous && !REDUCED_MOTION ? { opacity: 0 } : false} animate={{ opacity: 1 }} transition={{ duration: 0.18, ease: EASE_OUT }} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' }}><FrameImage frame={frame} current /></motion.div>{frame.point && <div style={{ position: 'absolute', left: Math.max(0, Math.min(1, frame.point[0])) * width - 7, top: Math.max(0, Math.min(1, frame.point[1])) * width / aspect - 7, width: 14, height: 14, borderRadius: 7, borderWidth: 2, borderColor: '#ffffff', backgroundColor: 'rgba(40,110,245,0.6)', pointerEvents: 'none' }} />}</div>
-    <div style={{ display: 'flex', alignItems: 'center', height: 36, gap: 6, paddingLeft: 10, paddingRight: 4 }}><Label color={t.text} size={11} truncate style={{ flexGrow: 1 }}>{`${frame.app} · ${frame.action ?? (running ? 'Working' : 'Done')}`}</Label><IconButton icon={N.window} size={28} label={expanded ? 'Show smaller' : 'Show larger'} onClick={() => setExpanded(!expanded)} /><IconButton icon={N.x} size={28} testId="computer-live-close" label="Hide until the next task" onClick={() => { setDismissed(true); setFrame(null); setPrevious(null) }} /></div>
+  return <Floating insetBottom={insetBottom} storageKey="kybern.computerLiveView.corner" testId="computer-live" width={width} height={width / aspect} overlayDrag insetEnd={dock.open ? Math.min(dock.width, 538) : 0}>
+    <div onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)} style={{ position: 'relative', flexGrow: 1, minHeight: 0 }}>{previous && <motion.div key={imageRevision - 1} initial={false} animate={{ opacity: 1 }} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' }}><FrameImage frame={previous} /></motion.div>}
+      <motion.div key={imageRevision} initial={previous && !REDUCED_MOTION ? { opacity: 0 } : false} animate={{ opacity: 1 }} transition={{ duration: 0.18, ease: EASE_OUT }} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' }}><FrameImage frame={frame} current /></motion.div>{frame.point && <div style={{ position: 'absolute', left: Math.max(0, Math.min(1, frame.point[0])) * width - 7, top: Math.max(0, Math.min(1, frame.point[1])) * width / aspect - 7, width: 14, height: 14, borderRadius: 7, borderWidth: 2, borderColor: '#ffffff', backgroundColor: 'rgba(40,110,245,0.6)', pointerEvents: 'none' }} />}
+      <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 76, borderBottomLeftRadius: 16, borderBottomRightRadius: 16, pointerEvents: 'none', background: { type: 'linear-gradient', angle: 180, stops: [{ color: 'rgba(0,0,0,0)', position: 0 }, { color: 'rgba(0,0,0,0.66)', position: 1 }] } }} />
+      <div style={{ position: 'absolute', left: 12, right: 12, bottom: 10, display: 'flex', flexDirection: 'column', gap: 2, pointerEvents: 'none' }}><Label color="rgba(255,255,255,0.7)" size={11} truncate>{frame.app}</Label><Label color="#ffffff" size={12} truncate>{frame.action ?? (running ? 'Working' : 'Done')}</Label></div>
+      <div style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 4, opacity: hovered ? 1 : 0, pointerEvents: hovered ? 'auto' : 'none', backgroundColor: t.popover, borderRadius: 8 }}><IconButton icon={N.window} size={28} label={expanded ? 'Show smaller' : 'Show larger'} onClick={() => setExpanded(!expanded)} /><IconButton icon={N.x} size={28} testId="computer-live-close" label="Hide until the next task" onClick={() => { setDismissed(true); setFrame(null); setPrevious(null) }} /></div>
+    </div>
   </Floating>
 }
 
@@ -69,5 +73,5 @@ function Live({ threadId, running, insetBottom }: { threadId: string; running: b
 function FrameImage({ frame, current = false }: { frame: ComputerFrame; current?: boolean }) {
   const { renderer } = useGpuix()
   const attach = useCallback((node: ImgInstance | null) => { if (node) renderer?.setImage?.(node.id, Buffer.from(frame.data, 'base64')) }, [renderer, frame.data, frame.media_type])
-  return <img ref={attach} testId={current ? 'computer-live-image' : undefined} alt={frame.title ? `${frame.app}: ${frame.title}` : frame.app} objectFit="contain" style={{ width: '100%', height: '100%', backgroundColor: '#000000', pointerEvents: 'none' }} />
+  return <img ref={attach} testId={current ? 'computer-live-image' : undefined} alt={frame.title ? `${frame.app}: ${frame.title}` : frame.app} objectFit="contain" style={{ width: '100%', height: '100%', borderRadius: 16, backgroundColor: '#000000', pointerEvents: 'none' }} />
 }

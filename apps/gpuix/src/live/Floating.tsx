@@ -10,7 +10,7 @@ import { useComposerOverlayHeight } from '../composer/height.ts'
 type Corner = 'top-end' | 'top-start' | 'bottom-end' | 'bottom-start'
 const corners: Corner[] = ['top-end', 'top-start', 'bottom-end', 'bottom-start']
 /** Shared native corner snap. The overlay exists only during the drag. */
-export function Floating({ storageKey, width, height, testId, children, insetEnd = 0, insetBottom: explicitInset = 0 }: { storageKey: string; width: number; height: number; testId: string; children: ReactNode; insetEnd?: number; insetBottom?: number }) {
+export function Floating({ storageKey, width, height, testId, children, insetEnd = 0, insetBottom: explicitInset = 0, overlayDrag = false }: { storageKey: string; width: number; height: number; testId: string; children: ReactNode; insetEnd?: number; insetBottom?: number; overlayDrag?: boolean }) {
   // Bottom corners sit above the composer and its request panels, as on the desktop.
   const insetBottom = Math.max(explicitInset, useComposerOverlayHeight())
   const t = useTheme()
@@ -72,7 +72,7 @@ export function Floating({ storageKey, width, height, testId, children, insetEnd
         const b = renderer?.getElementBounds?.(card.current.id), p = parent.current ?? renderer?.getElementBounds?.(container.current.id)
         renderer?.clearSelection?.(); entered.current = true; samples.current = [{ x: e.x, y: e.y, time: Date.now() }]; setSnap(null)
         if (b && p) setDrag({ x: e.x, y: e.y, left: b.x - p.x, top: b.y - p.y, dx: 0, dy: 0, parentX: p.x, parentY: p.y, parentWidth: p.width, parentHeight: p.height })
-      }} style={{ height: 10, flexShrink: 0, cursor: 'grab', userSelect: 'none', backgroundColor: t.buttonSecondary }} />
+      }} style={{ ...(overlayDrag ? { position: 'absolute' as const, top: 0, left: 0, right: 72, height: 24, zIndex: 2 } : { height: 10 }), flexShrink: 0, cursor: 'grab', userSelect: 'none', backgroundColor: overlayDrag ? 'transparent' : t.buttonSecondary }} />
       {children}
     </div>
     </anchored>

@@ -9,7 +9,7 @@ import { TaskWindow, type TaskWindowEntry } from '../tasks/TaskWindow.tsx'
 import { IconButton } from '../sidebar/rows.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { toast } from '../shell/toasts.tsx'
-import { ScopeHeader } from './Notes.tsx'
+import { DockFooter, DockSection, ScopeHeader } from './Notes.tsx'
 import { Action, DockEmpty, ErrorLine, Section } from './parts.tsx'
 const open = (id: string) => { openTask(id); goPage('tasks') }
 export function TasksPane({ thread }: { thread: Thread }) {
@@ -23,21 +23,21 @@ export function TasksPane({ thread }: { thread: Thread }) {
   const entries: TaskWindowEntry[] = []
   let status = ''
   for (const task of sorted.slice(0, 50)) {
-    if (task.status !== status) { status = task.status; const label = STATUS_LABEL[task.status]; entries.push({ key: status, height: 32, render: () => <Section label={label} /> }) }
-    entries.push({ key: task.id, height: 30, render: () => <TaskRow task={task} /> })
+    if (task.status !== status) { status = task.status; const label = STATUS_LABEL[task.status]; entries.push({ key: status, height: entries.length ? 36 : 28, render: () => <div style={{ paddingTop: sorted[0]?.status === task.status ? 0 : 8 }}><DockSection label={label} count={sorted.filter(t => t.status === task.status).length} /></div> }) }
+    entries.push({ key: task.id, height: 29, render: () => <TaskRow task={task} /> })
   }
+  if (entries.length) entries.push({ key: 'footer', height: 40, render: () => <DockFooter testId="dock-all-tasks" onClick={() => { chooseFilter(project ? `project:${project}` : 'global'); goPage('tasks') }}>{sorted.length > 50 ? `Show all ${sorted.length} in Tasks` : 'Show all in Tasks'}</DockFooter> })
   return <div testId="dock-tasks" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
     <ScopeHeader thread={thread} action={<IconButton icon={N.plus} label="New task" testId="dock-new-task" onClick={() => setAdding(true)} />} />
     {own && <><Section label="This thread" /><TaskRow task={own} /><Section label={`${splitTaskBody(own.body).criteria.filter(c => c.checked).length} of ${splitTaskBody(own.body).criteria.length} done`}><Action onClick={() => open(own.id)}>Open task</Action></Section></>}
     {adding && <QuickAdd project={project} done={() => setAdding(false)} />}
     <ErrorLine error={error} retry={() => void refreshTasks()} />
     {!loaded ? <Section label="Loading tasks…" /> : entries.length ? <TaskWindow entries={entries} testId="dock-tasks-list" /> : <DockEmpty icon={N.tasks} title="No open tasks" body="Tasks for this project appear here." />}
-    <Action testId="dock-all-tasks" onClick={() => { chooseFilter(project ? `project:${project}` : 'global'); goPage('tasks') }}>{sorted.length > 50 ? `Show all ${sorted.length} in Tasks` : 'Show all in Tasks'}</Action>
   </div>
 }
 const TaskRow = memo(function TaskRow({ task }: { task: TaskItem }) {
   const t = useTheme()
-  return <div testId={`dock-task-${task.id}`} role="button" tabIndex={0} onClick={() => open(task.id)} onKeyDown={e => { if (e.key === 'enter') open(task.id) }} style={{ display: 'flex', height: 30, alignItems: 'center', gap: 8, paddingLeft: 14, paddingRight: 14, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.hover } }}><StatusGlyph status={task.status} /><Label color={t.textTertiary} size={11} style={{ pointerEvents: 'none' }}>{task.key}</Label><Label color={t.text} size={12} truncate style={{ flexGrow: 1, pointerEvents: 'none' }}>{task.title.trim() || 'Untitled'}</Label>{task.priority !== 0 && <PriorityGlyph priority={task.priority} />}</div>
+  return <div testId={`dock-task-${task.id}`} role="button" tabIndex={0} onClick={() => open(task.id)} onKeyDown={e => { if (e.key === 'enter') open(task.id) }} style={{ display: 'flex', height: 28, marginLeft: 6, marginRight: 6, alignItems: 'center', gap: 8, paddingLeft: 8, paddingRight: 8, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.hover } }}><StatusGlyph status={task.status} /><Label color={t.textTertiary} size={13} style={{ pointerEvents: 'none' }}>{task.key}</Label><Label color={t.text} size={14} truncate style={{ flexGrow: 1, pointerEvents: 'none' }}>{task.title.trim() || 'Untitled'}</Label>{task.priority !== 0 && <PriorityGlyph priority={task.priority} />}</div>
 })
 function QuickAdd({ project, done }: { project: string | null; done: () => void }) {
   const t = useTheme()

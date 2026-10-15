@@ -1,3 +1,7 @@
+import { Icon } from '../icons.tsx'
+import { DockSection } from '../dock/Notes.tsx'
+import { muted } from '../nav/overlay.tsx'
+import { activeEnvironment } from '../shell/environment.ts'
 import { useEffect, useRef, useState } from 'react'
 import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { VIEWPORT_PRESETS, isViewportSizeValid, parseViewportField } from '../../../../packages/kybern-client/src/previewViewport.ts'
@@ -22,6 +26,10 @@ export function PreviewPane({ threadId }: { threadId: string }) {
   const [address, setAddress] = useState(entry?.address ?? '')
   const [servers, setServers] = useState<PreviewServer[]>([])
   const [searching, setSearching] = useState(false)
+  const [showAll, setShowAll] = useState(false)
+  const environment = activeEnvironment()
+  const sorted = servers.slice().sort((a, b) => Number(!!b.in_project) - Number(!!a.in_project) || a.port - b.port)
+  const shown = showAll ? sorted : sorted.slice(0, 12)
   useEffect(() => setAddress(entry?.address ?? ''), [entry])
   useEffect(() => addWindowKeyHandler(e => { if (e.modifiers?.cmd && !e.modifiers.alt && e.key === 'l') { if (input.current) renderer?.focusElement?.(input.current.id); return true } }), [renderer])
   const discover = async () => { setSearching(true); try { const result = await getClient()!.call('previews.servers.list', { thread_id: threadId }); setServers(result.servers); setPreview(threadId, { error: null }) } catch (e) { setPreview(threadId, { error: String(e) }) } finally { setSearching(false) } }
@@ -37,7 +45,19 @@ export function PreviewPane({ threadId }: { threadId: string }) {
     {s.permission ? <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 20 }}><Label color={t.text} size={13}>Allow this folder?</Label><Label color={t.textSecondary} size={12} lineHeight={20}>{s.permission.folder}</Label><Action disabled={!s.permission.grantable} onClick={() => void openPreview(threadId, s.permission!.address, true)}>Allow folder</Action><Action onClick={() => setPreview(threadId, { permission: undefined })}>Cancel</Action></div>
     : s.busy ? <DockEmpty icon={N.globe} title="Opening preview…" />
     : entry ? <><DockEmpty icon={N.globe} title={s.floating ? 'Floating over the chat' : s.opened ? 'Opened in browser' : 'Preview opens in your browser'} body={s.floating ? 'The floating card keeps the address and browser controls within reach.' : 'Use your browser to interact with this page.'} /><Action testId="preview-open-browser" onClick={() => launchPreview(threadId)}>Open in browser</Action>{s.floating && <Action onClick={() => setPreview(threadId, { floating: false })}>Return to panel</Action>}</>
-    : <><DockEmpty icon={N.globe} title="Preview a page" body="Enter a URL or HTML file path, or choose a running server." /><Section label="Running servers"><Action disabled={searching} onClick={() => void discover()}>Refresh</Action></Section><virtual-list style={{ maxHeight: 200, minHeight: 48 }}>{servers.slice(0, 20).map(server => <Action key={server.url} onClick={() => void openPreview(threadId, server.url)}>{`${server.title || server.framework || server.process_name || 'Server'} · ${server.port}`}</Action>)}</virtual-list></>}
+    : sorted.length ? <virtual-list style={{ flexGrow: 1, minHeight: 0, width: '100%' }}><div style={{ paddingLeft: 12, paddingRight: 12, paddingTop: 16, paddingBottom: 16 }}>
+      <DockSection label={environment.local ? 'Local servers' : `Servers on ${environment.name}`} count={servers.length} />
+      <div style={{ display: 'flex', flexDirection: 'column', marginLeft: 12, marginRight: 12, padding: 4, borderRadius: 10, backgroundColor: t.buttonSecondary }}>
+        {shown.map(server => <div key={server.url} testId={`preview-server-${server.port}`} role="button" tabIndex={0} onClick={() => void openPreview(threadId, server.url)} onKeyDown={e => { if (e.key === 'enter') void openPreview(threadId, server.url) }} style={{ display: 'flex', alignItems: 'center', gap: 10, height: 44, paddingLeft: 10, paddingRight: 10, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.hover } }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 5, backgroundColor: t.buttonSecondaryHover, position: 'relative', flexShrink: 0 }}><Icon source={N.globe} size={13} color={t.textSecondary} /><div style={{ position: 'absolute', right: -2, bottom: -2, width: 6, height: 6, borderRadius: 3, backgroundColor: t.green }} /></div>
+          <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={muted(t, 0.9)} size={14} lineHeight={21} truncate>{server.title && server.title.length <= 48 ? server.title : server.process_name ?? server.host}</Label><Label color={muted(t, 0.7)} size={13} lineHeight={19.5} truncate>{[server.process_name, server.cwd?.split('/').filter(Boolean).slice(-3).join('/')].filter(Boolean).join(' · ')}</Label></div>
+          <Label color={t.textSecondary} size={13}>{new URL(server.url).host}</Label>
+        </div>)}
+      </div>
+      {!showAll && sorted.length > 12 && <Action onClick={() => setShowAll(true)}>{`Show ${sorted.length - 12} more`}</Action>}
+      <Label color={muted(t, 0.6)} size={13} lineHeight={16} style={{ paddingLeft: 14, paddingTop: 2, paddingBottom: 8 }}>{environment.local ? 'Servers in this project come first. Updated when this panel opens.' : `Kybern forwards these through the connection to ${environment.name}.`}</Label>
+    </div></virtual-list> : <DockEmpty icon={N.globe} title={searching ? 'Looking for local servers…' : 'No local servers running'} body="Start a dev server or enter a file path above. Servers appear here while they run." />}
+
   </div>
 }
 function DeviceToolbar({ threadId }: { threadId: string }) {

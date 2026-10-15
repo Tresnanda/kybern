@@ -1,3 +1,5 @@
+import { DecoratedTextarea } from '../native/decorated-input.tsx'
+import { markdownInputDecorations, noteInputMarkColors } from '../native/input-marks.ts'
 import { useEffect, useMemo, useState } from 'react'
 import { useWindowSize } from '@gpuix/react'
 import { relativeTime } from '@/lib/format'
@@ -89,7 +91,8 @@ export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: strin
                   width="100%"
                 />
                 <Toolbar disabled={false} active format={(kind) => describe(formatBlock(parts.description, kind))} mark={(marker) => describe(`${marker}${parts.description.trimEnd()}${marker}`)} link={(label, href) => describe(`${parts.description} [${label.replace(/[\\[\]]/g, '\\$&')}](${encodeURI(href).replaceAll('(', '%28').replaceAll(')', '%29')})`)} finish={() => { void edit.flush(); setEditing(false); taskTyping(false) }} />
-                <textarea
+                <DecoratedTextarea
+                  decorations={markdownInputDecorations(parts.description, noteInputMarkColors(t))}
                   testId="task-edit-body"
                   onFocus={() => taskTyping(true)}
                   onBlur={() => {

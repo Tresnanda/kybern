@@ -77,7 +77,7 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
     else if (row.kind !== 'loading' && row.kind !== 'empty') setSelected(row.path)
   }, [load])
   return <div style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0 }}>
-    <div style={{ display: 'flex', flexDirection: 'column', width: width >= 560 ? 240 : 176, flexShrink: 0, borderRightWidth: 0.6, borderColor: t.borderLight }}>
+    <div style={{ display: 'flex', flexDirection: 'column', width: 240, flexShrink: 0, borderRightWidth: 0.6, borderColor: t.borderLight }}>
       <div {...ISLAND} style={{ display: 'flex', width: '100%', height: 44, alignItems: 'center', padding: 8 }}>
         <input testId="dock-file-search" placeholder="Search files…" aria-label="Search files" value={query} onChange={(e) => setQuery(e.value ?? '')} style={{ width: '100%', height: 28, paddingLeft: 8, paddingRight: 8, fontSize: 12, color: t.text, backgroundColor: t.buttonSecondary, borderRadius: 6 }} />
       </div>
@@ -110,7 +110,7 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
       </div>
     </div>
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, minHeight: 0 }}>
-      {selected ? <FileViewer key={selected} projectId={projectId} path={selected} onClose={() => setSelected(null)} /> : <DockEmpty icon={N.folder} title="Choose a file" body="Select a file from the tree to view it." />}
+      {selected ? <FileViewer key={selected} projectId={projectId} path={selected} onClose={() => setSelected(null)} /> : <div style={{ display: 'flex', flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: 20 }}><Label color={t.textSecondary} size={12} style={{ opacity: 0.7, textAlign: 'center' }}>Select a file from the tree to view it.</Label></div>}
     </div>
   </div>
 }
