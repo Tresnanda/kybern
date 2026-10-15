@@ -4,10 +4,12 @@ import { useGpuix, type PublicInstance } from '@gpuix/react'
 import type { TerminalInfo, TerminalOutputNotification, TerminalExitedNotification, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
 import { getClient, useApp } from '../state.ts'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
-import { Menu, MenuItem } from '../nav/overlay.tsx'
+import { ContextMenu, Menu, MenuItem } from '../nav/overlay.tsx'
 import { IconButton } from '../sidebar/rows.tsx'
 import { copyText } from '../transcript/store.ts'
 import { N } from '../nav/glyphs.ts'
+import { Icon } from '../icons.tsx'
+import { DOCK_ICONS } from '../dock/icons.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { Action, ErrorLine } from '../dock/parts.tsx'
 import { VT, type Line, type Pen } from './vt.ts'
@@ -64,7 +66,11 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
     return () => { live = false; alive.current = false; off() }
   }, [threadId, connected])
   return <div testId="dock-terminal" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
-    <div style={{ display: 'flex', alignItems: 'center', height: 36, gap: 4, paddingLeft: 6, paddingRight: 6, flexShrink: 0 }}><div style={{ display: 'flex', flexGrow: 1, minWidth: 0, overflowX: 'scroll', gap: 4 }}>{tabs.map((tab, index) => <div key={tab.id} style={{ display: 'flex', alignItems: 'center', height: 28, flexShrink: 0, borderRadius: 8, backgroundColor: tab.id === current?.id ? t.buttonSecondary : undefined }}><IconButton icon={N.x} label={`Close ${tab.title || 'terminal'}`} size={24} testId={`terminal-close-${tab.id}`} onClick={() => void close(tab.id)} /><Action testId={`terminal-tab-${tab.id}`} onClick={() => select(tab.id)}>{tab.title || (index ? `Terminal ${index + 1}` : 'Terminal')}</Action></div>)}</div><IconButton icon={N.plus} label="New terminal" testId="terminal-new" onClick={() => { if (!busy) void create() }} /><Menu align="end" testId="terminal-cli" trigger={() => <IconButton icon={N.laptop} label="Open an agent CLI" />}><MenuItem id="shell" label="Shell" onSelect={() => void create()} />{providers.filter(p => p.available && p.binary_path).map(p => <MenuItem key={p.kind} id={p.kind} label={p.display_name} onSelect={() => void create([p.binary_path!])} />)}</Menu></div>
+    <div style={{ display: 'flex', alignItems: 'center', height: 36, gap: 4, paddingLeft: 6, paddingRight: 6, flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', flexGrow: 1, minWidth: 0, overflowX: 'scroll', gap: 4 }}>{tabs.map((tab, index) => <div key={tab.id} role="button" tabIndex={0} testId={`terminal-tab-${tab.id}`} onClick={() => select(tab.id)} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') select(tab.id) }} style={{ display: 'flex', alignItems: 'center', gap: 6, height: 24, paddingLeft: 8, paddingRight: 8, flexShrink: 0, borderRadius: 6, cursor: 'pointer', backgroundColor: tab.id === current?.id ? t.buttonSecondary : undefined }}><Icon source={DOCK_ICONS.terminal} size={14} color={t.textSecondary} /><Label size={13} color={t.textSecondary}>{/^(zsh|bash|sh|fish)$/.test(tab.title) ? tab.cwd.split('/').filter(Boolean).at(-1) || 'Terminal' : tab.title || (index ? `Terminal ${index + 1}` : 'Terminal')}</Label></div>)}<IconButton icon={N.plus} size={24} label="New terminal" testId="terminal-new" onClick={() => { if (!busy) void create() }} /></div>
+      <Menu align="end" testId="terminal-cli" trigger={() => <IconButton icon={DOCK_ICONS.terminal} size={24} label="Open an agent CLI" />}><MenuItem id="shell" label="Shell" onSelect={() => void create()} />{providers.filter(p => p.available && p.binary_path).map(p => <MenuItem key={p.kind} id={p.kind} label={p.display_name} onSelect={() => void create([p.binary_path!])} />)}</Menu>
+      {current && <IconButton icon={DOCK_ICONS.trash} size={24} label="Close terminal" testId={`terminal-close-${current.id}`} onClick={() => void close(current.id)} />}
+    </div>
     <ErrorLine error={error} retry={() => void refresh()} />
     {current ? <Screen key={current.id} info={current} width={width} /> : <Action onClick={() => void create()}>Open terminal</Action>}
   </div>
@@ -87,6 +93,7 @@ function Screen({ info, width }: { info: TerminalInfo; width: number }) {
     if (end) selecting.current = false
   }, [])
   const [search, setSearch] = useState<string | null>(null)
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null)
   const [match, setMatch] = useState(-1)
   const find = (query: string, backwards = false, from = match) => {
     setSearch(query)
@@ -140,15 +147,22 @@ function Screen({ info, width }: { info: TerminalInfo; width: number }) {
       <input testId="terminal-search" autoFocus aria-label="Search terminal scrollback" value={search} placeholder="Search scrollback…" onChange={e => { find(e.value ?? '', false, -1) }} onSubmit={() => find(search)} onKeyDown={e => { if (e.key === 'escape') { setSearch(null); if (host.current) renderer?.focusElement?.(host.current.id) } }} style={{ flexGrow: 1, height: 26, fontSize: 12, color: t.text, backgroundColor: t.buttonSecondary }} />
       <Label color={t.textSecondary} size={10}>{match < 0 ? 'No match' : `Line ${match + 1}`}</Label><Action onClick={() => find(search, true)}>↑</Action><Action onClick={() => find(search)}>↓</Action><Action onClick={() => setSearch(null)}>Close</Action>
     </div>}
-    <div ref={host} testId="terminal-screen" tabIndex={0} role="textbox" aria-label="Terminal" onMouseUp={() => { selecting.current = false }} onMouseDownOutside={() => { selecting.current = false }} onClick={() => { if (host.current) renderer?.focusElement?.(host.current.id); fit() }} onKeyDown={e => {
-      if (e.modifiers?.cmd) { if (e.key === 'c') copy(); else if (e.key === 'v') paste(); else if (e.key === 'f') setSearch(''); return }
+    <div ref={host} testId="terminal-screen" tabIndex={0} role="textbox" aria-label="Terminal" onAuxClick={e => { if (e.isRightClick || e.button === 2) setMenuAt({ x: e.x ?? 0, y: e.y ?? 0 }) }} onMouseUp={() => { selecting.current = false }} onMouseDownOutside={() => { selecting.current = false }} onClick={() => { if (host.current) renderer?.focusElement?.(host.current.id); fit() }} onKeyDown={e => {
+      if (e.modifiers?.cmd) { if (e.key === 'c') copy(); else if (e.key === 'v') paste(); else if (e.key === 'f') setSearch(''); else if (e.key === 'end') { follow.current = true; update(v => v + 1) }; return }
       const text = terminalKey(e, model.applicationCursor); if (text !== null) { follow.current = true; setSelection(null); send(text) }
     }} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, paddingLeft: 8, paddingRight: 8, paddingTop: 4, backgroundColor: t.surface }}>
       <virtual-list ref={list} testId="terminal-lines" itemCount={lines.length} windowStart={start} estimatedItemHeight={ROW} overdraw={ROW * 4} onVisibleRange={e => { const a = e.startIndex ?? 0, b = e.endIndex ?? a + 40; setRange(old => old.start === Math.max(0, a - 4) && old.end === Math.min(lines.length, b + 4) ? old : { start: Math.max(0, a - 4), end: Math.min(lines.length, b + 4) }); follow.current = b >= lines.length - 1 }} style={{ flexGrow: 1, minHeight: 0, width: '100%' }}>
         {lines.slice(start, end).map((line, i) => <TerminalLine key={line.id} line={line} revision={line.revision} model={model} selection={selectionColumns(indexedSelection, start + i, model.cols)} selectCell={selectCell} cursor={model.cursorVisible && start + i === cursorLine && exit === null ? Math.min(model.x, model.cols - 1) : -1} />)}
       </virtual-list>
     </div>
-    <div style={{ display: 'flex', alignItems: 'center', height: 28, flexShrink: 0, gap: 4 }}><Label color={t.textTertiary} size={10} style={{ flexGrow: 1, paddingLeft: 12 }}>{exit === null ? `${model.cols} × ${model.rows}` : `Process exited (${exit})`}</Label><Action testId="terminal-find" onClick={() => setSearch('')}>Find</Action><Action testId="terminal-copy" onClick={copy}>Copy</Action><Action onClick={paste} disabled={exit !== null}>Paste</Action><Action testId="terminal-bottom" onClick={() => { follow.current = true; update(v => v + 1) }}>Latest ↓</Action></div>
+    {exit !== null && <Label color={t.textTertiary} size={12} style={{ paddingLeft: 12, paddingBottom: 8 }}>Process exited ({exit})</Label>}
+    {menuAt && <ContextMenu at={menuAt} onClose={() => setMenuAt(null)} testId="terminal-menu">
+      <MenuItem id="find" testId="terminal-find" label="Find" shortcut="⌘F" onSelect={() => setSearch('')} />
+      <MenuItem id="copy" testId="terminal-copy" label="Copy" shortcut="⌘C" onSelect={copy} />
+      <MenuItem id="paste" label="Paste" shortcut="⌘V" disabled={exit !== null} onSelect={paste} />
+      <MenuItem id="latest" testId="terminal-bottom" label="Scroll to latest" shortcut="⌘End" onSelect={() => { follow.current = true; update(v => v + 1) }} />
+    </ContextMenu>}
+
   </>
 }
 const TerminalLine = memo(function TerminalLine({ line, model, cursor, selection, selectCell }: { line: Line; revision: number; model: VT; cursor: number; selection: [number, number] | null; selectCell: (line: number, column: number, begin: boolean, end: boolean) => void }) {

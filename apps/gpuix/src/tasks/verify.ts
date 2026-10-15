@@ -251,6 +251,10 @@ try {
         (r) => r.task?.body.startsWith('Autosaved description.') ?? false,
         'description autosaved',
       )
+      // Editing a criterion scrolls the native input into view; bring the
+      // description toolbar back before issuing a pointer click.
+      await app.mouse.wheel({ x: 620, y: 400 }, 0, 3000)
+      await Bun.sleep(300)
       await click(app.getByTestId('note-format-bold'))
       await until(() => client.call('tasks.items.get', { id: ids[0]! }), (r) => r.task!.body.startsWith('**Autosaved description.**'), 'description formatting')
       const base = (await client.call('tasks.items.get', { id: ids[0]! })).task!

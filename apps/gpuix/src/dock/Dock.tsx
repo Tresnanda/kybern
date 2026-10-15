@@ -4,6 +4,7 @@ import { motion, useGpuix, type PublicInstance } from '@gpuix/react'
 import { useSidebarWidth, useWindowWidth } from '../shell/layout.ts'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
+import { DOCK_ICONS } from './icons.ts'
 import { Icon } from '../icons.tsx'
 import { ISLAND } from '../MatrixLoader.tsx'
 import { N } from '../nav/glyphs.ts'
@@ -30,15 +31,15 @@ const SLIDE = { duration: 0.22, ease: EASE_OUT }
 const PANELS: { id: DockTab; label: string; icon: string; width: number }[] = [
   { id: 'agents', label: 'Agents', icon: N.users, width: 100 },
   { id: 'project', label: 'Project', icon: N.note, width: 104 },
-  { id: 'activity', label: 'Activity', icon: N.usage, width: 104 },
-  { id: 'changes', label: 'Diff', icon: N.branch, width: 80 },
+  { id: 'activity', label: 'Activity', icon: DOCK_ICONS.activity, width: 104 },
+  { id: 'changes', label: 'Diff', icon: DOCK_ICONS.changes, width: 80 },
   { id: 'review', label: 'Review', icon: N.pullRequest, width: 100 },
-  { id: 'terminal', label: 'Terminal', icon: N.laptop, width: 112 },
-  { id: 'artifacts', label: 'Artifacts', icon: N.window, width: 110 },
-  { id: 'explorer', label: 'Explorer', icon: N.folder, width: 110 },
+  { id: 'terminal', label: 'Terminal', icon: DOCK_ICONS.terminal, width: 112 },
+  { id: 'artifacts', label: 'Artifacts', icon: DOCK_ICONS.artifacts, width: 110 },
+  { id: 'explorer', label: 'Explorer', icon: DOCK_ICONS.explorer, width: 110 },
   { id: 'notes', label: 'Notes', icon: N.note, width: 96 },
   { id: 'tasks', label: 'Tasks', icon: N.tasks, width: 96 },
-  { id: 'preview', label: 'Preview', icon: N.globe, width: 110 },
+  { id: 'preview', label: 'Preview', icon: DOCK_ICONS.preview, width: 110 },
 ]
 
 export function Dock({ sidebarOpen }: { sidebarOpen: boolean }) {
@@ -98,6 +99,7 @@ function DockContent({ threadId, thread, width }: { threadId: string | null; thr
 }
 
 function ThreadDock({ thread, width }: { thread: Thread; width: number }) {
+  const t = useTheme()
   const dock = useDock(thread.id)
   const tasks = useRuntimeTasks(thread.id)
   const [stats, setStats] = useState<[number, number]>([0, 0])
@@ -106,7 +108,7 @@ function ThreadDock({ thread, width }: { thread: Thread; width: number }) {
   return <>
     <TabStrip threadId={thread.id} width={width} coordinator={!!thread.coordinator_project_id} activeTasks={tasks.tasks.filter(isActiveTask).length} stats={stats} />
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', borderBottomRightRadius: 12 }}>
-      {tab === null ? <DockEmpty icon={N.plus} title="Add a panel with +." />
+      {tab === null ? <div style={{ display: 'flex', flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: 24 }}><Label color={t.textSecondary} size={12}>Add a panel with +.</Label></div>
         : tab === 'agents' ? <Agents thread={thread} />
         : tab === 'preview' ? <PreviewPane threadId={thread.id} />
         : tab === 'terminal' ? <TerminalPane threadId={thread.id} width={width} />
@@ -160,7 +162,7 @@ function TabStrip({ threadId, width, coordinator, activeTasks, stats }: { thread
             }}
             style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, minWidth: 0, height: 28, paddingLeft: 6, cursor: 'pointer', borderRadius: 8, hover: { backgroundColor: t.buttonSecondaryHover } }}>
             <Icon source={panel.icon} size={14} color={t.textSecondary} />
-            <Label color={panel.id === tab ? t.text : t.textSecondary} size={12}>{panel.label}</Label>
+            <Label color={panel.id === tab ? t.text : t.textSecondary} size={13}>{panel.label}</Label>
             {panel.id === 'activity' && activeTasks > 0 && <Label color={t.textSecondary} size={10}>{String(activeTasks)}</Label>}
             {panel.id === 'changes' && stats[0] + stats[1] > 0 && <div style={{ display: 'flex', gap: 3 }}><Label color={t.green} size={10}>{`+${stats[0]}`}</Label><Label color={t.red} size={10}>{`−${stats[1]}`}</Label></div>}
           </div>

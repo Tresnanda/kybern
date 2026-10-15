@@ -1,3 +1,5 @@
+import { DecoratedTextarea } from '../native/decorated-input.tsx'
+import { markdownInputDecorations, noteInputMarkColors } from '../native/input-marks.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import { NoteBlock } from './NoteBlock.tsx'
@@ -131,7 +133,7 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
   const deleted = !!(summary ? summary.deleted_at : snap.note?.deleted_at)
   const status = snap.status === 'saved' ? (note ? editedAgo(note.updated_at) : 'Saved') : snap.status === 'dirty' ? 'Unsaved changes' : snap.status === 'saving' ? 'Saving…' : snap.status === 'conflict' ? 'Choose a version' : 'Couldn’t save · Retry'
   if (compact) return <div testId="thread-note-editor" style={{ display: 'flex', flexDirection: 'column', height: 200, padding: 10, gap: 6, borderRadius: 8, backgroundColor: t.buttonSecondary }}>
-    {snap.phase === 'ready' ? <textarea testId="thread-note-body" aria-label="Thread note" value={snap.body} minRows={4} maxRows={6} readOnly={deleted} placeholder="Ideas, reminders, to-dos. Write Markdown here" onChange={(e) => session.edit({ body: e.value ?? '' })} onBlur={() => void session.flush()} theme={{ text: t.text, caret: t.text }} style={{ flexGrow: 1, width: '100%', fontSize: 12, lineHeight: 20, color: t.text, backgroundColor: t.buttonSecondary }} /> : <Label color={t.textSecondary} size={12}>{snap.phase === 'loading' ? 'Loading note…' : snap.error ?? 'This note is unavailable.'}</Label>}
+    {snap.phase === 'ready' ? <DecoratedTextarea decorations={markdownInputDecorations(snap.body, noteInputMarkColors(t))} testId="thread-note-body" aria-label="Thread note" value={snap.body} minRows={4} maxRows={6} readOnly={deleted} placeholder="Ideas, reminders, to-dos. Write Markdown here" onChange={(e) => session.edit({ body: e.value ?? '' })} onBlur={() => void session.flush()} theme={{ text: t.text, caret: t.text }} style={{ flexGrow: 1, width: '100%', fontSize: 12, lineHeight: 20, color: t.text, backgroundColor: t.buttonSecondary }} /> : <Label color={t.textSecondary} size={12}>{snap.phase === 'loading' ? 'Loading note…' : snap.error ?? 'This note is unavailable.'}</Label>}
     {snap.conflict ? <div style={{ display: 'flex', gap: 6 }}><Button onClick={() => session.useTheirs()}>Use theirs</Button><Button onClick={() => session.keepMine()}>Keep mine</Button></div> : <div onClick={() => void session.flush()}><Label color={snap.status === 'error' ? t.red : t.textSecondary} size={11}>{status}</Label></div>}
   </div>
   return <div testId="note-editor" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
@@ -152,7 +154,7 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
           </div></div>
           {blocks.map((body, index) => <div key={`${epoch}:${index}`} style={{ display: 'flex', justifyContent: 'center', paddingTop: index === 0 ? 0 : blockGap(blocks[index - 1]!, body) }}><div style={{ display: 'flex', flexDirection: 'column', width: docWidth }}>
             {active === index && !deleted ? <>
-              <textarea ref={bodyRef} testId={`note-block-input-${index}`} aria-label="Edit block" autoFocus value={body} minRows={2} maxRows={30} onChange={(e) => { update(index, e.value ?? ''); setSlashIndex(0) }} onBlur={() => void session.flush()} onKeyDown={(e) => {
+              <DecoratedTextarea decorations={markdownInputDecorations(body, noteInputMarkColors(t))} ref={bodyRef} testId={`note-block-input-${index}`} aria-label="Edit block" autoFocus value={body} minRows={2} maxRows={30} onChange={(e) => { update(index, e.value ?? ''); setSlashIndex(0) }} onBlur={() => void session.flush()} onKeyDown={(e) => {
                 if (e.key === 'escape' || (e.key === 'enter' && e.modifiers?.cmd)) finish()
                 if (slashItems.length && e.key === 'down') setSlashIndex((value) => (value + 1) % slashItems.length)
                 if (slashItems.length && e.key === 'up') setSlashIndex((value) => (value - 1 + slashItems.length) % slashItems.length)

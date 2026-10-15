@@ -47,7 +47,7 @@ for (let round = 1; round <= 2; round++) {
         await until(async () => { terminal = (await client.call('terminals.list', { thread_id: thread })).terminals.find(t => t.alive)?.id ?? ''; return !!terminal }, 'terminal')
         await sample('terminal idle')
         await sample('terminal 200000 lines', async () => { await client.call('terminals.input', { terminal_id: terminal, data: Buffer.from('yes | head -n 200000; printf "\\n__P5_DONE__\\n"\n').toString('base64') }) })
-        await app.getByTestId('terminal-bottom').click(); await until(async () => !!await app.getByText('__P5_DONE__').count(), 'final terminal output')
+        await app.getByTestId('terminal-screen').press('cmd-end'); await until(async () => !!await app.getByText('__P5_DONE__').count(), 'final terminal output')
       }
     }
   } finally {

@@ -32,9 +32,9 @@ describe('dock layout and thread choices', () => {
       chooseTab('dock-test-b', 'changes');
       console.log(JSON.stringify([getDock('dock-test-a'), getDock('dock-test-b')]));
     `)
-    expect(a.tabs).toEqual(['agents', 'explorer'])
+    expect(a.tabs).toEqual(['explorer'])
     expect(a.width).toBe(600)
-    expect(b.tabs).toEqual(['agents', 'changes'])
+    expect(b.tabs).toEqual(['changes'])
     expect(b.open).toBe(false)
   })
 })

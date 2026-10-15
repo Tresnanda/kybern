@@ -2,6 +2,10 @@ import { memo, useEffect, useRef, useState } from 'react'
 import { isEmptyThreadNote, noteTitle } from '@/state/notesModel'
 import { relativeTime } from '@/lib/format'
 import { isFreeChatProject, type NoteSummary, type Thread } from '../../../../packages/kybern-client/src/types.ts'
+import { ProjectDot, Ring } from '../notes/kit.tsx'
+import { muted } from '../nav/overlay.tsx'
+import { DecoratedTextarea } from '../native/decorated-input.tsx'
+import { markdownInputDecorations, noteInputMarkColors } from '../native/input-marks.ts'
 import { NoteEditor } from '../notes/NoteEditor.tsx'
 import { getNotes, openNote, openQuickNote, recordNote, refreshNotes, rpc, setNotes, useNotes } from '../notes/store.ts'
 import { load, save } from '../shell/persist.ts'
@@ -10,12 +14,13 @@ import { N } from '../nav/glyphs.ts'
 import { useApp } from '../state.ts'
 import { IconButton } from '../sidebar/rows.tsx'
 import { TaskWindow, type TaskWindowEntry } from '../tasks/TaskWindow.tsx'
-import { Label, useTheme } from '../ui.tsx'
+import { ink, Label, useTheme } from '../ui.tsx'
 import { Action, ErrorLine, Section } from './parts.tsx'
 
 export function ScopeHeader({ thread, action }: { thread: Thread; action: React.ReactNode }) {
   const name = useApp(s => s.projects.find(p => p.id === thread.project_id)?.name)
-  return <Section label={isFreeChatProject(thread.project_id) ? 'Global' : name ?? 'This project'}>{action}</Section>
+  const t = useTheme()
+  return <div style={{ display: 'flex', alignItems: 'center', height: 36, flexShrink: 0, gap: 8, paddingLeft: 14, paddingRight: 6 }}><div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 14 }}><ProjectDot projectId={isFreeChatProject(thread.project_id) ? null : thread.project_id} /></div><Label color={ink(t, 0.85)} size={14} weight={500} truncate style={{ flexGrow: 1 }}>{isFreeChatProject(thread.project_id) ? 'Global' : name ?? 'Project'}</Label>{action}</div>
 }
 export function NotesPane({ thread }: { thread: Thread }) {
   const notes = useNotes(s => s.notes)
@@ -30,8 +35,8 @@ export function NotesPane({ thread }: { thread: Thread }) {
   const other = live.filter(n => !n.pinned && scope(n)).sort(recent).slice(0, 50 - pinned.length)
   const entries: TaskWindowEntry[] = []
   for (const [label, items] of [['Pinned', pinned], ['Recent', other]] as const) {
-    if (items.length) entries.push({ key: label, height: 32, render: () => <Section label={label} /> })
-    for (const note of items) entries.push({ key: note.id, height: 48, render: () => <NoteRow note={note} /> })
+    if (items.length) entries.push({ key: label, height: label === 'Recent' && pinned.length ? 36 : 28, render: () => <div style={{ paddingTop: label === 'Recent' && pinned.length ? 8 : 0 }}><DockSection label={label} /></div> })
+    for (const note of items) entries.push({ key: note.id, height: 55, render: () => <NoteRow note={note} /> })
   }
   const all = () => { setNotes({ selected: null, filter: project ? { kind: 'project', projectId: project } : { kind: 'global' } }); goPage('notes') }
   const quick = () => {
@@ -39,20 +44,20 @@ export function NotesPane({ thread }: { thread: Thread }) {
     if (!draft?.title && !draft?.body) save('kybern.notes.quick', { title: '', body: '', home: project ? { scope: 'project', projectId: project } : { scope: 'global' } })
     openQuickNote()
   }
+  entries.push({ key: 'footer', height: 40, render: () => <DockFooter testId="dock-all-notes" onClick={all}>Show all in Notes</DockFooter> })
   return <div testId="dock-notes" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
     <ScopeHeader thread={thread} action={<IconButton icon={N.plus} label="New note" testId="dock-new-note" onClick={quick} />} />
-    <Section label="This thread">{own && <Action onClick={() => openNote(own.id)}>Open in Notes ↗</Action>}</Section>
-    <div style={{ paddingLeft: 8, paddingRight: 8 }}><ThreadNote key={thread.id} threadId={thread.id} noteId={own?.id} /></div>
+    <DockSection label="This thread">{own && <Action onClick={() => openNote(own.id)}>Open in Notes ↗</Action>}</DockSection>
+    <div style={{ paddingLeft: 8, paddingRight: 8, paddingBottom: 16 }}><ThreadNote key={thread.id} threadId={thread.id} noteId={own?.id} /></div>
     <ErrorLine error={error} retry={() => void refreshNotes()} />
     {!loaded ? <Section label="Loading notes…" /> : entries.length ? <TaskWindow entries={entries} testId="dock-notes-list" /> : <Section label="Other notes for this project appear here." />}
-    <Action testId="dock-all-notes" onClick={all}>Show all in Notes</Action>
   </div>
 }
 const NoteRow = memo(function NoteRow({ note }: { note: NoteSummary }) {
   const t = useTheme()
-  return <div testId={`dock-note-${note.id}`} role="button" tabIndex={0} onClick={() => openNote(note.id)} onKeyDown={e => { if (e.key === 'enter') openNote(note.id) }} style={{ display: 'flex', flexDirection: 'column', gap: 3, height: 48, padding: 6, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.hover } }}>
-    <div style={{ display: 'flex', gap: 8, pointerEvents: 'none' }}><Label color={t.text} size={12} lineHeight={16} truncate style={{ flexGrow: 1 }}>{noteTitle(note)}</Label>{note.checklist.total > 0 && <Label color={t.textSecondary} size={11}>{`${note.checklist.done}/${note.checklist.total}`}</Label>}<Label color={t.textTertiary} size={11}>{relativeTime(note.updated_at, Date.now())}</Label></div>
-    <Label color={t.textSecondary} size={11} lineHeight={14} truncate style={{ pointerEvents: 'none' }}>{note.preview.replace(/\s+/g, ' ').trim()}</Label>
+  return <div testId={`dock-note-${note.id}`} role="button" tabIndex={0} onClick={() => openNote(note.id)} onKeyDown={e => { if (e.key === 'enter') openNote(note.id) }} style={{ display: 'flex', flexDirection: 'column', gap: 2, height: 54, paddingTop: 6, paddingBottom: 6, paddingLeft: 8, paddingRight: 8, marginLeft: 6, marginRight: 6, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.hover } }}>
+    <div style={{ display: 'flex', gap: 8, pointerEvents: 'none' }}><Label color={t.text} size={14} lineHeight={21} truncate style={{ flexGrow: 1 }}>{noteTitle(note)}</Label>{note.checklist.total > 0 && <Ring done={note.checklist.done} total={note.checklist.total} color={muted(t, 0.55)} />}<Label color={muted(t, 0.55)} size={13}>{relativeTime(note.updated_at, Date.now())}</Label></div>
+    <Label color={muted(t, 0.6)} size={13} lineHeight={19.5} truncate style={{ pointerEvents: 'none' }}>{note.preview.replace(/\s+/g, ' ').trim()}</Label>
   </div>
 })
 function ThreadNote({ threadId, noteId }: { threadId: string; noteId?: string }) {
@@ -81,5 +86,14 @@ function ThreadNote({ threadId, noteId }: { threadId: string; noteId?: string })
   useEffect(() => { if (!body || noteId || created) return; const timer = setTimeout(() => void flush(), 500); return () => clearTimeout(timer) }, [body, noteId, created])
   useEffect(() => () => { void flush() }, [])
   if ((noteId || created) && !saving) return <NoteEditor id={(noteId ?? created)!} compact />
-  return <div style={{ display: 'flex', flexDirection: 'column', height: 200, padding: 10, borderRadius: 8, backgroundColor: t.buttonSecondary }}><textarea testId="thread-note-new" aria-label="Thread note" value={body} placeholder="Ideas, reminders, to-dos. Write Markdown here" minRows={5} maxRows={6} onChange={e => { draft.current = e.value ?? ''; setBody(draft.current); save(key, draft.current) }} onBlur={() => void flush()} theme={{ text: t.text, caret: t.text }} style={{ flexGrow: 1, width: '100%', fontSize: 12, lineHeight: 20, color: t.text, backgroundColor: t.buttonSecondary }} /><ErrorLine error={error} retry={() => void flush()} /></div>
+  return <div style={{ display: 'flex', flexDirection: 'column', height: 96, paddingLeft: 10, paddingRight: 10, paddingTop: 8, paddingBottom: 8, borderRadius: 10, backgroundColor: t.buttonSecondary }}><DecoratedTextarea decorations={markdownInputDecorations(body, noteInputMarkColors(t))} testId="thread-note-new" aria-label="Thread note" value={body} placeholder="Ideas, reminders, to-dos. Write Markdown here" minRows={3} maxRows={6} onChange={e => { draft.current = e.value ?? ''; setBody(draft.current); save(key, draft.current) }} onBlur={() => void flush()} theme={{ text: t.text, caret: t.text }} style={{ flexGrow: 1, width: '100%', fontSize: 12, lineHeight: 20, color: t.text, backgroundColor: 'transparent' }} /><ErrorLine error={error} retry={() => void flush()} /></div>
+}
+
+export function DockSection({ label, count, children }: { label: string; count?: number; children?: React.ReactNode }) {
+  const t = useTheme()
+  return <div style={{ display: 'flex', alignItems: 'center', height: 28, flexShrink: 0, gap: 6, paddingLeft: 14, paddingRight: 6 }}><Label color={muted(t, 0.58)} size={13}>{label}</Label>{count !== undefined && <Label color={muted(t, 0.4)} size={13}>{String(count)}</Label>}<div style={{ flexGrow: 1 }} />{children}</div>
+}
+export function DockFooter({ children, testId, onClick }: { children: string; testId: string; onClick: () => void }) {
+  const t = useTheme()
+  return <div testId={testId} role="button" tabIndex={0} onClick={onClick} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onClick() }} style={{ display: 'flex', alignItems: 'center', height: 28, marginLeft: 6, marginRight: 6, marginTop: 4, marginBottom: 8, paddingLeft: 8, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.hover } }}><Label color={muted(t, 0.7)} size={13}>{children}</Label></div>
 }

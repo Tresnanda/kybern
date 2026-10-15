@@ -24,7 +24,6 @@ export function TaskWindow({ entries, card = false, testId }: { entries: TaskWin
     if (index < 0) return
     revealTask(focused, renderer)
     if (taskVisible(focused, renderer)) return
-    setRange({ start: Math.max(0, index - overscan), end: index + (card ? 8 : 24) })
     renderer.scrollToItem?.(list.current.id, index)
   }, [focused])
   return (

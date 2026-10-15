@@ -1,3 +1,6 @@
+import { Icon } from '../icons.tsx'
+import { DOCK_ICONS } from './icons.ts'
+import { muted } from '../nav/overlay.tsx'
 import { memo, useEffect, useState } from 'react'
 import type { RuntimeTask, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { findSubagentFor } from '../../../../packages/kybern-client/src/subagents.ts'
@@ -7,7 +10,7 @@ import { N } from '../nav/glyphs.ts'
 import { useNav } from '../nav/store.ts'
 import { getClient, onOpenEvent } from '../state.ts'
 import { RuntimeTaskRow } from '../transcript/rows.tsx'
-import { clockDuration, Label, useTheme } from '../ui.tsx'
+import { clockDuration, ink, Label, useTheme } from '../ui.tsx'
 import { Action, DockEmpty, ErrorLine, Section } from './parts.tsx'
 
 export const isActiveTask = (task: RuntimeTask) => ['pending', 'running', 'waiting', 'stopping'].includes(task.status)
@@ -39,6 +42,7 @@ export function useRuntimeTasks(threadId: string) {
 }
 
 export function Activity({ tasks, error, loaded, retry }: ReturnType<typeof useRuntimeTasks>) {
+  const t = useTheme()
   const children = useNav((s) => s.children)
   const groups = [
     { label: 'Active', tasks: tasks.filter(isActiveTask) },
@@ -46,7 +50,7 @@ export function Activity({ tasks, error, loaded, retry }: ReturnType<typeof useR
   ]
   return <>
     <ErrorLine error={error} retry={retry} />
-    {tasks.length === 0 ? loaded && !error ? <DockEmpty icon={N.usage} title="No background work" body="Agents and processes started by this thread appear here." /> : null :
+    {tasks.length === 0 ? loaded && !error ? <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingLeft: 32, paddingRight: 32 }}><div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 8, backgroundColor: t.buttonSecondary, marginBottom: 12 }}><Icon source={DOCK_ICONS.activity} size={16} color={muted(t, 0.7)} /></div><Label color={ink(t, 0.8)} size={14} weight={500}>No background work</Label><Label color={muted(t, 0.6)} size={13} lineHeight={16} style={{ marginTop: 4, maxWidth: 256, textAlign: 'center' }}>Agents and processes started by this thread appear here.</Label></div> : null :
       <div {...FILL_ISLAND} style={{ display: 'flex', flexGrow: 1, minHeight: 0 }}>
         <virtual-list testId="dock-activity-list" style={{ width: '100%', height: '100%' }}>
           {groups.flatMap((group) => group.tasks.length ? [

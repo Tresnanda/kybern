@@ -94,7 +94,7 @@ export function Agents({ thread }: { thread: Thread }) {
 
   return <>
     <ErrorLine error={error} retry={() => setReload((n) => n + 1)} />
-    {!rows.length ? loaded && !error ? <DockEmpty icon={N.users} title="No agents yet" body="Ask the agent to delegate work to another agent; children appear here." /> : null : <>
+    {!rows.length ? loaded && !error ? <DockEmpty lineage icon={N.users} title="No agents yet" body="Ask the agent to delegate work to another agent; children appear here." /> : null : <>
       <Section label={lineageSummary(counts) || `${counts.total} ${counts.total === 1 ? 'agent' : 'agents'}`}>
         {stoppable.length >= 2 && <Action disabled={busy} onClick={() => void run(() => Promise.all(stoppable.map((th) => getClient()!.call('threads.interrupt', { thread_id: th.id }))))}>Stop all</Action>}
       </Section>
