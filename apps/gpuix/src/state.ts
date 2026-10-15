@@ -121,7 +121,44 @@ export function connect() {
   client.connect()
 }
 
-export async function refreshLists() {
+let refreshing: Promise<void> | null = null
+let refreshAgain = false
+let retryTimer: ReturnType<typeof setTimeout> | undefined
+
+/**
+ * Reload the project and thread lists. Calls that arrive while one is in flight
+ * (a burst of `threads.changed` from busy agents) fold into a single rerun, so a
+ * slow daemon gets at most one list request at a time. A failed first load
+ * retries after 3 s instead of leaving the window on "Connecting".
+ */
+export function refreshLists(): Promise<void> {
+  if (refreshing) {
+    refreshAgain = true
+    return refreshing
+  }
+  refreshing = (async () => {
+    try {
+      do {
+        refreshAgain = false
+        await loadLists()
+      } while (refreshAgain)
+    } catch {
+      clearTimeout(retryTimer)
+      if (!state.listsLoaded && client?.status === 'open') retryTimer = setTimeout(() => void refreshLists(), 3000)
+    } finally {
+      refreshing = null
+      // A request that arrived while a failing load was in flight (say, from a
+      // reconnect) still runs once the connection is open.
+      if (refreshAgain && client?.status === 'open') {
+        refreshAgain = false
+        void refreshLists()
+      }
+    }
+  })()
+  return refreshing
+}
+
+async function loadLists() {
   if (!client) return
   const [p, t] = await Promise.all([
     client.call('projects.list', {}),
