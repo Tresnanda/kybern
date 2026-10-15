@@ -1,3 +1,4 @@
+import { activeEnvironment } from '../shell/environment.ts'
 import { CursorSetup } from './Cursor.tsx'
 import { load, save } from '../shell/persist.ts'
 import { useState } from 'react'
@@ -8,7 +9,6 @@ import { getClient, useApp } from '../state.ts'
 import { useNav } from '../nav/store.ts'
 import { loadProviders } from '../nav/live.ts'
 import { Label, useTheme } from '../ui.tsx'
-import { THEMES } from '../theme.ts'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { Button, NumberField, PageBlock, Row, Section, Select, Switch, TextField } from './controls.tsx'
@@ -51,17 +51,22 @@ export function Appearance() {
   const [error, setError] = useState('')
   const save = (patch: Parameters<typeof setAppearance>[0]) => { try { setAppearance(patch); setError('') } catch (e) { setError(`Unable to save appearance. ${String(e)}`) } }
   return <>
-    <PageBlock><div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 30 }}><Label color={t.text} size={13} weight={600}>Theme</Label>
+    <PageBlock><div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 30 }}><Label color={t.text} size={14} lineHeight={19.6} weight={600}>Theme</Label>
       <div style={{ display: 'flex', gap: 14 }}>{(['light', 'dark', 'system'] as const).map((value) => {
-        const preview = THEMES[value === 'system' ? 'light' : value]
+        const preview = { frame: value === 'dark' ? '#202023' : '#f7f7f8', text: value === 'system' ? '#929299' : value === 'dark' ? '#ededf0' : '#27272a' }
         return <div key={value} testId={`settings-theme-${value}`} tabIndex={0} aria-label={`${value} theme`} aria-pressed={prefs.theme === value} onClick={() => save({ theme: value })} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') save({ theme: value }) }} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, flexBasis: 0, minWidth: 0, cursor: 'pointer' }}>
-          <div style={{ display: 'flex', pointerEvents: 'none', height: 112, borderWidth: prefs.theme === value ? 2 : 1, borderColor: prefs.theme === value ? t.text : t.border, borderRadius: 10, padding: 10, backgroundColor: preview.frame }}>
-            <div style={{ display: 'flex', flexDirection: 'column', pointerEvents: 'none', width: '28%', paddingTop: 14, paddingRight: 7, gap: 9, borderRightWidth: 1, borderColor: preview.border }}>{[0, 1, 2].map((i) => <div key={i} style={{ pointerEvents: 'none', height: 4, borderRadius: 3, backgroundColor: preview.text, opacity: 0.25 }} />)}</div>
-            <div style={{ display: 'flex', flexDirection: 'column', pointerEvents: 'none', flexGrow: 1, padding: 12, gap: 7, backgroundColor: value === 'system' ? THEMES.dark.surface : preview.surface, borderRadius: 6 }}>{[48, 76, 100, 76].map((w, i) => <div key={i} style={{ pointerEvents: 'none', width: `${w}%`, height: i === 2 ? 24 : 4, borderRadius: 3, backgroundColor: value === 'system' ? THEMES.dark.text : preview.text, opacity: i === 0 ? 0.6 : 0.15 }} />)}</div>
+          <div style={{ display: 'flex', pointerEvents: 'none', height: 112, borderWidth: 1, borderColor: prefs.theme === value ? 'transparent' : t.border, ...(prefs.theme === value ? { boxShadow: { offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 2, color: t.text } } : {}), borderRadius: 10, padding: 10, backgroundColor: preview.frame, ...(value === 'system' ? { background: { type: 'linear-gradient' as const, angle: 110, stops: [{ color: '#f7f7f8', position: 0.5 }, { color: '#202023', position: 0.5 }] } } : {}) }}>
+            <div style={{ display: 'flex', flexDirection: 'column', pointerEvents: 'none', width: '28%', paddingTop: 14, paddingRight: 7, gap: 9, borderRightWidth: 1, borderColor: preview.text, opacity: 0.25 }}>{[0, 1, 2].map((i) => <div key={i} style={{ pointerEvents: 'none', height: 4, borderRadius: 3, backgroundColor: preview.text }} />)}</div>
+            <div style={{ display: 'flex', flexDirection: 'column', pointerEvents: 'none', flexGrow: 1, paddingTop: 16, paddingLeft: 12 }}>
+              <div style={{ width: '48%', height: 4, borderRadius: 2, backgroundColor: preview.text, opacity: 0.6, marginBottom: 7 }} />
+              <div style={{ width: '76%', height: 4, borderRadius: 2, backgroundColor: preview.text, opacity: 0.25, marginBottom: 7 }} />
+              <div style={{ height: 24, borderWidth: 1, borderColor: preview.text, borderRadius: 4, opacity: 0.15, marginTop: 5, marginBottom: 12 }} />
+              <div style={{ width: '76%', height: 4, borderRadius: 2, backgroundColor: preview.text, opacity: 0.25 }} />
+            </div>
           </div><div style={{ display: 'flex', pointerEvents: 'none', gap: 7, paddingTop: 13, alignItems: 'center' }}><Icon source={value === 'system' ? N.laptop : value === 'dark' ? N.moon : N.sun} size={16} color={t.text} /><Label color={t.text} size={13}>{value[0].toUpperCase() + value.slice(1)}</Label></div>
         </div>
       })}</div>
-      <Label color={t.textSecondary} size={12}>System follows your device’s light and dark appearance.</Label>
+      <Label color={t.textSecondary} size={12} lineHeight={19.2}>System follows your device’s light and dark appearance.</Label>
     </div></PageBlock>
     <Section title="Window material"><Row title="Use translucent surfaces" description="Let your desktop show softly through the sidebar and floating controls. Relaunch GPUIX to apply window material changes."><Switch label="Use translucent surfaces" testId="settings-translucency" checked={prefs.translucent} onChange={(translucent) => save({ translucent })} /></Row></Section>
     {error && <Label color={t.red}>{error}</Label>}
@@ -89,7 +94,8 @@ export function Agents() {
     <Section title="Updates">
       <Row title="Update harnesses automatically" description="Check daily on this machine. Install when the agent's turns and background work are finished."><Switch label="Update harnesses automatically" testId="settings-harness-updates" checked={s.auto_update_harnesses} disabled={saving} onChange={(auto_update_harnesses) => void updateSettings({ auto_update_harnesses })} /></Row>
       <Row title="" description="Uses each CLI's updater or its existing Homebrew package. Custom binaries and version-managed installations stay under your control." />
-      <Row title="Update the daemon automatically" description="Check the release feed daily on this machine. Install and restart when nothing is running."><Switch label="Update the daemon automatically" checked={s.auto_update_daemon} disabled={saving} onChange={(auto_update_daemon) => void updateSettings({ auto_update_daemon })} /></Row>
+      {!activeEnvironment().local && <Row title="Update the daemon automatically" description="Check the release feed daily on this machine. Install and restart when nothing is running."><Switch label="Update the daemon automatically" checked={s.auto_update_daemon} disabled={saving} onChange={(auto_update_daemon) => void updateSettings({ auto_update_daemon })} /></Row>}
+      <DaemonUpdateRow />
     </Section>
     <OmpProfiles />
     <Section title="Delegation">
@@ -109,6 +115,17 @@ export function Agents() {
   </>
 }
 
+function DaemonUpdateRow() {
+ const t = useTheme()
+ const info = useResource('daemon.info', {})
+ const update = useResource('daemon_update.status', {}, !activeEnvironment().local)
+ const [busy, setBusy] = useState(false)
+ const [error, setError] = useState('')
+ const status = update.data
+ const act = async () => {setBusy(true);setError('');try {await getClient()!.call(status?.status === 'available' ? 'daemon_update.run' : 'daemon_update.check', {});update.refresh()} catch(e) {setError(`Unable to update the daemon. ${String(e)}`)} finally {setBusy(false)}}
+ return <Row title="kybernd" description={activeEnvironment().local ? 'Bundled with the app and updated with it.' : info.data ? `${info.data.hostname} · ${info.data.os} ${info.data.arch}` : '…'}><div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:8}}><div style={{display:'flex',alignItems:'center',gap:12}}><Label color={t.textSecondary} size={14}>{info.data?.version??'…'}</Label>{!activeEnvironment().local && <Button disabled={busy} onClick={()=>void act()}>{busy?'Checking…':status?.status==='available'&&status.latest_version?`Update to ${status.latest_version}`:'Check for updates'}</Button>}</div>{error&&<Label color={t.red} size={12}>{error}</Label>}</div></Row>
+}
+
 function RoleRow({ label, value, onChange }: { label: string; value?: RoleDefault; onChange: (value: RoleDefault | null) => void }) {
   const providers = useNav((s) => s.providers)
   const { saving } = useSettings()
@@ -124,9 +141,11 @@ function ProfileField({ value, onSave, inherit }: { value?: string; onSave: (val
 }
 
 function OmpProfiles() {
+  const t = useTheme()
   const { settings: s } = useSettings()
   const projects = useApp((s) => s.projects)
   const [project, setProject] = useState(projects[0]?.path ?? '')
+  const [expanded, setExpanded] = useState(false)
   if (!s) return null
   const omp = s.providers.omp ?? { env: {} }
   const save = (value: string, project?: string) => {
@@ -137,7 +156,7 @@ function OmpProfiles() {
     else { if (value) next.env.OMP_PROFILE = value; else delete next.env.OMP_PROFILE }
     void updateSettings({ providers: { ...settings.providers, omp: next } })
   }
-  return <Section title="OMP profiles"><Row title="Default profile" description="For new chats. Existing chats keep their profile."><ProfileField key={`default:${omp.env.OMP_PROFILE}`} value={omp.env.OMP_PROFILE} inherit="Use environment" onSave={(value) => save(value)} /></Row>{projects.length > 0 && <Row title="Project overrides" description="Also applies to this project’s worktrees."><div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}><Select label="Choose project" value={project} onChange={setProject} options={projects.map((p) => ({ value: p.path, label: p.name }))} /><ProfileField key={`${project}:${omp.project_profiles?.[project]}`} value={omp.project_profiles?.[project]} inherit="Use default above" onSave={(value) => save(value, project)} /></div></Row>}</Section>
+  return <Section title="OMP profiles"><Row title="Default profile" description="For new chats."><ProfileField key={`default:${omp.env.OMP_PROFILE}`} value={omp.env.OMP_PROFILE} inherit="Use environment" onSave={(value) => save(value)} /></Row>{projects.length > 0 && <><div testId="omp-project-overrides" tabIndex={0} onClick={()=>setExpanded(!expanded)} onKeyDown={e=>{if(e.key==='enter'||e.key==='space')setExpanded(!expanded)}} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:18}}><Label color={t.text} size={14}>Project overrides</Label><Icon source={expanded?N.arrowUp:N.chevronDown} size={14} color={t.textSecondary}/></div>{expanded&&<Row title="Project" description="Also applies to this project’s worktrees."><div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}><Select label="Choose project" value={project} onChange={setProject} options={projects.map((p) => ({ value: p.path, label: p.name }))} /><ProfileField key={`${project}:${omp.project_profiles?.[project]}`} value={omp.project_profiles?.[project]} inherit="Use default above" onSave={(value) => save(value, project)} /></div></Row>}</>}<Row title="" description="Existing chats keep their profile."/></Section>
 }
 
 export { About } from './About.tsx'

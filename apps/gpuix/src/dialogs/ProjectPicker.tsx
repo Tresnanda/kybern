@@ -6,6 +6,8 @@ import { activeEnvironment } from '../shell/environment.ts'
 import { getClient, refreshLists, selectDraft } from '../state.ts'
 import { errorText } from '../nav/actions.ts'
 import { Label, useTheme } from '../ui.tsx'
+import { Icon } from '../icons.tsx'
+import { N } from '../nav/glyphs.ts'
 import { setNav } from '../nav/store.ts'
 
 export function ProjectPicker({ close }: { close: () => void }) {
@@ -33,18 +35,23 @@ export function ProjectPicker({ close }: { close: () => void }) {
     } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
   }
   return <Dialog onClose={close} width={512} testId="project-picker"><DialogHeader title="Add project" description={`Choose a folder on ${activeEnvironment().name}.`} onClose={close} />
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 16 }}>
-      <Label color={t.text} size={12}>Folder path</Label>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><TextField testId="project-picker-path" autoFocus label="Project folder path" value={path} onChange={setPath} onSubmit={() => void browse(path)} width="100%" /><Button testId="project-picker-open" disabled={busy || !path} onClick={() => void browse(path)}>Open folder</Button></div>
-      <virtual-list testId="project-picker-folders" style={{ height: 256, width: '100%', borderWidth: 1, borderColor: t.border, borderRadius: 8 }}>
-        {listing?.parent && <div key="parent" style={{ padding: 4 }}><Button testId="project-picker-parent" disabled={busy} onClick={() => void browse(listing.parent!)}>Parent folder</Button></div>}
-        {listing?.directories.map((directory) => <div key={directory.path} style={{ padding: 4 }}><Button disabled={busy} onClick={() => void browse(directory.path)}>{directory.name}</Button></div>)}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingLeft:16, paddingRight:16, paddingTop:0, paddingBottom:12 }}>
+      <Label color={t.text} size={14}>Folder path</Label>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><TextField testId="project-picker-path" autoFocus label="Project folder path" value={path} onChange={setPath} onSubmit={() => void browse(path)} width="100%" style={{height:32,fontSize:14,backgroundColor:'transparent',borderColor:t.borderHeavy}} /><Button variant="secondary" testId="project-picker-open" disabled={busy || !path} onClick={() => void browse(path)}>Open folder</Button></div>
+      <div style={{height:256,width:'100%',borderWidth:1,borderColor:t.border,borderRadius:8,padding:4}}><virtual-list testId="project-picker-folders" style={{height:246,width:'100%'}}>
+        {listing?.parent && <div key="parent"><FolderRow testId="project-picker-parent" disabled={busy} onClick={() => void browse(listing.parent!)} name="Parent folder" /></div>}
+        {listing?.directories.map((directory) => <div key={directory.path}><FolderRow disabled={busy} onClick={() => void browse(directory.path)} name={directory.name} /></div>)}
         {busy && <div key="loading" style={{ padding: 12 }}><Label color={t.textSecondary} size={12}>Loading folders…</Label></div>}
         {!busy && listing?.directories.length === 0 && <div key="empty" style={{ padding: 12 }}><Label color={t.textSecondary} size={12}>No subfolders. Add this folder as a project, or enter another path.</Label></div>}
         {listing?.has_more && <div key="more" style={{ padding: 12 }}><Label color={t.textSecondary} size={12}>Showing the first 1,000 folders. Enter a path to open another folder.</Label></div>}
-      </virtual-list>
+      </virtual-list></div>
       {error && <Label color={t.red} size={12}>{error}</Label>}
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}><Button testId="project-picker-add" disabled={busy || !path.trim()} onClick={() => void add()}>Add this folder</Button></div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end',paddingTop:12 }}><Button variant="primary" testId="project-picker-add" disabled={busy || !path.trim()} onClick={() => void add()}>Add this folder</Button></div>
     </div>
   </Dialog>
+}
+
+function FolderRow({name,onClick,disabled,testId}:{name:string;onClick:()=>void;disabled:boolean;testId?:string}) {
+ const t=useTheme()
+ return <div testId={testId} tabIndex={disabled?-1:0} aria-label={name} onClick={()=>{if(!disabled)onClick()}} onKeyDown={e=>{if(!disabled&&(e.key==='enter'||e.key==='space'))onClick()}} style={{display:'flex',alignItems:'center',gap:8,minHeight:34,paddingLeft:8,paddingRight:8,borderRadius:6,hover:{backgroundColor:t.hover}}}><Icon source={N.folder} size={14} color={t.text}/><Label color={t.text} size={14} lineHeight={22}>{name}</Label></div>
 }
