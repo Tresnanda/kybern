@@ -3,6 +3,7 @@ import path from 'node:path'
 import assert from 'node:assert/strict'
 import { launch } from '@gpuix/react/automation'
 import { pagesFixture } from '../../scripts/pages-fixture.ts'
+import { verifyPrRecovery } from '../../scripts/pages-recovery.ts'
 const out = process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previews/gpuix/pages'
 mkdirSync(out, { recursive: true })
 const fixture = pagesFixture()
@@ -82,15 +83,9 @@ try {
   await screenshot('sidebar-peek')
   await app.getByTestId('pr-search').press('cmd-b')
   await sleep(700)
-  fixture.problem('missing')
-  await app.getByTestId('pr-refresh').press('enter')
-  await sleep(700)
-  assert.match(await app.getByTestId('page-pulls').textContent(), /Install the GitHub CLI/)
+  await verifyPrRecovery(app, fixture, 'missing')
   await screenshot('gh-missing')
-  fixture.problem('auth')
-  await app.getByTestId('pr-refresh').press('enter')
-  await sleep(700)
-  assert.match(await app.getByTestId('page-pulls').textContent(), /Sign in to the GitHub CLI/)
+  await verifyPrRecovery(app, fixture, 'auth')
   await screenshot('gh-auth')
   assert.ok(!fixture.calls.some(m => ['github.pr.action', 'threads.send', 'threads.create'].includes(m)), 'Verification must never submit a write action')
   console.log('PASS: usage grouping/period, PR search, native 2400-line diff, inline draft, remount retention, timeline paging, send/merge UI, sidebar peek, GitHub recovery states; no write RPCs')
