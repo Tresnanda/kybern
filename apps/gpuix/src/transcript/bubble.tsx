@@ -10,6 +10,8 @@ import { agentResultItems, delegationStatusWord, messageSenderName, purposeLabel
 import type { ContentPart } from '../../../../packages/kybern-client/src/types.ts'
 import { clockTime } from '../../../desktop/src/lib/format.ts'
 import { Icon } from '../icons.tsx'
+import { openSaveToNote } from '../notes/store.ts'
+import { useApp } from '../state.ts'
 import { useTheme } from '../ui.tsx'
 import { Label } from '../ui.tsx'
 import { T } from './glyphs.ts'
@@ -49,6 +51,25 @@ export function CopyAction({ text, testId }: { text: string; testId?: string }) 
           style={copied || !text ? undefined : { hover: { color: t.text } }}
         />
       </SwapOnChange>
+    </div>
+  )
+}
+
+/** `SaveToNoteAction`: opens the shared "Save to note" picker (`notes/Overlays.tsx`) with this text. */
+export function SaveToNoteAction({ text, testId }: { text: string; testId?: string }) {
+  const t = useTheme()
+  const threadId = useApp((s) => s.selectedId)
+  const title = useApp((s) => s.open.thread?.title ?? '')
+  const enabled = !!text && !!threadId
+  return (
+    <div
+      testId={testId}
+      role="button"
+      aria-label="Save to note"
+      onClick={enabled ? () => openSaveToNote({ text, threadTitle: title, threadId: threadId! }) : undefined}
+      style={{ display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: enabled ? 'pointer' : 'default', opacity: enabled ? 1 : 0.4 }}
+    >
+      <Icon source={T.note} size={13.5} color={muted(t)} style={enabled ? { hover: { color: t.text } } : undefined} />
     </div>
   )
 }
@@ -210,6 +231,7 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
                 {clockTime(at)}
               </Label>
               <CopyAction text={plainText || text} testId="user-copy" />
+              <SaveToNoteAction text={plainText || text} testId="user-save-note" />
             </div>
           </div>
         </Rise>

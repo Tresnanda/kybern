@@ -13,7 +13,7 @@ import { useApp } from '../state.ts'
 import { Icon } from '../icons.tsx'
 import { MatrixLoader, useLoaderStep } from '../MatrixLoader.tsx'
 import { clockDuration, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { CopyAction, UserBubble } from './bubble.tsx'
+import { CopyAction, SaveToNoteAction, UserBubble } from './bubble.tsx'
 import { T } from './glyphs.ts'
 import { ResponseImage } from './images.tsx'
 import { alpha, cachedMarkdownTheme, Chevron, fg, META, muted, Para, ROW_LINE, RowIcon, TEXT } from './kit.tsx'
@@ -208,6 +208,7 @@ export const TurnFooter = memo(function TurnFooter({ group, threadId, isLast }: 
           {(group.answer || group.end) && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2, marginLeft: -5 }}>
               <CopyAction text={answerText} testId="answer-copy" />
+              <SaveToNoteAction text={answerText} testId="answer-save-note" />
               {group.end?.at && (
                 <Label color={muted(t)} size={META.size} lineHeight={META.lineHeight}>
                   {clockTime(group.end.at)}
