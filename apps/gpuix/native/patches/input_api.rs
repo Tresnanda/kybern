@@ -45,7 +45,7 @@ pub(crate) fn select_input(id: u64, start: u32, end: u32, reversed: bool, cx: &m
         if state.marked_range.is_some() {
             return Err(napi::Error::from_reason("Input is composing"));
         }
-        state.selected_range = checked_range(&state.content, start, end)?;
+        state.selected_range = state.expand_atoms(checked_range(&state.content, start, end)?);
         state.selection_reversed = reversed;
         state.last_edit = None;
         state.follow_cursor = true;

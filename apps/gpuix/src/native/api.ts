@@ -40,3 +40,38 @@ export function nativeCapabilities(renderer: object): NativeCapabilities {
   }
   return renderer as NativeCapabilities
 }
+
+export interface InputDecoration {
+  start: number
+  end: number
+  style?: {
+    color?: string
+    backgroundColor?: string
+    fontWeight?: number
+    fontStyle?: 'normal' | 'italic'
+    underline?: boolean
+    /** Only zero is currently supported. */
+    borderRadius?: 0
+    /** Only zero is currently supported. */
+    paddingX?: 0
+  }
+  atomic?: boolean
+  id?: string
+}
+export interface DecoratedInputCapabilities {
+  /** UTF-16 ranges, guarded against stale React effects; does not add an undo step. */
+  setInputDecorations(elementId: number, decorations: InputDecoration[], expectedValue: string): void
+  /** Logical window content coordinates; returns the last matching identified range. */
+  hitTestInputDecoration(elementId: number, x: number, y: number): string | null
+}
+export function decoratedInputCapabilities(renderer: object): DecoratedInputCapabilities {
+  for (const method of ['setInputDecorations', 'hitTestInputDecoration'] as const) {
+    if (typeof (renderer as Record<string, unknown>)[method] !== 'function') throw Error(`Native capability ${method} requires the current Kybern native build`)
+  }
+  return renderer as DecoratedInputCapabilities
+}
+/** Cached ancestors are invalidated; queued offsets apply after child splices in the next draw. */
+export interface CachedListCapabilities {
+  scrollToItem(elementId: number, index: number, offsetInItem?: number): void
+  getListScrollTop(elementId: number): number[] | null
+}
