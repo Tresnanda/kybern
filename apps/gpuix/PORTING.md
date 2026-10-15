@@ -38,6 +38,23 @@ and behave like the desktop, and it must not make idle or animation cost worse
 - The `<textarea>` placeholder colour is fixed; `Composer.tsx` draws its own.
 - `motion.div` tweens width/height/top/left/opacity/borderRadius only; no springs.
 
+## App shell (`src/shell/`)
+
+- `persist.ts`: `load(key, fallback)` / `save(key, value)`, a per-environment
+  JSON file (`gpuix-ui.json` in the data dir), debounced and atomic; keys mirror
+  the desktop's `localStorage` names (`kybern.sidebar.width`, `kybern.dock.width`).
+- `layout.ts`: the panel width (208-480, saved, shrinks before the dock on a
+  narrow window). `toasts.tsx`: `toast()` / `toast.error()` / `toast.dismiss()` and
+  `<Toaster />`; `agentToasts.ts` raises the agent event toasts. `Connection.tsx`:
+  banner and Welcome. `ErrorBoundary.tsx`: per-surface fallback with Reload.
+  `window.ts`: frame save/restore, window width, OS appearance (one 300 ms poll).
+- Hit testing: GPUIX tests a child before its parent, so a plain child over a
+  handler swallows the press. Give decorative children `pointerEvents: 'none'`.
+- An `<anchored>` layer paints an opaque backing under its content: size it to
+  its opaque card (one layer per toast) and never use it for a transparent layer.
+- Never call `[NSApplication sharedApplication]` before GPUI starts (it crashes
+  on GPUI's own subclass); use `nsApp()` from `native/objc.ts`.
+
 ## Performance rules
 
 GPUI rebuilds and lays out every built element in the window whenever anything

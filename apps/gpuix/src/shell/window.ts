@@ -15,7 +15,7 @@ import type { Pointer } from 'bun:ffi'
 import type { NativeRenderer } from '@gpuix/react'
 import { cls, cstr, each, getObjc, nsApp, sel, type Objc } from '../native/objc.ts'
 import { readSystemVariant, setSystemVariant } from './appearance.ts'
-import { setWindowSize } from './layout.ts'
+import { setWindowWidth } from './layout.ts'
 import { load, save } from './persist.ts'
 
 const FRAME_KEY = 'kybern.window.frame'
@@ -120,7 +120,7 @@ export function startWindowShell(renderer: NativeRenderer) {
       if (size) {
         width = size.width
         height = size.height
-        setWindowSize(width, height)
+        setWindowWidth(width)
       }
       if (!mac) return
       // The frame (position moves without resizing) and the OS appearance: every third tick.

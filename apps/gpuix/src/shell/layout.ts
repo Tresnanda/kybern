@@ -25,8 +25,6 @@ const saved = Number(load<number>(KEY, SIDEBAR_DEFAULT))
 let stored = saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX ? saved : SIDEBAR_DEFAULT
 /** 0 until the first window-size reading: no narrow-window shrink before it. */
 let windowWidth = 0
-let windowHeight = 0
-let windowSizeSnapshot = { width: 0, height: 0 }
 let dragging = false
 const listeners = new Set<() => void>()
 const emit = () => listeners.forEach((l) => l())
@@ -57,27 +55,12 @@ export function useSidebarDragging(): boolean {
   )
 }
 
-/** Called by the window poller whenever the window's size changes. */
-export function setWindowSize(width: number, height: number) {
-  if (width === windowWidth && height === windowHeight) return
+/** Called by the window poller whenever the window's width changes. */
+export function setWindowWidth(width: number) {
+  if (width === windowWidth) return
   const before = effectiveSidebarWidth()
-  const grew = height !== windowHeight
   windowWidth = width
-  windowHeight = height
-  windowSizeSnapshot = { width, height }
-  // Only the handle (which spans the window's height) reads the height.
-  if (effectiveSidebarWidth() !== before || grew) emit()
-}
-
-/** The window's size as the poller last saw it (`{0, 0}` before the first reading). */
-export function useWindowSizeSnapshot(): { width: number; height: number } {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l)
-      return () => listeners.delete(l)
-    },
-    () => windowSizeSnapshot,
-  )
+  if (effectiveSidebarWidth() !== before) emit()
 }
 
 /** Follow the pointer; the width is saved when the drag ends. */

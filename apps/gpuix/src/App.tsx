@@ -140,12 +140,12 @@ export function App() {
             </PageEnter>
             <ConnectionBanner />
           </div>
+          {panelOpen && <SidebarResizeHandle />}
         </div>
       </div>
       <Palette />
       <HandoffDialog />
       <SessionsDialog />
-      {panelOpen && <SidebarResizeHandle />}
       <Toaster />
       <SidebarDragLayer />
     </div>
