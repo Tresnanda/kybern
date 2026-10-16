@@ -1,7 +1,7 @@
 /**
  * Side-by-side visual check: the Tauri desktop UI (WebKit) vs the GPUIX app.
  *
- *   bun scripts/visual-pair.ts [screen ...] [--theme dark|light|both] [--out dir] [--fresh] [--keep] [--gpuix-only] [--down]
+ *   bun scripts/visual-pair.ts [screen ...] [--theme dark|light|both] [--out dir] [--fresh] [--keep] [--gpuix-only|--tauri-only] [--down]
  *
  * Starts a scratch daemon (data under ade-gpuix-scratch/visual-pair) and the
  * desktop Vite server, seeds fixtures over RPC, captures both UIs at 1280x820
@@ -85,7 +85,7 @@ async function fixtureIds(): Promise<Fixture> {
 }
 function run(cmd: string[], opts: { env?: Record<string, string> } = {}) {
   const r = Bun.spawnSync(cmd, { env: { ...process.env, ...opts.env }, stdout: 'pipe', stderr: 'pipe' })
-  if (r.exitCode !== 0) throw new Error(`${cmd.join(' ')}\n${r.stderr.toString()}`)
+  if (r.exitCode !== 0) throw new Error(`${cmd.slice(0, 2).join(' ')} failed\n${r.stderr.toString()}`)
   return r.stdout.toString()
 }
 
@@ -101,6 +101,7 @@ try {
       const pid = await tauriWindowUp()
       for (const name of names) { tauriWindowShot(pid, path.join(out, `${name}-${theme}-tauri.png`)); console.log(`[tauri-window] ${name}`) }
     } else if (!flag('gpuix-only')) console.log(run(['node', path.join(here, '../visual/tauri-shot.mjs'), JSON.stringify({ port: state.port, token: state.token, vite: state.vitePort, theme, screens: names, out })]).trim())
+    if (flag('tauri-only')) continue
     // A fresh app per screen: an open note, task or menu must not leak into the next one.
     for (const name of names) {
       const step = gpuixScreens[name]
@@ -111,11 +112,12 @@ try {
       const app = await launch({
         command: 'bun',
         args: [path.resolve(here, '..', gpuixEntries[name]?.entry ?? 'src/main.tsx')],
-        env: { ...(gpuixEntries[name]?.env ?? {}), GPUIX_BACKGROUND: flag('foreground') ? '0' : '1', KYBERN_OPAQUE: '1', KYBERN_ENVIRONMENT_NAME: 'Development environment', KYBERN_APPEARANCE: theme, KYBERN_DATA_DIR: DATA_DIR, KYBERN_CLIENT_CONFIG_DIR: CLIENT_DIR, KYBERN_GPUIX_CREDENTIALS_DIR: CREDS_DIR, KYBERN_REDUCED_MOTION: '1', ...(winSize ? { KYBERN_WINDOW_SIZE: winSize } : {}), ...(process.env.KYBERN_SIDEBAR_WIDTH ? { KYBERN_SIDEBAR_WIDTH: process.env.KYBERN_SIDEBAR_WIDTH } : {}) },
+        env: { ...(gpuixEntries[name]?.env ?? {}), GPUIX_BACKGROUND: flag('foreground') ? '0' : '1', KYBERN_OPAQUE: '1', KYBERN_ENVIRONMENT_NAME: 'Development environment', KYBERN_APPEARANCE: theme, KYBERN_DATA_DIR: DATA_DIR, KYBERN_CLIENT_CONFIG_DIR: CLIENT_DIR, KYBERN_GPUIX_CREDENTIALS_DIR: CREDS_DIR, KYBERN_REDUCED_MOTION: process.env.KYBERN_REDUCED_MOTION ?? '1', ...(winSize ? { KYBERN_WINDOW_SIZE: winSize } : {}), ...(process.env.KYBERN_SIDEBAR_WIDTH ? { KYBERN_SIDEBAR_WIDTH: process.env.KYBERN_SIDEBAR_WIDTH } : {}) },
       })
       try {
         await app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })
         await Bun.sleep(1800)
+        process.env.KYBERN_VERIFY_THEME = theme
         await step(app, fixture)
         await app.screenshot({ path: path.join(out, `${name}-${theme}-gpuix.png`) })
       } finally {

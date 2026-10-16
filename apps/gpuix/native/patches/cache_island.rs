@@ -247,13 +247,13 @@ pub(crate) fn island_element(
             gpui::canvas(
                 |_, _, _| (),
                 move |_, _, _, _| {
-                    for &(id, bounds) in replay.borrow().iter() {
+                    for (id, bounds) in replay.borrow().iter() {
                         // A changed island already painted fresh ordinary bounds.
                         // Its deferred snapshot runs later, so replay must only
                         // fill gaps; overwriting here freezes the old coordinates
                         // into that next snapshot after layout/translation changes.
-                        if get_bounds(id).is_none() {
-                            insert_bounds(id, bounds);
+                        if get_bounds(*id).is_none() {
+                            insert_bounds(*id, bounds.clone());
                         }
                     }
                 },

@@ -26,6 +26,8 @@ static void emit(NSDictionary *event) {
 - (NSView *)hitTest:(NSPoint)point {
   if (pointerCaptured) return nil;
   NSPoint local = [self convertPoint:point fromView:self.superview];
+  CAShapeLayer *mask = (CAShapeLayer *)self.layer.mask;
+  if (mask.path && !CGPathContainsPoint(mask.path, NULL, NSPointToCGPoint(local), false)) return nil;
   for (NSBezierPath *path in self.blocked) if ([path containsPoint:local]) return nil;
   return [super hitTest:point];
 }
@@ -40,6 +42,7 @@ static void emit(NSDictionary *event) {
 @property NSString *category;
 @property WKWebView *web;
 @property KybernWebClip *clip;
+@property NSArray<NSArray<NSNumber *> *> *roundedClips;
 @property BOOL placed;
 @property NSNumber *generation;
 @property NSArray<NSString *> *allowedOrigins;
@@ -111,7 +114,27 @@ static void emit(NSDictionary *event) {
   [self.web evaluateJavaScript:script completionHandler:nil];
 }
 - (void)mask {
-  CGPathRef path = CGPathCreateWithRect(NSRectToCGRect(self.clip.bounds), NULL);
+  CGFloat ownRadius = self.clip.layer.cornerRadius;
+  CGPathRef path = CGPathCreateWithRoundedRect(NSRectToCGRect(self.clip.bounds), ownRadius, ownRadius, NULL);
+  for (NSArray<NSNumber *> *shape in self.roundedClips) {
+    if (shape.count != 8) continue;
+    CGFloat x = shape[0].doubleValue - self.logicalClip.origin.x, y = shape[1].doubleValue - self.logicalClip.origin.y;
+    CGFloat w = shape[2].doubleValue, h = shape[3].doubleValue;
+    CGFloat tl = shape[4].doubleValue, tr = shape[5].doubleValue, br = shape[6].doubleValue, bl = shape[7].doubleValue;
+    CGMutablePathRef rounded = CGPathCreateMutable();
+    CGPathMoveToPoint(rounded, NULL, x+tl, y);
+    CGPathAddLineToPoint(rounded, NULL, x+w-tr, y);
+    CGPathAddArcToPoint(rounded, NULL, x+w, y, x+w, y+tr, tr);
+    CGPathAddLineToPoint(rounded, NULL, x+w, y+h-br);
+    CGPathAddArcToPoint(rounded, NULL, x+w, y+h, x+w-br, y+h, br);
+    CGPathAddLineToPoint(rounded, NULL, x+bl, y+h);
+    CGPathAddArcToPoint(rounded, NULL, x, y+h, x, y+h-bl, bl);
+    CGPathAddLineToPoint(rounded, NULL, x, y+tl);
+    CGPathAddArcToPoint(rounded, NULL, x, y, x+tl, y, tl);
+    CGPathCloseSubpath(rounded);
+    CGPathRef next = CGPathCreateCopyByIntersectingPath(path, rounded, false);
+    CGPathRelease(rounded); CGPathRelease(path); path = next;
+  }
   NSMutableArray<NSBezierPath *> *blocked = [NSMutableArray new]; CGFloat dim = 0;
   for (NSNumber *layer in occlusions) {
     NSDictionary *entry = occlusions[layer], *r = entry[@"rect"];
@@ -215,6 +238,7 @@ void kybern_web_command(const char *json) {
       double x = [cmd[@"x"] doubleValue], y = [cmd[@"y"] doubleValue], width = [cmd[@"width"] doubleValue], height = [cmd[@"height"] doubleValue];
       host.clip.frame = NSMakeRect(x, content.isFlipped ? y : content.bounds.size.height - y - height, width, height);
       host.clip.layer.cornerRadius = [cmd[@"radius"] doubleValue];
+      host.roundedClips = [cmd[@"roundedClips"] isKindOfClass:NSArray.class] ? cmd[@"roundedClips"] : @[];
       host.logicalClip = NSMakeRect(x,y,width,height); host.layer = [cmd[@"layer"] integerValue]; [host mask];
       host.web.frame = NSMakeRect([cmd[@"offsetX"] doubleValue], [cmd[@"offsetY"] doubleValue], [cmd[@"logicalWidth"] doubleValue], [cmd[@"logicalHeight"] doubleValue]);
       // WKWebView magnification does not change the layout viewport. The wrapper

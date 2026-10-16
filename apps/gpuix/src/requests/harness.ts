@@ -6,7 +6,17 @@ import { spawn } from 'node:child_process'
 export async function launchFixture(entry: string, env: Record<string, string>) {
   const child = spawn('bun', [entry], { env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] })
   let stderr = ''
-  child.stderr.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-8000) })
+  const frames:number[]=[]
+  let frameRemainder=''
+  child.stderr.on('data', chunk => {
+    stderr = (stderr + String(chunk)).slice(-8000)
+    if(env.KYBERN_FRAME_TIMES==='1') {
+      const lines=(frameRemainder+String(chunk)).split('\n');frameRemainder=lines.pop()??''
+      for(const line of lines){const m=line.match(/\[kybern-frame\] ([\d.]+)/);if(m)frames.push(Number(m[1]))}
+      if(frames.length>10000)frames.splice(0,frames.length-10000)
+    }
+    if(process.env.KYBERN_FIXTURE_DIAGNOSTICS) process.stderr.write(chunk)
+  })
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     const app = await Promise.race([
@@ -18,7 +28,24 @@ export async function launchFixture(entry: string, env: Record<string, string>) 
       }),
     ])
     clearTimeout(timer)
-    return { app, pid: child.pid!, diagnostics: () => stderr, close: async () => { await app.close(); if (child.exitCode === null) child.kill() } }
+    // An addon panic after handshake must reject pending input, rather than
+    // leave a live test waiting forever on a dead transport.
+    const exited = new Promise<never>((_,reject)=>child.once('exit',code=>reject(new Error(`Fixture exited (${code}): ${stderr}`))))
+    void exited.catch(()=>{})
+    const backend=(app as unknown as {backend:{call:(...args:unknown[])=>Promise<unknown>}}).backend
+    const call=backend.call.bind(backend)
+    backend.call=(...args)=>Promise.race([call(...args),exited])
+    return { app, pid: child.pid!, diagnostics: () => stderr, frameTimes:()=>[...frames], close: async () => {
+      let deadline:ReturnType<typeof setTimeout>|undefined
+      try { await Promise.race([app.close(),new Promise(resolve=>{deadline=setTimeout(resolve,2000)})]) }
+      finally {
+        clearTimeout(deadline)
+        if(child.exitCode===null){
+          child.kill()
+          await new Promise<void>(resolve=>{const done=()=>{clearTimeout(deadline);resolve()};child.once('exit',done);deadline=setTimeout(()=>{child.kill('SIGKILL');done()},2000)})
+        }
+      }
+    } }
   } catch (error) { clearTimeout(timer); child.kill(); throw error }
 }
 

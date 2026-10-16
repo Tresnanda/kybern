@@ -1,6 +1,8 @@
 export type LayoutRect = { x: number; y: number; width: number; height: number }
 export type WindowResizeEvent = { width: number; height: number; scaleFactor: number; frame: number }
-export type ElementBoundsEvent = { elementId: number | null; rect: LayoutRect | null; clippedRect: LayoutRect | null; frame: number }
+/** Window coordinates: x, y, width, height, then top-left/right, bottom-right/left radii. */
+export type RoundedLayoutClip = [number,number,number,number,number,number,number,number]
+export type ElementBoundsEvent = { elementId: number | null; rect: LayoutRect | null; clippedRect: LayoutRect | null; roundedClips?: RoundedLayoutClip[] | null; frame: number }
 export type BoundsTarget = number | { testId: string } | { id: number }
 interface LayoutRenderer {
   addLayoutObserver(target: number | { testId: string } | null, callback: (error: Error | null, value: unknown) => void): number

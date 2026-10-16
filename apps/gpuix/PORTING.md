@@ -28,8 +28,9 @@ and behave like the desktop, and it must not make idle or animation cost worse
 - `div` is not flex until `display: 'flex'`. Shrinking children need `minWidth: 0`.
 - Every `<text>` needs `color`. Do not mix strings and expressions in one
   `<text>` (`Show {n} more` lays out as separate items): use a template string.
-- `overflow: 'hidden'` clips to a rectangle, not the radius. A child that paints
-  a background at a rounded edge must carry the same corner radii.
+- In the patched native renderer, `overflow: 'hidden'` clips descendant paint
+  and hit testing to the element's corner radii. Nested masks intersect and cached
+  views retain their clipping. The stock npm addon still clips rectangularly.
 - `<virtual-list>` ignores `padding` and its rows' outer margins: put spacing on
   each row as padding. Rows are its direct children with stable keys.
 - No nested vertical scrollers. Long lists use `<virtual-list>`.
@@ -42,6 +43,8 @@ and behave like the desktop, and it must not make idle or animation cost worse
 - The patched `motion.div` adds native springs and layout-neutral translateX/translateY
   to width/height/top/left/opacity/borderRadius. True subtree scale remains unsupported.
   See `native/README.md` for key interception, secure inputs, close hooks, and code wrap.
+  SVGs also support native `rotate` in degrees (`motion.svg`) and physical springs
+  with `{ type: 'spring', stiffness, damping, mass }`. Div-subtree rotation is not supported.
 
 ## App shell (`src/shell/`)
 

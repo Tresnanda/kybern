@@ -18,14 +18,14 @@ import { KybernClient } from '../../../packages/kybern-client/src/client.ts'
  */
 const SLOT = process.env.GPUIX_VISUAL_SLOT ?? createHash('sha1').update(path.resolve(import.meta.dir, '../../..')).digest('hex').slice(0, 8)
 export const SCRATCH = process.env.VISUAL_SCRATCH ?? `/Users/mymac/projects/ade-gpuix-scratch/visual-pair-${SLOT}`
-export const DATA_DIR = path.join(SCRATCH, 'data')
+export const DATA_DIR = process.env.VISUAL_DATA_DIR ?? path.join(SCRATCH, 'data')
 /** GPUIX appearance prefs and credentials live here, never in ~/Library (a guard refuses anything outside the scratch dir). */
 export const CLIENT_DIR = path.join(SCRATCH, 'client')
 export const CREDS_DIR = path.join(SCRATCH, 'credentials')
 export const DAEMON_BIN = process.env.KYBERND ?? '/Applications/kybern.app/Contents/MacOS/kybernd'
 const STATE = path.join(SCRATCH, 'state.json')
 
-for (const d of [DATA_DIR, CLIENT_DIR, CREDS_DIR]) if (!path.resolve(d).startsWith(path.resolve(SCRATCH) + path.sep)) throw new Error(`${d} is outside the scratch dir`)
+for (const d of [DATA_DIR, CLIENT_DIR, CREDS_DIR]) if (path.resolve(d) !== path.resolve(SCRATCH) && !path.resolve(d).startsWith(path.resolve(SCRATCH) + path.sep)) throw new Error(`${d} is outside the scratch dir`)
 if (!SCRATCH.includes('gpuix-scratch')) throw new Error('VISUAL_SCRATCH must contain gpuix-scratch')
 
 export type RunState = { daemonPid: number; daemonPort?: number; proxyPid?: number; port: number; token: string; vitePid?: number; vitePort?: number; seeded: boolean }
@@ -67,7 +67,7 @@ export async function startDaemon(fresh: boolean): Promise<RunState> {
   }
   if (fresh) rmSync(DATA_DIR, { recursive: true, force: true })
   mkdirSync(DATA_DIR, { recursive: true })
-  const port = await freePort()
+  const port = process.env.VISUAL_DAEMON_PORT ? Number(process.env.VISUAL_DAEMON_PORT) : await freePort()
   if (port === 4219) throw new Error('port 4219 is reserved')
   const child: ChildProcess = spawn(DAEMON_BIN, ['--data-dir', DATA_DIR, '--port', String(port)], {
     stdio: 'ignore',

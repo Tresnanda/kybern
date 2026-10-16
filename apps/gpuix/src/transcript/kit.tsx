@@ -16,7 +16,7 @@ export const TEXT = { size: 14, lineHeight: 22.75 }
 export const META = { size: 12, lineHeight: 19.5 }
 /** Tool and work rows: CHAT_FONT at `leading-6`. */
 export const ROW_LINE = 24
-export const CODE = { size: 13, lineHeight: 21.125, font: FONT_MONO }
+export const CODE = { size: 13, lineHeight: 21.125, font: FONT_MONO, radius: 10.4 } // kit.css: .65rem
 
 /** `text-muted-foreground` at an extra opacity (`/65` → 0.65). */
 export function muted(t: Theme, alpha = 1): string {
@@ -192,7 +192,7 @@ export function markdownTheme(t: Theme, tone: 'bright' | 'muted' = 'bright') {
       mdHeadingSizes: [24.5, 21.7, 18.9, 16.8],
       mdHeadingLineHeights: [30.6, 27.1, 23.6, 21],
       mdInlineCodeRadius: 6.4,
-      mdCodeRadius: 10.4,
+      mdCodeRadius: CODE.radius,
       mdCodePaddingX: 9.6,
       mdCodePaddingY: 8,
       mdCodeHeaderPaddingY: 1.6,

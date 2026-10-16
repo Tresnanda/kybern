@@ -66,7 +66,7 @@ export const CodeHeader = memo(function CodeHeader({ part, expanded, wrap, onExp
   part: MarkdownPart; expanded: boolean; wrap: boolean; onExpand?: () => void; onWrap: () => void
 }) {
   const t = useTheme()
-  return <div testId="code-header" style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 36, paddingLeft: 12, paddingRight: 8, borderTopLeftRadius: 10, borderTopRightRadius: 10, backgroundColor: t.codeSurface, borderWidth: 1, borderColor: t.border }}>
+  return <div testId="code-header" style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 36, paddingLeft: 12, paddingRight: 8, borderTopLeftRadius: CODE.radius, borderTopRightRadius: CODE.radius, overflow: 'hidden', backgroundColor: t.codeSurface, borderWidth: 1, borderColor: t.border }}>
     <Label color={muted(t)} size={11.52} style={{ flexGrow: 1 }}>{part.language === 'mermaid' ? 'Mermaid source · diagram preview unavailable' : part.language || 'text'}</Label>
     {onExpand && <Button testId="code-expand" variant="ghost" onClick={onExpand}>{expanded ? 'Show less' : 'Show more'}</Button>}
     <div testId="code-wrap" role="button" aria-label={wrap ? 'Disable line wrap' : 'Wrap lines'} onClick={onWrap} style={{ display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center', borderRadius: 6, cursor: 'pointer', backgroundColor: wrap ? t.hover : 'rgba(0, 0, 0, 0)', hover: { backgroundColor: t.hover } }}>
@@ -76,9 +76,9 @@ export const CodeHeader = memo(function CodeHeader({ part, expanded, wrap, onExp
   </div>
 })
 
-export const CodeChunk = memo(function CodeChunk({ text, language, wrap }: { text: string; language?: string; wrap: boolean }) {
+export const CodeChunk = memo(function CodeChunk({ text, language, wrap, last = true }: { text: string; language?: string; wrap: boolean; last?: boolean }) {
   const t = useTheme()
-  return <div style={{ display: 'flex', flexDirection: 'column', padding: 12, paddingTop: 4, paddingBottom: 4, backgroundColor: t.codeSurface, minWidth: 0 }}>
+  return <div testId="code-body" style={{ display: 'flex', flexDirection: 'column', padding: 12, paddingTop: 4, paddingBottom: 4, backgroundColor: t.codeSurface, minWidth: 0, borderBottomLeftRadius: last ? CODE.radius : 0, borderBottomRightRadius: last ? CODE.radius : 0, overflow: 'hidden' }}>
     <code softWrap={wrap} code={text.replace(/\n$/, '')} language={language} theme={cachedMarkdownTheme(t)} style={{ minWidth: 0, userSelect: 'text' }} />
   </div>
 })
