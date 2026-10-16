@@ -21,7 +21,7 @@ import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { DragGhost, DropSlot, type Rect, type Settle } from '../drag/Ghost.tsx'
 import { leftCapture } from '../drag/leave.ts'
 import { edgeSpeed, startFrameLoop } from '../drag/edge.ts'
-import { usePacing } from '../drag/pacing.ts'
+import { recordDragPointer, usePacing } from '../drag/pacing.ts'
 import { createShiftStore } from '../drag/shift.tsx'
 import { SPRING } from '../drag/spring.ts'
 import { createVelocityTracker } from '../drag/velocity.ts'
@@ -217,6 +217,7 @@ function move(event: EventPayload) {
   if (!drag || drag.settle) return
   if (event.pressedButton !== 0) return release(false)
   const x = event.x ?? drag.x, y = event.y ?? drag.y
+  recordDragPointer('projects', x - drag.grab.x, y - drag.grab.y)
   velocity.push(x, y)
   retarget(x, y)
 }

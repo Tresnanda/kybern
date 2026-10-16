@@ -18,7 +18,7 @@ import { NotesPage } from './notes/NotesPage.tsx'
 import { SettingsScreen } from './settings/SettingsScreen.tsx'
 import { UsagePage } from './usage/UsagePage.tsx'
 import { PullRequestsPage } from './pulls/PullRequestsPage.tsx'
-import { TasksDragLayer } from './tasks/drag.tsx'
+import { TasksDragLayer, trackTaskDrag, useHeldTask } from './tasks/drag.tsx'
 import { TabDragLayer } from './dock/reorder.tsx'
 import { ProjectDragLayer } from './sidebar/reorder.tsx'
 import { TasksPage } from './tasks/TasksPage.tsx'
@@ -77,6 +77,7 @@ export function App() {
 
 function Workspace() {
   const splitDragging = useSplitDragging()
+  const taskDragging = !!useHeldTask()
   useTasksFeed()
   const t = useTheme()
   const page = useNav((s) => s.page)
@@ -117,7 +118,7 @@ function Workspace() {
       testId="app-ready"
       // Any press makes later navigation pointer-driven again (`keyboardNav`).
       onMouseDown={pointerNav}
-      onMouseMove={splitDragging ? trackThreadDrag : undefined}
+      onMouseMove={taskDragging || splitDragging ? (event) => { if (taskDragging) trackTaskDrag(event); if (splitDragging) trackThreadDrag(event) } : undefined}
       onMouseUp={splitDragging ? finishSplitDrag : undefined}
       style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: OPAQUE_WINDOW && t.variant === 'light' ? over(t.frame, '#ffffff') : t.frame, position: 'relative' }}
     >

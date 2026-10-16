@@ -8,6 +8,11 @@ import { writeFileSync, mkdirSync } from 'node:fs'
 import { observeElementBounds } from '../native/layout.ts'
 
 const dir = process.env.KYBERN_DRAG_PACING
+const inputs = new Map<string, {time: number; x: number; y: number}>()
+/** Opt-in JS event → matching post-paint native bounds probe, not display latency. */
+export function recordDragPointer(label: string, x: number, y: number) {
+  if (dir) inputs.set(label, {time: performance.now(), x, y})
+}
 const pct = (sorted: number[], p: number) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))] ?? 0
 export function summarize(times: number[]) {
   const intervals = times.slice(1).map((t, i) => t - times[i]!)
@@ -21,13 +26,20 @@ export function usePacing(label: string) {
   useEffect(() => {
     if (!dir || !node) return
     const times: number[] = []
-    const stop = observeElementBounds(renderer, node.id, () => times.push(performance.now()))
+    const probes: {input: number; painted: number; delay: number; x: number; y: number}[] = []
+    const stop = observeElementBounds(renderer, node.id, ({rect}) => {
+      const now = performance.now()
+      times.push(now)
+      const input = inputs.get(label)
+      if (input && rect && Math.abs(rect.x - input.x) < 1 && Math.abs(rect.y - input.y) < 1) probes.push({input:input.time,painted:now,delay:now-input.time,x:rect.x,y:rect.y})
+    })
     return () => {
       stop()
       console.error('[pacing]', label, times.length)
       if (times.length < 3) return
       mkdirSync(dir, { recursive: true })
-      writeFileSync(`${dir}/${label}-${Date.now()}.json`, JSON.stringify(summarize(times)))
+      const delays = probes.map(p => p.delay).sort((a,b) => a-b)
+      writeFileSync(`${dir}/${label}-${Date.now()}.json`, JSON.stringify({...summarize(times), pointerToBounds: {kind:'JS move to matching native post-paint notification; not display presentation', samples:probes.length, p50:+pct(delays,.5).toFixed(2), p95:+pct(delays,.95).toFixed(2)}, probes}))
     }
   }, [node, renderer, label])
   return dir ? ref : undefined
