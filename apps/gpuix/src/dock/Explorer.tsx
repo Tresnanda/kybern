@@ -137,7 +137,7 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
         scrollToRow(next)
       }} style={{ display: 'flex', width: '100%', flexGrow: 1, minHeight: 0 }}>
       <TreeHost ref={treeList} testId="dock-file-tree" style={{ display: 'flex', flexDirection: 'column', width: '100%', flexGrow: 1, minHeight: 0, overflowY: virtualTree ? undefined : 'scroll', overflowX: 'hidden' }}>
-        <MotionFileTreeRows rows={rows} open={expanded} selected={selected} focus={focus} virtual={virtualTree} activate={(row, index) => { setFocus(index); activate(row); if (tree.current) renderer?.focusElement?.(tree.current.id) }} />
+        <MotionFileTreeRows rows={rows} open={expanded} selected={selected} focus={focus} virtual={virtualTree} search={results !== null} activate={(row, index) => { setFocus(index); activate(row); if (tree.current) renderer?.focusElement?.(tree.current.id) }} />
       </TreeHost>
       </div>
     </div>
