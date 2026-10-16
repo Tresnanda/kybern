@@ -207,7 +207,7 @@ index 3a3d64d72a471e955037efecac7e19df02bb9221..60c9c373fa8c28b2243127e64165e709
          }
          timer = setTimeout(loop, Math.max(0, frameMs - (performance.now() - started)));
      };
-+    if (typeof renderer.setFrameWakeCallback === "function" && process.env.KYBERN_VSYNC_WAKE === "1") {
++    if (typeof renderer.setFrameWakeCallback === "function" && process.env.KYBERN_VSYNC_WAKE !== "0") {
 +        renderer.setFrameWakeCallback((error) => {
 +            if (stopped) return;
 +            try {

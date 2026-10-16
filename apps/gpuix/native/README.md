@@ -499,10 +499,13 @@ without including the disposable upstream checkout.
 The pinned GPUI already implements `Window::request_animation_frame()` through
 `on_next_frame`/`schedule_frame`, with `gpui_macos/src/display_link.rs` supplying
 CVDisplayLink pacing and idle suspension. Native motion uses this path. The shared
-JS loader clock still deliberately samples at 5 Hz and stops while hidden; making
-that clock run at display rate would increase work, not fix frame presentation.
-No additional timer or GPUI scheduler patch was added. This source inspection is
-not a frame-interval or energy measurement.
+The shared source now supports display-rate JS sampling and native matrix/task
+loops without React commits. Full-app loop integration is still explicitly
+opt-in with `KYBERN_NATIVE_PAINT_ANIMATIONS=1`; the historical coarse clock remains
+outside that experiment because its smooth JS replacement regressed running CPU.
+That coarse behavior remains an unresolved pacing defect. Elapsed labels have a
+separate visibility-aware seconds clock. Round-seven measurements and remaining
+acceptance gaps are in `../perf/pacing-round7-2026-10-17.md`.
 
 Faithful subtree scale remains unsupported for the reasons in the native springs
 section: quads, paths, masks, glyphs and hitboxes need one coordinated GPUI scene
@@ -1050,11 +1053,18 @@ required regression check, not something inferred from callback counts.
 `paintAnimation: {kind:'matrix'|'breathe',cycleMs:number,delayMs?:number}` is allowed
 only on passive fixed-geometry div fills or SVG tints. Native paint samples the
 same easing without per-frame React updates, while still replaying/submitting the
-whole scene. Reduced motion omits the prop. The optional embedded-host wake is
-`KYBERN_VSYNC_WAKE=1`; inactive full-rate motion is `KYBERN_FULL_RATE=1`. Neither is
-enabled by default. `frame-check.ts` captures actual window pixels plus bounded
+whole scene. Reduced motion omits the prop. Embedded-host display wake and
+inactive full-rate motion are enabled by default; `KYBERN_VSYNC_WAKE=0` and
+`KYBERN_FULL_RATE=0` select the historical paths for comparisons.
+`KYBERN_REGION_PAINT=1` opts into retained damage rendering; the target is allocated
+only during eligible passive loops and released when they park. Path/filter
+scenes use full rendering. `KYBERN_NATIVE_TEXT_PAINT=1` opts into passive glyph
+tint. Both remain opt-in because repeated full-app GPU controls did not reliably
+meet the running-thread gate. `frame-check.ts` captures actual window pixels plus bounded
 submission cadence, callback backpressure, unsubscribe, minimize and unmount.
 
-The experimental frame app and frame-check fixtures are retained on
-`gpuix/native` at `f9e5e2a7`, not enabled in the integrated port. The shipped
-app still uses its existing loader clock until full-app performance acceptance.
+The original experiment is retained at `gpuix/native` `f9e5e2a7`. Round seven
+integrates the frame source and bounded wake selectively, rather than merging
+that checkpoint wholesale. See the round-seven report for before/after cadence,
+idle, memory and four-mode checks. Callback timestamps are display-source ticks,
+not physical presentation fences.

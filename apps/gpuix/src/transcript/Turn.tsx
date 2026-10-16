@@ -20,7 +20,7 @@ import { buildWorkHierarchy, shouldRevealLiveText, type Block, type TurnGroup } 
 import type { Diff, RuntimeTask, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { useApp } from '../state.ts'
 import { Icon } from '../icons.tsx'
-import { MatrixLoader, useLoaderStep } from '../MatrixLoader.tsx'
+import { MatrixLoader, useLoaderSecond } from '../MatrixLoader.tsx'
 import { clockDuration, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { CopyAction, SaveToNoteAction, UserBubble } from './bubble.tsx'
 import { T } from './glyphs.ts'
@@ -57,17 +57,10 @@ export function DateSeparator({ at }: { at: string }) {
   )
 }
 
-/** "Working for 12s": the orbit loader and an elapsed clock read on the loader's
- *  steps (a 1s timer only under Reduce Motion, when the clock is still). */
+/** The orbit loader animates independently; elapsed labels update once a second. */
 function WorkingHeader({ since }: { since: string }) {
   const t = useTheme()
-  useLoaderStep()
-  const [, setTick] = useState(0)
-  useEffect(() => {
-    if (!REDUCED_MOTION) return
-    const id = setInterval(() => setTick((n) => n + 1), 1000)
-    return () => clearInterval(id)
-  }, [])
+  useLoaderSecond(true)
   return (
     <div testId="working-header" style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: -2 }}>
       <div style={{ display: 'flex', width: 16, justifyContent: 'center' }}>

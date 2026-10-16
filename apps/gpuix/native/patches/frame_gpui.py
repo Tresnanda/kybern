@@ -44,7 +44,11 @@ impl Scene {
     }
     pub(crate) fn animate_tagged(&mut self) -> bool {
         let now = std::time::Instant::now();
+        // Text contributes a primitive per glyph, but its phase/base tint are
+        // shared by the tagged leaf. Evaluate the curve only once per leaf.
+        let mut seen = std::collections::HashSet::new();
         let updates: Vec<_> = self.repaint_tags.values().filter_map(|&(id, _, _, animation, color)| {
+            if animation.is_none() || !seen.insert(id) { return None; }
             animation.map(|animation| (id, color.opacity(animation.opacity(now))))
         }).collect();
         !updates.is_empty() && self.repaint_tagged_inner(&updates, false)
@@ -56,6 +60,9 @@ edit(w, '    pub(crate) needs_present: Rc<Cell<bool>>,', '    pub(crate) needs_p
 edit(w, '            needs_present,', '            needs_present,\n            paint_animation_scheduled: false,')
 edit(w, '        self.platform_window.draw(&self.rendered_frame.scene);', """        let animated = self.rendered_frame.scene.animate_tagged();
         self.platform_window.draw(&self.rendered_frame.scene);
+        if *TRACE.get_or_init(|| std::env::var_os("KYBERN_FRAME_TIMES").is_some()) {
+            eprintln!("[kybern-submit] {:.3}", ORIGIN.get_or_init(std::time::Instant::now).elapsed().as_secs_f64()*1000.0);
+        }
         if animated && !self.paint_animation_scheduled {
             self.paint_animation_scheduled = true;
             self.on_next_frame(|window, _| {

@@ -1,4 +1,4 @@
-import { ISLAND, useLoaderStep } from '../MatrixLoader.tsx'
+import { ISLAND, NATIVE_PAINT_ANIMATIONS, useLoaderStep } from '../MatrixLoader.tsx'
 import { motion } from '@gpuix/react'
 import type { TaskPriority, TaskStatus } from '../../../../packages/kybern-client/src/types.ts'
 import { EASE_OUT, ink, REDUCED_MOTION, useTheme } from '../ui.tsx'
@@ -30,7 +30,7 @@ export function StatusGlyph({ status, mono = false }: { status: TaskStatus; mono
       : status === 'canceled'
         ? '<defs><mask id="cross"><rect width="14" height="14" fill="white"/><path d="M5 5l4 4M9 5 5 9" stroke="black" stroke-width="1.5" stroke-linecap="round"/></mask></defs><circle cx="7" cy="7" r="6.5" fill="currentColor" mask="url(#cross)"/>'
         : `${ring}${status === 'running' ? '<path d="M7 7V3.6A3.4 3.4 0 0 1 7 10.4Z" fill="currentColor"/>' : status === 'needs_review' ? '<path d="M7 7V3.6A3.4 3.4 0 1 1 3.6 7Z" fill="currentColor"/>' : ''}`
-  if (status === 'running' && !mono) return <RunningGlyph source={wrap(body)} color={color} />
+  if (status === 'running' && !mono) return NATIVE_PAINT_ANIMATIONS ? <RunningGlyph ring={wrap(ring)} color={color} /> : <LegacyRunningGlyph source={wrap(body)} color={color} />
   return <svg source={wrap(body)} style={{ width: 14, height: 14, color, flexShrink: 0, pointerEvents: 'none' }} />
 }
 export function PriorityGlyph({ priority }: { priority: TaskPriority }) {
@@ -80,8 +80,17 @@ export function Check({ checked, onClick, testId }: { checked: boolean; onClick:
   )
 }
 
-function RunningGlyph({ source, color }: { source: string; color: string }) {
+function RunningGlyph({ ring, color }: { ring: string; color: string }) {
+  return <RunningPaint ring={ring} color={color} opacity={1} />
+}
+function LegacyRunningGlyph({ source, color }: { source: string; color: string }) {
   const step = useLoaderStep()
-  const opacity = REDUCED_MOTION ? 1 : 0.55 + 0.45 * (1 - Math.cos(step * Math.PI / 4)) / 2
+  const opacity = REDUCED_MOTION ? 1 : .55 + .45 * (1 - Math.cos(step * Math.PI / 4)) / 2
   return <div {...ISLAND} style={{ width: 14, height: 14, flexShrink: 0, pointerEvents: 'none' }}><svg source={source} style={{ width: 14, height: 14, color, opacity, pointerEvents: 'none' }} /></div>
+}
+function RunningPaint({ ring, color, opacity }: { ring: string; color: string; opacity: number }) {
+  return <div {...ISLAND} style={{ width: 14, height: 14, flexShrink: 0, pointerEvents: 'none',position:'relative' }}>
+    <svg source={ring} style={{width:14,height:14,color,pointerEvents:'none'}}/>
+    <svg {...(NATIVE_PAINT_ANIMATIONS && !REDUCED_MOTION ? {paintAnimation:{kind:'breathe',cycleMs:3200}} : {})} source={wrap('<path d="M7 7V3.6A3.4 3.4 0 0 1 7 10.4Z" fill="currentColor"/>')} style={{position:'absolute',left:0,top:0,width:14,height:14,color,opacity,pointerEvents:'none'}}/>
+  </div>
 }

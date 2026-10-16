@@ -6,7 +6,7 @@ import path from 'node:path'
 import { PROTOCOL_VERSION } from '../../../../packages/kybern-client/src/types.ts'
 import type { PrDetailResult, PrFile, PrReviewEntry, PullRequest, UsageRow } from '../../../../packages/kybern-client/src/types.ts'
 
-export function actionFixture() {
+export function actionFixture(options: { long?: boolean } = {}) {
   const scratch = mkdtempSync(path.join(tmpdir(), 'gpuix-scratch-pages-'))
   const now = new Date().toISOString()
   const project = { id: 'pages-fixture', name: 'Kybern fixture', path: '/tmp/kybern-pages-fixture', is_git: true, created_at: now, updated_at: now }
@@ -42,7 +42,7 @@ export function actionFixture() {
         let result: unknown = {}
         let error: string | undefined
         switch (message.method) {
-          case 'daemon.info': result = { protocol_version: PROTOCOL_VERSION, environment_id: 'pages-fixture', version: 'fixture' }; break
+          case 'daemon.info': result = { protocol_version: PROTOCOL_VERSION, environment_id: 'pages-fixture', version: 'fixture', scopes: [] }; break
           case 'projects.list': result = { projects: [project] }; break
           case 'threads.list': result = { threads: [{id:'linked',project_id:project.id,title:'Linked conversation',provider:{kind:'codex',instance:'default'},status:'idle',permission_mode:'supervised',worktree:{branch:pr.head,path:project.path},created_at:now,updated_at:now}], activity: [] }; break
           case 'providers.list': result = { providers: [] }; break
@@ -60,7 +60,7 @@ export function actionFixture() {
             else result = { pull_requests: Array.from({ length: 30 }, (_, i) => ({ ...pr, number: 108 + i, title: i ? `Review change ${i}` : pr.title })) }
             break
           case 'github.pr.action': actions.push(message.params); if(failAction)error='Fixture action rejected';else result={message:'Done'};break
-          case 'github.pr.detail': result = { ...detail, pull_request: { ...pr, number: Number(message.params.number) } }; break
+          case 'github.pr.detail': result = { ...detail, ...(options.long ? { body: Array.from({length: 40}, (_,i) => `### Verification ${i+1}\n\nPreserve **formatted content**, reading position and selection while scrolling.\n\n- Stable rows keep their identity.\n- The complete description remains reachable.\n\n\`row.id\` survives a refresh.`).join('\n\n') } : {}), pull_request: { ...pr, number: Number(message.params.number) } }; break
           case 'github.pr.page': result = { files: message.params.kind === 'files' ? files : [], entries: message.params.kind === 'files' ? [] : entries, page: message.params.page ?? 1, has_more: (Number(message.params.page) || 1) < 3 }; break
           default: if (!['events.unsubscribe', 'ping'].includes(message.method)) error = `Fixture rejects ${message.method}`
         }

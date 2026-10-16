@@ -1,26 +1,29 @@
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 import { revealBoundary } from './reveal.ts'
-// Live-state motion on the shared loader clock (`MatrixLoader.tsx`): the
-// desktop's `.shimmer` / `.t-shimmer` sweep becomes a slow brightness pulse
-// (GPUIX cannot clip a moving gradient to glyphs), stepping with the loaders
-// that are already animating so it adds no frames of its own. Reduce Motion
-// freezes the clock, leaving the plain muted label.
+// The existing port's live-state brightness pulse follows native display time.
+// Simple native glyph tint avoids React and layout work on every pulse frame.
+// Reduce Motion holds the plain muted label.
 import { useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
 import { smoothAdvance, type SmoothState } from '../../../desktop/src/lib/smoothStream.ts'
 import type { StyleDesc } from '@gpuix/react'
-import { useLoaderStep } from '../MatrixLoader.tsx'
+import { useLoaderTime, easeInOut, NATIVE_PAINT_ANIMATIONS } from '../MatrixLoader.tsx'
 import { Swap } from '../motion/kit.tsx'
 import { REDUCED_MOTION, Label } from '../ui.tsx'
 import { alpha, ROW_LINE } from './kit.tsx'
 import { PACE_MS } from './store.ts'
 
-/** Opacity multiplier over 8 steps (1.6s): rest, rise to near full ink, fall back. */
-const PULSE = [1, 1, 1.18, 1.42, 1.6, 1.42, 1.18, 1]
-
 export function Shimmer({ text, color, size = 14, lineHeight = ROW_LINE }: { text: string; color: string; size?: number; lineHeight?: number }) {
-  const step = useLoaderStep()
+  // Pixel/idle controls pass, but repeated full-app GPU controls have not yet
+  // met the running-thread gate. Keep native glyph replay explicitly opt-in.
+  if (NATIVE_PAINT_ANIMATIONS && process.env.KYBERN_NATIVE_TEXT_PAINT === '1') return <Label color={color} size={size} lineHeight={lineHeight} truncate paintAnimation={REDUCED_MOTION ? undefined : {kind:'shimmer',cycleMs:1600}}>{text}</Label>
+  return <SampledShimmer text={text} color={color} size={size} lineHeight={lineHeight} />
+}
+function SampledShimmer({ text, color, size, lineHeight }: { text: string; color: string; size: number; lineHeight: number }) {
+  const time = useLoaderTime()
+  const phase = (time % 1600) / 1600
+  const intensity = NATIVE_PAINT_ANIMATIONS ? 1 + .6 * easeInOut(phase < .5 ? phase * 2 : 2 - phase * 2) : [1, 1, 1.18, 1.42, 1.6, 1.42, 1.18, 1][Math.floor(time / 200) % 8]!
   return (
-    <Label color={alpha(color, PULSE[step % PULSE.length]!)} size={size} lineHeight={lineHeight} truncate>
+    <Label color={alpha(color, intensity)} size={size} lineHeight={lineHeight} truncate>
       {text}
     </Label>
   )
