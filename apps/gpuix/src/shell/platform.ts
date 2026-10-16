@@ -48,7 +48,7 @@ export function remoteScript(config: SshConfig, script: string, timeoutMs: numbe
     stdin: `PATH="$HOME/.cargo/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; export PATH\nKYBERN_DATA_DIR=${data}; export KYBERN_DATA_DIR\n${script}\n` }
 }
 export function tunnelPlan(config: SshConfig): CommandPlan {
-  return { command: 'ssh', args: [...sshArguments(config), '-o', 'ExitOnForwardFailure=yes', '-N', '-L', `127.0.0.1:${portNumber(config.localPort)}:127.0.0.1:${portNumber(config.remotePort)}`, config.target] }
+  return { command: 'ssh', args: [...sshArguments(config), '-o', 'ExitOnForwardFailure=yes', '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-N', '-L', `127.0.0.1:${portNumber(config.localPort)}:127.0.0.1:${portNumber(config.remotePort)}`, config.target] }
 }
 
 export function bootstrapPlan(config: SshConfig, installer = REMOTE_INSTALL_URL) {

@@ -158,7 +158,9 @@ export function setThreadOpen(id: string, open: ThreadState) {
 }
 
 /** Drop a dead client so `connect()` builds a fresh one, re-reading the port and token files. */
+let connectionAttempt = 0
 export function resetClient() {
+  connectionAttempt++
   for (const session of sessions.values()) session.stop?.()
   sessions.clear()
   for (const [id, pane] of panes) panes.set(id, { ...pane, open: emptyThreadState(), generation: pane.generation + 1 })
@@ -169,12 +171,15 @@ export function resetClient() {
   previous?.close()
 }
 
-export function connect() {
+export async function connect() {
   if (client) return
+  const attempt = ++connectionAttempt
   let ep
   try {
-    ep = environmentEndpoint()
+    ep = await environmentEndpoint()
+    if (attempt !== connectionAttempt) return
   } catch (error) {
+    if (attempt !== connectionAttempt) return
     set({ status: 'failed', statusDetail: error instanceof Error ? error.message : 'Start kybernd, then reconnect' })
     return
   }

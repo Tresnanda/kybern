@@ -48,7 +48,7 @@ function MenuContents({ at }: { at: { x: number; y: number } }) {
   const status = useApp((s) => s.status)
   const [profiles] = useState<EnvironmentProfile[]>(() => { try { return [localProfile, ...readRegistry().environments] } catch { return [localProfile] } })
   const statusLabel = status === 'connecting' || status === 'idle' ? 'Connecting' : status === 'open' ? 'Connected' : status === 'reconnecting' ? 'Reconnecting' : 'Offline'
-  const run = (action: () => void) => { try { action() } catch (e) { toast.error('Unable to open environment', { description: e instanceof Error ? e.message : String(e) }) } }
+  const run = (action: () => void | Promise<void>) => { void Promise.resolve().then(action).catch(e => toast.error('Unable to open environment', { description: e instanceof Error ? e.message : String(e) })) }
   return <ContextMenu at={at} onClose={() => setMenuAt(null)} width={304} testId="environment-menu">
       <MenuLabel>Environments</MenuLabel>
       <virtual-list style={{ width: '100%', height: Math.min(profiles.length, 6) * 44 }}>

@@ -359,16 +359,21 @@ export interface UploadedAsset {
 export async function uploadPath(path: string): Promise<UploadedAsset> {
   const file = Bun.file(path)
   const name = path.split('/').pop() ?? 'file'
+  return uploadBytes(name, file.type || 'application/octet-stream', await file.arrayBuffer())
+}
+
+/** Clipboard images use the same upload contract as files, without a temporary file. */
+export async function uploadBytes(name: string, mediaType: string, bytes: ArrayBuffer | Uint8Array): Promise<UploadedAsset> {
   const { base, token } = assetsEndpoint()
   const response = await fetch(`${base}/assets`, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${token}`,
       origin: 'tauri://localhost',
-      'content-type': file.type || 'application/octet-stream',
+      'content-type': mediaType,
       'x-kybern-filename': name,
     },
-    body: await file.arrayBuffer(),
+    body: bytes as BodyInit,
   })
   if (!response.ok) {
     const detail = (await response.text()).trim()

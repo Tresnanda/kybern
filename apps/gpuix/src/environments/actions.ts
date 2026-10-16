@@ -1,3 +1,4 @@
+import { ensureSshTunnel, stopSshTunnel, stopSshTunnels, bootstrapSsh, runSsh, type BootstrapInput, type BootstrapProgress, type SavedSsh } from './ssh.ts'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { KybernClient, type Endpoint } from '../../../../packages/kybern-client/src/client.ts'
@@ -22,15 +23,25 @@ export async function verifyEndpoint(endpoint: Endpoint) {
   } finally { client.close() }
 }
 
-export function connectEnvironment(id: string) {
+let selectionAttempt = 0
+export async function connectEnvironment(id: string) {
+  const attempt = ++selectionAttempt
   const profile = profileById(id)
+  if (profile.ssh) {
+    let port: number
+    try { port = await ensureSshTunnel(id, profile.ssh) } catch (error) { if (attempt !== selectionAttempt) return; throw error }
+    if (attempt !== selectionAttempt) return
+    profile.url = `ws://127.0.0.1:${port}/ws`
+    profile.ssh.local_port = port
+  }
   const endpoint = profileEndpoint(profile)
   const registry = readRegistry()
-  writeRegistry({ ...registry, selected_id: id })
+  writeRegistry({ ...registry, selected_id: id, environments: registry.environments.map(saved => saved.id === profile.id ? profile : saved) })
+  stopSshTunnels(id)
   switchEnvironment({ id, name: profile.name, local: profile.local, endpoint, dataDir: localDataDir })
 }
 
-export async function saveEnvironment(input: { id?: string; name: string; address: string; code?: string; token?: string }) {
+export async function saveEnvironment(input: { id?: string; name: string; address: string; code?: string; token?: string; ssh?: SavedSsh; expectedIdentity?: string }) {
   const name = input.name.trim()
   if (!name || name.length > 80) throw Error('Enter an environment name of 1–80 characters')
   const registry = readRegistry()
@@ -39,7 +50,7 @@ export async function saveEnvironment(input: { id?: string; name: string; addres
   const url = normalizeDaemonUrl(invitation?.url ?? input.address)
   const code = (invitation?.code ?? input.code ?? '').trim()
   let token = input.token?.trim() ?? ''
-  let expected = invitation?.environmentId ?? existing?.environment_id ?? undefined
+  let expected = invitation?.environmentId ?? input.expectedIdentity ?? existing?.environment_id ?? undefined
   const id = input.id ?? crypto.randomUUID()
   if (id === 'local') throw Error('The local environment is managed by Kybern')
   if (code && token) throw Error('Use a pairing code or a device token, not both')
@@ -57,7 +68,7 @@ export async function saveEnvironment(input: { id?: string; name: string; addres
   if (!token && existing) token = readCredential(existing.id)
   if (!token) throw Error('Enter a pairing code from the other machine')
   if (expected && registry.environments.some((p) => p.id !== id && p.environment_id === expected)) throw Error('This environment is already saved. Select it from the environment menu.')
-  const profile: EnvironmentProfile = { id, name, url, environment_id: expected, local: false }
+  const profile: EnvironmentProfile = { id, name, url, environment_id: expected, local: false, ssh: input.ssh ?? existing?.ssh }
   const persist = (next: EnvironmentProfile) => {
     const latest = readRegistry()
     writeCredential(id, token)
@@ -82,6 +93,7 @@ export function forgetEnvironment(id: string) {
   if (id === 'local') throw Error('The local environment cannot be removed')
   const registry = readRegistry()
   const previous = (() => { try { return readCredential(id) } catch { return null } })()
+  stopSshTunnel(id)
   removeCredential(id)
   try { writeRegistry({ selected_id: registry.selected_id === id ? 'local' : registry.selected_id, environments: registry.environments.filter((p) => p.id !== id) }) }
   catch (e) { if (previous) writeCredential(id, previous); throw e }
@@ -95,4 +107,29 @@ export function openEnvironmentWindow(id: string) {
   child.on('error', () => {})
   child.unref()
   return child.pid
+}
+
+/** Native-independent SSH lifecycle; the same endpoint/pairing checks as address connections. */
+export async function setupSshEnvironment(input: BootstrapInput, report: (progress: BootstrapProgress) => void, signal?: AbortSignal) {
+  const withClient = async <T>(port: number, token: string, action: (client: KybernClient) => Promise<T>) => {
+    const client = new KybernClient({ url: `ws://127.0.0.1:${port}/ws`, token }, { requestTimeoutMs: 10000, createSocket: (url, token) => new WebSocket(url, { headers: { origin: 'tauri://localhost', Authorization: `Bearer ${token}` } } as never) })
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(Error('The daemon did not answer through the tunnel.')), 10000)
+        client.onStatus((status, detail) => { if (status === 'open') { clearTimeout(timer); resolve() } else if (status === 'failed') { clearTimeout(timer); reject(Error(detail ?? 'Unable to connect through the tunnel.')) } })
+        client.connect()
+      })
+      return await action(client)
+    } finally { client.close() }
+  }
+  const version = (await import('../../../desktop/src-tauri/tauri.conf.json')).default.version
+  return bootstrapSsh(input, report, {
+    version, signal, run: plan => runSsh(plan, signal), tunnel: ensureSshTunnel, stop: stopSshTunnel,
+    info: (port, token) => verifyEndpoint({ url: `ws://127.0.0.1:${port}/ws`, token }),
+    shutdown: (port, token) => withClient(port, token, client => client.call('daemon.shutdown', {})).then(() => {}),
+    pair: async (port, token, next, ssh, identity) => {
+      const invitation = await withClient(port, token, client => client.call('access.pairing.create', { label: `Kybern desktop · ${next.name}` }))
+      return saveEnvironment({ id: next.id, name: next.name, address: `ws://127.0.0.1:${port}/ws`, code: invitation.code, expectedIdentity: identity, ssh })
+    },
+  })
 }

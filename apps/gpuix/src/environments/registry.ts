@@ -46,7 +46,6 @@ export function profileEndpoint(profile: EnvironmentProfile): Endpoint {
     const token = readFileSync(path.join(localDataDir, 'daemon.token'), 'utf8').trim()
     return { url: `ws://127.0.0.1:${port}/ws`, token }
   }
-  if (profile.ssh) throw Error('This environment needs an SSH tunnel. Open it in Kybern desktop, or add its reachable address here.')
   if (!profile.url) throw Error('Edit this environment and enter its address.')
   return { url: normalizeDaemonUrl(profile.url), token: readCredential(profile.id), environmentId: profile.environment_id ?? undefined }
 }

@@ -489,6 +489,7 @@ function ModelPickerPanel({
             current={current}
             model={model}
             effort={effort}
+            onClose={close}
             fallbackEfforts={status?.supported_efforts}
             busy={busy}
             divider={divider}
@@ -732,7 +733,9 @@ function ModelFooter({
   divider,
   onModelChange,
   onEffortChange,
+  onClose,
 }: {
+  onClose: () => void
   current: ProviderModel | undefined
   model?: string | null
   effort?: string | null
@@ -809,7 +812,7 @@ function ModelFooter({
     <>
       {divider}
       {hasEffort ? (
-        <EffortSlider efforts={efforts} value={effortValue} disabled={busy} leading={fastButton} trailing={resetButton} onChange={onEffortChange} />
+        <EffortSlider onEscape={onClose} efforts={efforts} value={effortValue} disabled={busy} leading={fastButton} trailing={resetButton} onChange={onEffortChange} />
       ) : fast ? (
         <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: 12, paddingRight: 12, paddingTop: 10, paddingBottom: 4, opacity: busy ? 0.6 : 1 }}>
           <CardHeader leading={fastButton} trailing={resetButton}>
@@ -876,7 +879,9 @@ function EffortSlider({
   leading,
   trailing,
   onChange,
+  onEscape,
 }: {
+  onEscape: () => void
   efforts: string[]
   value: string | null
   disabled: boolean
@@ -956,6 +961,7 @@ function EffortSlider({
           void commit(next)
         }}
         onKeyDown={(e) => {
+          if (e.key === 'escape') { onEscape(); return }
           if (disabled) return
           const step = e.key === 'right' || e.key === 'up' ? 1 : e.key === 'left' || e.key === 'down' ? -1 : 0
           if (step || e.key === 'home' || e.key === 'end') {

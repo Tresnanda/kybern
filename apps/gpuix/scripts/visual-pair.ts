@@ -57,13 +57,17 @@ if (flag('down')) { await down(); tauriWindowDown(); process.exit(0) }
 
 let state = await startDaemon(flag('fresh'))
 if (!state.seeded) { await seed(state); state = readState()! }
+if (state.vitePid) {
+  try { if (!(await fetch(`http://127.0.0.1:${state.vitePort}/`, { signal: AbortSignal.timeout(1000) })).ok) state = { ...state, vitePid: undefined, vitePort: undefined } }
+  catch { state = { ...state, vitePid: undefined, vitePort: undefined } }
+}
 if (!state.vitePid) {
   // The brief exports NAPI_RS_NATIVE_LIBRARY_PATH for GPUIX; rolldown (Vite) would load that .node instead of its own binding and crash.
   const { NAPI_RS_NATIVE_LIBRARY_PATH: _gpuixNative, ...viteEnv } = process.env
   const vitePort = await freePort()
-  const child = spawn('pnpm', ['exec', 'vite', '--port', String(vitePort), '--strictPort'], { cwd: desktop, stdio: 'ignore', detached: true, env: viteEnv })
+  const child = spawn('pnpm', ['exec', 'vite', '--host', '127.0.0.1', '--port', String(vitePort), '--strictPort'], { cwd: desktop, stdio: 'ignore', detached: true, env: viteEnv })
   child.unref()
-  for (let i = 0; i < 100; i++) { try { if ((await fetch(`http://localhost:${vitePort}/`)).ok) break } catch {} await Bun.sleep(200) }
+  for (let i = 0; i < 100; i++) { try { if ((await fetch(`http://127.0.0.1:${vitePort}/`)).ok) break } catch {} await Bun.sleep(200) }
   state = { ...state, vitePid: child.pid, vitePort }
   writeState(state)
 }
@@ -86,6 +90,7 @@ function run(cmd: string[], opts: { env?: Record<string, string> } = {}) {
 }
 
 const fixture = await fixtureIds()
+state = readState()! // Area fixtures may install a process-boundary proxy.
 try {
   for (const theme of themes) {
     // --tauri-window: the reference is a screenshot of the real Tauri dev window (material,
@@ -116,6 +121,7 @@ try {
       } finally {
         await app.close()
       }
+      if (flag('gpuix-only')) continue
       const base = path.join(out, `${name}-${theme}`)
       const res = run(['swift', path.join(here, '../visual/compose.swift'), `${base}-tauri.png`, `${base}-gpuix.png`, `${base}-pair.png`, `${base}-diff.png`, String(threshold)])
       console.log(`[pair] ${name} ${theme}: ${res.trim()}`)

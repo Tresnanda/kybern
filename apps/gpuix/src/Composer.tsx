@@ -1,3 +1,4 @@
+import { clipboardAttachments, type ClipboardImage } from './composer/clipboard.ts'
 import { StatusGlyph } from './composer/StatusGlyph.tsx'
 import { DecoratedTextarea } from './native/decorated-input.tsx'
 import { referenceDecorations } from './native/input-marks.ts'
@@ -68,6 +69,7 @@ import {
   setThreadMode,
   setThreadModel,
   uploadPath,
+  uploadBytes,
   useComposer,
 } from './composer/store.ts'
 
@@ -475,6 +477,19 @@ export function ComposerView(input: ComposerViewProps) {
     }
   }
 
+  const addClipboardImage = async (image: ClipboardImage) => {
+    setUploading((n) => n + 1)
+    setError(null)
+    const name = image.name ?? 'pasted-image.png'
+    try {
+      const info = await uploadBytes(name, image.mediaType, image.data)
+      // Native images accept data URIs, so previews need no temporary file.
+      const path = `data:${image.mediaType};base64,${Buffer.from(image.data).toString('base64')}`
+      setAttachments((list) => [...list, { ...info, path, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }])
+    } catch (e) { setError(`Unable to attach image: ${errorText(e)}`) }
+    finally { setUploading((n) => n - 1); focusEditor() }
+  }
+
   const addFiles = async (picked?: string[]) => {
     const paths = picked ?? (await renderer.promptForPaths?.({ files: true, multiple: true, prompt: 'Attach' }))
     if (!paths?.length) return
@@ -526,8 +541,9 @@ export function ComposerView(input: ComposerViewProps) {
         ref={(el) => {
           card.current = el
         }}
+        testId="composer-drop-zone"
         onFileDrop={(e) => {
-          if (!e.paths?.length) return
+          if (props.readOnly || !e.paths?.length) return
           void addFiles(e.paths)
         }}
         style={{
@@ -576,7 +592,7 @@ export function ComposerView(input: ComposerViewProps) {
               ref={(el) => {
                 editor.current = el
               }}
-              interceptKeys={['up', 'down', 'left', 'right', 'home', 'end', 'enter', 'tab', 'escape']}
+              interceptKeys={['up', 'down', 'left', 'right', 'home', 'end', 'enter', 'tab', 'escape', 'v']}
               testId="composer"
               autoFocus={!pane.frozen && getFocusedPaneId() === pane.id}
               onFocus={() => { if (!pane.frozen) focusPane(pane.id) }}
@@ -595,7 +611,18 @@ export function ComposerView(input: ComposerViewProps) {
               }}
               onKeyDown={(e) => {
                 readSelection()
-                if (e.modifiers?.cmd && e.key === 'v') pastePending.current = true
+                if (e.modifiers?.cmd && e.key === 'v' && !props.readOnly) {
+                  try {
+                    const payload = clipboardAttachments(renderer)
+                    if (payload.paths.length || payload.image) {
+                      e.preventDefault()
+                      if (payload.paths.length) void addFiles(payload.paths)
+                      else void addClipboardImage(payload.image!)
+                      return
+                    }
+                  } catch (error) { setError(`Unable to paste: ${errorText(error)}`) }
+                  pastePending.current = true
+                }
                 // Native navigation is applied after the key notification.
                 if (['left', 'right', 'up', 'down', 'home', 'end'].includes(e.key ?? '')) setTimeout(readSelection, 32)
                 // Marked IME input bypasses native interception. Do not turn
@@ -859,7 +886,7 @@ function Attachments({ items, uploading, onRemove }: { items: Attachment[]; uplo
               <div style={{ position: 'absolute', left: 4, bottom: 4, paddingLeft: 4, paddingRight: 4, borderRadius: 6, backgroundColor: 'rgba(0, 0, 0, 0.55)' }}>
                 <Label color="#ffffff" size={10} lineHeight={16} weight={500}>{`@${a.label}`}</Label>
               </div>
-              <RemoveButton onClick={() => onRemove(a)} />
+              <RemoveButton testId={`remove-attachment-${a.label}`} onClick={() => onRemove(a)} />
             </div>
           ) : (
             <div
@@ -895,7 +922,7 @@ function Attachments({ items, uploading, onRemove }: { items: Attachment[]; uplo
                   </Label>
                 </div>
               </div>
-              <RemoveButton onClick={() => onRemove(a)} />
+              <RemoveButton testId={`remove-attachment-${a.label}`} onClick={() => onRemove(a)} />
             </div>
           )}
         </Pop>
@@ -913,10 +940,11 @@ function Attachments({ items, uploading, onRemove }: { items: Attachment[]; uplo
 }
 
 /** A 20px ink disc with a 12px ×, top-right. */
-function RemoveButton({ onClick }: { onClick: () => void }) {
+function RemoveButton({ onClick, testId }: { onClick: () => void; testId?: string }) {
   const t = useTheme()
   return (
     <div
+      testId={testId}
       onClick={onClick}
       style={{
         position: 'absolute',
