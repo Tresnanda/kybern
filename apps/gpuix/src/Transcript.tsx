@@ -50,21 +50,24 @@ export function Transcript() {
   const groupTurns = useMemo(() => createTurnGrouper(), [threadId])
   const turns = useMemo(() => groupTurns(blocks), [blocks, groupTurns])
   const list = useRef<PublicInstance>(null)
-  const [viewportNode, setViewportNode] = useState<PublicInstance | null>(null)
+  // The virtual list reports no element bounds (its rect is always null), so the
+  // viewport size comes from the surface around it, which fills the same box.
+  const [surfaceNode, setSurfaceNode] = useState<PublicInstance | null>(null)
   const [topNode, setTopNode] = useState<PublicInstance | null>(null)
   const [bottomNode, setBottomNode] = useState<PublicInstance | null>(null)
-  const listRef = useCallback((node: PublicInstance | null) => { list.current = node; setViewportNode(node) }, [])
+  const listRef = useCallback((node: PublicInstance | null) => { list.current = node }, [])
   const topRef = useCallback((node: PublicInstance | null) => setTopNode(node), [])
   const bottomRef = useCallback((node: PublicInstance | null) => setBottomNode(node), [])
+  const surfaceRef = useCallback((node: PublicInstance | null) => setSurfaceNode(node), [])
   const [atTail, setAtTail] = useState(true)
   const [overflow, setOverflow] = useState(false)
   useEffect(() => {
-    if (!loaded || !turns.length || !viewportNode) { setOverflow(false); return }
+    if (!loaded || !turns.length || !surfaceNode) { setOverflow(false); return }
     const rects: Record<string, LayoutRect | null> = {}
     // A frozen outgoing page can share its pane id with the incoming transcript.
     // Observe these instances, never globally resolved test ids. Endpoint refs
     // also detach/rebind as the virtual list unmounts and restores its rows.
-    const nodes = { viewport: viewportNode, top: topNode, bottom: bottomNode }
+    const nodes = { viewport: surfaceNode, top: topNode, bottom: bottomNode }
     const stops = Object.entries(nodes).flatMap(([key, node]) => node ? [observeElementBounds(renderer, node.id, event => {
       rects[key] = event.rect
       const { viewport, top, bottom } = rects
@@ -73,7 +76,7 @@ export function Transcript() {
       else if (top || bottom) setOverflow(true)
     })] : [])
     return () => stops.forEach(stop => stop())
-  }, [renderer, viewportNode, topNode, bottomNode, threadId, loaded, turns.length, hasEarlier])
+  }, [renderer, surfaceNode, topNode, bottomNode, threadId, loaded, turns.length, hasEarlier])
   const [codeState, setCodeState] = useState<Record<string, { expanded: boolean; wrap: boolean }>>({})
   const [activeRow, setActiveRow] = useState(0)
   const nearTop = useRef(false)
@@ -222,7 +225,7 @@ export function Transcript() {
   }
 
   return (
-    <div testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+    <div ref={surfaceRef} testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
       <virtual-list
         ref={listRef}
         testId="transcript"
