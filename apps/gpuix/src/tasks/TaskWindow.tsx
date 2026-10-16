@@ -19,6 +19,9 @@ export interface TaskWindowEntry {
 export function TaskWindow({ entries, card = false, testId }: { entries: TaskWindowEntry[]; card?: boolean; testId?: string }) {
   const renderer = useGpuixRequired()
   const list = useRef<PublicInstance | null>(null)
+  const liveEntries = useRef(entries)
+  liveEntries.current = entries
+  const anchorFrame = useRef(-1)
   const [viewport, setViewport] = useState<PublicInstance | null>(null)
   const [viewportHeight, setViewportHeight] = useState(820)
   const [measured, setMeasured] = useState<Record<string, number>>({})
@@ -26,6 +29,14 @@ export function TaskWindow({ entries, card = false, testId }: { entries: TaskWin
   const held = useHeldTask()
   const overscan = card ? 2 : 4
   const [anchor, setAnchor] = useState({ key: '', index: 0 })
+  const syncAnchor = useCallback((frame?: number) => {
+    if (!list.current || (frame !== undefined && anchorFrame.current === frame)) return
+    if (frame !== undefined) anchorFrame.current = frame
+    const scroll = renderer.getListScrollTop?.(list.current.id)
+    if (!scroll) return
+    const index = scroll[0] ?? 0, key = liveEntries.current[index]?.key ?? ''
+    setAnchor(old => old.key === key && old.index === index ? old : {key, index})
+  }, [renderer])
   const heights = entries.map(entry => measured[entry.key] ?? entry.height)
   const entryKeys = entries.map(entry => entry.key).join('\0')
   useEffect(() => {
@@ -60,32 +71,36 @@ export function TaskWindow({ entries, card = false, testId }: { entries: TaskWin
   return (
     <div ref={setViewport} style={{ display: 'flex', flexGrow: 1, minHeight: 0, width: '100%' }}>
     <virtual-list
-      ref={(node) => { taskScrollRef(node, list.current, entries.length, (index) => setAnchor({key: entries[index]?.key ?? '', index}), heights, viewport); list.current = node }}
+      ref={(node) => { taskScrollRef(node, list.current, entries.length, (index) => setAnchor({key: entries[index]?.key ?? '', index}), heights, viewport, entries.map(entry => entry.key)); list.current = node }}
       testId={testId}
       estimatedItemHeight={card ? 122 : 40}
       overdraw={card ? 128 : 120}
       onVisibleRange={(event) => {
-        const index = event.startIndex ?? 0
+        if (process.env.KYBERN_DEBUG_DRAG === '1') console.error('[task-range]', JSON.stringify({list:list.current?.id, start:event.startIndex, end:event.endIndex, count:entries.length, anchor: list.current && renderer.getListScrollTop?.(list.current.id)}))
+        const index = (list.current && renderer.getListScrollTop?.(list.current.id)?.[0]) ?? event.startIndex ?? 0
         const key = entries[index]?.key ?? ''
         setAnchor(old => old.key === key && old.index === index ? old : {key, index})
       }}
       style={{ flexGrow: 1, minHeight: 0, width: '100%' }}
     >
       {entries.map((entry, index) => (
-        <TaskSlot key={entry.key} entry={entry} height={heights[index]!} mounted={!!entry.pinned || entry.key === focused || entry.key === held || (index >= range.start && index < range.end)} measure={measure} />
+        <TaskSlot key={entry.key} entry={entry} height={heights[index]!} mounted={!!entry.pinned || entry.key === focused || entry.key === held || (index >= range.start && index < range.end)} measure={measure} syncAnchor={syncAnchor} />
       ))}
     </virtual-list>
     </div>
   )
 }
 
-function TaskSlot({entry, height, mounted, measure}: {entry: TaskWindowEntry; height: number; mounted: boolean; measure: (key: string, height: number) => void}) {
+function TaskSlot({entry, height, mounted, measure, syncAnchor}: {entry: TaskWindowEntry; height: number; mounted: boolean; measure: (key: string, height: number) => void; syncAnchor: (frame: number) => void}) {
   const renderer = useGpuixRequired()
   const [node, setNode] = useState<PublicInstance | null>(null)
   useEffect(() => {
-    if (!node || !mounted || !entry.intrinsic) return
-    return observeElementBounds(renderer, node.id, ({rect}) => { if (rect) measure(entry.key, rect.height) })
-  }, [renderer, node, mounted, entry.intrinsic, entry.key, measure])
+    if (!node || !mounted) return
+    // Native cached-list scrolling can paint new placeholder slots without a
+    // fresh visibleRange event. Bounds notifications still report that paint;
+    // read its actual logical anchor once per frame to mount the new content.
+    return observeElementBounds(renderer, node.id, ({rect, frame}) => { if (rect && entry.intrinsic) measure(entry.key, rect.height); syncAnchor(frame) })
+  }, [renderer, node, mounted, entry.intrinsic, entry.key, measure, syncAnchor])
   return <div testId={`task-slot-${entry.key}`} ref={useCallback((value: PublicInstance | null) => { slotRef(entry.key, value); setNode(value) }, [entry.key])} style={{ ...(mounted && entry.intrinsic ? {} : {height}), flexShrink: 0, width: '100%' }}>
     {mounted ? entry.render() : null}
   </div>

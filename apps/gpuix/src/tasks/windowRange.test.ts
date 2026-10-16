@@ -13,4 +13,5 @@ test('task mount window stays bounded around a scrolled anchor in a large list',
   expect(taskWindowRange(Array(10000).fill(40), 500, 600, 4)).toEqual({start:496, end:520})
   expect(taskWindowRange([], 0, 600, 4)).toEqual({start:0, end:0})
   expect(taskWindowRange([40,40], 100, 600, 4)).toEqual({start:0, end:2})
+  expect(taskWindowRange(Array(10000).fill(40), 10000, 600, 4)).toEqual({start:9980, end:10000})
 })

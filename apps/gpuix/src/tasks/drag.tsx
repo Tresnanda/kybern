@@ -44,13 +44,13 @@ type Drag = {
   /** The RPC of a drop is still in flight. */
   saving: boolean
 }
-type ScrollList = { node: PublicInstance; count: number; mount?: (index: number) => void; heights: number[]; viewport?: PublicInstance | null }
+type ScrollList = { node: PublicInstance; count: number; mount?: (index: number) => void; heights: number[]; viewport?: PublicInstance | null; keys: string[] }
 const scrollLists = new Map<number, ScrollList>()
 let dragRenderer: NativeRenderer | null = null
 /** `mount` mounts the rows around an index; edge scrolling calls it first, because a native scroll does not report a new visible range until a later frame. */
-export function taskScrollRef(node: PublicInstance | null, previous: PublicInstance | null, count: number, mount?: (index: number) => void, heights: number[] = [], viewport?: PublicInstance | null) {
+export function taskScrollRef(node: PublicInstance | null, previous: PublicInstance | null, count: number, mount?: (index: number) => void, heights: number[] = [], viewport?: PublicInstance | null, keys: string[] = []) {
   if (previous) scrollLists.delete(previous.id)
-  if (node) scrollLists.set(node.id, { node, count, mount, heights, viewport })
+  if (node) scrollLists.set(node.id, { node, count, mount, heights, viewport, keys })
 }
 const rows = new Map<string, PublicInstance>()
 const slots = new Map<string, PublicInstance>()
@@ -111,7 +111,7 @@ export function escapeTaskDrag() {
   if (!current.active || !current.source) return cancelTaskDrag()
   if (current.settle) return
   taskShift.clear()
-  publish({ ...current, target: null, settle: { to: { x: current.source.x, y: current.source.y }, vx: 0, vy: 0, home: true } })
+  publish({ ...current, target: null, settle: { to: homePosition(current), vx: 0, vy: 0, home: true } })
 }
 const subscribe = (fn: () => void) => {
   listeners.add(fn)
@@ -293,6 +293,20 @@ function sourceIds(drag: Drag) {
   const region = drag.regions.find((r) => r.status === status && r.ids.includes(drag.id))
   return region?.ids ?? drag.sequence.filter((id) => taskState().tasks[id]?.status === status)
 }
+/** Cancel returns to the source's current scroll position, including a source
+ * that is no longer painted. Shifted child bounds cannot supply this geometry. */
+function homePosition(drag: Drag) {
+  for (const list of scrollLists.values()) {
+    const index = list.keys.indexOf(drag.id)
+    const anchor = dragRenderer?.getListScrollTop?.(list.node.id)
+    const box = list.viewport && dragRenderer?.getElementBounds?.(list.viewport.id)
+    if (index < 0 || !anchor || !box) continue
+    const top = list.heights.slice(0, index).reduce((a,b) => a+b, 0)
+    const scrolled = list.heights.slice(0, anchor[0] ?? 0).reduce((a,b) => a+b, 0) + (anchor[1] ?? 0)
+    return {x:box.x,y:box.y + top - scrolled}
+  }
+  return {x:drag.source!.x,y:drag.source!.y}
+}
 /** Layout is measured at press and after an auto-scroll step, not on every pointer move (each measure is a native call per row). */
 function move(event: EventPayload, remeasure = false) {
   if (!current || current.settle) return
@@ -346,7 +360,7 @@ function releaseDrag() {
     return
   }
   taskShift.clear()
-  publish({ ...drag, target: null, settle: { to: { x: drag.source.x, y: drag.source.y }, vx: v.x * 0.4, vy: v.y * 0.4, home: true } })
+  publish({ ...drag, target: null, settle: { to: homePosition(drag), vx: v.x * 0.4, vy: v.y * 0.4, home: true } })
 }
 function finishClick(drag: Drag) {
   cancelTaskDrag()
