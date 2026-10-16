@@ -9,7 +9,7 @@ def edit(name, old, new):
         raise SystemExit(f"{name}: moved anchor; nothing written: {old}")
     pending[name] = text.replace(old, new)
 
-edit('dist/mutations.js', '    "motion",\n    "testId",', '    "motion",\n    // Kybern native capabilities.\n    "backdrop",\n    "cache",\n    "windowDrag",\n    "interceptKeys",\n    "secure",\n    "softWrap",\n    "testId",')
+edit('dist/mutations.js', '    "motion",\n    "testId",', '    "motion",\n    // Kybern native capabilities.\n    "backdrop",\n    "paintAnimation",\n    "cache",\n    "windowDrag",\n    "interceptKeys",\n    "secure",\n    "softWrap",\n    "testId",')
 edit('dist/host.d.ts', 'export interface HostProps {', 'export interface HostProps {\n    cache?: boolean | "fill";\n    /** Empty titlebar region; do not place on interactive controls. */\n    windowDrag?: boolean;')
 edit('dist/host.d.ts', 'export interface InputProps extends HostProps {', 'export interface InputProps extends HostProps {\n    /** Key names delivered before native editing actions, with preventDefault(). */\n    interceptKeys?: string[];\n    /** Password input: masked paint/accessibility, no copy or cut. */\n    secure?: boolean;')
 edit('index.d.ts', 'export declare class GpuixRenderer {', 'export declare class GpuixRenderer {\n  resolveKeyEvent(token: number, prevented: boolean): void\n  setCloseGuard(enabled: boolean): void\n  resolveCloseRequest(token: number, allow: boolean): void')
@@ -52,6 +52,21 @@ edit('dist/host.d.ts', '"setWindowKeyEvents" |', '"resolveKeyEvent" | "setCloseG
 edit('dist/host.d.ts', 'export interface CodeProps extends HostProps {', 'export interface CodeProps extends HostProps {\n    /** Wrap highlighted lines at the available width. */\n    softWrap?: boolean;')
 edit('dist/host.d.ts', 'export interface MotionStyle {', 'export interface MotionStyle {\n    translateX?: number;\n    translateY?: number;')
 edit('dist/host.d.ts', 'export interface MotionTransition {', 'export interface MotionTransition {\n    type?: "tween" | "spring";\n    /** Damping control from 0 (no overshoot) to 1. */\n    bounce?: number;\n    /** Translation velocity in logical pixels per second. */\n    velocityX?: number;\n    velocityY?: number;')
+edit('dist/automation/client.js', '        scrollWheel: (params) => {', """        fileDrop: (params) => {
+            this.renderer.nativeSimulateFileDrop(params.x, params.y, params.paths);
+            return { ok: true };
+        },
+        scrollWheel: (params) => {""")
+edit('dist/automation/client.js', '        nativeSimulateScrollWheel(x, y, deltaX, deltaY, modifiers) {', """        nativeSimulateFileDrop(x, y, paths) {
+            renderer.simulateFileDrop(x, y, paths);
+            afterInput();
+        },
+        nativeSimulateScrollWheel(x, y, deltaX, deltaY, modifiers) {""")
+
+edit('dist/runtime.js', '        stopped = true;', '        stopped = true;\n        renderer.setFrameWakeCallback?.(null);')
+edit('dist/runtime.js', '    loop();\n    return { stop };', '    if (typeof renderer.setFrameWakeCallback === "function" && process.env.KYBERN_VSYNC_WAKE === "1") {\n        renderer.setFrameWakeCallback((error) => {\n            if (stopped) return;\n            try {\n                if (error) options.onError?.(error);\n                else if (renderer.tick() === false) { stop(); options.onTerminated?.(); }\n            } catch (error) { options.onError?.(error); }\n            finally { renderer.acknowledgeFrameWake(); }\n        });\n    }\n    loop();\n    return { stop };')
+edit('dist/automation/protocol.js', '    scrollWheel: {', '    fileDrop: {\n        params: pointSchema.extend({ paths: z.array(z.string()).min(1) }),\n        result: okSchema,\n    },\n    scrollWheel: {')
+edit('dist/automation/protocol.d.ts', '    readonly scrollWheel: {', '    readonly fileDrop: {\n        readonly params: z.ZodObject<{ x: z.ZodNumber; y: z.ZodNumber; paths: z.ZodArray<z.ZodString> }, z.core.$strip>;\n        readonly result: z.ZodObject<{ ok: z.ZodLiteral<true> }, z.core.$strip>;\n    };\n    readonly scrollWheel: {')
 for name, text in pending.items():
     (root / name).write_text(text)
 print(f"JS patch applied to {len(pending)} files")
