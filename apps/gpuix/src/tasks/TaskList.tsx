@@ -1,7 +1,7 @@
 import { memo, useState } from 'react'
 import { useGpuixRequired, useWindowSize } from '@gpuix/react'
 import { useSidebarWidth } from '../shell/layout.ts'
-import { beginTaskDrag, trackTaskDrag, endPendingDrag, regionRef, rowRef, taskShift, useTaskLift, viewportRef } from './drag.tsx'
+import { beginTaskDrag, trackTaskDrag, endPendingDrag, endTaskDrag, taskDragConsumesClick, regionRef, rowRef, taskShift, useTaskLift, viewportRef } from './drag.tsx'
 import { ShiftRow } from '../drag/shift.tsx'
 import { TaskWindow, type TaskWindowEntry } from './TaskWindow.tsx'
 import { isGroupCollapsed, isOpenStatus, latestRun, runOutcome, STATUS_LABEL, type TaskGroup } from '@/state/tasksModel'
@@ -172,11 +172,12 @@ export const TaskRow = memo(function TaskRow({
           aria-label={`${task.key} ${task.title}`}
           onFocus={() => setTasks({ focused: task.id })}
           onMouseEnter={() => setHover(true)}
-          onMouseLeave={(e) => { setHover(false); if (draggable) trackTaskDrag(e, true); endPendingDrag() }}
-          onMouseDown={draggable ? (e) => beginTaskDrag(task.id, e, renderer, sequence) : undefined}
+          onMouseLeave={(e) => { setHover(false); if (draggable) trackTaskDrag(e); endPendingDrag() }}
+          onMouseDown={(e) => beginTaskDrag(task.id, e, renderer, sequence, draggable)}
           onMouseMove={draggable ? (e) => trackTaskDrag(e) : undefined}
-          onMouseUp={endPendingDrag}
+          onMouseUp={endTaskDrag}
           onClick={(e) => {
+            if (taskDragConsumesClick()) return
             if (e.modifiers?.cmd || e.modifiers?.ctrl || e.modifiers?.shift) pick(task.id, sequence, !!e.modifiers?.shift)
             else openTask(task.id)
           }}
@@ -250,11 +251,12 @@ export const TaskRow = memo(function TaskRow({
           )}
           <div
             testId={`task-drag-${task.id}`}
-            onMouseDown={draggable ? (e) => beginTaskDrag(task.id, e, renderer, sequence) : undefined}
+            onMouseDown={(e) => beginTaskDrag(task.id, e, renderer, sequence, draggable)}
             onMouseMove={draggable ? (e) => trackTaskDrag(e) : undefined}
-            onMouseUp={endPendingDrag}
-            onMouseLeave={(e) => { if (draggable) trackTaskDrag(e, true); endPendingDrag() }}
+            onMouseUp={endTaskDrag}
+            onMouseLeave={(e) => { if (draggable) trackTaskDrag(e); endPendingDrag() }}
             onClick={(e) => {
+              if (taskDragConsumesClick()) return
               if (e.modifiers?.cmd || e.modifiers?.ctrl || e.modifiers?.shift) pick(task.id, sequence, !!e.modifiers?.shift)
               else openTask(task.id)
             }}

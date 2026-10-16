@@ -15,6 +15,8 @@ import { edgeSpeed, startFrameLoop } from '../drag/edge.ts'
 import { createVelocityTracker } from '../drag/velocity.ts'
 import { GhostCard, GhostRow } from './GhostItem.tsx'
 import { getState } from '../state.ts'
+import { watchPointerRelease } from '../split/release.ts'
+import { cls, getObjc, nsApp, sel } from '../native/objc.ts'
 
 type Region = { node: PublicInstance; status: TaskStatus; ids: string[]; board: boolean }
 type Target = { status: TaskStatus; before: string | null; slot: Rect; action: 'move' | 'send' | 'none'; shifts: Map<string, number> }
@@ -55,6 +57,31 @@ const regions = new Map<string, Region>()
 let viewport: PublicInstance | null = null
 let current: Drag | null = null
 let pending: Drag | null = null
+// Native click delivery may still target the pressed row after the overlay mounts.
+// Keep this through landing/cancel; only a new press starts a click gesture.
+let suppressTaskClick = false
+let stopReleaseWatch: (() => void) | undefined
+function stopWatchingRelease() {
+  stopReleaseWatch?.()
+  stopReleaseWatch = undefined
+}
+function watchRelease() {
+  stopWatchingRelease()
+  if (process.platform !== 'darwin') return
+  const o = getObjc(), app = nsApp()
+  stopReleaseWatch = watchPointerRelease(() => ({
+    pressed: (Number(o.msgU64(cls(o, 'NSEvent'), sel(o, 'pressedMouseButtons'))) & 1) !== 0,
+    active: !!app && Number(o.msgU64(app, sel(o, 'isActive'))) !== 0,
+  }), escapeTaskDrag)
+}
+export function taskDragConsumesClick() {
+  return suppressTaskClick || !!current?.active
+}
+export function endTaskDrag() {
+  stopWatchingRelease()
+  pending = null
+  releaseDrag()
+}
 const listeners = new Set<() => void>()
 const velocity = createVelocityTracker()
 let ghostLanded = false
@@ -67,6 +94,7 @@ function publish(value: Drag | null) {
 export const draggingTask = () => current !== null
 /** Immediate cancel (page changes, environment switches). */
 export const cancelTaskDrag = () => {
+  stopWatchingRelease()
   pending = null
   ghostLanded = false
   taskShift.clear(true)
@@ -74,6 +102,7 @@ export const cancelTaskDrag = () => {
 }
 /** Release the held item without a drop: it springs back to where it was picked up. */
 export function escapeTaskDrag() {
+  stopWatchingRelease()
   pending = null
   if (!current) return
   if (!current.active || !current.source) return cancelTaskDrag()
@@ -153,8 +182,10 @@ function measureTargets(renderer: NativeRenderer, sequence: string[]) {
   })
   return { regions: visible, rows: boxes }
 }
-export function beginTaskDrag(id: string, event: EventPayload, renderer: NativeRenderer, sequence: string[]) {
+export function beginTaskDrag(id: string, event: EventPayload, renderer: NativeRenderer, sequence: string[], draggable = true) {
   if (event.button !== 0 || event.x === undefined || event.y === undefined) return
+  suppressTaskClick = false
+  if (!draggable) return
   const targets = measureTargets(renderer, sequence)
   if (!targets) return
   // A drag still landing is finished at once; the new press owns the pointer.
@@ -183,21 +214,24 @@ export function beginTaskDrag(id: string, event: EventPayload, renderer: NativeR
     settle: null,
     saving: false,
   }
+  watchRelease()
 }
-export function trackTaskDrag(event: EventPayload, leaving = false) {
+export function trackTaskDrag(event: EventPayload) {
   if (!pending) return
-  if (event.pressedButton != null && event.pressedButton !== 0) {
-    pending = null
+  if (event.pressedButton !== 0) {
+    endPendingDrag()
     return
   }
   const x = event.x ?? pending.x,
     y = event.y ?? pending.y
-  if (Math.hypot(x - pending.startX, y - pending.startY) < 5 && !leaving) return
+  if (Math.hypot(x - pending.startX, y - pending.startY) < 5) return
+  suppressTaskClick = true
   current = pending
   pending = null
   move(event)
 }
 export function endPendingDrag() {
+  if (!current) stopWatchingRelease()
   pending = null
 }
 function resolveTarget(drag: Drag, x: number, y: number): Target | null {
@@ -248,7 +282,7 @@ function sourceIds(drag: Drag) {
 /** Layout is measured at press and after an auto-scroll step, not on every pointer move (each measure is a native call per row). */
 function move(event: EventPayload, remeasure = false) {
   if (!current || current.settle) return
-  if (event.pressedButton != null && event.pressedButton !== 0) return releaseDrag()
+  if (event.pressedButton !== 0) return releaseDrag()
   if (dragRenderer && remeasure) {
     const targets = measureTargets(dragRenderer, current.sequence)
     if (targets) { current.regions = targets.regions; current.rows = targets.rows }
@@ -263,8 +297,9 @@ function move(event: EventPayload, remeasure = false) {
 }
 /** Pointer-up or button released elsewhere: drop where the slot is, or return home. */
 function releaseDrag() {
+  stopWatchingRelease()
   const drag = current
-  if (!drag) return
+  if (!drag || drag.settle) return
   if (!drag.active || !drag.source) return finishClick(drag)
   const v = velocity.velocity()
   const task = taskState().tasks[drag.id]
@@ -367,7 +402,7 @@ export function TasksDragLayer() {
     <div
       testId="task-drag-layer"
       onMouseMove={(event) => move(event)}
-      onMouseUp={releaseDrag}
+      onMouseUp={endTaskDrag}
       onMouseLeave={(event) => { if (leftCapture(event, dragRenderer)) escapeTaskDrag() }}
       style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: drag.settle ? 'none' : 'auto', cursor: drag.active ? 'grabbing' : 'pointer' }}
     >

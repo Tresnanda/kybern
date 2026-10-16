@@ -67,6 +67,8 @@ export function TasksPage() {
   )
   const task = s.openId ? s.tasks[s.openId] : null
   const selected = [...s.selected].filter((id) => !!s.tasks[id])
+  // A view/detail switch ends pointer ownership even when this page stays mounted.
+  useEffect(() => { cancelTaskDrag() }, [s.openId, s.prefs.view, s.prefs.filter])
   useEffect(() => {
     const shown = new Set((s.prefs.view === 'board' ? columns : groups).flatMap((g) => g.tasks.map((task) => task.id)))
     const keep = [...taskState().selected].filter((id) => !!s.tasks[id] && (s.openId || shown.has(id)))
