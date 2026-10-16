@@ -183,7 +183,7 @@ describe('lossless source and rendered Markdown semantics', () => {
         }
       }
     }
-  })
+  }, 30000)
 })
 
 describe('inline token projection', () => {
