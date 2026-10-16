@@ -56,6 +56,9 @@ edit(w, '    pub(crate) needs_present: Rc<Cell<bool>>,', '    pub(crate) needs_p
 edit(w, '            needs_present,', '            needs_present,\n            paint_animation_scheduled: false,')
 edit(w, '        self.platform_window.draw(&self.rendered_frame.scene);', """        let animated = self.rendered_frame.scene.animate_tagged();
         self.platform_window.draw(&self.rendered_frame.scene);
+        if *TRACE.get_or_init(|| std::env::var_os("KYBERN_FRAME_TIMES").is_some()) {
+            eprintln!("[kybern-submit] {:.3}", ORIGIN.get_or_init(std::time::Instant::now).elapsed().as_secs_f64()*1000.0);
+        }
         if animated && !self.paint_animation_scheduled {
             self.paint_animation_scheduled = true;
             self.on_next_frame(|window, _| {
