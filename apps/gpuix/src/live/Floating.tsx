@@ -11,14 +11,14 @@ import { useComposerOverlayHeight } from '../composer/height.ts'
 type Corner = 'top-end' | 'top-start' | 'bottom-end' | 'bottom-start'
 const corners: Corner[] = ['top-end', 'top-start', 'bottom-end', 'bottom-start']
 /** Shared native corner snap. The overlay exists only during the drag. */
-export function Floating({ storageKey, width, height, testId, children, insetEnd = 0, insetBottom: explicitInset = 0, overlayDrag = false }: { storageKey: string; width: number; height: number; testId: string; children: ReactNode; insetEnd?: number; insetBottom?: number; overlayDrag?: boolean }) {
+export function Floating({ storageKey, width, height, testId, children, insetEnd = 0, insetBottom: explicitInset = 0, overlayDrag = false, defaultCorner = 'top-end', onCornerChange }: { storageKey: string; width: number; height: number; testId: string; children: ReactNode; insetEnd?: number; insetBottom?: number; overlayDrag?: boolean; defaultCorner?: Corner; onCornerChange?: (corner: Corner) => void }) {
   // Bottom corners sit above the composer and its request panels, as on the desktop.
   const insetBottom = Math.max(explicitInset, useComposerOverlayHeight())
   const t = useTheme()
   const { renderer } = useGpuix()
   const card = useRef<PublicInstance | null>(null)
   const container = useRef<PublicInstance | null>(null)
-  const [corner, setCorner] = useState<Corner>(() => { const saved = load<Corner>(storageKey, 'top-end'); return corners.includes(saved) ? saved : 'top-end' })
+  const [corner, setCorner] = useState<Corner>(() => { const saved = load<Corner>(storageKey, defaultCorner); return corners.includes(saved) ? saved : defaultCorner })
   const samples = useRef<{ x: number; y: number; time: number }[]>([])
   const generation = useRef(0)
   const entered = useRef(REDUCED_MOTION || getNav().keyboardNav)
@@ -48,7 +48,7 @@ export function Floating({ storageKey, width, height, testId, children, insetEnd
     const next = projected.replace('left', 'start').replace('right', 'end') as Corner
     const target = cornerPosition(projected, size, bounds, { bottomInset: 12 + insetBottom })
     setSnap(REDUCED_MOTION ? null : { generation: ++generation.current, x: position.x - target.x, y: position.y - target.y, vx: velocity.x, vy: velocity.y })
-    setCorner(next); save(storageKey, next); setDrag(null)
+    setCorner(next); save(storageKey, next); onCornerChange?.(next); setDrag(null)
   }
   const move = (e: EventPayload) => {
     if (!drag) return

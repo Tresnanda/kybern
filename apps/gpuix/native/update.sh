@@ -52,6 +52,7 @@ python3 tools/align_strtab.py "$out"
 codesign -f -s - "$out" 2>/dev/null
 node -e "require('$here/$out')"
 echo "native module loads"
+bun build-webview.ts
 
 if [ "$version" != "$pinned" ]; then
   echo "== npm packages and JS patch → $version"

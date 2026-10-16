@@ -2,6 +2,7 @@ import { usePaneAccess, useApp } from '../state.ts'
 import { useGpuixRequired, type PublicInstance } from "@gpuix/react"
 import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { observeElementBounds } from "../native/layout.ts"
+import { webHost } from '../native/webview.ts'
 
 const measurements = new Map<object, { priority: number; height: number; pane: string }>()
 const listeners = new Set<() => void>()
@@ -38,11 +39,12 @@ export function useMeasureComposerOverlay(priority = 0) {
     if (!node || pane.frozen) return
     const key = owner.current
     const stop = observeElementBounds(renderer, node.id, event => {
+      if (priority === 0) webHost.occlusion(-node.id, event.clippedRect, 24, 0, 1)
       if (event.rect) measurements.set(key, { priority, height: event.rect.height, pane: pane.id })
       else measurements.delete(key)
       publish()
     })
-    return () => { stop(); measurements.delete(key); publish() }
+    return () => { stop(); if (priority === 0) webHost.occlusion(-node.id, null); measurements.delete(key); publish() }
   }, [renderer, node, priority, pane])
   return setNode
 }

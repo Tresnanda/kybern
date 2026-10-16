@@ -1,4 +1,6 @@
-/** Proposed WKWebView ABI, NOT implemented or advertised as a capability. */
+/** Embedded WKWebView design contract. The implemented document/slot bridge is
+ * `webview.ts`; native/webview.m enforces the host lifecycle. This interface is
+ * retained as the original ABI proposal, not a renderer capability assertion. */
 export interface EmbeddedWebViewRect {
   /** Logical pixels relative to the GPUI window content area, top-left origin. */
   x: number
@@ -24,7 +26,7 @@ export type EmbeddedWebViewEvent =
   | { type: 'focus'; id: string; focused: boolean }
   | { type: 'terminated'; id: string; generation: number }
 
-/** Future native implementation must enforce the lifecycle in native/README.md. */
+/** Original ABI proposal; use webHost from webview.ts for the implemented API. */
 export interface EmbeddedWebViewHost {
   /** Creates hidden, idempotently rejects an existing ID. Maximum two hosts. */
   create(options: EmbeddedWebViewOptions): Promise<void>

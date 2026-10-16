@@ -1,0 +1,98 @@
+import { useEffect, useRef, useState } from 'react'
+import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
+import { observeElementBounds, type ElementBoundsEvent } from '../native/layout.ts'
+import { webHost } from '../native/webview.ts'
+import { viewportLayout } from '../../../../packages/kybern-client/src/previewViewport.ts'
+import { validateBridgeMessage } from '../../../../packages/kybern-client/src/previewTarget.ts'
+import { useTheme } from '../ui.tsx'
+import { openPreview, releasePreviewEntry, setPreview, usePreview, type Entry } from './store.ts'
+import { DeviceRails } from './DeviceRails.tsx'
+
+type Slot = { kind: 'dock' | 'mini'; bounds: ElementBoundsEvent }
+const slots = new Map<string, Map<string, Slot>>(), placements = new Map<string, () => void>()
+const dockedSizes = new Map<string, { w: number; h: number }>()
+export const previewDockSize = (id: string) => dockedSizes.get(id) ?? { w: 16, h: 10 }
+export const previewDocumentId = (id: string) => `preview:${id}`
+
+/** Slots only publish geometry. Dock/mini switches never move or recreate a web view. */
+export function PreviewSlot({ threadId, kind }: { threadId: string; kind: 'dock' | 'mini' }) {
+  const renderer = useGpuixRequired(), ref = useRef<PublicInstance | null>(null)
+  const [size, setSize] = useState({ width: 0, height: 0 })
+  useEffect(() => {
+    if (!ref.current) return
+    const key = `${kind}:${ref.current.id}`
+    const stop = observeElementBounds(renderer, ref.current.id, bounds => {
+      let entries = slots.get(threadId)
+      if (!entries) slots.set(threadId, entries = new Map())
+      entries.set(key, { kind, bounds }); placements.get(threadId)?.()
+      if (kind === 'dock' && bounds.rect) { const { width, height } = bounds.rect; setSize(previous => previous.width === width && previous.height === height ? previous : { width, height }) }
+    })
+    return () => { stop(); slots.get(threadId)?.delete(key); if (!slots.get(threadId)?.size) slots.delete(threadId); placements.get(threadId)?.() }
+  }, [renderer, threadId, kind])
+  return <div ref={ref} testId={`preview-slot-${kind}`} style={{ flexGrow: 1, minHeight: 0, width: '100%', position: 'relative' }}>{kind === 'dock' && <DeviceRails threadId={threadId} width={size.width} height={size.height} />}</div>
+}
+
+/** Matching PreviewSurfaceLayer: one selected dock document and one floating
+ * document. Components are keyed by thread, independent of either slot. */
+export function PreviewSurface({ threadId }: { threadId: string }) {
+  const s = usePreview(threadId), t = useTheme(), id = previewDocumentId(threadId), entry = s.entries[s.index]
+  const live = useRef(s), ready = useRef(false)
+  const hiddenTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined), suspended = useRef<Entry | null>(null)
+  const visibility = useRef<(visible: boolean) => void>(() => {})
+  live.current = s
+  useEffect(() => {
+    visibility.current = visible => {
+      if (visible || live.current.floating) { clearTimeout(hiddenTimer.current); hiddenTimer.current = undefined; return }
+      if (hiddenTimer.current || !ready.current) return
+      hiddenTimer.current = setTimeout(() => {
+        hiddenTimer.current = undefined
+        const current = live.current, entry = current.entries[current.index]
+        if (!entry || current.floating) return
+        suspended.current = entry; ready.current = false; webHost.destroy(id); releasePreviewEntry(entry)
+      }, 5 * 60_000)
+    }
+    const place = () => {
+      const current = live.current, kind = current.floating ? 'mini' : 'dock'
+      const slot = [...(slots.get(threadId)?.values() ?? [])].find(value => value.kind === kind)
+      const rect = slot?.bounds.rect, clip = slot?.bounds.clippedRect
+      if (!rect || !clip || current.busy) { if (ready.current) webHost.hide(id); visibility.current(false); return }
+      visibility.current(true)
+      if (suspended.current) { const entry = suspended.current; suspended.current = null; void openPreview(threadId, entry.address, false, false, true); return }
+      if (!ready.current) return
+      if (kind === 'dock') { dockedSizes.delete(threadId); dockedSizes.set(threadId, { w: rect.width, h: rect.height }); if (dockedSizes.size > 40) dockedSizes.delete(dockedSizes.keys().next().value!) }
+      const logical = current.device ? { w: current.width, h: current.height } : kind === 'mini' ? dockedSizes.get(threadId) ?? { w: 512, h: 320 } : { w: rect.width, h: rect.height }
+      const scale = Math.min(1, rect.width / logical.w, rect.height / logical.h)
+      const fit = kind === 'mini' ? { scale, left: (rect.width - logical.w * scale) / 2, top: (rect.height - logical.h * scale) / 2 } : current.device ? viewportLayout(logical, { w: rect.width, h: rect.height }) : { scale: 1, left: 0, top: 0 }
+      const frame = { x: rect.x + fit.left, y: rect.y + fit.top, width: logical.w * fit.scale, height: logical.h * fit.scale }
+      const x = Math.max(frame.x, clip.x), y = Math.max(frame.y, clip.y)
+      const clipped = { x, y, width: Math.max(0, Math.min(frame.x + frame.width, clip.x + clip.width) - x), height: Math.max(0, Math.min(frame.y + frame.height, clip.y + clip.height) - y) }
+      webHost.place(id, frame, clipped, { width: logical.w, height: logical.h, scale: fit.scale, left: 0, top: 0, radius: kind === 'mini' ? 12 : 0 })
+    }
+    placements.set(threadId, place); place()
+    return () => { clearTimeout(hiddenTimer.current); placements.delete(threadId); webHost.hide(id) }
+  }, [threadId, id])
+  useEffect(() => {
+    if (!entry || entry.kind === 'external') return
+    if (entry.released) { void openPreview(threadId, entry.address, false, false, true); return }
+    let alive = true, generation = 0
+    const stop = webHost.subscribe(event => {
+      if (event.id !== id || !alive || (event.generation !== undefined && event.generation !== generation)) return
+      if (event.type === 'created' || event.type === 'loaded') { ready.current = true; placements.get(threadId)?.(); webHost.theme(id, { appearance: t.variant, variables: { '--background': t.surface, '--foreground': t.text } }) }
+      if (event.type === 'failed' || event.type === 'terminated') setPreview(threadId, { error: event.message ?? 'The page stopped responding. Reload to try again.' })
+      if (event.type === 'visibility') visibility.current(!!event.visible)
+      if (event.type === 'externalNavigation') setPreview(threadId, { error: 'This link opens outside the preview. Use Open in browser to continue.' })
+      if (event.type === 'message') {
+        const message = validateBridgeMessage(event.data)
+        if (message && message.type !== 'nav-start') setPreview(threadId, { bridge: { back: message.back, forward: message.forward }, pageTitle: message.title, pagePath: message.path })
+      }
+    })
+    try { generation = webHost.create(id, entry.frameUrl ?? entry.url, entry.kind) }
+    catch (error) { setPreview(threadId, { error: String(error) }) }
+    return () => { alive = false; ready.current = false; clearTimeout(hiddenTimer.current); hiddenTimer.current = undefined; stop(); webHost.destroy(id); releasePreviewEntry(entry) }
+  }, [id, threadId, entry])
+  useEffect(() => { placements.get(threadId)?.() }, [s.floating, s.device, s.width, s.height, s.busy])
+  useEffect(() => { if (ready.current) webHost.theme(id, { appearance: t.variant, variables: { '--background': t.surface, '--foreground': t.text } }) }, [id, t])
+  return null
+}
+
+export function previewCommand(threadId: string, action: 'reload' | 'back' | 'forward' | 'stop') { webHost.action(previewDocumentId(threadId), action) }

@@ -138,7 +138,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning 
         </div>
       )}
 
-      {group.work.filter(b => b.kind === 'visual').map(b => b.kind === 'visual' && <VisualCard key={b.id} visual={b.visual} threadId={threadId} />)}
+      {group.visuals?.map(block => <VisualCard key={block.id} visual={block.visual} threadId={threadId} />)}
       {running && (
         <div testId="live-work" style={{ display: 'flex', flexDirection: 'column', paddingBottom: 8 }}>
           <WorkingHeader since={group.user?.at ?? group.work[0]?.at ?? ''} />

@@ -460,33 +460,53 @@ Faithful subtree scale remains unsupported for the reasons in the native springs
 section: quads, paths, masks, glyphs and hitboxes need one coordinated GPUI scene
 transform. Translation is not presented as scale.
 
-## Proposed embedded browser host contract (not implemented)
+## Embedded browser host (round 5)
 
-`src/native/webview-contract.ts` is the concrete TypeScript proposal for package 5.
-It does **not** enable browser UI or claim that WKWebView is available. A native
-implementation must attach one WKWebView per document to the GPUI content view,
-keep its identity while moving between dock and mini-player, and cap live hosts
-at two. `place` uses logical top-left coordinates and a clipping rectangle; the
-native side converts to AppKit coordinates and applies coalesced frame/visibility
-updates. Native browser views must not cover GPUI menus or dialogs; the integration
-needs an explicit overlay/occlusion policy before it can ship.
+`webview.m` is a small AppKit/WebKit companion library, built with
+`bun native/build-webview.ts`. It does not rebuild GPUI or replace its frame loop.
+`native/update.sh` builds it too; `scripts/package-app.ts` stages and signs it.
+The runtime loads `native/build/kybern-webview.dylib`, or the app Resources copy.
 
-URLs come from the existing authorized preview ticket/loopback relay flow. A
-WKNavigationDelegate checks initial navigation, redirects, popups and downloads
-against the allowed origins; external navigation is an event for app policy.
-Never inject daemon bearer credentials into page JavaScript. The contract has no
-arbitrary JS evaluation bridge. Per-environment nonpersistent website data stores
-prevent session/cookie crossover; file pages still rely on the daemon's sandbox
-CSP and canonical-root checks. A stale generation may not update new navigation.
+`src/native/webview.ts` owns the trusted wrapper. Each WKWebView uses a fresh
+nonpersistent website store and a native generation. A WKURLSchemeHandler serves
+only that document's wrapper at `tauri://localhost/embedded/...`; this origin is
+already allowed by the daemon's file `frame-ancestors` policy. File and visual
+children remain opaque sandboxed iframes; server children use the desktop's
+server sandbox. Native navigation action and response policies restrict the
+child to its ticket/relay origin and forbid top-level replacement and popups.
+No bearer token is sent to a page. Only main-frame wrapper messages enter the
+public message bridge; a separate isolated WKContentWorld retains the direct
+child's frame for back/forward/reload/stop. Untrusted child script cannot use it.
 
-Hidden hosts must lose keyboard focus, stop loading and cease presentation work;
-the implementation must separately verify media/timer suspension, since hiding an
-NSView alone is insufficient. Destruction removes navigation/message delegates,
-event observers and views, cancels pending work, and is idempotent. A process-crash
-event leaves retry UI to the app. Verification must include WebKit subprocess
-footprint/CPU, repeated dock/mini-player transitions, environment switches, blocked
-external navigation, clipping/hit testing, native keyboard editing and eventual
-process cleanup. No WKWebView prototype was added in this package.
+`src/preview/relay.ts` mirrors the Tauri relay's HTTP request-head rewrite and
+raw WebSocket splice. A loopback-only listener checks Host, refuses CONNECT and
+absolute targets, and only targets a ticket on the configured daemon. Page
+cookies/Authorization pass through; Kybern credentials are never added. The
+existing daemon proxy still enforces its credential filtering and destination
+checks. Closing a document destroys its relay sockets and revokes its ticket.
+
+`src/preview/Surface.tsx` owns at most two preview documents (the selected thread
+and one floating thread). Dock and mini-player publish clipped native geometry;
+the WK view never moves between parents or reloads on a slot change. Hidden
+docked documents unload after five minutes, with a new ticket on return. Native
+window occlusion/minimize notifications pause visual bootstrap loops and suspend
+media. Hidden views surrender native focus. Destruction removes both message
+handlers, observers, views, media, and the last host's key monitor. Native web
+input routes app shortcuts back to the existing JS shortcut handlers.
+
+GPUI popups publish rounded occlusion paths, including a native dim layer for
+modal scrims. An expanded visual inherits its popup layer so it appears above
+that modal and preserves the same document. The existing composer measurement
+observer also masks the native document below the floating composer. Ordinary
+layout measurements do not add a polling loop.
+
+Verification scripts: `native/webview-check.ts` exercises native AppKit pointer,
+text input, Command-L, blocked external navigation, identity, visibility and
+popup masking. `scripts/preview-app-check.ts` uses the scratch daemon for HTML,
+localhost root assets, visual expansion, mini-player and device rotation in
+light/dark and normal/reduced motion. Both acquire the round-5 UI lock and take
+window-only `screencapture` images: GPUI's own screenshot API excludes child
+NSViews. See the round-5 preview report for actual results and remaining gaps.
 
 ## Event-driven layout (package 2)
 

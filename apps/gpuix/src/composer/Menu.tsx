@@ -31,6 +31,7 @@ import type { Theme } from '../theme.ts'
 import { DURATION, EASE, POPUP } from '../motion/kit.tsx'
 import { REDUCED_MOTION } from '../ui.tsx'
 import { G } from './glyphs.ts'
+import { WebLayer, useWebOcclusion } from '../native/web-occlusion.ts'
 
 /** `rounded-[0.65rem]` panels, `rounded-[0.5rem]` rows. */
 export const PICKER_RADIUS = 10.4
@@ -112,6 +113,7 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
   ref,
 ) {
   const glass = useBackdropMaterial()
+  const webLayer = useWebOcclusion(undefined, typeof style?.borderRadius === 'number' ? style.borderRadius : 0, backing?.startsWith('rgba(0, 0, 0, ') ? Number(backing.slice(14, -1)) : 0)
   const [generation] = useState(() => ++popupGeneration)
   // Decided on mount: a later change must not restart or drop the tween.
   // Reduce Motion skips the tween entirely: a zero-length native opacity motion
@@ -146,8 +148,10 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
       priority={priority}
       occlude={occlude}
     >
+      <div testId={webLayer.id} style={{ display: 'flex' }}>
       <div {...props} ref={ref} style={glass && material !== 'none' && (style as StyleDesc | undefined)?.backgroundColor ? {...style as StyleDesc,backgroundColor:backdropTint((style as StyleDesc).backgroundColor!)} : style}>
-        {children}
+        <WebLayer.Provider value={webLayer.layer}>{children}</WebLayer.Provider>
+      </div>
       </div>
     </anchored>
   )
