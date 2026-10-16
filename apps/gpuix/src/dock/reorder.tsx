@@ -10,6 +10,7 @@ import { Icon } from '../icons.tsx'
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { DragGhost, DropSlot, type Rect, type Settle } from '../drag/Ghost.tsx'
+import { leftCapture } from '../drag/leave.ts'
 import { edgeSpeed, startFrameLoop } from '../drag/edge.ts'
 import { usePacing } from '../drag/pacing.ts'
 import { createShiftStore, ShiftRow } from '../drag/shift.tsx'
@@ -168,11 +169,11 @@ export function TabDragLayer() {
   if (!drag) return null
   const i = drag.from
   return (
-    <div testId="dock-tab-drag-layer" onMouseMove={move} onMouseUp={() => release(true)} onMouseLeave={escape}
+    <div testId="dock-tab-drag-layer" onMouseMove={move} onMouseUp={() => release(true)} onMouseLeave={(event) => { if (leftCapture(event, renderer)) escape() }}
       style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: drag.settle ? 'none' : 'auto', cursor: 'grabbing' }}>
       <DropSlot testId="dock-tab-drop-indicator" rect={drag.settle ? null : drag.slot} tone="ok" />
       <DragGhost rect={drag.source} grab={drag.grab} x={drag.x} y={drag.y} settle={drag.settle} onSettled={() => { if (!landed) { landed = true; finish() } }} radius={8} pacing={pacing as never}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: '100%', paddingLeft: 6 }}>
+        <div style={{ pointerEvents: 'none', display: 'flex', alignItems: 'center', gap: 6, height: '100%', paddingLeft: 6 }}>
           <Icon source={context.icons[i]!} size={14} color={t.textSecondary} />
           <Label color={t.text} size={13}>{context.labels[i] ?? ''}</Label>
         </div>

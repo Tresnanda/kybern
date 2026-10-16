@@ -15,6 +15,9 @@ const TICK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path 
 /** `.tk-dtitle`: 28/34 at 650, no box. Return commits and moves to the description; Escape puts the saved title back. */
 export function TitleField({ value, saved, onChange, onCommit, onEnter }: { value: string; saved: string; onChange: (value: string) => void; onCommit: () => void; onEnter: () => void }) {
   const t = useTheme()
+  const { renderer } = useGpuix()
+  const escaped = useRef(false)
+  const commit = () => { onChange(value.replace(/\s+/g, ' ').trim()); onCommit() }
   return (
     <textarea
       testId="task-title"
@@ -24,12 +27,12 @@ export function TitleField({ value, saved, onChange, onCommit, onEnter }: { valu
       minRows={1}
       maxRows={6}
       interceptKeys={['enter', 'escape']}
-      onFocus={() => taskTyping(true)}
-      onBlur={() => { taskTyping(false); onCommit() }}
+      onFocus={() => { escaped.current = false; taskTyping(true) }}
+      onBlur={() => { taskTyping(false); if (!escaped.current) commit() }}
       onChange={(e) => onChange((e.value ?? '').replace(/\n/g, ''))}
       onKeyDown={(e) => {
-        if (e.key === 'enter') { e.preventDefault(); onCommit(); onEnter() }
-        else if (e.key === 'escape') { e.preventDefault(); onChange(saved) }
+        if (e.key === 'enter') { e.preventDefault(); commit(); onEnter() }
+        else if (e.key === 'escape') { e.preventDefault(); escaped.current = true; onChange(saved); renderer?.blur?.() }
       }}
       theme={{ text: t.text, caret: t.text }}
       style={{ width: '100%', padding: 0, fontFamily: FONT_UI, fontSize: 28, lineHeight: 34, fontWeight: 650, color: t.text, backgroundColor: 'transparent' }}
@@ -82,8 +85,8 @@ export function CriterionRow({ index, text, checked, focusToken, onToggle, onTex
   useEffect(() => { if (focusNow && ref.current) renderer?.focusElement?.(ref.current.id) }, [focusNow, focusToken])
   return (
     <div testId={`task-criterion-row-${index}`} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, minHeight: 32, paddingTop: 4, paddingBottom: 4 }}>
-      <div testId={`task-criterion-${index}`} role="checkbox" aria-checked={checked} aria-label="Select task" tabIndex={0} onClick={onToggle} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, marginTop: 4, borderRadius: 4.5, flexShrink: 0, cursor: 'pointer', ...(checked ? { backgroundColor: k.checkOn } : { borderWidth: 1.5, borderColor: k.fg4, hover: { borderColor: k.fg3 } }) }}>
-        {checked && <svg source={TICK} style={{ width: 10.5, height: 10.5, color: t.surface }} />}
+      <div testId={`task-criterion-${index}`} role="checkbox" aria-checked={checked} aria-label={text || "Criterion"} tabIndex={0} onClick={onToggle} onKeyDown={(e) => { if (e.key === "space") { e.preventDefault(); onToggle() } }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, marginTop: 4, borderRadius: 4.5, flexShrink: 0, cursor: 'pointer', ...(checked ? { backgroundColor: k.checkOn } : { borderWidth: 1.5, borderColor: k.fg4, hover: { borderColor: k.fg3 } }) }}>
+        {checked && <svg source={TICK} style={{ width: 10.5, height: 10.5, color: t.surface, pointerEvents: 'none' }} />}
       </div>
       <textarea
         ref={ref}

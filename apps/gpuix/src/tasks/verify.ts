@@ -97,7 +97,7 @@ async function dragTo(id: string, target: { x: number; y: number }, cancel = fal
     'drag capture painted',
   )
   await app!.mouse.move(target, { pressedButton: 0 })
-  await app!.getByTestId('task-drop-indicator').waitFor()
+  await app!.getByTestId('task-ghost').waitFor()
   if (cancel) await source.press('escape')
   else await app!.screenshot({ path: path.join(out, `drag-${process.argv.includes('--light') ? 'light' : 'dark'}.png`) })
   await app!.mouse.up(target)

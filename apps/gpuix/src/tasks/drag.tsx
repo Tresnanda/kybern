@@ -8,10 +8,13 @@ import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { openTask, pick, setTasks, taskState, updateTask } from './store.ts'
 
 import { usePacing } from '../drag/pacing.ts'
-import { DragGhost, DropSlot, type Rect, type Settle } from '../drag/Ghost.tsx'
+import { DragGhost, type Rect, type Settle } from '../drag/Ghost.tsx'
 import { createShiftStore } from '../drag/shift.tsx'
+import { leftCapture } from '../drag/leave.ts'
 import { edgeSpeed, startFrameLoop } from '../drag/edge.ts'
 import { createVelocityTracker } from '../drag/velocity.ts'
+import { GhostCard, GhostRow } from './GhostItem.tsx'
+import { getState } from '../state.ts'
 
 type Region = { node: PublicInstance; status: TaskStatus; ids: string[]; board: boolean }
 type Target = { status: TaskStatus; before: string | null; slot: Rect; action: 'move' | 'send' | 'none'; shifts: Map<string, number> }
@@ -181,15 +184,15 @@ export function beginTaskDrag(id: string, event: EventPayload, renderer: NativeR
     saving: false,
   }
 }
-export function trackTaskDrag(event: EventPayload) {
+export function trackTaskDrag(event: EventPayload, leaving = false) {
   if (!pending) return
-  if (event.pressedButton !== 0) {
+  if (event.pressedButton != null && event.pressedButton !== 0) {
     pending = null
     return
   }
   const x = event.x ?? pending.x,
     y = event.y ?? pending.y
-  if (Math.hypot(x - pending.startX, y - pending.startY) < 5) return
+  if (Math.hypot(x - pending.startX, y - pending.startY) < 5 && !leaving) return
   current = pending
   pending = null
   move(event)
@@ -245,7 +248,7 @@ function sourceIds(drag: Drag) {
 /** Layout is measured at press and after an auto-scroll step, not on every pointer move (each measure is a native call per row). */
 function move(event: EventPayload, remeasure = false) {
   if (!current || current.settle) return
-  if (event.pressedButton !== 0) return releaseDrag()
+  if (event.pressedButton != null && event.pressedButton !== 0) return releaseDrag()
   if (dragRenderer && remeasure) {
     const targets = measureTargets(dragRenderer, current.sequence)
     if (targets) { current.regions = targets.regions; current.rows = targets.rows }
@@ -365,21 +368,17 @@ export function TasksDragLayer() {
       testId="task-drag-layer"
       onMouseMove={(event) => move(event)}
       onMouseUp={releaseDrag}
-      onMouseLeave={escapeTaskDrag}
+      onMouseLeave={(event) => { if (leftCapture(event, dragRenderer)) escapeTaskDrag() }}
       style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: drag.settle ? 'none' : 'auto', cursor: drag.active ? 'grabbing' : 'pointer' }}
     >
       {!drag.settle && <EdgeScroll />}
       {drag.active && drag.source && (
         <>
-          <DropSlot testId="task-drop-indicator" rect={drag.settle ? null : (drag.target?.slot ?? drag.source)} tone={action === 'none' ? 'none' : 'ok'} />
-          <DragGhost rect={drag.source} grab={drag.grab} x={drag.x} y={drag.y} settle={drag.settle} onSettled={onGhostSettled} pacing={pacing as never}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 12, paddingRight: 12, height: '100%' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, gap: 2 }}>
-                {taskState().prefs.view === 'board' && <Label size={12} color={t.textTertiary} truncate style={{ pointerEvents: 'none' }}>{task?.key ?? ''}</Label>}
-                <Label size={13} color={t.text} truncate style={{ pointerEvents: 'none' }}>{task?.title || 'Untitled'}</Label>
-              </div>
-              <Hint action={action} color={action === 'none' ? t.red : t.textTertiary} />
-            </div>
+          <DragGhost testId="task-drag-ghost" bare landing={{ duration: 0.25, ease: 'ease' }} rect={drag.source} grab={drag.grab} x={drag.x} y={drag.y} settle={drag.settle} onSettled={onGhostSettled} pacing={pacing as never}>
+            {task && (taskState().prefs.view === 'board'
+              ? <GhostCard task={task} />
+              : <GhostRow task={task} project={getState().projects.find((p) => p.id === task.project_id)?.name ?? 'Global'} />)}
+            {action !== 'move' && <Hint action={action} color={action === 'none' ? t.red : t.textTertiary} />}
           </DragGhost>
         </>
       )}

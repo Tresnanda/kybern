@@ -30,7 +30,7 @@ try {
   await Bun.sleep(500)
   console.log('Read list bounds')
   await app.getByTestId('task-list').waitFor()
-  await app.screenshot({ path: '/Users/mymac/projects/ade/previews/gpuix/p4/edge.png' })
+  await app.screenshot({ path: path.join(process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previews/gpuix/p4', 'edge.png') })
   const list = await app.getByTestId('task-list-viewport').bounds()
   let picked: string | undefined
   for (const id of ids) {
@@ -42,7 +42,7 @@ try {
   console.log('Drag visible row', picked)
   const source = app.getByTestId(`task-drag-${picked}`)
   const start = await source.center()
-  await app.mouse.move(start); await app.mouse.down(start)
+  await app.mouse.move(start); await app.clock.fastForward(32); await app.mouse.down(start)
   await app.mouse.move({ x: start.x + 8, y: start.y }, { pressedButton: 0 })
   await app.getByTestId('task-drag-layer').waitFor()
   const edge = { x: list.x + list.width / 2, y: list.y + list.height - 8 }

@@ -78,7 +78,7 @@ export function quickAdd(status: 'inbox' | 'todo' = 'inbox', home?: { projectId?
         ? filter.slice(8)
         : filter === 'global'
           ? null
-          : (getState().draft.projectId ?? null)
+          : (getState().threads.find((thread) => thread.id === getState().selectedId)?.project_id ?? getState().draft.projectId ?? null)
   const groupKey =
     state.prefs.view === 'board' || state.prefs.grouping === 'status'
       ? `status:${status}`

@@ -1,7 +1,7 @@
 // Audit-only relocation of src/environments/verify-qr.ts; assertions and UI steps unchanged.
 import { execFileSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
-import { pairingQrMatrix, pairingQrSvg } from '/Users/mymac/projects/ade-gpuix-dock2/apps/gpuix/src/environments/qr.ts'
+import { pairingQrMatrix, pairingQrSvg } from '../src/environments/qr.ts'
 const cliEnv={...process.env};delete cliEnv.KYBERN_URL;delete cliEnv.KYBERN_TOKEN
 const output = execFileSync('/Applications/kybern.app/Contents/MacOS/kybern', ['--data-dir', process.env.KYBERN_DATA_DIR!, 'pair', '--address', 'http://192.0.2.10:4227'], { encoding: 'utf8',env:cliEnv })
 const text = output.match(/Invitation: (kybern:\/\/pair\?[^\s]+)/)?.[1]

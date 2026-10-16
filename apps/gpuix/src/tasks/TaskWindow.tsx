@@ -40,7 +40,7 @@ export function TaskWindow({ entries, card = false, testId }: { entries: TaskWin
       style={{ flexGrow: 1, minHeight: 0, width: '100%' }}
     >
       {entries.map((entry, index) => (
-        <div key={entry.key} ref={(node) => slotRef(entry.key, node)} style={{ height: entry.height, width: '100%' }}>
+        <div testId={`task-slot-${entry.key}`} key={entry.key} ref={(node) => slotRef(entry.key, node)} style={{ height: entry.height, width: '100%' }}>
           {entry.pinned || entry.key === focused || (index >= range.start && index < range.end) ? entry.render() : null}
         </div>
       ))}

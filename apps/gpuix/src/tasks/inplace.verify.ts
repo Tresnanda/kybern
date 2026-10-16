@@ -33,7 +33,7 @@ async function until<T>(fn: () => Promise<T>, ok: (v: T) => boolean, label: stri
   }
 }
 const get = (id: string) => client.call('tasks.items.get', { id }).then((r) => r.task!)
-const click = async (testId: string) => { const l = app!.getByTestId(testId); await l.waitFor({ timeoutMs: 15000 }); await l.click() }
+const click = async (testId: string) => { const l = app!.getByTestId(testId); await l.waitFor({ timeoutMs: 15000 }); await l.hover(); await app!.clock.fastForward(32); await l.click() }
 const shot = (name: string) => app!.screenshot({ path: path.join(out, `${name}-${light ? 'light' : 'dark'}.png`) })
 
 try {
@@ -60,6 +60,22 @@ try {
   if (!(await app.getByTestId('task-quick-card').count())) throw new Error('Return should keep the card open for the next task')
   await app.getByTestId('task-quick-title').press('escape')
   await until(() => app!.getByTestId('task-quick-card').count(), (n) => n === 0, 'Escape closes the card')
+  // Shift+Return inserts a line; selecting a project keeps the draft, clicking outside adds it.
+  await app.getByTestId('task-column-todo').hover()
+  await click('task-board-add-todo')
+  await app.getByTestId('task-quick-title').fill(`${tag} away`)
+  await app.getByTestId('task-quick-title').press('shift-enter')
+  if ((await client.call('tasks.items.list', {})).tasks.some((v) => v.title === `${tag} away`)) throw new Error('Shift+Return submitted the card')
+  await click('task-quick-project')
+  await click(`task-quick-project-${project.id}`)
+  if (!(await app.getByTestId('task-quick-card').count())) throw new Error('Choosing a project closed the draft')
+  const col = await app.getByTestId('task-column-todo').bounds()
+  await app.mouse.move({ x: col.x + 40, y: col.y + 10 })
+  await app.clock.fastForward(32)
+  await app.mouse.click({ x: col.x + 40, y: col.y + 10 })
+  const away = await until(() => client.call('tasks.items.list', {}), (r) => r.tasks.some((v) => v.title.trim() === `${tag} away`), 'clicking away saves the draft')
+  ids.push(away.tasks.find((v) => v.title.trim() === `${tag} away`)!.id)
+  await until(() => app!.getByTestId('task-quick-card').count(), (n) => n === 0, 'clicking away closes the card')
   console.log('QUICK ADD CARD OK')
 
   // ---- the page, edited where it sits ----
@@ -86,6 +102,9 @@ try {
   await click('task-criterion-0')
   await until(() => get(task.id), (t) => t.body.includes('- [x] First criterion'), 'checkbox toggled')
   await click('task-criterion-text-0')
+  await click('task-criterion-0')
+  await until(() => get(task.id), (t) => t.body.includes('- [ ] First criterion'), 'filled checkbox toggled off after hover')
+  await click('task-criterion-0')
   await app.getByTestId('task-criterion-text-0').fill('First criterion, edited')
   await app.getByTestId('task-criterion-text-0').press('enter')
   await app.getByTestId('task-criterion-text-1').waitFor()
