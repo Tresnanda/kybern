@@ -9,7 +9,7 @@
  * everything; without `--keep` the servers are stopped after the run.
  */
 import { spawn } from 'node:child_process'
-import { mkdirSync, rmSync } from 'node:fs'
+import { mkdirSync, openSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { launch } from '@gpuix/react/automation'
 import { CLIENT_DIR, CREDS_DIR, DATA_DIR, connect, freePort, readState, seed, startDaemon, stopPid, stopVite, writeState } from '../visual/fixture.ts'
@@ -59,7 +59,7 @@ let state = await startDaemon(flag('fresh'))
 if (!state.seeded) { await seed(state); state = readState()! }
 if (!state.vitePid) {
   const vitePort = await freePort()
-  const child = spawn('pnpm', ['exec', 'vite', '--port', String(vitePort), '--strictPort'], { cwd: desktop, stdio: 'ignore', detached: true })
+  const child = spawn('pnpm', ['exec', 'vite', '--port', String(vitePort), '--strictPort'], { cwd: desktop, env: { ...process.env, NAPI_RS_NATIVE_LIBRARY_PATH: undefined }, stdio: ['ignore', openSync(path.join(path.dirname(DATA_DIR), 'vite.log'), 'w'), openSync(path.join(path.dirname(DATA_DIR), 'vite.log'), 'a')], detached: true })
   child.unref()
   for (let i = 0; i < 100; i++) { try { if ((await fetch(`http://localhost:${vitePort}/`)).ok) break } catch {} await Bun.sleep(200) }
   state = { ...state, vitePid: child.pid, vitePort }

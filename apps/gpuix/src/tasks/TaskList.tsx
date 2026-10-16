@@ -369,7 +369,7 @@ export function TaskBoard({
             card
             entries={[
               ...(quick?.status === column.status
-                ? [{ key: `quick:${quick.nonce}`, height: 196, pinned: true, render: () => <QuickAdd request={quick} card /> }]
+                ? [{ key: `quick:${quick.nonce}`, height: 96, pinned: true, render: () => <QuickAdd request={quick} card /> }]
                 : []),
               ...column.tasks.map((task) => {
                 const lines = titleLines(task.title, columnWidth - 24)

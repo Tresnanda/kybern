@@ -1,6 +1,4 @@
-import { DecoratedTextarea } from '../native/decorated-input.tsx'
-import { markdownInputDecorations, noteInputMarkColors } from '../native/input-marks.ts'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useWindowSize } from '@gpuix/react'
 import { relativeTime } from '@/lib/format'
 import { Icon } from '../icons.tsx'
@@ -8,17 +6,15 @@ import { N } from '../nav/glyphs.ts'
 import { useSidebarWidth } from '../shell/layout.ts'
 import { notesTokens } from '../notes/kit.tsx'
 import { setDetailSequence } from './Header.tsx'
-import { composeTaskBody, latestRun, runOutcome, splitTaskBody, STATUS_LABEL, taskActivity } from '@/state/tasksModel'
+import { composeTaskBody, type Criterion, latestRun, runOutcome, splitTaskBody, STATUS_LABEL, taskActivity } from '@/state/tasksModel'
 import type { Note, TaskItem } from '../../../../packages/kybern-client/src/types.ts'
 import { getClient } from '../state.ts'
 import { openThread } from '../nav/history.ts'
 import { Menu, MenuItem } from '../nav/overlay.tsx'
 import { useNotes, rpc as noteRpc } from '../notes/store.ts'
-import { Toolbar } from '../notes/Toolbar.tsx'
-import { formatBlock } from '../notes/blocks.ts'
 import { openLink } from '../notes/NoteEditor.tsx'
-import { Button, TextField } from '../settings/controls.tsx'
-import { FONT_UI } from '../theme.ts'
+import { Button } from '../settings/controls.tsx'
+import { CriterionRow, DescriptionEditor, TitleField } from './Content.tsx'
 import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { Check } from './Glyphs.tsx'
@@ -26,19 +22,36 @@ import { MoreMenu, ProjectMenu, TaskMenus } from './TaskMenus.tsx'
 import { useTaskAutosave } from './autosave.ts'
 import { openTask, taskTyping, setTasks, updateTask } from './store.ts'
 
-const TICK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path d="M2.2 5.2 4.1 7.1 7.9 3" fill="none" stroke="#000" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'
 
 export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: string[] }) {
   const t = useTheme()
   // `.tk-desc .note-prose`: 15/24 prose at 86% ink, inline code at 0.833em.
   const descTheme = useMemo(() => { const base = cachedMarkdownTheme(t); return { ...base, text: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.86)' : 'rgba(13, 13, 13, 0.86)', metrics: { ...base.metrics, mdTextSize: 15, mdLineHeight: 24, codeTextSize: 12.5 } } }, [t])
   const availableNotes = useNotes((s) => s.notes)
-  const describe = (description: string) => edit.editBody(composeTaskBody(description, parts.criteria))
   const [editing, setEditing] = useState(false)
   const edit = useTaskAutosave(task)
+  // The description and criteria are edited as local text and composed into the body (empty criteria are kept until the row is left).
+  const [description, setDescription] = useState(() => splitTaskBody(edit.body).description)
+  const [criteria, setCriteria] = useState<Criterion[]>(() => splitTaskBody(edit.body).criteria)
+  const [focusRow, setFocusRow] = useState<{ index: number; token: number } | null>(null)
+  const lastBody = useRef(edit.body)
+  // A body that arrived from elsewhere (and not from these edits) replaces what is shown, unless the description is being typed in.
+  useEffect(() => {
+    if (edit.body === lastBody.current) return
+    lastBody.current = edit.body
+    const next = splitTaskBody(edit.body)
+    setCriteria(next.criteria)
+    if (!editing) setDescription(next.description)
+  }, [edit.body])
+  const changeDescription = (value: string) => { setDescription(value); lastBody.current = composeTaskBody(value, criteria); edit.editBody(lastBody.current) }
+  const changeCriteria = (next: Criterion[], persist: boolean) => {
+    setCriteria(next)
+    lastBody.current = composeTaskBody(description, next)
+    if (lastBody.current !== edit.body) edit.editBody(lastBody.current)
+    if (persist) void edit.flush()
+  }
   const [notes, setNotes] = useState<(Note | { id: string; title: string; body: string })[]>([])
   const [expandedNote, setExpandedNote] = useState<string | null>(null)
-  const parts = splitTaskBody(edit.body)
   const run = latestRun(task)
   const at = sequence.indexOf(task.id)
   useEffect(() => () => taskTyping(false), [])
@@ -76,172 +89,51 @@ export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: strin
       <div style={{ display: 'flex', flexGrow: 1, minHeight: 0, position: 'relative' }}>
         <virtual-list testId="task-detail" style={{ flexGrow: 1, minWidth: 0, minHeight: 0 }}>
           <div key="content" style={{ ...padding, paddingTop: 48, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <TitleField value={edit.title} saved={task.title} onChange={edit.editTitle} onCommit={() => void edit.flush()} onEnter={() => setEditing(true)} />
             {editing ? (
-              <>
-                <TextField
-                  testId="task-edit-title"
-                  onFocus={() => taskTyping(true)}
-                  onBlur={() => {
-                    taskTyping(false)
-                    void edit.flush()
-                  }}
-                  label="Task title"
-                  value={edit.title}
-                  onChange={edit.editTitle}
-                  width="100%"
-                />
-                <Toolbar disabled={false} active format={(kind) => describe(formatBlock(parts.description, kind))} mark={(marker) => describe(`${marker}${parts.description.trimEnd()}${marker}`)} link={(label, href) => describe(`${parts.description} [${label.replace(/[\\[\]]/g, '\\$&')}](${encodeURI(href).replaceAll('(', '%28').replaceAll(')', '%29')})`)} finish={() => { void edit.flush(); setEditing(false); taskTyping(false) }} />
-                <DecoratedTextarea
-                  decorations={markdownInputDecorations(parts.description, noteInputMarkColors(t))}
-                  testId="task-edit-body"
-                  onFocus={() => taskTyping(true)}
-                  onBlur={() => {
-                    taskTyping(false)
-                    void edit.flush()
-                  }}
-                  value={parts.description}
-                  onChange={(e) => edit.editBody(composeTaskBody(e.value ?? '', parts.criteria))}
-                  placeholder="Add a description…"
-                  style={{
-                    height: 220,
-                    width: '100%',
-                    color: t.text,
-                    fontFamily: FONT_UI,
-                    fontSize: 15,
-                    backgroundColor: t.surface,
-                    padding: 12,
-                    borderWidth: 1,
-                    borderColor: t.border,
-                    borderRadius: 8,
-                  }}
-                />
-                {edit.conflict && <div style={{ display: 'flex', gap: 8 }}><Button testId="task-use-theirs" onClick={edit.useTheirs}>Use theirs</Button><Button testId="task-keep-mine" onClick={edit.keepMine}>Keep mine</Button></div>}
-                {edit.error && (
-                  <Label color={t.red} size={12}>
-                    {edit.error}
-                  </Label>
-                )}
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <Label color={t.textTertiary} size={12}>
-                    {edit.saving ? 'Saving…' : 'Changes save automatically'}
-                  </Label>
-                  {edit.error && (
-                    <Button
-                      onClick={() => {
-                        void edit.flush()
-                      }}
-                    >
-                      Retry saving
-                    </Button>
-                  )}
-                  <Button
-                    testId="task-edit-done"
-                    onClick={() => {
-                      void edit.flush()
-                      taskTyping(false)
-                      setEditing(false)
-                    }}
-                  >
-                    Done
-                  </Button>
-                </div>
-              </>
+              <DescriptionEditor value={description} onChange={changeDescription} onCommit={() => void edit.flush()} onExit={() => setEditing(false)} />
             ) : (
-              <div testId="task-edit" onClick={beginEdit} style={{ display: 'flex', flexDirection: 'column', gap: 14, cursor: 'text' }}>
-                <Label color={t.text} size={28} lineHeight={34} weight={650}>
-                  {task.title || 'Untitled'}
-                </Label>
-                {parts.description ? (
+              <div testId="task-desc" onClick={() => setEditing(true)} style={{ display: 'flex', flexDirection: 'column', minHeight: 24, cursor: 'text' }}>
+                {description.trim() ? (
                   <markdown
                     theme={descTheme}
-                    source={parts.description}
+                    source={description}
                     onLinkClick={(e) => { if (e.value) openLink(e.value) }}
                     style={{ color: ink(t, 0.86), fontSize: 15, userSelect: 'text' }}
                   />
                 ) : (
-                  <Label color={t.textTertiary} size={15} lineHeight={24}>
-                    Add a description…
-                  </Label>
+                  <Label color={k.fg3} size={15} lineHeight={24}>Add a description…</Label>
                 )}
               </div>
             )}
+            {edit.conflict && <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Label color={t.red} size={12}>This task changed elsewhere.</Label><Button testId="task-use-theirs" onClick={edit.useTheirs}>Use theirs</Button><Button testId="task-keep-mine" onClick={edit.keepMine}>Keep mine</Button></div>}
+            {edit.error && !edit.conflict && <Label color={t.red} size={12}>{edit.error}</Label>}
           </div>
-          {(parts.criteria.length > 0 || !editing) && (
-            <div key="criteria-title" style={{ ...padding, paddingTop: 36, paddingBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Label color={t.text} size={13} lineHeight={19.5} weight={600}>Acceptance criteria</Label>
-              {parts.criteria.length > 0 && <Label color={k.fg3} size={13} lineHeight={19.5}>{`${parts.criteria.filter((c) => c.checked).length} of ${parts.criteria.length}`}</Label>}
-            </div>
-          )}
-          {parts.criteria.map((criterion, index) => (
-            <div key={`criterion-${index}`} style={{ ...padding, display: 'flex', alignItems: 'flex-start', gap: 12, minHeight: 32, paddingTop: 4, paddingBottom: 4 }}>
-              <div testId={`task-criterion-${index}`} role="checkbox" aria-checked={criterion.checked} aria-label="Select task" tabIndex={0} onClick={() => {
-                const next = parts.criteria.map((c, i) => (i === index ? { ...c, checked: !c.checked } : c))
-                edit.editBody(composeTaskBody(parts.description, next))
-                void edit.flush()
-              }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, marginTop: 4, borderRadius: 4.5, flexShrink: 0, cursor: 'pointer', ...(criterion.checked ? { backgroundColor: k.checkOn } : { borderWidth: 1.5, borderColor: k.fg4, hover: { borderColor: k.fg3 } }) }}>
-                {criterion.checked && <svg source={TICK} style={{ width: 10.5, height: 10.5, color: t.surface }} />}
-              </div>
-              {editing ? (
-                <>
-                  <TextField
-                    testId={`task-criterion-text-${index}`}
-                    label="Acceptance criterion"
-                    value={criterion.text}
-                    onFocus={() => taskTyping(true)}
-                    onBlur={() => {
-                      taskTyping(false)
-                      void edit.flush()
-                    }}
-                    onChange={(text) =>
-                      edit.editBody(
-                        composeTaskBody(
-                          parts.description,
-                          parts.criteria.map((c, i) => (i === index ? { ...c, text } : c)),
-                        ),
-                      )
-                    }
-                    width="100%"
-                    style={{ flexGrow: 1 }}
-                  />
-                  <Button
-                    onClick={() => {
-                      edit.editBody(
-                        composeTaskBody(
-                          parts.description,
-                          parts.criteria.filter((_, i) => i !== index),
-                        ),
-                      )
-                      void edit.flush()
-                    }}
-                  >
-                    Remove
-                  </Button>
-                </>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}>
-                  <Label color={criterion.checked ? k.fg3 : k.fg1} size={15} lineHeight={24} style={{ width: '100%' }}>{[criterion.text, ...(criterion.extra ?? [])].join(' ')}</Label>
-                </div>
-              )}
+          <div key="criteria-title" style={{ ...padding, paddingTop: 36, paddingBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Label color={t.text} size={13} lineHeight={19.5} weight={600}>Acceptance criteria</Label>
+            {criteria.length > 0 && <Label color={k.fg3} size={13} lineHeight={19.5}>{`${criteria.filter((c) => c.checked).length} of ${criteria.length}`}</Label>}
+          </div>
+          {criteria.map((criterion, index) => (
+            <div key={`criterion-${index}`} style={padding}>
+              <CriterionRow
+                index={index}
+                text={criterion.text}
+                checked={criterion.checked}
+                focusNow={focusRow?.index === index}
+                focusToken={focusRow?.token ?? 0}
+                onToggle={() => changeCriteria(criteria.map((c, i) => (i === index ? { ...c, checked: !c.checked } : c)), true)}
+                onText={(text) => changeCriteria(criteria.map((c, i) => (i === index ? { ...c, text } : c)), false)}
+                onEnter={() => { changeCriteria([...criteria.slice(0, index + 1), { checked: false, text: '' }, ...criteria.slice(index + 1)], false); setFocusRow({ index: index + 1, token: Date.now() }) }}
+                onBackspaceEmpty={() => { changeCriteria(criteria.filter((_, i) => i !== index), true); setFocusRow({ index: Math.max(0, index - 1), token: Date.now() }) }}
+                onBlur={() => changeCriteria(criteria.filter((c) => c.text.trim() || c.extra?.length), true)}
+              />
             </div>
           ))}
-          {editing ? (
-            <div key="add-criterion" style={padding}>
-              <Button
-                testId="task-add-criterion"
-                onClick={() =>
-                  edit.editBody(composeTaskBody(parts.description, [...parts.criteria, { text: 'New criterion', checked: false }]))
-                }
-              >
-                Add criterion
-              </Button>
+          <div key="add-criterion" style={padding}>
+            <div testId="task-add-criterion" onClick={() => { changeCriteria([...criteria, { checked: false, text: '' }], false); setFocusRow({ index: criteria.length, token: Date.now() }) }} style={{ display: 'flex', alignItems: 'center', gap: 8, height: 32, marginLeft: -8, marginRight: -8, paddingLeft: 8, paddingRight: 8, borderRadius: 7, cursor: 'pointer', hover: { backgroundColor: ink(t, 0.05) } }}>
+              <Icon source={N.plus} size={14} color={k.fg3} /><Label color={k.fg3} size={13} lineHeight={19.5}>Add a criterion</Label>
             </div>
-          ) : (
-            <div key="add-criterion-ghost" style={padding}>
-              <div testId="task-add-criterion-ghost" onClick={() => { beginEdit(); edit.editBody(composeTaskBody(parts.description, [...parts.criteria, { text: 'New criterion', checked: false }])) }} style={{ display: 'flex', alignItems: 'center', gap: 8, height: 32, marginLeft: -8, marginRight: -8, paddingLeft: 8, paddingRight: 8, borderRadius: 7, cursor: 'pointer', hover: { backgroundColor: ink(t, 0.05) } }}>
-                <Icon source={N.plus} size={14} color={k.fg3} /><Label color={k.fg3} size={13} lineHeight={19.5}>Add a criterion</Label>
-              </div>
-            </div>
-          )}
+          </div>
           <div key="notes-title" style={{ ...padding, paddingTop: 36, paddingBottom: 8, display: 'flex', alignItems: 'center' }}>
             <Label color={t.text} size={13} lineHeight={19.5} weight={600}>Linked notes</Label>
           </div>
