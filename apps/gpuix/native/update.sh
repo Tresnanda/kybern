@@ -86,6 +86,8 @@ echo "== checks"
   bun native/capability-check.ts
   bun native/decoration-check.ts
   bun native/rounded-check.ts
+  bun native/clip-check.ts
+  bun native/explorer-motion-check.ts
   bun native/markdown-check.ts
   bun native/diff-check.ts
   bun native/surface-check.ts
@@ -96,5 +98,7 @@ echo "== checks"
   bun native/fixture.ts bun scripts/combined-pointer-check.ts
   rustc --test native/patches/spring.rs -o native/build/spring-tests
   native/build/spring-tests
+  rustc --test native/patches/physical_spring.rs -o native/build/physical-spring-tests
+  native/build/physical-spring-tests
 )
 echo "done: GPUIX $version with Kybern patches"

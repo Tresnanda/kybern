@@ -51,6 +51,10 @@ edit('dist/renderer-state.d.ts', 'import type { EventPayload }', 'export declare
 edit('dist/host.d.ts', '"setWindowKeyEvents" |', '"resolveKeyEvent" | "setCloseGuard" | "resolveCloseRequest" | "setWindowKeyEvents" |')
 edit('dist/host.d.ts', 'export interface CodeProps extends HostProps {', 'export interface CodeProps extends HostProps {\n    /** Wrap highlighted lines at the available width. */\n    softWrap?: boolean;')
 edit('dist/host.d.ts', 'export interface MotionStyle {', 'export interface MotionStyle {\n    translateX?: number;\n    translateY?: number;')
+edit('dist/host.d.ts', 'export interface MotionStyle {', 'export interface MotionStyle {\n    /** SVG rotation, in degrees about the centre. */\n    rotate?: number;')
+edit('dist/host.d.ts', 'export interface MotionTransition {', 'export interface MotionTransition {\n    stiffness?: number;\n    damping?: number;\n    mass?: number;')
+edit('index.d.ts', 'export declare class GpuixRenderer {', 'export declare class GpuixRenderer {\n  /** rotate refers to SVGs; arbitrary div-subtree rotation is not supported. */\n  getMotionCapabilities(): { rotate: true; physicalSprings: true }')
+edit('dist/host.d.ts', '"setWindowKeyEvents" |', '"getMotionCapabilities" | "setWindowKeyEvents" |')
 edit('dist/host.d.ts', 'export interface MotionTransition {', 'export interface MotionTransition {\n    type?: "tween" | "spring";\n    /** Damping control from 0 (no overshoot) to 1. */\n    bounce?: number;\n    /** Translation velocity in logical pixels per second. */\n    velocityX?: number;\n    velocityY?: number;')
 edit('dist/automation/client.js', '        scrollWheel: (params) => {', """        fileDrop: (params) => {
             this.renderer.nativeSimulateFileDrop(params.x, params.y, params.paths);

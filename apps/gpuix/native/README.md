@@ -4,7 +4,51 @@ The client runs on our own build of `@gpuix/native`: the upstream release in
 `VERSION` plus the capabilities below. The upstream checkout is disposable; all
 changes are reconstructed by the checked-in patches and anchored hooks.
 
-## Why
+## Rounded overflow and Explorer motion (round 7)
+
+`overflow: 'hidden'` plus corner radii now clips descendant quads, glyphs, SVGs,
+images, paths, surfaces, selection washes and backdrop filters. Nested rounded
+rectangles form an analytic intersection in the Metal fragment shaders; ordinary
+containers add no offscreen layer or extra render pass. The same mask chain gates
+native hit testing, including prepaint hit tests. A pooled immutable chain is
+shared by scene primitives, with generations for recycled slots so stale cache
+keys cannot match a new shape. Cached replay and scoped paint preserve the clip
+table. Completed frames reclaim unreferenced chains; storage follows peak visible
+clipped content rather than scroll history.
+
+Post-paint `ElementBoundsEvent.roundedClips` carries the immutable mask geometry
+to embedded WKWebViews. Their AppKit layer masks intersect these shapes before
+overlay occlusions, and native hit testing checks that same final path. Shape
+snapshots are shared with cached bounds rather than allocated for every element.
+The extension is currently Metal/macOS, like scene-local backdrops; the stock npm
+addon retains rectangular clips. Radii follow GPUI's existing circular-corner
+representation and clamping, not CSS elliptical corner radii.
+
+Implementation: `rounded_clip.rs`, `rounded_clip_gpui.py` (reconstructed by
+`backdrop_gpui.py`), the backdrop shader/renderer, bounds snapshots and the embedded
+webview bridge. `native/clip-check.ts` checks actual native corner pixels, masked
+input, cached replay, virtual rows and code scroll/wrap in four modes.
+
+```tsx
+const caps = renderer.getMotionCapabilities?.()
+// caps === { rotate: true, physicalSprings: true }; rotate means SVG rotation.
+<motion.svg source={icon} initial={false} animate={{ rotate: open ? 90 : 0 }}
+  transition={{ type: 'spring', stiffness: 360, damping: 32, mass: .6 }} />
+```
+
+`rotate` is degrees about the native SVG centre. `motion.svg` shares the div
+wrapper's presence, generation, cancellation and completion behavior. The raw
+`<svg motion={{ initial, animate, transition }}>` form also works. Arbitrary
+div-subtree rotation remains unsupported. Physical springs use analytic
+under/critical/overdamped solutions in seconds; a conservative displacement and
+velocity envelope determines completion, without truncating at a zero crossing.
+Supplying any physical parameter selects that model (defaults 100/10/1); values
+must be finite and positive and settle within 60 seconds. Without them, the
+existing duration/bounce form is unchanged. Reduced motion uses `{duration:0}`.
+`explorer_motion_hooks.py` and `physical_spring.rs` reconstruct this capability;
+`native/explorer-motion-check.ts` verifies pixels and geometry in all four modes.
+
+## Cached views
 
 GPUIX rebuilds and lays out every element of the window on every frame. Any
 animation (a loader tick, a 220 ms collapse) therefore pays for the whole

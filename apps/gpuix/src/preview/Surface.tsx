@@ -68,7 +68,7 @@ export function PreviewSurface({ threadId }: { threadId: string }) {
       const frame = { x: rect.x + fit.left, y: rect.y + fit.top, width: logical.w * fit.scale, height: logical.h * fit.scale }
       const x = Math.max(frame.x, clip.x), y = Math.max(frame.y, clip.y)
       const clipped = { x, y, width: Math.max(0, Math.min(frame.x + frame.width, clip.x + clip.width) - x), height: Math.max(0, Math.min(frame.y + frame.height, clip.y + clip.height) - y) }
-      webHost.place(id, frame, clipped, { width: logical.w, height: logical.h, scale: fit.scale, left: 0, top: 0, radius: kind === 'mini' ? 12 : 0 })
+      webHost.place(id, frame, clipped, { width: logical.w, height: logical.h, scale: fit.scale, left: 0, top: 0, radius: kind === 'mini' ? 12 : 0, roundedClips: slot?.bounds.roundedClips })
     }
     placements.set(threadId, place); place()
     return () => { clearTimeout(hiddenTimer.current); placements.delete(threadId); webHost.hide(id) }

@@ -1,17 +1,19 @@
 diff --git a/dist/host.d.ts b/dist/host.d.ts
-index cc6b7ef926c5c3122fff6107341913364a215710..2ea2c54b0a3976589215b6a7a6e7fc5da7261374 100644
+index cc6b7ef926c5c3122fff6107341913364a215710..a959d24f8ab04edde594fb7b61999f3cc7cafa44 100644
 --- a/dist/host.d.ts
 +++ b/dist/host.d.ts
-@@ -5,6 +5,8 @@ export * from "./mutations.js";
+@@ -5,6 +5,10 @@ export * from "./mutations.js";
  export * from "./renderer-state.js";
  export type DimensionValue = number | string;
  export interface MotionStyle {
++    /** SVG rotation, in degrees about the centre. */
++    rotate?: number;
 +    translateX?: number;
 +    translateY?: number;
      width?: number;
      height?: number;
      opacity?: number;
-@@ -16,6 +18,12 @@ export interface MotionStyle {
+@@ -16,6 +20,15 @@ export interface MotionStyle {
  }
  export type MotionEase = "linear" | "ease" | "easeIn" | "easeOut" | "easeInOut" | [number, number, number, number];
  export interface MotionTransition {
@@ -21,10 +23,13 @@ index cc6b7ef926c5c3122fff6107341913364a215710..2ea2c54b0a3976589215b6a7a6e7fc5d
 +    /** Translation velocity in logical pixels per second. */
 +    velocityX?: number;
 +    velocityY?: number;
++    stiffness?: number;
++    damping?: number;
++    mass?: number;
      /** Duration in seconds. */
      duration?: number;
      /** Delay in seconds. */
-@@ -275,6 +283,9 @@ export interface HighlightSpec {
+@@ -275,6 +288,9 @@ export interface HighlightSpec {
      radius?: number;
  }
  export interface HostProps {
@@ -34,7 +39,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..2ea2c54b0a3976589215b6a7a6e7fc5d
      style?: StyleDesc;
      /** Primary button only, like the DOM. Use `onAuxClick` for the others. */
      onClick?: (event: EventPayload) => void;
-@@ -287,7 +298,7 @@ export interface HostProps {
+@@ -287,7 +303,7 @@ export interface HostProps {
      onMouseMove?: (event: EventPayload) => void;
      /** Fires when user clicks OUTSIDE this element. Use for "click outside to close". */
      onMouseDownOutside?: (event: EventPayload) => void;
@@ -43,7 +48,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..2ea2c54b0a3976589215b6a7a6e7fc5d
      onKeyUp?: (event: EventPayload) => void;
      onFocus?: (event: EventPayload) => void;
      onBlur?: (event: EventPayload) => void;
-@@ -342,6 +353,10 @@ export interface HostProps {
+@@ -342,6 +358,10 @@ export interface HostProps {
      motion?: MotionProps;
  }
  export interface InputProps extends HostProps {
@@ -54,7 +59,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..2ea2c54b0a3976589215b6a7a6e7fc5d
      /** External editor value. Native edits apply immediately and report through onChange. */
      value?: string;
      placeholder?: string;
-@@ -405,6 +420,8 @@ export interface SvgProps extends HostProps {
+@@ -405,6 +425,8 @@ export interface SvgProps extends HostProps {
   * scroller, so `whiteSpace` and `overflowX` do nothing.
   */
  export interface CodeProps extends HostProps {
@@ -63,17 +68,17 @@ index cc6b7ef926c5c3122fff6107341913364a215710..2ea2c54b0a3976589215b6a7a6e7fc5d
      /** The source to display. Rendered one div per line at an exact line height. */
      code?: string;
      /** Language alias such as "ts", "rust", "bash". Beats `path` for detection. */
-@@ -468,7 +485,7 @@ export type WindowSizeHost = Pick<GpuixRenderer, "getWindowSize">;
+@@ -468,7 +490,7 @@ export type WindowSizeHost = Pick<GpuixRenderer, "getWindowSize">;
  export type WindowInsetsHost = Pick<GpuixRenderer, "getWindowInsets">;
  export type SelectionHost = Pick<GpuixRenderer, "getSelectedText">;
  /** `applyBatch` plus the live renderer methods a host may also expose. */
 -export type NativeRenderer = MutationHost & Partial<Pick<GpuixRenderer, "focusElement" | "focusNext" | "focusPrevious" | "getFocusedElementId" | "focusNextWithin" | "focusPreviousWithin" | "blur" | "setWindowKeyEvents" | "setWindowSelectionChange" | "getElementBounds" | "scrollTo" | "scrollToItem" | "scrollIntoView" | "setImage" | "setImagePixels" | "getScrollOffset" | "getListScrollTop" | "getSelectedText" | "clearSelection" | "getPaintedHighlights" | "getWindowSize" | "getWindowInsets" | "setWindowTitle" | "promptForPaths" | "activateWindow" | "minimizeWindow" | "zoomWindow" | "toggleFullscreen" | "setDebugFrameOverlay" | "getDebugFrameOverlay" | "cycleDebugFrameOverlay" | "resetDebugFrameOverlayStats" | "getDebugFrameOverlayStats">>;
-+export type NativeRenderer = MutationHost & Partial<Pick<GpuixRenderer, "focusElement" | "focusNext" | "focusPrevious" | "getFocusedElementId" | "focusNextWithin" | "focusPreviousWithin" | "blur" | "resolveKeyEvent" | "setCloseGuard" | "resolveCloseRequest" | "setWindowKeyEvents" | "setWindowSelectionChange" | "getElementBounds" | "scrollTo" | "scrollToItem" | "scrollIntoView" | "setImage" | "setImagePixels" | "getScrollOffset" | "getListScrollTop" | "getSelectedText" | "clearSelection" | "getPaintedHighlights" | "getWindowSize" | "getWindowInsets" | "setWindowTitle" | "promptForPaths" | "activateWindow" | "minimizeWindow" | "zoomWindow" | "toggleFullscreen" | "setDebugFrameOverlay" | "getDebugFrameOverlay" | "cycleDebugFrameOverlay" | "resetDebugFrameOverlayStats" | "getDebugFrameOverlayStats">>;
++export type NativeRenderer = MutationHost & Partial<Pick<GpuixRenderer, "focusElement" | "focusNext" | "focusPrevious" | "getFocusedElementId" | "focusNextWithin" | "focusPreviousWithin" | "blur" | "resolveKeyEvent" | "setCloseGuard" | "resolveCloseRequest" | "getMotionCapabilities" | "setWindowKeyEvents" | "setWindowSelectionChange" | "getElementBounds" | "scrollTo" | "scrollToItem" | "scrollIntoView" | "setImage" | "setImagePixels" | "getScrollOffset" | "getListScrollTop" | "getSelectedText" | "clearSelection" | "getPaintedHighlights" | "getWindowSize" | "getWindowInsets" | "setWindowTitle" | "promptForPaths" | "activateWindow" | "minimizeWindow" | "zoomWindow" | "toggleFullscreen" | "setDebugFrameOverlay" | "getDebugFrameOverlay" | "cycleDebugFrameOverlay" | "resetDebugFrameOverlayStats" | "getDebugFrameOverlayStats">>;
  /** Commit-phase mutation facade shared by framework adapters. */
  export interface MutationRenderer {
      createElement(id: number, elementType: string): void;
 diff --git a/dist/mutations.js b/dist/mutations.js
-index 7d0eda6cb58127462067cb9d5a442a9ea606c671..25786a7856241fad35c385e7338a4638b11dc3ea 100644
+index 7d0eda6cb58127462067cb9d5a442a9ea606c671..5bf32d217607cc6d52870521f94e70e2e7aff87f 100644
 --- a/dist/mutations.js
 +++ b/dist/mutations.js
 @@ -94,6 +94,14 @@ export const UNIVERSAL_PROPS = new Set([
@@ -145,13 +150,15 @@ index 21c90e91db66a09da919caeb990cc44225a94189..13db155595949bfd0ffd5b81f5d86062
              if (!root)
                  return false;
 diff --git a/index.d.ts b/index.d.ts
-index 2ec4b84d0cad37c2d57585af3abaec2478518728..dbe0382494254da9596abde514d98e20be4068a6 100644
+index 2ec4b84d0cad37c2d57585af3abaec2478518728..8111a413c4e0ca9ce617f9f8da9aaa6e8f73d532 100644
 --- a/index.d.ts
 +++ b/index.d.ts
-@@ -34,6 +34,9 @@ export declare class AvailableUpdate {
+@@ -34,6 +34,11 @@ export declare class AvailableUpdate {
  
  /** The main GPUI renderer exposed to Node.js. */
  export declare class GpuixRenderer {
++  /** rotate refers to SVGs; arbitrary div-subtree rotation is not supported. */
++  getMotionCapabilities(): { rotate: true; physicalSprings: true }
 +  resolveKeyEvent(token: number, prevented: boolean): void
 +  setCloseGuard(enabled: boolean): void
 +  resolveCloseRequest(token: number, allow: boolean): void
@@ -159,20 +166,21 @@ index 2ec4b84d0cad37c2d57585af3abaec2478518728..dbe0382494254da9596abde514d98e20
    /** Initialize GPUI using the native event-loop architecture for this OS. */
    init(options?: WindowOptions | undefined | null): void
 diff --git a/dist/automation/client.js b/dist/automation/client.js
+index c70a840dfde917eda48054ad2d71e2f54af2c48d..86627f67a5418aab985a5707d1a07eefa3c99d4f 100644
 --- a/dist/automation/client.js
 +++ b/dist/automation/client.js
-@@ -64,6 +64,10 @@
-         },
-         mouseMove: (params) => {
+@@ -66,6 +66,10 @@ export class InProcessBackend extends ValidatedAutomationBackend {
              this.renderer.nativeSimulateMouseMove(params.x, params.y, params.pressedButton, params.modifiers);
-+            return { ok: true };
-+        },
-+        fileDrop: (params) => {
-+            this.renderer.nativeSimulateFileDrop(params.x, params.y, params.paths);
              return { ok: true };
          },
++        fileDrop: (params) => {
++            this.renderer.nativeSimulateFileDrop(params.x, params.y, params.paths);
++            return { ok: true };
++        },
          scrollWheel: (params) => {
-@@ -496,6 +500,10 @@
+             this.renderer.nativeSimulateScrollWheel(params.x, params.y, params.deltaX, params.deltaY, params.modifiers);
+             return { ok: true };
+@@ -496,6 +500,10 @@ export function liveRendererAsTest(renderer) {
              renderer.simulateMouseMove(x, y, pressedButton, modifiers);
              afterInput();
          },
@@ -184,9 +192,10 @@ diff --git a/dist/automation/client.js b/dist/automation/client.js
              renderer.simulateScrollWheel(x, y, deltaX, deltaY, modifiers);
              afterInput();
 diff --git a/dist/runtime.js b/dist/runtime.js
+index 3a3d64d72a471e955037efecac7e19df02bb9221..60c9c373fa8c28b2243127e64165e709a02b33fc 100644
 --- a/dist/runtime.js
 +++ b/dist/runtime.js
-@@ -34,6 +34,7 @@
+@@ -34,6 +34,7 @@ export function startFrameLoop(renderer, options = {}) {
      let stopped = false;
      const stop = () => {
          stopped = true;
@@ -194,7 +203,7 @@ diff --git a/dist/runtime.js b/dist/runtime.js
          if (timer !== undefined)
              clearTimeout(timer);
          timer = undefined;
-@@ -56,6 +57,16 @@
+@@ -56,6 +57,16 @@ export function startFrameLoop(renderer, options = {}) {
          }
          timer = setTimeout(loop, Math.max(0, frameMs - (performance.now() - started)));
      };
@@ -212,9 +221,10 @@ diff --git a/dist/runtime.js b/dist/runtime.js
      return { stop };
  }
 diff --git a/dist/automation/protocol.js b/dist/automation/protocol.js
+index 37cc70406f67838394b07664259720cf9dd9f748..bc46412122154ea012e8874720a267d6e0a35b08 100644
 --- a/dist/automation/protocol.js
 +++ b/dist/automation/protocol.js
-@@ -105,6 +105,10 @@
+@@ -105,6 +105,10 @@ export const methods = {
          }),
          result: okSchema,
      },
@@ -226,9 +236,10 @@ diff --git a/dist/automation/protocol.js b/dist/automation/protocol.js
          params: pointSchema.extend({
              deltaX: z.number(),
 diff --git a/dist/automation/protocol.d.ts b/dist/automation/protocol.d.ts
+index 8e34dfa8d65fac7241ffc7eed252bf07db1fcf52..8af78b69befc84085c603e38e52a2487bc992215 100644
 --- a/dist/automation/protocol.d.ts
 +++ b/dist/automation/protocol.d.ts
-@@ -100,6 +100,10 @@
+@@ -100,6 +100,10 @@ export declare const methods: {
              ok: z.ZodLiteral<true>;
          }, z.core.$strip>;
      };

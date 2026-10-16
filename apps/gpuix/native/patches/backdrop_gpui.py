@@ -75,10 +75,14 @@ pending[m] += '\ninclude!("backdrop_renderer.rs");\n'
 exec((here / "paint_gpui.py").read_text())
 exec((here / "frame_gpui.py").read_text())
 exec((here / "pointer_gpui.py").read_text())
+exec((here / "rounded_clip_gpui.py").read_text())
 
 for name, text in pending.items():
     if (root/name).read_text()!=text: (root/name).write_text(text)
 for name in ['backdrop_renderer.rs', 'backdrop.metal']:
     dest=root/'crates/gpui_apple/src'/name; text=(here/name).read_text()
     if not dest.exists() or dest.read_text()!=text:dest.write_text(text)
+dest=root/'crates/gpui/src/rounded_clip.rs'
+text=(here/'rounded_clip.rs').read_text()
+if not dest.exists() or dest.read_text()!=text:dest.write_text(text)
 print('GPUI backdrop hooks applied')

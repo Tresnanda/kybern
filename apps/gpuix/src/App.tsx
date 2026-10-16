@@ -124,11 +124,9 @@ function Workspace() {
       <TitleBar panelOpen={panelOpen} />
       <div style={{ display: 'flex', position: 'absolute', left: 0, right: 0, bottom: 0, top: TITLEBAR, paddingRight: INSET, paddingBottom: INSET }}>
         <NavRail />
-        {/* GPUI clips overflow to a rectangle, so each surface rounds its own
-            corners like the desktop: the panel takes the leading pair, the content
-            the trailing pair (all four once the panel is gone, `kit.css:172-198`).
-            Strokes are 0.6px: the panel's top/leading/bottom, the content's ring. */}
-        <div style={{ display: 'flex', flexGrow: 1, minWidth: 0 }}>
+        {/* One rounded clipping boundary owns every workspace surface, including
+            split panes and the narrow-window dock overlay (kit.css:172-198). */}
+        <div testId="workspace-card" style={{ display: 'flex', flexGrow: 1, minWidth: 0, borderRadius: CARD_RADIUS, overflow: 'hidden' }}>
           <motion.div
             initial={false}
             animate={{ width: panelOpen ? sidebarWidth : 0 }}
@@ -171,6 +169,7 @@ function Workspace() {
               flexDirection: 'column',
               flexGrow: 1,
               minWidth: 0,
+              overflow: 'hidden',
               backgroundColor: t.surface,
               borderWidth: 0.6,
               borderColor: edge,
