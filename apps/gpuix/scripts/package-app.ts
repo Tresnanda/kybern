@@ -23,6 +23,7 @@ cpSync(path.join(root, '../desktop/src-tauri/icons/icon.icns'), path.join(resour
 cpSync(addon, path.join(resources, path.basename(addon)))
 cpSync(path.join(root, 'native/build/kybern-webview.dylib'), path.join(resources, 'kybern-webview.dylib'))
 cpSync(path.join(root, 'src/assets/fonts'), path.join(resources, 'src/assets/fonts'), {recursive:true})
+cpSync(path.join(root, 'src/assets/providers'), path.join(resources, 'src/assets/providers'), {recursive:true})
 const previousCwd = process.cwd()
 const buildTemps = new Set(readdirSync(root).filter(name => name.endsWith('.bun-build')))
 process.chdir(root)
