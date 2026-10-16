@@ -1,9 +1,10 @@
-import { Icon } from '../icons.tsx'
+import { relativeTime } from '@/lib/format'
+import type { PreviewRecent } from '../../../../packages/kybern-client/src/previewRecents.ts'
+import { Icon, ICONS } from '../icons.tsx'
 import { DockSection } from '../dock/Notes.tsx'
 import { muted } from '../nav/overlay.tsx'
 import { activeEnvironment } from '../shell/environment.ts'
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { useGpuix, type PublicInstance } from '@gpuix/react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { VIEWPORT_PRESETS, isViewportSizeValid, parseViewportField } from '../../../../packages/kybern-client/src/previewViewport.ts'
 import type { PreviewOpenRequestedNotification, PreviewServer } from '../../../../packages/kybern-client/src/types.ts'
 import { getClient, useApp } from '../state.ts'
@@ -14,10 +15,9 @@ import { IconButton } from '../sidebar/rows.tsx'
 import { Menu, MenuItem } from '../nav/overlay.tsx'
 import { N } from '../nav/glyphs.ts'
 import { Label, useTheme } from '../ui.tsx'
-import { copyText } from '../transcript/store.ts'
 import { Floating } from '../live/Floating.tsx'
-import { Action, DockEmpty, ErrorLine, Section } from '../dock/parts.tsx'
-import { closePreview, floatingPreview, launchPreview, navigatePreview, openPreview, previewState, setPreview, showPreview, subscribePreviews, usePreview } from './store.ts'
+import { Action, DockEmpty, ErrorLine } from '../dock/parts.tsx'
+import { floatingPreview, openPreview, previewState, setPreview, showPreview, subscribePreviews, usePreview } from './store.ts'
 import { PreviewSlot, PreviewSurface, previewCommand } from './Surface.tsx'
 import { previewDockSize } from './Surface.tsx'
 import { useElementBounds } from '../native/layout-hooks.ts'
@@ -27,49 +27,67 @@ import { useSidebarWidth, useWindowWidth } from '../shell/layout.ts'
 import { PreviewResizeCapture } from './resize.tsx'
 import { MiniResize, type MiniCorner } from './MiniResize.tsx'
 import { MiniChrome } from './MiniChrome.tsx'
+import { PreviewChrome } from './Chrome.tsx'
+import { PreviewStateView } from './States.tsx'
+import { forgetRecent, recentsKeyForThread, useRecents } from './recents.ts'
+import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 import { load, save } from '../shell/persist.ts'
 
 export function PreviewPane({ threadId }: { threadId: string }) {
   const t = useTheme(), s = usePreview(threadId)
-  const { renderer } = useGpuix()
-  const input = useRef<PublicInstance | null>(null)
   const entry = s.entries[s.index]
-  const [address, setAddress] = useState(entry?.address ?? '')
+  const key = recentsKeyForThread(threadId), recents = useRecents(key).slice(0, 8)
+  const [visible, setVisible] = useState(isWindowVisible), [now, setNow] = useState(Date.now)
   const [servers, setServers] = useState<PreviewServer[]>([])
   const [searching, setSearching] = useState(false)
   const [showAll, setShowAll] = useState(false)
   const environment = activeEnvironment()
   const sorted = servers.slice().sort((a, b) => Number(!!b.in_project) - Number(!!a.in_project) || a.port - b.port)
   const shown = showAll ? sorted : sorted.slice(0, 12)
-  useEffect(() => setAddress(entry?.address ?? ''), [entry])
-  useEffect(() => { if (s.focusAddress && input.current) renderer?.focusElement?.(input.current.id) }, [renderer, s.focusAddress])
-  useEffect(() => addWindowKeyHandler(e => { if (e.modifiers?.cmd && !e.modifiers.alt && e.key === 'l') { if (input.current) renderer?.focusElement?.(input.current.id); return true } }), [renderer])
-  const discover = async () => { setSearching(true); try { const result = await getClient()!.call('previews.servers.list', { thread_id: threadId }); setServers(result.servers); setPreview(threadId, { error: null }) } catch (e) { setPreview(threadId, { error: String(e) }) } finally { setSearching(false) } }
-  useEffect(() => { void discover() }, [threadId])
+  useEffect(() => onWindowVisibility(setVisible), [])
+  useEffect(() => { if (entry || !recents.length || !visible) return; const timer = setInterval(() => setNow(Date.now()), 60000); return () => clearInterval(timer) }, [!!entry, !!recents.length, visible])
+  useEffect(() => {
+    if (entry || !visible) return
+    let live = true
+    const scan = async () => { setSearching(true); try { const result = await getClient()!.call('previews.servers.list', { thread_id: threadId }); if (live) setServers(result.servers) } catch { /* Keep the last successful list. */ } finally { if (live) setSearching(false) } }
+    void scan(); const timer = setInterval(() => { void scan() }, 3000)
+    return () => { live = false; clearInterval(timer) }
+  }, [threadId, !!entry, visible])
   return <div testId="dock-preview" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
-    <div style={{ display: 'flex', alignItems: 'center', height: 36, gap: 4, paddingLeft: 6, paddingRight: 6, borderBottomWidth: 0.6, borderColor: t.border }}>
-      <IconButton icon={N.arrowLeft} size={28} label="Back" onClick={() => s.bridge?.back ? previewCommand(threadId, 'back') : navigatePreview(threadId, -1)} /><IconButton icon={N.arrowRight} size={28} label="Forward" onClick={() => s.bridge?.forward ? previewCommand(threadId, 'forward') : navigatePreview(threadId, 1)} /><IconButton icon={N.refresh} size={28} label="Reload" onClick={() => { if (entry) void openPreview(threadId, entry.address, false, false, true) }} />
-      <input ref={input} testId="preview-address" autoFocus={!entry} aria-label="Address" placeholder="Enter a URL or file path" value={address} onChange={e => setAddress(e.value ?? '')} onSubmit={() => { if (!s.busy) void openPreview(threadId, address) }} onKeyDown={e => { if (e.key === 'escape') setAddress(entry?.address ?? '') }} style={{ flexGrow: 1, minWidth: 0, height: 28, fontSize: 12, paddingLeft: 8, color: t.text, backgroundColor: t.buttonSecondary, borderRadius: 8 }} />
-      <Menu align="end" testId="preview-more" trigger={() => <IconButton icon={N.ellipsis} label="More" size={28} />}><MenuItem id="device" testId="preview-device" label={s.device ? 'Hide device toolbar' : 'Show device toolbar'} onSelect={() => setPreview(threadId, { device: !s.device })} /><MenuItem id="float" testId="preview-float" label={s.floating ? 'Return to panel' : 'Float over chat'} disabled={!entry} onSelect={() => setPreview(threadId, { floating: !s.floating })} /><MenuItem id="copy" label="Copy address" disabled={!entry} onSelect={() => { if (entry) copyText(entry.address) }} /><MenuItem id="browser" label="Open in browser" disabled={!entry} onSelect={() => { if (entry) launchPreview(threadId) }} /><MenuItem id="close" testId="preview-close" label="Close page" disabled={!entry} onSelect={() => closePreview(threadId)} /></Menu>
-    </div>
-    {s.device && <DeviceToolbar threadId={threadId} />}
-    <ErrorLine error={s.error} retry={() => void openPreview(threadId, address)} />
-    {s.permission ? <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 20 }}><Label color={t.text} size={13}>Allow this folder?</Label><Label color={t.textSecondary} size={12} lineHeight={20}>{s.permission.folder}</Label><Action disabled={!s.permission.grantable} onClick={() => void openPreview(threadId, s.permission!.address, true)}>Allow folder</Action><Action onClick={() => setPreview(threadId, { permission: undefined })}>Cancel</Action></div>
-    : s.busy ? <DockEmpty icon={N.globe} title="Opening preview…" />
-    : entry ? s.floating ? <><DockEmpty icon={N.globe} title="Floating over the chat" /><Action onClick={() => setPreview(threadId, { floating: false })}>Return to panel</Action></> : entry.kind === 'external' ? <><DockEmpty icon={N.globe} title="Open in browser" body="This address opens in your browser." /><Action testId="preview-open-browser" onClick={() => launchPreview(threadId)}>Open in browser</Action></> : <PreviewSlot threadId={threadId} kind="dock" />
-    : sorted.length ? <virtual-list style={{ flexGrow: 1, minHeight: 0, width: '100%' }}><div style={{ paddingLeft: 12, paddingRight: 12, paddingTop: 16, paddingBottom: 16 }}>
+    <PreviewChrome threadId={threadId} />
+    {entry && s.device && <DeviceToolbar threadId={threadId} />}
+    <ErrorLine error={s.error} />
+    {s.wsFailed && !s.wsNoticeDismissed && entry?.proxy && <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 12, height: 28 }}><Label color={t.textSecondary} size={11} truncate>{`Live reload isn't connected through ${environment.name}. Reload to see changes.`}</Label><Action onClick={() => previewCommand(threadId, 'reload')}>Reload</Action><IconButton icon={N.x} label="Dismiss" size={20} onClick={() => setPreview(threadId, { wsNoticeDismissed: true })} /></div>}
+    {s.permission ? <PreviewStateView threadId={threadId} />
+    : s.busy && s.load.phase !== 'waiting' ? <DockEmpty icon={N.globe} title="Opening preview…" />
+    : entry ? s.floating ? <><DockEmpty icon={N.globe} title="Floating over the chat" body="The page keeps running in the mini player." /><Action onClick={() => setPreview(threadId, { floating: false })}>Return to panel</Action></> : s.load.phase !== 'ready' ? <PreviewStateView threadId={threadId} /> : <PreviewSlot threadId={threadId} kind="dock" />
+    : sorted.length || recents.length ? <virtual-list style={{ flexGrow: 1, minHeight: 0, width: '100%' }}><div style={{ paddingLeft: 12, paddingRight: 12, paddingTop: 16, paddingBottom: 16 }}>
       <DockSection label={environment.local ? 'Local servers' : `Servers on ${environment.name}`} count={servers.length} />
       <div style={{ display: 'flex', flexDirection: 'column', marginLeft: 12, marginRight: 12, padding: 4, borderRadius: 10, backgroundColor: t.buttonSecondary }}>
         {shown.map(server => <div key={server.url} testId={`preview-server-${server.port}`} role="button" tabIndex={0} onClick={() => void openPreview(threadId, server.url)} onKeyDown={e => { if (e.key === 'enter') void openPreview(threadId, server.url) }} style={{ display: 'flex', alignItems: 'center', gap: 10, height: 44, paddingLeft: 10, paddingRight: 10, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.hover } }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 5, backgroundColor: t.buttonSecondaryHover, position: 'relative', flexShrink: 0 }}><Icon source={N.globe} size={13} color={t.textSecondary} /><div style={{ position: 'absolute', right: -2, bottom: -2, width: 6, height: 6, borderRadius: 3, backgroundColor: t.green }} /></div>
-          <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={muted(t, 0.9)} size={14} lineHeight={21} truncate>{server.title && server.title.length <= 48 ? server.title : server.process_name ?? server.host}</Label><Label color={muted(t, 0.7)} size={13} lineHeight={19.5} truncate>{[server.process_name, server.cwd?.split('/').filter(Boolean).slice(-3).join('/')].filter(Boolean).join(' · ')}</Label></div>
-          <Label color={t.textSecondary} size={13}>{new URL(server.url).host}</Label>
+          <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={muted(t, 0.9)} size={12} lineHeight={18} truncate>{server.title && server.title.length <= 48 ? server.title : server.process_name ?? server.host}</Label><Label color={muted(t, 0.7)} size={11} lineHeight={16} truncate>{[server.process_name, server.cwd?.split('/').filter(Boolean).slice(-3).join('/')].filter(Boolean).join(' · ')}</Label></div>
+          <Label color={t.textSecondary} size={11}>{new URL(server.url).host}</Label>
         </div>)}
       </div>
       {!showAll && sorted.length > 12 && <Action onClick={() => setShowAll(true)}>{`Show ${sorted.length - 12} more`}</Action>}
-      <Label color={muted(t, 0.6)} size={13} lineHeight={16} style={{ paddingLeft: 14, paddingTop: 2, paddingBottom: 8 }}>{environment.local ? 'Servers in this project come first. Updated when this panel opens.' : `Kybern forwards these through the connection to ${environment.name}.`}</Label>
+      {recents.length > 0 && <><DockSection label="Recent" /><div style={{ display: 'flex', flexDirection: 'column', marginLeft: 12, marginRight: 12, padding: 4, borderRadius: 10, backgroundColor: t.buttonSecondary }}>
+        {recents.map((recent, index) => <RecentRow key={`${recent.kind}:${recent.value}`} recent={recent} index={index} now={now} open={() => void openPreview(threadId, recent.value)} forget={() => forgetRecent(key, recent)} />)}
+      </div></>}
+      <Label color={muted(t, 0.6)} size={13} lineHeight={16} style={{ paddingLeft: 14, paddingTop: 2, paddingBottom: 8 }}>{environment.local ? 'Servers in this project come first. Updated every few seconds.' : `Kybern forwards these through the connection to ${environment.name}.`}</Label>
     </div></virtual-list> : <DockEmpty icon={N.globe} title={searching ? 'Looking for local servers…' : 'No local servers running'} body="Start a dev server or enter a file path above. Servers appear here while they run." />}
 
+  </div>
+}
+function RecentRow({ recent, index, now, open, forget }: { recent: PreviewRecent; index: number; now: number; open: () => void; forget: () => void }) {
+  const t = useTheme(), [hover, setHover] = useState(false)
+  const title = recent.title ?? (recent.kind === 'file' ? recent.value.split('/').pop() : new URL(recent.value).host) ?? recent.value
+  const location = recent.kind === 'file' ? `…/${recent.value.split('/').filter(Boolean).slice(0, -1).slice(-2).join('/')}` : (() => { const url = new URL(recent.value); return `${url.host}${url.pathname === '/' ? '' : url.pathname}` })()
+  const relative = relativeTime(new Date(recent.at).toISOString(), now), ago = relative === 'now' ? 'just now' : relative.includes(' ') || /^[A-Z]/.test(relative) ? relative : `${relative} ago`
+  return <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} style={{ display: 'flex', alignItems: 'center', height: 44, gap: 8, paddingLeft: 10, paddingRight: 10, borderRadius: 6, hover: { backgroundColor: t.hover } }}>
+    <div testId={`preview-recent-${index}`} role="button" tabIndex={0} onClick={open} onFocus={() => setHover(true)} onBlur={() => setHover(false)} onKeyDown={e => { if (e.key === 'enter') open() }} style={{ display: 'flex', flexGrow: 1, minWidth: 0, alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 5, backgroundColor: t.buttonSecondaryHover }}><Icon source={recent.kind === 'file' ? ICONS.file : N.globe} size={13} color={t.textSecondary} /></div><div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={12} lineHeight={18} truncate>{title}</Label><Label color={t.textSecondary} size={11} lineHeight={16} truncate>{`${location} · ${ago}`}</Label></div>
+    </div><div style={{ opacity: hover ? 1 : 0 }}><IconButton testId={`preview-forget-${index}`} icon={N.x} label={`Remove ${title} from recent`} onHover={setHover} size={24} onClick={forget} /></div>
   </div>
 }
 function DeviceToolbar({ threadId }: { threadId: string }) {
@@ -90,7 +108,7 @@ export function PreviewIntegration({ insetBottom = 0 }: { insetBottom?: number }
   useEffect(() => addWindowKeyHandler(e => {
     if (!id || page !== 'home' || settings || !e.modifiers?.cmd) return
     if (e.key === 'l' && !e.modifiers.alt) { showPreview(id); setPreview(id, { focusAddress: Date.now() }); return true }
-    if (e.key === 'r' && !e.modifiers.alt) { previewCommand(id, 'reload'); return true }
+    if (e.key === 'r' && !e.modifiers.alt) { previewCommand(id, 'reload', !!e.modifiers.shift); return true }
   }), [id, page, settings])
   useEffect(() => {
     if (!connected) return
@@ -101,12 +119,12 @@ export function PreviewIntegration({ insetBottom = 0 }: { insetBottom?: number }
   return <>{ids.map(threadId => <PreviewSurface key={threadId} threadId={threadId} />)}{floating && page === 'home' && !settings ? <MiniPlayer key={floating} insetBottom={insetBottom} insetEnd={insetEnd} threadId={floating} /> : null}<PreviewResizeCapture /></>
 }
 function MiniPlayer({ threadId, insetBottom, insetEnd }: { threadId: string; insetBottom: number; insetEnd: number }) {
-  const t = useTheme(), s = usePreview(threadId), entry = s.entries[s.index]
+  const s = usePreview(threadId), entry = s.entries[s.index]
   const bounds = useElementBounds('preview-mini-bounds')?.rect
   const [corner, setCorner] = useState<MiniCorner>(() => { const saved = load<string>('kybern.preview.corner', 'bottom-end'); return ['top-start','top-end','bottom-start','bottom-end'].includes(saved) ? saved as MiniCorner : 'bottom-end' })
   const [savedSize, setSize] = useState<PlayerSize | null>(() => { const saved = load<PlayerSize | null>('kybern.preview.size', null); return saved && Number.isFinite(saved.w) && Number.isFinite(saved.h) ? saved : null })
   const available = bounds ? { w: Math.max(240, bounds.width - insetEnd), h: bounds.height } : undefined
   const size = savedSize ? clampPlayerSize(savedSize, available) : defaultPlayerSize(previewDockSize(threadId), available)
   if (!s.floating || !entry) return null
-  return <Floating insetBottom={insetBottom} insetEnd={insetEnd} defaultCorner="bottom-end" onCornerChange={setCorner} storageKey="kybern.preview.corner" testId="preview-mini" width={size.w} height={size.h} overlayDrag><div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}><PreviewSlot threadId={threadId} kind="mini" /><MiniChrome title={s.pageTitle || entry.title}><IconButton icon={N.panelRight} size={24} testId="preview-mini-return" label="Return to panel" onClick={() => { setPreview(threadId, { floating: false }); showPreview(threadId) }} /><IconButton icon={N.x} size={24} testId="preview-mini-close" label="Close preview" onClick={() => { setPreview(threadId, { floating: false }) }} /></MiniChrome><MiniResize corner={corner} size={size} bounds={available} onResize={next => { setSize(next); save('kybern.preview.size', next) }} /></div></Floating>
+  return <Floating insetBottom={insetBottom} insetEnd={insetEnd} defaultCorner="bottom-end" onCornerChange={setCorner} storageKey="kybern.preview.corner" testId="preview-mini" width={size.w} height={size.h} overlayDrag><div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>{s.load.phase === 'ready' ? <PreviewSlot threadId={threadId} kind="mini" /> : <PreviewStateView threadId={threadId} />}<MiniChrome title={s.pageTitle || entry.title}><IconButton icon={N.panelRight} size={24} testId="preview-mini-return" label="Return to panel" onClick={() => { setPreview(threadId, { floating: false }); showPreview(threadId) }} /><IconButton icon={N.x} size={24} testId="preview-mini-close" label="Close preview" onClick={() => { setPreview(threadId, { floating: false }) }} /></MiniChrome><MiniResize corner={corner} size={size} bounds={available} onResize={next => { setSize(next); save('kybern.preview.size', next) }} /></div></Floating>
 }

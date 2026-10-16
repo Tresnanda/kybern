@@ -14,6 +14,7 @@ import { leftCapture } from '../drag/leave.ts'
 import { edgeSpeed, startFrameLoop } from '../drag/edge.ts'
 import { createVelocityTracker } from '../drag/velocity.ts'
 import { GhostCard, GhostRow } from './GhostItem.tsx'
+import { TASK_DROP_MOTION } from './motion.ts'
 import { getState } from '../state.ts'
 import { watchPointerRelease } from '../split/release.ts'
 import { cls, getObjc, nsApp, sel } from '../native/objc.ts'
@@ -114,9 +115,10 @@ const subscribe = (fn: () => void) => {
   listeners.add(fn)
   return () => listeners.delete(fn)
 }
-/** True while this row is held, and until its ghost has landed, so the real row stays hidden behind it. */
-export function useTaskLift(id: string) {
-  return useSyncExternalStore(subscribe, () => (current?.active && current.id === id ? true : false))
+/** tasks.css dims the held source to .35; dnd-kit's default drop side effect
+ * hides it completely while the overlay returns, then restores its opacity. */
+export function useTaskDragOpacity(id: string) {
+  return useSyncExternalStore(subscribe, () => current?.active && current.id === id ? current.settle ? 0 : 0.35 : 1)
 }
 export function rowRef(id: string, node: PublicInstance | null) {
   if (node) rows.set(id, node)
@@ -409,7 +411,7 @@ export function TasksDragLayer() {
       {!drag.settle && <EdgeScroll />}
       {drag.active && drag.source && (
         <>
-          <DragGhost testId="task-drag-ghost" bare landing={{ duration: 0.25, ease: 'ease' }} rect={drag.source} grab={drag.grab} x={drag.x} y={drag.y} settle={drag.settle} onSettled={onGhostSettled} pacing={pacing as never}>
+          <DragGhost testId="task-drag-ghost" bare landing={TASK_DROP_MOTION} rect={drag.source} grab={drag.grab} x={drag.x} y={drag.y} settle={drag.settle} onSettled={onGhostSettled} pacing={pacing as never}>
             {task && (taskState().prefs.view === 'board'
               ? <GhostCard task={task} />
               : <GhostRow task={task} project={getState().projects.find((p) => p.id === task.project_id)?.name ?? 'Global'} />)}

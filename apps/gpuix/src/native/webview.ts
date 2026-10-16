@@ -74,6 +74,7 @@ export const webHost = {
   hide(id: string) { if (bridge) command({ op: 'hide', id }) },
   post(id: string, script: string) { command({ op: 'post', id, script }) },
   theme(id: string, theme: unknown) { command({ op: 'post', id, script: `window.kybernTheme?.(${JSON.stringify(theme)})` }) },
+  navigate(id: string, url: string) { command({ op: 'navigate', id, url }) },
   action(id: string, action: 'reload' | 'back' | 'forward' | 'stop') { command({ op: 'action', id, action }) },
   destroy(id: string) { if (bridge) command({ op: 'destroy', id }) },
   capturePointer() {

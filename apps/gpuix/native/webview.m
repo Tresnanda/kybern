@@ -192,7 +192,18 @@ void kybern_web_command(const char *json) {
     }
     if (!host) return;
     if ([op isEqual:@"hide"]) { host.placed = NO; [host visibility]; return; }
+    if ([op isEqual:@"navigate"]) {
+      NSURL *url = [NSURL URLWithString:cmd[@"url"]];
+      if (![host allowsURL:url]) return;
+      NSData *literal = [NSJSONSerialization dataWithJSONObject:@[url.absoluteString] options:NSJSONWritingFragmentsAllowed error:nil];
+      NSString *array = [[NSString alloc] initWithData:literal encoding:NSUTF8StringEncoding];
+      NSString *script = [NSString stringWithFormat:host.childFrame ? @"{const url=(%@)[0];if(location.href===url)location.reload();else location.replace(url)}" : @"document.querySelector('iframe').src=(%@)[0]", array];
+      // DOM is shared, JavaScript globals are not. Page code cannot replace this command.
+      [host.web evaluateJavaScript:script inFrame:host.childFrame inContentWorld:[WKContentWorld worldWithName:@"KybernPreview"] completionHandler:^(id value, NSError *error) {}];
+      return;
+    }
     if ([op isEqual:@"action"]) {
+      if ([cmd[@"action"] isEqual:@"stop"]) { [host.web stopLoading]; return; }
       NSDictionary *scripts = @{@"back":@"history.back()",@"forward":@"history.forward()",@"reload":@"location.reload()",@"stop":@"window.stop()"};
       NSString *script = scripts[cmd[@"action"]];
       if (script && host.childFrame) [host.web evaluateJavaScript:script inFrame:host.childFrame inContentWorld:[WKContentWorld worldWithName:@"KybernPreview"] completionHandler:^(id value, NSError *error) {}];

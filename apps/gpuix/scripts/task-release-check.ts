@@ -4,8 +4,8 @@ import path from 'node:path'
 import { launch } from '@gpuix/react/automation'
 import { KybernClient } from '../../../packages/kybern-client/src/client.ts'
 const data = process.env.KYBERN_DATA_DIR ?? ''
-if (!data.includes('gpuix-scratch/drag-release/')) throw Error('Dedicated drag-release scratch daemon required')
-const out = '/Users/mymac/projects/ade/previews/gpuix/drag-release'
+if (!data.includes('gpuix-scratch/drag-release/') && !data.includes('gpuix-scratch/round5/motion/')) throw Error('Dedicated drag-release scratch daemon required')
+const out = process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previews/gpuix/drag-release'
 mkdirSync(out, { recursive: true })
 const client = new KybernClient({ url: `ws://127.0.0.1:${readFileSync(path.join(data, 'daemon.port'), 'utf8').trim()}/ws`, token: readFileSync(path.join(data, 'daemon.token'), 'utf8').trim() })
 client.connect()

@@ -12,6 +12,7 @@ import { useEffect, useRef, type ReactNode } from 'react'
 import { alpha } from '../transcript/kit.tsx'
 import { REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { LIFT, SPRING } from './spring.ts'
+import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 
 export type Rect = { x: number; y: number; width: number; height: number }
 export type Settle = { to: { x: number; y: number }; vx: number; vy: number; home: boolean }
@@ -41,11 +42,22 @@ export function DragGhost({ rect, grab, x, y, settle, onSettled, radius = 10, pa
   useEffect(() => {
     done.current = false
     // Reduce Motion stays instant and functional: the item is simply placed.
-    if (settle && REDUCED_MOTION) { done.current = true; onSettled(); return }
-    // A hidden or occluded window can pause the animation clock; the ghost must still land.
+    const alreadyHome = settle && Math.hypot(settle.to.x - left, settle.to.y - top) < 0.001
+      && (landing || (settle.vx === 0 && settle.vy === 0))
+    if (settle && (REDUCED_MOTION || alreadyHome)) { done.current = true; onSettled(); return }
+    // Native completion owns visible motion. Only a hidden window needs the
+    // wall-clock recovery: otherwise a delayed frame (or a paused inspection
+    // clock) can truncate the curve and teleport the held item home.
     if (!settle) return
-    const timer = setTimeout(() => { if (!done.current) { done.current = true; onSettled() } }, 900)
-    return () => clearTimeout(timer)
+    const deadline = performance.now() + 900
+    const recover = () => { if (!done.current && !isWindowVisible()) { done.current = true; onSettled() } }
+    let timer = setTimeout(recover, 900)
+    const stop = onWindowVisibility(visible => {
+      if (visible) return
+      clearTimeout(timer)
+      timer = setTimeout(recover, Math.max(0, deadline - performance.now()))
+    })
+    return () => { clearTimeout(timer); stop() }
   }, [settle])
   const finish = () => { if (settle && !done.current) { done.current = true; onSettled() } }
   const grow = REDUCED_MOTION || bare ? 0 : LIFT.grow
@@ -54,7 +66,7 @@ export function DragGhost({ rect, grab, x, y, settle, onSettled, radius = 10, pa
   return (
     <motion.div ref={pacing as never} testId={testId} initial={false} animate={{ translateX: left - rect.x, translateY: top - rect.y }} transition={{ duration: 0 }} style={{ position: 'absolute', left: rect.x, top: rect.y, width: rect.width, height: rect.height, pointerEvents: 'none' }}>
       <motion.div
-        initial={false}
+        initial={{ translateX: 0, translateY: 0 }}
         animate={settle ? { translateX: settle.to.x - left, translateY: settle.to.y - top } : { translateX: 0, translateY: 0 }}
         transition={settle && !REDUCED_MOTION ? (landing ?? { ...(settle.home ? SPRING.home : SPRING.land), velocityX: settle.vx, velocityY: settle.vy }) : { duration: 0 }}
         onMotionComplete={finish}

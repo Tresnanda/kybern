@@ -1,4 +1,5 @@
-import { createConnection, createServer, type Socket } from 'node:net'
+import { createConnection, createServer, isIP, type Socket } from 'node:net'
+import { connect as connectTLS, checkServerIdentity } from 'node:tls'
 
 /** The desktop's preview_relay.rs transport: a ticket owns an isolated loopback
  * origin so root-relative assets and WebSocket upgrades reach the proxy. */
@@ -6,6 +7,10 @@ export function rewriteRelayHead(head: string, authority: string, prefix: string
   if (Buffer.byteLength(head, 'latin1') > 65536) throw Error('431 Request Header Fields Too Large')
   const lines = head.split('\r\n'), request = lines.shift()!.split(' ')
   if (request.length !== 3 || request[0] === 'CONNECT' || !request[1].startsWith('/') || request[1].startsWith('//') || !/^HTTP\/1\.[01]$/.test(request[2])) throw Error('405 Method Not Allowed')
+  const path = request[1].split('?')[0]
+  let decoded: string
+  try { decoded = decodeURIComponent(path) } catch { throw Error('400 Bad Request') }
+  if (/[\\\x00-\x20\x7f]/.test(decoded) || decoded.split('/').some(part => part === '.' || part === '..')) throw Error('400 Bad Request')
   const headers = lines.filter(Boolean).map(line => { const colon = line.indexOf(':'); if (colon < 1) throw Error('400 Bad Request'); return [line.slice(0, colon).toLowerCase(), line.slice(colon + 1).trim()] })
   const host = headers.filter(([name]) => name === 'host')
   if (host.length !== 1 || ![`127.0.0.1:${port}`, `localhost:${port}`].includes(host[0][1].toLowerCase())) throw Error('421 Misdirected Request')
@@ -14,10 +19,11 @@ export function rewriteRelayHead(head: string, authority: string, prefix: string
   return `${request[0]} ${prefix}${request[1]} ${request[2]}\r\nHost: ${authority}\r\nConnection: ${upgrade ? 'Upgrade' : 'close'}\r\n${kept.map(([name, value]) => `${name}: ${value}\r\n`).join('')}\r\n`
 }
 
-export async function openRelay(upstream: string, daemon: string): Promise<{ url: string; close(): void }> {
+export async function openRelay(upstream: string, daemon: string, options?: { ca?: string | Buffer; onWebSocketFailure?: () => void }): Promise<{ url: string; close(): void }> {
   const target = new URL(upstream), endpoint = new URL(daemon)
-  if (target.origin !== endpoint.origin || target.protocol !== 'http:' || target.username || target.password || target.search || target.hash || !/^\/preview-proxy\/[A-Za-z0-9_-]+\/?$/.test(target.pathname)) throw Error('The preview relay must target the configured daemon ticket.')
+  if (target.origin !== endpoint.origin || endpoint.username || endpoint.password || !['http:', 'https:'].includes(target.protocol) || target.username || target.password || target.search || target.hash || !/^\/preview-proxy\/[A-Za-z0-9_-]+\/?$/.test(target.pathname)) throw Error('The preview relay must target the configured daemon ticket.')
   const prefix = target.pathname.replace(/\/$/, ''), sockets = new Set<Socket>()
+  const hostname = target.hostname.replace(/^\[|\]$/g, ''), secure = target.protocol === 'https:'
   const server = createServer(client => {
     sockets.add(client); client.on('close', () => sockets.delete(client)); client.on('error', () => {})
     client.setTimeout(15000, () => client.destroy())
@@ -29,11 +35,28 @@ export async function openRelay(upstream: string, daemon: string): Promise<{ url
       let head: string
       try { head = rewriteRelayHead(pending.subarray(0, end + 4).toString('latin1'), target.host, prefix, (server.address() as { port: number }).port) }
       catch (error) { client.end(`HTTP/1.1 ${error instanceof Error ? error.message : '400 Bad Request'}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`); return }
-      const socket = createConnection({ host: target.hostname.replace(/^\[|\]$/g, ''), port: Number(target.port) || 80 })
+      const connection = { host: hostname, port: Number(target.port) || (secure ? 443 : 80) }
+      // Wait for certificate + hostname validation before any page bytes leave.
+      // Explicit validation remains on even if the process environment disables TLS checks.
+      const socket = secure ? connectTLS({ ...connection, rejectUnauthorized: true,
+        servername: isIP(hostname) ? undefined : hostname, ALPNProtocols: ['http/1.1'],
+        checkServerIdentity: (_name, certificate) => checkServerIdentity(hostname, certificate),
+        ...(options?.ca ? { ca: options.ca } : {}),
+      }) : createConnection(connection)
+      socket.setTimeout(15000, () => socket.destroy(Error('Preview connection timed out')))
       sockets.add(socket); socket.on('close', () => { sockets.delete(socket); client.destroy() }); client.on('close', () => socket.destroy())
-      socket.once('error', () => client.end('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'))
-      socket.once('connect', () => {
-        client.setTimeout(0); socket.write(head, 'latin1'); socket.write(pending.subarray(end + 4)); pending = Buffer.alloc(0)
+      const upgrade = /\r\nupgrade:\s*websocket\r\n/i.test(head)
+      if (upgrade) {
+        let status = ''
+        const inspect = (chunk: Buffer) => {
+          status += chunk.subarray(0, Math.max(0, 256 - status.length)).toString('latin1')
+          if (status.includes('\r\n') || status.length >= 256) { socket.removeListener('data', inspect); if (!/^HTTP\/1\.[01] 101(?: |\r\n)/.test(status)) options?.onWebSocketFailure?.() }
+        }
+        socket.on('data', inspect)
+      }
+      socket.once('error', () => { if (upgrade) options?.onWebSocketFailure?.(); client.end('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n') })
+      socket.once(secure ? 'secureConnect' : 'connect', () => {
+        socket.setTimeout(0); client.setTimeout(0); socket.write(head, 'latin1'); socket.write(pending.subarray(end + 4)); pending = Buffer.alloc(0)
         client.pipe(socket); socket.pipe(client); client.resume()
       })
     }

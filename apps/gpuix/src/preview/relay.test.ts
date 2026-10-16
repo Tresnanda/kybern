@@ -40,3 +40,62 @@ test('root assets and websocket bytes reach the ticket; closing destroys both co
     expect(seen).not.toContain('authorization'); expect(response).toContain('101 Switching Protocols'); expect(response).toEndWith('pong')
   } finally { socket.destroy(); relay.close(); await new Promise<void>(resolve => upstream.close(() => resolve())) }
 })
+
+test('relay rejects traversal that would leave the authorized ticket path', () => {
+  for (const path of ['/../api', '/%2e%2e/api', '/a/%2e%2e/api', '/%5c..%5capi', '/%00', '/%0d%0aHost:evil']) {
+    expect(() => rewriteRelayHead(`GET ${path} HTTP/1.1\r\nHost: localhost:5321\r\n\r\n`, 'daemon:9', '/preview-proxy/T1', 5321)).toThrow('400')
+  }
+})
+
+test('HTTPS relay validates trust and hostname before forwarding HTTP, assets, credentials and WebSocket bytes', async () => {
+  const { mkdtempSync, readFileSync, rmSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { execFileSync } = await import('node:child_process')
+  const { createServer: createTLS } = await import('node:tls')
+  const dir = mkdtempSync(join(tmpdir(), 'gpuix-scratch-relay-tls-'))
+  const openssl = (args: string[]) => execFileSync('openssl', args, { cwd: dir, stdio: 'ignore' })
+  try {
+    openssl(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-subj', '/CN=Kybern preview test CA', '-days', '1'])
+    openssl(['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'server.key', '-out', 'server.csr', '-subj', '/CN=localhost'])
+    writeFileSync(join(dir, 'ext.cnf'), 'subjectAltName=DNS:localhost\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n')
+    openssl(['x509', '-req', '-in', 'server.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-out', 'server.pem', '-days', '1', '-extfile', 'ext.cnf'])
+    const seen: string[] = [], peers = new Set<import('node:tls').TLSSocket>()
+    const upstream = createTLS({ key: readFileSync(join(dir, 'server.key')), cert: readFileSync(join(dir, 'server.pem')) }, socket => {
+      peers.add(socket); socket.on('close', () => peers.delete(socket)); socket.on('error', () => {})
+      socket.once('data', data => {
+        seen.push(data.toString())
+        if (data.includes('Upgrade: websocket') || data.includes('upgrade: websocket')) {
+          socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n'); socket.on('data', chunk => socket.write(chunk))
+        } else socket.end('HTTP/1.1 200 OK\r\nContent-Length: 5\r\nSet-Cookie: session=page; HttpOnly\r\nConnection: close\r\n\r\nasset')
+      })
+    })
+    upstream.on('tlsClientError', () => {})
+    await new Promise<void>(resolve => upstream.listen(0, resolve))
+    const port = (upstream.address() as { port: number }).port, daemon = `https://localhost:${port}`, ca = readFileSync(join(dir, 'ca.pem'))
+    const relays: Awaited<ReturnType<typeof openRelay>>[] = []
+    const request = async (host: string, trust?: { ca: Buffer }, websocket = false) => {
+      const relay = await openRelay(`${host}/preview-proxy/secure/`, host, trust); relays.push(relay)
+      const socket = createConnection(Number(new URL(relay.url).port), '127.0.0.1')
+      return await new Promise<string>((resolve, reject) => {
+        let result = '', pinged = false
+        socket.on('error', reject); socket.setTimeout(3000, () => { socket.destroy(); reject(Error('test timeout')) })
+        socket.on('data', data => { result += data.toString(); if (websocket && result.includes('101') && !pinged) { pinged = true; socket.write('tls-echo') } if (result.endsWith('tls-echo')) socket.end() })
+        socket.on('close', () => resolve(result))
+        socket.write(`GET /root/asset.js?q=1 HTTP/1.1\r\nHost: ${new URL(relay.url).host}\r\nCookie: session=page\r\nAuthorization: Bearer page-credential\r\n${websocket ? 'Connection: Upgrade\r\nUpgrade: websocket\r\n' : ''}\r\n`)
+      })
+    }
+    try {
+      const good = await request(daemon, { ca })
+      expect(good).toContain('200 OK'); expect(good).toContain('Set-Cookie: session=page'); expect(good).toEndWith('asset')
+      expect(seen[0]).toStartWith(`GET /preview-proxy/secure/root/asset.js?q=1 HTTP/1.1\r\nHost: localhost:${port}`)
+      expect(seen[0]).toContain('cookie: session=page'); expect(seen[0]).toContain('authorization: Bearer page-credential')
+      const ws = await request(daemon, { ca }, true)
+      expect(ws).toContain('101 Switching Protocols'); expect(ws).toEndWith('tls-echo')
+      const before = seen.length
+      expect(await request(daemon)).toContain('502 Bad Gateway')
+      expect(await request(`https://127.0.0.1:${port}`, { ca })).toContain('502 Bad Gateway')
+      expect(seen.length).toBe(before)
+    } finally { relays.forEach(relay => relay.close()); peers.forEach(socket => socket.destroy()); await new Promise<void>(resolve => upstream.close(() => resolve())) }
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+}, 15000)

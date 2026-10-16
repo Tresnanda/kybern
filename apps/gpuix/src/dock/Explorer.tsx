@@ -15,6 +15,7 @@ import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { copyText } from '../transcript/store.ts'
 import { FONT_MONO } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
+import { takeExplorerSelection, useExplorerSelection } from './explorerSelection.ts'
 import { Action, DockEmpty, ErrorLine } from './parts.tsx'
 
 type Listing = FileEntry[] | 'loading' | 'error'
@@ -30,6 +31,8 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<string[] | null>(null)
+  const selectionRequest = useExplorerSelection(), threadId = useApp(s => s.selectedId)
+  const reveal = useRef<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const requested = useRef(new Set<string>())
@@ -46,6 +49,14 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
     })
   }, [projectId])
   useEffect(() => { load('') }, [load])
+  useEffect(() => {
+    if (!selectionRequest || !threadId) return
+    const request = takeExplorerSelection(threadId, projectId)
+    if (!request) return
+    setQuery(''); setSelected(request.path); reveal.current = request.path
+    setExpanded(previous => new Set([...previous, ...request.ancestors]))
+    request.ancestors.forEach(dir => load(dir))
+  }, [selectionRequest, threadId, projectId, load])
   useEffect(() => {
     let current = true
     if (!query.trim()) { setResults(null); return }
@@ -69,7 +80,14 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
     append('', 0)
     return out
   }, [listings, expanded, results])
+  useEffect(() => {
+    if (!reveal.current) return
+    const index = rows.findIndex(row => row.path === reveal.current && row.kind === 'file')
+    if (index < 0 || !treeList.current) return
+    setFocus(index); renderer?.scrollToItem?.(treeList.current.id, index); reveal.current = null
+  }, [rows, renderer])
   const activate = useCallback((row: TreeRow) => {
+    reveal.current = null
     if (row.kind === 'directory') {
       setExpanded((previous) => { const next = new Set(previous); if (next.has(row.path)) next.delete(row.path); else next.add(row.path); return next })
       load(row.path)

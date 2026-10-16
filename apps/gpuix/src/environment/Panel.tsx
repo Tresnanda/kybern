@@ -17,7 +17,7 @@ import { toast } from '../shell/toasts.tsx'
 import { errorText } from '../nav/actions.ts'
 import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { copyText } from '../transcript/store.ts'
-import { ENVIRONMENT_MOTION, useEnvironmentPanel, useEnvironmentDock, openEnvironmentPanel, closeEnvironmentPanel } from './store.ts'
+import { ENVIRONMENT_MOTION, useEnvironmentPanel, useEnvironmentDock, openEnvironmentPanel, closeEnvironmentPanel, finishEnvironmentClose } from './store.ts'
 import { ThreadNote } from './ThreadNote.tsx'
 
 const G = { commit: glyph(GitCommitIcon), github: glyph(GithubIcon), changes: glyph(Edit02Icon), copy: glyph(Copy01Icon), external: glyph(ArrowUpRight01Icon) }
@@ -52,6 +52,7 @@ export function EnvironmentOverlay() {
     initial={keyboard || REDUCED_MOTION ? false : { opacity: 0, translateX: 288 }}
     animate={{ opacity: leaving ? 0 : 1, translateX: leaving && !REDUCED_MOTION && !keyboard ? 288 : 0 }}
     transition={REDUCED_MOTION || keyboard ? { duration: 0 } : ENVIRONMENT_MOTION}
+    onMotionComplete={() => { if (leaving) finishEnvironmentClose(panel.generation) }}
     style={{ position: 'absolute', left: dock.x + dock.width - 300, top: dock.y + 12, pointerEvents: leaving ? 'none' : 'auto' }}>
     <div testId="environment-panel" tabIndex={0} autoFocus onKeyDown={(e) => { if (e.key === 'escape') closeEnvironmentPanel() }}
       style={{ display: 'flex', flexDirection: 'column', width: 288, maxHeight: Math.max(120, dock.height - 24), overflow: 'scroll', padding: 6, gap: 2, borderRadius: 16, borderWidth: 1, borderColor: t.borderLight, backgroundColor: t.popover, boxShadow: surfaceShadow(t), pointerEvents: leaving ? 'none' : 'auto' }}>

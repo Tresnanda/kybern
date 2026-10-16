@@ -18,7 +18,7 @@ import { createVelocityTracker } from '../drag/velocity.ts'
 import { watchPointerRelease } from './release.ts'
 import { cls, getObjc, nsApp, sel } from '../native/objc.ts'
 import { onEnvironmentChange } from '../shell/environment.ts'
-import { DOCKED_INSET, ENVIRONMENT_MOTION, setEnvironmentDock, useEnvironmentPanel } from '../environment/store.ts'
+import { DOCKED_INSET, ENVIRONMENT_MOTION, setEnvironmentDock, useEnvironmentPanel, useEnvironmentInstant } from '../environment/store.ts'
 import { canSplitPane, collectThreadPanes, closePane, getSplitRoot, resizePane, splitPane, useFocusedPane, useSplitRoot, type Pane } from './store.ts'
 
 /** The desktop clones the whole sidebar row (it spans the panel minus 6px of inset), whatever depth it sits at. */
@@ -136,6 +136,7 @@ function LeafBody({ id, focused, children }: { id: string; focused: boolean; chi
   const renderer = useGpuixRequired()
   const [node, ref] = useState<PublicInstance | null>(null)
   const panel = useEnvironmentPanel()
+  const instant = useEnvironmentInstant()
   const selected = useApp(s => s.selectedId)
   const docked = focused && !!panel && !panel.leaving && panel.threadId === selected
   useEffect(() => {
@@ -146,7 +147,7 @@ function LeafBody({ id, focused, children }: { id: string; focused: boolean; chi
   return <div ref={ref} testId={`environment-content-${id}`} style={{ display: 'flex', flexDirection: 'row', flexGrow: 1, minWidth: 0, minHeight: 0, position: 'relative' }}>
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, minHeight: 0 }}>{children}</div>
     {/* A native width tween is the layout equivalent of Tauri's padding-right transition. */}
-    <motion.div testId={`environment-inset-${id}`} initial={false} animate={{ width: docked ? DOCKED_INSET : 0 }} transition={REDUCED_MOTION || panel?.keyboard ? { duration: 0 } : ENVIRONMENT_MOTION} style={{ width: 0, flexShrink: 0, pointerEvents: 'none' }} />
+    <motion.div testId={`environment-inset-${id}`} initial={false} animate={{ width: docked ? DOCKED_INSET : 0 }} transition={instant ? { duration: 0 } : ENVIRONMENT_MOTION} style={{ width: 0, flexShrink: 0, pointerEvents: 'none' }} />
   </div>
 }
 function LeafContent({ id, split, children }: { id: string; split: boolean; children: ReactNode }) {

@@ -9,8 +9,10 @@ import { over } from '../theme.ts'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { PriorityGlyph, StatusGlyph } from './Glyphs.tsx'
 
-/** `--task-card-hover` and `--task-shadow-card-hover` (tasks.css:58, 60 dark; 28 light). */
-export function useHeldChrome(extra = false) {
+// Board rotation remains pending the native carry-resource acceptance gate.
+/** `--task-card-hover` and `--task-shadow-card-hover` (tasks.css:58, 60 dark; 28 light).
+ * GPUI uses Gaussian sigma directly; CSS box-shadow blur has sigma = radius/2. */
+export function useHeldChrome() {
   const t = useTheme()
   const dark = t.variant === 'dark'
   return {
@@ -18,8 +20,8 @@ export function useHeldChrome(extra = false) {
     borderWidth: dark ? 0 : 0.5,
     borderColor: 'rgba(0, 0, 0, 0.12)',
     boxShadow: dark
-      ? { offsetX: 0, offsetY: extra ? 18 : 6, blurRadius: extra ? 40 : 18, spreadRadius: extra ? -12 : -6, color: extra ? 'rgba(0, 0, 0, 0.55)' : 'rgba(0, 0, 0, 0.5)' }
-      : { offsetX: 0, offsetY: extra ? 18 : 4, blurRadius: extra ? 40 : 14, spreadRadius: extra ? -12 : -4, color: extra ? 'rgba(0, 0, 0, 0.35)' : 'rgba(0, 0, 0, 0.12)' },
+      ? { offsetX: 0, offsetY: 6, blurRadius: 18 / 2, spreadRadius: -6, color: 'rgba(0, 0, 0, 0.5)' }
+      : { offsetX: 0, offsetY: 4, blurRadius: 14 / 2, spreadRadius: -4, color: 'rgba(0, 0, 0, 0.12)' },
   }
 }
 
@@ -45,9 +47,12 @@ export function GhostRow({ task, project }: { task: TaskItem; project: string })
 
 export function GhostCard({ task }: { task: TaskItem }) {
   const t = useTheme()
-  const chrome = useHeldChrome(true)
+  const chrome = useHeldChrome()
   return (
-    <div testId="task-ghost" style={{ pointerEvents: 'none', display: 'flex', flexDirection: 'column', width: '100%', height: '100%', paddingTop: 11, paddingBottom: 12, paddingLeft: 12, paddingRight: 12, borderRadius: 10, ...chrome }}>
+    <div testId="task-ghost" style={{ pointerEvents: 'none', position: 'relative', width: '100%', height: '100%' }}>
+    {/* tasks.css data-overlay adds this shadow to the hover shadow. */}
+    <div style={{ pointerEvents: 'none', position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', borderRadius: 10, boxShadow: { offsetX: 0, offsetY: 18, blurRadius: 40 / 2, spreadRadius: -12, color: 'rgba(0, 0, 0, 0.35)' } }} />
+    <div style={{ pointerEvents: 'none', display: 'flex', flexDirection: 'column', width: '100%', height: '100%', paddingTop: 11, paddingBottom: 12, paddingLeft: 12, paddingRight: 12, borderRadius: 10, ...chrome }}>
       <div style={{ pointerEvents: 'none', display: 'flex', alignItems: 'center', gap: 7, height: 16, flexShrink: 0 }}>
         <ProjectDot projectId={task.scope === 'project' ? task.project_id ?? null : null} />
         <Label color={t.textTertiary} size={12} lineHeight={16} style={{ pointerEvents: 'none' }}>{task.key}</Label>
@@ -57,6 +62,7 @@ export function GhostCard({ task }: { task: TaskItem }) {
       <div style={{ pointerEvents: 'none', display: 'flex', flexDirection: 'column', marginTop: 6, width: '100%' }}>
         <Label color={isOpenStatus(task.status) ? t.text : t.textSecondary} size={13} lineHeight={18} style={{ width: '100%', pointerEvents: 'none' }}>{task.title || 'Untitled'}</Label>
       </div>
+    </div>
     </div>
   )
 }
