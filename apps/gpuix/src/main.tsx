@@ -12,6 +12,7 @@ import { connect } from './state.ts'
 import { ThemeProvider, VARIANT } from './ui.tsx'
 import { startPerfProbe } from './perf/probe.ts'
 import { installDesktopMaterial } from './native/material.ts'
+import { installFrameSource } from './native/frame.ts'
 import { hasSavedFrame, installWindowFrame, startWindowShell } from './shell/window.ts'
 
 const FONTS = ['CalSans-Regular.ttf', 'JetBrainsMono-Regular.ttf']
@@ -20,6 +21,7 @@ function Fonts({ children }: { children: ReactNode }) {
   const renderer = useGpuixRequired()
   const [ready, setReady] = useState(false)
   useEffect(() => {
+    installFrameSource(renderer)
     // `registerFont` landed after @gpuix/native 0.10.0; until then the UI
     // falls back to installed fonts (SF Pro, Menlo).
     const register = (renderer as { registerFont?: (bytes: Uint8Array) => void }).registerFont
