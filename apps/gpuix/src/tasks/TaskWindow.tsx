@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
+import { FILL_ISLAND } from '../MatrixLoader.tsx'
 import { getNav } from '../nav/store.ts'
 import { revealTask, slotRef, taskVisible, taskScrollRef, useHeldTask } from './drag.tsx'
 import { useTasks } from './store.ts'
@@ -69,9 +70,9 @@ export function TaskWindow({ entries, card = false, testId }: { entries: TaskWin
     renderer.scrollToItem?.(list.current.id, index)
   }, [focused])
   return (
-    <div ref={setViewport} style={{ display: 'flex', flexGrow: 1, minHeight: 0, width: '100%' }}>
+    <div {...FILL_ISLAND} ref={setViewport} style={{ display: 'flex', flexGrow: 1, minHeight: 0, width: '100%' }}>
     <virtual-list
-      ref={(node) => { taskScrollRef(node, list.current, entries.length, (index) => setAnchor({key: entries[index]?.key ?? '', index}), heights, viewport, entries.map(entry => entry.key)); list.current = node }}
+      ref={(node) => { taskScrollRef(node, list.current, entries.length, (index) => { const key = entries[index]?.key ?? ''; setAnchor(old => old.key === key && old.index === index ? old : {key, index}) }, heights, viewport, entries.map(entry => entry.key)); list.current = node }}
       testId={testId}
       estimatedItemHeight={card ? 122 : 40}
       overdraw={card ? 128 : 120}

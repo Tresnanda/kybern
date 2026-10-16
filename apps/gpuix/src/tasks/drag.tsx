@@ -1,5 +1,5 @@
 import { isWindowVisible } from '../native/visibility.ts'
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 import { type ElementBounds, type EventPayload, type NativeRenderer, type PublicInstance } from '@gpuix/react'
 import { dropAction } from '@/state/tasksModel'
 import type { TaskStatus } from '../../../../packages/kybern-client/src/types.ts'
@@ -8,13 +8,14 @@ import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { openTask, pick, setTasks, taskState, updateTask } from './store.ts'
 
 import { recordDragPointer, usePacing } from '../drag/pacing.ts'
-import { DragGhost, type Rect, type Settle } from '../drag/Ghost.tsx'
+import type { Rect, Settle } from '../drag/Ghost.tsx'
+import { createCarryStore } from '../drag/carry.ts'
+import { TaskCarryGhost } from './CarryGhost.tsx'
 import { createShiftStore } from '../drag/shift.tsx'
 import { leftCapture } from '../drag/leave.ts'
 import { edgeSpeed, startFrameLoop } from '../drag/edge.ts'
 import { createVelocityTracker } from '../drag/velocity.ts'
 import { GhostCard, GhostRow } from './GhostItem.tsx'
-import { TASK_DROP_MOTION } from './motion.ts'
 import { getState } from '../state.ts'
 import { watchPointerRelease } from '../split/release.ts'
 import { cls, getObjc, nsApp, sel } from '../native/objc.ts'
@@ -57,6 +58,9 @@ const slots = new Map<string, PublicInstance>()
 const regions = new Map<string, Region>()
 let viewport: PublicInstance | null = null
 let current: Drag | null = null
+// React observes lifecycle/hint changes; native motion observes pointer coordinates.
+let snapshot: Drag | null = null
+const taskCarry = createCarryStore()
 let pending: Drag | null = null
 // Native click delivery may still target the pressed row after the overlay mounts.
 // Keep this through landing/cancel; only a new press starts a click gesture.
@@ -91,6 +95,7 @@ let ghostLanded = false
 export const taskShift = createShiftStore()
 function publish(value: Drag | null) {
   current = value
+  snapshot = value
   listeners.forEach((fn) => fn())
 }
 export const draggingTask = () => current !== null
@@ -326,7 +331,11 @@ function move(event: EventPayload, remeasure = false) {
   const active = current.active || Math.hypot(x - current.startX, y - current.startY) >= 5
   const target = active ? resolveTarget(current, x, y) : null
   taskShift.set(target?.shifts ?? new Map())
-  publish({ ...current, x, y, active, target })
+  const next = { ...current, x, y, active, target }
+  const changed = current.active !== active || (current.target?.action ?? 'move') !== (target?.action ?? 'move')
+  current = next
+  taskCarry.set(x, y)
+  if (changed) publish(next)
 }
 function debugDrag(kind: string, event?: EventPayload) {
   if (process.env.KYBERN_DEBUG_DRAG !== '1') return
@@ -423,8 +432,7 @@ function Hint({ action, color }: { action: 'move' | 'send' | 'none'; color: stri
 export function TasksDragLayer() {
   const t = useTheme()
   const pacing = usePacing(`tasks-${taskState().prefs.view}`)
-  const drag = useSyncExternalStore(subscribe, () => current)
-  const settling = useRef(false)
+  const drag = useSyncExternalStore(subscribe, () => snapshot)
   useEffect(
     () =>
       addWindowKeyHandler((e) => {
@@ -435,7 +443,6 @@ export function TasksDragLayer() {
       }),
     [],
   )
-  settling.current = !!drag?.settle
   if (!drag) return null
   const task = taskState().tasks[drag.id]
   const action = drag.target?.action ?? 'move'
@@ -450,12 +457,12 @@ export function TasksDragLayer() {
       {!drag.settle && <EdgeScroll />}
       {drag.active && drag.source && (
         <>
-          <DragGhost testId="task-drag-ghost" bare landing={TASK_DROP_MOTION} rect={drag.source} grab={drag.grab} x={drag.x} y={drag.y} settle={drag.settle} onSettled={onGhostSettled} pacing={pacing as never}>
+          <TaskCarryGhost store={taskCarry} rect={drag.source} grab={drag.grab} x={drag.x} y={drag.y} settle={drag.settle} onSettled={onGhostSettled} pacing={pacing}>
             {task && (taskState().prefs.view === 'board'
               ? <GhostCard task={task} />
               : <GhostRow task={task} project={getState().projects.find((p) => p.id === task.project_id)?.name ?? 'Global'} />)}
             {action !== 'move' && <Hint action={action} color={action === 'none' ? t.red : t.textTertiary} />}
-          </DragGhost>
+          </TaskCarryGhost>
         </>
       )}
     </div>
