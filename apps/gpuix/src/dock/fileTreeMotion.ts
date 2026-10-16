@@ -6,9 +6,8 @@ export const TREE_WINDOW_THRESHOLD = 100
 export const TREE_ENTER = { duration: 0.22, ease: [...EASE_OUT] as [number, number, number, number] }
 export const TREE_BRANCH = { duration: 0.3, ease: [...EASE_OUT] as [number, number, number, number] }
 
-// clip7 supplies these additive native capabilities. The accepted round-6 addon
-// only understands duration/bounce springs and cannot animate rotation. Keep
-// that build usable; merged native capability exports enable exact physics.
+// clip7 supplies native SVG rotation and the desktop's physical springs.
+// Query capabilities so an older addon can still render a usable tree.
 export function treeMotionCapabilities(renderer: object) {
   const native = renderer as { getMotionCapabilities?: () => { rotate?: boolean; physicalSprings?: boolean } }
   const capabilities = native.getMotionCapabilities?.()
