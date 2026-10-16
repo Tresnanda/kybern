@@ -3,8 +3,8 @@ s = 'crates/gpui/src/scene.rs'
 edit(s, '    pub(crate) paint_operations: Vec<PaintOperation>,', '''    pub(crate) paint_operations: Vec<PaintOperation>,
     // A tag identifies a passive fixed-geometry leaf, never a scene position.
     // Kept outside GPU structs; shader layouts and primitive ordering are unchanged.
-    pub(crate) active_repaint_tag: Option<(u64, u8, f32)>,
-    repaint_tags: std::collections::HashMap<usize, (u64, u8, f32)>,''')
+    pub(crate) active_repaint_tag: Option<(u64, u8, f32, Option<crate::PaintAnimation>, Hsla)>,
+    repaint_tags: std::collections::HashMap<usize, (u64, u8, f32, Option<crate::PaintAnimation>, Hsla)>,''')
 edit(s, '        self.paint_operations.clear();', '        self.paint_operations.clear();\n        self.repaint_tags.clear();\n        self.active_repaint_tag = None;')
 edit(s, '        self.paint_operations\n            .push(PaintOperation::Primitive(primitive));', '''        if let Some(tag) = self.active_repaint_tag {
             self.repaint_tags.insert(self.paint_operations.len(), tag);
@@ -19,9 +19,12 @@ edit(s, '                PaintOperation::EndLayer => self.pop_layer(),\n        
 edit(s, '    pub fn finish(&mut self) {', '''    /// Replace only recorded quad fills / monochrome tint, preserving geometry,
     /// clipping, layer order and hit testing. All tags validate before mutation.
     pub(crate) fn repaint_tagged(&mut self, updates: &[(u64, Hsla)]) -> bool {
+        self.repaint_tagged_inner(updates, true)
+    }
+    fn repaint_tagged_inner(&mut self, updates: &[(u64, Hsla)], update_base: bool) -> bool {
         let colors: std::collections::HashMap<_, _> = updates.iter().copied().collect();
         let mut found = std::collections::HashSet::new();
-        for (&index, &(id, kind, _)) in &self.repaint_tags {
+        for (&index, &(id, kind, _, _, _)) in &self.repaint_tags {
             if !colors.contains_key(&id) { continue; }
             let valid = matches!((&self.paint_operations[index], kind),
                 (PaintOperation::Primitive(Primitive::Quad(_)), 0) |
@@ -30,13 +33,18 @@ edit(s, '    pub fn finish(&mut self) {', '''    /// Replace only recorded quad 
             found.insert(id);
         }
         if found.len() != colors.len() { return false; }
-        for (&index, &(id, kind, inherited_opacity)) in &self.repaint_tags {
+        for (&index, &(id, kind, inherited_opacity, _, _)) in &self.repaint_tags {
             let Some(color) = colors.get(&id) else { continue; };
             let color = color.opacity(inherited_opacity);
             match (&mut self.paint_operations[index], kind) {
                 (PaintOperation::Primitive(Primitive::Quad(quad)), 0) => quad.background = color.into(),
                 (PaintOperation::Primitive(Primitive::MonochromeSprite(sprite)), 1) => sprite.color = color,
                 _ => unreachable!("validated above"),
+            }
+        }
+        if update_base {
+            for (id, _, _, _, color) in self.repaint_tags.values_mut() {
+                if let Some(next) = colors.get(id) { *color = *next; }
             }
         }
         // Rebuild only the typed scene arrays / bounds ordering. Replaying the
@@ -51,8 +59,14 @@ edit(s, '    pub fn finish(&mut self) {', '''    /// Replace only recorded quad 
     pub fn finish(&mut self) {''')
 w = 'crates/gpui/src/window.rs'
 edit(w, '    pub fn refresh(&mut self) {', '''    /// Tag passive leaf paint for a subsequent geometry-preserving update.
-    pub fn with_repaint_tag<R>(&mut self, id: u64, kind: u8, paint: impl FnOnce(&mut Self) -> R) -> R {
-        let tag = (id, kind, self.element_opacity());
+    pub fn with_repaint_tag<R>(&mut self, id: u64, kind: u8, animation: Option<crate::PaintAnimation>, color: crate::Hsla, paint: impl FnOnce(&mut Self) -> R) -> R {
+        let animation = animation.map(|mut animation| {
+            if let Some(previous) = self.rendered_frame.scene.animation_for(id) {
+                if animation.same_config(previous) { animation.started = previous.started; }
+            }
+            animation
+        });
+        let tag = (id, kind, self.element_opacity(), animation, color);
         let previous = self.next_frame.scene.active_repaint_tag.replace(tag);
         let result = paint(self);
         self.next_frame.scene.active_repaint_tag = previous;

@@ -528,6 +528,11 @@ edit("custom_elements/anchored.rs", "        if !has_fill {", "        if !has_f
 edit("custom_elements/anchored.rs", "        let anchored = anchored.child(content);", "        let anchored = anchored.child(crate::backdrop::apply(content.into_any_element(), ctx.props.get(\"backdrop\"), ctx.style.and_then(|s|s.opacity).unwrap_or(1.0) as f32));")
 
 exec((Path(__file__).parent / "paint_hooks.py").read_text())
+exec((Path(__file__).parent / "frame_hooks.py").read_text())
+exec((Path(__file__).parent / "clipboard_hooks.py").read_text())
+
+# Explicit pointer-events:auto and anchored overlays retain hard barriers.
+edit("renderer.rs", "                el.block_mouse_except_scroll()", "                el.block_non_ancestor_mouse()")
 
 for path, text in pending.items():
     (src / path).write_text(text)

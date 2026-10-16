@@ -76,12 +76,13 @@ diff --git a/dist/mutations.js b/dist/mutations.js
 index 7d0eda6cb58127462067cb9d5a442a9ea606c671..25786a7856241fad35c385e7338a4638b11dc3ea 100644
 --- a/dist/mutations.js
 +++ b/dist/mutations.js
-@@ -94,6 +94,13 @@ export const UNIVERSAL_PROPS = new Set([
+@@ -94,6 +94,14 @@ export const UNIVERSAL_PROPS = new Set([
      "autoFocus",
      "tabIndex",
      "motion",
 +    // Kybern native capabilities.
 +    "backdrop",
++    "paintAnimation",
 +    "cache",
 +    "windowDrag",
 +    "interceptKeys",
@@ -157,3 +158,84 @@ index 2ec4b84d0cad37c2d57585af3abaec2478518728..dbe0382494254da9596abde514d98e20
    constructor(eventCallback?: (((err: Error | null, arg: EventPayload) => any)) | undefined | null)
    /** Initialize GPUI using the native event-loop architecture for this OS. */
    init(options?: WindowOptions | undefined | null): void
+diff --git a/dist/automation/client.js b/dist/automation/client.js
+--- a/dist/automation/client.js
++++ b/dist/automation/client.js
+@@ -64,6 +64,10 @@
+         },
+         mouseMove: (params) => {
+             this.renderer.nativeSimulateMouseMove(params.x, params.y, params.pressedButton, params.modifiers);
++            return { ok: true };
++        },
++        fileDrop: (params) => {
++            this.renderer.nativeSimulateFileDrop(params.x, params.y, params.paths);
+             return { ok: true };
+         },
+         scrollWheel: (params) => {
+@@ -496,6 +500,10 @@
+             renderer.simulateMouseMove(x, y, pressedButton, modifiers);
+             afterInput();
+         },
++        nativeSimulateFileDrop(x, y, paths) {
++            renderer.simulateFileDrop(x, y, paths);
++            afterInput();
++        },
+         nativeSimulateScrollWheel(x, y, deltaX, deltaY, modifiers) {
+             renderer.simulateScrollWheel(x, y, deltaX, deltaY, modifiers);
+             afterInput();
+diff --git a/dist/runtime.js b/dist/runtime.js
+--- a/dist/runtime.js
++++ b/dist/runtime.js
+@@ -34,6 +34,7 @@
+     let stopped = false;
+     const stop = () => {
+         stopped = true;
++        renderer.setFrameWakeCallback?.(null);
+         if (timer !== undefined)
+             clearTimeout(timer);
+         timer = undefined;
+@@ -56,6 +57,16 @@
+         }
+         timer = setTimeout(loop, Math.max(0, frameMs - (performance.now() - started)));
+     };
++    if (typeof renderer.setFrameWakeCallback === "function" && process.env.KYBERN_VSYNC_WAKE === "1") {
++        renderer.setFrameWakeCallback((error) => {
++            if (stopped) return;
++            try {
++                if (error) options.onError?.(error);
++                else if (renderer.tick() === false) { stop(); options.onTerminated?.(); }
++            } catch (error) { options.onError?.(error); }
++            finally { renderer.acknowledgeFrameWake(); }
++        });
++    }
+     loop();
+     return { stop };
+ }
+diff --git a/dist/automation/protocol.js b/dist/automation/protocol.js
+--- a/dist/automation/protocol.js
++++ b/dist/automation/protocol.js
+@@ -105,6 +105,10 @@
+         }),
+         result: okSchema,
+     },
++    fileDrop: {
++        params: pointSchema.extend({ paths: z.array(z.string()).min(1) }),
++        result: okSchema,
++    },
+     scrollWheel: {
+         params: pointSchema.extend({
+             deltaX: z.number(),
+diff --git a/dist/automation/protocol.d.ts b/dist/automation/protocol.d.ts
+--- a/dist/automation/protocol.d.ts
++++ b/dist/automation/protocol.d.ts
+@@ -100,6 +100,10 @@
+             ok: z.ZodLiteral<true>;
+         }, z.core.$strip>;
+     };
++    readonly fileDrop: {
++        readonly params: z.ZodObject<{ x: z.ZodNumber; y: z.ZodNumber; paths: z.ZodArray<z.ZodString> }, z.core.$strip>;
++        readonly result: z.ZodObject<{ ok: z.ZodLiteral<true> }, z.core.$strip>;
++    };
+     readonly scrollWheel: {
+         readonly params: z.ZodObject<{
+             x: z.ZodNumber;

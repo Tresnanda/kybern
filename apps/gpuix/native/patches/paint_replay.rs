@@ -48,9 +48,18 @@ pub(crate) fn color(element: &RetainedElement, style: &StyleDesc) -> Option<gpui
 
 pub(crate) fn apply(child: AnyElement, element: &RetainedElement, style: Option<&StyleDesc>) -> AnyElement {
     let Some(kind) = style.and_then(|style| kind(element, style)) else { return child; };
-    Tagged { child, id: element.id, kind }.into_any_element()
+    let animation = element.custom_props.get("paintAnimation").and_then(|value| {
+        let mode = value.get("kind")?.as_str()?;
+        if mode != "matrix" && mode != "breathe" { return None; }
+        let cycle_ms = value.get("cycleMs")?.as_f64()?;
+        let delay_ms = value.get("delayMs").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        if !cycle_ms.is_finite() || cycle_ms < 100.0 || !delay_ms.is_finite() || delay_ms < 0.0 { return None; }
+        Some(gpui::PaintAnimation { cycle_ms, delay_ms, breathe: mode == "breathe", started: std::time::Instant::now() })
+    });
+    let color = style.and_then(|style| color(element, style)).unwrap_or_default();
+    Tagged { child, id: element.id, kind, animation, color }.into_any_element()
 }
-struct Tagged { child: AnyElement, id: u64, kind: u8 }
+struct Tagged { child: AnyElement, id: u64, kind: u8, animation: Option<gpui::PaintAnimation>, color: gpui::Hsla }
 impl IntoElement for Tagged { type Element = Self; fn into_element(self) -> Self { self } }
 impl Element for Tagged {
     type RequestLayoutState = ();
@@ -64,7 +73,7 @@ impl Element for Tagged {
         self.child.prepaint(window, cx);
     }
     fn paint(&mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, _: Bounds<Pixels>, _: &mut (), _: &mut (), window: &mut Window, cx: &mut App) {
-        window.with_repaint_tag(self.id, self.kind, |window| self.child.paint(window, cx));
+        window.with_repaint_tag(self.id, self.kind, self.animation, self.color, |window| self.child.paint(window, cx));
     }
 }
 

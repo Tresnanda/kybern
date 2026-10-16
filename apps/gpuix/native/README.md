@@ -955,3 +955,34 @@ parent, movement, hit testing, focus/editing and removal/remount, in dark/light.
 The existing native suite covers selection, overlays, scrolling, virtual rows,
 layout observers, decorated inputs, native springs, Markdown and syntax.
 See `ROUND3.md` for measurement results and the exact remaining work.
+
+
+## Round 3 resume: ancestor pointers, clipboard, experimental frames
+
+Implicit filled boxes now use an ancestor-preserving hitbox behavior. A painted
+child continues to occlude unrelated overlapping controls but no longer makes its
+parent lose hover or click routing. Explicit pointer barriers and deferred overlays
+remain hard barriers. `pointer-check.ts` exercises dwell-before-click and overlap.
+
+The native renderer additionally exposes `readClipboardImage(): {data: Uint8Array,
+mediaType: string, name: string} | null` and `readClipboardPaths(): string[]` through
+GPUI's clipboard. They do not change clipboard contents. The automation
+`simulateFileDrop` accepts `{x,y,paths}` and dispatches the same native drop events
+as the platform to existing `onFileDrop` handlers.
+
+The frame APIs and `paintAnimation` prop are experimental; see `ROUND3.md` before
+integrating their app changes. `subscribeAnimationFrames(callback)` returns a token;
+the callback receives `(error,{timeMs})`. Acknowledge with
+`acknowledgeAnimationFrame(token)` to allow the next delivery; unsubscribe with
+`unsubscribeAnimationFrames(token)`. Deliveries are bounded, and consumers must
+ignore already-queued stale callbacks after unsubscribe. `src/native/frame.ts`
+shares one subscription and handles generations. Hidden-window behavior is a
+required regression check, not something inferred from callback counts.
+
+`paintAnimation: {kind:'matrix'|'breathe',cycleMs:number,delayMs?:number}` is allowed
+only on passive fixed-geometry div fills or SVG tints. Native paint samples the
+same easing without per-frame React updates, while still replaying/submitting the
+whole scene. Reduced motion omits the prop. The optional embedded-host wake is
+`KYBERN_VSYNC_WAKE=1`; inactive full-rate motion is `KYBERN_FULL_RATE=1`. Neither is
+enabled by default. `frame-check.ts` captures actual window pixels plus bounded
+submission cadence, callback backpressure, unsubscribe, minimize and unmount.
