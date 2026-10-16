@@ -38,8 +38,9 @@ measurements and the resolved width-measurement issue are recorded below.
   before measuring percentage-sized islands; the cache still needs definite height.
 - **No margins or position insets on the island itself;** put them on a parent.
   The island keeps its declared size (it does not flex-shrink).
-- **Unchanged islands replay.** Any change inside (props, text, children, style,
-  a running `motion.div`) re-renders that island only, in the same frame.
+- **Unchanged islands replay.** General changes (props, text, children, geometry, motion) invalidate the
+  owning cached island and its cached ancestors. The scoped-paint path below
+  skips render/layout for its narrow fill/opacity allowlist.
 - **Text selection** and painted-text inspection are restored in document order
   on cached replay. Selection changes refresh the native paint, including the wash.
   Deferred overlay text is not included in these ordinary-paint snapshots; keep
@@ -920,3 +921,37 @@ submodule commit or npm dependency is required. See `PACKAGE-7.md` for results,
 `BACKDROP-AUDIT.md` for exact desktop values and exceptions, and the **unapplied**
 `app-integration-7.patch` for the app changes. Run `bun native/check-integration-7.ts`
 to typecheck that patch without editing app files.
+
+
+## Round 3: scoped leaf paint
+
+`paint_replay.rs`, `paint_hooks.py`, and `paint_gpui.py` add a conservative
+paint-only path to the pinned GPUI fork. `update.sh` reconstructs the GPUI edits
+alongside `backdrop_gpui.py`; no upstream submodule commit is needed.
+
+A fixed-size passive leaf with no children, text, event handlers, hover/active
+styles, motion, backdrop, border or shadow can update either a div's solid
+`backgroundColor` or an SVG's `opacity` without invalidating ancestors. The
+renderer tags its original scene primitives with the element ID and inherited
+opacity. A style-only batch validates every tag before changing quad fills or
+monochrome-sprite tint, then requests presentation without element rendering,
+Taffy layout, prepaint, hitbox rebuilding or focus changes. Scene replay keeps
+clipping, layer order, atlas tiles, cached ranges and backdrop ordering intact.
+
+Unknown paint, missing/unpainted/clipped tags, geometry changes, custom props,
+structural updates and mixed batches use normal invalidation. Other platforms
+and the test host keep ordinary revision behavior unless the production host
+has enabled scene replay. The scene tags live only as long as the rendered
+scene. `KYBERN_SCOPED_PAINT=0` is the full-render A/B reference.
+
+This is **not a dirty-rectangle Metal compositor**: GPUI still submits the whole
+scene. It removes ancestor render/layout work for the supported leaves; it does
+not promise less GPU time or remove the application's React commits.
+
+`native/paint-check.ts` uses **window-ID OS captures** for live pixel assertions:
+GPUIX's automation screenshot method forces a full refresh and would hide stale
+cached paint. The check covers repeated fills, SVG opacity, a genuinely changed
+parent, movement, hit testing, focus/editing and removal/remount, in dark/light.
+The existing native suite covers selection, overlays, scrolling, virtual rows,
+layout observers, decorated inputs, native springs, Markdown and syntax.
+See `ROUND3.md` for measurement results and the exact remaining work.

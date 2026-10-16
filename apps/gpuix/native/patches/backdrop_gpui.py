@@ -72,6 +72,8 @@ edit(m, '            match batch {', '''            match batch {
                     command_encoder=new_command_encoder_for_texture(command_buffer,texture,viewport_size,None);
                 },''')
 pending[m] += '\ninclude!("backdrop_renderer.rs");\n'
+exec((here / "paint_gpui.py").read_text())
+
 for name, text in pending.items():
     if (root/name).read_text()!=text: (root/name).write_text(text)
 for name in ['backdrop_renderer.rs', 'backdrop.metal']:

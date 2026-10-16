@@ -527,6 +527,8 @@ edit("renderer.rs", "    ctx.inherited = parent_inherited;", "    let built = if
 edit("custom_elements/anchored.rs", "        if !has_fill {", "        if !has_fill && !ctx.props.contains_key(\"backdrop\") {")
 edit("custom_elements/anchored.rs", "        let anchored = anchored.child(content);", "        let anchored = anchored.child(crate::backdrop::apply(content.into_any_element(), ctx.props.get(\"backdrop\"), ctx.style.and_then(|s|s.opacity).unwrap_or(1.0) as f32));")
 
+exec((Path(__file__).parent / "paint_hooks.py").read_text())
+
 for path, text in pending.items():
     (src / path).write_text(text)
 print(f"hooks applied to {len(pending)} files")
