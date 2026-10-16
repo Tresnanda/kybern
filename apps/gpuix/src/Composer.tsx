@@ -1,8 +1,7 @@
 import { clipboardAttachments, type ClipboardImage } from './composer/clipboard.ts'
 import { StatusGlyph } from './composer/StatusGlyph.tsx'
-import { DecoratedTextarea } from './native/decorated-input.tsx'
-import { referenceDecorations } from './native/input-marks.ts'
-import { nativeCapabilities, type InputSelection } from './native/api.ts'
+import { TokenTextarea, type TokenTextareaHandle } from './composer/TokenTextarea.tsx'
+import { type InputSelection } from './native/api.ts'
 export { useComposerOverlayHeight, useMeasureComposerOverlay } from './composer/height.ts'
 import { useMeasureComposerOverlay } from './composer/height.ts'
 import { createCoordinatorStarter } from '../../../packages/kybern-client/src/coordinator.ts'
@@ -366,17 +365,18 @@ export function ComposerView(input: ComposerViewProps) {
   const [promptMode, setPromptMode] = useState<'queue' | 'steer'>('queue')
   const [changingModel, setChangingModel] = useState(false)
   const editor = useRef<PublicInstance | null>(null)
+  const tokenEditor = useRef<TokenTextareaHandle>(null)
   const card = useRef<PublicInstance | null>(null)
   const [selection, setSelection] = useState<InputSelection>({ start: text.length, end: text.length, reversed: false, composing: false })
   const readSelection = () => {
-    if (!editor.current) return
-    const next = nativeCapabilities(renderer).getInputSelection(editor.current.id)
+    if (!tokenEditor.current) return
+    const next = tokenEditor.current.selection()
     setSelection(old => old.start === next.start && old.end === next.end && old.composing === next.composing && old.reversed === next.reversed ? old : next)
   }
   const edit = (start: number, end: number, replacement: string) => {
     if (!editor.current || props.readOnly) return false
     try {
-      nativeCapabilities(renderer).editInput(editor.current.id, { start, end, text: replacement, expectedValue: text })
+      if (!tokenEditor.current?.edit(start, end, replacement)) return false
       readSelection()
       focusEditor()
       return true
@@ -467,7 +467,7 @@ export function ComposerView(input: ComposerViewProps) {
   }
 
   const submit = async (delivery: 'queue' | 'steer' = promptMode) => {
-    if (!canSend || (editor.current && nativeCapabilities(renderer).getInputSelection(editor.current.id).composing)) return
+    if (!canSend || tokenEditor.current?.selection().composing) return
     const status = provider ? providers.find((p) => p.kind === provider.kind) : undefined
     if (status && provider?.kind !== 'cursor' && !status.supported_permission_modes.includes(mode)) {
       setError('Choose a supported permission mode for the selected agent before sending.')
@@ -581,15 +581,6 @@ export function ComposerView(input: ComposerViewProps) {
               onRemove={(a) => setAttachments((list) => list.filter((item) => item.id !== a.id))}
             />
           )}
-          {!!completion.tokens.length && <div testId="composer-tokens" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingBottom: 8 }}>
-            {completion.tokens.map(token => <div key={token.token} role="button" aria-label={`Select ${token.label}`} onClick={() => {
-              if (!editor.current) return
-              const start = text.indexOf(token.token)
-              focusEditor()
-              nativeCapabilities(renderer).setInputSelection(editor.current.id, start, start + token.token.length, false)
-              readSelection()
-            }} style={{ padding: 4, paddingLeft: 8, paddingRight: 8, borderRadius: 6, backgroundColor: t.buttonSecondary, cursor: 'pointer' }}><Label color={t.text} size={12}>{token.label}</Label></div>)}
-          </div>}
           <div style={{ position: 'relative', display: 'flex' }}>
             {/* GPUIX paints its own placeholder in a fixed grey; this one is the kit's muted × 40%. */}
             {!text && (
@@ -599,9 +590,11 @@ export function ComposerView(input: ComposerViewProps) {
                 </Label>
               </div>
             )}
-            <DecoratedTextarea
-              decorations={referenceDecorations(text, [...completion.tokens, ...attachmentRefs.map(r => ({ token: r.token, label: r.token.slice(1) }))], { textSecondary: t.textSecondary, accent: t.accentBlue, buttonSecondary: t.buttonSecondary })}
-              ref={(el) => {
+            <TokenTextarea
+              editorRef={tokenEditor}
+              onEditorError={setError}
+              references={[...completion.tokens, ...attachmentRefs.map(r => ({ token: r.token, label: r.token.slice(1) }))]}
+              nativeRef={(el) => {
                 editor.current = el
               }}
               interceptKeys={['up', 'down', 'left', 'right', 'home', 'end', 'enter', 'tab', 'escape', 'v']}

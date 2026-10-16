@@ -3,8 +3,8 @@
 // layout. There is no edit mode, toolbar card, Done button or boxed field.
 import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { useEffect, useRef } from 'react'
-import { DecoratedTextarea } from '../native/decorated-input.tsx'
-import { markdownInputDecorations, noteInputMarkColors } from '../native/input-marks.ts'
+import { RichDocument } from '../notes/RichDocument.tsx'
+import { openLink } from '../notes/NoteEditor.tsx'
 import { notesTokens } from '../notes/kit.tsx'
 import { FONT_UI } from '../theme.ts'
 import { ink, useTheme } from '../ui.tsx'
@@ -41,23 +41,26 @@ export function TitleField({ value, saved, onChange, onCommit, onEnter }: { valu
 }
 
 /** `.tk-desc .note-prose`: 15/24 at 86% ink, written where it is read. Inline marks stay styled; no box, no padding. */
-export function DescriptionEditor({ value, onChange, onCommit, onExit }: { value: string; onChange: (value: string) => void; onCommit: () => void; onExit: () => void }) {
+export function DescriptionEditor({ value, onChange, onCommit, onExit, onFocus, focus = false }: { value: string; onChange: (value: string) => void; onCommit: () => void; onExit: () => void; onFocus?: () => void; focus?: boolean }) {
   const t = useTheme()
+  const { renderer } = useGpuix()
+  const ref = useRef<PublicInstance>(null)
+  useEffect(() => { if (focus && ref.current) renderer?.focusElement?.(ref.current.id) }, [focus])
   return (
-    <DecoratedTextarea
-      decorations={markdownInputDecorations(value, noteInputMarkColors(t))}
+    <RichDocument
       testId="task-desc-input"
+      nativeRef={ref}
+      onOpenLink={openLink}
       aria-label="Description"
-      autoFocus
       value={value}
       minRows={1}
       maxRows={60}
       placeholder="Add a description…"
       interceptKeys={['escape']}
-      onFocus={() => taskTyping(true)}
+      onFocus={() => { taskTyping(true); onFocus?.() }}
       onBlur={() => { taskTyping(false); onCommit(); onExit() }}
-      onKeyDown={(e) => { if (e.key === 'escape') { e.preventDefault(); onCommit(); onExit() } }}
-      onChange={(e) => onChange(e.value ?? '')}
+      onKeyDown={(e) => { if ((e as typeof e & { requestId?: number }).requestId != null && e.key === 'escape') { e.preventDefault(); onCommit(); onExit() } }}
+      onChange={onChange}
       theme={{ text: ink(t, 0.86), caret: t.text }}
       style={{ width: '100%', padding: 0, fontFamily: FONT_UI, fontSize: 15, lineHeight: 24, color: ink(t, 0.86), backgroundColor: 'transparent' }}
     />

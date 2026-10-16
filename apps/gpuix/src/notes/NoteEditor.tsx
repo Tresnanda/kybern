@@ -1,5 +1,6 @@
-import { DecoratedTextarea } from '../native/decorated-input.tsx'
-import { markdownInputDecorations, noteInputMarkColors } from '../native/input-marks.ts'
+import { type RichTextareaHandle } from './RichTextarea.tsx'
+import { RichDocument } from './RichDocument.tsx'
+import { parseRichText } from './rich-text.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import { NoteBlock } from './NoteBlock.tsx'
@@ -8,6 +9,7 @@ import { openTask } from '../tasks/store.ts'
 import { goPage } from '../nav/history.ts'
 import { spawn } from 'node:child_process'
 import { motion, useGpuix, useWindowSize, type PublicInstance } from '@gpuix/react'
+import { FloatingLayer } from '@gpuix/react/floating'
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { editedAgo } from '@/state/notesModel'
 import { countWords, wordCountLabel } from '@/state/miniMarkdown'
@@ -25,7 +27,7 @@ import { useApp } from '../state.ts'
 import { EASE_OUT, REDUCED_MOTION, Label, useTheme } from '../ui.tsx'
 import { display, gallery, getNotes, restoreNote, rpc, useNotes } from './store.ts'
 import { noteSession } from './session.ts'
-import { BLOCKS, formatBlock, splitBlocks } from './blocks.ts'
+import { BLOCKS, splitBlocks } from './blocks.ts'
 import { NoteMenu } from './NoteMenu.tsx'
 import { Toolbar } from './Toolbar.tsx'
 
@@ -71,6 +73,10 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
   const docWidth = Math.min(640, size.width - 60 - 48)
   const session = useMemo(() => noteSession(id), [id])
   const snap = useSyncExternalStore(session.subscribe, session.getSnapshot)
+  const referenceData = useMemo(() => {
+    const definitions = (snap.body.includes(']:') ? parseRichText(snap.body).tree?.children ?? [] : []).filter(node => node.type === 'definition' && node.identifier && node.url)
+    return { images: new Map(definitions.map(node => [node.identifier!, node.url!])), source: definitions.map(node => snap.body.slice(node.position?.start.offset ?? 0, node.position?.end.offset ?? 0)).join('\n') }
+  }, [snap.body])
   const summary = useNotes((s) => s.notes.find((n) => n.id === id))
   const outline = useNotes((s) => s.display.outline)
   const projects = useApp((s) => s.projects)
@@ -81,7 +87,7 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
   const [allTasks, setTasks] = useState<TaskItem[]>([])
   const tasks = allTasks.filter((task) => task.note_ids.includes(id) || task.source_note_id === id || snap.body.includes(`kybern://task/${task.id}`))
   const list = useRef<PublicInstance>(null)
-  const bodyRef = useRef<PublicInstance>(null)
+  const editors = useRef(new Map<number, RichTextareaHandle>())
   const viewportRef = useRef<PublicInstance>(null)
   const blockRefs = useRef(new Map<number, PublicInstance>())
   const [outlineActive, setOutlineActive] = useState(0)
@@ -100,17 +106,14 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
     if (!compact && e.key === 'escape' && active === null) { gallery(); return true }
   }), [session, active, compact])
   const update = (index: number, value: string) => { const next = [...blocks]; next[index] = value; setBlocks(next); session.edit({ body: next.join('') }) }
-  const finish = () => { setActive(null); setBlocks(splitBlocks(session.getSnapshot().body)); void session.flush() }
+  const finish = () => { setActive(null); renderer?.blur?.(); void session.flush() }
   const format = (kind: string) => {
     const at = active ?? Math.max(0, blocks.length - 1)
-    update(at, formatBlock(blocks[at] ?? '', kind)); setActive(at); setSlashIndex(0)
-    if (bodyRef.current) renderer?.focusElement?.(bodyRef.current.id)
+    editors.current.get(at)?.block(kind); setActive(at); setSlashIndex(0)
   }
   const mark = (marker: string) => {
     const at = active ?? Math.max(0, blocks.length - 1)
-    const raw = blocks[at] ?? ''
-    const tail = /\s*$/.exec(raw)?.[0] ?? ''
-    update(at, `${marker}${raw.trimEnd()}${marker}${tail}`); setActive(at)
+    editors.current.get(at)?.mark(marker); setActive(at)
   }
   const insertImage = async () => {
     const paths = await renderer?.promptForPaths?.({ files: true, multiple: false, prompt: 'Add image' })
@@ -184,7 +187,7 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
   const deleted = !!(summary ? summary.deleted_at : snap.note?.deleted_at)
   const status = snap.status === 'saved' ? (note ? editedAgo(note.updated_at) : 'Saved') : snap.status === 'dirty' ? 'Unsaved changes' : snap.status === 'saving' ? 'Saving…' : snap.status === 'conflict' ? 'Choose a version' : 'Couldn’t save · Retry'
   if (compact) return <div testId="thread-note-editor" style={{ display: 'flex', flexDirection: 'column', height: 200, padding: 10, gap: 6, borderRadius: 8, backgroundColor: t.buttonSecondary }}>
-    {snap.phase === 'ready' ? <DecoratedTextarea decorations={markdownInputDecorations(snap.body, noteInputMarkColors(t))} testId="thread-note-body" aria-label="Thread note" value={snap.body} minRows={4} maxRows={6} readOnly={deleted} placeholder="Ideas, reminders, to-dos. Write Markdown here" onChange={(e) => session.edit({ body: e.value ?? '' })} onBlur={() => void session.flush()} theme={{ text: t.text, caret: t.text }} style={{ flexGrow: 1, width: '100%', fontSize: 12, lineHeight: 20, color: t.text, backgroundColor: t.buttonSecondary }} /> : <Label color={t.textSecondary} size={12}>{snap.phase === 'loading' ? 'Loading note…' : snap.error ?? 'This note is unavailable.'}</Label>}
+    {snap.phase === 'ready' ? <RichDocument noteId={id} columnWidth={docWidth} onOpenLink={href => openLink(href, id)} testId="thread-note-body" aria-label="Thread note" value={snap.body} minRows={4} maxRows={6} readOnly={deleted} placeholder="Type / for commands" onChange={(body) => session.edit({ body })} onBlur={() => void session.flush()} theme={{ text: t.text, caret: t.text }} style={{ flexGrow: 1, width: '100%', fontSize: 12, lineHeight: 20, color: t.text, backgroundColor: t.buttonSecondary }} /> : <Label color={t.textSecondary} size={12}>{snap.phase === 'loading' ? 'Loading note…' : snap.error ?? 'This note is unavailable.'}</Label>}
     {snap.conflict ? <div style={{ display: 'flex', gap: 6 }}><Button onClick={() => session.useTheirs()}>Use theirs</Button><Button onClick={() => session.keepMine()}>Keep mine</Button></div> : <div onClick={() => void session.flush()}><Label color={snap.status === 'error' ? t.red : t.textSecondary} size={11}>{status}</Label></div>}
   </div>
   return <div testId="note-editor" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
@@ -201,18 +204,19 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
               <Label color={k.fg4} size={NOTES_META} lineHeight={19.5}>·</Label>
               <div testId="note-save-status" onClick={() => { if (snap.status === 'error') void session.flush() }}><Label color={snap.status === 'error' ? t.red : k.fg3} size={NOTES_META} lineHeight={19.5}>{status}</Label></div>
             </div>
-            <input testId="note-title" autoFocus={!snap.title && !snap.body && !deleted} aria-label="Title" value={snap.title} placeholder="Untitled" readOnly={deleted || note?.scope === 'thread'} onChange={(e) => session.edit({ title: (e.value ?? '').replace(/\s*\n\s*/g, ' ').slice(0, 300) })} onBlur={() => void session.flush()} onSubmit={() => setActive(0)} theme={{ text: k.fg, caret: k.fg }} style={{ width: '100%', height: 37, marginBottom: 24, fontSize: 30.15, lineHeight: 36.6, fontWeight: 650, color: k.fg, backgroundColor: t.surface }} />
+            <input testId="note-title" autoFocus={!snap.title && !snap.body && !deleted} aria-label="Title" value={snap.title} placeholder="Untitled" readOnly={deleted || note?.scope === 'thread'} onChange={(e) => session.edit({ title: (e.value ?? '').replace(/\s*\n\s*/g, ' ').slice(0, 300) })} onBlur={() => void session.flush()} onSubmit={() => { setActive(0); editors.current.get(0)?.focus() }} theme={{ text: k.fg, caret: k.fg }} style={{ width: '100%', height: 37, marginBottom: 24, fontSize: 30.15, lineHeight: 36.6, fontWeight: 650, color: k.fg, backgroundColor: t.surface }} />
           </div></div>
           {blocks.map((body, index) => <div key={`${epoch}:${index}`} ref={(node) => { if (node) blockRefs.current.set(index, node); else blockRefs.current.delete(index) }} style={{ display: 'flex', justifyContent: 'center', paddingTop: index === 0 ? 0 : blockGap(blocks[index - 1]!, body) }}><div style={{ display: 'flex', flexDirection: 'column', width: docWidth }}>
-            {active === index && !deleted ? <>
-              <DecoratedTextarea decorations={markdownInputDecorations(body, noteInputMarkColors(t))} ref={bodyRef} testId={`note-block-input-${index}`} aria-label="Edit block" autoFocus value={body} minRows={2} maxRows={30} onChange={(e) => { update(index, e.value ?? ''); setSlashIndex(0) }} onBlur={() => void session.flush()} onKeyDown={(e) => {
-                if (e.key === 'escape' || (e.key === 'enter' && e.modifiers?.cmd)) finish()
-                if (slashItems.length && e.key === 'down') setSlashIndex((value) => (value + 1) % slashItems.length)
-                if (slashItems.length && e.key === 'up') setSlashIndex((value) => (value - 1 + slashItems.length) % slashItems.length)
-                if (slashItems.length && e.key === 'enter') format(slashItems[slashIndex % slashItems.length]!.id)
+            {!deleted && !/^---\s*$/.test(body.trim()) ? <>
+              <RichDocument noteId={id} imageDefinitions={referenceData.images} markdownContext={referenceData.source} columnWidth={docWidth} onOpenLink={href => openLink(href, id)} editorRef={handle => { if (handle) editors.current.set(index, handle); else editors.current.delete(index) }} testId={`note-block-input-${index}`} aria-label="Note" autoFocus={active === index} value={body} minRows={1} maxRows={60} onFocus={() => setActive(index)} onChange={(value) => { update(index, value); setSlashIndex(0) }} onBlur={() => void session.flush()} interceptKeys={['escape', 'enter', 'up', 'down']} onKeyDown={(e) => {
+                if ((e as typeof e & { requestId?: number }).requestId == null) return
+                if (e.key === 'escape' || (e.key === 'enter' && e.modifiers?.cmd)) { e.preventDefault(); finish() }
+                if (slashItems.length && e.key === 'down') { e.preventDefault(); setSlashIndex((value) => (value + 1) % slashItems.length) }
+                if (slashItems.length && e.key === 'up') { e.preventDefault(); setSlashIndex((value) => (value - 1 + slashItems.length) % slashItems.length) }
+                if (slashItems.length && e.key === 'enter') { e.preventDefault(); format(slashItems[slashIndex % slashItems.length]!.id) }
               }} theme={{ text: k.fg1, caret: k.fg }} style={{ width: '100%', fontSize: READ, lineHeight: READ * 1.6, color: k.fg1, backgroundColor: t.surface }} />
-              {slash && slashItems.length > 0 && <div testId="note-slash-menu" style={{ display: 'flex', flexDirection: 'column', width: 240, padding: 6, borderRadius: 10, borderWidth: 1, borderColor: t.border, backgroundColor: t.popover }}>{slashItems.map((b, i) => <div key={b.id} testId={`note-slash-${b.id}`} onClick={() => format(b.id)} style={{ padding: 7, borderRadius: 6, backgroundColor: i === slashIndex ? t.hover : undefined, cursor: 'pointer' }}><Label color={t.text} size={13}>{b.label}</Label></div>)}</div>}
-            </> : <div testId={`note-block-${index}`} tabIndex={deleted ? -1 : 0} onClick={() => { if (!deleted) setActive(index) }} onKeyDown={(e) => { if (!deleted && e.key === 'enter') setActive(index) }} style={{ cursor: deleted ? 'default' : 'text' }}><NoteBlock width={docWidth} body={body} noteId={id} tasks={allTasks} /></div>}
+              {active === index && slash && slashItems.length > 0 && <FloatingLayer testId="note-slash-menu" side="bottom" align="start" sideOffset={8} collisionPadding={8} style={{ display: 'flex', flexDirection: 'column', width: 240, padding: 6, borderRadius: 10, borderWidth: 1, borderColor: t.border, backgroundColor: t.popover }}>{slashItems.map((b, i) => <div key={b.id} testId={`note-slash-${b.id}`} onClick={() => format(b.id)} style={{ padding: 7, borderRadius: 6, backgroundColor: i === slashIndex ? t.hover : undefined, cursor: 'pointer' }}><Label color={t.text} size={13} style={{ pointerEvents: 'none' }}>{b.label}</Label></div>)}</FloatingLayer>}
+            </> : <div testId={`note-block-${index}`} tabIndex={deleted ? -1 : 0} onClick={() => { if (!deleted) setActive(index) }} onKeyDown={(e) => { if (deleted) return; if (e.key === 'enter') setActive(index); if (e.key === 'backspace' || e.key === 'delete') { e.preventDefault(); update(index, '') } }} style={{ cursor: deleted ? 'default' : 'text' }}><NoteBlock width={docWidth} body={body} noteId={id} tasks={allTasks} /></div>}
           </div></div>)}
           <div key="append" style={{ display: 'flex', justifyContent: 'center', paddingTop: 24, paddingBottom: 48, minHeight: 96 }}>{!deleted && <div testId="note-add-block" style={{ width: '100%', minHeight: 48, cursor: 'text' }} onClick={() => { const next = [...blocks]; if (next[next.length - 1]?.trim()) { next[next.length - 1] = next[next.length - 1]!.replace(/\n*$/, '\n\n'); next.push('') }; setBlocks(next); session.edit({ body: next.join('') }); setActive(next.length - 1) }} />}</div>
         </virtual-list>
@@ -226,9 +230,7 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
         {!deleted && <div style={{ position: 'absolute', top: 14, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}><div style={{ pointerEvents: 'auto' }}>
           <Toolbar blockLabel={blockLabel(blocks[active ?? 0] ?? '')} outlineOn={outline} image={() => void insertImage()} disabled={deleted} active={active !== null} format={format} mark={mark} finish={finish} toggleOutline={() => display({ outline: !outline })} link={(label, href) => {
             const at = active ?? Math.max(0, blocks.length - 1)
-            const raw = blocks[at] ?? ''
-            const text = label.replace(/[\\[\]]/g, '\\$&')
-            update(at, `${raw.trimEnd()}${raw.trim() ? ' ' : ''}[${text}](${href.replaceAll(' ', '%20').replaceAll('(', '%28').replaceAll(')', '%29')})\n\n`)
+            editors.current.get(at)?.link(label, href.replaceAll(' ', '%20').replaceAll('(', '%28').replaceAll(')', '%29'))
             setActive(at)
           }} />
         </div></div>}

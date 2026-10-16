@@ -11,6 +11,7 @@ import { useTasks, refreshTasks } from '../tasks/store.ts'
 //
 // Completion uses the native UTF-16 selection and one undoable edit.
 import { FloatingLayer } from '@gpuix/react/floating'
+import { inlineTokenLabel } from '@/lib/inlineTokenLabel'
 import { useEffect, useMemo, useState } from 'react'
 import {
   fuzzyScore,
@@ -370,8 +371,11 @@ export function useCompletion({
 
   const tokens = [
     ...mentionRefs.map(r => ({ token: r.token, label: r.part.name })),
-    ...threadRefs.map(r => ({ token: r.token, label: r.token.slice(1) })),
-    ...[...mentioned].map(path => ({ token: `@${path}`, label: basename(path) })),
+    ...threadRefs.map(r => ({ token: r.token, label: inlineTokenLabel('thread', r.token) })),
+    ...[...mentioned].map(path => ({ token: `@${path}`, label: path })),
+    ...[...picked.values()].map(skill => skill.scope === 'plugin'
+      ? { token: `@${skill.display_name ?? skill.name}`, label: skill.display_name ?? skill.name }
+      : { token: `$${skill.name}`, label: skill.name }),
   ].filter(r => text.includes(r.token))
   return { menu, onKey, buildParts, reset, tokens, open: open && items.length > 0 }
 }

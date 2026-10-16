@@ -46,7 +46,7 @@ function imageSize(bytes: Uint8Array): { w: number; h: number } | null {
   return null
 }
 
-function NoteImage({ noteId, source, label, width }: { noteId: string; source: string; label: string; width: number }) {
+export function NoteImage({ noteId, source, label, width }: { noteId?: string; source: string; label: string; width: number }) {
   const t = useTheme()
   const [loaded, setLoaded] = useState<string | null>(source.startsWith('http') ? source : null)
   const [error, setError] = useState(false)

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useWindowSize } from '@gpuix/react'
 import { relativeTime } from '@/lib/format'
 import { Icon } from '../icons.tsx'
@@ -12,7 +12,6 @@ import { getClient } from '../state.ts'
 import { openThread } from '../nav/history.ts'
 import { Menu, MenuItem } from '../nav/overlay.tsx'
 import { useNotes, rpc as noteRpc } from '../notes/store.ts'
-import { openLink } from '../notes/NoteEditor.tsx'
 import { Button } from '../settings/controls.tsx'
 import { CriterionRow, DescriptionEditor, TitleField } from './Content.tsx'
 import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
@@ -25,8 +24,6 @@ import { openTask, taskTyping, setTasks, updateTask } from './store.ts'
 
 export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: string[] }) {
   const t = useTheme()
-  // `.tk-desc .note-prose`: 15/24 prose at 86% ink, inline code at 0.833em.
-  const descTheme = useMemo(() => { const base = cachedMarkdownTheme(t); return { ...base, text: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.86)' : 'rgba(13, 13, 13, 0.86)', metrics: { ...base.metrics, mdTextSize: 15, mdLineHeight: 24, codeTextSize: 12.5 } } }, [t])
   const availableNotes = useNotes((s) => s.notes)
   const [editing, setEditing] = useState(false)
   const edit = useTaskAutosave(task)
@@ -90,22 +87,7 @@ export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: strin
         <virtual-list testId="task-detail" style={{ flexGrow: 1, minWidth: 0, minHeight: 0 }}>
           <div key="content" style={{ ...padding, paddingTop: 48, display: 'flex', flexDirection: 'column', gap: 14 }}>
             <TitleField value={edit.title} saved={task.title} onChange={edit.editTitle} onCommit={() => void edit.flush()} onEnter={() => setEditing(true)} />
-            {editing ? (
-              <DescriptionEditor value={description} onChange={changeDescription} onCommit={() => void edit.flush()} onExit={() => setEditing(false)} />
-            ) : (
-              <div testId="task-desc" onClick={() => setEditing(true)} style={{ display: 'flex', flexDirection: 'column', minHeight: 24, cursor: 'text' }}>
-                {description.trim() ? (
-                  <markdown
-                    theme={descTheme}
-                    source={description}
-                    onLinkClick={(e) => { if (e.value) openLink(e.value) }}
-                    style={{ color: ink(t, 0.86), fontSize: 15, userSelect: 'text' }}
-                  />
-                ) : (
-                  <Label color={k.fg3} size={15} lineHeight={24}>Add a description…</Label>
-                )}
-              </div>
-            )}
+            <DescriptionEditor value={description} onChange={changeDescription} onCommit={() => void edit.flush()} onExit={() => setEditing(false)} onFocus={beginEdit} focus={editing} />
             {edit.conflict && <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Label color={t.red} size={12}>This task changed elsewhere.</Label><Button testId="task-use-theirs" onClick={edit.useTheirs}>Use theirs</Button><Button testId="task-keep-mine" onClick={edit.keepMine}>Keep mine</Button></div>}
             {edit.error && !edit.conflict && <Label color={t.red} size={12}>{edit.error}</Label>}
           </div>
