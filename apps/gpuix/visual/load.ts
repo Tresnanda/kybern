@@ -78,7 +78,10 @@ export async function loadGpuixEntries(): Promise<Record<string, ScreenEntry>> {
 
 export async function loadAreaFixtures(): Promise<Record<string, AreaFixture>> {
   const out: Record<string, AreaFixture> = {}
+  // Focused parity lanes can reuse a seeded daemon without unrelated RPC proxies.
+  const areas = process.env.GPUIX_VISUAL_AREAS?.split(',')
   for (const f of readdirSync(dir).filter((x) => /^fixture\..+\.ts$/.test(x)).sort()) {
+    if (areas && !areas.includes(f.slice('fixture.'.length, -'.ts'.length))) continue
     out[f.slice('fixture.'.length, -'.ts'.length)] = await import(path.join(dir, f))
   }
   return out
