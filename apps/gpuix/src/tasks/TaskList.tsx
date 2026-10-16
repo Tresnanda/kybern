@@ -135,13 +135,11 @@ export const TaskRow = memo(function TaskRow({
   sequence,
   project,
   card = false,
-  lines = 1,
 }: {
   task: TaskItem
   sequence: string[]
   project: string
   card?: boolean
-  lines?: number
 }) {
   const t = useTheme()
   const renderer = useGpuixRequired()
@@ -173,7 +171,7 @@ export const TaskRow = memo(function TaskRow({
           aria-label={`${task.key} ${task.title}`}
           onFocus={() => setTasks({ focused: task.id })}
           onMouseEnter={() => setHover(true)}
-          onMouseLeave={(e) => { setHover(false); if (draggable) trackTaskDrag(e); endPendingDrag() }}
+          onMouseLeave={(e) => { setHover(false); if (draggable) trackTaskDrag(e, true); endPendingDrag() }}
           onMouseDown={(e) => beginTaskDrag(task.id, e, renderer, sequence, draggable)}
           onMouseMove={draggable ? (e) => trackTaskDrag(e) : undefined}
           onMouseUp={endTaskDrag}
@@ -182,7 +180,7 @@ export const TaskRow = memo(function TaskRow({
             if (e.modifiers?.cmd || e.modifiers?.ctrl || e.modifiers?.shift) pick(task.id, sequence, !!e.modifiers?.shift)
             else openTask(task.id)
           }}
-          style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: cardHeight(task, lines) - 8, paddingTop: 11, paddingBottom: 12, paddingLeft: 12, paddingRight: 12, borderRadius: 10, backgroundColor: fill, userSelect: 'none', opacity: dragOpacity, boxShadow: dark ? { offsetX: 0, offsetY: raised ? 6 : 1, blurRadius: raised ? 18 : 2, spreadRadius: raised ? -6 : 0, color: raised ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.25)' } : { offsetX: 0, offsetY: raised ? 4 : 1, blurRadius: raised ? 14 : 2, spreadRadius: raised ? -4 : 0, color: raised ? 'rgba(0, 0, 0, 0.12)' : 'rgba(0, 0, 0, 0.05)' }, borderWidth: dark ? 0 : 0.5, borderColor: 'rgba(0, 0, 0, 0.09)', ...(focused ? { borderWidth: 1.5, borderColor: ink(t, 0.14) } : {}) }}
+          style={{ position: 'relative', display: 'flex', flexDirection: 'column', flexShrink: 0, paddingTop: 11, paddingBottom: 12, paddingLeft: 12, paddingRight: 12, borderRadius: 10, backgroundColor: fill, userSelect: 'none', opacity: dragOpacity, boxShadow: dark ? { offsetX: 0, offsetY: raised ? 6 : 1, blurRadius: raised ? 18 : 2, spreadRadius: raised ? -6 : 0, color: raised ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.25)' } : { offsetX: 0, offsetY: raised ? 4 : 1, blurRadius: raised ? 14 : 2, spreadRadius: raised ? -4 : 0, color: raised ? 'rgba(0, 0, 0, 0.12)' : 'rgba(0, 0, 0, 0.05)' }, borderWidth: dark ? 0 : 0.5, borderColor: 'rgba(0, 0, 0, 0.09)', ...(focused ? { borderWidth: 1.5, borderColor: ink(t, 0.14) } : {}) }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, height: 16, flexShrink: 0 }}>
             <ProjectDot projectId={task.scope === 'project' ? task.project_id ?? null : null} />
@@ -216,7 +214,7 @@ export const TaskRow = memo(function TaskRow({
           flexDirection: card ? 'column' : 'row',
           alignItems: card ? 'stretch' : 'center',
           minHeight: card ? 114 : 40,
-          height: card ? cardHeight(task) - 8 : 40,
+          height: 40,
           paddingLeft: card ? 12 : 20,
           paddingRight: card ? 12 : 20,
           paddingTop: card ? 8 : 0,
@@ -255,7 +253,7 @@ export const TaskRow = memo(function TaskRow({
             onMouseDown={(e) => beginTaskDrag(task.id, e, renderer, sequence, draggable)}
             onMouseMove={draggable ? (e) => trackTaskDrag(e) : undefined}
             onMouseUp={endTaskDrag}
-            onMouseLeave={(e) => { if (draggable) trackTaskDrag(e); endPendingDrag() }}
+            onMouseLeave={(e) => { if (draggable) trackTaskDrag(e, true); endPendingDrag() }}
             onClick={(e) => {
               if (taskDragConsumesClick()) return
               if (e.modifiers?.cmd || e.modifiers?.ctrl || e.modifiers?.shift) pick(task.id, sequence, !!e.modifiers?.shift)
@@ -374,30 +372,11 @@ export function TaskBoard({
               ...(quick?.status === column.status
                 ? [{ key: `quick:${quick.nonce}`, height: 96, pinned: true, render: () => <QuickAdd request={quick} card /> }]
                 : []),
-              ...column.tasks.map((task) => {
-                const lines = titleLines(task.title, columnWidth - 24)
-                return { key: task.id, height: cardHeight(task, lines), render: () => <TaskRow task={task} sequence={sequence} project={projectName(task)} card lines={lines} /> }
-              }),
+              ...column.tasks.map((task) => ({ key: task.id, height: 71, intrinsic: true, render: () => <TaskRow task={task} sequence={sequence} project={projectName(task)} card /> })),
             ]}
           />
         </div>
       ))}
     </div>
   )
-}
-
-/** 11 + 16 + 6 + the title's lines + 12 (+ 26 for an agent's line) + the 8px gap. */
-function cardHeight(task: TaskItem, lines = 1) {
-  return 45 + 18 * lines + (latestRun(task) && (task.status === 'running' || task.status === 'needs_review') ? 26 : 0) + 8
-}
-/** Lines a 13px title takes in a card text width (about 6.1px a character on average). */
-function titleLines(title: string, width: number): number {
-  const per = Math.max(8, Math.floor(width / 6.1))
-  let lines = 1
-  let used = 0
-  for (const word of (title || 'Untitled').split(/\s+/)) {
-    const need = word.length + (used ? 1 : 0)
-    if (used && used + need > per) { lines++; used = word.length } else used += need
-  }
-  return lines
 }

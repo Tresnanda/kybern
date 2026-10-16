@@ -7,7 +7,7 @@ import { addWindowKeyHandler } from '../nav/keys.ts'
 import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { openTask, pick, setTasks, taskState, updateTask } from './store.ts'
 
-import { usePacing } from '../drag/pacing.ts'
+import { recordDragPointer, usePacing } from '../drag/pacing.ts'
 import { DragGhost, type Rect, type Settle } from '../drag/Ghost.tsx'
 import { createShiftStore } from '../drag/shift.tsx'
 import { leftCapture } from '../drag/leave.ts'
@@ -44,13 +44,13 @@ type Drag = {
   /** The RPC of a drop is still in flight. */
   saving: boolean
 }
-type ScrollList = { node: PublicInstance; count: number; mount?: (index: number) => void; heights: number[] }
+type ScrollList = { node: PublicInstance; count: number; mount?: (index: number) => void; heights: number[]; viewport?: PublicInstance | null }
 const scrollLists = new Map<number, ScrollList>()
 let dragRenderer: NativeRenderer | null = null
 /** `mount` mounts the rows around an index; edge scrolling calls it first, because a native scroll does not report a new visible range until a later frame. */
-export function taskScrollRef(node: PublicInstance | null, previous: PublicInstance | null, count: number, mount?: (index: number) => void, heights: number[] = []) {
+export function taskScrollRef(node: PublicInstance | null, previous: PublicInstance | null, count: number, mount?: (index: number) => void, heights: number[] = [], viewport?: PublicInstance | null) {
   if (previous) scrollLists.delete(previous.id)
-  if (node) scrollLists.set(node.id, { node, count, mount, heights })
+  if (node) scrollLists.set(node.id, { node, count, mount, heights, viewport })
 }
 const rows = new Map<string, PublicInstance>()
 const slots = new Map<string, PublicInstance>()
@@ -79,6 +79,7 @@ export function taskDragConsumesClick() {
   return suppressTaskClick || !!current?.active
 }
 export function endTaskDrag() {
+  debugDrag('release')
   stopWatchingRelease()
   pending = null
   releaseDrag()
@@ -103,6 +104,7 @@ export const cancelTaskDrag = () => {
 }
 /** Release the held item without a drop: it springs back to where it was picked up. */
 export function escapeTaskDrag() {
+  debugDrag('cancel')
   stopWatchingRelease()
   pending = null
   if (!current) return
@@ -119,6 +121,10 @@ const subscribe = (fn: () => void) => {
  * hides it completely while the overlay returns, then restores its opacity. */
 export function useTaskDragOpacity(id: string) {
   return useSyncExternalStore(subscribe, () => current?.active && current.id === id ? current.settle ? 0 : 0.35 : 1)
+}
+/** Keep the pressed host alive if the React mount window scrolls past it. */
+export function useHeldTask() {
+  return useSyncExternalStore(subscribe, () => current?.active ? current.id : null)
 }
 export function rowRef(id: string, node: PublicInstance | null) {
   if (node) rows.set(id, node)
@@ -162,7 +168,7 @@ function measureTargets(renderer: NativeRenderer, sequence: string[]) {
   for (const [key, node] of slots) {
     if (!taskState().tasks[key]) continue
     const b = renderer.getElementBounds?.(node.id)
-    if (b && b.height > 0 && b.y >= frame.y && b.y < frame.y + frame.height) boxes.set(key, board ? { ...b, height: b.height - 8 } : b)
+    if (b && b.height > 0 && b.y + b.height > frame.y && b.y < frame.y + frame.height) boxes.set(key, board ? { ...b, height: b.height - 8 } : b)
   }
   // A status header may be above the mounted range. Its visible rows still form a drop region.
   if (taskState().prefs.view === 'list') {
@@ -185,6 +191,7 @@ function measureTargets(renderer: NativeRenderer, sequence: string[]) {
   return { regions: visible, rows: boxes }
 }
 export function beginTaskDrag(id: string, event: EventPayload, renderer: NativeRenderer, sequence: string[], draggable = true) {
+  debugDrag('press', event)
   if (event.button !== 0 || event.x === undefined || event.y === undefined) return
   suppressTaskClick = false
   if (!draggable) return
@@ -193,6 +200,8 @@ export function beginTaskDrag(id: string, event: EventPayload, renderer: NativeR
   // A drag still landing is finished at once; the new press owns the pointer.
   if (current) cancelTaskDrag()
   ghostLanded = false
+  scrollPx = null
+  scrollingList = null
   dragRenderer = renderer
   const box = targets.rows.get(id)
   const board = taskState().prefs.view === 'board'
@@ -218,15 +227,18 @@ export function beginTaskDrag(id: string, event: EventPayload, renderer: NativeR
   }
   watchRelease()
 }
-export function trackTaskDrag(event: EventPayload) {
+export function trackTaskDrag(event: EventPayload, leaving = false) {
+  // GPUI's physical leftMouseDragged stream can stay on the pressed row after
+  // the window capture layer mounts. Forward it just like trackProjectDrag.
+  if (current) return move(event)
   if (!pending) return
-  if (event.pressedButton !== 0) {
+  if (event.pressedButton != null && event.pressedButton !== 0) {
     endPendingDrag()
     return
   }
   const x = event.x ?? pending.x,
     y = event.y ?? pending.y
-  if (Math.hypot(x - pending.startX, y - pending.startY) < 5) return
+  if (!leaving && Math.hypot(x - pending.startX, y - pending.startY) < 5) return
   suppressTaskClick = true
   current = pending
   pending = null
@@ -284,18 +296,27 @@ function sourceIds(drag: Drag) {
 /** Layout is measured at press and after an auto-scroll step, not on every pointer move (each measure is a native call per row). */
 function move(event: EventPayload, remeasure = false) {
   if (!current || current.settle) return
-  if (event.pressedButton !== 0) return releaseDrag()
+  debugDrag('move', event)
+  // Leave/layout notifications can omit button state. Only a reported release
+  // ends capture; mouse-up and the physical release watcher own normal release.
+  if (event.pressedButton != null && event.pressedButton !== 0) return releaseDrag()
   if (dragRenderer && remeasure) {
     const targets = measureTargets(dragRenderer, current.sequence)
     if (targets) { current.regions = targets.regions; current.rows = targets.rows }
   }
   const x = event.x ?? current.x,
     y = event.y ?? current.y
+  if (current.active && x === current.x && y === current.y && !remeasure) return
+  recordDragPointer(`tasks-${taskState().prefs.view}`, x - current.grab.x, y - current.grab.y)
   velocity.push(x, y)
   const active = current.active || Math.hypot(x - current.startX, y - current.startY) >= 5
   const target = active ? resolveTarget(current, x, y) : null
   taskShift.set(target?.shifts ?? new Map())
   publish({ ...current, x, y, active, target })
+}
+function debugDrag(kind: string, event?: EventPayload) {
+  if (process.env.KYBERN_DEBUG_DRAG !== '1') return
+  console.error('[task-drag]', JSON.stringify({kind, event: event?.eventType, element: event?.elementId, button: event?.pressedButton, x:event?.x, y:event?.y, task:current?.id ?? pending?.id, active:current?.active, settling:!!current?.settle}))
 }
 /** Pointer-up or button released elsewhere: drop where the slot is, or return home. */
 function releaseDrag() {
@@ -344,25 +365,29 @@ function onGhostSettled() {
 }
 
 let scrollPx: number | null = null
+let scrollingList: number | null = null
 function scrollEdge(dt: number) {
   const drag = current
   if (!drag?.active || drag.settle || !dragRenderer || !isWindowVisible()) { scrollPx = null; return }
-  for (const { node, count, mount, heights } of scrollLists.values()) {
+  for (const { node, count, mount, heights, viewport: listViewport } of scrollLists.values()) {
     // A native virtual list reports no bounds of its own; the list view's viewport wrapper is the same rectangle.
-    const box = dragRenderer.getElementBounds?.(node.id) ?? (scrollLists.size === 1 && viewport ? dragRenderer.getElementBounds?.(viewport.id) : null)
+    const box = listViewport ? dragRenderer.getElementBounds?.(listViewport.id) : dragRenderer.getElementBounds?.(node.id)
     if (!box || drag.x < box.x || drag.x > box.x + box.width) continue
     const speed = edgeSpeed(drag.y, box.y, box.y + box.height)
     if (!speed) { scrollPx = null; return }
     const anchor = dragRenderer.getListScrollTop?.(node.id)
     if (!anchor) return
     const total = heights.reduce((a, b) => a + b, 0)
-    if (scrollPx === null) scrollPx = heights.slice(0, anchor[0] ?? 0).reduce((a, b) => a + b, 0) + (anchor[1] ?? 0)
+    if (scrollPx === null || scrollingList !== node.id) scrollPx = heights.slice(0, anchor[0] ?? 0).reduce((a, b) => a + b, 0) + (anchor[1] ?? 0)
+    scrollingList = node.id
     scrollPx = Math.max(0, Math.min(Math.max(0, total - box.height), scrollPx + speed * dt))
     let index = 0, rest = scrollPx
     while (index < count - 1 && rest >= (heights[index] ?? 40)) { rest -= heights[index] ?? 40; index++ }
     mount?.(index)
-    dragRenderer.scrollToItem?.(node.id, index, rest)
+    // The preceding scroll is painted now. Read those boxes before queuing the
+    // next scroll: scrollToItem does not synchronously update layout bounds.
     move({ elementId: node.id, eventType: 'mouseMove', x: drag.x, y: drag.y, pressedButton: 0 }, true)
+    dragRenderer.scrollToItem?.(node.id, index, rest)
     return
   }
 }
@@ -383,7 +408,7 @@ function Hint({ action, color }: { action: 'move' | 'send' | 'none'; color: stri
 /** Transparent root capture, like SidebarDragLayer; only this small overlay tracks pointer moves. */
 export function TasksDragLayer() {
   const t = useTheme()
-  const pacing = usePacing('tasks')
+  const pacing = usePacing(`tasks-${taskState().prefs.view}`)
   const drag = useSyncExternalStore(subscribe, () => current)
   const settling = useRef(false)
   useEffect(
@@ -405,7 +430,7 @@ export function TasksDragLayer() {
       testId="task-drag-layer"
       onMouseMove={(event) => move(event)}
       onMouseUp={endTaskDrag}
-      onMouseLeave={(event) => { if (leftCapture(event, dragRenderer)) escapeTaskDrag() }}
+      onMouseLeave={(event) => { const left = leftCapture(event, dragRenderer); debugDrag(left ? 'leave-capture' : 'leave-child', event); if (left) escapeTaskDrag() }}
       style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: drag.settle ? 'none' : 'auto', cursor: drag.active ? 'grabbing' : 'pointer' }}
     >
       {!drag.settle && <EdgeScroll />}
