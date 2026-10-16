@@ -34,7 +34,7 @@ export async function connectEnvironment(id: string) {
     profile.url = `ws://127.0.0.1:${port}/ws`
     profile.ssh.local_port = port
   }
-  const endpoint = profileEndpoint(profile)
+  const endpoint = profile.id === 'local' && !process.env.KYBERN_URL ? null : profileEndpoint(profile)
   const registry = readRegistry()
   writeRegistry({ ...registry, selected_id: id, environments: registry.environments.map(saved => saved.id === profile.id ? profile : saved) })
   stopSshTunnels(id)
@@ -103,8 +103,8 @@ export function forgetEnvironment(id: string) {
 /** GPUIX 0.10.0 has one native window per renderer/process. */
 export function openEnvironmentWindow(id: string) {
   profileById(id)
-  const child = spawn(process.execPath, [fileURLToPath(new URL('../main.tsx', import.meta.url))], { detached: true, stdio: 'ignore', env: { ...process.env, KYBERN_GPUIX_ENVIRONMENT: id, KYBERN_GPUIX_THREAD: '' } })
-  child.on('error', () => {})
+  const child = spawn(process.execPath, process.env.KYBERN_GPUIX_RESOURCES ? [] : [fileURLToPath(new URL('../main.tsx', import.meta.url))], { detached: true, stdio: 'ignore', env: { ...process.env, KYBERN_GPUIX_ENVIRONMENT: id, KYBERN_GPUIX_THREAD: '' } })
+  child.on('error', () => { void import('../shell/toasts.tsx').then(({ toast }) => toast.error('Unable to open a new window. Reopen Kybern and try again.')) })
   child.unref()
   return child.pid
 }

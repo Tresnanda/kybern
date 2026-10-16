@@ -20,12 +20,16 @@ import { toast } from './toasts.tsx'
 const DONE_MS = 6000
 
 let started = false
+let owner: ReturnType<typeof getClient> = null
 let stops: (() => void)[] = []
 /** Follow the daemon's events. Called once by the app shell, after `startLive()`. */
 export function startAgentToasts() {
-  if (started) return
   const client = getClient()
   if (!client) return
+  if (started && owner === client) return
+  for (const stop of stops) stop()
+  stops = []
+  owner = client
   started = true
   const startedAt = Date.now()
   const announced = new Map<ThreadId, number>()

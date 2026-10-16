@@ -16,7 +16,7 @@ const state = await import('../state.ts')
 const { switchEnvironment, activeEnvironment } = await import('../shell/environment.ts')
 const result = (id: string, seq: number) => ({ thread: { id, last_seq: seq }, transcript: [], pending_approvals: [], pending_questions: [], notes: '' }) as unknown as ThreadsGetResult
 function resolve(id: string, seq: number) { const item = pending.findIndex(p => p.id === id); assert.ok(item >= 0); pending.splice(item, 1)[0]!.resolve(result(id, seq)) }
-state.connect()
+await state.connect()
 state.createPane('two')
 const a = state.selectPaneThread('main', 'a'), b = state.selectPaneThread('two', 'b')
 resolve('b', 20); await b; resolve('a', 10); await a

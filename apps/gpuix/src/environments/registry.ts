@@ -12,7 +12,6 @@ export interface EnvironmentProfile {
 export interface Registry { selected_id: string; environments: EnvironmentProfile[] }
 export const localDataDir = process.env.KYBERN_DATA_DIR ?? path.join(homedir(), '.kybern')
 const configuredUrl = process.env.KYBERN_URL
-const configuredToken = process.env.KYBERN_TOKEN
 export const localProfile: EnvironmentProfile = { id: 'local', name: process.env.KYBERN_ENVIRONMENT_NAME ?? (configuredUrl ? 'Configured environment' : 'This Mac'), local: !configuredUrl, url: configuredUrl }
 export const configDir = () => process.env.KYBERN_CLIENT_CONFIG_DIR ?? path.join(homedir(), 'Library/Application Support/dev.kybern.desktop')
 export function readRegistry(): Registry {
@@ -41,7 +40,11 @@ export function profileById(id: string) {
 }
 export function profileEndpoint(profile: EnvironmentProfile): Endpoint {
   if (profile.id === 'local') {
-    if (configuredUrl && configuredToken) return { url: normalizeDaemonUrl(configuredUrl), token: configuredToken }
+    const configuredUrl = process.env.KYBERN_URL, configuredToken = process.env.KYBERN_TOKEN
+    if (configuredUrl) {
+      if (!configuredToken) throw Error('Set KYBERN_TOKEN for the daemon configured by KYBERN_URL')
+      return { url: normalizeDaemonUrl(configuredUrl), token: configuredToken }
+    }
     const port = readFileSync(path.join(localDataDir, 'daemon.port'), 'utf8').trim()
     const token = readFileSync(path.join(localDataDir, 'daemon.token'), 'utf8').trim()
     return { url: `ws://127.0.0.1:${port}/ws`, token }

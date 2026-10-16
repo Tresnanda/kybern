@@ -6,7 +6,9 @@ import { nativeCapabilities, type InputSelection } from './native/api.ts'
 export { useComposerOverlayHeight, useMeasureComposerOverlay } from './composer/height.ts'
 import { useMeasureComposerOverlay } from './composer/height.ts'
 import { createCoordinatorStarter } from '../../../packages/kybern-client/src/coordinator.ts'
-import { openThread } from './nav/history.ts'
+import { goPage, openThread } from './nav/history.ts'
+import { setNav } from './nav/store.ts'
+import { N } from './nav/glyphs.ts'
 import { activeEnvironment } from './shell/environment.ts'
 import { Tip } from './nav/overlay.tsx'
 import { onEnvironmentChange, onEnvironmentLeaving } from './shell/environment.ts'
@@ -422,7 +424,17 @@ export function ComposerView(input: ComposerViewProps) {
     provider: provider ?? undefined,
     currentThreadId: props.currentThreadId,
     attachments: attachmentRefs,
-    commands: [{ name: 'attach', hint: 'Attach files or images', icon: G.paperclip, run: () => void addFiles() }],
+    commands: [
+      ...(!props.currentThreadId ? [
+        { name: 'resume', hint: 'Continue a saved session', icon: G.clock, run: () => setNav({ sessions: { projectId: props.projectId ?? null } }) },
+        { name: 'sessions', hint: 'Browse saved sessions', icon: G.clock, run: () => setNav({ sessions: { projectId: props.projectId ?? null } }) },
+      ] : []),
+      { name: 'attach', hint: 'Attach files or images', icon: G.paperclip, run: () => void addFiles() },
+      ...(!props.currentThreadId ? [
+        { name: 'settings', hint: 'Open settings', icon: N.settings, run: () => setNav({ settingsOpen: true }) },
+        { name: 'usage', hint: 'Review token usage and cost', icon: N.usage, run: () => goPage('usage') },
+      ] : []),
+    ],
   })
 
   // Scope approval shortcuts strictly to this editor. Native events cannot

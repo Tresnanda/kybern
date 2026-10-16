@@ -23,15 +23,16 @@ import { ink, Label, LOGO_SVG, REDUCED_MOTION, useTheme } from '../ui.tsx'
 
 
 /** Reconnect after the transport gave up: a fresh client re-reads the port and token (the daemon may have restarted). */
-export function reconnect() {
+export async function reconnect() {
   const reopen = getState().selectedId
   resetClient()
   set({ status: 'connecting', statusDetail: null })
-  connect()
+  await connect()
   const client = getClient()
   if (!client) return
   restartLive()
   if (!reopen) return
+  if (client.status === 'open') { void selectThread(reopen); return }
   const stop = client.onStatus((status) => {
     if (status !== 'open') return
     stop()

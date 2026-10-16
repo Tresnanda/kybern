@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { VT } from './vt.ts'
-import { terminalKey, terminalPaste } from './keys.ts'
+import { terminalKey, terminalPaste, terminalMouse } from './keys.ts'
 describe('bounded terminal', () => {
   test('carriage return, fragmented CSI, cursor and erase preserve text', () => {
     const vt = new VT(20, 3)
@@ -131,4 +131,57 @@ test('restoring a saved cursor does not mutate its saved color', () => {
   const vt = new VT(10, 2)
   vt.write('\x1b[31m\x1b7\x1b8\x1b[32mX\x1b8R')
   expect(vt.runs(vt.screen[0]!)[0]!.style.fg).toBe(1)
+})
+
+test('modified terminal keys preserve xterm control and function sequences', () => {
+  const modifiers = { cmd: false, ctrl: true, alt: false, shift: false }
+  expect(terminalKey({ key: 'space', modifiers })).toBe('\0')
+  expect(terminalKey({ key: 'c', modifiers: { ...modifiers, alt: true } })).toBe('\x1b\x03')
+  expect(terminalKey({ key: '3', modifiers })).toBe('\x1b')
+  expect(terminalKey({ key: '8', modifiers })).toBe('\x7f')
+  expect(terminalKey({ key: 'pageup', modifiers })).toBe('\x1b[5;5~')
+  expect(terminalKey({ key: 'f1', modifiers: { ...modifiers, ctrl: false, shift: true } })).toBe('\x1b[1;2P')
+  expect(terminalKey({ key: 'f5', modifiers: { ...modifiers, ctrl: false, alt: true } })).toBe('\x1b[15;3~')
+})
+
+test('mouse protocols preserve coordinates, release, drag, hover and Shift selection override', () => {
+  const vt = new VT(300, 4)
+  const event = { kind: 'down' as const, button: 0, column: 10, row: 2 }
+  expect(terminalMouse(event, vt)).toBeNull()
+  vt.write('\x1b[?1000;1006h')
+  expect(terminalMouse(event, vt)).toBe('\x1b[<0;11;3M')
+  expect(terminalMouse({ ...event, kind: 'up' }, vt)).toBe('\x1b[<0;11;3m')
+  expect(terminalMouse({ ...event, kind: 'move' }, vt)).toBeNull()
+  expect(terminalMouse({ ...event, modifiers: { shift: true } }, vt)).toBeNull()
+  expect(terminalMouse({ ...event, kind: 'wheel', deltaY: 3 }, vt)).toBe('\x1b[<64;11;3M')
+  expect(terminalMouse({ ...event, kind: 'wheel', deltaY: -3, modifiers: { ctrl: true, alt: true } }, vt)).toBe('\x1b[<89;11;3M')
+  vt.write('\x1b[?1002h')
+  expect(terminalMouse({ ...event, kind: 'move' }, vt)).toBe('\x1b[<32;11;3M')
+  expect(terminalMouse({ ...event, kind: 'move', button: undefined }, vt)).toBeNull()
+  vt.write('\x1b[?1003h')
+  expect(terminalMouse({ ...event, kind: 'move', button: undefined }, vt)).toBe('\x1b[<35;11;3M')
+  vt.write('\x1b[?1006l')
+  expect(terminalMouse(event, vt)).toBe('\x1b[M' + String.fromCharCode(32, 43, 35))
+  expect(terminalMouse({ ...event, kind: 'up' }, vt)).toBe('\x1b[M' + String.fromCharCode(35, 43, 35))
+  expect(terminalMouse({ ...event, column: 240 }, vt)).toBeNull()
+  vt.write('\x1b[?1005h')
+  expect(terminalMouse({ ...event, column: 240 }, vt)).toBe('\x1b[M' + String.fromCodePoint(32, 273, 35))
+  vt.write('\x1b[?1015h')
+  expect(terminalMouse(event, vt)).toBe('\x1b[32;11;3M')
+  vt.write('\x1b[?1004h\x1bc')
+  expect(vt.mouseTracking).toBe(0)
+  expect(vt.focusReporting || vt.mouseSgr || vt.mouseUtf8 || vt.mouseUrxvt).toBe(false)
+})
+
+test('initial terminal fit preserves replay above the cursor instead of dropping it', () => {
+  const vt = new VT(80, 24)
+  vt.write('First replayed line\r\nSecond replayed line')
+  vt.resize(80, 20)
+  expect(vt.screen[0]!.chars.join('')).toBe('First replayed line')
+  expect(vt.screen[1]!.chars.join('')).toBe('Second replayed line')
+  expect(vt.history).toHaveLength(0)
+  vt.write('\x1b[20;1Hbottom')
+  vt.resize(80, 18)
+  expect(vt.history).toHaveLength(2)
+  expect(vt.screen[17]!.chars.join('')).toBe('bottom')
 })

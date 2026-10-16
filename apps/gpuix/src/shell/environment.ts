@@ -5,6 +5,9 @@ import { ensureSshTunnel, stopSshTunnels } from '../environments/ssh.ts'
 import { useSyncExternalStore } from 'react'
 import type { Endpoint } from '../../../../packages/kybern-client/src/client.ts'
 import { localDataDir, localProfile, profileById, profileEndpoint, readRegistry } from '../environments/registry.ts'
+import { createLocalDaemonResolver } from './daemon.ts'
+
+const resolveLocalDaemon = createLocalDaemonResolver({ root: localDataDir, port: process.env.KYBERN_PORT })
 
 export interface Environment { id: string; name: string; local: boolean; endpoint: Endpoint | null; dataDir: string; revision: number }
 function initial(): Environment {
@@ -24,6 +27,7 @@ export const activeEnvironment = () => active
 export const environmentKey = () => active.id === 'local' ? process.env.KYBERN_URL || active.dataDir : active.id
 export const environmentEndpoint = () => {
   const profile = profileById(active.id)
+  if (profile.id === 'local' && !process.env.KYBERN_URL) return resolveLocalDaemon()
   if (profile.ssh) return ensureSshTunnel(profile.id, profile.ssh).then(port => {
     profile.url = `ws://127.0.0.1:${port}/ws`
     return profileEndpoint(profile)

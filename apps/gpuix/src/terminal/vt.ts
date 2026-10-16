@@ -14,6 +14,7 @@ export class VT {
   history: Line[] = []
   pens: Pen[] = [{}]
   x = 0; y = 0; title = ''; cursorVisible = true; bracketedPaste = false; applicationCursor = false
+  mouseTracking = 0; mouseSgr = false; mouseUtf8 = false; mouseUrxvt = false; focusReporting = false
   private pen: Pen = {}; private style = 0; private penIds = new Map<string, number>([['{}', 0]])
   private sequence = ''; private mode: 'text' | 'esc' | 'csi' | 'osc' | 'oscEsc' | 'charset' | 'ignore' | 'ignoreEsc' = 'text'
   private saved: [number, number, Pen] = [0, 0, {}]
@@ -26,7 +27,12 @@ export class VT {
   resize(cols: number, rows: number) {
     cols = Math.max(2, Math.min(512, Math.floor(cols))); rows = Math.max(2, Math.min(200, Math.floor(rows)))
     if (cols === this.cols && rows === this.rows) return
-    while (this.screen.length > rows) { const line = this.screen.shift()!; if (!this.alternate) this.remember(line); this.y-- }
+    // Fit may run immediately after replay. Remove rows below the cursor first;
+    // shifting every removed row discarded fresh output at the top of the pane.
+    while (this.screen.length > rows) {
+      if (this.y < this.screen.length - 1) this.screen.pop()
+      else { const line = this.screen.shift()!; if (!this.alternate) this.remember(line); this.y-- }
+    }
     while (this.screen.length < rows) this.screen.push(blank())
     this.cols = cols; this.rows = rows; this.bottom = rows - 1; this.top = 0
     this.x = Math.min(this.x, cols - 1); this.y = Math.max(0, Math.min(this.y, rows - 1))
@@ -128,6 +134,11 @@ export class VT {
       if (mode === 7) this.wrap = on
       if (mode === 1) this.applicationCursor = on
       if (mode === 2004) this.bracketedPaste = on
+      if ([9, 1000, 1002, 1003].includes(mode)) this.mouseTracking = on ? mode : 0
+      if (mode === 1004) this.focusReporting = on
+      if (mode === 1005) this.mouseUtf8 = on
+      if (mode === 1006) this.mouseSgr = on
+      if (mode === 1015) this.mouseUrxvt = on
       if (mode === 1049 || mode === 1047 || mode === 47) {
         if (on && !this.normal) { this.normal = { screen: this.screen, x, y, top: this.top, bottom: this.bottom, pen: mode === 1049 ? { ...this.pen } : undefined }; this.screen = mode === 47 && this.alternateBuffer ? this.alternateBuffer : Array.from({ length: this.rows }, blank); while (this.screen.length < this.rows) this.screen.push(blank()); this.screen.length = this.rows; this.x = this.y = this.top = 0; this.bottom = this.rows - 1 }
         else if (!on && this.normal) { const normal = this.normal; this.alternateBuffer = mode === 47 ? this.screen : undefined; this.normal = undefined; this.screen = normal.screen; if (normal.pen) { this.pen = normal.pen; this.setPen() }; this.x = normal.x; this.y = normal.y; this.top = Math.min(normal.top, this.rows - 2); this.bottom = Math.max(this.top + 1, Math.min(normal.bottom, this.rows - 1)); this.x = Math.min(this.x, this.cols - 1); while (this.screen.length < this.rows) this.screen.push(blank()); this.screen.length = this.rows; this.y = Math.min(this.y, this.rows - 1) }
@@ -149,7 +160,7 @@ export class VT {
         else if (char === ']') this.mode = 'osc'
         else if ('P^_'.includes(char)) this.mode = 'ignore'
         else if ('()*+'.includes(char)) this.mode = 'charset'
-        else { this.mode = 'text'; if (char === '7') this.saved = [this.x, this.y, { ...this.pen }]; else if (char === '8') this.restoreCursor(); if (char === 'D') this.linefeed(); if (char === 'E') { this.x = 0; this.linefeed() }; if (char === 'M') { if (this.y === this.top) this.scroll(false); else this.y = Math.max(0, this.y - 1) }; if (char === 'c') { this.normal = undefined; this.alternateBuffer = undefined; this.top = 0; this.bottom = this.rows - 1; this.origin = this.insert = false; this.wrap = this.cursorVisible = true; this.applicationCursor = this.bracketedPaste = false; this.saved = [0, 0, {}]; this.screen = Array.from({ length: this.rows }, blank); this.x = this.y = 0; this.pen = {}; this.setPen() } }
+        else { this.mode = 'text'; if (char === '7') this.saved = [this.x, this.y, { ...this.pen }]; else if (char === '8') this.restoreCursor(); if (char === 'D') this.linefeed(); if (char === 'E') { this.x = 0; this.linefeed() }; if (char === 'M') { if (this.y === this.top) this.scroll(false); else this.y = Math.max(0, this.y - 1) }; if (char === 'c') { this.normal = undefined; this.alternateBuffer = undefined; this.top = 0; this.bottom = this.rows - 1; this.origin = this.insert = false; this.wrap = this.cursorVisible = true; this.applicationCursor = this.bracketedPaste = false; this.mouseTracking = 0; this.mouseSgr = this.mouseUtf8 = this.mouseUrxvt = this.focusReporting = false; this.saved = [0, 0, {}]; this.screen = Array.from({ length: this.rows }, blank); this.x = this.y = 0; this.pen = {}; this.setPen() } }
       } else if (this.mode === 'csi') {
         if (char >= '@' && char <= '~') { this.csi(char); this.mode = 'text'; this.sequence = '' }
         else if (this.sequence.length < 1024) this.sequence += char

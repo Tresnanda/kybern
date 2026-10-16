@@ -3,6 +3,9 @@ const resources = path.resolve(path.dirname(process.execPath), '../Resources')
 process.env.KYBERN_GPUIX_RESOURCES = resources
 process.env.NAPI_RS_NATIVE_LIBRARY_PATH = path.join(resources, 'gpuix-native.darwin-arm64.node')
 process.env.KYBERN_GPUIX_NATIVE = 'local'
+process.env.KYBERND ??= path.resolve(resources, '../MacOS/kybernd')
+process.env.KYBERN_BUNDLED_CLI ??= path.resolve(resources, '../MacOS/kybern')
+process.env.KYBERN_GPUIX_VERSION = (await Bun.file(path.join(resources, 'version')).text()).trim()
 await import('../src/main.tsx')
 if (process.env.KYBERN_GPUIX_NOTIFICATION_TEST === '1') {
   const { notifications } = await import('../src/native/notifications.ts')

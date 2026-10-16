@@ -255,6 +255,7 @@ function persistPrefs() {
 process.on('exit', () => pendingPrefs?.())
 
 let started = false
+let owner: ReturnType<typeof getClient> = null
 let limitsTimer: ReturnType<typeof setInterval> | undefined
 /** Follow a fresh client after a reconnect (`shell/connection.ts`). */
 export function restartLive() {
@@ -264,9 +265,11 @@ export function restartLive() {
 
 /** Start following the daemon. Called once by the app shell, after `connect()`. */
 export function startLive() {
-  if (started) return
   const client = getClient()
   if (!client) return
+  if (started && owner === client) return
+  if (started) stopLive()
+  owner = client
   started = true
 
   const prefs = readPrefs()
@@ -303,6 +306,6 @@ function stopLive() {
   stops = []
   clearTimeout(prefsTimer); pendingPrefs?.(); pendingPrefs = undefined
   clearTimeout(activityTimer); clearInterval(limitsTimer); limitsTimer = undefined
-  started = false; lastPrefs = ''; childLoads.clear(); archived.clear()
+  started = false; owner = null; lastPrefs = ''; childLoads.clear(); archived.clear()
 }
 onEnvironmentChange(stopLive, -100)

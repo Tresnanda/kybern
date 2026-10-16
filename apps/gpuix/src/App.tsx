@@ -103,11 +103,14 @@ function Workspace() {
 
   useEffect(() => {
     startSplitView()
-    startLive()
-    startAgentToasts()
     startNavHistory()
     startPreview()
   }, [])
+  const connectionStatus = useApp(s => s.status)
+  useEffect(() => {
+    startLive()
+    startAgentToasts()
+  }, [connectionStatus])
 
   return (
     <div
