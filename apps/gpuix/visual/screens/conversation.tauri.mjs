@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import path from 'node:path'
 const settle = (p, ms = 700) => p.waitForTimeout(ms)
 const park = (p) => p.mouse.move(1275, 815)
-const open = async (p, title) => {
+export const open = async (p, title) => {
   if (title === 'Review cancellation') { await open(p, 'Native subagents'); await p.getByText(title, { exact: true }).first().click(); await settle(p, 1000); return }
   const slot = process.env.GPUIX_VISUAL_SLOT ?? createHash('sha1').update(path.resolve(import.meta.dirname, '../../../..')).digest('hex').slice(0, 8)
   const scratch = process.env.VISUAL_SCRATCH ?? `/Users/mymac/projects/ade-gpuix-scratch/visual-pair-${slot}`

@@ -58,8 +58,10 @@ if (flag('down')) { await down(); tauriWindowDown(); process.exit(0) }
 let state = await startDaemon(flag('fresh'))
 if (!state.seeded) { await seed(state); state = readState()! }
 if (!state.vitePid) {
+  // The brief exports NAPI_RS_NATIVE_LIBRARY_PATH for GPUIX; rolldown (Vite) would load that .node instead of its own binding and crash.
+  const { NAPI_RS_NATIVE_LIBRARY_PATH: _gpuixNative, ...viteEnv } = process.env
   const vitePort = await freePort()
-  const child = spawn('pnpm', ['exec', 'vite', '--port', String(vitePort), '--strictPort'], { cwd: desktop, stdio: 'ignore', detached: true })
+  const child = spawn('pnpm', ['exec', 'vite', '--port', String(vitePort), '--strictPort'], { cwd: desktop, stdio: 'ignore', detached: true, env: viteEnv })
   child.unref()
   for (let i = 0; i < 100; i++) { try { if ((await fetch(`http://localhost:${vitePort}/`)).ok) break } catch {} await Bun.sleep(200) }
   state = { ...state, vitePid: child.pid, vitePort }

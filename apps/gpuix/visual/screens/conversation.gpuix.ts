@@ -3,7 +3,7 @@ import { SCRATCH } from '../fixture.ts'
 import { park, settle, type Step } from '../screens.gpuix.ts'
 
 const conv = (fx: { extra?: Record<string, Record<string, string>> }) => fx.extra?.conversation ?? {}
-async function open(app: Parameters<Step>[0], fx: Parameters<Step>[1], title: string) {
+export async function open(app: Parameters<Step>[0], fx: Parameters<Step>[1], title: string) {
   if (title === 'Review cancellation') { await open(app, fx, 'Native subagents'); await app.getByTestId(`subagent-open-${conv(fx as never)[title]}`).click(); await settle(1000); return }
   if (!await app.getByTestId(`thread-${conv(fx as never)[title]}`).count()) { await app.getByTestId(`more-${conv(fx as never).__project}`).click(); await settle(300) }
   const target = app.getByTestId(`thread-${conv(fx as never)[title]}`)

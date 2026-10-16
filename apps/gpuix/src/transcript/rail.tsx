@@ -1,56 +1,97 @@
+// The transcript's message rail: BeUI's message scroller rail as the desktop mounts it
+// (`components/beui/message-scroller.tsx`, `preview-rail.tsx`, `views/Transcript.tsx:480`).
+//
+// Geometry (measured in the desktop at 1280×820): a 28px column 20px from the pane's left edge,
+// running from 12px below the pane top to `bottomInset + 24` above its bottom and centring its
+// rows in that box; one 28×14 row per user prompt with a 1px tick, 16px wide for the highlighted
+// prompt and 0.68 / 0.44 / 0.25 of that at distance 1 / 2 / more. The highlighted prompt is the
+// hovered one, else the one at the reader's position. Ticks resize on `SPRING_LAYOUT`
+// (stiffness 360, damping 32, mass .6), which the native spring reproduces as `RAIL_SPRING`.
+//
+// The hover card is 256×80 at x = 60 (`left-14` + `ml-1`), radius 18, 12px padding, a one-line
+// title and a two-line description. It appears at once, glides between rows on the same spring
+// and disappears at once. Its row grid is centred on the whole pane rather than on the rail
+// box, so the card sits `(bottomInset + 12) / 2` lower than its tick, exactly as the desktop's
+// does (`previewContainerClassName` has no inset of its own).
+//
+// A rail with more rows than fit shows a window centred on the active prompt, like the
+// desktop's virtual rail does with its scroll position.
+import { motion } from '@gpuix/react'
 import { memo, useMemo, useState } from 'react'
-import type { TurnGroup } from '../../../../packages/kybern-client/src/transcript.ts'
-import { promptText } from '../../../../packages/kybern-client/src/prompts.ts'
-import { Dialog, DialogHeader, Tip } from '../nav/overlay.tsx'
-import { Label, useTheme } from '../ui.tsx'
-import { muted } from './kit.tsx'
+import { REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { Para } from './kit.tsx'
 
-const previews = new WeakMap<object, string>()
-function previewOf(turn: TurnGroup): string {
-  const user = turn.user!
-  let preview = previews.get(user)
-  if (preview === undefined) {
-    preview = promptText(user.message).replace(/\s+/g, ' ').trim().slice(0, 240) || 'Message with attachments'
-    previews.set(user, preview)
-  }
-  return preview
-}
+export interface RailItem { id: string; label: string; description?: string }
 
-/** Data-derived landmarks: no DOM measurement or geometry polling. The compact
- * rail is bounded; the full virtual menu keeps every loaded message reachable. */
-export const MessageRail = memo(function MessageRail({ turns, active, onJump }: { turns: TurnGroup[]; active: string | null; onJump: (id: string) => void }) {
+const ROW = 14
+const COLUMN_LEFT = 20
+const COLUMN_WIDTH = 28
+const TICK = 16
+const CARD = { left: 60, width: 256, height: 80 }
+/** `SPRING_LAYOUT` (stiffness 360, damping 32, mass 0.6) fitted to the desktop's frames: settles in 0.54 s, no overshoot. */
+const RAIL_SPRING = REDUCED_MOTION ? { duration: 0 } : { type: 'spring' as const, duration: 0.54, bounce: 0 }
+
+const scale = (distance: number) => (distance === 0 ? 1 : distance === 1 ? 0.68 : distance === 2 ? 0.44 : 0.25)
+
+export const MessageRail = memo(function MessageRail({ items, active, height, bottomInset, onJump }: {
+  items: readonly RailItem[]
+  active: string | null
+  /** The transcript pane's height. */
+  height: number
+  /** Space under the transcript taken by the floating composer (`bottomInset`). */
+  bottomInset: number
+  onJump: (id: string) => void
+}) {
   const t = useTheme()
-  const [open, setOpen] = useState(false)
-  const [query, setQuery] = useState('')
-  const items = useMemo(() => turns.filter(turn => turn.user).map(turn => ({
-    id: turn.turnId,
-    preview: previewOf(turn),
-  })), [turns])
-  const marks = useMemo(() => items.filter((_, i) => items.length <= 28 || i === 0 || i === items.length - 1 || i % Math.ceil(items.length / 26) === 0), [items])
-  const matches = useMemo(() => items.map((item, index) => ({ ...item, index })).filter(item => item.preview.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())), [items, query])
-  const close = () => { setOpen(false); setQuery('') }
-  if (items.length < 2) return null
+  const [hovered, setHovered] = useState<string | null>(null)
+  const railHeight = Math.max(0, height - 12 - (bottomInset + 24))
+  const capacity = Math.max(1, Math.floor((railHeight - 8) / ROW))
+  const activeIndex = Math.max(0, items.findIndex(item => item.id === active))
+  const first = items.length <= capacity ? 0 : Math.min(items.length - capacity, Math.max(0, activeIndex - Math.floor(capacity / 2)))
+  const rows = useMemo(() => items.slice(first, first + capacity), [items, first, capacity])
+  if (items.length < 2 || height <= 0) return null
+  const highlighted = hovered ?? active ?? items[0]!.id
+  const highlightedRow = rows.findIndex(item => item.id === highlighted)
+  const hoveredRow = hovered ? rows.findIndex(item => item.id === hovered) : -1
+  // The card's row grid is centred on the whole pane (see the header).
+  const cardTop = hoveredRow < 0 ? 0 : Math.max(12, Math.min(height - CARD.height - 12, height / 2 - (rows.length * ROW) / 2 + hoveredRow * ROW + ROW / 2 - CARD.height / 2))
+  const hoveredItem = hoveredRow < 0 ? null : rows[hoveredRow]!
   return <>
-    <div testId="message-rail" style={{ position: 'absolute', left: 20, top: 12, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1 }}>
-      {marks.map(item => <Tip key={item.id} label={item.preview} side="left" size={28}>
-        <div testId={`message-jump-${item.id}`} role="button" tabIndex={0} aria-label={item.preview} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onJump(item.id) }} onClick={() => onJump(item.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', width: 28, height: 16, cursor: 'pointer', borderRadius: 4, hover: { backgroundColor: t.buttonSecondaryHover } }}>
-          <div style={{ height: 2, width: active === item.id ? 20 : 12, borderRadius: 1, backgroundColor: active === item.id ? t.text : muted(t, 0.45) }} />
+    <div
+      testId="message-rail"
+      onMouseLeave={() => setHovered(null)}
+      style={{ position: 'absolute', left: COLUMN_LEFT, top: 12, width: COLUMN_WIDTH, height: railHeight, display: 'flex', flexDirection: 'column', justifyContent: 'center', overflow: 'hidden' }}
+    >
+      {rows.map((item, index) => {
+        const lit = index === highlightedRow
+        return <div
+          key={item.id}
+          testId={`message-jump-${first + index}`}
+          role="button"
+          aria-label={item.label}
+          onMouseEnter={() => setHovered(item.id)}
+          onClick={() => onJump(item.id)}
+          style={{ display: 'flex', alignItems: 'center', flexShrink: 0, width: COLUMN_WIDTH, height: ROW, cursor: 'pointer' }}
+        >
+          <motion.div
+            initial={{ width: TICK * scale(highlightedRow < 0 ? 9 : Math.abs(index - highlightedRow)) }}
+            animate={{ width: TICK * scale(highlightedRow < 0 ? 9 : Math.abs(index - highlightedRow)) }}
+            transition={RAIL_SPRING}
+            style={{ height: 1, backgroundColor: lit ? t.text : t.v('--muted-foreground'), pointerEvents: 'none' }}
+          />
         </div>
-      </Tip>)}
-      <div testId="message-navigation" role="button" tabIndex={0} aria-label="Jump to message" onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') setOpen(true) }} onClick={() => setOpen(true)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
-        <Label color={muted(t)} size={11}>{String(items.length)}</Label>
-      </div>
+      })}
     </div>
-    {open && <Dialog onClose={close} width={480} testId="message-navigation-dialog" instant>
-      <DialogHeader title="Jump to message" onClose={close} />
-      <div style={{ padding: 12, paddingTop: 0 }}><input testId="message-search" autoFocus value={query} onChange={e => setQuery(e.value ?? '')} placeholder="Find a message" style={{ width: '100%', height: 32, paddingLeft: 10, paddingRight: 10, borderRadius: 8, backgroundColor: t.buttonSecondary, color: t.text }} /></div>
-      {!matches.length && <div style={{ padding: 16 }}><Label color={muted(t)} size={13}>No matching messages</Label></div>}
-      <virtual-list style={{ height: Math.min(420, matches.length * 48) }} estimatedItemHeight={48}>
-        {matches.map((item) => <div key={item.id} testId={`message-option-${item.index}`} aria-selected={active === item.id} role="button" tabIndex={0} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') { onJump(item.id); close() } }} onClick={() => { onJump(item.id); close() }} style={{ display: 'flex', gap: 12, alignItems: 'center', height: 48, paddingLeft: 16, paddingRight: 16, cursor: 'pointer', backgroundColor: active === item.id ? t.buttonSecondary : undefined, hover: { backgroundColor: t.buttonSecondaryHover } }}>
-          <Label color={muted(t)} size={12}>{String(item.index + 1)}</Label>
-          <Label color={t.text} size={13} truncate>{item.preview}</Label>
-        </div>)}
-      </virtual-list>
-    </Dialog>}
+    {hoveredItem && <motion.div
+      key="card"
+      testId="message-preview"
+      initial={{ top: cardTop }}
+      animate={{ top: cardTop }}
+      transition={RAIL_SPRING}
+      style={{ position: 'absolute', left: CARD.left, width: CARD.width, height: CARD.height, display: 'flex', flexDirection: 'column', gap: 4, padding: 12, borderRadius: 18, borderWidth: 1, borderColor: t.v('--border'), backgroundColor: t.v('--card'), overflow: 'hidden', pointerEvents: 'none', boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 3, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.1)' } }}
+    >
+      <Para color={t.v('--card-foreground')} size={12} lineHeight={16} weight={500} style={{ lineClamp: 1 }}>{hoveredItem.label}</Para>
+      {hoveredItem.description && <Para color={t.v('--muted-foreground')} size={12} lineHeight={16} style={{ lineClamp: 2 }}>{hoveredItem.description}</Para>}
+    </motion.div>}
   </>
 })

@@ -17,3 +17,17 @@ export async function waitUntil(fn: () => Promise<boolean>, timeoutMs = 20_000, 
   throw new Error(`timed out waiting for ${label}`)
 }
 export const exists = (app: Awaited<ReturnType<typeof start>>, id: string) => async () => (await app.getByTestId(id).count()) > 0
+
+/** The seeded scratch environment held by `scripts/shell3-up.ts`: launches GPUIX against it, optionally opening a fixture thread. */
+export async function startScratch(opts: { light?: boolean; thread?: string; env?: Record<string, string> } = {}) {
+  const { SCRATCH, DATA_DIR, CLIENT_DIR, CREDS_DIR } = await import('../visual/fixture.ts')
+  const { readConversationIds } = await import('../visual/fixture.conversation.ts')
+  const up = JSON.parse(await Bun.file(`${SCRATCH}/shell3-up.json`).text()) as { proxy: string; port: number; vite: number }
+  const ids = readConversationIds()
+  const env: Record<string, string> = { KYBERN_DATA_DIR: DATA_DIR, KYBERN_URL: up.proxy, KYBERN_CLIENT_CONFIG_DIR: CLIENT_DIR, KYBERN_GPUIX_CREDENTIALS_DIR: CREDS_DIR, KYBERN_OPAQUE: '1', KYBERN_ENVIRONMENT_NAME: 'Development environment', ...opts.env }
+  if (opts.thread) env.KYBERN_GPUIX_THREAD = ids[opts.thread] ?? opts.thread
+  await Bun.$`rm -rf ${CLIENT_DIR} ${DATA_DIR}/gpuix-ui.json`.quiet()
+  const app = await launch({ command: 'bun', args: [path.join(import.meta.dir, '../src/main.tsx')], env: { GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: opts.light ? 'light' : 'dark', ...env } })
+  await app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })
+  return app
+}

@@ -75,7 +75,23 @@ export function conversationEvents(): { title: string; events: Ev[] }[] {
   const diffTurn = randomUUID(), diffUser = m(), diffAnswer = m()
   const shortIds = new Map<string, string>()
   const shortEvents = JSON.parse(JSON.stringify(events.filter((_, i) => [0, 10, 11, 12, 13, 14].includes(i)).map(ev => ev.kind === 'assistant_message_completed' ? { ...ev, text: 'Done. The date helper is updated.' } : ev)).replace(/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/g, id => { if (!shortIds.has(id)) shortIds.set(id, randomUUID()); return shortIds.get(id)! }))
-  return [{ title: 'Date helper cleanup', events }, { title: 'Subagent launches', events: [{ turn: diffTurn, kind: 'turn_started', message_id: m(), message: { parts: [{ type: 'text', text: 'Review cancellation and formatting in parallel.' }] } }, ...['Cancellation review', 'Formatting review'].map((title, i) => ({ turn: diffTurn, kind: 'tool_call_started', call: { id: `visual-agent-${i}`, name: 'Agent', input: { description: title, prompt: `Review ${title.toLowerCase()} and report concrete findings.`, subagent_type: 'general-purpose' } }, origin: { kind: 'root' } }))] }, { title: 'Context status', events: [{ kind: 'provider_usage_updated', usage: { context: { used_tokens: 48000, window_tokens: 200000 } } }] }, { title: 'Empty conversation', events: [] }, { title: 'Short exchange', events: shortEvents }, { title: 'Inline file changes', events: [
+  // A long thread for the transcript rail and the markdown rhythm checks: thirty turns, every other reply rich.
+  const longEvents: Ev[] = []
+  for (let i = 0; i < 30; i++) {
+    const turn = randomUUID(), user = m(), answer = m()
+    longEvents.push(
+      { turn, kind: 'turn_started', message_id: user, message: { parts: [{ type: 'text', text: `Question ${i + 1}: how should the ${['date helper', 'time zone handling', 'formatter tests', 'locale fallbacks', 'rollover logic'][i % 5]} change?` }] } },
+      { turn, kind: 'assistant_message_completed', message_id: answer, origin: { kind: 'root' }, text: i % 2 === 1 ? `Answer ${i + 1}. ${REPLY}` : `Answer ${i + 1}. Keep it as it is for now; nothing here needs to change.`, thinking: null },
+      { turn, kind: 'turn_completed', stop_reason: 'completed', usage, cost_usd: 0.004, duration_ms: 6000, terminal_message_id: answer },
+    )
+  }
+  const richTurn = randomUUID(), richAnswer = m()
+  const richEvents: Ev[] = [
+    { turn: richTurn, kind: 'turn_started', message_id: m(), message: { parts: [{ type: 'text', text: 'Summarise what you found in formatDate.' }] } },
+    { turn: richTurn, kind: 'assistant_message_completed', message_id: richAnswer, origin: { kind: 'root' }, text: REPLY, thinking: null },
+    { turn: richTurn, kind: 'turn_completed', stop_reason: 'completed', usage, cost_usd: 0.004, duration_ms: 6000, terminal_message_id: richAnswer },
+  ]
+  return [{ title: 'Date helper cleanup', events }, { title: 'Long review thread', events: longEvents }, { title: 'Rich reply', events: richEvents }, { title: 'Subagent launches', events: [{ turn: diffTurn, kind: 'turn_started', message_id: m(), message: { parts: [{ type: 'text', text: 'Review cancellation and formatting in parallel.' }] } }, ...['Cancellation review', 'Formatting review'].map((title, i) => ({ turn: diffTurn, kind: 'tool_call_started', call: { id: `visual-agent-${i}`, name: 'Agent', input: { description: title, prompt: `Review ${title.toLowerCase()} and report concrete findings.`, subagent_type: 'general-purpose' } }, origin: { kind: 'root' } }))] }, { title: 'Context status', events: [{ kind: 'provider_usage_updated', usage: { context: { used_tokens: 48000, window_tokens: 200000 } } }] }, { title: 'Empty conversation', events: [] }, { title: 'Short exchange', events: shortEvents }, { title: 'Inline file changes', events: [
     { turn: diffTurn, kind: 'turn_started', message_id: diffUser, message: { parts: [{ type: 'text', text: 'Handle null input in the date helper.' }] } },
     { turn: diffTurn, kind: 'assistant_message_completed', message_id: diffAnswer, origin: { kind: 'root' }, text: 'Added a null guard before parsing the date.', thinking: null },
     { turn: diffTurn, kind: 'turn_completed', stop_reason: 'completed', usage, cost_usd: 0.004, duration_ms: 6000, terminal_message_id: diffAnswer },

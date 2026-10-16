@@ -15,7 +15,8 @@ import { subscribe, useApp, usePaneAccess, usePaneCompact } from './state.ts'
 import { Label, REDUCED_MOTION, useTheme } from './ui.tsx'
 import { DISTANCE, DURATION, EASE } from './motion/kit.tsx'
 import { CodeChunk, CodeHeader, markdownParts, Prose, textChunks } from './transcript/markdown.tsx'
-import { MessageRail } from './transcript/rail.tsx'
+import { MessageRail, type RailItem } from './transcript/rail.tsx'
+import { createTranscriptNavigation } from '../../desktop/src/lib/transcriptNavigation.ts'
 import { T } from './transcript/glyphs.ts'
 import { alpha, muted, Para } from './transcript/kit.tsx'
 import { over } from './theme.ts'
@@ -61,6 +62,7 @@ export function Transcript() {
   const surfaceRef = useCallback((node: PublicInstance | null) => setSurfaceNode(node), [])
   const [atTail, setAtTail] = useState(true)
   const [overflow, setOverflow] = useState(false)
+  const [paneHeight, setPaneHeight] = useState(0)
   useEffect(() => {
     if (!loaded || !turns.length || !surfaceNode) { setOverflow(false); return }
     const rects: Record<string, LayoutRect | null> = {}
@@ -72,11 +74,16 @@ export function Transcript() {
       rects[key] = event.rect
       const { viewport, top, bottom } = rects
       if (!viewport) return
+      setPaneHeight(viewport.height)
       if (hasEarlier || (top && bottom)) setOverflow(hasEarlier || bottom!.y + bottom!.height - top!.y > viewport.height + 1)
       else if (top || bottom) setOverflow(true)
     })] : [])
     return () => stops.forEach(stop => stop())
   }, [renderer, surfaceNode, topNode, bottomNode, threadId, loaded, turns.length, hasEarlier])
+  // One rail mark per user prompt, with the desktop's preview text (`lib/transcriptNavigation.ts`).
+  const buildNavigation = useMemo(() => createTranscriptNavigation(), [threadId])
+  const navigationItems = useMemo(() => buildNavigation(turns as never), [buildNavigation, turns])
+  const railItems = useMemo<RailItem[]>(() => navigationItems.map(item => ({ id: item.id, label: item.label, description: item.description })), [navigationItems])
   const [codeState, setCodeState] = useState<Record<string, { expanded: boolean; wrap: boolean }>>({})
   const [activeRow, setActiveRow] = useState(0)
   const nearTop = useRef(false)
@@ -237,7 +244,8 @@ export function Transcript() {
         onVisibleRange={(event) => {
           const start = event.startIndex ?? 0
           const end = event.endIndex ?? count
-          setActiveRow(Math.max(0, start - lead))
+          // The reader's place: the first or last prompt at either end, else the row mid-screen (`MessageScroller.activeId`).
+          setActiveRow(end >= count ? rows.length - 1 : start <= lead ? 0 : Math.max(0, Math.floor((start + end) / 2) - lead))
           const tail = end >= count
           if (tail !== atTail) setAtTail(tail)
           // Prefetch while the first turns are on screen (`useEarlierHistory`).
@@ -269,8 +277,8 @@ export function Transcript() {
           <div key="__bottom" ref={bottomRef} testId={`transcript-bottom:${pane.id}`} style={{ height: COMPOSER_INSET + panelHeight }} />,
         ]}
       </virtual-list>
-      {overflow && <MessageRail turns={turns} active={rows[activeRow]?.turn.turnId ?? null} onJump={(id) => {
-        const index = rows.findIndex(row => row.turn.turnId === id)
+      {overflow && <MessageRail items={railItems} active={rows[activeRow]?.turn.user?.id ?? null} height={paneHeight} bottomInset={COMPOSER_INSET - 64 + panelHeight} onJump={(id) => {
+        const index = rows.findIndex(row => row.turn.user?.id === id)
         if (index >= 0 && list.current) {
           renderer.scrollToItem?.(list.current.id, index + lead, 0)
           setAtTail(false)
