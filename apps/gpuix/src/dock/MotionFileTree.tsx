@@ -19,6 +19,7 @@ export function MotionFileTreeRows({ rows, open, selected, focus, virtual, searc
   const t = useTheme(), capability = treeMotionCapabilities(useGpuixRequired())
   const [hovered, setHovered] = useState<string | null>(null)
   const indexes = new Map(rows.map((row, index) => [row.key, index]))
+  if (hovered && !indexes.has(hovered)) setHovered(null)
   // Desktop layout="position": change scroll geometry once and project the
   // surviving rows to their new slots. No per-frame branch-height reflow.
   // Removed rows leave immediately, as in the desktop's visibleRows map.
@@ -80,7 +81,7 @@ function FolderIcon({ folder, open, reduce, path }: { folder: boolean; open: boo
   </div>
 }
 let svgGeneration = 7_000_000
-/** Raw SVG motion is also understood before the additive motion.svg JS wrapper lands. */
+/** Stable keyed SVG mounts with generation-guarded outgoing cleanup. */
 function TreeSvg({ source, initial, animate, transition, style, onComplete, testId }: { source: string; initial: TreeMotionStyle | false; animate: TreeMotionStyle; transition: MotionTransition; style: StyleDesc; onComplete?: () => void; testId?: string }) {
   // Initial belongs to this keyed glyph's mount, not to later swap cleanup.
   // Keeping it stable avoids restarting the incoming spring when its peer exits.
