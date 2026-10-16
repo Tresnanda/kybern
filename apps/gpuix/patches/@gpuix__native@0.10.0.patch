@@ -198,7 +198,7 @@ diff --git a/dist/runtime.js b/dist/runtime.js
          }
          timer = setTimeout(loop, Math.max(0, frameMs - (performance.now() - started)));
      };
-+    if (typeof renderer.setFrameWakeCallback === "function" && process.env.KYBERN_VSYNC_WAKE === "1") {
++    if (typeof renderer.setFrameWakeCallback === "function" && process.env.KYBERN_VSYNC_WAKE !== "0") {
 +        renderer.setFrameWakeCallback((error) => {
 +            if (stopped) return;
 +            try {

@@ -44,7 +44,11 @@ impl Scene {
     }
     pub(crate) fn animate_tagged(&mut self) -> bool {
         let now = std::time::Instant::now();
+        // Text contributes a primitive per glyph, but its phase/base tint are
+        // shared by the tagged leaf. Evaluate the curve only once per leaf.
+        let mut seen = std::collections::HashSet::new();
         let updates: Vec<_> = self.repaint_tags.values().filter_map(|&(id, _, _, animation, color)| {
+            if animation.is_none() || !seen.insert(id) { return None; }
             animation.map(|animation| (id, color.opacity(animation.opacity(now))))
         }).collect();
         !updates.is_empty() && self.repaint_tagged_inner(&updates, false)

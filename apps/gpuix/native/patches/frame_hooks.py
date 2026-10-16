@@ -20,9 +20,9 @@ edit("renderer.rs", "    pub fn zoom_window(&self) -> Result<()> {", '''    pub 
     }
     #[napi]
     pub fn zoom_window(&self) -> Result<()> {''')
-edit("renderer.rs", "        is_resizable: options.resizable.unwrap_or(true),", '''        // Full-rate inactive motion is experimental until full-app regression
-        // acceptance. Preserve the previous inactive cadence by default.
-        inactive_frame_interval: if std::env::var("KYBERN_FULL_RATE").as_deref()==Ok("1") { None } else { Some(std::time::Duration::from_micros(33_333)) },
+edit("renderer.rs", "        is_resizable: options.resizable.unwrap_or(true),", '''        // Display-rate inactive motion parks when the window is occluded.
+        // Keep the previous cadence selectable for diagnostic comparisons.
+        inactive_frame_interval: if std::env::var("KYBERN_FULL_RATE").as_deref()==Ok("0") { Some(std::time::Duration::from_micros(33_333)) } else { None },
         is_resizable: options.resizable.unwrap_or(true),''')
 
 # Set rotation before id() wraps the SVG in Stateful<Svg>.
