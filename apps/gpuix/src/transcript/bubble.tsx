@@ -17,6 +17,7 @@ import { useTheme } from '../ui.tsx'
 import { Label } from '../ui.tsx'
 import { T } from './glyphs.ts'
 import { ResponseImage } from './images.tsx'
+import { AttachmentImage } from '../composer/AttachmentImage.tsx'
 import { cachedMarkdownTheme, CODE, fg, META, muted, TEXT } from './kit.tsx'
 import { FONT_MONO, FONT_UI } from '../theme.ts'
 import { Rise } from '../motion/kit.tsx'
@@ -144,6 +145,8 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
                 {files.map((p, i) =>
                   p.type === 'image' ? (
                     <ResponseImage key={i} source={`data:${p.media_type};base64,${p.data}`} label={`Attached image ${i + 1}`} thumbnail />
+                  ) : p.media_type.startsWith('image/') ? (
+                    <AttachmentImage key={p.asset_id} assetId={p.asset_id} name={p.name} />
                   ) : (
                     <div
                       key={i}

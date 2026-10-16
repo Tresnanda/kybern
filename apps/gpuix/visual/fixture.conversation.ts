@@ -150,6 +150,7 @@ export async function ids(client: KybernClient): Promise<Record<string, unknown>
   const state = readState()!
   rmSync(PROXY_READY, { force: true })
   const child = spawn('bun', [import.meta.filename, '--proxy', JSON.stringify({ port: state.port, token: state.token })], { stdio: 'ignore' })
+  child.unref()
   process.once('exit', () => child.kill())
   for (let i = 0; i < 100 && !existsSync(PROXY_READY); i++) await Bun.sleep(50)
   if (!existsSync(PROXY_READY)) throw new Error('Conversation fixture proxy did not start')

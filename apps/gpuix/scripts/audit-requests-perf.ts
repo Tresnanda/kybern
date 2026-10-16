@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { launchFixture, waitForPainted } from '/Users/mymac/projects/ade-gpuix-dock2/apps/gpuix/src/requests/harness.ts'
+import { launchFixture, waitForPainted } from '../src/requests/harness.ts'
 const exec = promisify(execFile)
 const out = '/Users/mymac/projects/ade/previews/gpuix/audit-2026-10-16/adapted'
 const fixture = await launchFixture(path.join("/Users/mymac/projects/ade-gpuix-dock2/apps/gpuix/src/requests", 'parity.fixture.tsx'), { GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: 'dark', KYBERN_DATA_DIR: process.env.KYBERN_DATA_DIR!, NAPI_RS_NATIVE_LIBRARY_PATH: '/Users/mymac/projects/ade-gpuix-dock2/apps/gpuix/native/build/gpuix-native.darwin-arm64.node' })

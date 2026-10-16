@@ -4,31 +4,40 @@ import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import type { KybernClient } from '../../../packages/kybern-client/src/client.ts'
 import type { SeedContext } from './load.ts'
+import { SCRATCH, readState, writeState, connect } from './fixture.ts'
 
 export async function seed(client: KybernClient, { state, scratch, projects }: SeedContext) {
   const thread = await client.call('threads.create', { project_id: projects[0]!.id, provider: { kind: 'codex', instance: 'default' }, title: 'Visual worktree', use_worktree: true })
-  const ready = path.join(scratch, 'settings-proxy.json')
+  writeFileSync(path.join(scratch, 'settings-fixture.json'), JSON.stringify({ projectId: projects[0]?.id, threadId: thread.id }))
+}
+export async function ids(_client: KybernClient) {
+  const state = readState()!
+  const upstreamPort = state.daemonPort ?? state.port
+  const ready = path.join(SCRATCH, 'settings-proxy.json')
+  const fixture = JSON.parse(readFileSync(path.join(SCRATCH, 'settings-fixture.json'), 'utf8'))
   rmSync(ready, { force: true })
-  const child = spawn('bun', [import.meta.filename, '--proxy', JSON.stringify({ port: state.port, token: state.token, ready, projectId: projects[0]?.id, threadId: thread.id })], { stdio: 'ignore' })
-  process.once('exit', () => child.kill())
+  const child = spawn('bun', [import.meta.filename, '--proxy', JSON.stringify({ port: upstreamPort, token: state.token, ready, ...fixture })], { stdio: 'ignore' })
+  child.unref()
+  process.once('exit', () => { child.kill(); writeState({ ...state, port: upstreamPort, daemonPort: upstreamPort, proxyPid: undefined }) })
   for (let i = 0; i < 100 && !existsSync(ready); i++) await Bun.sleep(50)
   if (!existsSync(ready)) throw Error('Settings visual proxy did not start')
   const { port } = JSON.parse(readFileSync(ready, 'utf8'))
-  state.port = port
+  writeState({ ...state, port, daemonPort: upstreamPort, proxyPid: child.pid })
   process.env.KYBERN_URL = `ws://127.0.0.1:${port}/ws`
   process.env.KYBERN_TOKEN = state.token
-
-}
-export async function ids(client: KybernClient) {
-  return await client.call('visual.settings' as never, {} as never) as Record<string, unknown>
+  const boundary = await connect({ ...state, port })
+  try { return await boundary.call('visual.settings' as never, {} as never) as Record<string, unknown> } finally { boundary.close() }
 }
 
 if (import.meta.main && process.argv[2] === '--proxy') {
   const config = JSON.parse(process.argv[3]!)
   const { actionFixture } = await import('../src/pulls/verify.fixture.ts')
   const fixture = actionFixture()
-  const providers = [{ kind: 'codex', display_name: 'Codex', available: true, binary_path: '/fixture/bin/codex', version: '1.0.0', models: [], supported_permission_modes: ['supervised', 'auto', 'full-access'], supports_fork: true, supports_model_switch: true, instances: ['work'] }]
+  const providers = [{ kind: 'codex', display_name: 'Codex', available: true, binary_path: '/fixture/bin/codex', version: '1.0.0', models: [{id:'gpt-6.1-sol',display_name:'GPT-6.1 Sol',is_default:true,efforts:['low','medium','high'],default_effort:'medium'}], supports_effort_switch:true, supported_efforts:['low','medium','high'], supported_permission_modes: ['supervised', 'auto', 'full-access'], supports_fork: true, supports_model_switch: true, instances: ['work'] }]
   const mocks: Record<string, unknown> = {
+    'access.pairing.create': { code: '123456', expires_at: new Date(Date.now() + 5 * 60_000).toISOString(), endpoints: [] },
+    'access.tokens.list': { tokens: [] },
+    'access.exposure.get': { tailscale: false, tailscale_ip: null },
     'providers.list': { providers },
     'providers.accounts.catalog': providers[0],
     'queue.list': { messages: [] },

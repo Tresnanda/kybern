@@ -34,7 +34,7 @@ const fresh = () => browser.newContext({ viewport: { width: 1280, height: 820 },
 let ctx = await fresh()
 let page = await ctx.newPage()
 const q = `?url=ws://127.0.0.1:${spec.port}/ws&token=${spec.token}`
-await page.goto(`http://localhost:${spec.vite}/${q}`)
+await page.goto(`http://127.0.0.1:${spec.vite}/${q}`)
 await page.waitForSelector('button[aria-label="Notes"]', { timeout: 30000 })
 await page.waitForTimeout(1500)
 for (const name of spec.screens) {
@@ -44,7 +44,7 @@ for (const name of spec.screens) {
   await ctx.close()
   ctx = await fresh()
   page = await ctx.newPage()
-  await page.goto(`http://localhost:${spec.vite}/${q}`)
+  await page.goto(`http://127.0.0.1:${spec.vite}/${q}`)
   await page.waitForSelector('button[aria-label="Notes"]', { timeout: 30000 })
   await page.waitForTimeout(1000)
   // macOS overlay scrollbars take no layout width; headless WebKit would draw classic ones.

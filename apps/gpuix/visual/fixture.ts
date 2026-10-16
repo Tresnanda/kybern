@@ -28,12 +28,19 @@ const STATE = path.join(SCRATCH, 'state.json')
 for (const d of [DATA_DIR, CLIENT_DIR, CREDS_DIR]) if (!path.resolve(d).startsWith(path.resolve(SCRATCH) + path.sep)) throw new Error(`${d} is outside the scratch dir`)
 if (!SCRATCH.includes('gpuix-scratch')) throw new Error('VISUAL_SCRATCH must contain gpuix-scratch')
 
-export type RunState = { daemonPid: number; port: number; token: string; vitePid?: number; vitePort?: number; seeded: boolean }
+export type RunState = { daemonPid: number; daemonPort?: number; proxyPid?: number; port: number; token: string; vitePid?: number; vitePort?: number; seeded: boolean }
 
 export function readState(): RunState | null {
   try {
     const s = JSON.parse(readFileSync(STATE, 'utf8')) as RunState
     process.kill(s.daemonPid, 0)
+    if (s.proxyPid) {
+      try { process.kill(s.proxyPid, 0) } catch {
+        s.port = s.daemonPort ?? s.port
+        delete s.proxyPid
+        writeState(s)
+      }
+    }
     return s
   } catch {
     return null
@@ -76,7 +83,7 @@ export async function startDaemon(fresh: boolean): Promise<RunState> {
   const token = readFileSync(tokenFile, 'utf8').trim()
   // The daemon moves to another port when the one picked was taken meanwhile: trust what it wrote.
   const actual = Number(readFileSync(portFile, 'utf8').trim()) || port
-  const state: RunState = { daemonPid: child.pid!, port: actual, token, seeded: false }
+  const state: RunState = { daemonPid: child.pid!, daemonPort: actual, port: actual, token, seeded: false }
   writeState(state)
   return state
 }

@@ -5,7 +5,7 @@ import { promisify } from 'node:util'
 const exec = promisify(execFile)
 import { mkdtempSync, rmSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { launchFixture } from '/Users/mymac/projects/ade-gpuix-dock2/apps/gpuix/src/requests/harness.ts'
+import { launchFixture } from '../src/requests/harness.ts'
 const out = '/Users/mymac/projects/ade/previews/gpuix/audit-2026-10-16/split-full'
 mkdirSync(out, { recursive: true })
 for (const theme of ['dark', 'light']) {
