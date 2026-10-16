@@ -1,4 +1,5 @@
 // Source geometry: desktop/components/kit/{ProviderIcon,Icons,AntigravityIcon}.
+import { fileURLToPath } from 'node:url'
 import claude from './assets/claude.svg' with { type: 'text' }
 import codex from './assets/openai.svg' with { type: 'text' }
 import cursor from './assets/providers/cursor.svg' with { type: 'text' }
@@ -11,10 +12,10 @@ export const PROVIDER_VECTORS: Record<string, string> = { 'claude-code': claude,
 // GPUI's SVG node is a tinted alpha mask. Keep multicolour marks as transparent
 // 128px rasters (4x the largest provider slot), never tint away the source colours.
 export const PROVIDER_IMAGES = {
-  omp: new URL('./assets/providers/omp-colour.png', import.meta.url).pathname,
-  antigravity: new URL('./assets/providers/antigravity-colour.png', import.meta.url).pathname,
+  omp: fileURLToPath(new URL('./assets/providers/omp-colour.png', import.meta.url)),
+  antigravity: fileURLToPath(new URL('./assets/providers/antigravity-colour.png', import.meta.url)),
   opencode: {
-    light: new URL('./assets/providers/opencode-light.png', import.meta.url).pathname,
-    dark: new URL('./assets/providers/opencode-dark.png', import.meta.url).pathname,
+    light: fileURLToPath(new URL('./assets/providers/opencode-light.png', import.meta.url)),
+    dark: fileURLToPath(new URL('./assets/providers/opencode-dark.png', import.meta.url)),
   },
 }
