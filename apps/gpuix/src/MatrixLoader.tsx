@@ -19,7 +19,7 @@ import { ink, REDUCED_MOTION, useTheme } from './ui.tsx'
 // Full-app native-loop acceptance remains opt-in: repeated GPU controls did not
 // meet the approved gate, and the smooth JS fallback regressed running CPU.
 // Preserve the existing clock outside that experiment; it is still a known
-// pacing defect, not an accepted 60 fps result. Native motion uses onFrame.
+// pacing defect, not an accepted 60 fps result. The onFrame API is independent.
 export const NATIVE_PAINT_ANIMATIONS = process.env.KYBERN_NATIVE_PAINT_ANIMATIONS === '1'
 const TICK_MS = Number(process.env.KYBERN_LOADER_TICK_MS ?? (NATIVE_PAINT_ANIMATIONS ? 0 : 200))
 let now = 0

@@ -1,5 +1,11 @@
 # GPUIX vs Tauri resource use (2026-10-14)
 
+Historical baseline. Current frame scheduling, passive loop changes, opt-in
+region/text rendering and acceptance gaps are documented in
+[round-seven pacing](pacing-round7-2026-10-17.md). The smooth loop integration is
+opt-in pending its resource gate; the old 5 Hz clock's low resource cost is not an
+acceptable smooth-motion target.
+
 `bun perf/sample.ts 30 Tauri=<pids> GPUIX=<pid>` samples both apps over the
 same 30 s: physical footprint (`footprint`), CPU time (`ps`), and Metal GPU
 time per process (`accumulatedGPUTime` from `ioreg`, no sudo).

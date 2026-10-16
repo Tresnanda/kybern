@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process'
 export async function launchFixture(entry: string, env: Record<string, string>) {
   const child = spawn('bun', [entry], { env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] })
   let stderr = ''; let renders = 0; let wakes = 0; let commits = 0; let pending = ''; let frames=0; const frameTimes:number[]=[]; const frameEvents:{native:number;received:number}[]=[]
+  const regions:string[]=[]
   child.stderr.on('data', chunk => {
     const text = String(chunk)
     stderr = (stderr + text).slice(-8000)
@@ -13,6 +14,7 @@ export async function launchFixture(entry: string, env: Record<string, string>) 
     const end = pending.lastIndexOf('\n')
     if (end < 0) return
     const lines = pending.slice(0, end + 1)
+    for(const line of lines.split('\n'))if(line.includes('[paint-region]'))regions.push(line)
     pending = pending.slice(end + 1)
     for(const match of lines.matchAll(/\[kybern-frame\] ([0-9.]+)/g)) { frames++;frameTimes.push(Number(match[1]));frameEvents.push({native:Number(match[1]),received:performance.now()});if(frameTimes.length>2048)frameTimes.shift();if(frameEvents.length>2048)frameEvents.shift() }
     commits += (lines.match(/\[idle\] react commit|\[pacing-commit\]/g) ?? []).length
@@ -30,7 +32,7 @@ export async function launchFixture(entry: string, env: Record<string, string>) 
       }),
     ])
     clearTimeout(timer)
-    return { app, pid: child.pid!, counts: () => ({renders,wakes,commits,frames}), frameTimes:()=>[...frameTimes], frameEvents:()=>[...frameEvents], diagnostics: () => stderr, close: async () => { await app.close(); if (child.exitCode === null && child.signalCode === null) { child.kill(); await new Promise<void>(resolve => child.once('exit', () => resolve())) } } }
+    return { app, pid: child.pid!, counts: () => ({renders,wakes,commits,frames}), regions:()=>[...regions], frameTimes:()=>[...frameTimes], frameEvents:()=>[...frameEvents], diagnostics: () => stderr, close: async () => { await app.close(); if (child.exitCode === null && child.signalCode === null) { child.kill(); await new Promise<void>(resolve => child.once('exit', () => resolve())) } } }
   } catch (error) { clearTimeout(timer); child.kill(); throw error }
 }
 
