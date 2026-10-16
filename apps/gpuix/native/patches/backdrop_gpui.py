@@ -74,6 +74,7 @@ edit(m, '            match batch {', '''            match batch {
 pending[m] += '\ninclude!("backdrop_renderer.rs");\n'
 exec((here / "paint_gpui.py").read_text())
 exec((here / "frame_gpui.py").read_text())
+exec((here / "frame_drawable_gpui.py").read_text())
 exec((here / "pointer_gpui.py").read_text())
 
 for name, text in pending.items():
