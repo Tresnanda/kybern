@@ -15,7 +15,8 @@ import { subscribe, useApp, usePaneAccess, usePaneCompact } from './state.ts'
 import { Label, REDUCED_MOTION, useTheme } from './ui.tsx'
 import { DISTANCE, DURATION, EASE } from './motion/kit.tsx'
 import { CodeChunk, CodeHeader, markdownParts, Prose, textChunks } from './transcript/markdown.tsx'
-import { MessageRail } from './transcript/rail.tsx'
+import { MessageRail, type RailItem } from './transcript/rail.tsx'
+import { createTranscriptNavigation } from '../../desktop/src/lib/transcriptNavigation.ts'
 import { T } from './transcript/glyphs.ts'
 import { alpha, muted, Para } from './transcript/kit.tsx'
 import { over } from './theme.ts'
@@ -50,30 +51,42 @@ export function Transcript() {
   const groupTurns = useMemo(() => createTurnGrouper(), [threadId])
   const turns = useMemo(() => groupTurns(blocks), [blocks, groupTurns])
   const list = useRef<PublicInstance>(null)
-  const [viewportNode, setViewportNode] = useState<PublicInstance | null>(null)
+  // The virtual list reports no element bounds (its rect is always null), so the
+  // viewport size comes from the surface around it, which fills the same box.
+  const [surfaceNode, setSurfaceNode] = useState<PublicInstance | null>(null)
   const [topNode, setTopNode] = useState<PublicInstance | null>(null)
   const [bottomNode, setBottomNode] = useState<PublicInstance | null>(null)
-  const listRef = useCallback((node: PublicInstance | null) => { list.current = node; setViewportNode(node) }, [])
+  const listRef = useCallback((node: PublicInstance | null) => { list.current = node }, [])
   const topRef = useCallback((node: PublicInstance | null) => setTopNode(node), [])
   const bottomRef = useCallback((node: PublicInstance | null) => setBottomNode(node), [])
+  const surfaceRef = useCallback((node: PublicInstance | null) => setSurfaceNode(node), [])
   const [atTail, setAtTail] = useState(true)
   const [overflow, setOverflow] = useState(false)
+  const [paneHeight, setPaneHeight] = useState(0)
+  const jumpStop = useRef<(() => void) | null>(null)
+  useEffect(() => () => jumpStop.current?.(), [threadId])
   useEffect(() => {
-    if (!loaded || !turns.length || !viewportNode) { setOverflow(false); return }
+    if (!loaded || !turns.length || !surfaceNode) { setOverflow(false); return }
     const rects: Record<string, LayoutRect | null> = {}
     // A frozen outgoing page can share its pane id with the incoming transcript.
     // Observe these instances, never globally resolved test ids. Endpoint refs
     // also detach/rebind as the virtual list unmounts and restores its rows.
-    const nodes = { viewport: viewportNode, top: topNode, bottom: bottomNode }
+    const nodes = { viewport: surfaceNode, top: topNode, bottom: bottomNode }
     const stops = Object.entries(nodes).flatMap(([key, node]) => node ? [observeElementBounds(renderer, node.id, event => {
       rects[key] = event.rect
       const { viewport, top, bottom } = rects
       if (!viewport) return
+      setPaneHeight(viewport.height)
       if (hasEarlier || (top && bottom)) setOverflow(hasEarlier || bottom!.y + bottom!.height - top!.y > viewport.height + 1)
-      else if (top || bottom) setOverflow(true)
+      // Neither endpoint is painted when restoring into the middle of a long list.
+      else setOverflow(true)
     })] : [])
     return () => stops.forEach(stop => stop())
-  }, [renderer, viewportNode, topNode, bottomNode, threadId, loaded, turns.length, hasEarlier])
+  }, [renderer, surfaceNode, topNode, bottomNode, threadId, loaded, turns.length, hasEarlier])
+  // One rail mark per user prompt, with the desktop's preview text (`lib/transcriptNavigation.ts`).
+  const buildNavigation = useMemo(() => createTranscriptNavigation(), [threadId])
+  const navigationItems = useMemo(() => buildNavigation(turns as never), [buildNavigation, turns])
+  const railItems = useMemo<RailItem[]>(() => navigationItems.map(item => ({ id: item.id, label: item.label, description: item.description })), [navigationItems])
   const [codeState, setCodeState] = useState<Record<string, { expanded: boolean; wrap: boolean }>>({})
   const [activeRow, setActiveRow] = useState(0)
   const nearTop = useRef(false)
@@ -96,9 +109,12 @@ export function Transcript() {
     const result = [{ key, turn, node: <TurnItem turn={turn} threadId={threadId!} isLast={i === turns.length - 1} threadRunning={i === turns.length - 1 && threadRunning} dateAt={startsDay ? at : null} /> }]
     if (running) return result
     result.push({ key: `${key}:images`, turn, node: <Row><AnswerImages group={turn} threadId={threadId!} /></Row> })
-    for (const part of markdownParts(turn.answer?.text ?? '')) {
+    for (const [partIndex, part] of markdownParts(turn.answer?.text ?? '').entries()) {
       const partKey = `${key}:answer:${part.key}`
       const chunks = textChunks(part.text)
+      // Native Markdown owns spacing inside prose; separate virtual parts
+      // share one collapsed .65rem margin at their boundary.
+      if (partIndex > 0) result.push({ key: `${partKey}:before`, turn, node: <div style={{ height: 10.4 }} /> })
       if (part.kind === 'code') {
         // Desktop code starts unwrapped; horizontal scrolling preserves long lines.
         const state = codeState[partKey] ?? { expanded: false, wrap: false }
@@ -107,7 +123,6 @@ export function Transcript() {
         for (const [chunkIndex, chunk] of (state.expanded ? chunks : chunks.slice(0, 1)).entries()) {
           result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><CodeChunk text={chunk} language={part.language} wrap={state.wrap} /></Row> })
         }
-        result.push({ key: `${partKey}:gap`, turn, node: <div style={{ height: 10 }} /> })
       } else {
         for (const [chunkIndex, chunk] of chunks.entries()) result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><Prose text={chunk} /></Row> })
       }
@@ -222,7 +237,7 @@ export function Transcript() {
   }
 
   return (
-    <div testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+    <div ref={surfaceRef} testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
       <virtual-list
         ref={listRef}
         testId="transcript"
@@ -234,7 +249,8 @@ export function Transcript() {
         onVisibleRange={(event) => {
           const start = event.startIndex ?? 0
           const end = event.endIndex ?? count
-          setActiveRow(Math.max(0, start - lead))
+          // The reader's place: the first or last prompt at either end, else the row mid-screen (`MessageScroller.activeId`).
+          setActiveRow(end >= count ? rows.length - 1 : start <= lead ? 0 : Math.max(0, Math.floor((start + end) / 2) - lead))
           const tail = end >= count
           if (tail !== atTail) setAtTail(tail)
           // Prefetch while the first turns are on screen (`useEarlierHistory`).
@@ -266,13 +282,42 @@ export function Transcript() {
           <div key="__bottom" ref={bottomRef} testId={`transcript-bottom:${pane.id}`} style={{ height: COMPOSER_INSET + panelHeight }} />,
         ]}
       </virtual-list>
-      {overflow && <MessageRail turns={turns} active={rows[activeRow]?.turn.turnId ?? null} onJump={(id) => {
-        const index = rows.findIndex(row => row.turn.turnId === id)
-        if (index >= 0 && list.current) {
-          renderer.scrollToItem?.(list.current.id, index + lead, 0)
-          setAtTail(false)
-          setActiveRow(index)
+      {overflow && <MessageRail items={railItems} active={rows[activeRow]?.turn.user?.id ?? null} height={paneHeight} bottomInset={COMPOSER_INSET - 64 + panelHeight} onJump={(id) => {
+        const index = rows.findIndex(row => row.turn.user?.id === id)
+        if (index < 0 || !list.current) return
+        setAtTail(false)
+        setActiveRow(index)
+        // The desktop brings the prompt to the middle of the viewport (`navigationModel.scrollToItem`).
+        // Mount the turn first, then place it from its measured row and bubble, whatever is scrolled now.
+        jumpStop.current?.()
+        const target = list.current.id
+        renderer.scrollToItem?.(target, index + lead, 0)
+        const rects: Record<string, LayoutRect | null> = {}
+        // `scrollToItem` redraws at once and that reports new bounds: place from a deferred call, at most
+        // three times, and stop once the offset stops changing, or the observer would chase its own scroll.
+        let placed: number | null = null
+        let attempts = 0
+        let queued: ReturnType<typeof setTimeout> | undefined
+        const place = () => {
+          if (!paneHeight || attempts >= 3 || queued) return
+          queued = setTimeout(() => {
+            queued = undefined
+            // Bounds arrive one host at a time. Read both after the batch,
+            // never capture one fresh rect with the other host's old position.
+            const { row, user } = rects
+            if (!row || !user) return
+            const bubble = user.height - 16
+            const offset = Math.round(user.y - row.y - (paneHeight - bubble) / 2)
+            if (offset === placed) return
+            placed = offset
+            attempts++
+            renderer.scrollToItem?.(target, index + lead, offset)
+          }, 0)
         }
+        const stops = (['row', 'user'] as const).map(key => observeElementBounds(renderer, { testId: `${key === 'row' ? 'turn-row' : 'turn-user'}:${id}` }, event => { rects[key] = event.rect; place() }))
+        const timer = setTimeout(() => stop(), 1500)
+        const stop = () => { clearTimeout(timer); clearTimeout(queued); stops.forEach(s => s()); jumpStop.current = null }
+        jumpStop.current = stop
       }} />}
       {actionError && (
         <div style={{ position: 'absolute', top: 12, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
@@ -299,8 +344,10 @@ function Row({ children }: { children: React.ReactNode }) {
 const TurnItem = memo(function TurnItem({ turn, threadId, isLast, threadRunning, dateAt }: { turn: TurnGroup; threadId: string; isLast: boolean; threadRunning: boolean; dateAt: string | null }) {
   return (
     <Row>
-      {dateAt && <DateSeparator at={dateAt} />}
-      <Turn group={turn} threadId={threadId} isLast={isLast} threadRunning={isLast && threadRunning} />
+      <div testId={turn.user ? `turn-row:${turn.user.id}` : undefined} style={{ display: 'flex', flexDirection: 'column' }}>
+        {dateAt && <DateSeparator at={dateAt} />}
+        <Turn group={turn} threadId={threadId} isLast={isLast} threadRunning={isLast && threadRunning} />
+      </div>
     </Row>
   )
 })

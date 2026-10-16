@@ -133,7 +133,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning 
     <div style={{ display: 'flex', flexDirection: 'column' }}>
       {subagentThread && group.user?.id === firstUserId && <SubagentDivider thread={subagentThread} />}
       {group.user && (
-        <div style={{ paddingBottom: running ? 20 : 16 }}>
+        <div testId={`turn-user:${group.user.id}`} style={{ paddingBottom: running ? 20 : 16 }}>
           <UserBubble parts={group.user.message.parts} at={group.user.at} clampLines={subagent ? 6 : undefined} />
         </div>
       )}

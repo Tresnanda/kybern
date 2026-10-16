@@ -23,7 +23,18 @@ export function actionFixture() {
   const server = Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
-    fetch(req, server) { if (server.upgrade(req)) return; return new Response('Not found', { status: 404 }) },
+    fetch(req, server) {
+      // WebKit uses the browser session-ticket path; the in-memory fixture
+      // accepts only its nonsecret local credential and never forwards it.
+      const headers = { 'access-control-allow-origin': req.headers.get('origin') ?? '*', 'access-control-allow-headers': 'authorization,content-type', 'access-control-allow-methods': 'POST,OPTIONS', 'vary': 'Origin' }
+      if (new URL(req.url).pathname === '/session') {
+        if (req.method === 'OPTIONS') return new Response(null, { headers })
+        if (req.method === 'POST' && req.headers.get('authorization') === 'Bearer local-fixture') return Response.json({ ticket: 'fixture-ticket' }, { headers })
+        return new Response('Unauthorized', { status: 401, headers })
+      }
+      if (server.upgrade(req)) return
+      return new Response('Not found', { status: 404 })
+    },
     websocket: {
       message(ws, raw) {
         const message = JSON.parse(String(raw)) as { id: string; method: string; params: Record<string, unknown> }

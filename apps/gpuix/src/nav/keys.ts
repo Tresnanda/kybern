@@ -45,7 +45,7 @@ function shortcut(event: EventPayload): boolean {
       newThread()
       return true
     case 'b':
-      if (nav.settingsOpen || nav.page === 'notes') return false
+      if (nav.settingsOpen || nav.page === 'notes' || nav.page === 'usage') return false
       if (nav.page === 'pulls') setNav({ pullsPeek: !nav.pullsPeek, panelInstant: true })
       else {
         setNav({ panelInstant: true })
