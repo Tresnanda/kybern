@@ -1,4 +1,5 @@
 import { memo, useState } from 'react'
+import { ISLAND } from '../MatrixLoader.tsx'
 import { useGpuixRequired, useWindowSize } from '@gpuix/react'
 import { useSidebarWidth } from '../shell/layout.ts'
 import { beginTaskDrag, trackTaskDrag, endPendingDrag, endTaskDrag, taskDragConsumesClick, regionRef, rowRef, taskShift, useTaskDragOpacity, viewportRef } from './drag.tsx'
@@ -201,6 +202,7 @@ export const TaskRow = memo(function TaskRow({
     <ShiftRow store={taskShift} id={task.id} transition={TASK_SORT_MOTION}>
     <div style={{ paddingLeft: card ? 2 : 0, paddingRight: card ? 2 : 0, paddingBottom: card ? 8 : 0 }}>
       <div
+        {...ISLAND}
         ref={(node) => rowRef(task.id, node)}
         testId={`task-row-${task.id}`}
         tabIndex={0}
@@ -214,6 +216,7 @@ export const TaskRow = memo(function TaskRow({
           flexDirection: card ? 'column' : 'row',
           alignItems: card ? 'stretch' : 'center',
           minHeight: card ? 114 : 40,
+          width: '100%',
           height: 40,
           paddingLeft: card ? 12 : 20,
           paddingRight: card ? 12 : 20,
