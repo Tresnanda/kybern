@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../icons.tsx'
 import { restartLive } from '../nav/live.ts'
 import { EASE } from '../motion/kit.tsx'
-import { useLoaderStep } from '../MatrixLoader.tsx'
+import { ISLAND, NATIVE_PAINT_ANIMATIONS, useLoaderTime, useLoaderStep } from '../MatrixLoader.tsx'
 import { connect, getClient, getState, resetClient, selectThread, set, useApp } from '../state.ts'
 import { ink, Label, LOGO_SVG, REDUCED_MOTION, useTheme } from '../ui.tsx'
 
@@ -40,14 +40,23 @@ export async function reconnect() {
   })
 }
 
-/** `Spinner` (`components/kybern/bits.tsx`): a 12-o'clock arc over a faint ring, stepped on the shared clock. */
-const arc = (deg: number) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#000" stroke-opacity="0.2" stroke-width="1.6"/><path d="M14 8a6 6 0 0 0-6-6" stroke="#000" stroke-width="1.6" stroke-linecap="round" transform="rotate(${deg} 8 8)"/></svg>`
-const SPINNER = Array.from({ length: 8 }, (_, i) => arc(i * 45))
-
+/** The desktop spinner: a continuous rotating arc over a stationary faint ring. */
+const SPINNER_RING='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-opacity="0.2" stroke-width="1.6"/></svg>'
+const SPINNER_ARC='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>'
 export function Spinner({ size = 14, color }: { size?: number; color: string }) {
+  return NATIVE_PAINT_ANIMATIONS ? <ContinuousSpinner size={size} color={color} /> : <LegacySpinner size={size} color={color} />
+}
+const LEGACY_SPINNER = Array.from({ length: 8 }, (_, i) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#000" stroke-opacity="0.2" stroke-width="1.6"/><path d="M14 8a6 6 0 0 0-6-6" stroke="#000" stroke-width="1.6" stroke-linecap="round" transform="rotate(${i * 45} 8 8)"/></svg>`)
+function LegacySpinner({ size, color }: { size: number; color: string }) {
   const step = useLoaderStep()
-  return <Icon source={SPINNER[step]!} size={size} color={color} />
+  return <Icon source={LEGACY_SPINNER[step]!} size={size} color={color} />
+}
+function ContinuousSpinner({ size, color }: { size: number; color: string }) {
+  const time = useLoaderTime()
+  return <div {...ISLAND} style={{ width: size, height: size, position: 'relative', flexShrink: 0, pointerEvents: 'none' }}>
+    <svg source={SPINNER_RING} style={{ width: size, height: size, color, pointerEvents: 'none' }} />
+    <svg {...{ rotate: REDUCED_MOTION ? 0 : (time % 1000) * .36 }} source={SPINNER_ARC} style={{ position: 'absolute', left: 0, top: 0, width: size, height: size, color, pointerEvents: 'none' }} />
+  </div>
 }
 
 type Phase = 'out' | 'in' | 'leaving'

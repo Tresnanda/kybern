@@ -5,39 +5,48 @@
 // and pulses the four inner dots together; orbit and pulse hide the corners, so
 // the grid reads as a disc.
 //
-// WebKit animates those keyframes in its compositor. GPUI lays out the whole
-// window for any change, so every loader samples the keyframes from ONE shared
-// clock: one React commit and one frame per tick however many loaders show.
+// WebKit animates those keyframes in its compositor. Native paintAnimation
+// evaluates the same curves at native display callbacks without React work.
+// The diagnostic JS path and non-declarative motion share the frame source.
+// The diagnostic React path shares one clock across all visible loaders.
 // The clock runs only while a loader is mounted and the window is visible, and
 // never under Reduce Motion (loaders then hold their rest frame).
-import { useSyncExternalStore } from 'react'
+import { useCallback, useSyncExternalStore } from 'react'
+import { onFrame } from './native/frame.ts'
 import { isWindowVisible, onWindowVisibility } from './native/visibility.ts'
 import { ink, REDUCED_MOTION, useTheme } from './ui.tsx'
 
-/** Ticks per loop step. Each tick re-lays out the whole window (~19 ms of CPU
- *  on the home screen, 2026-10-14): 100 ms costs ~21% CPU, 200 ms ~13%, 400 ms
- *  ~8%. 200 ms keeps the desktop's pattern with coarser steps.
- *  `KYBERN_LOADER_TICK_MS` overrides it for measurement. */
-const TICK_MS = Number(process.env.KYBERN_LOADER_TICK_MS ?? 200)
-
+// Full-app native-loop acceptance remains opt-in: repeated GPU controls did not
+// meet the approved gate, and the smooth JS fallback regressed running CPU.
+// Preserve the existing clock outside that experiment; it is still a known
+// pacing defect, not an accepted 60 fps result. Native motion uses onFrame.
+export const NATIVE_PAINT_ANIMATIONS = process.env.KYBERN_NATIVE_PAINT_ANIMATIONS === '1'
+const TICK_MS = Number(process.env.KYBERN_LOADER_TICK_MS ?? (NATIVE_PAINT_ANIMATIONS ? 0 : 200))
 let now = 0
-let timer: ReturnType<typeof setInterval> | undefined
+let stopFrame: (() => void) | undefined
+let legacyTimer: ReturnType<typeof setInterval> | undefined
 let stopVisibility: (() => void) | undefined
 const listeners = new Set<() => void>()
-
-// The clock ticks only while a loader is mounted AND the window is on screen
-// (desktop: loops pause in hidden windows). Covered or minimized, it stops.
 function sync() {
   const run = listeners.size > 0 && !REDUCED_MOTION && isWindowVisible()
-  if (run && !timer) {
-    now = performance.now()
-    timer = setInterval(() => {
+  if (run && TICK_MS > 0 && !legacyTimer) {
+    // Preserve the pre-experiment resource behavior while its replacement is
+    // gated. A native display subscription itself schedules recurring frames.
+    legacyTimer = setInterval(() => {
       now = performance.now()
-      for (const l of listeners) l()
+      for (const listener of listeners) listener()
     }, TICK_MS)
-  } else if (!run && timer) {
-    clearInterval(timer)
-    timer = undefined
+  } else if (run && TICK_MS <= 0 && !stopFrame) {
+    stopFrame = onFrame(time => {
+      if (time - now < TICK_MS) return
+      now = time
+      for (const listener of listeners) listener()
+    })
+  } else if (!run) {
+    stopFrame?.()
+    stopFrame = undefined
+    if (legacyTimer) clearInterval(legacyTimer)
+    legacyTimer = undefined
   }
 }
 
@@ -54,6 +63,18 @@ function subscribe(listener: () => void) {
     sync()
   }
 }
+
+function useLoaderSnapshot(snapshot: () => number, active = true) {
+  const connect = useCallback((listener: () => void) => {
+    if (!active) return () => {}
+    return subscribe(listener)
+  }, [active])
+  return useSyncExternalStore(connect, snapshot)
+}
+/** Continuous native frame time for motion; elapsed labels use coarse snapshots. */
+export function useLoaderTime() { return useLoaderSnapshot(() => now) }
+/** Historical port clock, retained until the smooth-loop resource gate passes. */
+export function useLoaderStep() { return useLoaderSnapshot(() => Math.floor(now / 200) % 8) }
 
 /** Marks a fixed-size `cache` island (native/patches/cache_island.rs). */
 export const ISLAND = { cache: true } as Record<string, unknown>
@@ -79,7 +100,7 @@ function delays(variant: MatrixVariant, cycle: number): number[] {
 }
 
 /** CSS `ease-in-out`, cubic-bezier(0.42, 0, 0.58, 1). */
-function easeInOut(x: number): number {
+export function easeInOut(x: number): number {
   const bez = (t: number, a: number, b: number) => 3 * a * t * (1 - t) ** 2 + 3 * b * t * t * (1 - t) + t ** 3
   let lo = 0
   let hi = 1
@@ -118,13 +139,13 @@ export function MatrixLoader({
   rgb?: readonly [number, number, number]
 }) {
   const t = useTheme()
-  const time = useSyncExternalStore(subscribe, () => now)
+  const time = useLoaderSnapshot(() => now, !NATIVE_PAINT_ANIMATIONS)
   const isRounded = rounded ?? (variant === 'orbit' || variant === 'pulse')
   const d = delays(variant, cycle)
   const size = dot * 4 + gap * 3
   return (
-    // A cached island (patched GPUIX): a tick re-renders these 16 dots, and the
-    // rest of the window replays its previous frame.
+    // Native paint loops evaluate the desktop keyframes without React commits.
+    // The diagnostic JS path uses the same binary for controlled A/B samples.
     <div {...ISLAND} style={{ display: 'flex', flexDirection: 'column', gap, width: size, height: size, flexShrink: 0 }}>
       {[0, 1, 2, 3].map((r) => (
         <div key={r} style={{ display: 'flex', gap }}>
@@ -132,8 +153,8 @@ export function MatrixLoader({
             const i = r * 4 + c
             const hidden = isRounded && ROUNDED_GAPS.has(i)
             const phase = REDUCED_MOTION ? 1 : ((((time - d[i]!) % cycle) + cycle) % cycle) / cycle
-            const opacity = hidden ? 0 : pulseOpacity(phase)
-            return <div key={c} style={{ width: dot, height: dot, borderRadius: 0.5, backgroundColor: rgb ? `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha * opacity})` : ink(t, alpha * opacity) }} />
+            const opacity = hidden ? 0 : NATIVE_PAINT_ANIMATIONS && !REDUCED_MOTION ? 1 : pulseOpacity(phase)
+            return <div key={c} {...(NATIVE_PAINT_ANIMATIONS && !REDUCED_MOTION && !hidden ? { paintAnimation: { kind: 'matrix', cycleMs: cycle, delayMs: d[i] } } : {})} style={{ width: dot, height: dot, borderRadius: 0.5, backgroundColor: rgb ? `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha * opacity})` : ink(t, alpha * opacity) }} />
           })}
         </div>
       ))}
@@ -141,15 +162,34 @@ export function MatrixLoader({
   )
 }
 
-/** A 0–7 step (200 ms each, a 1.6 s loop) for other loops on the shared clock,
- *  such as the transcript's "Thinking" pulse. Re-renders only when the step
- *  changes; holds still under Reduce Motion. */
-export function useLoaderStep(): number {
-  return useSyncExternalStore(subscribe, () => Math.floor(now / 200) % 8)
+/** Seconds for elapsed labels; independent of display-rate animation delivery.
+ * Settled labels never subscribe. */
+export function useLoaderSecond(active: boolean): number {
+  return useSyncExternalStore(active ? subscribeSeconds : noSubscription, () => active ? second : 0)
 }
 
-/** Seconds for visible elapsed labels. Shares the loader clock, but only commits
- * when a second changes; settled labels never subscribe. */
-export function useLoaderSecond(active: boolean): number {
-  return useSyncExternalStore(active ? subscribe : () => () => {}, () => active ? Math.floor(now / 1000) : 0)
+// Elapsed labels are information, not animation. They must keep advancing under
+// Reduce Motion without keeping a display-rate subscription alive.
+let second = Math.floor(Date.now() / 1000)
+let secondTimer: ReturnType<typeof setTimeout> | undefined
+let stopSecondVisibility: (() => void) | undefined
+const secondListeners = new Set<() => void>()
+const noSubscription = () => () => {}
+function syncSeconds() {
+  if (secondTimer) clearTimeout(secondTimer)
+  secondTimer = undefined
+  if (!secondListeners.size || !isWindowVisible()) return
+  const next = Math.floor(Date.now() / 1000)
+  if (next !== second) { second = next; for (const listener of secondListeners) listener() }
+  secondTimer = setTimeout(syncSeconds, 1000 - Date.now() % 1000)
+}
+function subscribeSeconds(listener: () => void) {
+  secondListeners.add(listener)
+  if (!stopSecondVisibility) stopSecondVisibility = onWindowVisibility(syncSeconds)
+  syncSeconds()
+  return () => {
+    secondListeners.delete(listener)
+    if (!secondListeners.size) { stopSecondVisibility?.(); stopSecondVisibility = undefined }
+    syncSeconds()
+  }
 }

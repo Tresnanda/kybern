@@ -56,6 +56,7 @@ export function Label({
   font = FONT_UI,
   truncate,
   style,
+  paintAnimation,
 }: {
   children: ReactNode
   color: string
@@ -65,9 +66,11 @@ export function Label({
   font?: string
   truncate?: boolean
   style?: StyleDesc
+  paintAnimation?: { kind: 'shimmer'; cycleMs: number }
 }) {
   return (
     <text
+      {...(paintAnimation ? { paintAnimation } : {})}
       style={{
         color,
         fontSize: size,
