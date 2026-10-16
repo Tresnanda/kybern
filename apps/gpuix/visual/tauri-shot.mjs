@@ -30,7 +30,7 @@ screens['dock-base'] = async p => {
 }
 const spec = JSON.parse(process.argv[2])
 const browser = await webkit.launch()
-const fresh = () => browser.newContext({ viewport: { width: 1280, height: 820 }, deviceScaleFactor: 2, colorScheme: spec.theme, reducedMotion: 'reduce' })
+const fresh = () => browser.newContext({ viewport: { width: 1280, height: 820 }, deviceScaleFactor: 2, colorScheme: spec.theme, reducedMotion: process.env.KYBERN_REDUCED_MOTION === '0' ? 'no-preference' : 'reduce' })
 let ctx = await fresh()
 let page = await ctx.newPage()
 const q = `?url=ws://127.0.0.1:${spec.port}/ws&token=${spec.token}`

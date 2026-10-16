@@ -23,6 +23,10 @@ snapshots are shared with cached bounds rather than allocated for every element.
 The extension is currently Metal/macOS, like scene-local backdrops; the stock npm
 addon retains rectangular clips. Radii follow GPUI's existing circular-corner
 representation and clamping, not CSS elliptical corner radii.
+The expanded `ContentMask` changes native primitive record sizes. These rebuild
+hooks target Metal; WGPU's packed WGSL/WebGL records need a separate port before
+reusing this patched GPUI checkout with that backend. The app loader selects the
+local addon only on macOS arm64; other platforms retain their npm addon.
 
 Implementation: `rounded_clip.rs`, `rounded_clip_gpui.py` (reconstructed by
 `backdrop_gpui.py`), the backdrop shader/renderer, bounds snapshots and the embedded

@@ -17,6 +17,10 @@ try { for(const appearance of ['dark','light']) {
     let log=await inspect();assert.ok(log.some(e=>e.type==='created'),fixture.diagnostics());assert.ok(log.some(e=>e.data?.kind==='lab'),JSON.stringify(log))
     const identity=log.find(e=>e.data?.kind==='lab').data.identity
     const root=(await a.getByTestId('app-ready').element()).id
+    if(process.env.KYBERN_ROUNDED_WEBVIEW==='1'){
+      await a.call('keyDown',{elementId:root,key:'q'})
+      assert.deepEqual(JSON.parse(await a.getByTestId('result').textContent()),{corner:false,inside:true},'AppKit rounded ancestor mask must exclude the corner from native web input')
+    }
     for(const key of ['c','f','t']){await a.call('keyDown',{elementId:root,key});await Bun.sleep(200)}
     log=await inspect();assert.ok(log.some(e=>e.data?.kind==='lab'&&e.data.count===1),'Native button click did not reach WKWebView');assert.ok(log.some(e=>e.data?.input==='kept text'),'Native text insertion did not reach WKWebView')
     await a.call('keyDown',{elementId:root,key:'s'});await Bun.sleep(200);log=await inspect();assert.ok(log.some(e=>e.type==='shortcut'&&e.key==='l'),'Command-L did not escape focused web input')
