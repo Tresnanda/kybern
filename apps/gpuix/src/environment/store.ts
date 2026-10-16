@@ -1,3 +1,4 @@
+import { REDUCED_MOTION } from '../ui.tsx'
 import { onEnvironmentChange } from '../shell/environment.ts'
 import { useSyncExternalStore } from 'react'
 
@@ -19,6 +20,8 @@ export function setEnvironmentDock(next: DockRect | null) {
 }
 /** Content inset while the panel is docked (`ENVIRONMENT_DOCKED_CONTENT_INSET_PX`). */
 export const DOCKED_INSET = 312
+/** composerPickerStyles.ts: Environment slide and content inset share the drawer curve. */
+export const ENVIRONMENT_MOTION = { duration: 0.3, ease: [0.32, 0.72, 0, 1] as [number, number, number, number] }
 export function openEnvironmentPanel(threadId: string, keyboard: boolean) {
   clearTimeout(timer)
   panel = { threadId, keyboard, leaving: false, generation: ++generation }
@@ -30,7 +33,7 @@ export function closeEnvironmentPanel(immediate = false) {
   if (immediate) { panel = null; emit(); return }
   panel = { ...panel, leaving: true, generation: ++generation }
   emit()
-  timer = setTimeout(() => { panel = null; emit() }, 120)
+  timer = setTimeout(() => { panel = null; emit() }, REDUCED_MOTION || panel.keyboard ? 0 : ENVIRONMENT_MOTION.duration * 1000)
 }
 
 onEnvironmentChange(() => closeEnvironmentPanel(true))

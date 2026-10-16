@@ -1,3 +1,4 @@
+import path from 'node:path'
 // Relocated full split matrix. Reduced motion asserts no outgoing page and painted child, preserving all other assertions/trials.
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
@@ -5,12 +6,12 @@ import { promisify } from 'node:util'
 const exec = promisify(execFile)
 import { mkdtempSync, rmSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { launchFixture } from '/Users/mymac/projects/ade-gpuix-dock2/apps/gpuix/src/requests/harness.ts'
+import { launchFixture } from '../src/requests/harness.ts'
 const out = '/Users/mymac/projects/ade/previews/gpuix/audit-2026-10-16/split-full'
 mkdirSync(out, { recursive: true })
 for (const theme of ['dark', 'light']) {
   const scratch = mkdtempSync(tmpdir() + '/gpuix-scratch-split-')
-  const f = await launchFixture("/Users/mymac/projects/ade-gpuix-dock2/apps/gpuix/src/split" + '/native.fixture.tsx', { GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: theme, KYBERN_DATA_DIR: scratch, KYBERN_CLIENT_CONFIG_DIR: scratch, KYBERN_GPUIX_CREDENTIALS_DIR: scratch, KYBERN_GPUIX_ENVIRONMENT: 'local', KYBERN_URL: '', KYBERN_TOKEN: '' })
+  const f = await launchFixture(path.resolve(import.meta.dir, "../src/split") + '/native.fixture.tsx', { GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: theme, KYBERN_DATA_DIR: scratch, KYBERN_CLIENT_CONFIG_DIR: scratch, KYBERN_GPUIX_CREDENTIALS_DIR: scratch, KYBERN_GPUIX_ENVIRONMENT: 'local', KYBERN_URL: '', KYBERN_TOKEN: '' })
   const app = f.app
   const until = async (check: () => Promise<boolean>) => { for (let i = 0; i < 100; i++) { if (await check()) return; await app.clock.fastForward(32); await Bun.sleep(20) } throw Error('Native paint did not settle') }
   const panes = async () => JSON.parse(await app.getByTestId('fixture-panes').textContent()) as { id: string; selected: string | null }[]
@@ -77,7 +78,7 @@ for (const theme of ['dark', 'light']) {
     const beforeSource = await panes()
     await dragTo('source'); assert.deepEqual(await panes(), beforeSource)
     if (process.argv.includes('--physical')) {
-    const [physical] = await Promise.all([exec('swift', ["/Users/mymac/projects/ade-gpuix-dock2/apps/gpuix/src/split" + '/../../scripts/split-outside-pointer.swift', String(f.pid), String(start.x), String(start.y), '820']),
+    const [physical] = await Promise.all([exec('swift', [path.resolve(import.meta.dir, "../src/split") + '/../../scripts/split-outside-pointer.swift', String(f.pid), String(start.x), String(start.y), '820']),
       app.getByTestId('split-drag-layer').waitFor({ timeoutMs: 30000 }),
     ])
     console.log(physical.stdout.trim())

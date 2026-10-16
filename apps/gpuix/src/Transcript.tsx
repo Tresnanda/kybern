@@ -63,6 +63,8 @@ export function Transcript() {
   const [atTail, setAtTail] = useState(true)
   const [overflow, setOverflow] = useState(false)
   const [paneHeight, setPaneHeight] = useState(0)
+  const jumpStop = useRef<(() => void) | null>(null)
+  useEffect(() => () => jumpStop.current?.(), [threadId])
   useEffect(() => {
     if (!loaded || !turns.length || !surfaceNode) { setOverflow(false); return }
     const rects: Record<string, LayoutRect | null> = {}
@@ -76,7 +78,8 @@ export function Transcript() {
       if (!viewport) return
       setPaneHeight(viewport.height)
       if (hasEarlier || (top && bottom)) setOverflow(hasEarlier || bottom!.y + bottom!.height - top!.y > viewport.height + 1)
-      else if (top || bottom) setOverflow(true)
+      // Neither endpoint is painted when restoring into the middle of a long list.
+      else setOverflow(true)
     })] : [])
     return () => stops.forEach(stop => stop())
   }, [renderer, surfaceNode, topNode, bottomNode, threadId, loaded, turns.length, hasEarlier])
@@ -106,9 +109,12 @@ export function Transcript() {
     const result = [{ key, turn, node: <TurnItem turn={turn} threadId={threadId!} isLast={i === turns.length - 1} threadRunning={i === turns.length - 1 && threadRunning} dateAt={startsDay ? at : null} /> }]
     if (running) return result
     result.push({ key: `${key}:images`, turn, node: <Row><AnswerImages group={turn} threadId={threadId!} /></Row> })
-    for (const part of markdownParts(turn.answer?.text ?? '')) {
+    for (const [partIndex, part] of markdownParts(turn.answer?.text ?? '').entries()) {
       const partKey = `${key}:answer:${part.key}`
       const chunks = textChunks(part.text)
+      // Native Markdown owns spacing inside prose; separate virtual parts
+      // share one collapsed .65rem margin at their boundary.
+      if (partIndex > 0) result.push({ key: `${partKey}:before`, turn, node: <div style={{ height: 10.4 }} /> })
       if (part.kind === 'code') {
         // Desktop code starts unwrapped; horizontal scrolling preserves long lines.
         const state = codeState[partKey] ?? { expanded: false, wrap: false }
@@ -117,7 +123,6 @@ export function Transcript() {
         for (const [chunkIndex, chunk] of (state.expanded ? chunks : chunks.slice(0, 1)).entries()) {
           result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><CodeChunk text={chunk} language={part.language} wrap={state.wrap} /></Row> })
         }
-        result.push({ key: `${partKey}:gap`, turn, node: <div style={{ height: 10 }} /> })
       } else {
         for (const [chunkIndex, chunk] of chunks.entries()) result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><Prose text={chunk} /></Row> })
       }
@@ -279,11 +284,40 @@ export function Transcript() {
       </virtual-list>
       {overflow && <MessageRail items={railItems} active={rows[activeRow]?.turn.user?.id ?? null} height={paneHeight} bottomInset={COMPOSER_INSET - 64 + panelHeight} onJump={(id) => {
         const index = rows.findIndex(row => row.turn.user?.id === id)
-        if (index >= 0 && list.current) {
-          renderer.scrollToItem?.(list.current.id, index + lead, 0)
-          setAtTail(false)
-          setActiveRow(index)
+        if (index < 0 || !list.current) return
+        setAtTail(false)
+        setActiveRow(index)
+        // The desktop brings the prompt to the middle of the viewport (`navigationModel.scrollToItem`).
+        // Mount the turn first, then place it from its measured row and bubble, whatever is scrolled now.
+        jumpStop.current?.()
+        const target = list.current.id
+        renderer.scrollToItem?.(target, index + lead, 0)
+        const rects: Record<string, LayoutRect | null> = {}
+        // `scrollToItem` redraws at once and that reports new bounds: place from a deferred call, at most
+        // three times, and stop once the offset stops changing, or the observer would chase its own scroll.
+        let placed: number | null = null
+        let attempts = 0
+        let queued: ReturnType<typeof setTimeout> | undefined
+        const place = () => {
+          if (!paneHeight || attempts >= 3 || queued) return
+          queued = setTimeout(() => {
+            queued = undefined
+            // Bounds arrive one host at a time. Read both after the batch,
+            // never capture one fresh rect with the other host's old position.
+            const { row, user } = rects
+            if (!row || !user) return
+            const bubble = user.height - 16
+            const offset = Math.round(user.y - row.y - (paneHeight - bubble) / 2)
+            if (offset === placed) return
+            placed = offset
+            attempts++
+            renderer.scrollToItem?.(target, index + lead, offset)
+          }, 0)
         }
+        const stops = (['row', 'user'] as const).map(key => observeElementBounds(renderer, { testId: `${key === 'row' ? 'turn-row' : 'turn-user'}:${id}` }, event => { rects[key] = event.rect; place() }))
+        const timer = setTimeout(() => stop(), 1500)
+        const stop = () => { clearTimeout(timer); clearTimeout(queued); stops.forEach(s => s()); jumpStop.current = null }
+        jumpStop.current = stop
       }} />}
       {actionError && (
         <div style={{ position: 'absolute', top: 12, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
@@ -310,8 +344,10 @@ function Row({ children }: { children: React.ReactNode }) {
 const TurnItem = memo(function TurnItem({ turn, threadId, isLast, threadRunning, dateAt }: { turn: TurnGroup; threadId: string; isLast: boolean; threadRunning: boolean; dateAt: string | null }) {
   return (
     <Row>
-      {dateAt && <DateSeparator at={dateAt} />}
-      <Turn group={turn} threadId={threadId} isLast={isLast} threadRunning={isLast && threadRunning} />
+      <div testId={turn.user ? `turn-row:${turn.user.id}` : undefined} style={{ display: 'flex', flexDirection: 'column' }}>
+        {dateAt && <DateSeparator at={dateAt} />}
+        <Turn group={turn} threadId={threadId} isLast={isLast} threadRunning={isLast && threadRunning} />
+      </div>
     </Row>
   )
 })

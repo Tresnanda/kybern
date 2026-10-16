@@ -38,14 +38,13 @@ export const LEADING_X = 82
 
 const SLIDE = { duration: 0.22, ease: EASE_OUT }
 
-/** The thread panel shows on every page but Notes, and on Pull requests only when peeked
- *  (`App.tsx:113-116`). Tasks puts its own Tasks sidebar there; until that is ported the
- *  slot stays empty rather than showing the thread list. */
+/** Notes and Usage have no thread panel. Pull requests allow a temporary peek;
+ *  Tasks use their own sidebar. The saved Home preference is unchanged. */
 export function usePanelOpen(): boolean {
   const sidebarOpen = useApp((s) => s.sidebarOpen)
   const page = useNav((s) => s.page)
   const peek = useNav((s) => s.pullsPeek)
-  if (page === 'notes') return false
+  if (page === 'notes' || page === 'usage') return false
   if (page === 'pulls') return peek
   return sidebarOpen
 }
@@ -122,7 +121,7 @@ export function TitleBar({ panelOpen }: { panelOpen: boolean }) {
   const sidebarWidth = useSidebarWidth()
   const resizing = useSidebarDragging()
   const titleStart = panelOpen ? RAIL + sidebarWidth : LEADING_X + 84
-  const panelless = page === 'notes'
+  const panelless = page === 'notes' || page === 'usage'
   const toggle = () => {
     setNav({ panelInstant: false })
     if (getNav().page === 'pulls') setNav({ pullsPeek: !getNav().pullsPeek })

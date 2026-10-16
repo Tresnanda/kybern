@@ -9,7 +9,7 @@ function Fixture() {
   const t = useTheme(), [active, setActive] = useState("turn-0")
   return <div testId="navigation-ready" style={{ position: "relative", width: "100%", height: "100%", backgroundColor: t.surface }}>
     <text testId="active-message" style={{ color: t.text }}>{active}</text>
-    <MessageRail turns={turns} active={active} onJump={setActive} />
+    <MessageRail items={turns.map(turn => ({ id: turn.turnId!, label: turn.user!.message.parts.map(part => part.type === "text" ? part.text : "").join("") }))} active={active} height={820} bottomInset={128} onJump={setActive} />
   </div>
 }
 render(<ThemeProvider><Fixture /></ThemeProvider>, { title: "Message navigation", width: 900, height: 820, focus: false })

@@ -1,8 +1,10 @@
 /** Shared launch helper for the shell3 checks (rail, spacing, env motion, nav, resize). */
 import path from 'node:path'
+import { mkdirSync } from 'node:fs'
 import { launch } from '@gpuix/react/automation'
 
-export const OUT = '/Users/mymac/projects/ade/previews/gpuix/shell3'
+export const OUT = '/Users/mymac/projects/ade/previews/gpuix/round3-resume/shell'
+mkdirSync(OUT, { recursive: true })
 const KEYS = ['KYBERN_DATA_DIR', 'KYBERN_URL', 'KYBERN_TOKEN', 'KYBERN_GPUIX_THREAD', 'KYBERN_REDUCED_MOTION', 'KYBERN_OPAQUE', 'KYBERN_WINDOW_SIZE', 'KYBERN_CLIENT_CONFIG_DIR', 'KYBERN_GPUIX_CREDENTIALS_DIR']
 
 export async function start(light = false, extra: Record<string, string> = {}) {

@@ -1,8 +1,8 @@
 import { activeEnvironment } from '../shell/environment.ts'
 import { useNav } from '../nav/store.ts'
 import { spawn } from 'node:child_process'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { useGpuix, type PublicInstance } from '@gpuix/react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { motion } from '@gpuix/react'
 import { GitCommitIcon, GithubIcon, Edit02Icon, Copy01Icon, ArrowUpRight01Icon } from '@hugeicons/core-free-icons'
 import type { Diff, GitStatus, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon, glyph } from '../icons.tsx'
@@ -15,9 +15,9 @@ import { openWeb } from '../dock/Diff.tsx'
 import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
 import { errorText } from '../nav/actions.ts'
-import { EASE_OUT, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { copyText } from '../transcript/store.ts'
-import { useEnvironmentPanel, useEnvironmentDock, openEnvironmentPanel, closeEnvironmentPanel } from './store.ts'
+import { ENVIRONMENT_MOTION, useEnvironmentPanel, useEnvironmentDock, openEnvironmentPanel, closeEnvironmentPanel } from './store.ts'
 import { ThreadNote } from './ThreadNote.tsx'
 
 const G = { commit: glyph(GitCommitIcon), github: glyph(GithubIcon), changes: glyph(Edit02Icon), copy: glyph(Copy01Icon), external: glyph(ArrowUpRight01Icon) }
@@ -47,14 +47,17 @@ export function EnvironmentOverlay() {
   const visible = useNav((s) => s.page === 'home' && !s.settingsOpen)
   useEffect(() => { if (panel && (!visible || selected !== panel.threadId)) closeEnvironmentPanel(true) }, [selected, visible, panel?.threadId])
   if (!panel || !visible || selected !== panel.threadId || !dock) return null
-  const { threadId, leaving, keyboard, generation } = panel
-  return <anchored position={{ x: dock.x + dock.width - 12, y: dock.y + 12 }} anchor="topRight" fit="snap" snapMargin={12} deferred priority={1} occlude style={{ borderRadius: 16 }}
-    {...({ motion: { generation, isExit: leaving, initial: { opacity: leaving ? 1 : 0, top: leaving || REDUCED_MOTION || keyboard ? 0 : -4 }, animate: { opacity: leaving ? 0 : 1, top: leaving && !REDUCED_MOTION && !keyboard ? -2 : 0 }, transition: { duration: keyboard ? 0 : leaving ? 0.12 : 0.18, ease: EASE_OUT } } } as object)}>
+  const { threadId, leaving, keyboard } = panel
+  return <motion.div
+    initial={keyboard || REDUCED_MOTION ? false : { opacity: 0, translateX: 288 }}
+    animate={{ opacity: leaving ? 0 : 1, translateX: leaving && !REDUCED_MOTION && !keyboard ? 288 : 0 }}
+    transition={REDUCED_MOTION || keyboard ? { duration: 0 } : ENVIRONMENT_MOTION}
+    style={{ position: 'absolute', left: dock.x + dock.width - 300, top: dock.y + 12, pointerEvents: leaving ? 'none' : 'auto' }}>
     <div testId="environment-panel" tabIndex={0} autoFocus onKeyDown={(e) => { if (e.key === 'escape') closeEnvironmentPanel() }}
       style={{ display: 'flex', flexDirection: 'column', width: 288, maxHeight: Math.max(120, dock.height - 24), overflow: 'scroll', padding: 6, gap: 2, borderRadius: 16, borderWidth: 1, borderColor: t.borderLight, backgroundColor: t.popover, boxShadow: surfaceShadow(t), pointerEvents: leaving ? 'none' : 'auto' }}>
       <EnvironmentPanel key={threadId} threadId={threadId} />
     </div>
-  </anchored>
+  </motion.div>
 }
 
 function Row({ icon, label, trailing, onClick, disabled, testId, decorative }: { icon: string; label: string; trailing?: ReactNode; onClick?: () => void; disabled?: boolean; testId?: string; decorative?: boolean }) {
