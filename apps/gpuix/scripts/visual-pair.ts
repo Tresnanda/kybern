@@ -9,7 +9,7 @@
  * everything; without `--keep` the servers are stopped after the run.
  */
 import { spawn } from 'node:child_process'
-import { mkdirSync, rmSync } from 'node:fs'
+import { mkdirSync, openSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { launch } from '@gpuix/react/automation'
 import { CLIENT_DIR, CREDS_DIR, DATA_DIR, connect, freePort, readState, seed, startDaemon, stopPid, stopVite, writeState } from '../visual/fixture.ts'

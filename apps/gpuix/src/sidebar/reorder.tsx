@@ -19,6 +19,7 @@ import { getNav, setNav } from '../nav/store.ts'
 import { getState } from '../state.ts'
 import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { DragGhost, DropSlot, type Rect, type Settle } from '../drag/Ghost.tsx'
+import { leftCapture } from '../drag/leave.ts'
 import { edgeSpeed, startFrameLoop } from '../drag/edge.ts'
 import { usePacing } from '../drag/pacing.ts'
 import { createShiftStore } from '../drag/shift.tsx'
@@ -298,12 +299,12 @@ export function ProjectDragLayer() {
       testId="project-drag-layer"
       onMouseMove={move}
       onMouseUp={() => release(true)}
-      onMouseLeave={escape}
+      onMouseLeave={(event) => { if (leftCapture(event, renderer)) escape() }}
       style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: drag.settle ? 'none' : 'auto', cursor: 'grabbing' }}
     >
       <DropSlot testId="project-drop-indicator" rect={drag.settle ? null : drag.slot} tone="ok" />
       <DragGhost rect={drag.source} grab={drag.grab} x={drag.x} y={drag.y} settle={drag.settle} onSettled={() => { if (!landed) { landed = true; finish() } }} radius={8} pacing={pacing as never}>
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', justifyContent: 'flex-start' }}>
+        <div style={{ pointerEvents: 'none', display: 'flex', flexDirection: 'column', height: '100%', justifyContent: 'flex-start' }}>
           {drag.members.map((row) => <GhostRow key={row.key} row={row} />)}
         </div>
       </DragGhost>
@@ -317,7 +318,7 @@ function GhostRow({ row }: { row: Row }) {
   const header = row.kind === 'project'
   const indent = header ? 8 : 12 + (row.kind === 'thread' || row.kind === 'child' ? 20 + row.depth * 20 : 20)
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: header ? HEADER : (rowHeight(row) ?? 30), flexShrink: 0, paddingLeft: indent, paddingRight: 8 }}>
+    <div style={{ pointerEvents: 'none', display: 'flex', alignItems: 'center', gap: 8, height: header ? HEADER : (rowHeight(row) ?? 30), flexShrink: 0, paddingLeft: indent, paddingRight: 8 }}>
       {header && <Icon source={N.folder} size={16} color={t.textSecondary} />}
       {(row.kind === 'thread' || row.kind === 'child') && <ProviderMark kind={row.thread.provider.kind} size={14} />}
       <Label color={header ? t.text : t.textSecondary} truncate style={{ pointerEvents: 'none' }}>{label}</Label>

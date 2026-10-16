@@ -172,15 +172,15 @@ export const TaskRow = memo(function TaskRow({
           aria-label={`${task.key} ${task.title}`}
           onFocus={() => setTasks({ focused: task.id })}
           onMouseEnter={() => setHover(true)}
-          onMouseLeave={() => { setHover(false); endPendingDrag() }}
+          onMouseLeave={(e) => { setHover(false); if (draggable) trackTaskDrag(e, true); endPendingDrag() }}
           onMouseDown={draggable ? (e) => beginTaskDrag(task.id, e, renderer, sequence) : undefined}
-          onMouseMove={draggable ? trackTaskDrag : undefined}
+          onMouseMove={draggable ? (e) => trackTaskDrag(e) : undefined}
           onMouseUp={endPendingDrag}
           onClick={(e) => {
             if (e.modifiers?.cmd || e.modifiers?.ctrl || e.modifiers?.shift) pick(task.id, sequence, !!e.modifiers?.shift)
             else openTask(task.id)
           }}
-          style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: cardHeight(task, lines) - 8, paddingTop: 11, paddingBottom: 12, paddingLeft: 12, paddingRight: 12, borderRadius: 10, backgroundColor: fill, userSelect: 'none', opacity: lifted ? 0 : 1, boxShadow: dark ? { offsetX: 0, offsetY: raised ? 6 : 1, blurRadius: raised ? 18 : 2, spreadRadius: raised ? -6 : 0, color: raised ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.25)' } : { offsetX: 0, offsetY: raised ? 4 : 1, blurRadius: raised ? 14 : 2, spreadRadius: raised ? -4 : 0, color: raised ? 'rgba(0, 0, 0, 0.12)' : 'rgba(0, 0, 0, 0.05)' }, borderWidth: dark ? 0 : 0.5, borderColor: 'rgba(0, 0, 0, 0.09)', ...(focused ? { borderWidth: 1.5, borderColor: ink(t, 0.14) } : {}) }}
+          style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: cardHeight(task, lines) - 8, paddingTop: 11, paddingBottom: 12, paddingLeft: 12, paddingRight: 12, borderRadius: 10, backgroundColor: fill, userSelect: 'none', opacity: lifted ? 0.35 : 1, boxShadow: dark ? { offsetX: 0, offsetY: raised ? 6 : 1, blurRadius: raised ? 18 : 2, spreadRadius: raised ? -6 : 0, color: raised ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.25)' } : { offsetX: 0, offsetY: raised ? 4 : 1, blurRadius: raised ? 14 : 2, spreadRadius: raised ? -4 : 0, color: raised ? 'rgba(0, 0, 0, 0.12)' : 'rgba(0, 0, 0, 0.05)' }, borderWidth: dark ? 0 : 0.5, borderColor: 'rgba(0, 0, 0, 0.09)', ...(focused ? { borderWidth: 1.5, borderColor: ink(t, 0.14) } : {}) }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, height: 16, flexShrink: 0 }}>
             <ProjectDot projectId={task.scope === 'project' ? task.project_id ?? null : null} />
@@ -188,7 +188,7 @@ export const TaskRow = memo(function TaskRow({
             <div style={{ flexGrow: 1 }} />
             {hover || selected ? <Check testId={`task-select-${task.id}`} checked={selected} onClick={() => pick(task.id, sequence)} /> : task.priority !== 0 && <PriorityGlyph priority={task.priority} />}
           </div>
-          <div testId={`task-drag-${task.id}`} style={{ display: 'flex', flexDirection: 'column', marginTop: 6, flexShrink: 0, width: '100%' }}>
+          <div testId={`task-drag-${task.id}`} style={{ display: 'flex', flexDirection: 'column', marginTop: 6, flexShrink: 0, width: '100%', pointerEvents: 'none' }}>
             <Label color={closed ? t.textSecondary : t.text} size={13} lineHeight={18} style={{ width: '100%', pointerEvents: 'none', userSelect: 'none' }}>{task.title || 'Untitled'}</Label>
           </div>
           {!!detail && <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 10 }}><Label color={ink(t, 0.6)} size={12} lineHeight={16} truncate style={{ pointerEvents: 'none' }}>{detail}</Label></div>}
@@ -222,7 +222,7 @@ export const TaskRow = memo(function TaskRow({
           borderRadius: card ? 8 : 0,
           backgroundColor: background,
           userSelect: 'none',
-          opacity: lifted ? 0 : 1,
+          opacity: lifted ? 0.35 : 1,
           gap: card ? 8 : 0,
         }}
       >
@@ -251,9 +251,9 @@ export const TaskRow = memo(function TaskRow({
           <div
             testId={`task-drag-${task.id}`}
             onMouseDown={draggable ? (e) => beginTaskDrag(task.id, e, renderer, sequence) : undefined}
-            onMouseMove={draggable ? trackTaskDrag : undefined}
+            onMouseMove={draggable ? (e) => trackTaskDrag(e) : undefined}
             onMouseUp={endPendingDrag}
-            onMouseLeave={endPendingDrag}
+            onMouseLeave={(e) => { if (draggable) trackTaskDrag(e, true); endPendingDrag() }}
             onClick={(e) => {
               if (e.modifiers?.cmd || e.modifiers?.ctrl || e.modifiers?.shift) pick(task.id, sequence, !!e.modifiers?.shift)
               else openTask(task.id)
@@ -369,7 +369,7 @@ export function TaskBoard({
             card
             entries={[
               ...(quick?.status === column.status
-                ? [{ key: `quick:${quick.nonce}`, height: 196, pinned: true, render: () => <QuickAdd request={quick} card /> }]
+                ? [{ key: `quick:${quick.nonce}`, height: 96, pinned: true, render: () => <QuickAdd request={quick} card /> }]
                 : []),
               ...column.tasks.map((task) => {
                 const lines = titleLines(task.title, columnWidth - 24)

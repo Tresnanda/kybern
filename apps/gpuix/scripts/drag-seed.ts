@@ -16,7 +16,7 @@ for (const n of names) {
   Bun.spawnSync(['git', 'init', '-q', '-b', 'main'], { cwd: dir })
   projects.push(await client.call('projects.add', { path: dir, name: n }))
 }
-for (const [pi, p] of projects.entries()) for (let i = 1; i <= 3; i++) await client.call('threads.create', { project_id: p.id, provider: { kind: 'claude-code', instance: 'default' }, title: `${names[pi]} thread ${i}` })
+for (const [pi, p] of projects.entries()) for (let i = 1; i <= 3; i++) await client.call('threads.create', { project_id: p.id, provider: { kind: 'codex', instance: 'default' }, title: `${names[pi]} thread ${i}` })
 const S = ['inbox', 'todo', 'done', 'canceled'] as const
 for (let i = 0; i < 24; i++) await client.call('tasks.items.create', { scope: 'project', project_id: projects[i % 2]!.id, title: `Drag task ${String(i + 1).padStart(2, '0')}`, body: '', status: S[i < 8 ? 0 : i < 16 ? 1 : i < 22 ? 2 : 3], priority: ((i % 4) + 1) as 1 })
 console.log('seeded', projects.length, 'projects')
