@@ -8,8 +8,7 @@ import { useAppearance } from './settings/appearance.ts'
 import { useSyncWindowAppearance, useSystemVariant } from './shell/appearance.ts'
 import { FONT_UI, THEMES, type Theme } from './theme.ts'
 import { Icon, type IconName } from './icons.tsx'
-import claudeSvg from './assets/claude.svg' with { type: 'text' }
-import openaiSvg from './assets/openai.svg' with { type: 'text' }
+import { PROVIDER_IMAGES, PROVIDER_VECTORS } from './providerMarks.ts'
 
 function systemVariant(): 'dark' | 'light' {
   const forced = process.env.KYBERN_APPEARANCE
@@ -124,11 +123,13 @@ export function ChromeButton({
   )
 }
 
-export function ProviderMark({ kind, size = 14 }: { kind: string; size?: number }) {
+export function ProviderMark({ kind, size = 14, tone = 'default' }: { kind: string; size?: number; tone?: 'default' | 'header' }) {
   const t = useTheme()
-  if (kind === 'claude-code')
-    return <svg source={claudeSvg} style={{ width: size, height: size, flexShrink: 0, color: '#D97757' }} />
-  if (kind === 'codex') return <svg source={openaiSvg} style={{ width: size, height: size, flexShrink: 0, color: t.text }} />
+  const style = { width: size, height: size, flexShrink: 0, pointerEvents: 'none' as const }
+  if (kind === 'opencode') return <img src={PROVIDER_IMAGES.opencode[t.variant]} objectFit="contain" style={style} />
+  if (kind === 'omp' || kind === 'antigravity') return <img src={PROVIDER_IMAGES[kind]} objectFit="contain" style={style} />
+  const source = PROVIDER_VECTORS[kind]
+  if (source) return <svg source={source} style={{ ...style, color: kind === 'claude-code' || kind === 'claudeAgent' ? '#D97757' : kind === 'codex' && tone === 'header' ? t.textSecondary : t.text, opacity: kind === 'codex' && tone === 'header' ? 0.85 : 1 }} />
   return <Icon name="bot" size={size} color={t.iconSecondary} />
 }
 

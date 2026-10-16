@@ -17,9 +17,10 @@ import { FONT_MONO } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { takeExplorerSelection, useExplorerSelection } from './explorerSelection.ts'
 import { Action, DockEmpty, ErrorLine } from './parts.tsx'
+import { MotionFileTreeRows, type TreeRow } from './MotionFileTree.tsx'
+import { TREE_ROW_HEIGHT, TREE_WINDOW_THRESHOLD } from './fileTreeMotion.ts'
 
 type Listing = FileEntry[] | 'loading' | 'error'
-type TreeRow = { key: string; path: string; name: string; kind: string; depth: number }
 export function Explorer({ projectId, width }: { projectId: string; width: number }) {
   const t = useTheme()
   const { renderer } = useGpuix()
@@ -66,26 +67,39 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
     return () => { current = false; clearTimeout(timer) }
   }, [query, projectId])
   const rows = useMemo(() => {
-    if (results) return results.map((path): TreeRow => ({ key: path, path, name: path, kind: 'file', depth: 0 }))
+    if (results) return results.map((path, index): TreeRow => ({ key: path, path, name: path, kind: 'file', depth: 0, position: index + 1, setSize: results.length }))
     const out: TreeRow[] = []
     const append = (dir: string, depth: number) => {
       const listing = listings[dir]
-      if (!Array.isArray(listing)) { out.push({ key: `${dir}:state`, path: dir, depth, kind: listing ?? 'loading', name: listing === 'error' ? 'Could not read folder · Retry' : 'Loading…' }); return }
-      if (!listing.length) out.push({ key: `${dir}:empty`, path: dir, depth, kind: 'empty', name: 'Empty folder' })
-      for (const file of [...listing].sort((a, b) => Number(b.kind === 'directory') - Number(a.kind === 'directory') || a.name.localeCompare(b.name))) {
-        out.push({ key: file.path, path: file.path, name: file.name, kind: file.kind, depth })
+      if (!Array.isArray(listing)) { out.push({ key: `${dir}:state`, path: dir, depth, kind: listing ?? 'loading', name: listing === 'error' ? 'Could not read folder · Retry' : 'Loading…', position: 1, setSize: 1 }); return }
+      if (!listing.length) out.push({ key: `${dir}:empty`, path: dir, depth, kind: 'empty', name: 'Empty folder', position: 1, setSize: 1 })
+      const sorted = [...listing].sort((a, b) => Number(b.kind === 'directory') - Number(a.kind === 'directory') || a.name.localeCompare(b.name))
+      for (const [index, file] of sorted.entries()) {
+        out.push({ key: file.path, path: file.path, name: file.name, kind: file.kind, depth, position: index + 1, setSize: sorted.length })
         if (file.kind === 'directory' && expanded.has(file.path)) append(file.path, depth + 1)
       }
     }
     append('', 0)
     return out
   }, [listings, expanded, results])
+  const virtualTree = rows.length > TREE_WINDOW_THRESHOLD
+  const TreeHost = virtualTree ? 'virtual-list' : 'div'
+  const scrollToRow = useCallback((index: number) => {
+    const id = treeList.current?.id
+    if (id == null) return
+    if (virtualTree) { renderer?.scrollToItem?.(id, index); return }
+    const bounds = renderer?.getElementBounds?.(id), offset = renderer?.getScrollOffset?.(id)
+    if (!bounds) return
+    const top = -(offset?.[1] ?? 0), target = index * TREE_ROW_HEIGHT
+    if (target < top) renderer?.scrollTo?.(id, 0, -target)
+    else if (target + TREE_ROW_HEIGHT > top + bounds.height) renderer?.scrollTo?.(id, 0, -(target + TREE_ROW_HEIGHT - bounds.height))
+  }, [renderer, virtualTree])
   useEffect(() => {
     if (!reveal.current) return
     const index = rows.findIndex(row => row.path === reveal.current && row.kind === 'file')
     if (index < 0 || !treeList.current) return
-    setFocus(index); renderer?.scrollToItem?.(treeList.current.id, index); reveal.current = null
-  }, [rows, renderer])
+    setFocus(index); scrollToRow(index); reveal.current = null
+  }, [rows, scrollToRow])
   const activate = useCallback((row: TreeRow) => {
     reveal.current = null
     if (row.kind === 'directory') {
@@ -106,7 +120,7 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
         let next = index
         if (event.key === 'down') next = Math.min(rows.length - 1, index + 1)
         else if (event.key === 'up') next = Math.max(0, index - 1)
-        else if (event.key === 'pagedown' || event.key === 'pageup') { const bounds = tree.current && renderer?.getElementBounds?.(tree.current.id); const page = Math.max(1, Math.floor((bounds?.height ?? 280) / 28)); next = Math.max(0, Math.min(rows.length - 1, index + (event.key === 'pagedown' ? page : -page))) }
+        else if (event.key === 'pagedown' || event.key === 'pageup') { const bounds = tree.current && renderer?.getElementBounds?.(tree.current.id); const page = Math.max(1, Math.floor((bounds?.height ?? 280) / TREE_ROW_HEIGHT)); next = Math.max(0, Math.min(rows.length - 1, index + (event.key === 'pagedown' ? page : -page))) }
         else if (event.key === 'home') next = 0
         else if (event.key === 'end') next = rows.length - 1
         else if (event.key === 'right') { if (row.kind === 'directory' && !expanded.has(row.path)) activate(row); else if (row.kind === 'directory') next = Math.min(rows.length - 1, index + 1) }
@@ -120,11 +134,11 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
           for (let step = 1; step <= rows.length; step++) { const i = (index + step) % rows.length; if (rows[i]!.name.toLocaleLowerCase().startsWith(prefix)) { next = i; break } }
         } else return
         setFocus(next)
-        if (tree.current) renderer?.scrollToItem?.(treeList.current!.id, next)
+        scrollToRow(next)
       }} style={{ display: 'flex', width: '100%', flexGrow: 1, minHeight: 0 }}>
-      <virtual-list ref={treeList} testId="dock-file-tree" style={{ width: '100%', flexGrow: 1, minHeight: 0 }}>
-        {rows.map((row, index) => <FileRow key={row.key} row={row} open={expanded.has(row.path)} selected={selected === row.path} focused={focus === index} activate={(row) => { setFocus(index); activate(row); if (tree.current) renderer?.focusElement?.(tree.current.id) }} />)}
-      </virtual-list>
+      <TreeHost ref={treeList} testId="dock-file-tree" style={{ display: 'flex', flexDirection: 'column', width: '100%', flexGrow: 1, minHeight: 0, overflowY: virtualTree ? undefined : 'scroll', overflowX: 'hidden' }}>
+        <MotionFileTreeRows rows={rows} open={expanded} selected={selected} focus={focus} virtual={virtualTree} search={results !== null} activate={(row, index) => { setFocus(index); activate(row); if (tree.current) renderer?.focusElement?.(tree.current.id) }} />
+      </TreeHost>
       </div>
     </div>
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, minHeight: 0 }}>
@@ -132,17 +146,6 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
     </div>
   </div>
 }
-
-const FileRow = memo(function FileRow({ row, open, selected, focused, activate }: { row: TreeRow; open: boolean; selected: boolean; focused: boolean; activate: (row: TreeRow) => void }) {
-  const t = useTheme()
-  const folder = row.kind === 'directory'
-  return <div style={{ paddingLeft: 6, paddingRight: 6 }}>
-    <div role="treeitem" aria-expanded={folder ? open : undefined} aria-selected={selected} testId={`dock-file-${row.path || 'root'}`} onClick={() => activate(row)} style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, paddingLeft: 6 + row.depth * 14, paddingRight: 6, borderRadius: 6, cursor: 'pointer', backgroundColor: focused ? t.selected : selected ? t.buttonSecondary : 'transparent', hover: { backgroundColor: focused ? t.selected : t.buttonSecondaryHover } }}>
-      <Icon source={folder ? open ? N.folderOpen : N.folder : N.note} size={13} color={t.textSecondary} />
-      <Label color={t.text} size={12} truncate>{row.name}</Label>
-    </div>
-  </div>
-})
 
 function FileViewer({ projectId, path, onClose }: { projectId: string; path: string; onClose: () => void }) {
   const t = useTheme()
