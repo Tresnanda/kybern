@@ -2,7 +2,8 @@
 using namespace metal;
 // Coordinates are device pixels. Two separable Gaussian passes, 49 samples
 // each. Crop includes the 3-sigma halo. No read/write feedback texture.
-struct Params { float4 crop; float4 bounds; float4 clip; float4 values; float4 viewport; };
+struct Params { float4 crop; float4 bounds; float4 clip; float4 values; float4 viewport; uint rounded_clip; };
+struct RoundedClipNode { float bounds[4]; float radii[4]; uint parent; };
 struct Varying { float4 position [[position]]; float2 pixel; };
 vertex Varying backdrop_vertex(uint i [[vertex_id]], constant Params &p [[buffer(0)]]) {
     float2 uv=float2((i==1||i==3)?1:0, i>=2?1:0);
@@ -10,7 +11,7 @@ vertex Varying backdrop_vertex(uint i [[vertex_id]], constant Params &p [[buffer
     Varying o; o.pixel=pos;
     o.position=float4(pos/p.viewport.xy*float2(2,-2)+float2(-1,1),0,1); return o;
 }
-fragment float4 backdrop_fragment(Varying in [[stage_in]], texture2d<float> source [[texture(0)]], constant Params &p [[buffer(0)]]) {
+fragment float4 backdrop_fragment(Varying in [[stage_in]], texture2d<float> source [[texture(0)]], constant Params &p [[buffer(0)]], device const RoundedClipNode *clips [[buffer(7)]]) {
     constexpr sampler s(coord::pixel, address::clamp_to_edge, filter::linear);
     bool vertical=p.values.w!=0;
     float2 pos=vertical?in.pixel-p.crop.xy:in.pixel+p.crop.xy;
@@ -34,6 +35,17 @@ fragment float4 backdrop_fragment(Varying in [[stage_in]], texture2d<float> sour
         c.rgb=mix(float3(luminance),c.rgb,p.values.y);
         // Blend fractional rounded edge against the unfiltered destination.
         c.a=clamp(0.5-distance,0.0,1.0)*p.viewport.z;
+        uint id=p.rounded_clip;
+        while(id!=0){
+            RoundedClipNode n=clips[id]; float2 lo=float2(n.bounds[0],n.bounds[1]),size=float2(n.bounds[2],n.bounds[3]);
+            bool right=in.pixel.x>=lo.x+size.x/2.,bottom=in.pixel.y>=lo.y+size.y/2.;
+            float r=n.radii[bottom?(right?2:3):(right?1:0)];
+            float2 center=lo+float2(right?size.x-r:r,bottom?size.y-r:r);
+            float2 q=float2(right?in.pixel.x-center.x:center.x-in.pixel.x,bottom?in.pixel.y-center.y:center.y-in.pixel.y);
+            float d=length(max(q,0.))+min(max(q.x,q.y),0.)-r;
+            if(any(in.pixel<lo)||any(in.pixel>=lo+size)||d>=.5)discard_fragment();
+            c.a*=saturate(.5-d); id=n.parent;
+        }
         if(p.viewport.w>0)c.a*=clamp((in.pixel.y-p.bounds.y)/(p.bounds.w*p.viewport.w),0.0,1.0);
     }
     return c;

@@ -121,7 +121,7 @@ export function Transcript() {
         const update = (patch: Partial<typeof state>) => setCodeState(value => ({ ...value, [partKey]: { ...state, ...patch } }))
         result.push({ key: partKey, turn, node: <Row><CodeHeader part={part} {...state} onWrap={() => update({ wrap: !state.wrap })} onExpand={chunks.length > 1 ? () => update({ expanded: !state.expanded }) : undefined} /></Row> })
         for (const [chunkIndex, chunk] of (state.expanded ? chunks : chunks.slice(0, 1)).entries()) {
-          result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><CodeChunk text={chunk} language={part.language} wrap={state.wrap} /></Row> })
+          result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><CodeChunk text={chunk} language={part.language} wrap={state.wrap} last={!state.expanded || chunkIndex === chunks.length - 1} /></Row> })
         }
       } else {
         for (const [chunkIndex, chunk] of chunks.entries()) result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><Prose text={chunk} /></Row> })

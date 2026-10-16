@@ -1,7 +1,7 @@
 // Included in gpui_apple::metal_renderer. Scratch texture is reused across
 // surfaces/frames; one ordered command queue prevents concurrent use hazards.
 #[repr(C)]
-struct BackdropParams { crop:[f32;4], bounds:[f32;4], clip:[f32;4], values:[f32;4], viewport:[f32;4] }
+struct BackdropParams { crop:[f32;4], bounds:[f32;4], clip:[f32;4], values:[f32;4], viewport:[f32;4], rounded_clip:u32 }
 struct BackdropResources {
     horizontal: metal::RenderPipelineState,
     vertical: metal::RenderPipelineState,
@@ -22,7 +22,7 @@ impl BackdropResources {
     }
 }
 impl MetalRenderer {
-    fn draw_backdrop(&mut self, b:&gpui::Backdrop, target:&metal::TextureRef, viewport:Size<DevicePixels>, command:&metal::CommandBufferRef)->Result<()> {
+    fn draw_backdrop(&mut self, b:&gpui::Backdrop, target:&metal::TextureRef, viewport:Size<DevicePixels>, command:&metal::CommandBufferRef, rounded_clips:&InstanceBinding)->Result<()> {
         let bounds=b.bounds;let clip=bounds.intersect(&b.content_mask.bounds);
         if clip.is_empty()||b.opacity<=0.0{return Ok(())}
         let sigma=b.blur.as_f32().max(0.01);let halo=(sigma*3.0).ceil();
@@ -37,8 +37,9 @@ impl MetalRenderer {
             r.scratch=Some(self.device.new_texture(&d));
         }
         let scratch=r.scratch.as_ref().unwrap();
-        let mut p=BackdropParams{crop:[x,y,w as f32,h as f32],bounds:[bounds.origin.x.as_f32(),bounds.origin.y.as_f32(),bounds.size.width.as_f32(),bounds.size.height.as_f32()],clip:[clip.origin.x.as_f32(),clip.origin.y.as_f32(),clip.size.width.as_f32(),clip.size.height.as_f32()],values:[sigma,b.saturation,b.radius.as_f32(),0.0],viewport:[scratch.width() as f32,scratch.height() as f32,b.opacity,b.fade_top]};
+        let mut p=BackdropParams{crop:[x,y,w as f32,h as f32],bounds:[bounds.origin.x.as_f32(),bounds.origin.y.as_f32(),bounds.size.width.as_f32(),bounds.size.height.as_f32()],clip:[clip.origin.x.as_f32(),clip.origin.y.as_f32(),clip.size.width.as_f32(),clip.size.height.as_f32()],values:[sigma,b.saturation,b.radius.as_f32(),0.0],viewport:[scratch.width() as f32,scratch.height() as f32,b.opacity,b.fade_top],rounded_clip:b.content_mask.rounded_clip};
         let encode=|e:&metal::RenderCommandEncoderRef,p:&BackdropParams,pipeline:&metal::RenderPipelineState,source:&metal::TextureRef|{
+            e.set_fragment_buffer(7,Some(&rounded_clips.buffer),rounded_clips.offset as u64);
             e.set_render_pipeline_state(pipeline);e.set_vertex_bytes(0,mem::size_of::<BackdropParams>() as u64,p as *const _ as *const c_void);e.set_fragment_bytes(0,mem::size_of::<BackdropParams>() as u64,p as *const _ as *const c_void);e.set_fragment_texture(0,Some(source));e.draw_primitives(metal::MTLPrimitiveType::TriangleStrip,0,4);e.end_encoding();
         };
         let e=new_command_encoder_for_texture(command,scratch,size(gpui::DevicePixels(scratch.width() as i32),gpui::DevicePixels(scratch.height() as i32)),Some(metal::MTLClearColor::new(0.,0.,0.,0.)));

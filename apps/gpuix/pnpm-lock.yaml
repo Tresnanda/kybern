@@ -5,8 +5,8 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  '@gpuix/native@0.10.0': 10acd5344924f3c8bc5323724d1d94d373ab29fe161e0c288ea13837f8d62710
-  '@gpuix/react@0.10.0': 7dd623df963f7a347fc8843e69cf54a90c0ae4947a53edd44773bcea0807e45b
+  '@gpuix/native@0.10.0': ea9ffae897da8a48b3fa553b9c8c579e8ded6ffde6280d565ca472dff42c9338
+  '@gpuix/react@0.10.0': a4c86e595309769db72640c6d5e8649da3e1dd181b8d7eb3568e208a254a70ba
 
 importers:
 
@@ -14,10 +14,10 @@ importers:
     dependencies:
       '@gpuix/native':
         specifier: 0.10.0
-        version: 0.10.0(patch_hash=10acd5344924f3c8bc5323724d1d94d373ab29fe161e0c288ea13837f8d62710)
+        version: 0.10.0(patch_hash=ea9ffae897da8a48b3fa553b9c8c579e8ded6ffde6280d565ca472dff42c9338)
       '@gpuix/react':
         specifier: 0.10.0
-        version: 0.10.0(patch_hash=7dd623df963f7a347fc8843e69cf54a90c0ae4947a53edd44773bcea0807e45b)(react@19.2.8)
+        version: 0.10.0(patch_hash=a4c86e595309769db72640c6d5e8649da3e1dd181b8d7eb3568e208a254a70ba)(react@19.2.8)
       '@hugeicons/core-free-icons':
         specifier: 4.3.3
         version: 4.3.3
@@ -291,7 +291,7 @@ snapshots:
   '@gpuix/native-win32-x64-msvc@0.10.0':
     optional: true
 
-  '@gpuix/native@0.10.0(patch_hash=10acd5344924f3c8bc5323724d1d94d373ab29fe161e0c288ea13837f8d62710)':
+  '@gpuix/native@0.10.0(patch_hash=ea9ffae897da8a48b3fa553b9c8c579e8ded6ffde6280d565ca472dff42c9338)':
     dependencies:
       eventsource-parser: 4.1.2
       zod: 4.6.7
@@ -300,9 +300,9 @@ snapshots:
       '@gpuix/native-linux-x64-gnu': 0.10.0
       '@gpuix/native-win32-x64-msvc': 0.10.0
 
-  '@gpuix/react@0.10.0(patch_hash=7dd623df963f7a347fc8843e69cf54a90c0ae4947a53edd44773bcea0807e45b)(react@19.2.8)':
+  '@gpuix/react@0.10.0(patch_hash=a4c86e595309769db72640c6d5e8649da3e1dd181b8d7eb3568e208a254a70ba)(react@19.2.8)':
     dependencies:
-      '@gpuix/native': 0.10.0(patch_hash=10acd5344924f3c8bc5323724d1d94d373ab29fe161e0c288ea13837f8d62710)
+      '@gpuix/native': 0.10.0(patch_hash=ea9ffae897da8a48b3fa553b9c8c579e8ded6ffde6280d565ca472dff42c9338)
       react: 19.2.8
       react-reconciler: 0.31.0(react@19.2.8)
 

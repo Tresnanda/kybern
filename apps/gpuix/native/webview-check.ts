@@ -7,7 +7,7 @@ import { acquirePreviewUiLock } from '../scripts/preview-ui-lock.ts'
 const out = process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previews/gpuix/round5/preview'
 mkdirSync(out,{recursive:true})
 execFileSync('clang',['-dynamiclib','-fobjc-arc','-fblocks','-framework','Cocoa',path.join(import.meta.dir,'webview-input.m'),'-o',path.join(import.meta.dir,'build/webview-input.dylib')])
-const releaseUi = acquirePreviewUiLock()
+const releaseUi = process.env.KYBERN_CLIP_LOCK_HELD ? () => {} : acquirePreviewUiLock()
 try { for(const appearance of ['dark','light']) {
   const fixture=await launchFixture(path.join(import.meta.dir,'webview-lab.tsx'),{GPUIX_BACKGROUND:'1',KYBERN_APPEARANCE:appearance})
   const a=fixture.app

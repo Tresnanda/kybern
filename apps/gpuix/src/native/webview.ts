@@ -1,7 +1,7 @@
 import { dlopen, FFIType, JSCallback, ptr } from 'bun:ffi'
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import type { LayoutRect } from './layout.ts'
+import type { LayoutRect, RoundedLayoutClip } from './layout.ts'
 
 export type WebEvent = { id: string; generation?: number; type: string; message?: string; url?: string; visible?: boolean; key?: string; modifiers?: { cmd: boolean; ctrl: boolean; alt: boolean; shift: boolean }; data?: Record<string, unknown> }
 let bridge: ReturnType<typeof load> | undefined, wake: JSCallback | undefined
@@ -66,10 +66,10 @@ export const webHost = {
     command({ op: 'create', id, category: kind === 'visual' ? 'visual' : 'preview', generation, allowedOrigins: [new URL(url).origin], html: webDocument(url, kind) })
     return generation
   },
-  place(id: string, rect: LayoutRect, clip: LayoutRect, logical: { width: number; height: number; scale: number; left: number; top: number; radius?: number }, visible = true, layer = 0) {
+  place(id: string, rect: LayoutRect, clip: LayoutRect, logical: { width: number; height: number; scale: number; left: number; top: number; radius?: number; roundedClips?: RoundedLayoutClip[] | null }, visible = true, layer = 0) {
     if (!bridge) return
     command({ op: 'place', id, x: clip.x, y: clip.y, width: clip.width, height: clip.height, offsetX: rect.x - clip.x, offsetY: rect.y - clip.y, logicalWidth: rect.width, logicalHeight: rect.height, visible,
-      layer, radius: logical.radius ?? 0, layout: `window.kybernLayout?.(${[logical.width, logical.height, logical.scale, logical.left, logical.top].join(',')})` })
+      layer, radius: logical.radius ?? 0, roundedClips: logical.roundedClips ?? [], layout: `window.kybernLayout?.(${[logical.width, logical.height, logical.scale, logical.left, logical.top].join(',')})` })
   },
   hide(id: string) { if (bridge) command({ op: 'hide', id }) },
   post(id: string, script: string) { command({ op: 'post', id, script }) },

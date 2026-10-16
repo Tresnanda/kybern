@@ -71,7 +71,7 @@ pub(crate) fn after_paint(observers: Shared, tree: std::sync::Arc<std::sync::Mut
       let first = matches.next()?.id; if matches.next().is_some() { None } else { Some(first) }
      });
      let bounds = id.filter(|id| tree.elements.contains_key(id)).and_then(automation::get_bounds);
-     json!({"elementId":id,"rect":bounds.map(rect),"clippedRect":bounds.and_then(|b| b.clip).map(|b| json!({"x":b[0],"y":b[1],"width":b[2],"height":b[3]}))})
+     json!({"elementId":id,"rect":bounds.clone().map(rect),"roundedClips":bounds.as_ref().and_then(|b| b.rounded_clips.as_deref()),"clippedRect":bounds.and_then(|b| b.clip).map(|b| json!({"x":b[0],"y":b[1],"width":b[2],"height":b[3]}))})
     };
     if entry.last.as_ref() == Some(&value) { continue; }
     entry.last = Some(value.clone()); value["frame"] = json!(frame);

@@ -22,7 +22,7 @@ function Lab() {
     if (!slot.current) return
     let apply = () => {}
     const stop = observeElementBounds(renderer,slot.current.id,event=>{
-      apply=()=>{const r=event.rect,c=event.clippedRect;if(!r||!c||hidden){webHost.hide('lab');return}webHost.place('lab',r,c,{width:560,height:360,scale:Math.min(r.width/560,r.height/360),left:0,top:0})};apply()
+      apply=()=>{const r=event.rect,c=event.clippedRect;if(!r||!c||hidden){webHost.hide('lab');return}webHost.place('lab',r,c,{width:560,height:360,scale:Math.min(r.width/560,r.height/360),left:0,top:0,roundedClips:event.roundedClips})};apply()
     })
     const events=webHost.subscribe(e=>{if(e.id==='lab'&&(e.type==='created'||e.type==='loaded'))apply()})
     return ()=>{stop();events()}
@@ -30,7 +30,7 @@ function Lab() {
   return <div testId="app-ready" onKeyDown={e=>{if(e.key==='c')input.kybern_web_test_click(55,250);if(e.key==='f')input.kybern_web_test_click(80,300);if(e.key==='t')input.kybern_web_test_type();if(e.key==='s')input.kybern_web_test_shortcut();if(e.key==='x')input.kybern_web_test_click(80,350);if(e.key==='m')setMini(n=>!n);if(e.key==='p')setPopup(n=>!n);if(e.key==='h')setHidden(n=>!n);if(e.key==='i')setResult(JSON.stringify(log));if(e.key==='d')webHost.destroy('lab')}} style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',backgroundColor:light?'#f2f2f2':'#242424'}}>
     <text style={{color:light?'#111':'#eee',height:50,padding:12}}>Embedded preview native host</text>
     <div style={{display:'flex',gap:10,paddingLeft:16,height:34}}>{[['m','Dock / mini'],['p','Menu'],['h','Hide / show'],['i','Inspect']].map(([key,label])=><div key={key} testId={`action-${key}`} onClick={()=>{if(key==='m')setMini(n=>!n);if(key==='p')setPopup(n=>!n);if(key==='h')setHidden(n=>!n);if(key==='i')setResult(JSON.stringify(log))}} style={{width:100,height:28,backgroundColor:light?'#ddd':'#444',borderRadius:6}}><text style={{color:light?'#111':'#eee',pointerEvents:'none'}}>{label}</text></div>)}</div>
-    <div ref={slot} testId="web-slot" style={{position:'absolute',left:mini?450:20,top:mini?310:100,width:mini?280:560,height:mini?180:360}}/>
+    <div style={{position:'absolute',left:mini?450:20,top:mini?310:100,width:mini?280:560,height:mini?180:360,borderRadius:process.env.KYBERN_ROUNDED_WEBVIEW==='1'?28:0,overflow:'hidden'}}><div ref={slot} testId="web-slot" style={{width:'100%',height:'100%'}}/></div>
     {popup&&<PopupLayer position={{x:100,y:150}} testId="web-menu" style={{width:240,height:180,padding:16,backgroundColor:light?'#fafafa':'#303030',borderRadius:12}}><text style={{color:light?'#111':'#eee'}}>Native page stays behind this GPUI menu.</text></PopupLayer>}
     <text testId="result" style={{position:'absolute',left:10,top:490,width:740,height:100,fontSize:9,color:light?'#111':'#eee'}}>{result}</text>
   </div>

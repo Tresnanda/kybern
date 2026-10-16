@@ -530,6 +530,18 @@ edit("custom_elements/anchored.rs", "        let anchored = anchored.child(conte
 exec((Path(__file__).parent / "paint_hooks.py").read_text())
 exec((Path(__file__).parent / "frame_hooks.py").read_text())
 exec((Path(__file__).parent / "clipboard_hooks.py").read_text())
+exec((Path(__file__).parent / "explorer_motion_hooks.py").read_text())
+
+edit("renderer.rs", 'style.and_then(|s|s.opacity).unwrap_or(1.0) as f32) };', 'style.and_then(|s|s.opacity).unwrap_or(1.0) as f32, style) };')
+edit("custom_elements/anchored.rs", 'ctx.style.and_then(|s|s.opacity).unwrap_or(1.0) as f32));', 'ctx.style.and_then(|s|s.opacity).unwrap_or(1.0) as f32, ctx.style));')
+
+# Keep native editor selection/caret washes under inherited rounded masks.
+edit("custom_elements/input.rs", "gpui::ContentMask { bounds }", "gpui::ContentMask { bounds, ..Default::default() }")
+edit("automation.rs", "#[derive(Clone, Copy, Debug)]\npub struct ElementBounds", "#[derive(Clone, Debug)]\npub struct ElementBounds")
+edit("automation.rs", "    pub clip: Option<[f64; 4]>,", "    pub clip: Option<[f64; 4]>,\n    pub rounded_clips: Option<std::sync::Arc<Vec<[f32;8]>>>,")
+edit("automation.rs", "            clip: None,", "            clip: None, rounded_clips: None,")
+edit("automation.rs", "    let mut value = ElementBounds::from_gpui(bounds);", "    let mut value = ElementBounds::from_gpui(bounds);\n    value.rounded_clips = window.rounded_content_masks();")
+edit("automation.rs", "BOUNDS.with(|cell| cell.borrow().get(&id).copied())", "BOUNDS.with(|cell| cell.borrow().get(&id).cloned())")
 
 # Explicit pointer-events:auto and anchored overlays retain hard barriers.
 edit("renderer.rs", "                el.block_mouse_except_scroll()", "                el.block_non_ancestor_mouse()")
