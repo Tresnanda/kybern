@@ -47,20 +47,32 @@ function footprintMiB(pid: number): number {
   return m[2] === 'GB' ? v * 1024 : m[2] === 'KB' ? v / 1024 : v
 }
 
-const cpu0 = groups.map((g) => g.pids.map(cpuSeconds))
+// Capture CPU endpoints before slow footprint queries. Time each process's
+// actual interval, including collection overhead, rather than the requested sleep.
+function cpuSnapshot(pid: number) {
+  const start = performance.now()
+  const value = cpuSeconds(pid)
+  return { value, at: (start + performance.now()) / 2 }
+}
+const cpu0 = groups.map((g) => g.pids.map(cpuSnapshot))
 const gpu0 = gpuNs()
+const gpuStart = performance.now()
 await new Promise((r) => setTimeout(r, seconds * 1000))
 const gpu1 = gpuNs()
+const gpuElapsed = (performance.now() - gpuStart) / 1000
+const cpu1 = groups.map((g) => g.pids.map(cpuSnapshot))
 for (const [gi, g] of groups.entries()) {
   console.log(`\n${g.name}`)
   let tf = 0, tc = 0, tg = 0
   for (const [i, pid] of g.pids.entries()) {
     const comm = execFileSync('ps', ['-o', 'comm=', '-p', String(pid)], { encoding: 'utf8' }).trim().split('/').pop()
     const fp = footprintMiB(pid)
-    const cpu = cpuSeconds(pid) - cpu0[gi][i]
+    const before = cpu0[gi][i]
+    const after = cpu1[gi][i]
+    const cpu = (after.value - before.value) / ((after.at - before.at) / 1000) * 100
     const gpu = ((gpu1.get(pid) ?? 0) - (gpu0.get(pid) ?? 0)) / 1e6
     tf += fp; tc += cpu; tg += gpu
-    console.log(`  ${String(pid).padEnd(6)} ${comm!.slice(0, 34).padEnd(34)} ${fp.toFixed(1).padStart(8)} MiB  cpu ${((cpu / seconds) * 100).toFixed(2).padStart(6)}%  gpu ${(tg >= 0 ? gpu : 0).toFixed(1).padStart(7)} ms`)
+    console.log(`  ${String(pid).padEnd(6)} ${comm!.slice(0, 34).padEnd(34)} ${fp.toFixed(1).padStart(8)} MiB  cpu ${cpu.toFixed(2).padStart(6)}%  gpu ${(tg >= 0 ? gpu : 0).toFixed(1).padStart(7)} ms`)
   }
-  console.log(`  ${'total'.padEnd(41)} ${tf.toFixed(1).padStart(8)} MiB  cpu ${((tc / seconds) * 100).toFixed(2).padStart(6)}%  gpu ${tg.toFixed(1).padStart(7)} ms over ${seconds}s`)
+  console.log(`  ${'total'.padEnd(41)} ${tf.toFixed(1).padStart(8)} MiB  cpu ${tc.toFixed(2).padStart(6)}%  gpu ${tg.toFixed(1).padStart(7)} ms over ${gpuElapsed.toFixed(2)}s`)
 }
