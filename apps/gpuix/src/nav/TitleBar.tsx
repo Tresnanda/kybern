@@ -288,7 +288,7 @@ export function ThreadHeader({ paneId }: { paneId?: string } = {}) {
                 </Label>
               </HeaderChip>
             )}
-            <ProviderMark kind={thread.provider.kind} size={14} />
+            <ProviderMark kind={thread.provider.kind} size={14} tone="header" />
             {renaming ? (
               <input
                 autoFocus
