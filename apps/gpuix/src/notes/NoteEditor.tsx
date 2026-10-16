@@ -7,7 +7,7 @@ import { toast } from '../shell/toasts.tsx'
 import { openTask } from '../tasks/store.ts'
 import { goPage } from '../nav/history.ts'
 import { spawn } from 'node:child_process'
-import { useGpuix, useWindowSize, type PublicInstance } from '@gpuix/react'
+import { motion, useGpuix, useWindowSize, type PublicInstance } from '@gpuix/react'
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { editedAgo } from '@/state/notesModel'
 import { countWords, wordCountLabel } from '@/state/miniMarkdown'
@@ -19,9 +19,10 @@ import { addWindowKeyHandler } from '../nav/keys.ts'
 import { getNav } from '../nav/store.ts'
 import { openThread } from '../nav/history.ts'
 import { Button } from '../settings/controls.tsx'
+import { observeElementBounds } from '../native/layout.ts'
 import { onWindowVisibility } from '../native/visibility.ts'
 import { useApp } from '../state.ts'
-import { Label, useTheme } from '../ui.tsx'
+import { EASE_OUT, REDUCED_MOTION, Label, useTheme } from '../ui.tsx'
 import { display, gallery, getNotes, restoreNote, rpc, useNotes } from './store.ts'
 import { noteSession } from './session.ts'
 import { BLOCKS, formatBlock, splitBlocks } from './blocks.ts'
@@ -81,6 +82,9 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
   const tasks = allTasks.filter((task) => task.note_ids.includes(id) || task.source_note_id === id || snap.body.includes(`kybern://task/${task.id}`))
   const list = useRef<PublicInstance>(null)
   const bodyRef = useRef<PublicInstance>(null)
+  const viewportRef = useRef<PublicInstance>(null)
+  const blockRefs = useRef(new Map<number, PublicInstance>())
+  const [outlineActive, setOutlineActive] = useState(0)
   if (epoch !== snap.epoch) { setEpoch(snap.epoch); setBlocks(splitBlocks(snap.body)) }
   useEffect(() => { session.attach(); const off = onWindowVisibility((visible) => { if (!visible) void session.flush() }); return () => { off(); session.detach() } }, [session])
   useEffect(() => {
@@ -127,6 +131,53 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
     } catch (error) { toast.error('Couldn’t add image', { description: String(error) }) }
   }
   const headings = blocks.flatMap((body, index) => { const match = /^(#{1,6})\s+(.+)/.exec(body); return match ? [{ index, level: match[1]!.length, text: match[2]! }] : [] }).slice(0, 80)
+  const updateOutline = () => {
+    if (!renderer || !list.current || !viewportRef.current || !headings.length) return
+    const frame = renderer.getElementBounds?.(viewportRef.current.id)
+    const anchor = renderer.getListScrollTop?.(list.current.id)
+    if (!frame || !anchor) return
+    const firstRow = anchor[0] ?? 0
+    // Offscreen native rows retain their last bounds. Walk only the contiguous
+    // painted rows at the anchor, stopping at the desktop's 120px reading line.
+    let next = 0
+    if (firstRow > 0) {
+      const firstBlock = firstRow - 1
+      for (let i = 0; i < headings.length; i++) {
+        if (headings[i]!.index < firstBlock) next = i
+      }
+      let top = frame.y - (anchor[1] ?? 0)
+      for (let index = firstBlock; index < blocks.length && top <= frame.y + 120; index++) {
+        const node = blockRefs.current.get(index)
+        const box = node && renderer.getElementBounds?.(node.id)
+        if (!box || box.height <= 0) break
+        const heading = headings.findIndex(h => h.index === index)
+        const gap = index === 0 ? 0 : blockGap(blocks[index - 1]!, blocks[index]!)
+        if (heading >= 0 && top + gap <= frame.y + 120) next = heading
+        top += box.height
+      }
+    }
+    setOutlineActive(old => old === next ? old : next)
+  }
+  const minimumHeadingLevel = Math.min(...headings.map(h => h.level))
+  const activeOutlineIndex = Math.min(outlineActive, Math.max(0, headings.length - 1))
+  const outlineSignature = headings.map(h => `${h.index}:${h.text}`).join('\n')
+  useEffect(() => { setOutlineActive(0) }, [id])
+  useEffect(() => {
+    if (!renderer || compact || !outline || size.width < 1050) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const schedule = () => {
+      if (timer !== undefined) return
+      timer = setTimeout(() => { timer = undefined; updateOutline() }, 0)
+    }
+    // Scroll notifications precede paint. Observe the painted heading positions
+    // instead, coalescing this frame's changed bounds into one reading-line check.
+    const stops = headings.flatMap(h => {
+      const node = blockRefs.current.get(h.index)
+      return node ? [observeElementBounds(renderer, node.id, schedule)] : []
+    })
+    schedule()
+    return () => { if (timer !== undefined) clearTimeout(timer); stops.forEach(stop => stop()) }
+  }, [renderer, compact, id, epoch, outlineSignature, size.width, size.height, outline])
   const slash = active !== null && /^\/[\w ]*$/.test(blocks[active] ?? '')
   const slashItems = slash ? BLOCKS.filter((b) => b.label.toLowerCase().includes((blocks[active!] ?? '').slice(1).toLowerCase())) : []
   const note = summary ?? snap.note
@@ -142,7 +193,7 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
     {snap.conflict && <Banner title="This note changed on another device" detail="Keep your version to replace theirs, or use theirs and discard your changes."><Button testId="note-use-theirs" onClick={() => session.useTheirs()}>Use theirs</Button><Button testId="note-keep-mine" onClick={() => session.keepMine()}>Keep mine</Button></Banner>}
     {deleted && <Banner title="This note is in Recently deleted" detail="Restore it to edit it again."><Button testId="note-restore" onClick={() => void restoreNote(id)}>Restore</Button></Banner>}
     {snap.phase === 'ready' && <>
-      <div style={{ display: 'flex', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+      <div ref={viewportRef} testId="note-viewport" style={{ display: 'flex', flexGrow: 1, minHeight: 0, position: 'relative' }}>
         <virtual-list ref={list} testId="note-body-list" style={{ flexGrow: 1, minHeight: 0 }}>
           <div key="heading" style={{ display: 'flex', justifyContent: 'center', paddingTop: 84 }}><div style={{ display: 'flex', flexDirection: 'column', width: docWidth }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, minHeight: 19.5, marginBottom: 20 }}>
@@ -152,7 +203,7 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
             </div>
             <input testId="note-title" autoFocus={!snap.title && !snap.body && !deleted} aria-label="Title" value={snap.title} placeholder="Untitled" readOnly={deleted || note?.scope === 'thread'} onChange={(e) => session.edit({ title: (e.value ?? '').replace(/\s*\n\s*/g, ' ').slice(0, 300) })} onBlur={() => void session.flush()} onSubmit={() => setActive(0)} theme={{ text: k.fg, caret: k.fg }} style={{ width: '100%', height: 37, marginBottom: 24, fontSize: 30.15, lineHeight: 36.6, fontWeight: 650, color: k.fg, backgroundColor: t.surface }} />
           </div></div>
-          {blocks.map((body, index) => <div key={`${epoch}:${index}`} style={{ display: 'flex', justifyContent: 'center', paddingTop: index === 0 ? 0 : blockGap(blocks[index - 1]!, body) }}><div style={{ display: 'flex', flexDirection: 'column', width: docWidth }}>
+          {blocks.map((body, index) => <div key={`${epoch}:${index}`} ref={(node) => { if (node) blockRefs.current.set(index, node); else blockRefs.current.delete(index) }} style={{ display: 'flex', justifyContent: 'center', paddingTop: index === 0 ? 0 : blockGap(blocks[index - 1]!, body) }}><div style={{ display: 'flex', flexDirection: 'column', width: docWidth }}>
             {active === index && !deleted ? <>
               <DecoratedTextarea decorations={markdownInputDecorations(body, noteInputMarkColors(t))} ref={bodyRef} testId={`note-block-input-${index}`} aria-label="Edit block" autoFocus value={body} minRows={2} maxRows={30} onChange={(e) => { update(index, e.value ?? ''); setSlashIndex(0) }} onBlur={() => void session.flush()} onKeyDown={(e) => {
                 if (e.key === 'escape' || (e.key === 'enter' && e.modifiers?.cmd)) finish()
@@ -167,7 +218,10 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
         </virtual-list>
         {outline && size.width >= 1050 && headings.length > 0 && <div style={{ display: 'flex', flexDirection: 'column', position: 'absolute', left: 24, top: 84, width: 188 }}>
           <div style={{ marginBottom: 6 }}><Label color={k.fg3} size={NOTES_META} lineHeight={18}>Outline</Label></div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{headings.map((h, i) => <div key={h.index} testId={`note-outline-${h.index}`} onClick={() => { if (list.current) renderer?.scrollToItem?.(list.current.id, h.index + 1) }} style={{ display: 'flex', alignItems: 'center', paddingTop: 4, paddingBottom: 4, paddingLeft: 10 + Math.min(2, h.level - 1) * 10 - (i === 0 ? 2 : 1), borderLeftWidth: i === 0 ? 2 : 1, borderColor: i === 0 ? k.fg2 : k.hair, cursor: 'pointer' }}><Label color={i === 0 ? k.fg : k.fg3} size={NOTES_META} lineHeight={16} truncate>{h.text}</Label></div>)}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, position: 'relative' }}>
+            {headings.map((h, i) => <div key={h.index} testId={`note-outline-${h.index}`} onClick={() => { if (list.current) renderer?.scrollToItem?.(list.current.id, h.index + 1, (h.index === 0 ? 0 : blockGap(blocks[h.index - 1]!, blocks[h.index]!)) - 96); setOutlineActive(i) }} style={{ display: 'flex', alignItems: 'center', height: 24, paddingTop: 4, paddingBottom: 4, paddingLeft: 9 + Math.min(2, h.level - minimumHeadingLevel) * 10, borderLeftWidth: 1, borderColor: k.hair, cursor: 'pointer' }}><Label color={i === activeOutlineIndex ? k.fg : k.fg3} size={NOTES_META} lineHeight={16} truncate style={{ pointerEvents: 'none' }}>{h.text}</Label></div>)}
+            <motion.div testId={`note-outline-active-${headings[activeOutlineIndex]?.index ?? 0}`} initial={false} animate={{ translateY: activeOutlineIndex * 26 }} transition={{ duration: REDUCED_MOTION || getNav().keyboardNav ? 0 : 0.12, ease: EASE_OUT }} style={{ position: 'absolute', left: 0, top: 0, width: 2, height: 24, backgroundColor: k.fg2, pointerEvents: 'none' }} />
+          </div>
         </div>}
         {!deleted && <div style={{ position: 'absolute', top: 14, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}><div style={{ pointerEvents: 'auto' }}>
           <Toolbar blockLabel={blockLabel(blocks[active ?? 0] ?? '')} outlineOn={outline} image={() => void insertImage()} disabled={deleted} active={active !== null} format={format} mark={mark} finish={finish} toggleOutline={() => display({ outline: !outline })} link={(label, href) => {
