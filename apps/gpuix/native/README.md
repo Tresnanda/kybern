@@ -986,3 +986,7 @@ whole scene. Reduced motion omits the prop. The optional embedded-host wake is
 `KYBERN_VSYNC_WAKE=1`; inactive full-rate motion is `KYBERN_FULL_RATE=1`. Neither is
 enabled by default. `frame-check.ts` captures actual window pixels plus bounded
 submission cadence, callback backpressure, unsubscribe, minimize and unmount.
+
+The experimental frame app and frame-check fixtures are retained on
+`gpuix/native` at `f9e5e2a7`, not enabled in the integrated port. The shipped
+app still uses its existing loader clock until full-app performance acceptance.

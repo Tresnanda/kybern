@@ -176,7 +176,8 @@ export async function connect() {
   const attempt = ++connectionAttempt
   let ep
   try {
-    ep = await environmentEndpoint()
+    const endpoint = environmentEndpoint()
+    ep = endpoint instanceof Promise ? await endpoint : endpoint
     if (attempt !== connectionAttempt) return
   } catch (error) {
     if (attempt !== connectionAttempt) return

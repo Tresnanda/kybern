@@ -204,3 +204,18 @@ requested cleanup after integration: keep the deliverable `.node` (~20MiB) and
 source/evidence; target, intermediate logs/screenshots and upstream are disposable
 after verifying no user of them remains. No installed runtime or user data changed.
 All own fixture windows/daemons closed; headless-reference Vite is stopped.
+
+
+## Integration boundary (2026-10-16)
+
+The port branch integrates native capabilities through `92189660`, including
+scoped paint, ancestor pointer routing, and clipboard/drop APIs. The app keeps
+its existing shared loader clock. Experimental app frame integration and its
+frame fixtures are preserved separately at `gpuix/native` commit `f9e5e2a7`;
+they are **not merged** into `feat/gpuix-mvp`. Native wake/full-rate switches
+remain opt-in. The larger Tasks GPU result has not passed acceptance.
+
+The general `perf/sample.ts` CPU sampler now captures CPU endpoints before
+footprint collection and uses actual elapsed intervals. Earlier 40.80/48.67%
+Tasks CPU values may include footprint-query overhead and must not be treated
+as comparable CPU results. This does not invalidate or clear the GPU concern.
