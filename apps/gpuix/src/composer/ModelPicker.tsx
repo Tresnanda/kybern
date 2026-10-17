@@ -1126,9 +1126,18 @@ export function ModelTriggerLabel({
 }) {
   const t = useTheme()
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1, overflow: 'hidden' }}>
-      <ProviderMark kind={kind} size={14} />
-      {account?.color && accountDots[account.color] && <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: accountDots[account.color]![t.variant === 'dark' ? 1 : 0], marginLeft: -4, alignSelf: 'flex-start', marginTop: 2, flexShrink: 0 }} />}
+    <div testId="model-label" style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1, overflow: 'hidden' }}>
+      {account?.color && accountDots[account.color] ? (
+        // The desktop hangs a 6px dot 4px back over the mark (`-ml-1 self-start mt-0.5`) and leaves a 2px slot. A
+        // negative margin made the native intrinsic width drop ~36px and clipped the effort and chevron, so the dot is
+        // absolutely placed inside a 22px box (mark 14 + gap 6 + slot 2) instead.
+        <div style={{ position: 'relative', display: 'flex', width: 22, height: 14, flexShrink: 0 }}>
+          <ProviderMark kind={kind} size={14} />
+          <div style={{ position: 'absolute', left: 16, top: 2, width: 6, height: 6, borderRadius: 3, backgroundColor: accountDots[account.color]![t.variant === 'dark' ? 1 : 0] }} />
+        </div>
+      ) : (
+        <ProviderMark kind={kind} size={14} />
+      )}
       {account && <Label color={t.textSecondary} lineHeight={16} style={{ maxWidth: 96, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{account.name}</Label>}
       <Label color={t.text} lineHeight={16} style={{ maxWidth: 220, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
         {model}
