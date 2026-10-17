@@ -1226,3 +1226,34 @@ Known limits: a pop whose frames stop part-way (window hidden during the
 paint (`KYBERN_REGION_LAYERS=1`), a finished pop still counts as a native paint
 animation, so the region target does not park. Checks:
 `scripts/kit9-spinner-check.ts` and `scripts/kit9-pop.ts`.
+
+## Rich editor and per-run text size (phase 2, editor9)
+
+`<rich-editor>` (`patches/rich_editor.rs`, model `patches/rich_doc.rs`) is the one
+formatted editor for notes, quick capture and task descriptions; the JS side and its
+API are in `src/editor/README.md`. `editor9_hooks.py` only registers it: the module
+lines in `lib.rs`, the factory in `custom_elements/mod.rs`, `"rich-editor"` in the two
+focus-handle `matches!`, and
+two napi methods before `zoom_window`: `richEditorCommand(id, command)` and
+`setRichEditorImage(src, bytes)`.
+
+- Keybindings are bound when the first editor renders, not at startup: bound globally
+  they made `paint-check.ts` see ancestor island renders on paint-only updates.
+- The model is std-only: `rustc --test patches/rich_doc.rs` runs its tests (Enter,
+  Backspace, input rules, history grouping, composition as one step, paste).
+- Layout is per block, cached by block revision and width; painting skips blocks
+  outside the content mask. `stats` counts reshaped blocks (one per keystroke).
+- The element implements `EntityInputHandler` over a flat UTF-16 view (blocks joined
+  by `\n`), so marked text, candidate windows and commits go through the platform path.
+- Images decode once into a shared, bounded cache (48 entries) and large ones are
+  area-averaged to 1280px: GPUI samples without mipmaps, so a 2,560px screenshot
+  shrunk to the column shimmers.
+
+`text_scale_gpui.py` (chained from `backdrop_gpui.py`) adds per-run font size inside
+one shaped line, which GPUI otherwise lacks (a line has one size). A `Font` whose
+features carry `kszl = N` is shaped and painted at N/1000 of the line's size: the mac
+text system records a scale per FontId (stripping the pseudo feature before CoreText),
+`layout_line` applies it per run, shaped runs map back to the scaled FontId by point
+size, and `paint_line` rasterizes glyphs at the scaled size. The editor uses it for
+inline code (0.833em) and task references (13/15), like `.note-prose code` and
+`.task-ref`. Ordinary fonts are unchanged (scale 1).

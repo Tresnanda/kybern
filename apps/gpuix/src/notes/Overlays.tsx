@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { noteMatchesQuery, noteTitle, savedMessageMarkdown, titleFromText } from '@/state/notesModel'
 import { isFreeChatProject } from '../../../../packages/kybern-client/src/types.ts'
 import { addWindowKeyHandler } from '../nav/keys.ts'
@@ -8,7 +8,9 @@ import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { NOTES_META, ProjectDot, notesTokens } from './kit.tsx'
 import { Button, Select, TextField } from '../settings/controls.tsx'
-import { getState, useApp } from '../state.ts'
+import { getClient, getState, useApp } from '../state.ts'
+import { RichEditor, type RichEditorHandle } from '../editor/RichEditor.tsx'
+import type { ImageHome } from '../editor/images.ts'
 import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
@@ -40,14 +42,18 @@ function QuickNote() {
   const update = (patch: Partial<typeof draft>) => { const next = { ...draft, ...patch }; setDraft(next); save(QUICK_KEY, { title: next.title, body: next.body, home: next.project ? { scope: 'project', projectId: next.project } : { scope: 'global' } }) }
   const finish = async () => {
     if (saving.current) return
-    if (!draft.title.trim() && !draft.body.trim()) { setNotes({ quick: false }); return }
+    const text = body.current?.read() ?? draft.body
+    if (!draft.title.trim() && !text.trim()) { setNotes({ quick: false }); return }
     saving.current = true; setBusy(true)
-    const note = await createNote(draft.body, draft.title || titleFromText(draft.body), draft.project)
+    const note = await createNote(text, draft.title || titleFromText(text), draft.project)
     saving.current = false; setBusy(false)
     if (!note) return
     save(QUICK_KEY, undefined); setNotes({ quick: false }); toast('Note saved', { action: { label: 'Open', onClick: () => openNote(note.id) } })
   }
   const k = notesTokens(t)
+  const body = useRef<RichEditorHandle>(null)
+  const [initialBody] = useState(draft.body)
+  const quickImages = useMemo<ImageHome>(() => ({ endpoint: () => getClient()?.endpoint ?? null }), [])
   const scope = projects.find((p) => p.id === draft.project)?.name ?? 'Global'
   const discard = () => { save(QUICK_KEY, undefined); setNotes({ quick: false }) }
   // `.quick-note` (notes.css): 576px card, 16/20/14 padding, scope row, 18.3px title, 16.15/25.85 body, 28px foot.
@@ -59,9 +65,13 @@ function QuickNote() {
           {[{ id: '', name: 'Global' }, ...projects.filter((p) => !isFreeChatProject(p.id))].map((p) => <MenuItem key={p.id} id={p.id || 'global'} label={p.name} checked={draft.project === p.id} onSelect={() => update({ project: p.id })} />)}
         </Menu>
       </div>
-      <input testId="quick-note-title" aria-label="Title" autoFocus placeholder="Untitled" value={draft.title} onChange={(e) => update({ title: (e.value ?? '').slice(0, 300) })} style={{ height: 23.8, fontSize: 18.31, fontWeight: 650, color: t.text, backgroundColor: 'transparent', borderWidth: 0 }} />
+      <input testId="quick-note-title" aria-label="Title" autoFocus placeholder="Untitled" value={draft.title} onChange={(e) => update({ title: (e.value ?? '').replace(/\s*\n\s*/g, ' ').slice(0, 300) })} onSubmit={() => body.current?.focus('start')} interceptKeys={['down']} onKeyDown={(e) => { if (e.key === 'down' && !e.modifiers?.shift) { e.preventDefault(); body.current?.focus('start') } }} style={{ height: 23.8, fontSize: 18.31, fontWeight: 650, color: t.text, backgroundColor: 'transparent', borderWidth: 0 }} />
       <div style={{ marginTop: 6, minHeight: 96 }}>
-        <textarea testId="quick-note-body" aria-label="Note" placeholder="Write something. Type / for formatting" value={draft.body} minRows={3} maxRows={12} onChange={(e) => update({ body: e.value ?? '' })} theme={{ text: k.fg1, caret: t.text }} style={{ fontSize: 16.15, lineHeight: 25.846, color: k.fg1, backgroundColor: 'transparent' }} />
+        <div style={{ display: 'flex', flexDirection: 'column', maxHeight: 310, overflow: 'scroll' }}>
+          <RichEditor ref={body} testId="quick-note-body" aria-label="Note" placeholder="Write something. Type / for formatting" value={initialBody} epoch={0} variant="compact" size={16.1538} lineHeight={25.846} minHeight={77.5} images={quickImages}
+            onChange={(markdown) => update({ body: markdown })} interceptKeys={['enter']}
+            onKeyDown={(e) => { if (e.requestId != null && e.key === 'enter' && e.modifiers?.cmd) { e.preventDefault(); update({ body: body.current?.read() ?? draft.body }); void finish() } }} />
+        </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, height: 28 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexGrow: 1 }}><Label color={k.fg2} size={NOTES_META} lineHeight={19.5} weight={500}>Esc</Label><Label color={k.fg3} size={NOTES_META} lineHeight={19.5}>saves and closes</Label></div>

@@ -3,7 +3,6 @@ import { readFileSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { launch } from '@gpuix/react/automation'
 import { KybernClient } from '../../../packages/kybern-client/src/client.ts'
-import { splitBlocks } from '../src/notes/blocks.ts'
 const data = process.env.KYBERN_DATA_DIR ?? ''
 if (!data.includes('gpuix-scratch/drag-release/')) throw Error('Dedicated scratch daemon required')
 const out = '/Users/mymac/projects/ade/previews/gpuix/note-outline'
@@ -11,7 +10,8 @@ mkdirSync(out, { recursive: true })
 const client = new KybernClient({ url: `ws://127.0.0.1:${readFileSync(path.join(data, 'daemon.port'), 'utf8').trim()}/ws`, token: readFileSync(path.join(data, 'daemon.token'), 'utf8').trim() })
 client.connect(); while (client.status !== 'open') await Bun.sleep(50)
 const body = Array.from({ length: 6 }, (_, i) => `## Section ${i + 1}\n\n` + Array.from({ length: 7 }, (_, p) => `Paragraph ${p + 1}. This is a readable note section with enough text to exercise scrolling through virtual rows.\n\n`).join('')).join('')
-const headings = splitBlocks(body).flatMap((block, index) => block.startsWith('## ') ? [index] : [])
+// Editor block indexes: each section is its heading and seven paragraphs.
+const headings = Array.from({ length: 6 }, (_, i) => i * 8)
 const note = await client.call('notes.create', { scope: 'global', title: 'Outline follows reading', body })
 const app = await launch({ command: 'bun', args: [path.resolve('src/main.tsx')], env: { GPUIX_BACKGROUND: '1', KYBERN_DATA_DIR: data, KYBERN_APPEARANCE: process.env.KYBERN_APPEARANCE ?? 'dark', KYBERN_REDUCED_MOTION: process.env.KYBERN_REDUCED_MOTION ?? '0', KYBERN_OPAQUE: '1' } })
 try {
