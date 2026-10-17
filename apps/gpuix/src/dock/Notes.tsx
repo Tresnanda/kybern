@@ -11,6 +11,9 @@ import { getNotes, openNote, openQuickNote, recordNote, refreshNotes, rpc, setNo
 import { load, save } from '../shell/persist.ts'
 import { goPage } from '../nav/history.ts'
 import { N } from '../nav/glyphs.ts'
+import { ArrowUpRight01Icon } from '@hugeicons/core-free-icons'
+import { glyph } from '../icons.tsx'
+const ARROW_UP_RIGHT = glyph(ArrowUpRight01Icon)
 import { useApp } from '../state.ts'
 import { IconButton } from '../sidebar/rows.tsx'
 import { TaskWindow, type TaskWindowEntry } from '../tasks/TaskWindow.tsx'
@@ -47,7 +50,7 @@ export function NotesPane({ thread }: { thread: Thread }) {
   entries.push({ key: 'footer', height: 40, render: () => <DockFooter testId="dock-all-notes" onClick={all}>Show all in Notes</DockFooter> })
   return <div testId="dock-notes" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
     <ScopeHeader thread={thread} action={<IconButton icon={N.plus} label="New note" testId="dock-new-note" onClick={quick} />} />
-    <DockSection label="This thread">{own && <Action onClick={() => openNote(own.id)}>Open in Notes ↗</Action>}</DockSection>
+    <DockSection label="This thread">{own && !isEmptyThreadNote(own) && <IconButton icon={ARROW_UP_RIGHT} size={20} glyph={14} label="Open in Notes" tooltip="Open in Notes" tooltipSide="top" onClick={() => openNote(own.id)} />}</DockSection>
     <div style={{ paddingLeft: 8, paddingRight: 8, paddingBottom: 16 }}><ThreadNote key={thread.id} threadId={thread.id} noteId={own?.id} /></div>
     <ErrorLine error={error} retry={() => void refreshNotes()} />
     {!loaded ? <Section label="Loading notes…" /> : entries.length ? <TaskWindow entries={entries} testId="dock-notes-list" /> : <Section label="Other notes for this project appear here." />}
@@ -86,7 +89,7 @@ function ThreadNote({ threadId, noteId }: { threadId: string; noteId?: string })
   useEffect(() => { if (!body || noteId || created) return; const timer = setTimeout(() => void flush(), 500); return () => clearTimeout(timer) }, [body, noteId, created])
   useEffect(() => () => { void flush() }, [])
   if ((noteId || created) && !saving) return <NoteEditor id={(noteId ?? created)!} compact />
-  return <div style={{ display: 'flex', flexDirection: 'column', height: 96, paddingLeft: 10, paddingRight: 10, paddingTop: 8, paddingBottom: 8, borderRadius: 10, backgroundColor: t.buttonSecondary }}><DecoratedTextarea decorations={markdownInputDecorations(body, noteInputMarkColors(t))} testId="thread-note-new" aria-label="Thread note" value={body} placeholder="Ideas, reminders, to-dos. Write Markdown here" minRows={3} maxRows={6} onChange={e => { draft.current = e.value ?? ''; setBody(draft.current); save(key, draft.current) }} onBlur={() => void flush()} theme={{ text: t.text, caret: t.text }} style={{ flexGrow: 1, width: '100%', fontSize: 12, lineHeight: 20, color: t.text, backgroundColor: 'transparent' }} /><ErrorLine error={error} retry={() => void flush()} /></div>
+  return <div style={{ display: 'flex', flexDirection: 'column', height: 96, paddingLeft: 10, paddingRight: 10, paddingTop: 8, paddingBottom: 8, borderRadius: 10, backgroundColor: t.buttonSecondary }}><DecoratedTextarea decorations={markdownInputDecorations(body, noteInputMarkColors(t))} testId="thread-note-new" aria-label="Thread note" value={body} placeholder="Ideas, reminders, to-dos. Type / for formatting" minRows={3} maxRows={6} onChange={e => { draft.current = e.value ?? ''; setBody(draft.current); save(key, draft.current) }} onBlur={() => void flush()} theme={{ text: t.text, caret: t.text }} style={{ flexGrow: 1, width: '100%', fontSize: 12, lineHeight: 20, color: t.text, backgroundColor: 'transparent' }} /><ErrorLine error={error} retry={() => void flush()} /></div>
 }
 
 export function DockSection({ label, count, children }: { label: string; count?: number; children?: React.ReactNode }) {
