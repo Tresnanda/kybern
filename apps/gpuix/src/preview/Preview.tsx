@@ -139,16 +139,19 @@ const MINI_CARD = (t: ReturnType<typeof useTheme>) => ({ borderWidth: 1, borderC
 function MiniBody({ threadId, entry, corner, size, available, setSize }: { threadId: string; entry: NonNullable<ReturnType<typeof usePreview>['entries'][number]>; corner: MiniCorner; size: PlayerSize; available?: PlayerSize; setSize: (size: PlayerSize) => void }) {
   const s = usePreview(threadId)
   const selectedElsewhere = useApp(state => state.selectedId !== threadId), threadTitle = useApp(state => state.threads.find(th => th.id === threadId)?.title)
-  const [hover, setHover] = useState(false), [shown, setShown] = useState(false)
+  // The revealed header takes the pointer from the card (it is its own hit target), so the card's enter/leave alone
+  // would flap while the pointer rests on the header; the header reports its own hover and the two are joined.
+  const [overBody, setOverBody] = useState(false), [overHeader, setOverHeader] = useState(false), [shown, setShown] = useState(false)
+  const hover = overBody || overHeader
   // Hover reveals the header; it stays mounted for its 150ms exit.
   useEffect(() => {
     if (hover) { setShown(true); return }
     const timer = setTimeout(() => setShown(false), 170)
     return () => clearTimeout(timer)
   }, [hover])
-  return <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+  return <div onMouseEnter={() => setOverBody(true)} onMouseLeave={() => setOverBody(false)} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
     {s.load.phase === 'ready' ? <PreviewSlot threadId={threadId} kind="mini" /> : <PreviewStateView threadId={threadId} />}
-    {(hover || shown) && <MiniChrome title={s.pageTitle || entry.title} otherThread={selectedElsewhere ? threadTitle : undefined} revealed={hover}><IconButton icon={N.panelRight} size={24} testId="preview-mini-return" label="Return to panel" onClick={() => { setPreview(threadId, { floating: false }); showPreview(threadId) }} /><IconButton icon={N.x} size={24} testId="preview-mini-close" label="Close preview" onClick={() => { setPreview(threadId, { floating: false }) }} /></MiniChrome>}
+    {(hover || shown) && <MiniChrome title={s.pageTitle || entry.title} otherThread={selectedElsewhere ? threadTitle : undefined} revealed={hover} onHover={setOverHeader}><IconButton icon={N.panelRight} size={24} testId="preview-mini-return" label="Return to panel" onClick={() => { setPreview(threadId, { floating: false }); showPreview(threadId) }} /><IconButton icon={N.x} size={24} testId="preview-mini-close" label="Close preview" onClick={() => { setPreview(threadId, { floating: false }) }} /></MiniChrome>}
     <MiniResize corner={corner} size={size} bounds={available} onResize={next => { setSize(next); save('kybern.preview.size', next) }} />
   </div>
 }

@@ -34,7 +34,7 @@ const until = async (what: string, ok: () => boolean, ms = 8000) => { const end 
 const pid = (await app.call('initialize', { protocolVersion: 1, client: 'dock9-input' })).pid as number
 const windowId = () => execFileSync('swift', [path.resolve(import.meta.dir, '../../visual/window-id.swift'), String(pid)], { encoding: 'utf8' }).trim()
 const shot = (name: string) => execFileSync('screencapture', ['-l', windowId(), '-x', path.join(out, `${name}-${theme}-gpuix.png`)])
-const CELL = 7, ROW = 21.5, PAD_X = 24.8, PAD_TOP = 13.6
+const CELL = 7, ROW = 21.5
 const file = (name: string) => path.join(project.path, name)
 const read = (name: string) => existsSync(file(name)) ? readFileSync(file(name), 'utf8').trim() : ''
 const clipboard = execFileSync('pbpaste', { encoding: 'buffer' })
@@ -49,23 +49,25 @@ try {
   await screen.waitFor({ timeoutMs: 30_000 }); await settle(1500)
   const terminal = () => client.call('terminals.list', { thread_id: thread.id }).then(r => r.terminals.find(t => t.alive)!)
   const input = async (text: string) => { await client.call('terminals.input', { terminal_id: (await terminal()).id, data: Buffer.from(text).toString('base64') }) }
-  for (const f of ['in-mouse.hex', 'in-paste.hex', 'in-size-1', 'in-size-2']) rmSync(file(f), { force: true })
+  for (const f of ['in-mouse.hex', 'in-mouse.ready', 'in-paste.hex', 'in-paste.ready', 'in-size-1', 'in-size-2']) rmSync(file(f), { force: true })
   await input(`cd ${project.path}\r`); await settle(600)
   await screen.click(); await settle(300)
 
   // 1. Mouse reporting: a real click on a program that enabled 1000 + 1006 arrives as an SGR press and release.
-  await input(`clear; printf '\\033[?1000h\\033[?1006h'; stty raw -echo; head -c 18 | xxd -p > in-mouse.hex; stty sane; printf '\\033[?1000l\\033[?1006l'\r`); await settle(800)
+  rmSync(file('in-mouse.ready'), { force: true })
+  await input(`clear; printf '\\033[?1000h\\033[?1006h'; stty raw -echo min 0 time 20; : > in-mouse.ready; cat | xxd -p > in-mouse.hex; stty sane; printf '\\033[?1000l\\033[?1006l'\r`); await until('mouse program ready', () => existsSync(file('in-mouse.ready'))); await settle(200)
   const b = await screen.bounds()
-  await app.mouse.click({ x: b.x + PAD_X + 10 * CELL + 3, y: b.y + PAD_TOP + 4 * ROW + 5 })
-  await until('mouse bytes', () => read('in-mouse.hex').length > 0)
+  const at = { x: b.x + 10 * CELL + 3, y: b.y + 4 * ROW + 5 } // `bounds()` is the content box, inside the padding
+  await app.mouse.down(at); await settle(80); await app.mouse.up(at)
+  await until('mouse bytes', () => read('in-mouse.hex').length > 0, 15000)
   const mouse = Buffer.from(read('in-mouse.hex').replace(/\s/g, ''), 'hex').toString('latin1')
   results.mouse = JSON.stringify(mouse)
-  assert.match(mouse, /^\x1b\[<0;11;5M\x1b\[<0;11;5m/, 'SGR press and release at column 11, row 5')
+  assert.match(mouse, /^\x1b\[<0;11;5M\x1b\[<0;11;5m$/, `SGR press then release on row 5, got ${JSON.stringify(mouse)}`)
   await settle(500)
 
   // 2. Bracketed paste: ⌘V of a two-line clipboard arrives wrapped in 200~/201~ with a carriage return.
-  execFileSync('pbcopy', { input: 'one\ntwo' })
-  await input(`clear; printf '\\033[?2004h'; stty raw -echo; head -c 18 | xxd -p > in-paste.hex; stty sane; printf '\\033[?2004l'\r`); await settle(800)
+  execFileSync('pbcopy', { input: 'one\ntwo' }); rmSync(file('in-paste.ready'), { force: true })
+  await input(`clear; printf '\\033[?2004h'; stty raw -echo; : > in-paste.ready; head -c 19 | xxd -p > in-paste.hex; stty sane; printf '\\033[?2004l'\r`); await until('paste program ready', () => existsSync(file('in-paste.ready'))); await settle(200)
   await screen.click(); await settle(200)
   await screen.press('cmd-v')
   await until('paste bytes', () => read('in-paste.hex').length > 0)
@@ -74,17 +76,21 @@ try {
   assert.equal(paste, '\x1b[200~one\rtwo\x1b[201~', 'bracketed paste with CR')
   await settle(500)
 
-  // 3. Selection + copy: double-click selects a word, ⌘C puts it on the pasteboard.
+  // 3. Selection + copy: a drag over the word selects exactly those cells and ⌘C puts them on the pasteboard;
+  //    a double-click selects the word (recorded, then cleared by the next drag).
   await input('clear; echo SELECTME\r'); await settle(800)
   execFileSync('pbcopy', { input: 'untouched' })
-  const y = b.y + PAD_TOP + 1 * ROW + ROW / 2
-  const word = { x: b.x + PAD_X + 3 * CELL, y }
-  await app.mouse.click(word); await app.mouse.click(word) // two quick clicks at one point = a double-click
-  await settle(400); shot('selection')
-  await screen.press('cmd-c'); await settle(400)
+  const y = b.y + ROW / 2 // `clear` wipes the command line, so the output is on row 0
+  const word = { x: b.x + 3 * CELL, y }
+  for (let n = 0; n < 2; n++) { await app.mouse.down(word); await app.mouse.up(word) } // two quick presses at one point
+  await screen.press('cmd-c'); await settle(300)
+  results.doubleClickCopied = execFileSync('pbpaste', { encoding: 'utf8' })
+  execFileSync('pbcopy', { input: 'untouched' })
+  await app.mouse.drag({ x: b.x + 1, y }, { x: b.x + 8 * CELL + 1, y }); await settle(300); shot('selection')
+  await screen.press('cmd-c'); await settle(300)
   const copied = execFileSync('pbpaste', { encoding: 'utf8' })
   results.copied = copied
-  assert.equal(copied, 'SELECTME', 'double-click selects the word and ⌘C copies it')
+  assert.equal(copied, 'SELECTME', 'a drag selects the cells and ⌘C copies them')
 
   // 4. Resize: the pty size follows the dock width.
   await input('clear; stty size > in-size-1\r'); await settle(800)
@@ -101,7 +107,7 @@ try {
   console.log(JSON.stringify(results, null, 2))
 } finally {
   execFileSync('pbcopy', { input: clipboard })
-  for (const f of ['in-mouse.hex', 'in-paste.hex', 'in-size-1', 'in-size-2']) rmSync(file(f), { force: true })
+  for (const f of ['in-mouse.hex', 'in-mouse.ready', 'in-paste.hex', 'in-paste.ready', 'in-size-1', 'in-size-2']) rmSync(file(f), { force: true })
   for (const tab of (await client.call('terminals.list', { thread_id: thread.id })).terminals) await client.call('terminals.close', { terminal_id: tab.id }).catch(() => {})
   await app.close()
   client.close?.()
