@@ -83,11 +83,20 @@ flowchart LR
 
 And some text after it.`
 
+export const MERMAID_INVALID = `This diagram is invalid:
+
+\`\`\`mermaid
+flowchart LR
+  A -->
+\`\`\`
+
+So it stays readable as source.`
+
 export async function seed(client: KybernClient, ctx: { projects: { id: string }[] }) {
   const db = new Database(path.join(DATA_DIR, 'state.sqlite'))
   db.exec('PRAGMA busy_timeout = 5000')
   const usage = { input_tokens: 4200, output_tokens: 880, cache_read_tokens: 12000, cache_write_tokens: 300 }
-  for (const [title, text] of [['Markdown A', BLOCKS_A], ['Markdown B', BLOCKS_B], ['Markdown C', BLOCKS_C], ['Mermaid diagram', MERMAID]] as const) {
+  for (const [title, text] of [['Markdown A', BLOCKS_A], ['Markdown B', BLOCKS_B], ['Markdown C', BLOCKS_C], ['Mermaid diagram', MERMAID], ['Mermaid invalid', MERMAID_INVALID]] as const) {
     const thread = await client.call('threads.create', { project_id: ctx.projects[0]!.id, provider: { kind: 'claude-code', instance: 'default' }, permission_mode: 'supervised', title })
     const turn = randomUUID(), answer = randomUUID()
     const events = [
