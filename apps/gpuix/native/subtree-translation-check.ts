@@ -39,7 +39,7 @@ for(const theme of ['dark','light'])for(const reduce of ['0','1']){
     const shot=(name:string)=>{const file=path.join(out,`${label}-${name}.png`);execFileSync('screencapture',['-x','-o','-l',windowId,file]);return file}
     const scoped=shot('scoped');await key('t');await a.getByText('Tick 1; clicks 0').waitFor();const full=shot('full')
     const left=pngPixels(scoped),right=pngPixels(full),scale=left.width/600;let changed=0
-    for(let y=60;y<235;y++)for(let x=10;x<490;x++){const p=left.at(x*scale,y*scale),q=right.at(x*scale,y*scale);if(p.some((v,i)=>Math.abs(v-q[i]!)>2))changed++}
+    for(let y=Math.round(60*scale);y<235*scale;y++)for(let x=Math.round(10*scale);x<490*scale;x++){const p=left.at(x,y),q=right.at(x,y);if(p.some((v,i)=>Math.abs(v-q[i]!)>2))changed++}
     assert.equal(changed,0,'retained glyphs/shadows/rounded clips differ from ordinary render')
     for(let frame=0;frame<10;frame++){await key('n');await key('t');await wait(async()=>(await bounds(movingId)).x===initial.x-30,'negative after full render');await key('m');await key('t');await wait(async()=>(await bounds(movingId)).x===moved.x,'positive after full render')}
     await a.mouse.click({x:button.x+20,y:button.y+10});await a.getByText('Tick 21; clicks 1').waitFor()

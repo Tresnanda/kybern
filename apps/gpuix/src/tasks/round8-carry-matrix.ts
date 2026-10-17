@@ -15,6 +15,13 @@ async function run(label:string,extra:Record<string,string>){
 async function resources(){for(let repeat=1;repeat<=2;repeat++)await run(`resources-${repeat}`,{R7_RESOURCES:'1',R8_WARMUP:'1',KYBERN_APPEARANCE:'dark',KYBERN_REDUCED_MOTION:'0'})}
 if(process.argv.includes('--resources'))await resources()
 else{
+  if(!process.argv.includes('--timing-only')){
+    for(const region of ['0','1']){
+      const child=Bun.spawn(['bun','native/subtree-translation-check.ts'],{env:{...env,KYBERN_REGION_PAINT:region,KYBERN_VERIFY_OUTPUT:`${out}/native-update`},stdout:'pipe',stderr:'pipe'})
+      const stdout=new Response(child.stdout).text(),stderr=new Response(child.stderr).text(),code=await child.exited
+      writeFileSync(`${out}/native-final-region-${region}.log`,await stdout+'\n'+await stderr);if(code)throw Error('Native translation check failed')
+    }
+  }
   for(const theme of ['dark','light'])for(const reduced of ['0','1']){
     const label=`${process.env.R8_TIMING_PREFIX??'carry'}-${theme}-${reduced}`
     await run(label,{KYBERN_APPEARANCE:theme,KYBERN_REDUCED_MOTION:reduced,KYBERN_FRAME_TIMES:'1',R7_LOG:`${out}/${label}-frames.log`})
