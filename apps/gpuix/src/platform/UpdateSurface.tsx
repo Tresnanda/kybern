@@ -145,7 +145,7 @@ function UpdateDetails({ version, notes }: { version: string; notes: string | nu
           ? <markdown source={release.notes} theme={cachedMarkdownTheme(t)} style={{ color: t.text, userSelect: 'text' }} />
           : <Label color={muted(t, 1)} size={14} lineHeight={22}>{release.summary}</Label>}
         <div role="button" testId="update-details-notes" onClick={() => openUrl(release.url)} style={{ display: 'flex', alignItems: 'center', gap: 4, alignSelf: 'flex-start', marginTop: 12, marginLeft: -12, height: 32, paddingLeft: 12, paddingRight: 12, borderRadius: 8, cursor: 'pointer' }}>
-          <Label color={t.link} size={14} weight={500}>Read release notes</Label><Icon source={ICON.arrowUpRight} size={14} color={t.link} />
+          <Label color={t.text} size={14} weight={500}>Read release notes</Label><Icon source={ICON.arrowUpRight} size={14} color={t.text} />
         </div>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 24, paddingRight: 24, paddingTop: 8, flexShrink: 0 }}>
