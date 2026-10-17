@@ -1,5 +1,6 @@
 import type { NativeRenderer } from '@gpuix/react'
 
+const debugCarry=process.env.KYBERN_DEBUG_DRAG==='1'
 type Point = { x: number; y: number }
 
 /** Carry coordinates are native motion input, separate from React's drag lifecycle. */
@@ -26,6 +27,7 @@ export function bindNativeCarry(renderer: NativeRenderer, id: number, origin: Po
     const point = store.get()
     if (last?.x === point.x && last?.y === point.y) return
     last = point
+    if(debugCarry)console.error('[carry]',JSON.stringify({id,origin,point,offset:{x:point.x-origin.x,y:point.y-origin.y}}))
     renderer.setSubtreeTranslation?.(id, { translateX: point.x - origin.x, translateY: point.y - origin.y })
   }
   const stop = store.subscribe(update)

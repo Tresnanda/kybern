@@ -2,11 +2,11 @@ import {mkdirSync,readFileSync,writeFileSync} from 'node:fs'
 import path from 'node:path'
 import {execFileSync} from 'node:child_process'
 import {connect} from '../../visual/fixture.ts'
-import {launchFixture} from './round7b-harness.ts'
+import {launchFixture,resetDragPreferences} from './round7b-harness.ts'
 import {acquirePreviewUiLock} from '../../scripts/preview-ui-lock.ts'
-const data='/Users/mymac/projects/ade-gpuix-scratch/round7-tasks7b'
-const out='/Users/mymac/projects/ade/previews/gpuix/round7/tasks7b'
-const client=await connect({daemonPid:0,port:4276,token:readFileSync(`${data}/daemon.token`,'utf8').trim(),seeded:true})
+const data=process.env.R8_DATA??'/Users/mymac/projects/ade-gpuix-scratch/round7-tasks7b'
+const out=process.env.R8_OUT??'/Users/mymac/projects/ade/previews/gpuix/round7/tasks7b'
+const client=await connect({daemonPid:0,port:Number(readFileSync(`${data}/daemon.port`,'utf8').trim()),token:readFileSync(`${data}/daemon.token`,'utf8').trim(),seeded:true})
 const titles=['Mobile parity for Orchestrator V2 Lineage and thread messaging','WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW','Review and verify all mobile task rendering, workspace events, keyboard controls, animation transitions and native accessibility behavior across devices','測試很長的任務標題與沒有空格的原生換行行為', 'Quick add preserves the fifth existing task', 'Drag task 06', 'Drag task 07', 'Drag task 08', 'Drag task 09', 'Drag task 10', 'Drag task 11', 'Drag task 12']
 let tasks=(await client.call('tasks.items.list',{})).tasks
 for(const task of tasks.filter(t=>t.title==='Round7 saved task'))await client.call('tasks.items.delete',{id:task.id})
@@ -24,10 +24,10 @@ for (const title of [...titles].reverse()) {
  await client.call('tasks.items.update', {id:task.id,status:'todo',before_id:first?.id ?? null})
 }
 if(process.argv.includes('--seed')){client.close?.();process.exit()}
-if(process.env.R7_LOCK_HELD!=='1'&&readFileSync('/tmp/kybern-gpuix-ui-queue','utf8').trim().split('\n')[0]!=='tasks7b')throw Error('Queue tasks7b before acquiring the UI lock')
+if(process.env.R7_LOCK_HELD!=='1'&&readFileSync('/tmp/kybern-gpuix-ui-queue','utf8').trim().split('\n')[0]!== (process.env.R8_LANE??'tasks7b'))throw Error('Queue tasks7b before acquiring the UI lock')
 const unlock=process.env.R7_LOCK_HELD==='1'?()=>{}:acquirePreviewUiLock()
 const label=process.env.R7_LABEL??'before'
-writeFileSync(`${data}/gpuix-ui.json`,'{}')
+resetDragPreferences(data)
 const fixture=await launchFixture(path.resolve('src/tasks/round7b-app.ts'),{GPUIX_BACKGROUND:'1',KYBERN_DATA_DIR:data,KYBERN_APPEARANCE:process.env.KYBERN_APPEARANCE??'dark',KYBERN_OPAQUE:'1',KYBERN_CLIENT_CONFIG_DIR:`${data}/client`,KYBERN_GPUIX_CREDENTIALS_DIR:`${data}/creds`,KYBERN_DEBUG_DRAG:process.env.R7_DEBUG??'0',KYBERN_DRAG_PACING:`${out}/${label}-pacing`,NAPI_RS_NATIVE_LIBRARY_PATH:path.resolve('native/build/gpuix-native.darwin-arm64.node')})
 let windowId=''
 const shot=(file:string)=>{execFileSync('screencapture',['-x','-o','-l',windowId,file])}
@@ -93,6 +93,7 @@ try{
   const expected={x:pointer.x-(from.x-source.x),y:pointer.y-(from.y-source.y)}
   moves.push({i,time:performance.now(),pointer,held,ghost,expected})
   if(i>2&&!held)throw Error('Ghost stopped following before release')
+  if(i>2&&ghost&&Math.max(Math.abs(ghost.x-expected.x),Math.abs(ghost.y-expected.y))>1.5)throw Error(`Ghost lost pointer offset: ${JSON.stringify({view,i,ghost,expected})}`)
  }
  if(resource)await resource.done()
  writeFileSync(`${out}/${label}-${view}-tracking.json`,JSON.stringify(moves,null,2))
@@ -141,12 +142,19 @@ try{
  const start=await app.getByTestId(`project-${a.id}`).center(),target=await app.getByTestId(`project-${b.id}`).center()
  await app.mouse.down(start)
  const probes=[]
+ let anchor: {pointer: {x:number;y:number};ghost: {x:number;y:number}} | undefined
  for(let i=1;i<=60;i++){
   const pointer={x:start.x,y:start.y+(target.y+60-start.y)*i/60}
   await app.mouse.move(pointer,{pressedButton:0});await Bun.sleep(8)
-  probes.push({time:performance.now(),pointer,held:await app.getByTestId('project-drag-layer').count()})
+  const held=await app.getByTestId('project-drag-layer').count(),ghost=held?await app.getByTestId('project-drag-ghost').bounds():null
+  if(ghost&&!anchor)anchor={pointer,ghost}
+  if(ghost&&anchor&&Math.max(Math.abs(ghost.x-anchor.ghost.x-pointer.x+anchor.pointer.x),Math.abs(ghost.y-anchor.ghost.y-pointer.y+anchor.pointer.y))>1.5)throw Error('Project ghost lost pointer offset')
+  probes.push({time:performance.now(),pointer,held,ghost})
+  if([1,10,30,60].includes(i))shot(`${out}/${label}-project-move-${i}.png`)
  }
  await app.mouse.up({x:start.x,y:target.y+60})
+ const projectDrop=performance.now()
+ for(const at of [0,80,160,300]){await Bun.sleep(Math.max(0,projectDrop+at-performance.now()));shot(`${out}/${label}-project-drop-${at}.png`)}
  await wait(async()=>!await app.getByTestId('project-drag-layer').count(),'project release')
  writeFileSync(`${out}/${label}-project-tracking.json`,JSON.stringify(probes))
  }

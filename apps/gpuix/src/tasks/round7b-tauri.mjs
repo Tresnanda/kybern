@@ -2,20 +2,21 @@
 // This is a WKWebView-engine reference, not the packaged native Tauri shell.
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs'
 const {webkit}=await import(process.env.PLAYWRIGHT_CORE ?? '/Users/mymac/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright-core/index.mjs')
-const data='/Users/mymac/projects/ade-gpuix-scratch/round7-tasks7b'
-const root='/Users/mymac/projects/ade/previews/gpuix/round7/tasks7b'
+const data=process.env.R8_DATA??'/Users/mymac/projects/ade-gpuix-scratch/round7-tasks7b'
+const root=process.env.R8_OUT??'/Users/mymac/projects/ade/previews/gpuix/round7/tasks7b'
 const token=readFileSync(`${data}/daemon.token`,'utf8').trim()
 const browser=await webkit.launch()
 const titles=JSON.parse(readFileSync(`${root}/fixture.json`,'utf8'))
 const task=titles.find(t=>t.title.startsWith('Mobile parity'))
 try {
 for(const theme of ['dark','light'])for(const reduced of [false,true])for(const width of [1280,1920]){
+ if(process.env.R8_WIDTH&&width!==Number(process.env.R8_WIDTH))continue
  const label=`${theme}-${reduced?'reduced':'normal'}-${width}`
  if(process.env.R7_ONLY&&process.env.R7_ONLY!==label)continue
  const ctx=await browser.newContext({viewport:{width,height:820},deviceScaleFactor:2,colorScheme:theme,reducedMotion:reduced?'reduce':'no-preference'})
  const page=await ctx.newPage()
  try{
- await page.goto(`http://127.0.0.1:5398/?url=ws://127.0.0.1:4276/ws&token=${token}`)
+ await page.goto(`http://127.0.0.1:${process.env.R8_VITE_PORT??5398}/?url=ws://127.0.0.1:${readFileSync(`${data}/daemon.port`,'utf8').trim()}/ws&token=${token}`)
  // Native macOS overlay scrollbars reserve no width. Headless WebKit otherwise
  // takes 10px from every column and gives the title a different wrap width.
  await page.addStyleTag({content:'*::-webkit-scrollbar{display:none}'})
@@ -104,7 +105,17 @@ for(const theme of ['dark','light'])for(const reduced of [false,true])for(const 
   await page.keyboard.press('Escape');await page.mouse.up()
   const start=performance.now()
   for(const at of [0,80,160,300]){await new Promise(r=>setTimeout(r,Math.max(0,start+at-performance.now())));await page.screenshot({path:`${dir}/cancel-${at}.png`})}
-  writeFileSync(`${dir}/frames.json`,JSON.stringify({kind:'Desktop frontend in WebKit; screenshots separate from timing run',times}))
+  writeFileSync(`${dir}/frames.json`,JSON.stringify({kind:'Desktop frontend in WebKit; screenshots separate from timing run',times,from,tasks:await page.evaluate(async()=>{const {rpc}=await import('/src/state/rpc.ts');return (await rpc().call('tasks.items.list',{})).tasks.map(({id,status,rank})=>({id,status,rank}))})}))
+ }
+ if(width===1280){
+  await page.getByRole('button',{name:'Home',exact:true}).first().click()
+  const project=name=>page.locator('[data-project-id]').filter({hasText:name}).locator('[data-sidebar="menu-button"]').first()
+  const a=await project('alpha-app').boundingBox(),b=await project('beta-docs').boundingBox()
+  const from={x:a.x+a.width/2,y:a.y+a.height/2},to={x:from.x,y:b.y+b.height/2+60}
+  await page.mouse.move(from.x,from.y);await page.mouse.down()
+  for(let i=1;i<=60;i++){await page.mouse.move(from.x,from.y+(to.y-from.y)*i/60);await page.evaluate(()=>new Promise(requestAnimationFrame));if([1,10,30,60].includes(i))await page.screenshot({path:`${root}/${label}-tauri-project-move-${i}.png`})}
+  await page.mouse.up();const drop=performance.now()
+  for(const at of [0,80,160,300]){await new Promise(r=>setTimeout(r,Math.max(0,drop+at-performance.now())));await page.screenshot({path:`${root}/${label}-tauri-project-drop-${at}.png`})}
  }
  console.log('reference',label)
  }finally{await ctx.close()}

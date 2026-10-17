@@ -330,7 +330,7 @@ function ProjectCarryGhost({ drag, onSettled, pacing, children }: { drag: Drag; 
   const node = useRef<PublicInstance | null>(null)
   useLayoutEffect(() => node.current ? bindNativeCarry(nativeRenderer, node.current.id, { x: drag.source.x + drag.grab.x, y: drag.source.y + drag.grab.y }, projectCarry) : undefined, [nativeRenderer, drag.source, drag.grab])
   const left = drag.x - drag.grab.x, top = drag.y - drag.grab.y
-  return <div ref={value => { node.current = value; pacing?.(value) }}
+  return <div testId="project-drag-ghost" ref={value => { node.current = value; pacing?.(value) }}
     paintTranslate={{ initial: false, animate: { translateX: 0, translateY: 0 }, transition: { duration: 0 } }}
     style={{ position: 'absolute', left: drag.source.x, top: drag.source.y, width: drag.source.width, height: drag.source.height, pointerEvents: 'none' }}>
     <DragGhost rect={{ x: 0, y: 0, width: drag.source.width, height: drag.source.height }} grab={drag.grab} x={drag.grab.x} y={drag.grab.y}
