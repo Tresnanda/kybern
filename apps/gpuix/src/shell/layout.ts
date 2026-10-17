@@ -20,7 +20,8 @@ const RAIL_WIDTH = 52
 const FRAME_INSET = 8
 
 const KEY = 'kybern.sidebar.width'
-const clamp = (w: number) => Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Math.round(w)))
+// A non-finite width (a pointer event without coordinates) would reach the native layout as NaN; keep the last width instead.
+const clamp = (w: number) => (Number.isFinite(w) ? Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Math.round(w))) : stored)
 
 const saved = Number(load<number>(KEY, SIDEBAR_DEFAULT))
 // `KYBERN_SIDEBAR_WIDTH` lets the pair tool match the reference window's stored width.
