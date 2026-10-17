@@ -358,7 +358,11 @@ export const RichEditor = forwardRef<RichEditorHandle, RichEditorProps>(function
         onFocus={() => latest.current.onFocus?.()}
         onBlur={() => { flush(); latest.current.onBlur?.() }}
         onLinkClick={(event: EventPayload) => { if (event.value) latest.current.onOpenLink?.(event.value) }}
-        onFileDrop={(event: EventPayload) => { void addImages((event.paths ?? []).filter(p => /\.(png|jpe?g|gif|webp|tiff?|heic|bmp|svg)$/i.test(p))) }}
+        onFileDrop={(event: EventPayload) => {
+          // A drop lands where it was dropped; a pasted image (no point) at the caret.
+          if (event.x != null && event.y != null && event.x !== 0) command({ cmd: 'caretAt', x: event.x, y: event.y })
+          void addImages((event.paths ?? []).filter(p => /\.(png|jpe?g|gif|webp|tiff?|heic|bmp|svg)$/i.test(p)))
+        }}
         style={{ width: '100%' }}
       />
       {slash && <SlashMenu rect={slash} items={slashItems} index={slashIndex} query={state!.slash!.query} onHover={setSlashIndex} onChoose={chooseSlash} />}

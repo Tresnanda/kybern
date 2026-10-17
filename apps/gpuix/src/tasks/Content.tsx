@@ -50,6 +50,7 @@ export function DescriptionEditor({ value, epoch, onChange, onCommit, onExit, on
   const images = useMemo<ImageHome>(() => ({ endpoint: () => getClient()?.endpoint ?? null }), [])
   useEffect(() => { if (focus) editor.current?.focus() }, [focus])
   return (
+    <div testId="task-desc" style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
     <RichEditor
       ref={editor}
       testId="task-desc-input"
@@ -70,6 +71,7 @@ export function DescriptionEditor({ value, epoch, onChange, onCommit, onExit, on
       onKeyDown={(e) => { if (e.requestId != null && e.key === 'escape' && !e.defaultPrevented) { e.preventDefault(); onCommit(); onExit() } }}
       onChange={onChange}
     />
+    </div>
   )
 }
 

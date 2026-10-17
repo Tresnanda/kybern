@@ -517,6 +517,42 @@ fn store_image(src: String, entry: ImageEntry) {
     IMAGE_GENERATION.with(|g| g.set(g.get() + 1));
 }
 
+/// The largest side an image keeps: the 640px column at Retina scale, so it samples 1:1.
+/// GPUI samples images without mipmaps, so a screenshot shrunk 4× shimmers; WebKit does not.
+const IMAGE_MAX_SIDE: u32 = 1280;
+
+/// Area-average a large image down to `IMAGE_MAX_SIDE`, keeping its aspect ratio.
+fn downscaled(image: Arc<gpui::RenderImage>) -> Arc<gpui::RenderImage> {
+    let s = image.size(0);
+    let (w, h) = (s.width.0.max(1) as u32, s.height.0.max(1) as u32);
+    let factor = (w.max(h) as f32 / IMAGE_MAX_SIDE as f32).max(1.0);
+    let Some(src) = image.as_bytes(0).filter(|_| factor > 1.0 && image.frame_count() == 1) else { return image };
+    let (nw, nh) = (((w as f32 / factor).round() as u32).max(1), ((h as f32 / factor).round() as u32).max(1));
+    let mut out = vec![0u8; (nw * nh * 4) as usize];
+    for y in 0..nh {
+        let (y0, y1) = ((y * h / nh) as usize, (((y + 1) * h / nh).max(y * h / nh + 1)) as usize);
+        for x in 0..nw {
+            let (x0, x1) = ((x * w / nw) as usize, (((x + 1) * w / nw).max(x * w / nw + 1)) as usize);
+            let mut acc = [0u32; 4];
+            for sy in y0..y1.min(h as usize) {
+                let row = sy * w as usize * 4;
+                for sx in x0..x1.min(w as usize) {
+                    let i = row + sx * 4;
+                    for c in 0..4 {
+                        acc[c] += src[i + c] as u32;
+                    }
+                }
+            }
+            let n = ((y1.min(h as usize) - y0) * (x1.min(w as usize) - x0)).max(1) as u32;
+            let o = ((y * nw + x) * 4) as usize;
+            for c in 0..4 {
+                out[o + c] = (acc[c] / n) as u8;
+            }
+        }
+    }
+    gpui::RenderImage::from_bgra(nw, nh, out).map(Arc::new).unwrap_or(image)
+}
+
 fn drain_image_drops(window: &mut Window) {
     let drops: Vec<_> = IMAGE_DROPS.with(|d| std::mem::take(&mut *d.borrow_mut()));
     for image in drops {
@@ -532,7 +568,7 @@ pub(crate) fn set_image(src: String, bytes: Vec<u8>, cx: &mut App) -> napi::Resu
     } else {
         let image = crate::custom_elements::img::render_image_from_encoded(bytes, cx.svg_renderer())
             .map_err(napi::Error::from_reason)?;
-        store_image(src, ImageEntry::Ready(image));
+        store_image(src, ImageEntry::Ready(downscaled(image)));
     }
     let editors: Vec<_> = EDITORS.with(|e| e.borrow().values().filter_map(|w| w.upgrade()).collect());
     for editor in editors {
@@ -3199,6 +3235,15 @@ pub(crate) fn command(id: u64, command: serde_json::Value, window: &mut Window, 
             "getSelection" => {
                 let sel = state.core.sel;
                 return Ok(serde_json::json!({"anchor": pos_json(&state.core.doc, sel.anchor), "head": pos_json(&state.core.doc, sel.head), "composing": state.core.marked.is_some()}));
+            }
+            "caretAt" => {
+                // A drop or paste point in window coordinates becomes the caret.
+                let x = command.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                let y = command.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                let p = state.local(point(px(x), px(y)));
+                let pos = if f32::from(p.y) > state.height { state.core.doc.end() } else { state.pos_at_point(p) };
+                state.core.set_selection(Sel::caret(pos));
+                serde_json::Value::Null
             }
             "select" => {
                 let anchor = pos_from(&state.core.doc, command.get("anchor")).unwrap_or_default();
