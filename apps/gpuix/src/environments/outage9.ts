@@ -4,11 +4,11 @@
  * for B only (A stays fine), keep B's saved connection, and reconnect when the machine returns.
  */
 import { spawn, execFileSync } from 'node:child_process'
-import { addSecond, DATA_B, mode, reset, start, switchTo, wait } from './verify9.lib.ts'
+import { addSecond, DATA_B, PORT_B, mode, reset, start, switchTo, wait } from './verify9.lib.ts'
 const assert = (ok: unknown, message: string) => { if (!ok) throw Error(`FAIL: ${message}`); console.log(`ok  ${message}`) }
 const KYBERND = '/Applications/kybern.app/Contents/MacOS/kybernd'
 const pidB = () => execFileSync('pgrep', ['-f', `kybernd --data-dir ${DATA_B}`], { encoding: 'utf8' }).trim().split('\n')[0]!
-const startB = () => { const child = spawn(KYBERND, ['--data-dir', DATA_B, '--port', '4295'], { detached: true, stdio: 'ignore' }); child.unref() }
+const startB = () => { const child = spawn(KYBERND, ['--data-dir', DATA_B, '--port', PORT_B], { detached: true, stdio: 'ignore' }); child.unref() }
 reset()
 const h = await start()
 let restarted = false

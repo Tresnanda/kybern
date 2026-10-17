@@ -219,7 +219,10 @@ function HowToSignIn({ kind }: { kind: ProviderKind }) {
   const command = CLI_SIGN_IN_COMMAND[kind]
   const [done, setDone] = useState(false)
   useEffect(() => { if (!done) return; const timer = setTimeout(() => setDone(false), 1400); return () => clearTimeout(timer) }, [done])
-  return <Menu testId={`account-how-${kind}`} align="end" width={288} fit="switch" trigger={() => <div style={{ display: 'flex', alignItems: 'center', minHeight: 28, paddingLeft: 10, paddingRight: 10, borderWidth: 1, borderColor: t.border, borderRadius: 8, hover: { backgroundColor: t.buttonTertiaryHover } }}><Label color={t.text} size={14} lineHeight={21}>How to sign in</Label></div>}>
+  // Escape closes the menu only, never the Settings page behind it (the desktop skips Escape from a `role="menu"`).
+  const [open, setOpen] = useState(false)
+  useSettingsModal(open)
+  return <Menu testId={`account-how-${kind}`} align="end" width={288} fit="switch" onOpenChange={setOpen} trigger={() => <div style={{ display: 'flex', alignItems: 'center', minHeight: 28, paddingLeft: 10, paddingRight: 10, borderWidth: 1, borderColor: t.border, borderRadius: 8, hover: { backgroundColor: t.buttonTertiaryHover } }}><Label color={t.text} size={14} lineHeight={21}>How to sign in</Label></div>}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 8 }}>
       <Label color={t.text} size={14} lineHeight={21} weight={500}>How to sign in</Label>
       <Label color={t.textSecondary} size={14} lineHeight={21}>{`Run ${command} in your terminal. Kybern picks it up automatically.`}</Label>
@@ -261,7 +264,9 @@ function AccountMenu({ account, onRename, onRemove, onAssign }: { account: Accou
       toast.error('Unable to change the color', { description: `${errorText(error)} Check your connection, then try again.` })
     }
   }
-  return <Menu testId={`account-actions-${id}`} align="end" minWidth={192} fit="switch" onOpenChange={(open) => { if (!open) setView('root') }} trigger={() => <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, hover: { backgroundColor: t.buttonSecondaryHover } }}><Icon source={N.ellipsis} size={16} color={t.textSecondary} style={{ pointerEvents: 'none' }} /></div>}>
+  const [open, setOpen] = useState(false)
+  useSettingsModal(open)
+  return <Menu testId={`account-actions-${id}`} align="end" minWidth={192} fit="switch" onOpenChange={(next) => { setOpen(next); if (!next) setView('root') }} trigger={() => <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, hover: { backgroundColor: t.buttonSecondaryHover } }}><Icon source={N.ellipsis} size={16} color={t.textSecondary} style={{ pointerEvents: 'none' }} /></div>}>
     {view === 'root' ? <>
       {!cli && <MenuItem id="rename" testId={`account-actions-${id}-rename`} label="Rename…" onSelect={onRename} />}
       {!cli && <MenuItem id="signin" testId={`account-actions-${id}-signin`} label="Sign in again" onSelect={() => openAddAccount({ provider: kind, instance })} />}

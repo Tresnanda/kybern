@@ -3,11 +3,11 @@
  * own composer draft, open thread, last page, sidebar state and notes; switching, relaunching and forgetting
  * behave like the desktop's `kybern.workspace.v1:<environment>`.
  */
-import { existsSync, readdirSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
-import { addSecond, CLIENT, DATA_A, ensureThread, mode, reset, start, switchTo, wait } from './verify9.lib.ts'
+import { addSecond, CLIENT, DATA_A, DATA_B, ensureThread, mode, reset, start, switchTo, wait } from './verify9.lib.ts'
 const assert = (ok: unknown, message: string) => { if (!ok) throw Error(`FAIL: ${message}`); console.log(`ok  ${message}`) }
-const DATA_B = '/Users/mymac/projects/ade-gpuix-scratch/phase2-settings9-b'
 const a1 = ensureThread(DATA_A, 'Thread A1'), b1 = ensureThread(DATA_B, 'Thread B1'), b2 = ensureThread(DATA_B, 'Thread B2')
 reset()
 let h = await start()
@@ -49,13 +49,16 @@ try {
   await h.app.close()
   h = await start()
   await h.until('A back', () => h.text('proj9a'), 30000); await wait(800)
-  assert(await open('Thread A1') || await h.text('reply draft in A1'), 'relaunching into A restores its last view and draft')
+  assert(await open('Thread A1') && await h.text('reply draft in A1'), 'relaunching into A restores its last view and draft')
   // Forget B: its stored UI state goes with it (desktop forgetEnvironmentStore).
-  const files = () => [...readdirSync(DATA_A), ...readdirSync(CLIENT)].filter(f => /^(gpuix-ui-|workspace-)/.test(f)).length
-  const before = files()
+  // `savedEnvironmentStateFile` / `prefsFileFor`: the files keyed by B's id, next to A's own.
+  const hash = (key: string) => createHash('sha1').update(key).digest('hex').slice(0, 12)
+  const bFiles = [path.join(DATA_A, `gpuix-ui-${hash(bId)}.json`), path.join(CLIENT, `workspace-${hash(bId)}.json`)]
+  const aFiles = [path.join(DATA_A, 'gpuix-ui.json'), path.join(CLIENT, `workspace-${hash(DATA_A)}.json`)]
+  assert(bFiles.every(f => existsSync(f)) && aFiles.every(f => existsSync(f)), 'A and B each have their own saved UI state files')
   await h.click('rail-home'); await h.click('environment-switcher'); await h.click('environment-manage'); await h.click(`environment-forget-${bId}`)
-  await wait(900)
-  assert(files() < before, `forgetting B removed its saved UI state files (${before} -> ${files()})`)
+  await h.until('B forgotten', async () => !(await h.present(`environment-forget-${bId}`)), 10_000); await wait(900)
+  assert(bFiles.every(f => !existsSync(f)), 'forgetting B removed its saved UI state files')
+  assert(aFiles.every(f => existsSync(f)), "forgetting B kept A's saved UI state")
   console.log(`PASS per-environment storage (${mode}${process.env.KYBERN_REDUCED_MOTION === '1' ? ', reduced motion' : ''})`)
 } catch (e) { await h.shot('s-failure'); throw e } finally { await h.app.close().catch(() => {}) }
-void existsSync; void path

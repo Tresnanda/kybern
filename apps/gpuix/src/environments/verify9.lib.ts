@@ -1,4 +1,5 @@
-/** Shared driver for the settings9 environment checks: scratch daemons A (4294) and B (4295), isolated registry and credentials. */
+/** Shared driver for the settings9 environment checks: scratch daemons A (4294) and B (4295), isolated registry and credentials.
+ * `KYBERN_VERIFY9_A`, `KYBERN_VERIFY9_B`, `KYBERN_VERIFY9_PORT_A` and `KYBERN_VERIFY9_PORT_B` point the checks at other scratch daemons. */
 import { launch } from '@gpuix/react/automation'
 import { assertScratchEnv } from '../requests/harness.ts'
 import { execFileSync } from 'node:child_process'
@@ -7,13 +8,16 @@ import path from 'node:path'
 
 export const S = '/Users/mymac/projects/ade-gpuix-scratch'
 export const OUT = process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previews/gpuix/phase2/settings9/envs'
-export const DATA_A = `${S}/phase2-settings9`
-export const DATA_B = `${S}/phase2-settings9-b`
+export const DATA_A = process.env.KYBERN_VERIFY9_A ?? `${S}/phase2-settings9`
+export const DATA_B = process.env.KYBERN_VERIFY9_B ?? `${S}/phase2-settings9-b`
+export const PORT_A = process.env.KYBERN_VERIFY9_PORT_A ?? '4294'
+export const PORT_B = process.env.KYBERN_VERIFY9_PORT_B ?? '4295'
+for (const dir of [DATA_A, DATA_B]) if (!dir.includes('/ade-gpuix-scratch/')) throw Error(`${dir} is not a scratch data directory`)
 export const CLIENT = process.env.KYBERN_CLIENT_CONFIG_DIR ?? `${S}/phase2-settings9-client`
 export const CREDS = process.env.KYBERN_GPUIX_CREDENTIALS_DIR ?? `${S}/phase2-settings9-creds`
 const CLI = '/Applications/kybern.app/Contents/MacOS/kybern'
 export const cli = (data: string, ...args: string[]) => execFileSync(CLI, ['--data-dir', data, ...args], { encoding: 'utf8' })
-export const pairingInvitation = (data = DATA_B, address = 'http://127.0.0.1:4295') => (JSON.parse(cli(data, '--json', 'pair', '--address', address)) as { addresses: { invitation: string }[] }).addresses[0]!.invitation
+export const pairingInvitation = (data = DATA_B, address = `http://127.0.0.1:${PORT_B}`) => (JSON.parse(cli(data, '--json', 'pair', '--address', address)) as { addresses: { invitation: string }[] }).addresses[0]!.invitation
 
 export const mode = process.env.KYBERN_APPEARANCE ?? process.argv[2] ?? 'dark'
 export const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))

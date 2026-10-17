@@ -8,7 +8,7 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
-import { CLIENT, DATA_A, DATA_B, cli, mode, pairingInvitation, reset, start, wait } from './verify9.lib.ts'
+import { CLIENT, CREDS, DATA_A, DATA_B, PORT_A, PORT_B, cli, mode, pairingInvitation, reset, start, wait } from './verify9.lib.ts'
 
 const registry = () => JSON.parse(readFileSync(path.join(CLIENT, 'environments.json'), 'utf8')) as { selected_id: string; environments: { id: string; name: string; url?: string; environment_id?: string }[] }
 const tokenList = (data: string) => (JSON.parse(cli(data, 'call', 'access.tokens.list', '{}')) as { tokens: { id: string; label: string; revoked: boolean }[] }).tokens
@@ -44,7 +44,7 @@ try {
   await until('connected to B', () => text('proj9b'), 30000)
   await shot('v-06-connected-b')
   const saved = registry()
-  assert(saved.selected_id === saved.environments[0]?.id && saved.environments[0]?.url === 'ws://127.0.0.1:4295/ws', 'registry has B and selects it')
+  assert(saved.selected_id === saved.environments[0]?.id && saved.environments[0]?.url === `ws://127.0.0.1:${PORT_B}/ws`, 'registry has B and selects it')
   assert(tokenList(DATA_B).length === before + 1 && tokenList(DATA_B).some(t => t.label.includes('Second machine') && !t.revoked), 'daemon B recorded a new paired device for this app')
   const bId = saved.environments[0]!.id
   // --- Switch back and forth, with the environment menu showing both --------------------------
@@ -79,7 +79,7 @@ try {
   // A real paired device on daemon A, to list and revoke.
   const phoneName = `Scratch phone ${Date.now() % 100000}`
   const code = (JSON.parse(cli(DATA_A, '--json', 'pair')) as { code: string }).code
-  const paired = await fetch('http://127.0.0.1:4294/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, device_name: phoneName }) })
+  const paired = await fetch(`http://127.0.0.1:${PORT_A}/pair`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, device_name: phoneName }) })
   assert(paired.ok, 'a scratch phone paired with daemon A over /pair')
   await click('environment-switcher'); await click('environment-pair'); await app.getByTestId('pairing-create').waitFor()
   await until('invitation created', async () => { if (await present('pairing-address')) return true; await app.getByTestId('pairing-create').click().catch(() => {}); await wait(500); return false }, 20000)
@@ -115,7 +115,7 @@ try {
   await click('environment-switcher'); await click('environment-manage'); await click(`environment-forget-${bId}`)
   await until('back on A after forgetting the active environment', () => text('proj9a'), 30000)
   assert(registry().environments.length === 0 && registry().selected_id === 'local', 'forget removed B and fell back to the local environment')
-  assert(!existsSync(path.join(process.env.KYBERN_GPUIX_CREDENTIALS_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/phase2-settings9-creds', `${encodeURIComponent(bId)}.token`)), 'forget removed the stored credential')
+  assert(!existsSync(path.join(CREDS, `${encodeURIComponent(bId)}.token`)), 'forget removed the stored credential')
   await shot('v-12-after-forget')
   console.log(`PASS environment flows (${mode}${process.env.KYBERN_REDUCED_MOTION === '1' ? ', reduced motion' : ''}); data dirs ${DATA_A}`)
 } catch (e) { await shot('v-failure'); throw e } finally { await app.close() }

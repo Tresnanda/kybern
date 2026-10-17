@@ -235,8 +235,16 @@ try {
   await check('accounts: Make default writes default_account; CLI account clears it', 'accounts', async () => {
     await click('account-actions-codex-side'); await click('account-actions-codex-side-default')
     await until('daemon side', async () => (await settingsNow()).providers.codex?.default_account === 'side')
+    // Visible result: the menu of the new default drops "Make default", the CLI account's offers it.
+    await click('account-actions-codex-side'); await until('side menu', () => has('account-actions-codex-side-rename'))
+    assert.ok(!(await has('account-actions-codex-side-default')), 'the default account offers no Make default')
+    await app.getByTestId('account-actions-codex-side-rename').press('escape'); await until('menu closed', async () => !(await has('account-actions-codex-side-rename')))
+    await settle(300); assert.ok(await has('page-settings'), 'Escape closed the menu only, not Settings')
+    await shot('accounts-default-side')
     await click('account-actions-codex-default'); await click('account-actions-codex-default-default')
     await until('daemon cli', async () => !(await settingsNow()).providers.codex?.default_account)
+    await click('account-actions-codex-side'); await until('side offers Make default again', () => has('account-actions-codex-side-default'))
+    await app.getByTestId('account-actions-codex-side-default').press('escape'); await until('menu closed', async () => !(await has('account-actions-codex-side-default')))
   })
   await check('accounts: Use for projects… saves project_accounts', 'accounts', async () => {
     await click('account-actions-codex-work'); await click('account-actions-codex-work-projects'); await app.getByTestId('account-projects').waitFor({ timeoutMs: 5000 }); await shot('accounts-projects')
