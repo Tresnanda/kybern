@@ -93,6 +93,26 @@ function readFrame(o: Objc, window: Pointer): string | null {
   return text ? String(text) : null
 }
 
+/**
+ * Bring this window forward for "Open in a new window" from a sibling window
+ * (`windows/registry.ts`): restore it if minimized, then make it key. Automation
+ * runs (`GPUIX_BACKGROUND`) only reorder it and never take the keyboard.
+ */
+export function focusAppWindow(renderer: NativeRenderer) {
+  const background = process.env.GPUIX_BACKGROUND === '1'
+  if (mac) {
+    try {
+      const o = getObjc()
+      const window = appWindow(o, true)
+      if (window) {
+        if ((Number(o.msgU64(window, sel(o, 'isMiniaturized'))) & 0xff) !== 0) o.msgSetPtr(window, sel(o, 'deminiaturize:'), null as unknown as Pointer)
+        if (background) o.msgSetPtr(window, sel(o, 'orderFront:'), null as unknown as Pointer)
+      }
+    } catch { /* GPUI's own activation below still runs. */ }
+  }
+  if (!background) (renderer as { activateWindow?: () => void }).activateWindow?.()
+}
+
 /** Whether the app's window is the key (focused) window; true when unknown. */
 export function isWindowFocused(): boolean {
   if (!mac) return true
