@@ -1,9 +1,25 @@
 import { connectStdio } from '@gpuix/react/automation'
 import { spawn } from 'node:child_process'
+import { realpathSync } from 'node:fs'
+
+/** A GPUIX launch must never resolve the user's real `~/.kybern`: startup restarts a
+ * daemon whose binary looks newer, which killed every running agent once. Aborts
+ * unless the data dir (or the daemon URL) is explicitly a scratch one. */
+export function assertScratchEnv(env: Record<string, string | undefined>) {
+  const merged = { ...process.env, ...env }
+  const dir = merged.KYBERN_DATA_DIR
+  const real = `${process.env.HOME}/.kybern`
+  const real_ = (path: string) => { try { return realpathSync(path) } catch { return path } }
+  const resolved = dir ? real_(dir.replace(/\/+$/, '') || '/') : undefined
+  if (resolved && (resolved === real || resolved === real_(real))) throw new Error(`Refusing to launch GPUIX against ${real}; set KYBERN_DATA_DIR to a scratch directory.`)
+  if (!dir && !merged.KYBERN_URL) throw new Error('Refusing to launch GPUIX without KYBERN_DATA_DIR (it would resolve ~/.kybern); set it, or KYBERN_URL and KYBERN_TOKEN for a scratch daemon.')
+  if (!merged.KYBERN_CLIENT_CONFIG_DIR) throw new Error('Refusing to launch GPUIX without KYBERN_CLIENT_CONFIG_DIR; it would change the saved environments.')
+}
 
 /** Automation launch with an explicit process lifetime and startup deadline.
  * The upstream launch helper doesn't reject when a child exits before handshake. */
 export async function launchFixture(entry: string, env: Record<string, string>) {
+  assertScratchEnv(env)
   const child = spawn('bun', [entry], { env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] })
   let stderr = ''
   const frames:number[]=[]

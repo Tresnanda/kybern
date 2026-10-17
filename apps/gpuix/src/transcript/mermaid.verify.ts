@@ -1,13 +1,15 @@
 // The hidden WKWebView runs the bundled Mermaid and rasterizes to PNG: a valid flowchart and
 // sequence diagram produce images, invalid source gives none, a repeat is served from the cache.
 import assert from 'node:assert/strict'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { launchFixture } from '../requests/harness.ts'
 import { EVIDENCE } from './live.ts'
 const out = process.env.KYBERN_VERIFY_OUTPUT ?? `${EVIDENCE}/mermaid`
 mkdirSync(out, { recursive: true })
+const scratch = mkdtempSync(tmpdir() + '/gpuix-mermaid-')
 for (const theme of ['dark', 'light']) {
-  const f = await launchFixture(import.meta.dir + '/mermaid.fixture.tsx', { GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: theme, KYBERN_OPAQUE: '1' })
+  const f = await launchFixture(import.meta.dir + '/mermaid.fixture.tsx', { GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: theme, KYBERN_OPAQUE: '1', KYBERN_DATA_DIR: scratch, KYBERN_CLIENT_CONFIG_DIR: scratch, KYBERN_GPUIX_CREDENTIALS_DIR: scratch, KYBERN_GPUIX_ENVIRONMENT: 'local', KYBERN_URL: '', KYBERN_TOKEN: '' })
   try {
     const app = f.app
     await app.getByTestId('mermaid-fixture').waitFor({ timeoutMs: 30000 })
