@@ -10,6 +10,7 @@ import { FONT_MONO, FONT_UI, type Theme } from '../theme.ts'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { T } from './glyphs.ts'
 import { G } from '../composer/glyphs.ts'
+import { pressTransform } from '../motion/press.ts'
 
 /** `getChatTranscriptTextStyle()`: 14px at `leading-relaxed` (1.625). */
 export const TEXT = { size: 14, lineHeight: 22.75 }
@@ -104,6 +105,7 @@ export function Button({
       aria-disabled={disabled}
       onKeyDown={e => { if (!disabled && (e.key === 'enter' || e.key === 'space')) { keyboardAnswer(); onClick?.() } }}
       onClick={disabled ? undefined : onClick}
+      paintTransform={pressTransform(!disabled && !!onClick)}
       style={{
         display: 'flex',
         alignItems: 'center',

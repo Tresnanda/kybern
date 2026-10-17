@@ -12,6 +12,7 @@ import { FONT_UI, THEMES, themeFor, type Theme } from './theme.ts'
 import { FULL_TRANSLUCENCY, OPAQUE_WINDOW, fullTranslucency, useAccessibilityDisplay } from './platform/material.ts'
 import { Icon, type IconName } from './icons.tsx'
 import { PROVIDER_IMAGES, PROVIDER_VECTORS } from './providerMarks.ts'
+import { pressTransform } from './motion/press.ts'
 
 function systemVariant(): 'dark' | 'light' {
   const forced = process.env.KYBERN_APPEARANCE
@@ -115,6 +116,7 @@ export function ChromeButton({
     <div
       testId={testId}
       onClick={onClick}
+      paintTransform={pressTransform(!!onClick)}
       style={{
         display: 'flex',
         alignItems: 'center',
