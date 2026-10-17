@@ -24,7 +24,7 @@
 // single combobox restores the input to its selected value.
 import { Tick02Icon, UnfoldMoreIcon } from '@hugeicons/core-free-icons'
 import { useGpuix, type PublicInstance } from '@gpuix/react'
-import { useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { muted } from '../composer/Menu.tsx'
 import { glyph, Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
@@ -89,6 +89,9 @@ export function Combobox({
   const fieldRef = useRef<PublicInstance | null>(null)
   const inputRef = useRef<PublicInstance | null>(null)
   const escape = useEscapeLayer(open)
+  // The scrolling option list; a keyboard move scrolls the highlighted row into view (pointer moves do not).
+  const listRef = useRef<PublicInstance | null>(null)
+  const reveal = useRef(false)
 
   const singleLabel = !multiple && typeof value === 'string' ? itemToLabel(value) : ''
   // Opening on a filled single combobox lists everything (the text is the selection, not a query).
@@ -122,7 +125,20 @@ export function Combobox({
     if (!shown.length) return
     const i = active ? shown.indexOf(active) : -1
     setActive(shown[i < 0 ? (step > 0 ? 0 : shown.length - 1) : Math.min(shown.length - 1, Math.max(0, i + step))]!)
+    reveal.current = true
   }
+  useLayoutEffect(() => {
+    const list = listRef.current
+    if (!open || !active || !reveal.current || !list) return
+    reveal.current = false
+    const scroll = renderer?.getScrollOffset?.(list.id), bounds = renderer?.getElementBounds?.(list.id)
+    const index = shown.indexOf(active)
+    if (!scroll || !bounds || index < 0) return
+    const top = -(scroll[1] ?? 0), viewport = Math.min(bounds.height, MAX_HEIGHT - 2)
+    const rowTop = 4 + index * ROW, rowBottom = rowTop + ROW
+    const next = rowTop < top + 4 ? rowTop - 4 : rowBottom > top + viewport - 4 ? rowBottom - viewport + 4 : top
+    if (next !== top) renderer?.scrollTo?.(list.id, 0, -Math.max(0, next))
+  }, [open, active, renderer])
   const onKeyDown = (e: { key?: string }) => {
     if (disabled) return
     if (e.key === 'down') { if (!open) setOpen(true); else move(1) }
@@ -216,7 +232,7 @@ export function Combobox({
               <Label color={muted(t, 1)} size={14} lineHeight={20}>{emptyText}</Label>
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', padding: 4, overflowY: 'scroll', minHeight: 0, flexShrink: 1 }}>
+            <div ref={(el) => { listRef.current = el }} style={{ display: 'flex', flexDirection: 'column', padding: 4, overflowY: 'scroll', minHeight: 0, flexShrink: 1 }}>
               {shown.map((item) => {
                 const on = item === active
                 return (
