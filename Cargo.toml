@@ -11,6 +11,8 @@ members = [
   "crates/kybern",
   "apps/desktop/src-tauri",
 ]
+# The GPUIX native checkout the GPUIX client builds from (apps/gpuix/native).
+exclude = ["apps/gpuix/native/upstream"]
 
 [workspace.package]
 version = "0.9.1"

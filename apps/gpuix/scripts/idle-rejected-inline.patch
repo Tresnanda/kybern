@@ -1,0 +1,22 @@
+diff --git a/apps/gpuix/src/App.tsx b/apps/gpuix/src/App.tsx
+index 1bfa45f0..bb9dc114 100644
+--- a/apps/gpuix/src/App.tsx
++++ b/apps/gpuix/src/App.tsx
+@@ -137,7 +137,7 @@ function Workspace() {
+             {/* Cached islands (native/README.md): the panel, the content card, the title
+                 bar and the rail each replay while another of them animates. */}
+             <div
+-              {...ISLAND}
++              {...(process.env.KYBERN_IDLE_INLINE_PARENTS && page === 'home' ? {} : ISLAND)}
+               style={{
+                 display: 'flex',
+                 width: sidebarWidth,
+@@ -160,7 +160,7 @@ function Workspace() {
+             </div>
+           </motion.div>
+           <div
+-            {...FILL_ISLAND}
++            {...(process.env.KYBERN_IDLE_INLINE_PARENTS && page === 'tasks' ? {} : FILL_ISLAND)}
+             style={{
+               display: 'flex',
+               flexDirection: 'column',

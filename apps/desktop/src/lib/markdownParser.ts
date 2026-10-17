@@ -10,6 +10,11 @@ import { chatLink, kybernRef, splitKybernRefs, type KybernRef } from "../../../.
 // The same GFM, HTML-as-text and URL policy as our ReactMarkdown renderer.
 const processor = unified().use(remarkParse).use(remarkGfm).use(remarkRehype, { allowDangerousHtml: true })
 type MarkdownTree = ReturnType<typeof processor.parse>
+/** Source-positioned CommonMark/GFM tree for native editing. Unlike the
+ * rendered tree below, this retains every original node and source range. */
+export function parseMarkdownDocument(source: string): MarkdownTree {
+  return processor.parse(source)
+}
 export type MarkdownTreeNode = ReturnType<typeof processor.runSync>["children"][number]
 export interface MarkdownBlock { key: string; node: MarkdownTreeNode }
 export interface ParsedMarkdown { source: string; blocks: MarkdownBlock[] }

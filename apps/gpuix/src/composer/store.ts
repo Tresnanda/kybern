@@ -1,0 +1,393 @@
+import { onEnvironmentChange, onEnvironmentLeaving } from '../shell/environment.ts'
+import { load, save } from '../shell/persist.ts'
+// Composer data and actions: the agent catalog, settings and accounts, the open
+// thread's next-message target, queued follow-ups, and the home screen's draft
+// choices. Every RPC here is the one the desktop uses (`state/rpc.ts`,
+// `views/Thread.tsx`, `views/Draft.tsx`), so behaviour stays in step.
+//
+// The desktop keeps draft choices, favorites and recents in localStorage; here
+// they live for the session only.
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import path from 'node:path'
+import { useRef, useSyncExternalStore } from 'react'
+import { getClient, getState, refreshLists, selectPaneThread, getFocusedPaneId, getPane, getPaneState, setPane, usePaneAccess, useApp } from '../state.ts'
+import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
+import type {
+  AccountSummary,
+  GitBranchesResult,
+  PermissionMode,
+  ProjectId,
+  ProviderInstance,
+  ProviderKind,
+  ProviderStatus,
+  QueuedMessage,
+  Settings,
+  ThreadId,
+  ThreadTargetState,
+  UserMessage,
+} from '../../../../packages/kybern-client/src/types.ts'
+import type { FavoriteModel } from '../../../../packages/kybern-client/src/models.ts'
+
+export interface DraftChoices {
+  /** `null` follows `settings.default_permission_mode`. */
+  mode: PermissionMode | null
+  provider: (ProviderInstance & { pinAccount?: boolean }) | null
+  models: Partial<Record<ProviderKind, { model?: string; effort?: string }>>
+  /** `undefined` is the most recently active project; `null` is Free chat. */
+  projectId: ProjectId | null | undefined
+  worktree: boolean | null
+  baseBranch: string | null
+}
+
+export interface ComposerData {
+  providers: ProviderStatus[]
+  providersLoading: boolean
+  settings: Settings | null
+  accounts: AccountSummary[]
+  target: { threadId: ThreadId; state: ThreadTargetState } | null
+  /** Per-account model catalog of the open thread's target (`providers.accounts.catalog`). */
+  catalog: { key: string; status: ProviderStatus } | null
+  catalogLoading: string | null
+  queued: Record<ThreadId, QueuedMessage[]>
+  branches: { projectId: ProjectId; result: GitBranchesResult } | null
+  draft: DraftChoices
+  favorites: FavoriteModel[]
+  recents: Record<string, string[]>
+}
+
+const initialData: ComposerData = {
+  providers: [],
+  providersLoading: false,
+  settings: null,
+  accounts: [],
+  target: null,
+  catalog: null,
+  catalogLoading: null,
+  queued: {},
+  branches: null,
+  draft: { mode: null, provider: null, models: {}, projectId: undefined, worktree: null, baseBranch: null },
+  favorites: [],
+  recents: {},
+}
+let data: ComposerData = { ...initialData, ...load<Partial<Pick<ComposerData, 'draft' | 'favorites' | 'recents'>>>('kybern.composer.choices', {}) }
+const targets = new Map<string, NonNullable<ComposerData['target']>>()
+const catalogs = new Map<string, NonNullable<ComposerData['catalog']>>()
+const catalogLoads = new Map<string, string>()
+const paneDrafts = new Map<string, DraftChoices>()
+const listeners = new Set<() => void>()
+function scopedData(paneId: string, threadId: string | null): ComposerData {
+  if (!paneDrafts.has(paneId)) paneDrafts.set(paneId, data.draft)
+  return { ...data, draft: paneDrafts.get(paneId) ?? data.draft,
+    target: threadId ? targets.get(threadId) ?? (data.target?.threadId === threadId ? data.target : null) : null,
+    catalog: threadId ? catalogs.get(threadId) ?? null : null,
+    catalogLoading: threadId ? catalogLoads.get(threadId) ?? null : null }
+}
+
+export function patch(next: Partial<ComposerData> | ((d: ComposerData) => Partial<ComposerData>)) {
+  const previous = data
+  data = { ...data, ...(typeof next === 'function' ? next(data) : next) }
+  if (data.target) { targets.set(data.target.threadId, data.target); if (targets.size > 100) targets.delete(targets.keys().next().value!) }
+  if (data.draft !== previous.draft || data.favorites !== previous.favorites || data.recents !== previous.recents) save('kybern.composer.choices', { draft: data.draft, favorites: data.favorites, recents: data.recents })
+  for (const l of listeners) l()
+}
+
+export function patchDraft(next: Partial<DraftChoices>, paneId = getFocusedPaneId()) {
+  const draft = { ...(paneDrafts.get(paneId) ?? data.draft), ...next }
+  paneDrafts.set(paneId, draft)
+  if ('projectId' in next) {
+    const pane = getPane(paneId)
+    if (pane) setPane(paneId, { draft: { ...pane.draft, projectId: next.projectId ?? undefined }, generation: pane.generation + 1 })
+  }
+  if (paneDrafts.size > 100) paneDrafts.delete(paneDrafts.keys().next().value!)
+  // Keep the last choices as the defaults for future panes and legacy callers.
+  patch({ draft })
+}
+
+export const getData = (paneId = getFocusedPaneId()) => scopedData(paneId, getPaneState(paneId).selectedId)
+
+export function useComposer<T>(select: (d: ComposerData) => T): T {
+  const pane = usePaneAccess()
+  const threadId = useApp(s => s.selectedId)
+  const frozen = useRef(scopedData(pane.id, threadId))
+  if (!pane.frozen) frozen.current = scopedData(pane.id, threadId)
+  return useSyncExternalStore(
+    (l) => {
+      listeners.add(l)
+      return () => listeners.delete(l)
+    },
+    () => select(pane.frozen ? frozen.current : scopedData(pane.id, threadId)),
+  )
+}
+
+function rpc() {
+  const client = getClient()
+  if (!client) throw new Error('Start kybernd, then reopen this window')
+  return client
+}
+
+/** `errorText` from `state/rpc.ts`: the daemon's message, or the thrown text. */
+export function errorText(e: unknown): string {
+  if (e && typeof e === 'object' && 'message' in e && typeof (e as { message: unknown }).message === 'string')
+    return (e as { message: string }).message
+  return String(e)
+}
+
+// ---- catalog, settings, accounts ----
+
+let loadedFor: unknown = null
+
+/** Load what the composer reads, once per connection. */
+export function ensureLoaded() {
+  const client = getClient()
+  if (!client || client === loadedFor || getState().status !== 'open') return
+  loadedFor = client
+  client.onNotification('settings.changed', (params) => {
+    if (getClient() !== client) return
+    const settings = (params as { settings?: Settings } | null)?.settings
+    if (settings && client === getClient()) patch({ settings })
+    void loadProviders(false).catch(() => {})
+  })
+  // Like the desktop's provider cache: paint the last catalog at once, since
+  // `providers.list` probes every agent CLI and can take seconds.
+  const cached = readProviderCache(client.endpoint.url)
+  if (cached && !data.providers.length) patch({ providers: cached })
+  void loadProviders(false).catch(() => {})
+  void client.call('settings.get', {}).then((settings) => { if (getClient() === client) patch({ settings }) }).catch(() => {})
+  void client
+    .call('providers.accounts.list', {})
+    .then((r) => { if (getClient() === client) patch({ accounts: r.accounts }) })
+    .catch(() => {})
+}
+
+/** Read the account list again (an account was added, changed or removed elsewhere, e.g. Settings). */
+export function refreshComposerAccounts() {
+  const client = getClient()
+  if (!client) return Promise.resolve()
+  return client.call('providers.accounts.list', {}).then((r) => { if (getClient() === client) patch({ accounts: r.accounts }) }).catch(() => {})
+}
+
+let providerLoad: Promise<ProviderStatus[]> | null = null
+export function loadProviders(force: boolean, projectId?: ProjectId): Promise<ProviderStatus[]> {
+  if (providerLoad && !force) return providerLoad
+  patch({ providersLoading: true })
+  const client = rpc()
+  const request = client
+    .call('providers.list', { ...(projectId ? { project_id: projectId } : {}), ...(force ? { force_refresh: true } : {}) })
+    .then((r) => {
+      if (getClient() !== client) return r.providers
+      patch({ providers: r.providers })
+      if (!projectId) writeProviderCache(client.endpoint.url, r.providers)
+      return r.providers
+    })
+    .finally(() => {
+      if (getClient() !== client) return
+      if (providerLoad === request) providerLoad = null
+      patch({ providersLoading: false })
+    })
+  providerLoad = request
+  return request
+}
+
+const CACHE_DIR = process.env.KYBERN_CLIENT_CONFIG_DIR ? path.join(process.env.KYBERN_CLIENT_CONFIG_DIR, 'cache') : path.join(homedir(), 'Library', 'Caches', 'kybern-gpuix')
+const cacheFile = (url: string) => path.join(CACHE_DIR, `providers-${url.replace(/[^a-z0-9]+/gi, '_')}.json`)
+
+function readProviderCache(url: string): ProviderStatus[] | null {
+  try {
+    return JSON.parse(readFileSync(cacheFile(url), 'utf8')) as ProviderStatus[]
+  } catch {
+    return null
+  }
+}
+
+function writeProviderCache(url: string, providers: ProviderStatus[]) {
+  try {
+    mkdirSync(CACHE_DIR, { recursive: true })
+    writeFileSync(cacheFile(url), JSON.stringify(providers))
+  } catch {
+    // A cache miss only costs the first paint.
+  }
+}
+
+// ---- the open thread's next-message target ----
+
+const targetSeq = new Map<string, number>()
+export async function loadTarget(threadId: ThreadId) {
+  const client = rpc()
+  const seq = (targetSeq.get(threadId) ?? 0) + 1
+  targetSeq.set(threadId, seq)
+  try {
+    const state = await client.call('threads.target.get', { thread_id: threadId })
+    if (getClient() === client && seq === targetSeq.get(threadId)) patch({ target: { threadId, state } })
+  } catch {
+    // An old daemon has no target API; the thread's own fields stand in.
+  }
+}
+
+const catalogSeq = new Map<string, number>()
+/** `refreshAccountCatalog` in `views/Thread.tsx`. */
+export async function loadCatalog(threadId: ThreadId, provider: ProviderInstance, projectId: ProjectId, force: boolean) {
+  const key = `${threadId}:${provider.kind}:${provider.instance}`
+  const client = rpc()
+  const seq = (catalogSeq.get(threadId) ?? 0) + 1
+  catalogSeq.set(threadId, seq)
+  catalogLoads.set(threadId, key)
+  patch({ catalogLoading: key })
+  try {
+    const status = await client.call('providers.accounts.catalog', { provider, project_id: projectId, force_refresh: force })
+    if (getClient() === client && seq === catalogSeq.get(threadId)) { catalogs.set(threadId, { key, status }); if (catalogs.size > 100) catalogs.delete(catalogs.keys().next().value!); patch({ catalog: { key, status } }) }
+    return status
+  } finally {
+    if (getClient() === client && seq === catalogSeq.get(threadId)) { catalogLoads.delete(threadId); patch({ catalogLoading: null }) }
+  }
+}
+
+/** `changePermission`: `threads.update`, then the target again. */
+export async function setThreadMode(threadId: ThreadId, mode: PermissionMode) {
+  const client = rpc()
+  await client.call('threads.update', { thread_id: threadId, permission_mode: mode })
+  if (getClient() !== client) return
+  await refreshLists()
+  if (getClient() === client) await loadTarget(threadId)
+}
+
+/** `chooseTarget` with the thread's target and a new model/effort. */
+export async function setThreadModel(threadId: ThreadId, model: string | undefined, effort: string | undefined) {
+  const current = data.target?.threadId === threadId ? data.target.state : null
+  const thread = getState().threads.find((t) => t.id === threadId) ?? getState().open.thread
+  const provider = current?.target.provider ?? thread?.provider
+  if (!provider) return
+  const client = rpc()
+  const state = await client.call('threads.target.set', {
+    thread_id: threadId,
+    target: { provider, model, effort },
+    inherit_account: !current?.account_override,
+  })
+  if (getClient() === client) patch({ target: { threadId, state } })
+}
+
+// ---- sending ----
+
+export async function loadQueue(threadId: ThreadId) {
+  const client = rpc()
+  try {
+    const r = await client.call('queue.list', { thread_id: threadId })
+    if (getClient() !== client) return
+    patch((d) => ({ queued: { ...d.queued, [threadId]: r.messages.filter((m) => m.thread_id === threadId) } }))
+  } catch {
+    // Older daemons have no queue.
+  }
+}
+
+export async function sendToThread(threadId: ThreadId, message: UserMessage, delivery: 'send' | 'queue' | 'steer') {
+  if (delivery === 'send') {
+    await rpc().call('threads.send', { thread_id: threadId, message })
+    return
+  }
+  if (delivery === 'steer') {
+    await rpc().call('threads.steer', { thread_id: threadId, id: crypto.randomUUID(), message })
+    return
+  }
+  const client = rpc()
+  await client.call('queue.add', { thread_id: threadId, id: crypto.randomUUID(), message })
+  if (getClient() === client) await loadQueue(threadId)
+}
+
+export async function removeQueued(threadId: ThreadId, id: string) {
+  const client = rpc()
+  await client.call('queue.remove', { thread_id: threadId, id })
+  if (getClient() === client) await loadQueue(threadId)
+}
+
+export async function interruptThread(threadId: ThreadId) {
+  await rpc().call('threads.interrupt', { thread_id: threadId })
+}
+
+/** `createThread` from the home screen, then open it. */
+export async function createThread(opts: {
+  paneId?: string
+  projectId: ProjectId | null
+  provider: ProviderInstance
+  pinAccount: boolean
+  permissionMode: PermissionMode
+  model?: string
+  effort?: string
+  useWorktree: boolean
+  baseBranch?: string
+  message: UserMessage
+}) {
+  const client = rpc()
+  const paneId = opts.paneId ?? getFocusedPaneId()
+  const generation = getPane(paneId)?.generation
+  const t = await client.call('threads.create', {
+    ...(opts.projectId ? { project_id: opts.projectId } : {}),
+    provider: opts.provider,
+    pin_account: opts.pinAccount,
+    permission_mode: opts.permissionMode,
+    model: opts.model,
+    effort: opts.effort,
+    use_worktree: opts.useWorktree,
+    base_branch: opts.baseBranch,
+    message: opts.message,
+  })
+  if (getClient() !== client) return t.id
+  await refreshLists()
+  if (getClient() === client && getPane(paneId)?.generation === generation) void selectPaneThread(paneId, t.id)
+  return t.id
+}
+
+export async function loadBranches(projectId: ProjectId) {
+  const client = rpc()
+  try {
+    const result = await client.call('git.branches', { project_id: projectId })
+    if (getClient() !== client) return
+    patch({ branches: { projectId, result } })
+  } catch {
+    if (getClient() !== client) return
+    patch({ branches: { projectId, result: { current: null, branches: [] } } })
+  }
+}
+
+// ---- attachments ----
+
+function assetsEndpoint(): { base: string; token: string } {
+  const { url, token } = rpc().endpoint
+  return { base: httpBase(url), token }
+}
+
+export interface UploadedAsset {
+  id: string
+  name: string
+  media_type: string
+  size: number
+}
+
+/** `uploadFile`: POST the bytes to the daemon's `/assets`. */
+export async function uploadPath(path: string): Promise<UploadedAsset> {
+  const file = Bun.file(path)
+  const name = path.split('/').pop() ?? 'file'
+  return uploadBytes(name, file.type || 'application/octet-stream', await file.arrayBuffer())
+}
+
+/** Clipboard images use the same upload contract as files, without a temporary file. */
+export async function uploadBytes(name: string, mediaType: string, bytes: ArrayBuffer | Uint8Array): Promise<UploadedAsset> {
+  const { base, token } = assetsEndpoint()
+  const response = await fetch(`${base}/assets`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      origin: 'tauri://localhost',
+      'content-type': mediaType,
+      'x-kybern-filename': name,
+    },
+    body: bytes as BodyInit,
+  })
+  if (!response.ok) {
+    const detail = (await response.text()).trim()
+    throw new Error(detail || `Upload failed (${response.status})`)
+  }
+  return (await response.json()) as UploadedAsset
+}
+
+onEnvironmentLeaving(() => save('kybern.composer.choices', { draft: data.draft, favorites: data.favorites, recents: data.recents }))
+onEnvironmentChange(() => { loadedFor = null; providerLoad = null; targetSeq.clear(); catalogSeq.clear(); targets.clear(); catalogs.clear(); catalogLoads.clear(); paneDrafts.clear(); patch({ ...initialData, ...load<Partial<Pick<ComposerData, 'draft' | 'favorites' | 'recents'>>>('kybern.composer.choices', {}) }) })

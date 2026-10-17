@@ -1,0 +1,28 @@
+{
+  "name": "kybern-gpuix",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Experimental Kybern client rendered natively with GPUIX (React on Zed's GPUI).",
+  "scripts": {
+    "dev": "bun --hot src/main.tsx",
+    "start": "bun src/main.tsx",
+    "screenshot": "bun scripts/screenshot.ts",
+    "typecheck": "tsc --noEmit",
+    "package:app": "bun scripts/package-app.ts"
+  },
+  "packageManager": "pnpm@11.25.0",
+  "dependencies": {
+    "@gpuix/native": "0.10.0",
+    "@gpuix/react": "0.10.0",
+    "@hugeicons/core-free-icons": "4.3.3",
+    "mdast-util-gfm": "3.1.0",
+    "mdast-util-to-markdown": "2.1.2",
+    "react": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.3",
+    "@types/react": "19.2.18",
+    "typescript": "6.0.3"
+  }
+}
