@@ -22,6 +22,8 @@ execFileSync('/usr/libexec/PlistBuddy', ['-c', `Set :CFBundleShortVersionString 
 cpSync(path.join(root, '../desktop/src-tauri/icons/icon.icns'), path.join(resources, 'icon.icns'))
 cpSync(addon, path.join(resources, path.basename(addon)))
 cpSync(path.join(root, 'native/build/kybern-webview.dylib'), path.join(resources, 'kybern-webview.dylib'))
+// Mermaid for transcript diagrams (`src/transcript/mermaid.ts` runs it in a hidden WKWebView).
+cpSync(path.join(root, '../desktop/node_modules/mermaid/dist/mermaid.min.js'), path.join(resources, 'mermaid.min.js'))
 cpSync(path.join(root, 'src/assets/fonts'), path.join(resources, 'src/assets/fonts'), {recursive:true})
 cpSync(path.join(root, 'src/assets/providers'), path.join(resources, 'src/assets/providers'), {recursive:true})
 const previousCwd = process.cwd()

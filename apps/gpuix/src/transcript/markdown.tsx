@@ -99,7 +99,7 @@ export const CodeHeader = memo(function CodeHeader({ part, expanded, wrap, onExp
 }) {
   const t = useTheme()
   return <div testId="code-header" style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 1.6, paddingBottom: 1.6, paddingLeft: 9.6, paddingRight: 6.4, borderTopLeftRadius: CODE.radius, borderTopRightRadius: CODE.radius, overflow: 'hidden', backgroundColor: t.codeSurface }}>
-    <Label color={muted(t)} size={11.52} lineHeight={16.128} font={FONT_MONO} style={{ flexGrow: 1 }}>{part.language === 'mermaid' ? 'Mermaid source · diagram preview unavailable' : part.language || 'text'}</Label>
+    <Label color={muted(t)} size={11.52} lineHeight={16.128} font={FONT_MONO} style={{ flexGrow: 1 }}>{part.language === 'mermaid' ? 'Mermaid source' : part.language || 'text'}</Label>
     {onExpand && <Button testId="code-expand" variant="ghost" onClick={onExpand}>{expanded ? 'Show less' : 'Show more'}</Button>}
     <HeaderButton testId="code-wrap" label={wrap ? 'Disable line wrap' : 'Wrap lines'} onClick={onWrap}>
       <Icon source={T.textWrap} size={12} color={wrap ? t.text : muted(t)} />

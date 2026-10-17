@@ -15,6 +15,7 @@ import { subscribe, useApp, usePaneAccess, usePaneCompact } from './state.ts'
 import { Label, REDUCED_MOTION, useTheme } from './ui.tsx'
 import { DISTANCE, DURATION, EASE } from './motion/kit.tsx'
 import { CodeChunk, CodeHeader, markdownParts, partGap, Prose, textChunks } from './transcript/markdown.tsx'
+import { MermaidBlock } from './transcript/MermaidBlock.tsx'
 import { MessageRail, type RailItem } from './transcript/rail.tsx'
 import { createTranscriptNavigation } from '../../desktop/src/lib/transcriptNavigation.ts'
 import { T } from './transcript/glyphs.ts'
@@ -31,7 +32,8 @@ export const COLUMN = 736
 const COMPOSER_INSET = 192
 const turnKey = (group: TurnGroup, index: number) => group.turnId || group.user?.id || `turn-${index}`
 
-type SavedAnchor = { key: string; offset: number; tail: boolean; code: Record<string, { expanded: boolean; wrap: boolean }> }
+type CodeState = { expanded: boolean; wrap: boolean; source?: boolean }
+type SavedAnchor = { key: string; offset: number; tail: boolean; code: Record<string, CodeState> }
 const scrollAnchors = new Map<string, SavedAnchor>()
 
 export function Transcript() {
@@ -87,7 +89,7 @@ export function Transcript() {
   const buildNavigation = useMemo(() => createTranscriptNavigation(), [threadId])
   const navigationItems = useMemo(() => buildNavigation(turns as never), [buildNavigation, turns])
   const railItems = useMemo<RailItem[]>(() => navigationItems.map(item => ({ id: item.id, label: item.label, description: item.description })), [navigationItems])
-  const [codeState, setCodeState] = useState<Record<string, { expanded: boolean; wrap: boolean }>>({})
+  const [codeState, setCodeState] = useState<Record<string, CodeState>>({})
   const [activeRow, setActiveRow] = useState(0)
   const nearTop = useRef(false)
 
@@ -116,7 +118,11 @@ export function Transcript() {
       // Native Markdown owns spacing inside prose; separate virtual parts
       // share the desktop's collapsed margin at their boundary (`partGap`).
       if (partIndex > 0) result.push({ key: `${partKey}:before`, turn, node: <div style={{ height: partGap(parts[partIndex - 1]!, part) }} /> })
-      if (part.kind === 'code') {
+      if (part.kind === 'code' && part.language === 'mermaid') {
+        // One row: the header (Preview/Source, expand, copy) and the diagram or its source.
+        const state = codeState[partKey] ?? { expanded: false, wrap: false }
+        result.push({ key: partKey, turn, node: <Row><MermaidBlock code={part.text} source={!!state.source} onSource={source => setCodeState(value => ({ ...value, [partKey]: { ...state, source } }))} /></Row> })
+      } else if (part.kind === 'code') {
         // Desktop code starts unwrapped; horizontal scrolling preserves long lines.
         const state = codeState[partKey] ?? { expanded: false, wrap: false }
         const update = (patch: Partial<typeof state>) => setCodeState(value => ({ ...value, [partKey]: { ...state, ...patch } }))

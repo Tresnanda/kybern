@@ -101,8 +101,8 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
   return <div testId="visual-card" data-status={error ? 'error' : loaded ? 'ready' : 'loading'} style={{ display: 'flex', flexDirection: 'column', marginTop: 8, marginBottom: 8, position: 'relative' }}>
     {expanded ? <>
       <div style={{ height, width: '100%' }} />
-      <Dialog width={expandedWidth} radius={14} onClose={() => setExpanded(false)} testId="visual-expanded">
-        {/* `.visual-reply__expanded-header`: 44px, 16px / 8px inset, the title and a ghost close button. */}
+      <Dialog instant width={expandedWidth} radius={14} onClose={() => setExpanded(false)} testId="visual-expanded">
+        {/* The desktop's native <dialog> opens and closes without motion (`instant`). `.visual-reply__expanded-header`: 44px, 16px / 8px inset, the title and a ghost close button. */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 44, paddingLeft: 16, paddingRight: 8, backgroundColor: t.surface }}>
           <Label color={t.text} weight={500} truncate style={{ flexGrow: 1 }}>{visual.title || 'Interactive visual'}</Label>
           <div testId="dialog-close" role="button" aria-label="Close expanded preview" onClick={() => setExpanded(false)} style={{ display: 'flex', width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 8, cursor: 'pointer', flexShrink: 0, hover: { backgroundColor: t.buttonSecondaryHover } }}>

@@ -62,6 +62,12 @@ export function webDocument(url: string, kind: 'file' | 'server' | 'visual') {
 }
 
 export const webHost = {
+  /** A trusted, never-placed document with no child frame (the Mermaid renderer): script runs, the page is not shown. */
+  createDocument(id: string, html: string) {
+    const generation = ++nextGeneration
+    command({ op: 'create', id, category: 'renderer', generation, allowedOrigins: [], html })
+    return generation
+  },
   create(id: string, url: string, kind: 'file' | 'server' | 'visual') {
     const generation = ++nextGeneration
     command({ op: 'create', id, category: kind === 'visual' ? 'visual' : 'preview', generation, allowedOrigins: [new URL(url).origin], html: webDocument(url, kind) })
