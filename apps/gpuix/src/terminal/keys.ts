@@ -1,24 +1,70 @@
 import type { EventPayload } from '@gpuix/react'
+const KEY_MODIFIERS = (m: { shift?: boolean; alt?: boolean; ctrl?: boolean; cmd?: boolean } | undefined) => (m?.shift ? 1 : 0) | (m?.alt ? 2 : 0) | (m?.ctrl ? 4 : 0) | (m?.cmd ? 8 : 0)
+/** Keys whose Shift+PageUp/PageDown scroll the viewport instead of reaching the program, and Cmd+A. */
+export function terminalViewportKey(event: Pick<EventPayload, 'key' | 'modifiers'>): 'pageup' | 'pagedown' | 'selectall' | null {
+  const key = event.key ?? '', m = event.modifiers
+  if ((key === 'pageup' || key === 'pagedown') && m?.shift) return key
+  if (key === 'a' && m?.cmd && !m.alt && !m.ctrl && !m.shift) return 'selectall'
+  return null
+}
+/**
+ * The bytes xterm.js 6.0.0 sends for a key press on macOS (src/common/input/Keyboard.ts with
+ * macOptionIsMeta off): Option composes characters, so Option+letter sends the composed text.
+ * Null means nothing is sent from the key itself.
+ */
 export function terminalKey(event: Pick<EventPayload, 'key' | 'keyChar' | 'modifiers'>, application = false): string | null {
   const key = event.key ?? '', m = event.modifiers
+  const modifiers = KEY_MODIFIERS(m), mod = modifiers + 1
+  const ESC = '\x1b'
   if (m?.cmd) return null
-  const alt = m?.alt ? '\x1b' : ''
-  if (m?.ctrl) {
-    const controls: Record<string, string> = { space: '\0', ' ': '\0', '2': '\0', '3': '\x1b', '4': '\x1c', '5': '\x1d', '6': '\x1e', '7': '\x1f', '8': '\x7f', '/': '\x1f', '?': '\x7f' }
-    if (controls[key] !== undefined) return alt + controls[key]
-    if (key.length === 1) { const code = key.toUpperCase().charCodeAt(0); if (code >= 64 && code <= 95) return alt + String.fromCharCode(code - 64) }
+  const cursor = (final: string) => modifiers ? `${ESC}[1;${mod}${final}` : `${ESC}${application ? 'O' : '['}${final}`
+  const tilde = (code: number) => modifiers ? `${ESC}[${code};${mod}~` : `${ESC}[${code}~`
+  switch (key) {
+    case 'backspace': return (m?.alt ? ESC : '') + (m?.ctrl ? '\b' : '\x7f')
+    case 'tab': return m?.shift ? `${ESC}[Z` : '\t'
+    case 'enter': case 'return': return m?.alt ? `${ESC}\r` : '\r'
+    case 'escape': return m?.alt ? `${ESC}${ESC}` : ESC
+    case 'left': return cursor('D')
+    case 'right': return cursor('C')
+    case 'up': return cursor('A')
+    case 'down': return cursor('B')
+    case 'home': return modifiers ? `${ESC}[1;${mod}H` : application ? `${ESC}OH` : `${ESC}[H`
+    case 'end': return modifiers ? `${ESC}[1;${mod}F` : application ? `${ESC}OF` : `${ESC}[F`
+    case 'insert': return !m?.shift && !m?.ctrl ? `${ESC}[2~` : null
+    case 'delete': return tilde(3)
+    case 'pageup': return m?.shift ? null : m?.ctrl ? `${ESC}[5;${mod}~` : `${ESC}[5~`
+    case 'pagedown': return m?.shift ? null : m?.ctrl ? `${ESC}[6;${mod}~` : `${ESC}[6~`
+    case 'f1': return modifiers ? `${ESC}[1;${mod}P` : `${ESC}OP`
+    case 'f2': return modifiers ? `${ESC}[1;${mod}Q` : `${ESC}OQ`
+    case 'f3': return modifiers ? `${ESC}[1;${mod}R` : `${ESC}OR`
+    case 'f4': return modifiers ? `${ESC}[1;${mod}S` : `${ESC}OS`
+    case 'f5': return tilde(15)
+    case 'f6': return tilde(17)
+    case 'f7': return tilde(18)
+    case 'f8': return tilde(19)
+    case 'f9': return tilde(20)
+    case 'f10': return tilde(21)
+    case 'f11': return tilde(23)
+    case 'f12': return tilde(24)
   }
-  const modifier = 1 + (m?.shift ? 1 : 0) + (m?.alt ? 2 : 0) + (m?.ctrl ? 4 : 0)
-  const arrows: Record<string, string> = { up: 'A', down: 'B', right: 'C', left: 'D', home: 'H', end: 'F' }
-  let value: string | undefined
-  if (arrows[key]) return modifier > 1 ? `\x1b[1;${modifier}${arrows[key]}` : `\x1b${application ? 'O' : '['}${arrows[key]}`
-  const tilde: Record<string, number> = { insert: 2, delete: 3, pageup: 5, pagedown: 6, f5: 15, f6: 17, f7: 18, f8: 19, f9: 20, f10: 21, f11: 23, f12: 24 }
-  if (tilde[key]) return `\x1b[${tilde[key]}${modifier > 1 ? `;${modifier}` : ''}~`
-  const functionKey: Record<string, string> = { f1: 'P', f2: 'Q', f3: 'R', f4: 'S' }
-  if (functionKey[key]) return modifier > 1 ? `\x1b[1;${modifier}${functionKey[key]}` : `\x1bO${functionKey[key]}`
-  const keys: Record<string, string> = { enter: '\r', return: '\r', backspace: '\x7f', delete: '\x1b[3~', escape: '\x1b', tab: m?.shift ? '\x1b[Z' : '\t', space: ' ', pageup: '\x1b[5~', pagedown: '\x1b[6~', insert: '\x1b[2~', f1: '\x1bOP', f2: '\x1bOQ', f3: '\x1bOR', f4: '\x1bOS', f5: '\x1b[15~', f6: '\x1b[17~', f7: '\x1b[18~', f8: '\x1b[19~', f9: '\x1b[20~', f10: '\x1b[21~', f11: '\x1b[23~', f12: '\x1b[24~' }
-  value = keys[key] ?? event.keyChar ?? (key.length === 1 ? (m?.shift ? key.toUpperCase() : key) : undefined)
-  return value === undefined ? null : alt + value
+  if (m?.ctrl && !m.shift && !m.alt) {
+    if (key.length === 1 && key >= 'a' && key <= 'z') return String.fromCharCode(key.charCodeAt(0) - 96)
+    if (key === 'space' || key === ' ') return '\0'
+    if (key >= '3' && key <= '7') return String.fromCharCode(key.charCodeAt(0) - 51 + 27)
+    if (key === '8') return '\x7f'
+    if (key === '[') return ESC
+    if (key === '\\') return '\x1c'
+    if (key === ']') return '\x1d'
+  }
+  if (m?.ctrl) {
+    const char = event.keyChar ?? key
+    if (char === '_') return '\x1f'
+    if (char === '@') return '\0'
+    return null
+  }
+  if (m?.alt) return event.keyChar && event.keyChar.length <= 2 && event.keyChar !== key ? event.keyChar : key === 'space' ? ' ' : null
+  if (key === 'space') return ' '
+  return event.keyChar ?? (key.length === 1 ? (m?.shift ? key.toUpperCase() : key) : null)
 }
 
 export interface MouseModes { mouseTracking: number; mouseSgr: boolean; mousePixels?: boolean }

@@ -135,7 +135,13 @@ test('restoring a saved cursor does not mutate its saved color', () => {
 test('modified terminal keys preserve xterm control and function sequences', () => {
   const modifiers = { cmd: false, ctrl: true, alt: false, shift: false }
   expect(terminalKey({ key: 'space', modifiers })).toBe('\0')
-  expect(terminalKey({ key: 'c', modifiers: { ...modifiers, alt: true } })).toBe('\x1b\x03')
+  // Ctrl+Option has no mapping in xterm.js on macOS.
+  expect(terminalKey({ key: 'c', modifiers: { ...modifiers, alt: true } })).toBeNull()
+  expect(terminalKey({ key: 'backspace', modifiers })).toBe('\b')
+  expect(terminalKey({ key: 'backspace', modifiers: { ...modifiers, ctrl: false, alt: true } })).toBe('\x1b\x7f')
+  expect(terminalKey({ key: 'b', keyChar: '∫', modifiers: { ...modifiers, ctrl: false, alt: true } })).toBe('∫')
+  expect(terminalKey({ key: 'pageup', modifiers: { ...modifiers, ctrl: false, alt: true } })).toBe('\x1b[5~')
+  expect(terminalKey({ key: 'insert', modifiers: { ...modifiers, ctrl: false, shift: true } })).toBeNull()
   expect(terminalKey({ key: '3', modifiers })).toBe('\x1b')
   expect(terminalKey({ key: '8', modifiers })).toBe('\x7f')
   expect(terminalKey({ key: 'pageup', modifiers })).toBe('\x1b[5;5~')
