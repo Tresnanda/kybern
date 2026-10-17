@@ -1,4 +1,4 @@
-import { canSplitPane, collectThreadPanes, splitFocusedPane, useFocusedPane, useSplitRoot } from '../split/store.ts'
+import { canOpenInSplit, collectThreadPanes, openThreadInSplit, useFocusedPane, useSplitRoot } from '../split/store.ts'
 import { beginThreadDrag, trackThreadDrag, consumeThreadDrag, finishSplitDrag } from '../split/Workspace.tsx'
 import { showDialog } from '../dialogs/store.ts'
 import { activeEnvironment } from '../shell/environment.ts'
@@ -658,8 +658,8 @@ export const ThreadRow = memo(function ThreadRow({
           />
           <MenuItem id="handoff" icon={N.handoff} label="Hand off to another agent" onSelect={() => setNav({ handoff: { threadId: thread.id, target: null } })} />
           <MenuSeparator />
-          <MenuItem id="right" icon={N.splitRight} label="Open to the right" disabled={inSplit || !canSplitPane(splitRoot, focusedPane, 'horizontal')} onSelect={() => { splitFocusedPane('horizontal', thread.id) }} />
-          <MenuItem id="below" icon={N.splitDown} label="Open below" disabled={inSplit || !canSplitPane(splitRoot, focusedPane, 'vertical')} onSelect={() => { splitFocusedPane('vertical', thread.id) }} />
+          <MenuItem id="right" icon={N.splitRight} label="Open to the right" disabled={!canOpenInSplit(thread.id, 'horizontal')} onSelect={() => { openThreadInSplit(thread.id, 'horizontal') }} />
+          <MenuItem id="below" icon={N.splitDown} label="Open below" disabled={!canOpenInSplit(thread.id, 'vertical')} onSelect={() => { openThreadInSplit(thread.id, 'vertical') }} />
           <MenuSeparator />
           {thread.worktree && <MenuItem id="cleanup" icon={N.worktree} label="Remove worktree…" onSelect={() => showDialog({ kind: 'worktree', threadId: thread.id })} />}
           {thread.worktree && <MenuItem id="branch" icon={N.branch} label={thread.worktree.branch} disabled onSelect={() => {}} />}
