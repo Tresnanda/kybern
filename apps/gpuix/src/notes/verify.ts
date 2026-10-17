@@ -6,7 +6,8 @@ import path from 'node:path'
 import assert from 'node:assert/strict'
 import { launch } from '@gpuix/react/automation'
 import { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
-import { splitBlocks } from './blocks.ts'
+import { parseDoc, serializeDoc } from '../editor/markdown.ts'
+const roundTrip = (source: string) => { const doc = parseDoc(source); return serializeDoc(doc.blocks, doc) }
 
 const data = (process.env.KYBERN_DATA_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/data')
 const out = process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previews/gpuix/notes'
@@ -49,7 +50,7 @@ const bodies = [
   'A focused document with clear typography, a small outline, and just enough structure.\n\n## Reading list\n\n[GPUIX](https://github.com/remorses/gpuix)\n',
   '## Release checklist\n\n- [x] Review the gallery\n- [ ] Check light and dark appearances\n- [ ] Measure typing latency\n',
 ]
-for (const body of bodies) assert.equal(splitBlocks(body).join(''), body)
+for (const body of bodies) assert.equal(roundTrip(body), body)
 let app: Awaited<ReturnType<typeof launch>> | undefined
 try {
   for (const [i, title] of ['A quieter workspace', 'Ideas for the next release', 'Before we ship', 'Meeting notes', 'Reading and references', 'Small things to remember'].entries()) {
@@ -74,17 +75,19 @@ try {
     await click(`note-card-${ids[0]}`); await pause(500)
     await app.screenshot({ path: `${out}/document-${appearance}.png` })
     if (appearance === 'dark' && !process.env.NOTES_SCREENSHOTS_ONLY) {
-      console.log('edit native block')
-      await click('note-block-0'); await pause(100)
-      const input = app.getByTestId('note-block-input-0')
+      console.log('edit in the formatted editor')
+      await click('note-body'); await pause(100)
+      const input = app.getByTestId('note-body')
+      // A new first line, made a heading by its Markdown shortcut, typed key by key.
+      await input.press('cmd-up'); await input.press('enter'); await input.press('up')
       const latency: number[] = []
-      for (let i = 0; i < 2; i++) { const start = performance.now(); await input.fill(`# A quieter workspace ${i}\n\n`); latency.push(performance.now() - start) }
-      console.log('native fill round-trip ms', JSON.stringify(latency))
+      for (const ch of '# A quieter workspace 1') { const start = performance.now(); await input.press(ch === ' ' ? 'space' : ch); latency.push(performance.now() - start) }
+      console.log('native key round-trip ms', JSON.stringify(latency))
       for (let retry = 0; retry < 20; retry++) { await input.element(); await pause(200); if ((await client.call('notes.get', { id: ids[0] })).note?.body.startsWith('# A quieter workspace 1')) break }
       const saved = (await client.call('notes.get', { id: ids[0] })).note!
       console.log('saved body', JSON.stringify(saved.body)); await app.screenshot({ path: `${out}/editing-dark.png` }); assert.ok(saved.body.startsWith('# A quieter workspace 1'))
       assert.ok(saved.body.includes('console.log(idea)'))
-      await click('note-done-editing')
+      await input.press('escape')
       await app.getByTestId('note-title').fill('Autosave verified')
       await click('notes-back'); await pause(2000)
       assert.equal((await client.call('notes.get', { id: ids[0] })).note!.title, 'Autosave verified')
@@ -134,10 +137,10 @@ try {
         console.log('document idle sample')
         const doc = Bun.spawn(['bun', 'perf/sample.ts', '15', `GPUIX=${pid}`], { stdout: 'pipe', stderr: 'pipe' })
         console.log(await new Response(doc.stdout).text()); assert.equal(await doc.exited, 0)
-        await click('note-block-0'); await pause(150)
+        await click('note-body'); await pause(150)
         console.log('typing sample: individual native keystrokes over 15 s')
         const active = Bun.spawn(['bun', 'perf/sample.ts', '15', `GPUIX=${pid}`], { stdout: 'pipe', stderr: 'pipe' })
-        const keys: number[] = []; const until = Date.now() + 15000; while (Date.now() < until) { const start = performance.now(); await app.getByTestId('note-block-input-0').press('a'); keys.push(performance.now() - start); await pause(200) }; console.log('single-key round-trip ms', JSON.stringify(keys))
+        const keys: number[] = []; const until = Date.now() + 15000; while (Date.now() < until) { const start = performance.now(); await app.getByTestId('note-body').press('a'); keys.push(performance.now() - start); await pause(200) }; console.log('single-key round-trip ms', JSON.stringify(keys))
         console.log(await new Response(active.stdout).text()); assert.equal(await active.exited, 0)
       }
     }

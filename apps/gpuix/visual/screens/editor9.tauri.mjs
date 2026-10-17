@@ -14,6 +14,7 @@ export const screens = {
   'editor9-note-slash': async (p) => { await into(p); await keys(p, 'Meta+ArrowDown', 'Enter', '/'); await settle(p, 400); await park(p) },
   'editor9-note-slash-query': async (p) => { await into(p); await keys(p, 'Meta+ArrowDown', 'Enter', '/', 'h', 'e'); await settle(p, 400); await park(p) },
   'editor9-note-select': async (p) => { await into(p); await keys(p, 'Shift+ArrowDown', 'Shift+ArrowDown', 'Shift+ArrowDown'); await park(p) },
-  'editor9-note-link': async (p) => { await into(p); await keys(p, 'ArrowDown', 'End', 'ArrowLeft', 'ArrowLeft', 'ArrowLeft'); await settle(p, 400); await park(p) },
+  // A plain click places the caret inside the link (End hangs headless WebKit's ProseMirror here).
+  'editor9-note-link': async (p) => { await into(p); await p.locator('.note-prose a[href="https://kybern.dev/docs"]').first().click({ position: { x: 30, y: 8 } }); await settle(p, 600); await park(p) },
   'editor9-desc-select': async (p) => { await detail(p); await p.locator('.tk-desc .ProseMirror').click(); await p.keyboard.press('Meta+ArrowDown'); await p.keyboard.press('Shift+Alt+ArrowLeft'); await settle(p, 600); await park(p) },
 }

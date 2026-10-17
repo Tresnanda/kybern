@@ -8,9 +8,9 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffec
 import { STATUS_LABEL } from '@/state/tasksModel'
 import type { TaskItem } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
-import { SLASH_ICON } from './icons.ts'
+import { SLASH_ICON, TASK_ICON } from './icons.ts'
 import { PopupLayer, popoverStyle } from '../composer/Menu.tsx'
-import { FONT_MONO, FONT_UI, type Theme } from '../theme.ts'
+import { FONT_MONO, FONT_UI, over, type Theme } from '../theme.ts'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { notesTokens } from '../notes/kit.tsx'
 import { statusGlyphSource } from '../tasks/Glyphs.tsx'
@@ -39,7 +39,11 @@ export interface EditorState {
   empty: boolean
   headings: { level: number; text: string; y: number; index: number }[]
   height: number
+  /** The checklist line under the pointer that can become a task (when `onMakeTask` is set). */
+  hoverTask: MakeTaskLine & { rect: Rect } | null
 }
+/** A checklist line for "Make task": its block, its place among all checklist items, its words. */
+export interface MakeTaskLine { block: number; index: number; title: string }
 export type Rect = [number, number, number, number]
 
 export interface RichEditorHandle {
@@ -86,6 +90,8 @@ export interface RichEditorProps {
   onKeyDown?: (event: EventPayload & { preventDefault(): void; defaultPrevented?: boolean; requestId?: number }) => void
   /** Tasks for live reference chips beyond the tasks store (a note in another environment). */
   tasks?: Record<string, TaskItem>
+  /** "Make task" on checklist lines (hover button and ⌘⇧T); unset where lines cannot become tasks. */
+  onMakeTask?: (line: MakeTaskLine) => void
   /** The link bubble's Edit, where a page toolbar edits links. */
   onEditLink?: () => void
   /** The scrolling ancestor that keeps the caret in view while typing. */
@@ -293,6 +299,8 @@ export const RichEditor = forwardRef<RichEditorHandle, RichEditorProps>(function
       if (next.focused && moved) followCaret(next)
     } else if (message.t === 'backspaceAtStart') {
       latest.current.onBackspaceAtStart?.()
+    } else if (message.t === 'makeTask') {
+      latest.current.onMakeTask?.(message as unknown as MakeTaskLine)
     }
   }
 
@@ -340,6 +348,7 @@ export const RichEditor = forwardRef<RichEditorHandle, RichEditorProps>(function
         tasks={tasksProp}
         taskKeys={taskInfo.keys}
         glyphs={glyphs}
+        makeTask={!!props.onMakeTask && !readOnly}
         interceptKeys={keys}
         onKeyDown={onKeyDown as never}
         onChange={onChange}
@@ -362,7 +371,24 @@ export const RichEditor = forwardRef<RichEditorHandle, RichEditorProps>(function
       </PopupLayer>}
       {selectionBar && windowState && !readOnly && <FormatBar state={windowState} command={command} />}
       {windowState && !readOnly && <LinkBubble state={windowState} command={command} onOpen={href => latest.current.onOpenLink?.(href)} onEdit={latest.current.onEditLink} inBar={selectionBar} tokens={k} />}
+      {state?.hoverTask && props.onMakeTask && !readOnly && <MakeTaskButton line={state.hoverTask} compact={variant === 'compact'} onClick={() => props.onMakeTask?.(state.hoverTask!)} />}
       {props.children}
     </div>
   )
 })
+
+/** `.task-line-make-button`: "Make task" at the end of the hovered checklist line. */
+function MakeTaskButton({ line, compact, onClick }: { line: MakeTaskLine & { rect: Rect }; compact: boolean; onClick: () => void }) {
+  const t = useTheme()
+  const k = notesTokens(t)
+  const row = over(k.hover, t.surface)
+  const [x, y, w, h] = line.rect
+  return <div testId="editor-make-task" role="button" aria-label="Make a task from this line (⌘⇧T)" onClick={onClick}
+    style={{ position: 'absolute', left: x + w - 120, top: y, width: 120, height: h, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', cursor: 'pointer' }}>
+    <div style={{ width: 14, height: h, background: { type: 'linear-gradient', angle: 90, stops: [{ color: withAlpha(row, 0), position: 0 }, { color: row, position: 0.86 }] } }} />
+    <div style={{ display: 'flex', alignItems: 'center', gap: 5, height: h, backgroundColor: row, hover: { opacity: 1 } }}>
+      <Icon source={TASK_ICON} size={13} color={k.fg2} />
+      <Label color={k.fg2} size={compact ? 12 : 13} style={{ pointerEvents: 'none' }}>Make task</Label>
+    </div>
+  </div>
+}

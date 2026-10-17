@@ -62,3 +62,9 @@ describe('edits rewrite only the touched blocks', () => {
     expect(serializeDoc([{ id: 1, type: 'paragraph', content: [] }], doc)).toBe('')
   })
 })
+
+describe('sources the session checks keep', () => {
+  for (const source of ['', '\n\n', '# Title\n\nBody\n', '```js\n\ncode\n```\n\nTail', 'a\r\n\r\nb\r\n', '~~~\n\n~~~\n\n', '    code\n\n    more\n']) {
+    test(JSON.stringify(source), () => { const doc = parseDoc(source); expect(serializeDoc(doc.blocks, doc)).toBe(source) })
+  }
+})

@@ -8,6 +8,8 @@ interface RichEditorHostProps extends Props {
   theme?: Record<string, string | number | boolean>
   placeholder?: string
   readOnly?: boolean
+  /** Offer "Make task" on checklist lines (hover fill, `makeTask` event on ⌘⇧T). */
+  makeTask?: boolean
   interceptKeys?: string[]
   /** Live task references: id → { key, status, statusLabel, state }. */
   tasks?: Record<string, { key: string; status: string; statusLabel: string; state: string }>

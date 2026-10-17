@@ -1,5 +1,6 @@
 import { toast } from '../shell/toasts.tsx'
-import { openTask } from '../tasks/store.ts'
+import { createTask, openTask } from '../tasks/store.ts'
+import { checklistLine } from '@/state/noteLines'
 import { goPage } from '../nav/history.ts'
 import { spawn } from 'node:child_process'
 import { motion, useGpuix, useWindowSize, type PublicInstance } from '@gpuix/react'
@@ -21,7 +22,7 @@ import { EASE_OUT, REDUCED_MOTION, Label, useTheme } from '../ui.tsx'
 import { display, gallery, getNotes, restoreNote, rpc, useNotes } from './store.ts'
 import { noteSession } from './session.ts'
 import { Toolbar } from './Toolbar.tsx'
-import { RichEditor, type EditorState, type RichEditorHandle } from '../editor/RichEditor.tsx'
+import { RichEditor, type EditorState, type MakeTaskLine, type RichEditorHandle } from '../editor/RichEditor.tsx'
 import type { ImageHome } from '../editor/images.ts'
 
 /** The text a reader counts: no link targets, list numbers, fences or heading marks. */
@@ -76,6 +77,26 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
     if (!compact && e.key === 'escape' && !editing) { gallery(); return true }
   }), [session, editing, compact])
   const finish = () => { renderer?.blur?.(); void session.flush() }
+  // "Make task" from a checklist line (desktop `noteTaskActions.ts`): save the note so the
+  // daemon finds the line, then make the task; the daemon ends the line with its link.
+  const making = useRef(new Set<string>())
+  const makeTask = async (line: MakeTaskLine) => {
+    if (!line.title) { toast('Write the line first, then make it a task'); return }
+    if (making.current.has(line.title)) return
+    making.current.add(line.title)
+    try {
+      const markdown = editor.current?.read() ?? session.getSnapshot().body
+      if (markdown !== session.getSnapshot().body) session.edit({ body: markdown })
+      await session.flush()
+      if (session.getSnapshot().status !== 'saved') { toast.error('Unable to make a task', { description: 'This note has changes that are not saved yet. Save it, then try again.' }); return }
+      const note = session.getSnapshot().note
+      const projectId = note?.scope === 'project' ? note.project_id ?? null : null
+      const lineText = checklistLine(markdown, line.index) ?? line.title
+      const task = await createTask({ scope: projectId ? 'project' : 'global', project_id: projectId, title: line.title, status: 'todo', note_ids: [id], source: { note_id: id, line_text: lineText } })
+      toast(`${task.key} created`, { action: { label: 'Open', onClick: () => { openTask(task.id); goPage('tasks') } } })
+    } catch (error) { toast.error('Unable to make a task', { description: String(error) }) }
+    finally { making.current.delete(line.title) }
+  }
   const insertImage = async () => {
     const paths = await renderer?.promptForPaths?.({ files: true, multiple: true, prompt: 'Add image' })
     if (!paths?.length) return
@@ -138,6 +159,7 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
     onBlur={() => void session.flush()}
     onOpenLink={href => openLink(href, id)}
     onState={setState}
+    onMakeTask={deleted ? undefined : (line) => void makeTask(line)}
     onBackspaceAtStart={() => { if (title.current && note?.scope !== 'thread') renderer?.focusElement?.(title.current.id) }}
     interceptKeys={['escape']}
     onKeyDown={(e) => { if (e.requestId != null && e.key === 'escape' && !e.defaultPrevented) { e.preventDefault(); finish() } }}
