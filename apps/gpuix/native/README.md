@@ -88,7 +88,9 @@ Implementation: `subtree_translation.rs`, `subtree_translation_hooks.py`,
 `subtree_bounds.rs`, and `subtree_a11y.rs`. The native translation check compares
 retained painting to a full render and exercises bounds, input, selection and lifecycle
 in four modes, with and without region painting alongside an animated loader.
-Translation currently reconstructs the typed scene arrays and calls `Scene.finish()`,
+Primitive scope/mask provenance is shared with `Arc` and translated once per
+context. Translation currently
+reconstructs the typed scene arrays and calls `Scene.finish()`,
 which advances `paint_generation`. Region rendering safely rebuilds its retained
 target after geometry changes; tracking old/new damage is a future GPU optimization.
 Rotation is not part of this API: a 1° subtree tilt requires transformed quads,

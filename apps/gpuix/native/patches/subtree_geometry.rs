@@ -123,8 +123,7 @@ impl Window {
         let scale = self.scale_factor();
         let viewport = self.viewport_size();
         let mut previous = std::mem::take(&mut self.rendered_frame.scene);
-        let mut scene = std::mem::take(&mut self.next_frame.scene);
-        scene.clear();
+        let mut scene = Scene::default();
         self.rounded_clip_pool.seed(&mut scene, scale);
         // Share immutable provenance across primitives and translate it once
         // per scope/mask context, rather than allocating vectors per glyph.
@@ -164,7 +163,6 @@ impl Window {
         scene.replay(0..previous.len(), &previous);
         scene.finish();
         self.rendered_frame.scene = scene;
-        self.next_frame.scene = previous;
         self.rounded_clip_pool.snapshot(&mut self.rendered_frame, scale);
         let mut a11y_deltas = std::collections::HashMap::new();
         for (id, geometry) in &mut self.subtree_a11y {
