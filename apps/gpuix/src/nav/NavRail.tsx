@@ -30,6 +30,7 @@ import { muted, Tip } from './overlay.tsx'
 import { getNav, setNav, useNav, type Page } from './store.ts'
 import { openSettingsTab } from '../settings/SettingsScreen.tsx'
 import { showDialog } from '../dialogs/store.ts'
+import { RailUpdateButton } from '../platform/UpdateSurface.tsx'
 
 const RAIL = 52
 const RAIL_ITEMS: { page: Page; icon: string; label: string }[] = [
@@ -71,6 +72,7 @@ export function NavRail() {
       <div style={{ flexGrow: 1 }} />
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
         <RailUsage />
+        <RailUpdateButton />
         <RailButton
           icon={N.settings}
           label="Settings"
