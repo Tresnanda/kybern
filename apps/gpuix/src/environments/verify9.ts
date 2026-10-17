@@ -5,6 +5,7 @@
  *
  *   bun src/environments/verify9.ts [dark|light]      (KYBERN_REDUCED_MOTION=1 for the reduced-motion pass)
  */
+import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
 import { CLIENT, DATA_A, DATA_B, cli, mode, pairingInvitation, reset, start, wait } from './verify9.lib.ts'
@@ -59,22 +60,50 @@ try {
   await click('environment-save')
   await until('edited name shown', async () => registry().environments[0]?.name === 'Studio B', 20000)
   assert(registry().environments[0]?.name === 'Studio B' && registry().environments[0]?.id === bId, 'edit renamed the saved environment and kept its identity')
+  // --- Open in a new window: the menu button starts a second process pinned to that environment ---
+  const windows = () => { try { return execFileSync('pgrep', ['-f', 'src/main.tsx'], { encoding: 'utf8' }).trim().split('\n').filter(Boolean) } catch { return [] as string[] } }
+  const running = new Set(windows())
+  await click('environment-switcher'); await click(`environment-window-${bId}`)
+  await until('a second window process', async () => windows().some(pid => !running.has(pid)), 20000)
+  const spawned = windows().filter(pid => !running.has(pid))
+  const env = execFileSync('ps', ['eww', '-p', spawned.join(',')], { encoding: 'utf8' })
+  assert(env.includes(`KYBERN_GPUIX_ENVIRONMENT=${bId}`), 'Open in a new window started a process pinned to that environment')
+  for (const pid of spawned) { try { process.kill(Number(pid), 'SIGTERM') } catch { /* already gone */ } }
   // --- Pair a device: a device paired by invitation has no access_write scope, like the desktop ----
   await until('B reconnected after the edit', () => text('proj9b'), 30000); await wait(800)
   await click('environment-switcher'); await click('environment-pair'); await wait(600)
   assert(!(await present('pairing-create')), 'Pair a device stays disabled on an environment this device only holds a device token for')
   await click('environment-switcher'); await wait(300); await click('environment-choice-local'); await until('back on A', () => text('proj9a'), 30000); await wait(800)
   // A real paired device on daemon A, to list and revoke.
+  const phoneName = `Scratch phone ${Date.now() % 100000}`
   const code = (JSON.parse(cli(DATA_A, '--json', 'pair')) as { code: string }).code
-  const paired = await fetch('http://127.0.0.1:4294/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, device_name: 'Scratch phone' }) })
+  const paired = await fetch('http://127.0.0.1:4294/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, device_name: phoneName }) })
   assert(paired.ok, 'a scratch phone paired with daemon A over /pair')
   await click('environment-switcher'); await click('environment-pair'); await click('pairing-create')
   await app.getByTestId('pairing-address').waitFor({ timeoutMs: 15000 })
+  const exposure = () => JSON.parse(cli(DATA_A, 'call', 'access.exposure.get', '{}')) as { tailscale: boolean; tailscale_ip: string | null }
+  assert(!exposure().tailscale, 'the scratch daemon starts without a Tailscale listener')
+  await click('environment-tailscale')
+  await until('Tailscale listener on', async () => exposure().tailscale, 15000)
+  await until('invitation follows the Tailscale address', () => text(exposure().tailscale_ip!), 15000)
+  await shot('v-09b-tailscale-on')
+  assert(exposure().tailscale && await text(`Devices on your tailnet connect to ${exposure().tailscale_ip} directly.`), 'the Tailscale switch turned the listener on and the invitation uses the tailnet address')
+  await click('environment-tailscale')
+  await until('Tailscale listener off', async () => !exposure().tailscale, 15000)
+  assert(!exposure().tailscale, 'the Tailscale switch turned the listener off again')
   await app.getByTestId('pairing-address').fill('https://studio.tailnet.ts.net')
   await app.getByTestId('pairing-qr').waitFor({ timeoutMs: 15000 })
-  const phone = () => tokenList(DATA_A).find(t => t.label === 'Scratch phone')!
-  await until('paired device listed', () => text('Scratch phone'), 10000)
+  const phone = () => tokenList(DATA_A).find(t => t.label === phoneName)!
+  await until('paired device listed', () => text(phoneName), 10000)
   await shot('v-10-pair-invitation')
+  // The device list is below the fold: scroll the dialog body like a user until the button is inside it.
+  const target = `revoke-${phone().id}`
+  for (let step = 0; step < 12; step++) {
+    const [button, body] = [await app.getByTestId(target).bounds(), await app.getByTestId('environment-access-body').bounds()]
+    if (button.y >= body.y && button.y + button.height <= body.y + body.height - 4) break
+    await app.getByTestId('environment-access-body').wheel(0, 160); await wait(200)
+  }
+  await shot('v-10b-pair-scrolled')
   await click(`revoke-${phone().id}`)
   await until('revoked in daemon', async () => phone().revoked, 10000)
   await until('Revoked label', () => text('Revoked'), 5000)

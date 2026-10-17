@@ -11,7 +11,7 @@ import { N } from '../nav/glyphs.ts'
 import { FONT_MONO, FONT_UI } from '../theme.ts'
 import { ink, Label, useTheme } from '../ui.tsx'
 
-const TRIANGLE = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 1.2 8.2 5 2.5 8.8Z" fill="#000"/></svg>'
+const TRIANGLE = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10"><path d="M1.6 0.4 9.2 5 1.6 9.6Z" fill="#000"/></svg>'
 
 /** `DialogHeader` + `DialogTitle` + `DialogDescription` with the environment overrides. */
 export function DialogHeader({ title, description, onClose }: { title: string; description: string; onClose: () => void }) {
@@ -92,8 +92,8 @@ export function EnvInput({ label, value, onChange, testId, placeholder, disabled
 /** The `<details>` summary the desktop shows: a small solid triangle that turns down when open. */
 export function Disclosure({ label, open, toggle, testId }: { label: string; open: boolean; toggle: () => void; testId?: string }) {
   const t = useTheme()
-  return <div testId={testId} role="button" tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') toggle() }} style={{ display: 'flex', alignItems: 'center', alignSelf: 'flex-start', gap: 6, paddingTop: 4, paddingBottom: 4, cursor: 'pointer' }}>
-    <motion.svg source={TRIANGLE} initial={false} animate={{ rotate: open ? 90 : 0 }} transition={{ duration: 0 }} style={{ width: 9, height: 9, color: t.textSecondary, flexShrink: 0 }} />
+  return <div testId={testId} role="button" tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') toggle() }} style={{ display: 'flex', alignItems: 'center', alignSelf: 'flex-start', gap: 5, paddingTop: 4, paddingBottom: 4, cursor: 'pointer' }}>
+    <motion.svg source={TRIANGLE} initial={false} animate={{ rotate: open ? 90 : 0 }} transition={{ duration: 0 }} style={{ width: 11, height: 11, color: t.textSecondary, flexShrink: 0 }} />
     <Hint>{label}</Hint>
   </div>
 }

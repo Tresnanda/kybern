@@ -1,5 +1,5 @@
 import { AccountsHeaderAction } from './Accounts.tsx'
-import { onEnvironmentChange } from '../shell/environment.ts'
+import { onEnvironmentChange, useEnvironment } from '../shell/environment.ts'
 import { motion, useGpuix } from '@gpuix/react'
 import { useEffect, useState } from 'react'
 import { setSettingsTitle } from './Breadcrumb.tsx'
@@ -35,6 +35,7 @@ export function openSettingsTab(tab: Tab) {
 const GROUPS = [{ label: 'Personal', ids: ['general', 'appearance', 'notifications'] }, { label: 'Coding', ids: ['agents', 'accounts', 'integrations', 'computer'] }, { label: 'System', ids: ['background', 'about'] }]
 
 export function SettingsScreen() {
+  const environment = useEnvironment()
   const t = useTheme()
   const { renderer } = useGpuix()
   const [previousFocus] = useState(() => renderer?.getFocusedElementId?.())
@@ -79,7 +80,7 @@ export function SettingsScreen() {
         {rows.map((row) => 'group' in row ? <div key={row.group} style={{ display: 'flex', alignItems: 'center', height: 33, marginTop: rows.indexOf(row) === 0 ? 0 : 14, paddingLeft: 8 }}><Label color={t.textSecondary} size={14} lineHeight={21} weight={500}>{row.group}</Label></div> : <div key={row.item[0]} testId={`settings-tab-${row.item[0]}`} tabIndex={0} aria-label={row.item[1]} onClick={() => select(row.item[0])} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') select(row.item[0], true) }} style={{ display: 'flex', position: 'relative', alignItems: 'center', height: 28, marginBottom: 2, paddingLeft: 8, gap: 8, borderRadius: 6, hover: { backgroundColor: row.item[0] === tab ? 'transparent' : t.hover } }}><Icon source={row.item[3]} size={16} color={t.text} /><Label color={t.text} size={14} lineHeight={21}>{row.item[1]}</Label></div>)}
         {!matches.length && <div style={{ padding: 8 }}><Label color={t.textSecondary} size={14} lineHeight={21}>{`No settings match “${query}”.`}</Label><div testId="settings-clear-search" tabIndex={0} onClick={() => setQuery('')} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') setQuery('') }} style={{ padding: 8, borderRadius: 8, hover: { backgroundColor: t.hover } }}><Label color={t.text} size={14}>Clear search</Label></div></div>}
       </div>
-      <div style={{ flexGrow: 1 }} /><Label color={t.textTertiary} size={12} style={{ padding: 8 }}>This machine</Label>
+      <div style={{ flexGrow: 1 }} /><div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 8, paddingRight: 8, paddingTop: 8 }}><div style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, backgroundColor: ink(t, 0.58 * 0.5) }} /><Label color={t.textSecondary} size={14} lineHeight={21}>{environment.name}</Label></div>
     </div>
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, minHeight: 0 }}>
       {error && <div style={{ padding: 16 }}><Label color={t.red} size={13}>{error}</Label></div>}

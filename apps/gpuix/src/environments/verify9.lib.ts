@@ -26,7 +26,7 @@ export async function start(extra: Record<string, string> = {}) {
   const present = (id: string) => app.getByTestId(id).count().then((n) => n > 0)
   const click = async (id: string) => { await until(`click ${id}`, async () => { if (!(await present(id))) return false; await app.getByTestId(id).click(); return true }) }
   const text = async (value: string) => (await app.getByText(value).count()) > 0 || JSON.stringify(await app.call('getPaintedText', {})).includes(value)
-  const shot = (name: string) => app.screenshot({ path: path.join(OUT, `${name}-${mode}.png`) })
+  const shot = (name: string) => app.screenshot({ path: path.join(OUT, `${name}-${mode}${process.env.KYBERN_REDUCED_MOTION === '1' ? '-reduced' : ''}.png`) })
   return { app, until, present, click, text, shot }
 }
 
