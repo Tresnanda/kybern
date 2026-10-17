@@ -23,6 +23,20 @@ export function Action({ children, onClick, disabled, testId, textSize = 11, sec
   </div>
 }
 
+/**
+ * Desktop `Button` at size `sm` (28px, radius 8, 12px medium): `default` is the primary fill, `subtle` the secondary fill,
+ * `ghost` text until hovered. TODO(kit9): swap for the shared kit button once it merges.
+ */
+export function KitButton({ children, onClick, variant = 'default', disabled, testId }: { children: ReactNode; onClick: () => void; variant?: 'default' | 'subtle' | 'ghost'; disabled?: boolean; testId?: string }) {
+  const t = useTheme()
+  const fill = variant === 'default' ? t.buttonPrimary : variant === 'subtle' ? t.buttonSecondary : undefined
+  const hover = variant === 'default' ? { opacity: 0.9 } : { backgroundColor: t.buttonSecondaryHover }
+  return <div role="button" tabIndex={disabled ? -1 : 0} aria-disabled={disabled} testId={testId} onClick={disabled ? undefined : onClick} onKeyDown={event => { if (!disabled && (event.key === 'enter' || event.key === 'space')) onClick() }}
+    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 28, paddingLeft: 9, paddingRight: 9, borderRadius: 8, flexShrink: 0, backgroundColor: fill, opacity: disabled ? 0.64 : 1, cursor: disabled ? 'default' : 'pointer', ...(disabled ? {} : { hover }) }}>
+    <Label size={12} weight={500} color={variant === 'default' ? t.buttonPrimaryText : variant === 'ghost' ? t.textSecondary : t.text}>{children}</Label>
+  </div>
+}
+
 export function Section({ label, children }: { label: string; children?: ReactNode }) {
   const t = useTheme()
   return <div style={{ display: 'flex', height: 32, flexShrink: 0, alignItems: 'center', gap: 6, paddingLeft: 14, paddingRight: 6 }}>
