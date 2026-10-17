@@ -2,7 +2,12 @@ import { mkdirSync, writeFileSync, readFileSync, unlinkSync, rmdirSync } from 'n
 import path from 'node:path'
 export function acquirePreviewUiLock() {
   const lock = '/tmp/kybern-gpuix-round5-ui-lock', owner = path.resolve(import.meta.dir, '../../..')
-  if (process.env.KYBERN_PACING_PARENT_LEASE === owner && readFileSync(path.join(lock, 'owner'), 'utf8') === owner) return () => {}
+  // A suite may already hold the lease around checks that acquire it locally.
+  // Require an explicit inherited lease and verify its current owner.
+  if (process.env.KYBERN_PACING_PARENT_LEASE === owner) {
+    if (readFileSync(path.join(lock, 'owner'), 'utf8') !== owner) throw Error('Inherited preview UI lease is no longer owned by this checkout')
+    return () => {}
+  }
   mkdirSync(lock); writeFileSync(path.join(lock, 'owner'), owner)
   return () => { if (readFileSync(path.join(lock, 'owner'), 'utf8') !== owner) throw Error('Preview UI lock owner changed'); unlinkSync(path.join(lock, 'owner')); rmdirSync(lock) }
 }
