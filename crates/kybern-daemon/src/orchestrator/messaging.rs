@@ -351,7 +351,7 @@ impl Orchestrator {
                 && matches!(recipient.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)
                 && harness_supports_steer(recipient.provider.kind)
             {
-                match self.steer(queued.clone()).await {
+                match self.steer_from(queued.clone(), super::SteerSource::Kybern).await {
                     Ok(sent) => {
                         if record.purpose == ThreadMessagePurpose::Question {
                             self.messaging_remember_consumed(recipient.id, sent.turn_id, record.id);
