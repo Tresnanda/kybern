@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FileEntry, FilesReadResult } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
+import { ResizeHandle, useResize } from '../kit/Resize.tsx'
 import { ISLAND } from '../MatrixLoader.tsx'
 import { errorText } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
@@ -108,8 +109,10 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
     } else if (row.kind === 'error') { setError(null); load(row.path, true) }
     else if (row.kind !== 'loading' && row.kind !== 'empty') setSelected(row.path)
   }, [load])
+  // `Explorer.tsx`: the file tree column resizes 176-520 (240 by default) and is saved.
+  const column = useResize({ initial: 240, min: 176, max: 520, side: 'left', storageKey: 'kybern.explorer.width' })
   return <div style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0 }}>
-    <div style={{ display: 'flex', flexDirection: 'column', width: 240, flexShrink: 0, borderRightWidth: 0.6, borderColor: t.borderLight }}>
+    <div style={{ display: 'flex', flexDirection: 'column', width: column.width, flexShrink: 0, position: 'relative', borderRightWidth: 0.6, borderColor: t.borderLight }}>
       <div {...ISLAND} style={{ display: 'flex', width: '100%', height: 44, alignItems: 'center', padding: 8 }}>
         <input testId="dock-file-search" placeholder="Search files…" aria-label="Search files" value={query} onChange={(e) => setQuery(e.value ?? '')} style={{ width: '100%', height: 28, paddingLeft: 8, paddingRight: 8, fontSize: 12, color: t.text, backgroundColor: t.buttonSecondary, borderRadius: 6 }} />
       </div>
@@ -140,6 +143,7 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
         <MotionFileTreeRows rows={rows} open={expanded} selected={selected} focus={focus} virtual={virtualTree} search={results !== null} activate={(row, index) => { setFocus(index); activate(row); if (tree.current) renderer?.focusElement?.(tree.current.id) }} />
       </TreeHost>
       </div>
+      <ResizeHandle testId="dock-file-tree-resize" edge="right" label="Resize file tree" dragging={column.dragging} onPointerDown={column.onPointerDown} onReset={column.reset} />
     </div>
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, minHeight: 0 }}>
       {selected ? <FileViewer key={selected} projectId={projectId} path={selected} onClose={() => setSelected(null)} /> : <div style={{ display: 'flex', flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: 20 }}><Label color={t.textSecondary} size={12} style={{ opacity: 0.7, textAlign: 'center' }}>Select a file from the tree to view it.</Label></div>}
