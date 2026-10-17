@@ -83,6 +83,18 @@ flowchart LR
 
 And some text after it.`
 
+export const TOKEN_PARTS = [
+  { type: 'text', text: 'Please read ' },
+  { type: 'mention', name: 'Release checklist 0.9.2', path: 'kybern://note/00000000-0000-4000-8000-000000000001', display_name: 'Release checklist 0.9.2' },
+  { type: 'text', text: ' and use the ' },
+  { type: 'skill', name: 'animate', path: '/skills/animate' },
+  { type: 'text', text: ' skill on ' },
+  { type: 'file_mention', path: 'src/date.ts' },
+  { type: 'text', text: ' with ' },
+  { type: 'mention', name: 'KYA-2 Ship notes image blocks', path: 'kybern://task/00000000-0000-4000-8000-000000000002', display_name: 'KYA-2 Ship notes image blocks' },
+  { type: 'text', text: '.' },
+]
+
 export const MERMAID_INVALID = `This diagram is invalid:
 
 \`\`\`mermaid
@@ -96,11 +108,11 @@ export async function seed(client: KybernClient, ctx: { projects: { id: string }
   const db = new Database(path.join(DATA_DIR, 'state.sqlite'))
   db.exec('PRAGMA busy_timeout = 5000')
   const usage = { input_tokens: 4200, output_tokens: 880, cache_read_tokens: 12000, cache_write_tokens: 300 }
-  for (const [title, text] of [['Markdown A', BLOCKS_A], ['Markdown B', BLOCKS_B], ['Markdown C', BLOCKS_C], ['Mermaid diagram', MERMAID], ['Mermaid invalid', MERMAID_INVALID]] as const) {
+  for (const [title, text] of [['Markdown A', BLOCKS_A], ['Markdown B', BLOCKS_B], ['Markdown C', BLOCKS_C], ['Mermaid diagram', MERMAID], ['Mermaid invalid', MERMAID_INVALID], ['Tokens in message', 'Done.']] as const) {
     const thread = await client.call('threads.create', { project_id: ctx.projects[0]!.id, provider: { kind: 'claude-code', instance: 'default' }, permission_mode: 'supervised', title })
     const turn = randomUUID(), answer = randomUUID()
     const events = [
-      { turn, kind: 'turn_started', message_id: randomUUID(), message: { parts: [{ type: 'text', text: 'Show me every block type.' }] } },
+      { turn, kind: 'turn_started', message_id: randomUUID(), message: { parts: title === 'Tokens in message' ? TOKEN_PARTS : [{ type: 'text', text: 'Show me every block type.' }] } },
       { turn, kind: 'assistant_message_completed', message_id: answer, origin: { kind: 'root' }, text, thinking: null },
       { turn, kind: 'turn_completed', stop_reason: 'completed', usage, cost_usd: 0.004, duration_ms: 6000, terminal_message_id: answer },
     ]
