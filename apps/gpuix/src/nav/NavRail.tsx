@@ -182,7 +182,7 @@ function RailUsage() {
           open={state.active === entry.provider}
           instant={state.instant}
           onEnter={() => ctl.enter(entry.provider)}
-          onLeave={() => ctl.leave()}
+          onLeave={() => ctl.leave(entry.provider)}
           onCardEnter={() => ctl.popupEnter()}
           onCardLeave={() => ctl.popupLeave()}
         />

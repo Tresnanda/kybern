@@ -152,4 +152,18 @@ describe('HoverController', () => {
     tip.dispose()
     expect(visibleHoverPopup()).toBeNull()
   })
+
+  test('a shared card ignores the previous trigger\'s late leave', () => {
+    const c = clock()
+    const card = new HoverController<'a' | 'b'>({ delay: 80, closeDelay: 100, hoverable: true }, () => {}, c.timers)
+    card.enter('a'); c.advance(100)
+    expect(card.active).toBe('a')
+    // GPUI delivered B's enter before A's leave.
+    card.enter('b')
+    card.leave('a')
+    c.advance(300)
+    expect(card.active).toBe('b')
+    card.leave('b'); c.advance(101)
+    expect(card.active).toBeNull()
+  })
 })

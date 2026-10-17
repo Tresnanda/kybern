@@ -111,8 +111,12 @@ export class HoverController<K = true> {
     }, delay)
   }
 
-  /** The pointer left a trigger. Always applied, however soon after the enter. */
-  leave() {
+  /**
+   * The pointer left a trigger. Always applied, however soon after the enter. With `key`, a leave from a
+   * trigger that is no longer the target (GPUI delivered the next trigger's enter first) is ignored.
+   */
+  leave(key?: K) {
+    if (key !== undefined && this.target !== null && !Object.is(this.target, key)) return
     this.target = null
     this.cancelOpen()
     this.scheduleClose()

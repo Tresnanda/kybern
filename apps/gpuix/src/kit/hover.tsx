@@ -44,7 +44,7 @@ export function hoverTrigger<K>(ctl: HoverController<K>, key: K, element: ReactE
     onMouseEnter: compose(p.onMouseEnter, () => ctl.enter(key)),
     onMouseLeave: compose(p.onMouseLeave, () => {
       press.current = false
-      ctl.leave()
+      ctl.leave(key)
     }),
     onMouseDown: compose(p.onMouseDown, () => {
       press.current = true
