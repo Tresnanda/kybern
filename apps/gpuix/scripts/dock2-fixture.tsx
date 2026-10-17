@@ -6,6 +6,8 @@ import { getClient, getState, set, subscribe } from '../src/state.ts'
 import { setPreview } from '../src/preview/store.ts'
 import '../src/main.tsx'
 assert.ok(process.env.KYBERN_DATA_DIR?.includes('gpuix-scratch') || process.env.KYBERN_DATA_DIR?.endsWith('/apps/gpuix/.combined/data'), 'Use an isolated scratch data directory')
+// main.tsx connects asynchronously; wait for its client before wrapping calls.
+while (!getClient()) await Bun.sleep(20)
 const client = getClient()!, call = client.call.bind(client)
 let frame = 0
 if (process.env.DOCK2_CONTROL_PORT) Bun.serve({ hostname: '127.0.0.1', port: Number(process.env.DOCK2_CONTROL_PORT), fetch(req) {
