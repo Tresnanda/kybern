@@ -107,6 +107,18 @@ try {
   await waitUntil(async () => (await count('menu-menu')) === 0, 2000, 'second Escape closes the root')
   console.log('PASS keyboard: Escape closes the submenu, then the root')
 
+  // Enter on the submenu trigger opens it like Right (Base UI): focus moves in with the first item lit.
+  await app.getByTestId('menu-trigger').click()
+  await waitUntil(async () => (await count('menu-menu')) === 1, 2000, 'root reopens (Enter run)')
+  await sleep(300)
+  for (let i = 0; i < 7; i++) await key('down')
+  await key('enter')
+  assert.equal(await count('menu-sub-trigger-menu'), 1, 'Enter on Color opens the submenu')
+  assert.equal(await count('menu-menu'), 1, 'Enter on Color keeps the root open')
+  await key('enter')
+  await waitUntil(async () => (await label('picked')).includes('blue'), 2000, 'a second Enter picks the lit first item')
+  console.log('PASS keyboard: Enter on a submenu trigger opens it with the first item lit')
+
   // 6. Existing behaviours: checkbox keeps the menu open and toggles, destructive row picks and closes.
   await app.getByTestId('menu-trigger').click()
   await waitUntil(async () => (await count('menu-menu')) === 1, 2000, 'root reopens (checkbox run)')

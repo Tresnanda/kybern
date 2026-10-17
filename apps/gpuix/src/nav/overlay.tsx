@@ -204,9 +204,10 @@ function useMenuLevel(tree: MenuTree, depth: number, closeSelf: () => void) {
   const onKeyDown = (e: MenuKeyEvent) => {
     if (e.key === 'escape') return depth > 0 ? closeSelf() : tree.close()
     if (e.key === 'left' && depth > 0) return closeSelf()
-    if (e.key === 'right') {
-      const entry = entries.current.find((en) => en.key === activeRef.current)
-      if (entry?.openSub && !entry.disabled) entry.openSub(true)
+    // → opens a submenu from the keyboard, and so do Enter and Space on its trigger (focus moves in, first item lit).
+    const sub = entries.current.find((en) => en.key === activeRef.current && en.openSub && !en.disabled)
+    if (e.key === 'right' || ((e.key === 'enter' || e.key === 'space') && sub)) {
+      sub?.openSub?.(true)
     } else if (e.key === 'down' || (e.key === 'n' && e.modifiers?.ctrl)) move(1)
     else if (e.key === 'up' || (e.key === 'p' && e.modifiers?.ctrl)) move(-1)
     else if ((e.key === 'enter' || e.key === 'space') && activeRef.current) pick(activeRef.current)
