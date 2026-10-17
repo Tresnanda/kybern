@@ -88,8 +88,9 @@ export function startAgentToasts() {
         : event.kind === 'user_input_requested' ? 'Needs your input' : 'Finished working'
       void notifications.requestPermission().then(status => {
         if (status === 'granted' && getClient() === client && enabled && !isWindowFocused()) {
-          return notifications.post({ id, title, body })
+          return notifications.post({ id, title, body }).then(posted => { if (process.env.KYBERN_DEBUG_NOTIFICATIONS) console.error('[notifications] posted', posted, id, title, body) })
         }
+        if (process.env.KYBERN_DEBUG_NOTIFICATIONS) console.error('[notifications] not posted', status)
       }).catch(error => console.error('[notifications]', error))
     }
     const open = { label: 'Open thread', onClick: () => openThread(event.thread_id) }
