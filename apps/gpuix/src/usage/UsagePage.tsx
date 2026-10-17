@@ -18,7 +18,7 @@ import { Button, Segments, column, row } from './controls.tsx'
 const PERIODS = [['7', 'Last 7 days'], ['30', 'Last 30 days'], ['all', 'All time']] as const
 type Period = typeof PERIODS[number][0]
 const count = (r: UsageRow) => r.usage.input_tokens + r.usage.output_tokens
-const dayLabel = (key: string, year = false) => new Date(`${key}T12:00:00Z`).toLocaleDateString('en-GB', { month: 'short', day: 'numeric', timeZone: 'UTC', ...(year ? { year: 'numeric' } : {}) })
+const dayLabel = (key: string, year = false) => new Date(`${key}T12:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC', ...(year ? { year: 'numeric' } : {}) })
 type Loaded = { scope: string; revision: number; summary: UsageSummaryResult; daily: UsageSummaryResult; end: string }
 
 export function UsagePage() {
