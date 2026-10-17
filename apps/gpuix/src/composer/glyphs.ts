@@ -12,6 +12,8 @@ import {
   GitBranchIcon,
   GitForkIcon,
   HandIcon,
+  File01Icon,
+  Note01Icon,
   PuzzleIcon,
   Refresh01Icon,
   RefreshIcon,
@@ -44,6 +46,9 @@ export const G = {
   /** `WorktreeIcon` = GitFork. */
   worktree: glyph(GitForkIcon),
   message: glyph(Comment01Icon),
+  /** `NoteIcon`; rows in the @ picker draw every non-task glyph at stroke 2. */
+  note: glyph(Note01Icon, 2),
+  file: glyph(File01Icon),
   star: glyph(StarIcon),
   starFilled: filled(StarIcon),
   refresh: glyph(RefreshIcon),

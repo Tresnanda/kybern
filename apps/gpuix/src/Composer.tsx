@@ -640,7 +640,7 @@ export function ComposerView(input: ComposerViewProps) {
                   return
                 }
                 if ((e.key === 'up' || e.key === 'down') && (e.modifiers?.cmd || e.modifiers?.alt || e.modifiers?.ctrl || e.modifiers?.shift)) return
-                if (completion.onKey(e.key ?? '', !!e.modifiers?.shift, !!e.modifiers?.ctrl)) {
+                if (completion.onKey(e.key ?? '', !!e.modifiers?.shift, !!e.modifiers?.ctrl, !!(e.modifiers?.alt || e.modifiers?.cmd))) {
                   e.preventDefault()
                   return
                 }
