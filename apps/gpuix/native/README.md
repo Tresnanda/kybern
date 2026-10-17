@@ -1223,6 +1223,6 @@ otherwise fails loudly at the anchor, never silently.
 
 Known limits: a pop whose frames stop part-way (window hidden during the
 250 ms) keeps its last scale and alpha until the leaf next repaints. With region
-paint (`KYBERN_PAINT_REGION`), a finished pop still counts as a native paint
+paint (`KYBERN_REGION_LAYERS=1`), a finished pop still counts as a native paint
 animation, so the region target does not park. Checks:
 `scripts/kit9-spinner-check.ts` and `scripts/kit9-pop.ts`.
