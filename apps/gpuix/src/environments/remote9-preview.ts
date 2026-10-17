@@ -29,8 +29,8 @@ mkdirSync(site, { recursive: true })
 writeFileSync(`${site}/server.ts`, `const log = ${JSON.stringify(`${site}/requests.log`)}
 Bun.serve({ hostname: '127.0.0.1', port: ${SITE_PORT}, fetch(req) {
   const url = new URL(req.url); require('node:fs').appendFileSync(log, req.method + ' ' + url.pathname + ' host=' + req.headers.get('host') + '\\n')
-  if (url.pathname === '/app.js') return new Response("document.querySelector('h1').textContent = 'Served on the SSH machine · root asset loaded'; parent.postMessage({ kind: 'fixture-page', origin: location.origin, asset: true }, '*')", { headers: { 'content-type': 'text/javascript' } })
-  return new Response('<!doctype html><meta name=viewport content="width=device-width"><style>body{font:15px system-ui;padding:24px;background:#e7eefc;color:#172346}h1{font-size:24px}</style><h1>Served on the SSH machine</h1><p>Through the preview relay, the SSH tunnel and the remote daemon.</p><script src="/app.js"></script>', { headers: { 'content-type': 'text/html' } })
+  if (url.pathname === '/app.js') return new Response("document.querySelector('h1').textContent = 'Served on the SSH machine · root asset loaded'; parent.postMessage({ kind: 'fixture-page', origin: location.origin, asset: true }, '*')", { headers: { 'content-type': 'text/javascript; charset=utf-8' } })
+  return new Response('<!doctype html><meta name=viewport content="width=device-width"><style>body{font:15px system-ui;padding:24px;background:#e7eefc;color:#172346}h1{font-size:24px}</style><h1>Served on the SSH machine</h1><p>Through the preview relay, the SSH tunnel and the remote daemon.</p><script src="/app.js"></script>', { headers: { 'content-type': 'text/html; charset=utf-8' } })
 } })
 `)
 writeFileSync(`${site}/requests.log`, '')
