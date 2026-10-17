@@ -31,6 +31,7 @@ import { keyMatchesQuery, PRIORITY_LABEL, STATUS_LABEL } from '@/state/tasksMode
 import { COMPUTER_MENTION_PATH, noteMentionPart, taskMentionPart } from '../../../../packages/kybern-client/src/userInput.ts'
 import { sharesHome } from '../notes/home.ts'
 import { MentionChips } from './MentionChips.tsx'
+import { tokenIcon } from './token-icons.ts'
 import { getFileIconName } from '../../../desktop/src/lib/kit/fileIcons.ts'
 import { diffFileIcons } from '../native/diff-file-icons.ts'
 import { PriorityGlyph, StatusGlyph } from '../tasks/Glyphs.tsx'
@@ -439,12 +440,12 @@ export function useCompletion({
     ) : null
 
   const tokens = [
-    ...mentionRefs.map(r => ({ token: r.token, label: inlineTokenLabel(mentionTokenKind(r.part.path), r.token) })),
-    ...threadRefs.map(r => ({ token: r.token, label: inlineTokenLabel('thread', r.token) })),
-    ...[...mentioned].map(path => ({ token: `@${path}`, label: path })),
+    ...mentionRefs.map(r => { const kind = mentionTokenKind(r.part.path); return { token: r.token, label: inlineTokenLabel(kind, r.token), icon: tokenIcon(kind, r.token) } }),
+    ...threadRefs.map(r => ({ token: r.token, label: inlineTokenLabel('thread', r.token), icon: tokenIcon('thread', r.token) })),
+    ...[...mentioned].map(path => ({ token: `@${path}`, label: path, icon: tokenIcon('file', `@${path}`) })),
     ...[...picked.values()].map(skill => skill.scope === 'plugin'
-      ? { token: `@${skill.display_name ?? skill.name}`, label: skill.display_name ?? skill.name }
-      : { token: `$${skill.name}`, label: skill.name }),
+      ? { token: `@${skill.display_name ?? skill.name}`, label: skill.display_name ?? skill.name, icon: tokenIcon(skill.path === COMPUTER_MENTION_PATH ? 'computer' : 'plugin', '') }
+      : { token: `$${skill.name}`, label: skill.name, icon: tokenIcon('skill', '') }),
   ].filter(r => text.includes(r.token))
   return { menu, onKey, buildParts, reset, tokens, open: open && items.length > 0 }
 }

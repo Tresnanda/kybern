@@ -3,14 +3,12 @@
 // weight-500 label with no box, in place in the sentence. Notes, tasks and threads open
 // on click. The sentence is a wrapping row of words so the bubble still hugs its text.
 import { memo, useMemo, useState } from 'react'
-import { getFileIconName } from '../../../desktop/src/lib/kit/fileIcons.ts'
 import { inlineTokenLabel, mentionTokenKind, type InlineTokenKind } from '@/lib/inlineTokenLabel'
 import { partToken } from '../../../../packages/kybern-client/src/composerTokens.ts'
 import { createComposerThreadReference } from '../../../../packages/kybern-client/src/threadReferences.ts'
 import { parseKybernMention } from '../../../../packages/kybern-client/src/userInput.ts'
 import type { ContentPart } from '../../../../packages/kybern-client/src/types.ts'
-import { diffFileIcons } from '../native/diff-file-icons.ts'
-import { G } from '../composer/glyphs.ts'
+import { tokenIcon } from '../composer/token-icons.ts'
 import { Icon } from '../icons.tsx'
 import { openNote } from '../notes/store.ts'
 import { goPage, openThread } from '../nav/history.ts'
@@ -18,22 +16,9 @@ import { openTask } from '../tasks/store.ts'
 import { FONT_UI } from '../theme.ts'
 import { useTheme } from '../ui.tsx'
 import { TEXT } from './kit.tsx'
-import { T } from './glyphs.ts'
 
 type Segment = { text: string } | { token: string; kind: InlineTokenKind; label: string; open?: () => void }
 const WORD_LIMIT = 400
-
-const iconFor = (kind: InlineTokenKind, token: string): string => {
-  switch (kind) {
-    case 'skill': return G.skill
-    case 'plugin': return G.plugin
-    case 'computer': return G.laptop
-    case 'thread': return G.message
-    case 'note': return T.note
-    case 'task': return T.listChecks
-    default: return diffFileIcons[getFileIconName(token.slice(1))] ?? T.file
-  }
-}
 
 /** The sentence as text and token segments, as `UserBubble` builds it; null when there is no token to draw. */
 export function tokenSegments(parts: readonly ContentPart[]): Segment[] | null {
@@ -88,7 +73,7 @@ function Token({ segment }: { segment: Extract<Segment, { token: string }> }) {
   return <>
     <div role={segment.open ? 'link' : undefined} testId={`inline-token-${segment.kind}`} onClick={segment.open} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
       style={{ display: 'flex', alignItems: 'center', gap: 3.5, cursor: segment.open ? 'pointer' : 'default', flexShrink: 0 }}>
-      <Icon source={iconFor(segment.kind, segment.token)} size={13.3} color={accent} />
+      <Icon source={tokenIcon(segment.kind, segment.token)} size={13.3} color={accent} />
       <Word text={first} color={color} weight={500} />
     </div>
     {rest && <Words text={rest} color={color} weight={500} />}

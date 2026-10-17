@@ -27,5 +27,6 @@ export const screens: Record<string, Step> = {
   'convo9-visual-hover': async (app, fx) => { await open(app, fx, 'Visual reply'); await settle(3500); await app.getByTestId('visual-frame').hover(); await settle(900) },
   'convo9-visual-expanded': async (app, fx) => { await open(app, fx, 'Visual reply'); await settle(3500); await app.getByTestId('visual-frame').hover(); await settle(500); await app.getByTestId('visual-expand').click(); await settle(900); await park(app) },
   'convo9-tokens': async (app, fx) => { await open(app, fx, 'Tokens in message'); await park(app) },
+  'convo9-links': async (app, fx) => { await open(app, fx, 'Note links'); await park(app) },
   'convo9-mermaid': async (app, fx) => { await open(app, fx, 'Mermaid diagram'); await settle(2500); await park(app) },
 }

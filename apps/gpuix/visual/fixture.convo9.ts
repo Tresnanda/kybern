@@ -104,11 +104,14 @@ flowchart LR
 
 So it stays readable as source.`
 
+let LINKS = 'placeholder'
 export async function seed(client: KybernClient, ctx: { projects: { id: string }[] }) {
+  const [note] = (await client.call('notes.list', {})).notes, [task] = (await client.call('tasks.items.list', {})).tasks
+  LINKS = `I wrote [that note](kybern://note/${note!.id}) and filed [this task](kybern://task/${task!.id}) for it.\n\nA bare reference also reads as a chip: kybern://task/${task!.id}.\n\n- The list keeps [${note!.title}](kybern://note/${note!.id}) inline.`
   const db = new Database(path.join(DATA_DIR, 'state.sqlite'))
   db.exec('PRAGMA busy_timeout = 5000')
   const usage = { input_tokens: 4200, output_tokens: 880, cache_read_tokens: 12000, cache_write_tokens: 300 }
-  for (const [title, text] of [['Markdown A', BLOCKS_A], ['Markdown B', BLOCKS_B], ['Markdown C', BLOCKS_C], ['Mermaid diagram', MERMAID], ['Mermaid invalid', MERMAID_INVALID], ['Tokens in message', 'Done.']] as const) {
+  for (const [title, text] of [['Markdown A', BLOCKS_A], ['Markdown B', BLOCKS_B], ['Markdown C', BLOCKS_C], ['Mermaid diagram', MERMAID], ['Mermaid invalid', MERMAID_INVALID], ['Tokens in message', 'Done.'], ['Note links', LINKS]] as const) {
     const thread = await client.call('threads.create', { project_id: ctx.projects[0]!.id, provider: { kind: 'claude-code', instance: 'default' }, permission_mode: 'supervised', title })
     const turn = randomUUID(), answer = randomUUID()
     const events = [

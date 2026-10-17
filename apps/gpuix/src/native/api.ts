@@ -59,6 +59,8 @@ export interface InputDecoration {
   }
   atomic?: boolean
   id?: string
+  /** A glyph drawn at the range start; its first two characters must be spaces, which take the monospace `font` so they reserve its room. */
+  icon?: { svg: string; color: string; font: string; size: number }
 }
 export interface DecoratedInputCapabilities {
   /** UTF-16 ranges, guarded against stale React effects; does not add an undo step. */

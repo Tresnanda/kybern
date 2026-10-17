@@ -11,7 +11,9 @@ const user: Block = { kind: 'user', id: 'u', turnId: 'turn', at, seq: 1, message
 const answer: Block = { kind: 'assistant', id: 'a', messageId: 'a', segment: 0, turnId: 'turn', at, seq: 2, origin: { kind: 'root' }, text: '', thinking: '', complete: false }
 set({ status: 'open', selectedId: thread.id, threads: [thread], open: { ...emptyThreadState(), loaded: true, thread, blocks: [user, answer] } })
 let n = 0
+const stopAt = Number(process.env.STREAM_STOP ?? Infinity)
 const timer = setInterval(() => {
+  if (n >= stopAt) return
   n++
   const text = Array.from({ length: n }, (_, i) => `Word ${i}: smooth output preserves **formatting** and Unicode 🌿. `).join('')
   set({ open: { ...getState().open, blocks: [user, { ...answer, text }] } })

@@ -4,9 +4,9 @@
 // the model list (sections, favorites, recents, "Show more"), and the effort
 // card of the selected model. The pure list logic comes from the shared
 // `packages/kybern-client/src/models.ts` and the desktop's `lib/accountUi.ts`.
-import { motion, useGpuix, type PublicInstance } from '@gpuix/react'
+import { motion, useGpuix, useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { followLine, pickerTabs, type PickerTab } from '@/lib/accountUi'
+import { followLine, nextTabIndex, pickerTabs, type PickerTab } from '@/lib/accountUi'
 import { formatEffort, PROVIDER_LABEL } from '@/lib/format'
 import {
   MODEL_FLAT_LIMIT,
@@ -523,10 +523,19 @@ function Tabs({
   const t = useTheme()
   const [hover, setHover] = useState<string | null>(null)
   const yellow = t.v('--color-accent-yellow')
+  const renderer = useGpuixRequired()
+  const nodes = useRef<(PublicInstance | null)[]>([])
+  // Roving focus (`ModelPickerTabs`): ←/→ move between enabled tabs, Home/End jump, Enter or Space activates.
+  const move = (key: string, index: number) => {
+    const target = key === 'right' ? nextTabIndex(tabs, index, 1) : key === 'left' ? nextTabIndex(tabs, index, -1) : key === 'home' ? nextTabIndex(tabs, -1, 1) : key === 'end' ? nextTabIndex(tabs, tabs.length, -1) : -1
+    const node = target >= 0 ? nodes.current[target] : null
+    if (node) renderer.focusElement?.(node.id)
+    return !!node
+  }
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 2, paddingLeft: 6, paddingRight: 6, paddingTop: 6 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 2, minWidth: 0, paddingBottom: 4, flexGrow: 1 }}>
-        {tabs.map((tab) => {
+        {tabs.map((tab, tabPosition) => {
           const hovered = hover === tab.key
           const dim = tab.type === 'starred' ? 0.45 : tab.needsSignIn ? 0.3 : tab.notSetUp || tab.disabled ? 0.2 : busy && !tab.selected ? 0.2 : 0.45
           const hoverDim = tab.type === 'starred' ? 1 : tab.needsSignIn || tab.notSetUp ? 0.6 : tab.disabled || busy ? dim : 1
@@ -536,6 +545,14 @@ function Tabs({
             <div
               key={tab.key}
               testId={`model-tab-${tab.key}`}
+              ref={node => { nodes.current[tabPosition] = node }}
+              role="tab"
+              aria-selected={tab.selected}
+              tabIndex={tab.selected ? 0 : -1}
+              onKeyDown={e => {
+                if (e.key === 'enter' || e.key === 'space') { if (tab.type === 'starred') onStarred(); else if (!tab.disabled) onAccount(tab); return }
+                move(e.key ?? '', tabPosition)
+              }}
               onMouseEnter={() => setHover(tab.key)}
               onMouseLeave={() => setHover((h) => (h === tab.key ? null : h))}
               onClick={() => (tab.type === 'starred' ? onStarred() : onAccount(tab))}

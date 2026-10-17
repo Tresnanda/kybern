@@ -49,6 +49,19 @@ export interface MarkdownStyle {
   codeHeader?: boolean
   codeBackground?: string
   codeBorder?: string
+  /** Links whose URL starts with `prefix` lead with an icon (two placeholder characters reserve its room). */
+  linkIcons?: { prefix: string; svg: string; color: string; textColor?: string; weight?: number }[]
+  /** A live answer: the caret after the last text and the fading of its newest words. */
+  stream?: MarkdownStream
+}
+export interface MarkdownStream {
+  caret: boolean
+  caretColor?: string
+  /** The blink phase, driven by the app. */
+  caretVisible: boolean
+  /** Birth times (epoch ms) of the newest words, oldest first. */
+  born: number[]
+  fadeMs?: number
 }
 declare module '@gpuix/native/host' {
   interface GpuixTheme { markdown?: MarkdownStyle }

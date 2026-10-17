@@ -50,6 +50,33 @@ pub struct MarkdownStyle {
     pub table_grid: bool,
     pub code_wrap: bool,
     pub code_header: Option<bool>,
+    /// Links whose URL starts with `prefix` lead with an icon (`kybern://note/…` chips).
+    pub link_icons: Vec<LinkIcon>,
+    /// A live answer: the caret after the last text and the fading of its newest words.
+    pub stream: Option<StreamStyle>,
+}
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LinkIcon {
+    pub prefix: String,
+    /// SVG with `currentColor`, drawn at 0.95em before the label.
+    pub svg: String,
+    /// CSS colour that replaces `currentColor`.
+    pub color: String,
+    /// Label colour and weight of such a link (a chip reads in the accent at weight 500).
+    pub text_color: Option<String>,
+    pub weight: Option<f32>,
+}
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct StreamStyle {
+    pub caret: bool,
+    pub caret_color: Option<String>,
+    /// The blink phase, driven by the app: nothing is drawn while false.
+    pub caret_visible: bool,
+    /// Birth times (epoch ms) of the newest words, oldest first.
+    pub born: Vec<f64>,
+    pub fade_ms: Option<f32>,
 }
 pub fn number(value: Option<f32>, fallback: f32) -> f32 {
     value.filter(|n| n.is_finite() && *n >= 0.0).unwrap_or(fallback)

@@ -32,6 +32,8 @@ struct InlineData {
     hover_link_color: Option<Hsla>,
     on_link: Option<Arc<dyn Fn(&str)>>,
     highlight: Option<Arc<crate::text::HighlightContext>>,
+    icons: Vec<(usize, Arc<gpui::RenderImage>)>,
+    caret: Option<Hsla>,
 }
 impl InlineData {
     fn runs(&self, range: &Range<usize>) -> Vec<TextRun> {
@@ -213,11 +215,18 @@ impl Element for InlineFlow {
             let wash = data.wash;
             let radius = data.radius;
             let inset = data.inset;
-            let extra_wash: Option<Box<dyn Fn(&gpui::TextLayout, &mut Window)>> = if token.code {
+            let is_code = token.code;
+            let icon_here: Vec<(usize, Arc<gpui::RenderImage>)> = data.icons.iter().filter(|(at, _)| *at == range.start).map(|(_, image)| (0, image.clone())).collect();
+            let caret_here = if position.index + 1 == data.tokens.len() { data.caret } else { None };
+            let size_here = data.size;
+            let extra_wash: Option<Box<dyn Fn(&gpui::TextLayout, &mut Window)>> = if is_code || !icon_here.is_empty() || caret_here.is_some() {
                 Some(Box::new(move |layout, window| {
-                    for rect in range_rects(layout, &(0..len), pad, inset) {
-                        window.paint_quad(gpui::quad(rect, px(radius), wash, px(0.0), gpui::transparent_black(), BorderStyle::default()));
+                    if is_code {
+                        for rect in range_rects(layout, &(0..len), pad, inset) {
+                            window.paint_quad(gpui::quad(rect, px(radius), wash, px(0.0), gpui::transparent_black(), BorderStyle::default()));
+                        }
                     }
+                    paint_decorations(layout, window, &icon_here, len.min(2), caret_here, len, size_here);
                 }))
             } else {
                 None
@@ -301,7 +310,7 @@ fn inline_element(flat: &FlatText, size: f32, line: f32, align: Option<TableAlig
     let bidi =
         flat.text.chars().any(|c| matches!(c as u32,0x0590..=0x08ff|0xfb1d..=0xfdff|0xfe70..=0xfefc|0x202a..=0x202e|0x2066..=0x2069));
     if bidi || flat.code_ranges.is_empty() || (padding == 0.0 && ratio == 1.0) {
-        return flat_text_element(flat, ctx);
+        return flat_text_element(flat, size, ctx);
     }
     let mut tokens = Vec::new();
     let mut start = 0;
@@ -325,6 +334,7 @@ fn inline_element(flat: &FlatText, size: f32, line: f32, align: Option<TableAlig
                 runs: flat.runs.clone(),
                 links: flat.links.clone(),
                 code_ranges: flat.code_ranges.clone(),
+                icons: flat.icons.clone(),
             },
             tokens,
             font_sans: ctx.theme.font_sans.clone(),
@@ -345,6 +355,8 @@ fn inline_element(flat: &FlatText, size: f32, line: f32, align: Option<TableAlig
             hover_link_color: (ctx.theme.markdown.link.underline.as_deref() == Some("hover")).then(||color(&ctx.theme.markdown.link.color, ctx.theme.text)),
             on_link: ctx.on_link.clone(),
             highlight: ctx.highlight_set.clone(),
+            icons: flat.icons.clone(),
+            caret: ctx.caret.take(),
         }),
     }
     .into_any_element()

@@ -50,6 +50,7 @@ import { G } from './composer/glyphs.ts'
 import { muted, PickerItem, PickerMenu } from './composer/Menu.tsx'
 import { useCompletion } from './composer/Completion.tsx'
 import { useThreadCommands } from './composer/commands.ts'
+import { tokenIcon } from './composer/token-icons.ts'
 import { ModelPicker, ModelTriggerLabel } from './composer/ModelPicker.tsx'
 import { PermissionPicker } from './composer/PermissionPicker.tsx'
 import { Pop, SwapOnChange } from './composer/motion.tsx'
@@ -596,7 +597,7 @@ export function ComposerView(input: ComposerViewProps) {
             <TokenTextarea
               editorRef={tokenEditor}
               onEditorError={setError}
-              references={[...completion.tokens, ...attachmentRefs.map(r => ({ token: r.token, label: r.token.slice(1) }))]}
+              references={[...completion.tokens, ...attachmentRefs.map(r => ({ token: r.token, label: r.token.slice(1), icon: tokenIcon('attachment', r.token) }))]}
               nativeRef={(el) => {
                 editor.current = el
               }}

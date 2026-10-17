@@ -37,7 +37,7 @@ import { ResponseImage } from './images.tsx'
 import { MidTurnMessage } from './bubble.tsx'
 import { cachedMarkdownTheme, Chevron, CODE, destructive, fg, muted, Para, ROW_LINE, RowIcon, TEXT } from './kit.tsx'
 import { Collapse, Rise } from '../motion/kit.tsx'
-import { Shimmer, SwapOnChange, useFresh, useSmoothText } from './motion.tsx'
+import { Shimmer, SwapOnChange, useFresh, useSmoothText, useStreamEffects } from './motion.tsx'
 import { hydrateToolOutput, useRowState, type ToolBlock } from './store.ts'
 
 export interface RowContext {
@@ -533,6 +533,7 @@ const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone, live, thi
   const showText = hasText && (!live || block.complete || shouldRevealLiveText(block.text, block.complete))
   // Only the segment receiving deltas is paced; settled prose renders whole.
   const text = useSmoothText(block.text, live && !block.complete && process.env.KYBERN_SMOOTH_STREAM !== '0', block.complete)
+  const stream = useStreamEffects(text, live && !block.complete && showText)
   if (!hasThinking && !showText) return null
   return (
     <>
@@ -563,7 +564,7 @@ const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone, live, thi
       )}
       {showText && (
         <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: 2, paddingRight: 2 }}>
-          <BoundedMarkdown text={text} tone={tone} />
+          <BoundedMarkdown text={text} tone={tone} stream={stream} />
         </div>
       )}
     </>

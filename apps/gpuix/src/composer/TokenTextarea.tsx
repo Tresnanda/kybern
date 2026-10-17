@@ -4,6 +4,8 @@ import { spawnSync } from 'node:child_process'
 import { DecoratedTextarea } from '../native/decorated-input.tsx'
 import { nativeCapabilities, type InputSelection } from '../native/api.ts'
 import { useTheme } from '../ui.tsx'
+import { FONT_MONO } from '../theme.ts'
+import { tinted } from '../transcript/kit.tsx'
 import { RichHistory } from '../notes/rich-text.ts'
 import { editTokenText, tokenDisplayOffset, tokenSourceOffset, tokenText, type TokenReference } from './token-text.ts'
 
@@ -24,6 +26,7 @@ const historyDoc = (text: string) => ({ text, marks: [], lines: [] })
  * completion queries, clipboard serialization and wire parts use raw tokens. */
 export function TokenTextarea({ references, editorRef, nativeRef, onEditorError, ...props }: Props) {
   const t = useTheme()
+  const accent = t.v('--color-accent-blue')
   const renderer = useGpuixRequired()
   const node = useRef<PublicInstance | null>(null)
   const projection = tokenText(props.value, references)
@@ -83,7 +86,10 @@ export function TokenTextarea({ references, editorRef, nativeRef, onEditorError,
   }
   return <DecoratedTextarea {...props} value={projection.text}
     ref={element => { node.current = element; if (typeof nativeRef === 'function') nativeRef(element); else if (nativeRef) nativeRef.current = element }}
-    decorations={projection.spans.map((span, index) => ({ start: span.start, end: span.end, atomic: true, id: `token:${index}:${span.token}`, style: { color: t.v('--color-accent-blue'), fontWeight: 500 } }))}
+    decorations={projection.spans.map((span, index) => {
+      const icon = references.find(r => r.token === span.token)?.icon
+      return { start: span.start, end: span.end, atomic: true, id: `token:${index}:${span.token}`, style: { color: accent, fontWeight: 500 }, ...(icon ? { icon: { svg: tinted(icon, accent), color: '', font: FONT_MONO, size: 13.3 } } : {}) }
+    })}
     interceptKeys={[...new Set([...(props.interceptKeys ?? []), 'c', 'x', 'z', 'y', 'backspace', 'delete'])]}
     onChange={event => {
       const value = event.value ?? ''
