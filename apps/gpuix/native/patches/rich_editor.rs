@@ -93,6 +93,19 @@ const KEY_CONTEXT: &str = "GpuixRichEditor";
 const CARET_BLINK_MS: u64 = 500;
 const CARET_WIDTH: f32 = 1.5;
 
+thread_local! {
+    static BOUND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The editor's keybindings, bound when the first editor appears. Bound at startup they
+/// changed scoped-paint behaviour elsewhere (`native/paint-check.ts` saw ancestor island
+/// renders on paint-only updates), so windows without an editor never carry them.
+fn ensure_bindings(cx: &mut App) {
+    if !BOUND.with(|b| b.replace(true)) {
+        init(cx);
+    }
+}
+
 pub fn init(cx: &mut App) {
     let c = Some(KEY_CONTEXT);
     let word = if cfg!(target_os = "macos") { "alt" } else { "ctrl" };
@@ -643,6 +656,7 @@ impl CustomElement for RichEditorElement {
         cx: &mut Context<crate::renderer::GpuixView>,
     ) -> gpui::AnyElement {
         crate::kybern_icon::set_renderer(cx.svg_renderer());
+        ensure_bindings(cx);
         let focus_handle = ctx.focus_handle.cloned().unwrap_or_else(|| cx.focus_handle());
         let callback = ctx.event_callback.clone();
         let id = ctx.id;

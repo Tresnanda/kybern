@@ -5,7 +5,6 @@
 edit("lib.rs", "mod cache_island;", "mod cache_island;\nmod rich_doc;\nmod rich_editor;")
 edit("custom_elements/mod.rs", "        registry.register(Box::new(markdown::MarkdownFactory));",
      "        registry.register(Box::new(markdown::MarkdownFactory));\n        registry.register(Box::new(crate::rich_editor::RichEditorFactory));")
-edit("renderer.rs", "crate::custom_elements::input::init(cx);", "crate::custom_elements::input::init(cx);\n            crate::rich_editor::init(cx);", count=3)
 # Like inputs, the editor always takes keyboard focus.
 edit("renderer.rs", 'matches!(element.element_type.as_str(), "input" | "textarea")', 'matches!(element.element_type.as_str(), "input" | "textarea" | "rich-editor")', count=2)
 edit("renderer.rs", "    pub fn zoom_window(&self) -> Result<()> {", """    pub fn rich_editor_command(&self, element_id: f64, command: serde_json::Value) -> Result<serde_json::Value> {
