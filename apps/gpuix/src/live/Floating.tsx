@@ -1,5 +1,5 @@
 import '../native/backdrop.ts'
-import { useGpuix, type PublicInstance, type EventPayload } from '@gpuix/react'
+import { useGpuix, type PublicInstance, type EventPayload, type StyleDesc } from '@gpuix/react'
 import { observeElementBounds, type LayoutRect } from '../native/layout.ts'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { getNav } from '../nav/store.ts'
@@ -11,7 +11,7 @@ import { useComposerOverlayHeight } from '../composer/height.ts'
 type Corner = 'top-end' | 'top-start' | 'bottom-end' | 'bottom-start'
 const corners: Corner[] = ['top-end', 'top-start', 'bottom-end', 'bottom-start']
 /** Shared native corner snap. The overlay exists only during the drag. */
-export function Floating({ storageKey, width, height, testId, children, insetEnd = 0, insetBottom: explicitInset = 0, overlayDrag = false, defaultCorner = 'top-end', onCornerChange }: { storageKey: string; width: number; height: number; testId: string; children: ReactNode; insetEnd?: number; insetBottom?: number; overlayDrag?: boolean; defaultCorner?: Corner; onCornerChange?: (corner: Corner) => void }) {
+export function Floating({ storageKey, width, height, testId, children, insetEnd = 0, insetBottom: explicitInset = 0, overlayDrag = false, defaultCorner = 'top-end', onCornerChange, cardStyle }: { cardStyle?: StyleDesc; storageKey: string; width: number; height: number; testId: string; children: ReactNode; insetEnd?: number; insetBottom?: number; overlayDrag?: boolean; defaultCorner?: Corner; onCornerChange?: (corner: Corner) => void }) {
   // Bottom corners sit above the composer and its request panels, as on the desktop.
   const insetBottom = Math.max(explicitInset, useComposerOverlayHeight())
   const t = useTheme()
@@ -67,7 +67,7 @@ export function Floating({ storageKey, width, height, testId, children, insetEnd
       {...(!drag && snap && !REDUCED_MOTION ? { motion: { generation: snap.generation, isExit: false, initial: { translateX: snap.x, translateY: snap.y }, animate: { translateX: 0, translateY: 0 }, transition: { type: 'spring', duration: 0.4, bounce: 0, velocityX: snap.vx, velocityY: snap.vy } } } as object : !drag && !entered.current ? { motion: { generation: 0, isExit: false, initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.fast, ease: [...EASE.smoothOut] } } } as object : {})}
       onMotionComplete={() => { entered.current = true }}
       style={{ borderRadius: 16 }}>
-    <div ref={card} testId={testId} onMouseUp={finish} style={{ display: 'flex', flexDirection: 'column', width, height, borderRadius: 16, backgroundColor: t.popover, borderWidth: 0.6, borderColor: t.border, overflow: 'hidden', pointerEvents: 'auto', boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: 'rgba(0,0,0,0.2)' } }}>
+    <div ref={card} testId={testId} onMouseUp={finish} style={{ display: 'flex', flexDirection: 'column', width, height, borderRadius: 16, backgroundColor: t.popover, borderWidth: 0.6, borderColor: t.border, overflow: 'hidden', pointerEvents: 'auto', boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: 'rgba(0,0,0,0.2)' }, ...cardStyle }}>
       <div testId={`${testId}-drag`} aria-label="Move preview" onMouseUp={finish} onMouseMove={move} onMouseDown={e => {
         if (e.button !== 0 || e.x === undefined || e.y === undefined || !card.current || !container.current) return
         const b = renderer?.getElementBounds?.(card.current.id), p = parent.current ?? renderer?.getElementBounds?.(container.current.id)
