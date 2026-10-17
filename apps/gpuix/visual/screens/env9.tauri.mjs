@@ -3,7 +3,9 @@ import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 const park = p => p.mouse.move(1275, 815)
 export const PROFILES = [
-  { id: 'local', name: 'Development environment', local: true, hostname: 'Managed by Kybern' },
+  // GPUIX runs this fixture on a configured `KYBERN_URL`, which the desktop also treats as a remote
+  // profile (`environments.rs` `local_profile`): globe icon and the endpoint URL. `prepare` fills `url`.
+  { id: 'local', name: 'Development environment', local: false, url: null },
   { id: 'second', name: 'Second machine', url: 'ws://127.0.0.1:4295/ws', environment_id: 'env-second', hostname: 'MacBookPro', local: false },
   { id: 'build', name: 'Build server', url: 'ws://127.0.0.1:4310/ws', environment_id: 'env-build', local: false, ssh: { target: 'dev@build.example.com', port: 2222, remote_port: 4173, local_port: 4310 } },
 ]
@@ -16,7 +18,8 @@ async function prepare(p) {
       return null
     } }
     const { useEnvironments } = await import('/src/state/environments.ts')
-    useEnvironments.setState({ profiles, selectedId: 'local' })
+    const url = new URL(location.href).searchParams.get('url')
+    useEnvironments.setState({ profiles: profiles.map(p => p.id === 'local' ? { ...p, url } : p), selectedId: 'local' })
   }, PROFILES)
 }
 async function open(p, title) {

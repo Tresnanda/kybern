@@ -90,17 +90,19 @@ export const useAccountsLoaded = () => select((s) => s.loaded)
 
 /** Every account of the environment, or only one agent's. CLI account first, then named accounts. */
 export function useAccounts(kind?: ProviderKind): AccountSummary[] {
-  const entry = select((s) => s)
+  // Only the two fields read here, so the always-mounted rail does not re-render on a flash or a load flag.
+  const list = select((s) => s.accounts)
+  const legacy = select((s) => s.legacy)
   const { settings } = useSettings()
   const providers = useNav((s) => s.providers)
   return useMemo(() => {
-    let all = entry.accounts
-    if (entry.legacy) {
+    let all = list
+    if (legacy) {
       const kinds = providers.length ? providers.map((p) => p.kind) : (Object.keys(settings?.providers ?? {}) as ProviderKind[])
       all = legacyAccounts(settings?.providers, kinds)
     }
     return kind ? all.filter((account) => account.provider.kind === kind) : all
-  }, [entry.accounts, entry.legacy, providers, settings, kind])
+  }, [list, legacy, providers, settings, kind])
 }
 
 export function useDefaultAccount(kind: ProviderKind | undefined): AccountSummary | undefined {

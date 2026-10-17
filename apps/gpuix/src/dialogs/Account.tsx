@@ -4,6 +4,7 @@
 // pick an agent, approve in the browser, come back to a check mark, a prefilled name and a colour.
 // It also signs an existing account in again.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { motion } from '@gpuix/react'
 import {
   ACCOUNT_COLORS,
   ACCOUNT_COLOR_LABELS,
@@ -26,7 +27,7 @@ import { PROVIDER_NAMES } from '../../../desktop/src/lib/providerUsage.ts'
 import type { AccountLoginMode, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
-import { Rise } from '../motion/kit.tsx'
+import { DURATION, EASE, Rise } from '../motion/kit.tsx'
 import { N } from '../nav/glyphs.ts'
 import { Dialog } from '../nav/overlay.tsx'
 import { setNav } from '../nav/store.ts'
@@ -41,7 +42,7 @@ import { toast } from '../shell/toasts.tsx'
 import { copyText } from '../transcript/store.ts'
 import { Screen as TerminalScreen } from '../terminal/Terminal.tsx'
 import { getClient } from '../state.ts'
-import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
+import { ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { FONT_UI } from '../theme.ts'
 import { AccountAvatar, accountColor } from '../usage/AccountMark.tsx'
 import { flashAccount, refreshAccounts, useAccounts, useAccountsFeed, useAccountsLegacy } from '../usage/accounts.ts'
@@ -308,7 +309,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
 
 // ── Pieces ───────────────────────────────────────────────────────────────────
 
-function CloseX({ onClose }: { onClose: () => void }) {
+export function CloseX({ onClose }: { onClose: () => void }) {
   const t = useTheme()
   return <div testId="dialog-close" role="button" aria-label="Close" onClick={onClose} style={{ position: 'absolute', top: 8, right: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 10, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}><Icon source={N.x} size={16} color={t.iconSecondary} style={{ pointerEvents: 'none' }} /></div>
 }
@@ -374,8 +375,9 @@ function PickStep(props: { providers: { kind: ProviderKind; display_name: string
   const placeholder = kind === 'claude-code' ? '~/.claude-work' : kind === 'codex' ? '~/.codex-work' : `~/.${kind ?? 'agent'}-work`
   const TILE = Math.floor((448 - 32 - 16) / 3) - 2
   return <>
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 16, paddingRight: 48, paddingTop: 16, paddingBottom: 4 }}>
-      <Title>Add an account</Title>
+    {/* `DialogHeader`: px-4 pt-4 pb-2, so the description wraps at the same width as the desktop's. */}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 16, paddingRight: 16, paddingTop: 16, paddingBottom: 8 }}>
+      <Title pe>Add an account</Title>
       <Desc>Sign in with another account. Your current sign-ins stay as they are.</Desc>
     </div>
     <Body gap={16} top={4}>
@@ -393,7 +395,7 @@ function PickStep(props: { providers: { kind: ProviderKind; display_name: string
       {kind === 'omp' && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}><Label color={t.text} size={14} lineHeight={21} weight={500}>Sign in with</Label><Select compact testId="account-upstream" label="Sign in with" value={props.upstream} onChange={props.onUpstream} options={OMP_UPSTREAMS.map((u) => ({ value: u.id, label: u.label }))} /></div>}
       {kind && kind !== 'opencode' && kind !== 'pi' && <div style={{ display: 'flex', flexDirection: 'column' }}>
         <div testId="account-advanced" role="button" aria-expanded={props.advancedOpen} tabIndex={0} onClick={() => props.onAdvancedOpen(!props.advancedOpen)} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') props.onAdvancedOpen(!props.advancedOpen) }} style={{ display: 'flex', alignItems: 'center', alignSelf: 'flex-start', gap: 4, marginLeft: -4, paddingLeft: 4, paddingRight: 4, borderRadius: 4, cursor: 'pointer' }}>
-          <Label color={t.textSecondary} size={13} lineHeight={19.5}>Advanced</Label><Icon source={props.advancedOpen ? N.chevronDown : N.chevronRight} size={12} color={t.textSecondary} />
+          <Label color={t.textSecondary} size={13} lineHeight={19.5}>Advanced</Label><motion.svg source={N.chevronDown} initial={false} animate={{ rotate: props.advancedOpen ? 180 : 0 }} transition={{ duration: REDUCED_MOTION ? 0 : DURATION.fast, ease: [...EASE.smoothOut] }} style={{ width: 12, height: 12, color: t.textSecondary, flexShrink: 0, pointerEvents: 'none' }} />
         </div>
         {props.advancedOpen && <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 12, paddingBottom: 4 }}>
           <Label color={t.text} size={14} lineHeight={21} weight={500}>Folder</Label>

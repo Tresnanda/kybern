@@ -12,13 +12,15 @@ import { errorText } from '../nav/actions.ts'
 import { Dialog, Menu, MenuItem, MenuSeparator, Tip } from '../nav/overlay.tsx'
 import { useNav } from '../nav/store.ts'
 import { showDialog } from '../dialogs/store.ts'
+import { CloseX } from '../dialogs/Account.tsx'
 import { activeEnvironment } from '../shell/environment.ts'
 import { toast } from '../shell/toasts.tsx'
 import { copyText } from '../transcript/store.ts'
 import { getClient, useApp } from '../state.ts'
-import { motion } from '@gpuix/react'
+import { motion, useGpuix, type PublicInstance } from '@gpuix/react'
+import { nativeCapabilities } from '../native/api.ts'
 import { EASE } from '../motion/kit.tsx'
-import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { AccountAvatar, AccountDot, AccountUsageRing } from '../usage/AccountMark.tsx'
 import { askAccountLimits, makeDefaultAccount, refreshAccounts, setUsageAnchor, updateProviderSettings, useAccountFlash, useAccountLimitEntries, useAccounts, useAccountsFeed, useAccountsLegacy, useAccountsLoaded } from '../usage/accounts.ts'
 import { limitsForAccount } from '../../../desktop/src/lib/accountUi.ts'
@@ -163,8 +165,13 @@ function RenameField({ account, onDone }: { account: AccountSummary; onDone: () 
       toast.error('Unable to rename the account', { description: `${errorText(problem)} Check the name, then try again.` })
     }
   }
+  // The desktop selects the whole name on focus and darkens the border to foreground/30.
+  const { renderer } = useGpuix()
+  const input = useRef<PublicInstance>(null)
+  const [focused, setFocused] = useState(false)
+  const selectAll = () => { if (renderer && input.current) try { nativeCapabilities(renderer).setInputSelection(input.current.id, 0, draft.length, false) } catch { /* Older addons keep the caret at the end. */ } }
   return <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}>
-    <input testId="account-rename" aria-label={`${account.name} name`} autoFocus value={draft} onChange={(e) => { setDraft(e.value ?? ''); setError(false) }} onBlur={() => void save()} onSubmit={() => void save()} onKeyDown={(e) => { if (e.key === 'escape') { canceled.current = true; onDone() } }} style={{ width: '100%', height: 28, minWidth: 0, borderWidth: 1, borderColor: error ? t.v('--destructive') : t.border, borderRadius: 8, paddingLeft: 10, paddingRight: 10, fontSize: 14, color: t.text, backgroundColor: t.inputGroupFill }} />
+    <input ref={input} testId="account-rename" aria-label={`${account.name} name`} autoFocus value={draft} onFocus={() => { setFocused(true); selectAll() }} onChange={(e) => { setDraft(e.value ?? ''); setError(false) }} onBlur={() => { setFocused(false); void save() }} onSubmit={() => void save()} onKeyDown={(e) => { if (e.key === 'escape') { canceled.current = true; onDone() } }} style={{ width: '100%', height: 28, minWidth: 0, borderWidth: 1, borderColor: error ? t.v('--destructive') : focused ? ink(t, .3) : t.border, borderRadius: 8, paddingLeft: 10, paddingRight: 10, fontSize: 14, color: t.text, backgroundColor: t.inputGroupFill }} />
     {error && <Label color={t.v('--destructive')} size={13} lineHeight={19.5} style={{ marginTop: 4 }}>Enter a name up to 120 characters.</Label>}
   </div>
 }
@@ -212,7 +219,7 @@ function HowToSignIn({ kind }: { kind: ProviderKind }) {
   const command = CLI_SIGN_IN_COMMAND[kind]
   const [done, setDone] = useState(false)
   useEffect(() => { if (!done) return; const timer = setTimeout(() => setDone(false), 1400); return () => clearTimeout(timer) }, [done])
-  return <Menu testId={`account-how-${kind}`} align="end" width={288} trigger={() => <div style={{ display: 'flex', alignItems: 'center', minHeight: 28, paddingLeft: 10, paddingRight: 10, borderWidth: 1, borderColor: t.border, borderRadius: 8, hover: { backgroundColor: t.buttonTertiaryHover } }}><Label color={t.text} size={14} lineHeight={21}>How to sign in</Label></div>}>
+  return <Menu testId={`account-how-${kind}`} align="end" width={288} fit="switch" trigger={() => <div style={{ display: 'flex', alignItems: 'center', minHeight: 28, paddingLeft: 10, paddingRight: 10, borderWidth: 1, borderColor: t.border, borderRadius: 8, hover: { backgroundColor: t.buttonTertiaryHover } }}><Label color={t.text} size={14} lineHeight={21}>How to sign in</Label></div>}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 8 }}>
       <Label color={t.text} size={14} lineHeight={21} weight={500}>How to sign in</Label>
       <Label color={t.textSecondary} size={14} lineHeight={21}>{`Run ${command} in your terminal. Kybern picks it up automatically.`}</Label>
@@ -254,7 +261,7 @@ function AccountMenu({ account, onRename, onRemove, onAssign }: { account: Accou
       toast.error('Unable to change the color', { description: `${errorText(error)} Check your connection, then try again.` })
     }
   }
-  return <Menu testId={`account-actions-${id}`} align="end" minWidth={192} onOpenChange={(open) => { if (!open) setView('root') }} trigger={() => <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, hover: { backgroundColor: t.buttonSecondaryHover } }}><Icon source={N.ellipsis} size={16} color={t.textSecondary} style={{ pointerEvents: 'none' }} /></div>}>
+  return <Menu testId={`account-actions-${id}`} align="end" minWidth={192} fit="switch" onOpenChange={(open) => { if (!open) setView('root') }} trigger={() => <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, hover: { backgroundColor: t.buttonSecondaryHover } }}><Icon source={N.ellipsis} size={16} color={t.textSecondary} style={{ pointerEvents: 'none' }} /></div>}>
     {view === 'root' ? <>
       {!cli && <MenuItem id="rename" testId={`account-actions-${id}-rename`} label="Rename…" onSelect={onRename} />}
       {!cli && <MenuItem id="signin" testId={`account-actions-${id}-signin`} label="Sign in again" onSelect={() => openAddAccount({ provider: kind, instance })} />}
@@ -348,6 +355,7 @@ function ProjectsDialog({ account, accounts, projects, projectAccounts, onClose 
       <Label color={t.text} size={18} lineHeight={22.5} weight={600}>{`Use ${account.name} for projects`}</Label>
       <Label color={t.textSecondary} size={14} lineHeight={19.25}>{`These projects use ${account.name} instead of the default. Their worktrees do too.`}</Label>
     </div>
+    <CloseX onClose={onClose} />
     <div testId="account-projects-list" aria-label="Projects" style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 288, overflowY: 'scroll', paddingLeft: 16, paddingRight: 16, paddingTop: 4, paddingBottom: 12 }}>
       {sorted.map((project) => {
         const other = otherName(project.path)

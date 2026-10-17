@@ -17,6 +17,7 @@ import { glyph, Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { listSshHosts, type BootstrapProgress, type BootstrapStep } from './ssh.ts'
 import { FONT_MONO } from '../theme.ts'
+import { clockTime } from '../transcript/clock.ts'
 import { DialogBody, DialogFooter, DialogHeader, Disclosure, EnvButton, EnvInput, ErrorText, Field, Hint, IconButton, Spinner } from './kit.tsx'
 
 type Screen = { kind: 'add'; profile?: EnvironmentProfile } | { kind: 'manage' | 'pair' }
@@ -136,7 +137,7 @@ function AddressForm({ profile, close, chooser, busy, setBusy }: { profile?: Env
       <Field label="Name"><EnvInput testId="environment-name" autoFocus label="Name" value={name} onChange={setName} disabled={busy} placeholder="Dev server" onSubmit={() => void submit()} /></Field>
       <Field label="Address or pairing invitation"><EnvInput testId="environment-address" label="Address or pairing invitation" value={address} onChange={setAddressOrInvitation} disabled={busy} invalid={!!addressError} onBlur={() => { if (address.trim()) validateAddress() }} placeholder="https://machine.example.ts.net" onSubmit={() => void submit()} />
         {!!addressError && <ErrorText testId="environment-address-error">{addressError}</ErrorText>}</Field>
-      <Field label={`Pairing code${profile ? ' (optional)' : ''}`}><EnvInput testId="environment-code" label="Pairing code" value={code} onChange={(value) => { setCode(value.replace(/\D/g, '').slice(0, 6)); setToken('') }} mono disabled={busy} placeholder="000000" onSubmit={() => void submit()} /></Field>
+      <Field label={`Pairing code${profile ? ' (optional)' : ''}`}><EnvInput testId="environment-code" label="Pairing code" value={code} onChange={(value) => { setCode(value.replace(/\D/g, '').slice(0, 6)); setToken('') }} disabled={busy} placeholder="000000" onSubmit={() => void submit()} /></Field>
       <Hint>{profile ? 'Leave the code empty to keep this device’s access.' : 'On the other machine, choose Pair a device in the environment menu. For a server or VPS, run kybern pair over SSH.'}</Hint>
       <Disclosure testId="environment-token-toggle" label="Use an existing device token" open={advanced} toggle={() => setAdvanced(!advanced)} />
       {advanced && <Field label="Device token"><EnvInput secure testId="environment-token" label="Device token" value={token} onChange={value => { setToken(value); setCode('') }} disabled={busy} placeholder="Device token" onSubmit={() => void submit()} /></Field>}
@@ -235,14 +236,15 @@ function DeviceAccess({ close }: { close: () => void }) {
   }
   const run = async (action: () => Promise<void>) => { setBusy(true); setError(''); try { await action() } catch (e) { setError(errorText(e)) } finally { setBusy(false) } }
   const paired = devices.filter(d => d.label !== 'bootstrap')
-  const card = { display: 'flex', borderRadius: 14, backgroundColor: t.variant === 'dark' ? ink(t, .016) : ink(t, .03) }
+  // `bg-muted/40`, measured in the desktop frontend: one level over the popover in dark (46 → 47), 1.6% black in light (255 → 251).
+  const card = { display: 'flex', borderRadius: 14, backgroundColor: t.variant === 'dark' ? ink(t, .005) : ink(t, .016) }
   return <>
     <DialogHeader title="Pair a device" description={`Give another device access to ${activeEnvironment().name}.`} onClose={close} />
     <DialogBody testId="environment-access-body" scroll>
       {exposure && <div style={{ ...card, alignItems: 'center', gap: 16, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}><div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={14} lineHeight={21} weight={500}>Reachable over Tailscale</Label><Hint>{exposure.tailscale_ip ? exposure.tailscale ? `Devices on your tailnet connect to ${exposure.tailscale_ip} directly.` : 'Lets phones and other devices on your tailnet pair without a tunnel.' : 'Tailscale is not running on this machine.'}</Hint></div><Switch testId="environment-tailscale" label="Reachable over Tailscale" checked={exposure.tailscale} disabled={exposureBusy || (!exposure.tailscale && !exposure.tailscale_ip)} onChange={tailscale => { setExposureBusy(true); setError(''); void (async () => { try { const value = await client.call('access.exposure.set', { tailscale }); setExposure(value); if (invitation) await create(value) } catch (e) { setError(errorText(e)) } finally { setExposureBusy(false) } })() }} /></div>}
       {invitation && <>
         {qr && <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}><div role="img" aria-label="Pairing QR code" style={{ width: 176, height: 176, padding: 12, borderRadius: 14, backgroundColor: '#ffffff' }}><svg testId="pairing-qr" source={qr} style={{ width: 152, height: 152, color: '#000000' }} /></div><Hint center>Scan with the Kybern mobile app, or copy the invitation below.</Hint></div>}
-        <div style={{ ...card, flexDirection: 'column', alignItems: 'center', gap: 8, padding: 16 }}><CodeDigits code={invitation.code} /><Hint>{expired ? 'Code expired. Create a new invitation.' : `Use once before ${new Date(invitation.expires_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}</Hint></div>
+        <div style={{ ...card, flexDirection: 'column', alignItems: 'center', gap: 8, padding: 16 }}><CodeDigits code={invitation.code} /><Hint>{expired ? 'Code expired. Create a new invitation.' : `Use once before ${clockTime(invitation.expires_at)}`}</Hint></div>
         <Field label="Connection address"><EnvInput testId="pairing-address" label="Connection address" value={address} onChange={setAddress} placeholder="https://machine.example.ts.net" /></Field>
         {!address && <Hint>Enter an address the other device can reach, such as your Tailscale HTTPS address or SSH tunnel address.</Hint>}
         {!!address && isLoopbackAddress(address) && <Hint>{`This address only works on the machine itself.${exposure?.tailscale_ip && !exposure.tailscale ? ' Turn on Reachable over Tailscale to get one other devices can use.' : ' Enter an address the other device can reach.'}`}</Hint>}

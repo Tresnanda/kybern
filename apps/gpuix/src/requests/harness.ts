@@ -11,13 +11,17 @@ export function assertScratchEnv(env: Record<string, string | undefined>) {
   if (!dir) throw Error('Refusing to launch GPUIX without KYBERN_DATA_DIR: it would resolve the real ~/.kybern daemon. Point it at a scratch directory.')
   const resolved = path.resolve(dir)
   if (resolved === real || resolved.startsWith(real + path.sep)) throw Error(`Refusing to launch GPUIX against the real data directory ${real}. Use a scratch directory.`)
+  // An endpoint inherited from the calling shell (an agent running inside Kybern) could be the user's own daemon.
+  if (process.env.KYBERN_URL && !env.KYBERN_URL) throw Error('Refusing to launch GPUIX with a KYBERN_URL inherited from this shell: it may be the real daemon. Unset it, or pass the scratch endpoint explicitly.')
 }
 
 /** Automation launch with an explicit process lifetime and startup deadline.
  * The upstream launch helper doesn't reject when a child exits before handshake. */
 export async function launchFixture(entry: string, env: Record<string, string>) {
   assertScratchEnv(env)
-  const child = spawn('bun', [entry], { env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] })
+  // Without a client config dir GPUIX would read the desktop's saved environments and write its own prefs under ~/Library.
+  const clientDir = process.env.KYBERN_CLIENT_CONFIG_DIR ?? path.join(path.resolve(({ ...process.env, ...env }).KYBERN_DATA_DIR!), 'client-config')
+  const child = spawn('bun', [entry], { env: { KYBERN_CLIENT_CONFIG_DIR: clientDir, ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] })
   let stderr = ''
   const frames:number[]=[]
   let frameRemainder=''

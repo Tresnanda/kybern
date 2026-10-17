@@ -99,7 +99,7 @@ export function Integrations() {
     </div>
     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
       <Segments testId="integrations-kind" value={category} width={[65, 90]} fontSize={12} options={[['plugin', 'Plugins'], ['connector', 'Connectors']]} onChange={(value) => { setCategory(value); setCount(40) }} />
-      <div style={{ flexGrow: 1, position: 'relative' }}><TextField testId="integrations-search" label="Find integrations" placeholder={`Find a ${noun}`} value={query} onChange={(value) => { setQuery(value); setCount(40) }} width="100%" style={{ backgroundColor: 'transparent', fontSize: 14, paddingLeft: 30 }} /><div style={{ position: 'absolute', left: 10, top: 8, pointerEvents: 'none' }}><Icon source={N.search} size={14} color={t.textSecondary} /></div></div>
+      <div style={{ flexGrow: 1, position: 'relative' }}>{/* `InputGroup`: `border-input` (white in light, so no visible edge) on `bg-background` / `dark:bg-input/32`. */}<TextField testId="integrations-search" label="Find integrations" placeholder={`Find a ${noun}`} value={query} onChange={(value) => { setQuery(value); setCount(40) }} width="100%" style={{ borderColor: t.v('--input'), backgroundColor: t.inputGroupFill, fontSize: 14, paddingLeft: 30 }} /><div style={{ position: 'absolute', left: 10, top: 8, pointerEvents: 'none' }}><Icon source={N.search} size={14} color={t.textSecondary} /></div></div>
     </div>
     <Label color={t.textSecondary} size={12} lineHeight={19.5}>{provider === 'codex' ? 'Type @ in a conversation to choose an installed plugin or connected app.' : 'Type / in a conversation to choose a plugin skill, such as /plugin:skill.'}</Label>
     {notice && <Label color={t.textSecondary} size={12} lineHeight={19.5}>{notice}</Label>}

@@ -113,6 +113,7 @@ export function Menu({
   minWidth,
   testId,
   rootStyle,
+  fit,
 }: {
   trigger: (open: boolean) => ReactNode
   children: ReactNode
@@ -125,6 +126,8 @@ export function Menu({
   minWidth?: number
   testId?: string
   rootStyle?: StyleDesc
+  /** `'switch'` flips to the other side when the popup does not fit, like Base UI's collision handling. */
+  fit?: 'snap' | 'switch'
 }) {
   const t = useTheme()
   const { renderer } = useGpuix()
@@ -178,6 +181,7 @@ export function Menu({
           side={side}
           align={align}
           sideOffset={sideOffset}
+          fit={fit}
           tabIndex={0}
           autoFocus
           testId={testId ? `${testId}-menu` : undefined}
