@@ -1,13 +1,10 @@
 // Composer motion on top of `src/motion/kit.tsx`: the desktop's swaps render
 // their first paint without motion (`IconSwap` / `TextSwap` in
 // `components/kybern/motion.tsx`), and attachment tiles `t-pop` in once.
-import { motion, type StyleDesc } from '@gpuix/react'
+import { type StyleDesc } from '@gpuix/react'
 import { useRef, type ReactNode } from 'react'
-import { DURATION, DISTANCE, Swap } from '../motion/kit.tsx'
-import { REDUCED_MOTION } from '../ui.tsx'
-
-/** `--ease-bounce`. */
-const EASE_BOUNCE: [number, number, number, number] = [0.34, 1.36, 0.64, 1]
+import { popTransform } from '../kit/Pop.tsx'
+import { Swap } from '../motion/kit.tsx'
 
 /**
  * `IconSwap` / `TextSwap`: the first state paints still; every later change
@@ -28,19 +25,13 @@ export function SwapOnChange({ active, children, style }: { active: string; chil
 }
 
 /**
- * `t-pop` (`motion.css`): an added attachment comes in from 40% opacity over
- * `--duration-fast` on `--ease-bounce`. GPUIX has no scale, so the 0.85 → 1
- * growth becomes a 4px drift that overshoots a hair, like the bounce does.
+ * `t-pop` (`motion.css`): an added attachment tile scales 0.85 -> 1 and fades in from 40% over `--duration-fast` on
+ * `--ease-bounce`, as a whole box (`kit/Pop.tsx` `popTransform`, paint-only). Reduce Motion shows it at once.
  */
 export function Pop({ children, style }: { children: ReactNode; style?: StyleDesc }) {
   return (
-    <motion.div
-      initial={{ opacity: 0.4, top: REDUCED_MOTION ? 0 : DISTANCE.micro }}
-      animate={{ opacity: 1, top: 0 }}
-      transition={{ duration: DURATION.fast, ease: EASE_BOUNCE }}
-      style={{ display: 'flex', position: 'relative', flexShrink: 0, ...style }}
-    >
+    <div paintTransform={popTransform()} style={{ display: 'flex', position: 'relative', flexShrink: 0, ...style }}>
       {children}
-    </motion.div>
+    </div>
   )
 }

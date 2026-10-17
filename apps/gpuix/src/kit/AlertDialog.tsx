@@ -19,6 +19,7 @@ import { pointerNav } from '../nav/store.ts'
 import { useSettingsModal } from '../settings/controls.tsx'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import type { Theme } from '../theme.ts'
+import { pressTransform } from '../motion/press.ts'
 
 // ─── Escape stack ─────────────────────────────────────────────────────────
 
@@ -246,6 +247,7 @@ export function KitButton({
       onMouseLeave={() => setHover(false)}
       onClick={() => { if (!disabled) onClick?.() }}
       onKeyDown={(e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) onClick?.() }}
+      paintTransform={pressTransform(!disabled)}
       style={{
         display: 'flex',
         alignItems: 'center',

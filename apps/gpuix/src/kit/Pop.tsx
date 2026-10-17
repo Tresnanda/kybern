@@ -7,8 +7,11 @@
 // 250 ms and nothing afterwards. Paint-only, like a CSS transform: layout and hit testing do not move. It plays when the element
 // mounts, so (as with the desktop's `key={count}`) a new `key` plays it again.
 //
-// Only leaves pop: a `Label` or an icon, not a box with a background. With the stock addon (`KYBERN_GPUIX_NATIVE=npm`) and
-// under Reduce Motion (`.t-pop { animation: none }`) the element simply appears.
+// A box with a background or border (a chip, an attachment tile) pops as a whole with `popTransform()`: the paint-only
+// subtree transform (`native/patches/subtree_transform.rs`) scales and fades everything the box paints about its centre,
+// again with no render or layout per frame. With the stock addon (`KYBERN_GPUIX_NATIVE=npm`) and under Reduce Motion
+// (`.t-pop { animation: none }`) the element simply appears.
+import type { PaintTransformProps } from '@gpuix/native/host'
 import { useRef } from 'react'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { REDUCED_MOTION } from '../ui.tsx'
@@ -20,6 +23,15 @@ export type PopAnimation = { kind: 'pop'; cycleMs: number; delayMs?: number }
 /** The `paintAnimation` prop that pops a text or SVG leaf when it mounts (undefined when it cannot play). */
 export function popAnimation(delayMs = 0): PopAnimation | undefined {
   return PATCHED_NATIVE && !REDUCED_MOTION ? { kind: 'pop', cycleMs: POP_MS, ...(delayMs ? { delayMs } : {}) } : undefined
+}
+
+/** `--ease-bounce`. */
+export const EASE_BOUNCE: [number, number, number, number] = [0.34, 1.36, 0.64, 1]
+
+/** The `paintTransform` prop that pops a whole box when it mounts (undefined when it cannot play). */
+export function popTransform(delayMs = 0): PaintTransformProps | undefined {
+  if (!PATCHED_NATIVE || REDUCED_MOTION) return undefined
+  return { initial: { scale: 0.85, opacity: 0.4 }, animate: { scale: 1, opacity: 1 }, transition: { duration: POP_MS / 1000, delay: delayMs / 1000, ease: EASE_BOUNCE } }
 }
 
 /**

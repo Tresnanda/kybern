@@ -35,6 +35,7 @@ import { RailUpdateButton } from '../platform/UpdateSurface.tsx'
 import { CardAccounts, useCardEntry } from '../usage/CardAccounts.tsx'
 import { AccountDot } from '../usage/AccountMark.tsx'
 import { useAccountsFeed, useDefaultAccount } from '../usage/accounts.ts'
+import { pressTransform } from '../motion/press.ts'
 
 const RAIL = 52
 const RAIL_ITEMS: { page: Page; icon: string; label: string }[] = [
@@ -120,6 +121,7 @@ function RailButton({
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
         onClick={onClick}
+        paintTransform={pressTransform()}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -231,6 +233,7 @@ function UsageRing({
         onMouseEnter={onEnter}
         onMouseLeave={onLeave}
         onClick={() => goPage('usage')}
+        paintTransform={pressTransform()}
         style={{
           display: 'flex',
           alignItems: 'center',

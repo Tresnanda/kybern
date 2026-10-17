@@ -55,6 +55,8 @@ import { ModelPicker, ModelTriggerLabel } from './composer/ModelPicker.tsx'
 import { PermissionPicker } from './composer/PermissionPicker.tsx'
 import { Pop, SwapOnChange } from './composer/motion.tsx'
 import { Rise } from './motion/kit.tsx'
+import { DropHighlight } from './motion/DropHighlight.tsx'
+import { pressTransform } from './motion/press.ts'
 import {
   createThread,
   ensureLoaded,
@@ -363,6 +365,8 @@ export function ComposerView(input: ComposerViewProps) {
   const [text, setText] = useState(saved?.text ?? '')
   const [attachments, setAttachments] = useState<Attachment[]>(saved?.attachments ?? [])
   const [uploading, setUploading] = useState(0)
+  // A Finder drag over the card (`dragOver` in the desktop composer), eased by `DropHighlight`.
+  const [dragOver, setDragOver] = useState(false)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
@@ -556,7 +560,9 @@ export function ComposerView(input: ComposerViewProps) {
           card.current = el
         }}
         testId="composer-drop-zone"
+        onFileDragChange={(e) => setDragOver(!!e.hovered && !props.readOnly)}
         onFileDrop={(e) => {
+          setDragOver(false)
           if (props.readOnly || !e.paths?.length) return
           void addFiles(e.paths)
         }}
@@ -567,8 +573,6 @@ export function ComposerView(input: ComposerViewProps) {
           borderRadius: compact ? 14 : COMPOSER_RADIUS,
           borderWidth: 1,
           borderColor: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.052)' : 'rgba(13, 13, 13, 0.076)',
-          // A Finder drag over the card (`dragOver && border-[color:var(--color-border-focus)]`).
-          dragOver: { borderColor: t.v('--color-border-focus') },
           backgroundColor: t.variant === 'dark' ? t.composer : '#ffffff',
           boxShadow:
             t.variant === 'dark'
@@ -577,6 +581,8 @@ export function ComposerView(input: ComposerViewProps) {
         }}
       >
         {completion.menu((card.current && renderer.getElementBounds?.(card.current.id)?.width) || 736)}
+        {/* `dragOver && border-[color:var(--color-border-focus)]` with the card's `transition-colors duration-200`. */}
+        <DropHighlight over={dragOver} radius={compact ? 14 : COMPOSER_RADIUS} color={t.v('--color-border-focus')} />
         <div style={{ display: 'flex', flexDirection: 'column', paddingTop: 14, paddingBottom: 8, paddingLeft: 16, paddingRight: 16 }}>
           {(attachments.length > 0 || uploading > 0) && (
             <Attachments
@@ -781,6 +787,7 @@ function RoundButton({ children, disabled, onClick, testId }: { children: ReactN
       role="button"
       aria-disabled={disabled}
       onClick={disabled ? undefined : onClick}
+      paintTransform={pressTransform(!disabled)}
       style={{
         display: 'flex',
         alignItems: 'center',

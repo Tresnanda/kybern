@@ -375,7 +375,7 @@ overshoots by 19.0px, ends at exactly 200×20px, leaves a sibling unchanged,
 and remains clickable at its translated position. The spring unit check covers
 finite output, endpoints and critical/underdamped behavior.
 
-**Scale remains unsupported.** This GPUI fork has transform matrices on glyph
+**Scale (historical note, superseded by `paintTransform` below).** This GPUI fork has transform matrices on glyph
 sprites, not a subtree scene transform for quads, shadows, paths, surfaces,
 clip masks and hitboxes together. Scaling only cached paint would leave these
 inconsistent. A faithful implementation needs coordinated scene + clip + input
@@ -566,7 +566,7 @@ That coarse behavior remains an unresolved pacing defect. Elapsed labels have a
 separate visibility-aware seconds clock. Round-seven measurements and remaining
 acceptance gaps are in `../perf/pacing-round7-2026-10-17.md`.
 
-Faithful subtree scale remains unsupported for the reasons in the native springs
+Subtree scale is now `paintTransform` ("Paint-only subtree transforms" below); the reasons in the native springs
 section: quads, paths, masks, glyphs and hitboxes need one coordinated GPUI scene
 transform. Translation is not presented as scale.
 
@@ -1221,10 +1221,9 @@ Files: `rotate_gpui.py` and `pop_gpui.py` (GPUI fork, run from
 another kind next to them must extend the same `mode != …` chain. Merge order
 otherwise fails loudly at the anchor, never silently.
 
-Known limits: a pop whose frames stop part-way (window hidden during the
-250 ms) keeps its last scale and alpha until the leaf next repaints. With region
-paint (`KYBERN_REGION_LAYERS=1`), a finished pop still counts as a native paint
-animation, so the region target does not park. Checks:
+Fixed in render9 (`stream_fade_gpui.py`): a pop whose frames stopped part-way (window hidden during the
+250 ms) lands on scale 1 / full opacity at the next presented frame (`finish_pops`), and a finished pop no
+longer counts as a native paint animation, so region layers (`KYBERN_REGION_LAYERS=1`) can park. Checks:
 `scripts/kit9-spinner-check.ts` and `scripts/kit9-pop.ts`.
 
 ## Rich editor and per-run text size (phase 2, editor9)
@@ -1257,3 +1256,72 @@ text system records a scale per FontId (stripping the pseudo feature before Core
 size, and `paint_line` rasterizes glyphs at the scaled size. The editor uses it for
 inline code (0.833em) and task references (13/15), like `.note-prose code` and
 `.task-ref`. Ordinary fonts are unchanged (scale 1).
+
+## Paint-only subtree transforms (Phase 2, render9)
+
+`paintTransform` on a host div scales, rotates, translates, fades and blurs everything the div paints, about a
+transform origin, without moving its layout slot. Frames run on native display callbacks and re-map retained paint:
+no React render, Taffy layout, prepaint, island wake or ancestor invalidation.
+
+```tsx
+<div paintTransform={{
+  initial: { scale: 0.85, opacity: 0.4 },          // or false (start at `animate`)
+  animate: { scale: 1, opacity: 1 },               // scale, rotate (deg, clockwise), translateX/Y, opacity, blur (px)
+  transition: { duration: 0.25, delay: 0, ease: [0.34, 1.36, 0.64, 1] },  // seconds; y may leave [0, 1]
+  keyframes: [{ offset: 0.6, rotate: 4, scale: 1.06 }],                   // optional CSS-style stops
+  origin: [0.5, 0.5],                              // fractions of the div's box
+  press: { scale: 0.97, down: { duration: 0.08 }, up: { duration: 0.15 } },  // native :active
+  generation: 1,
+}} onMotionComplete={e => …} />
+```
+
+- Changing `animate`, `keyframes` or `generation` retargets from the value on screen; a new `generation` with an
+  `initial` value restarts from it (the skeleton band's next pass). `onMotionComplete` fires with `motionGeneration`.
+- `press` squashes on a primary mouse down over the div (a hitbox under its children, so occluding overlays block it)
+  and restores on any mouse up, natively: no React state. `src/motion/press.ts` (`pressTransform`) is the desktop's
+  press feedback; `kit/Pop.tsx` `popTransform` the whole-box `t-pop`; `motion/success.ts` `t-success`;
+  `motion/DropHighlight.tsx` the composer's drop ring; `kit/Skeleton.tsx` the shimmer band.
+- How: `Scene::insert_primitive` maps each primitive painted inside a scope (and keeps its untransformed base); a
+  retained update (`Window::transform_subtrees`) recomputes changed scopes from the bases and replays the scene.
+  Quads, shadows, images, surfaces, backdrops and underlines scale about the origin (radii, borders, blur and
+  thickness scale too); glyph and SVG sprites take the full affine in their `transformation`; paths transform their
+  vertices. Opacity multiplies every primitive's alpha. Masks pushed inside the scope (rounded overflow) map
+  through the transform; the mask at the scope's entry stays in window coordinates; each primitive keeps its own
+  narrower clip (GPUI's four-strip border quads). Hitboxes and AccessKit bounds follow the paint.
+- `blur` paints a backdrop pass over what the subtree drew (bounds + 8 px), marked so frames set its radius; a
+  settled blur renders once to drop the pass. Like CSS `filter: blur()` it is applied before the transform.
+- Limits: rotation is exact for sprites and paths; quads/images/masks keep their axes (centres rotate), and
+  hitboxes/masks use the rotated envelope, so rotate only glyph/icon subtrees. Layout observers and automation
+  `getBounds` report the layout box. Text selection inside a transformed subtree uses untransformed geometry.
+  An identity scope without `press` is not tagged, so its first change renders once; a nested
+  `paintTranslate` inside an animating `paintTransform` moves by untransformed offsets.
+- Files: `subtree_transform.rs` (native: prop parsing, evaluator, element, press, ticks), `subtree_transform_hooks.py`,
+  `subtree_transform_window.rs` + `subtree_transform_a11y.rs` (GPUI), `subtree_transform_gpui.py`, `render9_js.py`
+  (bridge: `paintTransform` and `onFileDragChange` props and types).
+- Check: `bun native/subtree-transform-check.ts` (four modes; retained frames equal an ordinary render pixel for
+  pixel, hit testing follows the paint, native press, frames without renders). Strips against the desktop's
+  motion CSS in WebKit: `bun scripts/render9-strips.ts` then `bun scripts/render9-strip-metrics.ts <dir>`.
+
+## Variable font weights (render9)
+
+`font_weight.rs` / `font_weight_gpui.py` (gpui_macos): a face with a `wght` axis (SF Pro, the system UI font) renders
+the requested CSS weight on that axis, as WebKit does, instead of font-kit's nearest named face (its CoreText trait
+mapping put Medium at 530, so 500 matched Regular, and 600 drew Semibold = wght 590). The instance is registered
+under its PostScript name + `#wght=` so CoreText runs map back to it; axis lookups and sized run fonts are cached
+(uncached, `CTFontCopyVariationAxes` localized axis names on every shaped run). `KYBERN_FONT_WEIGHT_AXIS=0` restores
+the old matching. Check: `bun native/font-weight-check.ts` (every ladder line within 1 px of WebKit's width).
+
+## Paint-only streaming fade (render9)
+
+The live answer's per-word fade (`.t-stream-w`: opacity 0 → 1 and `blur(1px)` → 0 over 350 ms smooth-out) no longer
+re-renders the Markdown with faded run colours at every frame. `stream_fade_md.rs` hands the fading words' rects to
+the scene (`Window::push_fade_words` / `end_fade_words`); glyph sprites inside them are tagged as they enter the scene
+and `Scene::animate_fades` sets their alpha (and each young word's blur pass) in place before every present, in the
+operation log and the sorted GPU buffers. Renders now happen only for text deltas and the caret blink.
+`KYBERN_STREAM_FADE=render` selects the previous path for measurements. Colour emoji (polychrome sprites) do not fade.
+
+## File drag hover (render9)
+
+`onFileDragChange` (`file_drag.rs`): `hovered: true` when a Finder drag (GPUI external paths) moves over the element,
+`false` when it moves off, drops, leaves the window or ends. The composer eases its drop ring with it
+(`src/motion/DropHighlight.tsx`). `renderer.simulateFileDrag(x, y, paths, 'enter' | 'move' | 'end')` drives it in tests.

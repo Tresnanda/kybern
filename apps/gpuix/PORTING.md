@@ -41,10 +41,11 @@ and behave like the desktop, and it must not make idle or animation cost worse
   never `onKeyDown` (arrows and Escape do reach `onKeyDown`), unless you use the
   native key interception hook described in `native/README.md`.
 - The patched `motion.div` adds native springs and layout-neutral translateX/translateY
-  to width/height/top/left/opacity/borderRadius. True subtree scale remains unsupported.
+  to width/height/top/left/opacity/borderRadius. Paint-only subtree scale/rotate/opacity/blur is `paintTransform`
+  (`native/README.md`, "Paint-only subtree transforms"; `src/motion/press.ts`, `kit/Pop.tsx` `popTransform`).
   See `native/README.md` for key interception, secure inputs, close hooks, and code wrap.
   SVGs also support native `rotate` in degrees (`motion.svg`) and physical springs
-  with `{ type: 'spring', stiffness, damping, mass }`. Div-subtree rotation is not supported.
+  with `{ type: 'spring', stiffness, damping, mass }`. Div-subtree rotation via `paintTransform` is exact for glyphs, SVGs and paths only.
 
 ## App shell (`src/shell/`)
 
