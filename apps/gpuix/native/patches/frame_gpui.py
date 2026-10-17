@@ -3,7 +3,7 @@ w='crates/gpui/src/window.rs'
 edit(w, '        self.platform_window.draw(&self.rendered_frame.scene);', '''        static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
         if *TRACE.get_or_init(|| std::env::var_os("KYBERN_FRAME_TIMES").is_some()) {
-            eprintln!("[kybern-frame] {:.3}", ORIGIN.get_or_init(std::time::Instant::now).elapsed().as_secs_f64()*1000.0);
+            let message=format!("[kybern-frame] {:.3}\\n", ORIGIN.get_or_init(std::time::Instant::now).elapsed().as_secs_f64()*1000.0); let _=std::io::Write::write_all(&mut std::io::stderr().lock(),message.as_bytes());
         }
         self.platform_window.draw(&self.rendered_frame.scene);''')
 
@@ -61,7 +61,7 @@ edit(w, '            needs_present,', '            needs_present,\n            p
 edit(w, '        self.platform_window.draw(&self.rendered_frame.scene);', """        let animated = self.rendered_frame.scene.animate_tagged();
         self.platform_window.draw(&self.rendered_frame.scene);
         if *TRACE.get_or_init(|| std::env::var_os("KYBERN_FRAME_TIMES").is_some()) {
-            eprintln!("[kybern-submit] {:.3}", ORIGIN.get_or_init(std::time::Instant::now).elapsed().as_secs_f64()*1000.0);
+            let message=format!("[kybern-submit] {:.3}\\n", ORIGIN.get_or_init(std::time::Instant::now).elapsed().as_secs_f64()*1000.0); let _=std::io::Write::write_all(&mut std::io::stderr().lock(),message.as_bytes());
         }
         if animated && !self.paint_animation_scheduled {
             self.paint_animation_scheduled = true;

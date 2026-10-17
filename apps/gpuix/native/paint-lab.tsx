@@ -5,12 +5,16 @@ import { useEffect, useState } from 'react'
 import {each,getObjc,nsApp,sel} from '../src/native/objc.ts'
 const light = process.env.KYBERN_APPEARANCE === 'light'
 const fg = light ? '#222222' : '#eeeeee'
+const pointerLog=process.env.KYBERN_PAINT_LOG_POINTER==='1'?{onMouseEnter:()=>console.error('[paint-lab] pointer enter button'),onMouseLeave:()=>console.error('[paint-lab] pointer leave button')}:{}
 function Lab() {
  useEffect(()=>{
   // OS captures must observe presented frames. An occluded macOS window stops
   // its display link. Keep only this small test window visible, without making
   // it key or activating the app, even while other agents open background labs.
   const o=getObjc(),app=nsApp();if(app)each(o,o.msg(app,sel(o,'windows')) as Pointer,window=>{
+   // Native automation dispatches directly. Ignore the user's physical mouse
+   // so unrelated hover changes cannot invalidate the timer-only assertion.
+   if(process.env.KYBERN_PAINT_ACCEPT_PHYSICAL_MOUSE!=='1')o.msgSetBool(window,sel(o,'setIgnoresMouseEvents:'),true)
    o.msgSetI64(window,sel(o,'setLevel:'),3n);o.msg(window,sel(o,'orderFrontRegardless'))
   })
  },[])
@@ -31,7 +35,7 @@ function Lab() {
     {show&&<div testId="fill" style={{width:40,height:40,borderRadius:6,backgroundColor:fill}}/>}
     <svg testId="svg" source={'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="currentColor"/></svg>'} style={{width:40,height:40,color:'#55aa77',opacity,pointerEvents:'none'}}/>
    </div>
-   <div testId="button" onClick={()=>setCount(v=>v+1)} style={{width:180,height:36,backgroundColor:'#665599',hover:{backgroundColor:'#8866bb'}}}><text style={{color:'#ffffff',pointerEvents:'none'}}>{`Clicks ${count}`}</text></div>
+   <div testId="button" {...pointerLog} onClick={()=>setCount(v=>v+1)} style={{width:180,height:36,backgroundColor:'#665599',hover:{backgroundColor:'#8866bb'}}}><text style={{color:'#ffffff',pointerEvents:'none'}}>{`Clicks ${count}`}</text></div>
    <input testId="input" value={value} onChange={e=>setValue(e.value??'')} style={{width:240,height:32,color:fg}}/>
   </div>
   <text testId="input-value" style={{color:fg}}>{value}</text>
