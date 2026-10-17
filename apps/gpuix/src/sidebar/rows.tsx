@@ -27,7 +27,7 @@ import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
 import type { Theme } from '../theme.ts'
 import { beginProjectDrag, consumeProjectDrag, endProjectPending, trackProjectDrag } from './reorder.tsx'
 import { filterSummary, isFiltering, providerLabel, threadAgents } from './model.ts'
-import { FadeBack, Leave, markDisclosure, PadTween, Reveal, TitleSwap } from './motion.tsx'
+import { FadeBack, Leave, markDisclosure, MarqueeLabel, PadTween, Reveal, TitleSwap } from './motion.tsx'
 
 /** Open or close a project (or Recents); the rows it adds or removes animate as a block. */
 function toggleProject(id: string) {
@@ -575,9 +575,7 @@ export const ThreadRow = memo(function ThreadRow({
               />
             ) : (
               <TitleSwap text={thread.coordinator_project_id ? 'Open coordinator' : thread.title || 'Untitled'}>
-                <Label color={selected ? t.text : resting(t)} lineHeight={20} truncate style={{ flexGrow: 1, pointerEvents: 'none', userSelect: 'none' }}>
-                  {thread.coordinator_project_id ? 'Open coordinator' : thread.title || 'Untitled'}
-                </Label>
+                <MarqueeLabel hover={hover} text={thread.coordinator_project_id ? 'Open coordinator' : thread.title || 'Untitled'} color={selected ? t.text : resting(t)} />
               </TitleSwap>
             )}
             {hasDraft && !renaming && <DraftMarker />}
@@ -760,9 +758,7 @@ export const ChildRow = memo(function ChildRow({
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, minWidth: 0 }}>
             {/* A little quieter than its parent, so the parent stays dominant. */}
-            <Label color={selected ? t.text : ink(t, 0.82)} lineHeight={20} truncate style={{ flexGrow: 1, pointerEvents: 'none', userSelect: 'none' }}>
-              {thread.title || (delegated ? 'Agent' : 'Subagent')}
-            </Label>
+            <MarqueeLabel hover={hover} text={thread.title || (delegated ? 'Agent' : 'Subagent')} color={selected ? t.text : ink(t, 0.82)} />
             {thread.status === 'awaiting-approval' && (
               <Label color={amberText(t)} size={10} weight={500} style={{ flexShrink: 0 }}>
                 Pending
