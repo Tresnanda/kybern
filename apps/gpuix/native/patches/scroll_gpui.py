@@ -89,3 +89,12 @@ edit(v, "                            element.layout_as_root(bounds.size.into(), 
 # List's existing accumulator safe when ordinary App draws are frame-paced.
 edit("crates/gpui/src/elements/list.rs", "                accumulated_scroll_delta = accumulated_scroll_delta.coalesce(event.delta);", """                if event.delta.pixel_delta(px(20.)).y == px(0.) { return; }
                 accumulated_scroll_delta = accumulated_scroll_delta.coalesce(event.delta);""")
+
+# List implements InteractiveElement but bypasses Interactivity::paint. Forward
+# its paint-bounds callback explicitly so PR coalescing sees the actual viewport.
+edit("crates/gpui/src/elements/list.rs", "        let current_view = window.current_view();\n\n        // Register the scroll listener", """        if let Some(listener) = self.interactivity.paint_bounds_listener.take() {
+            listener(bounds, window, cx);
+        }
+        let current_view = window.current_view();
+
+        // Register the scroll listener""")

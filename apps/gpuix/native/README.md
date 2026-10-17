@@ -1082,7 +1082,8 @@ control.
 
 `scroll_input.rs` accumulates precise pixel wheel events for painted PR
 viewports in one pending native slot and applies a merged delta on the next
-platform frame. Same-direction deltas sum; reversal takes the latest direction.
+platform frame. GPUI List forwards its paint-bounds callback explicitly so
+this gate uses the actual List viewport, including cached frames. Same-direction deltas sum; reversal takes the latest direction.
 Phase markers preserve scroll-axis resets, and clicks/keys/target changes flush
 pending input in order. The physical macOS input path and automation share
 `Window::dispatch_event`; physical native-list scrolling has no JS/RPC hop.
@@ -1116,3 +1117,19 @@ Automation wheel requests accept optional `phase` values (`started`, `moved`,
 `ended`, `cancelled`) through the additive native `simulateScrollPhase` API.
 GPUI has no separate momentum flag. Zero-distance phase markers preserve the
 existing list offset rather than resetting its captured-frame accumulator.
+
+Scroll reproduction (capture-free timings, fair UI queue, no overlapping Rust builds):
+
+```sh
+bun perf/scroll8-all.ts
+SCROLL8_REAL=1 SCROLL8_PR_NUMBER=109 SCROLL8_FILE_INDEX=15 bun perf/scroll8-all.ts
+bun perf/scroll8-followup.ts
+bun perf/scroll8-report.ts
+```
+
+The first command records four-mode full-app controls and the actual desktop
+frontend in Playwright WebKit. The real-PR proxy forwards only read methods to
+`~/.kybern`; preference writes stay in its disposable fixture. The follow-up
+runs repeated app-wide wheel/pointer controls, PR actions, idle and separate
+four-mode captures. Timed input is 120 Hz pipelined pixel deltas with native
+contact/end phases and synthetic decay, rather than OS trackpad events.

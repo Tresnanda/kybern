@@ -8,6 +8,7 @@ try{
   const f=await launchFixture(path.join(import.meta.dir,'scroll8-lab.tsx'),{KYBERN_SCROLL_COALESCE:mode,KYBERN_SCROLL_ISLANDS:'1',KYBERN_FRAME_COSTS:'1',GPUIX_BACKGROUND:'1',KYBERN_FULL_RATE:'1'})
   try{
    const a=f.app;await a.getByTestId('ready').waitFor()
+   if(process.env.SCROLL8_LAB_UNGATED!=='1'){const viewport=await a.getByTestId('items').bounds();assert(viewport.width>600&&viewport.height>600,'Native List must report its painted viewport for PR batching')}
    const initial=(await a.getByTestId('prose').bounds()).y
    const waitY=async(expected:number)=>{
     const deadline=Date.now()+5000
@@ -17,6 +18,10 @@ try{
    // Burst faster than the display: preserve total distance without 120 draws.
    await Promise.all(Array.from({length:120},()=>a.mouse.wheel({x:350,y:330},0,-2)))
    await waitY(initial-240)
+   if(mode==='all'||process.env.SCROLL8_LAB_UNGATED!=='1'){
+    const batches=[...f.diagnostics().matchAll(/\[scroll-input-paint\] packets=(\d+)/g)].map(m=>Number(m[1]))
+    assert(batches.some(n=>n>1),`Burst must batch multiple native packets: ${f.diagnostics()}`)
+   }
    await a.getByTestId('ready').press('e');await waitY(initial-360)
    await a.getByTestId('ready').press('c');await waitY(initial-440)
    await a.getByTestId('ready').press('s');await a.getByTestId('ready').press('g')
