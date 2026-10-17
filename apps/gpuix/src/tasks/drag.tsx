@@ -403,7 +403,11 @@ function scrollEdge(dt: number) {
     const total = heights.reduce((a, b) => a + b, 0)
     if (scrollPx === null || scrollingList !== node.id) scrollPx = heights.slice(0, anchor[0] ?? 0).reduce((a, b) => a + b, 0) + (anchor[1] ?? 0)
     scrollingList = node.id
-    scrollPx = Math.max(0, Math.min(Math.max(0, total - box.height), scrollPx + speed * dt))
+    const nextScroll = Math.max(0, Math.min(Math.max(0, total - box.height), scrollPx + speed * dt))
+    // At a clamped edge there is no layout change. A no-op scrollToItem would
+    // still invalidate the native root and every island on each display tick.
+    if (Math.abs(nextScroll - scrollPx) < 0.001) return
+    scrollPx = nextScroll
     let index = 0, rest = scrollPx
     while (index < count - 1 && rest >= (heights[index] ?? 40)) { rest -= heights[index] ?? 40; index++ }
     mount?.(index)

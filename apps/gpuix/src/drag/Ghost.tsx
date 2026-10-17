@@ -13,6 +13,7 @@ import { alpha } from '../transcript/kit.tsx'
 import { REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { LIFT, SPRING } from './spring.ts'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
+import { PaintTranslate } from './PaintTranslate.tsx'
 
 export type Rect = { x: number; y: number; width: number; height: number }
 export type Settle = { to: { x: number; y: number }; vx: number; vy: number; home: boolean }
@@ -64,8 +65,8 @@ export function DragGhost({ rect, grab, x, y, settle, onSettled, radius = 10, pa
   const growY = REDUCED_MOTION || bare ? 0 : LIFT.growY
   const lifted = !settle
   return (
-    <motion.div ref={pacing as never} testId={testId} initial={false} animate={{ translateX: left - rect.x, translateY: top - rect.y }} transition={{ duration: 0 }} style={{ position: 'absolute', left: rect.x, top: rect.y, width: rect.width, height: rect.height, pointerEvents: 'none' }}>
-      <motion.div
+    <PaintTranslate ref={pacing as never} testId={testId} initial={false} animate={{ translateX: left - rect.x, translateY: top - rect.y }} transition={{ duration: 0 }} style={{ position: 'absolute', left: rect.x, top: rect.y, width: rect.width, height: rect.height, pointerEvents: 'none' }}>
+      <PaintTranslate
         initial={{ translateX: 0, translateY: 0 }}
         animate={settle ? { translateX: settle.to.x - left, translateY: settle.to.y - top } : { translateX: 0, translateY: 0 }}
         transition={settle && !REDUCED_MOTION ? (landing ?? { ...(settle.home ? SPRING.home : SPRING.land), velocityX: settle.vx, velocityY: settle.vy }) : { duration: 0 }}
@@ -89,8 +90,8 @@ export function DragGhost({ rect, grab, x, y, settle, onSettled, radius = 10, pa
           {children}
         </motion.div>
         </>}
-      </motion.div>
-    </motion.div>
+      </PaintTranslate>
+    </PaintTranslate>
   )
 }
 
@@ -101,15 +102,15 @@ export function DropSlot({ rect, tone, testId }: { rect: Rect | null; tone: 'ok'
   return (
     <AnimatePresence>
       {rect && (
-        <motion.div
-          key="slot"
-          testId={testId}
-          initial={{ opacity: 0, translateX: rect.x, translateY: rect.y + (REDUCED_MOTION ? 0 : 4) }}
-          animate={{ opacity: 1, translateX: rect.x, translateY: rect.y }}
-          exit={{ opacity: 0 }}
+        <PaintTranslate key="slot"
+          initial={{ translateX: rect.x, translateY: rect.y + (REDUCED_MOTION ? 0 : 4) }}
+          animate={{ translateX: rect.x, translateY: rect.y }}
           transition={REDUCED_MOTION ? { duration: 0 } : { type: 'spring', duration: 0.3, bounce: 0.05 }}
-          style={{ position: 'absolute', left: 0, top: 0, width: rect.width, height: rect.height, borderRadius: 10, borderWidth: 1, borderColor: alpha(color, 0.5), backgroundColor: alpha(color, 0.1), pointerEvents: 'none' }}
-        />
+          style={{ position: 'absolute', left: 0, top: 0, width: rect.width, height: rect.height, pointerEvents: 'none' }}>
+          <motion.div testId={testId} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            transition={REDUCED_MOTION ? { duration: 0 } : { type: 'spring', duration: 0.3, bounce: 0.05 }}
+            style={{ width: rect.width, height: rect.height, borderRadius: 10, borderWidth: 1, borderColor: alpha(color, 0.5), backgroundColor: alpha(color, 0.1), pointerEvents: 'none' }} />
+        </PaintTranslate>
       )}
     </AnimatePresence>
   )

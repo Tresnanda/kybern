@@ -18,6 +18,7 @@ export function TaskCarryGhost({ rect, x, y, grab, settle, store, pacing, onSett
   }, [renderer, rect, grab, store])
   const left = x - grab.x, top = y - grab.y
   return <div ref={value => { node.current = value; pacing?.(value) }} testId="task-drag-ghost"
+    paintTranslate={{ initial: false, animate: { translateX: 0, translateY: 0 }, transition: { duration: 0 } }}
     style={{ position: 'absolute', left: rect.x, top: rect.y, width: rect.width, height: rect.height, pointerEvents: 'none' }}>
     <DragGhost bare landing={TASK_DROP_MOTION} rect={{ x: 0, y: 0, width: rect.width, height: rect.height }} grab={grab}
       x={grab.x} y={grab.y} settle={settle ? { ...settle, to: { x: settle.to.x - left, y: settle.to.y - top } } : null} onSettled={onSettled}>

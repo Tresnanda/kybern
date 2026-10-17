@@ -1,5 +1,5 @@
 diff --git a/dist/host.d.ts b/dist/host.d.ts
-index cc6b7ef926c5c3122fff6107341913364a215710..a959d24f8ab04edde594fb7b61999f3cc7cafa44 100644
+index cc6b7ef926c5c3122fff6107341913364a215710..772a355af125b1f24b9e5f34071ba27f26011a8a 100644
 --- a/dist/host.d.ts
 +++ b/dist/host.d.ts
 @@ -5,6 +5,10 @@ export * from "./mutations.js";
@@ -29,17 +29,19 @@ index cc6b7ef926c5c3122fff6107341913364a215710..a959d24f8ab04edde594fb7b61999f3c
      /** Duration in seconds. */
      duration?: number;
      /** Delay in seconds. */
-@@ -275,6 +288,9 @@ export interface HighlightSpec {
+@@ -275,6 +288,11 @@ export interface HighlightSpec {
      radius?: number;
  }
  export interface HostProps {
++    /** Retained subtree translation; animate accepts translateX/translateY only. */
++    paintTranslate?: MotionProps;
 +    cache?: boolean | "fill";
 +    /** Empty titlebar region; do not place on interactive controls. */
 +    windowDrag?: boolean;
      style?: StyleDesc;
      /** Primary button only, like the DOM. Use `onAuxClick` for the others. */
      onClick?: (event: EventPayload) => void;
-@@ -287,7 +303,7 @@ export interface HostProps {
+@@ -287,7 +305,7 @@ export interface HostProps {
      onMouseMove?: (event: EventPayload) => void;
      /** Fires when user clicks OUTSIDE this element. Use for "click outside to close". */
      onMouseDownOutside?: (event: EventPayload) => void;
@@ -48,7 +50,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..a959d24f8ab04edde594fb7b61999f3c
      onKeyUp?: (event: EventPayload) => void;
      onFocus?: (event: EventPayload) => void;
      onBlur?: (event: EventPayload) => void;
-@@ -342,6 +358,10 @@ export interface HostProps {
+@@ -342,6 +360,10 @@ export interface HostProps {
      motion?: MotionProps;
  }
  export interface InputProps extends HostProps {
@@ -59,7 +61,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..a959d24f8ab04edde594fb7b61999f3c
      /** External editor value. Native edits apply immediately and report through onChange. */
      value?: string;
      placeholder?: string;
-@@ -405,6 +425,8 @@ export interface SvgProps extends HostProps {
+@@ -405,6 +427,8 @@ export interface SvgProps extends HostProps {
   * scroller, so `whiteSpace` and `overflowX` do nothing.
   */
  export interface CodeProps extends HostProps {
@@ -68,26 +70,64 @@ index cc6b7ef926c5c3122fff6107341913364a215710..a959d24f8ab04edde594fb7b61999f3c
      /** The source to display. Rendered one div per line at an exact line height. */
      code?: string;
      /** Language alias such as "ts", "rust", "bash". Beats `path` for detection. */
-@@ -468,7 +490,7 @@ export type WindowSizeHost = Pick<GpuixRenderer, "getWindowSize">;
+@@ -468,7 +492,7 @@ export type WindowSizeHost = Pick<GpuixRenderer, "getWindowSize">;
  export type WindowInsetsHost = Pick<GpuixRenderer, "getWindowInsets">;
  export type SelectionHost = Pick<GpuixRenderer, "getSelectedText">;
  /** `applyBatch` plus the live renderer methods a host may also expose. */
 -export type NativeRenderer = MutationHost & Partial<Pick<GpuixRenderer, "focusElement" | "focusNext" | "focusPrevious" | "getFocusedElementId" | "focusNextWithin" | "focusPreviousWithin" | "blur" | "setWindowKeyEvents" | "setWindowSelectionChange" | "getElementBounds" | "scrollTo" | "scrollToItem" | "scrollIntoView" | "setImage" | "setImagePixels" | "getScrollOffset" | "getListScrollTop" | "getSelectedText" | "clearSelection" | "getPaintedHighlights" | "getWindowSize" | "getWindowInsets" | "setWindowTitle" | "promptForPaths" | "activateWindow" | "minimizeWindow" | "zoomWindow" | "toggleFullscreen" | "setDebugFrameOverlay" | "getDebugFrameOverlay" | "cycleDebugFrameOverlay" | "resetDebugFrameOverlayStats" | "getDebugFrameOverlayStats">>;
-+export type NativeRenderer = MutationHost & Partial<Pick<GpuixRenderer, "focusElement" | "focusNext" | "focusPrevious" | "getFocusedElementId" | "focusNextWithin" | "focusPreviousWithin" | "blur" | "resolveKeyEvent" | "setCloseGuard" | "resolveCloseRequest" | "getMotionCapabilities" | "setWindowKeyEvents" | "setWindowSelectionChange" | "getElementBounds" | "scrollTo" | "scrollToItem" | "scrollIntoView" | "setImage" | "setImagePixels" | "getScrollOffset" | "getListScrollTop" | "getSelectedText" | "clearSelection" | "getPaintedHighlights" | "getWindowSize" | "getWindowInsets" | "setWindowTitle" | "promptForPaths" | "activateWindow" | "minimizeWindow" | "zoomWindow" | "toggleFullscreen" | "setDebugFrameOverlay" | "getDebugFrameOverlay" | "cycleDebugFrameOverlay" | "resetDebugFrameOverlayStats" | "getDebugFrameOverlayStats">>;
++export type NativeRenderer = MutationHost & Partial<Pick<GpuixRenderer, "focusElement" | "focusNext" | "focusPrevious" | "getFocusedElementId" | "focusNextWithin" | "focusPreviousWithin" | "blur" | "resolveKeyEvent" | "setCloseGuard" | "resolveCloseRequest" | "getMotionCapabilities" | "setSubtreeTranslation" | "setWindowKeyEvents" | "setWindowSelectionChange" | "getElementBounds" | "scrollTo" | "scrollToItem" | "scrollIntoView" | "setImage" | "setImagePixels" | "getScrollOffset" | "getListScrollTop" | "getSelectedText" | "clearSelection" | "getPaintedHighlights" | "getWindowSize" | "getWindowInsets" | "setWindowTitle" | "promptForPaths" | "activateWindow" | "minimizeWindow" | "zoomWindow" | "toggleFullscreen" | "setDebugFrameOverlay" | "getDebugFrameOverlay" | "cycleDebugFrameOverlay" | "resetDebugFrameOverlayStats" | "getDebugFrameOverlayStats">>;
  /** Commit-phase mutation facade shared by framework adapters. */
  export interface MutationRenderer {
      createElement(id: number, elementType: string): void;
 diff --git a/dist/mutations.js b/dist/mutations.js
-index 7d0eda6cb58127462067cb9d5a442a9ea606c671..5bf32d217607cc6d52870521f94e70e2e7aff87f 100644
+index 7d0eda6cb58127462067cb9d5a442a9ea606c671..2a537e62dae45d093ce1fbe127528a7d8a4de4e8 100644
 --- a/dist/mutations.js
 +++ b/dist/mutations.js
-@@ -94,6 +94,14 @@ export const UNIVERSAL_PROPS = new Set([
+@@ -1,5 +1,6 @@
+ export function createMutationQueue(renderer, onDestroyed = () => { }, scheduleFlush) {
+     let queue = [];
++    const subtreeDeclarations = new Map();
+     let flushScheduled = false;
+     const enqueue = (mutation) => {
+         queue.push(mutation);
+@@ -18,6 +19,7 @@ export function createMutationQueue(renderer, onDestroyed = () => { }, scheduleF
+             return queue.length;
+         },
+         createElement(id, elementType) {
++            subtreeDeclarations.delete(id);
+             enqueue(["createElement", id, elementType]);
+         },
+         destroyElement(id) {
+@@ -43,6 +45,13 @@ export function createMutationQueue(renderer, onDestroyed = () => { }, scheduleF
+             enqueue(["setRoot", id]);
+         },
+         setCustomProp(id, key, value) {
++            // An unchanged React declaration must not overwrite an imperative
++            // carry offset on an unrelated parent render.
++            if (key === "paintTranslate") {
++                const declaration = JSON.stringify(value);
++                if (subtreeDeclarations.get(id) === declaration) return;
++                subtreeDeclarations.set(id, declaration);
++            }
+             enqueue(["setCustomProp", id, key, value]);
+         },
+         flushMutations() {
+@@ -50,6 +59,7 @@ export function createMutationQueue(renderer, onDestroyed = () => { }, scheduleF
+             if (queue.length === 0)
+                 return;
+             const destroyed = renderer.applyBatch(JSON.stringify(queue));
++            for (const id of destroyed) subtreeDeclarations.delete(id);
+             onDestroyed(destroyed);
+             queue = [];
+         },
+@@ -94,6 +104,15 @@ export const UNIVERSAL_PROPS = new Set([
      "autoFocus",
      "tabIndex",
      "motion",
 +    // Kybern native capabilities.
 +    "backdrop",
 +    "paintAnimation",
++    "paintTranslate",
 +    "cache",
 +    "windowDrag",
 +    "interceptKeys",
@@ -150,13 +190,14 @@ index 21c90e91db66a09da919caeb990cc44225a94189..13db155595949bfd0ffd5b81f5d86062
              if (!root)
                  return false;
 diff --git a/index.d.ts b/index.d.ts
-index 2ec4b84d0cad37c2d57585af3abaec2478518728..8111a413c4e0ca9ce617f9f8da9aaa6e8f73d532 100644
+index 2ec4b84d0cad37c2d57585af3abaec2478518728..9bd013cbf55b1c1f78657cf97b419d036d86b4d8 100644
 --- a/index.d.ts
 +++ b/index.d.ts
-@@ -34,6 +34,11 @@ export declare class AvailableUpdate {
+@@ -34,6 +34,12 @@ export declare class AvailableUpdate {
  
  /** The main GPUI renderer exposed to Node.js. */
  export declare class GpuixRenderer {
++  setSubtreeTranslation(elementId: number, translation: { translateX: number; translateY: number }): void
 +  /** rotate refers to SVGs; arbitrary div-subtree rotation is not supported. */
 +  getMotionCapabilities(): { rotate: true; physicalSprings: true }
 +  resolveKeyEvent(token: number, prevented: boolean): void
@@ -192,7 +233,7 @@ index c70a840dfde917eda48054ad2d71e2f54af2c48d..86627f67a5418aab985a5707d1a07eef
              renderer.simulateScrollWheel(x, y, deltaX, deltaY, modifiers);
              afterInput();
 diff --git a/dist/runtime.js b/dist/runtime.js
-index 3a3d64d72a471e955037efecac7e19df02bb9221..60c9c373fa8c28b2243127e64165e709a02b33fc 100644
+index 3a3d64d72a471e955037efecac7e19df02bb9221..8c9dd4008be29ac7f99a4160818c664ca6b5798b 100644
 --- a/dist/runtime.js
 +++ b/dist/runtime.js
 @@ -34,6 +34,7 @@ export function startFrameLoop(renderer, options = {}) {

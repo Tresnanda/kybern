@@ -1,5 +1,6 @@
 import type { NativeRenderer } from '@gpuix/react'
 
+const debugCarry=process.env.KYBERN_DEBUG_DRAG==='1'
 type Point = { x: number; y: number }
 
 /** Carry coordinates are native motion input, separate from React's drag lifecycle. */
@@ -17,9 +18,7 @@ export function createCarryStore() {
   }
 }
 export type CarryStore = ReturnType<typeof createCarryStore>
-let generation = Number.MAX_SAFE_INTEGER
-
-/** Reuse the existing native motion protocol, including its layout-neutral translations.
+/** Translate the retained scene without a React commit or a native tree invalidation.
  * React owns this node's lifetime and static style; this binding alone owns its motion.
  * It adds no scheduler or work while the pointer rests. */
 export function bindNativeCarry(renderer: NativeRenderer, id: number, origin: Point, store: CarryStore) {
@@ -28,13 +27,8 @@ export function bindNativeCarry(renderer: NativeRenderer, id: number, origin: Po
     const point = store.get()
     if (last?.x === point.x && last?.y === point.y) return
     last = point
-    renderer.applyBatch(JSON.stringify([['setCustomProp', id, 'motion', {
-      // Reserve high safe integers separately from React's small incrementing ids.
-      generation: --generation,
-      initial: false,
-      animate: { translateX: point.x - origin.x, translateY: point.y - origin.y },
-      transition: { duration: 0 },
-    }]]))
+    if(debugCarry)console.error('[carry]',JSON.stringify({id,origin,point,offset:{x:point.x-origin.x,y:point.y-origin.y}}))
+    renderer.setSubtreeTranslation?.(id, { translateX: point.x - origin.x, translateY: point.y - origin.y })
   }
   const stop = store.subscribe(update)
   update()

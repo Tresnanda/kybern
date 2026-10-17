@@ -532,6 +532,7 @@ exec((Path(__file__).parent / "frame_hooks.py").read_text())
 exec((Path(__file__).parent / "paint_text_hooks.py").read_text())
 exec((Path(__file__).parent / "clipboard_hooks.py").read_text())
 exec((Path(__file__).parent / "explorer_motion_hooks.py").read_text())
+exec((Path(__file__).parent / "subtree_translation_hooks.py").read_text())
 
 edit("renderer.rs", 'style.and_then(|s|s.opacity).unwrap_or(1.0) as f32) };', 'style.and_then(|s|s.opacity).unwrap_or(1.0) as f32, style) };')
 edit("custom_elements/anchored.rs", 'ctx.style.and_then(|s|s.opacity).unwrap_or(1.0) as f32));', 'ctx.style.and_then(|s|s.opacity).unwrap_or(1.0) as f32, ctx.style));')

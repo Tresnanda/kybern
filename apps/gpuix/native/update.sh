@@ -88,6 +88,8 @@ echo "== checks"
   bun native/rounded-check.ts
   bun native/clip-check.ts
   bun native/explorer-motion-check.ts
+  bun native/subtree-translation-check.ts
+  KYBERN_REGION_PAINT=1 bun native/subtree-translation-check.ts
   bun native/markdown-check.ts
   bun native/diff-check.ts
   bun native/surface-check.ts

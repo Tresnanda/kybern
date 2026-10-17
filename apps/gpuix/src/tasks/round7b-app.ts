@@ -26,5 +26,6 @@ const { each, getObjc, nsApp, sel } = await import('../native/objc.ts')
 const o = getObjc(), app = nsApp()
 if (app) each(o, o.msg(app, sel(o, 'windows')) as any, window => {
   o.msgSetBool(window, sel(o, 'setIgnoresMouseEvents:'), true)
+  o.msgSetBool(window, sel(o, 'setAcceptsMouseMovedEvents:'), false)
 })
 export {}
