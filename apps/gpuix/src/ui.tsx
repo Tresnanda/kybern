@@ -4,7 +4,9 @@
 import { spawnSync } from 'node:child_process'
 import { createContext, useContext, type ReactNode } from 'react'
 import type { StyleDesc } from '@gpuix/react'
+import { useGpuix } from '@gpuix/react'
 import { useAppearance } from './settings/appearance.ts'
+import { installThemeFade } from './motion/themeFade.tsx'
 import { useSyncWindowAppearance, useSystemVariant } from './shell/appearance.ts'
 import { FONT_UI, THEMES, type Theme } from './theme.ts'
 import { Icon, type IconName } from './icons.tsx'
@@ -36,6 +38,7 @@ export const ThemeProvider = ({ children }: { children: ReactNode }) => {
   const forced = process.env.KYBERN_APPEARANCE === 'light' || process.env.KYBERN_APPEARANCE === 'dark'
   const variant = forced ? VARIANT : prefs.theme === 'system' ? system : prefs.theme
   useSyncWindowAppearance(variant, prefs.translucent)
+  installThemeFade(useGpuix()?.renderer)
   return <ThemeContext.Provider value={THEMES[variant]}>{children}</ThemeContext.Provider>
 }
 export const useTheme = () => useContext(ThemeContext)
