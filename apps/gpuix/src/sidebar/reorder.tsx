@@ -7,8 +7,8 @@
 // ghost carries the pointer from the exact grab offset. Release springs the ghost into the gap with
 // the pointer's velocity; Escape springs it home. `projectOrder` is committed at release, in the same
 // frame the shifts snap to zero, so the real layout and the held shifts agree and nothing jumps.
-import { motion, type EventPayload, type NativeRenderer, type PublicInstance } from '@gpuix/react'
-import { useEffect, useSyncExternalStore, type ReactNode } from 'react'
+import { motion, useGpuixRequired, type EventPayload, type NativeRenderer, type PublicInstance } from '@gpuix/react'
+import { useEffect, useLayoutEffect, useRef, useSyncExternalStore, type ReactNode } from 'react'
 import { dropIndex, moveProject, orderProjects } from '@/state/sidebarOrganize'
 import { isFreeChatProject } from '../../../../packages/kybern-client/src/types.ts'
 import { isWindowVisible } from '../native/visibility.ts'
@@ -25,6 +25,8 @@ import { recordDragPointer, usePacing } from '../drag/pacing.ts'
 import { createShiftStore } from '../drag/shift.tsx'
 import { SPRING } from '../drag/spring.ts'
 import { createVelocityTracker } from '../drag/velocity.ts'
+import { bindNativeCarry, createCarryStore } from '../drag/carry.ts'
+import { PaintTranslate } from '../drag/PaintTranslate.tsx'
 import { rowHeight } from './motion.tsx'
 import type { Row } from './model.ts'
 
@@ -69,6 +71,8 @@ export function setReorderContext(rows: Row[], list: PublicInstance | null, box:
 
 let pending: Pending | null = null
 let current: Drag | null = null
+let snapshot: Drag | null = null
+const projectCarry = createCarryStore()
 let renderer: NativeRenderer | null = null
 let scrollPx = 0
 let landed = false
@@ -82,6 +86,7 @@ const subscribe = (fn: () => void) => {
 }
 function publish(next: Drag | null) {
   current = next
+  snapshot = next
   listeners.forEach((fn) => fn())
 }
 let hidden = new Set<string>()
@@ -209,7 +214,12 @@ function retarget(x: number, y: number) {
   projectShift.set(shifts)
   const dragged = drag.blocks[drag.from]!
   const slotY = drag.listTop + tops.get(drag.from)! - scrollPx
-  publish({ ...drag, x, y, to, slot: { x: drag.source.x, y: slotY, width: drag.source.width, height: dragged.height } })
+  const next = { ...drag, x, y, to, slot: { x: drag.source.x, y: slotY, width: drag.source.width, height: dragged.height } }
+  projectCarry.set(x, y)
+  // Carry coordinates have their own native subscription. React only observes
+  // a changed gap, lifecycle or edge-scroll anchor.
+  if (to === drag.to && slotY === drag.slot?.y) current = next
+  else publish(next)
 }
 
 function move(event: EventPayload) {
@@ -277,11 +287,11 @@ export function BlockRow({ id, children }: { id: string; children: ReactNode }) 
   const hide = useSyncExternalStore(subscribe, () => hidden.has(id))
   const snap = projectShift.instant()
   return (
-    <motion.div initial={false} animate={{ translateX: 0, translateY: shift }} transition={REDUCED_MOTION || snap ? { duration: 0 } : SPRING.shift} style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
+    <PaintTranslate initial={false} animate={{ translateX: 0, translateY: shift }} transition={REDUCED_MOTION || snap ? { duration: 0 } : SPRING.shift} style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
       <motion.div initial={false} animate={{ opacity: hide ? 0 : 1 }} transition={{ duration: REDUCED_MOTION || hide ? 0 : 0.14 }} style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
         {children}
       </motion.div>
-    </motion.div>
+    </PaintTranslate>
   )
 }
 
@@ -289,7 +299,7 @@ export function BlockRow({ id, children }: { id: string; children: ReactNode }) 
 export function ProjectDragLayer() {
   const t = useTheme()
   const pacing = usePacing('projects')
-  const drag = useSyncExternalStore(subscribe, () => current)
+  const drag = useSyncExternalStore(subscribe, () => snapshot)
   const active = !!drag
   useEffect(() => addWindowKeyHandler((e) => { if (current && e.key === 'escape') { escape(); return true } }), [])
   useEffect(() => (active ? startFrameLoop(scrollStep) : undefined), [active])
@@ -304,13 +314,28 @@ export function ProjectDragLayer() {
       style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: drag.settle ? 'none' : 'auto', cursor: 'grabbing' }}
     >
       <DropSlot testId="project-drop-indicator" rect={drag.settle ? null : drag.slot} tone="ok" />
-      <DragGhost rect={drag.source} grab={drag.grab} x={drag.x} y={drag.y} settle={drag.settle} onSettled={() => { if (!landed) { landed = true; finish() } }} radius={8} pacing={pacing as never}>
+      <ProjectCarryGhost drag={drag} onSettled={() => { if (!landed) { landed = true; finish() } }} pacing={pacing}>
         <div style={{ pointerEvents: 'none', display: 'flex', flexDirection: 'column', height: '100%', justifyContent: 'flex-start' }}>
           {drag.members.map((row) => <GhostRow key={row.key} row={row} />)}
         </div>
-      </DragGhost>
+      </ProjectCarryGhost>
     </div>
   )
+}
+
+function ProjectCarryGhost({ drag, onSettled, pacing, children }: { drag: Drag; onSettled: () => void; pacing?: (node: PublicInstance | null) => void; children: ReactNode }) {
+  const nativeRenderer = useGpuixRequired()
+  const node = useRef<PublicInstance | null>(null)
+  useLayoutEffect(() => node.current ? bindNativeCarry(nativeRenderer, node.current.id, { x: drag.source.x + drag.grab.x, y: drag.source.y + drag.grab.y }, projectCarry) : undefined, [nativeRenderer, drag.source, drag.grab])
+  const left = drag.x - drag.grab.x, top = drag.y - drag.grab.y
+  return <div ref={value => { node.current = value; pacing?.(value) }}
+    paintTranslate={{ initial: false, animate: { translateX: 0, translateY: 0 }, transition: { duration: 0 } }}
+    style={{ position: 'absolute', left: drag.source.x, top: drag.source.y, width: drag.source.width, height: drag.source.height, pointerEvents: 'none' }}>
+    <DragGhost rect={{ x: 0, y: 0, width: drag.source.width, height: drag.source.height }} grab={drag.grab} x={drag.grab.x} y={drag.grab.y}
+      settle={drag.settle ? { ...drag.settle, to: { x: drag.settle.to.x - left, y: drag.settle.to.y - top } } : null} onSettled={onSettled} radius={8}>
+      {children}
+    </DragGhost>
+  </div>
 }
 
 function GhostRow({ row }: { row: Row }) {

@@ -1,7 +1,8 @@
 // Siblings that make room for a dragged item. Shifts are native translations (FLIP): no sibling is
 // re-laid-out while the pointer moves, only its paint offset springs. A row subscribes to its own
 // number, so a pointer move re-renders just the rows whose shift changed.
-import { motion, type MotionTransition } from '@gpuix/react'
+import { type MotionTransition } from '@gpuix/react'
+import { PaintTranslate } from './PaintTranslate.tsx'
 import { useSyncExternalStore, type ReactNode } from 'react'
 import { REDUCED_MOTION } from '../ui.tsx'
 import { SPRING } from './spring.ts'
@@ -42,13 +43,13 @@ export function ShiftRow({ store, id, axis = 'y', transition = SPRING.shift, chi
   const shiftX = useSyncExternalStore(store.subscribe, () => store.getX(id))
   const snap = store.instant()
   return (
-    <motion.div
+    <PaintTranslate
       initial={false}
       animate={axis === 'x' ? { translateX: shift, translateY: 0 } : axis === 'xy' ? { translateX: shiftX, translateY: shift } : { translateX: 0, translateY: shift }}
       transition={REDUCED_MOTION || snap ? { duration: 0 } : transition}
       style={axis === 'x' ? { display: 'flex', flexDirection: 'row', alignItems: 'center', height: 28, flexShrink: 0 } : { display: 'flex', flexDirection: 'column', width: '100%' }}
     >
       {children}
-    </motion.div>
+    </PaintTranslate>
   )
 }
