@@ -9,7 +9,7 @@ import { launch } from '@gpuix/react/automation'
 
 /** App settings passed through from this shell (data dir, thread, motion). */
 function forwarded(): Record<string, string> {
-  const keys = ['KYBERN_DATA_DIR', 'KYBERN_URL', 'KYBERN_TOKEN', 'KYBERN_GPUIX_THREAD', 'KYBERN_REDUCED_MOTION', 'KYBERN_OPAQUE']
+  const keys = ['KYBERN_DATA_DIR', 'KYBERN_CLIENT_CONFIG_DIR', 'KYBERN_URL', 'KYBERN_TOKEN', 'KYBERN_GPUIX_THREAD', 'KYBERN_REDUCED_MOTION', 'KYBERN_OPAQUE']
   return Object.fromEntries(keys.flatMap((k) => (process.env[k] ? [[k, process.env[k]!]] : [])))
 }
 
