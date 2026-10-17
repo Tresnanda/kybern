@@ -32,7 +32,7 @@ export function PreviewStateView({ threadId }: { threadId: string }) {
   if (load.phase === 'relay-failed') return <State title={`Open this page on ${activeEnvironment().name}`} body="Kybern can't forward this server through the current connection."><KitButton variant="subtle" onClick={() => copyText(entry.address)}>Copy address</KitButton><KitButton onClick={() => void launchPreview(threadId)}>Open in browser</KitButton><KitButton variant="subtle" onClick={() => void retryPreview(threadId)}>Try again</KitButton></State>
   return null
 }
-function State({ title, body, children, icon = N.globe }: { title: string; body: string; children?: ReactNode; icon?: string }) {
+export function State({ title, body, children, icon = N.globe }: { title: string; body: string; children?: ReactNode; icon?: string }) {
   const t = useTheme()
   return <div testId="preview-state" style={{ display: 'flex', flexGrow: 1, minHeight: 0, flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24 }}><div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: 340 }}>
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 8, marginBottom: 12, backgroundColor: t.buttonSecondary }}><Icon source={icon} size={16} color={t.textSecondary} /></div>

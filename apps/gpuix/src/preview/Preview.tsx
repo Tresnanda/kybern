@@ -28,7 +28,11 @@ import { PreviewResizeCapture } from './resize.tsx'
 import { MiniResize, type MiniCorner } from './MiniResize.tsx'
 import { MiniChrome } from './MiniChrome.tsx'
 import { PreviewChrome } from './Chrome.tsx'
-import { PreviewStateView } from './States.tsx'
+import { PreviewStateView, State } from './States.tsx'
+import { PictureInPictureIcon } from '@hugeicons/core-free-icons'
+import { glyph } from '../icons.tsx'
+import { KitButton } from '../dock/parts.tsx'
+const PIP = glyph(PictureInPictureIcon)
 import { forgetRecent, recentsKeyForThread, useRecents } from './recents.ts'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 import { load, save } from '../shell/persist.ts'
@@ -60,7 +64,7 @@ export function PreviewPane({ threadId }: { threadId: string }) {
     {s.wsFailed && !s.wsNoticeDismissed && entry?.proxy && <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 12, height: 28 }}><Label color={t.textSecondary} size={11} truncate>{`Live reload isn't connected through ${environment.name}. Reload to see changes.`}</Label><Action onClick={() => previewCommand(threadId, 'reload')}>Reload</Action><IconButton icon={N.x} label="Dismiss" size={20} onClick={() => setPreview(threadId, { wsNoticeDismissed: true })} /></div>}
     {s.permission ? <PreviewStateView threadId={threadId} />
     : s.busy && s.load.phase !== 'waiting' ? <DockEmpty icon={N.globe} title="Opening preview…" />
-    : entry ? s.floating ? <><DockEmpty icon={N.globe} title="Floating over the chat" body="The page keeps running in the mini player." /><Action onClick={() => setPreview(threadId, { floating: false })}>Return to panel</Action></> : s.load.phase !== 'ready' ? <PreviewStateView threadId={threadId} /> : <PreviewSlot threadId={threadId} kind="dock" />
+    : entry ? s.floating ? <State icon={PIP} title="Floating over the chat" body="The page keeps running in the mini player."><KitButton variant="subtle" testId="preview-return" onClick={() => setPreview(threadId, { floating: false })}>Return to panel</KitButton></State> : s.load.phase !== 'ready' ? <PreviewStateView threadId={threadId} /> : <PreviewSlot threadId={threadId} kind="dock" />
     : sorted.length || recents.length ? <virtual-list style={{ flexGrow: 1, minHeight: 0, width: '100%' }}><div style={{ paddingLeft: 12, paddingRight: 12, paddingTop: 16, paddingBottom: 16 }}>
       <DockSection label={environment.local ? 'Local servers' : `Servers on ${environment.name}`} count={servers.length} />
       <div style={{ display: 'flex', flexDirection: 'column', marginLeft: 12, marginRight: 12, padding: 4, borderRadius: 10, backgroundColor: t.buttonSecondary }}>
@@ -119,12 +123,32 @@ export function PreviewIntegration({ insetBottom = 0 }: { insetBottom?: number }
   return <>{ids.map(threadId => <PreviewSurface key={threadId} threadId={threadId} />)}{floating && page === 'home' && !settings ? <MiniPlayer key={floating} insetBottom={insetBottom} insetEnd={insetEnd} threadId={floating} /> : null}<PreviewResizeCapture /></>
 }
 function MiniPlayer({ threadId, insetBottom, insetEnd }: { threadId: string; insetBottom: number; insetEnd: number }) {
-  const s = usePreview(threadId), entry = s.entries[s.index]
+  const t = useTheme(), s = usePreview(threadId), entry = s.entries[s.index]
   const bounds = useElementBounds('preview-mini-bounds')?.rect
   const [corner, setCorner] = useState<MiniCorner>(() => { const saved = load<string>('kybern.preview.corner', 'bottom-end'); return ['top-start','top-end','bottom-start','bottom-end'].includes(saved) ? saved as MiniCorner : 'bottom-end' })
   const [savedSize, setSize] = useState<PlayerSize | null>(() => { const saved = load<PlayerSize | null>('kybern.preview.size', null); return saved && Number.isFinite(saved.w) && Number.isFinite(saved.h) ? saved : null })
   const available = bounds ? { w: Math.max(240, bounds.width - insetEnd), h: bounds.height } : undefined
   const size = savedSize ? clampPlayerSize(savedSize, available) : defaultPlayerSize(previewDockSize(threadId), available)
   if (!s.floating || !entry) return null
-  return <Floating insetBottom={insetBottom} insetEnd={insetEnd} defaultCorner="bottom-end" onCornerChange={setCorner} storageKey="kybern.preview.corner" testId="preview-mini" width={size.w} height={size.h} overlayDrag><div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>{s.load.phase === 'ready' ? <PreviewSlot threadId={threadId} kind="mini" /> : <PreviewStateView threadId={threadId} />}<MiniChrome title={s.pageTitle || entry.title}><IconButton icon={N.panelRight} size={24} testId="preview-mini-return" label="Return to panel" onClick={() => { setPreview(threadId, { floating: false }); showPreview(threadId) }} /><IconButton icon={N.x} size={24} testId="preview-mini-close" label="Close preview" onClick={() => { setPreview(threadId, { floating: false }) }} /></MiniChrome><MiniResize corner={corner} size={size} bounds={available} onResize={next => { setSize(next); save('kybern.preview.size', next) }} /></div></Floating>
+  return <Floating insetBottom={insetBottom} insetEnd={insetEnd} defaultCorner="bottom-end" onCornerChange={setCorner} storageKey="kybern.preview.corner" testId="preview-mini" width={size.w} height={size.h} overlayDrag radius={12} cardStyle={MINI_CARD(t)}>
+    <MiniBody threadId={threadId} entry={entry} corner={corner} size={size} available={available} setSize={setSize} />
+  </Floating>
+}
+/** kit.css `.preview-surface[data-shape="pip"]`: 12px radius, a heavy-border ring and the two-layer shadow. */
+const MINI_CARD = (t: ReturnType<typeof useTheme>) => ({ borderWidth: 1, borderColor: t.borderHeavy, boxShadow: { offsetX: 0, offsetY: 12, blurRadius: 32, spreadRadius: -8, color: t.variant === 'dark' ? 'rgba(0, 0, 0, 0.55)' : 'rgba(0, 0, 0, 0.28)' } } as const)
+function MiniBody({ threadId, entry, corner, size, available, setSize }: { threadId: string; entry: NonNullable<ReturnType<typeof usePreview>['entries'][number]>; corner: MiniCorner; size: PlayerSize; available?: PlayerSize; setSize: (size: PlayerSize) => void }) {
+  const s = usePreview(threadId)
+  const selectedElsewhere = useApp(state => state.selectedId !== threadId), threadTitle = useApp(state => state.threads.find(th => th.id === threadId)?.title)
+  const [hover, setHover] = useState(false), [shown, setShown] = useState(false)
+  // Hover reveals the header; it stays mounted for its 150ms exit.
+  useEffect(() => {
+    if (hover) { setShown(true); return }
+    const timer = setTimeout(() => setShown(false), 170)
+    return () => clearTimeout(timer)
+  }, [hover])
+  return <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+    {s.load.phase === 'ready' ? <PreviewSlot threadId={threadId} kind="mini" /> : <PreviewStateView threadId={threadId} />}
+    {(hover || shown) && <MiniChrome title={s.pageTitle || entry.title} otherThread={selectedElsewhere ? threadTitle : undefined} revealed={hover}><IconButton icon={N.panelRight} size={24} testId="preview-mini-return" label="Return to panel" onClick={() => { setPreview(threadId, { floating: false }); showPreview(threadId) }} /><IconButton icon={N.x} size={24} testId="preview-mini-close" label="Close preview" onClick={() => { setPreview(threadId, { floating: false }) }} /></MiniChrome>}
+    <MiniResize corner={corner} size={size} bounds={available} onResize={next => { setSize(next); save('kybern.preview.size', next) }} />
+  </div>
 }
