@@ -1,7 +1,10 @@
 import { connectStdio } from '@gpuix/react/automation'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
+import { assertScratchDataDir } from '../src/platform/verify.lib.ts'
 export async function launchFixture(_entry: string, env: Record<string,string>) {
+ // The packaged app restarts an incompatible daemon in its data dir: never the real one.
+ assertScratchDataDir(env.KYBERN_DATA_DIR ?? process.env.KYBERN_DATA_DIR)
  const start = performance.now()
  const executable = path.resolve(import.meta.dir, '../dist/Kybern GPUIX.app/Contents/MacOS/Kybern GPUIX')
  const child = spawn(executable, [], {env:{...process.env,...env}, stdio:['pipe','pipe','pipe']})

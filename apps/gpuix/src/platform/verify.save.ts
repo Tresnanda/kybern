@@ -9,7 +9,9 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { launchFixture } from '../../packaging/harness.ts'
-import { until, windowId } from './verify.lib.ts'
+import { assertScratchDataDir, until, windowId } from './verify.lib.ts'
+
+assertScratchDataDir()
 
 const [note, folder, out] = process.argv.slice(2) as [string, string, string]
 assert.ok(folder.includes('ade-gpuix-scratch'))

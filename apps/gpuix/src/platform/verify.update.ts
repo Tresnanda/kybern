@@ -10,7 +10,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { launch } from '@gpuix/react/automation'
-import { until } from './verify.lib.ts'
+import { assertScratchDataDir, until } from './verify.lib.ts'
+
+assertScratchDataDir()
 import { archive, fakeBundle, serveFeed, testKey } from './verify.feed.ts'
 
 const out = process.argv[2] ?? '/tmp/update-check'

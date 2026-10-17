@@ -11,7 +11,9 @@ import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { launch } from '@gpuix/react/automation'
 import { pixels } from '../../native/png.ts'
-import { windowId } from './verify.lib.ts'
+import { assertScratchDataDir, windowId } from './verify.lib.ts'
+
+assertScratchDataDir()
 
 const out = process.argv[2] ?? '/tmp/traffic'
 mkdirSync(out, { recursive: true })

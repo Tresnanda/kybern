@@ -12,7 +12,9 @@ import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { launch } from '@gpuix/react/automation'
 import { pixels } from '../../native/png.ts'
-import { until, windowId } from './verify.lib.ts'
+import { assertScratchDataDir, until, windowId } from './verify.lib.ts'
+
+assertScratchDataDir()
 
 const [title, out = '/tmp/compact', theme = 'dark', motion] = process.argv.slice(2) as [string, string?, string?, string?]
 const mode = `${theme}${motion === 'reduced' ? '-reduced' : ''}`

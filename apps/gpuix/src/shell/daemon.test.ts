@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { ChildProcess } from 'node:child_process'
 import type { DaemonInfo } from '../../../../packages/kybern-client/src/types.ts'
-import { createLocalDaemonResolver, daemonNeedsRestart, daemonRpc, preferredDaemonPort, type DaemonDependencies } from './daemon.ts'
+import { createLocalDaemonResolver, daemonNeedsRestart, daemonRpc, mayRestartDaemon, preferredDaemonPort, type DaemonDependencies } from './daemon.ts'
 
 const info = { version: '0.9.1', protocol_version: 1, started_at: '2099-01-01T00:00:00Z' } as DaemonInfo
 const fakeChild = () => ({ exitCode: null, signalCode: null }) as ChildProcess
@@ -71,9 +71,31 @@ test('stale managed daemon must finish discovery-file cleanup before successor l
     sleep: async () => { expect(stopped).toBe(true); expect(launched).toBe(false); slept = true; await rm(path.join(root, 'daemon.port')); await rm(path.join(root, 'daemon.listen')) },
     launch: async (_binary, args) => { launched = true; expect(slept).toBe(true); await writeFile(path.join(root, `.desktop-startup-${args.at(-1)}.json`), JSON.stringify({ port: 4321, protocol_version: 1 })); return fakeChild() },
   }
-  expect((await createLocalDaemonResolver({ root, binary, version: '0.9.1' }, dependencies)()).url).toBe('ws://127.0.0.1:4321/ws')
+  expect((await createLocalDaemonResolver({ root, binary, version: '0.9.1', allowRestart: true }, dependencies)()).url).toBe('ws://127.0.0.1:4321/ws')
   expect(stopped && launched).toBe(true)
 }))
+test('a development build never shuts down a daemon it did not start', () => fixture(async (root, binary) => {
+  await writeFile(path.join(root, 'daemon.port'), '4321'); await writeFile(path.join(root, 'daemon.token'), 'fixture')
+  for (const existing of [{ ...info, version: '0.0.0' }, { ...info, started_at: '2000-01-01T00:00:00Z' }, { ...info, protocol_version: 0 }]) {
+    const methods: string[] = []
+    const resolver = createLocalDaemonResolver({ root, binary, version: '0.9.1' }, {
+      rpc: (async (_endpoint, method) => { methods.push(method); return existing }) as typeof daemonRpc,
+      launch: async () => { throw Error('must never launch') },
+    })
+    if (existing.protocol_version === 1) expect((await resolver()).url).toBe('ws://127.0.0.1:4321/ws')
+    else await expect(resolver()).rejects.toThrow('KYBERN_ALLOW_DAEMON_RESTART=1')
+    expect(methods).toEqual(['daemon.info'])
+  }
+}))
+test('only the packaged app replacing its bundled kybernd, or an explicit opt-in, may restart a daemon', () => {
+  const app = '/Applications/Kybern GPUIX.app/Contents/MacOS/Kybern GPUIX'
+  expect(mayRestartDaemon('/Applications/Kybern GPUIX.app/Contents/MacOS/kybernd', {}, app)).toBe(true)
+  expect(mayRestartDaemon('/tmp/old/kybernd', {}, app)).toBe(false)
+  expect(mayRestartDaemon('/repo/target/debug/kybernd', {}, '/Users/me/.bun/bin/bun')).toBe(false)
+  expect(mayRestartDaemon('/Users/me/.bun/bin/kybernd', {}, '/Users/me/.bun/bin/bun')).toBe(false)
+  expect(mayRestartDaemon('/repo/target/debug/kybernd', { KYBERN_ALLOW_DAEMON_RESTART: '1' }, '/Users/me/.bun/bin/bun')).toBe(true)
+  expect(mayRestartDaemon('/repo/target/debug/kybernd', { KYBERN_ALLOW_DAEMON_RESTART: 'true' }, '/Users/me/.bun/bin/bun')).toBe(false)
+})
 test('early daemon exit fails instead of reusing a dead startup endpoint', () => fixture(async (root, binary) => {
   const resolver = createLocalDaemonResolver({ root, binary, version: '0.9.1' }, {
     launch: async () => ({ exitCode: 1, signalCode: null }) as ChildProcess,

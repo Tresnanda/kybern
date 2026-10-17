@@ -9,7 +9,9 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { launchFixture } from '../../packaging/harness.ts'
-import { until, windowId } from './verify.lib.ts'
+import { assertScratchDataDir, until, windowId } from './verify.lib.ts'
+
+assertScratchDataDir()
 
 const [thread, out, theme = 'dark'] = process.argv.slice(2) as [string, string, string?]
 assert.ok(thread && out)

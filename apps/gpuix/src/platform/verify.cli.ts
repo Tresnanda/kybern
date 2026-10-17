@@ -7,7 +7,9 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readlinkSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { launchFixture } from '../../packaging/harness.ts'
-import { until } from './verify.lib.ts'
+import { assertScratchDataDir, until } from './verify.lib.ts'
+
+assertScratchDataDir()
 
 const [root, out, theme = 'dark'] = process.argv.slice(2) as [string, string, string?]
 assert.ok(root?.includes('ade-gpuix-scratch'), 'scratch root only')

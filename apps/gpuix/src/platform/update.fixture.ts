@@ -5,6 +5,9 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { archive, fakeBundle, serveFeed, testKey } from './verify.feed.ts'
+import { assertScratchDataDir } from './verify.lib.ts'
+
+assertScratchDataDir()
 
 const root = mkdtempSync(path.join(tmpdir(), 'kybern-update-fixture-'))
 const key = testKey()

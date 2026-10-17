@@ -14,7 +14,9 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { launch } from '@gpuix/react/automation'
 import { pixels } from '../../native/png.ts'
-import { until, windowId } from './verify.lib.ts'
+import { assertScratchDataDir, until, windowId } from './verify.lib.ts'
+
+assertScratchDataDir()
 
 const [out = '/tmp/material', theme = 'dark', motion] = process.argv.slice(2)
 const mode = `${theme}${motion === 'reduced' ? '-reduced' : ''}`
