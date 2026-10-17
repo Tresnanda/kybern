@@ -5,13 +5,18 @@ import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import { visualFrameHeight, visualHeight, visualLink, visualThemeFragment, VISUAL_COLUMN_WIDTH } from '../../../../packages/kybern-client/src/visuals.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { getClient } from '../state.ts'
-import { Label, useTheme } from '../ui.tsx'
+import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { Button } from './kit.tsx'
+import { Icon } from '../icons.tsx'
+import { T } from './glyphs.ts'
+import { PopupLayer } from '../composer/Menu.tsx'
+import { Tip } from '../nav/overlay.tsx'
+import { useLoaderTime, easeInOut } from '../MatrixLoader.tsx'
 import { webHost } from '../native/webview.ts'
 import { observeElementBounds, type ElementBoundsEvent } from '../native/layout.ts'
 import { useNativeWindowSize } from '../native/layout-hooks.ts'
 import { useWebLayer } from '../native/web-occlusion.ts'
-import { Dialog, DialogHeader } from '../nav/overlay.tsx'
+import { Dialog } from '../nav/overlay.tsx'
 import { visualTheme } from '../preview/theme.ts'
 import { launchBrowser } from '../preview/browser.ts'
 import { useNav } from '../nav/store.ts'
@@ -20,7 +25,7 @@ const heights = new Map<string, number>()
 const placements = new Map<string, () => void>()
 
 /** Geometry leases keep the same WK document while expanding/collapsing. */
-function VisualSlot({ id, height, active }: { id: string; height: number; active: boolean }) {
+function VisualSlot({ id, height, active, onHover }: { id: string; height: number; active: boolean; onHover?: (over: boolean) => void }) {
   const renderer = useGpuixRequired(), ref = useRef<PublicInstance | null>(null), layer = useWebLayer()
   useEffect(() => {
     if (!ref.current) return
@@ -34,13 +39,21 @@ function VisualSlot({ id, height, active }: { id: string; height: number; active
     const stop = observeElementBounds(renderer, ref.current.id, bounds => { latest = bounds; place() })
     return () => { stop(); if (placements.get(id) === place) { placements.delete(id); webHost.hide(id) } }
   }, [renderer, id, layer, active])
-  return <div ref={ref} testId="visual-frame" style={{ height, width: '100%', flexShrink: 0 }} />
+  // A real pointer over the document reaches its wrapper (`kybern-visual-hover`); GPUI sees it when nothing covers the slot.
+  return <div ref={ref} testId="visual-frame" onMouseEnter={() => onHover?.(true)} onMouseLeave={() => onHover?.(false)} style={{ height, width: '100%', flexShrink: 0 }} />
 }
 
 export const VisualCard = memo(function VisualCard({ visual, threadId }: { visual: HtmlVisual; threadId: string }) {
   const t = useTheme(), size = useNativeWindowSize(), id = `visual:${threadId}:${visual.id}`
   const [error, setError] = useState(''), [attempt, retry] = useState(0), [expanded, setExpanded] = useState(false)
   const [loaded, setLoaded] = useState(false), [skeleton, setSkeleton] = useState(false)
+  // The pointer is over the figure (reported by its wrapper) or the control; the control hides a beat after both leave.
+  const [overFigure, setOverFigure] = useState(false), [overControl, setOverControl] = useState(false), [showControl, setShowControl] = useState(false)
+  useEffect(() => {
+    if (overFigure || overControl) { setShowControl(true); return }
+    const id = setTimeout(() => setShowControl(false), 120)
+    return () => clearTimeout(id)
+  }, [overFigure, overControl])
   const [height, setHeight] = useState(() => heights.get(id) ?? visualFrameHeight(visual, VISUAL_COLUMN_WIDTH))
   const ready = useRef(false), theme = useRef(visualTheme(t)); theme.current = visualTheme(t)
   const active = useNav(state => state.page === 'home' && !state.settingsOpen)
@@ -57,6 +70,7 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
       if (event.type === 'created' || event.type === 'loaded') { ready.current = true; placements.get(id)?.(); webHost.theme(id, theme.current) }
       if (event.type === 'failed' || event.type === 'terminated') setError(event.message ?? 'The page stopped responding. Retry to reload it.')
       if (event.type !== 'message' || !event.data) return
+      if (event.data.kind === 'kybern-visual-hover') { setOverFigure(!!event.data.value); return }
       if (event.data.kind === 'loaded' && !documentReady) { clearTimeout(watchdog); watchdog = setTimeout(() => { if (alive && !documentReady) setError('The preview expired or did not finish loading. Retry to reopen it.') }, 4000) }
       if (event.data.kind === 'kybern-visual-ready' && !documentReady && !fallback) fallback = setTimeout(reveal, 1000)
       if (event.data.kind === 'kybern-visual-size') {
@@ -81,10 +95,64 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
     return () => { alive = false; ready.current = false; clearTimeout(loading); clearTimeout(watchdog); clearTimeout(fallback); stop(); webHost.destroy(id); if (ticket) void client.call('threads.visuals.revoke', { thread_id: threadId, ticket }).catch(() => {}) }
   }, [threadId, visual.id, id, attempt])
   useEffect(() => { if (ready.current) webHost.theme(id, theme.current) }, [id, t])
-  const frame = <VisualSlot id={id} height={expanded ? Math.max(100, size.height - 150) : height} active={active && loaded && !error} />
-  return <div testId="visual-card" style={{ display: 'flex', flexDirection: 'column', marginTop: 8, marginBottom: 8, position: 'relative' }}>
-    {expanded ? <><div style={{ height, width: '100%' }} /><Dialog width={Math.max(320, size.width - 64)} onClose={() => setExpanded(false)} testId="visual-expanded"><DialogHeader title={visual.title || 'Interactive visual'} onClose={() => setExpanded(false)} />{frame}</Dialog></> : frame}
-    {skeleton && !loaded && !error && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height, backgroundColor: t.surface, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Label color={t.textTertiary} size={12}>{`Loading ${visual.title}…`}</Label></div>}
-    {error ? <div style={{ display: 'flex', padding: 12, gap: 8 }}><Label color={t.textSecondary} size={12}>{`Couldn’t load “${visual.title}”: ${error}`}</Label><Button onClick={() => retry(n => n + 1)}>Retry</Button></div> : loaded && <div style={{ display: 'flex', justifyContent: 'flex-end' }}><Button testId="visual-expand" variant="ghost" onClick={() => setExpanded(true)}>Expand preview</Button></div>}
+  const [expandedHeight, expandedWidth] = [Math.max(100, size.height - 32 - 44 - 2), Math.max(320, size.width - 32)]
+  const frame = <VisualSlot id={id} height={expanded ? expandedHeight : height} active={active && loaded && !error} onHover={setOverFigure} />
+  const control = showControl && loaded && !error && !expanded
+  return <div testId="visual-card" data-status={error ? 'error' : loaded ? 'ready' : 'loading'} style={{ display: 'flex', flexDirection: 'column', marginTop: 8, marginBottom: 8, position: 'relative' }}>
+    {expanded ? <>
+      <div style={{ height, width: '100%' }} />
+      <Dialog width={expandedWidth} radius={14} onClose={() => setExpanded(false)} testId="visual-expanded">
+        {/* `.visual-reply__expanded-header`: 44px, 16px / 8px inset, the title and a ghost close button. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 44, paddingLeft: 16, paddingRight: 8, backgroundColor: t.surface }}>
+          <Label color={t.text} weight={500} truncate style={{ flexGrow: 1 }}>{visual.title || 'Interactive visual'}</Label>
+          <div testId="dialog-close" role="button" aria-label="Close expanded preview" onClick={() => setExpanded(false)} style={{ display: 'flex', width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 8, cursor: 'pointer', flexShrink: 0, hover: { backgroundColor: t.buttonSecondaryHover } }}>
+            <Icon source={T.close} size={14} color={t.textSecondary} />
+          </div>
+        </div>
+        {frame}
+      </Dialog>
+    </> : <div style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
+      {frame}
+      {/* The glass control sits 8px inside the top-right corner (`.visual-reply__open`). It is an anchored layer so it paints above the native document. */}
+      {control && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 0 }}>
+        <PopupLayer kind="tooltip" side="bottom" align="end" sideOffset={8} alignOffset={-8} material="none" occlude style={{ borderRadius: 14 }}>
+          <Tip label="Expand preview" side="bottom" size={28}>
+            <div
+              testId="visual-expand"
+              role="button"
+              aria-label="Expand preview"
+              onClick={() => { setOverControl(false); setExpanded(true) }}
+              onMouseEnter={() => setOverControl(true)}
+              onMouseLeave={() => setOverControl(false)}
+              style={{
+                display: 'flex', width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 14, cursor: 'pointer',
+                borderWidth: 1, borderColor: t.border, backgroundColor: t.v('--color-background-elevated-primary-opaque'),
+                boxShadow: t.variant === 'dark'
+                  ? { offsetX: 0, offsetY: 1, blurRadius: 2, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.4)' }
+                  : { offsetX: 0, offsetY: 2, blurRadius: 8, spreadRadius: -2, color: 'rgba(0, 0, 0, 0.1)' },
+                hover: { backgroundColor: t.v('--color-background-elevated-secondary') },
+              }}
+            >
+              <Icon source={T.expand} size={14} color={t.textSecondary} />
+            </div>
+          </Tip>
+        </PopupLayer>
+      </div>}
+    </div>}
+    {skeleton && !loaded && !error && <Skeleton height={height} />}
+    {error && <div testId="visual-error" style={{ position: 'absolute', top: 0, left: 0, right: 0, height, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, paddingTop: Math.min(height * 0.35, 160), paddingLeft: 16, paddingRight: 16, borderRadius: 10, borderWidth: 1, borderColor: t.border, backgroundColor: ink(t, 0.04) }}>
+      <Label color={t.text} weight={500} style={{ textAlign: 'center' }}>{`Couldn’t load “${visual.title}”`}</Label>
+      {error && <Label color={t.textSecondary} size={13} style={{ textAlign: 'center', lineClamp: 2 }}>{error}</Label>}
+      <Button testId="visual-retry" variant="subtle" onClick={() => retry(n => n + 1)}><Icon source={T.rotateCcw} size={14} color={t.text} />Retry</Button>
+    </div>}
   </div>
 })
+
+/** `.visual-reply__skeleton`: a 4% wash over the reserved box, breathing between full and 55% opacity every 1.6s. */
+function Skeleton({ height }: { height: number }) {
+  const t = useTheme()
+  const time = useLoaderTime()
+  const phase = (time % 1600) / 1600
+  const opacity = REDUCED_MOTION ? 1 : 1 - 0.45 * easeInOut(phase < 0.5 ? phase * 2 : 2 - phase * 2)
+  return <div testId="visual-skeleton" role="status" aria-label="Loading visual" style={{ position: 'absolute', top: 0, left: 0, right: 0, height, borderRadius: 10, backgroundColor: ink(t, 0.04), opacity, pointerEvents: 'none' }} />
+}

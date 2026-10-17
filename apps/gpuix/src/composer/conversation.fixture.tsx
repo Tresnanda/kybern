@@ -10,6 +10,7 @@ import { Button } from '../transcript/kit.tsx'
 import { onWindowKeyDown } from '../nav/keys.ts'
 import { patch } from './store.ts'
 import { useState } from 'react'
+import { useGpuixRequired } from '@gpuix/react'
 const at = new Date().toISOString()
 const providers: ProviderStatus[] = ['claude-code', 'codex'].map(kind => ({ kind, display_name: kind, available: true, supported_permission_modes: ['supervised'], supports_fork: false, supports_model_switch: true, instances: ['default'], models: [{ id: kind + '-model', display_name: kind + ' model', is_default: true }] })) as ProviderStatus[]
 let coordinator: Thread | null = null
@@ -47,12 +48,23 @@ mkdirSync(dir, { recursive: true }); writeFileSync(dir + '/daemon.port', String(
 process.env.KYBERN_URL = `ws://127.0.0.1:${server.port}/ws`; process.env.KYBERN_TOKEN = 'fixture'
 patch({ providers })
 connect()
+/** Test hook: a Finder drag that enters, hovers or leaves the composer card without dropping. */
+function DragProbe() {
+  const renderer = useGpuixRequired() as unknown as { simulateFileDrag(x: number, y: number, paths: string[], phase: string): void }
+  const paths = [process.env.KYBERN_FIXTURE_DRAG_FILE ?? '/etc/hosts']
+  return <div style={{ display: 'flex', gap: 8 }}>
+    <Button testId="drag-enter" onClick={() => renderer.simulateFileDrag(300, 770, paths, 'enter')}>Drag enter</Button>
+    <Button testId="drag-outside" onClick={() => renderer.simulateFileDrag(1000, 300, paths, 'move')}>Drag outside</Button>
+    <Button testId="drag-exit" onClick={() => renderer.simulateFileDrag(300, 770, paths, 'exit')}>Drag exit</Button>
+  </div>
+}
 function Fixture() {
   const t = useTheme(), [draft, setDraft] = useState(false), [sent, setSent] = useState<UserMessage | null>(null)
   const overlayHeight = useComposerOverlayHeight()
   const status = useApp(s => s.status), th = useApp(s => s.open.thread)
   useApp(s => s.statusDetail)
   return <div testId="conversation-ready" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: t.surface }}>
+    <DragProbe />
     <Button testId="coordinator-draft" onClick={() => { selectDraft('project', 'coordinator'); setDraft(true) }}>Set up Coordinator</Button>
     <text testId="rpc-record" style={{ color: t.text }}>{JSON.stringify(record)}</text>
     <text testId="message-record" style={{ color: t.text }}>{JSON.stringify(sent)}</text>

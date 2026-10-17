@@ -18,5 +18,8 @@ export const screens = {
   'convo9-md-b': async (p) => { await open(p, 'Markdown B'); await park(p) },
   'convo9-md-c': async (p) => { await open(p, 'Markdown C'); await park(p) },
 
+  'convo9-visual': async (p) => { await open(p, 'Visual reply'); await settle(p, 3500); await park(p) },
+  'convo9-visual-hover': async (p) => { await open(p, 'Visual reply'); await settle(p, 3500); await p.locator('[data-visual-reply]').first().hover(); await settle(p, 900) },
+  'convo9-visual-expanded': async (p) => { await open(p, 'Visual reply'); await settle(p, 3500); await p.locator('[data-visual-reply]').first().hover(); await settle(p, 500); await p.getByRole('button', { name: 'Expand preview' }).click(); await settle(p, 900); await park(p) },
   'convo9-mermaid': async (p) => { await open(p, 'Mermaid diagram'); await settle(p, 3000); await park(p) },
 }

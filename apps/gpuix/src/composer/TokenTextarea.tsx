@@ -83,7 +83,7 @@ export function TokenTextarea({ references, editorRef, nativeRef, onEditorError,
   }
   return <DecoratedTextarea {...props} value={projection.text}
     ref={element => { node.current = element; if (typeof nativeRef === 'function') nativeRef(element); else if (nativeRef) nativeRef.current = element }}
-    decorations={projection.spans.map((span, index) => ({ start: span.start, end: span.end, atomic: true, id: `token:${index}:${span.token}`, style: { color: t.text, backgroundColor: t.buttonSecondary, borderRadius: 5, backgroundOutsetX: 3, fontWeight: 500 } }))}
+    decorations={projection.spans.map((span, index) => ({ start: span.start, end: span.end, atomic: true, id: `token:${index}:${span.token}`, style: { color: t.v('--color-accent-blue'), fontWeight: 500 } }))}
     interceptKeys={[...new Set([...(props.interceptKeys ?? []), 'c', 'x', 'z', 'y', 'backspace', 'delete'])]}
     onChange={event => {
       const value = event.value ?? ''

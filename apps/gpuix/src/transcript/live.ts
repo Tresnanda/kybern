@@ -35,3 +35,11 @@ export function percentile(values: number[], p: number) {
   const sorted = [...values].sort((a, b) => a - b)
   return sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))]! : NaN
 }
+
+/** Window-only capture (the GPUI screenshot API omits embedded web views). */
+export function captureWindow(pid: number, file: string) {
+  const id = Bun.spawnSync(['swift', path.join(ROOT, 'visual/window-id.swift'), String(pid)]).stdout.toString().trim()
+  if (!id) throw Error('No window for pid ' + pid)
+  const result = Bun.spawnSync(['screencapture', '-l', id, '-x', '-o', file])
+  if (result.exitCode !== 0) throw Error('screencapture failed: ' + result.stderr.toString())
+}

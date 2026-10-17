@@ -101,6 +101,28 @@ export async function seed(client: KybernClient, ctx: { projects: { id: string }
     const last = db.query('SELECT max(seq) AS s FROM events WHERE thread_id = ?1').get(thread.id) as { s: number }
     db.prepare('UPDATE threads SET last_seq = ?2, status = ?3 WHERE id = ?1').run(thread.id, last.s ?? 0, 'idle')
   }
+  // A published visual reply: the daemon serves it in a sandboxed frame.
+  const visual = await client.call('threads.create', { project_id: ctx.projects[0]!.id, provider: { kind: 'claude-code', instance: 'default' }, permission_mode: 'supervised', title: 'Visual reply' })
+  {
+    const turn = randomUUID(), answer = randomUUID()
+    const events = [
+      { turn, kind: 'turn_started', message_id: randomUUID(), message: { parts: [{ type: 'text', text: 'Chart the merged pull requests.' }] } },
+      { turn, kind: 'assistant_message_completed', message_id: answer, origin: { kind: 'root' }, text: 'Here is the chart.', thinking: null },
+      { turn, kind: 'turn_completed', stop_reason: 'completed', usage, cost_usd: 0.004, duration_ms: 6000, terminal_message_id: answer },
+    ]
+    const insert = db.prepare('INSERT INTO events(thread_id, turn_id, at, kind, payload) VALUES (?1, ?2, ?3, ?4, ?5)')
+    const start = Date.now() - 3600_000
+    events.forEach((ev, i) => { const { turn: t, ...payload } = ev; insert.run(visual.id, t, new Date(start + i * 1500).toISOString(), ev.kind, JSON.stringify(payload)) })
+    const last = db.query('SELECT max(seq) AS s FROM events WHERE thread_id = ?1').get(visual.id) as { s: number }
+    db.prepare('UPDATE threads SET last_seq = ?2, status = ?3 WHERE id = ?1').run(visual.id, last.s ?? 0, 'idle')
+  }
+  await client.call('threads.visuals.publish', { thread_id: visual.id, title: 'Weekly merges', height: 260, html: `<!doctype html><html><head><meta charset="utf-8"><style>
+body{font:14px system-ui,sans-serif;margin:0;padding:16px;color:var(--foreground,#222)}
+.bar{display:flex;align-items:center;gap:8px;margin:6px 0}.bar i{display:block;height:18px;border-radius:4px;background:#4a8bf5}
+h2{font-size:15px;margin:0 0 8px}
+</style></head><body><h2>Merged pull requests per week</h2>
+${[['Week 1', 120], ['Week 2', 200], ['Week 3', 160], ['Week 4', 260]].map(([label, width]) => `<div class="bar"><span style="width:56px">${label}</span><i style="width:${width}px"></i></div>`).join('')}
+</body></html>` })
   db.close()
 }
 
