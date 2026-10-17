@@ -72,15 +72,8 @@ try{
  for(let i=0;i<100;i++){if((await a.getByTestId('settings-global-notes').textContent()).includes('Shared across environments'))break;await Bun.sleep(30)}
  assert.match(await a.getByTestId('settings-global-notes').textContent(),/Shared across environments/)
  await click('settings-tab-notifications');assert.match(await a.getByTestId('page-settings').textContent(), /OS notifications require the packaged Kybern GPUIX.app/);assert.equal(await a.getByTestId('settings-notification-access').count(),1)
- if(!process.argv.includes('--about-only')) { await click('settings-tab-accounts');await click('account-actions-codex-work');await click('account-actions-codex-work-edit')
- await a.getByTestId('account-edit').press('escape');await Bun.sleep(200);assert.equal(await a.getByTestId('page-settings').count(),1);assert.equal(await a.getByTestId('account-edit').count(),0);await click('account-actions-codex-work');await click('account-actions-codex-work-edit')
- await a.getByTestId('account-name').fill('Personal');await click('account-color');await click('account-color-purple');await click('account-save');assert.equal(accounts[0]!.color,'purple');assert.equal(accounts[0]!.name,'Personal')
- await click('account-actions-codex-work');await click('account-actions-codex-work-default');assert.equal(settings.providers.codex?.default_account,'work')
- await click('account-actions-codex-work');await click('account-actions-codex-work-projects');await click('account-project');await click(`account-project-${scratch}`);await click('account-project-codex');await click('account-project-codex-work');assert.equal(settings.providers.codex?.project_accounts?.[scratch],'work');await a.getByTestId('account-projects').press('escape');await Bun.sleep(200)
- await a.screenshot({path:`${out}/accounts-${mode}.png`})
- await click('account-actions-codex-work');await click('account-actions-codex-work-sign_out');await click('account-confirm-submit');assert.equal(accounts[0]!.status,'signed_out');await click('account-actions-codex-work');await click('account-actions-codex-work-remove');await click('account-confirm-submit');assert.equal(accounts.length,1)
- await click('settings-tab-computer');await scroll(1300);await click('computer-note-com.fixture.App');await a.getByTestId('computer-note-text').fill('Edited hint');await Bun.sleep(300);await click('computer-note-save');assert.equal(notes[0]!.text,'Edited hint')
- await a.screenshot({path:`${out}/computer-notes-${mode}.png`});await click('computer-setup');assert.ok(calls.some(c=>c.method==='computer.setup'&&c.params.action==='install'))
+// Accounts, Computer use, Integrations and the Add account sheet are checked against a real scratch daemon by `verify9a.ts`.
+ if(!process.argv.includes('--about-only')) {
  await click('settings-tab-agents');await scroll(5000);await click('cursor-install');assert.equal(cursor.installed,true)
  await click('cursor-sign-in');assert.equal(cursor.signing_in,true);await click('cursor-cancel');assert.equal(cursor.signing_in,false)
  }
