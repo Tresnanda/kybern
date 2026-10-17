@@ -27,6 +27,20 @@ export function bundledCommand(name: 'kybern' | 'kybernd') {
   return candidates.find((candidate): candidate is string => !!candidate && existsSync(candidate) && statSync(candidate).isFile())
 }
 
+/**
+ * Whether this process may stop a running local daemon to replace it with
+ * `binary`. The packaged app keeps the desktop's restart policy for its own
+ * bundled kybernd. A development run (bun, a checkout's target/debug/kybernd,
+ * a KYBERND override) never stops a daemon it did not start: a fresh checkout
+ * build is newer than any running daemon, so the policy would replace the
+ * user's own daemon. KYBERN_ALLOW_DAEMON_RESTART=1 opts in.
+ */
+export function mayRestartDaemon(binary: string, env: NodeJS.ProcessEnv = process.env, execPath = process.execPath) {
+  if (env.KYBERN_ALLOW_DAEMON_RESTART === '1') return true
+  const name = path.basename(execPath)
+  return name !== 'bun' && name !== 'node' && path.resolve(binary) === path.resolve(path.dirname(execPath), 'kybernd')
+}
+
 export function daemonNeedsRestart(info: Pick<DaemonInfo, 'protocol_version' | 'version' | 'started_at'>, version: string, modifiedMs?: number) {
   return info.protocol_version !== PROTOCOL_VERSION || info.version !== version || (modifiedMs !== undefined && modifiedMs > Date.parse(info.started_at))
 }
@@ -73,7 +87,7 @@ export function daemonRpc<T>(endpoint: Endpoint, method: string, timeoutMs = 750
     socket.onclose = () => finish(Error('The daemon closed the connection'))
   })
 }
-export interface LocalDaemonOptions { root: string; url?: string; token?: string; binary?: string; version?: string; port?: string }
+export interface LocalDaemonOptions { root: string; url?: string; token?: string; binary?: string; version?: string; port?: string; allowRestart?: boolean }
 export interface DaemonDependencies {
   rpc: typeof daemonRpc
   launch: (binary: string, args: string[], root: string) => Promise<ChildProcess>
@@ -147,6 +161,11 @@ export function createLocalDaemonResolver(options: LocalDaemonOptions, dependenc
     if (port) await writeFile(path.join(root, 'desktop.port'), String(port))
     if (existing) {
       if (!daemonNeedsRestart(existing, version, statSync(binary).mtimeMs)) return endpoint!
+      if (!(options.allowRestart ?? mayRestartDaemon(binary))) {
+        if (existing.protocol_version !== PROTOCOL_VERSION) throw Error(`The daemon in ${root} uses another protocol. Restart it yourself, or set KYBERN_ALLOW_DAEMON_RESTART=1 to let this development build replace it.`)
+        console.error(`[daemon] ${root}: keeping kybernd ${existing.version} (this development build does not restart daemons it did not start; set KYBERN_ALLOW_DAEMON_RESTART=1 to allow it)`)
+        return endpoint!
+      }
       await deps.rpc(endpoint!, 'daemon.shutdown', 2000)
       const deadline = deps.now() + 30000
       while (existsSync(path.join(root, 'daemon.port')) || existsSync(path.join(root, 'daemon.listen')) || await info(endpoint!)) {
