@@ -1,88 +1,365 @@
-import { Label, ProviderMark, useTheme } from '../ui.tsx'
+// Settings › Accounts (`views/settings/AccountsSettings.tsx`): every signed-in account of each
+// installed agent, with its email, plan, usage and status. The CLI account (the agent's own
+// sign-in) comes first; named accounts follow in creation order.
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { ACCOUNT_COLORS, ACCOUNT_COLOR_LABELS, isAccountColor, isCliInstance, isNameValid } from '../../../desktop/src/lib/accounts.ts'
+import { bindingLimit, limitLabel, PROVIDER_NAMES } from '../../../desktop/src/lib/providerUsage.ts'
+import type { AccountSummary, ProviderKind, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
+import { goPage } from '../nav/history.ts'
 import { N } from '../nav/glyphs.ts'
+import { errorText } from '../nav/actions.ts'
+import { Dialog, Menu, MenuItem, MenuSeparator, Tip } from '../nav/overlay.tsx'
 import { useNav } from '../nav/store.ts'
-import { useState } from 'react'
-import type { AccountSummary, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
-import { ACCOUNT_COLORS, ACCOUNT_COLOR_LABELS, isNameValid, isCliInstance } from '../../../desktop/src/lib/accounts.ts'
-import { getClient, useApp } from '../state.ts'
 import { showDialog } from '../dialogs/store.ts'
-import { Menu, MenuItem, Dialog, DialogHeader } from '../nav/overlay.tsx'
-import { Button, PageBlock, Row, Section, Select, TextField, useSettingsModal, selectOwnsEscape } from './controls.tsx'
-import { latestSettings, updateSettings, useSettings } from './store.ts'
-import { useResource } from './resource.ts'
+import { activeEnvironment } from '../shell/environment.ts'
+import { toast } from '../shell/toasts.tsx'
+import { copyText } from '../transcript/store.ts'
+import { getClient, useApp } from '../state.ts'
+import { motion } from '@gpuix/react'
+import { EASE } from '../motion/kit.tsx'
+import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { AccountAvatar, AccountDot, AccountUsageRing } from '../usage/AccountMark.tsx'
+import { askAccountLimits, makeDefaultAccount, refreshAccounts, setUsageAnchor, updateProviderSettings, useAccountFlash, useAccountLimitEntries, useAccounts, useAccountsFeed, useAccountsLegacy, useAccountsLoaded } from '../usage/accounts.ts'
+import { limitsForAccount } from '../../../desktop/src/lib/accountUi.ts'
+import { Button, Checkbox, PageBlock, selectOwnsEscape, useSettingsModal } from './controls.tsx'
+import { S } from './glyphs.ts'
+import { openSettingsTab } from './SettingsScreen.tsx'
+import { useSettings } from './store.ts'
 
-const accountRgb = { blue:['1,105,204','51,134,214'], green:['0,162,64','47,191,99'], purple:['117,30,217','176,109,255'], pink:['194,48,122','232,106,166'], teal:['15,143,134','51,191,179'], amber:['217,119,6','245,180,74'] }
-function accountTint(color:string|null|undefined, dark:boolean, alpha:number) {
- const rgb=accountRgb[color as keyof typeof accountRgb]??accountRgb.blue
- return `rgba(${rgb[dark?1:0]},${alpha})`
+/** What to run in a terminal to sign the CLI account in again; Kybern picks the sign-in up on its own. */
+const CLI_SIGN_IN_COMMAND: Record<ProviderKind, string> = {
+  'claude-code': 'claude auth login',
+  codex: 'codex login',
+  cursor: 'cursor-agent login',
+  omp: 'omp login',
+  opencode: 'opencode auth login',
+  pi: 'pi',
 }
 
+/** Agents whose identity the daemon can read; others keep an unknown status without a loading placeholder. */
+const IDENTITY_KINDS: ProviderKind[] = ['claude-code', 'codex', 'cursor', 'omp']
+
+const agentLabel = (kind: ProviderKind, providers: ProviderStatus[]) => providers.find((p) => p.kind === kind)?.display_name ?? PROVIDER_NAMES[kind] ?? kind
+
+function openAddAccount(request: { provider?: ProviderKind; instance?: string } = {}) { showDialog({ kind: 'account', ...request }) }
+
+/** The heading's end-aligned action. Hidden for older daemons, which cannot add accounts from the browser. */
 export function AccountsHeaderAction() {
- const t = useTheme()
- return <div testId="account-add" tabIndex={0} aria-label="Add account" onClick={() => showDialog({kind:'account'})} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') showDialog({kind:'account'}) }} style={{ display:'flex', alignItems:'center', gap:6, height:28, paddingLeft:10, paddingRight:10, borderWidth:1, borderColor:t.border, borderRadius:8, flexShrink:0, hover:{backgroundColor:t.hover} }}><Icon source={N.plus} size={14} color={t.text}/><Label color={t.text} size={14}>Add account</Label></div>
+  const t = useTheme()
+  const legacy = useAccountsLegacy()
+  if (legacy) return null
+  return <div testId="account-add" role="button" tabIndex={0} aria-label="Add account" onClick={() => openAddAccount()} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') openAddAccount() }} style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, paddingLeft: 10, paddingRight: 10, borderWidth: 1, borderColor: t.border, borderRadius: 8, flexShrink: 0, hover: { backgroundColor: t.buttonTertiaryHover } }}><Icon source={N.plus} size={14} color={t.text} style={{ pointerEvents: 'none' }} /><Label color={t.text} size={14} lineHeight={21}>Add account</Label></div>
 }
 
 export function Accounts() {
- const t = useTheme()
- const providers = useNav(s => s.providers)
- const [assigning, setAssigning] = useState(false)
- const resource = useResource('providers.accounts.list', {})
- const { settings, saving } = useSettings()
- const projects = useApp(s => s.projects)
- const [project, setProject] = useState('')
- const [page, setPage] = useState(0)
- const [editing, setEditing] = useState<AccountSummary | null>(null)
- const [confirm, setConfirm] = useState<{account:AccountSummary; action:'sign_out'|'remove'} | null>(null)
- useSettingsModal(!!editing || !!confirm || assigning)
- const [name, setName] = useState('')
- const [color, setColor] = useState('blue')
- const [busy, setBusy] = useState(false)
- const [error, setError] = useState('')
- const accounts = resource.data?.accounts ?? []
- const visibleAccounts = accounts.slice(page*8,page*8+8)
- const run = async (action: () => Promise<unknown>) => {
-  setBusy(true); setError('')
-  try { await action(); resource.refresh(); setEditing(null); setConfirm(null) }
-  catch(e) { setError(`Unable to change account. ${String(e)}`) }
-  finally { setBusy(false) }
- }
- const configure = async (kind:ProviderKind, instance:string, projectPath?:string) => {
-  const s=latestSettings(); if(!s) return
-  const current=s.providers[kind] ?? {env:{}}
-  const next={...current, project_accounts:{...current.project_accounts}}
-  if(projectPath) { if(instance) next.project_accounts[projectPath]=instance; else delete next.project_accounts[projectPath] }
-  else next.default_account=instance
-  await updateSettings({providers:{...s.providers,[kind]:next}})
-  resource.refresh()
- }
- return <>
-  {(error || resource.error) && <PageBlock><Label color={t.red} size={14}>{error || resource.error}</Label></PageBlock>}
-  {resource.loading ? <PageBlock><Label color={t.textSecondary}>Reading accounts…</Label></PageBlock> : !accounts.length ? <Section title="Accounts"><Row title="No accounts found" description="Choose Add account to connect an agent." /></Section> : [...new Set(visibleAccounts.map(a => a.provider.kind))].map(kind => {
-   const provider = providers.find(p => p.kind === kind)
-   const label = provider?.display_name ?? kind
-   return <PageBlock key={kind}><div style={{display:'flex',flexDirection:'column',gap:12,paddingBottom:30}}>
-    <div style={{display:'flex',alignItems:'center',gap:6,paddingLeft:2}}><ProviderMark kind={kind} size={14}/><Label color={t.text} size={14} lineHeight={19.6} weight={600}>{label}</Label></div>
-    <div style={{display:'flex',flexDirection:'column',borderWidth:1,borderColor:t.v('--app-settings-card-border'),borderRadius:12,backgroundColor:t.v('--app-settings-card-surface'),overflow:'hidden'}}>
-     {visibleAccounts.filter(a => a.provider.kind === kind).map((account, index) => <div key={account.provider.instance} style={{display:'flex',alignItems:'center',gap:12,paddingLeft:18,paddingRight:18,paddingTop:12,paddingBottom:12,minHeight:56,borderTopWidth:index?1:0,borderColor:t.v('--app-settings-card-border')}}>
-      <div style={{display:'flex',alignItems:'center',justifyContent:'center',width:32,height:32,flexShrink:0,borderRadius:8,backgroundColor:accountTint(account.color,t.variant==='dark',0.14),borderWidth:1,borderColor:accountTint(account.color,t.variant==='dark',0.35)}}><ProviderMark kind={kind} size={18}/></div>
-      <div style={{display:'flex',flexDirection:'column',flexGrow:1,minWidth:0}}><div style={{display:'flex',alignItems:'center',gap:8}}><Label color={t.text} size={14} lineHeight={21} weight={500}>{account.name}</Label>{account.is_default&&<Label color={t.textSecondary} size={11}>Default</Label>}</div><Label color={t.textSecondary} size={14} lineHeight={21} truncate>{account.identity?.email ?? 'Email unavailable'}</Label></div>
-      <Label color={t.textSecondary} size={12}>{account.status==='signed_in'?'Signed in':account.status==='signed_out'?'Signed out':'Needs sign-in'}</Label>
-      <Menu testId={`account-actions-${kind}-${account.provider.instance}`} align="end" trigger={()=><div style={{display:'flex',alignItems:'center',justifyContent:'center',width:28,height:28,borderRadius:6,hover:{backgroundColor:t.hover}}}><Icon source={N.ellipsis} size={16} color={t.textSecondary}/></div>}>
-       <MenuItem id="default" testId={`account-actions-${kind}-${account.provider.instance}-default`} label="Make default" disabled={account.is_default||busy||saving} onSelect={()=>void configure(kind,account.provider.instance)}/>
-       <MenuItem id="projects" testId={`account-actions-${kind}-${account.provider.instance}-projects`} label="Assign projects" onSelect={()=>setAssigning(true)}/>
-       {!isCliInstance(account.provider.instance)&&<><MenuItem id="edit" testId={`account-actions-${kind}-${account.provider.instance}-edit`} label="Edit name and color" onSelect={()=>{setName(account.name);setColor(account.color??'blue');setEditing(account)}}/><MenuItem id="sign_out" testId={`account-actions-${kind}-${account.provider.instance}-sign_out`} label="Sign out" onSelect={()=>setConfirm({account,action:'sign_out'})}/><MenuItem id="remove" testId={`account-actions-${kind}-${account.provider.instance}-remove`} label="Remove account" onSelect={()=>setConfirm({account,action:'remove'})}/></>}
-      </Menu>
-     </div>)}
-     <div tabIndex={0} aria-label={`Add ${label} account`} onClick={()=>showDialog({kind:'account',provider:kind})} onKeyDown={e=>{if(e.key==='enter'||e.key==='space')showDialog({kind:'account',provider:kind})}} style={{display:'flex',alignItems:'center',gap:8,minHeight:44,paddingLeft:18,paddingRight:18,borderTopWidth:1,borderColor:t.v('--app-settings-card-border'),hover:{backgroundColor:t.hover}}}><Icon source={N.plus} size={16} color={t.textSecondary}/><Label color={t.textSecondary} size={14}>{`Add ${label} account`}</Label></div>
-    </div>
-    {accounts.length>8&&<Row title={`Page ${page+1}`}><Button disabled={!page} onClick={()=>setPage(page-1)}>Previous</Button><Button disabled={(page+1)*8>=accounts.length} onClick={()=>setPage(page+1)}>Next</Button></Row>}
-   </div></PageBlock>
-  })}
-  {assigning&&<Dialog testId="account-projects" onClose={()=>{if(!selectOwnsEscape())setAssigning(false)}}><DialogHeader title="Assign projects" onClose={()=>{if(!selectOwnsEscape())setAssigning(false)}}/><Row title="Project" description="New conversations use this account. Existing conversations keep theirs."><Select testId="account-project" label="Project" value={project} onChange={setProject} options={[{value:'',label:'Choose project'},...projects.map(p=>({value:p.path,label:p.name}))]}/></Row>
-   {project&&[...new Set(accounts.map(a=>a.provider.kind))].map(kind=><Row key={kind} title={kind}><Select testId={`account-project-${kind}`} label={`${kind} account`} disabled={saving} value={settings?.providers[kind]?.project_accounts?.[project]??''} onChange={v=>void configure(kind,v,project)} options={[{value:'',label:'Use default account'},...accounts.filter(a=>a.provider.kind===kind).map(a=>({value:a.provider.instance,label:a.name}))]}/></Row>)}
-  </Dialog>}
-  {editing&&<Dialog testId="account-edit" onClose={()=>{if(!busy&&!selectOwnsEscape())setEditing(null)}}><DialogHeader title="Edit account" onClose={()=>{if(!busy&&!selectOwnsEscape())setEditing(null)}}/><Row title="Name"><TextField testId="account-name" label="Account name" value={name} onChange={setName}/></Row><Row title="Color"><Select testId="account-color" label="Account color" value={color} onChange={setColor} options={ACCOUNT_COLORS.map(value=>({value,label:ACCOUNT_COLOR_LABELS[value]}))}/></Row><Row title={error}><Button testId="account-save" disabled={busy||!isNameValid(name)} onClick={()=>void run(()=>getClient()!.call('providers.accounts.update',{kind:editing.provider.kind,instance:editing.provider.instance,name:name.trim(),color}))}>Save</Button></Row></Dialog>}
-  {confirm&&<Dialog testId="account-confirm" onClose={()=>{if(!busy)setConfirm(null)}}><DialogHeader title={confirm.action==='remove'?'Remove account?':'Sign out?'} description={`${confirm.account.name}. Existing conversations keep their account identity and may need you to sign in again.`} onClose={()=>{if(!busy)setConfirm(null)}}/><Row title={error}><Button disabled={busy} onClick={()=>setConfirm(null)}>Cancel</Button><Button testId="account-confirm-submit" disabled={busy} onClick={()=>void run(()=>getClient()!.call(confirm.action==='remove'?'providers.accounts.remove':'providers.accounts.sign_out',confirm.account.provider))}>{confirm.action==='remove'?'Remove account':'Sign out'}</Button></Row></Dialog>}
- </>
+  const t = useTheme()
+  const providers = useNav((s) => s.providers)
+  const projects = useApp((s) => s.projects)
+  const { settings } = useSettings()
+  const accounts = useAccounts()
+  const legacy = useAccountsLegacy()
+  const loaded = useAccountsLoaded()
+  const [removing, setRemoving] = useState<AccountSummary | null>(null)
+  const [assigning, setAssigning] = useState<AccountSummary | null>(null)
+  const host = activeEnvironment().name
+  useSettingsModal(!!removing || !!assigning)
+  useAccountsFeed()
+  // Read accounts and their usage while this tab is open.
+  useEffect(() => { void refreshAccounts(); askAccountLimits() }, [])
+  const installed = providers.filter((p) => p.available && accounts.some((a) => a.provider.kind === p.kind))
+  const missing = providers.filter((p) => !p.available)
+  return <>
+    {legacy && <PageBlock><Note>{`Update Kybern on ${host} to sign in from the browser.`}</Note></PageBlock>}
+    {installed.map((provider) => <AgentSection key={provider.kind} provider={provider} accounts={accounts.filter((a) => a.provider.kind === provider.kind)} readOnly={legacy} onRemove={setRemoving} onAssign={setAssigning} />)}
+    {!loaded && installed.length === 0 && <PageBlock><div testId="accounts-loading" role="status" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>{[0, 1].map((i) => <div key={i} style={{ height: 56, borderRadius: 12, backgroundColor: t.buttonSecondary }} />)}</div></PageBlock>}
+    {missing.length > 0 && <PageBlock><div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', paddingBottom: 30 }}><Note>{`${listAgents(missing)} ${missing.length === 1 ? 'isn’t' : 'aren’t'} installed. Set them up in `}</Note><TextLink testId="accounts-agent-providers" onClick={() => openSettingsTab('agents')}>Agent providers</TextLink><Note>.</Note></div></PageBlock>}
+    {removing && <RemoveDialog account={removing} onClose={() => setRemoving(null)} />}
+    {assigning && <ProjectsDialog account={assigning} accounts={accounts} projects={projects} projectAccounts={settings?.providers[assigning.provider.kind]?.project_accounts} onClose={() => setAssigning(null)} />}
+  </>
 }
+
+function Note({ children }: { children: string }) {
+  const t = useTheme()
+  return <Label color={t.textSecondary} size={12} lineHeight={19.2}>{children}</Label>
+}
+function TextLink({ children, onClick, testId }: { children: string; onClick: () => void; testId?: string }) {
+  const t = useTheme()
+  return <div testId={testId} role="button" tabIndex={0} onClick={onClick} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') onClick() }} style={{ display: 'flex', cursor: 'pointer' }}><Label color={t.textSecondary} size={12} lineHeight={19.2} style={{ textDecoration: 'underline' }}>{children}</Label></div>
+}
+
+function listAgents(missing: ProviderStatus[]): string {
+  const names = missing.map((p) => p.display_name)
+  return typeof Intl !== 'undefined' && 'ListFormat' in Intl ? new Intl.ListFormat('en', { style: 'long', type: 'conjunction' }).format(names) : names.join(', ')
+}
+
+function AgentSection({ provider, accounts, readOnly, onRemove, onAssign }: { provider: ProviderStatus; accounts: AccountSummary[]; readOnly: boolean; onRemove: (account: AccountSummary) => void; onAssign: (account: AccountSummary) => void }) {
+  const t = useTheme()
+  return <PageBlock><div testId={`accounts-${provider.kind}`} style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 30 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 2 }}><ProviderMark kind={provider.kind} size={14} /><Label color={t.text} size={14} lineHeight={19.6} weight={600}>{provider.display_name}</Label></div>
+    {!readOnly && accounts.length > 1 && <div style={{ display: 'flex' }}><Note>Accounts share skills and installed plugin files. Sign-ins, sessions and connections stay separate. Conflicting local files are kept in backups.</Note></div>}
+    <div style={{ display: 'flex', flexDirection: 'column', borderWidth: 1, borderColor: t.v('--app-settings-card-border'), borderRadius: 12, backgroundColor: t.v('--app-settings-card-surface'), overflow: 'hidden' }}>
+      {accounts.map((account, index) => <AccountRow key={account.provider.instance} first={index === 0} account={account} readOnly={readOnly} onRemove={onRemove} onAssign={onAssign} />)}
+      {!readOnly && <div testId={`account-add-${provider.kind}`} role="button" tabIndex={0} aria-label={`Add ${provider.display_name} account`} onClick={() => openAddAccount({ provider: provider.kind })} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') openAddAccount({ provider: provider.kind }) }} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 44, paddingLeft: 18, paddingRight: 18, borderTopWidth: accounts.length ? 1 : 0, borderColor: t.v('--app-settings-card-border'), cursor: 'pointer', hover: { backgroundColor: t.hover } }}><Icon source={N.plus} size={16} color={t.textSecondary} style={{ pointerEvents: 'none' }} /><Label color={t.textSecondary} size={14} lineHeight={21}>{`Add ${provider.display_name} account`}</Label></div>}
+    </div>
+  </div></PageBlock>
+}
+
+// ── Row ──────────────────────────────────────────────────────────────────────
+
+function AccountRow({ account, first, readOnly, onRemove, onAssign }: { account: AccountSummary; first: boolean; readOnly: boolean; onRemove: (account: AccountSummary) => void; onAssign: (account: AccountSummary) => void }) {
+  const t = useTheme()
+  const { kind, instance } = account.provider
+  const cli = isCliInstance(instance)
+  const flash = useAccountFlash(kind, instance)
+  const [renaming, setRenaming] = useState(false)
+  const email = account.identity?.email
+  const plan = account.identity?.plan
+  const projectCount = account.projects.length
+  const detail = [email ?? 'Email unavailable', plan, projectCount > 0 ? (projectCount === 1 ? '1 project' : `${projectCount} projects`) : null, cli ? 'Same as your terminal' : null].filter(Boolean).join(' · ')
+  return <div testId={`account-row-${kind}-${instance}`} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 12, minHeight: 56, paddingLeft: 18, paddingRight: 18, paddingTop: 12, paddingBottom: 12, borderTopWidth: first ? 0 : 1, borderColor: t.v('--app-settings-card-border') }}>
+    {flash && <FlashOverlay />}
+    <AccountAvatar kind={kind} color={account.color} instance={instance} size={32} />
+    <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        {renaming ? <RenameField account={account} onDone={() => setRenaming(false)} /> : <Label color={t.text} size={14} lineHeight={21} weight={500} truncate>{account.name}</Label>}
+        {account.is_default && !renaming && <div style={{ display: 'flex', alignItems: 'center', height: 16, paddingLeft: 3, paddingRight: 3, borderRadius: 4, backgroundColor: t.buttonSecondary, flexShrink: 0 }}><Label color={t.textSecondary} size={11} lineHeight={14} weight={500}>Default</Label></div>}
+      </div>
+      <Label color={t.textSecondary} size={14} lineHeight={21.7} truncate>{detail}</Label>
+    </div>
+    <UsageCell account={account} />
+    <StatusCell account={account} cli={cli} />
+    {!readOnly && <AccountMenu account={account} onRename={() => setRenaming(true)} onRemove={onRemove} onAssign={onAssign} />}
+  </div>
+}
+
+/** A row that was just added flashes once as its accent background fades out (`account-row-flash`, 600 ms). */
+function FlashOverlay() {
+  const t = useTheme()
+  if (REDUCED_MOTION) return null
+  return <motion.div initial={{ opacity: 1 }} animate={{ opacity: 0 }} transition={{ duration: 0.6, ease: [...EASE.smoothOut] as [number, number, number, number] }} style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, backgroundColor: t.v('--color-background-accent'), pointerEvents: 'none' }} />
+}
+
+function RenameField({ account, onDone }: { account: AccountSummary; onDone: () => void }) {
+  const t = useTheme()
+  const [draft, setDraft] = useState(account.name)
+  const [error, setError] = useState(false)
+  const canceled = useRef(false)
+  const saving = useRef(false)
+  const save = async () => {
+    const client = getClient()
+    if (canceled.current || saving.current || !client) return
+    const name = draft.trim()
+    if (name === account.name) return onDone()
+    if (!isNameValid(name)) { setError(true); return }
+    saving.current = true
+    try {
+      await client.call('providers.accounts.update', { kind: account.provider.kind, instance: account.provider.instance, name })
+      await refreshAccounts()
+      toast.success(`Renamed to ${name}`)
+      onDone()
+    } catch (problem) {
+      saving.current = false
+      toast.error('Unable to rename the account', { description: `${errorText(problem)} Check the name, then try again.` })
+    }
+  }
+  return <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}>
+    <input testId="account-rename" aria-label={`${account.name} name`} autoFocus value={draft} onChange={(e) => { setDraft(e.value ?? ''); setError(false) }} onBlur={() => void save()} onSubmit={() => void save()} onKeyDown={(e) => { if (e.key === 'escape') { canceled.current = true; onDone() } }} style={{ width: '100%', height: 28, minWidth: 0, borderWidth: 1, borderColor: error ? t.v('--destructive') : t.border, borderRadius: 8, paddingLeft: 10, paddingRight: 10, fontSize: 14, color: t.text, backgroundColor: t.inputGroupFill }} />
+    {error && <Label color={t.v('--destructive')} size={13} lineHeight={19.5} style={{ marginTop: 4 }}>Enter a name up to 120 characters.</Label>}
+  </div>
+}
+
+function UsageCell({ account }: { account: AccountSummary }) {
+  const t = useTheme()
+  const { kind, instance } = account.provider
+  const entries = useAccountLimitEntries()
+  const global = useNav((s) => s.limits)
+  const [hover, setHover] = useState(false)
+  // The default account's limits are the global entry, labelled only once the agent has named accounts.
+  const entry = limitsForAccount(account, entries, global)
+  const binding = entry ? bindingLimit(entry.limits, Date.now()) : null
+  if (!binding) return null
+  const left = Math.max(0, Math.min(100, Math.round(100 - binding.used)))
+  const window = limitLabel(binding.limit).toLowerCase()
+  return <Tip label={`${left}% of the ${window} limit left · Open usage`} side="top" size={64}>
+    <div testId={`account-usage-${kind}-${instance}`} role="button" aria-label={`${left}% left`} tabIndex={0} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onClick={() => { setUsageAnchor(kind, instance); goPage('usage') }} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') { setUsageAnchor(kind, instance); goPage('usage') } }} style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 6, paddingRight: 6, paddingTop: 4, paddingBottom: 4, borderRadius: 6, flexShrink: 0, cursor: 'pointer', backgroundColor: hover ? t.buttonSecondaryHover : 'transparent' }}>
+      <AccountUsageRing left={left} />
+      <Label color={hover ? t.text : t.textSecondary} size={13} lineHeight={19.5}>{`${left}%`}</Label>
+    </div>
+  </Tip>
+}
+
+function StatusCell({ account, cli }: { account: AccountSummary; cli: boolean }) {
+  const t = useTheme()
+  const { kind, instance } = account.provider
+  const legacy = useAccountsLegacy()
+  const wrap = (children: ReactNode) => <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, minWidth: 104, flexShrink: 0 }}>{children}</div>
+  const muted = (text: string) => <Label color={t.textSecondary} size={13} lineHeight={19.5}>{text}</Label>
+  const signIn = cli ? <HowToSignIn kind={kind} /> : <Button testId={`account-signin-${kind}-${instance}`} onClick={() => openAddAccount({ provider: kind, instance })}>Sign in</Button>
+  switch (account.status) {
+    case 'signed_in': return wrap(muted('Signed in'))
+    case 'needs_sign_in': return wrap(<><div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Icon source={S.triangleAlert} size={12} color={t.warning} /><Label color={t.warning} size={13} lineHeight={19.5}>Needs sign-in</Label></div>{signIn}</>)
+    case 'signed_out': return wrap(<>{muted('Signed out')}{signIn}</>)
+    default:
+      if (legacy) return wrap(cli ? null : signIn)
+      if (account.identity) return wrap(muted('Signed in'))
+      return IDENTITY_KINDS.includes(kind) ? wrap(<div role="status" aria-label="Checking the sign-in" style={{ width: 56, height: 10, borderRadius: 4, backgroundColor: t.buttonSecondary }} />) : wrap(null)
+  }
+}
+
+function HowToSignIn({ kind }: { kind: ProviderKind }) {
+  const t = useTheme()
+  const command = CLI_SIGN_IN_COMMAND[kind]
+  const [done, setDone] = useState(false)
+  useEffect(() => { if (!done) return; const timer = setTimeout(() => setDone(false), 1400); return () => clearTimeout(timer) }, [done])
+  return <Menu testId={`account-how-${kind}`} align="end" width={288} trigger={() => <Button onClick={() => {}} testId={undefined}>How to sign in</Button>}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 8 }}>
+      <Label color={t.text} size={14} lineHeight={21} weight={500}>How to sign in</Label>
+      <Label color={t.textSecondary} size={14} lineHeight={21}>{`Run ${command} in your terminal. Kybern picks it up automatically.`}</Label>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingLeft: 10, paddingRight: 4, paddingTop: 4, paddingBottom: 4, borderWidth: 1, borderColor: t.border, borderRadius: 8 }}>
+        <Label color={t.text} size={13} lineHeight={19.5} font="Menlo" truncate>{command}</Label>
+        <Button testId="account-copy-command" variant="ghost" icon={done ? N.check : S.copy} onClick={() => { void copyText(command); setDone(true) }}>{done ? 'Copied' : 'Copy command'}</Button>
+      </div>
+    </div>
+  </Menu>
+}
+
+// ── Menu ─────────────────────────────────────────────────────────────────────
+
+function AccountMenu({ account, onRename, onRemove, onAssign }: { account: AccountSummary; onRename: () => void; onRemove: (account: AccountSummary) => void; onAssign: (account: AccountSummary) => void }) {
+  const t = useTheme()
+  const { kind, instance } = account.provider
+  const cli = isCliInstance(instance)
+  const id = `${kind}-${instance}`
+  // TODO(kit9): replace with the kit's nested menu (`MenuSub`/`MenuSubPopup`); until it lands the Color item swaps this menu's content.
+  const [view, setView] = useState<'root' | 'color'>('root')
+  const signOut = async () => {
+    const client = getClient()
+    if (!client) return
+    try {
+      await client.call('providers.accounts.sign_out', account.provider)
+      await refreshAccounts()
+      toast.success(`${account.name} signed out`)
+    } catch (error) {
+      toast.error(`Unable to sign ${account.name} out`, { description: `${errorText(error)} Check your connection, then try again.` })
+    }
+  }
+  const setColor = async (color: string) => {
+    const client = getClient()
+    if (!client) return
+    try {
+      await client.call('providers.accounts.update', { kind, instance, color })
+      await refreshAccounts()
+    } catch (error) {
+      toast.error('Unable to change the color', { description: `${errorText(error)} Check your connection, then try again.` })
+    }
+  }
+  return <Menu testId={`account-actions-${id}`} align="end" minWidth={192} onOpenChange={(open) => { if (!open) setView('root') }} trigger={() => <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, hover: { backgroundColor: t.buttonSecondaryHover } }}><Icon source={N.ellipsis} size={16} color={t.textSecondary} style={{ pointerEvents: 'none' }} /></div>}>
+    {view === 'root' ? <>
+      {!cli && <MenuItem id="rename" testId={`account-actions-${id}-rename`} label="Rename…" onSelect={onRename} />}
+      {!cli && <MenuItem id="signin" testId={`account-actions-${id}-signin`} label="Sign in again" onSelect={() => openAddAccount({ provider: kind, instance })} />}
+      {!cli && account.can_sign_out && account.status === 'signed_in' && <MenuItem id="sign_out" testId={`account-actions-${id}-sign_out`} label="Sign out" onSelect={() => void signOut()} />}
+      {!cli && <MenuSeparator />}
+      {!account.is_default && <MenuItem id="default" testId={`account-actions-${id}-default`} label="Make default" onSelect={() => void makeDefaultAccount(account)} />}
+      <MenuItem id="projects" testId={`account-actions-${id}-projects`} label="Use for projects…" onSelect={() => onAssign(account)} />
+      {!cli && <MenuItem id="color" testId={`account-actions-${id}-color`} label="Color" keepOpen detail="›" onSelect={() => setView('color')} />}
+      {!cli && <MenuSeparator />}
+      {!cli && <MenuItem id="remove" testId={`account-actions-${id}-remove`} label="Remove…" destructive onSelect={() => onRemove(account)} />}
+    </> : <>
+      <MenuItem id="back" label="Color" keepOpen icon={N.arrowLeft} onSelect={() => setView('root')} />
+      <MenuSeparator />
+      {ACCOUNT_COLORS.map((color) => <MenuItem key={color} id={`color-${color}`} testId={`account-actions-${id}-color-${color}`} label={ACCOUNT_COLOR_LABELS[color]} checked={isAccountColor(account.color) && account.color === color} iconNode={<AccountDot color={color} size={8} />} onSelect={() => void setColor(color)} />)}
+    </>}
+  </Menu>
+}
+
+// ── Dialogs ──────────────────────────────────────────────────────────────────
+
+function DialogShell({ children, onClose, testId, width = 448 }: { children: ReactNode; onClose: () => void; testId: string; width?: number }) {
+  return <Dialog testId={testId} width={width} onClose={() => { if (!selectOwnsEscape()) onClose() }}>{children}</Dialog>
+}
+function DialogFooter({ children }: { children: ReactNode }) {
+  return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}>{children}</div>
+}
+
+function RemoveDialog({ account, onClose }: { account: AccountSummary; onClose: () => void }) {
+  const t = useTheme()
+  const providers = useNav((s) => s.providers)
+  const [busy, setBusy] = useState(false)
+  const agent = agentLabel(account.provider.kind, providers)
+  const remove = async () => {
+    const client = getClient()
+    if (!client) return
+    setBusy(true)
+    try {
+      await client.call('providers.accounts.remove', account.provider)
+      await refreshAccounts()
+      toast.success(`${account.name} removed`)
+      onClose()
+    } catch (error) {
+      // The daemon says when a turn is still running ("Work is running in 2 threads. Stop them, then remove it.").
+      toast.error(`Unable to remove ${account.name}`, { description: errorText(error) })
+    } finally {
+      setBusy(false)
+    }
+  }
+  return <DialogShell testId="account-remove" onClose={() => { if (!busy) onClose() }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 16, paddingRight: 16, paddingTop: 16, paddingBottom: 8 }}>
+      <Label color={t.text} size={18} lineHeight={22.5} weight={600}>{`Remove ${account.name}?`}</Label>
+      <Label color={t.textSecondary} size={14} lineHeight={19.25}>{account.managed ? `Kybern signs ${account.name} out and deletes its folder. Threads that used ${account.name} switch to ${agent}’s default account on their next message.` : `Kybern stops using ${account.name}. The folder and its sign-in stay at ${account.directory ?? 'its folder'}.`}</Label>
+    </div>
+    <DialogFooter><Button testId="account-remove-cancel" variant="ghost" onClick={onClose}>Cancel</Button><Button testId="account-remove-confirm" variant="destructive" disabled={busy} onClick={() => void remove()}>Remove account</Button></DialogFooter>
+  </DialogShell>
+}
+
+function ProjectsDialog({ account, accounts, projects, projectAccounts, onClose }: { account: AccountSummary; accounts: AccountSummary[]; projects: { id: string; name: string; path: string }[]; projectAccounts: Record<string, string> | undefined; onClose: () => void }) {
+  const t = useTheme()
+  const { kind, instance } = account.provider
+  const stored = projectAccounts ?? {}
+  const [checked, setChecked] = useState(() => new Set(projects.filter((p) => stored[p.path] === instance).map((p) => p.path)))
+  const [saving, setSaving] = useState(false)
+  const otherName = (path: string) => {
+    const other = stored[path]
+    if (!other || other === instance) return null
+    return accounts.find((a) => a.provider.kind === kind && a.provider.instance === other)?.name ?? null
+  }
+  const sorted = useMemo(() => [...projects].sort((a, b) => a.name.localeCompare(b.name)), [projects])
+  const save = async () => {
+    setSaving(true)
+    try {
+      await updateProviderSettings(kind, (current) => {
+        const next = { ...current.project_accounts }
+        for (const project of projects) {
+          if (checked.has(project.path)) next[project.path] = instance
+          else if (next[project.path] === instance) delete next[project.path]
+        }
+        return { ...current, project_accounts: next }
+      })
+      onClose()
+    } catch (error) {
+      toast.error('Unable to save the projects', { description: `${errorText(error)} Check your connection, then try again.` })
+    } finally {
+      setSaving(false)
+    }
+  }
+  const toggle = (path: string) => setChecked((prev) => { const next = new Set(prev); if (next.has(path)) next.delete(path); else next.add(path); return next })
+  return <DialogShell testId="account-projects" onClose={onClose}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 16, paddingRight: 48, paddingTop: 16, paddingBottom: 4 }}>
+      <Label color={t.text} size={18} lineHeight={22.5} weight={600}>{`Use ${account.name} for projects`}</Label>
+      <Label color={t.textSecondary} size={14} lineHeight={19.25}>{`These projects use ${account.name} instead of the default. Their worktrees do too.`}</Label>
+    </div>
+    <div testId="account-projects-list" aria-label="Projects" style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 288, overflowY: 'scroll', paddingLeft: 16, paddingRight: 16, paddingTop: 4, paddingBottom: 12 }}>
+      {sorted.map((project) => {
+        const other = otherName(project.path)
+        return <div key={project.id} testId={`account-project-${project.id}`} role="checkbox" aria-checked={checked.has(project.path)} aria-label={project.name} tabIndex={0} onClick={() => toggle(project.path)} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') toggle(project.path) }} style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 36, paddingLeft: 8, paddingRight: 8, paddingTop: 6, paddingBottom: 6, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: t.hover } }}>
+          <Checkbox checked={checked.has(project.path)} />
+          <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={14} lineHeight={21} truncate>{project.name}</Label><Label color={t.textSecondary} size={13} lineHeight={19.5} truncate>{project.path}</Label></div>
+          {other && <Label color={t.textSecondary} size={13} lineHeight={19.5}>{`Uses ${other}`}</Label>}
+        </div>
+      })}
+      {sorted.length === 0 && <div style={{ paddingLeft: 8, paddingRight: 8, paddingTop: 12, paddingBottom: 12 }}><Label color={t.textSecondary} size={14} lineHeight={21}>No projects yet. Add a project from the sidebar.</Label></div>}
+    </div>
+    <DialogFooter><Button testId="account-projects-cancel" variant="ghost" onClick={onClose}>Cancel</Button><Button testId="account-projects-save" variant="primary" disabled={saving} onClick={() => void save()}>Save</Button></DialogFooter>
+  </DialogShell>
+}
+

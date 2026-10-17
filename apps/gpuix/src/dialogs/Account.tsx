@@ -1,89 +1,438 @@
-import { Button as ActionButton } from '../usage/controls.tsx'
-import { execFile } from 'node:child_process'
-import { useEffect, useRef, useState } from 'react'
-import type { AccountLogin, AccountLoginMode, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
-import { acceptLoginUpdate, initialLoginMode, supportsDeviceCode, supportsPasteCode } from '@/lib/accounts'
-import { Dialog, DialogHeader } from '../nav/overlay.tsx'
-import { Button, Switch, TextField } from '../settings/controls.tsx'
-import { activeEnvironment } from '../shell/environment.ts'
-import { getClient } from '../state.ts'
-import { useNav } from '../nav/store.ts'
+// The Add account sheet (`components/kybern/accounts/AddAccountSheet.tsx`): one dialog whose body
+// moves between steps (pick, waiting, paste, device, terminal, success, duplicate, error) as a
+// daemon-driven sign-in runs (`providers.accounts.login.*`). The common path is one browser trip:
+// pick an agent, approve in the browser, come back to a check mark, a prefilled name and a colour.
+// It also signs an existing account in again.
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  ACCOUNT_COLORS,
+  ACCOUNT_COLOR_LABELS,
+  accountDisplayName,
+  accountFor,
+  initialLoginMode,
+  isNameValid,
+  loginHost,
+  remoteNote,
+  shouldFinishOnClose,
+  stepFor,
+  successDefaults,
+  supportsBrowserLogin,
+  supportsDeviceCode,
+  supportsPasteCode,
+  type AccountColor,
+  type SheetStep,
+} from '../../../desktop/src/lib/accounts.ts'
+import { PROVIDER_NAMES } from '../../../desktop/src/lib/providerUsage.ts'
+import type { AccountLoginMode, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
+import { Icon } from '../icons.tsx'
+import { MatrixLoader } from '../MatrixLoader.tsx'
+import { Rise } from '../motion/kit.tsx'
+import { N } from '../nav/glyphs.ts'
+import { Dialog } from '../nav/overlay.tsx'
+import { setNav } from '../nav/store.ts'
 import { errorText } from '../nav/actions.ts'
+import { useNav } from '../nav/store.ts'
+import { Button, Select, Switch, TextField } from '../settings/controls.tsx'
+import { openExternal, pickFolder } from '../settings/external.ts'
+import { S } from '../settings/glyphs.ts'
+import { profileById } from '../environments/registry.ts'
+import { activeEnvironment } from '../shell/environment.ts'
+import { toast } from '../shell/toasts.tsx'
 import { copyText } from '../transcript/store.ts'
-import { Label, ProviderMark, useTheme } from '../ui.tsx'
+import { Screen as TerminalScreen } from '../terminal/Terminal.tsx'
+import { getClient } from '../state.ts'
+import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
+import { AccountAvatar, accountColor } from '../usage/AccountMark.tsx'
+import { flashAccount, refreshAccounts, useAccounts, useAccountsFeed, useAccountsLegacy } from '../usage/accounts.ts'
+import { useSettings } from '../settings/store.ts'
+import { useAccountLogin } from './useAccountLogin.ts'
 
-/** One daemon-owned login attempt. Notifications drive progress; Refresh is a
- * recovery path, so a waiting sheet has no polling clock. */
-export function Account({ close, provider }: { close: () => void; provider?: ProviderKind }) {
+/** Upstream providers `omp login` can use (`OMP_UPSTREAMS`). */
+const OMP_UPSTREAMS = [
+  { id: 'anthropic', label: 'Claude' },
+  { id: 'openai-codex', label: 'ChatGPT' },
+  { id: 'github-copilot', label: 'GitHub Copilot' },
+  { id: 'google-gemini-cli', label: 'Google' },
+] as const
+
+const TERMINAL_COPY: Partial<Record<ProviderKind, string>> = {
+  opencode: 'OpenCode asks for an API key. Paste it into the prompt below.',
+  pi: 'Pi asks which provider to sign in to. Follow its prompts below.',
+}
+
+export function Account({ close, provider, instance }: { close: () => void; provider?: ProviderKind; instance?: string }) {
   const t = useTheme()
+  useAccountsFeed()
   const providers = useNav((s) => s.providers)
-  const [client] = useState(() => getClient()!)
-  const [kind, setKind] = useState<ProviderKind>(provider ?? providers.find(p=>p.available)?.kind ?? 'claude-code')
-  const [login, setLogin] = useState<AccountLogin | null>(null)
-  const current = useRef<AccountLogin | null>(null)
-  const mounted = useRef(true)
-  const finished = useRef(false)
-  const [name, setName] = useState('')
+  const legacy = useAccountsLegacy()
+  const [kind, setKind] = useState<ProviderKind | undefined>(provider)
+  const [upstream, setUpstream] = useState<string>(OMP_UPSTREAMS[0].id)
+  const [folder, setFolder] = useState('')
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const api = useAccountLogin()
+  const apiRef = useRef(api)
+  useEffect(() => { apiRef.current = api })
+  const { login, failure, starting } = api
+  // Signing in again: opened for an account, or "Sign in again to Work" from the duplicate step.
+  const reauthInstance = login?.instance ?? instance
+  const reauth = !!reauthInstance
+  const accounts = useAccounts(kind)
+  const { settings } = useSettings()
+  const environment = activeEnvironment()
+  const remote = !environment.local
+  const host = environment.name
+  const transport: 'SSH' | 'Tailscale' = remote && profileById(environment.id).ssh ? 'SSH' : 'Tailscale'
+  const agent = kind ? providers.find((p) => p.kind === kind)?.display_name ?? PROVIDER_NAMES[kind] ?? kind : ''
+  const target = kind && reauthInstance ? accountFor(accounts, kind, reauthInstance) : undefined
+  const targetName = accountDisplayName(reauthInstance, target?.name)
+
+  // Success step values, prefilled from the daemon's suggestion.
+  const usedColors = useMemo(() => accounts.map((a) => a.color), [accounts])
+  const defaults = useMemo(() => (login && login.phase === 'signed_in' ? successDefaults(login, usedColors) : null), [login, usedColors])
+  const [name, setName] = useState<string | null>(null)
+  const [color, setColor] = useState<AccountColor | null>(null)
   const [makeDefault, setMakeDefault] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const adopt = (next: AccountLogin) => {
-    if (!mounted.current) return
-    current.current = acceptLoginUpdate(current.current, next)
-    setLogin(current.current)
-    if (next.phase === 'signed_in') setName((value) => value || next.suggested_name || next.identity?.email || 'New account')
+  const [finishError, setFinishError] = useState<string | null>(null)
+  const [finishing, setFinishing] = useState(false)
+  const [code, setCode] = useState('')
+  const [codeShown, setCodeShown] = useState(false)
+  // A code is single use: each refusal clears the field, like the desktop's remounted input.
+  useEffect(() => { setCode('') }, [api.wrongCodes])
+  const shownName = name ?? defaults?.name ?? ''
+  const shownColor = color ?? defaults?.color ?? 'blue'
+  const namedCount = accounts.filter((a) => a.provider.instance !== 'default').length
+  const providerSettings = kind ? settings?.providers[kind] : undefined
+  const forcedDefault = namedCount === 0 && !providerSettings?.default_account
+  const defaultOn = forcedDefault || makeDefault
+
+  const step: SheetStep | null = failure ? 'error' : api.legacyTerminal ? 'terminal' : instance && !login ? null : stepFor(login)
+  const verifying = login?.phase === 'verifying'
+  const modeFor = (k: ProviderKind): AccountLoginMode => initialLoginMode(k, remote)
+
+  const begin = async (patch: { mode?: AccountLoginMode } = {}) => {
+    if (!kind) return
+    const mode = patch.mode ?? modeFor(kind)
+    if (reauth && legacy) { await api.signInLegacy({ kind, instance: reauthInstance! }); return }
+    await api.start({ kind, mode, ...(reauth ? { instance: reauthInstance } : {}), ...(!reauth && folder.trim() ? { directory: folder.trim() } : {}), ...(kind === 'omp' && !reauth && (mode === 'browser' || mode === 'paste') ? { upstream } : {}) })
   }
+
+  // Signing in again starts straight away, with no pick step.
+  const started = useRef(false)
   useEffect(() => {
-    const stop = client.onNotification('providers.accounts.login.changed', (value) => { const next = value as AccountLogin; if (next.id === current.current?.id) adopt(next) })
-    return () => {
-      mounted.current = false; stop()
-      const pending = current.current
-      if (pending && !finished.current && !pending.instance) void client.call('providers.accounts.login.cancel', { id: pending.id }).catch(() => {})
+    if (!reauth || !kind || started.current) return
+    started.current = true
+    void begin()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  useEffect(() => { if (instance && provider && !kind) setKind(provider) }, [instance, provider, kind])
+
+  const finish = async (): Promise<boolean> => {
+    const client = getClient()
+    if (!login || !kind || !client) return false
+    setFinishing(true)
+    setFinishError(null)
+    try {
+      const result = await client.call('providers.accounts.login.finish', { id: login.id, name: shownName.trim(), color: shownColor, make_default: defaultOn })
+      await refreshAccounts()
+      flashAccount(result.kind, result.instance)
+      toast.success(`${shownName.trim()} added`)
+      return true
+    } catch (error) {
+      setFinishError(`${errorText(error)} Check the name, then try again.`)
+      return false
+    } finally {
+      setFinishing(false)
     }
-  }, [client])
-  const run = async (action: () => Promise<void>) => { setBusy(true); setError(''); try { await action() } catch (e) { if (mounted.current) setError(errorText(e)) } finally { if (mounted.current) setBusy(false) } }
-  const begin = (mode: AccountLoginMode) => void run(async () => {
-    if (current.current) await client.call('providers.accounts.login.cancel', { id: current.current.id })
-    current.current = null; setLogin(null)
-    const next = await client.call('providers.accounts.login.start', { kind, mode })
-    if (!mounted.current) { await client.call('providers.accounts.login.cancel', { id: next.id }); return }
-    adopt(next)
-  })
-  const mode = initialLoginMode(kind, !activeEnvironment().local)
-  const live = login && !['failed', 'canceled', 'signed_in'].includes(login.phase)
-  const finish = async () => {
-    if (!login || login.phase !== 'signed_in' || login.duplicate_of) return
-    await client.call('providers.accounts.login.finish', { id: login.id, name: name.trim() || login.suggested_name || 'New account', color: login.suggested_color, make_default: makeDefault })
-    finished.current = true; close()
   }
-  const dismiss = () => { if (busy) return; if (login?.phase === 'signed_in' && !login.duplicate_of && !login.instance) void run(finish); else close() }
-  return <Dialog onClose={dismiss} width={448} testId="add-account"><DialogHeader title={login?.phase === 'signed_in' ? 'Account connected' : 'Add an account'} description={login ? `Sign in on ${activeEnvironment().name}.` : 'Sign in with another account. Your current sign-ins stay as they are.'} onClose={dismiss} />
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, paddingLeft: 16, paddingRight: 16, paddingBottom: 16 }}>
-      {!login && <><div testId="account-provider" role="radiogroup" aria-label="Agent" style={{display:'flex',flexWrap:'wrap',gap:8}}>{providers.filter(p=>p.available).map(p=><div key={p.kind} testId={`account-provider-${p.kind}`} role="radio" aria-checked={kind===p.kind} tabIndex={busy?-1:0} onClick={()=>!busy&&setKind(p.kind)} onKeyDown={e=>{if(!busy&&(e.key==='enter'||e.key==='space'))setKind(p.kind)}} style={{display:'flex',flexDirection:'column',gap:8,width:130,height:72,padding:12,borderWidth:1,borderColor:kind===p.kind?t.border:'transparent',borderRadius:12,hover:{backgroundColor:t.hover}}}><ProviderMark kind={p.kind} size={18}/><Label color={t.text} size={14} weight={500}>{p.display_name}</Label></div>)}</div>
-        {mode === 'terminal' && <Label color={t.textSecondary} size={13} lineHeight={18}>This agent signs in through an interactive terminal. Use Kybern desktop’s Add account sheet to finish terminal sign-in.</Label>}
-        <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:12}}><ActionButton onClick={dismiss} disabled={busy}>Cancel</ActionButton><ActionButton testId="account-start" primary disabled={busy||mode==='terminal'||!providers.some(p=>p.available&&p.kind===kind)} onClick={()=>begin(mode)}>{busy?'Starting…':'Continue'}</ActionButton></div>
-      </>}
-      {login && <>
-        {login.error && <Label color={t.red} size={13} lineHeight={18}>{login.error}</Label>}
-        {live && <>
-          <Label color={t.text} size={13}>{login.phase === 'verifying' ? 'Checking your account…' : login.mode === 'device_code' ? 'Enter this code on the sign-in page.' : login.mode === 'paste' ? 'Sign in, then copy the authorization code.' : 'Finish signing in in your browser.'}</Label>
-          {login.user_code && <><Label color={t.text} size={28}>{login.user_code}</Label><Button onClick={() => copyText(login.user_code!)}>Copy code</Button></>}
-          {login.url && <Button testId="account-browser" onClick={() => { try { const url = new URL(login.url!); if (url.protocol !== 'https:' && url.protocol !== 'http:') throw Error('Unsupported sign-in address'); execFile('open', [url.toString()], (e) => { if (e) setError('Unable to open the sign-in page. Copy its address and open it in your browser.') }) } catch (e) { setError(errorText(e)) } }}>Open sign-in page</Button>}
-          {login.url && <Button onClick={() => copyText(login.url!)}>Copy sign-in address</Button>}
-          {login.mode === 'paste' && <Button testId="account-paste" disabled={busy} onClick={() => execFile('pbpaste', (e, code) => { if (e || !code.trim()) { setError('Copy the authorization code, then try again.'); return } void run(async () => adopt(await client.call('providers.accounts.login.input', { id: login.id, code: code.trim() }))) })}>Paste authorization code</Button>}
-          <Button disabled={busy} onClick={() => void run(async () => adopt(await client.call('providers.accounts.login.get', { id: login.id })))}>Check sign-in</Button>
-          {login.mode === 'browser' && supportsPasteCode(kind) && <Button disabled={busy} onClick={() => begin('paste')}>Use an authorization code</Button>}
-          {login.mode === 'browser' && supportsDeviceCode(kind) && <Button disabled={busy} onClick={() => begin('device_code')}>Use a device code</Button>}
-        </>}
-        {login.phase === 'signed_in' && (login.duplicate_of ? <><Label color={t.text} size={13}>This account is already connected.</Label><Button onClick={dismiss}>Done</Button></> : <>
-          <Label color={t.textSecondary} size={13}>{login.identity?.email ?? 'Signed in successfully'}</Label>
-          <TextField testId="account-name" label="Account name" value={name} onChange={setName} placeholder="Account name" width="100%" />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><Switch label="Use by default" checked={makeDefault} onChange={setMakeDefault} /><Label color={t.text} size={13}>Use by default</Label></div>
-          <Button testId="account-finish" disabled={busy || !name.trim()} onClick={() => void run(finish)}>{busy ? 'Adding account…' : 'Add account'}</Button>
-        </>)}
-        {(login.phase === 'failed' || login.phase === 'canceled') && <Button disabled={busy} onClick={() => begin(mode)}>Try again</Button>}
-      </>}
-      {error && <Label color={t.red} size={12} lineHeight={18}>{error}</Label>}
-    </div>
+
+  // Esc, the close button and the backdrop all arrive here. A sign-in that is still running is
+  // canceled; one that already succeeded is saved, because signing in counted as consent.
+  const stateRef = useRef({ login, shownName, shownColor, defaultOn })
+  useEffect(() => { stateRef.current = { login, shownName, shownColor, defaultOn } })
+  const dismissed = useRef(false)
+  const dismiss = () => {
+    if (dismissed.current) return
+    dismissed.current = true
+    const current = stateRef.current
+    const client = getClient()
+    if (client && shouldFinishOnClose(current.login) && current.login && isNameValid(current.shownName)) {
+      const label = current.shownName.trim()
+      void client.call('providers.accounts.login.finish', { id: current.login.id, name: label, color: current.shownColor, make_default: current.defaultOn }).then(
+        async (result) => { await refreshAccounts(); flashAccount(result.kind, result.instance); toast.success(`${label} added`) },
+        (error) => toast.error(`Unable to add ${label}`, { description: `${errorText(error)} Open Settings › Accounts to try again.` }),
+      )
+    } else {
+      void apiRef.current.cancel()
+      if (current.login?.phase === 'signed_in' && current.login.instance) void refreshAccounts()
+    }
+    close()
+  }
+  // Unmounting from outside (an environment switch) still cancels a running sign-in.
+  useEffect(() => () => { if (!dismissed.current) void apiRef.current.cancel() }, [])
+
+  // An older daemon has no login record: its sign-in ends when the terminal's process exits.
+  const legacyId = api.legacyTerminal?.id
+  useEffect(() => {
+    const client = getClient()
+    if (!legacyId || !client) return
+    return client.onNotification('terminal.exited', (params) => { if ((params as { terminal_id?: string }).terminal_id === legacyId) { void refreshAccounts(); dismiss() } })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [legacyId])
+  const showTerminal = () => void api.restart({ mode: 'terminal' })
+  const tryAgain = () => (reauth && legacy ? begin() : api.retry())
+
+  let body: ReactNode
+  let footer: ReactNode
+  if (step === 'pick' || (!step && !reauth)) {
+    const ready = !!kind && providers.some((p) => p.kind === kind && p.available)
+    body = <PickStep providers={providers} kind={kind} onKind={(next) => {
+      const status = providers.find((p) => p.kind === next)
+      if (status && !status.available) { setNav({ settingsOpen: true }); close(); void import('../settings/SettingsScreen.tsx').then((m) => m.openSettingsTab('agents')); return }
+      setKind(next)
+    }} upstream={upstream} onUpstream={setUpstream} folder={folder} onFolder={setFolder} advancedOpen={advancedOpen} onAdvancedOpen={setAdvancedOpen} remote={remote} />
+    footer = <><Button testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button><Button testId="account-start" variant="primary" disabled={!ready || starting} onClick={() => void begin()}>{kind && supportsBrowserLogin(kind) && !remote ? 'Continue in browser' : 'Continue'}</Button></>
+  } else if (step === 'waiting' && login && kind) {
+    const url = loginHost(login.url)
+    const canCode = supportsPasteCode(kind) || supportsDeviceCode(kind)
+    const codeMode: AccountLoginMode = supportsDeviceCode(kind) ? 'device_code' : 'paste'
+    body = <Body align="center" top={20}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}><AccountAvatar kind={kind} size={32} instance={reauthInstance} color={target?.color} /><MatrixLoader variant="orbit" dot={3} gap={2} /></div>
+      <Title center>{reauth ? `Sign in again to ${targetName}` : 'Finish signing in in your browser'}</Title>
+      {url && <Desc center>{`We opened ${url}. Come back here when you’re done.`}</Desc>}
+      {verifying && <Checking />}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, marginTop: 4 }}>
+        {login.url && <QuietLink testId="account-reopen" onClick={() => void openExternal(login.url!).catch((e) => toast.error('Unable to open the sign-in page', { description: `${errorText(e)} Copy its address and open it in your browser.` }))}>Open browser again</QuietLink>}
+        {canCode && !reauth && <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Quiet>Browser on another device?</Quiet><QuietLink testId="account-code-instead" onClick={() => void api.restart({ mode: codeMode })}>{supportsDeviceCode(kind) ? 'Use a code instead' : 'Paste code instead'}</QuietLink></div>}
+        {canCode && reauth && <QuietLink testId="account-code-instead" onClick={() => void api.restart({ mode: codeMode })}>{supportsDeviceCode(kind) ? 'Use a code instead' : 'Paste code instead'}</QuietLink>}
+        <QuietLink testId="account-show-terminal" onClick={showTerminal}>Having trouble? Show terminal</QuietLink>
+      </div>
+    </Body>
+    footer = <Button testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>
+  } else if (step === 'paste' && login && kind) {
+    const sending = api.codeState === 'sending' || verifying
+    const submit = () => { if (code.trim() && !sending) void api.submitCode(code) }
+    body = <PasteStep login={login} remote={remote} host={host} transport={transport} wrong={api.codeState === 'wrong'} code={code} onCode={setCode} shown={codeShown} onShown={setCodeShown} onSubmit={submit} onTerminal={showTerminal} />
+    footer = <><Button testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button><Button testId="account-paste-submit" variant="primary" disabled={sending} onClick={submit}>Sign in</Button></>
+  } else if (step === 'device' && login && kind) {
+    const url = loginHost(login.url)
+    body = <Body gap={12}>
+      <Title pe>Enter this code in your browser</Title>
+      {remote && <RemoteNote host={host} transport={transport} />}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, paddingLeft: 16, paddingRight: 16, paddingTop: 20, paddingBottom: 20, borderWidth: 1, borderColor: t.border, borderRadius: 12 }}>
+        {login.user_code ? <Label color={t.text} size={30} lineHeight={30} weight={500} font="Menlo">{login.user_code}</Label> : <div style={{ width: 192, height: 32, borderRadius: 6, backgroundColor: t.buttonSecondary }} />}
+        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 8 }}>
+          {login.user_code && <CopyButton text={login.user_code} label="Copy code" />}
+          {login.url && <Button testId="account-open-page" icon={S.externalLink} onClick={() => void openExternal(login.url!)}>{`Open ${url ?? 'sign-in page'}`}</Button>}
+        </div>
+      </div>
+      <Label color={t.textSecondary} size={13} lineHeight={19.5} style={{ textAlign: 'center' }}>The code expires in 15 minutes.</Label>
+      {verifying && <Checking />}
+      <div style={{ display: 'flex', justifyContent: 'center' }}><QuietLink testId="account-show-terminal" onClick={showTerminal}>Having trouble? Show terminal</QuietLink></div>
+    </Body>
+    footer = <Button testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>
+  } else if (step === 'terminal' && kind) {
+    const info = api.legacyTerminal ?? login?.terminal
+    body = <Body gap={12}>
+      <Title>Finish in the terminal</Title>
+      <Desc>{TERMINAL_COPY[kind] ?? `Follow ${agent}’s prompts below. Kybern checks the sign-in when it finishes.`}</Desc>
+      {legacy && <Label color={t.textSecondary} size={13} lineHeight={19.5}>{`Update Kybern on ${host} to sign in from the browser.`}</Label>}
+      <div testId="account-terminal" style={{ display: 'flex', flexDirection: 'column', height: 256, minWidth: 0, borderWidth: 1, borderColor: t.border, borderRadius: 8, overflow: 'hidden' }}>
+        {info ? <TerminalScreen key={info.id} info={info} width={382} /> : <div style={{ flexGrow: 1, backgroundColor: t.buttonSecondary }} />}
+      </div>
+      {verifying && <Checking />}
+    </Body>
+    footer = <Button testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>
+  } else if (step === 'success' && login && kind) {
+    const email = login.identity?.email
+    const meta = [[agent, login.identity?.plan].filter(Boolean).join(' '), login.identity?.organization].filter(Boolean).join(' · ')
+    const emailChanged = reauth && !!login.previous_email && !!email && login.previous_email.toLowerCase() !== email.toLowerCase()
+    body = <Body gap={16}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, paddingTop: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 20, backgroundColor: t.v('--success') + '1f' }}><Icon source={N.check} size={20} color={t.v('--success')} /></div>
+        <Title center>{email ? `Signed in as ${email}` : 'Signed in'}</Title>
+        {meta && <Desc center>{meta}</Desc>}
+        {emailChanged && <Label color={t.textSecondary} size={13} lineHeight={19.5} style={{ textAlign: 'center' }}>{`${targetName} was ${login.previous_email}. It now uses ${email}.`}</Label>}
+      </div>
+      {!reauth && <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <Label color={t.text} size={14} lineHeight={21} weight={500}>Name</Label>
+          <TextField testId="account-name" label="Name" value={shownName} onChange={(value) => setName(value)} width="100%" onSubmit={() => { if (isNameValid(shownName)) void finish().then((ok) => { if (ok) { dismissed.current = true; close() } }) }} style={{ height: 32, fontSize: 14, borderColor: isNameValid(shownName) ? t.border : t.v('--destructive') }} />
+          {!isNameValid(shownName) && <Label color={t.v('--destructive')} size={13} lineHeight={19.5}>Enter a name up to 120 characters.</Label>}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <Label color={t.text} size={14} lineHeight={21} weight={500}>Color</Label>
+          <ColorSwatches value={shownColor} onChange={setColor} />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <Label color={t.text} size={14} lineHeight={21} weight={500}>{`Use as default for ${agent}`}</Label>
+          <Switch testId="account-default" label={`Use as default for ${agent}`} checked={defaultOn} disabled={forcedDefault} onChange={setMakeDefault} />
+        </div>
+        {forcedDefault && <Label color={t.textSecondary} size={13} lineHeight={19.5} style={{ marginTop: -10 }}>Your first added account becomes the default. You can switch back to the CLI account in Settings › Accounts.</Label>}
+      </div>}
+      {finishError && <Label color={t.v('--destructive')} size={13} lineHeight={19.5}>{finishError}</Label>}
+    </Body>
+    footer = reauth
+      ? <Button testId="account-done" variant="primary" onClick={() => { void refreshAccounts(); dismissed.current = true; close() }}>Done</Button>
+      : <Button testId="account-finish" variant="primary" disabled={!isNameValid(shownName) || finishing} onClick={() => void finish().then((ok) => { if (ok) { dismissed.current = true; close() } })}>Add account</Button>
+  } else if (step === 'duplicate' && login && kind) {
+    const existing = accountFor(accounts, kind, login.duplicate_of)
+    const isCli = login.duplicate_of === 'default'
+    const existingName = accountDisplayName(login.duplicate_of, existing?.name)
+    body = <Body align="center" top={16} gap={8}>
+      <AccountAvatar kind={kind} size={32} instance={login.duplicate_of} color={existing?.color} />
+      <Title center>{`Already added as ${existingName}`}</Title>
+      <Desc center>{isCli ? `This is the account your ${agent} CLI already uses.` : `${login.identity?.email ?? 'This email'} is ${agent}’s ${existingName} account.`}</Desc>
+    </Body>
+    footer = isCli
+      ? <Button testId="account-done" variant="primary" onClick={dismiss}>Done</Button>
+      : <><Button testId="account-done" variant="ghost" onClick={dismiss}>Done</Button><Button testId="account-reauth" variant="primary" onClick={() => void api.restart({ instance: login.duplicate_of, directory: undefined, upstream: undefined, mode: login.mode })}>{`Sign in again to ${existingName}`}</Button></>
+  } else if (step === 'error') {
+    const message = failure ?? login?.error ?? 'Sign-in didn’t finish. Try again, or show the terminal.'
+    body = <Body align="center" top={16} gap={8}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 20, backgroundColor: t.v('--destructive') + '1a' }}><Icon source={S.circleAlert} size={20} color={t.v('--destructive')} /></div>
+      <Title>Unable to sign in</Title>
+      <Desc center testId="account-error">{message}</Desc>
+    </Body>
+    footer = <><Button testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>{login?.mode !== 'terminal' && kind && !legacy && <Button testId="account-show-terminal" onClick={showTerminal}>Show terminal</Button>}<Button testId="account-retry" variant="primary" onClick={() => void tryAgain()}>Try again</Button></>
+  } else {
+    body = <Body><Title>Add an account</Title><div style={{ height: 64, marginTop: 12, borderRadius: 6, backgroundColor: t.buttonSecondary }} /></Body>
+    footer = <Button testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>
+  }
+  return <Dialog onClose={dismiss} width={448} testId="add-account">
+    <Rise key={step ?? 'none'} kind="row">{body}</Rise>
+    {footer && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}>{footer}</div>}
+    <CloseX onClose={dismiss} />
   </Dialog>
+}
+
+// ── Pieces ───────────────────────────────────────────────────────────────────
+
+function CloseX({ onClose }: { onClose: () => void }) {
+  const t = useTheme()
+  return <div testId="dialog-close" role="button" aria-label="Close" onClick={onClose} style={{ position: 'absolute', top: 8, right: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 10, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}><Icon source={N.x} size={16} color={t.iconSecondary} style={{ pointerEvents: 'none' }} /></div>
+}
+
+/** `BODY_CLASS`: `px-4 pt-4 pb-4`, gap per step. */
+function Body({ children, gap = 12, align, top }: { children: ReactNode; gap?: number; align?: 'center'; top?: number }) {
+  return <div style={{ display: 'flex', flexDirection: 'column', gap, paddingLeft: 16, paddingRight: 16, paddingTop: top ?? 16, paddingBottom: 16, ...(align ? { alignItems: 'center' } : {}) }}>{children}</div>
+}
+function Title({ children, center, pe }: { children: ReactNode; center?: boolean; pe?: boolean }) {
+  const t = useTheme()
+  return <Label color={t.text} size={18} lineHeight={22.5} weight={600} style={{ ...(center ? { textAlign: 'center' } : {}), ...(pe ? { paddingRight: 32 } : {}) }}>{children}</Label>
+}
+function Desc({ children, center, testId }: { children: ReactNode; center?: boolean; testId?: string }) {
+  const t = useTheme()
+  return <div testId={testId} style={{ display: 'flex', flexDirection: 'column', ...(center ? { alignItems: 'center' } : {}) }}><Label color={t.textSecondary} size={14} lineHeight={19.25} style={center ? { textAlign: 'center' } : {}}>{children}</Label></div>
+}
+function Quiet({ children }: { children: string }) {
+  const t = useTheme()
+  return <Label color={t.textSecondary} size={13} lineHeight={19.5}>{children}</Label>
+}
+function QuietLink({ children, onClick, testId }: { children: string; onClick: () => void; testId?: string }) {
+  const t = useTheme()
+  const [hover, setHover] = useState(false)
+  return <div testId={testId} role="button" aria-label={children} tabIndex={0} onClick={onClick} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') onClick() }} style={{ display: 'flex', cursor: 'pointer', borderRadius: 4 }}><Label color={hover ? t.text : t.textSecondary} size={13} lineHeight={19.5}>{children}</Label></div>
+}
+function Checking() {
+  const t = useTheme()
+  return <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 8 }}><MatrixLoader variant="pulse" dot={2} gap={1.33} /><Label color={t.textSecondary} size={13} lineHeight={19.5}>Checking the sign-in…</Label></div>
+}
+function RemoteNote({ host, transport }: { host: string; transport: 'SSH' | 'Tailscale' }) {
+  const t = useTheme()
+  return <div style={{ display: 'flex', paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, borderRadius: 8, backgroundColor: t.buttonSecondary }}><Label color={t.textSecondary} size={13} lineHeight={19.5}>{remoteNote(host, transport)}</Label></div>
+}
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [done, setDone] = useState(false)
+  useEffect(() => { if (!done) return; const timer = setTimeout(() => setDone(false), 1400); return () => clearTimeout(timer) }, [done])
+  return <Button testId="account-copy" icon={done ? N.check : S.copy} onClick={() => { void copyText(text); setDone(true) }}>{done ? 'Copied' : label}</Button>
+}
+
+function ColorSwatches({ value, onChange }: { value: AccountColor; onChange: (color: AccountColor) => void }) {
+  const t = useTheme()
+  return <div role="radiogroup" aria-label="Color" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+    {ACCOUNT_COLORS.map((color) => {
+      const selected = color === value
+      const fill = accountColor(t, color)!
+      return <div key={color} testId={`account-color-${color}`} role="radio" aria-checked={selected} aria-label={ACCOUNT_COLOR_LABELS[color]} tabIndex={selected ? 0 : -1} onClick={() => onChange(color)}
+        onKeyDown={(e) => {
+          const step = e.key === 'right' || e.key === 'down' ? 1 : e.key === 'left' || e.key === 'up' ? -1 : 0
+          if (step) onChange(ACCOUNT_COLORS[(ACCOUNT_COLORS.indexOf(color) + step + ACCOUNT_COLORS.length) % ACCOUNT_COLORS.length]!)
+          else if (e.key === 'enter' || e.key === 'space') onChange(color)
+        }}
+        style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 14, cursor: 'pointer' }}>
+        <div style={{ width: 16, height: 16, borderRadius: 8, backgroundColor: fill, pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', left: 0, top: 0, width: 28, height: 28, borderRadius: 14, borderWidth: 2, borderColor: selected ? fill : 'transparent', pointerEvents: 'none' }} />
+      </div>
+    })}
+  </div>
+}
+
+function PickStep(props: { providers: { kind: ProviderKind; display_name: string; available: boolean }[]; kind: ProviderKind | undefined; onKind: (kind: ProviderKind) => void; upstream: string; onUpstream: (id: string) => void; folder: string; onFolder: (value: string) => void; advancedOpen: boolean; onAdvancedOpen: (open: boolean) => void; remote: boolean }) {
+  const t = useTheme()
+  const { providers, kind, remote } = props
+  const placeholder = kind === 'claude-code' ? '~/.claude-work' : kind === 'codex' ? '~/.codex-work' : `~/.${kind ?? 'agent'}-work`
+  const TILE = Math.floor((448 - 32 - 16) / 3)
+  return <>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 16, paddingRight: 48, paddingTop: 16, paddingBottom: 4 }}>
+      <Title>Add an account</Title>
+      <Desc>Sign in with another account. Your current sign-ins stay as they are.</Desc>
+    </div>
+    <Body gap={16} top={4}>
+      <div testId="account-provider" role="radiogroup" aria-label="Agent" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {providers.map((p) => {
+          const selected = p.kind === kind
+          return <div key={p.kind} testId={`account-provider-${p.kind}`} role="radio" aria-checked={selected} tabIndex={0} onClick={() => props.onKind(p.kind)} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') props.onKind(p.kind) }}
+            style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 8, width: TILE, minWidth: 0, padding: 12, borderWidth: 1, borderColor: selected ? t.v('--color-text-accent') : t.border, borderRadius: 12, backgroundColor: selected ? t.buttonSecondary : 'transparent', opacity: p.available ? 1 : 0.55, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
+            <ProviderMark kind={p.kind} size={18} />
+            <Label color={t.text} size={14} lineHeight={21} weight={500} truncate>{p.display_name}</Label>
+            {!p.available && <Label color={t.textSecondary} size={13} lineHeight={19.5} style={{ marginTop: -6 }}>Not installed</Label>}
+          </div>
+        })}
+      </div>
+      {kind === 'omp' && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}><Label color={t.text} size={14} lineHeight={21} weight={500}>Sign in with</Label><Select compact testId="account-upstream" label="Sign in with" value={props.upstream} onChange={props.onUpstream} options={OMP_UPSTREAMS.map((u) => ({ value: u.id, label: u.label }))} /></div>}
+      {kind && kind !== 'opencode' && kind !== 'pi' && <div style={{ display: 'flex', flexDirection: 'column' }}>
+        <div testId="account-advanced" role="button" aria-expanded={props.advancedOpen} tabIndex={0} onClick={() => props.onAdvancedOpen(!props.advancedOpen)} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') props.onAdvancedOpen(!props.advancedOpen) }} style={{ display: 'flex', alignItems: 'center', alignSelf: 'flex-start', gap: 4, marginLeft: -4, paddingLeft: 4, paddingRight: 4, borderRadius: 4, cursor: 'pointer' }}>
+          <Label color={t.textSecondary} size={13} lineHeight={19.5}>Advanced</Label><Icon source={props.advancedOpen ? N.chevronDown : N.chevronRight} size={12} color={t.textSecondary} />
+        </div>
+        {props.advancedOpen && <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 12, paddingBottom: 4 }}>
+          <Label color={t.text} size={14} lineHeight={21} weight={500}>Folder</Label>
+          <Label color={ink(t, 0.8)} size={13} lineHeight={19.5} weight={500}>Use an existing folder</Label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ flexGrow: 1, display: 'flex', minWidth: 0 }}><TextField testId="account-folder" label="Folder" placeholder={placeholder} value={props.folder} onChange={props.onFolder} width="100%" style={{ height: 32, fontSize: 14 }} /></div>
+            {!remote && <Button testId="account-choose-folder" onClick={() => void pickFolder().then((picked) => { if (picked) props.onFolder(picked) })}>Choose…</Button>}
+          </div>
+          <Label color={t.textSecondary} size={13} lineHeight={19.5}>Kybern uses the sign-in already saved in this folder and never deletes it.</Label>
+        </div>}
+      </div>}
+    </Body>
+  </>
+}
+
+function PasteStep({ login, remote, host, transport, wrong, code, onCode, shown, onShown, onSubmit, onTerminal }: { login: { url?: string }; remote: boolean; host: string; transport: 'SSH' | 'Tailscale'; wrong: boolean; code: string; onCode: (value: string) => void; shown: boolean; onShown: (value: boolean) => void; onSubmit: () => void; onTerminal: () => void }) {
+  const t = useTheme()
+  return <Body gap={12}>
+    <Title pe>Paste the sign-in code</Title>
+    {remote && <RemoteNote host={host} transport={transport} />}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {['Open the sign-in page and approve access.', 'Copy the code the page shows.', 'Paste it below.'].map((text, index) => <div key={text} style={{ display: 'flex', gap: 8 }}><div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, flexShrink: 0, borderRadius: 9, backgroundColor: t.buttonSecondary }}><Label color={t.text} size={12} lineHeight={12} weight={500}>{String(index + 1)}</Label></div><Label color={t.textSecondary} size={14} lineHeight={18}>{text}</Label></div>)}
+    </div>
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+      <Button testId="account-open-page" icon={S.externalLink} disabled={!login.url} onClick={() => void openExternal(login.url!)}>Open sign-in page</Button>
+      {login.url && <CopyButtonGhost text={login.url} />}
+    </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <Label color={t.text} size={14} lineHeight={21} weight={500}>Code</Label>
+      <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+        <input testId="account-code" aria-label="Code" secure={!shown} autoFocus={wrong} placeholder="Paste code" value={code} onChange={(e) => onCode(e.value ?? '')} onSubmit={onSubmit} style={{ width: '100%', height: 32, minWidth: 0, borderWidth: 1, borderColor: wrong ? t.v('--destructive') : t.border, borderRadius: 8, paddingLeft: 10, paddingRight: 36, fontFamily: 'Menlo', fontSize: 13, color: t.text, backgroundColor: t.surface }} />
+        <div testId="account-code-toggle" role="button" aria-label="Show code" aria-pressed={shown} tabIndex={0} onClick={() => onShown(!shown)} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') onShown(!shown) }} style={{ position: 'absolute', right: 3, top: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, borderRadius: 6, hover: { backgroundColor: t.buttonSecondaryHover } }}><Icon source={S.eye} size={14} color={shown ? t.text : t.textSecondary} style={{ pointerEvents: 'none' }} /></div>
+      </div>
+      {wrong && <Label color={t.v('--destructive')} size={13} lineHeight={19.5}>That code didn’t work. Open the sign-in page again and paste the new code.</Label>}
+    </div>
+    <QuietLink testId="account-show-terminal" onClick={onTerminal}>Having trouble? Show terminal</QuietLink>
+  </Body>
+}
+function CopyButtonGhost({ text }: { text: string }) {
+  const [done, setDone] = useState(false)
+  useEffect(() => { if (!done) return; const timer = setTimeout(() => setDone(false), 1400); return () => clearTimeout(timer) }, [done])
+  return <Button testId="account-copy-link" variant="ghost" icon={done ? N.check : S.copy} onClick={() => { void copyText(text); setDone(true) }}>{done ? 'Copied' : 'Copy link'}</Button>
 }

@@ -75,7 +75,7 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
     {current ? <Screen key={current.id} info={current} width={width} /> : <Action onClick={() => void create()}>Open terminal</Action>}
   </div>
 }
-function Screen({ info, width }: { info: TerminalInfo; width: number }) {
+export function Screen({ info, width }: { info: TerminalInfo; width: number }) {
   const t = useTheme()
   const { renderer } = useGpuix()
   const host = useRef<PublicInstance | null>(null), list = useRef<PublicInstance | null>(null)

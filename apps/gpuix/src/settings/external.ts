@@ -16,3 +16,10 @@ export function openExternal(address: string): Promise<void> {
     execFile('open', [url.toString()], (error) => (error ? reject(error) : resolve()))
   })
 }
+
+/** Ask for an existing folder with the system picker (`pickFolder` in `lib/tauri.ts`); null when canceled. */
+export function pickFolder(): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile('osascript', ['-e', 'POSIX path of (choose folder with prompt "Choose a folder")'], (error, stdout) => resolve(error ? null : stdout.trim().replace(/\/$/, '') || null))
+  })
+}
