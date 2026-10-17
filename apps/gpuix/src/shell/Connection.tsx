@@ -9,8 +9,8 @@ import { useEnvironment } from './environment.ts'
 //   open yet ("Add a project to begin").
 //
 // The banner slides in 4px and fades over 200 ms (ease-out) and leaves in 120 ms.
-// Under Reduce Motion it only fades. The spinner steps on the shared loader
-// clock, so it costs nothing while it is not on screen.
+// Under Reduce Motion it only fades. The spinner uses the shared loader
+// clock, which parks while it is not on screen.
 import { motion } from '@gpuix/react'
 import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../icons.tsx'
@@ -55,7 +55,7 @@ function ContinuousSpinner({ size, color }: { size: number; color: string }) {
   const time = useLoaderTime()
   return <div {...ISLAND} style={{ width: size, height: size, position: 'relative', flexShrink: 0, pointerEvents: 'none' }}>
     <svg source={SPINNER_RING} style={{ width: size, height: size, color, pointerEvents: 'none' }} />
-    <svg {...{ rotate: REDUCED_MOTION ? 0 : (time % 1000) * .36 }} source={SPINNER_ARC} style={{ position: 'absolute', left: 0, top: 0, width: size, height: size, color, pointerEvents: 'none' }} />
+    <svg {...{ rotate: REDUCED_MOTION ? 0 : (time % 1300) * 360 / 1300 }} source={SPINNER_ARC} style={{ position: 'absolute', left: 0, top: 0, width: size, height: size, color, pointerEvents: 'none' }} />
   </div>
 }
 

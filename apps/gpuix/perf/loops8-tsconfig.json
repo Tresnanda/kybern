@@ -1,0 +1,1 @@
+{"extends":"../tsconfig.json","include":["loops8*.ts","loops8*.tsx","../assets.d.ts"],"exclude":["loops8-webkit.tsx"]}
