@@ -59,6 +59,7 @@ export function AccountsHeaderAction() {
 export function Accounts() {
   const t = useTheme()
   const providers = useNav((s) => s.providers)
+  const providersLoaded = useNav((s) => s.providersLoaded)
   const projects = useApp((s) => s.projects)
   const { settings } = useSettings()
   const accounts = useAccounts()
@@ -76,7 +77,7 @@ export function Accounts() {
   return <>
     {legacy && <PageBlock><Note>{`Update Kybern on ${host} to sign in from the browser.`}</Note></PageBlock>}
     {installed.map((provider) => <AgentSection key={provider.kind} provider={provider} accounts={accounts.filter((a) => a.provider.kind === provider.kind)} readOnly={legacy} onRemove={setRemoving} onAssign={setAssigning} />)}
-    {!loaded && installed.length === 0 && <PageBlock><div testId="accounts-loading" role="status" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>{[0, 1].map((i) => <div key={i} style={{ height: 56, borderRadius: 12, backgroundColor: t.buttonSecondary }} />)}</div></PageBlock>}
+    {!(loaded && providersLoaded) && installed.length === 0 && <PageBlock><div testId="accounts-loading" role="status" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>{[0, 1].map((i) => <div key={i} style={{ height: 56, borderRadius: 12, backgroundColor: t.buttonSecondary }} />)}</div></PageBlock>}
     {missing.length > 0 && <PageBlock><div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', paddingBottom: 30 }}><Note>{`${listAgents(missing)} ${missing.length === 1 ? 'isn’t' : 'aren’t'} installed. Set them up in `}</Note><TextLink testId="accounts-agent-providers" onClick={() => openSettingsTab('agents')}>Agent providers</TextLink><Note>.</Note></div></PageBlock>}
     {removing && <RemoveDialog account={removing} onClose={() => setRemoving(null)} />}
     {assigning && <ProjectsDialog account={assigning} accounts={accounts} projects={projects} projectAccounts={settings?.providers[assigning.provider.kind]?.project_accounts} onClose={() => setAssigning(null)} />}
