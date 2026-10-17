@@ -1,5 +1,5 @@
 // Settings-only glyphs, mapped like the desktop's `lib/kit/icons.tsx` (names in the comments).
-import { Alert02Icon, AlertCircleIcon, Copy01Icon, EyeIcon, LinkSquare02Icon, PuzzleIcon, RefreshIcon } from '@hugeicons/core-free-icons'
+import { Alert02Icon, AlertCircleIcon, CommandLineIcon, Copy01Icon, EyeIcon, LinkSquare02Icon, PuzzleIcon, RefreshIcon, SquareArrowDown01Icon } from '@hugeicons/core-free-icons'
 import { glyph } from '../icons.tsx'
 
 /** `VscMcp` (react-icons): the desktop keeps the VS Code MCP mark, which has no Hugeicons equivalent. */
@@ -20,4 +20,8 @@ export const S = {
   /** `CopyIcon` = Copy01. */
   copy: glyph(Copy01Icon),
   eye: glyph(EyeIcon),
+  /** `TerminalIcon` = CommandLine (the Agent providers tab). */
+  terminal: glyph(CommandLineIcon),
+  /** `BackgroundTrayIcon` = SquareArrowDown01 (the Background activity tab). */
+  backgroundTray: glyph(SquareArrowDown01Icon),
 } as const

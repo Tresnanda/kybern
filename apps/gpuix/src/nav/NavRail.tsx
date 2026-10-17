@@ -30,6 +30,9 @@ import { muted, Tip } from './overlay.tsx'
 import { getNav, setNav, useNav, type Page } from './store.ts'
 import { openSettingsTab } from '../settings/SettingsScreen.tsx'
 import { showDialog } from '../dialogs/store.ts'
+import { CardAccounts, useCardEntry } from '../usage/CardAccounts.tsx'
+import { AccountDot } from '../usage/AccountMark.tsx'
+import { useAccountsFeed, useDefaultAccount } from '../usage/accounts.ts'
 
 const RAIL = 52
 const RAIL_ITEMS: { page: Page; icon: string; label: string }[] = [
@@ -164,6 +167,7 @@ function toneColor(t: Theme, tone: ReturnType<typeof limitTone>) {
 /** One ring per provider, filled with what is left of its tightest limit; hovering opens its card. */
 function RailUsage() {
   const providers = useNav((s) => s.limits)
+  useAccountsFeed()
   const [card, setCard] = useState<ProviderKind | null>(null)
   // The card opens with the popover motion; moving to the next ring carries it over without replaying it.
   const [carried, setCarried] = useState(false)
@@ -261,6 +265,7 @@ function UsageRing({
           <div style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
             <ProviderMark kind={entry.provider} size={11} />
           </div>
+          <DefaultDot kind={entry.provider} />
         </div>
       </div>
       {open && (
@@ -282,9 +287,16 @@ function UsageRing({
   )
 }
 
+/** A colored default account also wears its dot beside the ring (`DefaultRing`). */
+function DefaultDot({ kind }: { kind: ProviderKind }) {
+  const color = useDefaultAccount(kind)?.color
+  return color ? <div style={{ position: 'absolute', right: -4, top: -4, pointerEvents: 'none' }}><AccountDot color={color} /></div> : null
+}
+
 /** A provider's limits (`AccountsUsageCard`, default account only). Opening re-reads them. */
-function UsageCard({ entry }: { entry: ProviderLimits }) {
+function UsageCard({ entry: global }: { entry: ProviderLimits }) {
   const t = useTheme()
+  const entry = useCardEntry(global.provider, global)
   const refreshing = useNav((s) => s.limitsRefreshing.includes(entry.provider))
   const now = Date.now()
   useEffect(() => {
@@ -306,6 +318,7 @@ function UsageCard({ entry }: { entry: ProviderLimits }) {
           <Label color={small}>Usage details</Label>
         </div>
       </div>
+      <CardAccounts kind={entry.provider} global={global} />
       {entry.limits.map((limit) => {
         const used = limitUsed(limit, now)
         const left = used === null ? null : 100 - used

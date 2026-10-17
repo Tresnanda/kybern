@@ -371,7 +371,7 @@ function PickStep(props: { providers: { kind: ProviderKind; display_name: string
   const t = useTheme()
   const { providers, kind, remote } = props
   const placeholder = kind === 'claude-code' ? '~/.claude-work' : kind === 'codex' ? '~/.codex-work' : `~/.${kind ?? 'agent'}-work`
-  const TILE = Math.floor((448 - 32 - 16) / 3)
+  const TILE = Math.floor((448 - 32 - 16) / 3) - 2
   return <>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 16, paddingRight: 48, paddingTop: 16, paddingBottom: 4 }}>
       <Title>Add an account</Title>

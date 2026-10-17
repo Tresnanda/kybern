@@ -81,7 +81,7 @@ export function Accounts() {
 
 function Note({ children }: { children: string }) {
   const t = useTheme()
-  return <Label color={t.textSecondary} size={12} lineHeight={19.2}>{children}</Label>
+  return <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}><Label color={t.textSecondary} size={12} lineHeight={19.2}>{children}</Label></div>
 }
 function TextLink({ children, onClick, testId }: { children: string; onClick: () => void; testId?: string }) {
   const t = useTheme()
@@ -212,7 +212,7 @@ function HowToSignIn({ kind }: { kind: ProviderKind }) {
   const command = CLI_SIGN_IN_COMMAND[kind]
   const [done, setDone] = useState(false)
   useEffect(() => { if (!done) return; const timer = setTimeout(() => setDone(false), 1400); return () => clearTimeout(timer) }, [done])
-  return <Menu testId={`account-how-${kind}`} align="end" width={288} trigger={() => <Button onClick={() => {}} testId={undefined}>How to sign in</Button>}>
+  return <Menu testId={`account-how-${kind}`} align="end" width={288} trigger={() => <div style={{ display: 'flex', alignItems: 'center', minHeight: 28, paddingLeft: 10, paddingRight: 10, borderWidth: 1, borderColor: t.border, borderRadius: 8, hover: { backgroundColor: t.buttonTertiaryHover } }}><Label color={t.text} size={14} lineHeight={21}>How to sign in</Label></div>}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 8 }}>
       <Label color={t.text} size={14} lineHeight={21} weight={500}>How to sign in</Label>
       <Label color={t.textSecondary} size={14} lineHeight={21}>{`Run ${command} in your terminal. Kybern picks it up automatically.`}</Label>

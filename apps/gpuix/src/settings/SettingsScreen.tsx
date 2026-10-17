@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react'
 import { setSettingsTitle } from './Breadcrumb.tsx'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
+import { S } from './glyphs.ts'
 import { getNav, setNav } from '../nav/store.ts'
 import { EASE_OUT, ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { settingsOverlayOwnsEscape, TextField } from './controls.tsx'
@@ -16,11 +17,11 @@ export const TABS = [
   ['general', 'General', 'Defaults for new threads and workspace behavior.', N.settings, 'default agent permissions worktree titles close notes preview'],
   ['appearance', 'Appearance', 'Make Kybern feel at home on your desktop.', N.sun, 'theme light dark system translucent glass window'],
   ['notifications', 'Notifications', 'Choose when Kybern gets your attention.', N.bell, 'alerts sound permission finishes fails input'],
-  ['agents', 'Agent providers', 'Manage the coding agents on your connected machine.', N.laptop, 'harness install updates claude codex cursor opencode pi omp profiles sdk delegation coordinator autonomy models'],
+  ['agents', 'Agent providers', 'Manage the coding agents on your connected machine.', S.terminal, 'harness install updates claude codex cursor opencode pi omp profiles sdk delegation coordinator autonomy models'],
   ['accounts', 'Accounts', 'Sign in to more than one account for each agent. Threads use the default unless you pick another account in the model picker.', N.users, 'login email plan default project color work personal'],
-  ['integrations', 'Integrations', 'Plugins and connectors for your agents.', N.globe, 'tools mcp skills authentication'],
+  ['integrations', 'Integrations', 'Plugins and connectors for your agents.', S.plugin, 'tools mcp skills authentication'],
   ['computer', 'Computer use', 'Let agents read and use apps on this Mac.', N.laptop, 'cuadriver screen accessibility recording cursor'],
-  ['background', 'Background activity', 'Manage idle agents, terminals, and power use.', N.clock, 'memory warm shells daemon battery'],
+  ['background', 'Background activity', 'Manage idle agents, terminals, and power use.', S.backgroundTray, 'memory warm shells daemon battery'],
   ['about', 'About', 'App version, updates, and connected machine.', N.info, 'protocol host data folder cli path'],
 ] as const
 export type Tab = typeof TABS[number][0]
