@@ -1,17 +1,24 @@
 // Native GFM keeps prose, tables and syntax highlighting in single bounded
 // nodes. Code expansion contributes rows to the OUTER transcript virtual list.
-import { memo, useMemo, useState } from 'react'
+import { memo, useMemo, useState, type ReactNode } from 'react'
 import { spawn } from 'node:child_process'
-import { chatLink, kybernRefsIn } from '../../../../packages/kybern-client/src/chatLinks.ts'
+import { chatLink } from '../../../../packages/kybern-client/src/chatLinks.ts'
 import { TOOL_RESULT_CHAR_LIMIT, TOOL_RESULT_LINE_LIMIT } from '../../../desktop/src/lib/toolResultText.ts'
 import { getClient, usePaneAccess } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
+import { FONT_MONO } from '../theme.ts'
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
-import { Button, cachedMarkdownTheme, CODE, muted } from './kit.tsx'
+import { Button, cachedCodeTheme, cachedMarkdownTheme, CODE, muted, TEXT } from './kit.tsx'
 import { CopyAction } from './bubble.tsx'
 import { Icon } from '../icons.tsx'
 import { T } from './glyphs.ts'
 import { reportError } from './store.ts'
+import { chipifyKybernRefs } from './refs.ts'
+import { useNotes, openNote } from '../notes/store.ts'
+import { useTasks, openTask } from '../tasks/store.ts'
+import { goPage } from '../nav/history.ts'
+import type { NoteSummary, TaskItem } from '../../../../packages/kybern-client/src/types.ts'
+import type { MarkdownStream } from '../native/markdown.ts'
 
 export type MarkdownPart = { kind: 'prose' | 'code'; text: string; language?: string; key: string }
 const cache = new Map<string, MarkdownPart[]>()
@@ -46,6 +53,30 @@ export function markdownParts(source: string): MarkdownPart[] {
   return parts
 }
 
+const BLOCK_MARGIN = 10.4 // kit.css `.chat-markdown p, ul, ol, blockquote, pre, table { margin: 0.65rem 0 }`
+const RULE_MARGIN = 24 // `.chat-markdown hr { margin: 1.5rem 0 }`
+const HEADING_SCALE = [1.75, 1.55, 1.35, 1.2, 1.1, 1] // `.chat-markdown h1..h6` font sizes, in em
+/**
+ * The margin a part's outer block contributes at one of its edges. Parts are
+ * separate virtual rows, but the desktop lays them out as siblings of one block
+ * flow where adjoining margins collapse to the larger: a rule is 1.5rem, a
+ * heading `1.1em` above and `.35em` below, everything else .65rem.
+ */
+export function edgeMargin(part: MarkdownPart | undefined, edge: 'start' | 'end'): number {
+  if (!part || part.kind === 'code') return BLOCK_MARGIN
+  const lines = part.text.split('\n')
+  const line = (edge === 'start' ? lines.find(l => l.trim()) : [...lines].reverse().find(l => l.trim())) ?? ''
+  if (/^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(line)) return RULE_MARGIN
+  const heading = /^ {0,3}(#{1,6})(?:[ \t]|$)/.exec(line)
+  if (heading) {
+    const size = HEADING_SCALE[heading[1]!.length - 1]! * TEXT.size
+    return Math.max(BLOCK_MARGIN, edge === 'start' ? 1.1 * size : 0.35 * size)
+  }
+  return BLOCK_MARGIN
+}
+/** The collapsed gap between two neighbouring parts. */
+export const partGap = (before: MarkdownPart, after: MarkdownPart) => Math.max(edgeMargin(before, 'end'), edgeMargin(after, 'start'))
+
 /** Bound lines and characters, including a pathological single long line. */
 export function textChunks(text: string): string[] {
   const chunks: string[] = []
@@ -62,31 +93,50 @@ export function textChunks(text: string): string[] {
   return chunks
 }
 
+/** `.chat-markdown-codeblock__header` / `__action` (kit.css): 1.6px 6.4px 1.6px 9.6px
+ *  around 24px square, 8px-radius buttons; no border or rule under the header. */
+function HeaderButton({ testId, label, active, onClick, children }: { testId: string; label: string; active?: boolean; onClick: () => void; children: ReactNode }) {
+  const t = useTheme()
+  return <div testId={testId} role="button" aria-label={label} onClick={onClick} style={{ display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center', borderRadius: 8, cursor: 'pointer', flexShrink: 0, backgroundColor: 'rgba(0, 0, 0, 0)', hover: { backgroundColor: t.v('--color-background-button-secondary-hover') } }}>{children}</div>
+}
+
 export const CodeHeader = memo(function CodeHeader({ part, expanded, wrap, onExpand, onWrap }: {
   part: MarkdownPart; expanded: boolean; wrap: boolean; onExpand?: () => void; onWrap: () => void
 }) {
   const t = useTheme()
-  return <div testId="code-header" style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 36, paddingLeft: 12, paddingRight: 8, borderTopLeftRadius: CODE.radius, borderTopRightRadius: CODE.radius, overflow: 'hidden', backgroundColor: t.codeSurface, borderWidth: 1, borderColor: t.border }}>
-    <Label color={muted(t)} size={11.52} style={{ flexGrow: 1 }}>{part.language === 'mermaid' ? 'Mermaid source · diagram preview unavailable' : part.language || 'text'}</Label>
+  return <div testId="code-header" style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 1.6, paddingBottom: 1.6, paddingLeft: 9.6, paddingRight: 6.4, borderTopLeftRadius: CODE.radius, borderTopRightRadius: CODE.radius, overflow: 'hidden', backgroundColor: t.codeSurface }}>
+    <Label color={muted(t)} size={11.52} lineHeight={16.128} font={FONT_MONO} style={{ flexGrow: 1 }}>{part.language === 'mermaid' ? 'Mermaid source' : part.language || 'text'}</Label>
     {onExpand && <Button testId="code-expand" variant="ghost" onClick={onExpand}>{expanded ? 'Show less' : 'Show more'}</Button>}
-    <div testId="code-wrap" role="button" aria-label={wrap ? 'Disable line wrap' : 'Wrap lines'} onClick={onWrap} style={{ display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center', borderRadius: 6, cursor: 'pointer', backgroundColor: wrap ? t.hover : 'rgba(0, 0, 0, 0)', hover: { backgroundColor: t.hover } }}>
+    <HeaderButton testId="code-wrap" label={wrap ? 'Disable line wrap' : 'Wrap lines'} onClick={onWrap}>
       <Icon source={T.textWrap} size={12} color={wrap ? t.text : muted(t)} />
-    </div>
+    </HeaderButton>
     <CopyAction text={part.text} testId="code-copy" />
   </div>
 })
 
-export const CodeChunk = memo(function CodeChunk({ text, language, wrap, last = true }: { text: string; language?: string; wrap: boolean; last?: boolean }) {
+/** `pre` is padded .5rem .6rem; the body continues the header's surface. */
+export const CodeChunk = memo(function CodeChunk({ text, language, wrap, first = true, last = true }: { text: string; language?: string; wrap: boolean; first?: boolean; last?: boolean }) {
   const t = useTheme()
-  return <div testId="code-body" style={{ display: 'flex', flexDirection: 'column', padding: 12, paddingTop: 4, paddingBottom: 4, backgroundColor: t.codeSurface, minWidth: 0, borderBottomLeftRadius: last ? CODE.radius : 0, borderBottomRightRadius: last ? CODE.radius : 0, overflow: 'hidden' }}>
-    <code softWrap={wrap} code={text.replace(/\n$/, '')} language={language} theme={cachedMarkdownTheme(t)} style={{ minWidth: 0, userSelect: 'text' }} />
+  return <div testId="code-body" style={{ display: 'flex', flexDirection: 'column', paddingLeft: 9.6, paddingRight: 9.6, paddingTop: first ? 8 : 0, paddingBottom: last ? 8 : 0, backgroundColor: t.codeSurface, minWidth: 0, borderBottomLeftRadius: last ? CODE.radius : 0, borderBottomRightRadius: last ? CODE.radius : 0, overflow: 'hidden' }}>
+    <code softWrap={wrap} code={text.replace(/\n$/, '')} language={language} theme={cachedCodeTheme(t)} style={{ minWidth: 0, userSelect: 'text' }} />
   </div>
 })
+
+const NO_NOTES: NoteSummary[] = []
+const NO_TASKS: Record<string, TaskItem> = {}
+
+/** `withStream`: the live answer's caret and fading words go in the cached theme's `markdown` block. */
+export function withStream<T extends { markdown: object }>(theme: T, stream: MarkdownStream | undefined): T {
+  return stream ? { ...theme, markdown: { ...theme.markdown, stream } } : theme
+}
 
 export const Prose = memo(function Prose({ text }: { text: string }) {
   const pane = usePaneAccess()
   const t = useTheme()
-  const refs = useMemo(() => kybernRefsIn(text), [text])
+  const refs = text.includes('kybern://')
+  const notes = useNotes(s => (refs ? s.notes : NO_NOTES))
+  const tasks = useTasks(s => (refs ? s.tasks : NO_TASKS))
+  const source = useMemo(() => (refs ? chipifyKybernRefs(text, id => notes.find(n => n.id === id), id => tasks[id]) : text), [text, refs, notes, tasks])
   const [preview, setPreview] = useState<{ title: string; text: string; code: boolean } | null>(null)
   const open = async (href: string) => {
     const link = chatLink(href)
@@ -100,21 +150,14 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
         const file = await client.call('threads.files.read', { thread_id: threadId, path: link.path })
         setPreview({ title: link.path, text: file.content, code: true })
       } else if (link.kind === 'kybern') {
-        if (link.target === 'note') {
-          const { note } = await client.call('notes.get', { id: link.id })
-          if (note) setPreview({ title: note.title, text: note.body, code: false })
-        } else {
-          const { task } = await client.call('tasks.items.get', { id: link.id })
-          if (task) setPreview({ title: task.title, text: task.body, code: false })
-        }
+        // A chip opens the note or task page, as on the desktop.
+        if (link.target === 'note') openNote(link.id)
+        else { goPage('tasks'); openTask(link.id) }
       }
     } catch (e) { reportError('Unable to open link', e) }
   }
   return <>
-    <markdown source={text} theme={cachedMarkdownTheme(t)} onLinkClick={e => { if (e.value) void open(e.value) }} style={{ color: t.text, userSelect: 'text' }} />
-    {!!refs.length && <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', paddingTop: 4 }}>
-      {refs.map(ref => <Button key={ref.id} variant="subtle" onClick={() => void open(`kybern://${ref.target}/${ref.id}`)}>{ref.target === 'note' ? 'Open note' : 'Open task'}</Button>)}
-    </div>}
+    <markdown source={source} theme={cachedMarkdownTheme(t)} onLinkClick={e => { if (e.value) void open(e.value) }} style={{ color: t.text, userSelect: 'text' }} />
     {preview && <Dialog width={720} onClose={() => setPreview(null)} testId="chat-link-preview">
       <DialogHeader title={preview.title} onClose={() => setPreview(null)} />
       <virtual-list style={{ height: 480 }} estimatedItemHeight={300} overdraw={240}>
@@ -140,12 +183,12 @@ export function TextDetail({ text, title, code = false, onClose }: { text: strin
   </Dialog>
 }
 
-export const BoundedMarkdown = memo(function BoundedMarkdown({ text, tone = 'bright' }: { text: string; tone?: 'bright' | 'muted' }) {
+export const BoundedMarkdown = memo(function BoundedMarkdown({ text, tone = 'bright', stream }: { text: string; tone?: 'bright' | 'muted'; stream?: MarkdownStream }) {
   const t = useTheme()
   const chunks = useMemo(() => textChunks(text), [text])
   const [expanded, setExpanded] = useState(false)
   return <div style={{ display: 'flex', flexDirection: 'column' }}>
-    <markdown source={chunks[0]} theme={cachedMarkdownTheme(t, tone)} style={{ color: tone === 'bright' ? t.text : muted(t), userSelect: 'text' }} />
+    <markdown source={chunks[0]} theme={withStream(cachedMarkdownTheme(t, tone), stream)} style={{ color: tone === 'bright' ? t.text : muted(t), userSelect: 'text' }} />
     {chunks.length > 1 && <Button variant="ghost" onClick={() => setExpanded(true)}>Show more</Button>}
     {expanded && <TextDetail text={text} title="Agent response" onClose={() => setExpanded(false)} />}
   </div>

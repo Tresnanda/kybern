@@ -192,7 +192,8 @@ const TerminalLine = memo(function TerminalLine({ line, model, palette, surface,
   </div>
 })
 
-function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; width: number; onTitle: (title: string) => void; onExit: () => void }) {
+/** Also embedded by the Add account sheet's sign-in terminal, which keeps its tab when the program ends. */
+export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; width: number; onTitle?: (title: string) => void; onExit?: () => void }) {
   const t = useTheme()
   const palette = terminalPalette(t.variant)
   const { renderer } = useGpuix()
@@ -256,7 +257,7 @@ function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; width: n
     let live = true, timer: ReturnType<typeof setTimeout> | undefined, syncGuard: ReturnType<typeof setTimeout> | undefined, closing: ReturnType<typeof setTimeout> | undefined
     const decoder = new TextDecoder()
     const client = getClient()!
-    model.titleChanged = title => { const short = shortTitle(title); if (short) titleRef.current(short) }
+    model.titleChanged = title => { const short = shortTitle(title); if (short) titleRef.current?.(short) }
     const changed = () => {
       // Synchronized output (DECSET 2026) holds the picture until the program finishes its update, for at most a second.
       if (model.synchronizedOutput) { if (!syncGuard) syncGuard = setTimeout(() => { syncGuard = undefined; model.synchronizedOutput = false; if (live) update(v => v + 1) }, 1000); return }
@@ -270,7 +271,7 @@ function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; width: n
       model.write(`\r\n\x1b[2m[process exited${event.exit_code != null ? ` with ${event.exit_code}` : ''}]\x1b[0m\r\n`)
       setExit(event.exit_code ?? 0); update(v => v + 1)
       // A tab whose program ended closes itself.
-      closing = setTimeout(() => { if (live) exitRef.current() }, 600)
+      if (exitRef.current) closing = setTimeout(() => { if (live) exitRef.current?.() }, 600)
     })
     const attach = () => client.call('terminals.subscribe', { terminal_id: info.id, replay: true }).then(() => { if (live) { fit(); update(v => v + 1); if (host.current) renderer?.focusElement?.(host.current.id) } }).catch(e => { if (live) setError(String(e)) })
     // The daemon dropped output for this client: start over from its replay.

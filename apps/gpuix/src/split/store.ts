@@ -27,6 +27,25 @@ export function splitPane(target: string, direction: SplitDirection, threadId: s
   return true
 }
 export const splitFocusedPane = (direction: SplitDirection, threadId?: string | null) => splitPane(getFocusedPaneId(), direction, threadId)
+/**
+ * `openThreadInSplit` (desktop state/store.ts:873), the thread context menu's "Open to the right" / "Open below": the thread opens
+ * beside the focused pane. With nothing open in the focused pane (home, a draft) the thread takes that pane and an empty pane opens
+ * next to it, like the desktop's `createSplitView({ sourceThreadId })`, instead of the empty pane staying first.
+ */
+export function openThreadInSplit(threadId: string, direction: SplitDirection): boolean {
+  const focused = findThreadPane(root, getFocusedPaneId())
+  if (!focused || focused.threadId) return splitFocusedPane(direction, threadId)
+  if (!canSplitPane(root, focused.id, direction)) return false
+  // `selectPaneThread` records the pane's selection at once; the subscription below mirrors it into the tree.
+  void selectPaneThread(focused.id, threadId).catch(console.error)
+  return splitPane(focused.id, direction, null)
+}
+/** Whether the context menu's open-beside items apply: desktop `!inSplit && (!splitView || !focusedPane?.threadId || canSplitPane(...))`. */
+export function canOpenInSplit(threadId: string, direction: SplitDirection): boolean {
+  if (collectThreadPanes(root).some((pane) => pane.threadId === threadId)) return false
+  const focused = findThreadPane(root, getFocusedPaneId())
+  return !focused?.threadId || canSplitPane(root, focused.id, direction)
+}
 export function closePane(id: string) {
   if (root.kind === 'leaf') return
   const next = removeThreadPane(root, id)

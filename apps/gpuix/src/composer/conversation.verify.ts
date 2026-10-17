@@ -15,20 +15,25 @@ for (const variant of ['dark', 'light']) {
     await until(async () => await app.getByTestId('connected').textContent() === 'open')
     await until(async () => Number(await app.getByTestId('overlay-height').textContent()) > 80)
     const initialHeight = Number(await app.getByTestId('overlay-height').textContent())
-    for (const [query, path] of [['Release','kybern://note/note'], ['KYB-1','kybern://task/task'], ['Computer','kybern://computer']]) {
+    // Picked tokens are inline atomic labels in the editor itself; read them from the painted composer text.
+    const painted = async () => String((await app.call('getPaintedText', {})).text)
+    const shown = async (label: string) => (await painted()).includes(label)
+    for (const [query, path, label] of [['Release','kybern://note/note','Release notes'], ['KYB-1','kybern://task/task','KYB-1 Release checklist'], ['Computer','kybern://computer','Computer']] as const) {
       console.log('CHECK mention', query)
       await app.getByTestId('composer').fill('@' + query)
       await until(async () => (await app.getByTestId('completion-selected').textContent()).includes(query!))
       await app.getByTestId('composer').press('enter')
-      await app.getByTestId('composer-tokens').waitFor()
-      await until(async () => Number(await app.getByTestId('overlay-height').textContent()) > initialHeight)
+      await until(async () => (await app.getByTestId('completion').count()) === 0)
+      await until(() => shown(label))
       await app.screenshot({ path: `${out}/tokens-${variant}.png` })
       if (query !== 'Computer') {
+      // Undo returns the raw `@query`, which reopens the picker; redo restores the atom.
       await app.getByTestId('composer').press('cmd-z')
-      await until(async () => await app.getByTestId('composer-tokens').count() === 0)
+      await until(async () => (await app.getByTestId('completion').count()) > 0)
       await app.getByTestId('composer').press('cmd-shift-z')
+      await until(async () => (await app.getByTestId('completion').count()) === 0)
       }
-      await app.getByTestId('composer-tokens').waitFor()
+      await until(() => shown(label))
       await app.getByTestId('composer').press('enter')
       await until(async () => (await app.getByTestId('message-record').textContent()).includes(path!))
       assert.ok(JSON.parse(await app.getByTestId('message-record').textContent()).parts.some((part: { path?: string }) => part.path === path))
@@ -38,7 +43,7 @@ for (const variant of ['dark', 'light']) {
     for (let i = 0; i < 6; i++) await app.getByTestId('composer').press('left')
     await until(async () => (await app.getByTestId('completion-selected').textContent()).includes('Release'))
     await app.getByTestId('composer').press('enter')
-    await app.getByTestId('composer-tokens').waitFor()
+    await until(async () => (await app.getByTestId('completion').count()) === 0)
     await app.getByTestId('send').click()
     await until(async () => (await app.getByTestId('message-record').textContent()).includes('Before'))
     const middle = JSON.parse(await app.getByTestId('message-record').textContent()).parts

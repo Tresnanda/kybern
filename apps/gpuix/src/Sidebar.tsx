@@ -8,6 +8,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import type { PublicInstance } from '@gpuix/react'
 import { Icon } from './icons.tsx'
+import { SpinIcon } from './kit/Spin.tsx'
 import { loadProviders } from './nav/live.ts'
 import { N } from './nav/glyphs.ts'
 import { newThread } from './nav/history.ts'
@@ -308,7 +309,7 @@ function AppMenu() {
       <MenuSeparator />
       <MenuItem
         id="reload"
-        icon={check.state === 'idle' ? N.refresh : check.state === 'checking' ? N.loader : N.circleCheck}
+        {...(check.state === 'checking' ? { iconNode: <SpinIcon source={N.loader} size={16} color={ink(t, 0.8)} /> } : { icon: check.state === 'idle' ? N.refresh : N.circleCheck })}
         label="Reload agents"
         keepOpen
         detail={check.state === 'checking' ? 'Checking…' : check.state === 'done' ? (check.ready === 1 ? '1 ready' : `${check.ready} ready`) : undefined}

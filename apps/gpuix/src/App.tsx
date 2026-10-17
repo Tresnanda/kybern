@@ -49,6 +49,8 @@ import { ConnectionBanner, useWelcome, Welcome } from './shell/Connection.tsx'
 import { ErrorBoundary } from './shell/ErrorBoundary.tsx'
 import { useSidebarDragging, useSidebarWidth } from './shell/layout.ts'
 import { SidebarDragLayer, SidebarResizeHandle } from './shell/ResizeHandle.tsx'
+import { ResizeCaptureLayer } from './kit/Resize.tsx'
+import { ThemeFade } from './motion/themeFade.tsx'
 import { Toaster } from './shell/toasts.tsx'
 import { AppUpdateSurface } from './platform/UpdateSurface.tsx'
 import { TranscriptReleased } from './platform/TranscriptReleased.tsx'
@@ -212,11 +214,13 @@ function Workspace() {
       <Toaster />
       <AppUpdateSurface />
       <SidebarDragLayer />
+      <ResizeCaptureLayer />
       <DockResizeCapture />
       <TasksDragLayer />
       <ProjectDragLayer />
 <TabDragLayer />
       <SplitDragLayer />
+      <ThemeFade />
     </div>
   )
 }

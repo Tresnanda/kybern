@@ -10,6 +10,7 @@ import { onEnvironmentChange } from '../shell/environment.ts'
 import { useSyncExternalStore } from 'react'
 import { getState, selectDraft, selectThread, subscribe } from '../state.ts'
 import { getNav, setNav, subscribeNav, type NavEntry, type NavHistory, type Page } from './store.ts'
+import { loadView, saveView } from '../environments/workspace.ts'
 
 /** Not persisted: history starts fresh with each window. */
 export const NAV_HISTORY_LIMIT = 50
@@ -117,6 +118,8 @@ export function isNavEntryValid(entry: NavEntry): boolean {
 let restoring = false
 let nextMode: NavMode = 'push'
 let lastKey: string | null = null
+/** Set once boot has chosen (or restored) a view; only then is the view remembered for this environment. */
+let booted = false
 
 /** Run a selection that is not the reader's own move (boot, a draft that became a thread). */
 export function replaceNavigation(run: () => void) {
@@ -137,6 +140,7 @@ function record() {
   const previous = getNav().history.entries[getNav().history.index]
   lastKey = key
   if (entry.kind === 'thread') clearUnread(entry.id)
+  if (booted) saveView(entry)
   if (restoring) return
   // A draft that was sent became this thread: the draft step is swapped, like `selectCreatedThread`.
   let mode = nextMode
@@ -167,9 +171,15 @@ export function startNavHistory() {
     const s = getState()
     if (!s.projects.length && !s.threads.length) return
     stopBoot()
-    if (s.selectedId || s.draft.projectId || process.env.KYBERN_GPUIX_THREAD) return
+    // Return to the view this environment was last showing, when it still exists (desktop `readWorkspace`).
+    // An open thread comes back with the split view; the saved view adds the page it was left on.
+    const saved = process.env.KYBERN_GPUIX_THREAD ? null : loadView()
+    const page = saved && saved.kind !== 'thread' && saved.kind !== 'draft'
+    if (saved && (page || !(s.selectedId || s.draft.projectId)) && isNavEntryValid(saved)) { replaceNavigation(() => applyEntry(saved)); booted = true; record(); return }
+    if (s.selectedId || s.draft.projectId || process.env.KYBERN_GPUIX_THREAD) { booted = true; return }
     const first = s.projects[0]
     if (first) replaceNavigation(() => selectDraft(first.id))
+    booted = true
   })
   stops.push(stopBoot)
   record()
@@ -270,4 +280,4 @@ export function goPage(page: Page) {
   setNav({ page: 'home' })
 }
 
-onEnvironmentChange(() => { for (const stop of stops) stop(); stops = []; started = false; lastKey = null; restoring = false; nextMode = 'push' }, -100)
+onEnvironmentChange(() => { for (const stop of stops) stop(); stops = []; started = false; lastKey = null; restoring = false; nextMode = 'push'; booted = false }, -100)

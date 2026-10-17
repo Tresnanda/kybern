@@ -199,10 +199,12 @@ export function askLimits(refresh = false) {
 
 // ---- the reader's sidebar preferences, kept across launches per daemon ----
 
-const prefsFile = () => path.join(
+/** The sidebar-preferences file of an environment key (`environmentKey()`), so forgetting an environment can remove it. */
+export const prefsFileFor = (key: string) => path.join(
   process.env.KYBERN_CLIENT_CONFIG_DIR ?? path.join(homedir(), 'Library/Application Support/kybern-gpuix'),
-  `workspace-${createHash('sha1').update(environmentKey()).digest('hex').slice(0, 12)}.json`,
+  `workspace-${createHash('sha1').update(key).digest('hex').slice(0, 12)}.json`,
 )
+const prefsFile = () => prefsFileFor(environmentKey())
 
 interface Prefs {
   collapsed?: Record<string, boolean>

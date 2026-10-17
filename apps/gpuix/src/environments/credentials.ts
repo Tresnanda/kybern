@@ -4,7 +4,14 @@ import { dlopen, FFIType as F, ptr, read, toArrayBuffer, type Pointer } from 'bu
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
-const SERVICE = Buffer.from('dev.kybern.desktop.environments')
+const DESKTOP_SERVICE = 'dev.kybern.desktop.environments'
+/** Checks exercise the real Keychain under a scratch service (`KYBERN_GPUIX_KEYCHAIN_SERVICE=kybern-gpuix-test-…`, with a scratch client config), never the desktop's items. */
+function service() {
+  const scratch = process.env.KYBERN_GPUIX_KEYCHAIN_SERVICE
+  if (!scratch) return Buffer.from(DESKTOP_SERVICE)
+  if (!process.env.KYBERN_CLIENT_CONFIG_DIR || !/^kybern-gpuix-test-[\w-]+$/.test(scratch)) throw new Error('A scratch Keychain service needs KYBERN_CLIENT_CONFIG_DIR and a kybern-gpuix-test-… name')
+  return Buffer.from(scratch)
+}
 const MISSING = -25300
 function isolatedFile(id: string) {
   const dir = process.env.KYBERN_GPUIX_CREDENTIALS_DIR
@@ -32,7 +39,7 @@ function checked(status: number) {
   if (status) throw new Error(`Unlock the system credential store or pair this environment again (Keychain ${status})`)
 }
 function find(id: string, secret: boolean) {
-  const account = Buffer.from(id)
+  const SERVICE = service(), account = Buffer.from(id)
   const length = new Uint32Array(1)
   const data = new BigUint64Array(1)
   const item = new BigUint64Array(1)
@@ -58,7 +65,7 @@ export function writeCredential(id: string, token: string) {
   const found = find(id, false)
   const password = Buffer.from(token)
   if (found.status === MISSING) {
-    const account = Buffer.from(id)
+    const SERVICE = service(), account = Buffer.from(id)
     checked(api().SecKeychainAddGenericPassword(null, SERVICE.length, ptr(SERVICE), account.length, ptr(account), password.length, ptr(password), null))
   } else {
     checked(found.status)

@@ -23,6 +23,7 @@ import { FONT_MONO, FONT_UI } from '../theme.ts'
 import { Rise } from '../motion/kit.tsx'
 import { copyText, useRowState } from './store.ts'
 import { SwapOnChange, useFresh } from './motion.tsx'
+import { TokenText, tokenSegments } from './InlineTokens.tsx'
 
 /** `MessageActionButton` + `CopyAction`: a 2em square, copy glyph swapping to a
  *  green check for 1.4s through `IconSwap` (here the kit's `Swap`, 250 ms). */
@@ -104,6 +105,7 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
     if (clampLines || text.length > 70 || text.includes('\n') || !/`[^`]+`/.test(text)) return null
     return text.split(/(`[^`]+`)/).filter(Boolean).map((seg) => seg.length > 2 && seg.startsWith('`') && seg.endsWith('`') ? { code: true, text: seg.slice(1, -1) } : { code: false, text: seg })
   }, [text, clampLines])
+  const tokens = useMemo(() => (clampLines ? null : tokenSegments(parts)), [parts, clampLines])
   const plainText = useMemo(() => parts.map((p) => (p.type === 'text' ? p.text : '')).join(''), [parts])
   useEffect(() => {
     if (!clampLines || expanded) return
@@ -179,7 +181,7 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
                 {/* Plain text, not <markdown>: native markdown has no intrinsic width, and the
                     bubble must hug short messages (`w-max max-w-full`). */}
                 <div style={{ display: 'flex', flexDirection: 'column', ...(clampLines && !expanded ? { maxHeight: TEXT.lineHeight * clampLines, overflow: 'hidden' as const } : {}) }}>
-                  {chips ? (
+                  {tokens ? <TokenText segments={tokens} /> : chips ? (
                     <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' }}>
                       {chips.map((seg, i) => seg.code
                         ? <div key={i} style={{ paddingLeft: 5.6, paddingRight: 5.6, marginLeft: 2, marginRight: 2, borderRadius: 6.4, backgroundColor: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.09)' : 'rgba(13, 13, 13, 0.09)' }}>

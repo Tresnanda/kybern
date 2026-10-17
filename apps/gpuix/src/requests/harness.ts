@@ -1,10 +1,34 @@
 import { connectStdio } from '@gpuix/react/automation'
 import { spawn } from 'node:child_process'
+import { realpathSync } from 'node:fs'
+import { homedir } from 'node:os'
+import path from 'node:path'
+
+/** A GPUIX launch must never resolve the user's real `~/.kybern`: startup restarts a
+ * daemon whose binary looks newer, which killed every running agent once. Aborts
+ * unless the data dir is explicitly a scratch one outside `~/.kybern`, and refuses a
+ * `KYBERN_URL` inherited from the calling shell (an agent running inside Kybern), which
+ * may be the user's own daemon. Callers clear it with `KYBERN_URL: ''`. */
+export function assertScratchEnv(env: Record<string, string | undefined>) {
+  const merged = { ...process.env, ...env }
+  const canonical = (dir: string) => { try { return realpathSync(dir) } catch { return path.resolve(dir) } }
+  // The real directory itself is never touched, not even by a stat: only the home folder is resolved.
+  const home = process.env.HOME || homedir()
+  const reals = [path.join(home, '.kybern'), path.join(canonical(home), '.kybern')]
+  if (process.env.KYBERN_URL && !('KYBERN_URL' in env)) throw new Error('Refusing to launch GPUIX with a KYBERN_URL inherited from this shell: it may be the real daemon. Pass the scratch endpoint explicitly, or KYBERN_URL: \'\' to clear it.')
+  const dir = merged.KYBERN_DATA_DIR
+  if (!dir) throw new Error('Refusing to launch GPUIX without KYBERN_DATA_DIR: it would resolve the real ~/.kybern daemon. Point it at a scratch directory.')
+  const inside = (candidate: string) => reals.some(real => candidate === real || candidate.startsWith(real + path.sep))
+  if (inside(path.resolve(dir)) || inside(canonical(dir))) throw new Error(`Refusing to launch GPUIX against the real data directory ${reals[0]}. Use a scratch directory.`)
+}
 
 /** Automation launch with an explicit process lifetime and startup deadline.
  * The upstream launch helper doesn't reject when a child exits before handshake. */
 export async function launchFixture(entry: string, env: Record<string, string>) {
-  const child = spawn('bun', [entry], { env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] })
+  assertScratchEnv(env)
+  // Without a client config dir GPUIX would read the desktop's saved environments and write its own prefs under ~/Library.
+  const clientDir = process.env.KYBERN_CLIENT_CONFIG_DIR ?? path.join(path.resolve(({ ...process.env, ...env }).KYBERN_DATA_DIR!), 'client-config')
+  const child = spawn('bun', [entry], { env: { KYBERN_CLIENT_CONFIG_DIR: clientDir, ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] })
   let stderr = ''
   const frames:number[]=[]
   let frameRemainder=''

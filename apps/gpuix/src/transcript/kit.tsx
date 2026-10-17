@@ -9,6 +9,7 @@ import { Icon } from '../icons.tsx'
 import { FONT_MONO, FONT_UI, type Theme } from '../theme.ts'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { T } from './glyphs.ts'
+import { G } from '../composer/glyphs.ts'
 
 /** `getChatTranscriptTextStyle()`: 14px at `leading-relaxed` (1.625). */
 export const TEXT = { size: 14, lineHeight: 22.75 }
@@ -164,9 +165,31 @@ export function Para({ children, color, size = TEXT.size, lineHeight = TEXT.line
   )
 }
 
+/** Token colours of Shiki's `github-dark-default` / `github-light-default`, the themes
+ *  `lib/highlight.worker.ts` renders transcript code with, mapped onto the native
+ *  tree-sitter capture names (TextMate scopes → nearest capture). */
+const GITHUB_SYNTAX = {
+  dark: { fg: '#e6edf3', comment: '#8b949e', keyword: '#ff7b72', string: '#a5d6ff', constant: '#79c0ff', entity: '#ffa657', fn: '#d2a8ff', tag: '#7ee787', invalid: '#ffa198' },
+  light: { fg: '#1f2328', comment: '#6e7781', keyword: '#cf222e', string: '#0a3069', constant: '#0550ae', entity: '#953800', fn: '#8250df', tag: '#116329', invalid: '#82071e' },
+} as const
+export function githubSyntax(variant: 'dark' | 'light') {
+  const c = GITHUB_SYNTAX[variant]
+  return { comment: c.comment, keyword: c.keyword, string: c.string, stringSpecial: c.string, escape: c.constant, number: c.constant, boolean: c.constant,
+    typeName: c.entity, typeBuiltin: c.entity, constructor: c.entity, function: c.fn, functionBuiltin: c.fn, macroName: c.fn, property: c.constant, constant: c.constant,
+    variable: c.fg, variableSpecial: c.constant, parameter: c.entity, operator: c.keyword, punctuation: c.fg, tag: c.tag, attribute: c.constant, label: c.entity, invalid: c.invalid }
+}
+
+/** An icon source (`#000` strokes, tinted by the mask elsewhere) with its real colour, for icons drawn as images. */
+export const tinted = (svg: string, color: string) => svg.replaceAll('#000', color)
+/** `kybern://note/…` and `kybern://task/…` links read as the desktop's chips: an icon before the label. */
+function kybernLinkIcons(t: Theme) {
+  const chip = t.v('--color-accent-blue')
+  return [{ prefix: 'kybern://note/', svg: tinted(T.note, chip), color: '', textColor: chip, weight: 500 }, { prefix: 'kybern://task/', svg: tinted(T.listChecks, chip), color: '', textColor: chip, weight: 500 }]
+}
+
 /** Native markdown tokens for chat prose (`.chat-markdown`, kit.css). `tone`
  *  "muted" is the settled work log's `[&_*]:text-muted-foreground`. */
-export function markdownTheme(t: Theme, tone: 'bright' | 'muted' = 'bright') {
+export function markdownTheme(t: Theme, tone: 'bright' | 'muted' = 'bright', codeLineHeight = CODE.size * 1.5) {
   const text = tone === 'muted' ? muted(t) : t.text
   return {
     appearance: t.variant,
@@ -179,7 +202,9 @@ export function markdownTheme(t: Theme, tone: 'bright' | 'muted' = 'bright') {
     border: t.border,
     codeText: text,
     codeWash: t.codeSurface,
-    markdown: {...transcriptMarkdownStyle(text, t.textSecondary, t.border, t.codeSurface, TEXT.size, CODE.size),link:{color:t.v('--color-token-text-link-foreground'),underline:'hover' as const}},
+    syntax: githubSyntax(t.variant),
+    // WebKit puts a disc's centre 6.2px and `1.` 3.8px from the text; discs are 5.3px; hr margin is 1.5rem.
+    markdown: {...transcriptMarkdownStyle(text, t.textSecondary, t.border, t.codeSurface, TEXT.size, CODE.size),listMarkerGap:3.8,listBulletGap:11.15,listMarkerSize:5.3,ruleMargin:24,link:{color:t.v('--color-token-text-link-foreground'),underline:'hover' as const},linkIcons:kybernLinkIcons(t)},
     bg: t.codeSurface,
     fontSans: FONT_UI,
     fontMono: FONT_MONO,
@@ -198,7 +223,7 @@ export function markdownTheme(t: Theme, tone: 'bright' | 'muted' = 'bright') {
       mdCodeHeaderPaddingY: 1.6,
       mdCodeHeaderTextSize: 11.52,
       codeTextSize: CODE.size,
-      codeLineHeight: CODE.size * 1.5,
+      codeLineHeight,
       diffTextSize: 12,
       diffLineHeight: 19.5,
     },
@@ -211,4 +236,12 @@ export function cachedMarkdownTheme(t: Theme, tone: 'bright' | 'muted' = 'bright
   let entry = themeCache.get(t)
   if (!entry) themeCache.set(t, (entry = {}))
   return (entry[tone] ??= markdownTheme(t, tone))
+}
+
+const codeThemeCache = new WeakMap<Theme, ReturnType<typeof markdownTheme>>()
+/** Answer fences: `pre` keeps the chat's 22.75px line box (`pre code` is 13px/1.5 inside it), unlike tool output. */
+export function cachedCodeTheme(t: Theme) {
+  let theme = codeThemeCache.get(t)
+  if (!theme) codeThemeCache.set(t, (theme = markdownTheme(t, 'bright', TEXT.lineHeight)))
+  return theme
 }

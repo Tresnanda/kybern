@@ -1,10 +1,12 @@
 import { ensureSshTunnel, stopSshTunnel, stopSshTunnels, bootstrapSsh, runSsh, type BootstrapInput, type BootstrapProgress, type SavedSsh } from './ssh.ts'
-import { spawn } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { openWindowFor } from '../windows/registry.ts'
 import { KybernClient, type Endpoint } from '../../../../packages/kybern-client/src/client.ts'
 import { httpBase, normalizeDaemonUrl, parsePairingInvitation } from '../../../../packages/kybern-client/src/address.ts'
 import { activeEnvironment, switchEnvironment } from '../shell/environment.ts'
 import { readCredential, writeCredential, removeCredential } from './credentials.ts'
+import { rmSync } from 'node:fs'
+import { prefsFileFor } from '../nav/live.ts'
+import { savedEnvironmentStateFile } from '../shell/persist.ts'
 import { localDataDir, profileById, profileEndpoint, readRegistry, writeRegistry, type EnvironmentProfile } from './registry.ts'
 
 /** Verify protocol and environment identity with the same transport as the workspace. */
@@ -97,16 +99,24 @@ export function forgetEnvironment(id: string) {
   removeCredential(id)
   try { writeRegistry({ selected_id: registry.selected_id === id ? 'local' : registry.selected_id, environments: registry.environments.filter((p) => p.id !== id) }) }
   catch (e) { if (previous) writeCredential(id, previous); throw e }
-  if (activeEnvironment().id === id) connectEnvironment('local')
+  // The desktop drops the environment's stored workspace with it (`forgetEnvironmentStore`).
+  if (activeEnvironment().id !== id) for (const file of [savedEnvironmentStateFile(localDataDir, id), prefsFileFor(id)]) rmSync(file, { force: true })
+  if (activeEnvironment().id === id) { const files = [savedEnvironmentStateFile(localDataDir, id), prefsFileFor(id)]; connectEnvironment('local'); for (const file of files) rmSync(file, { force: true }) }
 }
 
-/** GPUIX 0.10.0 has one native window per renderer/process. */
-export function openEnvironmentWindow(id: string) {
-  profileById(id)
-  const child = spawn(process.execPath, process.env.KYBERN_GPUIX_RESOURCES ? [] : [fileURLToPath(new URL('../main.tsx', import.meta.url))], { detached: true, stdio: 'ignore', env: { ...process.env, KYBERN_GPUIX_ENVIRONMENT: id, KYBERN_GPUIX_THREAD: '' } })
-  child.on('error', () => { void import('../shell/toasts.tsx').then(({ toast }) => toast.error('Unable to open a new window. Reopen Kybern and try again.')) })
-  child.unref()
-  return child.pid
+/**
+ * "Open in a new window": focus the window that already shows this environment, or open one
+ * (`windows/registry.ts` explains why each window is its own process). Errors become a toast like the desktop's.
+ */
+export async function openEnvironmentWindow(id: string) {
+  try {
+    profileById(id)
+    return await openWindowFor(id)
+  } catch (error) {
+    const { toast } = await import('../shell/toasts.tsx')
+    toast.error(error instanceof Error ? error.message : String(error))
+    return null
+  }
 }
 
 /** Native-independent SSH lifecycle; the same endpoint/pairing checks as address connections. */

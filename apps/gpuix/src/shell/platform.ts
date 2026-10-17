@@ -1,6 +1,6 @@
 // Bun-side platform seams. Mirrors desktop/src-tauri/src/{remote,cli}.rs.
 // All inputs are explicit: tests never inspect ~/.ssh, PATH or installed apps.
-// SSH plans are intentionally not executed until tunnel/pairing lifecycle is wired.
+// `environments/ssh.ts` executes the SSH plans (bootstrap, tunnel keeper).
 import { lstat, mkdir, readlink, realpath, symlink, unlink } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -12,6 +12,7 @@ export const UPDATE_MANIFEST_URL = 'https://github.com/Tresnanda/kybern/releases
 
 export function parseSshTarget(input: string): SshTarget {
   let target = input.trim().replace(/^ssh:\/\//, '').replace(/\/+$/, '')
+  if (!target) throw Error('Enter the machine as user@host')
   let port: number | undefined
   const match = /^(.*):(\d+)$/.exec(target)
   if (match) {
@@ -56,7 +57,7 @@ export function bootstrapPlan(config: SshConfig, installer = REMOTE_INSTALL_URL)
   if (url.protocol !== 'https:') throw Error('Use an HTTPS installer address')
   return {
     probe: remoteScript(config, PROBE_SCRIPT, 45000),
-    installIfMissingOrOlder: remoteScript(config, `set -eu\ncommand -v curl >/dev/null 2>&1 || { echo 'Install curl and try again' >&2; exit 1; }\ncurl --proto '=https' --tlsv1.2 -LsSf ${shellQuote(url.href)} | sh`, 600000),
+    installIfMissingOrOlder: remoteScript(config, `set -eu\ncommand -v curl >/dev/null 2>&1 || { echo 'curl is not installed on this machine; install it and try again' >&2; exit 1; }\ncurl --proto '=https' --tlsv1.2 -LsSf ${shellQuote(url.href)} | sh`, 600000),
     startIfUnreachable: remoteScript(config, START_SCRIPT.replaceAll('{port}', String(portNumber(config.remotePort))), 60000),
     tunnel: tunnelPlan(config),
   }

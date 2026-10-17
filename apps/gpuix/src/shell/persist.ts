@@ -30,11 +30,13 @@ let warned = false
 function filePath(): string {
   const env = activeEnvironment()
   const dir = env.dataDir
-  if (env.id !== 'local' || (process.env.KYBERN_URL && !process.env.KYBERN_DATA_DIR)) {
-    const id = createHash('sha1').update(environmentKey()).digest('hex').slice(0, 12)
-    return path.join(dir, `gpuix-ui-${id}.json`)
-  }
+  if (env.id !== 'local' || (process.env.KYBERN_URL && !process.env.KYBERN_DATA_DIR)) return savedEnvironmentStateFile(dir, environmentKey())
   return path.join(dir, 'gpuix-ui.json')
+}
+
+/** The UI-state file of a saved (non-local) environment, so forgetting it can remove the state with it. */
+export function savedEnvironmentStateFile(dir: string, key: string): string {
+  return path.join(dir, `gpuix-ui-${createHash('sha1').update(key).digest('hex').slice(0, 12)}.json`)
 }
 
 let data: Record<string, unknown> | null = null

@@ -4,9 +4,9 @@
 // the model list (sections, favorites, recents, "Show more"), and the effort
 // card of the selected model. The pure list logic comes from the shared
 // `packages/kybern-client/src/models.ts` and the desktop's `lib/accountUi.ts`.
-import { motion, useGpuix, type PublicInstance } from '@gpuix/react'
+import { motion, useGpuix, useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { followLine, pickerTabs, type PickerTab } from '@/lib/accountUi'
+import { followLine, nextTabIndex, pickerTabs, type PickerTab } from '@/lib/accountUi'
 import { formatEffort, PROVIDER_LABEL } from '@/lib/format'
 import {
   MODEL_FLAT_LIMIT,
@@ -523,10 +523,19 @@ function Tabs({
   const t = useTheme()
   const [hover, setHover] = useState<string | null>(null)
   const yellow = t.v('--color-accent-yellow')
+  const renderer = useGpuixRequired()
+  const nodes = useRef<(PublicInstance | null)[]>([])
+  // Roving focus (`ModelPickerTabs`): ←/→ move between enabled tabs, Home/End jump, Enter or Space activates.
+  const move = (key: string, index: number) => {
+    const target = key === 'right' ? nextTabIndex(tabs, index, 1) : key === 'left' ? nextTabIndex(tabs, index, -1) : key === 'home' ? nextTabIndex(tabs, -1, 1) : key === 'end' ? nextTabIndex(tabs, tabs.length, -1) : -1
+    const node = target >= 0 ? nodes.current[target] : null
+    if (node) renderer.focusElement?.(node.id)
+    return !!node
+  }
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 2, paddingLeft: 6, paddingRight: 6, paddingTop: 6 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 2, minWidth: 0, paddingBottom: 4, flexGrow: 1 }}>
-        {tabs.map((tab) => {
+        {tabs.map((tab, tabPosition) => {
           const hovered = hover === tab.key
           const dim = tab.type === 'starred' ? 0.45 : tab.needsSignIn ? 0.3 : tab.notSetUp || tab.disabled ? 0.2 : busy && !tab.selected ? 0.2 : 0.45
           const hoverDim = tab.type === 'starred' ? 1 : tab.needsSignIn || tab.notSetUp ? 0.6 : tab.disabled || busy ? dim : 1
@@ -536,6 +545,14 @@ function Tabs({
             <div
               key={tab.key}
               testId={`model-tab-${tab.key}`}
+              ref={node => { nodes.current[tabPosition] = node }}
+              role="tab"
+              aria-selected={tab.selected}
+              tabIndex={tab.selected ? 0 : -1}
+              onKeyDown={e => {
+                if (e.key === 'enter' || e.key === 'space') { if (tab.type === 'starred') onStarred(); else if (!tab.disabled) onAccount(tab); return }
+                move(e.key ?? '', tabPosition)
+              }}
               onMouseEnter={() => setHover(tab.key)}
               onMouseLeave={() => setHover((h) => (h === tab.key ? null : h))}
               onClick={() => (tab.type === 'starred' ? onStarred() : onAccount(tab))}
@@ -1109,9 +1126,18 @@ export function ModelTriggerLabel({
 }) {
   const t = useTheme()
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1, overflow: 'hidden' }}>
-      <ProviderMark kind={kind} size={14} />
-      {account?.color && accountDots[account.color] && <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: accountDots[account.color]![t.variant === 'dark' ? 1 : 0], marginLeft: -4, alignSelf: 'flex-start', marginTop: 2, flexShrink: 0 }} />}
+    <div testId="model-label" style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1, overflow: 'hidden' }}>
+      {account?.color && accountDots[account.color] ? (
+        // The desktop hangs a 6px dot 4px back over the mark (`-ml-1 self-start mt-0.5`) and leaves a 2px slot. A
+        // negative margin made the native intrinsic width drop ~36px and clipped the effort and chevron, so the dot is
+        // absolutely placed inside a 22px box (mark 14 + gap 6 + slot 2) instead.
+        <div style={{ position: 'relative', display: 'flex', width: 22, height: 14, flexShrink: 0 }}>
+          <ProviderMark kind={kind} size={14} />
+          <div style={{ position: 'absolute', left: 16, top: 2, width: 6, height: 6, borderRadius: 3, backgroundColor: accountDots[account.color]![t.variant === 'dark' ? 1 : 0] }} />
+        </div>
+      ) : (
+        <ProviderMark kind={kind} size={14} />
+      )}
       {account && <Label color={t.textSecondary} lineHeight={16} style={{ maxWidth: 96, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{account.name}</Label>}
       <Label color={t.text} lineHeight={16} style={{ maxWidth: 220, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
         {model}

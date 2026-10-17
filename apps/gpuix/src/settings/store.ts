@@ -26,6 +26,20 @@ export async function updateSettings(patch: Partial<Settings>) {
   } finally { if (getClient() === client) emit({ saving: false }) }
 }
 
+/** Adopt a settings document the daemon just returned (another surface changed it). */
+export function setSettings(settings: Settings) { revision++; emit({ settings, error: '' }) }
+
+/** Read the daemon's settings again (a page whose values another surface may have changed, like "Always allow" on an approval). */
+export async function refreshSettings() {
+  const client = getClient()
+  if (!client) return
+  const at = revision
+  try {
+    const settings = await client.call('settings.get', {})
+    if (getClient() === client && revision === at) emit({ settings, error: '' })
+  } catch { /* the page keeps what it has */ }
+}
+
 export function useSettings() { return useSyncExternalStore(subscribe, () => state) }
 
 /** Mounted only with Settings. Subscribe before the read, so late hydration cannot overwrite events. */
