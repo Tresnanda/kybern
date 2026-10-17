@@ -5,7 +5,16 @@ struct InputDecoration {
     style: DecorationStyle,
     atomic: bool,
     id: Option<String>,
+    icon: Option<IconDeco>,
 }
+/// A glyph drawn over the first two characters of a decoration (spaces in a monospace font that
+/// reserve its room); the icon sits at the range start, vertically centred in the line.
+#[derive(Clone)]
+struct IconDeco { key: String, image: std::sync::Arc<gpui::RenderImage>, font: String, size: f32 }
+impl PartialEq for IconDeco { fn eq(&self, other: &Self) -> bool { self.key == other.key && self.font == other.font && self.size == other.size } }
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IconRequest { svg: String, color: String, font: String, size: f32 }
 #[derive(Clone, Default, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DecorationStyle {
@@ -28,9 +37,12 @@ struct DecorationRequest {
     #[serde(default)]
     atomic: bool,
     id: Option<String>,
+    #[serde(default)]
+    icon: Option<IconRequest>,
 }
 
 pub(crate) fn set_input_decorations(id: u64, value: serde_json::Value, expected: String, cx: &mut gpui::App) -> napi::Result<()> {
+    crate::kybern_icon::set_renderer(cx.svg_renderer());
     let requests: Vec<DecorationRequest> = serde_json::from_value(value).map_err(|e| napi::Error::from_reason(e.to_string()))?;
     if requests.len() > 4096 { return Err(napi::Error::from_reason("At most 4096 decorations are supported")); }
     editor_for(id)?.update(cx, |state, cx| {
@@ -58,7 +70,15 @@ pub(crate) fn set_input_decorations(id: u64, value: serde_json::Value, expected:
             if let Some(id) = &request.id {
                 if id.is_empty() || !ids.insert(id.clone()) { return Err(napi::Error::from_reason("Decoration IDs must be unique and nonempty")); }
             }
-            decorations.push(InputDecoration { range, style, atomic: request.atomic, id: request.id });
+            let icon = match request.icon {
+                Some(spec) => {
+                    if !spec.size.is_finite() || spec.size <= 0.0 || spec.size > 64.0 { return Err(napi::Error::from_reason("Invalid icon size")); }
+                    let image = crate::kybern_icon::image(&spec.svg, &spec.color).ok_or_else(|| napi::Error::from_reason("The icon could not be drawn"))?;
+                    Some(IconDeco { key: format!("{}\u{1}{}", spec.color, spec.svg), image, font: spec.font, size: spec.size })
+                }
+                None => None,
+            };
+            decorations.push(InputDecoration { range, style, atomic: request.atomic, id: request.id, icon });
         }
         let atoms: Vec<_> = decorations.iter().filter(|d| d.atomic).collect();
         for (i, atom) in atoms.iter().enumerate() {
@@ -109,13 +129,14 @@ impl TextEditorState {
     }
     fn decorated_runs(&self, style: &TextStyle, color: gpui::Hsla) -> Vec<TextRun> {
         let mut edges = vec![0, self.content.len()];
-        for d in &self.decorations { edges.extend([d.range.start, d.range.end]); }
+        for d in &self.decorations { edges.extend([d.range.start, d.range.end]); if d.icon.is_some() && d.range.start + 2 < d.range.end { edges.push(d.range.start + 2); } }
         if let Some(marked) = &self.marked_range { edges.extend([marked.start, marked.end]); }
         edges.sort_unstable(); edges.dedup();
         edges.windows(2).filter(|r| r[0] < r[1]).map(|r| {
             let mut run = TextRun { len: r[1] - r[0], font: style.font(), color, background_color: None, underline: None, strikethrough: None };
             for d in self.decorations.iter().filter(|d| d.range.start <= r[0] && r[0] < d.range.end) {
                 if let Some(c) = &d.style.color { run.color = crate::color::parse_color_rgba(c).unwrap().into(); }
+                if let Some(icon) = &d.icon { if r[0] < d.range.start + 2 { run.font.family = icon.font.clone().into(); } }
                 // Backgrounds are painted locally, retaining decoration identity across font runs.
                 if let Some(weight) = d.style.font_weight { run.font.weight = gpui::FontWeight(weight); }
                 if let Some(s) = &d.style.font_style { run.font.style = if s == "italic" { gpui::FontStyle::Italic } else { gpui::FontStyle::Normal }; }
@@ -155,6 +176,14 @@ impl TextEditorState {
                 let row = base + fragment[0]..base + fragment[1];
                 let row_x = layout.x_for_index(fragment[0]);
                 let x_at = |index| bounds.left() - px(self.scroll_left) + layout.x_for_index(index - base) - row_x;
+                for d in self.decorations.iter().filter(|d| d.icon.is_some()) {
+                    if d.range.start >= row.start && d.range.start < row.end {
+                        let icon = d.icon.as_ref().unwrap();
+                        let size = px(icon.size);
+                        let top = y + (self.line_height - size) / 2.0 + px(icon.size * 0.02);
+                        crate::kybern_icon::paint(window, &icon.image, Bounds::new(point(x_at(d.range.start), top), gpui::size(size, size)));
+                    }
+                }
                 for (span, owner) in &spans {
                     let start = span.start.max(row.start);
                     let end = span.end.min(row.end);

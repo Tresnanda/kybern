@@ -56,11 +56,18 @@ export function webDocument(url: string, kind: 'file' | 'server' | 'visual') {
   window.kybernLayout=(w,h,scale,left,top)=>{Object.assign(frame.style,{width:w+'px',height:h+'px',transform:'translate('+left+'px,'+top+'px) scale('+scale+')'})};
   window.kybernCommand=action=>{if(action==='reload')frame.src=frame.src;else if(action==='back'||action==='forward')frame.contentWindow.postMessage({type:'go',delta:action==='back'?-1:1},'*')};
   window.addEventListener('message',event=>{if(event.source!==frame.contentWindow||!event.data||typeof event.data!=='object')return;if(event.data.kind==='kybern-visual-link'&&!navigator.userActivation?.isActive)return;send(event.data)});
+  ${kind === 'visual' ? "frame.addEventListener('mouseenter',()=>send({kind:'kybern-visual-hover',value:true}));frame.addEventListener('mouseleave',()=>send({kind:'kybern-visual-hover',value:false}));" : ''}
   frame.onload=()=>{post(true);send({kind:'loaded'})};frame.src=${value};
   </script>`
 }
 
 export const webHost = {
+  /** A trusted, never-placed document with no child frame (the Mermaid renderer): script runs, the page is not shown. */
+  createDocument(id: string, html: string) {
+    const generation = ++nextGeneration
+    command({ op: 'create', id, category: 'renderer', generation, allowedOrigins: [], html })
+    return generation
+  },
   create(id: string, url: string, kind: 'file' | 'server' | 'visual') {
     const generation = ++nextGeneration
     command({ op: 'create', id, category: kind === 'visual' ? 'visual' : 'preview', generation, allowedOrigins: [new URL(url).origin], html: webDocument(url, kind) })

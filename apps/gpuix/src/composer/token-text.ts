@@ -1,5 +1,7 @@
 import { textEdit } from '../notes/rich-text.ts'
-export interface TokenReference { token: string; label: string }
+/** `icon` is the glyph the chip leads with: its room is two monospace spaces before the label (`ICON_PAD`), under the native icon. */
+export interface TokenReference { token: string; label: string; icon?: string }
+export const ICON_PAD = '  '
 export interface TokenSpan { sourceStart: number; sourceEnd: number; start: number; end: number; token: string }
 export interface TokenText { source: string; text: string; spans: TokenSpan[] }
 export function tokenText(source: string, references: readonly TokenReference[]): TokenText {
@@ -9,7 +11,7 @@ export function tokenText(source: string, references: readonly TokenReference[])
     const ref = refs.find(r => source.startsWith(r.token, at) && (at === 0 || /\s|[([{]/.test(source[at - 1]!)) && (at + r.token.length === source.length || /\s|[.,!?;:)\]}]/.test(source[at + r.token.length]!)))
     if (!ref) { result.text += source[at++]; continue }
     const start = result.text.length
-    result.text += ref.label
+    result.text += (ref.icon ? ICON_PAD : '') + ref.label
     result.spans.push({ sourceStart: at, sourceEnd: at + ref.token.length, start, end: result.text.length, token: ref.token })
     at += ref.token.length
   }

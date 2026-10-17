@@ -11,6 +11,8 @@ import { Swap } from '../motion/kit.tsx'
 import { REDUCED_MOTION, Label } from '../ui.tsx'
 import { alpha, ROW_LINE } from './kit.tsx'
 import { PACE_MS } from './store.ts'
+import type { MarkdownStream } from '../native/markdown.ts'
+import { useTheme } from '../ui.tsx'
 
 export function Shimmer({ text, color, size = 14, lineHeight = ROW_LINE }: { text: string; color: string; size?: number; lineHeight?: number }) {
   // Pixel/idle controls pass, but repeated full-app GPU controls have not yet
@@ -99,4 +101,40 @@ export function useSmoothText(target: string, live: boolean, complete: boolean):
     return onWindowVisibility(() => tick())
   }, [live])
   return behind ? target.slice(0, shown) : target
+}
+
+// ---- the live answer: caret and fading words ----
+
+const countWords = (text: string) => { let n = 0; for (const _ of text.matchAll(/\S+/g)) n++; return n }
+/** `KYBERN_STREAM_EFFECTS=0` turns caret and fade off and `caret` keeps only the caret, for measuring their cost. */
+const STREAM_EFFECTS = process.env.KYBERN_STREAM_EFFECTS !== '0'
+const STREAM_FADE = STREAM_EFFECTS && process.env.KYBERN_STREAM_EFFECTS !== 'caret'
+
+/**
+ * `.chat-message-segment[data-live] > .chat-markdown > :last-child::after` (a 2px, .95em bar that
+ * blinks on `steps(2)` over 1s) and `.t-stream-w` (each new word fades in over `--stream-fade`,
+ * 350 ms smooth-out). The native Markdown draws both: this only reports when each word was born
+ * and which half of the blink it is. Reduce Motion keeps a still caret and shows words at once.
+ */
+export function useStreamEffects(text: string, live: boolean): MarkdownStream | undefined {
+  const t = useTheme()
+  const seen = useRef<{ count: number; born: number[] } | null>(null)
+  const [phase, setPhase] = useState(true)
+  useEffect(() => {
+    if (!live || REDUCED_MOTION || !STREAM_EFFECTS) return
+    const id = setInterval(() => { if (isWindowVisible()) setPhase(value => !value) }, 500)
+    return () => clearInterval(id)
+  }, [live])
+  if (!live || !STREAM_EFFECTS) { seen.current = null; return undefined }
+  const count = countWords(text)
+  // A row that mounts mid-stream starts at what has arrived: nothing fades in for it.
+  const state = (seen.current ??= { count, born: [] })
+  if (count < state.count) { state.count = count; state.born.length = 0 }
+  else if (count > state.count) {
+    const now = Date.now()
+    for (let i = state.count; i < count; i++) state.born.push(now)
+    state.count = count
+    if (state.born.length > 24) state.born.splice(0, state.born.length - 24)
+  }
+  return { caret: true, caretColor: t.text, caretVisible: REDUCED_MOTION || phase, born: REDUCED_MOTION || !STREAM_FADE ? [] : [...state.born], fadeMs: 350 }
 }

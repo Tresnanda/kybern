@@ -10,8 +10,8 @@ import { CODE } from './kit.tsx'
 const CHROME = 52 + 8
 /** Menlo's advance width at the code size. */
 const CHAR = CODE.size * 0.602
-/** `CodeChunk`'s 12px side padding. */
-const PADDING = 24
+/** `CodeChunk`'s 9.6px side padding (`pre { padding: .5rem .6rem }`). */
+const PADDING = 19.2
 
 /** Columns available to a code block in the chat column; Infinity before the window is measured. */
 export function useCodeColumns(threadId: string | null, gutter: number, column: number, paneWidth?: number): number {
