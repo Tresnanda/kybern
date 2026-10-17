@@ -193,6 +193,7 @@ struct DocTheme {
     line: f32,
     compact: bool,
     min_height: f32,
+    reduced_motion: bool,
     color_key: u64,
 }
 
@@ -232,6 +233,7 @@ impl DocTheme {
             line: num("line", 1.6).clamp(1.0, 3.0),
             compact: g("compact").and_then(|v| v.as_bool()).unwrap_or(false),
             min_height: num("minHeight", 0.0).max(0.0),
+            reduced_motion: g("reducedMotion").and_then(|v| v.as_bool()).unwrap_or(false),
             color_key: 0,
         };
         use std::hash::{Hash, Hasher};
@@ -1102,6 +1104,9 @@ pub(crate) struct RichEditorState {
     make_task: bool,
     /// The checklist line under the pointer that can become a task.
     hover_line: Option<usize>,
+    /// Checked state per checklist block as last painted, and running tick transitions.
+    checks_seen: HashMap<u64, bool>,
+    check_anims: HashMap<u64, (Instant, bool)>,
 }
 
 #[derive(Clone, Copy)]
@@ -1148,6 +1153,8 @@ impl RichEditorState {
             reshaped: 0,
             make_task: false,
             hover_line: None,
+            checks_seen: HashMap::new(),
+            check_anims: HashMap::new(),
         }
     }
 
@@ -1318,6 +1325,11 @@ impl RichEditorState {
         let a_list = a.kind.is_list() || a.cont;
         let b_list = b.kind.is_list();
         if a_list && b_list && a.quote == b.quote {
+            let same_list = b.depth != a.depth || a.cont || std::mem::discriminant(&a.kind) == std::mem::discriminant(&b.kind);
+            if !same_list && b.depth == 0 {
+                // A checklist, bullet list and numbered list next to each other are separate lists.
+                return 0.93 * em;
+            }
             if matches!(b.kind, Kind::Task(_)) && b.depth == a.depth && matches!(a.kind, Kind::Task(_)) {
                 return 0.0;
             }
@@ -1507,13 +1519,8 @@ impl RichEditorState {
                         continue;
                     }
                     let x0 = f32::from(line.unwrapped_layout.x_for_index(sa)) - row_x;
-                    let mut sb_trim = sb;
-                    if row < last_row && sb == re {
-                        // A wrapped row ends before the spaces it wrapped at.
-                        let text = &line.text[rs..re];
-                        sb_trim = rs + text.trim_end().len();
-                    }
-                    let mut x1 = f32::from(line.unwrapped_layout.x_for_index(sb_trim.max(sa))) - row_x;
+                    // A wrapped row keeps the space it wrapped at, as WebKit underlines and selects it.
+                    let mut x1 = f32::from(line.unwrapped_layout.x_for_index(sb.max(sa))) - row_x;
                     if crosses_break {
                         x1 = x1.max(x0) + sliver;
                     }
@@ -1543,7 +1550,24 @@ impl RichEditorState {
             if block.kind.is_atom() {
                 continue;
             }
+            let first = out.len();
             self.range_rects(index, a, b, &mut out, index != end.block);
+            // WebKit fills a selected row to the column edge when the selection runs on past it.
+            let place = self.places[index];
+            let rows = out.len() - first;
+            for (n, r) in out[first..].iter_mut().enumerate() {
+                if n + 1 < rows || index != end.block {
+                    r.size.width = px((place.tx + place.tw - f32::from(r.origin.x)).max(f32::from(r.size.width)));
+                }
+            }
+            // …and the space between two selected blocks.
+            if index < end.block {
+                let next = self.places[index + 1];
+                let bottom = place.top + place.height;
+                if next.top > bottom {
+                    out.push(Bounds::new(point(px(0.0), px(bottom)), size(px(self.width), px(next.top - bottom))));
+                }
+            }
         }
         out
     }
@@ -1604,7 +1628,7 @@ impl RichEditorState {
         let at = text
             .split_word_bound_indices()
             .rev()
-            .find_map(|(i, w)| (i < pos.offset && !w.trim().is_empty()).then_some(i))
+            .find_map(|(i, w)| (i < pos.offset && w.chars().any(char::is_alphanumeric)).then_some(i))
             .unwrap_or(0);
         Pos::new(pos.block, at)
     }
@@ -1618,7 +1642,7 @@ impl RichEditorState {
             .split_word_bound_indices()
             .find_map(|(i, w)| {
                 let end = i + w.len();
-                (end > pos.offset && !w.trim().is_empty()).then_some(end)
+                (end > pos.offset && w.chars().any(char::is_alphanumeric)).then_some(end)
             })
             .unwrap_or(text.len());
         Pos::new(pos.block, at)
@@ -2742,6 +2766,20 @@ impl gpui::Element for DocElement {
             }
             editor.last_bounds = Some(bounds);
             editor.hitboxes.clear();
+            // A checklist item that changed state since the last frame starts its tick transition.
+            let now = Instant::now();
+            let mut seen = HashMap::new();
+            for block in editor.core.doc.blocks.iter() {
+                if let Kind::Task(checked) = block.kind {
+                    if let Some(&was) = editor.checks_seen.get(&block.id) {
+                        if was != checked && !editor.theme.reduced_motion {
+                            editor.check_anims.insert(block.id, (now, checked));
+                        }
+                    }
+                    seen.insert(block.id, checked);
+                }
+            }
+            editor.checks_seen = seen;
             let origin = bounds.origin;
             let mut boxes = Vec::new();
             for index in 0..editor.core.doc.len() {
@@ -2927,7 +2965,8 @@ fn paint_doc(editor: &mut RichEditorState, bounds: Bounds<Pixels>, caret_on: boo
         // Selection.
         for r in selection_rects.iter() {
             let top = f32::from(r.origin.y);
-            if top >= place.top - 0.5 && top < place.top + place.height {
+            let gap_owner = index + 1 < count && top >= place.top + place.height - 0.5 && top < editor.places[index + 1].top;
+            if (top >= place.top - 0.5 && top < place.top + place.height) || gap_owner {
                 window.paint_quad(fill(Bounds::new(origin + r.origin, r.size), theme.selection));
             }
         }
@@ -2957,17 +2996,53 @@ fn paint_doc(editor: &mut RichEditorState, bounds: Bounds<Pixels>, caret_on: boo
                 }
             }
             Kind::Task(checked) => {
+                // `.note-prose ul[data-type=taskList] > li > label`: the fill eases over 150 ms
+                // (--ease-out), the tick scales from 0.6 (--ease-smooth-out) and fades in 80 ms.
                 let check = 1.067 * em;
                 let b = Bounds::new(origin + point(px(place.list_x), px(place.ty + (lh - check) / 2.0)), size(px(check), px(check)));
                 let r = 0.3 * em;
-                if *checked {
-                    window.paint_quad(quad(b, theme.check_on, r));
-                    if let Some(tick) = editor.glyphs.get("tick") {
-                        crate::kybern_icon::paint(window, &tick.image, b);
+                let now = Instant::now();
+                let anim = editor.check_anims.get(&block.id).copied().filter(|(start, _)| now.duration_since(*start).as_secs_f32() < 0.15);
+                let (fill_t, tick_scale, tick_alpha) = match anim {
+                    Some((start, on)) => {
+                        let e = now.duration_since(start).as_secs_f32();
+                        let fill = bezier(0.23, 1.0, 0.32, 1.0, e / 0.15);
+                        let scale = bezier(0.22, 1.0, 0.36, 1.0, e / 0.15);
+                        let alpha = (e / 0.08).min(1.0);
+                        if on { (fill, 0.6 + 0.4 * scale, alpha) } else { (1.0 - fill, 1.0 - 0.4 * scale, 1.0 - alpha) }
                     }
+                    None => if *checked { (1.0, 1.0, 1.0) } else { (0.0, 0.6, 0.0) },
+                };
+                if anim.is_some() {
+                    window.request_animation_frame();
                 } else {
-                    let ring = if editor.hover == Hover::Check(index) { theme.fg3 } else { theme.fg4 };
-                    window.paint_quad(gpui::quad(b, Corners::all(px(r)), gpui::transparent_black(), px(1.5), ring, gpui::BorderStyle::Solid));
+                    editor.check_anims.remove(&block.id);
+                }
+                let ring = if editor.hover == Hover::Check(index) { theme.fg3 } else { theme.fg4 };
+                if fill_t < 1.0 {
+                    let mut ring_c = ring;
+                    ring_c.a *= 1.0 - fill_t;
+                    window.paint_quad(gpui::quad(b, Corners::all(px(r)), gpui::transparent_black(), px(1.5), ring_c, gpui::BorderStyle::Solid));
+                }
+                if fill_t > 0.0 {
+                    window.paint_quad(quad(b, mix(gpui::transparent_black(), theme.check_on, fill_t), r));
+                }
+                if tick_alpha > 0.0 {
+                    // The fade is quantized to quarter steps: each is one cached raster of the tick.
+                    let image = if tick_alpha >= 1.0 {
+                        editor.glyphs.get("tick").map(|g| g.image.clone())
+                    } else {
+                        editor.glyph_source.get("tick").and_then(|(svg, color)| {
+                            let step = (tick_alpha * 4.0).ceil() / 4.0;
+                            let c = crate::color::parse_color_rgba(color)?;
+                            crate::kybern_icon::image(svg, &format!("rgba({},{},{},{})", (c.r * 255.0).round(), (c.g * 255.0).round(), (c.b * 255.0).round(), c.a * step))
+                        })
+                    };
+                    if let Some(image) = image {
+                        let side = check * tick_scale;
+                        let tb = Bounds::new(b.center() - point(px(side / 2.0), px(side / 2.0)), size(px(side), px(side)));
+                        let _ = window.paint_image(tb, tb, Corners::default(), image, 0, false);
+                    }
                 }
             }
             _ => {}
@@ -3049,6 +3124,23 @@ fn paint_doc(editor: &mut RichEditorState, bounds: Bounds<Pixels>, caret_on: boo
             }
         }
     }
+}
+
+/// CSS `cubic-bezier(x1, y1, x2, y2)` at `t` (0–1).
+fn bezier(x1: f32, y1: f32, x2: f32, y2: f32, t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    let curve = |a: f32, b: f32, u: f32| 3.0 * a * u * (1.0 - u).powi(2) + 3.0 * b * u * u * (1.0 - u) + u.powi(3);
+    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    for _ in 0..24 {
+        let mid = (lo + hi) / 2.0;
+        if curve(x1, x2, mid) < t { lo = mid } else { hi = mid }
+    }
+    curve(y1, y2, (lo + hi) / 2.0)
+}
+
+fn mix(a: Hsla, b: Hsla, t: f32) -> Hsla {
+    let (a, b) = (gpui::Rgba::from(a), gpui::Rgba::from(b));
+    Hsla::from(gpui::Rgba { r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t, a: a.a + (b.a - a.a) * t })
 }
 
 fn list_level(doc: &Doc, index: usize) -> usize {

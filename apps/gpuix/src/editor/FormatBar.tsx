@@ -50,7 +50,7 @@ function TextButton({ label, onClick, testId, strong }: { label: string; onClick
   const t = useTheme()
   return (
     <div testId={testId} role="button" onClick={onClick} style={{ display: 'flex', alignItems: 'center', height: 28, paddingLeft: 8, paddingRight: 8, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
-      <Label color={strong ? t.text : t.textSecondary} size={12} weight={strong ? 500 : 400} style={{ pointerEvents: 'none' }}>{label}</Label>
+      <Label color={strong ? t.text : t.textSecondary} size={14} weight={strong ? 500 : 400} style={{ pointerEvents: 'none' }}>{label}</Label>
     </div>
   )
 }
@@ -79,7 +79,7 @@ export function LinkField({ initial, command, onDone, width = 224 }: { initial: 
         onSubmit={apply}
         onKeyDown={(e) => { if (e.key === 'escape') { e.preventDefault(); onDone(); command({ cmd: 'focus' }) } }}
         theme={{ text: t.text, caret: t.text }}
-        style={{ width, height: 28, paddingLeft: 6, paddingRight: 6, fontSize: 12, color: t.text, backgroundColor: 'transparent' }} />
+        style={{ width, height: 28, paddingLeft: 6, paddingRight: 6, fontSize: 14, color: t.text, backgroundColor: 'transparent' }} />
       <TextButton testId="editor-link-apply" label={initial && !value.trim() ? 'Remove' : 'Apply'} onClick={apply} strong />
     </div>
   )
@@ -98,7 +98,7 @@ export function FormatBar({ state, command }: { state: EditorState; command: Com
   const run = (cmd: Record<string, unknown>) => { command(cmd); command({ cmd: 'focus' }) }
   const separator = <div style={{ width: 1, height: 16, marginLeft: 2, marginRight: 2, backgroundColor: t.border }} />
   return (
-    <PopupLayer testId="editor-format-bar" position={{ x: x + w / 2, y: y - 8 }} anchor="bottomCenter" kind="menu" side="top"
+    <PopupLayer testId="editor-format-bar" still position={{ x: x + w / 2, y: y - 8 }} anchor="bottomCenter" kind="menu" side="top"
       style={{ ...popoverStyle(t), display: 'flex', alignItems: 'center', gap: 2, padding: 4 }}>
       {mode === 'link' ? <LinkField initial={state.link?.href ?? ''} command={command} onDone={() => setMode('buttons')} />
         : mode === 'turn' ? <div role="menu" aria-label="Turn into" style={{ display: 'flex', flexDirection: 'column', gap: 1, width: 176 }}>
@@ -107,7 +107,7 @@ export function FormatBar({ state, command }: { state: EditorState; command: Com
             return <div key={item.id} testId={`editor-turn-${item.id}`} role="menuitemradio" aria-selected={active} onClick={() => { if (!active) run({ cmd: 'turnInto', block: item.id }); setMode('buttons') }}
               style={{ display: 'flex', alignItems: 'center', gap: 8, height: 28, paddingLeft: 8, paddingRight: 8, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
               <Icon source={SLASH_ICON[item.icon]} size={14} color={ink(t, 0.8)} />
-              <div style={{ flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={12} truncate>{item.title}</Label></div>
+              <div style={{ flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={14} truncate>{item.title}</Label></div>
               {active && <Icon source={ICONS.check} size={12} color={t.text} />}
             </div>
           })}
@@ -115,7 +115,7 @@ export function FormatBar({ state, command }: { state: EditorState; command: Com
           : <>
             <div testId="editor-turn-into" role="button" aria-label={`Turn into. Now ${blockTitle}`} onClick={() => setMode('turn')}
               style={{ display: 'flex', alignItems: 'center', gap: 4, height: 28, paddingLeft: 8, paddingRight: 6, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
-              <Label color={t.textSecondary} size={12} truncate style={{ maxWidth: 96, pointerEvents: 'none' }}>{blockTitle}</Label>
+              <Label color={t.textSecondary} size={14} truncate style={{ maxWidth: 96, pointerEvents: 'none' }}>{blockTitle}</Label>
               <Icon source={ICONS.chevron} size={12} color={ink(t, 0.4)} />
             </div>
             {separator}
@@ -135,14 +135,15 @@ export function LinkBubble({ state, command, onOpen, onEdit, inBar }: { state: E
   const t = useTheme()
   const [editing, setEditing] = useState(false)
   useEffect(() => { if (!state.link) setEditing(false) }, [state.link?.href])
-  if (!state.link?.rect || (!state.focused && !editing) || (!state.collapsed && !editing)) return null
-  const [x, y, , h] = state.link.rect
+  const anchor = state.caret ?? state.link?.rect
+  if (!state.link || !anchor || (!state.focused && !editing) || (!state.collapsed && !editing)) return null
+  const [x, y, , h] = anchor
   const href = state.link.href
   return (
-    <PopupLayer testId="editor-link-bubble" position={{ x, y: y + h + 6 }} anchor="topLeft" kind="menu" side="bottom"
+    <PopupLayer testId="editor-link-bubble" still position={{ x, y: y + h + 6 }} anchor="topLeft" kind="menu" side="bottom"
       style={{ ...popoverStyle(t), display: 'flex', alignItems: 'center', gap: 2, padding: 4 }}>
       {editing ? <LinkField initial={href} command={command} onDone={() => setEditing(false)} /> : <>
-        <div style={{ paddingLeft: 8, paddingRight: 6, maxWidth: 224 }}><Label color={ink(t, t.variant === 'dark' ? 0.58 : 0.6)} size={12} truncate>{linkLabel(href)}</Label></div>
+        <div style={{ paddingLeft: 8, paddingRight: 6, maxWidth: 224 }}><Label color={ink(t, t.variant === 'dark' ? 0.58 : 0.6)} size={14} truncate>{linkLabel(href)}</Label></div>
         <TextButton testId="editor-link-open" label="Open" onClick={() => onOpen(href)} />
         <TextButton testId="editor-link-edit" label="Edit" onClick={() => { command({ cmd: 'selectLink' }); if (inBar || !onEdit) setEditing(true); else onEdit() }} />
         <TextButton testId="editor-link-remove" label="Remove" onClick={() => { command({ cmd: 'link', href: null }); command({ cmd: 'focus' }) }} />

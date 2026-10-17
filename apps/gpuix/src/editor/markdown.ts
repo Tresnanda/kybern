@@ -370,7 +370,9 @@ function isList(block: DocBlock) {
 /** What separates two generated neighbours. */
 function separator(a: DocBlock, b: DocBlock): string {
   const blank = '\n' + '> '.repeat(Math.min(a.quote ?? 0, b.quote ?? 0)).trimEnd() + '\n'
-  if (isList(b) && (isList(a) || a.cont) && (a.quote ?? 0) === (b.quote ?? 0)) return '\n'
+  // Separate lists (a checklist then a numbered list) keep a blank line between them.
+  const newList = isList(a) && !(b.depth ?? 0) && !(a.depth ?? 0) && a.type !== b.type && !(a.type === 'bullet' && b.type === 'bullet')
+  if (isList(b) && (isList(a) || a.cont) && (a.quote ?? 0) === (b.quote ?? 0) && !newList) return '\n'
   return blank
 }
 

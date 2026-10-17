@@ -24,10 +24,11 @@ import { noteSession } from './session.ts'
 import { Toolbar } from './Toolbar.tsx'
 import { RichEditor, type EditorState, type MakeTaskLine, type RichEditorHandle } from '../editor/RichEditor.tsx'
 import type { ImageHome } from '../editor/images.ts'
+import { plainText as docText, type DocBlock } from '../editor/markdown.ts'
 
 /** The text a reader counts: no link targets, list numbers, fences or heading marks. */
 function plainText(body: string): string {
-  return body.replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\]\([^)]*\)/g, ']').replace(/^\s*```.*$/gm, '').replace(/^\s*(?:\d+\.|[-*+])\s+/gm, '').replace(/^#{1,6}\s+/gm, '')
+  return body.replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\]\([^)]*\)/g, ']').replace(/^\s*```.*$/gm, '').replace(/^[\s>]*(?:\d+\.|[-*+])\s+(?:\[[ xX]\]\s+)?/gm, '').replace(/^#{1,6}\s+/gm, '')
 }
 export function openLink(href: string, _noteId?: string) {
   const task = /^kybern:\/\/task\/([a-f\d-]{36})\/?$/i.exec(href)
@@ -58,6 +59,7 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
   const taskMap = useMemo(() => Object.fromEntries(allTasks.map(task => [task.id, task])), [allTasks])
   const editor = useRef<RichEditorHandle>(null)
   const scroller = useRef<PublicInstance>(null)
+  const viewport = useRef<PublicInstance>(null)
   const title = useRef<PublicInstance>(null)
   const [state, setState] = useState<EditorState | null>(null)
   const [outlineActive, setOutlineActive] = useState(0)
@@ -102,13 +104,22 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
     if (!paths?.length) return
     try { await editor.current?.addImages(paths) } catch (error) { toast.error('Couldn’t add image', { description: String(error) }) }
   }
+  // Words in the document, read again a moment after typing pauses (desktop `useDocumentStats`).
+  const [words, setWords] = useState<number | null>(null)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const doc = editor.current?.command({ cmd: 'getDoc' }) as { blocks: DocBlock[] } | null
+      if (doc) setWords(countWords(docText(doc.blocks)))
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [snap.body, snap.epoch, state?.canUndo, state?.height])
   const headings = (state?.headings ?? []).slice(0, 80)
   // Desktop `hasOutline`: two headings and room in the margin.
   const hasOutline = !compact && headings.length >= 2 && size.width >= 1050
   const editorTop = () => {
     const id = editor.current?.id
     const box = id != null ? renderer?.getElementBounds?.(id) : null
-    const view = scroller.current ? renderer?.getElementBounds?.(scroller.current.id) : null
+    const view = viewport.current ? renderer?.getElementBounds?.(viewport.current.id) : null
     return box && view ? { box, view } : null
   }
   const updateOutline = () => {
@@ -155,6 +166,7 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
     images={images}
     tasks={taskMap}
     scroller={variant === 'page' ? scroller : undefined}
+    viewport={variant === 'page' ? viewport : undefined}
     onChange={(markdown) => { if (markdown !== session.getSnapshot().body) session.edit({ body: markdown }) }}
     onBlur={() => void session.flush()}
     onOpenLink={href => openLink(href, id)}
@@ -175,7 +187,7 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
     {snap.conflict && <Banner title="This note changed on another device" detail="Keep your version to replace theirs, or use theirs and discard your changes."><Button testId="note-use-theirs" onClick={() => session.useTheirs()}>Use theirs</Button><Button testId="note-keep-mine" onClick={() => session.keepMine()}>Keep mine</Button></Banner>}
     {deleted && <Banner title="This note is in Recently deleted" detail="Restore it to edit it again."><Button testId="note-restore" onClick={() => void restoreNote(id)}>Restore</Button></Banner>}
     {snap.phase === 'ready' && <>
-      <div testId="note-viewport" style={{ display: 'flex', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+      <div ref={viewport} testId="note-viewport" style={{ display: 'flex', flexGrow: 1, minHeight: 0, position: 'relative' }}>
         <div ref={scroller} testId="note-body-list" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexGrow: 1, minHeight: 0, overflow: 'scroll' }}>
           <div style={{ display: 'flex', flexDirection: 'column', width: docWidth, paddingTop: 84, flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, minHeight: 19.5, marginBottom: 20 }}>
@@ -211,7 +223,7 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
             <StatusGlyph status={task.status} /><Label color={k.fg2} size={NOTES_META} lineHeight={19.5}>{task.key}</Label><Label color={k.fg3} size={NOTES_META} lineHeight={19.5}>{STATUS_LABEL[task.status]}</Label></div>)}
           {tasks.length > 4 && <Label color={k.fg3} size={NOTES_META}>{`${tasks.length - 4} more`}</Label>}
         </>}
-        <div style={{ flexGrow: 1 }} /><Label color={k.fg3} size={NOTES_META} lineHeight={19.5}>{wordCountLabel(countWords(plainText(snap.body)))}</Label>
+        <div style={{ flexGrow: 1 }} /><Label color={k.fg3} size={NOTES_META} lineHeight={19.5}>{wordCountLabel(words ?? countWords(plainText(snap.body)))}</Label>
       </div>
     </>}
   </div>

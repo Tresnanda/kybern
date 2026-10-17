@@ -3,7 +3,7 @@
 // place with the reading look (desktop `NoteBody` + `.note-prose`); this component
 // feeds it Markdown, reads Markdown back, and draws the desktop's slash menu,
 // selection format bar and link bubble around it. See src/editor/README.md.
-import { useGpuix, type EventPayload, type PublicInstance, type StyleDesc } from '@gpuix/react'
+import { useGpuix, useWindowSize, type EventPayload, type PublicInstance, type StyleDesc } from '@gpuix/react'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { STATUS_LABEL } from '@/state/tasksModel'
 import type { TaskItem } from '../../../../packages/kybern-client/src/types.ts'
@@ -11,7 +11,7 @@ import { Icon } from '../icons.tsx'
 import { SLASH_ICON, TASK_ICON } from './icons.ts'
 import { PopupLayer, popoverStyle } from '../composer/Menu.tsx'
 import { FONT_MONO, FONT_UI, over, type Theme } from '../theme.ts'
-import { ink, Label, useTheme } from '../ui.tsx'
+import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { notesTokens } from '../notes/kit.tsx'
 import { statusGlyphSource } from '../tasks/Glyphs.tsx'
 import { useTasks } from '../tasks/store.ts'
@@ -94,8 +94,10 @@ export interface RichEditorProps {
   onMakeTask?: (line: MakeTaskLine) => void
   /** The link bubble's Edit, where a page toolbar edits links. */
   onEditLink?: () => void
-  /** The scrolling ancestor that keeps the caret in view while typing. */
+  /** The scrolling ancestor that keeps the caret in view while typing, and an unscrolled
+   * element covering its visible area (a scroller's own bounds move with its content). */
   scroller?: { current: PublicInstance | null }
+  viewport?: { current: PublicInstance | null }
   minHeight?: number
   testId?: string
   'aria-label'?: string
@@ -141,7 +143,7 @@ export function editorTheme(t: Theme, options: { variant: 'page' | 'compact'; si
     link, fill: k.fill, hair: k.hair, hover: k.hover, sel: k.sel, checkOn: k.checkOn,
     focus: t.v('--color-border-focus') || t.accentBlue, surface: t.surface,
     selection: withAlpha(link, 0.28), caret: k.fg,
-    font: FONT_UI, mono: FONT_MONO, size, line, compact, minHeight: options.minHeight ?? 0,
+    font: FONT_UI, mono: FONT_MONO, size, line, compact, minHeight: options.minHeight ?? 0, reducedMotion: REDUCED_MOTION,
   }
 }
 
@@ -307,10 +309,11 @@ export const RichEditor = forwardRef<RichEditorHandle, RichEditorProps>(function
   /** Keep the caret in view of the scrolling ancestor, like a browser does while typing. */
   const followCaret = (next: EditorState) => {
     const scroller = latest.current.scroller?.current
+    const viewport = latest.current.viewport?.current ?? scroller
     const id = node.current?.id
     const r = renderer as unknown as { getElementBounds?: (id: number) => { x: number; y: number; width: number; height: number } | null; getScrollOffset?: (id: number) => number[] | null; scrollTo?: (id: number, x: number, y: number) => void } | null
     if (!scroller || id == null || !next.caret || !r?.getElementBounds || !r.getScrollOffset || !r.scrollTo) return
-    const view = r.getElementBounds(scroller.id), own = r.getElementBounds(id), offset = r.getScrollOffset(scroller.id)
+    const view = r.getElementBounds(viewport!.id), own = r.getElementBounds(id), offset = r.getScrollOffset(scroller.id)
     if (!view || !own || !offset) return
     const top = own.y + next.caret[1], bottom = top + next.caret[3]
     const margin = 24
@@ -333,7 +336,7 @@ export const RichEditor = forwardRef<RichEditorHandle, RichEditorProps>(function
   const tasksProp = taskInfo.info
   const k = notesTokens(t)
   const slash = slashOpen && state?.slash?.rect ? toWindow(state.slash.rect) : null
-  const windowState = state ? { ...state, selection: toWindow(state.selection), link: state.link ? { ...state.link, rect: toWindow(state.link.rect) } : null } : null
+  const windowState = state ? { ...state, caret: toWindow(state.caret), selection: toWindow(state.selection), link: state.link ? { ...state.link, rect: toWindow(state.link.rect) } : null } : null
   return (
     <div style={{ display: 'flex', flexDirection: 'column', position: 'relative', width: '100%', ...props.style }}>
       <rich-editor
@@ -358,17 +361,7 @@ export const RichEditor = forwardRef<RichEditorHandle, RichEditorProps>(function
         onFileDrop={(event: EventPayload) => { void addImages((event.paths ?? []).filter(p => /\.(png|jpe?g|gif|webp|tiff?|heic|bmp|svg)$/i.test(p))) }}
         style={{ width: '100%' }}
       />
-      {slash && <PopupLayer testId="editor-slash-menu" position={{ x: slash[0], y: slash[1] + slash[3] + 6 }} kind="menu" style={{ ...popoverStyle(t), display: 'flex', flexDirection: 'column', width: 288, padding: 6 }}>
-        {slashItems.length === 0
-          ? <div style={{ paddingLeft: 10, paddingRight: 10, paddingTop: 8, paddingBottom: 8 }}><Label color={ink(t, 0.4)} size={11}>{`No blocks match “${state!.slash!.query}”`}</Label></div>
-          : slashItems.map((item, index) => <div key={item.id} testId={`editor-slash-${item.id}`} role="option" aria-selected={index === slashIndex}
-              onMouseEnter={() => setSlashIndex(index)} onClick={() => chooseSlash(item)}
-              style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 36, paddingLeft: 10, paddingRight: 10, paddingTop: 6, paddingBottom: 6, borderRadius: 8, cursor: 'pointer', backgroundColor: index === slashIndex ? t.buttonSecondary : undefined }}>
-              <div style={{ display: 'flex', width: 16, height: 16, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon source={SLASH_ICON[item.icon]} size={16} color={ink(t, 0.85)} /></div>
-              <div style={{ flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={12} truncate>{item.title}</Label></div>
-              {item.shortcut ? <Label color={ink(t, 0.36)} size={11} font={FONT_MONO}>{item.shortcut}</Label> : null}
-            </div>)}
-      </PopupLayer>}
+      {slash && <SlashMenu rect={slash} items={slashItems} index={slashIndex} query={state!.slash!.query} onHover={setSlashIndex} onChoose={chooseSlash} />}
       {selectionBar && windowState && !readOnly && <FormatBar state={windowState} command={command} />}
       {windowState && !readOnly && <LinkBubble state={windowState} command={command} onOpen={href => latest.current.onOpenLink?.(href)} onEdit={latest.current.onEditLink} inBar={selectionBar} tokens={k} />}
       {state?.hoverTask && props.onMakeTask && !readOnly && <MakeTaskButton line={state.hoverTask} compact={variant === 'compact'} onClick={() => props.onMakeTask?.(state.hoverTask!)} />}
@@ -391,4 +384,34 @@ function MakeTaskButton({ line, compact, onClick }: { line: MakeTaskLine & { rec
       <Label color={k.fg2} size={compact ? 12 : 13} style={{ pointerEvents: 'none' }}>Make task</Label>
     </div>
   </div>
+}
+
+const SLASH_MENU_WIDTH = 288
+/** The "/" menu (desktop `SlashMenu.tsx`): below the caret, or above it when there is no room below. */
+function SlashMenu({ rect, items, index, query, onHover, onChoose }: { rect: Rect; items: SlashItem[]; index: number; query: string; onHover: (index: number) => void; onChoose: (item: SlashItem) => void }) {
+  const t = useTheme()
+  const { renderer } = useGpuix()
+  const size = useWindowSize({ intervalMs: 300 })
+  const rows = useRef(new Map<number, PublicInstance>())
+  const [x, y, , h] = rect
+  const below = size.height - (y + h)
+  const above = below < 320 && y > below
+  const left = Math.max(8, Math.min(x, size.width - SLASH_MENU_WIDTH - 8))
+  // `max-h-[min(20rem,45vh)]`, scrolled so the highlighted item stays in view.
+  const maxHeight = Math.min(320, size.height * 0.45)
+  useEffect(() => { const row = rows.current.get(index); if (row) renderer?.scrollIntoView?.(row.id) }, [index])
+  return <PopupLayer testId="editor-slash-menu" still position={above ? { x: left, y: y - 6 } : { x: left, y: y + h + 6 }} anchor={above ? 'bottomLeft' : 'topLeft'} kind="menu"
+    style={{ ...popoverStyle(t), display: 'flex', flexDirection: 'column', width: SLASH_MENU_WIDTH }}>
+    <div testId="editor-slash-list" role="listbox" aria-label="Insert" style={{ display: 'flex', flexDirection: 'column', maxHeight, overflow: 'scroll', padding: 6 }}>
+      {items.length === 0
+        ? <div style={{ paddingLeft: 10, paddingRight: 10, paddingTop: 8, paddingBottom: 8 }}><Label color={ink(t, 0.4)} size={13}>{`No blocks match “${query}”`}</Label></div>
+        : items.map((item, i) => <div key={item.id} ref={(node) => { if (node) rows.current.set(i, node); else rows.current.delete(i) }} testId={`editor-slash-${item.id}`} role="option" aria-selected={i === index}
+            onMouseEnter={() => onHover(i)} onClick={() => onChoose(item)}
+            style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 36, flexShrink: 0, paddingLeft: 10, paddingRight: 10, paddingTop: 6, paddingBottom: 6, borderRadius: 8, cursor: 'pointer', backgroundColor: i === index ? t.buttonSecondary : undefined }}>
+            <div style={{ display: 'flex', width: 16, height: 16, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon source={SLASH_ICON[item.icon]} size={16} color={ink(t, 0.85)} /></div>
+            <div style={{ flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={14} truncate>{item.title}</Label></div>
+            {item.shortcut ? <Label color={ink(t, 0.36)} size={13} font={FONT_MONO}>{item.shortcut}</Label> : null}
+          </div>)}
+    </div>
+  </PopupLayer>
 }
