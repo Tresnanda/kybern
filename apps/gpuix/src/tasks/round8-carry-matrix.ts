@@ -12,7 +12,7 @@ async function run(label:string,extra:Record<string,string>){
   console.log(label,code)
   if(code)throw Error(`Carry fixture failed: ${label}`)
 }
-async function resources(){for(let repeat=1;repeat<=2;repeat++)await run(`resources-${repeat}`,{R7_RESOURCES:'1',R8_WARMUP:'1',KYBERN_APPEARANCE:'dark',KYBERN_REDUCED_MOTION:'0'})}
+async function resources(){for(let repeat=1;repeat<=2;repeat++)await run(`resources-${repeat}`,{R7_RESOURCES:'1',R8_WARMUP:'1',KYBERN_FRAME_TIMES:'1',R7_LOG:`${out}/resources-${repeat}-frames.log`,KYBERN_APPEARANCE:'dark',KYBERN_REDUCED_MOTION:'0'})}
 if(process.argv.includes('--resources'))await resources()
 else{
   if(!process.argv.includes('--timing-only')){

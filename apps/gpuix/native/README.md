@@ -97,6 +97,20 @@ Rotation is not part of this API: a 1° subtree tilt requires transformed quads,
 glyph/path transforms, inverse input coordinates and rotated clip boundaries;
 the SVG rotation capability remains separate.
 
+Proposed rotation extension (not implemented): add `paintTransform` and
+`setSubtreeTransform(id, { translateX, translateY, rotateZDegrees, origin })`,
+keeping the translation API as its zero-angle convenience form. `origin` defaults
+to `[.5, .5]` in the subtree's untransformed bounds; positive angles are clockwise.
+Compose `T(translation) · T(origin) · R(angle) · T(-origin)`, including nested scopes.
+Angles use the existing tween/spring evaluator; reduced motion takes the target
+angle immediately. The desktop task ghost supplies 1° wherever its reference
+class applies. Observers report the axis-aligned envelope of transformed corners;
+layout slots keep their original bounds. Hit testing and selection inverse-map
+coordinates, while native caret/IME rectangles use the visual envelope. Primitive
+vertices, shadows and inner rounded clip nodes need the same affine transform;
+ancestor clips remain in window coordinates. Retained GPU scope transforms must
+preserve painter order and cached replay without Taffy or island invalidation.
+
 ## Cached views
 
 GPUIX rebuilds and lays out every element of the window on every frame. Any
