@@ -271,7 +271,9 @@ function scrollStep(dt: number) {
   const speed = edgeSpeed(drag.y, drag.listTop, drag.listTop + drag.listHeight)
   if (!speed) return
   const total = drag.heights.reduce((a, b) => a + b, 0) + END
-  scrollPx = Math.max(0, Math.min(Math.max(0, total - drag.listHeight), scrollPx + speed * dt))
+  const nextScroll = Math.max(0, Math.min(Math.max(0, total - drag.listHeight), scrollPx + speed * dt))
+  if (Math.abs(nextScroll - scrollPx) < 0.001) return
+  scrollPx = nextScroll
   let index = 0, rest = scrollPx
   while (index < drag.heights.length - 1 && rest >= drag.heights[index]!) {
     rest -= drag.heights[index]!
