@@ -80,7 +80,7 @@ if (import.meta.main && process.argv[2] === '--proxy') {
     websocket: {
       open(ws) {
         for (const upstream of [ws.data.real, ws.data.fake]) {
-          upstream.onmessage = e => ws.send(upstream === ws.data.fake ? JSON.stringify(stabilize(JSON.parse(String(e.data)))) : String(e.data))
+          upstream.onmessage = e => { if (mode.startsWith('s9-') && upstream === ws.data.real && String(e.data).includes('"usage.limits.changed"')) return; ws.send(upstream === ws.data.fake ? JSON.stringify(stabilize(JSON.parse(String(e.data)))) : String(e.data)) }
           upstream.onopen = () => { for (const [socket, data] of ws.data.queued) if (socket === upstream) socket.send(data); ws.data.queued = ws.data.queued.filter(([socket]) => socket !== upstream) }
         }
       },

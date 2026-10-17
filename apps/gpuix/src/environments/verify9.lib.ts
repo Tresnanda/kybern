@@ -1,5 +1,6 @@
 /** Shared driver for the settings9 environment checks: scratch daemons A (4294) and B (4295), isolated registry and credentials. */
 import { launch } from '@gpuix/react/automation'
+import { assertScratchEnv } from '../requests/harness.ts'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
@@ -20,6 +21,7 @@ export function reset() { rmSync(CLIENT, { recursive: true, force: true }); rmSy
 
 export async function start(extra: Record<string, string> = {}) {
   mkdirSync(OUT, { recursive: true })
+  assertScratchEnv({ KYBERN_DATA_DIR: DATA_A })
   const app = await launch({ command: 'bun', args: ['src/main.tsx'], env: { ...process.env, GPUIX_BACKGROUND: '1', KYBERN_OPAQUE: '1', KYBERN_APPEARANCE: mode, KYBERN_DATA_DIR: DATA_A, KYBERN_CLIENT_CONFIG_DIR: CLIENT, KYBERN_GPUIX_CREDENTIALS_DIR: CREDS, ...extra } })
   await app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })
   const until = async (label: string, check: () => Promise<boolean>, ms = 30_000) => { const end = Date.now() + ms; while (Date.now() < end) { try { if (await check()) return } catch { /* retry */ } await wait(60) } throw Error(`Timed out: ${label}`) }

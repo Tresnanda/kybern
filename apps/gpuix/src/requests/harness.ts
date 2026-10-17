@@ -1,9 +1,22 @@
 import { connectStdio } from '@gpuix/react/automation'
 import { spawn } from 'node:child_process'
+import { homedir } from 'node:os'
+import path from 'node:path'
+
+/** Aborts a launch whose data directory is (or falls back to) the user's real `~/.kybern`: a GPUIX start can restart the daemon found there. */
+export function assertScratchEnv(env: Record<string, string | undefined>) {
+  const merged = { ...process.env, ...env }
+  const dir = merged.KYBERN_DATA_DIR
+  const real = path.join(homedir(), '.kybern')
+  if (!dir) throw Error('Refusing to launch GPUIX without KYBERN_DATA_DIR: it would resolve the real ~/.kybern daemon. Point it at a scratch directory.')
+  const resolved = path.resolve(dir)
+  if (resolved === real || resolved.startsWith(real + path.sep)) throw Error(`Refusing to launch GPUIX against the real data directory ${real}. Use a scratch directory.`)
+}
 
 /** Automation launch with an explicit process lifetime and startup deadline.
  * The upstream launch helper doesn't reject when a child exits before handshake. */
 export async function launchFixture(entry: string, env: Record<string, string>) {
+  assertScratchEnv(env)
   const child = spawn('bun', [entry], { env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] })
   let stderr = ''
   const frames:number[]=[]

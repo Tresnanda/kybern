@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs'
+import { assertScratchEnv } from '../requests/harness.ts'
 import path from 'node:path'
 import assert from 'node:assert/strict'
 import { launch } from '@gpuix/react/automation'
@@ -10,6 +11,7 @@ const fixture = pagesFixture()
 const variant = process.argv.includes('--light') ? 'light' : 'dark'
 const reduced = process.argv.includes('--reduced')
 const watchdog = setTimeout(() => process.exit(1), 240_000)
+assertScratchEnv({ ...fixture.env })
 const app = await launch({ command: 'bun', args: [path.join(import.meta.dir, '../main.tsx')], env: { ...process.env, ...fixture.env, KYBERN_APPEARANCE: variant, KYBERN_REDUCED_MOTION: reduced ? '1' : '0' } })
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 const click = async (id: string) => { console.log('Click', id); await app.getByTestId(id).waitFor({ timeoutMs: 10000 }); await app.getByTestId(id).click() }

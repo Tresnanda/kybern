@@ -35,7 +35,7 @@ for (let i = 0; client.status !== 'open' && i < 200; i++) await Bun.sleep(50)
 const folder = path.join(DIR, 'project'); mkdirSync(folder, { recursive: true })
 const project = await client.call('projects.add', { path: folder, name: 'Scratch project' })
 const settings0 = await client.call('settings.get', {})
-await client.call('settings.update', { settings: { ...settings0, providers: { ...settings0.providers, codex: { ...(settings0.providers.codex ?? { env: {} }), accounts: { work: { name: 'Work', color: 'blue', directory: path.join(DIR, 'codex-work') }, side: { name: 'Side projects', color: 'amber', directory: path.join(DIR, 'codex-side') } } } } } })
+await client.call('settings.update', { settings: { ...settings0, providers: { ...settings0.providers, codex: { ...(settings0.providers.codex ?? { env: {} }), default_account: 'work', accounts: { work: { name: 'Work', color: 'blue', directory: path.join(DIR, 'codex-work') }, side: { name: 'Side projects', color: 'amber', directory: path.join(DIR, 'codex-side') } } } } } })
 
 // The settings proxy answers the usage and account reads in `s9-rich` mode and forwards writes to the daemon.
 const ready = `${DIR}-proxy.json`; rmSync(ready, { force: true })
@@ -82,22 +82,27 @@ try {
     assert.ok(await has('rail-account-default') && await has('rail-account-work') && await has('rail-account-side'))
   })
   await check('rail: choosing an account writes default_account on the daemon and says "Default changed"', async () => {
-    await app.getByTestId('rail-account-work').click()
-    await until('daemon work', async () => (await settingsNow()).providers.codex?.default_account === 'work')
-    await until('note', () => hasText('Default changed'), 5000)
-    await still('rail-default-changed')
+    // The proxy's account list is static and marks Work as the default, so the daemon starts on Work and the CLI row is the one to choose.
+    assert.equal((await settingsNow()).providers.codex?.default_account, 'work')
     await app.getByTestId('rail-account-default').click()
     await until('daemon cli', async () => !(await settingsNow()).providers.codex?.default_account)
+    await until('note', () => hasText('Default changed'), 5000)
+    await still('rail-default-changed')
   })
   await check('rail: Sign in on a needs-sign-in account opens the sheet signing that account in again (real daemon login)', async () => {
     await hover('codex'); await app.getByTestId('rail-account-signin-side').click()
-    await until('sheet', async () => (await has('add-account')) && (await hasText('Sign in again to Side projects')), 20000); await shot('rail-signin-again')
+    await until('sheet', async () => (await has('add-account')) && ((await hasText('Enter this code in your browser')) || (await hasText('Continue in browser'))), 20000); await shot('rail-signin-again')
+    // The sheet went straight to the sign-in step (no agent picker), so the daemon started a login for that account.
+    assert.ok(!(await has('account-provider-codex')), 'no agent picker')
     await app.getByTestId('account-cancel').click(); await until('closed', async () => !(await has('add-account')))
   })
   await check('rail: Add account opens the sheet with the card\'s agent selected', async () => {
     await hover('codex'); await app.getByText('Add account').click()
     await until('sheet', () => has('add-account')); await settle(600)
-    assert.ok(await hasText('Continue in browser'), 'Codex is selected'); await shot('rail-add-account')
+    assert.ok(await has('account-provider-codex') && await has('account-start'), 'agent picker with Continue'); await shot('rail-add-account')
+    // Continue is enabled only with an agent chosen: pressing it starts the Codex sign-in (a device code, the proxy marks this environment remote).
+    await app.getByTestId('account-start').click()
+    await until('codex step', async () => (await hasText('Enter this code in your browser')) || (await hasText('Continue in browser')) || (await hasText('Sign in to Codex')), 20000)
     await app.getByTestId('account-cancel').click(); await until('closed', async () => !(await has('add-account')))
   })
   await check('rail: Manage accounts… opens Settings › Accounts', async () => {
