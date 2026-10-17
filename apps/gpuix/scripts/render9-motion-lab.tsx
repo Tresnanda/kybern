@@ -12,10 +12,14 @@ import { N } from '../src/nav/glyphs.ts'
 import { successTransform } from '../src/motion/success.ts'
 import { DropHighlight } from '../src/motion/DropHighlight.tsx'
 import { Skeleton } from '../src/kit/Skeleton.tsx'
+import { popAnimation } from '../src/kit/Pop.tsx'
+import type { Pointer } from 'bun:ffi'
+import { each, getObjc, nsApp, sel } from '../src/native/objc.ts'
 
 function Lab() {
   const t = useTheme()
   const renderer = useGpuixRequired() as unknown as { simulateFileDrag(x: number, y: number, paths: string[], phase: string): void }
+  const [leaf, setLeaf] = useState(0), [skeletons, setSkeletons] = useState(process.env.RENDER9_NO_SKELETON !== '1')
   const [tile, setTile] = useState(0), [check, setCheck] = useState(0), [over, setOver] = useState(false), [key, setKey] = useState(0)
   useEffect(() => { process.stdout.write('') }, [])
   const action = (k: string) => {
@@ -24,6 +28,11 @@ function Lab() {
     if (k === 'd') renderer.simulateFileDrag(470, 230, ['/tmp/render9-drop.png'], 'enter')
     if (k === 'e') renderer.simulateFileDrag(470, 230, ['/tmp/render9-drop.png'], 'end')
     if (k === 'r') setKey(n => n + 1)
+    // A leaf pop interrupted by hiding the window (kit9 pop_gpui.py): pop, minimize 60 ms in, restore with `u`.
+    if (k === 'h') { setLeaf(n => n + 1); setTimeout(() => (renderer as unknown as { minimizeWindow(): void }).minimizeWindow(), 60) }
+    if (k === 'p') setLeaf(n => n + 1)
+    if (k === 'k') setSkeletons(v => !v)
+    if (k === 'u') { const o = getObjc(), app = nsApp(); if (app) each(o, o.msg(app, sel(o, 'windows')) as Pointer, w => { o.msgSetPtr(w, sel(o, 'deminiaturize:'), null as unknown as Pointer) }) }
   }
   return <div key={key} testId="app-ready" onKeyDown={e => action(e.key ?? '')} style={{ position: 'relative', width: '100%', height: '100%', backgroundColor: t.v('--background') }}>
     <div style={{ position: 'absolute', left: 24, top: 24, display: 'flex', gap: 16, alignItems: 'center' }}>
@@ -45,9 +54,10 @@ function Lab() {
       <DropHighlight over={over} radius={19.2} color={t.v('--color-border-focus')} />
     </div>
     <text testId="drop-state" style={{ position: 'absolute', left: 380, top: 290, fontSize: 10, color: t.textSecondary }}>{over ? 'over' : 'out'}</text>
+    {leaf > 0 && <div testId="leaf-pop" style={{ position: 'absolute', left: 380, top: 30, display: 'flex' }}><Label key={leaf} color={t.text} size={24} weight={600} paintAnimation={popAnimation()}>Pending</Label></div>}
     <div style={{ position: 'absolute', left: 24, top: 180, display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <Skeleton testId="skel" width={300} height={16} view={{ width: 640, height: 320 }} />
-      <Skeleton width={200} height={40} radius={10} view={{ width: 640, height: 320 }} />
+      {skeletons && <Skeleton testId="skel" width={300} height={16} view={{ width: 640, height: 320 }} />}
+      {skeletons && <Skeleton width={200} height={40} radius={10} view={{ width: 640, height: 320 }} />}
     </div>
   </div>
 }
