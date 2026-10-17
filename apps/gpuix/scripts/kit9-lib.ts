@@ -97,5 +97,5 @@ export async function startGallery(section: string, opts: StartOptions = {}) {
   }
   const f = await launchFixture(path.join(import.meta.dir, opts.visible ? 'kit9-gallery-visible.ts' : 'kit9-gallery-entry.tsx'), { KYBERN_FRAME_TIMES: '1', ...env })
   await f.app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })
-  return Object.assign(f.app, { pid: f.pid, frameTimes: f.frameTimes, closeAll: f.close })
+  return Object.assign(f.app, { pid: f.pid, frameTimes: f.frameTimes, diagnostics: f.diagnostics, closeAll: f.close })
 }
