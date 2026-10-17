@@ -15,10 +15,11 @@
 //   const variant = forced ? VARIANT : prefs.theme === 'system' ? system : prefs.theme
 //   useSyncWindowAppearance(variant, prefs.translucent)
 //
-// There is no cross-fade: GPUIX paints one scene per frame and cannot hold the
-// old one under the new, so the switch is instant, like most macOS apps.
+// The switch cross-fades like the desktop's view transition (`motion/themeFade.tsx`).
 import type { Pointer } from 'bun:ffi'
 import { useEffect, useSyncExternalStore } from 'react'
+import { snapshotBeforeThemeChange } from '../motion/themeFade.tsx'
+import { appearance } from '../settings/appearance.ts'
 import { applyDesktopMaterial } from '../native/material.ts'
 import { cls, cstr, each, getObjc, nsApp, sel } from '../native/objc.ts'
 
@@ -46,6 +47,8 @@ const listeners = new Set<() => void>()
 /** `window.ts` calls this when macOS switches between Light and Dark. */
 export function setSystemVariant(variant: Variant) {
   if (variant === system) return
+  // The reader follows the system: hold the old frame so the change cross-fades (`motion/themeFade.tsx`).
+  if (system !== null && appearance().theme === 'system') snapshotBeforeThemeChange()
   system = variant
   listeners.forEach((l) => l())
 }

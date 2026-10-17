@@ -15,7 +15,6 @@
 // GPUIX paints an opaque #1A1A1A backing under every anchored layer, so fading
 // only its content would show that backing first.
 import { useGpuix, useWindowSize, type PublicInstance, type StyleDesc } from '@gpuix/react'
-import { Tooltip, TooltipTrigger } from '@gpuix/react/tooltip'
 import {
   createContext,
   useCallback,
@@ -30,35 +29,133 @@ import {
 } from 'react'
 import { muted, popoverStyle, PopupLayer, surfaceShadow } from '../composer/Menu.tsx'
 import { Icon } from '../icons.tsx'
+import { hoverTrigger, useHover } from '../kit/hover.tsx'
+import { kitOverlayOpen } from '../kit/AlertDialog.tsx'
+import { TOOLTIP_DELAY_MS, TOOLTIP_SKIP_MS } from '../kit/hoverController.ts'
 import { DISTANCE } from '../motion/kit.tsx'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { N } from './glyphs.ts'
+import { containsPoint, submenuCorridor, type Point } from './menuGeometry.ts'
 import { pointerNav } from './store.ts'
 import { observeElementBounds } from '../native/layout.ts'
 
 export { muted }
 
 // ---- menus ----
+//
+// One menu tree per open root (`Menu`, `ContextMenu`): the root panel plus any `MenuSub` panels opened from it, at
+// any depth. Pointer decisions are geometric, from the positions native events carry, never from timers racing
+// enter/leave notifications: GPUI treats a deferred overlay as a hard hover barrier, so entering a submenu always
+// sends its trigger (and the root panel) a leave. A leave whose point lies inside any panel of the tree changes
+// nothing; a leave outside all of them closes the submenus (the root stays); hovering a sibling row of an open
+// submenu's trigger closes it unless the pointer is inside the safe triangle toward it (Base UI's safePolygon).
+// Keys are routed once, at the root panel (native key events bubble from the focused submenu up through the
+// root), to the level that owns them: the deepest one the keyboard or pointer last touched.
+
+type MenuKeyEvent = { key?: string; modifiers?: { ctrl: boolean } }
+type PointerPayload = { x?: number; y?: number }
 
 interface Entry {
   key: string
   disabled: boolean
   keepOpen: boolean
   onSelect: () => void
+  /** A submenu trigger: open its menu (by key: focus moves into it and its first item lights up). */
+  openSub?: (byKey: boolean) => void
+}
+
+interface ChildHandle {
+  key: string
+  close: () => void
+  /** The pointer is inside the child or on the safe path to it. */
+  protects: (point: Point) => boolean
+}
+
+interface MenuTree {
+  close: () => void
+  /** The depth whose handlers get the keys. */
+  owner: { current: number }
+  levels: Map<number, { onKeyDown: (event: MenuKeyEvent) => void; panel: () => PublicInstance | null; closeChild: () => void; clearActive: () => void }>
+  contains: (point: Point) => boolean
+  closeSubs: () => void
+  /** The latest pointer position any panel or row of the tree reported. */
+  last: { current: (Point & { t: number }) | null }
+  /** A panel at `depth` lost the pointer (its notification carries no position): decide from `last`. */
+  left: (depth: number) => void
+  note: (point: PointerPayload | undefined) => void
 }
 
 interface MenuContextValue {
   active: string | null
   setActive: (key: string | null) => void
+  /** A row was hovered. False when a submenu's safe path protects the pointer (the highlight stays put). */
+  hover: (key: string, point?: PointerPayload) => boolean
   register: (entry: Entry) => () => void
   pick: (key: string) => void
+  child: { current: ChildHandle | null }
+  pending: { current: { key: string; cancel: () => void } | null }
+  tree: MenuTree
+  depth: number
+  focus: () => void
+  first: () => void
 }
 
 export const MenuContext = createContext<MenuContextValue | null>(null)
 
-function useMenuState(close: () => void) {
+function useMenuTree(close: () => void): MenuTree {
+  const { renderer } = useGpuix()
+  const tree = useRef<MenuTree | null>(null)
+  if (!tree.current) {
+    const levels: MenuTree['levels'] = new Map()
+    const last: { current: (Point & { t: number }) | null } = { current: null }
+    const panelAt = (point: Point | null) => {
+      if (!point) return -1
+      for (const [depth, level] of levels) {
+        const el = level.panel()
+        if (el && containsPoint(renderer?.getElementBounds?.(el.id), point)) return depth
+      }
+      return -1
+    }
+    tree.current = {
+      close,
+      owner: { current: 0 },
+      levels,
+      contains: (point) => panelAt(point) >= 0,
+      closeSubs: () => levels.get(0)?.closeChild(),
+      last,
+      note: (point) => { if (point?.x !== undefined && point.y !== undefined) last.current = { x: point.x, y: point.y, t: performance.now() } },
+      // Native leave notifications carry no position, and GPUI treats an overlay as a hard hover barrier, so entering a
+      // submenu also "leaves" its trigger and the root. What the tree itself reports tells them apart: a pointer that moved
+      // on within the menu keeps producing moves inside some panel (a beat before or after the leave), whereas a pointer that
+      // left produces none, and its last reported point is inside the panel it left. Checked a beat later.
+      left: (depth) => {
+        const at = performance.now()
+        setTimeout(() => {
+          const point = last.current
+          if (!point || point.t >= at - 5) return
+          const inside = panelAt(point)
+          if (inside === -1 || inside === depth) {
+            levels.get(0)?.closeChild()
+            // The pointer is off the menu: no row stays lit, so the keyboard starts from the top again.
+            levels.get(0)?.clearActive()
+          }
+        }, 50)
+      },
+    }
+  }
+  tree.current.close = close
+  return tree.current
+}
+
+function useMenuLevel(tree: MenuTree, depth: number, closeSelf: () => void) {
+  const { renderer } = useGpuix()
   const [active, setActive] = useState<string | null>(null)
+  const activeRef = useRef<string | null>(null)
+  activeRef.current = active
   const entries = useRef<Entry[]>([])
+  const child = useRef<ChildHandle | null>(null)
+  const pending = useRef<{ key: string; cancel: () => void } | null>(null)
+  const panelRef = useRef<PublicInstance | null>(null)
   const register = useCallback((entry: Entry) => {
     entries.current = [...entries.current.filter((e) => e.key !== entry.key), entry]
     return () => {
@@ -69,28 +166,66 @@ function useMenuState(close: () => void) {
     (key: string) => {
       const entry = entries.current.find((e) => e.key === key)
       if (!entry || entry.disabled) return
-      if (!entry.keepOpen) close()
+      if (entry.openSub) return entry.openSub(false)
+      if (!entry.keepOpen) tree.close()
       entry.onSelect()
     },
-    [close],
+    [tree],
+  )
+  const hover = useCallback(
+    (key: string, point?: PointerPayload) => {
+      tree.note(point)
+      if (pending.current && pending.current.key !== key) pending.current.cancel()
+      if (child.current && child.current.key !== key) {
+        if (point?.x !== undefined && point.y !== undefined && child.current.protects({ x: point.x, y: point.y })) return false
+        child.current.close()
+      }
+      tree.owner.current = depth
+      setActive(key)
+      return true
+    },
+    [tree, depth],
   )
   const move = (step: 1 | -1) => {
     const enabled = entries.current.filter((e) => !e.disabled)
     if (!enabled.length) return
-    const at = enabled.findIndex((e) => e.key === active)
+    const at = enabled.findIndex((e) => e.key === activeRef.current)
     const next = at < 0 ? (step > 0 ? 0 : enabled.length - 1) : (at + step + enabled.length) % enabled.length
+    child.current?.close()
     setActive(enabled[next]!.key)
   }
-  const context = useMemo<MenuContextValue>(() => ({ active, setActive, register, pick }), [active, register, pick])
-  const onKeyDown = (e: { key?: string; modifiers?: { ctrl: boolean } }) => {
-    if (e.key === 'escape') close()
-    else if (e.key === 'down' || (e.key === 'n' && e.modifiers?.ctrl)) move(1)
+  const first = useCallback(() => {
+    const enabled = entries.current.find((e) => !e.disabled)
+    if (enabled) setActive(enabled.key)
+  }, [])
+  const focus = useCallback(() => {
+    tree.owner.current = depth
+    const el = panelRef.current
+    if (el) renderer?.focusElement?.(el.id)
+  }, [tree, depth, renderer])
+  const onKeyDown = (e: MenuKeyEvent) => {
+    if (e.key === 'escape') return depth > 0 ? closeSelf() : tree.close()
+    if (e.key === 'left' && depth > 0) return closeSelf()
+    // → opens a submenu from the keyboard, and so do Enter and Space on its trigger (focus moves in, first item lit).
+    const sub = entries.current.find((en) => en.key === activeRef.current && en.openSub && !en.disabled)
+    if (e.key === 'right' || ((e.key === 'enter' || e.key === 'space') && sub)) {
+      sub?.openSub?.(true)
+    } else if (e.key === 'down' || (e.key === 'n' && e.modifiers?.ctrl)) move(1)
     else if (e.key === 'up' || (e.key === 'p' && e.modifiers?.ctrl)) move(-1)
-    else if ((e.key === 'enter' || e.key === 'space') && active) pick(active)
+    else if ((e.key === 'enter' || e.key === 'space') && activeRef.current) pick(activeRef.current)
   }
-  return { context, onKeyDown, setActive }
+  useLayoutEffect(() => {
+    tree.levels.set(depth, { onKeyDown, panel: () => panelRef.current, closeChild: () => child.current?.close(), clearActive: () => setActive(null) })
+  })
+  useLayoutEffect(() => () => { tree.levels.delete(depth) }, [tree, depth])
+  const context = useMemo<MenuContextValue>(
+    () => ({ active, setActive, hover, register, pick, child, pending, tree, depth, focus, first }),
+    [active, hover, register, pick, tree, depth, focus, first],
+  )
+  /** Key handler for the root panel: routes to the level that owns the keys. */
+  const route = (e: MenuKeyEvent) => tree.levels.get(tree.owner.current)?.onKeyDown(e)
+  return { context, route, panelRef }
 }
-
 
 function panelStyle(t: ReturnType<typeof useTheme>, width?: number, minWidth = 128): StyleDesc {
   return {
@@ -150,11 +285,12 @@ export function Menu({
     [openProp, onOpenChange, renderer],
   )
   const close = useCallback(() => setOpen(false), [setOpen])
-  const menu = useMenuState(close)
+  const tree = useMenuTree(close)
+  const menu = useMenuLevel(tree, 0, close)
   // GPUI's own `switch` mirrors the popup around one point (the trigger edge plus the gap), which lands it
   // on top of the trigger. Instead: after the first paint, a popup that was pushed above the trigger's
   // bottom did not fit below, so it opens on the top side when there is room there.
-  const popup = useRef<PublicInstance | null>(null)
+  const popup = menu.panelRef
   const [flipped, setFlipped] = useState(false)
   useEffect(() => {
     if (!open) { setFlipped(false); return }
@@ -189,7 +325,7 @@ export function Menu({
             pressedWhileOpen.current = false
             return setOpen(false)
           }
-          menu.setActive(null)
+          menu.context.setActive(null)
           setOpen(!open)
         }}
         onKeyDown={(e) => {
@@ -201,7 +337,7 @@ export function Menu({
       </div>
       {open && (
         <PopupLayer
-          ref={popup}
+          ref={menu.panelRef}
           side={flipped ? 'top' : side}
           align={align}
           sideOffset={sideOffset}
@@ -209,14 +345,18 @@ export function Menu({
           tabIndex={0}
           autoFocus
           testId={testId ? `${testId}-menu` : undefined}
-          onMouseDownOutside={() => {
+          onMouseDownOutside={(e) => {
+            // A press inside a submenu panel is outside this one's element but inside the tree.
+            if (e.x !== undefined && e.y !== undefined && tree.contains({ x: e.x, y: e.y })) return
             dismissedByOutside.current = true
             queueMicrotask(() => {
               dismissedByOutside.current = false
             })
             setOpen(false)
           }}
-          onKeyDown={menu.onKeyDown}
+          onKeyDown={menu.route}
+          onMouseMove={tree.note}
+          onMouseLeave={() => tree.left(0)}
           onMouseDown={pointerNav}
           style={panel ? { ...panelStyle(t, width, minWidth), ...panel } : panelStyle(t, width, minWidth)}
         >
@@ -242,19 +382,26 @@ export function ContextMenu({
   testId?: string
 }) {
   const t = useTheme()
-  const menu = useMenuState(onClose)
+  const tree = useMenuTree(onClose)
+  const menu = useMenuLevel(tree, 0, onClose)
   // The layer carries the panel's radius, as `FloatingLayer` does, or it paints square corners.
   return (
     // It opens down and right from the pointer, so it drifts in from above.
     <PopupLayer
+      ref={menu.panelRef}
       position={at}
       fit="switch"
       priority={2}
       testId={testId}
       tabIndex={0}
       autoFocus
-      onMouseDownOutside={onClose}
-      onKeyDown={menu.onKeyDown}
+      onMouseDownOutside={(e) => {
+        if (e.x !== undefined && e.y !== undefined && tree.contains({ x: e.x, y: e.y })) return
+        onClose()
+      }}
+      onKeyDown={menu.route}
+      onMouseMove={tree.note}
+      onMouseLeave={() => tree.left(0)}
       onMouseDown={pointerNav}
       style={panelStyle(t, undefined, width)}
     >
@@ -305,12 +452,14 @@ export function MenuItem({
   return (
     <div
       testId={testId}
-      onMouseMove={() => {
-        if (!disabled && menu.active !== id) menu.setActive(id)
+      onMouseMove={(e) => {
+        if (!disabled) menu.hover(id, e)
       }}
       onMouseLeave={() => {
         if (menu.active === id) menu.setActive(null)
       }}
+      // A row inside a nested overlay only receives its click when it also listens for the press (GPUIX hit routing).
+      onMouseDown={() => {}}
       onClick={() => menu.pick(id)}
       style={{
         display: 'flex',
@@ -349,6 +498,186 @@ export function MenuItem({
   )
 }
 
+/**
+ * `MenuSub` + `MenuSubTrigger` + `MenuSubPopup`: a row with a trailing chevron that opens a nested menu to its right
+ * (to its left when there is no room). Hover opens after 100 ms (Base UI's submenu delay); ArrowRight/Enter open it
+ * with the first item lit; ArrowLeft/Escape close it and return to the trigger. The popup sits at the trigger's
+ * edge, 5px above its row (`alignOffset -5`: the popup's padding and border), 192px wide like the desktop's.
+ */
+export function MenuSub({
+  id,
+  label,
+  icon,
+  children,
+  width = 192,
+  testId,
+  disabled = false,
+  maxHeight,
+}: {
+  id: string
+  label: string
+  icon?: string
+  children: ReactNode
+  width?: number
+  testId?: string
+  disabled?: boolean
+  /** Scroll the popup past this height (a long list). */
+  maxHeight?: number
+}) {
+  const t = useTheme()
+  const parent = useContext(MenuContext)!
+  const { renderer } = useGpuix()
+  const [open, setOpen] = useState(false)
+  const [byKey, setByKey] = useState(false)
+  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const origin = useRef<Point | null>(null)
+  const wrapper = useRef<PublicInstance | null>(null)
+  const cancelOpen = () => {
+    if (openTimer.current) clearTimeout(openTimer.current)
+    openTimer.current = null
+    if (parent.pending.current?.key === id) parent.pending.current = null
+  }
+  const close = useCallback(() => {
+    cancelOpen()
+    setOpen(false)
+    if (parent.child.current?.key === id) parent.child.current = null
+    // The submenu's panel unmounts with its focus: the parent panel takes the keys back.
+    if (parent.tree.owner.current > parent.depth) parent.focus()
+  }, [parent, id])
+  const menu = useMenuLevel(parent.tree, parent.depth + 1, () => {
+    close()
+    parent.setActive(id)
+  })
+  const protects = (point: Point) => {
+    const el = menu.panelRef.current
+    return submenuCorridor(origin.current, el ? renderer?.getElementBounds?.(el.id) : null, point)
+  }
+  const show = (viaKey: boolean) => {
+    cancelOpen()
+    parent.setActive(id)
+    if (parent.child.current && parent.child.current.key !== id) parent.child.current.close()
+    parent.child.current = { key: id, close, protects }
+    setByKey(viaKey)
+    setOpen(true)
+    if (viaKey) parent.tree.owner.current = parent.depth + 1
+  }
+  const showRef = useRef(show)
+  showRef.current = show
+  useLayoutEffect(
+    () => parent.register({ key: id, disabled, keepOpen: true, onSelect: () => showRef.current(true), openSub: (viaKey) => showRef.current(viaKey) }),
+    [parent.register, id, disabled],
+  )
+  // On unmount only: `parent` (the context value) changes whenever the highlight does.
+  const parentRef = useRef(parent)
+  parentRef.current = parent
+  useLayoutEffect(() => () => {
+    if (openTimer.current) clearTimeout(openTimer.current)
+    if (parentRef.current.child.current?.key === id) parentRef.current.child.current = null
+  }, [id])
+  // Opened from the keyboard: light the first item once its rows have registered.
+  useLayoutEffect(() => {
+    if (open && byKey) menu.context.first()
+  }, [open, byKey])
+  const lit = open || parent.active === id
+  // Enter and move do the same: a single synthetic move may arrive as an enter only.
+  const hoverTrigger = (e: PointerPayload) => {
+    if (disabled) return
+    if (e.x !== undefined && e.y !== undefined) origin.current = { x: e.x, y: e.y }
+    if (!parent.hover(id, e)) return
+    if (!open && !openTimer.current) {
+      parent.pending.current = { key: id, cancel: cancelOpen }
+      openTimer.current = setTimeout(() => showRef.current(false), 100)
+    }
+  }
+  return (
+    <div ref={wrapper} style={{ position: 'relative', display: 'flex', flexDirection: 'column', flexShrink: 0, minHeight: 26 }}>
+      <div
+        testId={testId}
+        role="menuitem"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-disabled={disabled}
+        onMouseMove={hoverTrigger}
+        onMouseEnter={hoverTrigger}
+        onMouseDown={() => {}}
+        onClick={() => {
+          if (!disabled) {
+            pointerNav()
+            show(false)
+          }
+        }}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          minHeight: 26,
+          paddingLeft: 8,
+          paddingRight: 8,
+          paddingTop: 1,
+          paddingBottom: 1,
+          borderRadius: 8,
+          opacity: disabled ? 0.64 : 1,
+          ...(lit && !disabled ? { backgroundColor: t.buttonSecondaryHover } : {}),
+        }}
+      >
+        {icon && <Icon source={icon} size={16} color={ink(t, 0.8)} />}
+        <Label color={t.text} truncate style={{ flexGrow: 1, pointerEvents: 'none' }}>
+          {label}
+        </Label>
+        <Icon source={N.chevronRight} size={16} color={t.text} style={{ marginRight: -2, pointerEvents: 'none' }} />
+      </div>
+      {open && (
+        <PopupLayer
+          ref={menu.panelRef}
+          side="right"
+          align="start"
+          sideOffset={0}
+          alignOffset={-5}
+          fit="switch"
+          priority={parent.depth + 3}
+          tabIndex={0}
+          autoFocus={byKey}
+          testId={testId ? `${testId}-menu` : undefined}
+          onMouseMove={(e) => {
+            // The pointer arrived: the corridor did its job, and this menu takes the keys.
+            parent.tree.note(e)
+            origin.current = null
+            parent.tree.owner.current = parent.depth + 1
+          }}
+          onMouseLeave={() => parent.tree.left(parent.depth + 1)}
+          onMouseDown={pointerNav}
+          style={panelStyle(t, width)}
+        >
+          <MenuContext.Provider value={menu.context}>
+            {maxHeight ? <div style={{ display: 'flex', flexDirection: 'column', maxHeight, overflow: 'scroll' }}>{children}</div> : children}
+          </MenuContext.Provider>
+        </PopupLayer>
+      )}
+    </div>
+  )
+}
+
+/** `MenuCheckboxItem` (default variant): a row whose trailing 12px check shows while `checked`. Selecting toggles and keeps the menu open. */
+export function MenuCheckboxItem({
+  id,
+  icon,
+  label,
+  checked,
+  onCheckedChange,
+  disabled,
+  testId,
+}: {
+  id: string
+  icon?: string
+  label: string
+  checked: boolean
+  onCheckedChange: (checked: boolean) => void
+  disabled?: boolean
+  testId?: string
+}) {
+  return <MenuItem id={id} icon={icon} label={label} checked={checked} keepOpen disabled={disabled} testId={testId} onSelect={() => onCheckedChange(!checked)} />
+}
+
 /** `MenuGroupLabel`. */
 export function MenuLabel({ children }: { children: string }) {
   const t = useTheme()
@@ -368,12 +697,6 @@ export function MenuSeparator() {
 }
 
 // ---- tooltips ----
-
-/** Base UI's tooltip delay; a neighbour within 300ms opens at once (provider skip delay). */
-const TOOLTIP_DELAY = 600
-/** The provider's skip delay: the window in which the next tooltip opens at once. */
-const TOOLTIP_SKIP = 300
-let tipClosedAt = -Infinity
 
 /** Tooltip box metrics: 13px text, 8px × 4px padding, 1px border; `Kbd` chips are 20px. */
 const TIP_TEXT_EM = 0.53
@@ -413,33 +736,26 @@ export function Tip({
   disabled?: boolean
 }) {
   const t = useTheme()
-  const [open, setOpen] = useState(false)
   // Opening right after a neighbour closed skips the delay and the fade (`data-instant`).
-  const [instant, setInstant] = useState(false)
+  // The controller keeps one tooltip visible app-wide and applies every leave (R4-1).
+  const { ctl, state } = useHover({ delay: TOOLTIP_DELAY_MS, skip: TOOLTIP_SKIP_MS })
+  const pressed = useRef(false)
   if (disabled) return children
+  const open = state.active !== null
   const vertical = side === 'left' || side === 'right'
   const extent = vertical ? (shortcut?.length ? TIP_KBD_HEIGHT : TIP_HEIGHT) : tipWidth(label, shortcut)
   const alignOffset = Math.round((size - extent) / 2)
   return (
-    <Tooltip
-      open={open}
-      onOpenChange={(next) => {
-        if (next) setInstant(performance.now() - tipClosedAt <= TOOLTIP_SKIP)
-        else tipClosedAt = performance.now()
-        setOpen(next)
-      }}
-      delayDuration={TOOLTIP_DELAY}
-      disableHoverableContent
-      style={{ flexShrink: 0 }}
-    >
+    <div style={{ display: 'flex', position: 'relative', alignItems: 'start', flexShrink: 0 }}>
       {/* The control itself is the trigger: a wrapper would be occluded by the
           control's own hover fill and lose the pointer at once. */}
-      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      {hoverTrigger(ctl, true, children, pressed)}
       {open && (
         // `TooltipContent`'s placement, with the surface animated.
         <PopupLayer
+          testId="tooltip"
           kind="tooltip"
-          still={instant}
+          still={state.instant}
           side={side}
           sideOffset={sideOffset}
           alignOffset={alignOffset}
@@ -466,7 +782,7 @@ export function Tip({
           {shortcut && <Kbd keys={shortcut} />}
         </PopupLayer>
       )}
-    </Tooltip>
+    </div>
   )
 }
 
@@ -574,9 +890,12 @@ export function Dialog({
         tabIndex={0}
         autoFocus
         onMouseDown={pointerNav}
-        onMouseDownOutside={onClose}
+        // A kit popup open inside the dialog (select, combobox, sheet) takes Escape and outside presses first.
+        onMouseDownOutside={() => {
+          if (!kitOverlayOpen()) onClose()
+        }}
         onKeyDown={(e) => {
-          if (e.key === 'escape') onClose()
+          if (e.key === 'escape' && !kitOverlayOpen()) onClose()
         }}
         style={{
           display: 'flex',

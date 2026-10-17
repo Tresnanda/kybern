@@ -7,10 +7,10 @@
 // region the way the desktop's grid shell does. Instead the rows a toggle adds or
 // removes travel together as one list item for the 220 ms of the tween
 // (`DisclosureGroup`), then flatten back into ordinary virtual rows.
-import { motion } from '@gpuix/react'
-import { useState, type ReactNode } from 'react'
+import { motion, useGpuix, type PublicInstance } from '@gpuix/react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { DISCLOSURE, DISTANCE, DURATION, EASE } from '../motion/kit.tsx'
-import { REDUCED_MOTION } from '../ui.tsx'
+import { Label, REDUCED_MOTION } from '../ui.tsx'
 import type { Row } from './model.ts'
 
 const tween = (duration: number, ease: readonly [number, number, number, number]) => ({ duration, ease: [...ease] as [number, number, number, number] })
@@ -117,6 +117,84 @@ export function TitleSwap({ text, children }: { text: string; children: ReactNod
     >
       {children}
     </motion.div>
+  )
+}
+
+/** `lib/kit/marquee.ts`: pixels per second the label travels and the shortest pan. */
+const MARQUEE_SPEED = 28
+const MARQUEE_MIN_MS = 900
+/** `.t-marquee` hover: the pan starts 350 ms after the pointer arrives (`transform … linear 350ms`). */
+const MARQUEE_DELAY_MS = 350
+/** The row's trailing padding settles in 150 ms; `primeMarquee` measures again at 180 ms, inside the delay. */
+const MARQUEE_MEASURE_MS = 190
+/** `transform var(--duration-slow) var(--ease-out)`: the pan back. */
+const MARQUEE_BACK = 0.4
+
+/**
+ * `.t-marquee` + `primeMarquee` (`lib/kit/marquee.ts`, `styles/motion.css`): a truncated row title pans to show its tail
+ * while the row is hovered (after 350 ms, at a steady 28 px/s, at least 900 ms), then pans back over 400 ms.
+ * At rest it is the plain ellipsised label. Hovered, the ellipsis goes at once and the text is clipped at the label's edge
+ * (CSS: `text-overflow: clip`), then the pan runs as one native `left` tween: no JS runs per frame. Titles that fit never
+ * move. Reduce Motion: no transition, the tail is shown immediately (`.t-marquee > span { transition: none }`).
+ */
+export function MarqueeLabel({ hover, text, color, lineHeight = 20 }: { hover: boolean; text: string; color: string; lineHeight?: number }) {
+  const { renderer } = useGpuix()
+  const box = useRef<PublicInstance | null>(null)
+  const inner = useRef<PublicInstance | null>(null)
+  const [overflow, setOverflow] = useState(0)
+  // 'rest': the ellipsised label. 'live': hovered. 'back': panning home, then the ellipsis returns.
+  const [phase, setPhase] = useState<'rest' | 'live' | 'back'>('rest')
+  if (hover && phase !== 'live') setPhase('live')
+  useEffect(() => {
+    if (!hover) return
+    const timer = setTimeout(() => {
+      const w = box.current ? renderer?.getElementBounds?.(box.current.id)?.width : undefined
+      const t = inner.current ? renderer?.getElementBounds?.(inner.current.id)?.width : undefined
+      if (w == null || t == null) return
+      const hidden = Math.max(0, t - w)
+      setOverflow(hidden > 0.5 ? hidden : 0)
+    }, REDUCED_MOTION ? 16 : MARQUEE_MEASURE_MS)
+    return () => clearTimeout(timer)
+  }, [hover, text, renderer])
+  useEffect(() => {
+    if (hover || phase !== 'live') return
+    // Nothing panned (the title fits, or the pointer left before the pan): the ellipsis returns at once.
+    if (overflow === 0 || REDUCED_MOTION) {
+      setPhase('rest')
+      setOverflow(0)
+      return
+    }
+    setPhase('back')
+    const timer = setTimeout(() => {
+      setPhase('rest')
+      setOverflow(0)
+    }, MARQUEE_BACK * 1000 + 40)
+    return () => clearTimeout(timer)
+  }, [hover, phase, overflow])
+  if (phase === 'rest') {
+    return (
+      <Label color={color} lineHeight={lineHeight} truncate style={{ flexGrow: 1, pointerEvents: 'none', userSelect: 'none' }}>
+        {text}
+      </Label>
+    )
+  }
+  const panning = hover && overflow > 0
+  const duration = Math.max(MARQUEE_MIN_MS, Math.round((overflow / MARQUEE_SPEED) * 1000)) / 1000
+  return (
+    <div ref={box} style={{ display: 'flex', flexGrow: 1, minWidth: 0, height: lineHeight, overflow: 'hidden', pointerEvents: 'none', userSelect: 'none' }}>
+      <motion.div
+        initial={false}
+        animate={{ left: panning ? -overflow : 0 }}
+        transition={panning ? (REDUCED_MOTION ? { duration: 0 } : { duration, ease: [0, 0, 1, 1], delay: (MARQUEE_DELAY_MS - MARQUEE_MEASURE_MS) / 1000 }) : { duration: REDUCED_MOTION ? 0 : MARQUEE_BACK, ease: [...EASE.out] as [number, number, number, number] }}
+        style={{ display: 'flex', position: 'relative', flexShrink: 0 }}
+      >
+        <div ref={inner} style={{ display: 'flex', flexShrink: 0 }}>
+          <Label color={color} lineHeight={lineHeight} style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
+            {text}
+          </Label>
+        </div>
+      </motion.div>
+    </div>
   )
 }
 

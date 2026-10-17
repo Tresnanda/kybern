@@ -1,5 +1,7 @@
 import { PR_SCROLL_LAYOUT } from './scroll-layout.ts'
 import { Icon } from '../icons.tsx'
+import { ResizeHandle, useResize } from '../kit/Resize.tsx'
+import { SpinIcon } from '../kit/Spin.tsx'
 import { N } from '../nav/glyphs.ts'
 import { onEnvironmentChange } from '../shell/environment.ts'
 import { useGpuix, type PublicInstance } from '@gpuix/react'
@@ -39,6 +41,8 @@ export function PullRequestsPage() {
   const [selection, setSelection] = useState(lastSelection)
   const search = useRef<PublicInstance | null>(null)
   const [focus, setFocus] = useState<string | null>(null)
+  // `PullRequests.tsx`: the list column resizes 288-512 (352 by default), saved, arrows 16px (shift 64px), double-click resets.
+  const list = useResize({ initial: 352, min: 288, max: 512, side: 'left', storageKey: 'kybern.pulls.listWidth' })
   const [windowWidth, setWindowWidth] = useState(() => renderer?.getWindowSize?.().width ?? 1280)
   // Read geometry on user input, with no idle resize polling.
   const measure = () => setWindowWidth(renderer?.getWindowSize?.().width ?? 1280)
@@ -89,8 +93,8 @@ export function PullRequestsPage() {
   const stateWord = filter === 'all' ? '' : `${filter} `
   const failure = data?.errors.find(e => ['gh-missing', 'gh-auth'].includes(classifyPrError(e)))
   return <div {...PR_SCROLL_LAYOUT} testId="page-pulls" onMouseMove={measure} style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0 }}>
-    {(wide || !selection) && <div style={{ ...column, width: wide ? 352 : '100%', flexShrink: 0, borderRightWidth: wide ? 1 : 0, borderColor: t.border }}>
-      <Header title="Pull requests"><Menu testId="pr-project-filter" align="end" width={240} trigger={() => <div style={{display:'flex',alignItems:'center',justifyContent:'center',width:28,height:28}}><Icon source={N.filter} size={16} color={t.textSecondary}/></div>}><MenuItem id="all" label="All projects" checked={!projectId} onSelect={() => setProjectId(null)} />{projects.filter(p => p.is_git).map(p => <MenuItem key={p.id} id={p.id} label={p.name} checked={projectId === p.id} onSelect={() => setProjectId(p.id)} />)}</Menu><div testId="pr-refresh" tabIndex={pending?-1:0} aria-label="Refresh" onClick={()=>{if(!pending)refresh(n=>n+1)}} onKeyDown={e=>{if(!pending&&(e.key==='enter'||e.key==='space'))refresh(n=>n+1)}} style={{display:'flex',alignItems:'center',justifyContent:'center',width:28,height:28,borderRadius:6,hover:{backgroundColor:t.hover}}}><Icon source={N.refresh} size={16} color={t.textSecondary}/></div></Header>
+    {(wide || !selection) && <div style={{ ...column, width: wide ? list.width : '100%', flexShrink: 0, position: 'relative', borderRightWidth: wide ? 1 : 0, borderColor: t.border }}>
+      <Header title="Pull requests"><Menu testId="pr-project-filter" align="end" width={240} trigger={() => <div style={{display:'flex',alignItems:'center',justifyContent:'center',width:28,height:28}}><Icon source={N.filter} size={16} color={t.textSecondary}/></div>}><MenuItem id="all" label="All projects" checked={!projectId} onSelect={() => setProjectId(null)} />{projects.filter(p => p.is_git).map(p => <MenuItem key={p.id} id={p.id} label={p.name} checked={projectId === p.id} onSelect={() => setProjectId(p.id)} />)}</Menu><div testId="pr-refresh" tabIndex={pending?-1:0} aria-label="Refresh" onClick={()=>{if(!pending)refresh(n=>n+1)}} onKeyDown={e=>{if(!pending&&(e.key==='enter'||e.key==='space'))refresh(n=>n+1)}} style={{display:'flex',alignItems:'center',justifyContent:'center',width:28,height:28,borderRadius:6,hover:{backgroundColor:t.hover}}}>{pending ? <SpinIcon testId="pr-refresh-spinner" source={N.refresh} size={16} color={t.textSecondary}/> : <Icon source={N.refresh} size={16} color={t.textSecondary}/>}</div></Header>
       <div style={{ ...column, gap: 8, padding: 12, paddingBottom: 8 }}><Segments value={filter} options={FILTERS} onChange={v => { setFilter(v); setFocus(null) }} testId="pr-filter" width={[54,72,66,42]} /><input ref={search} testId="pr-search" value={query} placeholder="Search by title, branch or number" onChange={e => setQuery(e.value ?? '')} onKeyDown={e => { if (e.key === 'down' && flat[0]) { setFocus(keyFor(flat[0])); } }} style={{ height: 30, width: '100%', color: t.text, fontSize: 14, borderWidth: 1, borderColor: t.border, backgroundColor: 'transparent', borderRadius: 8, paddingLeft: 9 }} /></div>
       <virtual-list {...PR_SCROLL_LAYOUT} testId="pr-list" estimatedItemHeight={68} style={{ flexGrow: 1, minHeight: 0 }}>
         {failure ? <div key="gh-error" style={{ padding: 20 }}><Problem error={failure} refresh={() => refresh(n => n + 1)} /></div> : !data ? <div key="loading" style={{ padding: 24 }}><Label color={t.textSecondary}>Loading pull requests…</Label></div> : <>
@@ -106,8 +110,10 @@ export function PullRequestsPage() {
           ])}
         </>}
       </virtual-list>
+      {wide && <ResizeHandle testId="pr-list-resize" edge="right" label="Resize pull request list" dragging={list.dragging} onPointerDown={list.onPointerDown} onReset={list.reset}
+        onKeyDown={(e) => { const step = e.modifiers?.shift ? 64 : 16; if (e.key === 'left') list.setWidth(list.width - step); else if (e.key === 'right') list.setWidth(list.width + step) }} />}
     </div>}
-    {selection ? <Detail key={`${selection.project.id}:${selection.number}`} project={selection.project} number={selection.number} onBack={back} showBack={!wide} width={windowWidth - 60 - (peek ? 256 : 0) - (wide ? 352 : 0)} onChanged={() => refresh(n => n + 1)} /> : wide && <div style={{ ...column, flexGrow: 1, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24 }}><Icon source={N.pullRequest} size={24} color={t.textSecondary}/><Label color={t.text} size={16} weight={500}>Select a pull request</Label><Label color={t.textSecondary} size={14} lineHeight={22} style={{maxWidth:300,textAlign:'center'}}>Read its summary, review changes and send findings to an agent.</Label><Label color={t.textSecondary} size={13}>↑ ↓ to move · Enter to open</Label></div>}
+    {selection ? <Detail key={`${selection.project.id}:${selection.number}`} project={selection.project} number={selection.number} onBack={back} showBack={!wide} width={windowWidth - 60 - (peek ? 256 : 0) - (wide ? list.width : 0)} onChanged={() => refresh(n => n + 1)} /> : wide && <div style={{ ...column, flexGrow: 1, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24 }}><Icon source={N.pullRequest} size={24} color={t.textSecondary}/><Label color={t.text} size={16} weight={500}>Select a pull request</Label><Label color={t.textSecondary} size={14} lineHeight={22} style={{maxWidth:300,textAlign:'center'}}>Read its summary, review changes and send findings to an agent.</Label><Label color={t.textSecondary} size={13}>↑ ↓ to move · Enter to open</Label></div>}
   </div>
 }
 

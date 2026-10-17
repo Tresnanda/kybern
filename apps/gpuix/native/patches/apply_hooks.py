@@ -530,6 +530,8 @@ edit("custom_elements/anchored.rs", "        let anchored = anchored.child(conte
 exec((Path(__file__).parent / "paint_hooks.py").read_text())
 exec((Path(__file__).parent / "frame_hooks.py").read_text())
 exec((Path(__file__).parent / "paint_text_hooks.py").read_text())
+exec((Path(__file__).parent / "rotate_hooks.py").read_text())
+exec((Path(__file__).parent / "pop_hooks.py").read_text())
 exec((Path(__file__).parent / "clipboard_hooks.py").read_text())
 exec((Path(__file__).parent / "explorer_motion_hooks.py").read_text())
 exec((Path(__file__).parent / "subtree_translation_hooks.py").read_text())

@@ -1,5 +1,6 @@
 // Native right dock. Only the chosen pane is mounted; the shell keeps it through
 // the 220 ms exit, just like App's thread panel. Each painted edge owns its radii.
+import { popAnimation } from '../kit/Pop.tsx'
 import { motion, useGpuix, type PublicInstance } from '@gpuix/react'
 import { useSidebarWidth, useWindowWidth } from '../shell/layout.ts'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -168,8 +169,8 @@ function TabStrip({ threadId, width, coordinator, activeTasks, stats }: { thread
             style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, minWidth: 0, height: 28, paddingLeft: 6, cursor: 'pointer', borderRadius: 8 }}>
             <Icon source={panel.icon} size={14} color={t.textSecondary} />
             <Label color={panel.id === tab ? t.text : t.textSecondary} size={13}>{panel.label}</Label>
-            {panel.id === 'activity' && activeTasks > 0 && <Label color={t.textSecondary} size={10}>{String(activeTasks)}</Label>}
-            {panel.id === 'changes' && stats[0] + stats[1] > 0 && <div style={{ display: 'flex', gap: 3 }}><Label color={t.green} size={10}>{`+${stats[0]}`}</Label><Label color={t.red} size={10}>{`−${stats[1]}`}</Label></div>}
+            {panel.id === 'activity' && activeTasks > 0 && <Label key={activeTasks} color={t.textSecondary} size={10} paintAnimation={popAnimation()}>{String(activeTasks)}</Label>}
+            {panel.id === 'changes' && stats[0] + stats[1] > 0 && <div key={`${stats[0]}:${stats[1]}`} style={{ display: 'flex', gap: 3 }}><Label color={t.green} size={10} paintAnimation={popAnimation()}>{`+${stats[0]}`}</Label><Label color={t.red} size={10} paintAnimation={popAnimation()}>{`−${stats[1]}`}</Label></div>}
           </div>
           <IconButton icon={N.x} glyph={12} size={24} label={`Close ${panel.label} panel`} onClick={() => closeTab(threadId, panel.id)} testId={`dock-tab-close-${panel.id}`} />
         </div></TabSlot>)}

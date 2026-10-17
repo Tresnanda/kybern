@@ -194,7 +194,7 @@ const NoteCard = memo(function NoteCard({ note, big, list, scope, projectId, act
   }
   return <motion.div {...motionProps} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, flexBasis: 0, minWidth: 0, position: 'relative' }}>
     <div testId={`note-card-${note.id}`} tabIndex={0} onFocus={onFocus} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onClick={() => openNote(note.id)} onKeyDown={(e) => { if (e.key === 'enter') openNote(note.id) }} style={{ display: 'flex', flexDirection: 'column', borderRadius: 12, cursor: 'pointer', marginLeft: 0 }}>
-      <div style={{ position: 'relative', top: hover && !REDUCED_MOTION ? -2 : 0, borderRadius: 12 }}><NoteThumb note={note} big={big} active={active} lift={hover} /></div>
+      <NoteThumb note={note} big={big} active={active} lift={hover} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0, paddingTop: 10, paddingLeft: 2, paddingRight: 2, pointerEvents: 'none' }}>
         <Label color={k.fg} size={NOTES_UI} lineHeight={18} weight={600} truncate>{noteTitle(note)}</Label>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>

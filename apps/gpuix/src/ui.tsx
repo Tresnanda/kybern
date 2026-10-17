@@ -4,7 +4,9 @@
 import { spawnSync } from 'node:child_process'
 import { createContext, useContext, type ReactNode } from 'react'
 import type { StyleDesc } from '@gpuix/react'
+import { useGpuix } from '@gpuix/react'
 import { useAppearance } from './settings/appearance.ts'
+import { installThemeFade } from './motion/themeFade.tsx'
 import { useSyncWindowAppearance, useSystemVariant } from './shell/appearance.ts'
 import { FONT_UI, THEMES, themeFor, type Theme } from './theme.ts'
 import { FULL_TRANSLUCENCY, OPAQUE_WINDOW, fullTranslucency, useAccessibilityDisplay } from './platform/material.ts'
@@ -40,6 +42,7 @@ export const ThemeProvider = ({ children }: { children: ReactNode }) => {
   useSyncWindowAppearance(variant, !OPAQUE_WINDOW)
   const a11y = useAccessibilityDisplay()
   const theme = themeFor(variant, fullTranslucency(prefs.translucent, a11y) ? FULL_TRANSLUCENCY : null, a11y.increaseContrast, a11y.reduceTransparency)
+  installThemeFade(useGpuix()?.renderer)
   return <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>
 }
 export const useTheme = () => useContext(ThemeContext)
@@ -69,7 +72,7 @@ export function Label({
   font?: string
   truncate?: boolean
   style?: StyleDesc
-  paintAnimation?: { kind: 'shimmer'; cycleMs: number }
+  paintAnimation?: { kind: 'shimmer' | 'pop'; cycleMs: number; delayMs?: number }
 }) {
   return (
     <text

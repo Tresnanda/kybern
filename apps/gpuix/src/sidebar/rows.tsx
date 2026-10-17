@@ -1,4 +1,4 @@
-import { canSplitPane, collectThreadPanes, splitFocusedPane, useFocusedPane, useSplitRoot } from '../split/store.ts'
+import { canOpenInSplit, collectThreadPanes, openThreadInSplit, useFocusedPane, useSplitRoot } from '../split/store.ts'
 import { beginThreadDrag, trackThreadDrag, consumeThreadDrag, finishSplitDrag } from '../split/Workspace.tsx'
 import { showDialog } from '../dialogs/store.ts'
 import { activeEnvironment } from '../shell/environment.ts'
@@ -27,7 +27,8 @@ import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
 import type { Theme } from '../theme.ts'
 import { beginProjectDrag, consumeProjectDrag, endProjectPending, trackProjectDrag } from './reorder.tsx'
 import { filterSummary, isFiltering, providerLabel, threadAgents } from './model.ts'
-import { FadeBack, Leave, markDisclosure, PadTween, Reveal, TitleSwap } from './motion.tsx'
+import { popAnimation, usePopOnChange } from '../kit/Pop.tsx'
+import { FadeBack, Leave, markDisclosure, MarqueeLabel, PadTween, Reveal, TitleSwap } from './motion.tsx'
 
 /** Open or close a project (or Recents); the rows it adds or removes animate as a block. */
 function toggleProject(id: string) {
@@ -265,6 +266,7 @@ export const SectionLabel = memo(function SectionLabel() {
   const [menuOpen, setMenuOpen] = useState(false)
   const onAddProject = useAddProject()
   const filtering = isFiltering(filter)
+  const summaryPop = usePopOnChange(filtering)
   const agents = threadAgents(threads, filter)
   const shown = hover || filtering || menuOpen
   return (
@@ -274,7 +276,7 @@ export const SectionLabel = memo(function SectionLabel() {
         {filtering && (
           <>
             <Label color={muted(t, 0.58)}>·</Label>
-            <Label color={ink(t, 0.7)} truncate>
+            <Label color={ink(t, 0.7)} truncate paintAnimation={summaryPop ? popAnimation() : undefined}>
               {filterSummary(filter)}
             </Label>
           </>
@@ -517,6 +519,7 @@ export const ThreadRow = memo(function ThreadRow({
   const rowRef = useRef<PublicInstance | null>(null)
   const hasGlyph = thread.status !== 'idle' || !!activity || unread
   const reveal = hover && !renaming
+  const pendingPop = usePopOnChange(thread.status === 'awaiting-approval')
   const wasRevealed = useWasRevealed(reveal)
   const commitRename = () => {
     setRenaming(false)
@@ -575,14 +578,12 @@ export const ThreadRow = memo(function ThreadRow({
               />
             ) : (
               <TitleSwap text={thread.coordinator_project_id ? 'Open coordinator' : thread.title || 'Untitled'}>
-                <Label color={selected ? t.text : resting(t)} lineHeight={20} truncate style={{ flexGrow: 1, pointerEvents: 'none', userSelect: 'none' }}>
-                  {thread.coordinator_project_id ? 'Open coordinator' : thread.title || 'Untitled'}
-                </Label>
+                <MarqueeLabel hover={hover} text={thread.coordinator_project_id ? 'Open coordinator' : thread.title || 'Untitled'} color={selected ? t.text : resting(t)} />
               </TitleSwap>
             )}
             {hasDraft && !renaming && <DraftMarker />}
             {thread.status === 'awaiting-approval' && (
-              <Label color={amberText(t)} size={10} weight={500} style={{ flexShrink: 0 }}>
+              <Label color={amberText(t)} size={10} weight={500} style={{ flexShrink: 0 }} paintAnimation={pendingPop ? popAnimation() : undefined}>
                 Pending
               </Label>
             )}
@@ -658,8 +659,8 @@ export const ThreadRow = memo(function ThreadRow({
           />
           <MenuItem id="handoff" icon={N.handoff} label="Hand off to another agent" onSelect={() => setNav({ handoff: { threadId: thread.id, target: null } })} />
           <MenuSeparator />
-          <MenuItem id="right" icon={N.splitRight} label="Open to the right" disabled={inSplit || !canSplitPane(splitRoot, focusedPane, 'horizontal')} onSelect={() => { splitFocusedPane('horizontal', thread.id) }} />
-          <MenuItem id="below" icon={N.splitDown} label="Open below" disabled={inSplit || !canSplitPane(splitRoot, focusedPane, 'vertical')} onSelect={() => { splitFocusedPane('vertical', thread.id) }} />
+          <MenuItem id="right" icon={N.splitRight} label="Open to the right" disabled={!canOpenInSplit(thread.id, 'horizontal')} onSelect={() => { openThreadInSplit(thread.id, 'horizontal') }} />
+          <MenuItem id="below" icon={N.splitDown} label="Open below" disabled={!canOpenInSplit(thread.id, 'vertical')} onSelect={() => { openThreadInSplit(thread.id, 'vertical') }} />
           <MenuSeparator />
           {thread.worktree && <MenuItem id="cleanup" icon={N.worktree} label="Remove worktree…" onSelect={() => showDialog({ kind: 'worktree', threadId: thread.id })} />}
           {thread.worktree && <MenuItem id="branch" icon={N.branch} label={thread.worktree.branch} disabled onSelect={() => {}} />}
@@ -727,6 +728,7 @@ export const ChildRow = memo(function ChildRow({
   }, [working, selected, leaveAsked, completedAt, thread.id])
 
   const reveal = hover && !working && !leaving
+  const pendingPop = usePopOnChange(thread.status === 'awaiting-approval')
   const wasRevealed = useWasRevealed(reveal)
   const body = (
     <div style={{ paddingTop: 3, paddingBottom: 1, ...INSET }}>
@@ -760,11 +762,9 @@ export const ChildRow = memo(function ChildRow({
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, minWidth: 0 }}>
             {/* A little quieter than its parent, so the parent stays dominant. */}
-            <Label color={selected ? t.text : ink(t, 0.82)} lineHeight={20} truncate style={{ flexGrow: 1, pointerEvents: 'none', userSelect: 'none' }}>
-              {thread.title || (delegated ? 'Agent' : 'Subagent')}
-            </Label>
+            <MarqueeLabel hover={hover} text={thread.title || (delegated ? 'Agent' : 'Subagent')} color={selected ? t.text : ink(t, 0.82)} />
             {thread.status === 'awaiting-approval' && (
-              <Label color={amberText(t)} size={10} weight={500} style={{ flexShrink: 0 }}>
+              <Label color={amberText(t)} size={10} weight={500} style={{ flexShrink: 0 }} paintAnimation={pendingPop ? popAnimation() : undefined}>
                 Pending
               </Label>
             )}
