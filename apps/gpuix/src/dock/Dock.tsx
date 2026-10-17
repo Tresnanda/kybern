@@ -148,7 +148,7 @@ function TabStrip({ threadId, width, coordinator, activeTasks, stats }: { thread
     const timer = setTimeout(() => { if (scroll.current) renderer?.scrollTo?.(scroll.current.id, -Math.max(0, left + selectedWidth - (width - 78)), 0) }, 16)
     return () => clearTimeout(timer)
   }, [left, selectedWidth, width, renderer])
-  return <div {...ISLAND} testId="dock-tabs" style={{ display: 'flex', width: '100%', height: 46, alignItems: 'center', gap: 4, paddingLeft: 6, paddingRight: 6, flexShrink: 0, backgroundColor: t.surface, borderTopRightRadius: 12 }}>
+  return <div {...ISLAND} testId="dock-tabs" style={{ display: 'flex', width: '100%', height: 46, alignItems: 'center', gap: 4, paddingLeft: 6, paddingRight: 6, flexShrink: 0, backgroundColor: t.surface, borderTopRightRadius: 12, borderBottomWidth: 1, borderColor: t.surfaceDivider }}>
     <div ref={scroll} style={{ display: 'flex', alignItems: 'center', flexGrow: 1, minWidth: 0, height: 32, overflowX: 'scroll', overflowY: 'hidden' }}>
       <div ref={rowRef} style={{ display: 'flex', alignItems: 'center', position: 'relative', gap: 4, height: 28, flexShrink: 0 }}>
         {tab && <motion.div initial={false} animate={{ left, width: selectedWidth }} transition={REDUCED_MOTION || keyboard || dock.instant ? { duration: 0 } : SLIDE}

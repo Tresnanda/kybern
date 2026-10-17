@@ -91,6 +91,8 @@ function build(variant: ThemeVariant, overrides: Vars = {}, contrast = false, re
     border: v('--color-border'),
     borderLight: v('--color-border-light'),
     borderHeavy: v('--color-border-heavy'),
+    /** `--app-surface-divider` (`kit.css:102`, set inside a layer the token build doesn't see): header and chrome row dividers. */
+    surfaceDivider: resolve('color-mix(in srgb, var(--color-border) 60%, transparent)', raw),
     hover: v('--color-token-list-hover-background'),
     selected: v('--color-token-list-active-selection-background'),
     buttonSecondary: v('--color-background-button-secondary'),
