@@ -1,6 +1,6 @@
 /**
  * Byte streams fed to both xterm.js 6.0.0 (the desktop terminal) and our VT.
- * `dump-xterm.mjs` records xterm's buffer for each case into `xterm.json`; the
+ * `dump-xterm.ts` records xterm's buffer for each case into `xterm.json`; the
  * `reference.test.ts` suite replays them through `VT` and compares screens.
  */
 export type Step = string | { resize: [number, number] }
