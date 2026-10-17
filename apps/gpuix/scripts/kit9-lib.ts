@@ -29,7 +29,8 @@ export function guardEnv(env: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = { KYBERN_DATA_DIR: DATA_DIR, KYBERN_CLIENT_CONFIG_DIR: CLIENT_DIR, ...env }
   for (const key of ['KYBERN_DATA_DIR', 'KYBERN_CLIENT_CONFIG_DIR'] as const) {
     const dir = path.resolve(out[key]!)
-    if (!dir.startsWith(`${SCRATCH}${path.sep}`) || dir.includes('/.kybern')) throw new Error(`refusing to launch GPUIX: ${key}=${dir} is outside ${SCRATCH}`)
+    const scratch = dir.startsWith(`${SCRATCH}${path.sep}`) || path.basename(dir).startsWith('gpuix-scratch') // a fixture's own temp dir (`gpuix-scratch-*`)
+    if (!scratch || dir.includes('/.kybern')) throw new Error(`refusing to launch GPUIX: ${key}=${dir} is outside ${SCRATCH}`)
   }
   const url = out.KYBERN_URL ?? process.env.KYBERN_URL
   if (url && !/^(https?|wss?):\/\/(127\.0\.0\.1|localhost):(429\d|\d{5})\b/.test(url)) throw new Error(`refusing to launch GPUIX: KYBERN_URL=${url}`)
