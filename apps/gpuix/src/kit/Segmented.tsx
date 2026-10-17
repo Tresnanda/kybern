@@ -123,7 +123,7 @@ export function Segmented({ options, value, onChange, busy = false, 'aria-label'
           animate={{ left: pill.x, width: pill.w }}
           transition={{ duration: slide ? DURATION.fast : 0, ease: [...EASE.smoothOut] as [number, number, number, number] }}
           style={{
-            position: 'absolute', top: 1, height: segmentHeight, borderRadius: 8, borderWidth: 1, pointerEvents: 'none',
+            position: 'absolute', top: 1, height: segmentHeight, borderRadius: 6, borderWidth: 1, pointerEvents: 'none',
             borderColor: ink(t, dark ? 0.07 : 0.05), backgroundColor: thumbFill,
             boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 1.5 / 2, spreadRadius: 0, color: `rgba(0, 0, 0, ${dark ? 0.16 : 0.04})` },
           }}
