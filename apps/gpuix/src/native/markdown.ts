@@ -28,6 +28,10 @@ export interface MarkdownStyle {
   listIndent?: number
   listMarkerGap?: number
   listMarkerSize?: number
+  /** Distance of a bullet disc's right edge from the text; ordered numbers use `listMarkerGap`. */
+  listBulletGap?: number
+  /** Margin above and below a thematic break, collapsed with its neighbours. */
+  ruleMargin?: number
   listMarker?: string
   listItemGap?: number
   listChildGap?: number
@@ -48,6 +52,8 @@ export interface MarkdownStyle {
 }
 declare module '@gpuix/native/host' {
   interface GpuixTheme { markdown?: MarkdownStyle }
+  /** Applied while a Finder file drag hovers the element. */
+  interface StyleDesc { dragOver?: Omit<StyleDesc, 'hover' | 'active' | 'dragOver'> }
 }
 
 export type MarkdownTheme = GpuixTheme & {markdown?:MarkdownStyle}

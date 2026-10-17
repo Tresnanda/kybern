@@ -19,6 +19,10 @@ pub struct MarkdownStyle {
     pub list_child_gap: Option<f32>,
     pub list_item_gap: Option<f32>,
     pub list_marker_size: Option<f32>,
+    /// Bullet discs sit this far left of the text (ordered numbers keep `list_marker_gap`).
+    pub list_bullet_gap: Option<f32>,
+    /// Margin above and below a thematic break, collapsed with its neighbours like CSS.
+    pub rule_margin: Option<f32>,
     pub inline_code_padding_x: Option<f32>,
     pub inline_code_padding_y: Option<f32>,
     pub inline_code_size_ratio: Option<f32>,

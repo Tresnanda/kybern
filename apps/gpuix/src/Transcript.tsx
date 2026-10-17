@@ -14,7 +14,7 @@ import { MatrixLoader } from './MatrixLoader.tsx'
 import { subscribe, useApp, usePaneAccess, usePaneCompact } from './state.ts'
 import { Label, REDUCED_MOTION, useTheme } from './ui.tsx'
 import { DISTANCE, DURATION, EASE } from './motion/kit.tsx'
-import { CodeChunk, CodeHeader, markdownParts, Prose, textChunks } from './transcript/markdown.tsx'
+import { CodeChunk, CodeHeader, markdownParts, partGap, Prose, textChunks } from './transcript/markdown.tsx'
 import { MessageRail, type RailItem } from './transcript/rail.tsx'
 import { createTranscriptNavigation } from '../../desktop/src/lib/transcriptNavigation.ts'
 import { T } from './transcript/glyphs.ts'
@@ -109,19 +109,20 @@ export function Transcript() {
     const result = [{ key, turn, node: <TurnItem turn={turn} threadId={threadId!} isLast={i === turns.length - 1} threadRunning={i === turns.length - 1 && threadRunning} dateAt={startsDay ? at : null} /> }]
     if (running) return result
     result.push({ key: `${key}:images`, turn, node: <Row><AnswerImages group={turn} threadId={threadId!} /></Row> })
-    for (const [partIndex, part] of markdownParts(turn.answer?.text ?? '').entries()) {
+    const parts = markdownParts(turn.answer?.text ?? '')
+    for (const [partIndex, part] of parts.entries()) {
       const partKey = `${key}:answer:${part.key}`
       const chunks = textChunks(part.text)
       // Native Markdown owns spacing inside prose; separate virtual parts
-      // share one collapsed .65rem margin at their boundary.
-      if (partIndex > 0) result.push({ key: `${partKey}:before`, turn, node: <div style={{ height: 10.4 }} /> })
+      // share the desktop's collapsed margin at their boundary (`partGap`).
+      if (partIndex > 0) result.push({ key: `${partKey}:before`, turn, node: <div style={{ height: partGap(parts[partIndex - 1]!, part) }} /> })
       if (part.kind === 'code') {
         // Desktop code starts unwrapped; horizontal scrolling preserves long lines.
         const state = codeState[partKey] ?? { expanded: false, wrap: false }
         const update = (patch: Partial<typeof state>) => setCodeState(value => ({ ...value, [partKey]: { ...state, ...patch } }))
         result.push({ key: partKey, turn, node: <Row><CodeHeader part={part} {...state} onWrap={() => update({ wrap: !state.wrap })} onExpand={chunks.length > 1 ? () => update({ expanded: !state.expanded }) : undefined} /></Row> })
         for (const [chunkIndex, chunk] of (state.expanded ? chunks : chunks.slice(0, 1)).entries()) {
-          result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><CodeChunk text={chunk} language={part.language} wrap={state.wrap} last={!state.expanded || chunkIndex === chunks.length - 1} /></Row> })
+          result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><CodeChunk text={chunk} language={part.language} wrap={state.wrap} first={chunkIndex === 0} last={!state.expanded || chunkIndex === chunks.length - 1} /></Row> })
         }
       } else {
         for (const [chunkIndex, chunk] of chunks.entries()) result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><Prose text={chunk} /></Row> })
