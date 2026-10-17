@@ -15,6 +15,9 @@ export const screens = {
   'convo9-composer-slash-query': async (p) => { await open(p, 'Markdown B'); await ed(p).click(); await p.keyboard.type('/ar'); await settle(p, 1200); await park(p) },
   'convo9-composer-token': async (p) => { await open(p, 'Markdown B'); await ed(p).click(); await p.keyboard.type('Look at @Release'); await settle(p, 1000); await p.keyboard.press('Enter'); await settle(p, 800); await p.keyboard.press('End'); await park(p) },
   'convo9-md-a': async (p) => { await open(p, 'Markdown A'); await park(p) },
+  'polish9-code': async (p) => { await open(p, 'Code languages'); await settle(p, 5000); await park(p) },
+  'polish9-code-2': async (p) => { await open(p, 'Code languages 2'); await settle(p, 5000); await park(p) },
+  'polish9-code-3': async (p) => { await open(p, 'Code languages 3'); await settle(p, 5000); await park(p) },
   'convo9-md-b': async (p) => { await open(p, 'Markdown B'); await park(p) },
   'convo9-md-c': async (p) => { await open(p, 'Markdown C'); await park(p) },
 
