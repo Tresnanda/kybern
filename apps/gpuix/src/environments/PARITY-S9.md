@@ -47,6 +47,8 @@ Forgetting an environment deletes both files (desktop `forgetEnvironmentStore`).
   window request, Tailscale switch, pair + Revoke, forget (daemon state asserted over the CLI).
 - `src/environments/storage9.ts [dark|light]`: drafts, threads, pages, restart, forget cleanup.
 - `src/environments/outage9.ts`: stop daemon B, see the failure, restart it, reconnect.
+- `src/environments/ssh9.ts`: the SSH tab against a closed local port (progress rows, failure text, form stays editable).
+- `src/environments/perf9.ts`: idle cost with the dialogs open (no timers once closed).
 - Visual pairs: `visual/screens/env9.{gpuix.ts,tauri.mjs}` (`bun scripts/visual-pair.ts env9-menu ...`).
 
 ## Known gaps
@@ -59,3 +61,11 @@ Forgetting an environment deletes both files (desktop `forgetEnvironmentStore`).
 - The desktop's stepped ring spinner is drawn with the app's matrix loader (TODO kit9).
 - "Open in a new window" spawns a separate process pinned to the environment; one window per
   environment (focus the existing one instead of spawning a second) needs remote9's window registry.
+
+## Measurements
+
+No motion was added: the tab pill, dialog and menu entrances are the existing shared ones. Idle cost with
+the dialogs open (`perf9.ts`, 10 s warm-up then 15 s `perf/sample.ts`, `KYBERN_FULL_RATE` not set, machine
+under load average ~45 from the other lanes, so differences under ~3 points are noise): home idle 3.25 %
+CPU / 197 MiB, Pair a device open 2.65 % / 209 MiB (5 s device poll, 250 ms window-size poll), Manage
+environments open 1.65 % / 206 MiB, dialog closed again 1.52 % / 206 MiB.
