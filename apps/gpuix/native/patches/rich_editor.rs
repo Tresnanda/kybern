@@ -85,6 +85,7 @@ actions!(
         TaskList,
         Blockquote,
         CodeBlock,
+        MakeTask,
     ]
 );
 
@@ -149,6 +150,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("shift-cmd-b", Blockquote, c),
         KeyBinding::new("alt-cmd-c", CodeBlock, c),
         KeyBinding::new("shift-cmd-v", PastePlain, c),
+        KeyBinding::new("shift-cmd-t", MakeTask, c),
     ];
     // ctrl-a/ctrl-e are Emacs line motion on macOS, so the shortcuts below take cmd there.
     let prefixes: &[&str] = if cfg!(target_os = "macos") { &["cmd"] } else { &["cmd", "ctrl"] };
@@ -258,6 +260,14 @@ struct TaskInfo {
 #[derive(Clone)]
 struct Glyph {
     image: Arc<gpui::RenderImage>,
+}
+
+/// A CSS color the SVG rasterizer understands (it has no `oklch()`).
+fn svg_color(color: &str) -> String {
+    match crate::color::parse_color_rgba(color) {
+        Some(c) => format!("rgba({},{},{},{})", (c.r * 255.0).round(), (c.g * 255.0).round(), (c.b * 255.0).round(), c.a),
+        None => color.to_string(),
+    }
 }
 
 // ------------------------------------------------------------- doc JSON ----
@@ -572,6 +582,7 @@ struct RichEditorElement {
     glyphs: HashMap<String, (String, String)>,
     task_keys: HashMap<String, String>,
     intercept_keys: Vec<String>,
+    make_task: bool,
     state: Option<Entity<RichEditorState>>,
     key_interceptor: Option<gpui::Subscription>,
 }
@@ -667,11 +678,12 @@ impl CustomElement for RichEditorElement {
                 state.glyphs = self
                     .glyphs
                     .iter()
-                    .filter_map(|(k, (svg, color))| crate::kybern_icon::image(svg, color).map(|image| (k.clone(), Glyph { image })))
+                    .filter_map(|(k, (svg, color))| crate::kybern_icon::image(svg, &svg_color(color)).map(|image| (k.clone(), Glyph { image })))
                     .collect();
                 cx.notify();
             }
             state.core.task_keys = self.task_keys.clone();
+            state.make_task = self.make_task;
             if let Some(doc) = doc {
                 state.replace_doc(doc_from_json(&doc), cx);
             }
@@ -710,6 +722,7 @@ impl CustomElement for RichEditorElement {
             "theme" => self.theme = DocTheme::from_prop(&value),
             "placeholder" => self.placeholder = value.as_str().unwrap_or_default().to_string(),
             "readOnly" => self.read_only = value.as_bool().unwrap_or(false),
+            "makeTask" => self.make_task = value.as_bool().unwrap_or(false),
             "interceptKeys" => {
                 self.intercept_keys = value
                     .as_array()
@@ -753,7 +766,7 @@ impl CustomElement for RichEditorElement {
     }
 
     fn supported_props(&self) -> &'static [&'static str] {
-        &["doc", "docEpoch", "theme", "placeholder", "readOnly", "interceptKeys", "tasks", "glyphs", "taskKeys"]
+        &["doc", "docEpoch", "theme", "placeholder", "readOnly", "interceptKeys", "tasks", "glyphs", "taskKeys", "makeTask"]
     }
 
     fn supported_events(&self) -> &'static [&'static str] {
@@ -1083,6 +1096,12 @@ pub(crate) struct RichEditorState {
     pending_events: Vec<String>,
     focused_before: bool,
     started: Instant,
+    /// Blocks shaped since the counter was last read (`stats` command).
+    reshaped: u64,
+    /// "Make task" is offered on checklist lines (a note with a task context).
+    make_task: bool,
+    /// The checklist line under the pointer that can become a task.
+    hover_line: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -1126,6 +1145,9 @@ impl RichEditorState {
             pending_events: Vec::new(),
             focused_before: false,
             started: Instant::now(),
+            reshaped: 0,
+            make_task: false,
+            hover_line: None,
         }
     }
 
@@ -1176,6 +1198,33 @@ impl RichEditorState {
 
     // ---- layout ----
 
+    /// A checklist line can become a task when it has words, is not done and links no task.
+    fn can_make_task(&self, index: usize) -> bool {
+        let block = self.core.doc.block(index);
+        matches!(block.kind, Kind::Task(false))
+            && !block.text.replace(ATOM, "").trim().is_empty()
+            && !block.runs.iter().any(|r| matches!(r.atom.as_deref(), Some(Atom::TaskRef { .. })))
+    }
+
+    /// What "Make task" needs: the line's place among the document's checklist items and its words.
+    fn make_task_info(&self, index: usize) -> serde_json::Value {
+        let doc = &self.core.doc;
+        let ordinal = (0..index).filter(|&i| matches!(doc.block(i).kind, Kind::Task(_))).count();
+        let block = doc.block(index);
+        let title = doc.text_between(Pos::new(index, 0), Pos::new(index, block.len()), "", true);
+        serde_json::json!({"block": index, "index": ordinal, "title": title.split_whitespace().collect::<Vec<_>>().join(" ")})
+    }
+
+    fn make_task(&mut self, _: &MakeTask, _: &mut Window, cx: &mut Context<Self>) {
+        let index = self.core.sel.head.block;
+        if self.make_task && matches!(self.core.doc.block(index).kind, Kind::Task(_)) {
+            let mut info = self.make_task_info(index);
+            info["t"] = "makeTask".into();
+            self.emit(info);
+            cx.notify();
+        }
+    }
+
     fn in_checklist(&self, index: usize) -> bool {
         matches!(self.core.doc.block(index).kind, Kind::Task(_))
     }
@@ -1189,6 +1238,7 @@ impl RichEditorState {
                 return;
             }
         }
+        self.reshaped += 1;
         let style = block_style(&block, &self.theme);
         let disp = build_display(&block, &self.theme, &style, &self.tasks, self.in_checklist(index));
         let mut lines = Vec::new();
@@ -1692,6 +1742,13 @@ impl RichEditorState {
             "empty": core.doc.len() == 1 && core.doc.block(0).is_empty() && core.doc.block(0).kind == Kind::Paragraph,
             "headings": headings,
             "height": self.height,
+            "hoverTask": self.hover_line.filter(|&i| i < core.doc.len() && self.can_make_task(i)).map(|i| {
+                let place = self.places[i];
+                let lh = self.lay(i).map(|l| l.style.line_h).unwrap_or(self.theme.size * self.theme.line);
+                let mut info = self.make_task_info(i);
+                info["rect"] = serde_json::json!([place.tx, place.ty, place.tw, lh]);
+                info
+            }),
         })
     }
 
@@ -2311,8 +2368,18 @@ impl RichEditorState {
             Hover::None
         };
         let _ = window;
-        if hover != self.hover {
+        let bounds = self.last_bounds.map(|b| b.size).unwrap_or_default();
+        let inside = p.x >= px(-40.0) && p.x <= bounds.width + px(8.0) && p.y >= px(0.0) && p.y <= bounds.height;
+        let line = if self.make_task && inside && !self.read_only {
+            let index = self.block_at_y(f32::from(p.y));
+            let place = self.places[index];
+            (f32::from(p.y) >= place.top && f32::from(p.y) <= place.top + place.height && self.can_make_task(index)).then_some(index)
+        } else {
+            None
+        };
+        if hover != self.hover || line != self.hover_line {
             self.hover = hover;
+            self.hover_line = line;
             cx.notify();
         }
     }
@@ -2601,6 +2668,7 @@ impl gpui::Render for RichEditorState {
             .on_action(cx.listener(Self::task_list))
             .on_action(cx.listener(Self::blockquote))
             .on_action(cx.listener(Self::code_block))
+            .on_action(cx.listener(Self::make_task))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
@@ -2820,6 +2888,14 @@ fn paint_doc(editor: &mut RichEditorState, bounds: Bounds<Pixels>, caret_on: boo
             }
             _ => {}
         }
+        // "Make task": a quiet fill behind the checklist line under the pointer.
+        if editor.hover_line == Some(index) && editor.make_task {
+            let check = 1.067 * em;
+            let (pad_y, gap, pad_x, radius) = if theme.compact { (2.0, 9.0, 6.0, 6.0) } else { (4.0, 12.0, 8.0, 8.0) };
+            let left = place.tx - check - gap - pad_x;
+            let fill_b = Bounds::new(origin + point(px(left), px(place.ty - pad_y)), size(px(place.tw + check + gap + 2.0 * pad_x), px(lay.text_h + 2.0 * pad_y)));
+            window.paint_quad(quad(fill_b, theme.hover, radius));
+        }
         // Inline code washes and chip hovers sit under the text.
         for range in &lay.disp.codes {
             let (a, b) = (lay.disp.d2m(range.start), lay.disp.d2m(range.end));
@@ -3037,6 +3113,37 @@ pub(crate) fn command(id: u64, command: serde_json::Value, window: &mut Window, 
                 let head = pos_from(&state.core.doc, command.get("head")).unwrap_or(anchor);
                 state.core.set_selection(Sel { anchor, head });
                 serde_json::Value::Null
+            }
+            "layout" => {
+                // Block geometry relative to the element, for checks.
+                let origin = state.last_bounds.map(|b| b.origin).unwrap_or_default();
+                return Ok(serde_json::json!({
+                    "x": f32::from(origin.x), "y": f32::from(origin.y),
+                    "blocks": state.places.iter().enumerate().map(|(i, p)| {
+                        let rects = |ranges: Vec<(usize, usize)>| ranges.into_iter().filter_map(|(a, b)| { let mut out = Vec::new(); state.range_rects(i, a, b, &mut out, false); out.first().map(|r| [f32::from(r.origin.x), f32::from(r.origin.y), f32::from(r.size.width), f32::from(r.size.height)]) }).collect::<Vec<_>>();
+                        let (chips, links) = state.lay(i).map(|l| (l.disp.chips.iter().map(|c| (c.model, c.model + ATOM_LEN)).collect::<Vec<_>>(), l.disp.links.iter().map(|(r, _)| (l.disp.d2m(r.start), l.disp.d2m(r.end))).collect::<Vec<_>>())).unwrap_or_default();
+                        serde_json::json!({"top": p.top, "height": p.height, "tx": p.tx, "ty": p.ty, "tw": p.tw, "listX": p.list_x, "lineHeight": state.lay(i).map(|l| l.style.line_h), "chips": rects(chips), "links": rects(links)})
+                    }).collect::<Vec<_>>(),
+                }));
+            }
+            "stats" => {
+                let reshaped = std::mem::take(&mut state.reshaped);
+                return Ok(serde_json::json!({"reshaped": reshaped, "blocks": state.core.doc.len(), "undo": state.core.history.undo.len()}));
+            }
+            "ime" => {
+                // The input method path (NSTextInputClient → EntityInputHandler), for checks.
+                match s("op").as_deref() {
+                    Some("mark") => {
+                        let text = s("text").unwrap_or_default();
+                        let len = text.encode_utf16().count();
+                        EntityInputHandler::replace_and_mark_text_in_range(state, None, &text, Some(len..len), window, cx);
+                    }
+                    Some("commit") => EntityInputHandler::replace_text_in_range(state, None, &s("text").unwrap_or_default(), window, cx),
+                    Some("unmark") => EntityInputHandler::unmark_text(state, window, cx),
+                    _ => return Err(napi::Error::from_reason("Unknown ime op")),
+                }
+                let marked = EntityInputHandler::marked_text_range(state, window, cx);
+                return Ok(serde_json::json!({"marked": marked.map(|r| [r.start, r.end])}));
             }
             "focus" => {
                 let at = s("at");
