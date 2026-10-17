@@ -77,10 +77,10 @@ impl Window {
     /// participate in layout. Cached scene replay preserves these scope tags.
     pub fn with_subtree_translation<R>(&mut self, id: u64, offset: Point<Pixels>, f: impl FnOnce(&mut Self) -> R) -> R {
         self.subtree_tags.push((id, offset));
-        self.next_frame.scene.active_subtree_geometry = self.subtree_geometry();
+        self.next_frame.scene.active_subtree_geometry = self.subtree_geometry().map(std::sync::Arc::new);
         let result = self.with_element_offset(offset, f);
         self.subtree_tags.pop();
-        self.next_frame.scene.active_subtree_geometry = self.subtree_geometry();
+        self.next_frame.scene.active_subtree_geometry = self.subtree_geometry().map(std::sync::Arc::new);
         result
     }
     #[allow(missing_docs)]
@@ -92,11 +92,11 @@ impl Window {
         let rounded =
             (mask.rounded_clip != 0 && mask.rounded_clip != inherited).then(|| self.rounded_clip_pool.nodes[mask.rounded_clip as usize]);
         self.subtree_masks.push(SubtreeMask { bounds: mask.bounds, rounded, tags: self.subtree_tags.clone() });
-        self.next_frame.scene.active_subtree_geometry = self.subtree_geometry();
+        self.next_frame.scene.active_subtree_geometry = self.subtree_geometry().map(std::sync::Arc::new);
     }
     fn pop_subtree_mask(&mut self) {
         self.subtree_masks.pop();
-        self.next_frame.scene.active_subtree_geometry = self.subtree_geometry();
+        self.next_frame.scene.active_subtree_geometry = self.subtree_geometry().map(std::sync::Arc::new);
     }
     /// Move existing scene operations and native hitboxes without rendering,
     /// layout, prepaint, listener replacement or ancestor invalidation.
@@ -123,17 +123,30 @@ impl Window {
         let scale = self.scale_factor();
         let viewport = self.viewport_size();
         let mut previous = std::mem::take(&mut self.rendered_frame.scene);
-        let mut scene = Scene::default();
+        let mut scene = std::mem::take(&mut self.next_frame.scene);
+        scene.clear();
         self.rounded_clip_pool.seed(&mut scene, scale);
-        for (&index, geometry) in &mut previous.subtree_geometries {
-            if !geometry.translation_changed(&values) {
+        // Share immutable provenance across primitives and translate it once
+        // per scope/mask context, rather than allocating vectors per glyph.
+        let mut translated = std::collections::HashMap::new();
+        for (&index, shared) in &mut previous.subtree_geometries {
+            let key = std::sync::Arc::as_ptr(shared) as usize;
+            let update = translated.entry(key).or_insert_with(|| {
+                if !shared.translation_changed(&values) {
+                    return None;
+                }
+                let mut geometry = (**shared).clone();
+                let delta = geometry.translate(&values).scale(scale);
+                let mask = geometry.mask(&mut self.rounded_clip_pool, &mut scene, scale, viewport).scale(scale);
+                Some((std::sync::Arc::new(geometry), delta, mask))
+            });
+            let Some((geometry, delta, mask)) = update else {
                 continue;
-            }
-            let delta = geometry.translate(&values).scale(scale);
-            let mask = geometry.mask(&mut self.rounded_clip_pool, &mut scene, scale, viewport).scale(scale);
+            };
+            *shared = geometry.clone();
             match &mut previous.paint_operations[index] {
-                crate::scene::PaintOperation::Primitive(p) => p.translate_subtree(delta, mask),
-                crate::scene::PaintOperation::StartLayer(bounds) => bounds.origin += delta,
+                crate::scene::PaintOperation::Primitive(p) => p.translate_subtree(*delta, *mask),
+                crate::scene::PaintOperation::StartLayer(bounds) => bounds.origin += *delta,
                 _ => {}
             }
         }
@@ -151,6 +164,7 @@ impl Window {
         scene.replay(0..previous.len(), &previous);
         scene.finish();
         self.rendered_frame.scene = scene;
+        self.next_frame.scene = previous;
         self.rounded_clip_pool.snapshot(&mut self.rendered_frame, scale);
         let mut a11y_deltas = std::collections::HashMap::new();
         for (id, geometry) in &mut self.subtree_a11y {

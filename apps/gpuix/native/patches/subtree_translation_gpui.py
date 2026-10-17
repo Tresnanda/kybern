@@ -19,7 +19,7 @@ edit(w,'            self.content_mask_stack.pop();','            self.content_ma
 edit(w,'        if !quad.background.is_transparent() {','        if !self.subtree_tags.is_empty() {self.next_frame.scene.insert_primitive(quad);return;}\n        if !quad.background.is_transparent() {')
 edit(w,'        let clipped_bounds = bounds.intersect(&content_mask.bounds);','        let clipped_bounds = if self.subtree_tags.is_empty(){bounds.intersect(&content_mask.bounds)}else{bounds};')
 pending[w] += '\ninclude!("subtree_geometry.rs");\n'
-edit(s,'    pub(crate) paint_operations: Vec<PaintOperation>,','    pub(crate) paint_operations: Vec<PaintOperation>,\n    pub(crate) active_subtree_geometry: Option<crate::window::SubtreeGeometry>,\n    pub(crate) subtree_geometries: std::collections::HashMap<usize, crate::window::SubtreeGeometry>,')
+edit(s,'    pub(crate) paint_operations: Vec<PaintOperation>,','    pub(crate) paint_operations: Vec<PaintOperation>,\n    pub(crate) active_subtree_geometry: Option<std::sync::Arc<crate::window::SubtreeGeometry>>,\n    pub(crate) subtree_geometries: std::collections::HashMap<usize, std::sync::Arc<crate::window::SubtreeGeometry>>,')
 edit(s,'        self.paint_operations.clear();','        self.paint_operations.clear();\n        self.subtree_geometries.clear();\n        self.active_subtree_geometry = None;')
 edit(s,'        if clipped_bounds.is_empty() {','        if clipped_bounds.is_empty() && self.active_subtree_geometry.is_none() {')
 edit(s,'            .unwrap_or_else(|| self.primitive_bounds.insert(clipped_bounds));','            .unwrap_or_else(|| self.primitive_bounds.insert(if clipped_bounds.is_empty() { *primitive.bounds() } else { clipped_bounds }));')
