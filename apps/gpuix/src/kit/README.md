@@ -34,7 +34,8 @@ opens a section window. Frame cadence: `KYBERN_FRAME_TIMES=1` (`app.frameTimes()
 puts the handlers on a trigger; `HoverCard` is the generic `PreviewCard` (props: `trigger`, `children`, `side`, `align`,
 `sideOffset` (8), `delay` (600), `closeDelay` (300), `skip`, `width`, `style`, `rootStyle`, `testId`, `disabled`).
 `Tip` (`nav/overlay.tsx`) is the tooltip. State lives in plain fields, never read from a render closure, so an enter
-and a leave inside one frame still close (R4-1).
+and a leave inside one frame still close (R4-1). `ctl.leave(key)` ignores a late leave from a trigger that is no longer the
+target, so a shared card with several triggers (the rail usage rings) survives GPUI delivering the next enter first.
 
 ## Spin (`Spin.tsx`)
 
@@ -46,7 +47,7 @@ and a leave inside one frame still close (R4-1).
 `Menu`, `ContextMenu`, `MenuItem`, `MenuLabel`, `MenuSeparator`, `MenuCheckboxItem`/`MenuRadioItem` as before, plus
 `<MenuSub id label icon? width=192 testId? disabled? maxHeight?>…items…</MenuSub>`: a row with a trailing chevron that opens a
 nested popup (Base UI `SubmenuTrigger`: 100 ms hover open, a safe triangle from the pointer to the popup so a diagonal move
-does not close it, → opens and focuses the first item, ← / Esc close one level). The geometry is `nav/menuGeometry.ts`
+does not close it, →, Enter and Space open it and light the first item, ← / Esc close one level). The geometry is `nav/menuGeometry.ts`
 (unit tests in `menuGeometry.test.ts`). Pointer handling reads geometry on each move; no timers run while nothing hovers.
 
 ## Dialogs and sheets (`AlertDialog.tsx`, `Sheet.tsx`)
@@ -54,10 +55,12 @@ does not close it, → opens and focuses the first item, ← / Esc close one lev
 `AlertDialog` (props `open`/`defaultOpen`/`onOpenChange`, `width` 512, `testId`) with `AlertDialogHeader`, `AlertDialogTitle`,
 `AlertDialogDescription`, `AlertDialogFooter` (`variant: 'default' | 'bare'`), `AlertDialogClose` (`variant` outline, `onClick`).
 `Sheet` (`side` right/left/top/bottom, `variant`, `showCloseButton`, `dismissible`, `width` 448) with `SheetHeader`, `SheetTitle`,
-`SheetDescription`, `SheetPanel`, `SheetFooter`, `SheetClose`. Both fade and move in and out (exits are faster), keep an Escape
-stack (the innermost overlay closes first: a `Select` inside a `Sheet`) and return focus to the opener. `ModalLayer`,
-`useEscapeLayer`, `usePresence` and `KitButton` (the desktop `Button`: `variant` default/outline/destructive/…, `size`, `icon`) are
-exported for other dialogs.
+`SheetDescription`, `SheetPanel`, `SheetFooter`, `SheetClose`. The alert card fades (the desktop's 0.98 scale needs a subtree
+scale GPUIX lacks); the sheet fades and slides 32px; both take 200 ms in and out. They keep an Escape stack (the innermost
+overlay closes first: a `Select` inside a `Sheet`; `useEscapeLayer(open)` returns `claim()` for Escape and `isTop()` for outside
+presses, and `nav/overlay.tsx`'s `Dialog` defers to `kitOverlayOpen()`) and return focus to the opener. Neither traps Tab yet.
+The window size is read only while one is mounted (`WindowSized`). `ModalLayer`, `useEscapeLayer`, `usePresence`, `WindowSized`
+and `KitButton` (the desktop `Button`: `variant` default/outline/destructive/…, `size`, `icon`) are exported for other dialogs.
 
 ## Form controls
 
