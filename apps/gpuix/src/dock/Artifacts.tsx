@@ -16,7 +16,8 @@ import { openUrl } from '../pulls/PrStates.tsx'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { TaskWindow, type TaskWindowEntry } from '../tasks/TaskWindow.tsx'
 import { Label, useTheme } from '../ui.tsx'
-import { ErrorLine, KitButton, Section } from './parts.tsx'
+import { ErrorLine, Section } from './parts.tsx'
+import { KitButton } from '../kit/AlertDialog.tsx'
 
 /** `--font-mono-family` (kit.css): JetBrains Mono first. */
 const FONT_CODE = 'JetBrains Mono'
@@ -68,7 +69,7 @@ export function ArtifactsPane({ thread }: { thread: Thread }) {
     <ErrorLine error={error} />{notice && <Section label={notice} />}
     {thread.provider.kind === 'claude-code' && <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 12, paddingRight: 12, paddingBottom: 16 }}><input testId="artifact-path" aria-label="Artifact file path" placeholder="artifacts/dashboard.html" value={path} onChange={e => setPath(e.value ?? '')} style={{ height: 30, fontSize: 14, color: t.text, backgroundColor: t.buttonSecondary, borderRadius: 8, borderWidth: 1, borderColor: t.borderLight, paddingLeft: 12 }} /><div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}><KitButton size="chip" variant="subtle" testId="artifact-preview" disabled={!path.trim()} onClick={() => setSelected({ id: 'local', seq: 0, title: path.split('/').pop() || 'Artifact', path: path.trim(), url: null, status: 'completed' })}>Preview file</KitButton><KitButton size="chip" variant="subtle" disabled={!path.trim() || busy} onClick={() => void publish({ path: path.trim(), url: null })}>Check publishing options</KitButton></div></div>}
     {entries.length ? <TaskWindow entries={entries} card testId="artifacts-list" /> : <Label color={t.textSecondary} size={12} lineHeight={19.5} style={{ paddingLeft: 12, paddingRight: 12, whiteSpace: 'normal' }}>{busy ? 'Loading artifacts…' : thread.provider.kind === 'claude-code' ? 'Preview a local file or check whether Claude has a publishing tool available.' : 'Local previews stay on your computer. Hosting requires a publishing tool available to the agent.'}</Label>}
-    {before !== null && <div style={{ display: 'flex', paddingLeft: 12, paddingTop: 12 }}><KitButton variant="ghost" disabled={busy} onClick={() => void older()}>Load earlier artifacts</KitButton></div>}
+    {before !== null && <div style={{ display: 'flex', paddingLeft: 12, paddingTop: 12 }}><KitButton size="sm" variant="ghost" disabled={busy} onClick={() => void older()}>Load earlier artifacts</KitButton></div>}
     {selected && <ArtifactPreview key={`${thread.id}:${selected.path}`} thread={thread} artifact={selected} close={() => setSelected(null)} />}
   </div>
 }

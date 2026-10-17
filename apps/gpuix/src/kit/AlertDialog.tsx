@@ -186,7 +186,7 @@ export function useReturnFocus(open: boolean) {
 // variants overlays and their galleries use. Size `default`: 32 high, 11px side padding inside a 1px border,
 // radius 10, 14/21 medium. `icon`: 32 square. Hover fills are instant; the desktop's 0.97 press scale has no
 // GPUIX subtree equivalent and is dropped.
-export type ButtonVariant = 'default' | 'outline' | 'destructive' | 'destructive-outline' | 'ghost' | 'secondary'
+export type ButtonVariant = 'default' | 'outline' | 'destructive' | 'destructive-outline' | 'ghost' | 'secondary' | 'subtle'
 
 function buttonColors(t: Theme, variant: ButtonVariant) {
   const fg = t.v('--foreground')
@@ -195,6 +195,7 @@ function buttonColors(t: Theme, variant: ButtonVariant) {
     case 'destructive': return { bg: t.v('--destructive'), hover: withAlpha(t.v('--destructive'), 0.9), border: t.v('--destructive'), text: '#ffffff' }
     case 'destructive-outline': return { bg: t.v('--color-background-elevated-primary-opaque'), hover: withAlpha(t.v('--destructive'), 0.04), border: t.border, text: t.v('--destructive') }
     case 'secondary': return { bg: t.v('--secondary'), hover: withAlpha(t.v('--secondary'), 0.9), border: 'rgba(0, 0, 0, 0)', text: t.v('--secondary-foreground') }
+    case 'subtle': return { bg: t.buttonSecondary, hover: t.buttonSecondaryHover, border: 'rgba(0, 0, 0, 0)', text: fg }
     case 'ghost': return { bg: 'rgba(0, 0, 0, 0)', hover: t.buttonSecondaryHover, border: 'rgba(0, 0, 0, 0)', text: t.textSecondary, hoverText: fg }
     default: return { bg: 'rgba(0, 0, 0, 0)', hover: t.v('--color-background-elevated-secondary'), border: t.border, text: fg }
   }
@@ -221,7 +222,8 @@ export function KitButton({
 }: {
   children?: string
   variant?: ButtonVariant
-  size?: 'default' | 'icon'
+  /** Measured from the desktop in WebKit (1px border included). `sm`: 28 high, 9px side padding, 14/21 text. `chip`: auto height, 8/2 padding, 13/19.5 text (`--app-font-size-ui-sm`). */
+  size?: 'default' | 'icon' | 'sm' | 'chip'
   /** Glyph source for `size="icon"` (16px at 80%). */
   icon?: string
   /** Accessible name (icon buttons). */
@@ -248,10 +250,10 @@ export function KitButton({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 8,
+        gap: size === 'chip' ? 4 : size === 'sm' ? 6 : 8,
         flexShrink: 0,
-        height: 32,
-        ...(size === 'icon' ? { width: 32 } : { paddingLeft: 11, paddingRight: 11 }),
+        ...(size === 'chip' ? { paddingLeft: 8, paddingRight: 8, paddingTop: 2, paddingBottom: 2 } : { height: size === 'sm' ? 28 : 32 }),
+        ...(size === 'icon' ? { width: 32 } : size === 'sm' ? { paddingLeft: 9, paddingRight: 9 } : size === 'chip' ? {} : { paddingLeft: 11, paddingRight: 11 }),
         borderRadius: 10,
         borderWidth: 1,
         borderColor: c.border,
@@ -263,7 +265,7 @@ export function KitButton({
       {size === 'icon' && icon ? (
         <Icon source={icon} size={16} color={text} style={{ opacity: 0.8, pointerEvents: 'none' }} />
       ) : (
-        <Label color={text} size={14} lineHeight={21} weight={500} style={{ whiteSpace: 'nowrap', pointerEvents: 'none' }}>
+        <Label color={text} size={size === 'chip' ? 13 : 14} lineHeight={size === 'chip' ? 19.5 : 21} weight={500} style={{ whiteSpace: 'nowrap', pointerEvents: 'none' }}>
           {children}
         </Label>
       )}
