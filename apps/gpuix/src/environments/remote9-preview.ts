@@ -27,6 +27,7 @@ stopSshTunnels()
 // The server, on the SSH machine: started through the SSH target, bound to its loopback, logging each request.
 mkdirSync(site, { recursive: true })
 writeFileSync(`${site}/server.ts`, `const log = ${JSON.stringify(`${site}/requests.log`)}
+require('node:fs').writeFileSync(${JSON.stringify(`${site}/server.pid`)}, String(process.pid))
 Bun.serve({ hostname: '127.0.0.1', port: ${SITE_PORT}, fetch(req) {
   const url = new URL(req.url); require('node:fs').appendFileSync(log, req.method + ' ' + url.pathname + ' host=' + req.headers.get('host') + '\\n')
   if (url.pathname === '/app.js') return new Response("document.querySelector('h1').textContent = 'Served on the SSH machine · root asset loaded'; parent.postMessage({ kind: 'fixture-page', origin: location.origin, asset: true }, '*')", { headers: { 'content-type': 'text/javascript; charset=utf-8' } })
@@ -95,4 +96,5 @@ try {
   release?.()
   writeFileSync(QUEUE, readFileSync(QUEUE, 'utf8').split('\n').filter((line, i, all) => !(line.trim() === LANE && all.findIndex(l => l.trim() === LANE) === i)).join('\n'))
   cli(DATA_B, 'call', 'threads.archive', JSON.stringify({ thread_id: thread }))
+  try { process.kill(Number(readFileSync(`${site}/server.pid`, 'utf8')), 'SIGTERM') } catch { /* already stopped */ }
 }
