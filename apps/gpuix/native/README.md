@@ -52,6 +52,49 @@ existing duration/bounce form is unchanged. Reduced motion uses `{duration:0}`.
 `explorer_motion_hooks.py` and `physical_spring.rs` reconstruct this capability;
 `native/explorer-motion-check.ts` verifies pixels and geometry in all four modes.
 
+## Retained subtree translation (round 8)
+
+`renderer.setSubtreeTranslation(elementId, { translateX, translateY })` moves
+an already painted subtree in logical pixels. It retains glyph atlas entries,
+shadows, opacity, scene ordering, native hitboxes and clipping; the layout slot
+does not move. Pointer updates do not build elements, run Taffy, increment
+ancestor revisions or wake cached islands. The first call on a node that did
+not opt in installs its scope through an ordinary render.
+
+For declarative motion, a host div accepts `paintTranslate` with the existing
+motion description (`initial`, `animate`, `transition`, `generation`). Only
+`translateX` and `translateY` belong in its styles. Tweens, duration/bounce
+springs and physical springs use the existing evaluator on native display
+callbacks. `src/drag/PaintTranslate.tsx` supplies React generation/completion
+handling; `src/drag/carry.ts` binds pointer input directly to the renderer.
+
+```tsx
+<div paintTranslate={{ initial: false,
+  animate: { translateX: 0, translateY: offset },
+  transition: { type: 'spring', duration: .3, bounce: .05 } }}>
+  {children}
+</div>
+```
+
+Native layout observations report visual coordinates while a surrounding slot
+wrapper stays fixed. Selection/link layouts and AccessKit bounds follow the
+translation. Raw masks are retained before intersection: ancestor masks stay
+fixed and rounded masks established inside the subtree move. A full render
+reconstructs the same scene from the current translation; removing the prop or
+remounting the host clears its retained motion state.
+
+Implementation: `subtree_translation.rs`, `subtree_translation_hooks.py`,
+`subtree_translation_gpui.py`, `subtree_geometry.rs`, `subtree_scene.rs`,
+`subtree_bounds.rs`, and `subtree_a11y.rs`. The native translation check compares
+retained painting to a full render and exercises bounds, input, selection and lifecycle
+in four modes, with and without region painting alongside an animated loader.
+Translation currently reconstructs the typed scene arrays and calls `Scene.finish()`,
+which advances `paint_generation`. Region rendering safely rebuilds its retained
+target after geometry changes; tracking old/new damage is a future GPU optimization.
+Rotation is not part of this API: a 1° subtree tilt requires transformed quads,
+glyph/path transforms, inverse input coordinates and rotated clip boundaries;
+the SVG rotation capability remains separate.
+
 ## Cached views
 
 GPUIX rebuilds and lays out every element of the window on every frame. Any

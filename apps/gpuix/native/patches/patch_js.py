@@ -11,6 +11,20 @@ def edit(name, old, new):
 
 edit('dist/mutations.js', '    "motion",\n    "testId",', '    "motion",\n    // Kybern native capabilities.\n    "backdrop",\n    "paintAnimation",\n    "cache",\n    "windowDrag",\n    "interceptKeys",\n    "secure",\n    "softWrap",\n    "testId",')
 edit('dist/host.d.ts', 'export interface HostProps {', 'export interface HostProps {\n    cache?: boolean | "fill";\n    /** Empty titlebar region; do not place on interactive controls. */\n    windowDrag?: boolean;')
+edit('dist/mutations.js', '    "paintAnimation",', '    "paintAnimation",\n    "paintTranslate",')
+edit('dist/mutations.js', '    let queue = [];', '    let queue = [];\n    const subtreeDeclarations = new Map();')
+edit('dist/mutations.js', '        createElement(id, elementType) {', '        createElement(id, elementType) {\n            subtreeDeclarations.delete(id);')
+edit('dist/mutations.js', '        setCustomProp(id, key, value) {', '''        setCustomProp(id, key, value) {
+            // An unchanged React declaration must not overwrite an imperative
+            // carry offset on an unrelated parent render.
+            if (key === "paintTranslate") {
+                const declaration = JSON.stringify(value);
+                if (subtreeDeclarations.get(id) === declaration) return;
+                subtreeDeclarations.set(id, declaration);
+            }''')
+edit('dist/mutations.js', '            onDestroyed(destroyed);', '            for (const id of destroyed) subtreeDeclarations.delete(id);\n            onDestroyed(destroyed);')
+edit('dist/host.d.ts', 'export interface HostProps {', 'export interface HostProps {\n    /** Retained subtree translation; animate accepts translateX/translateY only. */\n    paintTranslate?: MotionProps;')
+edit('index.d.ts', 'export declare class GpuixRenderer {', 'export declare class GpuixRenderer {\n  setSubtreeTranslation(elementId: number, translation: { translateX: number; translateY: number }): void')
 edit('dist/host.d.ts', 'export interface InputProps extends HostProps {', 'export interface InputProps extends HostProps {\n    /** Key names delivered before native editing actions, with preventDefault(). */\n    interceptKeys?: string[];\n    /** Password input: masked paint/accessibility, no copy or cut. */\n    secure?: boolean;')
 edit('index.d.ts', 'export declare class GpuixRenderer {', 'export declare class GpuixRenderer {\n  resolveKeyEvent(token: number, prevented: boolean): void\n  setCloseGuard(enabled: boolean): void\n  resolveCloseRequest(token: number, allow: boolean): void')
 edit('dist/host.d.ts', '    onKeyDown?: (event: EventPayload) => void;', '    onKeyDown?: (event: EventPayload & { preventDefault(): void; defaultPrevented: boolean }) => void;')
@@ -49,6 +63,7 @@ const STATE_KEY =""")
 edit('dist/renderer-state.d.ts', 'import type { EventPayload }', 'export declare function setWindowCloseHandler(renderer: NativeRenderer, handler: () => boolean | Promise<boolean>): () => void;\nimport type { EventPayload }')
 
 edit('dist/host.d.ts', '"setWindowKeyEvents" |', '"resolveKeyEvent" | "setCloseGuard" | "resolveCloseRequest" | "setWindowKeyEvents" |')
+edit('dist/host.d.ts', '"setWindowKeyEvents" |', '"setSubtreeTranslation" | "setWindowKeyEvents" |')
 edit('dist/host.d.ts', 'export interface CodeProps extends HostProps {', 'export interface CodeProps extends HostProps {\n    /** Wrap highlighted lines at the available width. */\n    softWrap?: boolean;')
 edit('dist/host.d.ts', 'export interface MotionStyle {', 'export interface MotionStyle {\n    translateX?: number;\n    translateY?: number;')
 edit('dist/host.d.ts', 'export interface MotionStyle {', 'export interface MotionStyle {\n    /** SVG rotation, in degrees about the centre. */\n    rotate?: number;')
