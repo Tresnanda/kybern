@@ -6,7 +6,8 @@ import { createContext, useContext, type ReactNode } from 'react'
 import type { StyleDesc } from '@gpuix/react'
 import { useAppearance } from './settings/appearance.ts'
 import { useSyncWindowAppearance, useSystemVariant } from './shell/appearance.ts'
-import { FONT_UI, THEMES, type Theme } from './theme.ts'
+import { FONT_UI, THEMES, themeFor, type Theme } from './theme.ts'
+import { FULL_TRANSLUCENCY, OPAQUE_WINDOW, fullTranslucency, useAccessibilityDisplay } from './platform/material.ts'
 import { Icon, type IconName } from './icons.tsx'
 import { PROVIDER_IMAGES, PROVIDER_VECTORS } from './providerMarks.ts'
 
@@ -35,8 +36,11 @@ export const ThemeProvider = ({ children }: { children: ReactNode }) => {
   const system = useSystemVariant(VARIANT)
   const forced = process.env.KYBERN_APPEARANCE === 'light' || process.env.KYBERN_APPEARANCE === 'dark'
   const variant = forced ? VARIANT : prefs.theme === 'system' ? system : prefs.theme
-  useSyncWindowAppearance(variant, prefs.translucent)
-  return <ThemeContext.Provider value={THEMES[variant]}>{children}</ThemeContext.Provider>
+  // The native material is always on (desktop #39); the switch only makes content glass.
+  useSyncWindowAppearance(variant, !OPAQUE_WINDOW)
+  const a11y = useAccessibilityDisplay()
+  const theme = themeFor(variant, fullTranslucency(prefs.translucent, a11y) ? FULL_TRANSLUCENCY : null, a11y.increaseContrast, a11y.reduceTransparency)
+  return <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>
 }
 export const useTheme = () => useContext(ThemeContext)
 

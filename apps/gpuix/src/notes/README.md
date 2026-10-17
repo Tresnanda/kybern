@@ -93,8 +93,8 @@ the formatted editing work above. It was verified against installed `@gpuix/nati
 - Renderer selection APIs return joined selected text and clear the selection.
   There is no input caret range, selection setter, replacement transaction,
   editable rich-text tree, or cancellable before-input event.
-- `promptForPaths` selects existing paths. Export therefore chooses a folder
-  and creates the sanitized title exclusively; it never overwrites a file.
+- Export uses the native save panel (`platform/files.ts` `saveTextFile`, the
+  desktop's `save_text_file`); the panel asks before replacing a file.
 - `slashItems`, `outlineHeadings`, `noteLinks` and `taskRef` contain editor,
   browser or Tauri runtime dependencies, so they are not safe pure imports.
 

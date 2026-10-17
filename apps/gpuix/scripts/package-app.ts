@@ -24,6 +24,8 @@ cpSync(addon, path.join(resources, path.basename(addon)))
 cpSync(path.join(root, 'native/build/kybern-webview.dylib'), path.join(resources, 'kybern-webview.dylib'))
 cpSync(path.join(root, 'src/assets/fonts'), path.join(resources, 'src/assets/fonts'), {recursive:true})
 cpSync(path.join(root, 'src/assets/providers'), path.join(resources, 'src/assets/providers'), {recursive:true})
+// The release announcement's artwork (`platform/UpdateSurface.tsx`).
+cpSync(path.join(root, '../desktop/public/release-background.png'), path.join(resources, 'release-background.png'))
 const previousCwd = process.cwd()
 const buildTemps = new Set(readdirSync(root).filter(name => name.endsWith('.bun-build')))
 process.chdir(root)

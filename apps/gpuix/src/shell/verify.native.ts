@@ -1,6 +1,9 @@
 import path from 'node:path'
 import { mkdirSync } from 'node:fs'
+import { assertScratchDataDir } from '../platform/verify.lib.ts'
 import { launchFixture, waitForPainted } from '../requests/harness.ts'
+
+assertScratchDataDir()
 const mode = process.argv[2] ?? 'dark'
 const out = process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previews/gpuix/p2'
 mkdirSync(out, { recursive: true })

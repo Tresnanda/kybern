@@ -17,6 +17,7 @@ import { onWindowResize } from '../native/layout.ts'
 import { readSystemVariant, setSystemVariant } from './appearance.ts'
 import { setWindowWidth } from './layout.ts'
 import { load, save } from './persist.ts'
+import { refreshAccessibilityDisplay } from '../platform/material.ts'
 
 const FRAME_KEY = 'kybern.window.frame'
 const POLL_MS = 900
@@ -123,6 +124,8 @@ export function startWindowShell(renderer: NativeRenderer) {
       }
       const variant = readSystemVariant()
       if (variant) setSystemVariant(variant)
+      // Reduce transparency / Increase contrast, changed in System Settings while running.
+      refreshAccessibilityDisplay()
     } catch { /* Retry the platform-only read on the next tick. */ }
   }
   onWindowResize(renderer, ({ width, height }) => {

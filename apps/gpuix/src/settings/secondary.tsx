@@ -18,26 +18,6 @@ function Pages({ page, count, onChange }: { page: number; count: number; onChang
   return count > 8 ? <Row title={`Page ${page + 1} of ${Math.ceil(count / 8)}`}><Button disabled={page === 0} onClick={() => onChange(page - 1)}>Previous</Button><Button disabled={(page + 1) * 8 >= count} onClick={() => onChange(page + 1)}>Next</Button></Row> : null
 }
 
-export function Notifications() {
-  const { settings, saving } = useSettings()
-  const [permission, setPermission] = useState<NotificationStatus>('not-determined')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  useEffect(() => { let active = true; void notifications.status().then(value => { if (active) setPermission(value) }).catch(e => { if (active) { setPermission('unsupported'); setError(String(e)) } }); return () => { active = false } }, [])
-  const test = async () => {
-    setBusy(true); setError('')
-    try {
-      const state = await notifications.requestPermission()
-      setPermission(state)
-      if (state === 'granted' && !await notifications.post({ id: 'settings-test', title: 'Kybern', body: "Notifications are ready. You'll hear when an agent needs you." })) throw Error('Check notification access in system settings and try again.')
-    } catch (e) { setError(`Unable to send notification. ${String(e)}`) }
-    finally { setBusy(false) }
-  }
-  const description = error || (permission === 'granted' ? 'System alerts appear when Kybern is in the background.' : permission === 'denied' ? 'Allow Kybern notifications in system settings, then try again.' : permission === 'unsupported' ? notifications.reason || "System notifications aren't available in this environment. In-app alerts still work." : 'Enable access to receive alerts outside Kybern.')
-  return <><Section title="Agent activity"><Row title="Show agent notifications" description="When work finishes, fails, or needs your input."><Switch label="Show agent notifications" testId="settings-notifications" checked={settings?.notifications ?? false} disabled={saving} onChange={(notifications) => void updateSettings({ notifications })} /></Row></Section><Section title="System notifications"><Row title="Notification access" description={description}><Button testId="settings-notification-access" disabled={busy || permission === 'unsupported'} onClick={() => void test()}>{permission === 'granted' ? 'Send test notification' : 'Enable notifications'}</Button></Row></Section></>
-
-}
-
 const FIELDS: { key: keyof Omit<BackgroundSettings, 'save_power_on_battery'>; title: string; description: string; unit: string; step: number }[] = [
   { key: 'session_idle_minutes', title: 'Release idle agents after', description: "Closes a quiet thread's agent. The next message starts it again.", unit: 'min', step: 5 },
   { key: 'max_idle_sessions', title: 'Keep idle agents warm', description: 'Past this many, the least recently used one is released first.', unit: 'agents', step: 1 },

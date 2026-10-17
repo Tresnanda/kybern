@@ -30,6 +30,7 @@ import { muted, Tip } from './overlay.tsx'
 import { getNav, setNav, useNav, type Page } from './store.ts'
 import { openSettingsTab } from '../settings/SettingsScreen.tsx'
 import { showDialog } from '../dialogs/store.ts'
+import { RailUpdateButton } from '../platform/UpdateSurface.tsx'
 
 const RAIL = 52
 const RAIL_ITEMS: { page: Page; icon: string; label: string }[] = [
@@ -55,8 +56,9 @@ export function NavRail() {
   const index = RAIL_ITEMS.findIndex((item) => item.page === destination)
   return (
     // A cached island sized by its row (`cache="fill"`, native/README.md).
-    <div {...FILL_ISLAND} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: RAIL, flexShrink: 0, paddingBottom: 12 - 8 }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 6, position: 'relative' }}>
+    // Empty rail space drags the window; the button groups do not (desktop `NavRail`).
+    <div {...FILL_ISLAND} windowDrag style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: RAIL, flexShrink: 0, paddingBottom: 12 - 8 }}>
+      <div windowDrag={false} style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 6, position: 'relative' }}>
         {/* One sliding pill marks the active destination (`motion.css:396`). */}
         <motion.div
           initial={false}
@@ -69,8 +71,9 @@ export function NavRail() {
         ))}
       </div>
       <div style={{ flexGrow: 1 }} />
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+      <div windowDrag={false} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
         <RailUsage />
+        <RailUpdateButton />
         <RailButton
           icon={N.settings}
           label="Settings"

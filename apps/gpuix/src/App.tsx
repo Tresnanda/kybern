@@ -50,18 +50,20 @@ import { ErrorBoundary } from './shell/ErrorBoundary.tsx'
 import { useSidebarDragging, useSidebarWidth } from './shell/layout.ts'
 import { SidebarDragLayer, SidebarResizeHandle } from './shell/ResizeHandle.tsx'
 import { Toaster } from './shell/toasts.tsx'
+import { AppUpdateSurface } from './platform/UpdateSurface.tsx'
+import { TranscriptReleased } from './platform/TranscriptReleased.tsx'
+import { installWindowSurface, useTranscriptReleased } from './platform/surface.ts'
 import { useApp, usePaneCompact } from './state.ts'
 import { COLUMN, GUTTER, Transcript } from './Transcript.tsx'
 import { ThreadRequests, useBlockingRequest } from './transcript/Requests.tsx'
 import { EASE_OUT, Label, REDUCED_MOTION, useTheme } from './ui.tsx'
 import { over } from './theme.ts'
-import { appearance } from './settings/appearance.ts'
+import { OPAQUE_WINDOW } from './platform/material.ts'
 import { TITLEBAR } from './nav/TitleBar.tsx'
 
-// An opaque window (capture mode, or translucency off, which is the desktop default) is
-// cleared dark by GPUI, which turns the 88% light frame ~13% darker than over the
-// desktop's light glass. Put the frame on white. Translucency applies at launch only.
-const OPAQUE_WINDOW = process.env.KYBERN_OPAQUE === '1' || !appearance().translucent
+// An opaque window (capture mode, `KYBERN_OPAQUE=1`) is cleared dark by GPUI, which
+// turns the 88% light frame ~13% darker than over the desktop's light glass. Put
+// the frame on white. Every other window has the native material (desktop #39).
 
 const INSET = 8
 const CARD_RADIUS = 12
@@ -100,7 +102,7 @@ function Workspace() {
   if (panelOpen && !panelMounted) setPanelMounted(true)
   const still = REDUCED_MOTION || instant
   if (still && !panelOpen && panelMounted) setPanelMounted(false)
-  const edge = t.variant === 'dark' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.10)'
+  const edge = t.cardEdge
 
   useEffect(() => {
     startSplitView()
@@ -111,6 +113,7 @@ function Workspace() {
   useEffect(() => {
     startLive()
     startAgentToasts()
+    installWindowSurface()
   }, [connectionStatus])
 
   return (
@@ -207,6 +210,7 @@ function Workspace() {
       <WorkspaceDialogs />
       <CloseGuard />
       <Toaster />
+      <AppUpdateSurface />
       <SidebarDragLayer />
       <DockResizeCapture />
       <TasksDragLayer />
@@ -257,12 +261,16 @@ function ConversationPage() {
   const thread = useApp((s) => s.open.thread)
   const selectedId = useApp((s) => s.selectedId)
   const blocking = useBlockingRequest()
+  // A hidden window releases its transcript (`platform/surface.ts`).
+  const released = useTranscriptReleased()
   if (!selectedId) return <Draft />
   return (
     <>
-      <ErrorBoundary label="the transcript">
-        <Transcript />
-      </ErrorBoundary>
+      {released ? <TranscriptReleased /> : (
+        <ErrorBoundary label="the transcript">
+          <Transcript />
+        </ErrorBoundary>
+      )}
       <BottomFade />
       <div ref={measureComposerOverlay} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, display: 'flex', justifyContent: 'center', paddingLeft: gutter, paddingRight: gutter, paddingBottom: 16 }}>
         {/* Pending approvals and questions stack on the composer; a blocking one replaces it. */}

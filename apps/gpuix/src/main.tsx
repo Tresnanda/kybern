@@ -12,6 +12,8 @@ import { connect } from './state.ts'
 import { ThemeProvider, VARIANT } from './ui.tsx'
 import { startPerfProbe } from './perf/probe.ts'
 import { installDesktopMaterial } from './native/material.ts'
+import { OPAQUE_WINDOW } from './platform/material.ts'
+import { startAppUpdateChecks } from './platform/update.ts'
 import { installFrameSource } from './native/frame.ts'
 import { hasSavedFrame, installWindowFrame, startWindowShell } from './shell/window.ts'
 
@@ -42,6 +44,8 @@ function Fonts({ children }: { children: ReactNode }) {
 }
 
 connect()
+// Packaged builds check the release feed 15 s after launch, then every 6 h (`platform/update.ts`).
+startAppUpdateChecks()
 
 render(
   <ThemeProvider>
@@ -56,9 +60,10 @@ render(
     width: Number(process.env.KYBERN_WINDOW_SIZE?.split('x')[0]) || 1280,
     height: Number(process.env.KYBERN_WINDOW_SIZE?.split('x')[1]) || 820,
     titlebarTransparent: true,
-    // The desktop's macOS window is translucent (under-window vibrancy) with
-    // the frame painted at 88% over it.
-    windowBackground: process.env.KYBERN_OPAQUE === '1' || !appearance().translucent ? 'opaque' : 'blurred',
+    // The desktop's macOS window is always translucent (under-window vibrancy,
+    // desktop #39) with the frame painted at 88% over it; "Use translucent
+    // surfaces" only makes the content glass (`platform/material.ts`).
+    windowBackground: OPAQUE_WINDOW ? 'opaque' : 'blurred',
     trafficLightX: 16,
     trafficLightY: 16,
     ...(process.env.KYBERN_PERF_PROBE === '1' ? { debugFrameOverlay: 'minimal' as const } : {}),
@@ -77,7 +82,7 @@ render(
 installWindowFrame()
 
 // GPUI's blur is colourless; give it the desktop's vibrancy material.
-if (process.env.KYBERN_OPAQUE !== '1' && appearance().translucent) installDesktopMaterial(process.env.KYBERN_APPEARANCE || appearance().theme === 'system' ? VARIANT : appearance().theme as 'light' | 'dark')
+if (!OPAQUE_WINDOW) installDesktopMaterial(process.env.KYBERN_APPEARANCE || appearance().theme === 'system' ? VARIANT : appearance().theme as 'light' | 'dark')
 
 // Automation drives the app over a stdin pipe (`@gpuix/react/automation`). If the
 // driving script dies without `close()`, the pipe ends: quit instead of

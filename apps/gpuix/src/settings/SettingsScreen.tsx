@@ -9,8 +9,11 @@ import { getNav, setNav } from '../nav/store.ts'
 import { EASE_OUT, ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { settingsOverlayOwnsEscape, TextField } from './controls.tsx'
 import { useSettings, useSettingsConnection } from './store.ts'
-import { General, Appearance, Agents, About } from './primary.tsx'
-import { Accounts, Integrations, Computer, Background, Notifications } from './secondary.tsx'
+import { General, Agents } from './primary.tsx'
+import { Accounts, Integrations, Computer, Background } from './secondary.tsx'
+import { Appearance } from './Appearance.tsx'
+import { Notifications } from './Notifications.tsx'
+import { About } from './About.tsx'
 
 export const TABS = [
   ['general', 'General', 'Defaults for new threads and workspace behavior.', N.settings, 'default agent permissions worktree titles close notes preview'],

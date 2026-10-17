@@ -58,12 +58,15 @@ export function over(top: string, base: string): string {
   return rgba([ch(0), ch(1), ch(2), 1])
 }
 
-function build(variant: ThemeVariant) {
+function build(variant: ThemeVariant, overrides: Vars = {}, contrast = false, reduceTransparency = false) {
   const pack = {
     codeThemeId: DEFAULT_THEME_STATE.codeThemeIds[variant],
     theme: DEFAULT_THEME_STATE.chromeThemes[variant],
   }
-  const raw = buildThemeCssVariables(pack, variant, { electron: true, isMac: true, systemUiFont: true }).variables as Vars
+  const base = buildThemeCssVariables(pack, variant, { electron: true, isMac: true, systemUiFont: true }).variables as Vars
+  // applyTheme.ts:57 keeps the opaque content surface for full translucency;
+  // `overrides` are its glass variables (src/platform/material.ts).
+  const raw: Vars = { ...base, '--app-opaque-content-surface': base['--color-background-surface']!, ...overrides }
   const v = (name: string) => resolve(raw[name] ?? 'transparent', raw)
   return {
     variant,
@@ -111,12 +114,27 @@ function build(variant: ThemeVariant) {
     switchOffBorder: resolve('color-mix(in srgb, var(--color-text-foreground) 14%, transparent)', raw),
     /** `--runtime-full-access-accent` (`kit.css:2647-2652`). */
     fullAccess: variant === 'dark' ? '#fe8549' : '#e25505',
+    /** `--app-card-edge` (`kit.css:139-150`): the border under Increase contrast. */
+    cardEdge: contrast ? resolve('var(--color-border)', raw) : variant === 'dark' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.10)',
+    /** Accessibility › Display, so a change re-renders every themed view (src/platform/material.ts). */
+    contrast,
+    reduceTransparency,
   }
 }
 
 export type Theme = ReturnType<typeof build>
 
 export const THEMES: Record<ThemeVariant, Theme> = { dark: build('dark'), light: build('light') }
+
+const derived = new Map<string, Theme>()
+/** The theme with full translucency (`glass`) and the accessibility display options applied; built once per combination. */
+export function themeFor(variant: ThemeVariant, glass: Vars | null, contrast: boolean, reduceTransparency: boolean): Theme {
+  if (!glass && !contrast && !reduceTransparency) return THEMES[variant]
+  const key = `${variant}:${!!glass}:${contrast}:${reduceTransparency}`
+  let theme = derived.get(key)
+  if (!theme) derived.set(key, theme = build(variant, glass ?? {}, contrast, reduceTransparency))
+  return theme
+}
 
 export const FONT_UI = '.SystemUIFont'
 export const FONT_MONO = 'Menlo'

@@ -1,7 +1,6 @@
 import { noteSession } from './session.ts'
 import { spawn } from 'node:child_process'
-import { writeFile } from 'node:fs/promises'
-import path from 'node:path'
+import { saveTextFile } from '../platform/files.ts'
 import { useGpuix } from '@gpuix/react'
 import { useState } from 'react'
 import { exportFileName, noteMarkdown } from '@/state/notesModel'
@@ -30,15 +29,14 @@ export function NoteMenu({ note, readText, part, trigger }: { note: NoteSummary;
       {!note.deleted_at && !part && <MenuItem id="pin" testId="note-pin" label={note.pinned ? 'Unpin' : 'Pin'} onSelect={() => run(async () => recordNote(await rpc(note.id).call('notes.pin', { id: note.id, pinned: !note.pinned })))} />}
       {part !== 'share' && !note.deleted_at && note.scope !== 'thread' && !note.project_role && <MenuItem id="move" testId="note-move" label="Move to…" onSelect={() => setMoving(true)} />}
       {part !== 'more' && <MenuItem id="copy" testId="note-copy" label="Copy as Markdown" onSelect={() => run(async () => { const current = await text(); await copyMarkdown(current.title, current.body); toast('Copied as Markdown') })} />}
-      {part !== 'more' && <MenuItem id="export" label="Export…" onSelect={() => run(async () => {
-        const folders = await renderer?.promptForPaths?.({ directories: true, files: false, prompt: 'Export here' })
-        if (!folders?.[0]) return
-        const current = await text()
-        const filename = path.join(folders[0], exportFileName(current.title))
-        // Exclusive creation never overwrites an existing export silently.
-        await writeFile(filename, noteMarkdown(current.title, current.body), { flag: 'wx' })
-        toast('Note exported', { description: filename })
-      })} />}
+      {part !== 'more' && <MenuItem id="export" label="Export…" onSelect={() => void (async () => {
+        // Desktop `exportNoteFile`: the native save panel picks the destination (`platform/files.ts`).
+        try {
+          const current = await text()
+          const fileName = exportFileName(current.title)
+          if (await saveTextFile(renderer, fileName, noteMarkdown(current.title, current.body))) toast(`Exported to ${fileName}`)
+        } catch (e) { toast.error('Unable to export the note', { description: e instanceof Error ? e.message : String(e) }) }
+      })()} />}
       {part === 'share' ? null : note.deleted_at ? <><MenuItem id="restore" label="Restore" onSelect={() => void restoreNote(note.id)} /><MenuItem id="purge" label="Delete forever…" destructive onSelect={() => setPurging(true)} /></> : <MenuItem id="delete" testId="note-delete" label="Delete" destructive onSelect={() => void deleteNote(note.id)} />}
     </Menu>
     {moving && <Dialog onClose={() => setMoving(false)} width={360}><div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 20 }}><Label color={t.text} size={17}>Move note</Label><Button onClick={() => move()}>Global</Button><virtual-list style={{ height: Math.min(280, projects.length * 36) }}>{projects.map((p) => <div key={p.id} style={{ paddingBottom: 8 }}><Button onClick={() => move(p.id)}>{p.name}</Button></div>)}</virtual-list></div></Dialog>}
