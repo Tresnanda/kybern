@@ -17,3 +17,25 @@ edit(r, "                                .ml(px(1.0))\n                         
 edit("style.rs", "    pub active: Option<Box<StyleDesc>>,\n}", "    pub active: Option<Box<StyleDesc>>,\n    pub drag_over: Option<Box<StyleDesc>>,\n}")
 edit("renderer.rs", "    if let Some(active_style) = style.active.as_deref() {\n        el = el.active(|refinement| apply_styles(refinement, active_style));\n    }\n    el\n}",
      "    if let Some(active_style) = style.active.as_deref() {\n        el = el.active(|refinement| apply_styles(refinement, active_style));\n    }\n    if let Some(drag_style) = style.drag_over.as_deref() {\n        let drag_style = drag_style.clone();\n        el = el.drag_over::<gpui::ExternalPaths>(move |refinement, _, _, _| apply_styles(refinement, &drag_style));\n    }\n    el\n}")
+
+# Automation: a Finder drag that enters and hovers without dropping, so `dragOver`
+# styles can be checked. `phase`: "enter" (Entered + Pending), "move" (Pending), "exit" (Ended).
+edit("renderer.rs", "    pub fn simulate_file_drop(&self, x: f64, y: f64, paths: Vec<String>) -> Result<()> {",
+'''    pub fn simulate_file_drag(&self, x: f64, y: f64, paths: Vec<String>, phase: String) -> Result<()> {
+        if !x.is_finite() || !y.is_finite() { return Err(Error::from_reason("Expected a finite position")); }
+        update_window_without_view(move |window, cx| {
+            use gpui::InputEvent;
+            let position=gpui::point(gpui::px(x as f32),gpui::px(y as f32));
+            match phase.as_str() {
+                "enter" => {
+                    let paths=gpui::ExternalPaths(paths.into_iter().map(std::path::PathBuf::from).collect());
+                    window.dispatch_event(gpui::FileDropEvent::Entered { position, paths }.to_platform_input(),cx);
+                    window.dispatch_event(gpui::FileDropEvent::Pending { position }.to_platform_input(),cx);
+                }
+                "move" => { window.dispatch_event(gpui::FileDropEvent::Pending { position }.to_platform_input(),cx); }
+                _ => { window.dispatch_event(gpui::FileDropEvent::Ended.to_platform_input(),cx); }
+            }
+        })
+    }
+    #[napi]
+    pub fn simulate_file_drop(&self, x: f64, y: f64, paths: Vec<String>) -> Result<()> {''')

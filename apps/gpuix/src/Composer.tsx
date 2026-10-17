@@ -49,6 +49,7 @@ import { FooterChip } from './composer/chips.tsx'
 import { G } from './composer/glyphs.ts'
 import { muted, PickerItem, PickerMenu } from './composer/Menu.tsx'
 import { useCompletion } from './composer/Completion.tsx'
+import { useThreadCommands } from './composer/commands.ts'
 import { ModelPicker, ModelTriggerLabel } from './composer/ModelPicker.tsx'
 import { PermissionPicker } from './composer/PermissionPicker.tsx'
 import { Pop, SwapOnChange } from './composer/motion.tsx'
@@ -153,6 +154,7 @@ function ThreadComposer({ thread }: { thread: Thread }) {
       draftKey={`thread:${threadId}`}
       projectId={isFreeChatProject(thread.project_id) ? undefined : thread.project_id}
       currentThreadId={threadId}
+      thread={thread}
       placeholder={
         approval
           ? isUserInput(approval) && !connectorApproval(approval) ? 'Answer the questions above' : 'Resolve this approval request to continue'
@@ -320,6 +322,8 @@ export interface ComposerViewProps {
   /** Enables @ files and the skill catalog (`views/Composer.tsx` `projectId`). */
   projectId?: ProjectId
   currentThreadId?: string
+  /** The open thread: its slash commands (`composer/commands.ts`) replace the home screen's. */
+  thread?: Thread
   placeholder?: string
   running?: boolean
   onStop?: () => void
@@ -413,6 +417,7 @@ export function ComposerView(input: ComposerViewProps) {
     () => attachments.map((a) => ({ token: `@${a.label}`, part: { type: 'attachment', asset_id: a.id, name: a.name, media_type: a.media_type, size: a.size } })),
     [attachments],
   )
+  const threadCommands = useThreadCommands(props.thread ?? null, () => void addFiles())
   const completion = useCompletion({
     draftKey: props.draftKey,
     text,
@@ -424,16 +429,12 @@ export function ComposerView(input: ComposerViewProps) {
     provider: provider ?? undefined,
     currentThreadId: props.currentThreadId,
     attachments: attachmentRefs,
-    commands: [
-      ...(!props.currentThreadId ? [
-        { name: 'resume', hint: 'Continue a saved session', icon: G.clock, run: () => setNav({ sessions: { projectId: props.projectId ?? null } }) },
-        { name: 'sessions', hint: 'Browse saved sessions', icon: G.clock, run: () => setNav({ sessions: { projectId: props.projectId ?? null } }) },
-      ] : []),
+    commands: props.thread ? threadCommands : [
+      { name: 'resume', hint: 'Continue a saved session', icon: G.clock, run: () => setNav({ sessions: { projectId: props.projectId ?? null } }) },
+      { name: 'sessions', hint: 'Browse saved sessions', icon: G.clock, run: () => setNav({ sessions: { projectId: props.projectId ?? null } }) },
       { name: 'attach', hint: 'Attach files or images', icon: G.paperclip, run: () => void addFiles() },
-      ...(!props.currentThreadId ? [
-        { name: 'settings', hint: 'Open settings', icon: N.settings, run: () => setNav({ settingsOpen: true }) },
-        { name: 'usage', hint: 'Review token usage and cost', icon: N.usage, run: () => goPage('usage') },
-      ] : []),
+      { name: 'settings', hint: 'Open settings', icon: N.settings, run: () => setNav({ settingsOpen: true }) },
+      { name: 'usage', hint: 'Review token usage and cost', icon: N.usage, run: () => goPage('usage') },
     ],
   })
 
@@ -565,6 +566,8 @@ export function ComposerView(input: ComposerViewProps) {
           borderRadius: compact ? 14 : COMPOSER_RADIUS,
           borderWidth: 1,
           borderColor: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.052)' : 'rgba(13, 13, 13, 0.076)',
+          // A Finder drag over the card (`dragOver && border-[color:var(--color-border-focus)]`).
+          dragOver: { borderColor: t.v('--color-border-focus') },
           backgroundColor: t.variant === 'dark' ? t.composer : '#ffffff',
           boxShadow:
             t.variant === 'dark'

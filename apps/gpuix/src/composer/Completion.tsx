@@ -57,6 +57,9 @@ export interface SlashCommand {
   hint: string
   icon: string
   run: () => void
+  /** A harness command: typed into the prompt as `/invocation` rather than run here. */
+  insert?: boolean
+  invocation?: string
 }
 
 type Item =
@@ -352,7 +355,8 @@ export function useCompletion({
     } else if (item.type === 'plugin' && mention) {
       if (replace(mention.start, `@${item.skill.display_name ?? item.skill.name} `)) setPicked((map) => new Map(map).set(item.skill.path, item.skill))
     } else if (item.type === 'command' && slash) {
-      if (replace(slash.start, '')) item.command.run()
+      if (item.command.insert) replace(slash.start, `/${item.command.invocation ?? item.command.name} `)
+      else if (replace(slash.start, '')) item.command.run()
     } else if (item.type === 'skill') {
       const trigger = skill ?? slash
       if (!trigger) return
