@@ -71,6 +71,8 @@ edit('dist/runtime.js', '        stopped = true;', '        stopped = true;\n   
 edit('dist/runtime.js', '    loop();\n    return { stop };', '    if (typeof renderer.setFrameWakeCallback === "function" && process.env.KYBERN_VSYNC_WAKE !== "0") {\n        renderer.setFrameWakeCallback((error) => {\n            if (stopped) return;\n            try {\n                if (error) options.onError?.(error);\n                else if (renderer.tick() === false) { stop(); options.onTerminated?.(); }\n            } catch (error) { options.onError?.(error); }\n            finally { renderer.acknowledgeFrameWake(); }\n        });\n    }\n    loop();\n    return { stop };')
 edit('dist/automation/protocol.js', '    scrollWheel: {', '    fileDrop: {\n        params: pointSchema.extend({ paths: z.array(z.string()).min(1) }),\n        result: okSchema,\n    },\n    scrollWheel: {')
 edit('dist/automation/protocol.d.ts', '    readonly scrollWheel: {', '    readonly fileDrop: {\n        readonly params: z.ZodObject<{ x: z.ZodNumber; y: z.ZodNumber; paths: z.ZodArray<z.ZodString> }, z.core.$strip>;\n        readonly result: z.ZodObject<{ ok: z.ZodLiteral<true> }, z.core.$strip>;\n    };\n    readonly scrollWheel: {')
+exec((Path(__file__).parent / "scroll_js.py").read_text())
+
 for name, text in pending.items():
     (root / name).write_text(text)
 print(f"JS patch applied to {len(pending)} files")

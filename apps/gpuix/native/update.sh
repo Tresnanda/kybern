@@ -90,6 +90,8 @@ echo "== checks"
   bun native/explorer-motion-check.ts
   bun native/markdown-check.ts
   bun native/diff-check.ts
+  bun native/scroll8-check.ts
+  bun native/scroll8-input-check.ts
   bun native/surface-check.ts
   bun native/link-check.ts
   for check in layout-check syntax-check syntax-lifecycle-check syntax-large-check; do

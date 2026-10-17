@@ -82,6 +82,8 @@ exec((here / "frame_cost_gpui.py").read_text())
 exec((here / "pointer_gpui.py").read_text())
 exec((here / "rounded_clip_gpui.py").read_text())
 
+exec((here / "scroll_gpui.py").read_text())
+
 for name, text in pending.items():
     if (root/name).read_text()!=text: (root/name).write_text(text)
 for name in ['backdrop_renderer.rs', 'backdrop.metal']:

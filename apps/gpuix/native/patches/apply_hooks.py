@@ -547,6 +547,8 @@ edit("automation.rs", "BOUNDS.with(|cell| cell.borrow().get(&id).copied())", "BO
 # Explicit pointer-events:auto and anchored overlays retain hard barriers.
 edit("renderer.rs", "                el.block_mouse_except_scroll()", "                el.block_non_ancestor_mouse()")
 
+exec((Path(__file__).parent / "scroll_hooks.py").read_text())
+
 for path, text in pending.items():
     (src / path).write_text(text)
 print(f"hooks applied to {len(pending)} files")

@@ -1,3 +1,81 @@
+diff --git a/dist/automation/client.js b/dist/automation/client.js
+index c70a840dfde917eda48054ad2d71e2f54af2c48d..163e6683b006810f11b27c33305bed02c19d37a0 100644
+--- a/dist/automation/client.js
++++ b/dist/automation/client.js
+@@ -66,8 +66,12 @@ export class InProcessBackend extends ValidatedAutomationBackend {
+             this.renderer.nativeSimulateMouseMove(params.x, params.y, params.pressedButton, params.modifiers);
+             return { ok: true };
+         },
++        fileDrop: (params) => {
++            this.renderer.nativeSimulateFileDrop(params.x, params.y, params.paths);
++            return { ok: true };
++        },
+         scrollWheel: (params) => {
+-            this.renderer.nativeSimulateScrollWheel(params.x, params.y, params.deltaX, params.deltaY, params.modifiers);
++            this.renderer.nativeSimulateScrollWheel(params.x, params.y, params.deltaX, params.deltaY, params.modifiers, params.phase);
+             return { ok: true };
+         },
+         keystrokes: (params) => {
+@@ -496,8 +500,15 @@ export function liveRendererAsTest(renderer) {
+             renderer.simulateMouseMove(x, y, pressedButton, modifiers);
+             afterInput();
+         },
+-        nativeSimulateScrollWheel(x, y, deltaX, deltaY, modifiers) {
+-            renderer.simulateScrollWheel(x, y, deltaX, deltaY, modifiers);
++        nativeSimulateFileDrop(x, y, paths) {
++            renderer.simulateFileDrop(x, y, paths);
++            afterInput();
++        },
++        nativeSimulateScrollWheel(x, y, deltaX, deltaY, modifiers, phase) {
++            if (phase) {
++                if (!renderer.simulateScrollPhase) throw new AutomationError("Unsupported", "Native phase injection requires the Kybern addon");
++                renderer.simulateScrollPhase(x, y, deltaX, deltaY, phase, modifiers);
++            } else renderer.simulateScrollWheel(x, y, deltaX, deltaY, modifiers);
+             afterInput();
+         },
+         simulateKeystrokes(keys) {
+diff --git a/dist/automation/protocol.d.ts b/dist/automation/protocol.d.ts
+index 8e34dfa8d65fac7241ffc7eed252bf07db1fcf52..1561793aac2557a25b973f449d5d07e8b4eba850 100644
+--- a/dist/automation/protocol.d.ts
++++ b/dist/automation/protocol.d.ts
+@@ -100,12 +100,17 @@ export declare const methods: {
+             ok: z.ZodLiteral<true>;
+         }, z.core.$strip>;
+     };
++    readonly fileDrop: {
++        readonly params: z.ZodObject<{ x: z.ZodNumber; y: z.ZodNumber; paths: z.ZodArray<z.ZodString> }, z.core.$strip>;
++        readonly result: z.ZodObject<{ ok: z.ZodLiteral<true> }, z.core.$strip>;
++    };
+     readonly scrollWheel: {
+         readonly params: z.ZodObject<{
+             x: z.ZodNumber;
+             y: z.ZodNumber;
+             deltaX: z.ZodNumber;
+             deltaY: z.ZodNumber;
++            phase: z.ZodOptional<z.ZodEnum<{started:"started";moved:"moved";ended:"ended";cancelled:"cancelled"}>>;
+             modifiers: z.ZodOptional<z.ZodString>;
+         }, z.core.$strip>;
+         readonly result: z.ZodObject<{
+diff --git a/dist/automation/protocol.js b/dist/automation/protocol.js
+index 37cc70406f67838394b07664259720cf9dd9f748..09a5c21aacf092351270d6322bee5e84d58a97da 100644
+--- a/dist/automation/protocol.js
++++ b/dist/automation/protocol.js
+@@ -105,10 +105,15 @@ export const methods = {
+         }),
+         result: okSchema,
+     },
++    fileDrop: {
++        params: pointSchema.extend({ paths: z.array(z.string()).min(1) }),
++        result: okSchema,
++    },
+     scrollWheel: {
+         params: pointSchema.extend({
+             deltaX: z.number(),
+             deltaY: z.number(),
++            phase: z.enum(["started","moved","ended","cancelled"]).optional(),
+             modifiers: modifiersSchema,
+         }),
+         result: okSchema,
 diff --git a/dist/host.d.ts b/dist/host.d.ts
 index cc6b7ef926c5c3122fff6107341913364a215710..a959d24f8ab04edde594fb7b61999f3cc7cafa44 100644
 --- a/dist/host.d.ts
@@ -149,50 +227,8 @@ index 21c90e91db66a09da919caeb990cc44225a94189..13db155595949bfd0ffd5b81f5d86062
              const root = active;
              if (!root)
                  return false;
-diff --git a/index.d.ts b/index.d.ts
-index 2ec4b84d0cad37c2d57585af3abaec2478518728..8111a413c4e0ca9ce617f9f8da9aaa6e8f73d532 100644
---- a/index.d.ts
-+++ b/index.d.ts
-@@ -34,6 +34,11 @@ export declare class AvailableUpdate {
- 
- /** The main GPUI renderer exposed to Node.js. */
- export declare class GpuixRenderer {
-+  /** rotate refers to SVGs; arbitrary div-subtree rotation is not supported. */
-+  getMotionCapabilities(): { rotate: true; physicalSprings: true }
-+  resolveKeyEvent(token: number, prevented: boolean): void
-+  setCloseGuard(enabled: boolean): void
-+  resolveCloseRequest(token: number, allow: boolean): void
-   constructor(eventCallback?: (((err: Error | null, arg: EventPayload) => any)) | undefined | null)
-   /** Initialize GPUI using the native event-loop architecture for this OS. */
-   init(options?: WindowOptions | undefined | null): void
-diff --git a/dist/automation/client.js b/dist/automation/client.js
-index c70a840dfde917eda48054ad2d71e2f54af2c48d..86627f67a5418aab985a5707d1a07eefa3c99d4f 100644
---- a/dist/automation/client.js
-+++ b/dist/automation/client.js
-@@ -66,6 +66,10 @@ export class InProcessBackend extends ValidatedAutomationBackend {
-             this.renderer.nativeSimulateMouseMove(params.x, params.y, params.pressedButton, params.modifiers);
-             return { ok: true };
-         },
-+        fileDrop: (params) => {
-+            this.renderer.nativeSimulateFileDrop(params.x, params.y, params.paths);
-+            return { ok: true };
-+        },
-         scrollWheel: (params) => {
-             this.renderer.nativeSimulateScrollWheel(params.x, params.y, params.deltaX, params.deltaY, params.modifiers);
-             return { ok: true };
-@@ -496,6 +500,10 @@ export function liveRendererAsTest(renderer) {
-             renderer.simulateMouseMove(x, y, pressedButton, modifiers);
-             afterInput();
-         },
-+        nativeSimulateFileDrop(x, y, paths) {
-+            renderer.simulateFileDrop(x, y, paths);
-+            afterInput();
-+        },
-         nativeSimulateScrollWheel(x, y, deltaX, deltaY, modifiers) {
-             renderer.simulateScrollWheel(x, y, deltaX, deltaY, modifiers);
-             afterInput();
 diff --git a/dist/runtime.js b/dist/runtime.js
-index 3a3d64d72a471e955037efecac7e19df02bb9221..60c9c373fa8c28b2243127e64165e709a02b33fc 100644
+index 3a3d64d72a471e955037efecac7e19df02bb9221..8c9dd4008be29ac7f99a4160818c664ca6b5798b 100644
 --- a/dist/runtime.js
 +++ b/dist/runtime.js
 @@ -34,6 +34,7 @@ export function startFrameLoop(renderer, options = {}) {
@@ -220,33 +256,39 @@ index 3a3d64d72a471e955037efecac7e19df02bb9221..60c9c373fa8c28b2243127e64165e709
      loop();
      return { stop };
  }
-diff --git a/dist/automation/protocol.js b/dist/automation/protocol.js
-index 37cc70406f67838394b07664259720cf9dd9f748..bc46412122154ea012e8874720a267d6e0a35b08 100644
---- a/dist/automation/protocol.js
-+++ b/dist/automation/protocol.js
-@@ -105,6 +105,10 @@ export const methods = {
-         }),
-         result: okSchema,
-     },
-+    fileDrop: {
-+        params: pointSchema.extend({ paths: z.array(z.string()).min(1) }),
-+        result: okSchema,
-+    },
-     scrollWheel: {
-         params: pointSchema.extend({
-             deltaX: z.number(),
-diff --git a/dist/automation/protocol.d.ts b/dist/automation/protocol.d.ts
-index 8e34dfa8d65fac7241ffc7eed252bf07db1fcf52..8af78b69befc84085c603e38e52a2487bc992215 100644
---- a/dist/automation/protocol.d.ts
-+++ b/dist/automation/protocol.d.ts
-@@ -100,6 +100,10 @@ export declare const methods: {
-             ok: z.ZodLiteral<true>;
-         }, z.core.$strip>;
-     };
-+    readonly fileDrop: {
-+        readonly params: z.ZodObject<{ x: z.ZodNumber; y: z.ZodNumber; paths: z.ZodArray<z.ZodString> }, z.core.$strip>;
-+        readonly result: z.ZodObject<{ ok: z.ZodLiteral<true> }, z.core.$strip>;
-+    };
-     readonly scrollWheel: {
-         readonly params: z.ZodObject<{
-             x: z.ZodNumber;
+diff --git a/dist/testing.js b/dist/testing.js
+index fb14e5ee95bd9d32fa8bca800dfe1be016cbed0f..5786b8301edca1b78b92a8d1fe78919f9730a17d 100644
+--- a/dist/testing.js
++++ b/dist/testing.js
+@@ -129,9 +129,12 @@ export class TestRenderer {
+     }
+     /** End-to-end: simulate scroll wheel through GPUI →
+      *  dispatch resulting events to the framework. */
+-    nativeSimulateScrollWheel(x, y, deltaX, deltaY, modifiers) {
++    nativeSimulateScrollWheel(x, y, deltaX, deltaY, modifiers, phase) {
+         this.native.flush();
+-        this.native.simulateScrollWheel(x, y, deltaX, deltaY, modifiers);
++        if (phase) {
++            if (!this.native.simulateScrollPhase) throw new Error("Native phases require the real Kybern renderer");
++            this.native.simulateScrollPhase(x, y, deltaX, deltaY, phase, modifiers);
++        } else this.native.simulateScrollWheel(x, y, deltaX, deltaY, modifiers);
+         this.dispatchNativeEvents();
+     }
+     /** Dispatch a wheel without the surrounding flushes, for perf sampling.
+diff --git a/index.d.ts b/index.d.ts
+index 2ec4b84d0cad37c2d57585af3abaec2478518728..4877ee8a748e61fe0878e12f6e9e139edb55c250 100644
+--- a/index.d.ts
++++ b/index.d.ts
+@@ -34,6 +34,12 @@ export declare class AvailableUpdate {
+ 
+ /** The main GPUI renderer exposed to Node.js. */
+ export declare class GpuixRenderer {
++  simulateScrollPhase(x:number,y:number,deltaX:number,deltaY:number,phase:"started"|"moved"|"ended"|"cancelled",modifiers?:string|null):void
++  /** rotate refers to SVGs; arbitrary div-subtree rotation is not supported. */
++  getMotionCapabilities(): { rotate: true; physicalSprings: true }
++  resolveKeyEvent(token: number, prevented: boolean): void
++  setCloseGuard(enabled: boolean): void
++  resolveCloseRequest(token: number, allow: boolean): void
+   constructor(eventCallback?: (((err: Error | null, arg: EventPayload) => any)) | undefined | null)
+   /** Initialize GPUI using the native event-loop architecture for this OS. */
+   init(options?: WindowOptions | undefined | null): void

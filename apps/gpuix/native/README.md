@@ -1068,3 +1068,51 @@ integrates the frame source and bounded wake selectively, rather than merging
 that checkpoint wholesale. See the round-seven report for before/after cadence,
 idle, memory and four-mode checks. Callback timestamps are display-source ticks,
 not physical presentation fences.
+
+### PR scroll layout and input cadence
+
+PR viewports opt in with `cacheLayout: true`. `scroll_layout.rs` and
+`scroll_taffy.rs` reuse root-relative layout geometry for an unchanged row;
+prepaint and paint still rebuild clipping, hitboxes, selection and search.
+The cache checks retained identity/revision, available size, scale, styles,
+topology and measured sizes. It retains no frame-arena IDs or elements, and is
+bounded to 128 roots / 16,384 nodes (8,192 per root), expiring rows after two
+frames outside the visible window. `KYBERN_SCROLL_LAYOUT=0` is the full-layout
+control.
+
+`scroll_input.rs` accumulates precise pixel wheel events for painted PR
+viewports in one pending native slot and applies a merged delta on the next
+platform frame. Same-direction deltas sum; reversal takes the latest direction.
+Phase markers preserve scroll-axis resets, and clicks/keys/target changes flush
+pending input in order. The physical macOS input path and automation share
+`Window::dispatch_event`; physical native-list scrolling has no JS/RPC hop.
+`KYBERN_SCROLL_COALESCE=0` disables accumulation. `=all` is an experimental
+app-wide precise-wheel mode; the default is PR-only.
+
+The native addon uses GPUI `test-support`, whose `App::flush_effects` normally
+draws dirty windows after every update. `KYBERN_INPUT_FRAME_DRAW=1` experimentally
+skips that synchronous test draw and relies on normal platform-frame scheduling
+for every input/state update. It preserves event delivery, including pointer
+moves and keys. Keep this opt-in until broader interaction validation supports
+an app-wide default.
+
+With `KYBERN_FRAME_COSTS=1`, `[scroll-layout-frame]` reports geometry reuse and
+`[scroll-input-paint]` reports native dispatch-to-CPU-paint latency and merged
+packet counts. These are not physical presentation fences. `perf/scroll8.ts`
+adds 120 Hz pipelined RPC production, acknowledgement backlog and drain metrics;
+`native/scroll8-check.ts` checks pixel/selection/search/link parity, and
+`native/scroll8-input-check.ts` checks burst distance and navigation ordering.
+
+PR viewport islands additionally opt into GPUI's `independent_scroll_cache`.
+Upstream GPUI forces nested cached views to refresh when any cached ancestor
+re-renders; scrolling one list otherwise lays out the surrounding PR pane.
+This opt-in distinguishes that internal refresh from a genuine window refresh.
+The retained root revision invalidates the boundary on any content/style
+change. During active native motion, these PR boundaries build inline so ancestor
+opacity and transforms remain current. Other cached views retain their original behavior.
+`KYBERN_SCROLL_ISLANDS=0` disables these boundaries for the baseline control.
+
+Automation wheel requests accept optional `phase` values (`started`, `moved`,
+`ended`, `cancelled`) through the additive native `simulateScrollPhase` API.
+GPUI has no separate momentum flag. Zero-distance phase markers preserve the
+existing list offset rather than resetting its captured-frame accumulator.
