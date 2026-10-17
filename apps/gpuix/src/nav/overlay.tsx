@@ -29,6 +29,7 @@ import {
 import { muted, popoverStyle, PopupLayer, surfaceShadow } from '../composer/Menu.tsx'
 import { Icon } from '../icons.tsx'
 import { hoverTrigger, useHover } from '../kit/hover.tsx'
+import { kitOverlayOpen } from '../kit/AlertDialog.tsx'
 import { TOOLTIP_DELAY_MS, TOOLTIP_SKIP_MS } from '../kit/hoverController.ts'
 import { DISTANCE } from '../motion/kit.tsx'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
@@ -861,9 +862,12 @@ export function Dialog({
         tabIndex={0}
         autoFocus
         onMouseDown={pointerNav}
-        onMouseDownOutside={onClose}
+        // A kit popup open inside the dialog (select, combobox, sheet) takes Escape and outside presses first.
+        onMouseDownOutside={() => {
+          if (!kitOverlayOpen()) onClose()
+        }}
         onKeyDown={(e) => {
-          if (e.key === 'escape') onClose()
+          if (e.key === 'escape' && !kitOverlayOpen()) onClose()
         }}
         style={{
           display: 'flex',

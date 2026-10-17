@@ -12,13 +12,12 @@
 // its edge over 200 ms `--ease-in-out`, in and out (Base UI keeps it mounted through `data-ending-style`; the
 // desktop exit is as long as the enter). Both are native tweens on the anchored layers. Reduce Motion keeps
 // the fades and drops the slide. Escape and a click on the scrim close it; focus returns to the opener.
-import { useWindowSize } from '@gpuix/react'
 import { createContext, useContext, useState, type ReactNode } from 'react'
 import { muted } from '../composer/Menu.tsx'
 import { useSettingsModal } from '../settings/controls.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import {
-  CLOSE_GLYPH, EASE_DEFAULT, EASE_IN_OUT_CSS, KitButton, ModalLayer, useEscapeLayer, usePresence, useReturnFocus,
+  CLOSE_GLYPH, EASE_DEFAULT, EASE_IN_OUT_CSS, KitButton, ModalLayer, useEscapeLayer, usePresence, useReturnFocus, WindowSized,
   type ButtonVariant,
 } from './AlertDialog.tsx'
 
@@ -56,7 +55,6 @@ export function Sheet({
   testId?: string
 }) {
   const t = useTheme()
-  const size = useWindowSize({ intervalMs: 250 })
   const [own, setOwn] = useState(defaultOpen)
   const open = openProp ?? own
   const setOpen = (next: boolean) => { if (openProp === undefined) setOwn(next); onOpenChange?.(next) }
@@ -65,75 +63,77 @@ export function Sheet({
   useSettingsModal(open)
   useReturnFocus(open)
   if (!presence.mounted) return null
-
-  const inset = variant === 'inset'
-  const pad = inset ? 16 : 0
-  const vertical = side === 'left' || side === 'right'
-  const W = size.width - pad * 2, H = size.height - pad * 2
-  const panelWidth = vertical ? Math.min(width, W - 48) : W
-  const x = side === 'right' ? size.width - pad - panelWidth : pad
-  const y = side === 'bottom' ? size.height - pad : pad
-  const offset = side === 'right' ? { left: SLIDE } : side === 'left' ? { left: -SLIDE } : side === 'top' ? { top: -SLIDE } : { top: SLIDE }
-  const border = inset
-    ? { borderWidth: 1 }
-    : side === 'right' ? { borderLeftWidth: 1 } : side === 'left' ? { borderRightWidth: 1 } : side === 'top' ? { borderBottomWidth: 1 } : { borderTopWidth: 1 }
-  const radius = inset ? 18 : 0
-  return (
-    <SheetContext.Provider value={{ close: () => setOpen(false), side, inset }}>
-      <ModalLayer
-        phase={presence.phase}
-        gen={presence.gen}
-        duration={DURATION}
-        ease={EASE_DEFAULT}
-        position={{ x: 0, y: 0 }}
-        priority={5}
-        backing="rgba(0, 0, 0, 0.6)"
-        testId={testId ? `${testId}-backdrop` : undefined}
-        style={{ width: size.width, height: size.height }}
-      />
-      <ModalLayer
-        phase={presence.phase}
-        gen={presence.gen}
-        onExited={presence.done}
-        duration={DURATION}
-        ease={EASE_IN_OUT_CSS}
-        offset={offset}
-        position={{ x, y }}
-        anchor={side === 'bottom' ? 'bottomLeft' : 'topLeft'}
-        priority={6}
-        radius={radius}
-        testId={testId}
-        focus
-        onKeyDown={(e) => { if (e.key === 'escape' && escape.claim()) setOpen(false) }}
-        onMouseDownOutside={dismissible ? () => setOpen(false) : undefined}
-        // `shadow-lg/5`: two 5% layers; the wrapper carries the wider one, the panel the tighter one.
-        style={{ display: 'flex', borderRadius: radius, boxShadow: { offsetX: 0, offsetY: 10, blurRadius: 15, spreadRadius: -3, color: 'rgba(0, 0, 0, 0.05)' } }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            position: 'relative',
-            width: panelWidth,
-            ...(vertical ? { height: H } : { maxHeight: H - 48 }),
-            backgroundColor: t.v('--popover'),
-            borderColor: t.border,
-            ...border,
-            borderRadius: radius,
-            overflow: 'hidden',
-            boxShadow: { offsetX: 0, offsetY: 4, blurRadius: 6, spreadRadius: -4, color: 'rgba(0, 0, 0, 0.05)' },
-          }}
+  return <WindowSized>{(size) => {
+    const inset = variant === 'inset'
+    const pad = inset ? 16 : 0
+    const vertical = side === 'left' || side === 'right'
+    const W = size.width - pad * 2, H = size.height - pad * 2
+    const panelWidth = vertical ? Math.min(width, W - 48) : W
+    const x = side === 'right' ? size.width - pad - panelWidth : pad
+    const y = side === 'bottom' ? size.height - pad : pad
+    const offset = side === 'right' ? { left: SLIDE } : side === 'left' ? { left: -SLIDE } : side === 'top' ? { top: -SLIDE } : { top: SLIDE }
+    const border = inset
+      ? { borderWidth: 1 }
+      : side === 'right' ? { borderLeftWidth: 1 } : side === 'left' ? { borderRightWidth: 1 } : side === 'top' ? { borderBottomWidth: 1 } : { borderTopWidth: 1 }
+    const radius = inset ? 18 : 0
+    return (
+      <SheetContext.Provider value={{ close: () => setOpen(false), side, inset }}>
+        <ModalLayer
+          phase={presence.phase}
+          gen={presence.gen}
+          duration={DURATION}
+          ease={EASE_DEFAULT}
+          position={{ x: 0, y: 0 }}
+          priority={5}
+          backing="rgba(0, 0, 0, 0.6)"
+          testId={testId ? `${testId}-backdrop` : undefined}
+          style={{ width: size.width, height: size.height }}
+        />
+        <ModalLayer
+          phase={presence.phase}
+          gen={presence.gen}
+          onExited={presence.done}
+          duration={DURATION}
+          ease={EASE_IN_OUT_CSS}
+          offset={offset}
+          position={{ x, y }}
+          anchor={side === 'bottom' ? 'bottomLeft' : 'topLeft'}
+          priority={6}
+          radius={radius}
+          testId={testId}
+          focus
+          onKeyDown={(e) => { if (e.key === 'escape' && escape.claim()) setOpen(false) }}
+          // A press in a nested popup (an alert's card, a select hanging past the panel) is not a scrim press.
+          onMouseDownOutside={dismissible ? () => { if (escape.isTop()) setOpen(false) } : undefined}
+          // `shadow-lg/5`: two 5% layers; the wrapper carries the wider one, the panel the tighter one.
+          style={{ display: 'flex', borderRadius: radius, boxShadow: { offsetX: 0, offsetY: 10, blurRadius: 15, spreadRadius: -3, color: 'rgba(0, 0, 0, 0.05)' } }}
         >
-          {children}
-          {showCloseButton && (
-            <div style={{ position: 'absolute', top: 8, right: 8 }}>
-              <KitButton variant="ghost" size="icon" icon={CLOSE_GLYPH} label="Close" testId={testId ? `${testId}-close` : undefined} onClick={() => setOpen(false)} />
-            </div>
-          )}
-        </div>
-      </ModalLayer>
-    </SheetContext.Provider>
-  )
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              position: 'relative',
+              width: panelWidth,
+              ...(vertical ? { height: H } : { maxHeight: H - 48 }),
+              backgroundColor: t.v('--popover'),
+              borderColor: t.border,
+              ...border,
+              borderRadius: radius,
+              overflow: 'hidden',
+              boxShadow: { offsetX: 0, offsetY: 4, blurRadius: 6, spreadRadius: -4, color: 'rgba(0, 0, 0, 0.05)' },
+            }}
+          >
+            {children}
+            {showCloseButton && (
+              <div style={{ position: 'absolute', top: 8, right: 8 }}>
+                <KitButton variant="ghost" size="icon" icon={CLOSE_GLYPH} label="Close" testId={testId ? `${testId}-close` : undefined} onClick={() => setOpen(false)} />
+              </div>
+            )}
+          </div>
+        </ModalLayer>
+      </SheetContext.Provider>
+    )
+  }}</WindowSized>
 }
 
 /** `SheetHeader`: 24px padding (12px below when a panel follows), 8px between title and description. */

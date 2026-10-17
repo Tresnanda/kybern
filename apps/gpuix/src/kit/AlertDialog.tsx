@@ -48,11 +48,19 @@ export function useEscapeLayer(open: boolean) {
       queueMicrotask(() => { consumed = false })
       return true
     },
+    /** Whether this layer is the innermost open overlay (an outside press inside a nested popup is not this layer's). */
+    isTop: () => stack[stack.length - 1] === id,
   }
 }
 
 /** Whether any kit overlay (dialog, sheet, select, combobox popup) is open: hosts with their own Escape check this. */
 export const kitOverlayOpen = () => stack.length > 0
+
+/** Renders `children` with the window size. Mount it only while a layer is up: a closed dialog keeps no 4 Hz poll. */
+export function WindowSized({ children }: { children: (size: { width: number; height: number }) => ReactNode }) {
+  const size = useWindowSize({ intervalMs: 250 })
+  return <>{children(size)}</>
+}
 
 // ─── Presence (enter and exit tweens) ─────────────────────────────────────
 
@@ -286,7 +294,6 @@ export function AlertDialog({
   testId?: string
 }) {
   const t = useTheme()
-  const size = useWindowSize({ intervalMs: 250 })
   const [own, setOwn] = useState(defaultOpen)
   const open = openProp ?? own
   const setOpen = (next: boolean) => { if (openProp === undefined) setOwn(next); onOpenChange?.(next) }
@@ -295,50 +302,52 @@ export function AlertDialog({
   useSettingsModal(open)
   useReturnFocus(open)
   if (!presence.mounted) return null
-  const cardWidth = Math.min(width, size.width - 32)
-  return (
-    <AlertContext.Provider value={{ close: () => setOpen(false) }}>
-      <ModalLayer
-        phase={presence.phase}
-        gen={presence.gen}
-        duration={DURATION}
-        ease={EASE_OUT_CSS}
-        position={{ x: 0, y: 0 }}
-        priority={5}
-        backing="rgba(0, 0, 0, 0.6)"
-        testId={testId ? `${testId}-backdrop` : undefined}
-        style={{ width: size.width, height: size.height }}
-      />
-      <ModalLayer
-        phase={presence.phase}
-        gen={presence.gen}
-        onExited={presence.done}
-        duration={DURATION}
-        ease={EASE_IN_OUT_CSS}
-        position={{ x: Math.round((size.width - cardWidth) / 2), y: size.height / 2 }}
-        anchor="leftCenter"
-        priority={6}
-        radius={22}
-        testId={testId}
-        focus
-        onKeyDown={(e) => { if (e.key === 'escape' && escape.claim()) setOpen(false) }}
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          width: cardWidth,
-          maxHeight: size.height - 32,
-          borderRadius: 22,
-          borderWidth: 1,
-          borderColor: t.borderLight,
-          backgroundColor: t.v('--popover'),
-          boxShadow: { offsetX: 0, offsetY: 16, blurRadius: 50, spreadRadius: -12, color: t.variant === 'dark' ? 'rgba(0, 0, 0, 0.7)' : 'rgba(0, 0, 0, 0.34)' },
-          overflow: 'hidden',
-        }}
-      >
-        {children}
-      </ModalLayer>
-    </AlertContext.Provider>
-  )
+  return <WindowSized>{(size) => {
+    const cardWidth = Math.min(width, size.width - 32)
+    return (
+      <AlertContext.Provider value={{ close: () => setOpen(false) }}>
+        <ModalLayer
+          phase={presence.phase}
+          gen={presence.gen}
+          duration={DURATION}
+          ease={EASE_OUT_CSS}
+          position={{ x: 0, y: 0 }}
+          priority={5}
+          backing="rgba(0, 0, 0, 0.6)"
+          testId={testId ? `${testId}-backdrop` : undefined}
+          style={{ width: size.width, height: size.height }}
+        />
+        <ModalLayer
+          phase={presence.phase}
+          gen={presence.gen}
+          onExited={presence.done}
+          duration={DURATION}
+          ease={EASE_IN_OUT_CSS}
+          position={{ x: Math.round((size.width - cardWidth) / 2), y: size.height / 2 }}
+          anchor="leftCenter"
+          priority={6}
+          radius={22}
+          testId={testId}
+          focus
+          onKeyDown={(e) => { if (e.key === 'escape' && escape.claim()) setOpen(false) }}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            width: cardWidth,
+            maxHeight: size.height - 32,
+            borderRadius: 22,
+            borderWidth: 1,
+            borderColor: t.borderLight,
+            backgroundColor: t.v('--popover'),
+            boxShadow: { offsetX: 0, offsetY: 16, blurRadius: 50, spreadRadius: -12, color: t.variant === 'dark' ? 'rgba(0, 0, 0, 0.7)' : 'rgba(0, 0, 0, 0.34)' },
+            overflow: 'hidden',
+          }}
+        >
+          {children}
+        </ModalLayer>
+      </AlertContext.Provider>
+    )
+  }}</WindowSized>
 }
 
 /** `AlertDialogHeader`: 16px sides and top, 8px bottom, 6px between title and description. */
