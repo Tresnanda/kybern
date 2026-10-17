@@ -29,6 +29,8 @@ export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: strin
   const edit = useTaskAutosave(task)
   // The description and criteria are edited as local text and composed into the body (empty criteria are kept until the row is left).
   const [description, setDescription] = useState(() => splitTaskBody(edit.body).description)
+  // Bumped when the description is replaced from elsewhere; typing never bumps it.
+  const [descriptionEpoch, setDescriptionEpoch] = useState(0)
   const [criteria, setCriteria] = useState<Criterion[]>(() => splitTaskBody(edit.body).criteria)
   const [focusRow, setFocusRow] = useState<{ index: number; token: number } | null>(null)
   const lastBody = useRef(edit.body)
@@ -38,7 +40,7 @@ export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: strin
     lastBody.current = edit.body
     const next = splitTaskBody(edit.body)
     setCriteria(next.criteria)
-    if (!editing) setDescription(next.description)
+    if (!editing && next.description !== description) { setDescription(next.description); setDescriptionEpoch(e => e + 1) }
   }, [edit.body])
   const changeDescription = (value: string) => { setDescription(value); lastBody.current = composeTaskBody(value, criteria); edit.editBody(lastBody.current) }
   const changeCriteria = (next: Criterion[], persist: boolean) => {
@@ -87,7 +89,7 @@ export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: strin
         <virtual-list testId="task-detail" style={{ flexGrow: 1, minWidth: 0, minHeight: 0 }}>
           <div key="content" style={{ ...padding, paddingTop: 48, display: 'flex', flexDirection: 'column', gap: 14 }}>
             <TitleField value={edit.title} saved={task.title} onChange={edit.editTitle} onCommit={() => void edit.flush()} onEnter={() => setEditing(true)} />
-            <DescriptionEditor value={description} onChange={changeDescription} onCommit={() => void edit.flush()} onExit={() => setEditing(false)} onFocus={beginEdit} focus={editing} />
+            <DescriptionEditor value={description} epoch={descriptionEpoch} onChange={changeDescription} onCommit={() => void edit.flush()} onExit={() => setEditing(false)} onFocus={beginEdit} focus={editing} />
             {edit.conflict && <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Label color={t.red} size={12}>This task changed elsewhere.</Label><Button testId="task-use-theirs" onClick={edit.useTheirs}>Use theirs</Button><Button testId="task-keep-mine" onClick={edit.keepMine}>Keep mine</Button></div>}
             {edit.error && !edit.conflict && <Label color={t.red} size={12}>{edit.error}</Label>}
           </div>
