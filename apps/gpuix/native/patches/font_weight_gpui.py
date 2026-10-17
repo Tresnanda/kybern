@@ -4,6 +4,8 @@
 t = 'crates/gpui_macos/src/text_system.rs'
 edit(t, '            let font_id = candidates[ix];\n', '            let font_id = candidates[ix];\n            let font_id = lock.weight_variation(font_id, font.weight.0);\n')
 edit(t, '    fn id_for_native_font(&mut self, requested_font: CTFont) -> FontId {\n        let postscript_name = requested_font.postscript_name();', '    fn id_for_native_font(&mut self, requested_font: CTFont) -> FontId {\n        if let Some(font_id) = self.same_face(&requested_font) { return font_id; }\n        let postscript_name = native_font_key(&requested_font);')
+# A variable instance built for every shaped run re-evaluates the font's variation store: reuse one sized CTFont.
+edit(t, '                        &font.native_font().clone_with_font_size(font_size.into()),', '                        &sized_native_font(run.font_id, font, font_size.into()),')
 pending[t] += '\ninclude!("font_weight.rs");\n'
 dest = root / 'crates/gpui_macos/src/font_weight.rs'
 text = (here / 'font_weight.rs').read_text()

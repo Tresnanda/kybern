@@ -26,8 +26,20 @@ mod font_weight_ffi {
 
 const WGHT_TAG: i64 = 0x7767_6874;
 
-/// The `wght` axis of a face: (minimum, maximum, default).
+/// The `wght` axis of a face: (minimum, maximum, default). Cached by PostScript name: CoreText localizes every axis
+/// name for `CTFontCopyVariationAxes`, far too slow for each shaped run.
 fn wght_axis(font: &CTFont) -> Option<(f64, f64, f64)> {
+    static CACHE: OnceLock<parking_lot::Mutex<HashMap<String, Option<(f64, f64, f64)>>>> = OnceLock::new();
+    let name = font.postscript_name();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(axis) = cache.lock().get(&name) {
+        return *axis;
+    }
+    let axis = wght_axis_uncached(font);
+    cache.lock().insert(name, axis);
+    axis
+}
+fn wght_axis_uncached(font: &CTFont) -> Option<(f64, f64, f64)> {
     let axes = font.get_variation_axes()?;
     for axis in axes.iter() {
         let number = |key| unsafe {
@@ -74,8 +86,18 @@ impl MacTextSystemState {
     fn same_face(&self, font: &CTFont) -> Option<FontId> {
         let weight = wght_value(font)?;
         let id = *self.font_ids_by_postscript_name.get(&font.postscript_name())?;
-        let face = self.fonts[id.0].native_font();
-        let face_weight = wght_value(&face).or_else(|| wght_axis(&face).map(|axis| axis.2))?;
+        static FACE: OnceLock<parking_lot::Mutex<HashMap<usize, Option<f64>>>> = OnceLock::new();
+        let faces = FACE.get_or_init(Default::default);
+        let cached = faces.lock().get(&id.0).copied();
+        let face_weight = match cached {
+            Some(weight) => weight,
+            None => {
+                let face = self.fonts[id.0].native_font();
+                let weight = wght_value(&face).or_else(|| wght_axis(&face).map(|axis| axis.2));
+                faces.lock().insert(id.0, weight);
+                weight
+            }
+        }?;
         ((face_weight - weight).abs() < 0.5).then_some(id)
     }
     fn weight_variation(&mut self, font_id: FontId, weight: f32) -> FontId {
@@ -115,4 +137,19 @@ impl MacTextSystemState {
         self.fonts.push(unsafe { FontKitFont::from_native_font(&font) });
         id
     }
+}
+
+thread_local! {
+    static SIZED: std::cell::RefCell<HashMap<(usize, u64), CTFont>> = Default::default();
+}
+/// The run font at `size`, created once per (font, size). CoreText caches named faces itself, but a variation instance
+/// copied for every run rebuilds its glyph advances from the variation store each time.
+fn sized_native_font(id: FontId, font: &FontKitFont, size: f64) -> CTFont {
+    SIZED.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() > 512 {
+            cache.clear();
+        }
+        cache.entry((id.0, size.to_bits())).or_insert_with(|| font.native_font().clone_with_font_size(size)).clone()
+    })
 }

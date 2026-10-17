@@ -48,6 +48,7 @@ import { AccountAvatar, accountColor } from '../usage/AccountMark.tsx'
 import { flashAccount, refreshAccounts, useAccounts, useAccountsFeed, useAccountsLegacy } from '../usage/accounts.ts'
 import { useSettings } from '../settings/store.ts'
 import { useAccountLogin } from './useAccountLogin.ts'
+import { successTransform } from '../motion/success.ts'
 
 /** Upstream providers `omp login` can use (`OMP_UPSTREAMS`). */
 const OMP_UPSTREAMS = [
@@ -250,7 +251,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
     const emailChanged = reauth && !!login.previous_email && !!email && login.previous_email.toLowerCase() !== email.toLowerCase()
     body = <Body gap={16}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, paddingTop: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 20, backgroundColor: t.v('--success') + '1f' }}><Icon source={N.check} size={20} color={t.v('--success')} /></div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 20, backgroundColor: t.v('--success') + '1f' }}><div testId="account-success-check" paintTransform={successTransform()} style={{ display: 'flex' }}><Icon source={N.check} size={20} color={t.v('--success')} /></div></div>
         <Title center>{email ? `Signed in as ${email}` : 'Signed in'}</Title>
         {meta && <Desc center>{meta}</Desc>}
         {emailChanged && <Label color={t.textSecondary} size={13} lineHeight={19.5} style={{ textAlign: 'center' }}>{`${targetName} was ${login.previous_email}. It now uses ${email}.`}</Label>}

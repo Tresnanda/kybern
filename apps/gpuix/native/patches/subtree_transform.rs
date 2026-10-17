@@ -16,7 +16,8 @@
 //! Missing values are the identity (scale 1, opacity 1, others 0). `keyframes` are CSS-style
 //! intermediate stops between the start (`initial`, or the current value on a retarget) and
 //! `animate`; each segment uses `ease`, and a property absent from a stop interpolates across
-//! it. Changing `animate`, `keyframes` or `generation` retargets from the value on screen.
+//! it. Changing `animate`, `keyframes` or `generation` retargets from the value on screen; a new `generation` with an
+//! `initial` value restarts from that value instead.
 //! `press` is the desktop's `:active` squash, driven natively by mouse down/up on the host.
 use crate::{renderer::GpuixView, retained_tree::RetainedTree};
 use gpui::{
@@ -224,12 +225,17 @@ impl Track {
         if source == self.source {
             return;
         }
-        let retarget = source.animate != self.source.animate || source.keyframes != self.source.keyframes || source.generation != self.source.generation;
+        let generation = source.generation != self.source.generation;
+        let retarget = source.animate != self.source.animate || source.keyframes != self.source.keyframes || generation;
         self.source = source;
         if retarget {
             let timing = self.source.transition.unwrap_or_default();
             let stops = self.source.keyframes.clone();
             self.retarget(now, timing, stops);
+            // A new generation with an `initial` value restarts from it (a loop's next pass) instead of the value on screen.
+            if let (true, Some(Initial::Value(initial))) = (generation, &self.source.initial) {
+                self.from = initial.over(SubtreeTransformValue::default());
+            }
         }
     }
     fn press(&mut self, pressed: bool, now: Instant) -> bool {

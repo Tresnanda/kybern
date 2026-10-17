@@ -7,9 +7,11 @@
 //
 // GPUIX: the band is a child element (two halves with two-stop horizontal gradients; the desktop's 30° slant moves the
 // band by under 12 px across a 40 px-tall block, which this approximates with the band position at the block's
-// vertical centre) that a native linear `left` tween carries across the block. One tween covers one pass; the next
-// starts, re-phased from the shared clock, while the band is outside the block, so the restart is never visible.
-// No JS runs per frame; the band holds still while the window is hidden.
+// vertical centre) that a linear paint-only translation (`paintTransform`, `native/patches/subtree_transform.rs`)
+// carries across the block: frames re-place the retained band without a render, layout or island wake. One pass
+// covers one crossing; the next (a new generation, which restarts from `initial`) starts, re-phased from the shared
+// clock, while the band is outside the block, so the restart is never visible. No JS runs per frame; the band holds
+// still while the window is hidden.
 import { useGpuixRequired, type PublicInstance, type StyleDesc } from '@gpuix/react'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { useTheme } from '../ui.tsx'
@@ -88,9 +90,9 @@ export function Skeleton({ width = '100%', height = 16, radius = 6, view = { wid
       {pass && (
         <div
           testId={testId ? `${testId}-band` : undefined}
-          {...({ motion: { generation: pass.generation, isExit: false, initial: { left: pass.from }, animate: { left: pass.to }, transition: { duration: pass.ms / 1000, ease: LINEAR } } } as object)}
+          paintTransform={{ generation: pass.generation, initial: { translateX: pass.from }, animate: { translateX: pass.to }, transition: { duration: pass.ms / 1000, ease: LINEAR } }}
           onMotionComplete={(e) => { if (e.motionGeneration === pass.generation && run) plan() }}
-          style={{ position: 'absolute', top: 0, left: pass.from, width: half * 2, height: '100%', display: 'flex', pointerEvents: 'none' }}
+          style={{ position: 'absolute', top: 0, left: 0, width: half * 2, height: '100%', display: 'flex', pointerEvents: 'none' }}
         >
           <div style={{ width: half, height: '100%', background: { type: 'linear-gradient', angle: 90, stops: [{ color: clear, position: 0 }, { color: highlight, position: 1 }] } }} />
           <div style={{ width: half, height: '100%', background: { type: 'linear-gradient', angle: 90, stops: [{ color: highlight, position: 0 }, { color: clear, position: 1 }] } }} />
