@@ -48,6 +48,11 @@ try {
   mark('controls'); await app.mouse.move({ x: b.x + b.width - 24, y: b.y + 22 }); await Bun.sleep(1300)
   mark('away'); await app.mouse.move({ x: 20, y: 20 }); await Bun.sleep(1000)
   mark('end')
+  if (process.env.DOCK9_RESOURCES) {
+    // 10 s warm-up, then 15 s of CPU / footprint / GPU with the live card resting (polling at the desktop's cadence).
+    await Bun.sleep(10_000)
+    result.resources = Bun.spawnSync(['bun', path.resolve(import.meta.dir, '../../perf/sample.ts'), '15', `GPUIX=${child.pid}`], { stdout: 'pipe' }).stdout.toString().trim()
+  }
   result.bodyHoverFramesPer200ms = per200('body'); result.controlsHoverFramesPer200ms = per200('controls'); result.leaveFramesPer200ms = per200('away')
   console.log(JSON.stringify(result))
 } finally { await app.close(); if (child.exitCode === null) child.kill(); stopPid(state.daemonPid) }
