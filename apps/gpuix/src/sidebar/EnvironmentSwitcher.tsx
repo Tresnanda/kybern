@@ -59,6 +59,7 @@ function MenuContents() {
   </>
 }
 
+// Rows listen for the press too: GPUIX only routes a click to a row inside an overlay that also handles mouse down (`nav/overlay.tsx` MenuItem).
 /** An action row at the environment menu's own density: 29px (21px line + `--picker-option-py: .25rem`), 12px gap (`--picker-option-gap: .75rem`). */
 function EnvironmentAction({ id, testId, icon, label, disabled = false, onSelect }: { id: string; testId: string; icon: string; label: string; disabled?: boolean; onSelect: () => void }) {
   const t = useTheme()
@@ -66,7 +67,7 @@ function EnvironmentAction({ id, testId, icon, label, disabled = false, onSelect
   const select = useRef(onSelect)
   select.current = onSelect
   useLayoutEffect(() => menu.register({ key: id, disabled, keepOpen: false, onSelect: () => select.current() }), [menu.register, id, disabled])
-  return <div testId={testId} role="menuitem" aria-label={label} aria-disabled={disabled} onMouseMove={() => { if (!disabled && menu.active !== id) menu.setActive(id) }} onMouseLeave={() => { if (menu.active === id) menu.setActive(null) }} onClick={() => menu.pick(id)} style={{ display: 'flex', alignItems: 'center', gap: 12, height: 29, paddingLeft: 8, paddingRight: 8, borderRadius: 10, opacity: disabled ? 0.64 : 1, ...(menu.active === id && !disabled ? { backgroundColor: t.buttonSecondaryHover } : {}) }}>
+  return <div testId={testId} role="menuitem" aria-label={label} aria-disabled={disabled} onMouseMove={() => { if (!disabled && menu.active !== id) menu.setActive(id) }} onMouseLeave={() => { if (menu.active === id) menu.setActive(null) }} onMouseDown={() => {}} onClick={() => menu.pick(id)} style={{ display: 'flex', alignItems: 'center', gap: 12, height: 29, paddingLeft: 8, paddingRight: 8, borderRadius: 10, opacity: disabled ? 0.64 : 1, ...(menu.active === id && !disabled ? { backgroundColor: t.buttonSecondaryHover } : {}) }}>
     <Icon source={icon} size={16} color={ink(t, 0.8)} style={{ pointerEvents: 'none' }} /><Label color={t.text} size={14} lineHeight={21} truncate style={{ flexGrow: 1, pointerEvents: 'none' }}>{label}</Label>
   </div>
 }
@@ -94,7 +95,7 @@ function EnvironmentChoice({ profile, last, current, status, statusLabel, onChoo
   const detail = current ? statusLabel : profile.local ? 'On this Mac' : profile.ssh ? 'SSH connection' : 'Remote environment'
   const dot = current && status === 'open' ? '#00bc7d' : current && status === 'failed' ? t.red : muted(t, 0.4)
   return <div style={{ paddingBottom: last ? 0 : 2 }}><div style={{ display: 'flex', alignItems: 'center', gap: 4, height: 45, paddingRight: 4, borderRadius: 10, backgroundColor: choiceActive || windowActive ? t.buttonSecondaryHover : current ? t.buttonSecondary : 'transparent' }}>
-    <div testId={`environment-choice-${profile.id}`} role="menuitem" aria-checked={current} aria-label={profile.name} onMouseMove={() => { if (menu.active !== profile.id) menu.setActive(profile.id) }} onMouseLeave={() => { if (menu.active === profile.id) menu.setActive(null) }} onClick={() => menu.pick(profile.id)} style={{ display: 'flex', alignItems: 'center', gap: 12, flexGrow: 1, minWidth: 0, height: 45, paddingLeft: 8, paddingRight: 8 }}>
+    <div testId={`environment-choice-${profile.id}`} role="menuitem" aria-checked={current} aria-label={profile.name} onMouseMove={() => { if (menu.active !== profile.id) menu.setActive(profile.id) }} onMouseLeave={() => { if (menu.active === profile.id) menu.setActive(null) }} onMouseDown={() => {}} onClick={() => menu.pick(profile.id)} style={{ display: 'flex', alignItems: 'center', gap: 12, flexGrow: 1, minWidth: 0, height: 45, paddingLeft: 8, paddingRight: 8 }}>
       <Icon source={profile.local ? N.laptop : N.globe} size={16} color={ink(t, 0.8)} style={{ opacity: 0.8, pointerEvents: 'none' }} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexGrow: 1, minWidth: 0, pointerEvents: 'none' }}>
         <Label color={t.text} size={14} lineHeight={19.25} truncate>{profile.name}</Label>
@@ -102,7 +103,7 @@ function EnvironmentChoice({ profile, last, current, status, statusLabel, onChoo
       </div>
       <div style={{ display: 'flex', width: 14, height: 14, flexShrink: 0, pointerEvents: 'none' }}>{current && <Icon source={CHECK} size={14} color={t.text} />}</div>
     </div>
-    <div testId={`environment-window-${profile.id}`} role="menuitem" aria-label={`Open ${profile.name} in a new window`} onMouseMove={() => { if (menu.active !== windowKey) menu.setActive(windowKey) }} onMouseLeave={() => { if (menu.active === windowKey) menu.setActive(null) }} onClick={() => menu.pick(windowKey)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, flexShrink: 0, borderRadius: 10, backgroundColor: windowActive ? t.buttonSecondary : 'transparent' }}>
+    <div testId={`environment-window-${profile.id}`} role="menuitem" aria-label={`Open ${profile.name} in a new window`} onMouseMove={() => { if (menu.active !== windowKey) menu.setActive(windowKey) }} onMouseLeave={() => { if (menu.active === windowKey) menu.setActive(null) }} onMouseDown={() => {}} onClick={() => menu.pick(windowKey)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, flexShrink: 0, borderRadius: 10, backgroundColor: windowActive ? t.buttonSecondary : 'transparent' }}>
       <Icon source={N.window} size={16} color={muted(t, 1)} style={{ pointerEvents: 'none' }} />
     </div>
   </div></div>
