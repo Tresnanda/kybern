@@ -15,7 +15,6 @@
 // GPUIX paints an opaque #1A1A1A backing under every anchored layer, so fading
 // only its content would show that backing first.
 import { useGpuix, useWindowSize, type PublicInstance, type StyleDesc } from '@gpuix/react'
-import { Tooltip, TooltipTrigger } from '@gpuix/react/tooltip'
 import {
   createContext,
   useCallback,
@@ -29,6 +28,8 @@ import {
 } from 'react'
 import { muted, popoverStyle, PopupLayer, surfaceShadow } from '../composer/Menu.tsx'
 import { Icon } from '../icons.tsx'
+import { hoverTrigger, useHover } from '../kit/hover.tsx'
+import { TOOLTIP_DELAY_MS, TOOLTIP_SKIP_MS } from '../kit/hoverController.ts'
 import { DISTANCE } from '../motion/kit.tsx'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { N } from './glyphs.ts'
@@ -341,12 +342,6 @@ export function MenuSeparator() {
 
 // ---- tooltips ----
 
-/** Base UI's tooltip delay; a neighbour within 300ms opens at once (provider skip delay). */
-const TOOLTIP_DELAY = 600
-/** The provider's skip delay: the window in which the next tooltip opens at once. */
-const TOOLTIP_SKIP = 300
-let tipClosedAt = -Infinity
-
 /** Tooltip box metrics: 13px text, 8px × 4px padding, 1px border; `Kbd` chips are 20px. */
 const TIP_TEXT_EM = 0.53
 const TIP_HEIGHT = 4 * 2 + 17 + 2
@@ -385,33 +380,26 @@ export function Tip({
   disabled?: boolean
 }) {
   const t = useTheme()
-  const [open, setOpen] = useState(false)
   // Opening right after a neighbour closed skips the delay and the fade (`data-instant`).
-  const [instant, setInstant] = useState(false)
+  // The controller keeps one tooltip visible app-wide and applies every leave (R4-1).
+  const { ctl, state } = useHover({ delay: TOOLTIP_DELAY_MS, skip: TOOLTIP_SKIP_MS })
+  const pressed = useRef(false)
   if (disabled) return children
+  const open = state.active !== null
   const vertical = side === 'left' || side === 'right'
   const extent = vertical ? (shortcut?.length ? TIP_KBD_HEIGHT : TIP_HEIGHT) : tipWidth(label, shortcut)
   const alignOffset = Math.round((size - extent) / 2)
   return (
-    <Tooltip
-      open={open}
-      onOpenChange={(next) => {
-        if (next) setInstant(performance.now() - tipClosedAt <= TOOLTIP_SKIP)
-        else tipClosedAt = performance.now()
-        setOpen(next)
-      }}
-      delayDuration={TOOLTIP_DELAY}
-      disableHoverableContent
-      style={{ flexShrink: 0 }}
-    >
+    <div style={{ display: 'flex', position: 'relative', alignItems: 'start', flexShrink: 0 }}>
       {/* The control itself is the trigger: a wrapper would be occluded by the
           control's own hover fill and lose the pointer at once. */}
-      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      {hoverTrigger(ctl, true, children, pressed)}
       {open && (
         // `TooltipContent`'s placement, with the surface animated.
         <PopupLayer
+          testId="tooltip"
           kind="tooltip"
-          still={instant}
+          still={state.instant}
           side={side}
           sideOffset={sideOffset}
           alignOffset={alignOffset}
@@ -438,7 +426,7 @@ export function Tip({
           {shortcut && <Kbd keys={shortcut} />}
         </PopupLayer>
       )}
-    </Tooltip>
+    </div>
   )
 }
 

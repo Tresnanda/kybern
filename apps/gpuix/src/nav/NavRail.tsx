@@ -27,6 +27,7 @@ import { goPage } from './history.ts'
 import { askLimits } from './live.ts'
 import { popoverStyle, PopupLayer } from '../composer/Menu.tsx'
 import { muted, Tip } from './overlay.tsx'
+import { useHover } from '../kit/hover.tsx'
 import { getNav, setNav, useNav, type Page } from './store.ts'
 import { openSettingsTab } from '../settings/SettingsScreen.tsx'
 import { showDialog } from '../dialogs/store.ts'
@@ -164,35 +165,12 @@ function toneColor(t: Theme, tone: ReturnType<typeof limitTone>) {
 /** One ring per provider, filled with what is left of its tightest limit; hovering opens its card. */
 function RailUsage() {
   const providers = useNav((s) => s.limits)
-  const [card, setCard] = useState<ProviderKind | null>(null)
-  // The card opens with the popover motion; moving to the next ring carries it over without replaying it.
-  const [carried, setCarried] = useState(false)
-  const openTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  useEffect(() => () => {
-    clearTimeout(openTimer.current)
-    clearTimeout(closeTimer.current)
-  }, [])
+  // One shared card (`RailUsage.tsx`: 80 ms open, 100 ms close): moving to the next ring carries it over
+  // without replaying it. The controller keeps one card visible app-wide and applies every leave.
+  const { ctl, state } = useHover<ProviderKind>({ delay: 80, closeDelay: 100, hoverable: true })
   const now = Date.now()
   const glance = providers.flatMap((entry) => (entry.limits.length > 0 ? [{ entry, used: bindingLimit(entry.limits, now)?.used ?? null }] : []))
   if (glance.length === 0) return null
-  // One shared card: moving to the next ring carries it over (80ms open, 100ms close).
-  const enter = (kind: ProviderKind) => {
-    clearTimeout(closeTimer.current)
-    clearTimeout(openTimer.current)
-    if (card) {
-      if (card !== kind) setCarried(true)
-      return setCard(kind)
-    }
-    openTimer.current = setTimeout(() => {
-      setCarried(false)
-      setCard(kind)
-    }, 80)
-  }
-  const leave = () => {
-    clearTimeout(openTimer.current)
-    closeTimer.current = setTimeout(() => setCard(null), 100)
-  }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
       {glance.map(({ entry, used }) => (
@@ -201,11 +179,12 @@ function RailUsage() {
           entry={entry}
           used={used}
           now={now}
-          open={card === entry.provider}
-          carried={carried}
-          onEnter={() => enter(entry.provider)}
-          onLeave={leave}
-          onCardEnter={() => clearTimeout(closeTimer.current)}
+          open={state.active === entry.provider}
+          instant={state.instant}
+          onEnter={() => ctl.enter(entry.provider)}
+          onLeave={() => ctl.leave()}
+          onCardEnter={() => ctl.popupEnter()}
+          onCardLeave={() => ctl.popupLeave()}
         />
       ))}
     </div>
@@ -220,9 +199,10 @@ function UsageRing({
   onEnter,
   onLeave,
   onCardEnter,
-  carried,
+  onCardLeave,
+  instant,
 }: {
-  carried: boolean
+  instant: boolean
   entry: ProviderLimits
   used: number | null
   now: number
@@ -230,6 +210,7 @@ function UsageRing({
   onEnter: () => void
   onLeave: () => void
   onCardEnter: () => void
+  onCardLeave: () => void
 }) {
   const t = useTheme()
   const left = used === null ? null : 100 - used
@@ -267,12 +248,12 @@ function UsageRing({
         // `PopoverPopup` (250 ms smooth-out, drifting from the ring's side); moving to
         // the next ring carries the card over without replaying it.
         <PopupLayer
-          still={carried}
+          still={instant}
           side="right"
           align="end"
           sideOffset={8}
           onMouseEnter={onCardEnter}
-          onMouseLeave={onLeave}
+          onMouseLeave={onCardLeave}
           style={{ ...popoverStyle(t), display: 'flex', flexDirection: 'column', width: 320, padding: 16, gap: 12 }}
         >
           <UsageCard entry={entry} />
