@@ -18,6 +18,7 @@ import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { openUrl } from '../pulls/PrStates.tsx'
 import { ink, Label, LOGO_SVG, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { canSelfUpdate, closeUpdateDetails, dismissUpdateAnnouncement, installAppUpdate, openUpdateDetails, useAppUpdate } from './update.ts'
+import { pressTransform } from '../motion/press.ts'
 
 const ICON = { download: glyph(Download04Icon), arrowRight: glyph(ArrowRight01Icon), arrowUpRight: glyph(ArrowUpRight01Icon), x: glyph(Cancel01Icon) }
 
@@ -75,6 +76,7 @@ export function RailUpdateButton() {
       <div testId="rail-update" role="button" aria-label={`Update available: Kybern v${short}`}
         onMouseDown={() => { pressedWhileOpen.current = open }}
         onClick={() => { if (pressedWhileOpen.current) { pressedWhileOpen.current = false; return setOpen(false) } setOpen(true) }}
+        paintTransform={pressTransform()}
         style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, cursor: 'pointer', hover: { backgroundColor: ink(t, 0.06) } }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 14, backgroundColor: t.link, pointerEvents: 'none' }}>
           {busy ? <Spinner size={14} color="#ffffff" /> : <Icon source={ICON.download} size={16} color="#ffffff" />}

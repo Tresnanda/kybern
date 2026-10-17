@@ -14,17 +14,19 @@ import { DURATION, EASE } from './kit.tsx'
 /** `--scale-press`. */
 export const PRESS_SCALE = 0.97
 
-const PRESS: PaintTransformProps = {
-  initial: false,
-  animate: {},
-  press: {
-    scale: PRESS_SCALE,
-    down: { duration: DURATION.micro, ease: [...EASE.out] },
-    up: { duration: DURATION.quick, ease: [...EASE.out] },
-  },
-}
+let press: PaintTransformProps | undefined
 
 /** The `paintTransform` prop for a pressable compact control; undefined when disabled, wide or under Reduce Motion. */
 export function pressTransform(enabled = true): PaintTransformProps | undefined {
-  return enabled && PATCHED_NATIVE && !REDUCED_MOTION ? PRESS : undefined
+  if (!enabled || !PATCHED_NATIVE || REDUCED_MOTION) return undefined
+  // Built on first use: `ui.tsx` imports this module, and `motion/kit.tsx` imports `ui.tsx`.
+  return (press ??= {
+    initial: false,
+    animate: {},
+    press: {
+      scale: PRESS_SCALE,
+      down: { duration: DURATION.micro, ease: [...EASE.out] },
+      up: { duration: DURATION.quick, ease: [...EASE.out] },
+    },
+  })
 }

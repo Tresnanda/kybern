@@ -56,6 +56,7 @@ import { PermissionPicker } from './composer/PermissionPicker.tsx'
 import { Pop, SwapOnChange } from './composer/motion.tsx'
 import { Rise } from './motion/kit.tsx'
 import { DropHighlight } from './motion/DropHighlight.tsx'
+import { pressTransform } from './motion/press.ts'
 import {
   createThread,
   ensureLoaded,
@@ -786,6 +787,7 @@ function RoundButton({ children, disabled, onClick, testId }: { children: ReactN
       role="button"
       aria-disabled={disabled}
       onClick={disabled ? undefined : onClick}
+      paintTransform={pressTransform(!disabled)}
       style={{
         display: 'flex',
         alignItems: 'center',
