@@ -3,12 +3,17 @@ import { Children, useEffect, useState, type ReactNode } from 'react'
 import { PickerMenu, PickerItem, CheckMark } from '../composer/Menu.tsx'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
-import { EASE_OUT, ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { EASE_OUT, ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { FONT_UI } from '../theme.ts'
 
-export function Button({ children, onClick, disabled = false, testId, variant = 'outline' }: { variant?: 'outline' | 'primary' | 'destructive' | 'ghost' | 'secondary'; children: string; onClick: () => void; disabled?: boolean; testId?: string }) {
+export function Button({ children, onClick, disabled = false, testId, variant = 'outline', size = 'default', icon, label }: { variant?: 'outline' | 'primary' | 'destructive' | 'ghost' | 'secondary' | 'subtle'; size?: 'default' | 'chip' | 'xs'; children: string; onClick: () => void; disabled?: boolean; testId?: string; /** Leading glyph (`kit` buttons put 16px icons beside the label). */ icon?: string; label?: string }) {
   const t = useTheme()
-  return <div testId={testId} tabIndex={disabled ? -1 : 0} aria-label={children} onClick={() => !disabled && onClick()} onKeyDown={(e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) onClick() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: variant === 'outline' ? 28 : 32, backgroundColor: variant === 'primary' ? t.buttonPrimary : variant === 'destructive' ? t.red : variant === 'secondary' ? t.buttonSecondary : 'transparent', paddingLeft: 10, paddingRight: 10, borderWidth: variant === 'outline' ? 1 : 0, borderColor: t.border, borderRadius: 8, opacity: disabled ? 0.45 : 1, cursor: disabled ? 'default' : 'pointer', hover: { backgroundColor: variant === 'primary' ? t.buttonPrimary : variant === 'destructive' ? t.red : t.buttonTertiaryHover }, active: { backgroundColor: variant === 'primary' ? t.buttonPrimary : variant === 'destructive' ? t.red : t.buttonSecondaryHover } }}><Label color={variant === 'primary' ? t.buttonPrimaryText : variant === 'destructive' ? '#fff' : t.text} size={14} lineHeight={21}>{children}</Label></div>
+  const chip = size === 'chip' || size === 'xs'
+  const text = size === 'xs' ? 12 : 13
+  const fill = variant === 'primary' ? t.buttonPrimary : variant === 'destructive' ? t.red : variant === 'secondary' || variant === 'subtle' ? t.buttonSecondary : 'transparent'
+  const hover = variant === 'primary' ? t.buttonPrimary : variant === 'destructive' ? t.red : variant === 'subtle' || variant === 'ghost' ? t.buttonSecondaryHover : t.buttonTertiaryHover
+  const color = variant === 'primary' ? t.buttonPrimaryText : variant === 'destructive' ? '#fff' : variant === 'ghost' ? t.textSecondary : t.text
+  return <div testId={testId} role="button" tabIndex={disabled ? -1 : 0} aria-label={label ?? children} onClick={() => !disabled && onClick()} onKeyDown={(e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) onClick() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: chip ? 4 : 6, minHeight: chip ? 24 : variant === 'outline' || variant === 'ghost' || variant === 'subtle' ? 28 : 32, backgroundColor: fill, paddingLeft: chip ? 8 : 10, paddingRight: chip ? 8 : 10, borderWidth: variant === 'outline' ? 1 : 0, borderColor: t.border, borderRadius: chip ? 8 : 8, opacity: disabled ? 0.45 : 1, cursor: disabled ? 'default' : 'pointer', flexShrink: 0, hover: { backgroundColor: hover }, active: { backgroundColor: variant === 'primary' ? t.buttonPrimary : variant === 'destructive' ? t.red : t.buttonSecondaryHover } }}>{icon && <Icon source={icon} size={chip ? 12 : 14} color={color} style={{ pointerEvents: 'none' }} />}<Label color={color} size={chip ? text : 14} lineHeight={chip ? text * 1.5 : 21}>{children}</Label></div>
 }
 
 /** Pointer toggles give state feedback in 160ms; keyboard and Reduce Motion are immediate. */
@@ -97,17 +102,19 @@ let selectClosedAt = 0
 export const selectOwnsEscape = () => openSelects > 0 || Date.now() - selectClosedAt < 100
 export const settingsOverlayOwnsEscape = () => selectOwnsEscape() || openModals > 0 || Date.now() - modalClosedAt < 100
 
-export interface Option { value: string; label: string; disabled?: boolean }
+/** `mark` draws the agent's mark (12px) before the label, like the desktop's `SettingsPicker`. */
+export interface Option { value: string; label: string; disabled?: boolean; mark?: string }
 export function Select({ value, onChange, options, label, disabled, testId, compact = false }: { value: string; onChange: (value: string) => void; options: readonly Option[]; label: string; disabled?: boolean; testId?: string; compact?: boolean }) {
   const t = useTheme()
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   useEffect(() => { if (!open) return; openSelects++; return () => { openSelects--; selectClosedAt = Date.now() } }, [open])
   const filtered = options.filter((o) => o.label.toLowerCase().includes(query.toLowerCase()))
-  return <PickerMenu open={open} testId={testId} disabled={disabled} side="bottom" align="end" minWidth={190} onOpenChange={(next) => { setOpen(next); setQuery('') }} trigger={() => <div aria-label={label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: compact ? 6 : 12, minWidth: compact ? 96 : 144, maxWidth: 248, height: 28, borderWidth: 1, borderColor: t.border, borderRadius: 8, paddingLeft: 10, paddingRight: 8, opacity: disabled ? 0.45 : 1, hover: { backgroundColor: t.hover } }}><Label color={t.text} size={14} lineHeight={21} truncate>{options.find((o) => o.value === value)?.label ?? value}</Label><Icon source={N.chevronDown} size={12} color={t.iconSecondary} /></div>}>
+  const current = options.find((o) => o.value === value)
+  return <PickerMenu open={open} testId={testId} disabled={disabled} side="bottom" align="end" minWidth={190} onOpenChange={(next) => { setOpen(next); setQuery('') }} trigger={() => <div aria-label={label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: compact ? 6 : 12, minWidth: compact ? 96 : 144, maxWidth: 248, height: 28, borderWidth: 1, borderColor: t.border, borderRadius: 8, paddingLeft: 10, paddingRight: 8, opacity: disabled ? 0.45 : 1, hover: { backgroundColor: t.hover } }}><div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexShrink: 1 }}>{current?.mark && <ProviderMark kind={current.mark} size={12} />}<Label color={t.text} size={14} lineHeight={21} truncate>{current?.label ?? value}</Label></div><Icon source={N.chevronDown} size={12} color={t.iconSecondary} /></div>}>
     {options.length > 10 && <TextField label={`Search ${label}`} value={query} onChange={setQuery} width={230} />}
     <virtual-list style={{ width: 250, height: Math.max(28, Math.min(filtered.length, 9) * 28) }}>
-      {filtered.map((option) => <PickerItem key={option.value} id={option.value} testId={testId ? `${testId}-${option.value}` : undefined} disabled={option.disabled} onSelect={() => onChange(option.value)} style={{ height: 28 }}><Label color={t.text} size={12} truncate style={{ flexGrow: 1 }}>{option.label}</Label><CheckMark color={t.text} visible={option.value === value} /></PickerItem>)}
+      {filtered.map((option) => <PickerItem key={option.value} id={option.value} testId={testId ? `${testId}-${option.value}` : undefined} disabled={option.disabled} onSelect={() => onChange(option.value)} style={{ height: 28 }}>{option.mark && <ProviderMark kind={option.mark} size={12} />}<Label color={t.text} size={12} truncate style={{ flexGrow: 1 }}>{option.label}</Label><CheckMark color={t.text} visible={option.value === value} /></PickerItem>)}
     </virtual-list>
   </PickerMenu>
 }
@@ -153,7 +160,7 @@ export function Section({ title, children }: { title: string; children: ReactNod
   return <PageBlock><div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 30 }}><Label color={t.text} size={14} lineHeight={19.6} weight={600} style={{ paddingLeft: 2 }}>{title}</Label><div style={{ display: 'flex', flexDirection: 'column', borderWidth: 1, borderColor: t.v('--app-settings-card-border'), borderRadius: 12, backgroundColor: t.v('--app-settings-card-surface'), overflow: 'hidden' }}>{rows.map((row, i) => <div key={i} style={{ borderTopWidth: i ? 1 : 0, borderColor: t.v('--app-settings-card-border') }}>{row}</div>)}</div></div></PageBlock>
 }
 
-export function Row({ title, description, children }: { title: string; description?: string; children?: ReactNode }) {
+export function Row({ title, description, status, children }: { title: string; description?: ReactNode; status?: string; children?: ReactNode }) {
   const t = useTheme()
-  return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 20, paddingLeft: 18, paddingRight: 18, paddingTop: 16, paddingBottom: 16 }}><div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexGrow: 1, minWidth: 0 }}>{title && <Label color={t.text} size={14} lineHeight={21} weight={500}>{title}</Label>}{description && <Label color={t.textSecondary} size={14} lineHeight={21.7} style={{ maxWidth: 451 }}>{description}</Label>}</div>{children && <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>{children}</div>}</div>
+  return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 20, paddingLeft: 18, paddingRight: 18, paddingTop: 16, paddingBottom: 16 }}><div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexGrow: 1, minWidth: 0 }}>{title && <Label color={t.text} size={14} lineHeight={21} weight={500}>{title}</Label>}{description && (typeof description === 'string' ? <Label color={t.textSecondary} size={14} lineHeight={21.7} style={{ maxWidth: 451 }}>{description}</Label> : description)}{status && <Label color={t.textSecondary} size={11} lineHeight={16.5} style={{ maxWidth: 451, paddingTop: 4 }}>{status}</Label>}</div>{children && <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>{children}</div>}</div>
 }

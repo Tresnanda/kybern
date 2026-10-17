@@ -9,7 +9,8 @@ import type { PermissionMode, ProviderKind, OrchestrationSettings, RoleDefault }
 import { getClient, useApp } from '../state.ts'
 import { useNav } from '../nav/store.ts'
 import { loadProviders } from '../nav/live.ts'
-import { Label, useTheme } from '../ui.tsx'
+import { Label, ink, useTheme } from '../ui.tsx'
+import { FONT_MONO } from '../theme.ts'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { Button, NumberField, PageBlock, Row, Section, Select, Switch, TextField } from './controls.tsx'
@@ -25,7 +26,7 @@ export function General() {
   if (!s) return null
   return <>
     <Section title="New threads">
-      <Row title="Default agent" description="Used when you start a thread from a project."><Select label="Default agent" testId="settings-default-agent" value={s.default_provider} disabled={saving} onChange={(value) => void updateSettings({ default_provider: value as ProviderKind })} options={providers.map((p) => ({ value: p.kind, label: p.display_name, disabled: !p.available }))} /></Row>
+      <Row title="Default agent" description="Used when you start a thread from a project."><Select label="Default agent" testId="settings-default-agent" value={s.default_provider} disabled={saving} onChange={(value) => void updateSettings({ default_provider: value as ProviderKind })} options={providers.map((p) => ({ value: p.kind, label: p.display_name, disabled: !p.available, mark: p.kind }))} /></Row>
       <Row title="Default permissions" description={PERMISSION_HINT[s.default_permission_mode]}><Select label="Default permissions" testId="settings-permissions" value={s.default_permission_mode} disabled={saving} onChange={(value) => void updateSettings({ default_permission_mode: value as PermissionMode })} options={Object.entries(PERMISSION_LABEL).map(([value, label]) => ({ value, label }))} /></Row>
       <Row title="Use a worktree for new threads" description="Each thread gets its own branch and folder. Projects can override this."><Switch label="Use a worktree for new threads" testId="settings-worktrees" checked={s.worktrees_default} disabled={saving} onChange={(worktrees_default) => void updateSettings({ worktrees_default })} /></Row>
     </Section>
@@ -40,12 +41,16 @@ export function General() {
   </>
 }
 
+/** Folders outside a project that the user allowed Preview to serve files from (`PreviewFoldersRow`). */
 function PreviewFolders() {
+  const t = useTheme()
   const { settings, saving } = useSettings()
-  const [page, setPage] = useState(0)
   const folders = settings?.preview_allowed_folders ?? []
-  return <Section title="Preview"><Row title="Allowed folders" description={folders.length ? 'Folders outside projects that Preview can serve files from. Removing a folder revokes that permission.' : 'No extra folders allowed. Preview asks when you open a file outside a project.'} />{folders.slice(page * 8, page * 8 + 8).map((folder) => <Row key={folder} title={folder}><Button disabled={saving} onClick={() => void updateSettings({ preview_allowed_folders: folders.filter((p) => p !== folder) })}>Remove</Button></Row>)}{folders.length > 8 && <Row title={`Page ${page + 1}`}><Button disabled={!page} onClick={() => setPage(page - 1)}>Previous</Button><Button disabled={(page + 1) * 8 >= folders.length} onClick={() => setPage(page + 1)}>Next</Button></Row>}</Section>
+  return <Section title="Preview"><Row title="Allowed folders" description={folders.length > 0 ? 'Pages in these folders can open in Preview. Files inside your projects never need this.' : 'None yet. Kybern asks the first time a page outside your projects opens in Preview.'}>{folders.length > 0 && <div testId="preview-folders" style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 320, maxWidth: '100%' }}>{folders.map((folder) => <div key={folder} style={{ display: 'flex', alignItems: 'center', gap: 4, height: 28, paddingLeft: 10, paddingRight: 4, borderRadius: 6, backgroundColor: t.v('--color-background-elevated-secondary') }}><Label color={ink(t, 0.85)} size={11} lineHeight={16} font={FONT_MONO} truncate style={{ flexGrow: 1 }}>{startTruncate(folder)}</Label><Button size="xs" variant="ghost" label={`Remove ${folder}`} disabled={saving} onClick={() => void updateSettings({ preview_allowed_folders: folders.filter((p) => p !== folder) })}>Remove</Button></div>)}</div>}</Row></Section>
 }
+
+/** The desktop truncates the start of a path (`dir="rtl"`), so the folder's own name stays visible. */
+const startTruncate = (path: string, max = 34) => path.length > max ? `…${path.slice(path.length - max + 1)}` : path
 
 export function Appearance() {
   const t = useTheme()
