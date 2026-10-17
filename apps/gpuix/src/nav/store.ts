@@ -62,6 +62,8 @@ export interface NavState {
   /** Child rows the reader dismissed, or that finished and left. */
   dismissed: Record<ThreadId, true>
   providers: ProviderStatus[]
+  /** `providers.list` has answered once for this daemon (it probes every agent CLI and can take seconds). */
+  providersLoaded: boolean
   limits: ProviderLimits[]
   limitsRefreshing: ProviderKind[]
   filter: SidebarFilter
@@ -93,6 +95,7 @@ const initialNav: NavState = {
   unread: {},
   dismissed: {},
   providers: [],
+  providersLoaded: false,
   limits: [],
   limitsRefreshing: [],
   filter: DEFAULT_FILTER,

@@ -25,7 +25,8 @@ import { TextSwap } from "@/components/kybern/motion"
 // actions, dock toggle), the transcript scrolling under the frosted composer,
 // queued follow-ups stacked above the input and the approval card.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { threadCommandSpecs, type ThreadCommandId } from "@/lib/threadCommands"
 import { useHotkey } from "@/lib/hooks"
 import { toast } from "sonner"
 
@@ -326,46 +327,41 @@ export function ThreadView({
     ["codex", "pi", "omp", "opencode"].includes(thread.provider.kind) || nativeCommands.some((command) => command.name === "compact")
   )
   const commands = useMemo<SlashCommand[]>(
-    () => [
-      { name: "resume", hint: "Continue a saved session", icon: <ClockIcon className="size-4" />, run: () => set({ sessionsOpen: true, sessionsProjectId: freeChat ? null : thread?.project_id ?? null }) },
-      { name: "sessions", hint: "Browse saved sessions", icon: <ClockIcon className="size-4" />, run: () => set({ sessionsOpen: true, sessionsProjectId: freeChat ? null : thread?.project_id ?? null }) },
-      ...(canCompact ? [{ name: "compact", hint: "Compact context and keep conversation history", icon: <WorkflowIcon className="size-4" />, run: () => {
-        void rpc().call("threads.compact", { thread_id: threadId }).catch((error) => toast.error("Unable to compact context", { description: errorText(error) }))
-      } }] : []),
-      ...nativeCommands.filter((command) => command.name !== "compact").map((command) => ({
-        name: ["resume", "sessions", "new", "stop", "activity", "attach", "changes", "terminal", "files", "environment", "pr", "archive", "settings", "usage"].includes(command.name) ? `harness:${command.name}` : command.name,
-        invocation: command.name,
-        hint: `${PROVIDER_LABEL[thread?.provider.kind ?? "codex"]} · ${command.description}`,
-        insert: true, run: () => {},
-      })),
-      { name: "new", hint: freeChat ? "Start a new free chat" : "Start a new thread in this project", icon: <NewThreadIcon className="size-4" />, run: () => newThread(freeChat ? undefined : thread?.project_id) },
-      { name: "reconnect", hint: "Release the idle agent; resume history on your next message", icon: <WorkflowIcon className="size-4" />, run: () => {
-        void rpc().call("threads.release", { thread_id: threadId }).then(() => toast("Agent released", { description: "Your next message resumes the saved conversation." })).catch((error) => toast.error("Unable to release agent", { description: errorText(error) }))
-      } },
-      { name: "stop", hint: "Interrupt the running turn", icon: <StopIcon className="size-4" />, run: () => void interrupt(threadId) },
-      { name: "activity", hint: "Show agents and background processes", icon: <WorkflowIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "activity" }) },
-      { name: "agents", hint: "Start and coordinate helper agents", icon: <UsersIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "agents" }) },
-      { name: "attach", hint: "Attach files or images", icon: <PaperclipIcon className="size-4" />, run: () => document.querySelector<HTMLInputElement>('input[type="file"]')?.click() },
-      { name: "terminal", hint: "Open a terminal in this thread", icon: <TerminalIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "terminal" }) },
-      ...(!freeChat ? [
-        { name: "changes", hint: "Show the changes panel", icon: <ChangesIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "changes" as const }) },
-        { name: "files", hint: "Browse the project files", icon: <FoldersIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "explorer" as const }) },
-        { name: "environment", hint: "Show branch, commit and pull request controls", icon: <GitBranchIcon className="size-4" />, run: () => set({ rightOpen: true, rightTab: "changes" as const }) },
-        {
-        name: "pr",
-        hint: "Create a pull request from this thread",
-        icon: <GitPullRequestIcon className="size-4" />,
-        run: () =>
-          rpc()
+    () => {
+      const sessions = () => set({ sessionsOpen: true, sessionsProjectId: freeChat ? null : thread?.project_id ?? null })
+      const panel = (rightTab: "activity" | "agents" | "terminal" | "changes" | "explorer") => () => set({ rightOpen: true, rightTab })
+      const handlers: Record<ThreadCommandId, { icon: ReactNode; run: () => void }> = {
+        resume: { icon: <ClockIcon className="size-4" />, run: sessions },
+        sessions: { icon: <ClockIcon className="size-4" />, run: sessions },
+        compact: { icon: <WorkflowIcon className="size-4" />, run: () => {
+          void rpc().call("threads.compact", { thread_id: threadId }).catch((error) => toast.error("Unable to compact context", { description: errorText(error) }))
+        } },
+        new: { icon: <NewThreadIcon className="size-4" />, run: () => newThread(freeChat ? undefined : thread?.project_id) },
+        reconnect: { icon: <WorkflowIcon className="size-4" />, run: () => {
+          void rpc().call("threads.release", { thread_id: threadId }).then(() => toast("Agent released", { description: "Your next message resumes the saved conversation." })).catch((error) => toast.error("Unable to release agent", { description: errorText(error) }))
+        } },
+        stop: { icon: <StopIcon className="size-4" />, run: () => void interrupt(threadId) },
+        activity: { icon: <WorkflowIcon className="size-4" />, run: panel("activity") },
+        agents: { icon: <UsersIcon className="size-4" />, run: panel("agents") },
+        attach: { icon: <PaperclipIcon className="size-4" />, run: () => document.querySelector<HTMLInputElement>('input[type="file"]')?.click() },
+        terminal: { icon: <TerminalIcon className="size-4" />, run: panel("terminal") },
+        changes: { icon: <ChangesIcon className="size-4" />, run: panel("changes") },
+        files: { icon: <FoldersIcon className="size-4" />, run: panel("explorer") },
+        environment: { icon: <GitBranchIcon className="size-4" />, run: panel("changes") },
+        pr: { icon: <GitPullRequestIcon className="size-4" />, run: () =>
+          void rpc()
             .call("github.pr.create", { thread_id: threadId })
             .then((p) => toast("Pull request opened", { description: p.title, action: { label: "Open", onClick: () => void openExternal(p.url) } }))
-            .catch((e) => toast.error("Unable to create pull request", { description: errorText(e) })),
-        },
-      ] : []),
-      { name: "archive", hint: "Archive this thread", icon: <ArchiveIcon className="size-4" />, run: () => void archiveThread(threadId) },
-      { name: "settings", hint: "Open settings", icon: <SettingsIcon className="size-4" />, run: () => set({ settingsOpen: true, settingsTab: "general" }) },
-      { name: "usage", hint: "Review token usage and cost", icon: <AnalyticsIcon className="size-4" />, run: () => useStore.getState().selectUsage() },
-    ],
+            .catch((e) => toast.error("Unable to create pull request", { description: errorText(e) })) },
+        archive: { icon: <ArchiveIcon className="size-4" />, run: () => void archiveThread(threadId) },
+        settings: { icon: <SettingsIcon className="size-4" />, run: () => set({ settingsOpen: true, settingsTab: "general" }) },
+        usage: { icon: <AnalyticsIcon className="size-4" />, run: () => useStore.getState().selectUsage() },
+      }
+      return threadCommandSpecs({ freeChat, canCompact, providerKind: thread?.provider.kind, nativeCommands }).map((spec): SlashCommand =>
+        spec.kind === "native"
+          ? { name: spec.name, invocation: spec.invocation, hint: spec.hint, insert: true, run: () => {} }
+          : { name: spec.name, hint: spec.hint, ...handlers[spec.id] })
+    },
     [threadId, thread?.project_id, thread?.provider, freeChat, canCompact, nativeCommands, set],
   )
 

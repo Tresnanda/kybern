@@ -167,16 +167,41 @@ export function Para({ children, color, size = TEXT.size, lineHeight = TEXT.line
 
 /** Token colours of Shiki's `github-dark-default` / `github-light-default`, the themes
  *  `lib/highlight.worker.ts` renders transcript code with, mapped onto the native
- *  tree-sitter capture names (TextMate scopes → nearest capture). */
-const GITHUB_SYNTAX = {
+ *  highlight kinds (TextMate scopes → nearest kind, `native/syntax`). */
+const GITHUB_SLOTS = {
   dark: { fg: '#e6edf3', comment: '#8b949e', keyword: '#ff7b72', string: '#a5d6ff', constant: '#79c0ff', entity: '#ffa657', fn: '#d2a8ff', tag: '#7ee787', invalid: '#ffa198' },
   light: { fg: '#1f2328', comment: '#6e7781', keyword: '#cf222e', string: '#0a3069', constant: '#0550ae', entity: '#953800', fn: '#8250df', tag: '#116329', invalid: '#82071e' },
 } as const
-export function githubSyntax(variant: 'dark' | 'light') {
-  const c = GITHUB_SYNTAX[variant]
-  return { comment: c.comment, keyword: c.keyword, string: c.string, stringSpecial: c.string, escape: c.constant, number: c.constant, boolean: c.constant,
-    typeName: c.entity, typeBuiltin: c.entity, constructor: c.entity, function: c.fn, functionBuiltin: c.fn, macroName: c.fn, property: c.constant, constant: c.constant,
-    variable: c.fg, variableSpecial: c.constant, parameter: c.entity, operator: c.keyword, punctuation: c.fg, tag: c.tag, attribute: c.constant, label: c.entity, invalid: c.invalid }
+type Slot = keyof typeof GITHUB_SLOTS.dark
+type SyntaxKind = 'comment' | 'keyword' | 'string' | 'stringSpecial' | 'escape' | 'number' | 'boolean' | 'typeName' | 'typeBuiltin' | 'constructor' | 'function' | 'functionBuiltin' | 'macroName' | 'property' | 'constant' | 'variable' | 'variableSpecial' | 'parameter' | 'operator' | 'punctuation' | 'tag' | 'attribute' | 'label' | 'invalid'
+/** The slot each native kind takes unless a language says otherwise. */
+const BASE_KINDS: Record<SyntaxKind, Slot> = {
+  comment: 'comment', keyword: 'keyword', string: 'string', stringSpecial: 'string', escape: 'constant', number: 'constant', boolean: 'constant',
+  typeName: 'entity', typeBuiltin: 'entity', constructor: 'entity', function: 'fn', functionBuiltin: 'fn', macroName: 'fn', property: 'constant', constant: 'constant',
+  variable: 'fg', variableSpecial: 'constant', parameter: 'entity', operator: 'keyword', punctuation: 'fg', tag: 'tag', attribute: 'constant', label: 'entity', invalid: 'invalid',
+}
+/** One kind covers scopes Shiki colours differently per language (the native renderer uses Sublime grammars, Shiki the
+ *  VS Code ones), so each common language re-points the kinds whose Shiki colour differs. Measured as the share of
+ *  characters with the Shiki colour over real source (`perf/syntax-parity-2026-10-18.md`). `plain` colours text no
+ *  grammar scope covers: in shell that is every argument, which Shiki draws as a string. */
+const LANGUAGE_KINDS: Record<string, { plain?: Slot; kinds: Partial<Record<Exclude<SyntaxKind, 'constructor'>, Slot>> }> = {
+  bash: { plain: 'string', kinds: { variable: 'entity', parameter: 'constant', functionBuiltin: 'constant', number: 'keyword' } },
+  typescript: { kinds: { typeBuiltin: 'constant', property: 'fg' } },
+  rust: { kinds: { property: 'fg', parameter: 'fg' } },
+  python: { kinds: { typeBuiltin: 'constant', functionBuiltin: 'constant', parameter: 'fg' } },
+  json: { kinds: { property: 'tag', escape: 'keyword' } },
+  css: { kinds: { typeBuiltin: 'fg', functionBuiltin: 'fg', constant: 'fg', tag: 'keyword' } },
+}
+const LANGUAGE_ALIASES: Record<string, string> = {
+  sh: 'bash', bash: 'bash', shell: 'bash', zsh: 'bash', console: 'bash', shellscript: 'bash',
+  ts: 'typescript', typescript: 'typescript', tsx: 'typescript', js: 'typescript', javascript: 'typescript', jsx: 'typescript', mjs: 'typescript', cjs: 'typescript', mts: 'typescript', cts: 'typescript',
+  rust: 'rust', rs: 'rust', python: 'python', py: 'python', python3: 'python', json: 'json', jsonc: 'json', css: 'css',
+}
+/** The `LANGUAGE_KINDS` entry a fence tag uses, if any. */
+export const syntaxProfile = (language?: string) => LANGUAGE_ALIASES[(language ?? '').trim().split(/\s+/)[0]!.toLowerCase()]
+export function githubSyntax(variant: 'dark' | 'light', profile?: string) {
+  const c = GITHUB_SLOTS[variant], kinds = { ...BASE_KINDS, ...(profile ? LANGUAGE_KINDS[profile]?.kinds : undefined) }
+  return Object.fromEntries(Object.entries(kinds).map(([kind, slot]) => [kind, c[slot]])) as Record<SyntaxKind, string>
 }
 
 /** An icon source (`#000` strokes, tinted by the mask elsewhere) with its real colour, for icons drawn as images. */
@@ -238,10 +263,17 @@ export function cachedMarkdownTheme(t: Theme, tone: 'bright' | 'muted' = 'bright
   return (entry[tone] ??= markdownTheme(t, tone))
 }
 
-const codeThemeCache = new WeakMap<Theme, ReturnType<typeof markdownTheme>>()
-/** Answer fences: `pre` keeps the chat's 22.75px line box (`pre code` is 13px/1.5 inside it), unlike tool output. */
-export function cachedCodeTheme(t: Theme) {
-  let theme = codeThemeCache.get(t)
-  if (!theme) codeThemeCache.set(t, (theme = markdownTheme(t, 'bright', TEXT.lineHeight)))
+const codeThemeCache = new WeakMap<Theme, Map<string, ReturnType<typeof markdownTheme>>>()
+/** Answer fences: `pre` keeps the chat's 22.75px line box (`pre code` is 13px/1.5 inside it), unlike tool output.
+ *  `language` picks the fence's Shiki-matched palette (`LANGUAGE_KINDS`). */
+export function cachedCodeTheme(t: Theme, language?: string) {
+  const profile = syntaxProfile(language) ?? ''
+  let themes = codeThemeCache.get(t)
+  if (!themes) codeThemeCache.set(t, (themes = new Map()))
+  let theme = themes.get(profile)
+  if (!theme) {
+    const base = markdownTheme(t, 'bright', TEXT.lineHeight), plain = LANGUAGE_KINDS[profile]?.plain
+    themes.set(profile, (theme = profile ? { ...base, ...(plain ? { text: GITHUB_SLOTS[t.variant][plain], codeText: GITHUB_SLOTS[t.variant][plain] } : {}), syntax: githubSyntax(t.variant, profile) } : base))
+  }
   return theme
 }

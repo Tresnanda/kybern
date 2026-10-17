@@ -16,10 +16,10 @@ import { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import { launchFixture } from '../requests/harness.ts'
 
 const ROOT = '/Users/mymac/projects/ade-gpuix-scratch'
-const DIR = `${ROOT}/phase2-settings9-a`
-const CLIENT_DIR = `${ROOT}/phase2-settings9-a-client`
-const PORT = 4296
-const EVIDENCE = '/Users/mymac/projects/ade/previews/gpuix/phase2/settings9/partA/verify'
+const DIR = process.env.VERIFY9A_DIR ?? `${ROOT}/phase2-settings9-a`
+const CLIENT_DIR = `${DIR}-client`
+const PORT = Number(process.env.VERIFY9A_PORT ?? 4296)
+const EVIDENCE = process.env.VERIFY9A_EVIDENCE ?? '/Users/mymac/projects/ade/previews/gpuix/phase2/settings9/partA/verify'
 const light = process.argv.includes('--light')
 const reduced = process.argv.includes('--reduced')
 const tag = `${light ? 'light' : 'dark'}-${reduced ? 'reduced' : 'motion'}`

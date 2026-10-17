@@ -553,6 +553,7 @@ edit("renderer.rs", "                el.block_mouse_except_scroll()", "         
 exec((Path(__file__).parent / "scroll_hooks.py").read_text())
 exec((Path(__file__).parent / "convo9_hooks.py").read_text())
 exec((Path(__file__).parent / "window_platform_hooks.py").read_text())
+exec((Path(__file__).parent / "editor9_hooks.py").read_text())
 
 for path, text in pending.items():
     (src / path).write_text(text)

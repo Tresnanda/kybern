@@ -104,6 +104,21 @@ flowchart LR
 
 So it stays readable as source.`
 
+
+/** One fence per grammar the native renderer ships, to compare token colours against Shiki (polish9). */
+const CODE_LANGUAGES = [
+  ['sh', 'cd apps/desktop && pnpm dev --port 4199 # start\nexport FOO="bar $BAZ"\nif [ -f x ]; then echo "$(ls -la)" | grep -v x; fi\nfor i in 1 2; do git commit -m "msg"; done'],
+  ['ts', 'import { a } from "x"\nconst n: number = 42\nexport function f(x: string): void { return console.log(`hi ${x}`) } // c\nclass A extends B { private x = true }'],
+  ['json', '{ "a": [1, true, null], "b": "s" }'],
+  ['python', 'def f(x: int) -> str:\n    """doc"""\n    return f"{x}"  # c\nclass A(B): pass'],
+  ['rust', 'fn main() -> Result<(), E> {\n    let x: u32 = 1;\n    println!("{}", x);\n}'],
+  ['css', '.a > b:hover { color: #fff; margin: 0 4px; } /* c */\n@media (min-width: 1px) { :root { --x: 1 } }'],
+  ['yaml', 'name: ci\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest # c\n    steps: [{ run: "echo 1" }]'],
+  ['diff', '--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-old line\n+new line\n context'],
+  ['go', 'package main\nfunc main() {\n\tx := 1 // c\n\tfmt.Println("hi", x)\n}'],
+]
+const fences = (from: number, to: number) => CODE_LANGUAGES.slice(from, to).map(([lang, code]) => `\`\`\`${lang}\n${code}\n\`\`\``).join('\n\n')
+
 let LINKS = 'placeholder'
 export async function seed(client: KybernClient, ctx: { projects: { id: string }[] }) {
   const [note] = (await client.call('notes.list', {})).notes, [task] = (await client.call('tasks.items.list', {})).tasks
@@ -111,7 +126,7 @@ export async function seed(client: KybernClient, ctx: { projects: { id: string }
   const db = new Database(path.join(DATA_DIR, 'state.sqlite'))
   db.exec('PRAGMA busy_timeout = 5000')
   const usage = { input_tokens: 4200, output_tokens: 880, cache_read_tokens: 12000, cache_write_tokens: 300 }
-  for (const [title, text] of [['Markdown A', BLOCKS_A], ['Markdown B', BLOCKS_B], ['Markdown C', BLOCKS_C], ['Mermaid diagram', MERMAID], ['Mermaid invalid', MERMAID_INVALID], ['Tokens in message', 'Done.'], ['Note links', LINKS]] as const) {
+  for (const [title, text] of [['Markdown A', BLOCKS_A], ['Markdown B', BLOCKS_B], ['Markdown C', BLOCKS_C], ['Code languages', fences(0, 3)], ['Code languages 2', fences(3, 6)], ['Code languages 3', fences(6, 9)], ['Mermaid diagram', MERMAID], ['Mermaid invalid', MERMAID_INVALID], ['Tokens in message', 'Done.'], ['Note links', LINKS]] as const) {
     const thread = await client.call('threads.create', { project_id: ctx.projects[0]!.id, provider: { kind: 'claude-code', instance: 'default' }, permission_mode: 'supervised', title })
     const turn = randomUUID(), answer = randomUUID()
     const events = [

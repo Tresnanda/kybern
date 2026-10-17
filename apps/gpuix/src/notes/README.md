@@ -23,52 +23,15 @@ The transcript-owned button is deliberately left to that surface's owner.
 
 ## Editing and persistence
 
-Editable prose stays in a formatted native input (`RichTextarea`); focusing it
-does not reveal Markdown delimiters or link destinations. `rich-text.ts` maps
-the visible UTF-16 text and semantic ranges to source-positioned CommonMark/GFM
-from the desktop parser. Text edits patch source ranges; only a formatting action
-serializes its touched parsed block with the standard mdast serializer. Unchanged
-source round-trips exactly, including images, titled/reference links, arbitrary
-code fences/spans, tables, definitions and entities. A reparse verifies visible
-text before a source change can be published. Selection marks and links change the selection;
-block formatting still applies to the current virtual block. Image blocks retain the existing native image host. `RichDocument` keeps mixed
-code and following paragraphs editable, and renders table cells as formatted
-native inputs in a native grid. An edited paragraph keeps its scope stable across
-source echoes when Return creates another paragraph. Dividers keep their display host. The slash chooser is a floating native layer.
+The note body is the shared formatted editor (`../editor/`, README there): one
+native `<rich-editor>` for the whole document, edited in place with the reading
+look, the desktop's toolbar (`Toolbar.tsx`, desktop `NoteToolbar`), slash menu,
+link bubble, live task references, images and "Make task" on checklist lines.
+The page is one scrolling column (meta line, title, body, the blank space below
+that focuses the end); the outline reads heading positions from the editor's
+state. Quick capture and the compact thread/dock note use the same editor.
+Markdown is written back losslessly: unchanged blocks keep their exact source.
 The title and body save after 500 ms, on blur, window hiding and unmount.
-
-The formatted editor keeps a 200-entry history including formatting-only
-changes and saved selections, with 800ms typing groups. Marked IME text stays
-in the native editor; formatting and history shortcuts do not consume composition
-keys. A committed composition publishes one document history entry. A real input
-method still needs a manual integration check.
-
-Round 5 references: desktop `NoteBody.tsx`, `FormatBar.tsx`, `editorExtensions.ts`,
-`slashItems.ts`, `components/kit/chat/ComposerEditor.tsx`, and
-`views/tasks/TaskDetail.tsx`. Tasks use the same formatted buffer. Composer tokens
-use `composer/TokenTextarea.tsx` and `token-text.ts`: inline atomic display labels,
-source/display selection conversion, raw-token keyboard copy/cut, and completion
-transactions with their own history. They no longer duplicate mentions above
-the editor.
-
-`bun scripts/rich-editor-check.ts` and `bun scripts/rich-document-check.ts` each passed in four native configurations (dark/light, Reduce Motion off/on), using the integration native binary read-only.
-It checks actual painted formatted text, selection formatting and restored
-selection on undo, redo, atomic token movement/deletion, raw source offsets,
-undo of mention insertion and reversed selection restoration. The mixed-document fixture also checks a real native image, literal code, editable later prose, formatted table cells and undo, exact untouched image/code source, and Return+typing across source echoes. Screenshots are in the original conversation at
-`previews/gpuix/round5/rich/`. These are GPUIX fixtures compared with desktop
-source; no matching live Tauri screenshot or 1:1 visual certification was made.
-
-Remaining editor parity work: one native document selection and history across
-virtual Notes blocks; exact list/quote/nested-block layout and mixed heading
-sizes and code-block wash/metrics; native inline token icons and full layout padding; selection and link
-bubbles; task-description slash commands and image insertion/resizing; formatted clipboard HTML and native
-Edit-menu commands; a real IME and clipboard integration pass. Current inline
-code has a wash but not its own monospace run, and strike is retained in Markdown
-but only dimmed by the current decoration primitive. The CommonMark/GFM source model preserves document nodes, while the native
-presentation still lacks some ProseMirror behaviors. Complex inline images
-retain a native image host below their containing paragraph rather than exact
-inline geometry. Images and tables are not replaced by source text. Do not treat
-typecheck or the fixture's successful checks as complete editor parity.
 
 `session` serializes writes, retains newer typing during an in-flight request,
 persists unsaved drafts, merges only unambiguous remote line edits, and offers
@@ -80,41 +43,6 @@ Display choices use `kybern.notes.display`; quick drafts use
 `kybern.notes.quick`; note drafts use `kybern.notes.draft:env:note:<id>` in the
 per-environment store. Desktop's `lastOpenId` is memory-only on this base;
 GPUIX additionally persists it as `kybern.notes.lastOpenId`.
-
-## Initial GPUIX 0.10.0 investigation (historical)
-
-The initial investigation below predates the input API/decorations patches and
-the formatted editing work above. It was verified against installed `@gpuix/native/dist/host.d.ts`, `index.d.ts`, and
-`@gpuix/react/dist/types/host.d.ts` (plus current Context7 docs):
-
-- Inputs expose `value`, `onChange`, `readOnly`, theme and focus/blur/key events.
-  Textareas add `minRows`/`maxRows`; edits apply in native code immediately.
-- Markdown exposes `source`, theme and `onLinkClick`; it is not editable.
-- Renderer selection APIs return joined selected text and clear the selection.
-  There is no input caret range, selection setter, replacement transaction,
-  editable rich-text tree, or cancellable before-input event.
-- Export uses the native save panel (`platform/files.ts` `saveTextFile`, the
-  desktop's `save_text_file`); the panel asks before replacing a file.
-- `slashItems`, `outlineHeadings`, `noteLinks` and `taskRef` contain editor,
-  browser or Tauri runtime dependencies, so they are not safe pure imports.
-
-For faithful WYSIWYG, the patched module would need:
-
-1. `getInputSelection(id)` and `setInputSelection(id, {anchor, head})` using
-   documented UTF-16 offsets; `onSelectionChange` with input id, offsets,
-   caret/selection rectangles, and composition state.
-2. Atomic `replaceInputRange(id, {from, to, text, selection, undoGroup})`, with
-   native undo/redo and IME preservation, plus cancellable `beforeInput`/key
-   handling. This enables precise formatting, slash acceptance, links and
-   cross-block caret navigation without rewriting the whole field value.
-3. An editable attributed/block document host with source ranges, styled text
-   runs, inline task/image atoms, transaction events, selection and native IME.
-   Read-only Markdown source rendering alone cannot supply ProseMirror parity.
-
-The current remaining differences are listed above. This historical investigation
-does not describe the current input-selection API, formatted editor, image upload
-or shared-note routing. Task-reference status and save-picker placement still
-need their own current parity checks.
 
 ## Verification
 

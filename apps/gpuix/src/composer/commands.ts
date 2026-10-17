@@ -2,7 +2,7 @@
 // compact, the harness's own commands, new, reconnect, stop, the dock panels,
 // pull request, archive, settings and usage.
 import { useMemo } from 'react'
-import { PROVIDER_LABEL } from '@/lib/format'
+import { threadCommandSpecs, type ThreadCommandId } from '@/lib/threadCommands'
 import { isFreeChatProject, type Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { chooseTab, setDock, type DockTab } from '../dock/store.ts'
 import { N } from '../nav/glyphs.ts'
@@ -17,8 +17,6 @@ import { errorText, interruptThread } from './store.ts'
 import type { SlashCommand } from './Completion.tsx'
 
 const EMPTY: never[] = []
-/** Names the harness may also define; the desktop prefixes those so both stay reachable. */
-const LOCAL = ['resume', 'sessions', 'new', 'stop', 'activity', 'attach', 'changes', 'terminal', 'files', 'environment', 'pr', 'archive', 'settings', 'usage']
 
 export function useThreadCommands(thread: Thread | null, attach: () => void): SlashCommand[] {
   const nativeCommands = useApp(s => (thread && s.open.thread?.id === thread.id ? s.open.providerCommands : undefined) ?? EMPTY)
@@ -29,40 +27,37 @@ export function useThreadCommands(thread: Thread | null, attach: () => void): Sl
     const panel = (tab: DockTab) => () => { setDock(thread.id, { open: true }); chooseTab(thread.id, tab) }
     const sessions = () => setNav({ sessions: { projectId: freeChat ? null : thread.project_id } })
     const client = () => getClient()!
-    return [
-      { name: 'resume', hint: 'Continue a saved session', icon: G.clock, run: sessions },
-      { name: 'sessions', hint: 'Browse saved sessions', icon: G.clock, run: sessions },
-      ...(canCompact ? [{ name: 'compact', hint: 'Compact context and keep conversation history', icon: G.workflow, run: () => {
+    const handlers: Record<ThreadCommandId, { icon: string; run: () => void }> = {
+      resume: { icon: G.clock, run: sessions },
+      sessions: { icon: G.clock, run: sessions },
+      compact: { icon: G.workflow, run: () => {
         void client().call('threads.compact', { thread_id: thread.id }).catch(error => toast.error('Unable to compact context', { description: errorText(error) }))
-      } }] : []),
-      ...nativeCommands.filter(command => command.name !== 'compact').map(command => ({
-        name: LOCAL.includes(command.name) ? `harness:${command.name}` : command.name,
-        invocation: command.name,
-        hint: `${PROVIDER_LABEL[thread.provider.kind]} · ${command.description}`,
-        icon: G.terminal, insert: true, run: () => {},
-      })),
-      { name: 'new', hint: freeChat ? 'Start a new free chat' : 'Start a new thread in this project', icon: N.newThread, run: () => newThread(freeChat ? undefined : thread.project_id) },
-      { name: 'reconnect', hint: 'Release the idle agent; resume history on your next message', icon: G.workflow, run: () => {
+      } },
+      new: { icon: N.newThread, run: () => newThread(freeChat ? undefined : thread.project_id) },
+      reconnect: { icon: G.workflow, run: () => {
         void client().call('threads.release', { thread_id: thread.id }).then(() => toast('Agent released', { description: 'Your next message resumes the saved conversation.' })).catch(error => toast.error('Unable to release agent', { description: errorText(error) }))
       } },
-      { name: 'stop', hint: 'Interrupt the running turn', icon: N.stop, run: () => void interruptThread(thread.id).catch(() => {}) },
-      { name: 'activity', hint: 'Show agents and background processes', icon: G.workflow, run: panel('activity') },
-      { name: 'agents', hint: 'Start and coordinate helper agents', icon: N.users, run: panel('agents') },
-      { name: 'attach', hint: 'Attach files or images', icon: G.paperclip, run: attach },
-      { name: 'terminal', hint: 'Open a terminal in this thread', icon: G.terminal, run: panel('terminal') },
-      ...(!freeChat ? [
-        { name: 'changes', hint: 'Show the changes panel', icon: G.changes, run: panel('changes') },
-        { name: 'files', hint: 'Browse the project files', icon: G.folders, run: panel('explorer') },
-        { name: 'environment', hint: 'Show branch, commit and pull request controls', icon: N.branch, run: panel('changes') },
-        { name: 'pr', hint: 'Create a pull request from this thread', icon: N.pullRequest, run: () => {
-          void client().call('github.pr.create', { thread_id: thread.id })
-            .then(pr => toast('Pull request opened', { description: pr.title, action: { label: 'Open', onClick: () => void launchBrowser(pr.url) } }))
-            .catch(error => toast.error('Unable to create pull request', { description: errorText(error) }))
-        } },
-      ] : []),
-      { name: 'archive', hint: 'Archive this thread', icon: N.archive, run: () => void archiveThread(thread.id) },
-      { name: 'settings', hint: 'Open settings', icon: N.settings, run: () => setNav({ settingsOpen: true }) },
-      { name: 'usage', hint: 'Review token usage and cost', icon: N.usage, run: () => goPage('usage') },
-    ]
+      stop: { icon: N.stop, run: () => void interruptThread(thread.id).catch(() => {}) },
+      activity: { icon: G.workflow, run: panel('activity') },
+      agents: { icon: N.users, run: panel('agents') },
+      attach: { icon: G.paperclip, run: attach },
+      terminal: { icon: G.terminal, run: panel('terminal') },
+      changes: { icon: G.changes, run: panel('changes') },
+      files: { icon: G.folders, run: panel('explorer') },
+      environment: { icon: N.branch, run: panel('changes') },
+      pr: { icon: N.pullRequest, run: () => {
+        void client().call('github.pr.create', { thread_id: thread.id })
+          .then(pr => toast('Pull request opened', { description: pr.title, action: { label: 'Open', onClick: () => void launchBrowser(pr.url) } }))
+          .catch(error => toast.error('Unable to create pull request', { description: errorText(error) }))
+      } },
+      archive: { icon: N.archive, run: () => void archiveThread(thread.id) },
+      settings: { icon: N.settings, run: () => setNav({ settingsOpen: true }) },
+      usage: { icon: N.usage, run: () => goPage('usage') },
+    }
+    // The names, hints and order are the desktop's (`lib/threadCommands.ts`); only the icons and handlers are ours.
+    return threadCommandSpecs({ freeChat, canCompact, providerKind: thread.provider.kind, nativeCommands }).map((spec): SlashCommand =>
+      spec.kind === 'native'
+        ? { name: spec.name, invocation: spec.invocation, hint: spec.hint, icon: G.terminal, insert: true, run: () => {} }
+        : { name: spec.name, hint: spec.hint, ...handlers[spec.id] })
   }, [thread?.id, thread?.project_id, thread?.provider.kind, freeChat, canCompact, nativeCommands, attach])
 }

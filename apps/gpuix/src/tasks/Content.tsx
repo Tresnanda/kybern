@@ -2,8 +2,10 @@
 // the title, the description and each criterion are edited where they sit, in the reading
 // layout. There is no edit mode, toolbar card, Done button or boxed field.
 import { useGpuix, type PublicInstance } from '@gpuix/react'
-import { useEffect, useRef } from 'react'
-import { RichDocument } from '../notes/RichDocument.tsx'
+import { useEffect, useMemo, useRef } from 'react'
+import { RichEditor, type RichEditorHandle } from '../editor/RichEditor.tsx'
+import type { ImageHome } from '../editor/images.ts'
+import { getClient } from '../state.ts'
 import { openLink } from '../notes/NoteEditor.tsx'
 import { notesTokens } from '../notes/kit.tsx'
 import { FONT_UI } from '../theme.ts'
@@ -40,30 +42,36 @@ export function TitleField({ value, saved, onChange, onCommit, onEnter }: { valu
   )
 }
 
-/** `.tk-desc .note-prose`: 15/24 at 86% ink, written where it is read. Inline marks stay styled; no box, no padding. */
-export function DescriptionEditor({ value, onChange, onCommit, onExit, onFocus, focus = false }: { value: string; onChange: (value: string) => void; onCommit: () => void; onExit: () => void; onFocus?: () => void; focus?: boolean }) {
+/** `.tk-desc .note-prose`: the shared editor at 15/24 in the task's 86% ink, edited where it is read
+ * (desktop `NoteBody` variant `compact` inside `.tk-desc`). Images go to the environment that keeps the tasks. */
+export function DescriptionEditor({ value, epoch, onChange, onCommit, onExit, onFocus, focus = false }: { value: string; epoch: number; onChange: (value: string) => void; onCommit: () => void; onExit: () => void; onFocus?: () => void; focus?: boolean }) {
   const t = useTheme()
-  const { renderer } = useGpuix()
-  const ref = useRef<PublicInstance>(null)
-  useEffect(() => { if (focus && ref.current) renderer?.focusElement?.(ref.current.id) }, [focus])
+  const editor = useRef<RichEditorHandle>(null)
+  const images = useMemo<ImageHome>(() => ({ endpoint: () => getClient()?.endpoint ?? null }), [])
+  useEffect(() => { if (focus) editor.current?.focus() }, [focus])
   return (
-    <RichDocument
+    <div testId="task-desc" style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
+    <RichEditor
+      ref={editor}
       testId="task-desc-input"
-      nativeRef={ref}
-      onOpenLink={openLink}
       aria-label="Description"
       value={value}
-      minRows={1}
-      maxRows={60}
+      epoch={epoch}
+      variant="compact"
+      size={15}
+      lineHeight={24}
+      color={ink(t, 0.86)}
+      minHeight={24}
+      images={images}
       placeholder="Add a description…"
+      onOpenLink={openLink}
       interceptKeys={['escape']}
       onFocus={() => { taskTyping(true); onFocus?.() }}
       onBlur={() => { taskTyping(false); onCommit(); onExit() }}
-      onKeyDown={(e) => { if ((e as typeof e & { requestId?: number }).requestId != null && e.key === 'escape') { e.preventDefault(); onCommit(); onExit() } }}
+      onKeyDown={(e) => { if (e.requestId != null && e.key === 'escape' && !e.defaultPrevented) { e.preventDefault(); onCommit(); onExit() } }}
       onChange={onChange}
-      theme={{ text: ink(t, 0.86), caret: t.text }}
-      style={{ width: '100%', padding: 0, fontFamily: FONT_UI, fontSize: 15, lineHeight: 24, color: ink(t, 0.86), backgroundColor: 'transparent' }}
     />
+    </div>
   )
 }
 

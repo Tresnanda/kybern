@@ -182,7 +182,7 @@ export async function loadProviders(forceRefresh = false) {
   const client = getClient()
   if (!client) return []
   const result = await client.call('providers.list', forceRefresh ? { force_refresh: true } : {})
-  if (getClient() === client) setNav({ providers: result.providers })
+  if (getClient() === client) setNav({ providers: result.providers, providersLoaded: true })
   return result.providers
 }
 
@@ -285,7 +285,7 @@ export function startLive() {
   stops.push(client.onNotification(USAGE_LIMITS_CHANGED_NOTIFICATION, (params) => applyLimits(params as UsageLimitsResult)))
   const onOpen = () => {
     void refreshActivity()
-    void loadProviders().catch(() => {})
+    void loadProviders().catch(() => { if (getClient() === client) setNav({ providersLoaded: true }) })
     askLimits()
     void client.call('daemon.info', {}).then((info) => { if (getClient() === client) setNav({ version: info.version ?? null }) }, () => {})
   }

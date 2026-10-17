@@ -27,6 +27,9 @@ export const screens: Record<string, Step> = {
   'convo9-composer-token': async (app, fx) => { await open(app, fx, 'Markdown B'); await composer(app).fill('Look at @Release'); await settle(1000); await composer(app).press('enter'); await settle(800); await composer(app).press('End'); await park(app) },
   'convo9-trigger-wait': async (app, fx) => { await open(app, fx, 'Markdown B'); await settle(4000); await park(app) },
   'convo9-md-a': async (app, fx) => { await open(app, fx, 'Markdown A'); await park(app) },
+  'polish9-code': async (app, fx) => { await open(app, fx, 'Code languages'); await settle(3000); await park(app) },
+  'polish9-code-2': async (app, fx) => { await open(app, fx, 'Code languages 2'); await settle(3000); await park(app) },
+  'polish9-code-3': async (app, fx) => { await open(app, fx, 'Code languages 3'); await settle(3000); await park(app) },
   'convo9-md-b': async (app, fx) => { await open(app, fx, 'Markdown B'); await park(app) },
   'convo9-md-c': async (app, fx) => { await open(app, fx, 'Markdown C'); await park(app) },
 
