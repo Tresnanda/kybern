@@ -15,7 +15,9 @@
 // (`native/visibility.ts`). Automation windows (`GPUIX_BACKGROUND=1`) usually sit
 // behind other apps, so they opt in with `KYBERN_HIDDEN_COMPACT=1`; screenshots
 // of covered windows would otherwise capture the placeholder.
+import type { Pointer } from 'bun:ffi'
 import { useSyncExternalStore } from 'react'
+import { each, getObjc, nsApp, sel } from '../native/objc.ts'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 import { reloadOpenTranscripts, releaseOpenTranscripts } from '../state.ts'
 
@@ -38,7 +40,11 @@ function compact() {
   log('released')
   // Unmount first: each list saves its anchor while its rows still exist.
   emit()
-  queueMicrotask(releaseOpenTranscripts)
+  queueMicrotask(() => {
+    releaseOpenTranscripts()
+    // Return the released blocks and rows now: a hidden window may not run JS again for hours.
+    setTimeout(() => (globalThis as { Bun?: { gc(full: boolean): void } }).Bun?.gc(true), 250)
+  })
 }
 function restore() {
   if (!released) return
@@ -64,4 +70,24 @@ export function installWindowSurface() {
   if (stop || !hiddenCompactEnabled()) return
   stop = onWindowVisibility(sync)
   sync(isWindowVisible())
+  debugCycle()
+}
+
+/**
+ * Checks: `KYBERN_DEBUG_SURFACE="minimize@4000,restore@9000"` miniaturizes and
+ * deminiaturizes the window through AppKit at those times (ms after start),
+ * without activating the app.
+ */
+function debugCycle() {
+  for (const step of (process.env.KYBERN_DEBUG_SURFACE ?? '').split(',').filter(Boolean)) {
+    const [action, at] = step.split('@') as [string, string]
+    setTimeout(() => {
+      const o = getObjc(), app = nsApp()
+      if (!app) return
+      each(o, o.msg(app, sel(o, 'windows')) as Pointer, (window) => {
+        if (!o.msg(window, sel(o, 'contentView'))) return
+        o.msgSetPtr(window, sel(o, action === 'minimize' ? 'miniaturize:' : 'deminiaturize:'), null as unknown as Pointer)
+      })
+    }, Number(at))
+  }
 }
