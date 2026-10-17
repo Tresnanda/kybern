@@ -17,6 +17,7 @@ import { glyphRects, isCustomGlyph } from './glyphs.ts'
 import { allRange, lineRange, selectedText, selectionByIndex, selectionColumns, wordRange, type TerminalSelection } from './selection.ts'
 import { observeElementBounds } from '../native/layout.ts'
 import { terminalKey, terminalPaste, terminalMouse, terminalViewportKey, type TerminalMouseEvent } from './keys.ts'
+import { fitTerminal, PANE_BOTTOM, PANE_X, XTERM_X, XTERM_Y } from './fit.ts'
 import { blend, indexedColor, parseCss, terminalColors, terminalPalette, type TerminalPalette } from './palette.ts'
 
 // xterm.js on the desktop: JetBrains Mono 12px, line height 1.35. Its cell is 7 x 21.5 CSS px
@@ -24,8 +25,8 @@ import { blend, indexedColor, parseCss, terminalColors, terminalPalette, type Te
 // glyph advances exactly one cell, because a run is one native text node and must not drift.
 const FONT = 'JetBrains Mono'
 const CELL = 7, ROW = 21.5, FONT_SIZE = 12 * CELL / 7.2
-// Measured from the desktop pane at 1280x820: text starts 24.8px from the dock edge and 13.6px below the tab row.
-const PAD_X = 24.8, PAD_TOP = 13.6, PAD_BOTTOM = 8
+// Desktop pane padding plus `.xterm` padding (see fit.ts): text starts 24px from the dock edge and 13.6px below the tab row.
+const PAD_X = PANE_X + XTERM_X, PAD_TOP = 13.6, PAD_BOTTOM = PANE_BOTTOM + XTERM_Y
 const BLINK_MS = 600
 const OUTPUT_MS = 33
 
@@ -52,7 +53,7 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
   const [busy, setBusy] = useState(false)
   const alive = useRef(true)
   const current = tabs.find(tab => tab.id === selected) ?? tabs[tabs.length - 1]
-  const cols = () => Math.max(20, Math.floor((width - PAD_X * 2) / CELL))
+  const cols = () => Math.max(20, fitTerminal(width, 0, CELL, ROW).cols)
   const refresh = async () => {
     try { const result = await getClient()!.call('terminals.list', { thread_id: threadId }); if (alive.current) setTabs(result.terminals) }
     catch (e) { if (alive.current) setError(String(e)) }
@@ -248,7 +249,7 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
   const fit = () => {
     const bounds = host.current && renderer?.getElementBounds?.(host.current.id)
     if (!bounds) return
-    const cols = Math.max(2, Math.floor((bounds.width - PAD_X * 2) / CELL)), rows = Math.max(2, Math.floor((bounds.height - PAD_TOP - PAD_BOTTOM) / ROW))
+    const { cols, rows } = fitTerminal(bounds.width, bounds.height, CELL, ROW)
     if (cols === model.cols && rows === model.rows) return
     model.resize(cols, rows); update(v => v + 1)
     void getClient()!.call('terminals.resize', { terminal_id: info.id, cols: model.cols, rows: model.rows }).catch(e => setError(String(e)))
