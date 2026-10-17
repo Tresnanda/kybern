@@ -20,7 +20,8 @@ for (const variant of ['dark', 'light'] as const) for (const reduced of ['0', '1
     await app.getByTestId('conversation-ready').waitFor()
     await until(async () => (await app.getByTestId('connected').textContent()) === 'open', 'connected')
     const zone = await app.getByTestId('composer-drop-zone').bounds()
-    // Top edge: the 1px border row, away from the corner radius.
+    // Top edge: the 1px border row, away from the corner radius. The ring eases over 200 ms (motion/DropHighlight.tsx),
+    // so each step waits past it.
     const edge = async (name: string) => {
       const path = `${out}/${name}-${label}.png`
       await app.screenshot({ path })
@@ -34,14 +35,14 @@ for (const variant of ['dark', 'light'] as const) for (const reduced of ['0', '1
       return spread > 6 ? best : [0, 0, 0]
     }
     const rest = await edge('rest')
-    await app.getByTestId('drag-enter').click(); await Bun.sleep(200)
+    await app.getByTestId('drag-enter').click(); await Bun.sleep(320)
     // The probe buttons sit above the card; the simulated pointer is at (640, 700), inside it.
     const over = await edge('drag-over')
     assert.notDeepEqual(over, rest, `border did not change over the card: ${rest} → ${over}`)
-    await app.getByTestId('drag-outside').click(); await Bun.sleep(200)
+    await app.getByTestId('drag-outside').click(); await Bun.sleep(320)
     assert.deepEqual(await edge('drag-outside'), rest, 'border must return when the pointer leaves the card')
     await app.getByTestId('drag-enter').click(); await Bun.sleep(150)
-    await app.getByTestId('drag-exit').click(); await Bun.sleep(200)
+    await app.getByTestId('drag-exit').click(); await Bun.sleep(320)
     assert.deepEqual(await edge('drag-ended'), rest, 'border must return when the drag ends')
     const target = await app.getByTestId('composer-drop-zone').center()
     await app.call('fileDrop' as never, { ...target, paths: [file] } as never)
