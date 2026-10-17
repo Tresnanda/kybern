@@ -61,6 +61,6 @@ for (const [theme, reduced] of [['dark', false], ['light', false], ['dark', true
     await app.getByTestId('model-search').press('escape')
     await closed('Escape closes again')
     console.log(`PASS ${label}: ↑↓+Enter, ⌘3, filter, Escape, →+Enter on tabs`)
-  } catch (error) { await f.app.screenshot({ path: `${out}/failed-${label}.png` }).catch(() => {}); console.log(f.diagnostics().slice(-1500)); throw error } finally { await f.close() }
+  } catch (error) { await f.app.screenshot({ path: `${out}/failed-${label}.png` }).catch(() => {}); console.log(f.diagnostics().slice(-1500)); throw error } finally { const id = f.thread?.id; await f.close(); if (id) { const c = await connect(readState()!); await c.call('threads.archive', { thread_id: id }).catch(() => {}); c.close?.() } }
 }
 process.exit(0)
