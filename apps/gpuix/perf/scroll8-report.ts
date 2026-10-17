@@ -4,7 +4,7 @@ const read=(file:string)=>existsSync(`${out}/${file}.json`)?JSON.parse(readFileS
 const n=(v:unknown)=>typeof v==='number'?v.toFixed(2):'—'
 let text=`# PR scroll geometry — round 8
 
-Status: partial. Native input and layout fixes are implemented; strict 16.7 ms p95 and physical-trackpad acceptance require the final evidence below.
+Status: partial against the literal frame target. The native backlog/layout fixes pass the synthetic input and pixel checks below. Physical-trackpad hands-on acceptance remains unverified; submission p95 exceeds a strict 16.7 ms cutoff.
 
 ## Workload and methods
 
@@ -82,12 +82,12 @@ for(const theme of ['dark','light'])for(const reduce of ['0','1'])for(const labe
 text+=`
 ## App-wide experiments
 
-These controls keep PR geometry caching on and use dark/normal/full rate. Wheel \`all\` removes the PR bounds gate. \`frame-draw\` disables synchronous test-support drawing and relies on platform frames; wheel controls disable the explicit accumulator to isolate scheduling. Pointer controls use 120 Hz sinusoidal native pointer RPCs with no wheel input. The ungated controls use the same native Markdown/list fixture with every PR opt-in removed, comparing pr (no batching there) with all. Repeated samples are shown rather than choosing the best run. These flags remain opt-in: the full interaction/drag surface has not been proven safe for an app-wide default.
+These controls use dark/normal/full rate. \`frame-draw\` disables synchronous test-support drawing and relies on platform frames; wheel controls disable the explicit accumulator to isolate scheduling. Pointer controls use 120 Hz sinusoidal native pointer RPCs with no wheel input. The ungated controls use the same native Markdown/list fixture with every PR opt-in removed, comparing ordinary drawing with frame-draw. The native synchronous-bounds check fails with frame-draw enabled (Element has no painted bounds); this is recorded in app-wide-check.log. Pointer controls generated at most one submission because their path stayed over plain content, so they do not establish hover/drag redraw safety. One warm-up packet can overlap the timed frame-draw batch (1,801 painted packets); offered-to-paint matching is therefore withheld for those controls. The user deferred the deep resource pass; these are quick scheduling checks, without a default decision based on CPU/GPU gains. These flags remain opt-in: the full interaction/drag surface has not been proven safe for an app-wide default.
 
 | Variant / repeat | Scene | Frame p50/p95 ms | Render p95 ms | Outstanding max | ACK p95 / drain ms | CPU % / GPU ms / MiB |
 |---|---|---|---:|---:|---|---|
 `
-for(const variant of ['experimental-all','experimental-frame-draw','pointer-before','pointer-frame-draw','ungated-pr','ungated-all'])for(const repeat of [0,1])for(const r of read(`${variant}-${repeat}-dark-0`)?.results??[]){
+for(const variant of ['experimental-frame-draw','pointer-before','pointer-frame-draw','ungated-pr','ungated-frame-draw'])for(const repeat of [0,1])for(const r of read(`${variant}-${repeat}-dark-0`)?.results??[]){
  const resource=r.resourceText?.match(/total\s+([\d.]+) MiB\s+cpu\s+([\d.]+)%\s+gpu\s+([\d.]+) ms/)
  text+=`| ${variant}/${repeat} | ${r.scene} | ${n(r.p50)}/${n(r.p95)} | ${n(r.renderMsP95)} | ${r.maxOutstanding} | ${n(r.packetAckP95)}/${n(r.drainMs)} | ${resource?.[2]??'—'}/${resource?.[3]??'—'}/${resource?.[1]??'—'} |\n`
 }
@@ -95,8 +95,8 @@ for(const r of read('default-pr-repeat-dark-0')?.results??[]){
  const resource=r.resourceText?.match(/total\s+([\d.]+) MiB\s+cpu\s+([\d.]+)%\s+gpu\s+([\d.]+) ms/)
  text+=`| default-pr-repeat | ${r.scene} | ${n(r.p50)}/${n(r.p95)} | ${n(r.renderMsP95)} | ${r.maxOutstanding} | ${n(r.packetAckP95)}/${n(r.drainMs)} | ${resource?.[2]??'—'}/${resource?.[3]??'—'}/${resource?.[1]??'—'} |\n`
 }
-const idle=read('idle');text+=`
-Idle after scrolling: ${idle?`${idle.draws} submissions over 15 s; ${idle.resourceText.trim()}`:'pending'}.
+const idle=read('idle'),idleBefore=read('idle-baseline');text+=`
+Idle after scrolling, with physical mouse input excluded from our floating fixture: ${idle?`${idle.draws} submissions over 15 s; ${idle.resourceText.trim()}`:'pending'}. Baseline: ${idleBefore?`${idleBefore.draws} submissions; ${idleBefore.resourceText.trim()}`:'pending'}. The earlier uncontrolled physical-pointer sample is preserved as idle-physical-pointer-enabled.json; it is not an idle result.
 `
 text+=`
 ## Root cause and implementation
@@ -120,6 +120,48 @@ Native exact-pixel controls (all four modes, full update.sh passed): ${out}/cach
 
 Real-daemon PRs are accessed through scroll8-real-fixture.ts, which forwards only github.pr.list/detail/page and rejects other GitHub calls. Boot/session state remains in the disposable fixture. PR #109 has 810 changed files, a 2,240-byte description and no comments; the largest file on its first page is native/README.md (1,071 patch lines). A no-comment real Timeline cannot establish long-Timeline performance.
 
-Final acceptance, repeated controls, idle samples, final checks and cleanup are recorded below after review.
+Scope update: the user deferred the deep RAM/CPU/GPU/fps optimization pass until the port is complete. This lane finishes the user-felt scroll backlog, four-mode parity, a quick app-wide scheduling check, and a read-only real-PR spot check. Further resource tuning and a deep four-mode real-PR matrix are deferred. The four-mode fixture, real-PR spot check, visual controls and idle check are complete. Validation and cleanup are listed below.
+`
+text+=`
+## Visual review and functional limits
+
+The full-app controls compare layout/islands disabled and enabled with the same source, clock and fixture. All sixteen PNG files are byte-for-byte identical. Native lab controls additionally cover scroll offsets, content/width/ancestor-opacity changes and four deterministic motion frames, with selection/search/link assertions. This establishes preservation of the native appearance, not complete desktop-port parity. The desktop reference still differs in Summary text-column width and the linked-conversation block, and in some Timeline spacing; these are present in the uncached controls too.
+
+| Mode | Desktop WebKit / GPUIX pairs | Native uncached / cached pairs |
+|---|---|---|
+`
+for(const theme of ['dark','light'])for(const reduce of ['0','1']){
+ const links=(prefix:string)=>['list','summary','changes','timeline'].map(scene=>`[${scene}](${out}/${prefix}-${theme}-${reduce}-${scene}.png)`).join(' · ')
+ text+=`| ${theme}/${reduce==='1'?'reduced':'normal'} | ${links('pair')} | ${links('app-cache')} |\n`
+}
+text+=`
+The optional PR action check fails in all four modes: the review popover places its submit button below the window (y≈2,718). This also reproduces with the original round-7 addon, layout=0 and islands=0; see actions-baseline-round7-dark-0.png/json and actions-baseline-round7-config.json. No GitHub writes occur: all attempted actions target the in-memory fixture. This existing action issue is unresolved and must not be described as a passed interaction check.
+
+One light/reduced native timing attempt produced no Summary/Changes/Timeline paints and later flushed accumulated packets at an interaction barrier. It is preserved under invalid-no-paint-after-light-1.* and excluded; the replacement requires >200 submissions and exactly 1,800 matched packets in every scene. A covered background macOS window can stop display callbacks, but occlusion was not instrumented in that rejected run, so its cause remains unproven.
+`
+const finalRows=['dark','light'].flatMap(theme=>['0','1'].flatMap(reduce=>(read(`after-${theme}-${reduce}`)?.results??[])))
+const beforeRows=['dark','light'].flatMap(theme=>['0','1'].flatMap(reduce=>(read(`before-${theme}-${reduce}`)?.results??[])))
+const values=(rows:any[],key:string)=>rows.map(r=>r[key]).filter(v=>typeof v==='number')
+const range=(rows:any[],key:string)=>{const a=values(rows,key);return a.length?`${n(Math.min(...a))}–${n(Math.max(...a))}`:'pending'}
+text+=`
+## Acceptance result
+
+${finalRows.length}/16 final fixture scenes collected. Patched submission p95: ${range(finalRows,'p95')} ms; CPU render p95: ${range(finalRows,'renderMsP95')} ms; layout p95: ${range(finalRows,'layoutMsP95')} ms. RPC drain: ${range(finalRows,'drainMs')} ms; final CPU-paint drain: ${range(finalRows,'nativePaintDrainMs')} ms. Maximum transient outstanding RPC depth: ${Math.max(0,...values(finalRows,'maxOutstanding'))}, compared with ${Math.max(0,...values(beforeRows,'maxOutstanding'))} before. Outstanding RPC counts measure transport acknowledgements, not a native event queue. All requests are awaited to zero; the native pending accumulator is bounded to one slot.
+
+The seconds-long input backlog is resolved in the synthetic PR fixture. A literal every-scene p95 ≤16.7 ms is not met; WebKit reference p95 is usually 17–19 ms, with light/reduced Changes at 34 ms. These results do not establish physical display presentation or replace the user's trackpad test. Keep R3-8 partial until that hands-on check.
+`
+const validation=read('validation')
+if(validation)text+=`
+## Validation and cleanup
+
+- native/update.sh passed end to end; the final log ends with \`done: GPUIX 0.10.0 with Kybern patches\`. It includes the existing native regression suite and the new four-mode geometry/pixel/motion and input-burst checks.
+- pnpm typecheck and pnpm exec tsc --noEmit -p native/tsconfig.json passed.
+- bun test ./src: 107 passed, 0 failed, 4,650 expectations. git diff --check passed for the final source/report changes.
+- Branch: gpuix/scroll8. Core commits: 77206f69 and b89f2dee; measurement infrastructure: c199fd31. The source package remains pinned to GPUIX 0.10.0. Integration must regenerate the combined JS package patch and pnpm patch hash after applying the other native lanes.
+- Final addon SHA-256: \`${validation.addonSha256}\`. The retained addon contains this lane on the round-7 combined base, rather than the other round-8 lanes.
+- Free space: ${validation.freeBeforeHeavy} before heavy work, ${validation.freeBeforeCleanup} before cleanup, ${validation.freeAfterCleanup} after. ${validation.cleanup}
+- Retained: ${validation.retained}
+
+Shared edits are additive in native/patches/apply_hooks.py, backdrop_gpui.py, patch_js.py, native/update.sh, scripts/preview-ui-lock.ts, the pinned native JS package patch and pnpm-lock.yaml. New native files are scroll_input.rs, scroll_layout.rs, scroll_taffy.rs, scroll_gpui.py, scroll_hooks.py and scroll_js.py. PR source opt-ins live in src/pulls/scroll-layout.ts, PullRequestsPage.tsx, PrDetail.tsx and PrTabs.tsx. The fixture gains read-only browser session/CORS and empty queue support; the action verifier gains failure evidence. No other lane's native patch file was edited.
 `
 writeFileSync(new URL('scroll-round8-2026-10-17.md',import.meta.url),text)

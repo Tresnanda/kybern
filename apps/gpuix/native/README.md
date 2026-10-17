@@ -1130,6 +1130,6 @@ bun perf/scroll8-report.ts
 The first command records four-mode full-app controls and the actual desktop
 frontend in Playwright WebKit. The real-PR proxy forwards only read methods to
 `~/.kybern`; preference writes stay in its disposable fixture. The follow-up
-runs repeated app-wide wheel/pointer controls, PR actions, idle and separate
+runs a quick app-wide scheduling control, PR actions, idle and separate
 four-mode captures. Timed input is 120 Hz pipelined pixel deltas with native
 contact/end phases and synthetic decay, rather than OS trackpad events.

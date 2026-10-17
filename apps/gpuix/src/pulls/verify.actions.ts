@@ -1,6 +1,7 @@
 /** Every destructive action goes only to an in-memory server. */
 import assert from 'node:assert/strict'
 import path from 'node:path'
+import {writeFileSync} from 'node:fs'
 import {launchFixture} from '../requests/harness.ts'
 import {actionFixture} from './verify.fixture.ts'
 const fixture=actionFixture(),mode=process.argv.includes('--light')?'light':'dark'
@@ -23,4 +24,9 @@ try{
  }
  fixture.empty(true);await click('pr-refresh');assert.equal(await a.getByTestId('pr-row-108').count(),0)
  console.log(`PASS ${mode}: all six PR actions, reviewed head, linked checkout, failed-review draft retention and empty list; mock RPC only`)
+}catch(error){
+ const out='/Users/mymac/projects/ade/previews/gpuix/round8/scroll'
+ writeFileSync(`${out}/actions-failure-${mode}-${process.env.KYBERN_REDUCED_MOTION??0}.json`,JSON.stringify({tree:await a.call('getTree',{}),actions:fixture.actions,diagnostics:f.diagnostics()},null,2))
+ await a.screenshot({path:`${out}/actions-failure-${mode}-${process.env.KYBERN_REDUCED_MOTION??0}.png`}).catch(()=>{})
+ throw error
 }finally{await f.close();fixture.close()}

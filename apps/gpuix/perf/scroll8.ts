@@ -48,13 +48,18 @@ try {
     connectStdio({ write: v => { child.stdin.write(v) }, feed: listener => { child.stdout.on('data', v => listener(String(v))) }, close: async () => { child.kill() } }),
     new Promise<never>((_,reject) => child.once('exit', code => reject(Error(`Exited ${code}: ${raw.slice(-3000)}`)))),
   ])
+  const clickPainted=async(id:string)=>{
+    const target=app!.getByTestId(id);await target.waitFor({timeoutMs:10000})
+    const end=Date.now()+10000
+    for(;;){try{const b=await target.bounds();if(b.width>0&&b.height>0){await app!.mouse.click({x:b.x+b.width/2,y:b.y+b.height/2});return}}catch(e){if(Date.now()>=end)throw e}if(Date.now()>=end)throw Error(`No painted bounds for ${id}`);await Bun.sleep(10)}
+  }
   await app.getByTestId(ungated?'ready':'app-ready').waitFor({ timeoutMs: 60000 })
-  if(!ungated){await app.getByTestId('rail-pulls').click();await app.getByTestId(`pr-row-${process.env.SCROLL8_PR_NUMBER??108}`).waitFor()}
+  if(!ungated){await clickPainted('rail-pulls');await app.getByTestId(`pr-row-${process.env.SCROLL8_PR_NUMBER??108}`).waitFor()}
   const results: unknown[] = []
   let opened=ungated
   for (const scene of (process.env.SCROLL8_SCENES??'list,summary,changes,timeline').split(',')) {
-    if(scene!=='list'&&!opened){await app.getByTestId(`pr-row-${process.env.SCROLL8_PR_NUMBER??108}`).click();await app.getByTestId('pr-summary').waitFor();opened=true}
-    if (scene === 'changes' || scene === 'timeline') { await app.getByTestId(`pr-tab-${scene}`).click(); if(scene==='changes')await app.getByTestId('pr-native-diff').waitFor();else await app.getByTestId('pr-timeline').waitFor() }
+    if(scene!=='list'&&!opened){await clickPainted(`pr-row-${process.env.SCROLL8_PR_NUMBER??108}`);await app.getByTestId('pr-summary').waitFor();opened=true}
+    if (scene === 'changes' || scene === 'timeline') { await clickPainted(`pr-tab-${scene}`); if(scene==='changes')await app.getByTestId('pr-native-diff').waitFor();else await app.getByTestId('pr-timeline').waitFor() }
     if(scene==='changes'&&process.env.SCROLL8_FILE_INDEX){
       const name=`pr-file-${process.env.SCROLL8_FILE_INDEX}`,area=await app.getByTestId('pr-changes').bounds()
       let visible=false
@@ -66,7 +71,7 @@ try {
         while(inputPaints.length===painted&&Date.now()<end)await Bun.sleep(5)
       }
       if(!visible)throw Error(`Real file ${name} is not reachable`)
-      await app.getByTestId(name).click()
+      await clickPainted(name)
     }
     // Native virtual-list itself has no automation hitbox; use the surrounding
     // PR page, whose geometry is recorded, or the native diff viewport.
