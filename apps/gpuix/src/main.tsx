@@ -16,6 +16,7 @@ import { OPAQUE_WINDOW } from './platform/material.ts'
 import { startAppUpdateChecks } from './platform/update.ts'
 import { installFrameSource } from './native/frame.ts'
 import { hasSavedFrame, installWindowFrame, startWindowShell } from './shell/window.ts'
+import { startEnvironmentWindow } from './windows/window.ts'
 
 const FONTS = ['CalSans-Regular.ttf', 'JetBrainsMono-Regular.ttf']
 
@@ -37,6 +38,8 @@ function Fonts({ children }: { children: ReactNode }) {
     setReady(true)
     startPerfProbe(renderer)
     startWindowShell(renderer)
+    // One window per environment across processes; the title names the environment (`windows/`).
+    startEnvironmentWindow(renderer)
     // Debug: minimize after launch to check that hidden windows stop their loops.
     if (process.env.KYBERN_DEBUG_MINIMIZE) setTimeout(() => renderer.minimizeWindow?.(), Number(process.env.KYBERN_DEBUG_MINIMIZE))
   }, [renderer])
