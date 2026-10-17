@@ -77,7 +77,7 @@ index 37cc70406f67838394b07664259720cf9dd9f748..09a5c21aacf092351270d6322bee5e84
          }),
          result: okSchema,
 diff --git a/dist/host.d.ts b/dist/host.d.ts
-index cc6b7ef926c5c3122fff6107341913364a215710..a7dd2665768efa1a6a17484097e1d551596d68a2 100644
+index cc6b7ef926c5c3122fff6107341913364a215710..0c2d48d87de78adb90589d7647b883700b3492f3 100644
 --- a/dist/host.d.ts
 +++ b/dist/host.d.ts
 @@ -5,6 +5,10 @@ export * from "./mutations.js";
@@ -107,10 +107,44 @@ index cc6b7ef926c5c3122fff6107341913364a215710..a7dd2665768efa1a6a17484097e1d551
      /** Duration in seconds. */
      duration?: number;
      /** Delay in seconds. */
-@@ -275,6 +288,11 @@ export interface HighlightSpec {
+@@ -274,7 +287,45 @@ export interface HighlightSpec {
+     /** Corner radius of the wash. Defaults to 2. */
      radius?: number;
  }
++export interface PaintTransformValue {
++    scale?: number;
++    /** Clockwise degrees. */
++    rotate?: number;
++    translateX?: number;
++    translateY?: number;
++    opacity?: number;
++    /** `filter: blur()` radius in logical pixels. */
++    blur?: number;
++}
++export interface PaintTransformTiming {
++    /** Seconds. */
++    duration?: number;
++    delay?: number;
++    /** cubic-bezier control points; y may leave [0, 1]. */
++    ease?: [number, number, number, number];
++}
++export interface PaintTransformProps {
++    initial?: false | PaintTransformValue;
++    animate?: PaintTransformValue;
++    transition?: PaintTransformTiming;
++    /** CSS-style intermediate stops between the start and `animate`. */
++    keyframes?: Array<PaintTransformValue & { offset: number }>;
++    /** Fractions of the element's box; defaults to the centre. */
++    origin?: [number, number];
++    /** Native `:active` squash on primary mouse down. */
++    press?: { scale: number; down?: PaintTransformTiming; up?: PaintTransformTiming };
++    generation?: number;
++}
  export interface HostProps {
++    /** Paint-only subtree scale / rotation / opacity / blur; layout never moves. */
++    paintTransform?: PaintTransformProps;
++    /** A Finder drag entered (`hovered: true`) or left (`hovered: false`) this element. */
++    onFileDragChange?: (event: EventPayload) => void;
 +    /** Retained subtree translation; animate accepts translateX/translateY only. */
 +    paintTranslate?: MotionProps;
 +    cache?: boolean | "fill";
@@ -119,7 +153,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..a7dd2665768efa1a6a17484097e1d551
      style?: StyleDesc;
      /** Primary button only, like the DOM. Use `onAuxClick` for the others. */
      onClick?: (event: EventPayload) => void;
-@@ -287,7 +305,7 @@ export interface HostProps {
+@@ -287,7 +338,7 @@ export interface HostProps {
      onMouseMove?: (event: EventPayload) => void;
      /** Fires when user clicks OUTSIDE this element. Use for "click outside to close". */
      onMouseDownOutside?: (event: EventPayload) => void;
@@ -128,7 +162,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..a7dd2665768efa1a6a17484097e1d551
      onKeyUp?: (event: EventPayload) => void;
      onFocus?: (event: EventPayload) => void;
      onBlur?: (event: EventPayload) => void;
-@@ -342,6 +360,10 @@ export interface HostProps {
+@@ -342,6 +393,10 @@ export interface HostProps {
      motion?: MotionProps;
  }
  export interface InputProps extends HostProps {
@@ -139,7 +173,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..a7dd2665768efa1a6a17484097e1d551
      /** External editor value. Native edits apply immediately and report through onChange. */
      value?: string;
      placeholder?: string;
-@@ -405,6 +427,8 @@ export interface SvgProps extends HostProps {
+@@ -405,6 +460,8 @@ export interface SvgProps extends HostProps {
   * scroller, so `whiteSpace` and `overflowX` do nothing.
   */
  export interface CodeProps extends HostProps {
@@ -148,7 +182,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..a7dd2665768efa1a6a17484097e1d551
      /** The source to display. Rendered one div per line at an exact line height. */
      code?: string;
      /** Language alias such as "ts", "rust", "bash". Beats `path` for detection. */
-@@ -468,7 +492,7 @@ export type WindowSizeHost = Pick<GpuixRenderer, "getWindowSize">;
+@@ -468,7 +525,7 @@ export type WindowSizeHost = Pick<GpuixRenderer, "getWindowSize">;
  export type WindowInsetsHost = Pick<GpuixRenderer, "getWindowInsets">;
  export type SelectionHost = Pick<GpuixRenderer, "getSelectedText">;
  /** `applyBatch` plus the live renderer methods a host may also expose. */
@@ -157,8 +191,21 @@ index cc6b7ef926c5c3122fff6107341913364a215710..a7dd2665768efa1a6a17484097e1d551
  /** Commit-phase mutation facade shared by framework adapters. */
  export interface MutationRenderer {
      createElement(id: number, elementType: string): void;
+diff --git a/dist/mutations.d.ts b/dist/mutations.d.ts
+index dc645f7af4cca2917a59c340b185b539c7c34e0f..4cdffbfaa6af9d3162c583024eb22bdbb44d5ec3 100644
+--- a/dist/mutations.d.ts
++++ b/dist/mutations.d.ts
+@@ -6,7 +6,7 @@ export interface MutationQueue extends MutationRenderer {
+     readonly pending: number;
+ }
+ export declare function createMutationQueue(renderer: MutationHost, onDestroyed?: (ids: readonly number[]) => void, scheduleFlush?: (flush: () => void) => void): MutationQueue;
+-export declare const EVENT_PROPS: readonly [readonly ["onToggleFile", "toggleFile"], readonly ["onShowMore", "showMore"], readonly ["onLineClick", "lineClick"], readonly ["onLinkClick", "linkClick"], readonly ["onVisibleRange", "visibleRange"], readonly ["onHighlight", "highlight"], readonly ["onMotionComplete", "motionComplete"], readonly ["onChange", "change"], readonly ["onSubmit", "submit"], readonly ["onClick", "click"], readonly ["onAuxClick", "auxClick"], readonly ["onMouseDown", "mouseDown"], readonly ["onMouseUp", "mouseUp"], readonly ["onMouseEnter", "mouseEnter"], readonly ["onMouseLeave", "mouseLeave"], readonly ["onMouseMove", "mouseMove"], readonly ["onMouseDownOutside", "mouseDownOutside"], readonly ["onKeyDown", "keyDown"], readonly ["onKeyUp", "keyUp"], readonly ["onFocus", "focus"], readonly ["onBlur", "blur"], readonly ["onScroll", "scroll"], readonly ["onFileDrop", "fileDrop"]];
++export declare const EVENT_PROPS: readonly [readonly ["onToggleFile", "toggleFile"], readonly ["onShowMore", "showMore"], readonly ["onLineClick", "lineClick"], readonly ["onLinkClick", "linkClick"], readonly ["onVisibleRange", "visibleRange"], readonly ["onHighlight", "highlight"], readonly ["onMotionComplete", "motionComplete"], readonly ["onChange", "change"], readonly ["onSubmit", "submit"], readonly ["onClick", "click"], readonly ["onAuxClick", "auxClick"], readonly ["onMouseDown", "mouseDown"], readonly ["onMouseUp", "mouseUp"], readonly ["onMouseEnter", "mouseEnter"], readonly ["onMouseLeave", "mouseLeave"], readonly ["onMouseMove", "mouseMove"], readonly ["onMouseDownOutside", "mouseDownOutside"], readonly ["onKeyDown", "keyDown"], readonly ["onKeyUp", "keyUp"], readonly ["onFocus", "focus"], readonly ["onBlur", "blur"], readonly ["onScroll", "scroll"], readonly ["onFileDrop", "fileDrop"], readonly ["onFileDragChange", "fileDragChange"]];
+ export declare const EVENT_PROP_NAMES: ReadonlySet<string>;
+ export declare const RESERVED_PROPS: ReadonlySet<string>;
+ export declare const BUILT_IN_TYPES: ReadonlySet<string>;
 diff --git a/dist/mutations.js b/dist/mutations.js
-index 7d0eda6cb58127462067cb9d5a442a9ea606c671..2a537e62dae45d093ce1fbe127528a7d8a4de4e8 100644
+index 7d0eda6cb58127462067cb9d5a442a9ea606c671..9d19d987f848e81d396210913899ab4f53cb053d 100644
 --- a/dist/mutations.js
 +++ b/dist/mutations.js
 @@ -1,5 +1,6 @@
@@ -198,7 +245,15 @@ index 7d0eda6cb58127462067cb9d5a442a9ea606c671..2a537e62dae45d093ce1fbe127528a7d
              onDestroyed(destroyed);
              queue = [];
          },
-@@ -94,6 +104,15 @@ export const UNIVERSAL_PROPS = new Set([
+@@ -80,6 +90,7 @@ export const EVENT_PROPS = [
+     ["onBlur", "blur"],
+     ["onScroll", "scroll"],
+     ["onFileDrop", "fileDrop"],
++    ["onFileDragChange", "fileDragChange"],
+ ];
+ export const EVENT_PROP_NAMES = new Set(EVENT_PROPS.map(([name]) => name));
+ export const RESERVED_PROPS = new Set([
+@@ -94,6 +105,16 @@ export const UNIVERSAL_PROPS = new Set([
      "autoFocus",
      "tabIndex",
      "motion",
@@ -206,6 +261,7 @@ index 7d0eda6cb58127462067cb9d5a442a9ea606c671..2a537e62dae45d093ce1fbe127528a7d
 +    "backdrop",
 +    "paintAnimation",
 +    "paintTranslate",
++    "paintTransform",
 +    "cache",
 +    "windowDrag",
 +    "interceptKeys",
