@@ -68,31 +68,34 @@ try {
     if (reduced) assert(frames.length <= 3, `Reduce Motion must not keep presenting frames (${frames.length})`)
     else assert(frames.length > 120, `a spinning glyph must present continuous frames (${frames.length})`)
 
-    // 1. Pixels: capture the glyph region at known offsets (clock paused after the interval above).
-    const at = await a.clock.pause()
-    const shots: Record<number, string> = {}
-    for (const o of [0, 40, 125, 500, 1000, 1125]) {
-      await a.clock.set(at + o)
-      shots[o] = `${dir}/${label}-${String(o).padStart(4, '0')}.png`
-      await a.screenshot({ path: shots[o] })
-    }
-    await a.clock.resume()
-    const region = (file: string) => {
+    // 1. Pixels. The native animation runs on the real clock, so each phase is a separate launch with the phase frozen
+    // (`KYBERN_PAINT_PHASE_MS`, the native checks' own mechanism). The glyph has eight-fold symmetry: 125 ms is exactly
+    // 45 degrees and looks like 0, so 40 ms (14.4 degrees) must differ while 45-degree multiples (125, 1000, 1125 ms) match.
+    const region = (file: string, box: { x: number; y: number; width: number; height: number }) => {
       const img = pixels(file), scale = img.w / 1280
       const out: number[] = []
-      for (let y = Math.floor((first.y - 1) * scale); y < Math.ceil((first.y + first.height + 1) * scale); y++) for (let x = Math.floor((first.x - 1) * scale); x < Math.ceil((first.x + first.width + 1) * scale); x++) out.push(...img.at(x, y).slice(0, 3))
+      for (let y = Math.floor((box.y - 1) * scale); y < Math.ceil((box.y + box.height + 1) * scale); y++) for (let x = Math.floor((box.x - 1) * scale); x < Math.ceil((box.x + box.width + 1) * scale); x++) out.push(...img.at(x, y).slice(0, 3))
       return out
     }
-    const diff = (x: string, y: string) => { const A = region(x), B = region(y); let s = 0; for (let i = 0; i < A.length; i++) s += Math.abs(A[i]! - B[i]!); return s }
-    const d = { '0→40': diff(shots[0]!, shots[40]!), '0→125': diff(shots[0]!, shots[125]!), '0→500': diff(shots[0]!, shots[500]!), '0→1000': diff(shots[0]!, shots[1000]!), '125→1125': diff(shots[125]!, shots[1125]!) }
-    console.log('glyph pixel difference between frames:', JSON.stringify(d))
-    if (reduced) {
-      assert.equal(d['0→500'], 0, 'Reduce Motion: the glyph must stay still')
-    } else {
-      // The glyph has eight-fold symmetry: 125 ms is exactly 45 degrees and looks like 0, so 40 ms (14.4 degrees) is the
-      // frame that must differ, while whole 45-degree multiples (125, 500, 1000 ms) must match.
-      assert(d['0→40'] > 8 * Math.max(d['0→125'], d['0→500'], d['0→1000'], d['125→1125'], 1), 'the glyph must be a different phase at 40 ms and match at 125/500/1000 ms: a 1000 ms linear turn')
+    const shots: Record<number, string> = {}
+    for (const phase of [0, 40, 125, 1000, 1125]) {
+      const g = await launchFixture(path.join(import.meta.dir, 'kit9-app.ts'), { ...fixture.env, KYBERN_APPEARANCE: theme, KYBERN_PAINT_PHASE_MS: String(phase), ...(reduced ? { KYBERN_REDUCED_MOTION: '1' } : {}) })
+      try {
+        await g.app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })
+        await g.app.getByTestId('rail-pulls').click()
+        await g.app.getByTestId('pr-row-108').waitFor({ timeoutMs: 15_000 })
+        await g.app.getByTestId('pr-row-108').click()
+        await g.app.getByTestId('pr-summary').waitFor({ timeoutMs: 15_000 })
+        await sleep(1500)
+        shots[phase] = `${dir}/${label}-${String(phase).padStart(4, '0')}.png`
+        await g.app.screenshot({ path: shots[phase] })
+      } finally { await g.close() }
     }
+    const diff = (x: number, y: number) => { const A = region(shots[x]!, first), B = region(shots[y]!, first); let s = 0; for (let i = 0; i < A.length; i++) s += Math.abs(A[i]! - B[i]!); return s }
+    const d = { '0→40': diff(0, 40), '0→125': diff(0, 125), '0→1000': diff(0, 1000), '125→1125': diff(125, 1125), '0→1125': diff(0, 1125) }
+    console.log('glyph pixel difference between frozen phases:', JSON.stringify(d))
+    if (reduced) assert.equal(d['0→40'], 0, 'Reduce Motion: the glyph must stay still')
+    else assert(d['0→40'] > 8 * Math.max(d['0→125'], d['0→1000'], d['125→1125'], 1), 'the glyph must be a different phase at 40 ms and match at 125/1000/1125 ms: a 1000 ms linear turn')
     // A zoomed strip of the glyph (60 x 60 pt around it) for the report.
     const H = import.meta.dir, scale = 2
     const crops = Object.entries(shots).map(([o, file]) => { const c = `${dir}/c-${label}-${String(o).padStart(4, '0')}.png`; Bun.spawnSync(['swift', `${H}/kit9-crop.swift`, file, c, String(Math.round((first.x - 23) * scale)), String(Math.round((first.y - 23) * scale)), String(60 * scale), String(60 * scale)]); return c })

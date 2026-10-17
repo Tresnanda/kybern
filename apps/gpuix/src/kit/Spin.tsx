@@ -1,14 +1,16 @@
-// A spinning glyph (`animate-spin`: 1 s linear infinite) on GPUIX's native SVG rotation.
+// A spinning glyph (`animate-spin`: 1 s linear infinite).
 //
-// The rotation is one long linear native tween (`TURNS` full turns), so the renderer advances it every
-// frame with no React or JS work per frame, and JS wakes once per `TURNS` seconds to restart it. There is
-// no JS clock driving visible movement (the legacy `Spinner` in `shell/Connection.tsx` steps 8 frames at
-// 5 Hz; its continuous variant commits React every frame). While the window is hidden, covered or
-// minimized (the poll in `native/visibility.ts`, which runs only while something spins) the glyph is
-// replaced by a still one so no frames are requested; under Reduce Motion it is still. Rotation about the
-// glyph's centre needs a square glyph: every kit icon is.
+// Patched native build (`native/patches/rotate_gpui.py`): `paintAnimation: { kind: 'rotate', cycleMs }` on a passive
+// fixed-size SVG. The renderer re-rotates the glyph's sprite at every presented frame without element render,
+// layout or prepaint, so a spinner costs a scene replay per frame, not a window rebuild (measured on the PR page:
+// ~41% CPU as a native motion tween, ~12% as a scoped paint animation). There is no JS clock and no React work.
+// With the stock npm addon (`KYBERN_GPUIX_NATIVE=npm`) it falls back to one long linear native motion tween.
+// While the window is hidden, covered or minimized (the poll in `native/visibility.ts`, which runs only while
+// something spins) the glyph is replaced by a still one so no frames are requested; under Reduce Motion it is
+// still. Rotation about the glyph's centre needs a square glyph: every kit icon is.
 import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import type { StyleDesc } from '@gpuix/react'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 import { REDUCED_MOTION } from '../ui.tsx'
 
@@ -49,9 +51,9 @@ export function SpinIcon({
   const visible = useWindowVisible()
   const run = spinning && visible && !REDUCED_MOTION
   const motion = useMemo(
-    () => (run ? { generation: ++generation, isExit: false, initial: { rotate: 0 }, animate: { rotate: 360 * TURNS }, transition: { duration: (TURNS * periodMs) / 1000, ease: LINEAR } } : null),
+    () => (run && !PATCHED_NATIVE ? { generation: ++generation, isExit: false, initial: { rotate: 0 }, animate: { rotate: 360 * TURNS }, transition: { duration: (TURNS * periodMs) / 1000, ease: LINEAR } } : null),
     [run, periodMs],
   )
   // The still glyph is the same element without the motion, so a test id and layout survive hiding.
-  return <svg testId={testId} source={source} {...(motion ? ({ motion } as object) : {})} style={{ width: size, height: size, flexShrink: 0, color, ...style }} />
+  return <svg testId={testId} source={source} {...(motion ? ({ motion } as object) : run ? { paintAnimation: { kind: 'rotate', cycleMs: periodMs } } : {})} style={{ width: size, height: size, flexShrink: 0, color, ...style }} />
 }
