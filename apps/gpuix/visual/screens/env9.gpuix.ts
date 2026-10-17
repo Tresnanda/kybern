@@ -14,7 +14,7 @@ const open = async (app: Parameters<Step>[0], kind: string, ready: string) => { 
 const address: Step = async app => { await open(app, 'add', 'environment-machine'); await pointer(app, 'environment-tab-address'); await app.getByTestId('environment-address').waitFor() }
 const fill = (app: Parameters<Step>[0], id: string, value: string) => app.getByTestId(id).fill(value)
 export const screens: Record<string, Step> = {
-  'env9-menu': async app => { seedRegistry(); await pointer(app, 'environment-switcher'); await app.getByTestId('environment-menu').waitFor(); await settle(); await park(app) },
+  'env9-menu': async app => { seedRegistry(); await pointer(app, 'environment-switcher'); await app.getByTestId('environment-switcher-menu').waitFor(); await settle(); await park(app) },
   'env9-manage': async app => { await open(app, 'manage', 'environment-manage-list'); await park(app) },
   'env9-edit-address': async app => { await open(app, 'manage', 'environment-manage-list'); await pointer(app, 'environment-edit-second'); await app.getByTestId('environment-address').waitFor(); await park(app) },
   'env9-edit-ssh': async app => { await open(app, 'manage', 'environment-manage-list'); await pointer(app, 'environment-edit-build'); await app.getByTestId('environment-machine').waitFor(); await park(app) },

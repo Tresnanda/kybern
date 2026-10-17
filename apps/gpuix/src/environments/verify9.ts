@@ -75,7 +75,9 @@ try {
   await until('B reconnected after the edit', () => text('proj9b'), 30000); await wait(800)
   await click('environment-switcher'); await click('environment-pair'); await wait(600)
   assert(!(await present('pairing-create')), 'Pair a device stays disabled on an environment this device only holds a device token for')
-  await click('environment-switcher'); await wait(300); await click('environment-choice-local'); await until('back on A', () => text('proj9a'), 30000); await wait(800)
+  // The disabled row leaves the menu open; clicking the trigger again would close it, like the desktop.
+  if (!(await present('environment-choice-local'))) await click('environment-switcher')
+  await click('environment-choice-local'); await until('back on A', () => text('proj9a'), 30000); await wait(800)
   // A real paired device on daemon A, to list and revoke.
   const phoneName = `Scratch phone ${Date.now() % 100000}`
   const code = (JSON.parse(cli(DATA_A, '--json', 'pair')) as { code: string }).code
