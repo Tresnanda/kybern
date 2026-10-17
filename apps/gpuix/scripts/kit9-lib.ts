@@ -13,6 +13,21 @@ export const CLIENT_DIR = `${SCRATCH}/phase2-kit9-client`
 export const EVIDENCE = '/Users/mymac/projects/ade/previews/gpuix/phase2/kit9'
 mkdirSync(EVIDENCE, { recursive: true })
 
+/**
+ * Safety rule: a GPUIX launch must never resolve the user's real `~/.kybern` (startup can restart the live daemon).
+ * Fills in the scratch dirs and throws unless both resolve under `ade-gpuix-scratch`. Wrap the env of EVERY launch in it.
+ */
+export function guardEnv(env: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = { KYBERN_DATA_DIR: DATA_DIR, KYBERN_CLIENT_CONFIG_DIR: CLIENT_DIR, ...env }
+  for (const key of ['KYBERN_DATA_DIR', 'KYBERN_CLIENT_CONFIG_DIR'] as const) {
+    const dir = path.resolve(out[key]!)
+    if (!dir.startsWith(`${SCRATCH}${path.sep}`) || dir.includes('/.kybern')) throw new Error(`refusing to launch GPUIX: ${key}=${dir} is outside ${SCRATCH}`)
+  }
+  const url = out.KYBERN_URL ?? process.env.KYBERN_URL
+  if (url && !/^(https?|wss?):\/\/(127\.0\.0\.1|localhost):(429\d|\d{5})\b/.test(url)) throw new Error(`refusing to launch GPUIX: KYBERN_URL=${url}`)
+  return out
+}
+
 export interface StartOptions { light?: boolean; reduced?: boolean; full?: boolean; env?: Record<string, string>; size?: string; seeded?: boolean; /** Keep the window on screen at floating level (timing and resource runs). */ visible?: boolean }
 
 export async function start(opts: StartOptions = {}) {
@@ -28,7 +43,7 @@ export async function start(opts: StartOptions = {}) {
     ...opts.env,
   }
   // KYBERN_FRAME_TIMES makes the patched native layer log every presented frame (`[kybern-frame] <ms>`).
-  const f = await launchFixture(path.join(import.meta.dir, opts.visible ? 'kit9-app.ts' : '../src/main.tsx'), { KYBERN_FRAME_TIMES: '1', ...env })
+  const f = await launchFixture(path.join(import.meta.dir, opts.visible ? 'kit9-app.ts' : '../src/main.tsx'), guardEnv({ KYBERN_FRAME_TIMES: '1', ...env }))
   const app = f.app
   await app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })
   return Object.assign(app, { pid: f.pid, frameTimes: f.frameTimes, counts: f.counts, diagnostics: f.diagnostics, closeAll: f.close })
@@ -95,7 +110,7 @@ export async function startGallery(section: string, opts: StartOptions = {}) {
     KYBERN_CLIENT_CONFIG_DIR: CLIENT_DIR,
     ...opts.env,
   }
-  const f = await launchFixture(path.join(import.meta.dir, opts.visible ? 'kit9-gallery-visible.ts' : 'kit9-gallery-entry.tsx'), { KYBERN_FRAME_TIMES: '1', ...env })
+  const f = await launchFixture(path.join(import.meta.dir, opts.visible ? 'kit9-gallery-visible.ts' : 'kit9-gallery-entry.tsx'), guardEnv({ KYBERN_FRAME_TIMES: '1', ...env }))
   await f.app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })
   return Object.assign(f.app, { pid: f.pid, frameTimes: f.frameTimes, diagnostics: f.diagnostics, closeAll: f.close })
 }

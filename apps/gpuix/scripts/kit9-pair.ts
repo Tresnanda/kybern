@@ -11,6 +11,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { launchFixture } from '../native/frame-harness.ts'
+import { guardEnv } from './kit9-lib.ts'
 import { states } from '../visual/kit/steps/index.ts'
 
 process.env.PLAYWRIGHT_CORE ??= '/Users/mymac/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright-core/index.mjs'
@@ -51,7 +52,7 @@ for (const theme of themes) {
   for (const name of names) {
     const state = states[name]!
     const env = { KIT_SECTION: state.section, GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: theme, KYBERN_OPAQUE: '1', ...(reduced ? { KYBERN_REDUCED_MOTION: '1' } : { KYBERN_REDUCED_MOTION: '0' }), KYBERN_CLIENT_CONFIG_DIR: '/Users/mymac/projects/ade-gpuix-scratch/phase2-kit9-client' }
-    const f = await launchFixture(path.join(here, 'kit9-gallery-entry.tsx'), env)
+    const f = await launchFixture(path.join(here, 'kit9-gallery-entry.tsx'), guardEnv(env))
     try {
       await f.app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })
       await Bun.sleep(400)

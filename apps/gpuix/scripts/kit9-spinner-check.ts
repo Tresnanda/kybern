@@ -12,6 +12,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { launchFixture } from '../src/requests/harness.ts'
+import { guardEnv } from './kit9-lib.ts'
 import { actionFixture } from '../src/pulls/verify.fixture.ts'
 import { pixels } from '../native/png.ts'
 
@@ -24,7 +25,7 @@ const dir = '/Users/mymac/projects/ade/previews/gpuix/phase2/kit9/spinner'
 mkdirSync(dir, { recursive: true })
 const label = `${theme}${reduced ? '-reduced' : ''}${minimized ? '-minimized' : ''}-${extra + 1}running`
 const fixture = actionFixture({ running: extra })
-const f = await launchFixture(path.join(import.meta.dir, 'kit9-app.ts'), { ...fixture.env, KYBERN_APPEARANCE: theme, KYBERN_FRAME_TIMES: '1', ...(reduced ? { KYBERN_REDUCED_MOTION: '1' } : {}) })
+const f = await launchFixture(path.join(import.meta.dir, 'kit9-app.ts'), guardEnv({ ...fixture.env, KYBERN_APPEARANCE: theme, KYBERN_FRAME_TIMES: '1', ...(reduced ? { KYBERN_REDUCED_MOTION: '1' } : {}) }))
 const a = f.app
 const sleep = (n: number) => new Promise((r) => setTimeout(r, n))
 const pct = (xs: number[], p: number) => xs[Math.floor(xs.length * p)] ?? NaN
@@ -79,7 +80,7 @@ try {
     }
     const shots: Record<number, string> = {}
     for (const phase of [0, 40, 125, 1000, 1125]) {
-      const g = await launchFixture(path.join(import.meta.dir, 'kit9-app.ts'), { ...fixture.env, KYBERN_APPEARANCE: theme, KYBERN_PAINT_PHASE_MS: String(phase), ...(reduced ? { KYBERN_REDUCED_MOTION: '1' } : {}) })
+      const g = await launchFixture(path.join(import.meta.dir, 'kit9-app.ts'), guardEnv({ ...fixture.env, KYBERN_APPEARANCE: theme, KYBERN_PAINT_PHASE_MS: String(phase), ...(reduced ? { KYBERN_REDUCED_MOTION: '1' } : {}) }))
       try {
         await g.app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })
         await g.app.getByTestId('rail-pulls').click()
