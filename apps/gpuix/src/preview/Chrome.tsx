@@ -60,11 +60,11 @@ export function PreviewChrome({ threadId }: { threadId: string }) {
     showFileInExplorer(threadId, thread.project_id, explorerPath)
   }
   const deviceLabel = s.device ? 'Hide device toolbar' : 'Show device toolbar', floatLabel = s.floating ? 'Return to panel' : 'Float over chat'
-  return <div testId="preview-chrome" style={{ display: 'flex', alignItems: 'center', height: 36, flexShrink: 0, gap: 4, paddingLeft: 8, paddingRight: 6, position: 'relative' }}>
+  return <div testId="preview-chrome" style={{ display: 'flex', alignItems: 'center', height: 36, flexShrink: 0, gap: 4, paddingLeft: 8, paddingRight: 6, position: 'relative', borderBottomWidth: 1, borderColor: t.surfaceDivider }}>
     <div role="group" aria-label="Navigation" style={{ display: 'flex', gap: 2 }}>
-      <div style={{ opacity: back ? 1 : 0.35 }}><IconButton testId="preview-back" icon={N.arrowLeft} size={28} label="Back" onClick={() => back && go(-1)} /></div>
-      {!narrow && <div style={{ opacity: forward ? 1 : 0.35 }}><IconButton testId="preview-forward" icon={N.arrowRight} size={28} label="Forward" onClick={() => forward && go(1)} /></div>}
-      <div style={{ opacity: entry ? 1 : 0.35 }}><IconButton testId="preview-reload" icon={s.loading ? N.x : N.refresh} size={28} label={s.loading ? 'Stop loading' : 'Reload'} onClick={() => entry && previewCommand(threadId, s.loading ? 'stop' : 'reload')} /></div>
+      <div style={{ opacity: back ? 1 : 0.35 }}><IconButton testId="preview-back" icon={N.arrowLeft} size={24} label="Back" onClick={() => back && go(-1)} /></div>
+      {!narrow && <div style={{ opacity: forward ? 1 : 0.35 }}><IconButton testId="preview-forward" icon={N.arrowRight} size={24} label="Forward" onClick={() => forward && go(1)} /></div>}
+      <div style={{ opacity: entry ? 1 : 0.35 }}><IconButton testId="preview-reload" icon={s.loading ? N.x : N.refresh} size={24} label={s.loading ? 'Stop loading' : 'Reload'} onClick={() => entry && previewCommand(threadId, s.loading ? 'stop' : 'reload')} /></div>
     </div>
     <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} style={{ display: 'flex', alignItems: 'center', flexGrow: 1, minWidth: 0, height: 28, gap: 6, paddingLeft: 8, paddingRight: 8, borderRadius: 8, backgroundColor: editing ? t.v('--color-background-elevated-secondary') : undefined, borderWidth: editing ? 1 : 0, borderColor: t.variant === 'dark' ? 'rgba(115, 115, 115, 0.45)' : 'rgba(163, 163, 163, 0.45)', hover: { backgroundColor: t.buttonSecondary } }}>
       <Icon source={s.load.phase === 'blocked' ? ICONS.shield : s.load.phase === 'waiting' || s.load.phase === 'error' ? warningIcon : entry?.kind === 'file' ? ICONS.file : N.globe} size={14} color={t.textSecondary} />

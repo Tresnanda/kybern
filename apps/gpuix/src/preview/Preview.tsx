@@ -4,7 +4,7 @@ import { Icon, ICONS } from '../icons.tsx'
 import { DockSection } from '../dock/Notes.tsx'
 import { muted } from '../nav/overlay.tsx'
 import { activeEnvironment } from '../shell/environment.ts'
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { VIEWPORT_PRESETS, isViewportSizeValid, parseViewportField } from '../../../../packages/kybern-client/src/previewViewport.ts'
 import type { PreviewOpenRequestedNotification, PreviewServer } from '../../../../packages/kybern-client/src/types.ts'
 import { getClient, useApp } from '../state.ts'
@@ -14,7 +14,7 @@ import { webHost } from '../native/webview.ts'
 import { IconButton } from '../sidebar/rows.tsx'
 import { Menu, MenuItem } from '../nav/overlay.tsx'
 import { N } from '../nav/glyphs.ts'
-import { Label, useTheme } from '../ui.tsx'
+import { ink, Label, useTheme } from '../ui.tsx'
 import { Floating } from '../live/Floating.tsx'
 import { Action, DockEmpty, ErrorLine } from '../dock/parts.tsx'
 import { floatingPreview, openPreview, previewState, setPreview, showPreview, subscribePreviews, usePreview } from './store.ts'
@@ -28,11 +28,22 @@ import { PreviewResizeCapture } from './resize.tsx'
 import { MiniResize, type MiniCorner } from './MiniResize.tsx'
 import { MiniChrome } from './MiniChrome.tsx'
 import { PreviewChrome } from './Chrome.tsx'
-import { PreviewStateView, State } from './States.tsx'
+import { PreviewStateView } from './States.tsx'
 import { PictureInPictureIcon } from '@hugeicons/core-free-icons'
 import { glyph } from '../icons.tsx'
-import { KitButton } from '../dock/parts.tsx'
+import { KitButton } from '../kit/AlertDialog.tsx'
 const PIP = glyph(PictureInPictureIcon)
+
+/** Desktop `DockEmpty` in the preview body: a block parent, so it sits at the top (`py-10`), not centred. */
+function FloatingState({ children }: { children: ReactNode }) {
+  const t = useTheme()
+  return <div testId="preview-state" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingLeft: 32, paddingRight: 32, paddingTop: 40, paddingBottom: 40 }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 10, marginBottom: 12, backgroundColor: t.v('--color-background-elevated-secondary') }}><Icon source={PIP} size={16} color={muted(t, 0.7)} /></div>
+    <Label color={ink(t, 0.8)} size={14} lineHeight={21} weight={500} style={{ textAlign: 'center' }}>Floating over the chat</Label>
+    <Label color={muted(t, 0.6)} size={13} lineHeight={16} style={{ textAlign: 'center', marginTop: 4, maxWidth: 256, whiteSpace: 'normal' }}>The page keeps running in the mini player.</Label>
+    <div style={{ display: 'flex', marginTop: 12 }}>{children}</div>
+  </div>
+}
 import { forgetRecent, recentsKeyForThread, useRecents } from './recents.ts'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 import { load, save } from '../shell/persist.ts'
@@ -64,17 +75,17 @@ export function PreviewPane({ threadId }: { threadId: string }) {
     {s.wsFailed && !s.wsNoticeDismissed && entry?.proxy && <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 12, height: 28 }}><Label color={t.textSecondary} size={11} truncate>{`Live reload isn't connected through ${environment.name}. Reload to see changes.`}</Label><Action onClick={() => previewCommand(threadId, 'reload')}>Reload</Action><IconButton icon={N.x} label="Dismiss" size={20} onClick={() => setPreview(threadId, { wsNoticeDismissed: true })} /></div>}
     {s.permission ? <PreviewStateView threadId={threadId} />
     : s.busy && s.load.phase !== 'waiting' ? <DockEmpty icon={N.globe} title="Opening preview…" />
-    : entry ? s.floating ? <State icon={PIP} title="Floating over the chat" body="The page keeps running in the mini player."><KitButton variant="subtle" testId="preview-return" onClick={() => setPreview(threadId, { floating: false })}>Return to panel</KitButton></State> : s.load.phase !== 'ready' ? <PreviewStateView threadId={threadId} /> : <PreviewSlot threadId={threadId} kind="dock" />
+    : entry ? s.floating ? <FloatingState><KitButton size="sm" variant="subtle" testId="preview-return" onClick={() => setPreview(threadId, { floating: false })}>Return to panel</KitButton></FloatingState> : s.load.phase !== 'ready' ? <PreviewStateView threadId={threadId} /> : <PreviewSlot threadId={threadId} kind="dock" />
     : sorted.length || recents.length ? <virtual-list style={{ flexGrow: 1, minHeight: 0, width: '100%' }}><div style={{ paddingLeft: 12, paddingRight: 12, paddingTop: 16, paddingBottom: 16 }}>
       <DockSection label={environment.local ? 'Local servers' : `Servers on ${environment.name}`} count={servers.length} />
       <div style={{ display: 'flex', flexDirection: 'column', marginLeft: 12, marginRight: 12, padding: 4, borderRadius: 10, backgroundColor: t.buttonSecondary }}>
         {shown.map(server => <div key={server.url} testId={`preview-server-${server.port}`} role="button" tabIndex={0} onClick={() => void openPreview(threadId, server.url)} onKeyDown={e => { if (e.key === 'enter') void openPreview(threadId, server.url) }} style={{ display: 'flex', alignItems: 'center', gap: 10, height: 44, paddingLeft: 10, paddingRight: 10, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.hover } }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 5, backgroundColor: t.buttonSecondaryHover, position: 'relative', flexShrink: 0 }}><Icon source={N.globe} size={13} color={t.textSecondary} /><div style={{ position: 'absolute', right: -2, bottom: -2, width: 6, height: 6, borderRadius: 3, backgroundColor: t.green }} /></div>
-          <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={muted(t, 0.9)} size={12} lineHeight={18} truncate>{server.title && server.title.length <= 48 ? server.title : server.process_name ?? server.host}</Label><Label color={muted(t, 0.7)} size={11} lineHeight={16} truncate>{[server.process_name, server.cwd?.split('/').filter(Boolean).slice(-3).join('/')].filter(Boolean).join(' · ')}</Label></div>
-          <Label color={t.textSecondary} size={11}>{new URL(server.url).host}</Label>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 5, backgroundColor: t.v('--color-background-elevated-secondary'), position: 'relative', flexShrink: 0 }}><Icon source={N.globe} size={13} color={t.textSecondary} />{/* `size-1.5 bg-emerald-500 ring-[1.5px] ring-(button-secondary)` */}<div style={{ position: 'absolute', right: -3.5, bottom: -3.5, width: 9, height: 9, borderRadius: 4.5, borderWidth: 1.5, borderColor: t.buttonSecondary, backgroundColor: 'oklch(0.696 0.17 162.48)' }} /></div>
+          <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={ink(t, 0.9)} size={14} lineHeight={21} truncate>{server.title && server.title.length <= 48 ? server.title : server.process_name ?? server.host}</Label><Label color={muted(t, 0.7)} size={13} lineHeight={19.5} truncate>{[server.process_name, server.cwd?.split('/').filter(Boolean).slice(-3).join('/')].filter(Boolean).join(' · ')}</Label></div>
+          <Label color={t.textSecondary} size={13}>{new URL(server.url).host}</Label>
         </div>)}
       </div>
-      {!showAll && sorted.length > 12 && <Action onClick={() => setShowAll(true)}>{`Show ${sorted.length - 12} more`}</Action>}
+      {!showAll && sorted.length > 12 && <Action textSize={13} onClick={() => setShowAll(true)}>{`Show ${sorted.length - 12} more`}</Action>}
       {recents.length > 0 && <><DockSection label="Recent" /><div style={{ display: 'flex', flexDirection: 'column', marginLeft: 12, marginRight: 12, padding: 4, borderRadius: 10, backgroundColor: t.buttonSecondary }}>
         {recents.map((recent, index) => <RecentRow key={`${recent.kind}:${recent.value}`} recent={recent} index={index} now={now} open={() => void openPreview(threadId, recent.value)} forget={() => forgetRecent(key, recent)} />)}
       </div></>}
@@ -90,7 +101,7 @@ function RecentRow({ recent, index, now, open, forget }: { recent: PreviewRecent
   const relative = relativeTime(new Date(recent.at).toISOString(), now), ago = relative === 'now' ? 'just now' : relative.includes(' ') || /^[A-Z]/.test(relative) ? relative : `${relative} ago`
   return <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} style={{ display: 'flex', alignItems: 'center', height: 44, gap: 8, paddingLeft: 10, paddingRight: 10, borderRadius: 6, hover: { backgroundColor: t.hover } }}>
     <div testId={`preview-recent-${index}`} role="button" tabIndex={0} onClick={open} onFocus={() => setHover(true)} onBlur={() => setHover(false)} onKeyDown={e => { if (e.key === 'enter') open() }} style={{ display: 'flex', flexGrow: 1, minWidth: 0, alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 5, backgroundColor: t.buttonSecondaryHover }}><Icon source={recent.kind === 'file' ? ICONS.file : N.globe} size={13} color={t.textSecondary} /></div><div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={12} lineHeight={18} truncate>{title}</Label><Label color={t.textSecondary} size={11} lineHeight={16} truncate>{`${location} · ${ago}`}</Label></div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 5, backgroundColor: t.v('--color-background-elevated-secondary') }}><Icon source={recent.kind === 'file' ? ICONS.file : N.globe} size={13} color={t.textSecondary} /></div><div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={ink(t, 0.9)} size={14} lineHeight={21} truncate>{title}</Label><Label color={muted(t, 0.7)} size={13} lineHeight={19.5} truncate>{`${location} · ${ago}`}</Label></div>
     </div><div style={{ opacity: hover ? 1 : 0 }}><IconButton testId={`preview-forget-${index}`} icon={N.x} label={`Remove ${title} from recent`} onHover={setHover} size={24} onClick={forget} /></div>
   </div>
 }
