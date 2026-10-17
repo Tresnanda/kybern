@@ -17,6 +17,7 @@ import { glyphRects, isCustomGlyph } from './glyphs.ts'
 import { allRange, lineRange, selectedText, selectionByIndex, selectionColumns, wordRange, type TerminalSelection } from './selection.ts'
 import { observeElementBounds } from '../native/layout.ts'
 import { terminalKey, terminalPaste, terminalMouse, terminalViewportKey, type TerminalMouseEvent } from './keys.ts'
+import { Utf8ToUtf32 } from './utf8.ts'
 import { fitTerminal, PANE_BOTTOM, PANE_X, XTERM_X, XTERM_Y } from './fit.ts'
 import { blend, indexedColor, parseCss, terminalColors, terminalPalette, type TerminalPalette } from './palette.ts'
 
@@ -24,6 +25,8 @@ import { blend, indexedColor, parseCss, terminalColors, terminalPalette, type Te
 // at 2x (device width floor(7.2 * 2) = 14, height floor(32 * 1.35) = 43). The font is sized so a
 // glyph advances exactly one cell, because a run is one native text node and must not drift.
 const FONT = 'JetBrains Mono'
+// `fontWeight: 300`, `fontWeightBold: 500`; italic faces are registered as their own family (main.tsx).
+const FONT_ITALIC = 'JetBrains Mono Italic', WEIGHT = 300, WEIGHT_BOLD = 500
 const CELL = 7, ROW = 21.5, FONT_SIZE = 12 * CELL / 7.2
 // Desktop pane padding plus `.xterm` padding (see fit.ts): text starts 24px from the dock edge and 13.6px below the tab row.
 const PAD_X = PANE_X + XTERM_X, PAD_TOP = 13.6, PAD_BOTTOM = PANE_BOTTOM + XTERM_Y
@@ -132,7 +135,7 @@ function TabChip({ id, kind, title, active, onSelect, onClose }: { id: string; k
 
 interface RowProps {
   line: Line; revision: number; model: VT; palette: TerminalPalette; surface: string; selectionColor: string; cursorColor: string
-  cursor: number; cursorShape: 'block' | 'underline' | 'bar'; selection: [number, number] | null
+  cursor: number; cursorShape: 'block' | 'underline' | 'bar' | 'outline'; selection: [number, number] | null
   selectCell: (line: Line, column: number, begin: boolean, end: boolean, clicks: number, shift: boolean) => void
   reportMouse: (line: Line, column: number, event: EventPayload, kind: TerminalMouseEvent['kind']) => boolean
 }
@@ -183,13 +186,14 @@ const TerminalLine = memo(function TerminalLine({ line, model, palette, surface,
     onMouseUp={e => { if (!reportMouse(line, mouseColumn(e.x), e, 'up')) selectCell(line, column(e.x), false, true, 1, false) }}
     style={{ display: 'flex', height: ROW, minHeight: ROW, flexShrink: 0, position: 'relative', cursor: model.mouseTracking ? 'default' : 'text' }}>
     {runs.map(({ run, plain, overlays, fg, bg }, i) => <Fragment key={i}>
-      <text style={{ width: run.columns * CELL, flexShrink: 0, fontFamily: FONT, fontSize: FONT_SIZE, lineHeight: ROW, color: fg, ...(bg ? { backgroundColor: bg } : {}), fontWeight: run.style.bold ? 700 : 400, ...(run.style.underline || run.style.link ? { textDecoration: 'underline' } : run.style.strike ? { textDecoration: 'line-through' } : {}), whiteSpace: 'nowrap', userSelect: 'none', pointerEvents: 'none' }}>{plain}</text>
+      <text style={{ width: run.columns * CELL, flexShrink: 0, fontFamily: run.style.italic ? FONT_ITALIC : FONT, fontSize: FONT_SIZE, lineHeight: ROW, color: fg, ...(bg ? { backgroundColor: bg } : {}), fontWeight: run.style.bold ? WEIGHT_BOLD : WEIGHT, ...(run.style.underline || run.style.link ? { textDecoration: 'underline' } : run.style.strike ? { textDecoration: 'line-through' } : {}), whiteSpace: 'nowrap', userSelect: 'none', pointerEvents: 'none' }}>{plain}</text>
       {overlays.map(o => <div key={o.key} style={{ position: 'absolute', left: o.x, top: o.y, width: o.w, height: o.h, backgroundColor: fg, opacity: o.alpha ?? 1, pointerEvents: 'none' }} />)}
     </Fragment>)}
     {selection && selection[1] > selection[0] && <div style={{ position: 'absolute', top: 0, height: ROW, left: selection[0] * CELL, width: (selection[1] - selection[0]) * CELL, backgroundColor: selectionColor, pointerEvents: 'none' }} />}
     {cursor >= 0 && cursorShape === 'bar' && <div style={{ position: 'absolute', left: cursor * CELL, top: 0, width: 1, height: ROW, backgroundColor: cursorColor, pointerEvents: 'none' }} />}
+    {cursor >= 0 && cursorShape === 'outline' && <div style={{ position: 'absolute', left: cursor * CELL, top: 0, width: CELL, height: ROW, borderWidth: 1, borderColor: cursorColor, pointerEvents: 'none' }} />}
     {cursor >= 0 && cursorShape === 'underline' && <div style={{ position: 'absolute', left: cursor * CELL, top: ROW - 1, width: CELL, height: 1, backgroundColor: cursorColor, pointerEvents: 'none' }} />}
-    {cursor >= 0 && cursorShape === 'block' && <div style={{ position: 'absolute', left: cursor * CELL, top: 0, width: CELL * (char !== undefined && char !== '' && model.runs(line).length ? 1 : 1), height: ROW, backgroundColor: cursorColor, pointerEvents: 'none', display: 'flex' }}><text style={{ fontFamily: FONT, fontSize: FONT_SIZE, lineHeight: ROW, color: surface, whiteSpace: 'nowrap', userSelect: 'none' }}>{!char || char === '\0' ? ' ' : char}</text></div>}
+    {cursor >= 0 && cursorShape === 'block' && <div style={{ position: 'absolute', left: cursor * CELL, top: 0, width: CELL * (char !== undefined && char !== '' && model.runs(line).length ? 1 : 1), height: ROW, backgroundColor: cursorColor, pointerEvents: 'none', display: 'flex' }}><text style={{ fontFamily: FONT, fontSize: FONT_SIZE, fontWeight: WEIGHT, lineHeight: ROW, color: surface, whiteSpace: 'nowrap', userSelect: 'none' }}>{!char || char === '\0' ? ' ' : char}</text></div>}
   </div>
 })
 
@@ -256,7 +260,7 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
   }
   useEffect(() => {
     let live = true, timer: ReturnType<typeof setTimeout> | undefined, syncGuard: ReturnType<typeof setTimeout> | undefined, closing: ReturnType<typeof setTimeout> | undefined
-    const decoder = new TextDecoder()
+    const decoder = new Utf8ToUtf32()
     const client = getClient()!
     model.titleChanged = title => { const short = shortTitle(title); if (short) titleRef.current?.(short) }
     const changed = () => {
@@ -265,7 +269,7 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
       if (syncGuard) { clearTimeout(syncGuard); syncGuard = undefined }
       if (!timer && isWindowVisible()) timer = setTimeout(() => { timer = undefined; if (live) update(v => v + 1) }, OUTPUT_MS)
     }
-    const output = client.onNotification('terminal.output', params => { const output = params as TerminalOutputNotification; if (output.terminal_id === info.id) { model.write(decoder.decode(Buffer.from(output.data, 'base64'), { stream: true })); changed() } })
+    const output = client.onNotification('terminal.output', params => { const output = params as TerminalOutputNotification; if (output.terminal_id === info.id) { model.write(decoder.decodeString(Buffer.from(output.data, 'base64'))); changed() } })
     const exited = client.onNotification('terminal.exited', params => {
       const event = params as TerminalExitedNotification
       if (event.terminal_id !== info.id) return
@@ -333,8 +337,9 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
     }
     return false
   }
-  const shape = model.cursorShape ?? 'bar'
-  const cursorVisible = model.cursorVisible && exit === null && focused && blinkOn
+  // Unfocused, xterm.js draws `cursorInactiveStyle: 'outline'` (a 1px box inside the cell) and does not blink.
+  const shape = focused ? model.cursorShape ?? 'bar' : 'outline'
+  const cursorVisible = model.cursorVisible && model.cursorInitialized && exit === null && (!focused || blinkOn)
   const renderLine = (line: Line, index: number) => <TerminalLine key={line.id} line={line} revision={line.revision} model={model} palette={palette} surface={t.surface} selectionColor={palette.selection} cursorColor={model.cursorOverride ? `rgb(${model.cursorOverride.join(',')})` : palette.cursor} selection={selectionColumns(indexedSelection, index, model.cols)} selectCell={selectCell} reportMouse={reportMouse} cursorShape={shape} cursor={cursorVisible && index === cursorLine ? Math.min(model.x, model.cols - 1) : -1} />
   return <>
     <ErrorLine error={error} />
@@ -343,7 +348,7 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
       <Label color={t.textSecondary} size={10}>{match < 0 ? 'No match' : `Line ${match + 1}`}</Label><Action onClick={() => find(search, true)}>↑</Action><Action onClick={() => find(search)}>↓</Action><Action onClick={() => setSearch(null)}>Close</Action>
     </div>}
     <div ref={host} testId="terminal-screen" tabIndex={0} role="textbox" aria-label="Terminal"
-      onFocus={() => { model.focused = true; setFocused(true); if (model.focusReporting) send('\x1b[I') }}
+      onFocus={() => { model.focused = true; model.cursorInitialized = true; setFocused(true); if (model.focusReporting) send('\x1b[I') }}
       onBlur={() => { model.focused = false; setFocused(false); if (model.focusReporting) send('\x1b[O') }}
       onAuxClick={e => { if ((!model.mouseTracking || e.modifiers?.shift) && (e.isRightClick || e.button === 2)) setMenuAt({ x: e.x ?? 0, y: e.y ?? 0 }) }}
       onMouseUp={() => { selecting.current = false }} onMouseDownOutside={() => { selecting.current = false }}

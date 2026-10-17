@@ -601,6 +601,8 @@ export class VT {
   mousePixels = false
   /** Whether the terminal view has keyboard focus (reported when focus reporting turns on). */
   focused = false
+  /** xterm's `isCursorInitialized`: the cursor shows once the terminal was focused or switched screens. */
+  cursorInitialized = false
   private colorSlot(slot: number, text: string, reportPrefix: string) {
     if (text === '?') {
       const colors = this.colors
@@ -784,6 +786,7 @@ export class VT {
       case 1049: case 47: case 1047:
         if (on) { if (mode === 1049) this.saveCursor(); this.enterAlternate() }
         else { this.leaveAlternate(); if (mode === 1049) this.restoreCursor() }
+        this.cursorInitialized = true
         break
       case 2004: this.bracketedPaste = on; break
       case 2026: this.synchronizedOutput = on; break

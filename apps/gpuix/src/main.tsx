@@ -18,7 +18,8 @@ import { installFrameSource } from './native/frame.ts'
 import { hasSavedFrame, installWindowFrame, startWindowShell } from './shell/window.ts'
 import { startEnvironmentWindow } from './windows/window.ts'
 
-const FONTS = ['CalSans-Regular.ttf', 'JetBrainsMono-Regular.ttf']
+// The terminal draws xterm's weights (300 text, 500 bold); italics are their own family until GPUIX styles take `fontStyle`.
+const FONTS = ['CalSans-Regular.ttf', 'JetBrainsMono-Regular.ttf', 'JetBrainsMono-Light.ttf', 'JetBrainsMono-Medium.ttf', 'JetBrainsMono-LightItalic.ttf', 'JetBrainsMono-MediumItalic.ttf']
 
 function Fonts({ children }: { children: ReactNode }) {
   const renderer = useGpuixRequired()
