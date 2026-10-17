@@ -255,4 +255,3 @@ unmount and occlusion must park the source and release any retained target.
 Acceptance needs matched desktop/GPUIX phase strips in all four modes, a
 within-glyph gradient assertion, native selection/focus/Unicode checks, exact
 region/full redraw pixels, and repeated running-thread resource controls.
-

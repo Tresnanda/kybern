@@ -36,4 +36,3 @@ export async function launchFixture(entry: string, env: Record<string, string>) 
     return { app, pid: child.pid!, counts: () => ({renders,wakes,commits,frames}), observerReady:()=>observerReady,frontAt:()=>frontAt,visibilityEvents:()=>[...visibilityEvents],gpuFrames:()=>[...gpuFrames], regionEvents:()=>[...regionEvents], regions:()=>[...regions], frameTimes:()=>[...frameTimes], frameEvents:()=>[...frameEvents], diagnostics: () => stderr, close: async () => { await app.close(); if (child.exitCode === null && child.signalCode === null) { child.kill(); await new Promise<void>(resolve => child.once('exit', () => resolve())) } } }
   } catch (error) { clearTimeout(timer); child.kill(); throw error }
 }
-
