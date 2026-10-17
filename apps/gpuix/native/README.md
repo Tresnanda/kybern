@@ -1192,3 +1192,37 @@ frontend in Playwright WebKit. The real-PR proxy forwards only read methods to
 runs a quick app-wide scheduling control, PR actions, idle and separate
 four-mode captures. Timed input is 120 Hz pipelined pixel deltas with native
 contact/end phases and synthetic decay, rather than OS trackpad events.
+
+## Rotate and pop paint animations (Phase 2, kit9)
+
+Two more `paintAnimation` kinds ride the scoped leaf paint path above
+(`animate_tagged` → `repaint_tagged_inner`): the scene re-evaluates the tagged
+leaf at every presented frame with no element render, layout or prepaint.
+
+- `{ kind: 'rotate', cycleMs }` on a passive fixed-size SVG: `animate-spin`.
+  Each frame sets the sprite's `transformation` to a rotation about the sprite
+  centre. It runs until the prop is removed; `src/kit/Spin.tsx` removes it under
+  Reduce Motion and while the window is hidden, so a still glyph presents no
+  frames. Used by the PR checks and the sidebar's running state.
+- `{ kind: 'pop', cycleMs, delayMs? }` on a passive text or SVG leaf: `t-pop`
+  (250 ms `--ease-bounce`, scale 0.85 → 1, opacity 0.4 → 1, `both` fill). Each
+  frame sets every sprite's alpha and a scale about the centre of the union of
+  the leaf's glyph sprites; 100 ms after the curve ends the leaf stops asking
+  for frames. `src/kit/Pop.tsx` skips it under Reduce Motion.
+
+Both are paint-only: geometry, layout, hit testing and clipping are untouched.
+Only monochrome and subpixel sprites honour `transformation`, so a pop on a box
+with a background or border only fades; there is still no subtree scale.
+
+Files: `rotate_gpui.py` and `pop_gpui.py` (GPUI fork, run from
+`backdrop_gpui.py` after `paint_gpui.py`/`paint_text_gpui.py`), and
+`rotate_hooks.py` and `pop_hooks.py` (native crate, run from `apply_hooks.py`).
+`pop_*` anchors on lines `rotate_*` writes, so keep the order. A lane that adds
+another kind next to them must extend the same `mode != …` chain. Merge order
+otherwise fails loudly at the anchor, never silently.
+
+Known limits: a pop whose frames stop part-way (window hidden during the
+250 ms) keeps its last scale and alpha until the leaf next repaints. With region
+paint (`KYBERN_PAINT_REGION`), a finished pop still counts as a native paint
+animation, so the region target does not park. Checks:
+`scripts/kit9-spinner-check.ts` and `scripts/kit9-pop.ts`.
