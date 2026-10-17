@@ -16,8 +16,10 @@ import { openUrl } from '../pulls/PrStates.tsx'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { TaskWindow, type TaskWindowEntry } from '../tasks/TaskWindow.tsx'
 import { Label, useTheme } from '../ui.tsx'
-import { Action, ErrorLine, KitButton, Section } from './parts.tsx'
-import { FileCode } from './Explorer.tsx'
+import { ErrorLine, KitButton, Section } from './parts.tsx'
+
+/** `--font-mono-family` (kit.css): JetBrains Mono first. */
+const FONT_CODE = 'JetBrains Mono'
 
 export function ArtifactsPane({ thread }: { thread: Thread }) {
   const t = useTheme()
@@ -62,17 +64,18 @@ export function ArtifactsPane({ thread }: { thread: Thread }) {
     </div> }] : []
   })
   return <div testId="dock-artifacts" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
-    <div style={{ display: 'flex', height: 40, alignItems: 'center', paddingLeft: 12, paddingRight: 12 }}><Label color={t.text} size={14} weight={500} style={{ flexGrow: 1 }}>Artifacts</Label><Action textSize={13} disabled={busy} onClick={() => setRefresh(n => n + 1)}>Refresh</Action></div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 12, paddingRight: 12, paddingTop: 12, marginBottom: 12 }}><Label color={t.text} size={14} lineHeight={20} weight={500} style={{ flexGrow: 1 }}>Artifacts</Label><KitButton size="chip" variant="ghost" disabled={busy} onClick={() => setRefresh(n => n + 1)}>Refresh</KitButton></div>
     <ErrorLine error={error} />{notice && <Section label={notice} />}
-    {thread.provider.kind === 'claude-code' && <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 12, paddingRight: 12, paddingBottom: 8 }}><input testId="artifact-path" aria-label="Artifact file path" placeholder="artifacts/dashboard.html" value={path} onChange={e => setPath(e.value ?? '')} style={{ height: 30, fontSize: 14, color: t.text, backgroundColor: t.buttonSecondary, borderRadius: 8, borderWidth: 1, borderColor: t.borderLight, paddingLeft: 12 }} /><div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}><KitButton size="chip" variant="subtle" testId="artifact-preview" disabled={!path.trim()} onClick={() => setSelected({ id: 'local', seq: 0, title: path.split('/').pop() || 'Artifact', path: path.trim(), url: null, status: 'completed' })}>Preview file</KitButton><KitButton size="chip" variant="subtle" disabled={!path.trim() || busy} onClick={() => void publish({ path: path.trim(), url: null })}>Check publishing options</KitButton></div></div>}
-    {entries.length ? <TaskWindow entries={entries} card testId="artifacts-list" /> : <Label color={t.textSecondary} size={12} lineHeight={20} style={{ padding: 12 }}>{busy ? 'Loading artifacts…' : thread.provider.kind === 'claude-code' ? 'Preview a local file or check whether Claude has a publishing tool available.' : 'Local previews stay on your computer. Hosting requires a publishing tool available to the agent.'}</Label>}
-    {before !== null && <Action disabled={busy} onClick={() => void older()}>Load earlier artifacts</Action>}
+    {thread.provider.kind === 'claude-code' && <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 12, paddingRight: 12, paddingBottom: 16 }}><input testId="artifact-path" aria-label="Artifact file path" placeholder="artifacts/dashboard.html" value={path} onChange={e => setPath(e.value ?? '')} style={{ height: 30, fontSize: 14, color: t.text, backgroundColor: t.buttonSecondary, borderRadius: 8, borderWidth: 1, borderColor: t.borderLight, paddingLeft: 12 }} /><div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}><KitButton size="chip" variant="subtle" testId="artifact-preview" disabled={!path.trim()} onClick={() => setSelected({ id: 'local', seq: 0, title: path.split('/').pop() || 'Artifact', path: path.trim(), url: null, status: 'completed' })}>Preview file</KitButton><KitButton size="chip" variant="subtle" disabled={!path.trim() || busy} onClick={() => void publish({ path: path.trim(), url: null })}>Check publishing options</KitButton></div></div>}
+    {entries.length ? <TaskWindow entries={entries} card testId="artifacts-list" /> : <Label color={t.textSecondary} size={12} lineHeight={19.5} style={{ paddingLeft: 12, paddingRight: 12, whiteSpace: 'normal' }}>{busy ? 'Loading artifacts…' : thread.provider.kind === 'claude-code' ? 'Preview a local file or check whether Claude has a publishing tool available.' : 'Local previews stay on your computer. Hosting requires a publishing tool available to the agent.'}</Label>}
+    {before !== null && <div style={{ display: 'flex', paddingLeft: 12, paddingTop: 12 }}><KitButton variant="ghost" disabled={busy} onClick={() => void older()}>Load earlier artifacts</KitButton></div>}
     {selected && <ArtifactPreview key={`${thread.id}:${selected.path}`} thread={thread} artifact={selected} close={() => setSelected(null)} />}
   </div>
 }
 /** The desktop's sandboxed `<iframe sandbox="allow-scripts">`: one native web document in a slot, shared with inline visuals. */
-function ArtifactFrame({ id, url, height, onFailed }: { id: string; url: string; height: number; onFailed: (message: string) => void }) {
+function ArtifactFrame({ id, url, height, hidden, onFailed }: { id: string; url: string; height: number; hidden: boolean; onFailed: (message: string) => void }) {
   const renderer = useGpuixRequired(), ref = useRef<PublicInstance | null>(null), layer = useWebLayer(), t = useTheme()
+  const hiddenRef = useRef(hidden); hiddenRef.current = hidden
   const theme = useRef(visualTheme(t)); theme.current = visualTheme(t)
   const place = useRef<() => void>(() => {}), ready = useRef(false)
   useEffect(() => {
@@ -80,7 +83,7 @@ function ArtifactFrame({ id, url, height, onFailed }: { id: string; url: string;
     let latest: ElementBoundsEvent | undefined, generation = 0
     place.current = () => {
       const rect = latest?.rect, clip = latest?.clippedRect
-      if (!rect || !clip || !ready.current) { webHost.hide(id); return }
+      if (!rect || !clip || !ready.current || hiddenRef.current) { webHost.hide(id); return }
       webHost.place(id, rect, clip, { width: rect.width, height: rect.height, scale: 1, left: 0, top: 0 }, true, layer)
     }
     const stop = webHost.subscribe(event => {
@@ -94,7 +97,9 @@ function ArtifactFrame({ id, url, height, onFailed }: { id: string; url: string;
     return () => { bounds(); stop(); ready.current = false; webHost.destroy(id) }
   }, [renderer, id, url, layer])
   useEffect(() => { if (ready.current) webHost.theme(id, theme.current) }, [id, t])
-  return <div ref={ref} testId="artifact-frame" style={{ height, width: '100%', borderRadius: 8, backgroundColor: '#ffffff', flexShrink: 0 }} />
+  useEffect(() => { place.current() }, [hidden])
+  // Source keeps the page loaded under it, like the desktop's `hidden` iframe.
+  return <div ref={ref} testId="artifact-frame" style={{ height: hidden ? 0 : height, width: '100%', borderRadius: 8, backgroundColor: '#ffffff', flexShrink: 0 }} />
 }
 
 /** Desktop `ArtifactPreview`: a dialog with Source and Preview, the page in a sandboxed frame, Markdown rendered natively. */
@@ -122,14 +127,17 @@ function ArtifactPreview({ thread, artifact, close }: { thread: Thread; artifact
     <DialogHeader title={artifact.title} description="Local preview. Open in Claude for live connectors, sharing, and version history." onClose={close} />
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingLeft: 16, paddingRight: 16, paddingBottom: 16 }}>
       <div style={{ display: 'flex', gap: 8 }}>
-        <KitButton variant="subtle" testId="artifact-source" onClick={() => setSource(!source)}>{source ? 'Preview' : 'Source'}</KitButton>
-        {artifact.url && <KitButton variant="ghost" onClick={() => openUrl(artifact.url!)}>Open in Claude</KitButton>}
+        <KitButton size="chip" variant="subtle" testId="artifact-source" onClick={() => setSource(!source)}>{source ? 'Preview' : 'Source'}</KitButton>
+        {artifact.url && <KitButton size="chip" variant="ghost" onClick={() => openUrl(artifact.url!)}>Open in Claude</KitButton>}
       </div>
       {error ? <Label color={t.red} size={14}>{error}</Label>
         : !file ? <Label color={t.textSecondary} size={14}>Loading preview…</Label>
-        : source ? <div style={{ height, overflow: 'hidden' }}><FileCode content={file.content} path={artifact.path!} /></div>
-        : markdown ? <div style={{ height, overflow: 'scroll' }}><markdown source={file.content} theme={cachedMarkdownTheme(t)} /></div>
-        : url ? <ArtifactFrame id={`artifact:${thread.id}:${artifact.path}`} url={url} height={height} onFailed={setError} /> : <Label color={t.textSecondary} size={14}>Loading preview…</Label>}
+        : <>
+          {/* Desktop `<pre className="text-xs whitespace-pre-wrap">`: the raw file in the mono family, wrapped. */}
+          {source && <div testId="artifact-source-text" style={{ height, overflow: 'scroll' }}><Label color={t.text} size={12} lineHeight={16} font={FONT_CODE} style={{ whiteSpace: 'normal', width: '100%' }}>{file.content}</Label></div>}
+          {markdown ? !source && <div style={{ height, overflow: 'scroll' }}><markdown source={file.content} theme={cachedMarkdownTheme(t)} /></div>
+            : url ? <ArtifactFrame id={`artifact:${thread.id}:${artifact.path}`} url={url} height={height} hidden={source} onFailed={setError} /> : !source && <Label color={t.textSecondary} size={14}>Loading preview…</Label>}
+        </>}
     </div>
   </Dialog>
 }
