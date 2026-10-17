@@ -5,6 +5,7 @@ import path from 'node:path'
 import type { KybernClient } from '../../../packages/kybern-client/src/client.ts'
 import type { SeedContext } from './load.ts'
 import { SCRATCH, readState, writeState, connect } from './fixture.ts'
+import { settings9aMock } from './mock.settings9a.ts'
 
 export async function seed(client: KybernClient, { state, scratch, projects }: SeedContext) {
   const thread = await client.call('threads.create', { project_id: projects[0]!.id, provider: { kind: 'codex', instance: 'default' }, title: 'Visual worktree', use_worktree: true })
@@ -87,7 +88,11 @@ if (import.meta.main && process.argv[2] === '--proxy') {
         const text = String(raw), req = JSON.parse(text)
         const reply = (result: unknown) => ws.send(JSON.stringify({ jsonrpc: '2.0', id: req.id, result }))
         if (req.method === 'github.pr.list' && req.params?.project_id !== config.projectId) { reply({ pull_requests: [] }); return }
+        { const mocked = settings9aMock(req.method, mode, req.params); if (mocked !== undefined) { reply(mocked); return } }
         if (req.method === 'visual.settings') { reply({ port: server.port, threadId: config.threadId }); return }
+        // settings9 environment screens: paired devices and a running Tailscale listener.
+        if (req.method === 'access.tokens.list' && mode === 'devices') { reply({ tokens: [{ id: 'dev-1', label: 'Pixel tablet', created_at: timestamp, last_used_at: timestamp, revoked: false, scopes: [] }, { id: 'dev-2', label: 'Kybern mobile · iPhone', created_at: timestamp, last_used_at: timestamp, revoked: false, scopes: [] }, { id: 'dev-3', label: 'Old laptop', created_at: timestamp, last_used_at: timestamp, revoked: true, scopes: [] }, { id: 'dev-0', label: 'bootstrap', created_at: timestamp, last_used_at: timestamp, revoked: false, scopes: [] }] }); return }
+        if (req.method === 'access.exposure.get' && mode === 'devices') { reply({ tailscale: true, tailscale_ip: '100.64.0.7' }); return }
         if (req.method in mocks) { reply(mocks[req.method]); return }
         if (req.method === 'usage.summary' && mode === 'usage-empty') { reply({ rows: [], total: { key: 'total', turns: 0, usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 }, cost_usd: 0 } }); return }
         let socket: WebSocket

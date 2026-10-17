@@ -1,12 +1,12 @@
 import { useGpuix, type PublicInstance } from '@gpuix/react'
 // The desktop's environment row/menu. Connection state is per native window;
 // saved metadata and macOS credentials use the desktop's registry and service.
-import { useState, useRef, useSyncExternalStore } from 'react'
+import { useContext, useLayoutEffect, useState, useRef, useSyncExternalStore } from 'react'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
-import { ContextMenu, MenuItem, MenuLabel, MenuSeparator, muted } from '../nav/overlay.tsx'
+import { ContextMenu, MenuContext, MenuLabel, MenuSeparator, muted } from '../nav/overlay.tsx'
 import { getClient, useApp } from '../state.ts'
-import { Label, useTheme } from '../ui.tsx'
+import { ink, Label, useTheme } from '../ui.tsx'
 import { accent } from './rows.tsx'
 import { useEnvironment, onEnvironmentChange } from '../shell/environment.ts'
 import { reconnect } from '../shell/Connection.tsx'
@@ -49,17 +49,61 @@ function MenuContents({ at }: { at: { x: number; y: number } }) {
   const [profiles] = useState<EnvironmentProfile[]>(() => { try { return [localProfile, ...readRegistry().environments] } catch { return [localProfile] } })
   const statusLabel = status === 'connecting' || status === 'idle' ? 'Connecting' : status === 'open' ? 'Connected' : status === 'reconnecting' ? 'Reconnecting' : 'Offline'
   const run = (action: () => void | Promise<void>) => { void Promise.resolve().then(action).catch(e => toast.error('Unable to open environment', { description: e instanceof Error ? e.message : String(e) })) }
+  const rows = profiles.map((profile) => <EnvironmentChoice key={profile.id} profile={profile} current={profile.id === active.id} status={status} statusLabel={statusLabel}
+    onChoose={() => run(() => { if (profile.id === active.id) { if (status !== 'open') reconnect() } else connectEnvironment(profile.id) })}
+    onWindow={() => run(() => { openEnvironmentWindow(profile.id) })} />)
   return <ContextMenu at={at} onClose={() => setMenuAt(null)} width={304} testId="environment-menu">
       <MenuLabel>Environments</MenuLabel>
-      <virtual-list style={{ width: '100%', height: Math.min(profiles.length, 6) * 44 }}>
-        {profiles.map((profile) => <div key={profile.id} style={{ display: 'flex', alignItems: 'center', gap: 4, height: 44 }}>
-          <div style={{ flexGrow: 1, minWidth: 0 }}><MenuItem id={profile.id} testId={`environment-choice-${profile.id}`} icon={profile.local ? N.laptop : N.globe} label={profile.name} detail={profile.id === active.id ? statusLabel : undefined} checked={profile.id === active.id} onSelect={() => run(() => { if (profile.id === active.id) { if (status !== 'open') reconnect() } else connectEnvironment(profile.id) })} /></div>
-          <div style={{ width: 28, flexShrink: 0 }}><MenuItem id={`window-${profile.id}`} testId={`environment-window-${profile.id}`} icon={N.window} label="" onSelect={() => run(() => { openEnvironmentWindow(profile.id) })} /></div>
-        </div>)}
-      </virtual-list>
+      {profiles.length > 5 ? <virtual-list style={{ width: '100%', height: 5 * ENV_ROW_PITCH }}>{rows}</virtual-list> : <div style={{ display: 'flex', flexDirection: 'column' }}>{rows}</div>}
       <MenuSeparator />
-      <MenuItem id="add" testId="environment-add" icon={N.plus} label="Add environment" onSelect={() => showEnvironmentDialog({ kind: 'add' })} />
-      <MenuItem id="manage" testId="environment-manage" icon={N.settings} label="Manage environments" onSelect={() => showEnvironmentDialog({ kind: 'manage' })} />
-      <MenuItem id="pair" testId="environment-pair" icon={N.globe} label="Pair a device" disabled={status !== 'open' || !getClient()?.info?.scopes.includes('access_write')} onSelect={() => showEnvironmentDialog({ kind: 'pair' })} />
+      <EnvironmentAction id="add" testId="environment-add" icon={N.plus} label="Add environment" onSelect={() => showEnvironmentDialog({ kind: 'add' })} />
+      <EnvironmentAction id="manage" testId="environment-manage" icon={N.settings} label="Manage environments" onSelect={() => showEnvironmentDialog({ kind: 'manage' })} />
+      <EnvironmentAction id="pair" testId="environment-pair" icon={N.globe} label="Pair a device" disabled={status !== 'open' || !getClient()?.info?.scopes.includes('access_write')} onSelect={() => showEnvironmentDialog({ kind: 'pair' })} />
   </ContextMenu>
+}
+
+/** An action row at the environment menu's own density: 28.5px, 8px gaps (`.environment-switcher-menu` keeps `--picker-option-py: .25rem`). */
+function EnvironmentAction({ id, testId, icon, label, disabled = false, onSelect }: { id: string; testId: string; icon: string; label: string; disabled?: boolean; onSelect: () => void }) {
+  const t = useTheme()
+  const menu = useContext(MenuContext)!
+  const select = useRef(onSelect)
+  select.current = onSelect
+  useLayoutEffect(() => menu.register({ key: id, disabled, keepOpen: false, onSelect: () => select.current() }), [menu.register, id, disabled])
+  return <div testId={testId} role="menuitem" aria-label={label} aria-disabled={disabled} onMouseMove={() => { if (!disabled && menu.active !== id) menu.setActive(id) }} onMouseLeave={() => { if (menu.active === id) menu.setActive(null) }} onClick={() => menu.pick(id)} style={{ display: 'flex', alignItems: 'center', gap: 8, height: 28.5, paddingLeft: 8, paddingRight: 8, borderRadius: 10, opacity: disabled ? 0.64 : 1, ...(menu.active === id && !disabled ? { backgroundColor: t.buttonSecondaryHover } : {}) }}>
+    <Icon source={icon} size={16} color={ink(t, 0.8)} style={{ pointerEvents: 'none' }} /><Label color={t.text} size={14} lineHeight={21} truncate style={{ flexGrow: 1, pointerEvents: 'none' }}>{label}</Label>
+  </div>
+}
+
+/** Rows are 44px with 2px between them (`min-h-11`, `space-y-0.5`). */
+const ENV_ROW_PITCH = 46
+
+/**
+ * One saved environment: a two-line choice (name, then status dot and detail) with a
+ * check on the current one, and an "Open in a new window" button
+ * (`views/EnvironmentSwitcher.tsx`: `.environment-choice`, `environment-choice-status`).
+ */
+function EnvironmentChoice({ profile, current, status, statusLabel, onChoose, onWindow }: { profile: EnvironmentProfile; current: boolean; status: string; statusLabel: string; onChoose: () => void; onWindow: () => void }) {
+  const t = useTheme()
+  const menu = useContext(MenuContext)!
+  const choose = useRef(onChoose), openWindow = useRef(onWindow)
+  choose.current = onChoose; openWindow.current = onWindow
+  const windowKey = `window-${profile.id}`
+  useLayoutEffect(() => menu.register({ key: profile.id, disabled: false, keepOpen: false, onSelect: () => choose.current() }), [menu.register, profile.id])
+  useLayoutEffect(() => menu.register({ key: windowKey, disabled: false, keepOpen: false, onSelect: () => openWindow.current() }), [menu.register, windowKey])
+  const choiceActive = menu.active === profile.id, windowActive = menu.active === windowKey
+  const detail = current ? statusLabel : profile.local ? 'On this Mac' : profile.ssh ? 'SSH connection' : 'Remote environment'
+  const dot = current && status === 'open' ? '#00bc7d' : current && status === 'failed' ? t.red : muted(t, 0.4)
+  return <div style={{ paddingBottom: 2 }}><div style={{ display: 'flex', alignItems: 'center', gap: 4, height: 44, paddingRight: 4, borderRadius: 10, backgroundColor: choiceActive || windowActive ? t.buttonSecondaryHover : current ? t.buttonSecondary : 'transparent' }}>
+    <div testId={`environment-choice-${profile.id}`} role="menuitem" aria-checked={current} aria-label={profile.name} onMouseMove={() => { if (menu.active !== profile.id) menu.setActive(profile.id) }} onMouseLeave={() => { if (menu.active === profile.id) menu.setActive(null) }} onClick={() => menu.pick(profile.id)} style={{ display: 'flex', alignItems: 'center', gap: 12, flexGrow: 1, minWidth: 0, height: 44, paddingLeft: 8, paddingRight: 8 }}>
+      <Icon source={profile.local ? N.laptop : N.globe} size={16} color={ink(t, 0.8)} style={{ opacity: 0.8, pointerEvents: 'none' }} />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexGrow: 1, minWidth: 0, pointerEvents: 'none' }}>
+        <Label color={t.text} size={14} lineHeight={19.25} truncate>{profile.name}</Label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}><div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: dot, flexShrink: 0 }} /><Label color={muted(t, 1)} size={11.5} lineHeight={15.8} truncate>{detail}</Label></div>
+      </div>
+      <div style={{ display: 'flex', width: 14, height: 14, flexShrink: 0, pointerEvents: 'none' }}>{current && <Icon source={N.check} size={14} color={t.text} />}</div>
+    </div>
+    <div testId={`environment-window-${profile.id}`} role="menuitem" aria-label={`Open ${profile.name} in a new window`} onMouseMove={() => { if (menu.active !== windowKey) menu.setActive(windowKey) }} onMouseLeave={() => { if (menu.active === windowKey) menu.setActive(null) }} onClick={() => menu.pick(windowKey)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, flexShrink: 0, borderRadius: 10, backgroundColor: windowActive ? t.buttonSecondary : 'transparent' }}>
+      <Icon source={N.window} size={16} color={muted(t, 1)} style={{ pointerEvents: 'none' }} />
+    </div>
+  </div></div>
 }

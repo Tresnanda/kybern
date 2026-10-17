@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
-import { motion, useWindowSize, type InputProps } from '@gpuix/react'
-import { parsePairingInvitation, pairingInvitation } from '../../../../packages/kybern-client/src/address.ts'
+import { parsePairingInvitation, pairingInvitation, normalizeDaemonUrl } from '../../../../packages/kybern-client/src/address.ts'
 import type { Exposure, PairingCreateResult, TokenInfo } from '../../../../packages/kybern-client/src/types.ts'
 import { Dialog } from '../nav/overlay.tsx'
-import { Button, Switch, TextField } from '../settings/controls.tsx'
+import { Switch } from '../settings/controls.tsx'
 import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
 import { getClient } from '../state.ts'
-import { EASE_OUT, REDUCED_MOTION, ink, Label, useTheme } from '../ui.tsx'
+import { motion } from '@gpuix/react'
+import { EASE_OUT, ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { copyText, errorText } from '../transcript/store.ts'
 import { toast } from '../shell/toasts.tsx'
 import { connectEnvironment, forgetEnvironment, saveEnvironment, setupSshEnvironment } from './actions.ts'
@@ -16,8 +16,8 @@ import { Delete02Icon } from '@hugeicons/core-free-icons'
 import { glyph, Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { listSshHosts, type BootstrapProgress, type BootstrapStep } from './ssh.ts'
-import { MatrixLoader } from '../MatrixLoader.tsx'
 import { FONT_MONO } from '../theme.ts'
+import { DialogBody, DialogFooter, DialogHeader, Disclosure, EnvButton, EnvInput, ErrorText, Field, Hint, IconButton, Spinner } from './kit.tsx'
 
 type Screen = { kind: 'add'; profile?: EnvironmentProfile } | { kind: 'manage' | 'pair' }
 let screen: Screen | null = null
@@ -33,142 +33,165 @@ export function EnvironmentDialogs() {
   </Dialog>
 }
 
-function DialogHeader({ title, description, onClose }: { title: string; description: string; onClose: () => void }) {
-  const t = useTheme()
-  return <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 16, paddingRight: 40, paddingTop: 16, paddingBottom: 4, position: 'relative' }}>
-    <Label color={t.text} size={16} lineHeight={20} weight={600}>{title}</Label>
-    <Label color={t.textSecondary} size={14} lineHeight={21.7}>{description}</Label>
-    <IconButton testId="dialog-close" label="Close" icon={N.x} onClick={onClose} style={{ position: 'absolute', top: 8, right: 8 }} />
-  </div>
-}
-function IconButton({ testId, label, icon, onClick, style = {} }: { testId: string; label: string; icon: string; onClick: () => void; style?: object }) {
-  const t = useTheme()
-  return <div testId={testId} role="button" aria-label={label} tabIndex={0} onClick={onClick} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onClick() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, flexShrink: 0, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover }, ...style }}><Icon source={icon} size={14} color={t.textSecondary} /></div>
-}
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  const t = useTheme()
-  return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Label color={ink(t, .8)} size={13} weight={500}>{label}</Label>{children}</div>
-}
-function EnvironmentInput(props: Parameters<typeof TextField>[0]) {
-  const t = useTheme()
-  return <TextField {...props} style={{ height: 32, paddingLeft: 12, paddingRight: 12, fontSize: 14, backgroundColor: t.variant === 'dark' ? ink(t, .025) : t.v('--background'), ...props.style }} />
-}
-function Hint({ children }: { children: ReactNode }) {
-  const t = useTheme()
-  return <Label color={t.textSecondary} size={13} lineHeight={20.15}>{children}</Label>
-}
-function Disclosure({ label, open, toggle }: { label: string; open: boolean; toggle: () => void }) {
-  const t = useTheme()
-  return <div testId={label === 'Advanced' ? 'environment-advanced' : 'environment-token-toggle'} role="button" tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') toggle() }} style={{ display: 'flex', alignItems: 'center', alignSelf: 'flex-start', gap: 4, paddingTop: 4, paddingBottom: 4, cursor: 'pointer' }}><Icon source={open ? N.chevronDown : N.chevronRight} size={12} color={t.textSecondary} /><Hint>{label}</Hint></div>
-}
 function EnvironmentForm({ profile, close }: { profile?: EnvironmentProfile; close: () => void }) {
   const initialMode = profile && !profile.ssh ? 'address' : 'ssh'
   const [selection, setSelection] = useState({ mode: initialMode, previous: initialMode, keyboard: false })
+  const [busy, setBusy] = useState(false)
   const { mode } = selection
-  const chooser = !profile && <EnvironmentChooser {...selection} onChange={(next, keyboard) => setSelection({ mode: next, previous: mode, keyboard })} />
-  return mode === 'ssh' ? <SshForm profile={profile} close={close} chooser={chooser} /> : <AddressForm profile={profile} close={close} chooser={chooser} />
+  const chooser = !profile && <EnvironmentChooser {...selection} busy={busy} onChange={(next, keyboard) => setSelection({ mode: next, previous: mode, keyboard })} />
+  return mode === 'ssh' ? <SshForm profile={profile} close={close} chooser={chooser} busy={busy} setBusy={setBusy} /> : <AddressForm profile={profile} close={close} chooser={chooser} busy={busy} setBusy={setBusy} />
 }
-function EnvironmentChooser({ mode, previous, keyboard, onChange }: { mode: string; previous: string; keyboard: boolean; onChange: (mode: string, keyboard: boolean) => void }) {
+/** The desktop's `t-tabs` sliding pill: 478px track, 4px padding, two 233px tabs of 31.5px. */
+function EnvironmentChooser({ mode, previous, keyboard, busy, onChange }: { mode: string; previous: string; keyboard: boolean; busy: boolean; onChange: (mode: string, keyboard: boolean) => void }) {
   const t = useTheme()
-  return <div role="tablist" aria-label="How to reach the machine" style={{ display: 'flex', position: 'relative', padding: 4, height: 40, width: '100%', gap: 4, borderRadius: 8, backgroundColor: t.buttonSecondary }}>
-    <motion.div initial={{ translateX: previous === 'ssh' ? 0 : 237 }} animate={{ translateX: mode === 'ssh' ? 0 : 237 }} transition={{ duration: keyboard || REDUCED_MOTION ? 0 : .22, ease: EASE_OUT }} style={{ position: 'absolute', top: 4, left: 4, width: 233, height: 32, borderRadius: 6, backgroundColor: t.v('--sidebar-accent-active'), pointerEvents: 'none' }} />
-    {[['ssh','Over SSH'],['address','Address or invitation']].map(([id,label]) => <div key={id} testId={`environment-tab-${id}`} role="tab" aria-selected={mode === id} tabIndex={0} onClick={() => onChange(id!, false)} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onChange(id!, true) }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 233, height: 32, cursor: 'pointer' }}><Label color={mode === id ? t.text : t.textSecondary} size={14} weight={500}>{label}</Label></div>)}
+  return <div role="tablist" aria-label="How to reach the machine" style={{ display: 'flex', position: 'relative', padding: 4, height: 39.5, width: '100%', gap: 4, borderRadius: 10, backgroundColor: t.buttonSecondary }}>
+    <motion.div initial={{ translateX: previous === 'ssh' ? 0 : 237 }} animate={{ translateX: mode === 'ssh' ? 0 : 237 }} transition={{ duration: keyboard || REDUCED_MOTION ? 0 : .22, ease: EASE_OUT }} style={{ position: 'absolute', top: 4, left: 4, width: 233, height: 31.5, borderRadius: 8, backgroundColor: t.v('--sidebar-accent-active'), pointerEvents: 'none' }} />
+    {[['ssh', 'Over SSH'], ['address', 'Address or invitation']].map(([id, label]) => <div key={id} testId={`environment-tab-${id}`} role="tab" aria-selected={mode === id} tabIndex={busy ? -1 : 0} onClick={() => { if (!busy) onChange(id!, false) }} onKeyDown={e => { if (!busy && (e.key === 'enter' || e.key === 'space')) onChange(id!, true) }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 233, height: 31.5, cursor: 'pointer', opacity: busy ? 0.6 : 1 }}><Label color={mode === id ? t.v('--sidebar-accent-foreground') : t.textSecondary} size={13} lineHeight={19.5}>{label}</Label></div>)}
   </div>
 }
 const BOOTSTRAP_STEPS: { id: BootstrapStep; label: string }[] = [{ id: 'connect', label: 'Connect over SSH' }, { id: 'install', label: 'Install kybernd' }, { id: 'start', label: 'Start the daemon' }, { id: 'pair', label: 'Pair this device' }]
-function SshForm({ profile, close, chooser }: { profile?: EnvironmentProfile; close: () => void; chooser: ReactNode }) {
+function SshForm({ profile, close, chooser, busy, setBusy }: { profile?: EnvironmentProfile; close: () => void; chooser: ReactNode; busy: boolean; setBusy: (busy: boolean) => void }) {
   const t = useTheme()
   const [name, setName] = useState(profile?.name ?? '')
   const [target, setTarget] = useState(profile?.ssh ? `${profile.ssh.target}${profile.ssh.port ? `:${profile.ssh.port}` : ''}` : '')
   const [dataDir, setDataDir] = useState(profile?.ssh?.data_dir ?? '')
   const [hosts, setHosts] = useState<string[]>([])
   const [advanced, setAdvanced] = useState(false)
-  const [busy, setBusy] = useState(false)
   const controller = useRef<AbortController | null>(null)
   useEffect(() => () => controller.current?.abort(), [])
   const [steps, setSteps] = useState<Partial<Record<BootstrapStep, BootstrapProgress>>>({})
   const [error, setError] = useState('')
   useEffect(() => { let live = true; void listSshHosts(process.env.KYBERN_SSH_CONFIG).then(found => { if (live) setHosts(found) }); return () => { live = false } }, [])
+  const ready = !!name.trim() && !!target.trim()
   const submit = async () => {
-    if (busy) return
+    if (busy || !ready) return
     setBusy(true); setError(''); setSteps({}); controller.current = new AbortController()
-    try { const saved = await setupSshEnvironment({ id: profile?.id, name, target, data_dir: dataDir }, progress => setSteps(old => ({ ...old, [progress.step]: progress })), controller.current.signal); await connectEnvironment(saved.id); close() }
+    try {
+      const saved = await setupSshEnvironment({ id: profile?.id, name, target, data_dir: dataDir }, progress => setSteps(old => ({ ...old, [progress.step]: progress })), controller.current.signal)
+      await connectEnvironment(saved.id); close()
+    }
     catch (e) { setError(errorText(e)) } finally { setBusy(false) }
   }
+  const suggestions = !!target && hosts.some(host => host.startsWith(target) && host !== target) ? hosts.filter(host => host.startsWith(target) && host !== target).slice(0, 4) : []
+  const host = target.trim().replace(/^ssh:\/\//, '').replace(/^[^@]*@/, '')
   return <>
     <DialogHeader title={profile ? 'Edit environment' : 'Add environment'} description="Switch between machines. Each keeps its own projects and threads." onClose={close} />
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}>
+    <DialogBody footer>
       {chooser}
-      <Field label="Name"><EnvironmentInput testId="environment-name" label="Name" autoFocus value={name} onChange={setName} width="100%" readOnly={busy} placeholder="Dev server" /></Field>
-      <Field label="Machine"><EnvironmentInput testId="environment-machine" label="SSH machine" value={target} onChange={setTarget} width="100%" readOnly={busy} placeholder="user@host" onSubmit={() => { if (name.trim() && target.trim()) void submit() }} />
-        {!!target && hosts.some(host => host.startsWith(target) && host !== target) && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>{hosts.filter(host => host.startsWith(target) && host !== target).slice(0, 4).map(host => <Button key={host} variant="ghost" testId={`ssh-host-${host}`} onClick={() => setTarget(host)}>{host}</Button>)}</div>}
+      <Field label="Name"><EnvInput testId="environment-name" label="Name" autoFocus value={name} onChange={setName} disabled={busy} placeholder="Dev server" onSubmit={() => void submit()} /></Field>
+      <Field label="Machine"><EnvInput testId="environment-machine" label="SSH machine" value={target} onChange={setTarget} disabled={busy} placeholder="user@host" onSubmit={() => void submit()} />
+        {suggestions.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>{suggestions.map(item => <EnvButton key={item} variant="ghost" size="xs" testId={`ssh-host-${item}`} onClick={() => setTarget(item)}>{item}</EnvButton>)}</div>}
       </Field>
       <Hint>Kybern signs in with your SSH keys, never a password, installs and starts the daemon there, and pairs this device through a tunnel it keeps open. Aliases from ~/.ssh/config and host:port work too.</Hint>
-      <Disclosure label="Advanced" open={advanced} toggle={() => setAdvanced(!advanced)} />
-      {advanced && <Field label="Data directory on that machine (optional)"><EnvironmentInput testId="environment-data-dir" label="Data directory on that machine (optional)" value={dataDir} onChange={setDataDir} width="100%" readOnly={busy} placeholder="~/.kybern" /></Field>}
-      {!!Object.keys(steps).length && <div testId="environment-setup-progress" style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: t.border }}>{BOOTSTRAP_STEPS.map(step => <div key={step.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}><div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16 }}>{steps[step.id]?.state === 'running' ? <MatrixLoader rgb={[128,128,128]} /> : steps[step.id]?.state === 'done' ? <Icon source={N.check} size={14} color={t.green} /> : <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: steps[step.id]?.state === 'failed' ? t.red : t.textTertiary }} />}</div><div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={steps[step.id] ? t.text : t.textSecondary} size={13}>{step.label}</Label>{steps[step.id]?.detail && steps[step.id]?.state !== 'failed' && <Hint>{steps[step.id]!.detail}</Hint>}</div></div>)}</div>}
-      {error && <div testId="environment-setup-error"><Label color={t.red} size={13} lineHeight={20.15}>{error}</Label></div>}
-    </div>
-    <div style={{ display: 'flex', justifyContent: 'flex-end', paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}><Button variant="primary" testId="environment-save" disabled={busy || !name.trim() || !target.trim()} onClick={() => void submit()}>{busy ? 'Setting up' : profile ? 'Set up again and connect' : 'Set up and connect'}</Button></div>
+      <Disclosure testId="environment-advanced" label="Advanced" open={advanced} toggle={() => setAdvanced(!advanced)} />
+      {advanced && <Field label="Data directory on that machine (optional)"><EnvInput testId="environment-data-dir" label="Data directory on that machine (optional)" value={dataDir} onChange={setDataDir} disabled={busy} placeholder="~/.kybern" onSubmit={() => void submit()} /></Field>}
+      {!!Object.keys(steps).length && <div testId="environment-setup-progress" aria-label="Setup progress" style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: ink(t, t.variant === 'dark' ? .06 : .08) }}>{BOOTSTRAP_STEPS.map(step => { const state = steps[step.id]?.state ?? 'pending'; return <div key={step.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}><div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, marginTop: 2 }}>{state === 'running' ? <Spinner /> : state === 'done' ? <Icon source={N.check} size={14} color="#10b981" /> : state === 'failed' ? <div style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: t.red }} /> : <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: ink(t, .4 * .58) }} />}</div><div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={state === 'pending' ? t.textSecondary : t.text} size={13} lineHeight={17.5}>{step.label}</Label>{steps[step.id]?.detail && state !== 'failed' && <Hint>{steps[step.id]!.detail!}</Hint>}</div></div> })}</div>}
+      {error && <div testId="environment-setup-error" role="alert" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}><Label color={t.red} size={13} lineHeight={21.125}>{error}</Label>{/Permission denied|ssh-copy-id/.test(error) && !!host && <Label color={t.text} size={13} lineHeight={21.125} font={FONT_MONO}>{`ssh-copy-id ${target.trim()}`}</Label>}</div>}
+    </DialogBody>
+    <DialogFooter><EnvButton testId="environment-save" disabled={!ready} busy={busy} onClick={() => void submit()}>{busy ? 'Setting up' : profile ? 'Set up again and connect' : 'Set up and connect'}</EnvButton></DialogFooter>
   </>
 }
-function AddressForm({ profile, close, chooser }: { chooser: ReactNode } & { profile?: EnvironmentProfile; close: () => void }) {
-  const t = useTheme()
+
+/** `isLoopbackAddress` for the address a user typed, tolerant of scheme-less input. */
+function isLoopback(address: string) { return isLoopbackAddress(address.includes('://') ? address : `ws://${address}`) }
+function AddressForm({ profile, close, chooser, busy, setBusy }: { profile?: EnvironmentProfile; close: () => void; chooser: ReactNode; busy: boolean; setBusy: (busy: boolean) => void }) {
   const [name, setName] = useState(profile?.name ?? '')
   const [address, setAddress] = useState(profile?.url ?? '')
   const [code, setCode] = useState('')
   const [token, setToken] = useState('')
+  const [expectedIdentity, setExpectedIdentity] = useState<string | undefined>(undefined)
   const [advanced, setAdvanced] = useState(false)
   const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [addressError, setAddressError] = useState('')
+  const validateAddress = () => {
+    try { normalizeDaemonUrl(address); setAddressError(''); return true }
+    catch { setAddressError('Enter a machine address, such as https://machine.example.ts.net.'); return false }
+  }
+  /** Pasting a complete invitation fills the address and the code, like the desktop. */
+  const setAddressOrInvitation = (value: string) => {
+    setAddressError('')
+    const invitation = parsePairingInvitation(value)
+    if (invitation) { setAddress(invitation.url); setCode(invitation.code); setToken(''); setExpectedIdentity(invitation.environmentId) }
+    else { setAddress(value); setExpectedIdentity(undefined) }
+  }
+  const ready = !!name.trim() && !!address.trim() && (!!profile || code.length === 6 || !!token.trim())
   const submit = async () => {
+    if (busy || !ready || !validateAddress()) return
     setBusy(true); setError('')
     try {
-      const saved = await saveEnvironment({ id: profile?.id, name, address, code, token })
+      const saved = await saveEnvironment({ id: profile?.id, name, address, code: code || undefined, token: token || undefined, expectedIdentity })
       await connectEnvironment(saved.id); close()
-    } catch (e) { setError(errorText(e)); setBusy(false) }
+    } catch (e) {
+      const detail = errorText(e)
+      const unreachable = /error sending request|connection refused|timed out|Unable to connect|ConnectionRefused|fetch failed|Unable to reach/i.test(detail)
+      setError(unreachable && isLoopback(address)
+        ? "This invitation points at the other machine's own loopback address, which only works on that machine. For a daemon that listens on 127.0.0.1, add it over SSH instead, or bind it to an address this device can reach."
+        : unreachable ? 'Unable to reach this machine. Check its address and network connection, then try again.' : detail)
+    } finally { setBusy(false) }
   }
-  const invited = parsePairingInvitation(address)
   return <>
     <DialogHeader title={profile ? 'Edit environment' : 'Add environment'} description="Switch between machines. Each keeps its own projects and threads." onClose={close} />
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}>
+    <DialogBody footer>
       {chooser}
-      <Field label="Name"><EnvironmentInput testId="environment-name" autoFocus label="Name" value={name} onChange={setName} width="100%" readOnly={busy} placeholder="Dev server" /></Field>
-      <Field label="Address or pairing invitation"><EnvironmentInput testId="environment-address" label="Address or pairing invitation" value={address} onChange={(value) => { setAddress(value); if (parsePairingInvitation(value)) setToken('') }} width="100%" readOnly={busy} placeholder="https://machine.example.ts.net" /></Field>
-      <Field label={`Pairing code${profile ? ' (optional)' : ''}`}><EnvironmentInput testId="environment-code" label="Pairing code" value={invited?.code ?? code} onChange={(value) => { setCode(value.replace(/\D/g, '').slice(0, 6)); setToken('') }} style={{ fontFamily: FONT_MONO }} width="100%" readOnly={busy || !!invited} placeholder="000000" /></Field>
-      <Label color={t.textSecondary} size={13} lineHeight={20.15}>{profile ? 'Leave the code empty to keep this device’s access.' : 'On the other machine, choose Pair a device in the environment menu. For a server or VPS, run kybern pair over SSH.'}</Label>
-      <Disclosure label="Use an existing device token" open={advanced} toggle={() => setAdvanced(!advanced)} />
-      {advanced && <Field label="Device token"><EnvironmentInput {...({ secure: true } as InputProps)} testId="environment-token" label="Device token" value={token} onChange={value => { setToken(value); setCode('') }} width="100%" readOnly={busy} placeholder="Device token" /></Field>}
-      {error && <Label color={t.red} size={12} lineHeight={18}>{error}</Label>}
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}><Button variant="primary" testId="environment-save" disabled={busy || !name.trim() || !address.trim() || (!profile && !invited && code.length !== 6 && !token.trim())} onClick={() => void submit()}>{busy ? 'Connecting' : 'Save and connect'}</Button></div>
-    </div>
+      <Field label="Name"><EnvInput testId="environment-name" autoFocus label="Name" value={name} onChange={setName} disabled={busy} placeholder="Dev server" onSubmit={() => void submit()} /></Field>
+      <Field label="Address or pairing invitation"><EnvInput testId="environment-address" label="Address or pairing invitation" value={address} onChange={setAddressOrInvitation} disabled={busy} invalid={!!addressError} onBlur={() => { if (address.trim()) validateAddress() }} placeholder="https://machine.example.ts.net" onSubmit={() => void submit()} />
+        {!!addressError && <ErrorText testId="environment-address-error">{addressError}</ErrorText>}</Field>
+      <Field label={`Pairing code${profile ? ' (optional)' : ''}`}><EnvInput testId="environment-code" label="Pairing code" value={code} onChange={(value) => { setCode(value.replace(/\D/g, '').slice(0, 6)); setToken('') }} mono disabled={busy} placeholder="000000" onSubmit={() => void submit()} /></Field>
+      <Hint>{profile ? 'Leave the code empty to keep this device’s access.' : 'On the other machine, choose Pair a device in the environment menu. For a server or VPS, run kybern pair over SSH.'}</Hint>
+      <Disclosure testId="environment-token-toggle" label="Use an existing device token" open={advanced} toggle={() => setAdvanced(!advanced)} />
+      {advanced && <Field label="Device token"><EnvInput secure testId="environment-token" label="Device token" value={token} onChange={value => { setToken(value); setCode('') }} disabled={busy} placeholder="Device token" onSubmit={() => void submit()} /></Field>}
+      {!!error && <ErrorText testId="environment-save-error">{error}</ErrorText>}
+    </DialogBody>
+    <DialogFooter><EnvButton testId="environment-save" disabled={!ready} busy={busy} onClick={() => void submit()}>{busy ? 'Connecting' : 'Save and connect'}</EnvButton></DialogFooter>
   </>
 }
 
 function Manage({ close }: { close: () => void }) {
   const t = useTheme()
   const [revision, setRevision] = useState(0)
+  const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState('')
   const profiles = useMemo(() => { try { return [localProfile, ...readRegistry().environments] } catch { return [localProfile] } }, [revision])
+  const forget = async (profile: EnvironmentProfile) => {
+    setBusy(profile.id); setError('')
+    try { forgetEnvironment(profile.id); setRevision(n => n + 1) } catch (e) { setError(errorText(e)) } finally { setBusy(null) }
+  }
   return <>
     <DialogHeader title="Manage environments" description="Edit a connection or remove it from this device. Work on that machine keeps running." onClose={close} />
-    <virtual-list testId="environment-manage-list" style={{ width: '100%', height: Math.min(360, profiles.length * 69 + 28) }}>
-      {profiles.map((profile, index) => <div key={profile.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, paddingLeft: 16, paddingRight: 16, paddingTop: index ? 12 : 24, paddingBottom: index === profiles.length - 1 ? 28 : 12 }}>
+    <div testId="environment-manage-list" style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16, paddingBottom: 16 }}>
+      {profiles.map((profile) => <div key={profile.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, paddingTop: 12, paddingBottom: 12 }}>
         <Icon source={N.globe} size={16} color={t.textSecondary} style={{ marginTop: 4 }} />
-        <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={14} lineHeight={21.7}>{profile.name}</Label><Hint>{profile.ssh ? `ssh ${profile.ssh.target}${profile.ssh.port ? `:${profile.ssh.port}` : ''}` : profile.url ?? profile.hostname ?? getClient()?.info?.hostname ?? 'Managed by Kybern'}</Hint></div>
-        {profile.id !== 'local' && <><IconButton testId={`environment-edit-${profile.id}`} label={`Edit ${profile.name}`} icon={N.pencil} onClick={() => showEnvironmentDialog({ kind: 'add', profile })} /><IconButton testId={`environment-forget-${profile.id}`} label={`Remove ${profile.name}`} icon={glyph(Delete02Icon)} onClick={() => { try { forgetEnvironment(profile.id); setRevision(n => n + 1) } catch (e) { setError(errorText(e)) } }} /></>}
+        <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={14} lineHeight={22.75}>{profile.name}</Label><Hint>{profile.ssh ? `ssh ${profile.ssh.target}${profile.ssh.port ? `:${profile.ssh.port}` : ''}` : profile.url ?? profile.hostname ?? 'Managed by Kybern'}</Hint></div>
+        {profile.id !== 'local' && <><IconButton testId={`environment-edit-${profile.id}`} label={`Edit ${profile.name}`} icon={N.pencil} disabled={!!busy} onClick={() => showEnvironmentDialog({ kind: 'add', profile })} /><IconButton testId={`environment-forget-${profile.id}`} label={`Remove ${profile.name}`} disabled={!!busy} onClick={() => void forget(profile)}>{busy === profile.id ? <Spinner /> : <Icon source={glyph(Delete02Icon)} size={14} color={t.textSecondary} />}</IconButton></>}
       </div>)}
-    </virtual-list>
-    {error && <Label color={t.red} size={12} style={{ padding: 16 }}>{error}</Label>}
+      {!!error && <ErrorText testId="environment-manage-error">{error}</ErrorText>}
+    </div>
   </>
 }
 
 export function isLoopbackAddress(address: string) {
-  try { const host = new URL(address).hostname.replace(/^\[|\]$/g, ''); return host === 'localhost' || host === '::1' || /^127\./.test(host) } catch { return false }
+  try { const host = new URL(address.trim()).hostname.replace(/^\[|\]$/g, ''); return host === 'localhost' || host === '::1' || /^127\./.test(host) } catch { return false }
 }
+
+/** The address another device should use: Tailscale first, then any other reachable endpoint, then the one this device connected with. */
+export function suggestedAddress(endpoints: string[], exposure: Exposure | null, profileUrl: string | null | undefined) {
+  const remote = endpoints.filter((url) => !isLoopbackAddress(url))
+  const tailscale = exposure?.tailscale_ip ? remote.find((url) => url.includes(exposure.tailscale_ip!)) : undefined
+  if (tailscale) return tailscale
+  if (remote[0]) return remote[0]
+  if (profileUrl && !isLoopbackAddress(profileUrl)) return profileUrl
+  return ''
+}
+
+/** The invitation code in `font-mono text-3xl tracking-[0.25em]`: one 18px cell per digit, 7.5px apart (GPUIX text has no letter spacing). */
+function CodeDigits({ code }: { code: string }) {
+  const t = useTheme()
+  return <div testId="pairing-code" style={{ display: 'flex', justifyContent: 'center', gap: 7.5, paddingLeft: 7.5 }}>{code.split('').map((digit, index) => <div key={index} style={{ display: 'flex', justifyContent: 'center', width: 18 }}><Label color={t.text} size={30} lineHeight={36} font={FONT_MONO}>{digit}</Label></div>)}</div>
+}
+
+const DEVICES_POLL_MS = 5000
 function DeviceAccess({ close }: { close: () => void }) {
   const t = useTheme()
-  const size = useWindowSize({ intervalMs: 250 })
   const [client] = useState(() => getClient()!)
   const [exposure, setExposure] = useState<Exposure | null>(null)
   const [devices, setDevices] = useState<TokenInfo[]>([])
@@ -176,14 +199,25 @@ function DeviceAccess({ close }: { close: () => void }) {
   const [address, setAddress] = useState('')
   const [expired, setExpired] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [exposureBusy, setExposureBusy] = useState(false)
   const [error, setError] = useState('')
-  const [reload, setReload] = useState(0)
   useEffect(() => {
     let live = true
-    void client.call('access.exposure.get', {}).then((value) => { if (live) setExposure(value) }, () => {})
-    void client.call('access.tokens.list', {}).then((value) => { if (live) setDevices(value.tokens) }, (e) => { if (live) setError(errorText(e)) })
+    void client.call('access.exposure.get', {}).then((value) => { if (live) setExposure(value) }, () => { /* Older daemons have no exposure control; the row stays hidden. */ })
     return () => { live = false }
-  }, [client, reload])
+  }, [client])
+  // The paired-device list follows the other machines: refreshed every 5 s while this dialog is open, like the desktop.
+  useEffect(() => {
+    let live = true, loading = false
+    const refresh = () => {
+      if (loading || client.status !== 'open') return
+      loading = true
+      void client.call('access.tokens.list', {}).then((value) => { if (live) setDevices(value.tokens) }, (e) => { if (live) setError(errorText(e)) }).finally(() => { loading = false })
+    }
+    refresh()
+    const timer = setInterval(refresh, DEVICES_POLL_MS)
+    return () => { live = false; clearInterval(timer) }
+  }, [client])
   useEffect(() => {
     if (!invitation) return
     const left = Date.parse(invitation.expires_at) - Date.now()
@@ -197,27 +231,29 @@ function DeviceAccess({ close }: { close: () => void }) {
   const create = async (nextExposure = exposure) => {
     const next = await client.call('access.pairing.create', {})
     setInvitation(next)
-    const remote = next.endpoints.filter((url) => !isLoopbackAddress(url))
-    setAddress(remote.find((url) => nextExposure?.tailscale_ip && url.includes(nextExposure.tailscale_ip)) ?? remote[0] ?? (!isLoopbackAddress(client.endpoint.url) ? client.endpoint.url : ''))
+    setAddress(suggestedAddress(next.endpoints, nextExposure, activeEnvironment().local ? null : client.endpoint.url))
   }
   const run = async (action: () => Promise<void>) => { setBusy(true); setError(''); try { await action() } catch (e) { setError(errorText(e)) } finally { setBusy(false) } }
+  const paired = devices.filter(d => d.label !== 'bootstrap')
+  const card = { display: 'flex', borderRadius: 14, backgroundColor: t.variant === 'dark' ? ink(t, .016) : ink(t, .03) }
   return <>
     <DialogHeader title="Pair a device" description={`Give another device access to ${activeEnvironment().name}.`} onClose={close} />
-    <div testId="environment-access-body" style={{ display: 'flex', flexDirection: 'column', gap: 16, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 16, maxHeight: size.height - 125, minHeight: 0, flexShrink: 1, overflowY: 'scroll' }}>
-      {exposure && <div style={{ display: 'flex', alignItems: 'center', gap: 16, borderRadius: 12, backgroundColor: ink(t, .016), paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}><div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={14} weight={500}>Reachable over Tailscale</Label><Hint>{exposure.tailscale_ip ? exposure.tailscale ? `Devices on your tailnet connect to ${exposure.tailscale_ip} directly.` : 'Lets phones and other devices on your tailnet pair without a tunnel.' : 'Tailscale is not running on this machine.'}</Hint></div><Switch testId="environment-tailscale" label="Reachable over Tailscale" checked={exposure.tailscale} disabled={busy || (!exposure.tailscale && !exposure.tailscale_ip)} onChange={tailscale => void run(async () => { const value = await client.call('access.exposure.set', { tailscale }); setExposure(value); if (invitation) await create(value) })} /></div>}
+    <DialogBody testId="environment-access-body" scroll>
+      {exposure && <div style={{ ...card, alignItems: 'center', gap: 16, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}><div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={14} lineHeight={21} weight={500}>Reachable over Tailscale</Label><Hint>{exposure.tailscale_ip ? exposure.tailscale ? `Devices on your tailnet connect to ${exposure.tailscale_ip} directly.` : 'Lets phones and other devices on your tailnet pair without a tunnel.' : 'Tailscale is not running on this machine.'}</Hint></div><Switch testId="environment-tailscale" label="Reachable over Tailscale" checked={exposure.tailscale} disabled={exposureBusy || (!exposure.tailscale && !exposure.tailscale_ip)} onChange={tailscale => { setExposureBusy(true); setError(''); void (async () => { try { const value = await client.call('access.exposure.set', { tailscale }); setExposure(value); if (invitation) await create(value) } catch (e) { setError(errorText(e)) } finally { setExposureBusy(false) } })() }} /></div>}
       {invitation && <>
-        {qr && <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}><div role="img" aria-label="Pairing QR code" style={{ width: 176, height: 176, padding: 12, borderRadius: 12, backgroundColor: '#ffffff' }}><svg testId="pairing-qr" source={qr} style={{ width: 152, height: 152, color: '#000000' }} /></div><Hint>Scan with the Kybern mobile app, or copy the invitation below.</Hint></div>}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, borderRadius: 12, backgroundColor: ink(t, .016), padding: 16 }}><Label color={t.text} size={30} lineHeight={36} style={{ fontFamily: FONT_MONO }}>{invitation.code.split('').join(' ')}</Label><Hint>{expired ? 'Code expired. Create a new invitation.' : `Use once before ${new Date(invitation.expires_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}</Hint></div>
-        <Field label="Connection address"><EnvironmentInput testId="pairing-address" label="Connection address" value={address} onChange={setAddress} width="100%" placeholder="https://machine.example.ts.net" /></Field>
-        {(!address || isLoopbackAddress(address)) && <Hint>{address ? `This address only works on the machine itself.${exposure?.tailscale_ip && !exposure.tailscale ? ' Turn on Reachable over Tailscale to get one other devices can use.' : ' Enter an address the other device can reach.'}` : 'Enter an address the other device can reach, such as your Tailscale HTTPS address or SSH tunnel address.'}</Hint>}
-        <Button variant="primary" testId="pairing-copy" disabled={!link || expired} onClick={() => { if (link) { copyText(link); toast('Copied pairing invitation') } }}>Copy invitation</Button>
+        {qr && <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}><div role="img" aria-label="Pairing QR code" style={{ width: 176, height: 176, padding: 12, borderRadius: 14, backgroundColor: '#ffffff' }}><svg testId="pairing-qr" source={qr} style={{ width: 152, height: 152, color: '#000000' }} /></div><Hint center>Scan with the Kybern mobile app, or copy the invitation below.</Hint></div>}
+        <div style={{ ...card, flexDirection: 'column', alignItems: 'center', gap: 8, padding: 16 }}><CodeDigits code={invitation.code} /><Hint>{expired ? 'Code expired. Create a new invitation.' : `Use once before ${new Date(invitation.expires_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}</Hint></div>
+        <Field label="Connection address"><EnvInput testId="pairing-address" label="Connection address" value={address} onChange={setAddress} placeholder="https://machine.example.ts.net" /></Field>
+        {!address && <Hint>Enter an address the other device can reach, such as your Tailscale HTTPS address or SSH tunnel address.</Hint>}
+        {!!address && isLoopbackAddress(address) && <Hint>{`This address only works on the machine itself.${exposure?.tailscale_ip && !exposure.tailscale ? ' Turn on Reachable over Tailscale to get one other devices can use.' : ' Enter an address the other device can reach.'}`}</Hint>}
+        <EnvButton block icon="copy" testId="pairing-copy" disabled={!link || expired} onClick={() => { if (link) { copyText(link); toast('Copied pairing invitation') } }}>Copy invitation</EnvButton>
       </>}
-      <Button variant={invitation && !expired ? 'secondary' : 'primary'} testId="pairing-create" disabled={busy} onClick={() => void run(() => create())}>{invitation ? 'Create new invitation' : 'Create pairing invitation'}</Button>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 16 }}><Label color={t.text} size={14} weight={500}>Paired devices</Label>
-        {!devices.filter(d => d.label !== 'bootstrap').length && <div style={{ paddingTop: 8, paddingBottom: 8 }}><Hint>Create an invitation, then open it on the device you want to connect.</Hint></div>}
-        {devices.filter(d => d.label !== 'bootstrap').map(device => <div key={device.id} style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 8, paddingBottom: 8 }}><Label color={t.text} size={13} lineHeight={20.15} style={{ flexGrow: 1, minWidth: 0 }}>{device.label}</Label>{device.revoked ? <Hint>Revoked</Hint> : <Button variant="ghost" testId={`revoke-${device.id}`} disabled={busy} onClick={() => void run(async () => { await client.call('access.tokens.revoke', { token_id: device.id }); setDevices(list => list.map(d => d.id === device.id ? { ...d, revoked: true } : d)) })}>Revoke access</Button>}</div>)}
+      <EnvButton block variant={invitation && !expired ? 'secondary' : 'primary'} testId="pairing-create" busy={busy} onClick={() => void run(() => create())}>{invitation ? 'Create new invitation' : 'Create pairing invitation'}</EnvButton>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 16 }}><Label color={t.text} size={14} lineHeight={21} weight={500}>Paired devices</Label>
+        {!paired.length && <div style={{ paddingTop: 8, paddingBottom: 8 }}><Hint>Create an invitation, then open it on the device you want to connect.</Hint></div>}
+        {paired.map(device => <div key={device.id} style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 8, paddingBottom: 8 }}><Label color={t.text} size={13} lineHeight={21.125} style={{ flexGrow: 1, minWidth: 0 }}>{device.label}</Label>{device.revoked ? <Label color={t.textSecondary} size={12} lineHeight={16}>Revoked</Label> : <EnvButton variant="ghost" size="xs" testId={`revoke-${device.id}`} onClick={() => void run(async () => { await client.call('access.tokens.revoke', { token_id: device.id }); setDevices(list => list.map(d => d.id === device.id ? { ...d, revoked: true } : d)) })}>Revoke access</EnvButton>}</div>)}
       </div>
-      {error && <Label color={t.red} size={13} lineHeight={20.15}>{error}</Label>}
-    </div>
+      {!!error && <ErrorText testId="environment-access-error">{error}</ErrorText>}
+    </DialogBody>
   </>
 }

@@ -52,7 +52,7 @@ interface MenuContextValue {
   pick: (key: string) => void
 }
 
-const MenuContext = createContext<MenuContextValue | null>(null)
+export const MenuContext = createContext<MenuContextValue | null>(null)
 
 function useMenuState(close: () => void) {
   const [active, setActive] = useState<string | null>(null)
