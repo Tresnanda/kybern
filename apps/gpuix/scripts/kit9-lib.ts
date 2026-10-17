@@ -13,7 +13,7 @@ export const CLIENT_DIR = `${SCRATCH}/phase2-kit9-client`
 export const EVIDENCE = '/Users/mymac/projects/ade/previews/gpuix/phase2/kit9'
 mkdirSync(EVIDENCE, { recursive: true })
 
-export interface StartOptions { light?: boolean; reduced?: boolean; full?: boolean; env?: Record<string, string>; size?: string; seeded?: boolean }
+export interface StartOptions { light?: boolean; reduced?: boolean; full?: boolean; env?: Record<string, string>; size?: string; seeded?: boolean; /** Keep the window on screen at floating level (timing and resource runs). */ visible?: boolean }
 
 export async function start(opts: StartOptions = {}) {
   const env: Record<string, string> = {
@@ -28,7 +28,7 @@ export async function start(opts: StartOptions = {}) {
     ...opts.env,
   }
   // KYBERN_FRAME_TIMES makes the patched native layer log every presented frame (`[kybern-frame] <ms>`).
-  const f = await launchFixture(path.join(import.meta.dir, '../src/main.tsx'), { KYBERN_FRAME_TIMES: '1', ...env })
+  const f = await launchFixture(path.join(import.meta.dir, opts.visible ? 'kit9-app.ts' : '../src/main.tsx'), { KYBERN_FRAME_TIMES: '1', ...env })
   const app = f.app
   await app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })
   return Object.assign(app, { pid: f.pid, frameTimes: f.frameTimes, counts: f.counts, diagnostics: f.diagnostics, closeAll: f.close })
