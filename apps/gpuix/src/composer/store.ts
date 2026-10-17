@@ -160,6 +160,13 @@ export function ensureLoaded() {
     .catch(() => {})
 }
 
+/** Read the account list again (an account was added, changed or removed elsewhere, e.g. Settings). */
+export function refreshComposerAccounts() {
+  const client = getClient()
+  if (!client) return Promise.resolve()
+  return client.call('providers.accounts.list', {}).then((r) => { if (getClient() === client) patch({ accounts: r.accounts }) }).catch(() => {})
+}
+
 let providerLoad: Promise<ProviderStatus[]> | null = null
 export function loadProviders(force: boolean, projectId?: ProjectId): Promise<ProviderStatus[]> {
   if (providerLoad && !force) return providerLoad

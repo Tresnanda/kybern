@@ -20,6 +20,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -33,6 +34,7 @@ import { DISTANCE } from '../motion/kit.tsx'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { N } from './glyphs.ts'
 import { pointerNav } from './store.ts'
+import { observeElementBounds } from '../native/layout.ts'
 
 export { muted }
 
@@ -52,7 +54,7 @@ interface MenuContextValue {
   pick: (key: string) => void
 }
 
-const MenuContext = createContext<MenuContextValue | null>(null)
+export const MenuContext = createContext<MenuContextValue | null>(null)
 
 function useMenuState(close: () => void) {
   const [active, setActive] = useState<string | null>(null)
@@ -113,6 +115,8 @@ export function Menu({
   minWidth,
   testId,
   rootStyle,
+  fit,
+  panel,
 }: {
   trigger: (open: boolean) => ReactNode
   children: ReactNode
@@ -125,6 +129,10 @@ export function Menu({
   minWidth?: number
   testId?: string
   rootStyle?: StyleDesc
+  /** `'switch'` flips to the other side of the trigger when the popup does not fit, like Base UI's collision handling. */
+  fit?: 'snap' | 'switch'
+  /** Overrides on the menu panel, for a popover opened from a trigger (its radius and padding). */
+  panel?: StyleDesc
 }) {
   const t = useTheme()
   const { renderer } = useGpuix()
@@ -143,6 +151,24 @@ export function Menu({
   )
   const close = useCallback(() => setOpen(false), [setOpen])
   const menu = useMenuState(close)
+  // GPUI's own `switch` mirrors the popup around one point (the trigger edge plus the gap), which lands it
+  // on top of the trigger. Instead: after the first paint, a popup that was pushed above the trigger's
+  // bottom did not fit below, so it opens on the top side when there is room there.
+  const popup = useRef<PublicInstance | null>(null)
+  const [flipped, setFlipped] = useState(false)
+  useEffect(() => {
+    if (!open) { setFlipped(false); return }
+    if (fit !== 'switch' || side !== 'bottom' || !renderer || !popup.current || !triggerRef.current) return
+    let decided = false
+    return observeElementBounds(renderer, { id: popup.current.id }, ({ rect }) => {
+      const anchor = triggerRef.current && renderer.getElementBounds?.(triggerRef.current.id)
+      if (decided || !rect || !anchor) return
+      decided = true
+      // `rect` is the content box: add the panel's padding and 1px border back.
+      const inset = 2 * ((typeof panel?.padding === 'number' ? panel.padding : 4) + 1)
+      if (rect.y < anchor.y + anchor.height && anchor.y - sideOffset - (rect.height + inset) >= 8) setFlipped(true)
+    })
+  }, [open, fit, side, sideOffset, renderer])
   return (
     <div style={{ display: 'flex', position: 'relative', minWidth: 0, ...rootStyle }}>
       <div
@@ -175,9 +201,11 @@ export function Menu({
       </div>
       {open && (
         <PopupLayer
-          side={side}
+          ref={popup}
+          side={flipped ? 'top' : side}
           align={align}
           sideOffset={sideOffset}
+          fit={fit}
           tabIndex={0}
           autoFocus
           testId={testId ? `${testId}-menu` : undefined}
@@ -190,7 +218,7 @@ export function Menu({
           }}
           onKeyDown={menu.onKeyDown}
           onMouseDown={pointerNav}
-          style={panelStyle(t, width, minWidth)}
+          style={panel ? { ...panelStyle(t, width, minWidth), ...panel } : panelStyle(t, width, minWidth)}
         >
           <MenuContext.Provider value={menu.context}>{children}</MenuContext.Provider>
         </PopupLayer>

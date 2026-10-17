@@ -1,0 +1,80 @@
+// Marks that tell one account of an agent apart from another (`components/kybern/accounts/AccountMark.tsx`):
+// the colour dot, the agent mark with its dot, the avatar tile, the usage ring and the limit meter.
+// The CLI account and any account without a known colour never show a dot.
+import { isAccountColor, isCliInstance, type AccountColor } from '../../../desktop/src/lib/accounts.ts'
+import type { LimitPace } from '../../../desktop/src/lib/providerUsage.ts'
+import { limitTone } from '../../../desktop/src/lib/providerUsage.ts'
+import type { ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
+import { ink, ProviderMark, useTheme } from '../ui.tsx'
+import type { Theme } from '../theme.ts'
+
+/** `--account-*` (`kit.css:3365-3384`), light then dark. */
+const ACCOUNT_RGB: Record<AccountColor, readonly [string, string]> = {
+  blue: ['1, 105, 204', '51, 134, 214'],
+  green: ['0, 162, 64', '47, 191, 99'],
+  purple: ['117, 30, 217', '176, 109, 255'],
+  pink: ['194, 48, 122', '232, 106, 166'],
+  teal: ['15, 143, 134', '51, 191, 179'],
+  amber: ['217, 119, 6', '245, 180, 74'],
+}
+
+/** The account colour as an rgba string, or null when the key is unknown. */
+export function accountColor(t: Theme, color: string | null | undefined, alpha = 1): string | null {
+  return isAccountColor(color) ? `rgba(${ACCOUNT_RGB[color][t.variant === 'dark' ? 1 : 0]}, ${alpha})` : null
+}
+
+/** The account's colour as a small dot. It never sits on an agent mark: beside a mark use `AccountMarkStack`. */
+export function AccountDot({ color, size = 6 }: { color?: string | null; size?: number }) {
+  const t = useTheme()
+  const fill = accountColor(t, color)
+  if (!fill) return null
+  return <div style={{ width: size, height: size, flexShrink: 0, borderRadius: size / 2, backgroundColor: fill, pointerEvents: 'none' }} />
+}
+
+/** The agent mark with the account's dot beside it at the top-right, never on the mark. */
+export function AccountMarkStack({ kind, color, size = 14 }: { kind: ProviderKind; color?: string | null; size?: number }) {
+  return <div style={{ display: 'flex', alignItems: 'flex-start', flexShrink: 0, pointerEvents: 'none' }}><ProviderMark kind={kind} size={size} />{isAccountColor(color) && <div style={{ marginLeft: 1 }}><AccountDot color={color} /></div>}</div>
+}
+
+/** A rounded tile tinted with the account colour, with the agent mark in its centre. */
+export function AccountAvatar({ kind, color, instance, size = 28 }: { kind: ProviderKind; color?: string | null; instance?: string | null; size?: 20 | 28 | 32 }) {
+  const t = useTheme()
+  const cli = isCliInstance(instance)
+  const tint = cli ? null : accountColor(t, color, 0.14)
+  const edge = cli ? null : accountColor(t, color, 0.4)
+  return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: size, height: size, flexShrink: 0, borderRadius: size === 20 ? 6 : 8, borderWidth: 1, borderColor: edge ?? t.border, backgroundColor: tint ?? t.buttonSecondary, pointerEvents: 'none' }}><ProviderMark kind={kind} size={Math.round(size * 0.5)} /></div>
+}
+
+const R = 10.25
+const CIRCUMFERENCE = 2 * Math.PI * R
+function ringSvg(left: number, stroke: number) {
+  const head = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">'
+  const length = (Math.max(0, Math.min(100, left)) / 100) * CIRCUMFERENCE
+  return { track: `${head}<circle cx="12" cy="12" r="${R}" stroke="#000" stroke-width="${stroke}"/></svg>`, arc: `${head}<circle cx="12" cy="12" r="${R}" stroke="#000" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="${length.toFixed(3)} ${CIRCUMFERENCE.toFixed(3)}" transform="rotate(-90 12 12)"/></svg>` }
+}
+
+export function toneColor(t: Theme, tone: ReturnType<typeof limitTone>) {
+  return tone === 'critical' ? t.v('--destructive') : tone === 'warning' ? t.warning : ink(t, 0.62)
+}
+
+/** A small ring filled with what is left of a limit, in the tone of how close it is to running out (`AccountUsageRing`). */
+export function AccountUsageRing({ left, size = 20 }: { left: number; size?: number }) {
+  const t = useTheme()
+  const svg = ringSvg(left, 2.5)
+  return <div style={{ position: 'relative', width: size, height: size, flexShrink: 0, pointerEvents: 'none' }}><svg source={svg.track} style={{ position: 'absolute', left: 0, top: 0, width: size, height: size, color: ink(t, 0.12), pointerEvents: 'none' }} /><svg source={svg.arc} style={{ position: 'absolute', left: 0, top: 0, width: size, height: size, color: toneColor(t, limitTone(100 - left)), pointerEvents: 'none' }} /></div>
+}
+
+/**
+ * What is left of a plan limit, as a bar that drains as it is used (`LimitMeter`). The tick marks
+ * where even spending across the window would leave it: fill past the tick is reserve, fill short of
+ * it means usage is running ahead of time.
+ */
+export function LimitMeter({ left, pace, label }: { left: number; pace: LimitPace | null; label: string }) {
+  const t = useTheme()
+  const tone = limitTone(100 - left)
+  return <div role="meter" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(left)} style={{ position: 'relative', width: '100%', paddingTop: 3, paddingBottom: 3 }}>
+    <div style={{ display: 'flex', height: 4, borderRadius: 2, overflow: 'hidden', backgroundColor: ink(t, 0.1) }}><div style={{ width: `${Math.max(0, Math.min(100, left))}%`, height: 4, borderRadius: 2, backgroundColor: tone === 'critical' ? t.v('--destructive') : tone === 'warning' ? t.warning : ink(t, 0.65) }} /></div>
+    {pace && <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${pace.evenLeft}%`, borderRightWidth: 1.5, borderColor: ink(t, 0.45), pointerEvents: 'none' }} />}
+  </div>
+}
+

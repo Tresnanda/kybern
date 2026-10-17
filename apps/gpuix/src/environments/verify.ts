@@ -1,9 +1,11 @@
 import { launch } from '@gpuix/react/automation'
+import { assertScratchEnv } from '../requests/harness.ts'
 import { execFileSync, spawn } from 'node:child_process'
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 const out = process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previews/gpuix/environments'
 mkdirSync(out, { recursive: true })
 const mode = process.argv[2] ?? 'dark'
+assertScratchEnv({ KYBERN_DATA_DIR: process.env.KYBERN_DATA_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/data' })
 const app = await launch({ command: 'bun', args: ['src/main.tsx'], env: { ...process.env, GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: mode, KYBERN_DATA_DIR: process.env.KYBERN_DATA_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/data', KYBERN_CLIENT_CONFIG_DIR: process.env.KYBERN_CLIENT_CONFIG_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/environment-client', KYBERN_GPUIX_CREDENTIALS_DIR: process.env.KYBERN_GPUIX_CREDENTIALS_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/environment-credentials', KYBERN_GPUIX_THREAD: process.env.KYBERN_GPUIX_THREAD ?? '01a13e34-40eb-7682-81b0-7cb58da9cc63' } })
 async function click(id: string) {
   console.log('Click', id)

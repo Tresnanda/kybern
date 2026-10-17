@@ -5,6 +5,9 @@ import { KybernClient, type Endpoint } from '../../../../packages/kybern-client/
 import { httpBase, normalizeDaemonUrl, parsePairingInvitation } from '../../../../packages/kybern-client/src/address.ts'
 import { activeEnvironment, switchEnvironment } from '../shell/environment.ts'
 import { readCredential, writeCredential, removeCredential } from './credentials.ts'
+import { rmSync } from 'node:fs'
+import { prefsFileFor } from '../nav/live.ts'
+import { savedEnvironmentStateFile } from '../shell/persist.ts'
 import { localDataDir, profileById, profileEndpoint, readRegistry, writeRegistry, type EnvironmentProfile } from './registry.ts'
 
 /** Verify protocol and environment identity with the same transport as the workspace. */
@@ -97,7 +100,9 @@ export function forgetEnvironment(id: string) {
   removeCredential(id)
   try { writeRegistry({ selected_id: registry.selected_id === id ? 'local' : registry.selected_id, environments: registry.environments.filter((p) => p.id !== id) }) }
   catch (e) { if (previous) writeCredential(id, previous); throw e }
-  if (activeEnvironment().id === id) connectEnvironment('local')
+  // The desktop drops the environment's stored workspace with it (`forgetEnvironmentStore`).
+  if (activeEnvironment().id !== id) for (const file of [savedEnvironmentStateFile(localDataDir, id), prefsFileFor(id)]) rmSync(file, { force: true })
+  if (activeEnvironment().id === id) { const files = [savedEnvironmentStateFile(localDataDir, id), prefsFileFor(id)]; connectEnvironment('local'); for (const file of files) rmSync(file, { force: true }) }
 }
 
 /** GPUIX 0.10.0 has one native window per renderer/process. */
