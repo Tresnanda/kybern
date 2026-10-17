@@ -9,7 +9,7 @@ import { Icon } from '../icons.tsx'
 import { goPage } from '../nav/history.ts'
 import { N } from '../nav/glyphs.ts'
 import { errorText } from '../nav/actions.ts'
-import { Dialog, Menu, MenuItem, MenuSeparator, Tip } from '../nav/overlay.tsx'
+import { Dialog, Menu, MenuItem, MenuSeparator, MenuSub, Tip } from '../nav/overlay.tsx'
 import { useNav } from '../nav/store.ts'
 import { showDialog } from '../dialogs/store.ts'
 import { CloseX } from '../dialogs/Account.tsx'
@@ -26,7 +26,8 @@ import { markdownTheme } from '../transcript/kit.tsx'
 import { AccountAvatar, AccountDot, AccountUsageRing } from '../usage/AccountMark.tsx'
 import { askAccountLimits, makeDefaultAccount, refreshAccounts, setUsageAnchor, updateProviderSettings, useAccountFlash, useAccountLimitEntries, useAccounts, useAccountsFeed, useAccountsLegacy, useAccountsLoaded } from '../usage/accounts.ts'
 import { limitsForAccount } from '../../../desktop/src/lib/accountUi.ts'
-import { Button, Checkbox, PageBlock, selectOwnsEscape, useSettingsModal } from './controls.tsx'
+import { Checkbox } from '../kit/Checkbox.tsx'
+import { Button, PageBlock, selectOwnsEscape, useSettingsModal } from './controls.tsx'
 import { S } from './glyphs.ts'
 import { openSettingsTab } from './SettingsScreen.tsx'
 import { useSettings } from './store.ts'
@@ -256,8 +257,6 @@ function AccountMenu({ account, onRename, onRemove, onAssign }: { account: Accou
   const { kind, instance } = account.provider
   const cli = isCliInstance(instance)
   const id = `${kind}-${instance}`
-  // TODO(kit9): replace with the kit's nested menu (`MenuSub`/`MenuSubPopup`); until it lands the Color item swaps this menu's content.
-  const [view, setView] = useState<'root' | 'color'>('root')
   const signOut = async () => {
     const client = getClient()
     if (!client) return
@@ -281,22 +280,18 @@ function AccountMenu({ account, onRename, onRemove, onAssign }: { account: Accou
   }
   const [open, setOpen] = useState(false)
   useSettingsModal(open)
-  return <Menu testId={`account-actions-${id}`} align="end" minWidth={192} fit="switch" onOpenChange={(next) => { setOpen(next); if (!next) setView('root') }} trigger={() => <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, hover: { backgroundColor: t.buttonSecondaryHover } }}><Icon source={N.ellipsis} size={16} color={t.textSecondary} style={{ pointerEvents: 'none' }} /></div>}>
-    {view === 'root' ? <>
-      {!cli && <MenuItem id="rename" testId={`account-actions-${id}-rename`} label="Rename…" onSelect={onRename} />}
-      {!cli && <MenuItem id="signin" testId={`account-actions-${id}-signin`} label="Sign in again" onSelect={() => openAddAccount({ provider: kind, instance })} />}
-      {!cli && account.can_sign_out && account.status === 'signed_in' && <MenuItem id="sign_out" testId={`account-actions-${id}-sign_out`} label="Sign out" onSelect={() => void signOut()} />}
-      {!cli && <MenuSeparator />}
-      {!account.is_default && <MenuItem id="default" testId={`account-actions-${id}-default`} label="Make default" onSelect={() => void makeDefaultAccount(account)} />}
-      <MenuItem id="projects" testId={`account-actions-${id}-projects`} label="Use for projects…" onSelect={() => onAssign(account)} />
-      {!cli && <MenuItem id="color" testId={`account-actions-${id}-color`} label="Color" keepOpen detail="›" onSelect={() => setView('color')} />}
-      {!cli && <MenuSeparator />}
-      {!cli && <MenuItem id="remove" testId={`account-actions-${id}-remove`} label="Remove…" destructive onSelect={() => onRemove(account)} />}
-    </> : <>
-      <MenuItem id="back" label="Color" keepOpen icon={N.arrowLeft} onSelect={() => setView('root')} />
-      <MenuSeparator />
+  return <Menu testId={`account-actions-${id}`} align="end" minWidth={192} onOpenChange={setOpen} trigger={() => <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, hover: { backgroundColor: t.buttonSecondaryHover } }}><Icon source={N.ellipsis} size={16} color={t.textSecondary} style={{ pointerEvents: 'none' }} /></div>}>
+    {!cli && <MenuItem id="rename" testId={`account-actions-${id}-rename`} label="Rename…" onSelect={onRename} />}
+    {!cli && <MenuItem id="signin" testId={`account-actions-${id}-signin`} label="Sign in again" onSelect={() => openAddAccount({ provider: kind, instance })} />}
+    {!cli && account.can_sign_out && account.status === 'signed_in' && <MenuItem id="sign_out" testId={`account-actions-${id}-sign_out`} label="Sign out" onSelect={() => void signOut()} />}
+    {!cli && <MenuSeparator />}
+    {!account.is_default && <MenuItem id="default" testId={`account-actions-${id}-default`} label="Make default" onSelect={() => void makeDefaultAccount(account)} />}
+    <MenuItem id="projects" testId={`account-actions-${id}-projects`} label="Use for projects…" onSelect={() => onAssign(account)} />
+    {!cli && <MenuSub id="color" testId={`account-actions-${id}-color`} label="Color">
       {ACCOUNT_COLORS.map((color) => <MenuItem key={color} id={`color-${color}`} testId={`account-actions-${id}-color-${color}`} label={ACCOUNT_COLOR_LABELS[color]} checked={isAccountColor(account.color) && account.color === color} iconNode={<AccountDot color={color} size={8} />} onSelect={() => void setColor(color)} />)}
-    </>}
+    </MenuSub>}
+    {!cli && <MenuSeparator />}
+    {!cli && <MenuItem id="remove" testId={`account-actions-${id}-remove`} label="Remove…" destructive onSelect={() => onRemove(account)} />}
   </Menu>
 }
 
@@ -380,7 +375,7 @@ function ProjectsDialog({ account, accounts, projects, projectAccounts, onClose 
       {sorted.map((project) => {
         const other = otherName(project.path)
         return <div key={project.id} testId={`account-project-${project.id}`} role="checkbox" aria-checked={checked.has(project.path)} aria-label={project.name} tabIndex={0} onClick={() => toggle(project.path)} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') toggle(project.path) }} style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 36, paddingLeft: 8, paddingRight: 8, paddingTop: 6, paddingBottom: 6, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: t.hover } }}>
-          <Checkbox checked={checked.has(project.path)} />
+          <Checkbox checked={checked.has(project.path)} aria-label={project.name} style={{ pointerEvents: 'none' }} />
           <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={14} lineHeight={21} truncate>{project.name}</Label><Label color={t.textSecondary} size={13} lineHeight={19.5} truncate>{project.path}</Label></div>
           {other && <Label color={t.textSecondary} size={13} lineHeight={19.5}>{`Uses ${other}`}</Label>}
         </div>

@@ -3,7 +3,6 @@ import { startSplitView } from './split/store.ts'
 import { useMeasureComposerOverlay } from './composer/height.ts'
 import { CloseGuard } from './shell/CloseGuard.tsx'
 import { WorkspaceDialogs } from './dialogs/Dialogs.tsx'
-import { EnvironmentMenu } from './sidebar/EnvironmentSwitcher.tsx'
 import { EnvironmentDialogs } from './environments/Dialogs.tsx'
 import { useEnvironment } from './shell/environment.ts'
 // The window shell (`App.tsx`, `views/chrome.tsx`): a 46px title bar and a 52px
@@ -208,7 +207,6 @@ function Workspace() {
       <SessionsDialog />
       <EnvironmentOverlay />
       <EnvironmentDialogs />
-      <EnvironmentMenu />
       <WorkspaceDialogs />
       <CloseGuard />
       <Toaster />

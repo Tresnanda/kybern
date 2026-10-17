@@ -33,7 +33,8 @@ import { Dialog } from '../nav/overlay.tsx'
 import { setNav } from '../nav/store.ts'
 import { errorText } from '../nav/actions.ts'
 import { useNav } from '../nav/store.ts'
-import { Button, Select, Switch, TextField } from '../settings/controls.tsx'
+import { Button, Select, TextField } from '../settings/controls.tsx'
+import { Switch } from '../kit/Switch.tsx'
 import { openExternal, pickFolder } from '../settings/external.ts'
 import { S } from '../settings/glyphs.ts'
 import { profileById } from '../environments/registry.ts'
@@ -267,7 +268,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
         </div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           <Label color={t.text} size={14} lineHeight={21} weight={500}>{`Use as default for ${agent}`}</Label>
-          <Switch testId="account-default" label={`Use as default for ${agent}`} checked={defaultOn} disabled={forcedDefault} onChange={setMakeDefault} />
+          <Switch testId="account-default" aria-label={`Use as default for ${agent}`} checked={defaultOn} disabled={forcedDefault} onCheckedChange={setMakeDefault} />
         </div>
         {forcedDefault && <Label color={t.textSecondary} size={13} lineHeight={19.5} style={{ marginTop: -10 }}>Your first added account becomes the default. You can switch back to the CLI account in Settings › Accounts.</Label>}
       </div>}

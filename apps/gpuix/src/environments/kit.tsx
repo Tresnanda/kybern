@@ -2,12 +2,12 @@
 // `button`, `input` and `views/environmentStyles.ts` (measured in the desktop
 // frontend: header 16/16/4, title 15/18.75, description 14/22.75, panel gap 16,
 // field label 13/19.5 w500, hint 13/21.125, buttons h32 radius 10, disabled 64%).
-// TODO(kit9): swap these for the kit button/input/dialog/spinner primitives when they land.
+// The kit has no dialog header, 28px icon button, h-8 input or xs button yet; `Switch` and `Spinner` are the shared ones.
 import { motion, useWindowSize } from '@gpuix/react'
 import { useState, type ReactNode } from 'react'
 import { Icon } from '../icons.tsx'
-import { MatrixLoader } from '../MatrixLoader.tsx'
 import { N } from '../nav/glyphs.ts'
+import { Spinner } from '../shell/Connection.tsx'
 import { FONT_MONO, FONT_UI } from '../theme.ts'
 import { ink, Label, useTheme } from '../ui.tsx'
 
@@ -58,11 +58,6 @@ export function ErrorText({ children, testId }: { children: ReactNode; testId?: 
   return <div testId={testId} role="alert"><Label color={t.red} size={13} lineHeight={21.125}>{children}</Label></div>
 }
 
-/** Busy spinner for buttons and rows. TODO(kit9): the desktop's stepped ring spinner. */
-export function Spinner({ rgb }: { rgb?: readonly [number, number, number] }) {
-  return <MatrixLoader rgb={rgb} />
-}
-
 /** Kit `Button` (default size, h-8) with the dialog footer radius of 10 and the busy spinner. */
 export function EnvButton({ children, onClick, disabled = false, busy = false, testId, variant = 'primary', size = 'default', icon, block = false }: { children: string; onClick: () => void; disabled?: boolean; busy?: boolean; testId?: string; variant?: 'primary' | 'secondary' | 'ghost' | 'outline'; size?: 'default' | 'xs'; icon?: 'copy'; block?: boolean }) {
   const t = useTheme()
@@ -73,9 +68,8 @@ export function EnvButton({ children, onClick, disabled = false, busy = false, t
   const hover = variant === 'primary' ? t.buttonPrimary : variant === 'outline' ? t.buttonTertiaryHover : t.buttonSecondaryHover
   const color = variant === 'primary' ? t.buttonPrimaryText : variant === 'secondary' ? (dark ? 'rgb(104, 104, 104)' : 'rgb(15, 15, 15)') : variant === 'ghost' ? t.textSecondary : t.text
   const off = disabled || busy
-  const loader = variant === 'primary' ? (t.variant === 'dark' ? [17, 17, 17] as const : [250, 250, 250] as const) : undefined
   return <div testId={testId} role="button" aria-label={children} tabIndex={off ? -1 : 0} onClick={() => { if (!off) onClick() }} onKeyDown={(e) => { if (!off && (e.key === 'enter' || e.key === 'space')) onClick() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: xs ? 4 : 8, height: xs ? 24 : 32, width: block ? '100%' : undefined, paddingLeft: xs ? 7 : 11, paddingRight: xs ? 7 : 11, borderRadius: xs ? 6 : 10, borderWidth: 1, borderColor: variant === 'outline' ? t.border : 'transparent', backgroundColor: fill, opacity: disabled ? 0.64 : 1, cursor: off ? 'default' : 'pointer', flexShrink: 0, hover: { backgroundColor: hover }, active: { backgroundColor: variant === 'primary' ? t.buttonPrimary : t.buttonSecondaryHover } }}>
-    {busy && <div style={{ pointerEvents: 'none' }}><Spinner rgb={loader} /></div>}
+    {busy && <div style={{ pointerEvents: 'none' }}><Spinner size={13} color={color} /></div>}
     {!busy && icon === 'copy' && <Icon name="copy" size={14} color={color} style={{ pointerEvents: 'none', opacity: 0.8 }} />}
     <Label color={color} size={xs ? 12 : 14} lineHeight={xs ? 18 : 21} weight={500}>{children}</Label>
   </div>

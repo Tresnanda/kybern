@@ -11,7 +11,8 @@ import { errorText } from '../nav/actions.ts'
 import { toast } from '../shell/toasts.tsx'
 import { getClient, useApp } from '../state.ts'
 import { Label, ink, useTheme } from '../ui.tsx'
-import { Button, Row, Section, Select, Switch } from './controls.tsx'
+import { Button, Row, Section, Select } from './controls.tsx'
+import { Switch } from '../kit/Switch.tsx'
 import { latestSettings, refreshSettings, updateSettings, useSettings } from './store.ts'
 
 /** Mirrors the daemon's per-app limit (`computer/notes.rs`). */
@@ -75,9 +76,9 @@ export function ComputerUse() {
   const needsInstallMessage = status?.checks.find((check) => !check.ok && ['installed', 'version', 'signature'].includes(check.name))?.message
   return <>
     <Section title="Access">
-      <Row title="Let agents use apps on this Mac" description="Agents can read an app’s window and click and type in it. You approve each app the first time a conversation uses it." status={readiness}><Switch testId="computer-enabled" label="Let agents use apps on this Mac" checked={enabled} onChange={(checked) => update({ enabled: checked })} /></Row>
+      <Row title="Let agents use apps on this Mac" description="Agents can read an app’s window and click and type in it. You approve each app the first time a conversation uses it." status={readiness}><Switch testId="computer-enabled" aria-label="Let agents use apps on this Mac" checked={enabled} onCheckedChange={(checked) => update({ enabled: checked })} /></Row>
       <Row title="Your cursor and keyboard" description="Agents work in the background and leave your cursor alone. When a step needs the real cursor, or you ask to watch, they can ask to take over for that app."><Select testId="computer-foreground" label="Your cursor and keyboard" value={computer?.foreground ?? 'ask'} onChange={(foreground) => update({ foreground: foreground as 'ask' | 'never' })} options={[{ value: 'ask', label: 'Ask first' }, { value: 'never', label: 'Never' }]} /></Row>
-      <Row title="Show the agent’s cursor" description="Draws a second cursor on screen where agents click. CuaDriver can use over a gigabyte of memory while it’s on. The preview in each chat shows every step either way."><Switch testId="computer-cursor" label="Show the agent’s cursor" checked={computer?.show_cursor ?? false} onChange={(checked) => update({ show_cursor: checked })} /></Row>
+      <Row title="Show the agent’s cursor" description="Draws a second cursor on screen where agents click. CuaDriver can use over a gigabyte of memory while it’s on. The preview in each chat shows every step either way."><Switch testId="computer-cursor" aria-label="Show the agent’s cursor" checked={computer?.show_cursor ?? false} onCheckedChange={(checked) => update({ show_cursor: checked })} /></Row>
       <Row title="When agents ask first" description="This follows each chat’s permission mode. Full access never asks. Approve for me asks only before using your cursor. Other modes ask once per app, unless you allow it below." />
       <Row title="Apps allowed without asking" description={allowed.length ? 'Agents use these in the background without asking. They still ask before taking over your cursor.' : 'None yet. Choose “Always allow” when an agent asks to use an app.'}>
         {allowed.length > 0 && <div testId="computer-allowed" style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 6, maxWidth: 320 }}>{allowed.map((app) => <AllowedApp key={app} app={app} onRemove={() => update({ always_allowed_apps: allowed.filter((item) => item !== app) })} />)}</div>}

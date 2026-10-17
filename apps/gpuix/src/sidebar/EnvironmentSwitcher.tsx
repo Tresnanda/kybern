@@ -38,8 +38,6 @@ export function EnvironmentSwitcher() {
   </div>
 }
 
-/** The menu now renders inside the switcher; kept so `App.tsx` (and `composer/app-integration.patch`) need no change. TODO(merge): drop it with its mount. */
-export function EnvironmentMenu() { return null }
 function MenuContents() {
   const active = useEnvironment()
   const status = useApp((s) => s.status)

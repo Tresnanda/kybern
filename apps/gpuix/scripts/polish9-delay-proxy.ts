@@ -2,6 +2,7 @@
 // make provider statuses (or accounts) arrive early, late or in the other order.
 //   bun scripts/polish9-delay-proxy.ts <daemonPort> <token> 'providers.list=1500,providers.accounts.list=0'
 // Prints the proxy port on the first line of stdout.
+export {}
 const [daemonPort, token, spec = ''] = process.argv.slice(2)
 if (!daemonPort || !token) throw new Error('usage: polish9-delay-proxy.ts <daemonPort> <token> [method=ms,...]')
 if (Number(daemonPort) === 4219) throw new Error('Port 4219 is the older scratch daemon: leave it alone')

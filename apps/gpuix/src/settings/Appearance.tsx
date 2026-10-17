@@ -6,7 +6,8 @@ import { useState } from 'react'
 import { Label, useTheme } from '../ui.tsx'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
-import { PageBlock, Row, Section, Switch } from './controls.tsx'
+import { PageBlock, Row, Section } from './controls.tsx'
+import { Switch } from '../kit/Switch.tsx'
 import { setAppearance, useAppearance } from './appearance.ts'
 
 export function Appearance() {
@@ -32,7 +33,7 @@ export function Appearance() {
       })}</div>
       <Label color={t.textSecondary} size={12} lineHeight={19.2}>System follows your device’s light and dark appearance.</Label>
     </div></PageBlock>
-    <Section title="Window material"><Row title="Use translucent surfaces" description="Let your desktop show softly through the sidebar and floating controls. Follows your system’s reduced transparency preference."><Switch label="Use translucent surfaces" testId="settings-translucency" checked={prefs.translucent} onChange={(translucent) => save({ translucent })} /></Row></Section>
+    <Section title="Window material"><Row title="Use translucent surfaces" description="Let your desktop show softly through the sidebar and floating controls. Follows your system’s reduced transparency preference."><Switch aria-label="Use translucent surfaces" testId="settings-translucency" checked={prefs.translucent} onCheckedChange={(translucent) => save({ translucent })} /></Row></Section>
     {error && <Label color={t.red}>{error}</Label>}
   </>
 }

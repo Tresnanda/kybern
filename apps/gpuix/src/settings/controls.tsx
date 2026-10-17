@@ -17,75 +17,6 @@ export function Button({ children, onClick, disabled = false, testId, variant = 
   return <div testId={testId} role="button" tabIndex={disabled ? -1 : 0} aria-label={label ?? children} onClick={() => !disabled && onClick()} onKeyDown={(e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) onClick() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: chip ? 4 : 6, minHeight: chip ? 24 : 28, backgroundColor: fill, paddingLeft: chip ? 8 : 10, paddingRight: chip ? 8 : 10, borderWidth: variant === 'outline' ? 1 : 0, borderColor: t.border, borderRadius: chip ? 8 : 8, opacity: disabled ? 0.64 : 1, cursor: disabled ? 'default' : 'pointer', flexShrink: 0, hover: { backgroundColor: hover }, active: { backgroundColor: variant === 'primary' ? t.buttonPrimary : variant === 'destructive' ? t.red : t.buttonSecondaryHover } }}>{busy && <MatrixLoader dot={2} gap={1.33} rgb={variant === 'primary' ? (t.variant === 'dark' ? [13, 13, 13] : [252, 252, 252]) : undefined} alpha={0.7} />}{icon && <Icon source={icon} size={chip ? 12 : 14} color={color} style={{ pointerEvents: 'none' }} />}<Label color={color} size={chip ? text : 14} lineHeight={chip ? text * 1.5 : 21}>{children}</Label></div>
 }
 
-/** Pointer toggles give state feedback in 160ms; keyboard and Reduce Motion are immediate. */
-/**
- * The desktop's `Switch` (`components/kit/switch.tsx`): a 32×20 track, accent when
- * on, with a white 16px thumb that slides 200 ms ease-out and stretches while
- * pressed. Keyboard toggles and Reduce Motion change without movement.
- */
-export function Switch({ checked, onChange, label, disabled = false, testId }: { checked: boolean; onChange: (value: boolean) => void; label: string; disabled?: boolean; testId?: string }) {
-  const t = useTheme()
-  const [keyboard, setKeyboard] = useState(false)
-  const [pressed, setPressed] = useState(false)
-  const still = keyboard || REDUCED_MOTION
-  // The thumb widens by 2px toward the track's centre, like the desktop's scale-x 1.1.
-  const stretch = pressed && !disabled ? 2 : 0
-  return (
-    <div
-      testId={testId}
-      role="switch"
-      aria-label={label}
-      aria-checked={checked}
-      tabIndex={disabled ? -1 : 0}
-      onMouseDown={() => setPressed(true)}
-      onMouseUp={() => setPressed(false)}
-      onMouseLeave={() => setPressed(false)}
-      onClick={() => {
-        if (disabled) return
-        setKeyboard(false)
-        onChange(!checked)
-      }}
-      onKeyDown={(e) => {
-        if (disabled || (e.key !== 'enter' && e.key !== 'space')) return
-        setKeyboard(true)
-        onChange(!checked)
-      }}
-      // A 38×28 hit area around the 32×20 track.
-      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 38, height: 28, flexShrink: 0, cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.64 : 1 }}
-    >
-      <div
-        style={{
-          pointerEvents: 'none',
-          position: 'relative',
-          width: 32,
-          height: 20,
-          borderRadius: 10,
-          borderWidth: 1,
-          borderColor: checked ? t.switchOn : t.switchOffBorder,
-          backgroundColor: checked ? t.switchOn : t.switchOff,
-        }}
-      >
-        <motion.div
-          initial={false}
-          animate={{ left: checked ? 13 - stretch : 1, width: 16 + stretch }}
-          transition={{ duration: still ? 0 : 0.2, ease: EASE_OUT }}
-          style={{
-            pointerEvents: 'none',
-            position: 'absolute',
-            top: 1,
-            height: 16,
-            borderRadius: 8,
-            backgroundColor: '#ffffff',
-            borderWidth: 0.5,
-            borderColor: 'rgba(0, 0, 0, 0.05)',
-            boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 2, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.12)' },
-          }}
-        />
-      </div>
-    </div>
-  )
-}
-
 let openModals = 0
 let modalClosedAt = 0
 /** Keep a dialog's Escape from also dismissing its containing Settings page. */
@@ -164,11 +95,4 @@ export function Section({ title, children }: { title: string; children: ReactNod
 export function Row({ title, description, status, children }: { title: string; description?: ReactNode; status?: string; children?: ReactNode }) {
   const t = useTheme()
   return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 20, paddingLeft: 18, paddingRight: 18, paddingTop: 16, paddingBottom: 16 }}><div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexGrow: 1, minWidth: 0 }}>{title && <Label color={t.text} size={14} lineHeight={21} weight={500}>{title}</Label>}{description && (typeof description === 'string' ? <Label color={t.textSecondary} size={14} lineHeight={21.7} style={{ maxWidth: 451 }}>{description}</Label> : description)}{status && <Label color={t.textSecondary} size={14} lineHeight={21.7} style={{ maxWidth: 451, paddingTop: 4 }}>{status}</Label>}</div>{children && <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>{children}</div>}</div>
-}
-
-/** A 16px checkbox (`components/kit/checkbox.tsx`): a 1px light border, accent fill with a check when on. The row that holds it owns the click. */
-// TODO(kit9): replace with the kit's checkbox when it lands.
-export function Checkbox({ checked }: { checked: boolean }) {
-  const t = useTheme()
-  return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, flexShrink: 0, borderRadius: 4, borderWidth: 1, borderColor: checked ? t.buttonPrimary : t.borderLight, backgroundColor: checked ? t.buttonPrimary : t.inputGroupFill, pointerEvents: 'none' }}>{checked && <Icon source={N.check} size={12} color={t.buttonPrimaryText} />}</div>
 }
