@@ -326,7 +326,12 @@ impl crate::scene::Primitive {
         let m = context.matrix.scaled(factor);
         let s = m.magnitude();
         let opacity = context.opacity;
-        let mask = context.visual_mask.scale(factor);
+        // The scope's mask, narrowed by the primitive's own clip mapped through the transform: GPUI paints a
+        // border-only quad as four strips, each clipped to its strip, and other paint narrows its mask the same way.
+        let mut mask = context.visual_mask.scale(factor);
+        let own = self.content_mask().bounds;
+        let (ox, oy, ow, oh) = m.envelope(own.origin.x.0, own.origin.y.0, own.size.width.0, own.size.height.0);
+        mask.bounds = mask.bounds.intersect(&Bounds::new(point(ScaledPixels(ox), ScaledPixels(oy)), size(ScaledPixels(ow), ScaledPixels(oh))));
         let rect = |b: &mut Bounds<ScaledPixels>| {
             let (x, y, w, h) = m.rect(b.origin.x.0, b.origin.y.0, b.size.width.0, b.size.height.0);
             *b = Bounds::new(point(ScaledPixels(x), ScaledPixels(y)), size(ScaledPixels(w), ScaledPixels(h)));

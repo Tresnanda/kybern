@@ -25,12 +25,27 @@ fn change(callback: &Option<EventCallback>, id: u64, over: bool, position: gpui:
 }
 
 pub(crate) fn attach(el: gpui::Stateful<gpui::Div>, id: u64, callback: Option<EventCallback>) -> gpui::Stateful<gpui::Div> {
+    use gpui::{ParentElement, Styled};
     let on_drop = callback.clone();
+    let on_end = callback.clone();
     el.on_drag_move::<gpui::ExternalPaths>(move |event, _window, _cx| {
         let position = event.event.position;
         change(&callback, id, event.bounds.contains(&position), position);
     })
     .on_drop(move |_: &gpui::ExternalPaths, window, _cx| change(&on_drop, id, false, window.mouse_position()))
+    // The drag left the window or ended (dropped elsewhere, cancelled): GPUI dispatches these as mouse events.
+    .child(
+        gpui::canvas(|_, _, _| (), move |_, _, window, _| {
+            let on_end = on_end.clone();
+            window.on_mouse_event(move |event: &gpui::FileDropEvent, _, window, _| {
+                if matches!(event, gpui::FileDropEvent::Exited | gpui::FileDropEvent::Ended) {
+                    change(&on_end, id, false, window.mouse_position());
+                }
+            });
+        })
+        .absolute()
+        .size_0(),
+    )
 }
 
 /// At each render: a drag that ended or left the window leaves every element it was over.

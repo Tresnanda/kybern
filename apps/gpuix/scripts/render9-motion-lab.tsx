@@ -44,6 +44,7 @@ function Lab() {
     <div testId="drop-card" onFileDragChange={e => setOver(!!e.hovered)} onFileDrop={() => setOver(false)} style={{ position: 'absolute', left: 380, top: 180, width: 200, height: 100, borderRadius: 19.2, borderWidth: 1, borderColor: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.052)' : 'rgba(13, 13, 13, 0.076)', backgroundColor: t.variant === 'dark' ? t.composer : '#ffffff' }}>
       <DropHighlight over={over} radius={19.2} color={t.v('--color-border-focus')} />
     </div>
+    <text testId="drop-state" style={{ position: 'absolute', left: 380, top: 290, fontSize: 10, color: t.textSecondary }}>{over ? 'over' : 'out'}</text>
     <div style={{ position: 'absolute', left: 24, top: 180, display: 'flex', flexDirection: 'column', gap: 8 }}>
       <Skeleton testId="skel" width={300} height={16} view={{ width: 640, height: 320 }} />
       <Skeleton width={200} height={40} radius={10} view={{ width: 640, height: 320 }} />
