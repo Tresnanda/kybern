@@ -45,6 +45,16 @@ if (ran('artifacts')) {
   await page.getByRole('textbox', { name: 'Artifact file path' }).fill('artifacts/notes.md'); await page.getByRole('button', { name: 'Preview file' }).click(); await page.waitForTimeout(1500); await shot('artifact-markdown')
   await page.keyboard.press('Escape'); await page.waitForTimeout(500)
 }
+if (ran('artifact-cards')) {
+  console.log('scenario artifact-cards')
+  const { ARTIFACTS } = await import('./artifact-fixture.mjs')
+  await page.evaluate(async artifacts => {
+    const { rpc } = await import('/src/state/rpc.ts')
+    const client = rpc(), call = client.call.bind(client)
+    client.call = (method, params) => method === 'threads.artifacts.list' ? Promise.resolve({ artifacts, next_before_seq: null }) : call(method, params)
+  }, ARTIFACTS)
+  await openTab('Artifacts'); await page.mouse.move(1275, 815); await shot('artifact-cards')
+}
 if (ran('environment')) {
   console.log('scenario environment')
   await page.getByRole('button', { name: 'Toggle environment panel' }).click(); await page.waitForTimeout(1000)

@@ -33,7 +33,7 @@ export function KitButton({ children, onClick, variant = 'default', size = 'sm',
   const hover = variant === 'default' ? { opacity: 0.9 } : { backgroundColor: t.buttonSecondaryHover }
   return <div role="button" tabIndex={disabled ? -1 : 0} aria-disabled={disabled} testId={testId} onClick={disabled ? undefined : onClick} onKeyDown={event => { if (!disabled && (event.key === 'enter' || event.key === 'space')) onClick() }}
     style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', ...(size === 'chip' ? { paddingLeft: 8, paddingRight: 8, paddingTop: 2, paddingBottom: 2 } : { height: 28, paddingLeft: 9, paddingRight: 9 }), borderRadius: 8, flexShrink: 0, backgroundColor: fill, opacity: disabled ? 0.64 : 1, cursor: disabled ? 'default' : 'pointer', ...(disabled ? {} : { hover }) }}>
-    <Label size={size === 'chip' ? 11 : 12} weight={500} color={variant === 'default' ? t.buttonPrimaryText : variant === 'ghost' ? t.textSecondary : t.text}>{children}</Label>
+    <Label size={size === 'chip' ? 13 : 12} {...(size === 'chip' ? { lineHeight: 21.5 } : {})} weight={500} color={variant === 'default' ? t.buttonPrimaryText : variant === 'ghost' ? t.textSecondary : t.text}>{children}</Label>
   </div>
 }
 

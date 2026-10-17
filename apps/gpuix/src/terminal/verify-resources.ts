@@ -27,6 +27,7 @@ try {
   await app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 }); await settle(1500)
   await app.getByTestId(`thread-${thread.id}`).click(); await settle(1000)
   if (!await app.getByTestId('dock-tabs').count()) await app.getByTestId('dock-toggle').click()
+  await app.getByTestId('dock-add').waitFor({ timeoutMs: 10_000 }); await settle(600)
   await app.getByTestId('dock-add').click(); await app.getByTestId('dock-add-terminal').click()
   const screen = app.getByTestId('terminal-screen'); await screen.waitFor({ timeoutMs: 30_000 }); await settle(1500)
   await screen.click(); await settle(10_000)
