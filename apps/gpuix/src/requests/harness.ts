@@ -12,7 +12,8 @@ export function assertScratchEnv(env: Record<string, string | undefined>) {
   const resolved = path.resolve(dir)
   if (resolved === real || resolved.startsWith(real + path.sep)) throw Error(`Refusing to launch GPUIX against the real data directory ${real}. Use a scratch directory.`)
   // An endpoint inherited from the calling shell (an agent running inside Kybern) could be the user's own daemon.
-  if (process.env.KYBERN_URL && !env.KYBERN_URL) throw Error('Refusing to launch GPUIX with a KYBERN_URL inherited from this shell: it may be the real daemon. Unset it, or pass the scratch endpoint explicitly.')
+  // An explicit empty value clears it for the child, so only a missing key is inherited.
+  if (process.env.KYBERN_URL && env.KYBERN_URL === undefined) throw Error('Refusing to launch GPUIX with a KYBERN_URL inherited from this shell: it may be the real daemon. Unset it, or pass the scratch endpoint explicitly.')
 }
 
 /** Automation launch with an explicit process lifetime and startup deadline.
