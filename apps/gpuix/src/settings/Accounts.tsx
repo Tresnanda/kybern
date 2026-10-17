@@ -21,6 +21,8 @@ import { motion, useGpuix, type PublicInstance } from '@gpuix/react'
 import { nativeCapabilities } from '../native/api.ts'
 import { EASE } from '../motion/kit.tsx'
 import { ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { FONT_MONO } from '../theme.ts'
+import { markdownTheme } from '../transcript/kit.tsx'
 import { AccountAvatar, AccountDot, AccountUsageRing } from '../usage/AccountMark.tsx'
 import { askAccountLimits, makeDefaultAccount, refreshAccounts, setUsageAnchor, updateProviderSettings, useAccountFlash, useAccountLimitEntries, useAccounts, useAccountsFeed, useAccountsLegacy, useAccountsLoaded } from '../usage/accounts.ts'
 import { limitsForAccount } from '../../../desktop/src/lib/accountUi.ts'
@@ -222,16 +224,28 @@ function HowToSignIn({ kind }: { kind: ProviderKind }) {
   // Escape closes the menu only, never the Settings page behind it (the desktop skips Escape from a `role="menu"`).
   const [open, setOpen] = useState(false)
   useSettingsModal(open)
-  return <Menu testId={`account-how-${kind}`} align="end" width={288} fit="switch" onOpenChange={setOpen} trigger={() => <div style={{ display: 'flex', alignItems: 'center', minHeight: 28, paddingLeft: 10, paddingRight: 10, borderWidth: 1, borderColor: t.border, borderRadius: 8, hover: { backgroundColor: t.buttonTertiaryHover } }}><Label color={t.text} size={14} lineHeight={21}>How to sign in</Label></div>}>
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 8 }}>
+  const description = useMemo(() => howToTheme(t), [t])
+  const copy = () => { void copyText(command); setDone(true) }
+  // `PopoverPopup` (`w-72`, 18px radius, 16px padding): title, a description with the command as inline code, then
+  // the command on its own row with `CopyButton` (24px, icon only).
+  return <Menu testId={`account-how-${kind}`} align="end" width={288} fit="switch" panel={{ borderRadius: 18, padding: 16 }} onOpenChange={setOpen} trigger={() => <div style={{ display: 'flex', alignItems: 'center', minHeight: 28, paddingLeft: 9, paddingRight: 9, borderWidth: 1, borderColor: t.border, borderRadius: 8, hover: { backgroundColor: t.buttonTertiaryHover } }}><Label color={t.text} size={14} lineHeight={21}>How to sign in</Label></div>}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <Label color={t.text} size={14} lineHeight={21} weight={500}>How to sign in</Label>
-      <Label color={t.textSecondary} size={14} lineHeight={21}>{`Run ${command} in your terminal. Kybern picks it up automatically.`}</Label>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingLeft: 10, paddingRight: 4, paddingTop: 4, paddingBottom: 4, borderWidth: 1, borderColor: t.border, borderRadius: 8 }}>
-        <Label color={t.text} size={13} lineHeight={19.5} font="Menlo" truncate>{command}</Label>
-        <Button testId="account-copy-command" variant="ghost" icon={done ? N.check : S.copy} onClick={() => { void copyText(command); setDone(true) }}>{done ? 'Copied' : 'Copy command'}</Button>
+      <markdown source={`Run \`${command}\` in your terminal. Kybern picks it up automatically.`} theme={description} />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, height: 34, paddingLeft: 10, paddingRight: 4, borderWidth: 1, borderColor: t.border, borderRadius: 10 }}>
+        <Label color={t.text} size={13} lineHeight={19.5} font={FONT_MONO} truncate>{command}</Label>
+        <div testId="account-copy-command" role="button" tabIndex={0} aria-label={done ? 'Copied' : 'Copy command'} onClick={copy} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') copy() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, flexShrink: 0, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
+          <Icon source={done ? N.check : S.copy} size={14} color={done ? t.v('--success') : t.textSecondary} style={{ pointerEvents: 'none' }} />
+        </div>
       </div>
     </div>
   </Menu>
+}
+
+/** `PopoverDescription`: 14/20 muted text; its `<code>` is foreground on `button-secondary`, 4px radius, 2×4px padding, 0.92em. */
+function howToTheme(t: ReturnType<typeof useTheme>) {
+  const base = markdownTheme(t, 'muted')
+  return { ...base, text: t.textSecondary, codeText: t.text, codeWash: t.buttonSecondary, markdown: { ...base.markdown, inlineCodePaddingX: 4, inlineCodePaddingY: 2, inlineCodeSizeRatio: 0.92 }, metrics: { ...base.metrics, mdTextSize: 14, mdLineHeight: 20, mdInlineCodeRadius: 4 } }
 }
 
 // ── Menu ─────────────────────────────────────────────────────────────────────

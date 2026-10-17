@@ -116,6 +116,7 @@ export function Menu({
   testId,
   rootStyle,
   fit,
+  panel,
 }: {
   trigger: (open: boolean) => ReactNode
   children: ReactNode
@@ -130,6 +131,8 @@ export function Menu({
   rootStyle?: StyleDesc
   /** `'switch'` flips to the other side of the trigger when the popup does not fit, like Base UI's collision handling. */
   fit?: 'snap' | 'switch'
+  /** Overrides on the menu panel, for a popover opened from a trigger (its radius and padding). */
+  panel?: StyleDesc
 }) {
   const t = useTheme()
   const { renderer } = useGpuix()
@@ -161,8 +164,9 @@ export function Menu({
       const anchor = triggerRef.current && renderer.getElementBounds?.(triggerRef.current.id)
       if (decided || !rect || !anchor) return
       decided = true
-      // `rect` is the content box: add the panel's 4px padding and 1px border back.
-      if (rect.y < anchor.y + anchor.height && anchor.y - sideOffset - (rect.height + 10) >= 8) setFlipped(true)
+      // `rect` is the content box: add the panel's padding and 1px border back.
+      const inset = 2 * ((typeof panel?.padding === 'number' ? panel.padding : 4) + 1)
+      if (rect.y < anchor.y + anchor.height && anchor.y - sideOffset - (rect.height + inset) >= 8) setFlipped(true)
     })
   }, [open, fit, side, sideOffset, renderer])
   return (
@@ -214,7 +218,7 @@ export function Menu({
           }}
           onKeyDown={menu.onKeyDown}
           onMouseDown={pointerNav}
-          style={panelStyle(t, width, minWidth)}
+          style={panel ? { ...panelStyle(t, width, minWidth), ...panel } : panelStyle(t, width, minWidth)}
         >
           <MenuContext.Provider value={menu.context}>{children}</MenuContext.Provider>
         </PopupLayer>
