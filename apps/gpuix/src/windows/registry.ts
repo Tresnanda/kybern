@@ -27,7 +27,7 @@ import { configDir } from '../environments/registry.ts'
 
 export interface WindowClaim { pid: number; environment: string; name?: string; socket: string; pending?: boolean; at: number }
 type Request = { type: 'focus' } | { type: 'ping' }
-export interface WindowReply { ok: boolean; pid: number; environment: string; focused?: number }
+export interface WindowReply { ok: boolean; pid: number; environment: string; focused: number }
 export type OpenResult = { action: 'self' | 'focused' | 'opened'; pid: number }
 
 const dir = () => path.join(configDir(), 'gpuix-windows')
@@ -117,7 +117,7 @@ export function startWindowRegistry(next: Host) {
       let request: Request | null = null
       try { request = JSON.parse(buffer.slice(0, line)) as Request } catch { /* answered as not ok */ }
       if (request?.type === 'focus') { focusCount++; host!.focus() }
-      const reply: WindowReply = { ok: !!request, pid: process.pid, environment: host!.environment().id, ...(request?.type === 'focus' ? { focused: focusCount } : {}) }
+      const reply: WindowReply = { ok: !!request, pid: process.pid, environment: host!.environment().id, focused: focusCount }
       connection.end(`${JSON.stringify(reply)}\n`)
     })
   })
