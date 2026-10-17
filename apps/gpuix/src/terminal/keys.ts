@@ -21,23 +21,29 @@ export function terminalKey(event: Pick<EventPayload, 'key' | 'keyChar' | 'modif
   return value === undefined ? null : alt + value
 }
 
-export interface MouseModes { mouseTracking: number; mouseSgr: boolean; mouseUtf8: boolean; mouseUrxvt: boolean }
-export interface TerminalMouseEvent { kind: 'down' | 'up' | 'move' | 'wheel'; column: number; row: number; button?: number; deltaY?: number; modifiers?: { shift?: boolean; alt?: boolean; ctrl?: boolean; cmd?: boolean } }
-/** DEC mouse protocol; Shift bypasses reporting for native scrollback selection. */
+export interface MouseModes { mouseTracking: number; mouseSgr: boolean; mousePixels?: boolean }
+export interface TerminalMouseEvent { kind: 'down' | 'up' | 'move' | 'wheel'; column: number; row: number; /** Pixel position inside the screen, for SGR-Pixels (DECSET 1016). */ px?: number; py?: number; button?: number; deltaY?: number; modifiers?: { shift?: boolean; alt?: boolean; ctrl?: boolean; cmd?: boolean } }
+/**
+ * xterm.js CoreMouseService: protocols X10 (9), VT200 (1000), drag (1002) and any-motion (1003) with the
+ * default (single byte, up to 223) or SGR encodings. UTF-8 and urxvt encodings are not supported there either.
+ * Shift is Kybern's override to select text in the scrollback instead of reporting (xterm.js has none on macOS).
+ */
 export function terminalMouse(event: TerminalMouseEvent, modes: MouseModes): string | null {
   const { kind, modifiers: m } = event, mode = modes.mouseTracking
   if (!mode || m?.shift || m?.cmd || event.column < 0 || event.row < 0) return null
   if (kind === 'move' && mode !== 1003 && !(mode === 1002 && event.button !== undefined)) return null
+  if ((mode === 9 || mode === 1000) && kind === 'move') return null
   if (mode === 9 && kind !== 'down') return null
   if (kind === 'wheel' && !event.deltaY) return null
   const button = kind === 'wheel' ? (event.deltaY! > 0 ? 64 : 65) : (event.button ?? 3)
   if (button < 0 || (button > 2 && kind !== 'wheel' && kind !== 'move')) return null
-  const code = (kind === 'up' && !modes.mouseSgr ? 3 : button) + (kind === 'move' ? 32 : 0) + (m?.alt ? 8 : 0) + (m?.ctrl ? 16 : 0)
-  const x = Math.floor(event.column) + 1, y = Math.floor(event.row) + 1
+  const modifier = mode === 9 ? 0 : (m?.alt ? 8 : 0) + (m?.ctrl ? 16 : 0)
+  const code = (kind === 'up' && !modes.mouseSgr ? 3 : button) + (kind === 'move' ? 32 : 0) + modifier
+  const x = Math.floor(modes.mousePixels && event.px !== undefined ? event.px : event.column) + 1, y = Math.floor(modes.mousePixels && event.py !== undefined ? event.py : event.row) + 1
   if (modes.mouseSgr) return `\x1b[<${code};${x};${y}${kind === 'up' ? 'm' : 'M'}`
-  if (modes.mouseUrxvt) return `\x1b[${code + 32};${x};${y}M`
-  if (!modes.mouseUtf8 && (x > 223 || y > 223)) return null
-  return `\x1b[M${String.fromCodePoint(code + 32, Math.min(2015, x) + 32, Math.min(2015, y) + 32)}`
+  // The default encoding cannot address cells past 223; xterm.js sends nothing then.
+  if (code + 32 > 255 || x + 32 > 255 || y + 32 > 255) return null
+  return `\x1b[M${String.fromCharCode(code + 32, x + 32, y + 32)}`
 }
 
 /** Bracket delimiters are terminal protocol, never part of the pasted text. */

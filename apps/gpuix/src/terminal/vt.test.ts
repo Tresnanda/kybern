@@ -45,7 +45,7 @@ describe('bounded terminal', () => {
     vt.write('\x1b[24;80H\x1b7\x1b[?1049h')
     vt.resize(20, 4); vt.write('\x1b[?1049l\x1b8X\x1b[6n\x1b[5n')
     expect(vt.y).toBe(3); expect(vt.screen.length).toBe(4)
-    expect(replies).toEqual(['\x1b[4;20R', '\x1b[0n'])
+    expect(replies).toEqual(['\x1b[4;21R', '\x1b[0n'])  // x is still pending past the margin, as in xterm.js
     vt.write('\rA' + '\u0301'.repeat(10000))
     expect(vt.screen[3]!.chars[0]!.length).toBeLessThanOrEqual(64)
   })
@@ -62,7 +62,8 @@ describe('bounded terminal', () => {
     vt.write('\x1b[2;4r\x1b[?6h\x1b[1;1HX')
     expect(vt.screen[1]!.chars.join('')).toBe('X')
     vt.write('\x1b[99B'); expect(vt.y).toBe(3)
-    vt.write('\x1b[99A'); expect(vt.y).toBe(1)
+    // xterm.js adds the margin again to relative moves in origin mode (reference: 'origin mode relative moves').
+    vt.write('\x1b[99A'); expect(vt.y).toBe(2)
     vt.write('\x1b[?25l\x1b[?2004h\x1b[?1h\x1bc\x1b[1;1HY')
     expect(vt.screen[0]!.chars.join('')).toBe('Y')
     expect(vt.cursorVisible).toBe(true)
@@ -92,7 +93,7 @@ test('cursor modes, origin reports and fragmented bracketed paste mode', () => {
   const replies: string[] = [], vt = new VT(20, 6, 10, 1000, value => replies.push(value))
   vt.write('\x1b[2;5r\x1b[?6h\x1b[2d\x1b[6n')
   expect(vt.y).toBe(2)
-  expect(replies).toEqual(['\x1b[2;1R'])
+  expect(replies).toEqual(['\x1b[3;1R'])  // DSR reports the absolute row, as xterm.js does
   vt.write('\x1b[?1;25;2004'); vt.write('h')
   expect(terminalKey({ key: 'left' }, vt.applicationCursor)).toBe('\x1bOD')
   expect(terminalPaste('one\ntwo', vt.bracketedPaste)).toBe('\x1b[200~one\ntwo\x1b[201~')
@@ -117,13 +118,11 @@ test('alternate screens preserve normal history and indexed/RGB pens after resiz
   expect(vt.screen.length).toBe(4)
 })
 
-test('legacy alternate buffer is retained while 1047 clears it', () => {
+test('the alternate buffer is blank every time it opens, like xterm.js', () => {
   const vt = new VT(20, 3)
-  vt.write('normal\x1b[?47hretained\x1b[?47l')
+  vt.write('normal\x1b[?47hgone\x1b[?47l')
   expect(vt.text()).toContain('normal')
   vt.write('\x1b[?47h')
-  expect(vt.text()).toContain('retained')
-  vt.write('\x1b[?1047l\x1b[?47h')
   expect(vt.text().trim()).toBe('')
 })
 
@@ -164,10 +163,10 @@ test('mouse protocols preserve coordinates, release, drag, hover and Shift selec
   expect(terminalMouse(event, vt)).toBe('\x1b[M' + String.fromCharCode(32, 43, 35))
   expect(terminalMouse({ ...event, kind: 'up' }, vt)).toBe('\x1b[M' + String.fromCharCode(35, 43, 35))
   expect(terminalMouse({ ...event, column: 240 }, vt)).toBeNull()
-  vt.write('\x1b[?1005h')
-  expect(terminalMouse({ ...event, column: 240 }, vt)).toBe('\x1b[M' + String.fromCodePoint(32, 273, 35))
-  vt.write('\x1b[?1015h')
-  expect(terminalMouse(event, vt)).toBe('\x1b[32;11;3M')
+  // xterm.js ignores the UTF-8 (1005) and urxvt (1015) encodings.
+  vt.write('\x1b[?1005h\x1b[?1015h')
+  expect(terminalMouse({ ...event, column: 240 }, vt)).toBeNull()
+  expect(terminalMouse(event, vt)).toBe('\x1b[M' + String.fromCharCode(32, 43, 35))
   vt.write('\x1b[?1004h\x1bc')
   expect(vt.mouseTracking).toBe(0)
   expect(vt.focusReporting || vt.mouseSgr || vt.mouseUtf8 || vt.mouseUrxvt).toBe(false)
