@@ -10,6 +10,11 @@ import { CLIENT_DIR as SEED_CLIENT, DATA_DIR as SEED_DATA, readState } from '../
 /** The notes/tasks seeded scratch daemon held by `bun scripts/visual-pair.ts … --keep` (this checkout's slot). */
 export const SEEDED = { dataDir: SEED_DATA, clientDir: SEED_CLIENT, state: readState }
 
+/** Forget the seeded scratch app's saved layout and filters (sidebar, splits, thread filter), so runs do not leak into each other. */
+export function resetSeededUi() {
+  Bun.spawnSync(['sh', '-c', `rm -f '${SEED_DATA}/gpuix-ui.json' '${SEED_CLIENT}'/workspace-*.json`])
+}
+
 export const SCRATCH = '/Users/mymac/projects/ade-gpuix-scratch'
 export const DATA_DIR = `${SCRATCH}/phase2-kit9`
 export const CLIENT_DIR = `${SCRATCH}/phase2-kit9-client`

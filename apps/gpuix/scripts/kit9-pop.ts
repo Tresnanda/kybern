@@ -6,7 +6,7 @@
  *   bun scripts/kit9-pop.ts [--light] [--reduced] [--offsets 0,50,100,150,200,250,350]
  */
 import { mkdirSync } from 'node:fs'
-import { EVIDENCE, start, waitUntil } from './kit9-lib.ts'
+import { EVIDENCE, resetSeededUi, start, waitUntil } from './kit9-lib.ts'
 const light = process.argv.includes('--light'), reduced = process.argv.includes('--reduced')
 const theme = light ? 'light' : 'dark'
 const arg = (n: string) => (process.argv.includes(n) ? process.argv[process.argv.indexOf(n) + 1] : undefined)
@@ -15,6 +15,7 @@ const dir = `${EVIDENCE}/pop`
 mkdirSync(dir, { recursive: true })
 const sleep = (n: number) => new Promise((r) => setTimeout(r, n))
 async function run(phase: number | null) {
+  resetSeededUi()
   const app = await start({ light, reduced, seeded: true, full: true, visible: phase == null, env: phase == null ? {} : { KYBERN_PAINT_PHASE_MS: String(phase) } })
   try {
     await waitUntil(async () => (await app.getByTestId('sidebar-resize').count()) > 0, 20_000, 'sidebar')
