@@ -14,4 +14,9 @@ export interface KitState {
   clip?: [number, number, number, number]
 }
 import { states as hello } from './hello.ts'
-export const states: Record<string, KitState> = { ...hello }
+import { states as menus } from './menus.ts'
+import { states as controls } from './controls.ts'
+import { states as feedback } from './feedback.ts'
+import { states as overlays } from './overlays.ts'
+import { states as pickers } from './pickers.ts'
+export const states: Record<string, KitState> = { ...hello, ...menus, ...controls, ...feedback, ...overlays, ...pickers }
