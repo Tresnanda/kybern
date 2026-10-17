@@ -81,4 +81,4 @@ try {
   const stuck = Object.entries(results).filter(([, v]) => v > 0)
   console.log(stuck.length ? `STUCK in ${stuck.length}/${Object.keys(results).length} trials: ${stuck.map(([k, v]) => `${k}=${v}`).join(', ')}` : `PASS: 0 stuck in ${Object.keys(results).length} trials`)
   process.exitCode = stuck.length ? 1 : 0
-} finally { await app.close() }
+} finally { await app.closeAll() }

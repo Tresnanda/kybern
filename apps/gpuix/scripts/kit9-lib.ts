@@ -1,7 +1,11 @@
 /** Shared launch + OS-pointer helpers for the kit9 (Phase 2 primitives) checks. */
 import path from 'node:path'
 import { mkdirSync } from 'node:fs'
-import { launch } from '@gpuix/react/automation'
+import { launchFixture } from '../native/frame-harness.ts'
+import { CLIENT_DIR as SEED_CLIENT, DATA_DIR as SEED_DATA, readState } from '../visual/fixture.ts'
+
+/** The notes/tasks seeded scratch daemon held by `bun scripts/visual-pair.ts … --keep` (this checkout's slot). */
+export const SEEDED = { dataDir: SEED_DATA, clientDir: SEED_CLIENT, state: readState }
 
 export const SCRATCH = '/Users/mymac/projects/ade-gpuix-scratch'
 export const DATA_DIR = `${SCRATCH}/phase2-kit9`
@@ -9,23 +13,25 @@ export const CLIENT_DIR = `${SCRATCH}/phase2-kit9-client`
 export const EVIDENCE = '/Users/mymac/projects/ade/previews/gpuix/phase2/kit9'
 mkdirSync(EVIDENCE, { recursive: true })
 
-export interface StartOptions { light?: boolean; reduced?: boolean; full?: boolean; env?: Record<string, string>; size?: string }
+export interface StartOptions { light?: boolean; reduced?: boolean; full?: boolean; env?: Record<string, string>; size?: string; seeded?: boolean }
 
 export async function start(opts: StartOptions = {}) {
   const env: Record<string, string> = {
     GPUIX_BACKGROUND: '1',
     KYBERN_APPEARANCE: opts.light ? 'light' : 'dark',
-    KYBERN_DATA_DIR: DATA_DIR,
-    KYBERN_CLIENT_CONFIG_DIR: CLIENT_DIR,
+    KYBERN_DATA_DIR: opts.seeded ? SEED_DATA : DATA_DIR,
+    KYBERN_CLIENT_CONFIG_DIR: opts.seeded ? SEED_CLIENT : CLIENT_DIR,
     KYBERN_OPAQUE: '1',
     KYBERN_WINDOW_SIZE: opts.size ?? '1280x820',
     ...(opts.reduced ? { KYBERN_REDUCED_MOTION: '1' } : {}),
     ...(opts.full ? { KYBERN_FULL_RATE: '1' } : {}),
     ...opts.env,
   }
-  const app = await launch({ command: 'bun', args: [path.join(import.meta.dir, '../src/main.tsx')], env })
+  // KYBERN_FRAME_TIMES makes the patched native layer log every presented frame (`[kybern-frame] <ms>`).
+  const f = await launchFixture(path.join(import.meta.dir, '../src/main.tsx'), { KYBERN_FRAME_TIMES: '1', ...env })
+  const app = f.app
   await app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })
-  return app
+  return Object.assign(app, { pid: f.pid, frameTimes: f.frameTimes, counts: f.counts, diagnostics: f.diagnostics, closeAll: f.close })
 }
 export type App = Awaited<ReturnType<typeof start>>
 
