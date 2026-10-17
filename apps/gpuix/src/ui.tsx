@@ -68,7 +68,7 @@ export function Label({
   font?: string
   truncate?: boolean
   style?: StyleDesc
-  paintAnimation?: { kind: 'shimmer'; cycleMs: number }
+  paintAnimation?: { kind: 'shimmer' | 'pop'; cycleMs: number; delayMs?: number }
 }) {
   return (
     <text

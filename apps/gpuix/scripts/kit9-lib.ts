@@ -1,7 +1,10 @@
 /** Shared launch + OS-pointer helpers for the kit9 (Phase 2 primitives) checks. */
 import path from 'node:path'
 import { mkdirSync } from 'node:fs'
-import { launchFixture } from '../native/frame-harness.ts'
+import { launchFixture as nativeLaunch } from '../native/frame-harness.ts'
+import { launchFixture as requestsLaunch } from '../src/requests/harness.ts'
+/** `KIT9_HARNESS=requests` (with KYBERN_FIXTURE_DIAGNOSTICS=1) streams the app's stderr to this process, for full frame logs. */
+const launchFixture: typeof nativeLaunch = process.env.KIT9_HARNESS === 'requests' ? (requestsLaunch as unknown as typeof nativeLaunch) : nativeLaunch
 import { CLIENT_DIR as SEED_CLIENT, DATA_DIR as SEED_DATA, readState } from '../visual/fixture.ts'
 
 /** The notes/tasks seeded scratch daemon held by `bun scripts/visual-pair.ts … --keep` (this checkout's slot). */

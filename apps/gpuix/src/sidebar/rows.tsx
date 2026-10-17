@@ -27,6 +27,7 @@ import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
 import type { Theme } from '../theme.ts'
 import { beginProjectDrag, consumeProjectDrag, endProjectPending, trackProjectDrag } from './reorder.tsx'
 import { filterSummary, isFiltering, providerLabel, threadAgents } from './model.ts'
+import { popAnimation, usePopOnChange } from '../kit/Pop.tsx'
 import { FadeBack, Leave, markDisclosure, MarqueeLabel, PadTween, Reveal, TitleSwap } from './motion.tsx'
 
 /** Open or close a project (or Recents); the rows it adds or removes animate as a block. */
@@ -265,6 +266,7 @@ export const SectionLabel = memo(function SectionLabel() {
   const [menuOpen, setMenuOpen] = useState(false)
   const onAddProject = useAddProject()
   const filtering = isFiltering(filter)
+  const summaryPop = usePopOnChange(filtering)
   const agents = threadAgents(threads, filter)
   const shown = hover || filtering || menuOpen
   return (
@@ -274,7 +276,7 @@ export const SectionLabel = memo(function SectionLabel() {
         {filtering && (
           <>
             <Label color={muted(t, 0.58)}>·</Label>
-            <Label color={ink(t, 0.7)} truncate>
+            <Label color={ink(t, 0.7)} truncate paintAnimation={summaryPop ? popAnimation() : undefined}>
               {filterSummary(filter)}
             </Label>
           </>
@@ -517,6 +519,7 @@ export const ThreadRow = memo(function ThreadRow({
   const rowRef = useRef<PublicInstance | null>(null)
   const hasGlyph = thread.status !== 'idle' || !!activity || unread
   const reveal = hover && !renaming
+  const pendingPop = usePopOnChange(thread.status === 'awaiting-approval')
   const wasRevealed = useWasRevealed(reveal)
   const commitRename = () => {
     setRenaming(false)
@@ -580,7 +583,7 @@ export const ThreadRow = memo(function ThreadRow({
             )}
             {hasDraft && !renaming && <DraftMarker />}
             {thread.status === 'awaiting-approval' && (
-              <Label color={amberText(t)} size={10} weight={500} style={{ flexShrink: 0 }}>
+              <Label color={amberText(t)} size={10} weight={500} style={{ flexShrink: 0 }} paintAnimation={pendingPop ? popAnimation() : undefined}>
                 Pending
               </Label>
             )}
@@ -725,6 +728,7 @@ export const ChildRow = memo(function ChildRow({
   }, [working, selected, leaveAsked, completedAt, thread.id])
 
   const reveal = hover && !working && !leaving
+  const pendingPop = usePopOnChange(thread.status === 'awaiting-approval')
   const wasRevealed = useWasRevealed(reveal)
   const body = (
     <div style={{ paddingTop: 3, paddingBottom: 1, ...INSET }}>
@@ -760,7 +764,7 @@ export const ChildRow = memo(function ChildRow({
             {/* A little quieter than its parent, so the parent stays dominant. */}
             <MarqueeLabel hover={hover} text={thread.title || (delegated ? 'Agent' : 'Subagent')} color={selected ? t.text : ink(t, 0.82)} />
             {thread.status === 'awaiting-approval' && (
-              <Label color={amberText(t)} size={10} weight={500} style={{ flexShrink: 0 }}>
+              <Label color={amberText(t)} size={10} weight={500} style={{ flexShrink: 0 }} paintAnimation={pendingPop ? popAnimation() : undefined}>
                 Pending
               </Label>
             )}
