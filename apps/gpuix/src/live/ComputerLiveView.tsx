@@ -50,7 +50,9 @@ function Live({ threadId, running, insetBottom }: { threadId: string; running: b
   }, [])
   useEffect(() => { if (!previous) return; const timer = setTimeout(() => setPrevious(null), 200); return () => clearTimeout(timer) }, [imageRevision, previous])
   const [expanded, setExpanded] = useState(false)
-  const [hovered, setHovered] = useState(false)
+  // The revealed controls take the pointer from the card, so the card's enter/leave alone flaps at 60 Hz while the pointer rests on them.
+  const [overBody, setOverBody] = useState(false), [overControls, setOverControls] = useState(false)
+  const hovered = overBody || overControls
   const [dismissed, setDismissed] = useState(false)
   useEffect(() => { if (running) { setDismissed(false); setFrame(null); setPrevious(null) } }, [running])
   useEffect(() => {
@@ -65,11 +67,11 @@ function Live({ threadId, running, insetBottom }: { threadId: string; running: b
   const aspect = frame.width > 0 && frame.height > 0 ? frame.width / frame.height : 1.6
   const width = Math.max(208, Math.min(expanded ? 520 : 320, (expanded ? 480 : 360) * aspect))
   return <Floating insetBottom={insetBottom} storageKey="kybern.computerLiveView.corner" testId="computer-live" width={width} height={width / aspect} overlayDrag cardStyle={LIVE_CARD} insetEnd={dock.open ? Math.min(dock.width, 538) : 0}>
-    <div onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)} style={{ position: 'relative', flexGrow: 1, minHeight: 0 }}>{previous && <motion.div key={imageRevision - 1} initial={false} animate={{ opacity: 1 }} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' }}><FrameImage frame={previous} /></motion.div>}
+    <div onMouseEnter={() => setOverBody(true)} onMouseLeave={() => setOverBody(false)} style={{ position: 'relative', flexGrow: 1, minHeight: 0 }}>{previous && <motion.div key={imageRevision - 1} initial={false} animate={{ opacity: 1 }} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' }}><FrameImage frame={previous} /></motion.div>}
       <motion.div key={imageRevision} initial={previous && !REDUCED_MOTION ? { opacity: 0 } : false} animate={{ opacity: 1 }} transition={{ duration: 0.18, ease: EASE_OUT }} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' }}><FrameImage frame={frame} current /></motion.div>{frame.point && <div style={{ position: 'absolute', left: Math.max(0, Math.min(1, frame.point[0])) * width - 7, top: Math.max(0, Math.min(1, frame.point[1])) * width / aspect - 7, width: 14, height: 14, borderRadius: 7, borderWidth: 2, borderColor: '#ffffff', backgroundColor: 'rgba(40,110,245,0.6)', pointerEvents: 'none' }} />}
       <Scrim height={width >= 260 ? 76 : 56} />
       <div style={{ position: 'absolute', left: 12, right: 12, bottom: 10, display: 'flex', flexDirection: 'column', gap: 1, pointerEvents: 'none' }}>{width >= 260 && <Label color="rgba(255,255,255,0.72)" size={11} lineHeight={14} weight={500} truncate>{frame.app}</Label>}<Caption action={frame.action ?? (running ? 'Working' : 'Done')} live={running} /></div>
-      <div backdrop={hovered && BACKDROP_ALLOWED ? {...BACKDROP.liveControls,radius:8} : undefined} style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 4, opacity: hovered ? 1 : 0, pointerEvents: hovered ? 'auto' : 'none', backgroundColor: BACKDROP_ALLOWED ? 'rgba(0,0,0,.45)' : t.popover, borderRadius: 8 }}><IconButton icon={N.window} size={28} label={expanded ? 'Show smaller' : 'Show larger'} onClick={() => setExpanded(!expanded)} /><IconButton icon={N.x} size={28} testId="computer-live-close" label="Hide until the next task" onClick={() => { setDismissed(true); setFrame(null); setPrevious(null) }} /></div>
+      <div onMouseEnter={() => setOverControls(true)} onMouseLeave={() => setOverControls(false)} backdrop={hovered && BACKDROP_ALLOWED ? {...BACKDROP.liveControls,radius:8} : undefined} style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 4, opacity: hovered ? 1 : 0, pointerEvents: hovered ? 'auto' : 'none', backgroundColor: BACKDROP_ALLOWED ? 'rgba(0,0,0,.45)' : t.popover, borderRadius: 8 }}><IconButton icon={N.window} size={28} label={expanded ? 'Show smaller' : 'Show larger'} onClick={() => setExpanded(!expanded)} /><IconButton icon={N.x} size={28} testId="computer-live-close" label="Hide until the next task" onClick={() => { setDismissed(true); setFrame(null); setPrevious(null) }} /></div>
     </div>
   </Floating>
 }
