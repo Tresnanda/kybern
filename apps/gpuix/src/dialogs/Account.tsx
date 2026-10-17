@@ -42,6 +42,7 @@ import { copyText } from '../transcript/store.ts'
 import { Screen as TerminalScreen } from '../terminal/Terminal.tsx'
 import { getClient } from '../state.ts'
 import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
+import { FONT_UI } from '../theme.ts'
 import { AccountAvatar, accountColor } from '../usage/AccountMark.tsx'
 import { flashAccount, refreshAccounts, useAccounts, useAccountsFeed, useAccountsLegacy } from '../usage/accounts.ts'
 import { useSettings } from '../settings/store.ts'
@@ -212,7 +213,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
     const sending = api.codeState === 'sending' || verifying
     const submit = () => { if (code.trim() && !sending) void api.submitCode(code) }
     body = <PasteStep login={login} remote={remote} host={host} transport={transport} wrong={api.codeState === 'wrong'} code={code} onCode={setCode} shown={codeShown} onShown={setCodeShown} onSubmit={submit} onTerminal={showTerminal} />
-    footer = <><Button testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button><Button testId="account-paste-submit" variant="primary" disabled={sending} onClick={submit}>Sign in</Button></>
+    footer = <><Button testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button><Button testId="account-paste-submit" variant="primary" busy={sending} disabled={sending} onClick={submit}>Sign in</Button></>
   } else if (step === 'device' && login && kind) {
     const url = loginHost(login.url)
     body = <Body gap={12}>
@@ -256,7 +257,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
       {!reauth && <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <Label color={t.text} size={14} lineHeight={21} weight={500}>Name</Label>
-          <TextField testId="account-name" label="Name" value={shownName} onChange={(value) => setName(value)} width="100%" onSubmit={() => { if (isNameValid(shownName)) void finish().then((ok) => { if (ok) { dismissed.current = true; close() } }) }} style={{ height: 32, fontSize: 14, borderColor: isNameValid(shownName) ? t.border : t.v('--destructive') }} />
+          <TextField testId="account-name" label="Name" value={shownName} onChange={(value) => setName(value)} width="100%" onSubmit={() => { if (isNameValid(shownName)) void finish().then((ok) => { if (ok) { dismissed.current = true; close() } }) }} style={{ height: 32, fontSize: 14, backgroundColor: t.inputGroupFill, borderColor: isNameValid(shownName) ? t.border : t.v('--destructive') }} />
           {!isNameValid(shownName) && <Label color={t.v('--destructive')} size={13} lineHeight={19.5}>Enter a name up to 120 characters.</Label>}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -339,7 +340,7 @@ function Checking() {
 }
 function RemoteNote({ host, transport }: { host: string; transport: 'SSH' | 'Tailscale' }) {
   const t = useTheme()
-  return <div style={{ display: 'flex', paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, borderRadius: 8, backgroundColor: t.buttonSecondary }}><Label color={t.textSecondary} size={13} lineHeight={19.5}>{remoteNote(host, transport)}</Label></div>
+  return <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, borderRadius: 8, backgroundColor: t.buttonSecondary }}><Label color={t.textSecondary} size={13} lineHeight={19.5}>{remoteNote(host, transport)}</Label></div>
 }
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [done, setDone] = useState(false)
@@ -398,7 +399,7 @@ function PickStep(props: { providers: { kind: ProviderKind; display_name: string
           <Label color={t.text} size={14} lineHeight={21} weight={500}>Folder</Label>
           <Label color={ink(t, 0.8)} size={13} lineHeight={19.5} weight={500}>Use an existing folder</Label>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ flexGrow: 1, display: 'flex', minWidth: 0 }}><TextField testId="account-folder" label="Folder" placeholder={placeholder} value={props.folder} onChange={props.onFolder} width="100%" style={{ height: 32, fontSize: 14 }} /></div>
+            <div style={{ flexGrow: 1, display: 'flex', minWidth: 0 }}><TextField testId="account-folder" label="Folder" placeholder={placeholder} value={props.folder} onChange={props.onFolder} width="100%" style={{ height: 32, fontSize: 14, backgroundColor: t.inputGroupFill }} /></div>
             {!remote && <Button testId="account-choose-folder" onClick={() => void pickFolder().then((picked) => { if (picked) props.onFolder(picked) })}>Choose…</Button>}
           </div>
           <Label color={t.textSecondary} size={13} lineHeight={19.5}>Kybern uses the sign-in already saved in this folder and never deletes it.</Label>
@@ -423,7 +424,7 @@ function PasteStep({ login, remote, host, transport, wrong, code, onCode, shown,
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <Label color={t.text} size={14} lineHeight={21} weight={500}>Code</Label>
       <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
-        <input testId="account-code" aria-label="Code" secure={!shown} autoFocus={wrong} placeholder="Paste code" value={code} onChange={(e) => onCode(e.value ?? '')} onSubmit={onSubmit} style={{ width: '100%', height: 32, minWidth: 0, borderWidth: 1, borderColor: wrong ? t.v('--destructive') : t.border, borderRadius: 8, paddingLeft: 10, paddingRight: 36, fontFamily: 'Menlo', fontSize: 13, color: t.text, backgroundColor: t.surface }} />
+        <input testId="account-code" aria-label="Code" secure={!shown} autoFocus={wrong} placeholder="Paste code" value={code} onChange={(e) => onCode(e.value ?? '')} onSubmit={onSubmit} style={{ width: '100%', height: 32, minWidth: 0, borderWidth: 1, borderColor: wrong ? t.v('--destructive') : t.border, borderRadius: 8, paddingLeft: 10, paddingRight: 36, fontFamily: code ? 'Menlo' : FONT_UI, fontSize: 13, color: t.text, backgroundColor: t.inputGroupFill }} />
         <div testId="account-code-toggle" role="button" aria-label="Show code" aria-pressed={shown} tabIndex={0} onClick={() => onShown(!shown)} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') onShown(!shown) }} style={{ position: 'absolute', right: 3, top: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, borderRadius: 6, hover: { backgroundColor: t.buttonSecondaryHover } }}><Icon source={S.eye} size={14} color={shown ? t.text : t.textSecondary} style={{ pointerEvents: 'none' }} /></div>
       </div>
       {wrong && <Label color={t.v('--destructive')} size={13} lineHeight={19.5}>That code didn’t work. Open the sign-in page again and paste the new code.</Label>}

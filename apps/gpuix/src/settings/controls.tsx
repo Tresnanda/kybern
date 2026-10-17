@@ -2,18 +2,19 @@ import { motion, type InputProps } from '@gpuix/react'
 import { Children, useEffect, useState, type ReactNode } from 'react'
 import { PickerMenu, PickerItem, CheckMark } from '../composer/Menu.tsx'
 import { Icon } from '../icons.tsx'
+import { MatrixLoader } from '../MatrixLoader.tsx'
 import { N } from '../nav/glyphs.ts'
 import { EASE_OUT, ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { FONT_UI } from '../theme.ts'
 
-export function Button({ children, onClick, disabled = false, testId, variant = 'outline', size = 'default', icon, label }: { variant?: 'outline' | 'primary' | 'destructive' | 'ghost' | 'secondary' | 'subtle'; size?: 'default' | 'chip' | 'xs'; children: string; onClick: () => void; disabled?: boolean; testId?: string; /** Leading glyph (`kit` buttons put 16px icons beside the label). */ icon?: string; label?: string }) {
+export function Button({ children, onClick, disabled = false, testId, variant = 'outline', size = 'default', icon, label, busy = false }: { variant?: 'outline' | 'primary' | 'destructive' | 'ghost' | 'secondary' | 'subtle'; size?: 'default' | 'chip' | 'xs'; children: string; onClick: () => void; disabled?: boolean; testId?: string; /** Leading glyph (`kit` buttons put 16px icons beside the label). */ icon?: string; label?: string; /** A loader before the label while work is pending. */ busy?: boolean }) {
   const t = useTheme()
   const chip = size === 'chip' || size === 'xs'
   const text = size === 'xs' ? 12 : 13
   const fill = variant === 'primary' ? t.buttonPrimary : variant === 'destructive' ? t.red : variant === 'secondary' || variant === 'subtle' ? t.buttonSecondary : 'transparent'
   const hover = variant === 'primary' ? t.buttonPrimary : variant === 'destructive' ? t.red : variant === 'subtle' || variant === 'ghost' ? t.buttonSecondaryHover : t.buttonTertiaryHover
   const color = variant === 'primary' ? t.buttonPrimaryText : variant === 'destructive' ? '#fff' : variant === 'ghost' ? t.textSecondary : t.text
-  return <div testId={testId} role="button" tabIndex={disabled ? -1 : 0} aria-label={label ?? children} onClick={() => !disabled && onClick()} onKeyDown={(e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) onClick() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: chip ? 4 : 6, minHeight: chip ? 24 : variant === 'outline' || variant === 'ghost' || variant === 'subtle' ? 28 : 32, backgroundColor: fill, paddingLeft: chip ? 8 : 10, paddingRight: chip ? 8 : 10, borderWidth: variant === 'outline' ? 1 : 0, borderColor: t.border, borderRadius: chip ? 8 : 8, opacity: disabled ? 0.64 : 1, cursor: disabled ? 'default' : 'pointer', flexShrink: 0, hover: { backgroundColor: hover }, active: { backgroundColor: variant === 'primary' ? t.buttonPrimary : variant === 'destructive' ? t.red : t.buttonSecondaryHover } }}>{icon && <Icon source={icon} size={chip ? 12 : 14} color={color} style={{ pointerEvents: 'none' }} />}<Label color={color} size={chip ? text : 14} lineHeight={chip ? text * 1.5 : 21}>{children}</Label></div>
+  return <div testId={testId} role="button" tabIndex={disabled ? -1 : 0} aria-label={label ?? children} onClick={() => !disabled && onClick()} onKeyDown={(e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) onClick() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: chip ? 4 : 6, minHeight: chip ? 24 : 28, backgroundColor: fill, paddingLeft: chip ? 8 : 10, paddingRight: chip ? 8 : 10, borderWidth: variant === 'outline' ? 1 : 0, borderColor: t.border, borderRadius: chip ? 8 : 8, opacity: disabled ? 0.64 : 1, cursor: disabled ? 'default' : 'pointer', flexShrink: 0, hover: { backgroundColor: hover }, active: { backgroundColor: variant === 'primary' ? t.buttonPrimary : variant === 'destructive' ? t.red : t.buttonSecondaryHover } }}>{busy && <MatrixLoader dot={2} gap={1.33} rgb={variant === 'primary' ? (t.variant === 'dark' ? [13, 13, 13] : [252, 252, 252]) : undefined} alpha={0.7} />}{icon && <Icon source={icon} size={chip ? 12 : 14} color={color} style={{ pointerEvents: 'none' }} />}<Label color={color} size={chip ? text : 14} lineHeight={chip ? text * 1.5 : 21}>{children}</Label></div>
 }
 
 /** Pointer toggles give state feedback in 160ms; keyboard and Reduce Motion are immediate. */
