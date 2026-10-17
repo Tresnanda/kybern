@@ -1,17 +1,15 @@
-import {spawnSync} from 'node:child_process'
+import {backdropAllowed, fullTranslucency, onAccessibilityDisplay, useAccessibilityDisplay} from '../platform/material.ts'
 import {useAppearance} from '../settings/appearance.ts'
 
-// Like the app's reduced-motion preference, OS accessibility overrides are
-// read at launch. App translucency changes remain reactive through useAppearance.
-function preference(key: string, override: string): boolean {
-  if (process.env[override]) return process.env[override] === '1'
-  const result = spawnSync('defaults', ['read', 'com.apple.universalaccess', key], {encoding:'utf8'})
-  return result.stdout?.trim() === '1'
-}
-export const BACKDROP_ALLOWED = !preference('reduceTransparency', 'KYBERN_REDUCED_TRANSPARENCY')
-  && !preference('increaseContrast', 'KYBERN_INCREASED_CONTRAST')
+// Scene backdrops follow Reduce transparency and Increase contrast live
+// (`platform/material.ts`). `BACKDROP_ALLOWED` is a live binding, updated
+// before React re-renders: those options are part of the theme, so a change
+// re-renders every themed view, which then reads the new value.
+export let BACKDROP_ALLOWED = backdropAllowed()
+onAccessibilityDisplay(() => { BACKDROP_ALLOWED = backdropAllowed() })
+/** Glass popovers: full translucency is on and allowed. */
 export function useBackdropMaterial(): boolean {
-  return useAppearance().translucent && BACKDROP_ALLOWED && process.env.KYBERN_OPAQUE !== '1'
+  return fullTranslucency(useAppearance().translucent, useAccessibilityDisplay())
 }
 /** Theme colors are resolved rgb()/rgba()/hex before reaching native styles. */
 export function backdropTint(color: string, alpha = 0.78): string {

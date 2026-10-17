@@ -6,6 +6,7 @@ import { createContext, createElement, useContext, useMemo, useSyncExternalStore
 import { KybernClient, type ConnectionStatus } from '../../../packages/kybern-client/src/client.ts'
 import {
   applyEvent,
+  compactThreadState,
   emptyThreadState,
   seedFromGet,
   type ThreadState,
@@ -271,7 +272,7 @@ export function onOpenEvent(listener: (event: ThreadEvent) => void): () => void 
 }
 
 export function selectThread(id: ThreadId | null) { return selectPaneThread(focusedPaneId, id) }
-export async function selectPaneThread(paneId: string, id: ThreadId | null) {
+export async function selectPaneThread(paneId: string, id: ThreadId | null, keepOpen = false) {
   const pane = panes.get(paneId)
   if (!pane) return
   const generation = pane.generation + 1
@@ -280,7 +281,7 @@ export async function selectPaneThread(paneId: string, id: ThreadId | null) {
     sessions.get(id)?.stop?.(); sessions.delete(id)
   }
   const existing = id ? sessions.get(id) : undefined
-  setPane(paneId, { selectedId: id, open: existing?.open ?? emptyThreadState(), generation })
+  setPane(paneId, { selectedId: id, open: existing?.open ?? (keepOpen ? pane.open : emptyThreadState()), generation })
   releaseUnused()
   if (!id || !client) return
   if (existing) { await existing.ready; return }
@@ -306,6 +307,22 @@ export async function selectPaneThread(paneId: string, id: ThreadId | null) {
   try { await session.ready } catch (error) {
     if (valid()) { sessions.delete(id); throw error }
   }
+}
+/**
+ * Hidden-window compaction (`platform/surface.ts`, the desktop's
+ * `releaseCachedData`): drop every open transcript's blocks and its live
+ * subscription. The thread record, selection and pending requests stay, so the
+ * composer and its drafts are untouched.
+ */
+export function releaseOpenTranscripts() {
+  for (const session of sessions.values()) session.stop?.()
+  sessions.clear()
+  for (const [id, pane] of panes) panes.set(id, { ...pane, open: compactThreadState(pane.open), generation: pane.generation + 1 })
+  mirrorFocus(); emit()
+}
+/** Showing the window again rehydrates each pane's thread (the desktop's `loadOpenThreads`). */
+export function reloadOpenTranscripts() {
+  for (const [id, pane] of panes) if (pane.selectedId && !pane.open.loaded) void selectPaneThread(id, pane.selectedId, true).catch(error => console.error('[pane] Unable to reload thread:', error))
 }
 const threadEventListeners = new Set<(id: string, event: ThreadEvent) => void>()
 export function onThreadEvent(listener: (id: string, event: ThreadEvent) => void) {
