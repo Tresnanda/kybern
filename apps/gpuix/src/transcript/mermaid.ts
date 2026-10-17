@@ -29,7 +29,9 @@ function bundlePath(): string | null {
 }
 export const mermaidAvailable = () => bundlePath() !== null
 
-const WRAPPER = `<!doctype html><meta charset="utf-8"><body><script>
+// Nothing in the renderer needs the network: Mermaid's strict mode is the first line, this CSP
+// the second (the bundle and jobs arrive through evaluateJavaScript, which CSP does not gate).
+const WRAPPER = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data:; font-src data:"><body><script>
 const send = message => window.webkit.messageHandlers.kybern.postMessage(message)
 window.addEventListener('error', event => send({ kind: 'mermaid-error', message: String(event.message) }))
 window.kybernBundle = () => send({ kind: 'mermaid-bundle', has: typeof window.mermaid })
