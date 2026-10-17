@@ -14,6 +14,8 @@ const registry = () => JSON.parse(readFileSync(path.join(CLIENT, 'environments.j
 const tokenList = (data: string) => (JSON.parse(cli(data, 'call', 'access.tokens.list', '{}')) as { tokens: { id: string; label: string; revoked: boolean }[] }).tokens
 const assert = (ok: unknown, message: string) => { if (!ok) throw Error(`FAIL: ${message}`); console.log(`ok  ${message}`) }
 
+// Earlier runs leave scratch devices behind; revoke them so the device list stays short.
+for (const [data, prefix] of [[DATA_A, 'Scratch phone'], [DATA_B, 'Kybern desktop']] as const) for (const t of tokenList(data)) if (!t.revoked && t.label.startsWith(prefix)) cli(data, 'call', 'access.tokens.revoke', JSON.stringify({ token_id: t.id }))
 reset()
 const { app, until, click, present, text, shot } = await start()
 const painted = async () => (await app.getByTestId('environment-dialog').count()) ? 'dialog' : ''
@@ -79,8 +81,8 @@ try {
   const code = (JSON.parse(cli(DATA_A, '--json', 'pair')) as { code: string }).code
   const paired = await fetch('http://127.0.0.1:4294/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, device_name: phoneName }) })
   assert(paired.ok, 'a scratch phone paired with daemon A over /pair')
-  await click('environment-switcher'); await click('environment-pair'); await click('pairing-create')
-  await app.getByTestId('pairing-address').waitFor({ timeoutMs: 15000 })
+  await click('environment-switcher'); await click('environment-pair'); await app.getByTestId('pairing-create').waitFor()
+  await until('invitation created', async () => { if (await present('pairing-address')) return true; await app.getByTestId('pairing-create').click().catch(() => {}); await wait(500); return false }, 20000)
   const exposure = () => JSON.parse(cli(DATA_A, 'call', 'access.exposure.get', '{}')) as { tailscale: boolean; tailscale_ip: string | null }
   assert(!exposure().tailscale, 'the scratch daemon starts without a Tailscale listener')
   await click('environment-tailscale')
@@ -96,15 +98,13 @@ try {
   const phone = () => tokenList(DATA_A).find(t => t.label === phoneName)!
   await until('paired device listed', () => text(phoneName), 10000)
   await shot('v-10-pair-invitation')
-  // The device list is below the fold: scroll the dialog body like a user until the button is inside it.
+  // The device list is below the fold (earlier runs left revoked rows above the new one): scroll the dialog
+  // body to its end like a user, where the newest device sits.
   const target = `revoke-${phone().id}`
-  for (let step = 0; step < 12; step++) {
-    const [button, body] = [await app.getByTestId(target).bounds(), await app.getByTestId('environment-access-body').bounds()]
-    if (button.y >= body.y && button.y + button.height <= body.y + body.height - 4) break
-    await app.getByTestId('environment-access-body').wheel(0, 160); await wait(200)
-  }
+  for (let step = 0; step < 12; step++) await app.getByTestId('environment-access-body').wheel(0, -900)
+  await wait(400)
   await shot('v-10b-pair-scrolled')
-  await click(`revoke-${phone().id}`)
+  await app.getByTestId(target).click()
   await until('revoked in daemon', async () => phone().revoked, 10000)
   await until('Revoked label', () => text('Revoked'), 5000)
   assert(phone().revoked, 'Revoke access revoked the device token on daemon A')

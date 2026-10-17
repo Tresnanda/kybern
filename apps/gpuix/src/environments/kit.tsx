@@ -67,10 +67,11 @@ export function Spinner({ rgb }: { rgb?: readonly [number, number, number] }) {
 export function EnvButton({ children, onClick, disabled = false, busy = false, testId, variant = 'primary', size = 'default', icon, block = false }: { children: string; onClick: () => void; disabled?: boolean; busy?: boolean; testId?: string; variant?: 'primary' | 'secondary' | 'ghost' | 'outline'; size?: 'default' | 'xs'; icon?: 'copy'; block?: boolean }) {
   const t = useTheme()
   const xs = size === 'xs'
-  const fill = variant === 'primary' ? t.buttonPrimary : variant === 'secondary' ? t.buttonSecondary : 'transparent'
+  // Kit `secondary` (measured in the desktop frontend): dark rgb(104,104,104) on 2.8% white, light rgb(15,15,15) on 4.6% black.
+  const dark = t.variant === 'dark'
+  const fill = variant === 'primary' ? t.buttonPrimary : variant === 'secondary' ? (dark ? 'rgba(252, 252, 252, 0.0277)' : 'rgba(13, 13, 13, 0.0458)') : 'transparent'
   const hover = variant === 'primary' ? t.buttonPrimary : variant === 'outline' ? t.buttonTertiaryHover : t.buttonSecondaryHover
-  // The app theme sets --secondary-foreground to the muted ink, so secondary buttons read dimmer than outline ones.
-  const color = variant === 'primary' ? t.buttonPrimaryText : variant === 'ghost' || variant === 'secondary' ? t.textSecondary : t.text
+  const color = variant === 'primary' ? t.buttonPrimaryText : variant === 'secondary' ? (dark ? 'rgb(104, 104, 104)' : 'rgb(15, 15, 15)') : variant === 'ghost' ? t.textSecondary : t.text
   const off = disabled || busy
   const loader = variant === 'primary' ? (t.variant === 'dark' ? [17, 17, 17] as const : [250, 250, 250] as const) : undefined
   return <div testId={testId} role="button" aria-label={children} tabIndex={off ? -1 : 0} onClick={() => { if (!off) onClick() }} onKeyDown={(e) => { if (!off && (e.key === 'enter' || e.key === 'space')) onClick() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: xs ? 4 : 8, height: xs ? 24 : 32, width: block ? '100%' : undefined, paddingLeft: xs ? 7 : 11, paddingRight: xs ? 7 : 11, borderRadius: xs ? 6 : 10, borderWidth: 1, borderColor: variant === 'outline' ? t.border : 'transparent', backgroundColor: fill, opacity: disabled ? 0.64 : 1, cursor: off ? 'default' : 'pointer', flexShrink: 0, hover: { backgroundColor: hover }, active: { backgroundColor: variant === 'primary' ? t.buttonPrimary : t.buttonSecondaryHover } }}>
