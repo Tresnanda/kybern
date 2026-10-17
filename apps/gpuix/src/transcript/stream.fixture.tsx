@@ -13,7 +13,15 @@ set({ status: 'open', selectedId: thread.id, threads: [thread], open: { ...empty
 let n = 0
 const stopAt = Number(process.env.STREAM_STOP ?? Infinity)
 const timer = setInterval(() => {
-  if (n >= stopAt) return
+  if (n >= stopAt) {
+    // `STREAM_COMPLETE=1`: the answer settles when the stream stops, as a finished turn does.
+    if (process.env.STREAM_COMPLETE === '1' && !getState().open.blocks.some(b => b.kind === 'assistant' && b.complete)) {
+      const idle = { ...thread, status: 'idle' } as Thread
+      const end = { kind: 'turn_end', id: 'end:turn', turnId: 'turn', at: new Date().toISOString(), seq: 3, stopReason: 'end_turn', usage: {}, costUsd: null, durationMs: n * 300, terminalMessageId: 'a' } as unknown as Block
+      set({ threads: [idle], open: { ...getState().open, thread: idle, blocks: [...getState().open.blocks.map(b => (b.kind === 'assistant' ? { ...b, complete: true } : b)), end] } })
+    }
+    return
+  }
   n++
   const text = Array.from({ length: n }, (_, i) => `Word ${i}: smooth output preserves **formatting** and Unicode 🌿. `).join('')
   set({ open: { ...getState().open, blocks: [user, { ...answer, text }] } })

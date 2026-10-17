@@ -6,14 +6,16 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { launchFixture } from '../requests/harness.ts'
 const exec = promisify(execFile)
-for (const reduced of ['0', '1']) {
+// `KYBERN_STREAM_EFFECTS=0` measures the same stream without caret and fade, `caret` with the caret only.
+const effects = process.env.KYBERN_STREAM_EFFECTS ?? '1'
+for (const reduced of (process.env.PERF_REDUCED ?? '0,1').split(',')) {
   const scratch = mkdtempSync(tmpdir() + '/gpuix-stream9perf-')
-  const f = await launchFixture(import.meta.dir + '/stream.fixture.tsx', { GPUIX_BACKGROUND: '1', KYBERN_OPAQUE: '1', KYBERN_APPEARANCE: 'dark', KYBERN_REDUCED_MOTION: reduced, KYBERN_DATA_DIR: scratch, KYBERN_CLIENT_CONFIG_DIR: scratch, KYBERN_GPUIX_CREDENTIALS_DIR: scratch, KYBERN_GPUIX_ENVIRONMENT: 'local', KYBERN_URL: '', KYBERN_TOKEN: '', ...(process.env.KYBERN_FULL_RATE ? { KYBERN_FULL_RATE: '1' } : {}) })
+  const f = await launchFixture(import.meta.dir + '/stream.fixture.tsx', { GPUIX_BACKGROUND: '1', KYBERN_OPAQUE: '1', KYBERN_APPEARANCE: 'dark', KYBERN_REDUCED_MOTION: reduced, KYBERN_DATA_DIR: scratch, KYBERN_CLIENT_CONFIG_DIR: scratch, KYBERN_GPUIX_CREDENTIALS_DIR: scratch, KYBERN_GPUIX_ENVIRONMENT: 'local', KYBERN_URL: '', KYBERN_TOKEN: '', KYBERN_STREAM_EFFECTS: effects, ...(process.env.KYBERN_FULL_RATE ? { KYBERN_FULL_RATE: '1' } : {}) })
   try {
     await f.app.getByTestId('stream-ready').waitFor({ timeoutMs: 30000 })
     await Bun.sleep(10000)
     const result = await exec('bun', ['perf/sample.ts', '15', `stream-reduced${reduced}=${f.pid}`])
-    console.log(`reduced motion ${reduced}; KYBERN_FULL_RATE=${process.env.KYBERN_FULL_RATE ?? 'unset'}\n${result.stdout}`)
+    console.log(`reduced motion ${reduced}; KYBERN_STREAM_EFFECTS=${effects}; KYBERN_FULL_RATE=${process.env.KYBERN_FULL_RATE ?? 'unset'}\n${result.stdout}`)
   } finally { await f.close(); rmSync(scratch, { recursive: true, force: true }) }
 }
 process.exit(0)

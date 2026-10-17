@@ -106,6 +106,9 @@ export function useSmoothText(target: string, live: boolean, complete: boolean):
 // ---- the live answer: caret and fading words ----
 
 const countWords = (text: string) => { let n = 0; for (const _ of text.matchAll(/\S+/g)) n++; return n }
+/** `KYBERN_STREAM_EFFECTS=0` turns caret and fade off and `caret` keeps only the caret, for measuring their cost. */
+const STREAM_EFFECTS = process.env.KYBERN_STREAM_EFFECTS !== '0'
+const STREAM_FADE = STREAM_EFFECTS && process.env.KYBERN_STREAM_EFFECTS !== 'caret'
 
 /**
  * `.chat-message-segment[data-live] > .chat-markdown > :last-child::after` (a 2px, .95em bar that
@@ -118,11 +121,11 @@ export function useStreamEffects(text: string, live: boolean): MarkdownStream | 
   const seen = useRef<{ count: number; born: number[] } | null>(null)
   const [phase, setPhase] = useState(true)
   useEffect(() => {
-    if (!live || REDUCED_MOTION) return
+    if (!live || REDUCED_MOTION || !STREAM_EFFECTS) return
     const id = setInterval(() => { if (isWindowVisible()) setPhase(value => !value) }, 500)
     return () => clearInterval(id)
   }, [live])
-  if (!live) { seen.current = null; return undefined }
+  if (!live || !STREAM_EFFECTS) { seen.current = null; return undefined }
   const count = countWords(text)
   // A row that mounts mid-stream starts at what has arrived: nothing fades in for it.
   const state = (seen.current ??= { count, born: [] })
@@ -133,5 +136,5 @@ export function useStreamEffects(text: string, live: boolean): MarkdownStream | 
     state.count = count
     if (state.born.length > 24) state.born.splice(0, state.born.length - 24)
   }
-  return { caret: true, caretColor: t.text, caretVisible: REDUCED_MOTION || phase, born: REDUCED_MOTION ? [] : [...state.born], fadeMs: 350 }
+  return { caret: true, caretColor: t.text, caretVisible: REDUCED_MOTION || phase, born: REDUCED_MOTION || !STREAM_FADE ? [] : [...state.born], fadeMs: 350 }
 }
