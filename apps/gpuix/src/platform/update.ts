@@ -67,17 +67,22 @@ let dismissedInSession: string | null = null
 
 /** The `.app` this process runs from, or null outside a packaged build. */
 export function appBundle(execPath = process.execPath): string | null {
+  // Checks against a local feed may name a scratch bundle to replace.
+  if (process.env.KYBERN_UPDATE_BUNDLE && testFeed()) return process.env.KYBERN_UPDATE_BUNDLE
   const match = /^(.*\.app)\/Contents\/MacOS\/[^/]+$/.exec(execPath)
   return match ? match[1]! : null
 }
+function testFeed(): URL | null {
+  const override = process.env.KYBERN_UPDATE_FEED
+  if (!override) return null
+  const url = new URL(override)
+  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) throw Error('KYBERN_UPDATE_FEED must be a loopback http address')
+  return url
+}
 
 function feed(): { endpoints: string[]; pubkey: string } {
-  const override = process.env.KYBERN_UPDATE_FEED
-  if (override) {
-    const url = new URL(override)
-    if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) throw Error('KYBERN_UPDATE_FEED must be a loopback http address')
-    return { endpoints: [override], pubkey: process.env.KYBERN_UPDATE_PUBKEY ?? conf.plugins.updater.pubkey }
-  }
+  const local = testFeed()
+  if (local) return { endpoints: [local.href], pubkey: process.env.KYBERN_UPDATE_PUBKEY ?? conf.plugins.updater.pubkey }
   return { endpoints: conf.plugins.updater.endpoints, pubkey: conf.plugins.updater.pubkey }
 }
 
@@ -199,19 +204,26 @@ async function runUpdateInstall(update: Pending) {
     const archive = await download(update.entry.url, (progress) => set({ progress }))
     verifyMinisign(archive, update.entry.signature, feed().pubkey)
     await replaceBundle(bundle, archive)
-    relaunch(bundle)
+    await relaunch(bundle)
   } catch (error) {
     set({ phase: 'available', progress: null, error: describe(error), errorKind: 'install' })
     void import('../shell/toasts.tsx').then(({ toast }) => toast.error('Unable to install the update', { description: describe(error) }))
   }
 }
 
-/** Start the new bundle, then quit (Tauri's `relaunch`). The bundled daemon restarts when its version no longer matches. */
-function relaunch(bundle: string) {
+/**
+ * Start the new bundle's executable with this process's environment, then quit
+ * (Tauri's `relaunch`, which spawns the binary directly). Keeping the
+ * environment keeps the same daemon; its bundled copy restarts once its version
+ * no longer matches the app's.
+ */
+async function relaunch(bundle: string) {
   if (process.env.KYBERN_UPDATE_NO_RELAUNCH === '1') { console.error('[update] installed', bundle); process.exit(0) }
-  const child = spawn('/usr/bin/open', ['-n', bundle], { detached: true, stdio: 'ignore', env: process.env })
+  const { stdout } = await run('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleExecutable', path.join(bundle, 'Contents/Info.plist')])
+  const child = spawn(path.join(bundle, 'Contents/MacOS', stdout.trim()), [], { detached: true, stdio: 'ignore', env: process.env })
+  await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
   child.unref()
-  child.once('spawn', () => setTimeout(() => process.exit(0), 100))
+  process.exit(0)
 }
 
 /** Hide this version's launch announcement across app restarts. */

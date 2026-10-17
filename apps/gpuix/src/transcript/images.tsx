@@ -7,6 +7,7 @@ import { closeSync, openSync, readSync } from 'node:fs'
 import { useMemo, useRef, useState } from 'react'
 import { motion, useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
+import { ImageActions } from '../platform/ImageActions.tsx'
 import { imageSource } from '../../../desktop/src/lib/responseImages.ts'
 import { EASE_OUT, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { alpha, muted, Para } from './kit.tsx'
@@ -138,6 +139,7 @@ function ImageLightbox({ src, label, size, onClose }: { src: string; label: stri
       style={{ display: 'flex', flexDirection: 'column', position: 'relative' }}
     >
       <DialogHeader title={label} onClose={() => setClosing(true)} />
+      <ImageActions source={src} label={label} />
       <div style={{ padding: 16, paddingTop: 0 }}><img src={src} alt={label} objectFit="contain" style={{ width, height, borderRadius: 8 }} /></div>
     </motion.div>
   </Dialog>
