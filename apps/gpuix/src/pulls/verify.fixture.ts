@@ -45,6 +45,7 @@ export function actionFixture(options: { long?: boolean } = {}) {
           case 'daemon.info': result = { protocol_version: PROTOCOL_VERSION, environment_id: 'pages-fixture', version: 'fixture', scopes: [] }; break
           case 'projects.list': result = { projects: [project] }; break
           case 'threads.list': result = { threads: [{id:'linked',project_id:project.id,title:'Linked conversation',provider:{kind:'codex',instance:'default'},status:'idle',permission_mode:'supervised',worktree:{branch:pr.head,path:project.path},created_at:now,updated_at:now}], activity: [] }; break
+          case 'queue.list': result = { messages: [] }; break
           case 'providers.list': result = { providers: [] }; break
           case 'providers.accounts.list': result = { accounts: [] }; break
           case 'settings.get': result = { default_provider: 'claude-code', default_permission_mode: 'supervised' }; break
