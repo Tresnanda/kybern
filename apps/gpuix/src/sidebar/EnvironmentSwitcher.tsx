@@ -1,7 +1,8 @@
 // The desktop's environment row/menu. Connection state is per native window;
 // saved metadata and macOS credentials use the desktop's registry and service.
 import { useContext, useLayoutEffect, useState, useRef, useSyncExternalStore } from 'react'
-import { Icon } from '../icons.tsx'
+import { Tick02Icon } from '@hugeicons/core-free-icons'
+import { glyph, Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { Menu, MenuContext, MenuLabel, MenuSeparator, muted } from '../nav/overlay.tsx'
 import { getClient, useApp } from '../state.ts'
@@ -58,17 +59,20 @@ function MenuContents() {
   </>
 }
 
-/** An action row at the environment menu's own density: 29px (21px line + `--picker-option-py: .25rem`), 8px gaps. */
+/** An action row at the environment menu's own density: 29px (21px line + `--picker-option-py: .25rem`), 12px gap (`--picker-option-gap: .75rem`). */
 function EnvironmentAction({ id, testId, icon, label, disabled = false, onSelect }: { id: string; testId: string; icon: string; label: string; disabled?: boolean; onSelect: () => void }) {
   const t = useTheme()
   const menu = useContext(MenuContext)!
   const select = useRef(onSelect)
   select.current = onSelect
   useLayoutEffect(() => menu.register({ key: id, disabled, keepOpen: false, onSelect: () => select.current() }), [menu.register, id, disabled])
-  return <div testId={testId} role="menuitem" aria-label={label} aria-disabled={disabled} onMouseMove={() => { if (!disabled && menu.active !== id) menu.setActive(id) }} onMouseLeave={() => { if (menu.active === id) menu.setActive(null) }} onClick={() => menu.pick(id)} style={{ display: 'flex', alignItems: 'center', gap: 8, height: 29, paddingLeft: 8, paddingRight: 8, borderRadius: 10, opacity: disabled ? 0.64 : 1, ...(menu.active === id && !disabled ? { backgroundColor: t.buttonSecondaryHover } : {}) }}>
+  return <div testId={testId} role="menuitem" aria-label={label} aria-disabled={disabled} onMouseMove={() => { if (!disabled && menu.active !== id) menu.setActive(id) }} onMouseLeave={() => { if (menu.active === id) menu.setActive(null) }} onClick={() => menu.pick(id)} style={{ display: 'flex', alignItems: 'center', gap: 12, height: 29, paddingLeft: 8, paddingRight: 8, borderRadius: 10, opacity: disabled ? 0.64 : 1, ...(menu.active === id && !disabled ? { backgroundColor: t.buttonSecondaryHover } : {}) }}>
     <Icon source={icon} size={16} color={ink(t, 0.8)} style={{ pointerEvents: 'none' }} /><Label color={t.text} size={14} lineHeight={21} truncate style={{ flexGrow: 1, pointerEvents: 'none' }}>{label}</Label>
   </div>
 }
+
+/** The current environment's check: 14px at stroke 2.75 (kit.css `.environment-choice [data-slot="menu-radio-indicator"] > svg`). */
+const CHECK = glyph(Tick02Icon, 2.75)
 
 /** Rows are 45px with 2px between them (measured in the desktop frontend: two lines + `py-1`, `space-y-0.5`). */
 const ENV_ROW_PITCH = 47
@@ -96,7 +100,7 @@ function EnvironmentChoice({ profile, last, current, status, statusLabel, onChoo
         <Label color={t.text} size={14} lineHeight={19.25} truncate>{profile.name}</Label>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}><div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: dot, flexShrink: 0 }} /><Label color={muted(t, 1)} size={11.5} lineHeight={15.8} truncate>{detail}</Label></div>
       </div>
-      <div style={{ display: 'flex', width: 14, height: 14, flexShrink: 0, pointerEvents: 'none' }}>{current && <Icon source={N.check} size={14} color={t.text} />}</div>
+      <div style={{ display: 'flex', width: 14, height: 14, flexShrink: 0, pointerEvents: 'none' }}>{current && <Icon source={CHECK} size={14} color={t.text} />}</div>
     </div>
     <div testId={`environment-window-${profile.id}`} role="menuitem" aria-label={`Open ${profile.name} in a new window`} onMouseMove={() => { if (menu.active !== windowKey) menu.setActive(windowKey) }} onMouseLeave={() => { if (menu.active === windowKey) menu.setActive(null) }} onClick={() => menu.pick(windowKey)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, flexShrink: 0, borderRadius: 10, backgroundColor: windowActive ? t.buttonSecondary : 'transparent' }}>
       <Icon source={N.window} size={16} color={muted(t, 1)} style={{ pointerEvents: 'none' }} />
