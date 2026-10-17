@@ -88,7 +88,6 @@ export function Combobox({
   const [anchorW, setAnchorW] = useState<number | null>(null)
   const fieldRef = useRef<PublicInstance | null>(null)
   const inputRef = useRef<PublicInstance | null>(null)
-  const dismissedByOutside = useRef(false)
   const escape = useEscapeLayer(open)
 
   const singleLabel = !multiple && typeof value === 'string' ? itemToLabel(value) : ''
@@ -167,7 +166,6 @@ export function Combobox({
       onClick={() => {
         if (disabled) return
         if (kind === 'clear') { setValue(multiple ? [] : null); setInput(''); focusInput(); return }
-        if (dismissedByOutside.current) { dismissedByOutside.current = false; return }
         setOpen(!open)
         focusInput()
       }}
@@ -193,9 +191,11 @@ export function Combobox({
         <div
           testId={testId ? `${testId}-popup` : undefined}
           role="listbox"
-          onMouseDownOutside={() => {
-            dismissedByOutside.current = true
-            queueMicrotask(() => { dismissedByOutside.current = false })
+          onMouseDownOutside={(e) => {
+            // A press on the field itself (the input, the trigger) is not outside: the input keeps the popup and
+            // the query, the trigger toggles it on click (Base UI Combobox).
+            const b = fieldRef.current ? renderer?.getElementBounds?.(fieldRef.current.id) : null
+            if (b && e.x !== undefined && e.y !== undefined && e.x >= b.x && e.x < b.x + b.width && e.y >= b.y && e.y < b.y + b.height) return
             setOpen(false)
           }}
           style={{
