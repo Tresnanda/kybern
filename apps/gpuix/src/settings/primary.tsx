@@ -13,7 +13,8 @@ import { Label, ink, useTheme } from '../ui.tsx'
 import { FONT_MONO } from '../theme.ts'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
-import { Button, NumberField, PageBlock, Row, Section, Select, Switch, TextField } from './controls.tsx'
+import { Button, NumberField, PageBlock, Row, Section, Select, TextField } from './controls.tsx'
+import { Switch } from '../kit/Switch.tsx'
 import { latestSettings, updateSettings, useSettings } from './store.ts'
 import { setAppearance, useAppearance } from './appearance.ts'
 import { useResource } from './resource.ts'
@@ -28,13 +29,13 @@ export function General() {
     <Section title="New threads">
       <Row title="Default agent" description="Used when you start a thread from a project."><Select label="Default agent" testId="settings-default-agent" value={s.default_provider} disabled={saving} onChange={(value) => void updateSettings({ default_provider: value as ProviderKind })} options={providers.map((p) => ({ value: p.kind, label: p.display_name, disabled: !p.available, mark: p.kind }))} /></Row>
       <Row title="Default permissions" description={PERMISSION_HINT[s.default_permission_mode]}><Select label="Default permissions" testId="settings-permissions" value={s.default_permission_mode} disabled={saving} onChange={(value) => void updateSettings({ default_permission_mode: value as PermissionMode })} options={Object.entries(PERMISSION_LABEL).map(([value, label]) => ({ value, label }))} /></Row>
-      <Row title="Use a worktree for new threads" description="Each thread gets its own branch and folder. Projects can override this."><Switch label="Use a worktree for new threads" testId="settings-worktrees" checked={s.worktrees_default} disabled={saving} onChange={(worktrees_default) => void updateSettings({ worktrees_default })} /></Row>
+      <Row title="Use a worktree for new threads" description="Each thread gets its own branch and folder. Projects can override this."><Switch aria-label="Use a worktree for new threads" testId="settings-worktrees" checked={s.worktrees_default} disabled={saving} onCheckedChange={(worktrees_default) => void updateSettings({ worktrees_default })} /></Row>
     </Section>
-    <Section title="Worktrees"><Row title="Remove eligible archived worktrees" description="Automatically remove clean, merged worktrees after archiving. Keeps branches and conversation history; continuing restores the folder."><Switch label="Remove eligible archived worktrees" testId="settings-cleanup" checked={s.automatic_worktree_cleanup ?? false} disabled={saving} onChange={(automatic_worktree_cleanup) => void updateSettings({ automatic_worktree_cleanup })} /></Row></Section>
+    <Section title="Worktrees"><Row title="Remove eligible archived worktrees" description="Automatically remove clean, merged worktrees after archiving. Keeps branches and conversation history; continuing restores the folder."><Switch aria-label="Remove eligible archived worktrees" testId="settings-cleanup" checked={s.automatic_worktree_cleanup ?? false} disabled={saving} onCheckedChange={(automatic_worktree_cleanup) => void updateSettings({ automatic_worktree_cleanup })} /></Row></Section>
     <Section title="Threads">
-      <Row title="Generate thread titles" description="Names the thread from its first message using the agent."><Switch label="Generate thread titles" testId="settings-titles" checked={s.generate_titles} disabled={saving} onChange={(generate_titles) => void updateSettings({ generate_titles })} /></Row>
-      <Row title="Tell agents about Kybern" description="Adds a short guide to new agent sessions: how to show images, link notes and tasks, and reach other threads."><Switch label="Tell agents about Kybern" checked={s.tell_agents_about_kybern ?? true} disabled={saving} onChange={(tell_agents_about_kybern) => void updateSettings({ tell_agents_about_kybern })} /></Row>
-      <Row title="Ask before closing while threads work" description="Agents keep going after the window closes. The prompt lists them and offers to stop them."><Switch testId="settings-close-confirmation" label="Ask before closing while threads work" checked={ask} onChange={value => { save('kybern.askBeforeClose', value); setAsk(value) }} /></Row>
+      <Row title="Generate thread titles" description="Names the thread from its first message using the agent."><Switch aria-label="Generate thread titles" testId="settings-titles" checked={s.generate_titles} disabled={saving} onCheckedChange={(generate_titles) => void updateSettings({ generate_titles })} /></Row>
+      <Row title="Tell agents about Kybern" description="Adds a short guide to new agent sessions: how to show images, link notes and tasks, and reach other threads."><Switch aria-label="Tell agents about Kybern" checked={s.tell_agents_about_kybern ?? true} disabled={saving} onCheckedChange={(tell_agents_about_kybern) => void updateSettings({ tell_agents_about_kybern })} /></Row>
+      <Row title="Ask before closing while threads work" description="Agents keep going after the window closes. The prompt lists them and offers to stop them."><Switch testId="settings-close-confirmation" aria-label="Ask before closing while threads work" checked={ask} onCheckedChange={value => { save('kybern.askBeforeClose', value); setAsk(value) }} /></Row>
     </Section>
     <Section title="Notes"><Row title="Global notes" description="Notes that belong to no project. Shared keeps one set on this Mac for every environment window. Switching never moves or deletes a note."><Select label="Global notes" testId="settings-global-notes" value={notesHome} onChange={(value) => setGlobalNotesHome(value as 'shared' | 'separate')} options={[{ value: 'shared', label: 'Shared across environments' }, { value: 'separate', label: 'Separate per environment' }]} /></Row></Section>
     <PreviewFolders />
@@ -71,9 +72,9 @@ export function Agents() {
   }
   return <>
     <Section title="Updates">
-      <Row title="Update harnesses automatically" description="Check daily on this machine. Install when the agent's turns and background work are finished."><Switch label="Update harnesses automatically" testId="settings-harness-updates" checked={s.auto_update_harnesses} disabled={saving} onChange={(auto_update_harnesses) => void updateSettings({ auto_update_harnesses })} /></Row>
+      <Row title="Update harnesses automatically" description="Check daily on this machine. Install when the agent's turns and background work are finished."><Switch aria-label="Update harnesses automatically" testId="settings-harness-updates" checked={s.auto_update_harnesses} disabled={saving} onCheckedChange={(auto_update_harnesses) => void updateSettings({ auto_update_harnesses })} /></Row>
       <Row title="" description="Uses each CLI's updater or its existing Homebrew package. Custom binaries and version-managed installations stay under your control." />
-      {!activeEnvironment().local && <Row title="Update the daemon automatically" description="Check the release feed daily on this machine. Install and restart when nothing is running."><Switch label="Update the daemon automatically" checked={s.auto_update_daemon} disabled={saving} onChange={(auto_update_daemon) => void updateSettings({ auto_update_daemon })} /></Row>}
+      {!activeEnvironment().local && <Row title="Update the daemon automatically" description="Check the release feed daily on this machine. Install and restart when nothing is running."><Switch aria-label="Update the daemon automatically" checked={s.auto_update_daemon} disabled={saving} onCheckedChange={(auto_update_daemon) => void updateSettings({ auto_update_daemon })} /></Row>}
       <DaemonUpdateRow />
     </Section>
     <OmpProfiles />
@@ -85,7 +86,7 @@ export function Agents() {
     <Section title={COPY.defaultsSection}>
       <Row title={COPY.autonomy} description={autonomyHint(effective.lead_autonomy)}><Select label={COPY.autonomy} value={effective.lead_autonomy} options={AUTONOMY_OPTIONS} disabled={saving} onChange={(v) => change({ lead_autonomy: v as OrchestrationSettings['lead_autonomy'] })} /></Row>
       <Row title={COPY.workspace} description="Where the Coordinator's agents edit when it doesn't choose. An own worktree keeps parallel work apart."><Select label={COPY.workspace} value={effective.lead_workspace} options={WORKSPACE_OPTIONS} disabled={saving} onChange={(v) => change({ lead_workspace: v as OrchestrationSettings['lead_workspace'] })} /></Row>
-      <Row title={COPY.push} description={COPY.pushDetail}><Switch label={COPY.push} checked={effective.lead_push_without_asking} disabled={saving} onChange={(lead_push_without_asking) => change({ lead_push_without_asking })} /></Row>
+      <Row title={COPY.push} description={COPY.pushDetail}><Switch aria-label={COPY.push} checked={effective.lead_push_without_asking} disabled={saving} onCheckedChange={(lead_push_without_asking) => change({ lead_push_without_asking })} /></Row>
       <Row title={COPY.models} description="When the Coordinator delegates without choosing a model. Each project can override these in its Project tab." />
       {COORDINATOR_ROLES.map(({ role, label }) => <RoleRow key={role} label={label} value={current.role_defaults?.[role]} onChange={(value) => void updateSettings({ orchestration: withGlobalRoleDefault(latestSettings()!.orchestration, role, value) })} />)}
     </Section>

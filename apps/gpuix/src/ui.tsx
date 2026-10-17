@@ -2,6 +2,7 @@
 // rows and controls with a 10px radius, 14px UI text, SF Pro for UI and
 // JetBrains Mono for code.
 import { spawnSync } from 'node:child_process'
+import './locale.ts'
 import { createContext, useContext, type ReactNode } from 'react'
 import type { StyleDesc } from '@gpuix/react'
 import { useGpuix } from '@gpuix/react'
@@ -168,7 +169,3 @@ export function clockDuration(ms: number): string {
   return rm ? `${h}h ${rm}m` : `${h}h`
 }
 
-export function clockTime(iso: string): string {
-  const d = new Date(iso)
-  return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`
-}

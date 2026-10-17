@@ -118,7 +118,7 @@ export const CodeHeader = memo(function CodeHeader({ part, expanded, wrap, onExp
 export const CodeChunk = memo(function CodeChunk({ text, language, wrap, first = true, last = true }: { text: string; language?: string; wrap: boolean; first?: boolean; last?: boolean }) {
   const t = useTheme()
   return <div testId="code-body" style={{ display: 'flex', flexDirection: 'column', paddingLeft: 9.6, paddingRight: 9.6, paddingTop: first ? 8 : 0, paddingBottom: last ? 8 : 0, backgroundColor: t.codeSurface, minWidth: 0, borderBottomLeftRadius: last ? CODE.radius : 0, borderBottomRightRadius: last ? CODE.radius : 0, overflow: 'hidden' }}>
-    <code softWrap={wrap} code={text.replace(/\n$/, '')} language={language} theme={cachedCodeTheme(t)} style={{ minWidth: 0, userSelect: 'text' }} />
+    <code softWrap={wrap} code={text.replace(/\n$/, '')} language={language} theme={cachedCodeTheme(t, language)} style={{ minWidth: 0, userSelect: 'text' }} />
   </div>
 })
 
