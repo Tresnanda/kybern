@@ -63,3 +63,13 @@ edit("renderer.rs", "    pub fn zoom_window(&self) -> Result<()> {", '''    pub 
 
     #[napi]
     pub fn zoom_window(&self) -> Result<()> {''')
+
+# Title-bar drag regions skip presses on controls, like Tauri's `deep` drag
+# regions (window_drag.rs `is_control`): presses on clickable, interactive-role
+# or focusable children that are not drag regions themselves.
+edit("renderer.rs", "        el = crate::window_drag::apply(el);\n    }\n\n    // Wire up events.\n", "        el = crate::window_drag::apply(el);\n    } else if crate::window_drag::is_control(&element.events, &element.custom_props) {\n        el = crate::window_drag::control(el);\n    }\n\n    // Wire up events.\n")
+
+# A transparent title bar is drawn by the app, which moves the window itself
+# (window_drag.rs): AppKit must not also drag from its 28pt titlebar band, or
+# presses on title-bar controls move the window there.
+edit("renderer.rs", "            appears_transparent: titlebar_transparent,\n            traffic_light_position,\n        }),\n", "            appears_transparent: titlebar_transparent,\n            traffic_light_position,\n        }),\n        app_owns_titlebar_drag: titlebar_transparent,\n")
