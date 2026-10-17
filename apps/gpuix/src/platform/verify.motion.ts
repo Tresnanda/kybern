@@ -8,18 +8,18 @@
 //
 //   KYBERN_DATA_DIR=<scratch> bun src/platform/verify.motion.ts <out.json> [reduced]
 import { spawn } from 'node:child_process'
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { connectStdio } from '@gpuix/react/automation'
 import { assertScratchDataDir } from './verify.lib.ts'
 
 const [out = '/tmp/update-motion.json', motion] = process.argv.slice(2)
-const client = path.join(assertScratchDataDir(), 'client-motion')
-mkdirSync(client, { recursive: true })
+// A fresh client dir per run: the announcement shows once per version.
+const client = mkdtempSync(path.join(assertScratchDataDir(), 'client-motion-'))
 const trace = `${out}.trace`
 writeFileSync(trace, '')
 const child = spawn('bun', [path.join(import.meta.dir, 'update.fixture.ts')], { stdio: ['pipe', 'pipe', 'pipe'], env: {
-  ...process.env, GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: 'dark', KYBERN_FRAME_TIMES: '1', KYBERN_UPDATE_FIRST_CHECK_MS: '6000',
+  ...process.env, GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: 'dark', KYBERN_FRAME_TIMES: '1', KYBERN_UPDATE_FIRST_CHECK_MS: process.env.FIRST_CHECK ?? '6000',
   KYBERN_REDUCED_MOTION: motion === 'reduced' ? '1' : '0', KYBERN_CLIENT_CONFIG_DIR: client,
 } })
 child.stderr.on('data', chunk => appendFileSync(trace, chunk))
@@ -49,6 +49,9 @@ function burst(times: number[]) {
 const result: Record<string, unknown> = { fullRate: process.env.KYBERN_FULL_RATE ?? 'unset', reducedMotion: motion === 'reduced', kind: 'scene submissions, not compositor presentations; first contiguous burst after each step' }
 try {
   await app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })
+  // Tasks has no composer: on a scratch daemon without provider binaries the
+  // composer's model spinner never settles and would fill every burst.
+  await app.getByTestId('rail-tasks').click()
   await Bun.sleep(2000)
   mark('enter')
   await app.getByTestId('update-announcement').waitFor({ timeoutMs: 20_000 })

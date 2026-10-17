@@ -103,11 +103,12 @@ function UpdateAnnouncement({ version, notes, leaving }: { version: string; note
   const release = useMemo(() => releasePresentation(version, notes), [version, notes])
   const [motion, setMotion] = useState(() => ({ generation: ++generation, leaving: false }))
   if (leaving !== motion.leaving) setMotion({ generation: ++generation, leaving })
-  const rise = REDUCED_MOTION ? 0 : 16
   const animation = motion.leaving
-    ? { initial: { opacity: 1, top: 0 }, animate: { opacity: 0, top: rise }, transition: { duration: REDUCED_MOTION ? 0 : 0.25, ease: TOAST_EASE } }
-    : { initial: { opacity: 0, top: rise }, animate: { opacity: 1, top: 0 }, transition: { duration: REDUCED_MOTION ? 0 : 0.35, ease: TOAST_EASE } }
-  return <anchored {...({ motion: { generation: motion.generation, isExit: motion.leaving, ...animation } } as object)}
+    ? { initial: { opacity: 1, top: 0 }, animate: { opacity: 0, top: 16 }, transition: { duration: 0.25, ease: TOAST_EASE } }
+    : { initial: { opacity: 0, top: 16 }, animate: { opacity: 1, top: 0 }, transition: { duration: 0.35, ease: TOAST_EASE } }
+  // Reduced motion shows and removes the card at once: a zero-length motion
+  // would hold its initial (transparent) state.
+  return <anchored {...(REDUCED_MOTION ? {} : { motion: { generation: motion.generation, isExit: motion.leaving, ...animation } } as object)}
     position={{ x: size.width - 16, y: size.height - 16 }} anchor="bottomRight" fit="snap" snapMargin={16} deferred priority={5} occlude style={{ borderRadius: 24 }}>
     <div testId="update-announcement" aria-label="Kybern update available" style={{ display: 'flex', flexDirection: 'column', position: 'relative', width: Math.min(352, size.width - 32), borderRadius: 24, borderWidth: 1, borderColor: t.border, backgroundColor: t.popover, boxShadow: surfaceShadow(t), overflow: 'hidden' }}>
       <ReleaseArtwork compact />

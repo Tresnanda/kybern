@@ -15,6 +15,7 @@ const next = archive(fakeBundle(path.join(root, 'next'), '0.9.2'), path.join(roo
 const feed = await serveFeed({ version: '0.9.2', archive: next, signature: key.signFile(next, 'gpuix.app.tar.gz') })
 Object.assign(process.env, {
   KYBERN_UPDATE_FEED: feed.url, KYBERN_UPDATE_PUBKEY: key.pubkey, KYBERN_UPDATE_BUNDLE: fakeBundle(path.join(root, 'installed'), '0.9.1'),
-  KYBERN_UPDATE_FIRST_CHECK_MS: '200', KYBERN_UPDATE_NO_RELAUNCH: '1', KYBERN_GPUIX_VERSION: '0.9.1',
+  KYBERN_UPDATE_NO_RELAUNCH: '1', KYBERN_GPUIX_VERSION: '0.9.1',
 })
+process.env.KYBERN_UPDATE_FIRST_CHECK_MS ??= '200'
 await import('../main.tsx')
