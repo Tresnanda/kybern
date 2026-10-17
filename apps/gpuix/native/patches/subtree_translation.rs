@@ -7,6 +7,11 @@ thread_local! {
     static TIME: std::cell::Cell<Option<web_time::Instant>> = const {std::cell::Cell::new(None)};
     static SCHEDULED: std::cell::Cell<bool> = const {std::cell::Cell::new(false)};
 }
+pub(crate) fn forget(id: u64) {
+    STATES.with(|states| {
+        states.borrow_mut().remove(&id);
+    });
+}
 pub(crate) fn valid(value: &serde_json::Value) -> bool {
     if value.is_null() {
         return true;
