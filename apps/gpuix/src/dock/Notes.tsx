@@ -30,6 +30,7 @@ export function NotesPane({ thread }: { thread: Thread }) {
   const loaded = useNotes(s => s.loaded)
   const error = useNotes(s => s.error)
   const project = isFreeChatProject(thread.project_id) ? null : thread.project_id
+  const projectName = useApp(s => s.projects.find(p => p.id === thread.project_id)?.name)
   const own = notes.find(n => n.thread_id === thread.id && !n.deleted_at)
   const scope = (n: NoteSummary) => project ? n.scope !== 'global' && n.project_id === project : n.scope === 'global'
   const live = notes.filter(n => !n.deleted_at && !isEmptyThreadNote(n) && n.id !== own?.id)
@@ -53,13 +54,13 @@ export function NotesPane({ thread }: { thread: Thread }) {
     <DockSection label="This thread">{own && !isEmptyThreadNote(own) && <IconButton icon={ARROW_UP_RIGHT} size={20} glyph={14} label="Open in Notes" tooltip="Open in Notes" tooltipSide="top" onClick={() => openNote(own.id)} />}</DockSection>
     <div style={{ paddingLeft: 8, paddingRight: 8, paddingBottom: 16 }}><ThreadNote key={thread.id} threadId={thread.id} noteId={own?.id} /></div>
     <ErrorLine error={error} retry={() => void refreshNotes()} />
-    {!loaded ? <Section label="Loading notes…" /> : entries.length ? <TaskWindow entries={entries} testId="dock-notes-list" /> : <Section label="Other notes for this project appear here." />}
+    {!loaded ? <Section label="Loading notes…" /> : entries.length ? <TaskWindow entries={entries} testId="dock-notes-list" /> : <Section label={`Other notes for ${project ? projectName ?? 'this project' : 'Global'} appear here.`} />}
   </div>
 }
 const NoteRow = memo(function NoteRow({ note }: { note: NoteSummary }) {
   const t = useTheme()
   return <div testId={`dock-note-${note.id}`} role="button" tabIndex={0} onClick={() => openNote(note.id)} onKeyDown={e => { if (e.key === 'enter') openNote(note.id) }} style={{ display: 'flex', flexDirection: 'column', gap: 2, height: 54, paddingTop: 6, paddingBottom: 6, paddingLeft: 8, paddingRight: 8, marginLeft: 6, marginRight: 6, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.hover } }}>
-    <div style={{ display: 'flex', gap: 8, pointerEvents: 'none' }}><Label color={t.text} size={14} lineHeight={21} truncate style={{ flexGrow: 1 }}>{noteTitle(note)}</Label>{note.checklist.total > 0 && <Ring done={note.checklist.done} total={note.checklist.total} color={muted(t, 0.55)} />}<Label color={muted(t, 0.55)} size={13}>{relativeTime(note.updated_at, Date.now())}</Label></div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'none' }}><Label color={t.text} size={14} lineHeight={21} truncate style={{ flexGrow: 1 }}>{noteTitle(note)}</Label>{note.checklist.total > 0 && <Ring done={note.checklist.done} total={note.checklist.total} color={muted(t, 0.55)} />}<Label color={muted(t, 0.55)} size={13}>{relativeTime(note.updated_at, Date.now())}</Label></div>
     <Label color={muted(t, 0.6)} size={13} lineHeight={19.5} truncate style={{ pointerEvents: 'none' }}>{note.preview.replace(/\s+/g, ' ').trim()}</Label>
   </div>
 })
