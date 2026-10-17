@@ -23,7 +23,7 @@
 // typed prefix jumps to a match, Enter/Space pick, Escape and Tab close. Focus returns to the trigger.
 // Escape belongs to the innermost overlay (`useEscapeLayer`): a select inside a sheet closes first.
 import { useGpuix, type PublicInstance } from '@gpuix/react'
-import { useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { muted, surfaceShadow } from '../composer/Menu.tsx'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
@@ -107,6 +107,9 @@ export function Select({
   const pressedWhileOpen = useRef(false)
   const dismissedByOutside = useRef(false)
   const typed = useRef({ text: '', at: 0 })
+  // The scrolling listbox, and whether the highlight last moved by keyboard or by opening (then it is scrolled into view).
+  const listRef = useRef<PublicInstance | null>(null)
+  const reveal = useRef(false)
   const escape = useEscapeLayer(open)
   useSettingsModal(open)
 
@@ -124,6 +127,7 @@ export function Select({
       setAt(b ? { x: b.x, y: b.y, w: b.width } : null)
       // Base UI highlights the selected option when the popup opens.
       setActive(selected && !selected.disabled ? selected.value : null)
+      reveal.current = true
     }
     setOpenState(next)
     if (!next) focusTrigger()
@@ -138,6 +142,7 @@ export function Select({
     const i = enabled.findIndex((o) => o.value === active)
     const n = to === 'first' ? 0 : to === 'last' ? enabled.length - 1 : i < 0 ? (to === 'next' ? 0 : enabled.length - 1) : Math.min(enabled.length - 1, Math.max(0, i + (to === 'next' ? 1 : -1)))
     setActive(enabled[n]!.value)
+    reveal.current = true
   }
   /** Type-ahead: keys within 500 ms extend the prefix; returns the match after `from`. */
   const typeahead = (char: string, from: string | null) => {
@@ -162,9 +167,23 @@ export function Select({
     }
     return h
   }
-  const popupHeight = rowsHeight() + s.pad * 2 + 2
-  const anchorValue = (selected && !selected.disabled ? selected : enabled[0])?.value
   const windowH = renderer?.getWindowSize?.()?.height ?? 820
+  const maxHeight = Math.min(448, windowH - EDGE * 2)
+  // A long list scrolls inside `maxHeight`; place it by its visible height, not its content height.
+  const popupHeight = Math.min(maxHeight, rowsHeight() + s.pad * 2 + 2)
+  const anchorValue = (selected && !selected.disabled ? selected : enabled[0])?.value
+  // A keyboard move (or opening) past the visible rows scrolls the highlighted row into view; pointer moves do not.
+  useLayoutEffect(() => {
+    const list = listRef.current
+    if (!open || !active || !reveal.current || !list) return
+    reveal.current = false
+    const scroll = renderer?.getScrollOffset?.(list.id)
+    if (!scroll) return
+    const top = -(scroll[1] ?? 0), viewport = popupHeight - 2
+    const rowTop = s.pad + rowsHeight(active), rowBottom = rowTop + s.row
+    const next = rowTop < top + s.pad ? rowTop - s.pad : rowBottom > top + viewport - s.pad ? rowBottom - viewport + s.pad : top
+    if (next !== top) renderer?.scrollTo?.(list.id, 0, -Math.max(0, next))
+  }, [open, active, renderer])
 
   const triggerText = selected?.label ?? placeholder ?? ''
   const triggerColor = !selected ? muted(t, 1) : variant === 'ghost' ? t.textSecondary : t.text
@@ -239,6 +258,7 @@ export function Select({
         >
           <div
             testId={testId ? `${testId}-popup` : undefined}
+            ref={(el) => { listRef.current = el }}
             role="listbox"
             tabIndex={0}
             autoFocus
@@ -258,14 +278,14 @@ export function Select({
               else {
                 const c = printable(e)
                 const hit = c ? typeahead(c, active) : undefined
-                if (hit) setActive(hit.value)
+                if (hit) { setActive(hit.value); reveal.current = true }
               }
             }}
             style={{
               display: 'flex',
               flexDirection: 'column',
               minWidth: aligned && at ? at.w + 22 : (at?.w ?? (width ?? 144)),
-              maxHeight: Math.min(448, windowH - EDGE * 2),
+              maxHeight,
               padding: s.pad,
               borderRadius: s.radius,
               borderWidth: 1,
