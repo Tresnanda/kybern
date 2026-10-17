@@ -1,18 +1,23 @@
 import { connectStdio } from '@gpuix/react/automation'
 import { spawn } from 'node:child_process'
 import { realpathSync } from 'node:fs'
+import { homedir } from 'node:os'
+import path from 'node:path'
 
 /** A GPUIX launch must never resolve the user's real `~/.kybern`: startup restarts a
  * daemon whose binary looks newer, which killed every running agent once. Aborts
- * unless the data dir (or the daemon URL) is explicitly a scratch one. */
+ * unless the data dir is explicitly a scratch one outside `~/.kybern`, and refuses a
+ * `KYBERN_URL` inherited from the calling shell (an agent running inside Kybern), which
+ * may be the user's own daemon. Callers clear it with `KYBERN_URL: ''`. */
 export function assertScratchEnv(env: Record<string, string | undefined>) {
   const merged = { ...process.env, ...env }
+  const canonical = (dir: string) => { try { return realpathSync(dir) } catch { return path.resolve(dir) } }
+  const real = canonical(path.join(homedir(), '.kybern'))
+  if (process.env.KYBERN_URL && !('KYBERN_URL' in env)) throw new Error('Refusing to launch GPUIX with a KYBERN_URL inherited from this shell: it may be the real daemon. Pass the scratch endpoint explicitly, or KYBERN_URL: \'\' to clear it.')
   const dir = merged.KYBERN_DATA_DIR
-  const real = `${process.env.HOME}/.kybern`
-  const real_ = (path: string) => { try { return realpathSync(path) } catch { return path } }
-  const resolved = dir ? real_(dir.replace(/\/+$/, '') || '/') : undefined
-  if (resolved && (resolved === real || resolved === real_(real))) throw new Error(`Refusing to launch GPUIX against ${real}; set KYBERN_DATA_DIR to a scratch directory.`)
-  if (!dir && !merged.KYBERN_URL) throw new Error('Refusing to launch GPUIX without KYBERN_DATA_DIR (it would resolve ~/.kybern); set it, or KYBERN_URL and KYBERN_TOKEN for a scratch daemon.')
+  if (!dir) throw new Error('Refusing to launch GPUIX without KYBERN_DATA_DIR: it would resolve the real ~/.kybern daemon. Point it at a scratch directory.')
+  const resolved = canonical(dir)
+  if (resolved === real || resolved.startsWith(real + path.sep)) throw new Error(`Refusing to launch GPUIX against the real data directory ${real}. Use a scratch directory.`)
   if (!merged.KYBERN_CLIENT_CONFIG_DIR) throw new Error('Refusing to launch GPUIX without KYBERN_CLIENT_CONFIG_DIR; it would change the saved environments.')
 }
 
