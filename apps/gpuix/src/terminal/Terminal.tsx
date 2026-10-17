@@ -29,6 +29,7 @@ const FONT = 'JetBrains Mono'
 const FONT_ITALIC = 'JetBrains Mono Italic', WEIGHT = 300, WEIGHT_BOLD = 500
 const CELL = 7, ROW = 21.5, FONT_SIZE = 12 * CELL / 7.2
 // Desktop pane padding plus `.xterm` padding (see fit.ts): text starts 24px from the dock edge and 13.6px below the tab row.
+// The grid is exactly rows × ROW from the top, like xterm's viewport; the remainder stays below it.
 const PAD_X = PANE_X + XTERM_X, PAD_TOP = 13.6, PAD_BOTTOM = PANE_BOTTOM + XTERM_Y
 const BLINK_MS = 600
 const OUTPUT_MS = 33
@@ -362,7 +363,7 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
         if (text !== null) { follow.current = true; setSelection(null); setRestart(n => n + 1); send(text) }
       }}
       style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, paddingLeft: PAD_X, paddingRight: PAD_X, paddingTop: PAD_TOP, paddingBottom: PAD_BOTTOM, backgroundColor: t.surface }}>
-      {model.mouseTracking ? <div testId="terminal-mouse-screen" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, overflow: 'hidden' }}>{lines.map(renderLine)}</div> : <virtual-list ref={list} testId="terminal-lines" itemCount={lines.length} windowStart={start} estimatedItemHeight={ROW} overdraw={ROW * 4} onVisibleRange={e => { const a = e.startIndex ?? 0, b = e.endIndex ?? a + 40; setRange(old => old.start === Math.max(0, a - 4) && old.end === Math.min(lines.length, b + 4) ? old : { start: Math.max(0, a - 4), end: Math.min(lines.length, b + 4) }); follow.current = b >= lines.length - 1 }} style={{ flexGrow: 1, minHeight: 0, width: '100%' }}>
+      {model.mouseTracking ? <div testId="terminal-mouse-screen" style={{ display: 'flex', flexDirection: 'column', height: model.rows * ROW, flexShrink: 1, minHeight: 0, overflow: 'hidden' }}>{lines.map(renderLine)}</div> : <virtual-list ref={list} testId="terminal-lines" itemCount={lines.length} windowStart={start} estimatedItemHeight={ROW} overdraw={ROW * 4} onVisibleRange={e => { const a = e.startIndex ?? 0, b = e.endIndex ?? a + 40; setRange(old => old.start === Math.max(0, a - 4) && old.end === Math.min(lines.length, b + 4) ? old : { start: Math.max(0, a - 4), end: Math.min(lines.length, b + 4) }); follow.current = b >= lines.length - 1 }} style={{ height: model.rows * ROW, flexShrink: 1, minHeight: 0, width: '100%' }}>
         {lines.slice(start, end).map((line, i) => renderLine(line, start + i))}
       </virtual-list>}
     </div>
