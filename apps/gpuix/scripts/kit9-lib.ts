@@ -83,3 +83,19 @@ export function appPid(): number {
   const pids = r.stdout.toString().trim().split('\n').filter(Boolean).map(Number)
   return pids[pids.length - 1]!
 }
+
+/** The GPUIX kit gallery window for one section (`src/kit/gallery`), for motion strips and interaction checks. */
+export async function startGallery(section: string, opts: StartOptions = {}) {
+  const env: Record<string, string> = {
+    KIT_SECTION: section,
+    GPUIX_BACKGROUND: '1',
+    KYBERN_APPEARANCE: opts.light ? 'light' : 'dark',
+    KYBERN_OPAQUE: '1',
+    KYBERN_REDUCED_MOTION: opts.reduced ? '1' : '0',
+    KYBERN_CLIENT_CONFIG_DIR: CLIENT_DIR,
+    ...opts.env,
+  }
+  const f = await launchFixture(path.join(import.meta.dir, opts.visible ? 'kit9-gallery-visible.ts' : 'kit9-gallery-entry.tsx'), { KYBERN_FRAME_TIMES: '1', ...env })
+  await f.app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })
+  return Object.assign(f.app, { pid: f.pid, frameTimes: f.frameTimes, closeAll: f.close })
+}
