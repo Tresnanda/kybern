@@ -69,7 +69,8 @@ export function EnvButton({ children, onClick, disabled = false, busy = false, t
   const xs = size === 'xs'
   const fill = variant === 'primary' ? t.buttonPrimary : variant === 'secondary' ? t.buttonSecondary : 'transparent'
   const hover = variant === 'primary' ? t.buttonPrimary : variant === 'outline' ? t.buttonTertiaryHover : t.buttonSecondaryHover
-  const color = variant === 'primary' ? t.buttonPrimaryText : variant === 'ghost' ? t.textSecondary : t.text
+  // The app theme sets --secondary-foreground to the muted ink, so secondary buttons read dimmer than outline ones.
+  const color = variant === 'primary' ? t.buttonPrimaryText : variant === 'ghost' || variant === 'secondary' ? t.textSecondary : t.text
   const off = disabled || busy
   const loader = variant === 'primary' ? (t.variant === 'dark' ? [17, 17, 17] as const : [250, 250, 250] as const) : undefined
   return <div testId={testId} role="button" aria-label={children} tabIndex={off ? -1 : 0} onClick={() => { if (!off) onClick() }} onKeyDown={(e) => { if (!off && (e.key === 'enter' || e.key === 'space')) onClick() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: xs ? 4 : 8, height: xs ? 24 : 32, width: block ? '100%' : undefined, paddingLeft: xs ? 7 : 11, paddingRight: xs ? 7 : 11, borderRadius: xs ? 6 : 10, borderWidth: 1, borderColor: variant === 'outline' ? t.border : 'transparent', backgroundColor: fill, opacity: disabled ? 0.64 : 1, cursor: off ? 'default' : 'pointer', flexShrink: 0, hover: { backgroundColor: hover }, active: { backgroundColor: variant === 'primary' ? t.buttonPrimary : t.buttonSecondaryHover } }}>
