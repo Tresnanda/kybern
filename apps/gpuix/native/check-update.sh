@@ -21,6 +21,7 @@ geometry)
 content)
   bun native/markdown-check.ts
   bun native/markdown-document-check.ts
+  bun native/markdown-document-cost-check.ts
   bun native/diff-check.ts
   bun native/surface-check.ts
   bun native/link-check.ts

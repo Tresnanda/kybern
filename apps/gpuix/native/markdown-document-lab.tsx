@@ -29,4 +29,5 @@ function Check() {
  <text testId="result" style={{color:t.text}}>{result}</text>
  </div>
 }
-render(process.env.MD_CHECK==='1'?<Check/>:<div testId="ready" style={{width:'100%',height:'100%',padding:24,backgroundColor:t.surface,overflowY:'scroll'}}><Markdown testId="sample" source={supplied ?? (large ? Array.from({length:200},()=>sample).join('\n\n')+(process.env.MD_LARGE_CHECK==='1'?'\n\nEND `sentinel` reachable.':'') : sample)} theme={theme} style={{color:t.text,userSelect:'text'}} /></div>,{title:'Markdown parity',width:728,height:Number(process.env.MD_HEIGHT??800),focus:false})
+function Sample(){const [narrow,setNarrow]=useState(false);return <div testId="ready" onKeyDown={e=>{if(e.key==='r')setNarrow(!narrow)}} style={{width:narrow?'75%':'100%',height:'100%',padding:24,backgroundColor:t.surface,overflowY:'scroll'}}><Markdown testId="sample" source={supplied ?? (large ? Array.from({length:200},()=>sample).join('\n\n')+(process.env.MD_LARGE_CHECK==='1'?'\n\nEND `sentinel` reachable.':'') : sample)} theme={theme} style={{color:t.text,userSelect:'text'}} /></div>}
+render(process.env.MD_CHECK==='1'?<Check/>:<Sample/>,{title:'Markdown parity',width:728,height:Number(process.env.MD_HEIGHT??800),focus:false})

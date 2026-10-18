@@ -85,3 +85,9 @@ and intersecting visible text work follows
 [Zed editor element.rs 8690–8712](https://github.com/zed-industries/zed/blob/56934ec0560bce8929025497411de7f5322fb6ca/crates/editor/src/element.rs#L8690-L8712).
 The read-only source clones used for implementation are listed in
 `perf/zeron-zed-techniques.md`.
+
+Intrinsic size probes reuse the last ready measured width instead of invalidating
+all row geometry at a temporary 320 px width. Definite width/scale changes and
+source changes still remeasure. The native cost gate scrolls 1,500-row tables and
+code fences before and after resizing and requires fewer than 1,000 layout calls
+per warm frame; this catches accidental work proportional to container rows.

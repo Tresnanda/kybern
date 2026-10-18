@@ -112,7 +112,11 @@ impl Element for Flow {
         let id = window.request_measured_layout(style, move |known, available, window, cx| {
             let width = f32::from(known.width.unwrap_or(match available.width {
                 AvailableSpace::Definite(w) => w,
-                _ => px(320.0),
+                // Horizontal container layout asks for intrinsic size before
+                // resolving its real width. Do not discard exact geometry for
+                // that unconstrained probe on every wheel frame. A definite
+                // width (including a real resize) still invalidates below.
+                _ => px({ let geo = geometry.borrow(); if geo.ready { geo.width } else { 320.0 } }),
             }))
             .max(1.0);
             let scale = window.scale_factor();
