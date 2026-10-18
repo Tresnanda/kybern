@@ -9,7 +9,7 @@ const state=await import('../../src/state.ts')
 const nav=await import('../../src/nav/store.ts')
 const dock=await import('../../src/dock/store.ts')
 const {showFileInExplorer}=await import('../../src/dock/explorerSelection.ts')
-const {applyEvent}=await import('../../../../packages/kybern-client/src/transcript.ts')
+const {applyEvent,seedFromGet}=await import('../../../../packages/kybern-client/src/transcript.ts')
 let streamTimer:ReturnType<typeof setInterval>|undefined
 const {dlopen,FFIType}=await import('bun:ffi')
 const defaultWheel=path.join(process.env.KYBERN_DATA_DIR!,'bench-wheel.dylib')
@@ -57,6 +57,18 @@ const server=Bun.serve({idleTimeout:255,port:0,hostname:'127.0.0.1',async fetch(
   return Response.json({sent,accepted,productionMs:performance.now()-start,drainMs:0,maxOutstanding:0,acks:[],input:'120 Hz scheduled real AppKit NSEvent scrollWheel; precise deltas + native contact and momentum phases; direct own-window dispatch'})
  }
  if(body.action==='open'){nav.setNav({page:'home',keyboardNav:true});await state.selectThread(body.thread!)}
+ if(body.action==='load-history'){
+  const id=state.getState().selectedId!
+  const client=state.getClient()!,page=await client.call('threads.get',{thread_id:id,transcript_limit:500,include_tool_output:false})
+  let transcript=page.transcript,cursor=page.next_before_seq
+  for(let pages=0;cursor!=null;pages++){
+   if(pages>=64)throw Error('Benchmark full-history bound exceeded')
+   const earlier=await client.call('threads.get',{thread_id:id,transcript_limit:500,include_tool_output:false,before_seq:cursor,through_seq:page.thread.last_seq})
+   transcript=[...earlier.transcript,...transcript];cursor=earlier.next_before_seq
+  }
+  state.setThreadOpen(id,seedFromGet({...page,transcript,next_before_seq:null}))
+  if(state.getState().open.blocks.filter(b=>b.kind==='user').length!==1000)throw Error('Expected exactly 1,000 historical turns')
+ }
  if(body.action==='idle'){state.set({threads:state.getState().threads.map(t=>t.status==='running'?{...t,status:'idle'}:t)})}
  if(body.action==='home'){nav.setNav({page:'home',keyboardNav:true});await state.selectThread(null)}
  if(body.action==='explorer'){dock.setDock(state.getState().selectedId,{open:true,tabs:['explorer'],tab:'explorer',width:538,instant:true});if(body.file)showFileInExplorer(state.getState().selectedId!,state.getState().open.thread!.project_id!,body.file)}
@@ -64,13 +76,16 @@ const server=Bun.serve({idleTimeout:255,port:0,hostname:'127.0.0.1',async fetch(
  if(body.action==='stream'){
   clearInterval(streamTimer)
   const id=state.getState().selectedId!,turn='bench-stream-turn',message='bench-stream-answer',started=performance.now()
-  const push=(payload:Record<string,unknown>)=>state.setThreadOpen(id,applyEvent(state.getState().open,{thread_id:id,turn_id:turn,seq:++sequence,at:'2026-10-17T00:00:00Z',...payload} as never))
+  const push=(payload:Record<string,unknown>)=>state.setThreadOpen(id,applyEvent(state.getState().open,{thread_id:id,turn_id:turn,seq:++sequence,at:'2026-10-17T00:00:00Z',...payload} as never),payload.kind==='assistant_text_delta')
   push({kind:'turn_started',message_id:'bench-stream-user',message:{parts:[{type:'text',text:'Explain bounded rendering during a long answer.'}]}})
   let n=0;streamDeltas=0
   streamTimer=setInterval(()=>{
    if(performance.now()-started>(body.durationMs??60000)){clearInterval(streamTimer);push({kind:'assistant_message_completed',message_id:message,origin:{kind:'root'},text:Array.from({length:n},(_,i)=>`Streaming paragraph ${i}: preserve **formatted output** and Unicode 🌿.\n\n`).join(''),thinking:null});push({kind:'turn_completed',stop_reason:'completed',usage:{input_tokens:100,output_tokens:100},duration_ms:Math.round(performance.now()-started),terminal_message_id:message});return}
-   streamDeltas=n+1
-   push({kind:'assistant_text_delta',message_id:message,origin:{kind:'root'},delta:`Streaming paragraph ${n++}: preserve **formatted output** and Unicode 🌿.\n\n`})
+   const due=process.env.KYBERN_BENCH_STREAM_CATCHUP==='1'?Math.floor((performance.now()-started)/40):n+1
+   while(n<due){
+    push({kind:'assistant_text_delta',message_id:message,origin:{kind:'root'},delta:`Streaming paragraph ${n++}: preserve **formatted output** and Unicode 🌿.\n\n`})
+   }
+   streamDeltas=n
   },40)
  }
  const s=state.getState();return Response.json({streamDeltas,selected:s.selectedId,loaded:s.open.loaded,blocks:s.open.blocks.length,nextBeforeSeq:s.open.nextBeforeSeq,firstSeq:s.open.blocks[0]?.seq,firstPromptNumber:(()=>{const numbers=s.open.blocks.flatMap(b=>{const text=b.kind==='user'?b.message.parts.flatMap(p=>p.type==='text'?[p.text]:[]).join(''):b.kind==='assistant'?b.text:'';return [...text.matchAll(/(?:Bench prompt |BENCH_RESULT_)(\d+)/g)].map(m=>Number(m[1]))});return numbers.length?Math.min(...numbers):0})(),listsLoaded:s.listsLoaded,now:performance.now()})
