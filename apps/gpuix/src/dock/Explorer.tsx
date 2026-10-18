@@ -19,15 +19,19 @@ import { Label, useTheme } from '../ui.tsx'
 import { takeExplorerSelection, useExplorerSelection } from './explorerSelection.ts'
 import { Action, DockEmpty, ErrorLine } from './parts.tsx'
 import { MotionFileTreeRows, type TreeRow } from './MotionFileTree.tsx'
-import { TREE_ROW_HEIGHT, TREE_WINDOW_THRESHOLD } from './fileTreeMotion.ts'
+import { TREE_ROW_HEIGHT, TREE_WINDOW_THRESHOLD, treeWindowRange } from './fileTreeMotion.ts'
 
 type Listing = FileEntry[] | 'loading' | 'error'
+// Reuse the native row geometry/input path used by the PR viewports. Paint,
+// hit testing and selection are rebuilt at the current scroll offset.
+const EXPLORER_SCROLL_LAYOUT = { cacheLayout: true, cache: 'fill' as const }
 export function Explorer({ projectId, width }: { projectId: string; width: number }) {
   const t = useTheme()
   const { renderer } = useGpuix()
   const tree = useRef<PublicInstance | null>(null)
   const treeList = useRef<PublicInstance | null>(null)
   const [focus, setFocus] = useState(0)
+  const [treeWindow, setTreeWindow] = useState({ start: 0, end: 128 })
   const typeAhead = useRef({ value: '', at: 0 })
   const [listings, setListings] = useState<Record<string, Listing>>({})
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -36,6 +40,7 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
   const selectionRequest = useExplorerSelection(), threadId = useApp(s => s.selectedId)
   const reveal = useRef<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
+  const closeFile = useCallback(() => setSelected(null), [])
   const [error, setError] = useState<string | null>(null)
   const requested = useRef(new Set<string>())
   const live = useRef(true)
@@ -85,16 +90,17 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
   }, [listings, expanded, results])
   const virtualTree = rows.length > TREE_WINDOW_THRESHOLD
   const TreeHost = virtualTree ? 'virtual-list' : 'div'
+  useEffect(() => { setTreeWindow({ start: 0, end: 128 }) }, [virtualTree, results])
   const scrollToRow = useCallback((index: number) => {
     const id = treeList.current?.id
     if (id == null) return
-    if (virtualTree) { renderer?.scrollToItem?.(id, index); return }
+    if (virtualTree) { setTreeWindow(previous => treeWindowRange(rows.length, index, index + 1, previous)); renderer?.scrollToItem?.(id, index); return }
     const bounds = renderer?.getElementBounds?.(id), offset = renderer?.getScrollOffset?.(id)
     if (!bounds) return
     const top = -(offset?.[1] ?? 0), target = index * TREE_ROW_HEIGHT
     if (target < top) renderer?.scrollTo?.(id, 0, -target)
     else if (target + TREE_ROW_HEIGHT > top + bounds.height) renderer?.scrollTo?.(id, 0, -(target + TREE_ROW_HEIGHT - bounds.height))
-  }, [renderer, virtualTree])
+  }, [renderer, virtualTree, rows.length])
   useEffect(() => {
     if (!reveal.current) return
     const index = rows.findIndex(row => row.path === reveal.current && row.kind === 'file')
@@ -109,6 +115,10 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
     } else if (row.kind === 'error') { setError(null); load(row.path, true) }
     else if (row.kind !== 'loading' && row.kind !== 'empty') setSelected(row.path)
   }, [load])
+  const activateRow = useCallback((row: TreeRow, index: number) => {
+    setFocus(index); activate(row)
+    if (tree.current) renderer?.focusElement?.(tree.current.id)
+  }, [activate, renderer])
   // `Explorer.tsx`: the file tree column resizes 176-520 (240 by default) and is saved.
   const column = useResize({ initial: 240, min: 176, max: 520, side: 'left', storageKey: 'kybern.explorer.width' })
   return <div style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0 }}>
@@ -139,19 +149,21 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
         setFocus(next)
         scrollToRow(next)
       }} style={{ display: 'flex', width: '100%', flexGrow: 1, minHeight: 0 }}>
-      <TreeHost ref={treeList} testId="dock-file-tree" style={{ display: 'flex', flexDirection: 'column', width: '100%', flexGrow: 1, minHeight: 0, overflowY: virtualTree ? undefined : 'scroll', overflowX: 'hidden' }}>
-        <MotionFileTreeRows rows={rows} open={expanded} selected={selected} focus={focus} virtual={virtualTree} search={results !== null} activate={(row, index) => { setFocus(index); activate(row); if (tree.current) renderer?.focusElement?.(tree.current.id) }} />
+      <TreeHost ref={treeList} testId="dock-file-tree" {...(virtualTree ? { ...EXPLORER_SCROLL_LAYOUT, estimatedItemHeight: TREE_ROW_HEIGHT, overdraw: 0, onVisibleRange: (event: { startIndex?: number; endIndex?: number }) => {
+        setTreeWindow(previous => treeWindowRange(rows.length, event.startIndex ?? 0, event.endIndex ?? 0, previous))
+      } } : {})} style={{ display: 'flex', flexDirection: 'column', width: '100%', flexGrow: 1, minHeight: 0, overflowY: virtualTree ? undefined : 'scroll', overflowX: 'hidden' }}>
+        <MotionFileTreeRows rows={rows} open={expanded} selected={selected} focus={focus} virtual={virtualTree} window={virtualTree ? treeWindow : undefined} search={results !== null} activate={activateRow} />
       </TreeHost>
       </div>
       <ResizeHandle testId="dock-file-tree-resize" edge="right" label="Resize file tree" dragging={column.dragging} onPointerDown={column.onPointerDown} onReset={column.reset} />
     </div>
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, minHeight: 0 }}>
-      {selected ? <FileViewer key={selected} projectId={projectId} path={selected} onClose={() => setSelected(null)} /> : <div style={{ display: 'flex', flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: 20 }}><Label color={t.textSecondary} size={12} style={{ opacity: 0.7, textAlign: 'center' }}>Select a file from the tree to view it.</Label></div>}
+      {selected ? <FileViewer key={selected} projectId={projectId} path={selected} onClose={closeFile} /> : <div style={{ display: 'flex', flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: 20 }}><Label color={t.textSecondary} size={12} style={{ opacity: 0.7, textAlign: 'center' }}>Select a file from the tree to view it.</Label></div>}
     </div>
   </div>
 }
 
-function FileViewer({ projectId, path, onClose }: { projectId: string; path: string; onClose: () => void }) {
+const FileViewer = memo(function FileViewer({ projectId, path, onClose }: { projectId: string; path: string; onClose: () => void }) {
   const t = useTheme()
   const project = useApp((s) => s.projects.find((p) => p.id === projectId))
   const absolutePath = project ? `${project.path}/${path}` : null
@@ -181,13 +193,13 @@ function FileViewer({ projectId, path, onClose }: { projectId: string; path: str
     </div>
     <ErrorLine error={error} retry={() => setReload((n) => n + 1)} />
     {file ? file.binary ? <DockEmpty icon={N.note} title="Binary file" body="Open this file in your editor to view it." /> : <>
-      {showPreview ? <div testId="dock-file-content" style={{ flexGrow: 1, minHeight: 0, overflow: 'scroll', padding: 12 }}>
-        <markdown source={file.content} theme={cachedMarkdownTheme(t)} />
-      </div> : <FileCode content={file.content} path={path} />}
+      {showPreview ? <virtual-list testId="dock-file-content" {...EXPLORER_SCROLL_LAYOUT} overdraw={0} style={{ flexGrow: 1, minHeight: 0, overflowX: 'scroll' }}>
+        <div style={{ padding: 12 }}><markdown source={file.content} theme={cachedMarkdownTheme(t)} /></div>
+      </virtual-list> : <FileCode content={file.content} path={path} />}
       {file.truncated && <Label color={t.textSecondary} size={11} style={{ padding: 8 }}>Showing the first 256 KB. Open the file in your editor for the rest.</Label>}
     </> : !error && <Label color={t.textSecondary} size={12} style={{ padding: 12 }}>Loading file…</Label>}
   </>
-}
+})
 
 // Share one whole-document parse across the bounded native rows.
 export function FileCode({ content, path }: { content: string; path: string }) {
@@ -214,7 +226,7 @@ export function FileCode({ content, path }: { content: string; path: string }) {
   const t = useTheme()
   if (error) return <ErrorLine error={error} retry={() => setRetry(n => n + 1)} />
   if (!document) return <Label color={t.textSecondary} size={12} style={{ padding: 12 }}>Loading source…</Label>
-  return <div testId="dock-file-horizontal" style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0, overflowX: 'scroll' }}><virtual-list testId="dock-file-content" estimatedItemHeight={1280} overdraw={0} style={{ flexGrow: 1, flexShrink: 0, minHeight: 0, height: '100%', width: sourceWidth }}>
+  return <div testId="dock-file-horizontal" style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0, overflowX: 'scroll' }}><virtual-list testId="dock-file-content" {...EXPLORER_SCROLL_LAYOUT} estimatedItemHeight={1280} overdraw={0} style={{ flexGrow: 1, flexShrink: 0, minHeight: 0, height: '100%', width: sourceWidth }}>
     {chunks.map(chunk => <CodeChunk key={chunk.start} document={document} start={chunk.start} end={chunk.end} />)}
   </virtual-list></div>
 }
