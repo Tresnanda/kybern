@@ -1,9 +1,10 @@
-import { memo, useState } from 'react'
+import { memo, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { ISLAND } from '../MatrixLoader.tsx'
-import { useGpuixRequired, useWindowSize } from '@gpuix/react'
+import { useGpuixRequired, useWindowSize, type PublicInstance, type StyleDesc } from '@gpuix/react'
 import { useSidebarWidth } from '../shell/layout.ts'
-import { beginTaskDrag, trackTaskDrag, endPendingDrag, endTaskDrag, taskDragConsumesClick, regionRef, rowRef, taskShift, useTaskDragOpacity, viewportRef } from './drag.tsx'
+import { beginTaskDrag, trackTaskDrag, endPendingDrag, endTaskDrag, taskDragConsumesClick, regionRef, rowRef, taskPlaceholder, taskShift, useTaskDragOpacity, viewportRef } from './drag.tsx'
 import { ShiftRow } from '../drag/shift.tsx'
+import { PaintTranslate } from '../drag/PaintTranslate.tsx'
 import { TASK_SORT_MOTION } from './motion.ts'
 import { TaskWindow, type TaskWindowEntry } from './TaskWindow.tsx'
 import { isGroupCollapsed, isOpenStatus, latestRun, runOutcome, STATUS_LABEL, type TaskGroup } from '@/state/tasksModel'
@@ -13,7 +14,7 @@ import { Button } from '../settings/controls.tsx'
 import { Icon } from '../icons.tsx'
 import { ProjectDot } from '../notes/kit.tsx'
 import { N } from '../nav/glyphs.ts'
-import { ink, Label, useTheme } from '../ui.tsx'
+import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { over } from '../theme.ts'
 import { Check, PriorityGlyph, StatusGlyph } from './Glyphs.tsx'
 import { QuickAdd } from './QuickAdd.tsx'
@@ -71,6 +72,11 @@ export function TaskList({
             }}
             onMouseEnter={() => setHoverGroup(group.key)}
             onMouseLeave={() => setHoverGroup((key) => (key === group.key ? null : key))}
+            style={{ display: 'flex', flexDirection: 'column', height: index ? 50 : 40 }}
+          >
+          {/* The header moves with the rows when a drag between groups reflows the list; its region box stays put. */}
+          <ShiftRow store={taskShift} id={`header:${group.key}`} transition={TASK_SORT_MOTION}>
+          <div
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -106,6 +112,8 @@ export function TaskList({
                 }
               />
             )}
+          </div>
+          </ShiftRow>
           </div>
         ),
       },
@@ -150,18 +158,13 @@ export const TaskRow = memo(function TaskRow({
   const focused = useTasks((s) => s.focused === task.id)
   const [hover, setHover] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
-  const run = latestRun(task)
-  const detail = run && (task.status === 'running' || task.status === 'needs_review') ? run.activity || runOutcome(run, Date.now()) : ''
+  const detail = cardDetail(task)
   // tasks.css: selected+hover > selected > focused > hover, each a step brighter; selected+focused adds a 2px ring.
   const strong = t.variant === 'dark'
   const rowAlpha = selected && hover ? (strong ? 0.12 : 0.105) : selected ? (strong ? 0.095 : 0.08) : focused ? (strong ? 0.075 : 0.06) : hover ? (strong ? 0.035 : 0.03) : 0
   const background = rowAlpha ? ink(t, rowAlpha) : 'transparent'
   if (card) {
-    const dark = t.variant === 'dark'
-    const base = dark ? over(ink(t, 0.03), t.surface) : t.surface
     const raised = hover || focused || selected
-    const fill = dark ? (raised ? over(ink(t, 0.055), t.surface) : base) : base
-    const closed = !isOpenStatus(task.status)
     return (
       <ShiftRow store={taskShift} id={task.id} transition={TASK_SORT_MOTION}>
       <div style={{ paddingBottom: 8 }}>
@@ -181,18 +184,9 @@ export const TaskRow = memo(function TaskRow({
             if (e.modifiers?.cmd || e.modifiers?.ctrl || e.modifiers?.shift) pick(task.id, sequence, !!e.modifiers?.shift)
             else openTask(task.id)
           }}
-          style={{ position: 'relative', display: 'flex', flexDirection: 'column', flexShrink: 0, paddingTop: 11, paddingBottom: 12, paddingLeft: 12, paddingRight: 12, borderRadius: 10, backgroundColor: fill, userSelect: 'none', opacity: dragOpacity, boxShadow: dark ? { offsetX: 0, offsetY: raised ? 6 : 1, blurRadius: raised ? 18 : 2, spreadRadius: raised ? -6 : 0, color: raised ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.25)' } : { offsetX: 0, offsetY: raised ? 4 : 1, blurRadius: raised ? 14 : 2, spreadRadius: raised ? -4 : 0, color: raised ? 'rgba(0, 0, 0, 0.12)' : 'rgba(0, 0, 0, 0.05)' }, borderWidth: dark ? 0 : 0.5, borderColor: 'rgba(0, 0, 0, 0.09)', ...(focused ? { borderWidth: 1.5, borderColor: ink(t, 0.14) } : {}) }}
+          style={{ ...cardSurface(t, raised, focused), opacity: dragOpacity }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, height: 16, flexShrink: 0 }}>
-            <ProjectDot projectId={task.scope === 'project' ? task.project_id ?? null : null} />
-            <Label color={t.textTertiary} size={12} lineHeight={16} style={{ pointerEvents: 'none', userSelect: 'none' }}>{task.key}</Label>
-            <div style={{ flexGrow: 1 }} />
-            {hover || selected ? <Check testId={`task-select-${task.id}`} checked={selected} onClick={() => pick(task.id, sequence)} /> : task.priority !== 0 && <PriorityGlyph priority={task.priority} />}
-          </div>
-          <div testId={`task-drag-${task.id}`} style={{ display: 'flex', flexDirection: 'column', marginTop: 6, flexShrink: 0, width: '100%', pointerEvents: 'none' }}>
-            <Label color={closed ? t.textSecondary : t.text} size={13} lineHeight={18} style={{ width: '100%', pointerEvents: 'none', userSelect: 'none' }}>{task.title || 'Untitled'}</Label>
-          </div>
-          {!!detail && <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 10 }}><Label color={ink(t, 0.6)} size={12} lineHeight={16} truncate style={{ pointerEvents: 'none' }}>{detail}</Label></div>}
+          <CardLines task={task} detail={detail} trailing={hover || selected ? <Check testId={`task-select-${task.id}`} checked={selected} onClick={() => pick(task.id, sequence)} /> : undefined} />
         </div>
       </div>
       </ShiftRow>
@@ -313,6 +307,60 @@ export const TaskRow = memo(function TaskRow({
   )
 })
 
+function cardDetail(task: TaskItem) {
+  const run = latestRun(task)
+  return run && (task.status === 'running' || task.status === 'needs_review') ? run.activity || runOutcome(run, Date.now()) : ''
+}
+/** `.tk-card` at rest, raised (hover, focus, selection) and focused. */
+function cardSurface(t: ReturnType<typeof useTheme>, raised: boolean, focused: boolean): StyleDesc {
+  const dark = t.variant === 'dark'
+  const base = dark ? over(ink(t, 0.03), t.surface) : t.surface
+  const fill = dark ? (raised ? over(ink(t, 0.055), t.surface) : base) : base
+  return { position: 'relative', display: 'flex', flexDirection: 'column', flexShrink: 0, paddingTop: 11, paddingBottom: 12, paddingLeft: 12, paddingRight: 12, borderRadius: 10, backgroundColor: fill, userSelect: 'none', boxShadow: dark ? { offsetX: 0, offsetY: raised ? 6 : 1, blurRadius: raised ? 18 : 2, spreadRadius: raised ? -6 : 0, color: raised ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.25)' } : { offsetX: 0, offsetY: raised ? 4 : 1, blurRadius: raised ? 14 : 2, spreadRadius: raised ? -4 : 0, color: raised ? 'rgba(0, 0, 0, 0.12)' : 'rgba(0, 0, 0, 0.05)' }, borderWidth: dark ? 0 : 0.5, borderColor: 'rgba(0, 0, 0, 0.09)', ...(focused ? { borderWidth: 1.5, borderColor: ink(t, 0.14) } : {}) }
+}
+/** The card's key row, title and run line; `trailing` replaces the priority glyph (the hover checkbox). */
+function CardLines({ task, detail, trailing }: { task: TaskItem; detail: string; trailing?: ReactNode }) {
+  const t = useTheme()
+  return <>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 7, height: 16, flexShrink: 0 }}>
+      <ProjectDot projectId={task.scope === 'project' ? task.project_id ?? null : null} />
+      <Label color={t.textTertiary} size={12} lineHeight={16} style={{ pointerEvents: 'none', userSelect: 'none' }}>{task.key}</Label>
+      <div style={{ flexGrow: 1 }} />
+      {trailing ?? (task.priority !== 0 && <PriorityGlyph priority={task.priority} />)}
+    </div>
+    <div testId={`task-drag-${task.id}`} style={{ display: 'flex', flexDirection: 'column', marginTop: 6, flexShrink: 0, width: '100%', pointerEvents: 'none' }}>
+      <Label color={isOpenStatus(task.status) ? t.text : t.textSecondary} size={13} lineHeight={18} style={{ width: '100%', pointerEvents: 'none', userSelect: 'none' }}>{task.title || 'Untitled'}</Label>
+    </div>
+    {!!detail && <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 10 }}><Label color={ink(t, 0.6)} size={12} lineHeight={16} truncate style={{ pointerEvents: 'none' }}>{detail}</Label></div>}
+  </>
+}
+
+/** The held card in a column it did not start in: the source's dimmed `.tk-card[data-dragging]` in
+ * its slot, under the column's cards and clipped to the column, as dnd-kit draws it after moving it
+ * there. It appears in place and slides between slots of this column like a sorted card. */
+function TaskDropPlaceholder({ status }: { status: TaskStatus }) {
+  const t = useTheme()
+  const renderer = useGpuixRequired()
+  const held = useSyncExternalStore(taskPlaceholder.subscribe, taskPlaceholder.get)
+  const [node, setNode] = useState<PublicInstance | null>(null)
+  const shown = held?.status === status ? held : null
+  const task = shown && taskState().tasks[shown.id]
+  const origin = shown && node && renderer.getElementBounds?.(node.id)
+  return (
+    <div ref={setNode} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', overflow: 'hidden', pointerEvents: 'none' }}>
+      {shown && task && origin && (
+        <PaintTranslate key={shown.entry} initial={{ translateX: 0, translateY: shown.slot.y - origin.y }} animate={{ translateX: 0, translateY: shown.slot.y - origin.y }}
+          transition={REDUCED_MOTION ? { duration: 0 } : TASK_SORT_MOTION}
+          style={{ position: 'absolute', left: shown.slot.x - origin.x, top: 0, width: shown.slot.width, height: shown.slot.height, pointerEvents: 'none' }}>
+          <div testId="task-drop-placeholder" style={{ ...cardSurface(t, false, false), width: '100%', height: '100%', opacity: 0.35, pointerEvents: 'none' }}>
+            <CardLines task={task} detail={cardDetail(task)} />
+          </div>
+        </PaintTranslate>
+      )}
+    </div>
+  )
+}
+
 export function TaskBoard({
   columns,
   sequence,
@@ -371,6 +419,7 @@ export function TaskBoard({
           <div style={{ height: 4, flexShrink: 0 }} />
           <TaskWindow
             card
+            underlay={<TaskDropPlaceholder status={column.status} />}
             entries={[
               ...(quick?.status === column.status
                 ? [{ key: `quick:${quick.nonce}`, height: 96, pinned: true, render: () => <QuickAdd request={quick} card /> }]
