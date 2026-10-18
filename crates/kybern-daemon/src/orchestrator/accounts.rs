@@ -102,8 +102,15 @@ impl Orchestrator {
             account_override: override_id.is_some(),
             effective_permission_mode: thread.permission_mode,
             pending_permission_mode,
-            quota_limited: quota_limited_turn(thread.status, &self.inner.store.events_for_thread(thread.id)?, Utc::now().timestamp()),
+            quota_limited: self.thread_quota_limited(&thread)?,
         })
+    }
+
+    fn thread_quota_limited(&self, thread: &Thread) -> Result<bool> {
+        if !matches!(thread.status, ThreadStatus::Failed | ThreadStatus::Idle) {
+            return Ok(false);
+        }
+        Ok(quota_limited_turn(thread.status, &self.inner.store.latest_turn_quota_events(thread.id)?, Utc::now().timestamp()))
     }
 
     pub async fn set_thread_target(&self, params: methods::ThreadTargetParams) -> Result<methods::ThreadTargetState> {
@@ -607,9 +614,8 @@ impl Orchestrator {
         }
         let thread = self.inner.store.thread_get(params.thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
         ensure!(thread.status != ThreadStatus::Archived, "Unarchive this conversation before continuing.");
-        let events = self.inner.store.events_for_thread(thread.id)?;
         ensure!(
-            quota_limited_turn(thread.status, &events, Utc::now().timestamp()),
+            self.thread_quota_limited(&thread)?,
             "The latest turn was not interrupted by a confirmed 5-hour or weekly account limit. Retry your prompt normally."
         );
         ensure!(

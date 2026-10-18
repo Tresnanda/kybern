@@ -1090,6 +1090,22 @@ impl Store {
         self.events_for_thread_through(thread_id, i64::MAX)
     }
 
+    /// Only evidence consumed by quota recovery, starting at the latest turn.
+    /// Keep the range and kinds in SQL so target hydration never decodes message
+    /// text or tool results from the rest of the conversation.
+    pub fn latest_turn_quota_events(&self, thread_id: ThreadId) -> Result<Vec<ThreadEvent>> {
+        self.with(|c| {
+            let mut statement = c.prepare(
+                "SELECT seq,thread_id,turn_id,at,payload FROM events
+                 WHERE thread_id=?1 AND seq >= (
+                     SELECT seq FROM events WHERE thread_id=?1 AND kind='turn_started' ORDER BY seq DESC LIMIT 1
+                 ) AND kind IN ('turn_started','provider_usage_updated','turn_failed','turn_completed','turn_resumed','session_transitioned')
+                 ORDER BY seq",
+            )?;
+            Ok(statement.query_map([thread_id.to_string()], row_to_event)?.collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
     pub fn events_for_thread_recent(&self, thread_id: ThreadId, limit: u32) -> Result<Vec<ThreadEvent>> {
         self.with(|c| {
             let mut st = c.prepare("SELECT seq,thread_id,turn_id,at,payload FROM (SELECT seq,thread_id,turn_id,at,payload FROM events WHERE thread_id=?1 ORDER BY seq DESC LIMIT ?2) ORDER BY seq")?;
@@ -2694,6 +2710,45 @@ mod tool_output_allocation_tests {
 #[cfg(test)]
 mod transcript_scan_allocation_tests {
     use super::*;
+
+    #[test]
+    fn quota_evidence_reads_only_relevant_events_since_the_latest_start() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE events (seq INTEGER PRIMARY KEY, thread_id TEXT NOT NULL, turn_id TEXT, at TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
+          CREATE INDEX events_thread ON events(thread_id, seq);").unwrap();
+        let thread = ThreadId::new_v4();
+        let turn = TurnId::new_v4();
+        let at = Utc::now().to_rfc3339();
+        let start =
+            serde_json::to_string(&EventPayload::TurnStarted { message_id: MessageId::new_v4(), message: UserMessage::text("latest") })
+                .unwrap();
+        let failed = serde_json::to_string(&EventPayload::TurnFailed { error: "weekly quota".into() }).unwrap();
+        let switched = serde_json::to_string(&EventPayload::SessionTransitioned {
+            from: ProviderInstance::default_for(ProviderKind::Codex),
+            to: ProviderInstance::default_for(ProviderKind::ClaudeCode),
+            native_resume: false,
+            text: "switched".into(),
+        })
+        .unwrap();
+        for (seq, kind, payload, owner) in [
+            (1, "turn_started", "malformed old payload", thread),
+            (2, "turn_failed", "malformed old payload", thread),
+            (3, "turn_started", start.as_str(), thread),
+            (4, "tool_call_completed", "malformed irrelevant payload", thread),
+            (5, "turn_failed", failed.as_str(), thread),
+            (6, "session_transitioned", switched.as_str(), thread),
+            (7, "turn_started", "malformed foreign payload", ThreadId::new_v4()),
+        ] {
+            conn.execute(
+                "INSERT INTO events VALUES (?1,?2,?3,?4,?5,?6)",
+                params![seq, owner.to_string(), turn.to_string(), at, kind, payload],
+            )
+            .unwrap();
+        }
+        let store = Store { conn: Arc::new(Mutex::new(conn)) };
+        assert_eq!(store.latest_turn_quota_events(thread).unwrap().iter().map(|event| event.seq).collect::<Vec<_>>(), vec![3, 5, 6]);
+        assert!(store.latest_turn_quota_events(ThreadId::new_v4()).unwrap().is_empty());
+    }
 
     #[test]
     fn compact_batches_preserve_cross_batch_updates_snapshot_and_page_boundaries() {
