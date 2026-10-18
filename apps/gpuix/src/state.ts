@@ -2,6 +2,9 @@ import { environmentEndpoint, onEnvironmentChange, registerEnvironmentConnection
 import { startupMark } from './perf/startup.ts'
 import { HistoryPrefetch } from './shell/historyPrefetch.ts'
 import { EARLIER_HISTORY_ENTRIES } from '../../../packages/kybern-client/src/historyPaging.ts'
+import { onFrame } from './native/frame.ts'
+import { isWindowVisible, onWindowVisibility } from './native/visibility.ts'
+import { eventFrame } from './transcript/eventFrame.ts'
 // App state: one daemon connection, the project and thread lists, and the open
 // thread's transcript. Transport and transcript folding come from the shared
 // `packages/kybern-client` sources, the same ones desktop and mobile use.
@@ -83,7 +86,12 @@ export function usePaneAccess() {
   const id = context?.id ?? focusedPaneId
   return useMemo(() => ({ id, get: () => context?.snapshot ?? getPaneState(id), frozen: !!context?.snapshot }), [id, context])
 }
-function emit() { for (const listener of listeners) listener() }
+const publication = eventFrame(flush => {
+  const stop = onFrame(flush)
+  const stopVisibility = onWindowVisibility(visible => { if (!visible) flush() })
+  return () => { stop(); stopVisibility() }
+}, () => { for (const listener of listeners) listener() })
+function emit() { publication.now() }
 function mirrorFocus() {
   const pane = panes.get(focusedPaneId)!
   state = { ...state, selectedId: pane.selectedId, open: pane.open, draft: pane.draft }
@@ -171,11 +179,13 @@ export async function reloadPaneThread(paneId: string, threadId: string) {
   return selectPaneThread(paneId, threadId)
 }
 export function getThreadOpen(id: string) { return sessions.get(id)?.open ?? [...panes.values()].find(p => p.selectedId === id)?.open }
-export function setThreadOpen(id: string, open: ThreadState) {
+export function setThreadOpen(id: string, open: ThreadState, textOnly = false) {
   const session = sessions.get(id)
   if (session) session.open = open
   for (const [paneId, pane] of panes) if (pane.selectedId === id) panes.set(paneId, { ...pane, open })
-  mirrorFocus(); emit()
+  mirrorFocus()
+  if (textOnly && isWindowVisible() && process.env.KYBERN_STREAM_EVENT_FRAME !== '0') publication.next()
+  else emit()
 }
 
 /** Drop a dead client so `connect()` builds a fresh one, re-reading the port and token files. */
@@ -351,7 +361,7 @@ export async function selectPaneThread(paneId: string, id: ThreadId | null, keep
         // A snapshot from before this event cannot repair newly exposed older
         // rows. Demand loading keeps its existing in-flight event replay.
         session.history.clear()
-        setThreadOpen(id, applyEvent(session.open, event))
+        setThreadOpen(id, applyEvent(session.open, event), event.kind === 'assistant_text_delta' || event.kind === 'assistant_thinking_delta')
         for (const listener of threadEventListeners) listener(id, event)
         if (state.selectedId === id) for (const listener of openEventListeners) listener(event)
       },
