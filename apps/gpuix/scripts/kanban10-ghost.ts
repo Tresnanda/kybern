@@ -86,10 +86,13 @@ for (const name of names) {
     const after = await rowsNow()
     writeFileSync(`${dir}/geometry.json`, JSON.stringify({ scenario: s, from, to, src, over, hold, placeholder, after }, null, 1))
     // While held, every card (the dimmed source included, or its placeholder in another column)
-    // is painted exactly where the drop lays it out: no exposed source, no empty room.
+    // is painted where the drop lays it out: no exposed source, no empty room. Up to 2 pt: under the
+    // paused clock, frames come from screenshots, and a tween retargeted just before the hold can keep
+    // its last screenshot-driven step (1.5 pt seen, on the base too). kanban10-ghost-nsevent.ts checks
+    // the running display clock exactly.
     const wrong = Object.entries(after).flatMap(([title, a]) => {
       const h = title === s.drag && placeholder ? placeholder : hold[title]
-      return a && h && (Math.abs(a.x - h.x) > 1 || Math.abs(a.y - h.y) > 1 || Math.abs(a.height - h.height) > 1) ? [`${title}: held ${h.x},${h.y} h${h.height} lands ${a.x},${a.y} h${a.height}`] : []
+      return a && h && (Math.abs(a.x - h.x) > 2 || Math.abs(a.y - h.y) > 2 || Math.abs(a.height - h.height) > 2) ? [`${title}: held ${h.x},${h.y} h${h.height} lands ${a.x},${a.y} h${a.height}`] : []
     })
     if (wrong.length) throw new Error(`held layout differs from the drop: ${wrong.join('; ')}`)
     console.log('done', name, placeholder ? '(placeholder)' : '')
