@@ -17,7 +17,7 @@ renderer += "\n" + (here / "backdrop_kernel.rs").read_text()
 shader = (here / "backdrop.metal").read_text()
 anchor = "struct RoundedClipNode"
 assert shader.count(anchor) == 1
-shader = shader.replace(anchor, "struct Kernel { uint count; uint padding[3]; float4 taps[25]; };\n" + anchor)
+shader = shader.replace(anchor, "struct Kernel { uint count; uint padding[3]; float4 taps[49]; };\n" + anchor)
 anchor = "device const RoundedClipNode *clips [[buffer(7)]])"
 assert shader.count(anchor) == 1
 shader = shader.replace(anchor, "device const RoundedClipNode *clips [[buffer(7)]], constant Kernel &kernel [[buffer(1)]])")

@@ -64,7 +64,7 @@ that content into compositor layers. A behind-window effect blurs the desktop.
 | Window frame, rail, sidebar, title bar | `kit.css:120,174,465`; `lib/kit/theme/theme.logic.ts:812–821` explicitly sets sidebar CSS filter to none over Tauri vibrancy | (a) Existing native under-window material plus theme fills; no scene blur to remove. Preserve. |
 | Workspace/dock/settings planes | `kybern.css:582–618` translucent theme fills | (a)/(d) Existing shared compositor material and plane fills. No extra pass. Opaque/accessibility retains flat fills. |
 | Composer body (`src/composer.tsx:565`) | `kit.css:2838–2892`, `kybern.css:611–615,647–658` | Current GPUIX has fill/shadow and no scene backdrop. Preserve existing behavior; full-translucency composer parity is a pre-existing gap, not a performance win. |
-| PopupLayer menus, dialogs, pickers (`src/composer/Menu.tsx:141`) | `kit.css:2946–2956`, `kybern.css:621–623` | (c) Keep one scene blur with existing sigma/tint/order; compositor cannot sample underlying Metal scene. Large sigma retains original 49-tap shader. (d) Existing accessibility/full-translucency gate removes pass. |
+| PopupLayer menus, dialogs, pickers (`src/composer/Menu.tsx:141`) | `kit.css:2946–2956`, `kybern.css:621–623` | (c) Keep one scene blur with existing sigma/tint/order; compositor cannot sample underlying Metal scene. Large sigma retains all 49 positions with precomputed Gaussian weights. (d) Existing accessibility/full-translucency gate removes pass. |
 | Command palette (`src/nav/overlay.tsx:884`) | Desktop palette has no backdrop filter | (d) Explicit `material="none"`; preserve fill and separate content entrance blur. |
 | Split drop target + label (`src/split/Workspace.tsx:267–276`) | `kybern.css:133,158` | (c) Preserve intentional separate visible surfaces; each samples live content. (d) Existing accessibility disables blur. |
 | Computer live hover controls (`src/live/ComputerLiveView.tsx:74`) | `kybern.css:445` | (c) Keep one live scene filter; hover and accessibility gates remain. |
@@ -72,7 +72,7 @@ that content into compositor layers. A behind-window effect blurs the desktop.
 | Toast anchors (`src/shell/toasts.tsx:319`) | Desktop Sonner popover fill + `.t-toast` entrance blur | (d) `{blur:0}` only suppresses legacy anchored backing. No material blur pass; paintTransform entrance/exit blur is content animation and remains. |
 | Floating live anchor (`src/live/Floating.tsx:66`) | Floating preview | (d) `{blur:0}` is transparent backing opt-in, not active filtering. |
 | Per-word stream fades (`native/patches/stream_fade_window.rs:34`) | `.t-stream-w`: filter blur(1px) → 0 | (c) Exact dense-kernel reconstruction for device sigma <=8; 49 taps become <=25 (typically <=7 for Retina word blur). Preserve two-pass order, sigma, opacity, clip, timing. |
-| Subtree animation blur (`subtree_transform*`) | `.t-toast`, pop/entrance filters | (c) Same exact narrow kernel where eligible. Broad radii use original path. |
+| Subtree animation blur (`subtree_transform*`) | `.t-toast`, pop/entrance filters | (c) Same exact narrow kernel where eligible. Broad radii retain all original sample positions. |
 | `BACKDROP.popup`/`liveScrim` definitions | Reserved presets | No active direct callsites found; do not count definitions as rendered surfaces. |
 
 The prior perf-gpu “nine backdrops” are streaming **word filters**, not nine
@@ -90,8 +90,8 @@ sigma <=8 the full support is <=49 texels and needs <=25 samples (sigma<=2: <=7)
 CPU computes one 49-term kernel per backdrop submission; shaders no longer
 compute an exponential per sample per fragment. The Gaussian, fractional step,
 3-sigma extent, crop-edge clamping, two-pass rounding, saturation, opacity and
-rounded-mask operations are retained. Above sigma8 the original shader runs.
-Tests cover 800 sigmas, interior and both clamp edges. Actual GPU screenshot
+rounded-mask operations are retained. Above sigma8 all 49 original sample positions remain; weights and normalization move to CPU.
+Tests cover 804 sigmas, interior and both clamp edges. Actual GPU screenshot
 comparisons must establish the hardware precision limits before acceptance.
 
 MPS/downsampling would change this shader's low-sigma discrete filter and its

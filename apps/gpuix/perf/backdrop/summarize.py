@@ -3,7 +3,7 @@ import json,re,statistics
 root=Path(__file__).resolve().parents[4]
 app=root/'apps/gpuix'
 out=Path('/Users/mymac/projects/ade/previews/gpuix/perf/backdrop')
-labels=['backdrop-control','backdrop-after','backdrop-diagnostic-control','backdrop-diagnostic-after']
+labels=['backdrop-before','backdrop-control','backdrop-after','backdrop-diagnostic-control','backdrop-diagnostic-after']
 summary={}
 median=lambda xs:statistics.median([x for x in xs if x is not None]) if any(x is not None for x in xs) else None
 for label in labels:

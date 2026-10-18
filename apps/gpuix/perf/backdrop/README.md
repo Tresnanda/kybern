@@ -2,7 +2,7 @@
 
 `RESEARCH.md` identifies native compositor materials vs scene filters. The narrow
 kernel candidate is enabled in this isolated worktree; `KYBERN_BACKDROP_KERNEL=0` is the
-same-addon legacy control. Large device sigma (>8) always uses the legacy shader.
+same-addon legacy control. Large device sigma (>8) keeps all 49 original samples with precomputed weights.
 No cadence/material/animation timing changes. No backdrop-pixel cache is added.
 
 Run from `apps/gpuix`:

@@ -5,12 +5,24 @@
 struct BackdropKernel {
     count: u32,
     padding: [u32; 3],
-    taps: [[f32; 4]; 25],
+    taps: [[f32; 4]; 49],
 }
 impl BackdropKernel {
     fn new(sigma: f32, enabled: bool) -> Self {
-        let mut result = Self { count: 0, padding: [0; 3], taps: [[0.; 4]; 25] };
-        if !enabled || !sigma.is_finite() || sigma <= 0. || sigma > 8. { return result; }
+        let mut result = Self { count: 0, padding: [0; 3], taps: [[0.; 4]; 49] };
+        if !enabled || !sigma.is_finite() || sigma <= 0. { return result; }
+        if sigma > 8. {
+            let mut total = 0.0;
+            for (index, i) in (-24..=24).enumerate() {
+                let d = i as f32 * (sigma / 8.0).max(0.125);
+                let w = (-0.5 * d * d / (sigma * sigma).max(0.001)).exp();
+                result.taps[index] = [d, w, 0.0, 0.0];
+                total += w;
+            }
+            for tap in &mut result.taps { tap[1] /= total; }
+            result.count = 49;
+            return result;
+        }
         let mut weights = [0.0f32; 49];
         let mut total = 0.0;
         for i in -24..=24 {
@@ -48,10 +60,9 @@ mod tests {
     #[test]
     fn reconstructed_kernel_preserves_linear_samples_including_edges() {
         let values: Vec<_> = (0..97).map(|i| ((i * 13 + i * i * 7) % 97) as f32 / 97.0).collect();
-        for n in 1..=800 {
-            let sigma = n as f32 / 100.;
+        for sigma in (1..=800).map(|n| n as f32 / 100.).chain([8.01, 16., 40., 128.]) {
             let kernel = BackdropKernel::new(sigma, true);
-            assert!(kernel.count > 0 && kernel.count <= 25);
+            assert!(kernel.count > 0 && kernel.count <= (if sigma <= 8. { 25 } else { 49 }));
             for centre in [0., 1., 4., 48., 94., 96.] {
                 let mut expected = 0.; let mut total = 0.;
                 for i in -24..=24 {
@@ -65,10 +76,11 @@ mod tests {
         }
     }
     #[test]
-    fn dense_kernel_is_bounded_and_wide_blur_retains_legacy_path() {
-        assert_eq!(std::mem::size_of::<BackdropKernel>(), 416);
+    fn dense_kernel_is_bounded_and_wide_blur_retains_original_positions() {
+        assert_eq!(std::mem::size_of::<BackdropKernel>(), 800);
         assert!(BackdropKernel::new(2., true).count <= 7);
-        for sigma in [0., -1., f32::NAN, f32::INFINITY, 8.01, 128.] { assert_eq!(BackdropKernel::new(sigma, true).count, 0); }
+        for sigma in [0., -1., f32::NAN, f32::INFINITY] { assert_eq!(BackdropKernel::new(sigma, true).count, 0); }
         assert_eq!(BackdropKernel::new(1., false).count, 0);
+        for sigma in [8.01, 16., 40., 128.] { assert_eq!(BackdropKernel::new(sigma, true).count, 49); }
     }
 }
