@@ -94,6 +94,11 @@ exec((here / "subtree_transform_gpui.py").read_text())
 exec((here / "stream_fade_gpui.py").read_text())
 exec((here / "stroke_draw_gpui.py").read_text())
 
+exec((here / "sparse_list_gpui.py").read_text())
+
+exec((Path(__file__).parent / "motion_frame_gpui.py").read_text())
+exec((Path(__file__).parent / "cache_frame_gpui.py").read_text())
+
 for name, text in pending.items():
     if (root/name).read_text()!=text: (root/name).write_text(text)
 for name in ['backdrop_renderer.rs', 'backdrop.metal']:

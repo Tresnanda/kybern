@@ -1,3 +1,28 @@
+## Sparse transcript and sidebar lists
+
+The internal `sparseVersion` extension combines GPUIX's `itemCount/windowStart`
+with `windowIndices` for noncontiguous retained owners. React supplies only the
+buffered viewport and explicitly held rows. `sparseKeys` contains unique semantic
+IDs, `sparseEstimates` contains logical-pixel height hints, and their version changes
+only when metadata changes. `sparseLayout` invalidates heights after a transcript
+width/theme change. These props are owned by `src/kit/sparseList.tsx`; they are
+not a public upstream GPUIX API.
+
+`sparse_list.rs` retains measured heights by semantic key, preserves the logical
+anchor across prepends/reorders, and updates only mounted child/focus/revision
+records during a window change. Stable scroll frames skip that synchronization.
+The GPUI SumTree retains offscreen measurements even when the React host goes
+away; fallback rows use those heights rather than replacing them with a uniform
+estimate. Hinted splices and focus changes preserve the unaffected tree and
+anchor. Metadata and the height summary remain proportional to loaded logical
+rows; fibers, retained hosts, bounds observers and native row construction follow
+the viewport plus selection/focus/overlay/animation owners.
+
+Patches: `sparse_list_hooks.py`, `sparse_list_gpui.py`, `sparse_list.rs`, each
+reconstructed by the existing anchored-hook drivers. `KYBERN_SPARSE_LIST=0` is
+the dense-slot comparison control. Ordinary lists do not enter this path.
+Checks and paired measurements are in `perf/scroll2/`.
+
 # Patched GPUIX native module
 
 The client runs on our own build of `@gpuix/native`: the upstream release in
@@ -1385,3 +1410,23 @@ The lease owns a separate process group for its command. Interruption stops that
 group before releasing the UI, and normal exit removes any orphaned descendants.
 Inherited leases stay in the owning group. `bun native/ui-lease-check.ts` verifies
 that interrupting a command also stops its grandchild.
+Every lease, inherited or not, first waits while any `/tmp/kybern-gpuix-quiet.*`
+file exists, so native checks never enter another lane's final measurement window.
+
+### Motion reconciliation during deferred rows
+
+`motion_frame.rs` shares the global motion reconciliation across the root and
+all deferred virtual rows in one GPUI draw. The key includes the retained-tree
+revision, so a Node commit between root rendering and row prepaint still
+reconciles the new motion description. Styles continue sampling the existing
+clock, and completion notifications are emitted once. A per-window draw epoch
+also covers cached scroll draws that do not rebuild the root view.
+`KYBERN_MOTION_SYNC=0` is the same-binary control for the previous per-row global
+scan; it does not disable motion.
+
+Cached GPUI view ranges now carry their draw and rollback generation
+(`cache_frame_gpui.py`). A List focus/autoscroll retry can discard prepaint
+text and dispatch entries after a cached child wrote its new state. Such
+state must render again; it cannot replay indices against the prior draw.
+A rollback also invalidates caches recorded in the abandoned transaction.
+Ordinary consecutive draws still reuse the unchanged island.

@@ -1,6 +1,7 @@
-import { createContext, memo, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { observeElementBounds } from '../native/layout.ts'
+import { SparseRetention } from '../kit/sparseList.tsx'
 import { transcriptWindowRange, transcriptWindowRangeBy } from './windowRange.ts'
 
 const FirstBodyMount = createContext(true)
@@ -119,7 +120,8 @@ export function useTranscriptWindow(keys: readonly string[], list: React.RefObje
     for(const key of heights.current.keys()) if(!valid.has(key)) heights.current.delete(key)
     for(const key of selected.current) if(!valid.has(key)) selected.current.delete(key)
   }, [keys])
-  const at = keys.indexOf(anchor.key)
+  const keyIndices = useMemo(() => new Map(keys.map((key,index) => [key,index])), [keys])
+  const at = keyIndices.get(anchor.key) ?? -1
   const range = buffered
     ? transcriptWindowRangeBy(keys.length, i => heights.current.get(keys[i]!) ?? estimates[i] ?? 160, at < 0 ? anchor.index : at, anchor.offset, viewport || 820)
     : transcriptWindowRange(keys.map((key,index) => heights.current.get(key) ?? estimates[index] ?? 160), at < 0 ? anchor.index : at, anchor.offset, viewport || 820)
@@ -133,13 +135,14 @@ export function useTranscriptWindow(keys: readonly string[], list: React.RefObje
   return { range, onRange, sync, measure, reveal: (index: number) => { setRangeHint(null); setAnchor({key:keys[index] ?? '',index,offset:0}) }, height: (key: string, estimate = 160) => heights.current.get(key) ?? estimate, selected: selected.current }
 }
 
-/** Slot refs and keys survive disposal of the rich body. Only mounted bodies
- * have bounds subscriptions, so observers do not grow with thread length. */
+/** Mounted bodies own bounds subscriptions and active row leases. Native
+ * semantic metadata preserves identity and height after the whole slot leaves. */
 export const TranscriptSlot = memo(function TranscriptSlot({ rowKey, mounted, height, children, measure, sync }: {
   rowKey: string; mounted: boolean; height: number; children: ReactNode
   measure: (key: string, height: number) => void; sync: (frame?: number) => void
 }) {
   const renderer = useGpuixRequired()
+  const retention = useContext(SparseRetention)
   const node = useRef<PublicInstance | null>(null)
   const [focused, setFocused] = useState(false)
   const [leases, setLeases] = useState(0)
@@ -153,8 +156,9 @@ export const TranscriptSlot = memo(function TranscriptSlot({ rowKey, mounted, he
   const settle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => () => clearTimeout(settle.current), [])
   const keep = mounted || focused || leases > 0 || resizing
-  const lifetime = useRef({mounted:false, count:0})
-  if(keep && !lifetime.current.mounted) lifetime.current.count++
+  useLayoutEffect(() => { retention?.retain(rowKey, focused || leases > 0 || resizing); return () => retention?.retain(rowKey, false) }, [retention, rowKey, focused, leases, resizing])
+  const lifetime = useRef({mounted:false, count:retention?.visited.has(rowKey) ? 1 : 0})
+  if(keep && !lifetime.current.mounted) { lifetime.current.count++; retention?.visited.add(rowKey) }
   lifetime.current.mounted = keep
   useEffect(() => {
     if(!node.current || !keep) return
