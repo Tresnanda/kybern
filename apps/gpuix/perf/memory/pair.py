@@ -57,6 +57,17 @@ try:
                   ('memory-after-disabled', 'gpuix-native.darwin-arm64.node', {'KYBERN_IMAGE_MEMORY': '0', 'KYBERN_EDITOR_IMAGE_MEMORY': '0', 'KYBERN_FRAME_MEMORY': '0'}),
                   ('memory-after-matched', 'gpuix-native.darwin-arm64.node', {})]],
         ]
+    elif '--remaining' in sys.argv:
+        jobs = [
+            ('memory-tooling-typecheck', ['pnpm', 'exec', 'tsc', '-p', 'perf/memory/tsconfig.json'], {}),
+            ('before-web-smoke', ['bun', 'perf/memory/run.ts', 'before-web-smoke'], {'KYBERN_MEMORY_GROUPS': 'webviews', 'KYBERN_MEMORY_SMOKE': '1'}),
+            ('before-product-final', ['bun', 'perf/memory/run.ts', 'before-product-final'], {}),
+            ('after-final', ['bun', 'perf/memory/run.ts', 'after-final'], {}),
+            ('after-code-repeat', ['bun', 'perf/memory/lab-run.ts', 'after-code-repeat'], {'KYBERN_MEMORY_CODE_ONLY': '1', 'KYBERN_MEMORY_CODE_ROUNDS': '2'}),
+            ('before-final-visual', ['bun', 'perf/memory/visual.ts', 'before-final'], {}),
+            ('after-final-visual', ['bun', 'perf/memory/visual.ts', 'after-final'], {}),
+            ('visual-diff', ['bun', 'perf/memory/visual-diff.ts'], {}),
+        ]
     elif '--memory' in sys.argv:
         jobs = [
             ('before-final-lab', ['bun', 'perf/memory/lab-run.ts', 'before-final-lab'], {}),

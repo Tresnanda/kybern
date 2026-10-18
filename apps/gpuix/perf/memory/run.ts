@@ -52,6 +52,13 @@ try {
     }
    }
    const measure = async (name: string, warmup = true) => {
+    if (process.env.KYBERN_MEMORY_SMOKE === '1') {
+      await Bun.sleep(name === 'mermaid-jobs-every-3s' ? 8000 : 1000)
+      const state = await control('stats', {}, true) as { diagrams: { completed: number } }
+      if (name === 'mermaid-jobs-every-3s') assert(state.diagrams.completed >= 1, 'Smoke must actually render Mermaid')
+      console.log('smoke', name, JSON.stringify(state))
+      return
+    }
     await f.app.call('blur', {}); await f.app.mouse.move({ x: 900, y: 4 })
     if (warmup) await Bun.sleep(10000)
     await f.app.call('blur', {})
@@ -123,6 +130,7 @@ try {
     await control('preview-close', {}, true); await control('dock-close'); await control('home'); await measure('preview-closed')
     await control('mermaid-start', {}, true); await measure('mermaid-jobs-every-3s')
     await control('mermaid-stop', {}, true)
+    if (process.env.KYBERN_MEMORY_SMOKE === '1') await Bun.sleep(12000)
     await Bun.sleep(1500) // Last job plus the existing ten-second idle release.
    }
    await control('home'); await measure('home-returned')

@@ -98,6 +98,9 @@ Both honor build reservations and the current quiet holder's UI priority.
 `pair.py --resume` retries failed/missing benchmark scenarios in fresh processes,
 retains accepted runs, verifies addon/settings/workload identity, and archives
 the failed attempt separately before producing the accepted comparison.
+`pair.py --remaining` resumes the product/code-repeat/visual jobs after the image
+labs, with a scratch-only preview grant and an untimed preview/Mermaid smoke
+check first. Full-product A/B runs use identical fixture imports and setup.
 `summarize.py` preserves accepted compact results and generates `RESULTS.md`.
 
 The allocator-relief probe tested both all zones and the explicit default zone.

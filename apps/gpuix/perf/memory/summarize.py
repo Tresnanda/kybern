@@ -25,10 +25,10 @@ def compact(row):
             'timedWindowStartedAt': row['gate']['timedWindowStartedAt'],
             'timedWindowEndedAt': row['gate']['timedWindowEndedAt']}
 
-controls = [row for row in load(evidence / 'before-rerun-app/results.json')
-            if row['group'] in ['thread-explorer-notes', 'terminal-stream']]
-controls += load(evidence / 'before-extra-final-app/results.json')
+controls = load(evidence / 'before-product-final-app/results.json')
 result = {
+    'metadata': {label: load(evidence / label / 'metadata.json') for label in
+                 ['before-final-lab', 'after-final-lab', 'before-product-final-app', 'after-final-app', 'after-code-repeat']},
     'diagnosticControls': {label: [compact(row) for row in load(evidence / label / 'results.json')]
                            for label in ['before-lab', 'image-only', 'arena-only', 'allocator-zones']},
     'featureControls': {label: load(bench / f'memory-{label}.json') for label in ['before-matched', 'after-disabled', 'after-matched']},

@@ -19,11 +19,20 @@ let diagramTimer: ReturnType<typeof setInterval> | undefined
 const diagramCancel = new AbortController()
 const diagrams = { requested: 0, completed: 0, failed: 0 }
 const server = Bun.serve({ hostname: '127.0.0.1', port: 0, idleTimeout: 255, async fetch(req) {
+  try {
   const body = await req.json() as { action: string; note?: string; index?: number; file?: string }
   if (body.action === 'older-all') {
     for (let page = 0; page < 150 && getState().open.nextBeforeSeq != null; page++) await loadEarlier()
   } else if (body.action === 'note') openNote(body.note!)
-  else if (body.action === 'preview') { if (!(await openPreview(getState().selectedId!, body.file!))) throw Error('Preview did not open'); showPreview(getState().selectedId!) }
+  else if (body.action === 'preview') {
+    const id = getState().selectedId!, file = path.resolve(body.file!)
+    if (!file.startsWith(path.resolve(process.env.KYBERN_DATA_DIR!) + path.sep)) throw Error('Preview fixture must stay inside scratch data')
+    if (!(await openPreview(id, file, true))) {
+      const preview = previewState(id)
+      throw Error(`Preview did not open: ${JSON.stringify({ load: preview.load, error: preview.error, permission: !!preview.permission })}`)
+    }
+    showPreview(id)
+  }
   else if (body.action === 'preview-close') closePreview(getState().selectedId!)
   else if (body.action === 'mermaid-start') {
     let index = 0
@@ -41,6 +50,7 @@ const server = Bun.serve({ hostname: '127.0.0.1', port: 0, idleTimeout: 255, asy
   }
   const s = getState(), preview = s.selectedId ? previewState(s.selectedId) : null
   return Response.json({ diagrams, preview: preview ? { phase: preview.load.phase, loading: preview.loading, entries: preview.entries.length } : null, heap: heapStats(), process: process.memoryUsage(), native: renderer().getMemoryStats?.() ?? null, syntax: renderer().getSyntaxDocumentStats?.() ?? null, blocks: s.open.blocks.length, nextBeforeSeq: s.open.nextBeforeSeq })
+  } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 }) }
 } })
 writeFileSync(path.join(process.env.KYBERN_CLIENT_CONFIG_DIR!, 'memory-control.json'), JSON.stringify({ port: server.port }))
 process.stdin.on('end', () => { clearInterval(diagramTimer); diagramCancel.abort(); server.stop(true) })
