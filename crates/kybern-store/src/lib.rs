@@ -1205,30 +1205,49 @@ impl Store {
         })
     }
 
-    /// Fold the transcript without retaining every event payload at once.
+    /// Fold bounded batches outside the connection lock. A saved long thread
+    /// must not block the sidebar's sparse activity reads for its entire replay.
     pub fn project_transcript_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<Vec<TranscriptEntry>> {
-        self.with(|c| {
-            // Exclude only the known no-op arm of apply_transcript_event. In
-            // particular, terminal/tool output deltas can be large but never
-            // contribute a transcript row. Other projections and replay still
-            // read the unchanged event log. Unknown/new kinds are NOT excluded.
-            // Keep this list aligned with that no-op arm when event behavior changes.
-            let mut statement = c.prepare(
-                "SELECT seq, thread_id, turn_id, at, payload FROM events
-                 WHERE thread_id = ?1 AND seq <= ?2 AND kind NOT IN (
-                   'async_questions_requested', 'provider_commands_updated', 'provider_usage_updated',
-                   'thread_created', 'thread_updated', 'message_queued', 'message_queue_updated',
-                   'thread_notes_updated', 'message_removed', 'thread_archived', 'tool_call_output_delta', 'checkpoint_updated',
-                   'thread_message_held', 'thread_message_resolved', 'thread_message_updated'
-                 ) ORDER BY seq",
-            )?;
-            let mut rows = statement.query(params![thread_id.to_string(), through_seq])?;
-            let mut fold = TranscriptFold::omitting_tool_outputs();
-            while let Some(row) = rows.next()? {
-                fold.apply(&row_to_event(row)?);
+        const BATCH: usize = 128;
+        const BATCH_BYTES: usize = 256 * 1024;
+        let mut fold = TranscriptFold::omitting_tool_outputs();
+        let mut after = 0;
+        loop {
+            let (events, bytes) = self.with(|c| {
+                // Exclude only known no-op events. Unknown/new kinds still
+                // enter the fold. Keep this aligned with its no-op arm.
+                let mut statement = c.prepare_cached(
+                    "SELECT seq, thread_id, turn_id, at, kind, payload FROM events
+                     WHERE thread_id = ?1 AND seq > ?2 AND seq <= ?3 AND kind NOT IN (
+                       'async_questions_requested', 'provider_commands_updated', 'provider_usage_updated',
+                       'thread_created', 'thread_updated', 'message_queued', 'message_queue_updated',
+                       'thread_notes_updated', 'message_removed', 'thread_archived', 'tool_call_output_delta', 'checkpoint_updated',
+                       'thread_message_held', 'thread_message_resolved', 'thread_message_updated'
+                     ) ORDER BY seq LIMIT ?4",
+                )?;
+                let mut rows = statement.query(params![thread_id.to_string(), after, through_seq, BATCH as u32])?;
+                let mut events = Vec::new();
+                let mut bytes = 0;
+                while let Some(row) = rows.next()? {
+                    bytes += row.get_ref(5)?.as_bytes()?.len();
+                    events.push(row_to_projection_event(row)?);
+                    // A single event can exceed the budget, but a batch never
+                    // retains several oversized messages before folding them.
+                    if bytes >= BATCH_BYTES {
+                        break;
+                    }
+                }
+                Ok((events, bytes))
+            })?;
+            let done = events.len() < BATCH && bytes < BATCH_BYTES;
+            for event in events {
+                after = event.seq;
+                fold.apply(&event);
             }
-            Ok(fold.finish())
-        })
+            if done {
+                return Ok(fold.finish());
+            }
+        }
     }
 
     /// Mark completed tool rows whose exact invocation has persisted output
@@ -1932,9 +1951,9 @@ struct BorrowedToolCompletion<'a> {
     is_error: bool,
 }
 
-fn compact_or_decode_tool_completion(payload: &str) -> std::result::Result<EventPayload, serde_json::Error> {
+fn compact_or_decode_tool_completion(payload: &str, preserve_omission: bool) -> std::result::Result<EventPayload, serde_json::Error> {
     let raw: BorrowedToolCompletion<'_> = serde_json::from_str(payload)?;
-    let output = if raw.output_omitted || raw.output.get().len() <= LARGE_TOOL_OUTPUT_BYTES {
+    let output = if (preserve_omission && raw.output_omitted) || raw.output.get().len() <= LARGE_TOOL_OUTPUT_BYTES {
         serde_json::from_str(raw.output.get())?
     } else {
         serde_json::Value::Null
@@ -1942,18 +1961,28 @@ fn compact_or_decode_tool_completion(payload: &str) -> std::result::Result<Event
     Ok(EventPayload::ToolCallCompleted {
         tool_call_id: raw.tool_call_id,
         output,
-        output_omitted: raw.output_omitted || raw.output.get().len() > LARGE_TOOL_OUTPUT_BYTES,
+        output_omitted: (preserve_omission && raw.output_omitted) || raw.output.get().len() > LARGE_TOOL_OUTPUT_BYTES,
         stream_recoverable: false,
         is_error: raw.is_error,
     })
 }
 
+fn row_to_projection_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadEvent> {
+    // The legacy stored projection decides omission from the persisted value,
+    // rather than trusting a transport-only omission marker in imported logs.
+    row_to_compact_event_inner(r, false)
+}
+
 fn row_to_compact_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadEvent> {
+    row_to_compact_event_inner(r, true)
+}
+
+fn row_to_compact_event_inner(r: &rusqlite::Row<'_>, preserve_omission: bool) -> rusqlite::Result<ThreadEvent> {
     let kind: String = r.get(4)?;
     let payload = r.get_ref(5)?.as_str()?;
     let turn: Option<String> = r.get(2)?;
     let payload = if kind == "tool_call_completed" {
-        compact_or_decode_tool_completion(payload).map_err(other)?
+        compact_or_decode_tool_completion(payload, preserve_omission).map_err(other)?
     } else {
         serde_json::from_str(payload).map_err(other)?
     };
@@ -2665,6 +2694,126 @@ mod tool_output_allocation_tests {
 #[cfg(test)]
 mod transcript_scan_allocation_tests {
     use super::*;
+
+    #[test]
+    fn compact_batches_preserve_cross_batch_updates_snapshot_and_page_boundaries() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE events (seq INTEGER PRIMARY KEY, thread_id TEXT NOT NULL, turn_id TEXT, at TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
+          CREATE INDEX events_thread ON events(thread_id, seq);").unwrap();
+        let store = Store { conn: Arc::new(Mutex::new(conn)) };
+        let thread = ThreadId::new_v4();
+        let at = Utc::now();
+        let mut events = Vec::new();
+        let mut push = |turn, payload| {
+            events.push(ThreadEvent { seq: (events.len() * 2 + 1) as i64, thread_id: thread, turn_id: Some(turn), at, payload });
+        };
+        let early = TurnId::new_v4();
+        push(
+            early,
+            EventPayload::ToolCallStarted {
+                call: ToolCall { id: "late".into(), name: "Read".into(), input: serde_json::Value::Null, parent_id: None },
+                origin: EventOrigin::Root,
+            },
+        );
+        push(
+            early,
+            EventPayload::ProviderNotice {
+                level: NoticeLevel::Info,
+                text: "A single retained event may exceed the batch byte budget. ".repeat(6000),
+                data: None,
+            },
+        );
+        for i in 0..260 {
+            let turn = TurnId::new_v4();
+            push(turn, EventPayload::TurnStarted { message_id: MessageId::new_v4(), message: UserMessage::text(format!("turn {i}")) });
+            push(
+                turn,
+                EventPayload::ToolCallStarted {
+                    call: ToolCall { id: "reused".into(), name: "Read".into(), input: serde_json::Value::Null, parent_id: None },
+                    origin: EventOrigin::Root,
+                },
+            );
+            push(
+                turn,
+                EventPayload::ToolCallCompleted {
+                    tool_call_id: "reused".into(),
+                    output: serde_json::json!({"text": if i % 7 == 0 { "🌿\n".repeat(2048) } else { format!("result {i}") }}),
+                    output_omitted: i % 5 == 0,
+                    stream_recoverable: false,
+                    is_error: i % 3 == 0,
+                },
+            );
+            let message = MessageId::new_v4();
+            push(turn, EventPayload::AssistantTextDelta { message_id: message, origin: EventOrigin::Root, delta: "prefix ".into() });
+            push(
+                turn,
+                EventPayload::AssistantMessageCompleted {
+                    message_id: message,
+                    origin: EventOrigin::Root,
+                    text: format!("prefix result {i}"),
+                    thinking: None,
+                },
+            );
+            push(
+                turn,
+                EventPayload::TurnCompleted {
+                    stop_reason: StopReason::Completed,
+                    usage: Usage::default(),
+                    cost_usd: None,
+                    duration_ms: 1000,
+                    terminal_message_id: Some(message),
+                },
+            );
+            push(turn, EventPayload::ToolCallOutputDelta { tool_call_id: "reused".into(), delta: "not a transcript row".into() });
+        }
+        push(
+            early,
+            EventPayload::ToolCallCompleted {
+                tool_call_id: "late".into(),
+                output: serde_json::json!("last"),
+                output_omitted: false,
+                stream_recoverable: false,
+                is_error: false,
+            },
+        );
+        store
+            .with(|c| {
+                for event in &events {
+                    c.execute(
+                        "INSERT INTO events VALUES (?1,?2,?3,?4,?5,?6)",
+                        params![
+                            event.seq,
+                            thread.to_string(),
+                            event.turn_id.unwrap().to_string(),
+                            at.to_rfc3339(),
+                            event.payload.kind(),
+                            serde_json::to_string(&event.payload)?
+                        ],
+                    )?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        for count in [0, 127, 128, 129, 255, 256, events.len() - 1, events.len()] {
+            let through = events.get(count.wrapping_sub(1)).map_or(0, |event| event.seq);
+            let mut fold = TranscriptFold::omitting_tool_outputs();
+            for event in &events[..count] {
+                let mut canonical = event.clone();
+                if let EventPayload::ToolCallCompleted { output_omitted, .. } = &mut canonical.payload {
+                    *output_omitted = false;
+                }
+                fold.apply(&canonical);
+            }
+            let expected = fold.finish();
+            let actual = store.project_transcript_through(thread, through).unwrap();
+            assert_eq!(serde_json::to_value(&actual).unwrap(), serde_json::to_value(&expected).unwrap(), "snapshot {through}");
+            for before in [None, Some(through / 2)] {
+                let page = transcript_page_ref(&actual, Some(120), before);
+                let expected_page = transcript_page_ref(&expected, Some(120), before);
+                assert_eq!(serde_json::to_value(page).unwrap(), serde_json::to_value(expected_page).unwrap());
+            }
+        }
+    }
 
     #[test]
     fn filtered_sql_projection_matches_event_fold_at_every_snapshot() {

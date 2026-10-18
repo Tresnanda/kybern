@@ -512,11 +512,11 @@ fn apply_transcript_event(
                     at: ev.at,
                 });
             }
-            EventPayload::ToolCallCompleted { tool_call_id, output, output_omitted: _, is_error, .. } => {
+            EventPayload::ToolCallCompleted { tool_call_id, output, output_omitted: omitted, is_error, .. } => {
                 if let Some(TranscriptEntry::ToolCall { output: o, output_omitted, is_error: e, complete, .. }) =
                     out.iter_mut().rev().find(|e| matches!(e, TranscriptEntry::ToolCall { call, .. } if &call.id == tool_call_id))
                 {
-                    if omit_tool_outputs && should_omit_tool_output(output) {
+                    if omit_tool_outputs && (*omitted || should_omit_tool_output(output)) {
                         *o = None;
                         *output_omitted = true;
                     } else {
