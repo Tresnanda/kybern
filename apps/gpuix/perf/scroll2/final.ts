@@ -7,7 +7,7 @@ for(const [folder,match] of [['transcript',/^(dense|sparse|diagnostic)(-syntheti
  for(const name of readdirSync(from))if(match.test(name)&&!existsSync(to+'/'+name))copyFileSync(from+'/'+name,to+'/'+name)
 }
 async function run(command:string[]){const child=Bun.spawn(command,{env:process.env,stdin:'inherit',stdout:'inherit',stderr:'inherit'});for(const signal of ['SIGINT','SIGTERM'] as const)process.once(signal,()=>child.kill(signal));if(await child.exited)throw Error(command.join(' ')+' failed')}
-await run(['pnpm','typecheck']);await run(['pnpm','exec','tsc','-p','perf/scroll2/tsconfig.json'])
+await run(['pnpm','typecheck']);await run(['pnpm','exec','tsc','-p','perf/scroll2/tsconfig.json']);await run(['bun','test','./src'])
 await run(['bun','perf/scroll2/metrics.ts'])
 await run(['python3','perf/scroll2/summarize.py'])
 export {}

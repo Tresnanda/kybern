@@ -82,6 +82,7 @@ try {
     const box = await app.getByTestId('sidebar-viewport').bounds()
     const point = { x: box.x + Math.min(box.width / 2, 100), y: box.y + box.height / 2 }
     if (process.env.SIDEBAR_VISUAL === '1') {
+      await app.mouse.move({x:1100,y:650})
       await Bun.sleep(700)
       let firstProject: string | undefined, firstThread: string | undefined
       {
@@ -101,7 +102,8 @@ try {
       if (firstProject) {
         await app.getByTestId(firstProject).click({ button: 2 })
         await app.getByTestId('project-menu').waitFor()
-        await Bun.sleep(600)
+        await app.mouse.move({x:1100,y:650})
+        await Bun.sleep(700)
         await app.screenshot({ path: `${out}/${label}-${theme}-${scene}-menu.png` })
         await app.getByTestId('app-ready').press('escape')
         await Bun.sleep(200)
