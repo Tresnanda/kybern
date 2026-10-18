@@ -106,7 +106,23 @@ input. If AppKit cannot associate that event with this window, the suite records
 that rejection (or a failed offset-change preflight) and reuses `scroll8.ts`'s 120 Hz pipelined native wheel RPC schedule,
 including contact markers, direction reversals and exponential synthetic momentum.
 A small harness subclass supplies this process’s window association while the
-concrete NSEvent retains its precise delta and phase implementation. An untimed
+concrete NSEvent retains its phase implementation. Its `scrollingDeltaY` and
+`deltaY` getters return the exact offered CGFloat: CoreGraphics stores
+`kCGScrollWheelEventPointDeltaAxis1` as an integer even when its double setter
+is used, and NSEvent otherwise returns zero for fractional momentum below one
+pixel. This previously replaced roughly the last 0.8 seconds of each synthetic
+momentum tail with zero-distance events. The unrelated sidebar loader's 200 ms
+clock then dominated those submission intervals and inflated the next-submission
+proxy; those gaps do not prove delayed scrolling. `KYBERN_BENCH_INTEGER_WHEEL=1`
+reproduces that historical injector for diagnosis only, and is recorded in
+`renderFlags`. Do not compare its resource results to fractional input as if
+both offered the same effective workload.
+
+`wheel-check.m` verifies the actual NSEvent getters and independent contact /
+momentum phases with positive, negative, zero and subpixel input without opening
+a window. Run `clang -fobjc-arc -framework AppKit -framework CoreGraphics
+perf/bench/wheel-check.m -o <scratch-output>` then that executable. The corrected
+AppKit backend and RPC backend both retain fractional momentum. An untimed
 offset-change preflight must confirm that AppKit actually scrolls the target.
 `KYBERN_BENCH_RPC_ONLY=1` forces the existing RPC schedule for a matched-input
 control; each row records `forcedRpc`. With `KYBERN_BENCH_COUNTERS=1`, capable
