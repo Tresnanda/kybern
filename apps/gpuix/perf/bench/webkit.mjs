@@ -34,8 +34,10 @@ const input=async(page,b,ms,fling=false)=>{
  const offeredMs=performance.now()-start;await Promise.all(pending);return {offeredMs,drainMs:performance.now()-start-offeredMs,packets:count,maxOutstanding}
 }
 let page,target,b
+const children=new Set()
 const scrolling=name.endsWith('scroll')||name==='thread-fling'||name.startsWith('pr-')
-process.once('SIGTERM',async()=>{await browser.close();await server.close();process.exit(143)})
+const stop=async(code)=>{for(const child of children)child.kill();await browser.close();await server.close();process.exit(code)}
+process.once('SIGTERM',()=>void stop(143));process.once('SIGINT',()=>void stop(130))
 try{
  if(name==='startup-warm'){
   const primer=await browser.newPage({viewport:{width:1280,height:820},deviceScaleFactor:2,colorScheme:'dark'})
@@ -97,8 +99,9 @@ try{
    if(pids.length<2)throw Error('Incomplete WebKit process coalition')
    const resourceBuildBefore=markers(),resourceQuietBefore=quiet()
    const sampler=spawn('bun',[path.resolve(import.meta.dirname,'../sample.ts'),String(seconds),`WebKit=${pids.join(',')}`],{stdio:['ignore','pipe','pipe']})
+   children.add(sampler)
    let raw='',error='';sampler.stdout.on('data',v=>raw+=v);sampler.stderr.on('data',v=>error+=v)
-   const done=new Promise((resolve,reject)=>sampler.once('exit',code=>code?reject(Error(error)):resolve()))
+   const done=new Promise((resolve,reject)=>sampler.once('exit',code=>{children.delete(sampler);code?reject(Error(error)):resolve()}))
    await page.evaluate(()=>{
     const m=window.__bench={times:[],latencies:[],active:true,commits:window.__commits,pending:null}
     m.wheel=()=>{m.pending??=performance.now()};window.addEventListener('wheel',m.wheel,{passive:true})
@@ -115,4 +118,4 @@ try{
   }catch(e){r.status='failed';r.reason=safeError(e)}finally{const processAfter=processInventory();r.evidence.gpuixProcessesBefore=processBefore.processes;r.evidence.gpuixProcessesAfter=processAfter.processes;r.evidence.foreignProcessesBefore=processBefore.foreign;r.evidence.foreignProcessesAfter=processAfter.foreign;if(processBefore.foreign.length||processAfter.foreign.length){r.status='discarded';r.reason='foreign GPUIX process: discarded'};watcher.close();r.evidence.buildMarkersDuring=[...seen];r.evidence.buildMarkersFinal=markers();r.evidence.quietMarkersFinal=quiet();if(seen.size||r.evidence.buildMarkersFinal.length){r.status='discarded';r.reason='build overlap: discarded'};if(run===runs||r.status==='failed'||r.status==='discarded'){await page?.close();page=null}}
   results.push(r)
  }
-}catch(e){console.error(safeError(e));process.exitCode=1}finally{await browser.close();await server.close();writeFileSync(out,JSON.stringify(results,null,2))}
+}catch(e){console.error(safeError(e));process.exitCode=1}finally{for(const child of children)child.kill();await browser.close();await server.close();writeFileSync(out,JSON.stringify(results,null,2))}

@@ -23,3 +23,12 @@ test('build watcher catches a marker removed before the final endpoint',async()=
  const watch=watchBuilds(dir)
  try{writeFileSync(marker,'');await Bun.sleep(30);rmSync(marker);await Bun.sleep(30);const gate=watch.finish();expect(gate.buildMarkersAfter).toEqual([]);expect(gate.quietMarkersBefore).toEqual(['kybern-gpuix-quiet.test']);expect(gate.quietMarkersAfter).toEqual(['kybern-gpuix-quiet.test']);expect(gate.overlap).toBe(true);expect(gate.buildMarkersDuring).toContain('kybern-gpuix-native-build.short')}finally{watch.finish();rmSync(dir,{recursive:true,force:true})}
 })
+
+import {foreignProcesses} from './process-gate.ts'
+test('process gate excludes this runner descendants but rejects cancelled-run orphans',()=>{
+ const rows=['20 bun /tmp/ade-gpuix/perf/bench/app.ts','21 bun /tmp/ade-gpuix/perf/sample.ts 15 GPUIX=20','30 bun /tmp/ade-gpuix/native/markdown-fixture.ts','40 /bin/sh -c pgrep -fl "bun .*ade-gpuix"','50 /opt/homebrew/bin/bun /tmp/ade-gpuix/perf/bench/run.ts']
+ const parents=new Map([[20,10],[21,10],[30,1],[40,1],[50,1]])
+ expect(foreignProcesses(rows,parents,10)).toEqual([rows[2]!])
+ parents.set(20,1)
+ expect(foreignProcesses(rows,parents,10)).toEqual([rows[0]!,rows[2]!])
+})

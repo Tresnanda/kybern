@@ -112,6 +112,8 @@ export async function scenario(name:Scenario,runs:number,fixture:Fixture,evidenc
  for(let run=1;run<=runs;run++){
   const r=emptyResult(name,run)
   let buildWatch:ReturnType<typeof watchRun>|undefined
+  const children: {kill:()=>unknown;exited:Promise<number>}[]=[]
+  const unregisterChildren:(()=>void)[]=[]
   try{
    if(name==='open-long')await control('home')
    if(name==='older-history'){await control('home');await control('open',{thread:fixture.manifest.long3000});await bounds(app,'transcript-surface')}
@@ -140,12 +142,16 @@ export async function scenario(name:Scenario,runs:number,fixture:Fixture,evidenc
     r.timings.olderHistoryVisibleMs=performance.now()-timed;r.evidence.firstSeqAfter=after.firstSeq;r.evidence.olderBlocks=after.blocks-before.blocks
    }
    const sampler=Bun.spawn(['bun',path.join(root,'perf/sample.ts'),String(options.seconds),`GPUIX=${launch!.pid}`],{stdout:'pipe',stderr:'pipe'})
+   children.push(sampler)
    const unsampler=onExit(async()=>{sampler.kill();await sampler.exited})
+   unregisterChildren.push(unsampler)
    const resourceStart=performance.now()
    const sampleTextPromise=new Response(sampler.stdout).text(),sampleErrorPromise=new Response(sampler.stderr).text()
    const resourceMark=telemetry.mark()
    const profiler=options.profile?Bun.spawn(['sample',String(launch!.pid),'5','-file',path.join(evidence,`profile-${name}-${run}.txt`)],{stdout:'ignore',stderr:'ignore'}):undefined
+   if(profiler)children.push(profiler)
    const unprofiler=profiler?onExit(async()=>{profiler.kill();await profiler.exited}):()=>{}
+   unregisterChildren.push(unprofiler)
    const input=scrolling?await inputDrive(point!,options.seconds*1000,name==='thread-fling'):undefined
    if(!scrolling)await delay(options.seconds*1000)
    const measured=telemetry.result(resourceMark,input?.sent)
@@ -160,7 +166,7 @@ export async function scenario(name:Scenario,runs:number,fixture:Fixture,evidenc
    if(streamBefore!=null){const streamAfter=(await control('state')).streamDeltas;r.evidence.offeredDeltas=streamAfter-streamBefore;r.evidence.offeredDeltasPerSecond=(streamAfter-streamBefore)/(r.timings.resourceWindowMs!/1000)}
    if(process.env.KYBERN_BENCH_COUNTERS==='1'){const response=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action:'counters'})});r.evidence.counters=await response.json()}
    writeFileSync(path.join(evidence,`${name}-${run}-resources.txt`),sampleText)
-  }catch(error){r.status='failed';r.reason=String(error)}
+  }catch(error){r.status='failed';r.reason=String(error)}finally{for(const child of children){child.kill();await child.exited}for(const unregister of unregisterChildren)unregister()}
   if(buildWatch){const gate=buildWatch.finish();Object.assign(r.evidence,gate);if(gate.overlap||gate.orphanOverlap){r.status='discarded';r.reason=gate.orphanOverlap?'foreign GPUIX process: discarded':'build overlap: discarded'}}
   writeFileSync(path.join(evidence,`${name}-${run}.log`),telemetry.raw)
   results.push(r)
