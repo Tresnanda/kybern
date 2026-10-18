@@ -191,6 +191,22 @@ async fn steer_goes_into_a_running_turn_and_falls_back_to_the_queue_when_it_cann
 }
 
 #[tokio::test]
+async fn a_steered_thread_message_queues_while_the_recipient_switches_model_instead_of_interrupting_it() {
+    let chat = Chat::new();
+    let a = chat.party("Alpha", ProviderKind::ClaudeCode, PermissionMode::Supervised, true).await;
+    let b = chat.party("Beta", ProviderKind::ClaudeCode, PermissionMode::Supervised, true).await;
+    let mut target = chat.fixture.orchestrator.thread_target(b.thread.id).unwrap().target;
+    target.model = Some("sonnet".into());
+    chat.fixture.store.meta_set(&format!("target:{}", b.thread.id), &serde_json::to_string(&target).unwrap()).unwrap();
+
+    let result = chat.send(&a, json!({"thread_id": b.thread.id, "body": "steer me", "delivery": "steer"})).await;
+    assert_eq!(result["delivered_as"], "queued");
+    assert_eq!(thread_message_parts(&chat.queued_for(&b.thread)).len(), 1);
+    assert_eq!(chat.fixture.store.thread_get(b.thread.id).unwrap().unwrap().status, ThreadStatus::Running);
+    assert!(!chat.events(&b.thread).iter().any(|event| matches!(event, EventPayload::TurnCompleted { .. })));
+}
+
+#[tokio::test]
 async fn a_message_to_a_more_permissive_thread_is_held_until_the_user_delivers_or_dismisses_it() {
     let chat = Chat::new();
     let a = chat.party("Alpha", ProviderKind::ClaudeCode, PermissionMode::Supervised, true).await;

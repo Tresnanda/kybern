@@ -469,7 +469,8 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         ThreadsInterrupt::NAME => {
             let p: ThreadsInterruptParams = parse(params)?;
-            state.orchestrator.interrupt(p.thread_id).await.map_err(bad)?;
+            let cause = format!("threads.interrupt from client {:?} (connection {})", ctx.principal.label, ctx.id);
+            state.orchestrator.stop_thread(p.thread_id, &cause).await.map_err(bad)?;
             ok(Empty {})
         }
         ThreadMessagesList::NAME => {

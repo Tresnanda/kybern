@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use tokio::sync::Notify;
 use uuid::Uuid;
 
-use super::{LiveSession, Orchestrator, derived_operation_id, truncate_utf8};
+use super::{LiveSession, Orchestrator, SteerSource, derived_operation_id, truncate_utf8};
 
 /// Names of the tools this module serves.
 pub(crate) const TOOL_NAMES: [&str; 6] = [
@@ -1114,6 +1114,7 @@ impl Orchestrator {
             "You can only stop agents you delegated work to. Call kybern_agent_status to list them."
         );
         Self::ensure_turn_active(live, turn_id).await?;
+        tracing::info!(caller = %caller.id, thread_id = %child.id, "an agent stopped a thread it delegated work to");
         if let Err(error) = self.delegation_stop(child.id, false).await {
             tracing::debug!(thread_id = %child.id, %error, "stopped agent had no live session to interrupt");
         }
@@ -1376,7 +1377,7 @@ impl Orchestrator {
         cap_batch(&mut items);
         if matches!(parent.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) && harness_supports_steer(parent.provider.kind) {
             let message = UserMessage { parts: vec![ContentPart::AgentResults { items: items.clone() }] };
-            match self.steer(methods::QueuedMessage { id: Uuid::now_v7(), thread_id: parent_id, message }).await {
+            match self.steer_from(methods::QueuedMessage { id: Uuid::now_v7(), thread_id: parent_id, message }, SteerSource::Kybern).await {
                 Ok(_) => return Ok(()),
                 Err(error) => tracing::debug!(%parent_id, %error, "steering agent results failed; queueing them instead"),
             }
@@ -1486,6 +1487,7 @@ impl Orchestrator {
             if descendant.delegation.as_ref().is_some_and(|info| info.status == DelegationStatus::Running)
                 && self.delegation_mark_cancelled(descendant.id, false)?
             {
+                tracing::info!(thread_id = %descendant.id, stopped = %root, "cancelling a delegated agent because a thread above it stopped");
                 self.delegation_drop_queued(descendant.id);
                 cancelled.push(descendant.id);
             }
