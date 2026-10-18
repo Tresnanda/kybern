@@ -24,7 +24,7 @@ export function assertScratchEnv(env: Record<string, string | undefined>) {
 
 /** Automation launch with an explicit process lifetime and startup deadline.
  * The upstream launch helper doesn't reject when a child exits before handshake. */
-export async function launchFixture(entry: string, env: Record<string, string>) {
+export async function launchFixture(entry: string, env: Record<string, string>, observe?: { stderr?: (chunk: string) => void }) {
   assertScratchEnv(env)
   // Without a client config dir GPUIX would read the desktop's saved environments and write its own prefs under ~/Library.
   const clientDir = process.env.KYBERN_CLIENT_CONFIG_DIR ?? path.join(path.resolve(({ ...process.env, ...env }).KYBERN_DATA_DIR!), 'client-config')
@@ -33,6 +33,7 @@ export async function launchFixture(entry: string, env: Record<string, string>) 
   const frames:number[]=[]
   let frameRemainder=''
   child.stderr.on('data', chunk => {
+    observe?.stderr?.(String(chunk))
     stderr = (stderr + String(chunk)).slice(-8000)
     if(env.KYBERN_FRAME_TIMES==='1') {
       const lines=(frameRemainder+String(chunk)).split('\n');frameRemainder=lines.pop()??''
