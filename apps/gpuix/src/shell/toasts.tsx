@@ -14,9 +14,14 @@ import { onEnvironmentChange } from './environment.ts'
 // the pointer is over the stack and while the window is hidden, and resumes with
 // the time that was left. No timer exists while no toast does.
 //
-// Motion: a toast rises 12px and fades in over 300 ms; it leaves in 160 ms, so
-// exits are faster than entrances. Both retarget if a toast is dismissed
-// mid-entrance. Under Reduce Motion a toast only fades, 120 ms.
+// Motion: a toast cross-fades in, 250 ms on the desktop's `--toast-ease`: opacity 0 -> 1 while a
+// 4px blur clears and it settles from 97% scale (`.t-toast`, `styles/motion.css`, minus its rise:
+// toasts do not slide). It leaves in 150 ms (opacity, a lighter blur, 98.5%), so exits are faster
+// than entrances. A toast replaced by another, a card that drops back into the collapsed stack and a
+// ghost that steps forward all cross-fade the same way instead of popping. All of it is the paint-only
+// `paintTransform` on the card (no render per frame), and it retargets if a toast is dismissed
+// mid-entrance. Under Reduce Motion a toast only fades, 120 ms. A toast is dismissed with its hover
+// close button, not by swiping.
 import {
   AlertCircleIcon,
   Alert02Icon,
@@ -25,10 +30,13 @@ import {
   InformationCircleIcon,
 } from '@hugeicons/core-free-icons'
 import { useGpuixRequired, useWindowSize, type PublicInstance } from '@gpuix/react'
+import type { PaintTransformProps } from '@gpuix/native/host'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { glyph, Icon } from '../icons.tsx'
+import '../native/backdrop.ts'
 import { onWindowVisibility, isWindowVisible } from '../native/visibility.ts'
 import { EASE } from '../motion/kit.tsx'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 
 export type ToastKind = 'default' | 'success' | 'info' | 'warning' | 'error'
@@ -44,6 +52,8 @@ export interface ToastOptions {
 
 interface Item {
   id: string
+  /** Unique per card: a toast that replaces another keeps its id, so layers and removal go by this. */
+  key: string
   kind: ToastKind
   title: string
   description?: string
@@ -68,14 +78,17 @@ const PEEK = 12.5
 /** A one-line toast: 16px padding either side, a 20px title, the border. */
 const ESTIMATE = 54
 const DEFAULT_DURATION = 4000
-const ENTER = 0.3
-const EXIT = 0.16
+/** `--toast-open` less the rise it dropped; the curve is `--toast-ease`. */
+const ENTER = 0.25
+const EXIT = 0.15
+const FADE = 0.12
 
 let items: Item[] = []
 let snapshot: readonly Item[] = items
 let hovered = false
 let hidden = false
 let nextId = 1
+let nextKey = 1
 const listeners = new Set<() => void>()
 
 function commit() {
@@ -101,8 +114,8 @@ function reconcile() {
   }
 }
 
-function remove(id: string) {
-  items = items.filter((i) => i.id !== id)
+function remove(key: string) {
+  items = items.filter((i) => i.key !== key)
   if (items.length === 0) hovered = false
   commit()
 }
@@ -114,14 +127,14 @@ function dismiss(id?: string) {
     clearTimeout(item.timer)
     item.startedAt = null
     item.leaving = true
-    setTimeout(() => remove(item.id), (REDUCED_MOTION ? 0.12 : EXIT) * 1000 + 40)
+    setTimeout(() => remove(item.key), (REDUCED_MOTION ? FADE : EXIT) * 1000 + 40)
   }
   commit()
 }
 
 /** Record a toast's measured height so the stack above it sits right. */
-function setHeight(id: string, height: number) {
-  const item = items.find((i) => i.id === id)
+function setHeight(key: string, height: number) {
+  const item = items.find((i) => i.key === key)
   if (!item) return
   item.height = height
   commit()
@@ -130,7 +143,7 @@ function setHeight(id: string, height: number) {
 function show(kind: ToastKind, title: string, options: ToastOptions = {}): string {
   const id = options.id ?? `toast-${nextId++}`
   const duration = options.duration ?? DEFAULT_DURATION
-  const existing = items.find((i) => i.id === id)
+  const existing = items.find((i) => i.id === id && !i.leaving)
   const fields = {
     kind,
     title,
@@ -139,16 +152,24 @@ function show(kind: ToastKind, title: string, options: ToastOptions = {}): strin
     duration,
     remaining: duration,
   }
-  if (existing && !existing.leaving) {
-    // An update in place: new text, and the timer starts over.
+  if (existing && existing.kind === kind && existing.title === title && existing.description === options.description && existing.action?.label === options.action?.label) {
+    // The same toast again: the timer starts over and nothing changes on screen.
     clearTimeout(existing.timer)
     Object.assign(existing, fields, { startedAt: null })
   } else {
+    // A new toast, or one that replaces the toast with this id: the old card fades out where it
+    // stood while the new one fades in over it.
+    let at = items.length
+    let height = ESTIMATE
     if (existing) {
+      at = items.indexOf(existing)
+      height = existing.height
       clearTimeout(existing.timer)
-      items = items.filter((i) => i !== existing)
+      existing.startedAt = null
+      existing.leaving = true
+      setTimeout(() => remove(existing.key), (REDUCED_MOTION ? FADE : EXIT) * 1000 + 40)
     }
-    items.push({ id, leaving: false, startedAt: null, height: ESTIMATE, ...fields })
+    items.splice(at, 0, { id, key: `${id}#${nextKey++}`, leaving: false, startedAt: null, height, ...fields })
   }
   commit()
   return id
@@ -212,35 +233,75 @@ function ToastStack({ list }: { list: readonly Item[] }) {
   // peeking above it, narrower by 5% per step (the cards carry no content there).
   const live = placed.filter((p) => !p.item.leaving)
   const collapsed = !hovered && live.length > 1
-  if (collapsed) {
-    const front = live[0]!
-    return (
-      <>
-        {placed.map(({ item, lift: above }) => {
-          if (item.leaving) return <ToastLayer key={item.id} item={item} x={size.width - OFFSET} y={size.height - OFFSET - above} lift={above} />
-          const step = live.findIndex((p) => p.item === item)
-          if (step === 0) return <ToastLayer key={item.id} item={item} x={size.width - OFFSET} y={size.height - OFFSET} lift={0} />
-          return <GhostLayer key={item.id} step={step} height={front.item.height} x={size.width - OFFSET} y={size.height - OFFSET} />
-        })}
-      </>
-    )
+  const x = size.width - OFFSET
+  const base = size.height - OFFSET
+  const layers: Layer[] = placed.map(({ item, lift: above }) => {
+    if (!collapsed || item.leaving) return { key: item.key, item, step: 0, x, y: base - above, lift: above, height: item.height }
+    const step = live.findIndex((p) => p.item === item)
+    if (step === 0) return { key: item.key, item, step: 0, x, y: base, lift: 0, height: item.height }
+    return { key: `ghost-${item.key}`, item, step, x, y: base, lift: 0, height: live[0]!.item.height }
+  })
+  // A layer that vanishes while its toast stays (a card dropping back into the collapsed stack, a
+  // ghost stepping forward) fades out where it stood rather than popping; a leaving toast has
+  // already faded by itself.
+  const seen = useRef(new Map<string, Layer>())
+  const retired = useRef(new Map<string, Layer>())
+  const [, settle] = useState(0)
+  const now = new Set(layers.map((l) => l.key))
+  for (const [key, layer] of seen.current) {
+    if (now.has(key) || retired.current.has(key) || layer.item.leaving || !items.includes(layer.item)) continue
+    retired.current.set(key, layer)
+    setTimeout(() => {
+      retired.current.delete(key)
+      settle((n) => n + 1)
+    }, (REDUCED_MOTION ? FADE : EXIT) * 1000 + 60)
   }
+  for (const key of now) retired.current.delete(key)
+  seen.current = new Map(layers.map((l) => [l.key, l]))
   return (
     <>
-      {placed.map(({ item, lift: above }) => (
-        <ToastLayer key={item.id} item={item} x={size.width - OFFSET} y={size.height - OFFSET - above} lift={above} />
-      ))}
+      {[...retired.current.values()].map((layer) => (layer.step > 0 ? <GhostLayer key={`out-${layer.key}`} layer={layer} leaving /> : <ToastLayer key={`out-${layer.key}`} layer={{ ...layer, item: { ...layer.item, leaving: true } }} />))}
+      {layers.map((layer) => (layer.step > 0 ? <GhostLayer key={layer.key} layer={layer} /> : <ToastLayer key={layer.key} layer={layer} />))}
     </>
   )
 }
 
+interface Layer {
+  key: string
+  item: Item
+  /** 0 is a card; an older toast of the collapsed stack is a ghost at 1, 2. */
+  step: number
+  x: number
+  y: number
+  /** How far the card sits above the corner: when it changes, the card glides. */
+  lift: number
+  height: number
+}
+
+/**
+ * The paint-only enter and exit of one layer: opacity with a blur that clears and a settle from 97%
+ * (`.t-toast`). Reduce Motion fades only. `initial` is read once, at mount; a layer that mounts
+ * already leaving (a retired layer) starts shown. Undefined without the patched native build, where
+ * the layer simply appears.
+ */
+function useFade(leaving: boolean): PaintTransformProps | undefined {
+  const initial = useRef(leaving ? SHOWN : HIDDEN).current
+  if (!PATCHED_NATIVE) return undefined
+  return { initial, animate: leaving ? GONE : SHOWN, transition: { duration: leaving ? (REDUCED_MOTION ? FADE : EXIT) : REDUCED_MOTION ? FADE : ENTER, ease: [...(leaving ? EASE.out : EASE.smoothOut)] as [number, number, number, number] } }
+}
+const SHOWN = REDUCED_MOTION ? { opacity: 1 } : { opacity: 1, blur: 0, scale: 1 }
+const HIDDEN = REDUCED_MOTION ? { opacity: 0 } : { opacity: 0, blur: 4, scale: 0.97 }
+const GONE = REDUCED_MOTION ? { opacity: 0 } : { opacity: 0, blur: 3, scale: 0.985 }
+
 /** An older toast peeking above the front one in the collapsed stack. */
-function GhostLayer({ step, height, x, y }: { step: number; height: number; x: number; y: number }) {
+function GhostLayer({ layer, leaving = false }: { layer: Layer; leaving?: boolean }) {
   const t = useTheme()
+  const fade = useFade(leaving)
+  const { step, height, x, y } = layer
   const width = WIDTH * (1 - 0.05 * step)
   return (
-    <anchored position={{ x: x - (WIDTH - width) / 2, y: y - PEEK * step }} anchor="bottomRight" fit="snap" snapMargin={8} deferred priority={6 - step} occlude style={{ borderRadius: 10 }}>
-      <div onMouseEnter={hoverStack(true)} style={{ width, height, borderRadius: 10, borderWidth: 1, borderColor: t.border, backgroundColor: t.popover }} />
+    <anchored position={{ x: x - (WIDTH - width) / 2, y: y - PEEK * step }} anchor="bottomRight" fit="snap" snapMargin={8} deferred priority={6 - step} occlude backdrop={BACKING} style={{ borderRadius: 10 }}>
+      <div onMouseEnter={hoverStack(true)} paintTransform={fade} style={{ width, height, borderRadius: 10, borderWidth: 1, borderColor: t.border, backgroundColor: t.popover }} />
     </anchored>
   )
 }
@@ -251,41 +312,42 @@ const hoverStack = (on: boolean) => () => {
 }
 
 /**
- * One toast on its own `<anchored>` layer. Each layer is exactly its card, so the
- * opaque backing GPUIX paints under an anchored surface is hidden by the card
- * (a shared layer showed it in the gaps and while rows faded). The motion runs
- * on the layer itself: it rises 12px and fades in over 300 ms, glides when a
- * newer toast pushes it up, and leaves in 160 ms, faster than it came. Reduce
- * Motion keeps the 120 ms fades and drops the movement.
+ * An explicit `{ blur: 0 }` makes the opaque backing GPUIX paints under an anchored surface
+ * transparent. The card paints its own opaque surface, so nothing shows through at rest, and while
+ * it fades and blurs there is no backing left behind it: the whole layer fades as one.
  */
-function ToastLayer({ item, x, y, lift }: { item: Item; x: number; y: number; lift: number }) {
+const BACKING = { blur: 0 }
+
+/**
+ * One toast on its own `<anchored>` layer. Each layer is exactly its card, so nothing shows in the
+ * gaps between cards. The card cross-fades in and out with `paintTransform` (`useFade`); the layer
+ * itself glides when a newer toast pushes it up, or a toast below it leaves.
+ */
+function ToastLayer({ layer }: { layer: Layer }) {
+  const { item, x, y, lift } = layer
   const renderer = useGpuixRequired()
   const card = useRef<PublicInstance>(null)
-  const move = REDUCED_MOTION ? 0 : 12
-  // What the layer is doing: arriving, gliding after the stack moved, or leaving.
-  const [motion, setMotion] = useState<Motion>(() => ({ generation: ++generation, initial: { opacity: 0, top: move }, animate: { opacity: 1, top: 0 }, ease: EASE.smoothOut, duration: REDUCED_MOTION ? 0.12 : ENTER }))
-  const last = useRef({ lift, leaving: item.leaving })
-  if (last.current.leaving !== item.leaving && item.leaving) {
-    last.current = { lift, leaving: true }
-    setMotion({ generation: ++generation, initial: { opacity: 1, top: 0 }, animate: { opacity: 0, top: REDUCED_MOTION ? 0 : 4 }, ease: EASE.out, duration: REDUCED_MOTION ? 0.12 : EXIT })
-  } else if (last.current.lift !== lift && !item.leaving) {
-    // A toast arrived or left below: start where this one was and glide up (or down) to its place.
-    const delta = REDUCED_MOTION ? 0 : lift - last.current.lift
-    last.current = { lift, leaving: false }
-    setMotion({ generation: ++generation, initial: { opacity: 1, top: delta }, animate: { opacity: 1, top: 0 }, ease: EASE.smoothOut, duration: DURATION_GLIDE })
+  const fade = useFade(item.leaving)
+  // Gliding after the stack moved: start where this one was and move to its place.
+  const [glide, setGlide] = useState<Glide | null>(null)
+  const last = useRef(lift)
+  if (last.current !== lift) {
+    const delta = REDUCED_MOTION || item.leaving ? 0 : lift - last.current
+    last.current = lift
+    if (delta !== 0) setGlide({ generation: ++generation, from: delta })
   }
   // Measure once painted: the stack needs each card's real height (text wraps).
   useEffect(() => {
     const timer = setTimeout(() => {
       const id = card.current?.id
       const bounds = id != null ? renderer.getElementBounds?.(id) : null
-      if (bounds && Math.abs(bounds.height - item.height) > 0.5) setHeight(item.id, bounds.height)
+      if (bounds && Math.abs(bounds.height - item.height) > 0.5) setHeight(item.key, bounds.height)
     }, 32)
     return () => clearTimeout(timer)
-  }, [renderer, item.id, item.title, item.description, item.height])
+  }, [renderer, item.key, item.title, item.description, item.height])
   return (
     <anchored
-      {...({ motion: { generation: motion.generation, isExit: item.leaving, initial: motion.initial, animate: motion.animate, transition: { duration: motion.duration, ease: [...motion.ease] } } } as object)}
+      {...(glide ? { motion: { generation: glide.generation, initial: { top: glide.from }, animate: { top: 0 }, transition: { duration: DURATION_GLIDE, ease: [...EASE.smoothOut] } } } as object : {})}
       style={{ borderRadius: 10 }}
       position={{ x, y }}
       anchor="bottomRight"
@@ -294,8 +356,9 @@ function ToastLayer({ item, x, y, lift }: { item: Item; x: number; y: number; li
       deferred
       priority={6}
       occlude
+      backdrop={BACKING}
     >
-      <div ref={card} onMouseEnter={hoverStack(true)} onMouseLeave={hoverStack(false)}>
+      <div ref={card} paintTransform={fade} onMouseEnter={hoverStack(true)} onMouseLeave={hoverStack(false)}>
         <ToastCard item={item} />
       </div>
     </anchored>
@@ -303,12 +366,9 @@ function ToastLayer({ item, x, y, lift }: { item: Item; x: number; y: number; li
 }
 
 let generation = 2_000_000
-interface Motion {
+interface Glide {
   generation: number
-  initial: { opacity: number; top: number }
-  animate: { opacity: number; top: number }
-  ease: readonly number[]
-  duration: number
+  from: number
 }
 const DURATION_GLIDE = 0.25
 
