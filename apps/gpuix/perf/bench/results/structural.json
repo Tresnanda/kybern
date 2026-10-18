@@ -1,0 +1,59 @@
+{
+  "kind": "headless structural counts; no native paint or FPS measured",
+  "results": [
+    {
+      "totalRows": 300,
+      "providedRows": 300,
+      "mode": "all children supplied",
+      "reactRowRenders": 300,
+      "mountedReactRows": 300,
+      "retainedHostNodes": 1201,
+      "maxAllocatedId": 1201
+    },
+    {
+      "totalRows": 300,
+      "providedRows": 32,
+      "mode": "caller mounts 32 rows",
+      "reactRowRenders": 32,
+      "mountedReactRows": 32,
+      "retainedHostNodes": 129,
+      "maxAllocatedId": 129
+    },
+    {
+      "totalRows": 3000,
+      "providedRows": 3000,
+      "mode": "all children supplied",
+      "reactRowRenders": 3000,
+      "mountedReactRows": 3000,
+      "retainedHostNodes": 12001,
+      "maxAllocatedId": 12001
+    },
+    {
+      "totalRows": 3000,
+      "providedRows": 32,
+      "mode": "caller mounts 32 rows",
+      "reactRowRenders": 32,
+      "mountedReactRows": 32,
+      "retainedHostNodes": 129,
+      "maxAllocatedId": 129
+    },
+    {
+      "totalRows": 10000,
+      "providedRows": 10000,
+      "mode": "all children supplied",
+      "reactRowRenders": 10000,
+      "mountedReactRows": 10000,
+      "retainedHostNodes": 40001,
+      "maxAllocatedId": 40001
+    },
+    {
+      "totalRows": 10000,
+      "providedRows": 32,
+      "mode": "caller mounts 32 rows",
+      "reactRowRenders": 32,
+      "mountedReactRows": 32,
+      "retainedHostNodes": 129,
+      "maxAllocatedId": 129
+    }
+  ]
+}
