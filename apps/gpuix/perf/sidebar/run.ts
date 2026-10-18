@@ -49,7 +49,7 @@ const pct = (values: number[], p: number) => [...values].sort((a,b) => a-b)[Math
 const buildMarkers = () => readdirSync('/tmp').filter(name => name.startsWith('kybern-gpuix-native-build.'))
 const processCheck = (ownPid?: number) => {
   const listing = Bun.spawnSync(['pgrep', '-fl', 'bun .*ade-gpuix']).stdout.toString().trim()
-  const others = listing.split('\n').filter(line => line && Number(line.split(/\s+/)[0]) !== ownPid)
+  const others = listing.split('\n').filter(line => /^\d+\s+(?:\S*\/)?bun\s/.test(line) && Number(line.split(/\s+/)[0]) !== ownPid)
   if (others.length) throw Error(`Discard/repeat ${label}: other GPUIX processes alive: ${others.join('; ')}`)
   return listing
 }
@@ -130,7 +130,7 @@ try {
     const times = frames.slice(f0).filter(f => f.received < start + input.durationMs + 250)
     const intervals = times.slice(1).map((v, i) => v.native - times[i]!.native)
     const work = costs.slice(w0), inputPaints = paints.slice(p0)
-    const result = { scene, fixtureScene: process.env.SIDEBAR_SCENE ?? 'settled', idle: process.env.SIDEBAR_IDLE === '1', buffer: Number(process.env.KYBERN_SIDEBAR_BUFFER ?? 768), firstContentMs, processesBefore, processesAfter, nativeBuildMarkersBefore, nativeBuildMarkersAfter, nativeBuildMarkersDuring: [...observedBuildMarkers], fullTree: true, fullRate: '1', opaque: true, window: '1440x900', nativeOverdraw: Number(process.env.KYBERN_OVERDRAW ?? (label.startsWith('baseline') || label.startsWith('p1') ? 512 : 128)), offeredPackets: process.env.SIDEBAR_IDLE === '1' ? 0 : Number(process.env.SIDEBAR_PACKETS ?? 1800), magnitude: Number(process.env.SIDEBAR_MAGNITUDE ?? 10), input: '120Hz synthetic precise AppKit NSEvent via GPUIView.scrollWheel:, contact + native momentum phases; no automation RPC',
+    const result = { scene, fixtureScene: process.env.SIDEBAR_SCENE ?? 'settled', idle: process.env.SIDEBAR_IDLE === '1', buffer: label.startsWith('baseline') || label.startsWith('p1') ? null : Number(process.env.KYBERN_SIDEBAR_BUFFER ?? 768), firstContentMs, processesBefore, processesAfter, nativeBuildMarkersBefore, nativeBuildMarkersAfter, nativeBuildMarkersDuring: [...observedBuildMarkers], fullTree: true, cacheLayout: !label.startsWith('baseline'), bodyWindow: !label.startsWith('baseline') && !label.startsWith('p1'), fullRate: '1', opaque: true, window: '1440x900', nativeOverdraw: Number(process.env.KYBERN_OVERDRAW ?? (label.startsWith('baseline') || label.startsWith('p1') ? 512 : 128)), offeredPackets: process.env.SIDEBAR_IDLE === '1' ? 0 : Number(process.env.SIDEBAR_PACKETS ?? 1800), magnitude: Number(process.env.SIDEBAR_MAGNITUDE ?? 10), input: '120Hz synthetic precise AppKit NSEvent via GPUIView.scrollWheel:, contact + native momentum phases; no automation RPC',
       frames: times.length, p50: pct(intervals, .5), p95: pct(intervals, .95), p99: pct(intervals, .99), over16_7: intervals.filter(v => v > 16.7).length, over33: intervals.filter(v => v > 33).length, max: Math.max(0, ...intervals),
       commits: commits - c0, renderP50: pct(work.map(v => v.render), .5), renderP95: pct(work.map(v => v.render), .95), layoutP95: pct(work.map(v => v.layout), .95), layoutCallsP50: pct(work.map(v => v.calls), .5),
       inputToCpuPaintP50: pct(inputPaints.map(v => v.first), .5), inputToCpuPaintP95: pct(inputPaints.map(v => v.first), .95), batchMax: Math.max(0, ...inputPaints.map(v => v.packets)),

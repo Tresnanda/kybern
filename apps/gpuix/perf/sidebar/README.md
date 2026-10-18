@@ -57,7 +57,7 @@ Neither measures input-to-photon. CPU/GPU/physical footprint come from
 separate and excluded from clean acceptance tables. Idle runs use no input.
 
 Every timed run checks native build markers before, during and after its sample,
-and lists GPUIX processes before/after. Other live fixtures invalidate the run.
+and lists GPUIX processes before/after. Only actual Bun commands count as live fixtures; a shell inspecting that same process pattern does not. Other live fixtures invalidate the run.
 The initial 05:16–05:32Z data is archived under `excluded-overlap-0516-0532`
 and excluded from acceptance claims. Evidence is saved under the original
 conversation folder: `/Users/mymac/projects/ade/previews/gpuix/perf/sidebar/`.
@@ -66,5 +66,7 @@ conversation folder: `/Users/mymac/projects/ade/previews/gpuix/perf/sidebar/`.
 cache, alternates pair order, and repeats three times (each fixture also records a second warm launch). This is process/cache
 cold; it does not purge OS filesystem caches or include daemon startup/migration.
 Cold windows are explicitly 1280×820, matching the earlier startup workload.
-Both packages contain the same complete app/resources/native addon; only the
+Use `KYBERN_TEST_DAEMON=<worktree>/target/debug/kybernd` to match the current startup fixes; the installed-daemon diagnostics are retained separately. Both packages contain the same complete app/resources/native addon; only the
 sidebar-owned sources differ. The selected newest-content timeline remains measured.
+
+`final.ts --buffer-probe` (inside `lease.ts` + `fixture.ts`) compares 1536/3072 px rich-body buffers with the same fast wheel trace. The production buffer remains 768 px: larger buffers trade fewer refills for higher CPU and larger individual stalls. `SIDEBAR_IDLE=1 SIDEBAR_WARM_MS=20000` repeats settled idle after late startup work. `summary.ts` includes these controls separately from the repeated primary runs. See `REPORT.md` for the measured tradeoffs and unmet gates.

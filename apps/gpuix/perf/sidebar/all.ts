@@ -1,6 +1,6 @@
 /** One final quiet window for the scroll and fresh-daemon cold batches. */
 for (const command of [
-  ['bun', 'perf/sidebar/package.ts'],
+  ['bun', 'perf/sidebar/lease.ts', 'bun', 'perf/sidebar/package.ts'],
   ['bun', 'perf/sidebar/final.ts', '--cold-fixture'],
   ['bun', 'perf/sidebar/fixture.ts', 'bun', 'perf/sidebar/final.ts'],
 ]) {

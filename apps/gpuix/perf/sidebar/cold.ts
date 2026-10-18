@@ -10,17 +10,16 @@ assertScratchEnv({ KYBERN_DATA_DIR: process.env.KYBERN_DATA_DIR, KYBERN_URL: '' 
 const packaged = process.argv.includes('--packaged'), visuals = process.argv.includes('--visuals'), active = process.argv.includes('--active'), resources = process.argv.includes('--resources') || active, history = process.argv.includes('--history')
 const data = process.env.KYBERN_DATA_DIR!, token = readFileSync(path.join(data, 'daemon.token'), 'utf8').trim()
 const rpcs: { id: unknown; method: string; start: number; end?: number; bytes?: number; before?: number }[] = []
-const pending = new Map<unknown, (typeof rpcs)[number]>()
-const proxy = Bun.serve<{ upstream: WebSocket }>({ port: 4328, hostname: '127.0.0.1', fetch(req, server) {
+const proxy = Bun.serve<{ upstream: WebSocket; pending: Map<unknown, (typeof rpcs)[number]> }>({ port: 4328, hostname: '127.0.0.1', fetch(req, server) {
   const upstream = new WebSocket('ws://127.0.0.1:4327/ws', { headers: { origin: 'tauri://localhost', Authorization: `Bearer ${token}` } } as never)
-  if (server.upgrade(req, { data: { upstream } })) return
+  if (server.upgrade(req, { data: { upstream, pending: new Map() } })) return
   upstream.close(); return new Response('WebSocket required', { status: 400 })
 }, websocket: {
   open(socket) {
     socket.data.upstream.onmessage = e => {
-      const message = JSON.parse(String(e.data)), entry = pending.get(message.id)
+      const message = JSON.parse(String(e.data)), entry = socket.data.pending.get(message.id)
       const deliver = () => {
-        if (entry) { entry.end = performance.now(); entry.bytes = String(e.data).length; pending.delete(message.id) }
+        if (entry) { entry.end = performance.now(); entry.bytes = String(e.data).length; socket.data.pending.delete(message.id) }
         socket.send(String(e.data))
       }
       const delay = entry?.before == null ? 0 : Number(process.env.KYBERN_STARTUP_HISTORY_DELAY_MS ?? 0)
@@ -30,7 +29,7 @@ const proxy = Bun.serve<{ upstream: WebSocket }>({ port: 4328, hostname: '127.0.
   },
   async message(socket, raw) {
     const message = JSON.parse(String(raw))
-    if (message.id !== undefined) { const entry = { id: message.id, method: message.method, start: performance.now(), before: message.params?.before_seq }; rpcs.push(entry); pending.set(message.id, entry) }
+    if (message.id !== undefined) { const entry = { id: message.id, method: message.method, start: performance.now(), before: message.params?.before_seq }; rpcs.push(entry); socket.data.pending.set(message.id, entry) }
     while (socket.data.upstream.readyState === WebSocket.CONNECTING) await Bun.sleep(1)
     socket.data.upstream.send(String(raw))
   }, close(socket) { socket.data.upstream.close() },
@@ -43,7 +42,7 @@ const results: unknown[] = []
 let discarded = 0
 const processCheck = (ownPid?: number) => {
   const listing = spawnSync('pgrep', ['-fl', 'bun .*ade-gpuix'], { encoding: 'utf8' }).stdout.trim()
-  const others = listing.split('\n').filter(line => line && Number(line.split(/\s+/)[0]) !== ownPid)
+  const others = listing.split('\n').filter(line => /^\d+\s+(?:\S*\/)?bun\s/.test(line) && Number(line.split(/\s+/)[0]) !== ownPid)
   if (others.length) throw Error(`Discard/repeat cold run: other GPUIX processes alive: ${others.join('; ')}`)
   return listing
 }

@@ -29,6 +29,8 @@ const scroll: Record<string,unknown> = {}
 for (const scene of ['settled','running','mixed']) for(const variant of ['baseline','p1','candidate']) scroll[`${scene}/${variant}`]=summarize([0,1].map(i=>`${variant}-final-${scene}-${i}-dark.json`))
 for (const scene of ['fast','idle','profile']) for(const variant of ['baseline',...(scene==='fast'?['p1']:[]),'candidate']) scroll[`${scene}/${variant}`]=summarize([`${variant}-final-${scene}-dark.json`])
 scroll['wide-overdraw/candidate']=summarize(['candidate-final-wide-overdraw-dark.json'])
+scroll['idle-settled/candidate']=summarize(['candidate-final-idle-settled-dark.json'])
+for (const buffer of ['1536','3072']) scroll[`buffer-${buffer}/candidate-fast`]=summarize([`candidate-buffer-${buffer}-fast-dark.json`])
 const cold: Record<string,unknown> = {}
 for (const variant of ['baseline','candidate']) for(const temperature of ['cold','warm']) {
   const runs = [0,1,2].flatMap(i=>{
