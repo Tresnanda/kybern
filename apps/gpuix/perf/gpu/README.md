@@ -19,6 +19,7 @@ bun native/ui-lease.ts perf-gpu-visual bun perf/gpu/visual.ts
 bun perf/gpu/quiet.ts bun perf/gpu/measure.ts diagnosis
 bun perf/gpu/quiet.ts bun perf/gpu/measure.ts followups
 bun perf/gpu/quiet.ts bun perf/gpu/followups.ts
+KYBERN_BENCH_STREAM_CATCHUP=1 bun perf/gpu/quiet.ts bun perf/gpu/gated.ts
 pnpm exec tsc -p perf/gpu/tsconfig.json
 ```
 
@@ -74,6 +75,11 @@ inside every ancestor's rounded shape. Retained scene operations, cache keys,
 clip generations, input masks, atlas entries and transform bases remain intact.
 Animated/transformed monochrome sprites, shadows, paths and backdrops keep the
 original mask chain. There is no timer, frame-source or animation-default change.
+The final candidate also bypasses pruning for every primitive in any scene with
+backdrops. Unrestricted streaming results changed sign across repeat pairs and
+its original timer-driven fixture offered unequal delta counts; that extension
+was dropped. Final `gpu-gated-*` runs use the fixture's existing wall-time catchup
+flag so streaming offers a matched 25Hz timeline without changing product loops.
 `gpu_clip_bounds.rs` has a standalone `rustc --edition=2021 --test` geometry check.
 
 External evidence: `/Users/mymac/projects/ade/previews/gpuix/perf/gpu/`.

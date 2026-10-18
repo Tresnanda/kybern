@@ -16,6 +16,13 @@ log = Path("/Users/mymac/projects/ade/previews/gpuix/perf/gpu/native-update.log"
 child = None
 reserved = False
 routing = []
+awake = None
+screen_script = '/Users/mymac/projects/ade-gpuix-scratch/screen-state.swift'
+
+def screen_ready():
+    result=subprocess.run(['swift',screen_script],capture_output=True,text=True)
+    import re
+    return result.returncode==0 and bool(re.search(r'locked:\s*(?:0|nil)\b',result.stdout)) and bool(re.search(r'displayAsleep:\s*(?:0|false)\b',result.stdout))
 
 def cancelled(_signal, _frame):
     raise KeyboardInterrupt
@@ -38,9 +45,11 @@ try:
     reserved = True
     while list(tmp.glob("kybern-gpuix-quiet.*")) or list(tmp.glob("kybern-gpuix-native-build.*")):
         time.sleep(1)
+    while not screen_ready(): time.sleep(60)
     import shutil
     if shutil.disk_usage(root).free < 30*1024**3: raise RuntimeError("Need 30 GiB free")
     marker.write_text(f"{lane} {time.time()}\n")
+    awake=subprocess.Popen(['/usr/bin/caffeinate','-d','-i','-u','-w',str(os.getpid())])
     (app / "native/build/gpu-final-pending").write_text("Full updater pending\n")
     evidence=log.parent/"native-checks"
     old="/Users/mymac/projects/ade/previews/gpuix"
@@ -73,15 +82,20 @@ try:
                     ["native/build/gpu-clip-tests"]]
         if finish_only: commands = commands[2:]
         for command in commands:
+            if not screen_ready(): raise RuntimeError('Locked/asleep: pause native UI validation')
             child = subprocess.Popen(command, cwd=app, env=env, stdout=output,
                                      stderr=subprocess.STDOUT, start_new_session=True)
             while child.poll() is None:
                 time.sleep(1)
             if child.returncode:
                 sys.exit(child.returncode)
+            if not screen_ready(): raise RuntimeError('Locked/asleep after native validation: discard')
         (app / "native/build/gpu-final-pending").unlink(missing_ok=True)
 
 finally:
+    if awake is not None:
+        awake.terminate()
+        awake.wait()
     for p,original in routing: p.write_text(original)
     if child is not None and child.poll() is None:
         os.killpg(child.pid, signal.SIGTERM)

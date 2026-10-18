@@ -2,7 +2,7 @@ import { writeFileSync, unlinkSync, readdirSync, readFileSync, existsSync } from
 const lane='perf-gpu', marker=`/tmp/kybern-gpuix-quiet.${lane}`
 const order='/tmp/kybern-gpuix-quiet-order'
 const screenScript='/Users/mymac/projects/ade-gpuix-scratch/screen-state.swift'
-function ready(){const result=Bun.spawnSync(['swift',screenScript],{stdout:'pipe',stderr:'pipe'});const raw=result.stdout.toString();return result.exitCode===0&&/locked:\s*0\b/.test(raw)&&/displayAsleep:\s*(?:false|0)\b/.test(raw)}
+function ready(){const result=Bun.spawnSync(['swift',screenScript],{stdout:'pipe',stderr:'pipe'});const raw=result.stdout.toString();return result.exitCode===0&&/locked:\s*(?:0|nil)\b/.test(raw)&&/displayAsleep:\s*(?:false|0)\b/.test(raw)}
 function queue(remove=false) {
  const result=Bun.spawnSync(['python3','-c',
   'from pathlib import Path;import sys\np=Path(sys.argv[1]);lane=sys.argv[2];lines=p.read_text().splitlines() if p.exists() else []\nlines=[x for x in lines if x and x!=lane] if sys.argv[3]=="remove" else lines+([] if lane in lines else [lane])\np.write_text("".join(x+chr(10) for x in lines))',

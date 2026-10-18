@@ -2,13 +2,14 @@ from pathlib import Path
 import json,re,statistics,shutil
 app=Path(__file__).resolve().parents[2]
 evidence=Path('/Users/mymac/projects/ade/previews/gpuix/perf/gpu')
-labels=['gpu-before','gpu-control','gpu-after','gpu-diagnostic-control','gpu-diagnostic-after','gpu-stream-reverse-1','gpu-stream-reverse-0']
+labels=['gpu-before','gpu-control','gpu-after','gpu-diagnostic-control','gpu-diagnostic-after','gpu-stream-reverse-1','gpu-stream-reverse-0','gpu-final-control','gpu-final-after','gpu-gated-control','gpu-gated-after','gpu-gated-diagnostic-control','gpu-gated-diagnostic-after']
 all_rows={}
 for label in labels:
     p=app/'perf/bench/results'/f'{label}.json'
+    if not p.exists():p=evidence/f'{label}.json'
     if not p.exists():continue
     d=json.loads(p.read_text())
-    shutil.copy2(p,evidence/f'{label}.json')
+    if p.resolve()!=(evidence/f'{label}.json').resolve():shutil.copy2(p,evidence/f'{label}.json')
     rows=[r for r in d['results'] if r['status']=='ok']
     all_rows[label]={'addonSha256':d['addonSha256'],'fullRate':d['fullRate'],'host':d['host'],'hardware':d['hardware'],'renderFlags':d['renderFlags'],'gpuLaneControls':d.get('gpuLaneControls'),'resourceSeconds':d['resourceSeconds'],'warmupSeconds':d['warmupSeconds'],'aborted':d['aborted'],'results':[{k:r[k] for k in ['scenario','run','frames','resources','work','latency']}|{'gpuMsPerSubmission':r['evidence'].get('averageProcessGpuMsPerSubmission'),'cpuMsPerSubmission':r['evidence'].get('averageProcessCpuMsPerSubmission'),'input':r['evidence'].get('input'),'packets':r['evidence'].get('offeredPackets'),'packetsPerSecond':r['evidence'].get('offeredPacketsPerSecond'),'deltasPerSecond':r['evidence'].get('offeredDeltasPerSecond'),'nativeMemory':r['evidence'].get('counters',{}).get('nativeMemory'),'screenStateBefore':r['evidence'].get('screenStateBefore'),'screenStateAfter':r['evidence'].get('screenStateAfter')} for r in rows]}
 
@@ -44,9 +45,19 @@ for label in labels:
         diags[label][name]=fields
 
 doc={'measurements':all_rows,'diagnostics':diags}
-for name in ['precise','markdown-cost']:
+for name in ['precise','precise-gated','markdown-cost']:
     p=evidence/name/'results.json'
     if p.exists():doc[name]=json.loads(p.read_text())
 (evidence/'summary.json').write_text(json.dumps(doc,indent=2))
+# Preserve per-packet timing arrays externally; the checked-in summary keeps
+# counts/quantiles so repeated measurements do not become a recording archive.
+for name in ['precise','precise-gated']:
+    for row in doc.get(name,[]):
+        inputs=row['inputResult']
+        inputs['offeredPackets']=len(inputs.pop('offered'))
+        samples=sorted(inputs.pop('handlerLatencies'))
+        inputs['handlerLatencyMs']={'count':len(samples),**{
+            key:samples[min(len(samples)-1,int(len(samples)*q))] if samples else None
+            for key,q in [('p50',.5),('p95',.95),('p99',.99)]}}
 (app/'perf/gpu/results.json').write_text(json.dumps(doc,indent=2))
 print(json.dumps(diags,indent=2))

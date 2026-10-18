@@ -12,11 +12,13 @@ const jobs=[
  {label:'gpu-diagnostic-after',env:{KYBERN_GPU_CLIP_PRUNE:'1',KYBERN_GPU_TRACE:'1'},scenes:['explorer-scroll','markdown-scroll','sidebar-scroll','thread-scroll','pr-changes','streaming'],args:['--runs','1','--seconds','5','--warmup','10']},
 ]
 jobs.sort((a,b)=>Number(!a.label.includes('diagnostic'))-Number(!b.label.includes('diagnostic')))
+const prefix=process.env.KYBERN_GPU_ACCEPTANCE_PREFIX??(process.env.KYBERN_GPU_FINAL_ACCEPTANCE==='1'?'gpu-final':undefined)
+if(prefix)for(const job of jobs)job.label=job.label.replace('gpu-',prefix+'-')
 for(const job of jobs.filter(job=>phase==='diagnosis'?job.label.includes('diagnostic'):phase==='acceptance'?!job.label.includes('diagnostic'):false)){
  const child=Bun.spawn(['bun','perf/bench/run.ts',...job.scenes,...job.args,'--label',job.label,'--keep-data'],{env:{...process.env,NAPI_RS_NATIVE_LIBRARY_PATH:new URL('../../native/build/gpuix-native.darwin-arm64.node',import.meta.url).pathname,...job.env},stdin:'inherit',stdout:'inherit',stderr:'inherit'})
  const unregister=onExit(async()=>{child.kill();await child.exited})
  const code=await child.exited;unregister();if(code)throw Error(`${job.label} failed (${code})`)
- const resultFile=`perf/bench/results/${job.label}.json`;const result=JSON.parse(readFileSync(resultFile,'utf8'));result.gpuLaneControls={clipPrune:Reflect.get(job.env,'KYBERN_GPU_CLIP_PRUNE'),trace:Reflect.get(job.env,'KYBERN_GPU_TRACE')??'0'};writeFileSync(resultFile,JSON.stringify(result,null,2))
+ const resultFile=`perf/bench/results/${job.label}.json`;const result=JSON.parse(readFileSync(resultFile,'utf8'));result.gpuLaneControls={clipPrune:Reflect.get(job.env,'KYBERN_GPU_CLIP_PRUNE'),trace:Reflect.get(job.env,'KYBERN_GPU_TRACE')??'0',streamingCatchup:process.env.KYBERN_BENCH_STREAM_CATCHUP??'0'};writeFileSync(resultFile,JSON.stringify(result,null,2))
  if(result.results.some((row:{status:string;scenario:string;frames:{count:number};resources:{gpuMs:number}})=>row.status!=='ok'||(row.scenario!=='idle-home'&&(row.frames.count<30||row.resources.gpuMs<=0))))throw Error('Discard invalid active window')
 }
 

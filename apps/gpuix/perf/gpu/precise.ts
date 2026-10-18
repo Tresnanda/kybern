@@ -8,8 +8,9 @@ import {watchRun} from '../bench/process-gate.ts'
 import {screenState} from '../bench/screen-state.ts'
 import {Telemetry,parseResources} from '../bench/telemetry.ts'
 import {launchFixture} from '../../src/requests/harness.ts'
-const evidence='/Users/mymac/projects/ade/previews/gpuix/perf/gpu/precise';mkdirSync(evidence,{recursive:true})
+const evidence='/Users/mymac/projects/ade/previews/gpuix/perf/gpu/'+(process.env.KYBERN_GPU_PRECISE_LABEL??'precise');mkdirSync(evidence,{recursive:true})
 process.env.KYBERN_BENCH_SCREEN_STATE_SCRIPT??='/Users/mymac/projects/ade-gpuix-scratch/screen-state.swift'
+if(existsSync('native/build/gpu-final-pending'))throw Error('Complete native updater has not passed')
 const fixture=await seed('/Users/mymac/projects/ade-gpuix-scratch/perf-gpu-precise',4335)
 const results:unknown[]=[]
 async function until<T>(fn:()=>Promise<T|false>,label:string,ms=30000):Promise<T>{const end=performance.now()+ms;for(;;){const v=await fn();if(v)return v;if(performance.now()>end)throw Error(label);await Bun.sleep(20)}}

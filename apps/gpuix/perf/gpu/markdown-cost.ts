@@ -2,7 +2,7 @@ import {onExit} from '../bench/lifetime.ts'
 // Diagnostic isolation: the same source/theme/width on the pre-document addon,
 // legacy Markdown on this addon, and canonical documents on this addon.
 import assert from 'node:assert/strict'
-import {mkdirSync,writeFileSync} from 'node:fs'
+import {mkdirSync,writeFileSync,existsSync} from 'node:fs'
 import path from 'node:path'
 import {launchFixture} from '../../src/requests/harness.ts'
 import {Telemetry,parseResources} from '../bench/telemetry.ts'
@@ -11,6 +11,7 @@ import {lease} from '../bench/lease.ts'
 import {watchRun} from '../bench/process-gate.ts'
 import {screenState} from '../bench/screen-state.ts'
 process.env.KYBERN_BENCH_SCREEN_STATE_SCRIPT??='/Users/mymac/projects/ade-gpuix-scratch/screen-state.swift'
+if(existsSync('native/build/gpu-final-pending'))throw Error('Complete native updater has not passed')
 const out='/Users/mymac/projects/ade/previews/gpuix/perf/gpu/markdown-cost';mkdirSync(out,{recursive:true})
 const data='/Users/mymac/projects/ade-gpuix-scratch/perf-gpu-raw';mkdirSync(data,{recursive:true})
 const results=[]

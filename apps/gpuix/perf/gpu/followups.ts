@@ -20,3 +20,12 @@ for(const prune of ['1','0']){
  if(result.results.some((row:{status:string;frames:{count:number};resources:{gpuMs:number}})=>row.status!=='ok'||row.frames.count<30||row.resources.gpuMs<=0))throw Error('Discard invalid active streaming window')
  result.gpuLaneControls={clipPrune:prune,trace:'0'};writeFileSync(file,JSON.stringify(result,null,2))
 }
+const median=(xs:number[])=>[...xs].sort((a,b)=>a-b)[Math.floor(xs.length/2)]!
+const p95=(prune:string)=>median(JSON.parse(readFileSync(`perf/bench/results/gpu-stream-reverse-${prune}.json`,'utf8')).results.map((row:{frames:{p95:number}})=>row.frames.p95))
+const verdict={controlP95:p95('0'),prunedP95:p95('1'),repeatOrder:'pruned then control',thresholdMs:1.5}
+writeFileSync('/Users/mymac/projects/ade/previews/gpuix/perf/gpu/streaming-repeat.json',JSON.stringify(verdict,null,2))
+if(verdict.prunedP95>verdict.controlP95+verdict.thresholdMs)throw Error('Streaming frame tail regression repeated; review scope before final acceptance')
+const end=readFileSync('/tmp/kybern-gpuix-quiet.perf-gpu','utf8').match(/expected_end=(\S+)/)?.[1]
+if(!end||Date.parse(end)-Date.now()<17*60_000)throw Error('Requeue final acceptance in a fresh bounded quiet window')
+// Recheck the complete acceptance pair with the explicit unlocked/awake gates.
+await run(['perf/gpu/measure.ts','acceptance'],{KYBERN_GPU_FINAL_ACCEPTANCE:'1'})
