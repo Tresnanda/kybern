@@ -1,3 +1,4 @@
+import { DocumentMarkdown } from '../native/markdownDocument.tsx'
 import { createSyntaxDocument, releaseSyntaxDocument, VirtualCode, type SyntaxDocument } from '../native/syntax.tsx'
 import { activeEnvironment } from '../shell/environment.ts'
 import { useGpuix, useGpuixRequired, type PublicInstance } from '@gpuix/react'
@@ -163,8 +164,10 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
   </div>
 }
 
+const MARKDOWN_PREVIEW_BYTES = 2 * 1024 * 1024
 const FileViewer = memo(function FileViewer({ projectId, path, onClose }: { projectId: string; path: string; onClose: () => void }) {
   const t = useTheme()
+  const markdownFile = /\.(md|mdx|markdown)$/i.test(path)
   const project = useApp((s) => s.projects.find((p) => p.id === projectId))
   const absolutePath = project ? `${project.path}/${path}` : null
   const [file, setFile] = useState<FilesReadResult | null>(null)
@@ -174,10 +177,19 @@ const FileViewer = memo(function FileViewer({ projectId, path, onClose }: { proj
   useEffect(() => {
     let current = true
     setError(null)
-    void getClient()!.call('files.read', { project_id: projectId, path, max_bytes: 256 * 1024 }).then((result) => { if (current) setFile(result) }, (e) => { if (current) setError(errorText(e)) })
+    const read = async () => {
+      const client = getClient()!
+      const first = await client.call('files.read', { project_id: projectId, path, max_bytes: 256 * 1024 })
+      if (markdownFile && !first.binary && first.truncated && first.size <= MARKDOWN_PREVIEW_BYTES) {
+        const full = await client.call('files.read', { project_id: projectId, path, max_bytes: MARKDOWN_PREVIEW_BYTES })
+        if (!full.truncated && Buffer.byteLength(full.content, 'utf8') <= MARKDOWN_PREVIEW_BYTES) return full
+      }
+      return first
+    }
+    void read().then((result) => { if (current) setFile(result) }, (e) => { if (current) setError(errorText(e)) })
     return () => { current = false }
-  }, [projectId, path, reload])
-  const canPreview = /\.(md|mdx|markdown)$/i.test(path) && file && !file.binary && file.size <= 96 * 1024 && file.content.split('\n').length <= 2000
+  }, [projectId, path, reload, markdownFile])
+  const canPreview = markdownFile && file && !file.binary && !file.truncated && file.size <= MARKDOWN_PREVIEW_BYTES
   const showPreview = preview && canPreview
   return <>
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 36, paddingLeft: 10, paddingRight: 4, flexShrink: 0, borderBottomWidth: 0.6, borderColor: t.borderLight }}>
@@ -194,7 +206,7 @@ const FileViewer = memo(function FileViewer({ projectId, path, onClose }: { proj
     <ErrorLine error={error} retry={() => setReload((n) => n + 1)} />
     {file ? file.binary ? <DockEmpty icon={N.note} title="Binary file" body="Open this file in your editor to view it." /> : <>
       {showPreview ? <virtual-list testId="dock-file-content" {...EXPLORER_SCROLL_LAYOUT} overdraw={0} style={{ flexGrow: 1, minHeight: 0, overflowX: 'scroll' }}>
-        <div style={{ padding: 12 }}><markdown source={file.content} theme={cachedMarkdownTheme(t)} /></div>
+        <div style={{ padding: 12 }}><DocumentMarkdown source={file.content} theme={cachedMarkdownTheme(t)} /></div>
       </virtual-list> : <FileCode content={file.content} path={path} />}
       {file.truncated && <Label color={t.textSecondary} size={11} style={{ padding: 8 }}>Showing the first 256 KB. Open the file in your editor for the rest.</Label>}
     </> : !error && <Label color={t.textSecondary} size={12} style={{ padding: 12 }}>Loading file…</Label>}
