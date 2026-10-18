@@ -129,9 +129,44 @@ pub fn should_omit_tool_output(output: &Value) -> bool {
     json_payload_exceeds(output, LARGE_TOOL_OUTPUT_BYTES)
 }
 
+/// Temporary lookup state for a replay. It is dropped with the fold; cached
+/// projections keep only transcript rows. Structural recovery rebuilds it.
+#[derive(Default)]
+struct TranscriptLookup {
+    omit_tool_outputs: bool,
+    users: std::collections::HashSet<MessageId>,
+    assistants: std::collections::HashMap<MessageId, Vec<usize>>,
+    turns: std::collections::HashMap<TurnId, Vec<usize>>,
+}
+impl TranscriptLookup {
+    fn extend(&mut self, rows: &[TranscriptEntry], start: usize) {
+        for (index, row) in rows.iter().enumerate().skip(start) {
+            match row {
+                TranscriptEntry::User { id, .. } => {
+                    self.users.insert(*id);
+                }
+                TranscriptEntry::Assistant { id, turn_id, .. } => {
+                    self.assistants.entry(*id).or_default().push(index);
+                    self.turns.entry(*turn_id).or_default().push(index);
+                }
+                TranscriptEntry::ToolCall { turn_id, .. } => {
+                    self.turns.entry(*turn_id).or_default().push(index);
+                }
+                _ => {}
+            }
+        }
+    }
+    fn rebuild(&mut self, rows: &[TranscriptEntry]) {
+        self.users.clear();
+        self.assistants.clear();
+        self.turns.clear();
+        self.extend(rows, 0);
+    }
+}
+
 #[derive(Default)]
 pub struct TranscriptFold {
-    omit_tool_outputs: bool,
+    lookup: TranscriptLookup,
     out: Vec<TranscriptEntry>,
     turn_started_at: std::collections::HashMap<TurnId, chrono::DateTime<chrono::Utc>>,
     last_turn_id: Option<TurnId>,
@@ -141,10 +176,11 @@ pub struct TranscriptFold {
 
 impl TranscriptFold {
     pub fn omitting_tool_outputs() -> Self {
-        Self { omit_tool_outputs: true, ..Self::default() }
+        Self { lookup: TranscriptLookup { omit_tool_outputs: true, ..TranscriptLookup::default() }, ..Self::default() }
     }
 
     pub fn apply(&mut self, ev: &ThreadEvent) {
+        let start = self.out.len();
         apply_transcript_event(
             &mut self.out,
             &mut self.turn_started_at,
@@ -152,8 +188,15 @@ impl TranscriptFold {
             &mut self.unscoped_assistant_message,
             &mut self.roots,
             ev,
-            self.omit_tool_outputs,
+            &self.lookup,
         );
+        // Recovery can replace rows without changing length; resume/binding
+        // only remove rows. Repeated root bindings need no full reindex.
+        if self.out.len() < start || matches!(ev.payload, EventPayload::AssistantMessageBlocksRecovered { .. }) {
+            self.lookup.rebuild(&self.out);
+        } else {
+            self.lookup.extend(&self.out, start);
+        }
     }
 
     pub fn finish(self) -> Vec<TranscriptEntry> {
@@ -292,7 +335,7 @@ fn apply_transcript_event(
     unscoped_assistant_message: &mut Option<(TurnId, MessageId)>,
     roots: &mut std::collections::HashSet<(ThreadId, String)>,
     ev: &ThreadEvent,
-    omit_tool_outputs: bool,
+    lookup: &TranscriptLookup,
 ) {
     let mut last_turn_id_value = *last_turn_id;
     let mut unscoped_assistant_message_value = *unscoped_assistant_message;
@@ -317,7 +360,7 @@ fn apply_transcript_event(
             EventPayload::TurnStarted { message_id, message }
             | EventPayload::MessageSteered { message_id, message }
             | EventPayload::AsyncQuestionsAnswered { message_id, message, .. } => {
-                if out.iter().any(|entry| matches!(entry, TranscriptEntry::User { id, .. } if id == message_id)) { continue; }
+                if lookup.users.contains(message_id) { continue; }
                 let Some(turn_id) = turn_id else { continue };
                 last_turn_id_value = Some(turn_id);
                 unscoped_assistant_message_value = None;
@@ -355,7 +398,7 @@ fn apply_transcript_event(
                 match tail_open_assistant(out, message_id, origin) {
                     Some(TranscriptEntry::Assistant { text, .. }) => text.push_str(delta),
                     _ => {
-                        let segment = next_segment(out, message_id, origin);
+                        let segment = next_segment(out, message_id, origin, lookup);
                         out.push(TranscriptEntry::Assistant {
                             id: message_id,
                             turn_id,
@@ -386,7 +429,7 @@ fn apply_transcript_event(
                         *thinking_complete = false;
                     }
                     _ => {
-                        let segment = next_segment(out, message_id, origin);
+                        let segment = next_segment(out, message_id, origin, lookup);
                         out.push(TranscriptEntry::Assistant {
                             id: message_id,
                             turn_id,
@@ -422,14 +465,14 @@ fn apply_transcript_event(
                 else {
                     continue;
                 };
-                let mut segments = assistant_segment_indices(out, message_id, origin);
+                let mut segments = assistant_segment_indices(out, message_id, origin, lookup);
                 if segments.is_empty() {
                     out.push(TranscriptEntry::Assistant {
                         id: message_id,
                         turn_id,
                         seq: ev.seq,
                         origin: origin.clone(),
-                        segment: next_segment(out, message_id, origin),
+                        segment: next_segment(out, message_id, origin, lookup),
                         text: text.clone(),
                         thinking: thinking.clone(),
                         thinking_complete: false,
@@ -447,7 +490,7 @@ fn apply_transcript_event(
                         .flatten()
                         .filter(|suffix| !suffix.is_empty());
                     if trailing_text.is_some() || trailing_thinking.is_some() {
-                        let segment = next_segment(out, message_id, origin);
+                        let segment = next_segment(out, message_id, origin, lookup);
                         out.push(TranscriptEntry::Assistant {
                             id: message_id,
                             turn_id,
@@ -516,7 +559,7 @@ fn apply_transcript_event(
                 if let Some(TranscriptEntry::ToolCall { output: o, output_omitted, is_error: e, complete, .. }) =
                     out.iter_mut().rev().find(|e| matches!(e, TranscriptEntry::ToolCall { call, .. } if &call.id == tool_call_id))
                 {
-                    if omit_tool_outputs && (*omitted || should_omit_tool_output(output)) {
+                    if lookup.omit_tool_outputs && (*omitted || should_omit_tool_output(output)) {
                         *o = None;
                         *output_omitted = true;
                     } else {
@@ -530,7 +573,7 @@ fn apply_transcript_event(
             EventPayload::TurnCompleted { stop_reason, usage, cost_usd, duration_ms, terminal_message_id } => {
                 let Some(turn_id) = turn_id else { continue };
                 last_turn_id_value = Some(turn_id);
-                mark_turn_complete(out, turn_id);
+                mark_turn_complete(out, turn_id, lookup);
                 out.push(TranscriptEntry::TurnSummary {
                     turn_id,
                     seq: ev.seq,
@@ -546,7 +589,7 @@ fn apply_transcript_event(
             EventPayload::TurnFailed { error } => {
                 let Some(turn_id) = turn_id else { continue };
                 last_turn_id_value = Some(turn_id);
-                mark_turn_complete(out, turn_id);
+                mark_turn_complete(out, turn_id, lookup);
                 let duration_ms = turn_started_at.get(&turn_id).map(|s| (ev.at - *s).num_milliseconds().max(0) as u64).unwrap_or(0);
                 out.push(TranscriptEntry::TurnSummary {
                     turn_id,
@@ -681,8 +724,13 @@ fn tail_open_assistant<'a>(out: &'a mut [TranscriptEntry], id: MessageId, origin
     if is_match { Some(entry) } else { None }
 }
 
-fn next_segment(out: &[TranscriptEntry], id: MessageId, origin: &EventOrigin) -> u32 {
-    out.iter()
+fn next_segment(out: &[TranscriptEntry], id: MessageId, origin: &EventOrigin, lookup: &TranscriptLookup) -> u32 {
+    lookup
+        .assistants
+        .get(&id)
+        .into_iter()
+        .flatten()
+        .map(|&index| &out[index])
         .filter_map(|entry| match entry {
             TranscriptEntry::Assistant { id: candidate, origin: candidate_origin, segment, .. }
                 if *candidate == id && candidate_origin == origin =>
@@ -695,13 +743,14 @@ fn next_segment(out: &[TranscriptEntry], id: MessageId, origin: &EventOrigin) ->
         .map_or(0, |segment| segment + 1)
 }
 
-fn assistant_segment_indices(out: &[TranscriptEntry], id: MessageId, origin: &EventOrigin) -> Vec<usize> {
-    out.iter()
-        .enumerate()
-        .filter_map(|(index, entry)| {
-            matches!(entry, TranscriptEntry::Assistant { id: candidate, origin: candidate_origin, .. } if *candidate == id && candidate_origin == origin)
-                .then_some(index)
-        })
+fn assistant_segment_indices(out: &[TranscriptEntry], id: MessageId, origin: &EventOrigin, lookup: &TranscriptLookup) -> Vec<usize> {
+    lookup
+        .assistants
+        .get(&id)
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|&index| matches!(&out[index], TranscriptEntry::Assistant { origin: candidate, .. } if candidate == origin))
         .collect()
 }
 
@@ -785,8 +834,9 @@ fn reconcile_assistant_field(out: &mut [TranscriptEntry], indices: &[usize], can
     }
 }
 
-fn mark_turn_complete(out: &mut [TranscriptEntry], turn: TurnId) {
-    for e in out.iter_mut() {
+fn mark_turn_complete(out: &mut [TranscriptEntry], turn: TurnId, lookup: &TranscriptLookup) {
+    for &index in lookup.turns.get(&turn).into_iter().flatten() {
+        let e = &mut out[index];
         match e {
             TranscriptEntry::Assistant { turn_id, complete, .. } if *turn_id == turn => *complete = true,
             TranscriptEntry::ToolCall { turn_id, complete, output, .. } if *turn_id == turn && !*complete => {
