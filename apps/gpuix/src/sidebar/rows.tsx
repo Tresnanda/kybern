@@ -1,3 +1,4 @@
+import { useSidebarRowLease } from './Window.tsx'
 import { canOpenInSplit, collectThreadPanes, openThreadInSplit, useFocusedPane, useSplitRoot } from '../split/store.ts'
 import { beginThreadDrag, trackThreadDrag, consumeThreadDrag, finishSplitDrag } from '../split/Workspace.tsx'
 import { showDialog } from '../dialogs/store.ts'
@@ -87,6 +88,7 @@ function useHover() {
 /** Right-click opens a context menu at the pointer. */
 function useContextMenu() {
   const [at, setAt] = useState<{ x: number; y: number } | null>(null)
+  useSidebarRowLease(at !== null)
   return {
     at,
     close: () => setAt(null),
@@ -269,6 +271,7 @@ export const SectionLabel = memo(function SectionLabel() {
   const filter = useNav((s) => s.filter)
   const threads = useNav(() => getState().threads)
   const [menuOpen, setMenuOpen] = useState(false)
+  useSidebarRowLease(menuOpen)
   const onAddProject = useAddProject()
   const filtering = isFiltering(filter)
   const summaryPop = usePopOnChange(filtering)
@@ -517,6 +520,7 @@ export const ThreadRow = memo(function ThreadRow({
   const { hover, bind, keep } = useHover()
   const menu = useContextMenu()
   const [renaming, setRenaming] = useState(false)
+  useSidebarRowLease(renaming)
   const [title, setTitle] = useState(thread.title)
   const splitRoot = useSplitRoot(), focusedPane = useFocusedPane()
   const inSplit = collectThreadPanes(splitRoot).some((pane) => pane.threadId === thread.id)
@@ -677,7 +681,7 @@ export const ThreadRow = memo(function ThreadRow({
 })
 
 /** Working, done, failed or stopped, for either kind of child (`rowPhase`). */
-function rowPhase(thread: Thread): SubagentPhase {
+export function rowPhase(thread: Thread): SubagentPhase {
   if (thread.subagent) return subagentThreadPhase(thread)
   const { phase } = childState(thread)
   return phase === 'working' || phase === 'waiting' ? 'working' : phase === 'done' ? 'done' : phase === 'failed' ? 'failed' : 'stopped'
@@ -721,6 +725,7 @@ export const ChildRow = memo(function ChildRow({
   // Viewing the row, or it working again, stops the leave.
   const [leaveAsked, setLeaveAsked] = useState(false)
   const leaving = leaveAsked && !working && !selected
+  useSidebarRowLease(leaving || (!working && !selected))
   if (leaveAsked && working) setLeaveAsked(false)
 
   // A finished row that is not open holds its check, then leaves.
