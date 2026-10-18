@@ -1,3 +1,4 @@
+import { useTranscriptEntranceLease, useTranscriptFirstMount } from './Window.tsx'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 import { revealBoundary } from './reveal.ts'
 // The existing port's live-state brightness pulse follows native display time.
@@ -40,11 +41,13 @@ export const FRESH_MS = 3000
  *  arrived plays its entrance. History pages and rows already there when the
  *  thread opened are older than this and render plainly. */
 export function useFresh(at: string | undefined): boolean {
+  const firstMount = useTranscriptFirstMount()
   const [fresh] = useState(() => {
-    if (!at) return false
+    if (!at || !firstMount) return false
     const age = Date.now() - new Date(at).getTime()
     return age >= -FRESH_MS && age < FRESH_MS
   })
+  useTranscriptEntranceLease(fresh ? FRESH_MS : 0)
   return fresh
 }
 

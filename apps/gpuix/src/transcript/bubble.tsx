@@ -1,3 +1,4 @@
+import { useTranscriptRowLease } from './Window.tsx'
 import { InboundMessage, DelegatedResults } from './Messages.tsx'
 // The user's message (`UserBubble` in `views/Transcript.tsx`): attachments and
 // images above an 80%-wide bubble, inline skill/mention tokens, and a hover
@@ -30,6 +31,7 @@ import { TokenText, tokenSegments } from './InlineTokens.tsx'
 export function CopyAction({ text, testId }: { text: string; testId?: string }) {
   const t = useTheme()
   const [copied, setCopied] = useState(false)
+  useTranscriptRowLease(copied)
   return (
     <div
       testId={testId}

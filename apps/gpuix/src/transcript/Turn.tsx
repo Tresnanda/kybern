@@ -1,3 +1,4 @@
+import type { PublicInstance } from '@gpuix/react'
 import { chooseTab, setDock } from '../dock/store.ts'
 import { getFileIconName } from '../../../desktop/src/lib/kit/fileIcons.ts'
 import { diffFileIcons } from '../native/diff-file-icons.ts'
@@ -81,7 +82,7 @@ function itemCards(group: TurnGroup) {
   }), group.answer?.text)
 }
 
-export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning }: { group: TurnGroup; threadId: ThreadId; isLast: boolean; threadRunning: boolean }) {
+export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning, userRef }: { group: TurnGroup; threadId: ThreadId; isLast: boolean; threadRunning: boolean; userRef?: (node: PublicInstance | null) => void }) {
   const t = useTheme()
   const subagentThread = useApp(s => s.open.thread?.subagent ? s.open.thread : null)
   const subagent = !!subagentThread
@@ -126,7 +127,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning 
     <div style={{ display: 'flex', flexDirection: 'column' }}>
       {subagentThread && group.user?.id === firstUserId && <SubagentDivider thread={subagentThread} />}
       {group.user && (
-        <div testId={`turn-user:${group.user.id}`} style={{ paddingBottom: running ? 20 : 16 }}>
+        <div ref={userRef} testId={`turn-user:${group.user.id}`} style={{ paddingBottom: running ? 20 : 16 }}>
           <UserBubble parts={group.user.message.parts} at={group.user.at} clampLines={subagent ? 6 : undefined} />
         </div>
       )}

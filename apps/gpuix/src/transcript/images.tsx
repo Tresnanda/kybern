@@ -1,3 +1,4 @@
+import { useTranscriptRowLease } from './Window.tsx'
 import { onEnvironmentChange } from '../shell/environment.ts'
 // `components/kybern/ResponseImage.tsx`: a 280px-wide image (rounded 12, 8 when
 // compact) or a 64px thumbnail, with a hairline outline. GPUIX's <img> needs a
@@ -124,6 +125,7 @@ export function ResponseImage({ source, label = 'Agent image', compact = false, 
 function ImageLightbox({ src, label, size, onClose }: { src: string; label: string; size: { width: number; height: number } | null; onClose: () => void }) {
   const renderer = useGpuixRequired()
   const window = renderer.getWindowSize?.() ?? { width: 900, height: 600 }
+  useTranscriptRowLease(true)
   const maxWidth = Math.min(1000, window.width - 80)
   const maxHeight = window.height - 140
   const ratio = size ? Math.min(maxWidth / size.width, maxHeight / size.height, 1) : 1

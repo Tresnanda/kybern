@@ -1,3 +1,4 @@
+import { useTranscriptRowLease } from './Window.tsx'
 import { memo, useEffect, useRef, useState } from 'react'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import type { HtmlVisual } from '../../../../packages/kybern-client/src/types.ts'
@@ -46,6 +47,10 @@ function VisualSlot({ id, height, active, onHover }: { id: string; height: numbe
 export const VisualCard = memo(function VisualCard({ visual, threadId }: { visual: HtmlVisual; threadId: string }) {
   const t = useTheme(), size = useNativeWindowSize(), id = `visual:${threadId}:${visual.id}`
   const [error, setError] = useState(''), [attempt, retry] = useState(0), [expanded, setExpanded] = useState(false)
+  // A WK document has arbitrary interactive state. Once visited, retain its
+  // owner until this transcript closes; native offscreen placement hides it
+  // without reloading the document. Ordinary Markdown/code bodies stay bounded.
+  useTranscriptRowLease(true)
   const [loaded, setLoaded] = useState(false), [skeleton, setSkeleton] = useState(false)
   // The pointer is over the figure (reported by its wrapper) or the control; the control hides a beat after both leave.
   const [overFigure, setOverFigure] = useState(false), [overControl, setOverControl] = useState(false), [showControl, setShowControl] = useState(false)
