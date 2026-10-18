@@ -1,0 +1,11 @@
+# Cached ranges address the immediately previous draw, never a discarded retry.
+w = "crates/gpui/src/window.rs"
+edit(w, "    kybern_motion_frame_epoch: u64,", "    kybern_motion_frame_epoch: u64,\n    pub(crate) kybern_prepaint_rollback_epoch: u64,")
+edit(w, "            kybern_motion_frame_epoch: 0,", "            kybern_motion_frame_epoch: 0,\n            kybern_prepaint_rollback_epoch: 0,")
+edit(w, "        if result.is_err() {\n            self.next_frame.hitboxes.truncate", "        if result.is_err() {\n            self.kybern_prepaint_rollback_epoch = self.kybern_prepaint_rollback_epoch.wrapping_add(1);\n            self.next_frame.hitboxes.truncate")
+v = "crates/gpui/src/view.rs"
+edit(v, "struct ViewElementState {", "struct ViewElementState {\n    prepaint_frame: u64,\n    paint_frame: Option<u64>,\n    rollback_epoch: u64,")
+edit(v, "                        if let Some(mut element_state) = element_state\n", "                        if let Some(mut element_state) = element_state\n                            && element_state.prepaint_frame.wrapping_add(1) == window.kybern_motion_frame_epoch()\n                            && element_state.paint_frame == Some(element_state.prepaint_frame)\n                            && element_state.rollback_epoch == window.kybern_prepaint_rollback_epoch\n")
+edit(v, "                            element_state.prepaint_range = prepaint_start..prepaint_end;", "                            element_state.prepaint_range = prepaint_start..prepaint_end;\n                            element_state.prepaint_frame = window.kybern_motion_frame_epoch();")
+edit(v, "                            ViewElementState {\n                                accessed_entities,", "                            ViewElementState {\n                                prepaint_frame: window.kybern_motion_frame_epoch(),\n                                paint_frame: None,\n                                rollback_epoch: window.kybern_prepaint_rollback_epoch,\n                                accessed_entities,")
+edit(v, "                            element_state.paint_range = paint_start..paint_end;", "                            element_state.paint_range = paint_start..paint_end;\n                            element_state.paint_frame = Some(window.kybern_motion_frame_epoch());")

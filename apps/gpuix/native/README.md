@@ -1414,3 +1414,10 @@ clock, and completion notifications are emitted once. A per-window draw epoch
 also covers cached scroll draws that do not rebuild the root view.
 `KYBERN_MOTION_SYNC=0` is the same-binary control for the previous per-row global
 scan; it does not disable motion.
+
+Cached GPUI view ranges now carry their draw and rollback generation
+(`cache_frame_gpui.py`). A List focus/autoscroll retry can discard prepaint
+text and dispatch entries after a cached child wrote its new state. Such
+state must render again; it cannot replay indices against the prior draw.
+A rollback also invalidates caches recorded in the abandoned transaction.
+Ordinary consecutive draws still reuse the unchanged island.
