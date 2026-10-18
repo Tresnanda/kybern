@@ -25,14 +25,15 @@ const url=process.env.KYBERN_URL||`ws://127.0.0.1:${readFileSync(path.join(proce
 const safeError=e=>String(e).replaceAll(auth,'[redacted scratch token]').replaceAll(encodeURIComponent(auth),'[redacted scratch token]')
 const input=async(page,b,ms,fling=false)=>{
  await page.mouse.move(b.x+b.width/2,b.y+b.height/2)
- const start=performance.now(),pending=new Set();let count=0,maxOutstanding=0
+ const start=performance.now(),pending=new Set();let count=0,maxOutstanding=0,inputError
  while(performance.now()-start<ms){
+  if(inputError)throw inputError
   if(pending.size>=8){await Promise.race(pending);continue}
   const i=Math.floor((performance.now()-start)*120/1000),phase=i%300,cycle=i%600,delta=fling?(phase<20?45:45*Math.exp(-(phase-20)/35)):(phase<120?6*Math.sin(Math.PI*Math.min(phase+1,30)/60):6*Math.exp(-(phase-120)/45))
-  const packet=page.mouse.wheel(0,(cycle<300?1:-1)*delta);pending.add(packet);packet.finally(()=>pending.delete(packet));count++;maxOutstanding=Math.max(maxOutstanding,pending.size)
-  const due=start+(i+1)*1000/120;if(due>performance.now())await new Promise(r=>setTimeout(r,due-performance.now()))
+  const packet=page.mouse.wheel(0,(cycle<300?1:-1)*delta);pending.add(packet);packet.then(()=>pending.delete(packet),error=>{pending.delete(packet);inputError=error});count++;maxOutstanding=Math.max(maxOutstanding,pending.size)
+  const due=start+(i+1)*1000/120;if(due>performance.now())await new Promise(r=>setTimeout(r,Math.max(1,due-performance.now())))
  }
- const offeredMs=performance.now()-start;await Promise.all(pending);return {offeredMs,drainMs:performance.now()-start-offeredMs,packets:count,maxOutstanding}
+ const offeredMs=performance.now()-start;await Promise.all(pending);if(inputError)throw inputError;return {offeredMs,drainMs:performance.now()-start-offeredMs,packets:count,maxOutstanding}
 }
 let page,target,b
 const children=new Set()

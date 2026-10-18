@@ -1,5 +1,9 @@
 # Shared GPUIX benchmark
 
+Recorded results and interpretation: [baseline-ef2251e2](BASELINE.md). This is
+the original product control, with three successful repeats of each available
+native scenario; it does not measure later integration optimizations.
+
 Run from `apps/gpuix` with the existing patched native addon and frozen dependencies:
 
 ```sh
@@ -46,6 +50,10 @@ Raw bounded diagnostic logs and resource samples are in
 `KYBERN_BENCH_EVIDENCE`. Retain small baseline JSON, not generated logs, binaries,
 or the scratch dataset. `--webkit` labels its host **desktop frontend in WebKit**;
 it is not a Tauri binary. It reuses the installed Playwright runtime; no downloads.
+Vite may discover a lazy dependency and reload a first-use page. Such a window
+is a failed measurement and must be rerun after its dependency cache is primed;
+do not combine input from across a reload. Wheel rejections are handled without
+leaving an unhandled cleanup promise.
 
 ## Workload and scenarios
 
@@ -100,7 +108,7 @@ including contact markers, direction reversals and exponential synthetic momentu
 A small harness subclass supplies this process’s window association while the
 concrete NSEvent retains its precise delta and phase implementation. An untimed
 offset-change preflight must confirm that AppKit actually scrolls the target.
-The JSON states the accepted input backend and delivered packet rate. A slow
+The JSON states the accepted input backend, producer wall time, actual packet rate and packets per nominal second. A dispatch that finishes after the nominal deadline remains visible in the producer duration. A slow
 in-process AppKit callback can throttle the producer; the fallback also bounds
 backlog and truncates unoffered packets at the real-time deadline. This limits
 matched-input claims across very different renderer speeds. A fast fling uses a larger ramp and
