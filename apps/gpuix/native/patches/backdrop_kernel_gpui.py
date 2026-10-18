@@ -20,15 +20,15 @@ assert shader.count(anchor) == 1
 shader = shader.replace(anchor, "struct Kernel { uint count; uint padding[3]; float4 taps[49]; };\n" + anchor)
 anchor = "device const RoundedClipNode *clips [[buffer(7)]])"
 assert shader.count(anchor) == 1
-shader = shader.replace(anchor, "device const RoundedClipNode *clips [[buffer(7)]], constant Kernel &kernel [[buffer(1)]])")
+shader = shader.replace(anchor, "device const RoundedClipNode *clips [[buffer(7)]], constant Kernel &weights [[buffer(1)]])")
 anchor = "    for(int i=-24;i<=24;i++) {"
 assert shader.count(anchor) == 1
-shader = shader.replace(anchor, """    if(kernel.count > 0) {
-        for(uint i=0;i<kernel.count;i++) {
-            float d=kernel.taps[i].x;
+shader = shader.replace(anchor, """    if(weights.count > 0) {
+        for(uint i=0;i<weights.count;i++) {
+            float d=weights.taps[i].x;
             float2 at=pos+(vertical?float2(0,d):float2(d,0));
             if(vertical)at=clamp(at,float2(0.5),p.crop.zw-float2(0.5));
-            sum+=source.sample(s,at)*kernel.taps[i].y;
+            sum+=source.sample(s,at)*weights.taps[i].y;
         }
         total=1.0;
     } else for(int i=-24;i<=24;i++) {""")

@@ -12,7 +12,7 @@ const out='/Users/mymac/projects/ade/previews/gpuix/perf/backdrop/surface'
 mkdirSync(out,{recursive:true});const release=await lease(),results:unknown[]=[]
 try{for(const kernel of ['0','1']){
  requireScreen();const telemetry=new Telemetry()
- const f=await launchFixture(path.resolve(import.meta.dir,'../../native/surface-lab.tsx'),{KYBERN_DATA_DIR:'/Users/mymac/projects/ade-gpuix-scratch/perf-backdrop-surface',KYBERN_CLIENT_CONFIG_DIR:'/Users/mymac/projects/ade-gpuix-scratch/perf-backdrop-surface/client',KYBERN_URL:'',KYBERN_TOKEN:'',KYBERN_APPEARANCE:'dark',KYBERN_BACKDROP_KERNEL:kernel,KYBERN_FULL_RATE:'1',KYBERN_FRAME_TIMES:'1',KYBERN_FRAME_COSTS:'1',GPUIX_BACKGROUND:'1'}, {stderr:telemetry.stderr})
+ const f=await launchFixture(path.resolve(import.meta.dir,'surface-entry.ts'),{KYBERN_DATA_DIR:'/Users/mymac/projects/ade-gpuix-scratch/perf-backdrop-surface',KYBERN_CLIENT_CONFIG_DIR:'/Users/mymac/projects/ade-gpuix-scratch/perf-backdrop-surface/client',KYBERN_URL:'',KYBERN_TOKEN:'',KYBERN_APPEARANCE:'dark',KYBERN_BACKDROP_KERNEL:kernel,KYBERN_FULL_RATE:'1',KYBERN_FRAME_TIMES:'1',KYBERN_FRAME_COSTS:'1',GPUIX_BACKGROUND:'1'}, {stderr:telemetry.stderr})
  const unfixture=onExit(()=>f.close())
  try{
   await f.app.getByTestId('glass').waitFor();await drive(f.app,{x:100,y:470},10000)
