@@ -15,7 +15,8 @@ test('unchanged semantic metadata does not resend history on local window update
   const first=state!.props,indices=state!.indices
   flushSync(()=>root.render(<Fixture keys={['a','b']} heights={[30,50]} layout={0}/>))
   expect(state!.props.sparseVersion).toBe(first.sparseVersion);expect(state!.props.sparseKeys).toBe(first.sparseKeys);expect(state!.indices).toBe(indices)
-  flushSync(()=>state!.context.retain('b',true));expect(state!.retained.has('b')).toBe(true)
+  flushSync(()=>{state!.context.retain('a',true);state!.context.retain('b',true);state!.context.retain('a',false)})
+  expect(state!.retained.has('b')).toBe(true);expect(state!.retained.has('a')).toBe(false)
   state!.context.visited.add('b')
   flushSync(()=>root.render(<Fixture keys={['older','a']} heights={[80,30]} layout={1}/>))
   await Bun.sleep(5);flushSync(()=>{})
