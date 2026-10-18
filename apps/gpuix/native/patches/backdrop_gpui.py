@@ -99,6 +99,10 @@ exec((here / "sparse_list_gpui.py").read_text())
 exec((Path(__file__).parent / "motion_frame_gpui.py").read_text())
 exec((Path(__file__).parent / "cache_frame_gpui.py").read_text())
 
+exec((here / "image_memory_gpui.py").read_text())
+exec((here / "memory_counters_gpui.py").read_text())
+exec((here / "frame_memory_gpui.py").read_text())
+
 for name, text in pending.items():
     if (root/name).read_text()!=text: (root/name).write_text(text)
 for name in ['backdrop_renderer.rs', 'backdrop.metal']:

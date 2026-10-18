@@ -108,6 +108,10 @@ including contact markers, direction reversals and exponential synthetic momentu
 A small harness subclass supplies this process’s window association while the
 concrete NSEvent retains its precise delta and phase implementation. An untimed
 offset-change preflight must confirm that AppKit actually scrolls the target.
+`KYBERN_BENCH_RPC_ONLY=1` forces the existing RPC schedule for a matched-input
+control; each row records `forcedRpc`. With `KYBERN_BENCH_COUNTERS=1`, capable
+addons also return `counters.nativeMemory` after the sample. Metal gauges require
+`KYBERN_MEMORY_COUNTERS=1`; disabled gauges must not be interpreted as zero usage.
 The JSON states the accepted input backend, producer wall time, actual packet rate and packets per nominal second. A dispatch that finishes after the nominal deadline remains visible in the producer duration. A slow
 in-process AppKit callback can throttle the producer; the fallback also bounds
 backlog and truncates unoffered packets at the real-time deadline. This limits

@@ -9,16 +9,20 @@ export interface ImageHome { endpoint: () => { url: string; token: string } | nu
 
 const MAX_BYTES = 12 * 1024 * 1024
 const loaded = new Map<string, Promise<void>>()
+const pending = new Set<string>()
 const LIMIT = 48
 
-type ImageRenderer = { setRichEditorImage?: (src: string, bytes: Buffer) => void } | null | undefined
+type ImageRenderer = { setRichEditorImage?: (src: string, bytes: Buffer) => void; hasRichEditorImage?: (src: string) => boolean } | null | undefined
 
 /** Decode an image for the editors that show `src`; failures show "Image unavailable". */
 export function loadEditorImage(renderer: unknown, home: ImageHome | null, src: string): Promise<void> {
   const native = renderer as ImageRenderer
   if (!native?.setRichEditorImage) return Promise.resolve()
   const cached = loaded.get(src)
-  if (cached) return cached
+  if (cached && (pending.has(src) || !native.hasRichEditorImage || native.hasRichEditorImage(src))) return cached
+  if (!cached && native.hasRichEditorImage?.(src)) return Promise.resolve()
+  loaded.delete(src)
+  pending.add(src)
   const job = (async () => {
     try {
       let bytes: ArrayBuffer
@@ -33,7 +37,8 @@ export function loadEditorImage(renderer: unknown, home: ImageHome | null, src: 
         if (!response.ok) throw Error(`Image unavailable (${response.status})`)
         bytes = await response.arrayBuffer()
       } else if (src.startsWith('data:image/')) {
-        bytes = Buffer.from(src.slice(src.indexOf(',') + 1), 'base64').buffer as ArrayBuffer
+        const decoded = Buffer.from(src.slice(src.indexOf(',') + 1), 'base64')
+        bytes = decoded.buffer.slice(decoded.byteOffset, decoded.byteOffset + decoded.byteLength) as ArrayBuffer
       } else if (src.startsWith('/') || src.startsWith('file://')) {
         bytes = await Bun.file(src.replace(/^file:\/\//, '')).arrayBuffer()
       } else throw Error('Unsupported image address')
@@ -43,7 +48,12 @@ export function loadEditorImage(renderer: unknown, home: ImageHome | null, src: 
       loaded.delete(src)
       native.setRichEditorImage?.(src, Buffer.alloc(0))
     }
-  })()
+  })().finally(() => {
+    pending.delete(src)
+    // A resolved promise must not pin a multi-megabyte data URL after closing
+    // its editor. Native residency decides whether it needs loading again.
+    if (src.length > 8192) loaded.delete(src)
+  })
   loaded.set(src, job)
   while (loaded.size > LIMIT) loaded.delete(loaded.keys().next().value!)
   return job

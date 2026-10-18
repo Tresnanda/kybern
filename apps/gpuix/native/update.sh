@@ -65,6 +65,7 @@ python3 tools/align_strtab.py "$out"
 codesign -f -s - "$out" 2>/dev/null
 node -e "require('$here/$out')"
 echo "native module loads"
+python3 tools/check_arena.py
 bun build-webview.ts
 
 if [ "$version" != "$pinned" ]; then

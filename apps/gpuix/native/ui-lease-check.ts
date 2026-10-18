@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
-const output='/Users/mymac/projects/ade/previews/gpuix/perf/markdown/ui-lease-children.json'
+const output=path.join(process.env.KYBERN_VERIFY_OUTPUT??path.join(import.meta.dir,'build'),'ui-lease-children.json')
+mkdirSync(path.dirname(output),{recursive:true})
 rmSync(output,{force:true})
-const lane=`perf-markdown-lease-check-${process.pid}`
+const lane=`ui-lease-check-${process.pid}`
 const code=`const child=Bun.spawn(['sleep','60']);require('fs').writeFileSync(${JSON.stringify(output)},JSON.stringify({parent:process.pid,child:child.pid}));setInterval(()=>{},1000)`
 const child=Bun.spawn(['bun',path.join(import.meta.dir,'ui-lease.ts'),lane,'bun','-e',code],{stdout:'inherit',stderr:'inherit'})
 try {

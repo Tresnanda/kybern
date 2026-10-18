@@ -74,8 +74,9 @@ const quit = () => {
 process.on('SIGINT', quit)
 process.on('SIGTERM', quit)
 
-// Native checks never enter another lane's final measurement window.
-while (readdirSync('/tmp').some(name => name.startsWith('kybern-gpuix-quiet.'))) await Bun.sleep(1000)
+// Native labs must not overlap another lane's final measurement window.
+const quiet = () => readdirSync('/tmp').some(name => name.startsWith('kybern-gpuix-quiet.'))
+while (quiet()) await Bun.sleep(1000)
 
 // Already inside a lease of this checkout (a caller holds it): just run.
 if (process.env.KYBERN_PACING_PARENT_LEASE === root && existsSync(`${lock}/owner`) && readFileSync(`${lock}/owner`, 'utf8') === root) {
@@ -86,6 +87,7 @@ if (!lines().includes(lane)) edit(true)
 const deadline = Date.now() + 60 * 60_000
 while (!release) {
   if (Date.now() > deadline) { leave(); throw Error(`Timed out waiting for the UI lease (queue: ${lines().join(', ')})`) }
+  if (quiet()) { leave(); await Bun.sleep(1000); continue }
   if (!lines().includes(lane)) edit(true)
   if (lines()[0] !== lane || existsSync(lock)) { await Bun.sleep(2000); continue }
   try {

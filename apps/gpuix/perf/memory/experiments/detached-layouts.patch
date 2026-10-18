@@ -1,0 +1,55 @@
+diff --git a/apps/gpuix/native/patches/rich_editor.rs b/apps/gpuix/native/patches/rich_editor.rs
+index c89b2d60..ed7250d2 100644
+--- a/apps/gpuix/native/patches/rich_editor.rs
++++ b/apps/gpuix/native/patches/rich_editor.rs
+@@ -496,6 +496,8 @@ thread_local! {
+     static IMAGE_DROPS: RefCell<Vec<Arc<gpui::RenderImage>>> = const { RefCell::new(Vec::new()) };
+     static IMAGE_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+     static EDITORS: RefCell<HashMap<u64, gpui::WeakEntity<RichEditorState>>> = RefCell::new(HashMap::new());
++    static DETACHED_EDITORS: RefCell<Vec<gpui::WeakEntity<RichEditorState>>> = const { RefCell::new(Vec::new()) };
++    static DETACHED_LAYOUTS_CLEARED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+ }
+ 
+ const IMAGE_LIMIT: usize = 48;
+@@ -833,7 +835,11 @@ impl CustomElement for RichEditorElement {
+ 
+     fn destroy(&mut self) {
+         if let Some(id) = self.element_id.take() { EDITORS.with(|editors| { editors.borrow_mut().remove(&id); }); }
+-        self.state = None;
++        if let Some(state) = self.state.take() {
++            if editor_detach_memory_enabled() {
++                DETACHED_EDITORS.with(|editors| editors.borrow_mut().push(state.downgrade()));
++            }
++        }
+         self.key_interceptor = None;
+     }
+ }
+@@ -3498,10 +3504,27 @@ pub(crate) fn has_image(src: &str) -> bool {
+ pub(crate) fn image_memory_stats() -> serde_json::Value {
+     IMAGES.with(|cache| {
+         let cache = cache.borrow();
+-        serde_json::json!({"entries":cache.0.len(),"cpuAndGpuPixelBytesEstimate":cache.0.iter().map(|(src,entry)| editor_image_cost(src,entry)).sum::<usize>()})
++        serde_json::json!({"entries":cache.0.len(),"detachedLayoutsCleared":DETACHED_LAYOUTS_CLEARED.with(|count| count.get()),"pendingDetachedEditors":DETACHED_EDITORS.with(|editors| editors.borrow().len()),"cpuAndGpuPixelBytesEstimate":cache.0.iter().map(|(src,entry)| editor_image_cost(src,entry)).sum::<usize>()})
+     })
+ }
++fn editor_detach_memory_enabled() -> bool {
++    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ENABLED.get_or_init(|| std::env::var("KYBERN_EDITOR_DETACH_MEMORY").as_deref() != Ok("0")
++        && std::env::var("KYBERN_EDITOR_IMAGE_MEMORY").as_deref() != Ok("0"))
++}
++
+ pub(crate) fn trim_images(window: &mut Window, cx: &mut App) {
++    // Cached GPUI frame/input state may keep a detached editor entity alive.
++    // Its derived layouts independently own decoded image Arcs. Clear them
++    // after the draw; keep the document/undo model intact for pending callbacks.
++    let detached = DETACHED_EDITORS.with(|editors| std::mem::take(&mut *editors.borrow_mut()));
++    for editor in detached.into_iter().filter_map(|editor| editor.upgrade()) {
++        editor.update(cx, |state, _| {
++            state.layouts.clear();
++            state.layouts.shrink_to_fit();
++        });
++        DETACHED_LAYOUTS_CLEARED.with(|count| count.set(count.get().saturating_add(1)));
++    }
+     if std::env::var("KYBERN_EDITOR_IMAGE_MEMORY").as_deref() == Ok("0") { return; }
+     if IMAGES.with(|cache| cache.borrow().0.is_empty()) {
+         drain_image_drops(window);
