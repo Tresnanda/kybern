@@ -10,7 +10,9 @@ const light = process.env.KYBERN_APPEARANCE === 'light'
 const fg = light ? '#202020' : '#eeeeee'
 type Value = { scale?: number; rotate?: number; opacity?: number; translateX?: number; translateY?: number; blur?: number }
 function Lab() {
-  useEffect(() => { const o = getObjc(), app = nsApp(); if (app) each(o, o.msg(app, sel(o, 'windows')) as Pointer, window => { o.msgSetI64(window, sel(o, 'setLevel:'), 3n); o.msgSetBool(window, sel(o, 'setIgnoresMouseEvents:'), true); o.msg(window, sel(o, 'orderFrontRegardless')) }) }, [])
+  // Match the translation lab: exclude physical hover input while automation
+  // continues to dispatch native mouse down/up directly.
+  useEffect(() => { const o = getObjc(), app = nsApp(); if (app) each(o, o.msg(app, sel(o, 'windows')) as Pointer, window => { o.msgSetI64(window, sel(o, 'setLevel:'), 3n); o.msgSetBool(window, sel(o, 'setIgnoresMouseEvents:'), true); o.msgSetBool(window, sel(o, 'setAcceptsMouseMovedEvents:'), false); o.msg(window, sel(o, 'orderFrontRegardless')) }) }, [])
   const [value, setValue] = useState<Value>({})
   const [duration, setDuration] = useState(0)
   const [tick, setTick] = useState(0), [clicks, setClicks] = useState(0), [pressClicks, setPressClicks] = useState(0)

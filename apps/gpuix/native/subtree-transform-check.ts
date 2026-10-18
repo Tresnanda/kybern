@@ -7,7 +7,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { launchFixture } from '../src/tasks/round7b-harness.ts'
-import { pngPixels } from './clip-pixels.ts'
+import { assertNonBlackContent, pngPixels } from './clip-pixels.ts'
 const out = process.env.KYBERN_VERIFY_OUTPUT ?? path.join(import.meta.dir, 'build/subtree-transform'); mkdirSync(out, { recursive: true })
 const scratch = { KYBERN_DATA_DIR: process.env.KYBERN_DATA_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/phase2-render9', KYBERN_CLIENT_CONFIG_DIR: process.env.KYBERN_CLIENT_CONFIG_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/phase2-render9-client', KYBERN_URL: '', KYBERN_TOKEN: '' }
 const quantile = (values: number[], q: number) => { const s = [...values].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(q * s.length))] ?? NaN }
@@ -25,7 +25,12 @@ for (const theme of ['dark', 'light']) for (const reduce of ['0', '1']) {
     const wait = async (check: () => Promise<boolean> | boolean, name: string) => { const deadline = Date.now() + 6000; while (!await check()) { assert.ok(Date.now() < deadline, name); await Bun.sleep(10) } }
     const count = (pattern: RegExp) => (all().match(pattern) ?? []).length
     const windowId = execFileSync('swift', [path.join(import.meta.dir, '../src/tasks/round7-window-id.swift'), String(f.pid)], { encoding: 'utf8' }).trim()
-    const shot = (name: string) => { const file = path.join(out, `${label}-${name}.png`); execFileSync('screencapture', ['-x', '-o', '-l', windowId, file]); return file }
+    const shot = (name: string) => {
+      const file = path.join(out, `${label}-${name}.png`)
+      execFileSync('screencapture', ['-x', '-o', '-l', windowId, file])
+      assertNonBlackContent(file, 520, 300, `${label}/${name}`)
+      return file
+    }
     const settle = async () => { let last = all().length, quiet = performance.now(); await wait(() => { const n = all().length; if (n !== last) { last = n; quiet = performance.now() } return performance.now() - quiet > 250 }, 'settled') }
     await key('q'); await settle()
     const slot = await bounds('slot'), card = await bounds('scope')

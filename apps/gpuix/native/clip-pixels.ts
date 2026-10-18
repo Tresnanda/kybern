@@ -9,3 +9,18 @@ export function pngPixels(file:string) {
  for(let y=0;y<height;y++){const filter=raw[y*(stride+1)]!;for(let x=0;x<stride;x++){const a=x>=bpp?out[y*stride+x-bpp]!:0,b=y?out[(y-1)*stride+x]!:0,c=y&&x>=bpp?out[(y-1)*stride+x-bpp]!:0,p=a+b-c,pa=Math.abs(p-a),pb=Math.abs(p-b),pc=Math.abs(p-c);const delta=filter===0?0:filter===1?a:filter===2?b:filter===3?Math.floor((a+b)/2):pa<=pb&&pa<=pc?a:pb<=pc?b:c;out[y*stride+x]=(raw[y*(stride+1)+1+x]!+delta)&255}}
  return {width,height,at:(x:number,y:number)=>[...out.subarray((Math.floor(y)*width+Math.floor(x))*bpp,(Math.floor(y)*width+Math.floor(x))*bpp+3)]}
 }
+
+/** Reject missing presentation in fixtures whose content has a nonblack fill.
+ * Exclude AppKit chrome and rounded window edges: a lit titlebar proves nothing
+ * about the Metal surface, and two black captures must not count as parity.
+ */
+export function assertNonBlackContent(file: string, logicalWidth: number, contentHeight: number, label: string) {
+ const pixels = pngPixels(file), scale = pixels.width / logicalWidth
+ const top = pixels.height - contentHeight * scale
+ for (let y = Math.ceil(top + 12 * scale); y < pixels.height - 12 * scale; y += 8) {
+  for (let x = Math.ceil(12 * scale); x < pixels.width - 12 * scale; x += 8) {
+   if (pixels.at(x, y).some(value => value > 8)) return
+  }
+ }
+ assert.fail(`${label}: captured an all-black content area; native presentation is missing (${file})`)
+}
