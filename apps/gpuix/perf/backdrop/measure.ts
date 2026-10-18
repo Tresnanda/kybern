@@ -10,6 +10,6 @@ for(const control of (phase==='diagnosis'?['0','1']:['old','0','1'])) {
  const unregister=onExit(async()=>{child.kill();await child.exited})
  const code=await child.exited;unregister();if(code)throw Error(`${label} failed`)
  const file=`perf/bench/results/${label}.json`,doc=JSON.parse(readFileSync(file,'utf8'))
- if(doc.aborted||doc.results.some((r:Result)=>r.status!=='ok'||(r.scenario!=='idle-home'&&(r.frames.count<30||r.resources.gpuMs<=0))))throw Error('Invalid active window')
+ if(doc.aborted||doc.results.some((r:Result)=>r.status!=='ok'||(r.scenario!=='idle-home'&&(r.frames.count<30||(r.resources.gpuMs==null||r.resources.gpuMs<=0)))))throw Error('Invalid active window')
  doc.backdropKernel=control;writeFileSync(file,JSON.stringify(doc,null,2));copyFileSync(file,`/Users/mymac/projects/ade/previews/gpuix/perf/backdrop/${label}.json`)
 }
