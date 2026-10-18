@@ -1,3 +1,4 @@
+import { applyUsageLimits as applyLimits } from './limits.ts'
 import { environmentKey, onEnvironmentChange } from '../shell/environment.ts'
 // Keeps the thread panel live, like the desktop's `state/rpc.ts`:
 //
@@ -184,10 +185,6 @@ export async function loadProviders(forceRefresh = false) {
   const result = await client.call('providers.list', forceRefresh ? { force_refresh: true } : {})
   if (getClient() === client) setNav({ providers: result.providers, providersLoaded: true })
   return result.providers
-}
-
-function applyLimits(result: UsageLimitsResult) {
-  setNav({ limits: result.providers, limitsRefreshing: result.refreshing ?? [] })
 }
 
 /** Ask the daemon for plan limits; `refresh` re-reads every provider now (the card does on open). */

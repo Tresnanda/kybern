@@ -38,6 +38,7 @@ import { ResponseImage } from './images.tsx'
 import { MidTurnMessage } from './bubble.tsx'
 import { cachedMarkdownTheme, Chevron, CODE, destructive, fg, muted, Para, ROW_LINE, RowIcon, TEXT } from './kit.tsx'
 import { Collapse, Rise } from '../motion/kit.tsx'
+import { useLoopVisibility } from '../native/loop-visibility.ts'
 import { Shimmer, SwapOnChange, useFresh, useSmoothText, useStreamEffects } from './motion.tsx'
 import { hydrateToolOutput, useRowState, usePacedAssistant, type ToolBlock } from './store.ts'
 
@@ -542,7 +543,8 @@ const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone, live, thi
   const showText = hasText && (!live || block.complete || shouldRevealLiveText(block.text, block.complete))
   // Only the segment receiving deltas is paced; settled prose renders whole.
   const text = useSmoothText(block.text, live && !block.complete && process.env.KYBERN_SMOOTH_STREAM !== '0', block.complete)
-  const stream = useStreamEffects(text, live && !block.complete && showText)
+  const caret = useLoopVisibility(live && !block.complete && showText)
+  const stream = useStreamEffects(text, live && !block.complete && showText, caret.visible)
   if (!hasThinking && !showText) return null
   return (
     <>
@@ -572,7 +574,7 @@ const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone, live, thi
         </div>
       )}
       {showText && (
-        <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: 2, paddingRight: 2 }}>
+        <div ref={caret.ref} style={{ display: 'flex', flexDirection: 'column', paddingLeft: 2, paddingRight: 2 }}>
           <BoundedMarkdown text={text} tone={tone} stream={stream} />
         </div>
       )}

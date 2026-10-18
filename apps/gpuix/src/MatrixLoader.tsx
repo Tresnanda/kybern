@@ -12,14 +12,16 @@
 // The clock runs only while a loader is mounted and the window is visible, and
 // never under Reduce Motion (loaders then hold their rest frame).
 import { useCallback, useSyncExternalStore } from 'react'
+import { useLoopVisibility } from './native/loop-visibility.ts'
 import { onFrame } from './native/frame.ts'
 import { isWindowVisible, onWindowVisibility } from './native/visibility.ts'
 import { ink, REDUCED_MOTION, useTheme } from './ui.tsx'
 
 // Full-app native-loop acceptance remains opt-in: repeated GPU controls did not
 // meet the approved gate, and the smooth JS fallback regressed running CPU.
-// Preserve the existing clock outside that experiment; it is still a known
-// pacing defect, not an accepted 60 fps result. The onFrame API is independent.
+// Preserve the approved stepped loader appearance outside that experiment.
+// Its clock subscribes only while at least one loader is actually painted.
+// The onFrame API is independent of this legacy clock.
 export const NATIVE_PAINT_ANIMATIONS = process.env.KYBERN_NATIVE_PAINT_ANIMATIONS === '1'
 const TICK_MS = Number(process.env.KYBERN_LOADER_TICK_MS ?? (NATIVE_PAINT_ANIMATIONS ? 0 : 200))
 let now = 0
@@ -72,9 +74,9 @@ function useLoaderSnapshot(snapshot: () => number, active = true) {
   return useSyncExternalStore(connect, snapshot)
 }
 /** Continuous native frame time for motion; elapsed labels use coarse snapshots. */
-export function useLoaderTime() { return useLoaderSnapshot(() => now) }
+export function useLoaderTime(active = true) { return useLoaderSnapshot(() => now, active) }
 /** Historical port clock, retained until the smooth-loop resource gate passes. */
-export function useLoaderStep() { return useLoaderSnapshot(() => Math.floor(now / 200) % 8) }
+export function useLoaderStep(active = true) { return useLoaderSnapshot(() => Math.floor(now / 200) % 8, active) }
 
 /** Marks a fixed-size `cache` island (native/patches/cache_island.rs). */
 export const ISLAND = { cache: true } as Record<string, unknown>
@@ -139,14 +141,15 @@ export function MatrixLoader({
   rgb?: readonly [number, number, number]
 }) {
   const t = useTheme()
-  const time = useLoaderSnapshot(() => now, !NATIVE_PAINT_ANIMATIONS)
+  const loop = useLoopVisibility(!REDUCED_MOTION)
+  const time = useLoaderSnapshot(() => now, loop.visible && !NATIVE_PAINT_ANIMATIONS)
   const isRounded = rounded ?? (variant === 'orbit' || variant === 'pulse')
   const d = delays(variant, cycle)
   const size = dot * 4 + gap * 3
   return (
     // Native paint loops evaluate the desktop keyframes without React commits.
     // The diagnostic JS path uses the same binary for controlled A/B samples.
-    <div {...ISLAND} style={{ display: 'flex', flexDirection: 'column', gap, width: size, height: size, flexShrink: 0 }}>
+    <div ref={loop.ref} {...ISLAND} style={{ display: 'flex', flexDirection: 'column', gap, width: size, height: size, flexShrink: 0 }}>
       {[0, 1, 2, 3].map((r) => (
         <div key={r} style={{ display: 'flex', gap }}>
           {[0, 1, 2, 3].map((c) => {
@@ -154,7 +157,7 @@ export function MatrixLoader({
             const hidden = isRounded && ROUNDED_GAPS.has(i)
             const phase = REDUCED_MOTION ? 1 : ((((time - d[i]!) % cycle) + cycle) % cycle) / cycle
             const opacity = hidden ? 0 : NATIVE_PAINT_ANIMATIONS && !REDUCED_MOTION ? 1 : pulseOpacity(phase)
-            return <div key={c} {...(NATIVE_PAINT_ANIMATIONS && !REDUCED_MOTION && !hidden ? { paintAnimation: { kind: 'matrix', cycleMs: cycle, delayMs: d[i] } } : {})} style={{ width: dot, height: dot, borderRadius: 0.5, backgroundColor: rgb ? `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha * opacity})` : ink(t, alpha * opacity) }} />
+            return <div key={c} {...(NATIVE_PAINT_ANIMATIONS && loop.visible && !REDUCED_MOTION && !hidden ? { paintAnimation: { kind: 'matrix', cycleMs: cycle, delayMs: d[i] } } : {})} style={{ width: dot, height: dot, borderRadius: 0.5, backgroundColor: rgb ? `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha * opacity})` : ink(t, alpha * opacity) }} />
           })}
         </div>
       ))}

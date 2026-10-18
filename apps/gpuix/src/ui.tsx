@@ -65,6 +65,7 @@ export function Label({
   truncate,
   style,
   paintAnimation,
+  ref,
 }: {
   children: ReactNode
   color: string
@@ -74,10 +75,11 @@ export function Label({
   font?: string
   truncate?: boolean
   style?: StyleDesc
+  ref?: import('react').Ref<import('@gpuix/react').PublicInstance>
   paintAnimation?: { kind: 'shimmer' | 'pop'; cycleMs: number; delayMs?: number }
 }) {
   return (
-    <text
+    <text ref={ref}
       {...(paintAnimation ? { paintAnimation } : {})}
       style={{
         color,

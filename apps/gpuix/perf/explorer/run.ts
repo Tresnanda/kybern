@@ -8,7 +8,7 @@ import { openDock, painted, until } from '../../scripts/dock-waits.ts'
 assertScratchEnv({ KYBERN_URL: '' })
 const data = process.env.KYBERN_DATA_DIR!
 const fixture = JSON.parse(readFileSync(path.join(data, 'fixture.json'), 'utf8')) as { threadId: string }
-const out = '/Users/mymac/projects/ade/previews/gpuix/perf/explorer'
+const out = process.env.EXPLORER_EVIDENCE ?? '/Users/mymac/projects/ade/previews/gpuix/perf/explorer'
 mkdirSync(out, { recursive: true })
 const label = process.argv[2] ?? 'baseline', theme = process.env.KYBERN_APPEARANCE ?? 'dark'
 const plan = path.join(data, `wheel-${process.pid}.json`)

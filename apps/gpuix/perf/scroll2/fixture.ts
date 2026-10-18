@@ -8,13 +8,14 @@ import path from 'node:path'
 import { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import { assertScratchEnv } from '../../src/requests/harness.ts'
 
-const data = '/Users/mymac/projects/ade-gpuix-scratch/perf-scroll2/sidebar'
+const data = process.env.SCROLL2_DATA_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/perf-scroll2/sidebar'
+const port = process.env.SCROLL2_PORT ?? '4331'
 const command = process.argv.slice(2).filter((arg, i) => i !== 0 || arg !== '--')
 if (!command.length) throw Error('Pass a verification command')
 assertScratchEnv({ KYBERN_DATA_DIR: data, KYBERN_URL: '' })
 if (existsSync(path.join(data, 'daemon.port'))) throw Error('Sidebar fixture already has a daemon; refusing to reuse it')
 mkdirSync(data, { recursive: true })
-const daemon = spawn(process.env.KYBERN_TEST_DAEMON ?? '/Applications/kybern.app/Contents/MacOS/kybernd', ['--data-dir', data, '--port', '4331'], { stdio: 'ignore' })
+const daemon = spawn(process.env.KYBERN_TEST_DAEMON ?? '/Applications/kybern.app/Contents/MacOS/kybernd', ['--data-dir', data, '--port', port], { stdio: 'ignore' })
 let client: KybernClient | undefined
 let child: ReturnType<typeof Bun.spawn> | undefined
 for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, () => { child?.kill(signal); daemon.kill(signal) })
@@ -25,7 +26,7 @@ try {
     await Bun.sleep(30)
   }
   const token = readFileSync(path.join(data, 'daemon.token'), 'utf8').trim()
-  client = new KybernClient({ url: 'ws://127.0.0.1:4331/ws', token })
+  client = new KybernClient({ url: `ws://127.0.0.1:${port}/ws`, token })
   client.connect()
   while (client.status !== 'open') { if (Date.now() > deadline) throw Error('Scratch handshake failed'); await Bun.sleep(30) }
   const db = new Database(path.join(data, 'state.sqlite'))

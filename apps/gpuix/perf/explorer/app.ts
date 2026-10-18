@@ -1,3 +1,4 @@
+import '../cadence/control.ts'
 import { readFileSync } from 'node:fs'
 import { dlopen, FFIType as T } from 'bun:ffi'
 import path from 'node:path'

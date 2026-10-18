@@ -1,3 +1,4 @@
+import '../cadence/control.ts'
 // Harness-only controls; the rendered product is the unchanged full app.
 import {existsSync,writeFileSync} from 'node:fs'
 import path from 'node:path'
@@ -14,7 +15,8 @@ let streamTimer:ReturnType<typeof setInterval>|undefined
 const {dlopen,FFIType}=await import('bun:ffi')
 const defaultWheel=path.join(process.env.KYBERN_DATA_DIR!,'bench-wheel.dylib')
 const wheelLibrary=process.env.KYBERN_BENCH_WHEEL_LIBRARY??(existsSync(defaultWheel)?defaultWheel:path.resolve(process.env.KYBERN_CLIENT_CONFIG_DIR!,'../..','bench-wheel.dylib'))
-const wheel=dlopen(wheelLibrary,{bench_scroll:{args:[FFIType.f64,FFIType.f64,FFIType.f64,FFIType.i32,FFIType.i32],returns:FFIType.i32}}).symbols.bench_scroll
+const wheelApi=dlopen(wheelLibrary,{bench_handler_delta:{args:[],returns:FFIType.f64},bench_handler_count:{args:[],returns:FFIType.i32},bench_last_delta:{args:[],returns:FFIType.f64},bench_scroll:{args:[FFIType.f64,FFIType.f64,FFIType.f64,FFIType.i32,FFIType.i32],returns:FFIType.i32}}).symbols
+const wheel=wheelApi.bench_scroll
 let sequence=1000000,streamDeltas=0
 const server=Bun.serve({idleTimeout:255,port:0,hostname:'127.0.0.1',async fetch(req){
  if(req.method!=='POST')return new Response('POST only',{status:405})
@@ -42,7 +44,7 @@ const server=Bun.serve({idleTimeout:255,port:0,hostname:'127.0.0.1',async fetch(
  if(body.action==='wheel-probe')return Response.json({accepted:wheel(body.x!,body.y!,body.delta??0,1,0),now:performance.now()})
  if(body.action==='wheel-drive'){
   const sent:number[]=[],start=performance.now(),count=Math.floor((body.durationMs??15000)*120/1000)
-  let accepted=0,lastPhase=-1
+  let accepted=0,lastPhase=-1,zeroDistancePackets=0,requestedDistance=0,effectiveDistance=0,handledPackets=0,handlerDistance=0
   for(let i=0;i<count&&performance.now()-start<(body.durationMs??15000);i++){
    const tick=Math.floor((performance.now()-start)*120/1000),phase=tick%300,cycle=tick%600,direction=cycle<300?-1:1
    const delta=body.fling?(phase<20?45:45*Math.exp(-(phase-20)/35)):(phase<120?6*Math.sin(Math.PI*Math.min(phase+1,30)/60):6*Math.exp(-(phase-120)/45))
@@ -51,10 +53,12 @@ const server=Bun.serve({idleTimeout:255,port:0,hostname:'127.0.0.1',async fetch(
    const contact=phase<120?(lastPhase<0||phase<lastPhase?1:2):0,momentum=phase>=120?(lastPhase<120?1:2):0
    lastPhase=phase
    sent.push(performance.now());accepted+=wheel(body.x!,body.y!,direction*delta,contact,momentum)
+   const effective=wheelApi.bench_last_delta();zeroDistancePackets+=Number(effective===0&&delta!==0);requestedDistance+=Math.abs(delta);effectiveDistance+=Math.abs(effective)
+   handledPackets+=wheelApi.bench_handler_count();handlerDistance+=Math.abs(wheelApi.bench_handler_delta())
    const due=start+(i+1)*1000/120;if(due>performance.now())await Bun.sleep(due-performance.now())
   }
   wheel(body.x!,body.y!,0,lastPhase<120?4:0,lastPhase>=120?3:0)
-  return Response.json({sent,accepted,productionMs:performance.now()-start,drainMs:0,maxOutstanding:0,acks:[],input:'120 Hz scheduled real AppKit NSEvent scrollWheel; precise deltas + native contact and momentum phases; direct own-window dispatch'})
+  return Response.json({sent,accepted,zeroDistancePackets,requestedDistance,effectiveDistance,handledPackets,handlerDistance,productionMs:performance.now()-start,drainMs:0,maxOutstanding:0,acks:[],input:`120 Hz scheduled real AppKit NSEvent scrollWheel; precise deltas + native contact and momentum phases; ${process.env.KYBERN_BENCH_DIRECT_VIEW!=='0'?'direct own GPUIView handler':'own NSWindow sendEvent route'}`})
  }
  if(body.action==='open'){nav.setNav({page:'home',keyboardNav:true});await state.selectThread(body.thread!)}
  if(body.action==='load-history'){

@@ -10,6 +10,7 @@
 // still. Rotation about the glyph's centre needs a square glyph: every kit icon is.
 import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import type { StyleDesc } from '@gpuix/react'
+import { useLoopVisibility } from '../native/loop-visibility.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 import { REDUCED_MOTION } from '../ui.tsx'
@@ -25,8 +26,8 @@ function subscribeVisible(listener: () => void) {
   return onWindowVisibility(listener)
 }
 /** Whether the window is on screen; polling runs only while a spinner is mounted. */
-export function useWindowVisible() {
-  return useSyncExternalStore(useCallback(subscribeVisible, []), isWindowVisible)
+export function useWindowVisible(active = true) {
+  return useSyncExternalStore(useCallback(listener => active ? subscribeVisible(listener) : () => {}, [active]), isWindowVisible)
 }
 
 export function SpinIcon({
@@ -48,12 +49,13 @@ export function SpinIcon({
   style?: StyleDesc
   testId?: string
 }) {
-  const visible = useWindowVisible()
-  const run = spinning && visible && !REDUCED_MOTION
+  const loop = useLoopVisibility(spinning && !REDUCED_MOTION)
+  const visible = useWindowVisible(loop.visible)
+  const run = loop.visible && visible
   const motion = useMemo(
     () => (run && !PATCHED_NATIVE ? { generation: ++generation, isExit: false, initial: { rotate: 0 }, animate: { rotate: 360 * TURNS }, transition: { duration: (TURNS * periodMs) / 1000, ease: LINEAR } } : null),
     [run, periodMs],
   )
   // The still glyph is the same element without the motion, so a test id and layout survive hiding.
-  return <svg testId={testId} source={source} {...(motion ? ({ motion } as object) : run ? { paintAnimation: { kind: 'rotate', cycleMs: periodMs } } : {})} style={{ width: size, height: size, flexShrink: 0, color, ...style }} />
+  return <svg ref={loop.ref} testId={testId} source={source} {...(motion ? ({ motion } as object) : run ? { paintAnimation: { kind: 'rotate', cycleMs: periodMs } } : {})} style={{ width: size, height: size, flexShrink: 0, color, ...style }} />
 }
