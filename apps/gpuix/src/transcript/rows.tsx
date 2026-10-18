@@ -567,7 +567,8 @@ const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone, live, thi
             <Chevron open={open} color={muted(t, 0.7)} />
           </div>
           <Collapse open={open}>
-            <div style={{ display: 'flex', paddingTop: 8, marginLeft: 28 }}>
+            {/* A column, so the text takes the row's width and wraps (desktop: `min-w-0 whitespace-pre-wrap`). */}
+            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, paddingTop: 8, marginLeft: 28 }}>
               <text style={{ color: muted(t), fontSize: TEXT.size, lineHeight: TEXT.lineHeight, fontFamily: FONT_UI, userSelect: 'text' }}>{block.thinking}</text>
             </div>
           </Collapse>
