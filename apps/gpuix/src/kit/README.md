@@ -65,8 +65,8 @@ and `KitButton` (the desktop `Button`: `variant` default/outline/destructive/…
 ## Form controls
 
 - `Switch` (`checked`/`defaultChecked`/`onCheckedChange`, `disabled`, `aria-label`): 32×20 track, 12 px thumb travel, press stretch.
-- `Checkbox` (same plus `indeterminate`, `invalid`): the check strokes itself in (a pre-rendered dash-offset sprite sequence on native
-  opacity tweens, exact to the desktop's `.t-check-path`; no JS per frame).
+- `Checkbox` (same plus `indeterminate`, `invalid`): the check strokes itself in (`.t-check-path`), painted natively by
+  `paintAnimation: { kind: 'stroke' }` (`motion/success.ts` `strokeDraw`; no render or JS per frame).
 - `Toggle` (`pressed`/`defaultPressed`/`onPressedChange`, `variant` default/outline, `size` xs/sm/default/lg, `icon`, children = label).
 - `Segmented` (`options: {value,label,unavailable?}[]`, `value`, `onChange`, `busy`, `textSize` 14, `segmentHeight` 24, `segmentPadX` 8,
   `fill`): radiogroup with the raised thumb that slides between segments; arrow keys skip unavailable options.

@@ -30,6 +30,7 @@ import { TOOL_RESULT_CHAR_LIMIT, TOOL_RESULT_LINE_LIMIT } from '../../../desktop
 import { BoundedMarkdown, TextDetail } from './markdown.tsx'
 import { Icon } from '../icons.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
+import { SuccessCheck } from '../motion/SuccessCheck.tsx'
 import { FONT_UI } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { T } from './glyphs.ts'
@@ -197,6 +198,19 @@ export const WorkRows = memo(function WorkRows({
 })
 
 /** Muted label that brightens on hover, like `TONE`. */
+/** The generic approval's `IconSwap`: the matrix loader, then `<CheckIcon className="t-success" />` once answered. The check
+ *  plays only when the answer arrives while the row is mounted (a row first rendered answered shows it at rest). */
+function ApprovalStatus({ decided, color }: { decided: boolean; color: string }) {
+  const [answeredAtMount] = useState(decided)
+  return (
+    <SwapOnChange active={decided ? 'done' : 'waiting'} style={{ flexShrink: 0 }}>
+      <div style={{ display: 'flex', width: 20, height: 20, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        {decided ? <SuccessCheck size={16} color={color} play={!answeredAtMount} /> : <MatrixLoader />}
+      </div>
+    </SwapOnChange>
+  )
+}
+
 function ToneLabel({ children, color, shimmer = false }: { children: string; color?: string; shimmer?: boolean }) {
   const t = useTheme()
   if (shimmer) return <Shimmer text={children} color={color ?? muted(t)} />
@@ -308,17 +322,11 @@ export const WorkRow = memo(function WorkRow({
       const userInput = isUserInput(block.approval)
       const icon = secret || coordinator ? <RowIcon box={20} size={16} source={block.decision?.decision === 'submit' || block.decision?.decision === 'allow_once' ? T.check : secret ? T.key : T.note} color={block.decision?.decision === 'submit' ? t.green : muted(t)} /> : userInput ? (
         <RowIcon box={20} size={16} source={!block.decision ? T.question : denied ? T.alert : T.checkSquare} color={denied ? destructive(t, 0.85) : block.decision ? fg(t, 0.75) : muted(t)} />
-      ) : block.decision ? (
-        <RowIcon box={20} size={16} source={T.check} color={fg(t, 0.75)} />
-      ) : (
-        <div style={{ display: 'flex', width: 20, height: 20, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          <MatrixLoader />
-        </div>
-      )
+      ) : null
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 4, paddingBottom: 4, minWidth: 0 }}>
           {/* `IconSwap` loader → check once the request is answered. */}
-          {userInput || secret || coordinator ? icon : <SwapOnChange active={block.decision ? 'done' : 'waiting'} style={{ flexShrink: 0 }}>{icon}</SwapOnChange>}
+          {icon ?? <ApprovalStatus decided={!!block.decision} color={fg(t, 0.75)} />}
           <Label color={color} lineHeight={ROW_LINE} truncate>
             {text}
           </Label>

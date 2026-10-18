@@ -1325,3 +1325,32 @@ operation log and the sorted GPU buffers. Renders now happen only for text delta
 `onFileDragChange` (`file_drag.rs`): `hovered: true` when a Finder drag (GPUI external paths) moves over the element,
 `false` when it moves off, drops, leaves the window or ends. The composer eases its drop ring with it
 (`src/motion/DropHighlight.tsx`). `renderer.simulateFileDrag(x, y, paths, 'enter' | 'move' | 'end')` drives it in tests.
+
+## Stroke draw-in (motion10)
+
+`paintAnimation: { kind: 'stroke', cycleMs, delayMs?, dash, ease? }` on an `<svg source>` strokes its paths in like the
+desktop's `t-check-draw` (`stroke-dasharray: dash`, `stroke-dashoffset: dash -> 0` over `cycleMs` after `delayMs`, on the
+cubic-bezier `ease`, default `--ease-smooth-out`). `motion/success.ts` `strokeDraw` / `successStroke` build it (undefined under
+Reduce Motion or with the stock addon); used by `motion/SuccessCheck.tsx` (`t-success`: sign-in success, answered approvals)
+and `kit/Checkbox.tsx` (`.t-check-path`).
+
+- Paint-only: the SVG's sprite is tagged as it enters the scene (`Window::with_stroke_draw`); before every present
+  `Window::animate_strokes` points it, in the operation log, the sorted GPU buffer and any `paintTransform` base, at an atlas
+  tile of the same SVG rasterized (resvg, like any SVG) with the dash attributes at the current offset. Offsets are quantized
+  to 1/64 of a user unit; a draw rasterizes one small tile per presented frame and returns them to the atlas one frame after
+  it ends, when the sprite goes back to the tile it was painted with. Geometry, order, clipping and hit testing never change.
+- The clock is the view's automation clock (paused and stepped in strips, like `paintTransform`), and a glyph keeps its clock
+  across re-renders (by element id); an unmounted glyph is forgotten after two seconds. Frames stop when it has ended.
+- Files: `stroke_draw.rs` (native: prop parsing, wrapper, clock), `stroke_draw_hooks.py`, `stroke_draw_scene.rs` +
+  `stroke_draw_window.rs` (GPUI), `stroke_draw_gpui.py` (runs after `stream_fade_gpui.py`).
+- Check: `bun native/stroke-draw-check.ts` (four modes: no ink during the delay, partial mid-draw, monotonic, a re-render keeps
+  progress, the end equals a plain render, display-rate frames without renders, none after the end). Strips against the
+  desktop's motion CSS in WebKit: `bun native/ui-lease.ts motion10 bun scripts/motion10-strips.ts`.
+
+## One UI lease for update.sh
+
+`native/ui-lease.ts <lane> <command…>` joins the fair UI queue only when it is about to run, waits for its line to be first
+and the lock free, takes `/tmp/kybern-gpuix-round5-ui-lock`, runs the command with `KYBERN_PACING_PARENT_LEASE` and
+`KYBERN_CLIP_LOCK_HELD` (so `clip-check`, `explorer-motion-check`, `scroll8-check` and `scroll8-input-check` reuse the lease
+instead of queueing behind it), then leaves the queue and releases the lock. `update.sh` runs those four checks together
+under one lease as `update-<checkout>`.
