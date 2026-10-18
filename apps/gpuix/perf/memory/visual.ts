@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { metadata } from './metadata.ts'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { gradientPng } from '../../visual/fixture.ts'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { launchFixture } from '../../src/requests/harness.ts'
@@ -12,10 +13,18 @@ const addon = process.env.NAPI_RS_NATIVE_LIBRARY_PATH ?? path.resolve(import.met
 const out = `${process.env.KYBERN_MEMORY_EVIDENCE ?? '/Users/mymac/projects/ade/previews/gpuix/perf/memory'}/${label}-visual`
 mkdirSync(out, { recursive: true })
 metadata(out, addon, false)
+// Distinct dimensions expose incorrect atlas-slot reuse; these assets are
+// separate from the fixed-size timed residency fixture.
+const imageDir = path.join(data, 'memory-visual-images')
+mkdirSync(imageDir, { recursive: true })
+for (let index = 0; index < 48; index++) {
+  const file = path.join(imageDir, `${index}.png`)
+  if (!existsSync(file)) writeFileSync(file, gradientPng(1536 + index * 4, 1024))
+}
 for (const theme of ['dark', 'light']) {
  const release = await lease(), leave = onExit(release)
  const client = path.join(data, `${label}-visual-${theme}`); mkdirSync(client, { recursive: true })
- const f = await launchFixture(path.join(import.meta.dir, 'lab.tsx'), { NAPI_RS_NATIVE_LIBRARY_PATH: addon, KYBERN_DATA_DIR: data, KYBERN_CLIENT_CONFIG_DIR: client, KYBERN_URL: '', KYBERN_TOKEN: '', GPUIX_BACKGROUND: '1', KYBERN_FULL_RATE: '1', KYBERN_APPEARANCE: theme })
+ const f = await launchFixture(path.join(import.meta.dir, 'lab.tsx'), { NAPI_RS_NATIVE_LIBRARY_PATH: addon, KYBERN_MEMORY_IMAGE_DIR: imageDir, KYBERN_DATA_DIR: data, KYBERN_CLIENT_CONFIG_DIR: client, KYBERN_URL: '', KYBERN_TOKEN: '', GPUIX_BACKGROUND: '1', KYBERN_FULL_RATE: '1', KYBERN_APPEARANCE: theme })
  const stop = onExit(f.close)
  try {
   await f.app.getByTestId('app-ready').waitFor()

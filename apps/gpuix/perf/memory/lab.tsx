@@ -9,6 +9,7 @@ import { dlopen, FFIType, type Pointer } from 'bun:ffi'
 import { each, getObjc, nsApp, sel } from '../../src/native/objc.ts'
 import { RichEditor } from '../../src/editor/RichEditor.tsx'
 import { loadEditorImage } from '../../src/editor/images.ts'
+const imageDir = process.env.KYBERN_MEMORY_IMAGE_DIR ?? path.join(process.env.KYBERN_DATA_DIR!, 'memory-images')
 type Scene = { kind: string; index: number; peer?: boolean }
 let change: (scene: Scene) => void
 let native: ReturnType<typeof useGpuixRequired>
@@ -25,14 +26,18 @@ function Lab() {
       o.msg(window, sel(o, 'orderFrontRegardless'))
     })
   }, [])
-  const src = path.join(process.env.KYBERN_DATA_DIR!, 'memory-images', `${scene.index}.png`)
-  useEffect(() => { if (scene.kind === 'editor') void loadEditorImage(native, null, src) }, [src, scene.kind])
+  const src = path.join(imageDir, `${scene.index}.png`)
+  useEffect(() => {
+    if (scene.kind === 'editor') void loadEditorImage(native, null, src)
+    if (scene.kind === 'editor-many') for (let index = 0; index < 24; index++) void loadEditorImage(native, null, path.join(imageDir, `${index}.png`))
+  }, [src, scene.kind])
   return <div testId="app-ready" style={{ width: '100%', height: '100%', backgroundColor: light ? '#f5f5f5' : '#202020', padding: 24 }}>
     <text testId="scene" style={{ color: light ? '#202020' : '#eeeeee', height: 30 }}>{`${scene.kind} ${scene.index}`}</text>
     {scene.kind === 'image' && <div style={{ display: 'flex' }}>
       <img key={scene.index} testId="memory-image" src={src} style={{ width: 480, height: 320, borderRadius: 12 }} />
-      {scene.peer && <img testId="memory-peer" src={path.join(process.env.KYBERN_DATA_DIR!, 'memory-images', '0.png')} style={{ width: 120, height: 80 }} />}
+      {scene.peer && <img testId="memory-peer" src={path.join(imageDir, '0.png')} style={{ width: 120, height: 80 }} />}
     </div>}
+    {scene.kind === 'editor-many' && <RichEditor value={'# Many images\n\n' + Array.from({ length: 24 }, (_, index) => `![Memory ${index}](${path.join(imageDir, `${index}.png`)})\n\n`).join('')} epoch={1000} readOnly={process.env.KYBERN_MEMORY_EDITOR_EDITABLE !== '1'} testId="memory-editor-many" />}
     {scene.kind === 'editor' && <RichEditor key={scene.index} value={`# Image ${scene.index}\n\n![Memory fixture](${src})\n`} epoch={scene.index} readOnly testId="memory-editor" />}
     {scene.kind === 'code' && <code testId="memory-code" code={Array.from({ length: 12000 }, (_, i) => `export const entry${i} = { title: 'Memory fixture ${i}', enabled: true };`).join('\n')} language="typescript" style={{ width: 950, height: 600, color: '#eeeeee', fontFamily: 'Menlo', fontSize: 14 }} />}
   </div>
@@ -44,7 +49,7 @@ const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
   if (body.action === 'editor-retry') {
     const renderer = native as unknown as { setRichEditorImage: (src: string, bytes: Buffer) => void; hasRichEditorImage?: (src: string) => boolean }
     if (!renderer.hasRichEditorImage) return Response.json({ available: false })
-    const src = path.join(process.env.KYBERN_DATA_DIR!, 'memory-images', `${body.index ?? 0}.png`)
+    const src = path.join(imageDir, `${body.index ?? 0}.png`)
     renderer.setRichEditorImage(src, Buffer.alloc(0))
     assert.equal(renderer.hasRichEditorImage(src), false, 'A failed entry is not a resident decode')
     await loadEditorImage(renderer, null, src)

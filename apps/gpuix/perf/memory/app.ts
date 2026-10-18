@@ -25,9 +25,9 @@ const server = Bun.serve({ hostname: '127.0.0.1', port: 0, idleTimeout: 255, asy
     for (let page = 0; page < 150 && getState().open.nextBeforeSeq != null; page++) await loadEarlier()
   } else if (body.action === 'note') openNote(body.note!)
   else if (body.action === 'preview') {
-    const id = getState().selectedId!, file = path.resolve(body.file!)
-    if (!file.startsWith(path.resolve(process.env.KYBERN_DATA_DIR!) + path.sep)) throw Error('Preview fixture must stay inside scratch data')
-    if (!(await openPreview(id, file, true))) {
+    const id = getState().selectedId!, target = new URL(body.file!)
+    if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1') throw Error('Preview fixture must use its own loopback server')
+    if (!(await openPreview(id, target.href))) {
       const preview = previewState(id)
       throw Error(`Preview did not open: ${JSON.stringify({ load: preview.load, error: preview.error, permission: !!preview.permission })}`)
     }

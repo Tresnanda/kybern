@@ -34,7 +34,7 @@ fence. `KYBERN_MEMORY_CODE_ONLY=1` isolates the code round trip;
 - Populate terminal scrollback with 12,000 lines, stream paragraphs at 25 Hz,
   close the terminal, and return Home.
 - Scroll a 2,400-line PR Changes fixture and return Home.
-- Open/close a local HTML preview, keep Mermaid's hidden renderer alive with
+- Open/close a loopback HTML preview, keep Mermaid's hidden renderer alive with
   jobs every three seconds, then allow its existing ten-second idle release.
 
 Use `KYBERN_MEMORY_GROUPS=webviews` (or a comma-separated subset) to isolate a
@@ -99,7 +99,7 @@ Both honor build reservations and the current quiet holder's UI priority.
 retains accepted runs, verifies addon/settings/workload identity, and archives
 the failed attempt separately before producing the accepted comparison.
 `pair.py --remaining` resumes the product/code-repeat/visual jobs after the image
-labs, with a scratch-only preview grant and an untimed preview/Mermaid smoke
+labs, with an owned loopback preview server and an untimed preview/Mermaid smoke
 check first. Full-product A/B runs use identical fixture imports and setup.
 `summarize.py` preserves accepted compact results and generates `RESULTS.md`.
 
@@ -107,3 +107,29 @@ The allocator-relief probe tested both all zones and the explicit default zone.
 Both returned zero pages and did not lower physical footprint on this host; no
 allocator-relief call is included in the production patch. `KYBERN_MEMORY_HEAP=1`
 adds a separate post-sample `heap -s -H` ownership inspection.
+
+`pair.py --note-probe` isolates a single editable document with 24 images and
+captures its heap after closure. `pair.py --note-stacks` repeats that diagnosis
+with stack logging enabled only on the native child. Its resource/timing data
+are excluded from comparisons because logging changes allocation overhead.
+The captured heap resolved the remaining large allocations to `image::Frame`
+cloning, but did not establish their retaining owner. The original exact-size
+history filter missed the logging-inflated allocation size; the helper now uses
+the observed heap size. That filter correction has been typechecked but not
+rerun against a live process.
+
+`experiments/detached-layouts.patch` preserves a rejected editor-layout cleanup
+experiment. It is not applied to production. `pair.py --detach-controls` requires
+that experimental addon and aborts if its counter is absent. The measured
+cleanup executed but did not release the remaining image allocations; both it
+and the allocator-relief production experiment were dropped.
+
+Visual captures use distinct image dimensions to expose incorrect atlas reuse.
+Timed image captures keep their original fixed dimensions. `RESULTS.md` contains
+the acceptance tables and limitations; compact accepted repeats are committed
+in `results.json`, while raw benchmark captures and native profiles stay in the
+external evidence folder.
+
+The HTML fixture uses an owned loopback server because daemon-data folders are
+intentionally excluded by file-preview policy. It exercises normal server
+preview loading/closure; that policy is preserved.

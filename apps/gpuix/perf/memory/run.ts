@@ -24,6 +24,7 @@ try {
  for (const group of process.env.KYBERN_MEMORY_GROUPS?.split(',') ?? ['thread-explorer-notes', 'terminal-stream', 'pull-request', 'webviews']) {
   const release = await lease(), leave = onExit(release)
   const proxy = group === 'pull-request' ? actionFixture({ long: true }) : null
+  let previewServer: ReturnType<typeof Bun.serve> | null = null
   const webkitProcesses = () => execFileSync('ps', ['-Ao', 'pid=,comm='], { encoding: 'utf8' }).split('\n').flatMap(line => {
     const match = line.trim().match(/^(\d+)\s+(.+)$/)
     return match && /com\.apple\.WebKit\.(?:WebContent|GPU|Networking)/.test(match[2]!) ? [{ pid: Number(match[1]), command: match[2]! }] : []
@@ -32,7 +33,7 @@ try {
   const client = path.join(data, `memory-${label}-${group}`); mkdirSync(client, { recursive: true })
   const telemetry = new Telemetry()
   const f = await launchFixture(path.join(import.meta.dir, 'app.ts'), { ...fixture.env, ...proxy?.env, NAPI_RS_NATIVE_LIBRARY_PATH: addon, KYBERN_CLIENT_CONFIG_DIR: client, KYBERN_GPUIX_CREDENTIALS_DIR: path.join(client, 'credentials'), KYBERN_BENCH_WHEEL_LIBRARY: path.join(data, 'bench-wheel.dylib'), KYBERN_GPUIX_THREAD: '', GPUIX_BACKGROUND: '1', KYBERN_FULL_RATE: '1', KYBERN_MEMORY_COUNTERS: '1', KYBERN_FRAME_TIMES: '1', KYBERN_FRAME_COSTS: '1', KYBERN_PACING_IGNORE_PHYSICAL_MOUSE: '1', KYBERN_APPEARANCE: process.env.KYBERN_APPEARANCE ?? 'dark' }, { stderr: telemetry.stderr })
-  const stop = onExit(async () => { await f.close(); proxy?.close() })
+  const stop = onExit(async () => { await f.close(); proxy?.close(); await previewServer?.stop(true) })
   const timeout = setTimeout(() => process.kill(process.pid, 'SIGTERM'), 250000)
   try {
    await f.app.getByTestId('app-ready').waitFor()
@@ -56,7 +57,7 @@ try {
       await Bun.sleep(name === 'mermaid-jobs-every-3s' ? 8000 : 1000)
       const state = await control('stats', {}, true) as { diagrams: { completed: number } }
       if (name === 'mermaid-jobs-every-3s') assert(state.diagrams.completed >= 1, 'Smoke must actually render Mermaid')
-      console.log('smoke', name, JSON.stringify(state))
+      console.log('smoke', name, JSON.stringify({ diagrams: state.diagrams, preview: (state as { preview?: unknown }).preview }))
       return
     }
     await f.app.call('blur', {}); await f.app.mouse.move({ x: 900, y: 4 })
@@ -116,9 +117,15 @@ try {
     await measure('changes-2400')
    } else if (group === 'webviews') {
     await control('open', { thread: fixture.manifest.long1000 })
-    const html = path.join(fixture.manifest.projectPath, 'memory-preview.html')
-    writeFileSync(html, '<!doctype html><meta charset="utf-8"><title>Memory preview</title><h1>Memory preview</h1><img src="fixture.png">' + Array.from({ length: 2000 }, (_, i) => `<p>Preview row ${i}</p>`).join(''))
-    await control('preview', { file: html }, true); await bounds('preview-slot-dock')
+    const html = '<!doctype html><meta charset="utf-8"><title>Memory preview</title><h1>Memory preview</h1><img src="fixture.png">' + Array.from({ length: 2000 }, (_, i) => `<p>Preview row ${i}</p>`).join('')
+    // Daemon-data folders deliberately cannot be granted to file previews.
+    // Exercise the real server-preview path with an owned loopback origin.
+    previewServer = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+      return new URL(request.url).pathname === '/fixture.png'
+        ? new Response(Bun.file(path.join(fixture.manifest.projectPath, 'fixture.png')))
+        : new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } })
+    } })
+    await control('preview', { file: `http://127.0.0.1:${previewServer.port}/` }, true); await bounds('preview-slot-dock')
     const previewDeadline = Date.now() + 30000
     while (true) {
       const state = await control('stats', {}, true) as { preview: { phase: string; loading: boolean } | null }
@@ -136,7 +143,7 @@ try {
    await control('home'); await measure('home-returned')
   } finally {
    clearTimeout(timeout); writeFileSync(path.join(out, `${group}-native.log`), telemetry.raw)
-   await f.close(); proxy?.close(); stop(); release(); leave()
+   await f.close(); proxy?.close(); await previewServer?.stop(true); stop(); release(); leave()
   }
  }
 } finally { await fixture.close() }

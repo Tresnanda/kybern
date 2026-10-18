@@ -57,6 +57,16 @@ try:
                   ('memory-after-disabled', 'gpuix-native.darwin-arm64.node', {'KYBERN_IMAGE_MEMORY': '0', 'KYBERN_EDITOR_IMAGE_MEMORY': '0', 'KYBERN_FRAME_MEMORY': '0'}),
                   ('memory-after-matched', 'gpuix-native.darwin-arm64.node', {})]],
         ]
+    elif '--detach-controls' in sys.argv:
+        jobs = [(label, ['bun', 'perf/memory/lab-run.ts', label],
+                 {'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_MEMORY_HEAP': '1', 'KYBERN_MEMORY_RELIEF': '1', 'KYBERN_EDITOR_DETACH_MEMORY': flag, 'KYBERN_MEMORY_REQUIRE_DETACH': '1'})
+                for label, flag in [('after-note-detach-off', '0'), ('after-note-detach-on', '1')]]
+    elif '--note-stacks' in sys.argv:
+        jobs = [('after-note-stacks', ['bun', 'perf/memory/lab-run.ts', 'after-note-stacks'],
+                 {'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_MEMORY_HEAP': '1', 'KYBERN_MEMORY_STACKS': '1'})]
+    elif '--note-probe' in sys.argv:
+        jobs = [('after-note-heap', ['bun', 'perf/memory/lab-run.ts', 'after-note-heap'],
+                 {'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_MEMORY_HEAP': '1'})]
     elif '--remaining' in sys.argv:
         jobs = [
             ('memory-tooling-typecheck', ['pnpm', 'exec', 'tsc', '-p', 'perf/memory/tsconfig.json'], {}),
