@@ -69,4 +69,3 @@ for(const theme of ['dark','light']){
   console.log(`PASS ${theme}: first/middle/tail rail, pinned image overlay, native selection, formatted final answer`)
  }catch(e){await f.app.screenshot({path:`${out}/verify-${theme}-failed.png`}).catch(()=>{});throw e}finally{await f.close()}
 }
-

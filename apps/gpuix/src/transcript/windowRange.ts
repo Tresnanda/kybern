@@ -6,4 +6,3 @@ export {pixelWindowRange as transcriptWindowRangeBy} from '../kit/windowRange.ts
 export function transcriptWindowRange(heights: readonly number[], anchor: number, offset: number, viewport: number, overdraw = 1536) {
   return transcriptWindowRangeBy(heights.length, index => heights[index] ?? 160, anchor, offset, viewport, overdraw)
 }
-
