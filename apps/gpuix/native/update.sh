@@ -86,23 +86,34 @@ echo "== checks"
   bun native/capability-check.ts
   bun native/decoration-check.ts
   bun native/rounded-check.ts
-  bun native/clip-check.ts
-  bun native/explorer-motion-check.ts
   bun native/subtree-translation-check.ts
   KYBERN_REGION_PAINT=1 bun native/subtree-translation-check.ts
+  bun native/subtree-transform-check.ts
+  KYBERN_REGION_PAINT=1 bun native/subtree-transform-check.ts
+  bun native/font-weight-check.ts
+  bun native/stroke-draw-check.ts
   bun native/markdown-check.ts
   bun native/diff-check.ts
-  bun native/scroll8-check.ts
-  bun native/scroll8-input-check.ts
   bun native/surface-check.ts
   bun native/link-check.ts
   for check in layout-check syntax-check syntax-lifecycle-check syntax-large-check; do
     bun "native/$check.ts"
   done
   bun native/fixture.ts bun scripts/combined-pointer-check.ts
+  # The checks that take the preview UI lock run together under ONE lease from the fair queue, joined only now
+  # and released right after (each would otherwise queue on its own, behind this checkout's own line).
+  bun native/ui-lease.ts "update-$(basename "$(cd "$app/../.." && pwd)")" sh -c '
+    set -e
+    bun native/clip-check.ts
+    bun native/explorer-motion-check.ts
+    bun native/scroll8-check.ts
+    bun native/scroll8-input-check.ts
+  '
   rustc --test native/patches/spring.rs -o native/build/spring-tests
   native/build/spring-tests
   rustc --test native/patches/physical_spring.rs -o native/build/physical-spring-tests
   native/build/physical-spring-tests
+  rustc --test native/patches/rich_doc.rs -o native/build/rich-doc-tests
+  native/build/rich-doc-tests
 )
 echo "done: GPUIX $version with Kybern patches"
