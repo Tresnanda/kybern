@@ -1,9 +1,9 @@
 # Backdrop filter experiment
 
 `RESEARCH.md` identifies native compositor materials vs scene filters. The narrow
-kernel candidate is opt-in until measured: `KYBERN_BACKDROP_KERNEL=1`; `=0` is the
+kernel candidate is enabled in this isolated worktree; `KYBERN_BACKDROP_KERNEL=0` is the
 same-addon legacy control. Large device sigma (>8) always uses the legacy shader.
-No cadence/material/animation default changes. No backdrop-pixel cache is added.
+No cadence/material/animation timing changes. No backdrop-pixel cache is added.
 
 Run from `apps/gpuix`:
 

@@ -3,7 +3,7 @@ renderer = (here / "backdrop_renderer.rs").read_text()
 anchor = "        let sigma=b.blur.as_f32().max(0.01);"
 assert renderer.count(anchor) == 1
 renderer = renderer.replace(anchor, """        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        let enabled = *ENABLED.get_or_init(|| std::env::var("KYBERN_BACKDROP_KERNEL").is_ok_and(|v| v != "0"));
+        let enabled = *ENABLED.get_or_init(|| !std::env::var("KYBERN_BACKDROP_KERNEL").is_ok_and(|v| v == "0"));
         let kernel = BackdropKernel::new(b.blur.as_f32().max(0.01), enabled);
         static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         if *TRACE.get_or_init(|| std::env::var("KYBERN_GPU_TRACE").is_ok_and(|v| v == "1")) {
