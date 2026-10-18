@@ -510,7 +510,8 @@ fn image_for(src: &str) -> Option<Result<Arc<gpui::RenderImage>, ()>> {
     })
 }
 
-fn store_image(src: String, entry: ImageEntry) {
+fn store_image(src: String, entry: ImageEntry, cx: &App) {
+    let protected = editor_image_sources(cx);
     IMAGES.with(|cache| {
         let mut cache = cache.borrow_mut();
         let (map, order) = &mut *cache;
@@ -519,11 +520,14 @@ fn store_image(src: String, entry: ImageEntry) {
         if let Some(ImageEntry::Ready(old)) = map.insert(src, entry) {
             IMAGE_DROPS.with(|d| d.borrow_mut().push(old));
         }
-        while order.len() > IMAGE_LIMIT {
-            if let Some(oldest) = order.pop_front() {
-                if let Some(ImageEntry::Ready(old)) = map.remove(&oldest) {
-                    IMAGE_DROPS.with(|d| d.borrow_mut().push(old));
-                }
+        let mut bytes: usize = map.iter().map(|(src, entry)| editor_image_cost(src, entry)).sum();
+        let candidates: Vec<_> = order.iter().filter(|src| !protected.contains(*src)).cloned().collect();
+        for oldest in candidates {
+            if order.len() <= IMAGE_LIMIT && bytes <= EDITOR_IMAGE_BYTES { break; }
+            order.retain(|src| src != &oldest);
+            if let Some(entry) = map.remove(&oldest) {
+                bytes = bytes.saturating_sub(editor_image_cost(&oldest, &entry));
+                if let ImageEntry::Ready(old) = entry { IMAGE_DROPS.with(|d| d.borrow_mut().push(old)); }
             }
         }
     });
@@ -577,11 +581,11 @@ fn drain_image_drops(window: &mut Window) {
 /// Empty bytes record a failed load ("Image unavailable").
 pub(crate) fn set_image(src: String, bytes: Vec<u8>, cx: &mut App) -> napi::Result<()> {
     if bytes.is_empty() {
-        store_image(src, ImageEntry::Failed);
+        store_image(src, ImageEntry::Failed, cx);
     } else {
         let image = crate::custom_elements::img::render_image_from_encoded(bytes, cx.svg_renderer())
             .map_err(napi::Error::from_reason)?;
-        store_image(src, ImageEntry::Ready(downscaled(image)));
+        store_image(src, ImageEntry::Ready(downscaled(image)), cx);
     }
     let editors: Vec<_> = EDITORS.with(|e| e.borrow().values().filter_map(|w| w.upgrade()).collect());
     for editor in editors {
@@ -623,6 +627,7 @@ impl CustomElementFactory for RichEditorFactory {
 
 #[derive(Default)]
 struct RichEditorElement {
+    element_id: Option<u64>,
     doc: Option<serde_json::Value>,
     doc_epoch: Option<f64>,
     applied_epoch: Option<f64>,
@@ -660,6 +665,7 @@ impl CustomElement for RichEditorElement {
         let focus_handle = ctx.focus_handle.cloned().unwrap_or_else(|| cx.focus_handle());
         let callback = ctx.event_callback.clone();
         let id = ctx.id;
+        self.element_id = Some(id);
         let state = self
             .state
             .get_or_insert_with(|| {
@@ -826,6 +832,7 @@ impl CustomElement for RichEditorElement {
     }
 
     fn destroy(&mut self) {
+        if let Some(id) = self.element_id.take() { EDITORS.with(|editors| { editors.borrow_mut().remove(&id); }); }
         self.state = None;
         self.key_interceptor = None;
     }
@@ -1133,6 +1140,7 @@ pub(crate) struct RichEditorState {
     glyph_source: HashMap<String, (String, String)>,
     glyphs: HashMap<String, Glyph>,
     layouts: HashMap<u64, Lay>,
+    image_sources: RefCell<(u64, std::collections::HashSet<String>)>,
     places: Vec<Place>,
     width: f32,
     height: f32,
@@ -1185,6 +1193,7 @@ impl RichEditorState {
             glyph_source: HashMap::new(),
             glyphs: HashMap::new(),
             layouts: HashMap::new(),
+            image_sources: RefCell::new((u64::MAX, Default::default())),
             places: Vec::new(),
             width: 0.0,
             height: 0.0,
@@ -1215,6 +1224,7 @@ impl RichEditorState {
     fn replace_doc(&mut self, doc: Doc, cx: &mut Context<Self>) {
         let sel = self.core.sel;
         self.core.doc = doc;
+        *self.image_sources.borrow_mut() = (u64::MAX, Default::default());
         self.core.history = History::default();
         self.core.stored = None;
         self.core.marked = None;
@@ -3442,4 +3452,71 @@ mod tests {
         assert_eq!(disp.d2m(10), 1 + ATOM_LEN + 1);
         assert_eq!(disp.m2d(block.len()), 11);
     }
+}
+
+
+// Document leases protect every referenced image, including below the viewport.
+// Detached screen state may still live in GPUI's previous frame, so destroy()
+// removes its weak registry entry immediately rather than waiting for its Arc.
+const EDITOR_IMAGE_BYTES: usize = 16 * 1024 * 1024;
+fn editor_image_cost(src: &str, entry: &ImageEntry) -> usize {
+    src.len().saturating_add(match entry {
+        ImageEntry::Ready(image) => (0..image.frame_count()).map(|frame| image.as_bytes(frame).map_or(0, <[u8]>::len)).sum::<usize>().saturating_mul(2),
+        ImageEntry::Failed => 0,
+    })
+}
+fn editor_image_sources(cx: &App) -> std::collections::HashSet<String> {
+    let editors: Vec<_> = EDITORS.with(|editors| editors.borrow().values().filter_map(|editor| editor.upgrade()).collect());
+    let mut sources = std::collections::HashSet::new();
+    for editor in editors {
+        let state = editor.read(cx);
+        let mut cached = state.image_sources.borrow_mut();
+        if cached.0 != state.core.doc.rev() {
+            cached.0 = state.core.doc.rev();
+            cached.1.clear();
+            let mut seen = std::collections::HashSet::new();
+            let history = state.core.history.undo.iter().chain(&state.core.history.redo).map(|snapshot| &snapshot.blocks);
+            let rule = state.core.rule_undo.as_ref().map(|(snapshot, _)| &snapshot.blocks);
+            for blocks in std::iter::once(&state.core.doc.blocks).chain(history).chain(rule) {
+                for block in blocks {
+                    if !seen.insert(std::rc::Rc::as_ptr(block)) { continue; }
+                    if let Kind::Image { src, .. } = &block.kind { cached.1.insert(src.clone()); }
+                    for run in &block.runs {
+                        if let Some(atom) = &run.atom { if let Atom::Image { src, .. } = atom.as_ref() { cached.1.insert(src.clone()); } }
+                    }
+                }
+            }
+        }
+        sources.extend(cached.1.iter().cloned());
+    }
+    sources
+}
+// A failed placeholder must not suppress a later JavaScript retry.
+pub(crate) fn has_image(src: &str) -> bool {
+    IMAGES.with(|cache| matches!(cache.borrow().0.get(src), Some(ImageEntry::Ready(_))))
+}
+pub(crate) fn image_memory_stats() -> serde_json::Value {
+    IMAGES.with(|cache| {
+        let cache = cache.borrow();
+        serde_json::json!({"entries":cache.0.len(),"cpuAndGpuPixelBytesEstimate":cache.0.iter().map(|(src,entry)| editor_image_cost(src,entry)).sum::<usize>()})
+    })
+}
+pub(crate) fn trim_images(window: &mut Window, cx: &mut App) {
+    if std::env::var("KYBERN_EDITOR_IMAGE_MEMORY").as_deref() == Ok("0") { return; }
+    let protected = editor_image_sources(cx);
+    IMAGES.with(|cache| {
+        let (map, order) = &mut *cache.borrow_mut();
+        // Reopening uses hasRichEditorImage to reload a reclaimed decode.
+        let mut bytes: usize = map.iter().filter(|(src,_)| !protected.contains(*src)).map(|(src,entry)| editor_image_cost(src,entry)).sum();
+        for src in order.clone() {
+            if protected.contains(&src) { continue; }
+            if !protected.is_empty() && bytes <= EDITOR_IMAGE_BYTES && map.len() <= IMAGE_LIMIT { break; }
+            order.retain(|value| value != &src);
+            if let Some(entry) = map.remove(&src) {
+                bytes = bytes.saturating_sub(editor_image_cost(&src, &entry));
+                if let ImageEntry::Ready(image) = entry { IMAGE_DROPS.with(|drops| drops.borrow_mut().push(image)); }
+            }
+        }
+    });
+    drain_image_drops(window);
 }
