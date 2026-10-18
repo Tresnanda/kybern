@@ -69,13 +69,17 @@ try {
   }
   await measure('home-initial')
   if (process.env.KYBERN_MEMORY_EDITOR_MANY === '1') {
-    await scene('editor-many')
-    if (process.env.KYBERN_MEMORY_EDITOR_EDITABLE === '1') {
-      const bounds = await f.app.getByTestId('memory-editor-many').bounds()
-      await f.app.mouse.click({ x: bounds.x + 24, y: bounds.y + 12 })
+    const rounds = Number(process.env.KYBERN_MEMORY_EDITOR_ROUNDS ?? '1')
+    assert(Number.isInteger(rounds) && rounds >= 1 && rounds <= 3, 'At most three editable-note round trips per lease')
+    for (let round = 0; round < rounds; round++) {
+      await scene('editor-many')
+      if (process.env.KYBERN_MEMORY_EDITOR_EDITABLE === '1') {
+        const bounds = await f.app.getByTestId('memory-editor-many').bounds()
+        await f.app.mouse.click({ x: bounds.x + 24, y: bounds.y + 12 })
+      }
+      await measure(round ? `editor-many-${round}` : 'editor-many')
+      await scene('home'); await measure(round ? `home-editor-many-${round}` : 'home-editor-many')
     }
-    await measure('editor-many')
-    await scene('home'); await measure('home-editor-many')
   }
   if (process.env.KYBERN_MEMORY_CODE_ONLY !== '1' && process.env.KYBERN_MEMORY_EDITOR_MANY !== '1') {
   for (let round = 0; round < 2; round++) {

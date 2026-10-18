@@ -10,6 +10,9 @@ import { launchFixture } from '../../src/requests/harness.ts'
 import { lease } from './lease.ts'
 import { watchRun } from '../bench/process-gate.ts'
 import { Telemetry, parseResources } from '../bench/telemetry.ts'
+import { drive } from '../bench/input.ts'
+import { requireActiveSample } from '../bench/screen-state.ts'
+import { imageThread } from '../images/thread-fixture.ts'
 import { onExit } from '../bench/lifetime.ts'
 const label = process.argv[2] ?? 'diagnose'
 const data = process.env.KYBERN_DATA_DIR!
@@ -17,9 +20,10 @@ const addon = process.env.NAPI_RS_NATIVE_LIBRARY_PATH ?? path.resolve(import.met
 const out = `${process.env.KYBERN_MEMORY_EVIDENCE ?? '/Users/mymac/projects/ade/previews/gpuix/perf/memory'}/${label}-app`
 mkdirSync(out, { recursive: true })
 metadata(out, addon)
-const fixture = await seed(data, 4332)
+const fixture = await seed(data, Number(process.env.KYBERN_BENCH_PORT ?? '4332'))
 const rows: unknown[] = []
 try {
+ if (process.env.KYBERN_MEMORY_IMAGE_THREAD === '1') await imageThread(fixture)
  const note = await fixture.client.call('notes.create', { scope: 'project', project_id: fixture.manifest.projects[0], title: 'Memory image note', body: '# Image residency\n\n' + Array.from({ length: 24 }, (_, i) => `![Fixture ${i}](${path.join(data, 'memory-images', `${i}.png`)})\n\n`).join('') })
  for (const group of process.env.KYBERN_MEMORY_GROUPS?.split(',') ?? ['thread-explorer-notes', 'terminal-stream', 'pull-request', 'webviews']) {
   const release = await lease(), leave = onExit(release)
@@ -52,7 +56,7 @@ try {
      assert(Date.now() < until, `No painted bounds: ${id}`); await Bun.sleep(50)
     }
    }
-   const measure = async (name: string, warmup = true) => {
+   const measure = async (name: string, warmup = true, scroll?: { x: number; y: number }) => {
     if (process.env.KYBERN_MEMORY_SMOKE === '1') {
       await Bun.sleep(name === 'mermaid-jobs-every-3s' ? 8000 : 1000)
       const state = await control('stats', {}, true) as { diagrams: { completed: number } }
@@ -61,7 +65,7 @@ try {
       return
     }
     await f.app.call('blur', {}); await f.app.mouse.move({ x: 900, y: 4 })
-    if (warmup) await Bun.sleep(10000)
+    if (warmup) { if (scroll) await drive(f.app, scroll, 10000); else await Bun.sleep(10000) }
     await f.app.call('blur', {})
     const gate = watchRun(), mark = telemetry.mark()
     const webkit = webkitProcesses().filter(process => !preexistingWebkit.has(process.pid))
@@ -71,10 +75,13 @@ try {
     const webText = webSampler ? new Response(webSampler.stdout).text() : Promise.resolve('')
     const webError = webSampler ? new Response(webSampler.stderr).text() : Promise.resolve('')
     const cancelWeb = onExit(async () => { webSampler?.kill(); await webSampler?.exited })
+    const offered = scroll ? drive(f.app, scroll, 15000) : Promise.resolve(null)
     const raw = await new Response(sampler.stdout).text(); assert.equal(await sampler.exited, 0); cancel()
     const webkitRaw = await webText, webkitError = await webError
     const webkitExit = webSampler ? await webSampler.exited : 0; cancelWeb()
+    const input = await offered
     const timing = telemetry.result(mark), overlap = gate.finish()
+    if (scroll) requireActiveSample(timing.frames.count, parseResources(raw).gpuMs, 15)
     const prefix = `${group}-${name}`
     writeFileSync(path.join(out, `${prefix}-footprint.txt`), execFileSync('footprint', ['-p', String(f.pid)], { encoding: 'utf8' }))
     writeFileSync(path.join(out, `${prefix}-vmmap.txt`), execFileSync('vmmap', ['-summary', String(f.pid)], { encoding: 'utf8' }))
@@ -83,15 +90,20 @@ try {
     }
     const attribution = await control('stats', {}, true) as { diagrams: { completed: number; failed: number } }
     if (name === 'mermaid-jobs-every-3s') assert(attribution.diagrams.completed >= 1, 'Mermaid must actually render')
-    rows.push({ group, name, fullRate: '1', ...timing, resources: parseResources(raw), webkitResources: webkitRaw && !webkitExit ? parseResources(webkitRaw) : null, webkitSampleError: webkitExit ? webkitError : null, webkitCandidates: webkit, webkitAttribution: 'New WebKit XPC services during this isolated fixture lease; external app launches can confound attribution. Main GPUIX resources remain separate.', attribution, counters: await control('counters'), gate: overlap })
+    rows.push({ group, name, input, fullRate: '1', ...timing, resources: parseResources(raw), webkitResources: webkitRaw && !webkitExit ? parseResources(webkitRaw) : null, webkitSampleError: webkitExit ? webkitError : null, webkitCandidates: webkit, webkitAttribution: 'New WebKit XPC services during this isolated fixture lease; external app launches can confound attribution. Main GPUIX resources remain separate.', attribution, counters: await control('counters'), gate: overlap })
     writeFileSync(path.join(out, 'results.json'), JSON.stringify(rows, null, 2))
-    assert(!overlap.overlap && !overlap.orphanOverlap, 'Contended sample must be rerun')
+    assert(!overlap.overlap && !overlap.orphanOverlap && !overlap.screenInvalid, 'Contended sample must be rerun')
    }
    // Keep the synthetic running sidebar row for matched active-screen samples.
    // The separate idle-home benchmark removes it after lists hydrate.
    while (!(await control('state') as { listsLoaded: boolean }).listsLoaded) await Bun.sleep(50)
    await control('home'); await measure('home-initial')
-   if (group === 'thread-explorer-notes') {
+   if (group === 'image-thread') {
+    await control('open', { thread: fixture.manifest.long1000 })
+    await f.app.getByTestId('response-image').waitFor({ timeoutMs: 30000 })
+    const viewport = await bounds('transcript-surface')
+    await measure('image-thread-scroll', true, { x: viewport.x + viewport.width / 2, y: viewport.y + viewport.height / 2 })
+   } else if (group === 'thread-explorer-notes') {
     await control('open', { thread: fixture.manifest.long3000 })
     const history = await control('older-all', {}, true) as { blocks: number; nextBeforeSeq: number | null }
     assert(history.nextBeforeSeq == null && history.blocks >= 6000, 'All 3000 turns must be reachable')

@@ -54,10 +54,25 @@ try:
             ('before-lab', ['bun', 'perf/memory/lab-run.ts', 'before-lab'], common),
             ('before-final', ['bun', 'perf/memory/visual.ts', 'before-final'], common),
         ]
+    if mode == 'final':
+        common = {'NAPI_RS_NATIVE_LIBRARY_PATH': str(addon), 'KYBERN_MEMORY_LANE': lane}
+        product = {'KYBERN_DATA_DIR': str(data) + '-product', 'KYBERN_MEMORY_GROUPS': 'image-thread', 'KYBERN_MEMORY_IMAGE_THREAD': '1'}
+        jobs = [
+            ('after-note', ['bun', 'perf/memory/lab-run.ts', 'after-note'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_MEMORY_EDITOR_ROUNDS': '2', 'KYBERN_MEMORY_HEAP': '1'}),
+            ('after-lab', ['bun', 'perf/memory/lab-run.ts', 'after-lab'], common),
+            ('before-thread', ['bun', 'perf/memory/run.ts', 'before-thread'], {**common, **product, 'NAPI_RS_NATIVE_LIBRARY_PATH': str(app / 'native/build/images-before.node')}),
+            ('after-thread', ['bun', 'perf/memory/run.ts', 'after-thread'], {**common, **product}),
+            ('after-final', ['bun', 'perf/memory/visual.ts', 'after-final'], common),
+            ('visual-diff', ['bun', 'perf/images/visual-diff.ts'], common),
+            ('lightbox-before', ['bun', 'perf/images/verify-run.ts'], {**common, 'NAPI_RS_NATIVE_LIBRARY_PATH': str(app / 'native/build/images-before.node'), 'KYBERN_IMAGE_VERIFY_LABEL': 'before'}),
+            ('lightbox-after', ['bun', 'perf/images/verify-run.ts'], {**common, 'KYBERN_IMAGE_VERIFY_LABEL': 'after'}),
+            ('after-note-stacks', ['bun', 'perf/memory/lab-run.ts', 'after-note-stacks'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_MEMORY_HEAP': '1', 'KYBERN_MEMORY_STACKS': '1'}),
+        ]
     for label, command, extra in jobs:
         env = dict(os.environ, KYBERN_DATA_DIR=str(data), KYBERN_CLIENT_CONFIG_DIR=str(data / 'client'),
                    KYBERN_URL='', KYBERN_TOKEN='', KYBERN_BENCH_PORT='4340',
-                   KYBERN_MEMORY_EVIDENCE=str(evidence), KYBERN_BENCH_EVIDENCE=str(evidence), KYBERN_FULL_RATE='1', **extra)
+                   KYBERN_MEMORY_EVIDENCE=str(evidence), KYBERN_BENCH_EVIDENCE=str(evidence), KYBERN_FULL_RATE='1')
+        env.update(extra)
         if '--memory' in sys.argv and 'NAPI_RS_NATIVE_LIBRARY_PATH' not in extra:
             env.pop('NAPI_RS_NATIVE_LIBRARY_PATH', None)
         with (evidence / f'{label}.log').open('w') as log:
