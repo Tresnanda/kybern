@@ -5,7 +5,8 @@
  * it reuse this lease instead of queueing behind it, then leaves the queue and releases the lock.
  *   bun native/ui-lease.ts <lane> <command> [args…]
  */
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import path from 'node:path'
 import { acquirePreviewUiLock } from '../scripts/preview-ui-lock.ts'
 
@@ -14,31 +15,80 @@ const [lane, ...command] = process.argv.slice(2)
 if (!lane || !command.length) throw Error('usage: bun native/ui-lease.ts <lane> <command> [args…]')
 const root = path.resolve(import.meta.dir, '../../..')
 const env = { ...process.env, KYBERN_PACING_PARENT_LEASE: root, KYBERN_CLIP_LOCK_HELD: '1' }
-const run = async () => {
-  const child = Bun.spawn(command, { env, stdin: 'inherit', stdout: 'inherit', stderr: 'inherit' })
-  return await child.exited
+let active: ChildProcess | undefined
+let interrupted = false
+let ownsGroup = true
+let forcedStop: ReturnType<typeof setTimeout> | undefined
+const signalGroup = (signal: NodeJS.Signals) => {
+  if (!active?.pid) return
+  try { if (ownsGroup) process.kill(-active.pid, signal); else active.kill(signal) } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ESRCH') return
+    // Darwin/Bun can report EPERM for an empty group after its leader exits.
+    // Suppress it only after verifying no group member remains to clean up.
+    if (code === 'EPERM' && ownsGroup) {
+      const groups = spawnSync('ps', ['-axo', 'pgid='], { encoding: 'utf8' })
+      if (groups.status === 0 && !groups.stdout.split(/\s+/).some(group => Number(group) === active!.pid)) return
+    }
+    throw error
+  }
 }
-
-// Already inside a lease of this checkout (a caller holds it): just run.
-if (process.env.KYBERN_PACING_PARENT_LEASE === root && existsSync(`${lock}/owner`) && readFileSync(`${lock}/owner`, 'utf8') === root) {
-  process.exit(await run())
+const run = async (detached = true) => {
+  ownsGroup = detached
+  // A separate process group owns only this command and its descendants. Stop
+  // the group on interruption and after exit, including any orphaned fixtures.
+  active = spawn(command[0]!, command.slice(1), { env, stdio: 'inherit', detached })
+  const deadline = setTimeout(() => { interrupted = true; signalGroup('SIGTERM'); forcedStop = setTimeout(() => signalGroup('SIGKILL'), 1000) }, 250000)
+  try {
+    return await new Promise<number>((resolve, reject) => {
+      active!.once('error', reject)
+      active!.once('exit', code => resolve(interrupted ? 130 : code ?? 1))
+    })
+  } finally {
+    clearTimeout(deadline)
+    signalGroup('SIGKILL')
+    if (forcedStop) clearTimeout(forcedStop)
+    active = undefined
+  }
 }
 
 const lines = () => (existsSync(queue) ? readFileSync(queue, 'utf8').split('\n').filter(Boolean) : [])
-const leave = () => {
-  const rest = lines().filter(line => line !== lane)
-  writeFileSync(queue, rest.join('\n') + (rest.length ? '\n' : ''))
-}
+const editQueue = (add: boolean) => execFileSync('python3', ['-c', `from pathlib import Path
+p=Path(${JSON.stringify(queue)})
+a=[x for x in p.read_text().splitlines() if x] if p.exists() else []
+lane=${JSON.stringify(lane)}
+if ${add ? 'True' : 'False'}:
+ if lane not in a:a.append(lane)
+else:a=[x for x in a if x!=lane]
+p.write_text(chr(10).join(a)+(chr(10) if a else ''))`])
+const leave = () => { editQueue(false) }
+
 let release: (() => void) | undefined
-const quit = () => { leave(); release?.(); process.exit(130) }
+const quit = () => {
+  if (interrupted) return
+  interrupted = true
+  if (!active) { leave(); release?.(); process.exit(130) }
+  signalGroup('SIGTERM')
+  forcedStop = setTimeout(() => signalGroup('SIGKILL'), 1000)
+}
 process.on('SIGINT', quit)
 process.on('SIGTERM', quit)
 
-if (!lines().includes(lane)) appendFileSync(queue, `${lane}\n`)
+// Native labs must not overlap another lane's final measurement window.
+const quiet = () => readdirSync('/tmp').some(name => name.startsWith('kybern-gpuix-quiet.'))
+while (quiet()) await Bun.sleep(1000)
+
+// Already inside a lease of this checkout (a caller holds it): just run.
+if (process.env.KYBERN_PACING_PARENT_LEASE === root && existsSync(`${lock}/owner`) && readFileSync(`${lock}/owner`, 'utf8') === root) {
+  process.exit(await run(false))
+}
+
+if (!lines().includes(lane)) editQueue(true)
 const deadline = Date.now() + 60 * 60_000
 while (!release) {
   if (Date.now() > deadline) { leave(); throw Error(`Timed out waiting for the UI lease (queue: ${lines().join(', ')})`) }
-  if (!lines().includes(lane)) appendFileSync(queue, `${lane}\n`)
+  if (quiet()) { leave(); await Bun.sleep(1000); continue }
+  if (!lines().includes(lane)) editQueue(true)
   if (lines()[0] !== lane || existsSync(lock)) { await Bun.sleep(2000); continue }
   try {
     release = acquirePreviewUiLock()

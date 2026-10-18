@@ -46,12 +46,14 @@ echo "== build (several minutes after a version change)"
 
 echo "== package"
 out=build/gpuix-native.darwin-arm64.node
+rm -f "$out"
 cp build/target/release/libgpuix_native.dylib "$out"
 # Xcode 27's ld misaligns the LINKEDIT string pool of this dylib; dyld rejects it.
 python3 tools/align_strtab.py "$out"
 codesign -f -s - "$out" 2>/dev/null
 node -e "require('$here/$out')"
 echo "native module loads"
+python3 tools/check_arena.py
 bun build-webview.ts
 
 if [ "$version" != "$pinned" ]; then
@@ -78,37 +80,9 @@ echo "== checks"
   cd "$app"
   pnpm typecheck
   export NAPI_RS_NATIVE_LIBRARY_PATH="$here/build/gpuix-native.darwin-arm64.node"
-  for check in island-check island-overlay-check native-check secure-input-check code-wrap-check native-motion-check; do
-    bun "scripts/$check.ts"
+  for batch in geometry content input; do
+    bun native/ui-lease.ts "update-$batch-$(basename "$(cd "$app/../.." && pwd)")" sh native/check-update.sh "$batch"
   done
-  pnpm exec tsc -p native/tsconfig.json
-  bun native/paint-check.ts
-  bun native/capability-check.ts
-  bun native/decoration-check.ts
-  bun native/rounded-check.ts
-  bun native/subtree-translation-check.ts
-  KYBERN_REGION_PAINT=1 bun native/subtree-translation-check.ts
-  bun native/subtree-transform-check.ts
-  KYBERN_REGION_PAINT=1 bun native/subtree-transform-check.ts
-  bun native/font-weight-check.ts
-  bun native/markdown-check.ts
-  bun native/diff-check.ts
-  bun native/surface-check.ts
-  bun native/link-check.ts
-  for check in layout-check syntax-check syntax-lifecycle-check syntax-large-check; do
-    bun "native/$check.ts"
-  done
-  bun native/fixture.ts bun scripts/combined-pointer-check.ts
-  # The checks that take the preview UI lock run together under ONE lease from the fair queue, joined only now
-  # and released right after (each would otherwise queue on its own, behind this checkout's own line).
-  bun native/ui-lease.ts "update-$(basename "$(cd "$app/../.." && pwd)")" sh -c '
-    set -e
-    bun native/stroke-draw-check.ts
-    bun native/clip-check.ts
-    bun native/explorer-motion-check.ts
-    bun native/scroll8-check.ts
-    bun native/scroll8-input-check.ts
-  '
   rustc --test native/patches/spring.rs -o native/build/spring-tests
   native/build/spring-tests
   rustc --test native/patches/physical_spring.rs -o native/build/physical-spring-tests
