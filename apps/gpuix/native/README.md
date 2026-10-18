@@ -1,3 +1,28 @@
+## Sparse transcript and sidebar lists
+
+The internal `sparseVersion` extension combines GPUIX's `itemCount/windowStart`
+with `windowIndices` for noncontiguous retained owners. React supplies only the
+buffered viewport and explicitly held rows. `sparseKeys` contains unique semantic
+IDs, `sparseEstimates` contains logical-pixel height hints, and their version changes
+only when metadata changes. `sparseLayout` invalidates heights after a transcript
+width/theme change. These props are owned by `src/kit/sparseList.tsx`; they are
+not a public upstream GPUIX API.
+
+`sparse_list.rs` retains measured heights by semantic key, preserves the logical
+anchor across prepends/reorders, and updates only mounted child/focus/revision
+records during a window change. Stable scroll frames skip that synchronization.
+The GPUI SumTree retains offscreen measurements even when the React host goes
+away; fallback rows use those heights rather than replacing them with a uniform
+estimate. Hinted splices and focus changes preserve the unaffected tree and
+anchor. Metadata and the height summary remain proportional to loaded logical
+rows; fibers, retained hosts, bounds observers and native row construction follow
+the viewport plus selection/focus/overlay/animation owners.
+
+Patches: `sparse_list_hooks.py`, `sparse_list_gpui.py`, `sparse_list.rs`, each
+reconstructed by the existing anchored-hook drivers. `KYBERN_SPARSE_LIST=0` is
+the dense-slot comparison control. Ordinary lists do not enter this path.
+Checks and paired measurements are in `perf/scroll2/`.
+
 # Patched GPUIX native module
 
 The client runs on our own build of `@gpuix/native`: the upstream release in
