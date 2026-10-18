@@ -2,7 +2,8 @@ import {mkdirSync,writeFileSync,existsSync,readFileSync} from 'node:fs'
 const out='/Users/mymac/projects/ade/previews/gpuix/perf/cadence/diagnostics'
 mkdirSync(out,{recursive:true})
 const hasher=new Bun.CryptoHasher('sha256')
-const files=[...new Bun.Glob('{src,perf/bench,perf/cadence}/**/*.{ts,tsx,m,py}').scanSync('.')].sort()
+const files=['src','perf/bench','perf/cadence'].flatMap(dir=>[...new Bun.Glob('**/*').scanSync({cwd:dir,onlyFiles:true})].filter(file=>/\.(?:ts|tsx|m|py|swift)$/.test(file)).map(file=>`${dir}/${file}`)).sort()
+if(files.length<300||!files.includes('perf/bench/lease.ts'))throw Error('Source validation glob did not cover this checkout')
 for(const file of [...files,'tsconfig.json','native/tsconfig.json','perf/bench/tsconfig.json','perf/cadence/tsconfig.json'])hasher.update(file).update(await Bun.file(file).arrayBuffer())
 const sourceHash=hasher.digest('hex'),stamp=`${out}/source-validation.json`
 const prior=existsSync(stamp)?JSON.parse(readFileSync(stamp,'utf8')):null

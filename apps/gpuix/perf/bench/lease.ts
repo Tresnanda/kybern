@@ -32,7 +32,7 @@ export async function lease(){
  const root=path.resolve(import.meta.dir,'../../../..')
  if(process.env.KYBERN_PACING_PARENT_LEASE===root){if(readFileSync(`${lock}/owner`,'utf8')!==root)throw Error('Inherited UI lease owner changed');return()=>{}}
  cleanupStaleLease(root)
- const lane=`perf-bench-${process.pid}`;edit(true,lane)
+ const lane=`perf-bench-${process.pid}`
  const token=`/tmp/kybern-gpuix-lease-token.${process.pid}.${crypto.randomUUID()}`,log=`/tmp/kybern-gpuix-lease-watch.${process.pid}.log`,fd=openSync(log,'w')
  writeFileSync(token,JSON.stringify({root,pid:process.pid,lane}))
  const guardian=spawnSync('python3',[watcher,'watch',String(process.pid),root,lane,lock,queue,token],{stdio:['ignore','ignore',fd]});closeSync(fd)
@@ -42,6 +42,7 @@ export async function lease(){
  let unregister=()=>{}
  const leave=()=>{stopAwake();if(existsSync(token))unlinkSync(token);if(existsSync(log))unlinkSync(log);edit(false,lane);if(release&&existsSync(`${lock}/bench-pid`))unlinkSync(`${lock}/bench-pid`);release?.();release=undefined;unregister()}
  unregister=onExit(leave)
+ edit(true,lane)
  const deadline=Date.now()+60*60_000
  try{while(!release){if(Date.now()>deadline)throw Error('UI lease timeout');if(!readFileSync(queue,'utf8').split('\n').includes(lane))edit(true,lane);const first=readFileSync(queue,'utf8').split('\n').find(Boolean);if(first!==lane||existsSync(lock)){await Bun.sleep(1000);continue}try{release=acquirePreviewUiLock();writeFileSync(`${lock}/bench-pid`,String(process.pid))}catch(e){if((e as NodeJS.ErrnoException).code!=='EEXIST')throw e;await Bun.sleep(1000)}}}catch(e){leave();throw e}
  if(!headless){try{requireScreen();stopAwake=keepDisplayAwake()}catch(e){leave();throw e}}
