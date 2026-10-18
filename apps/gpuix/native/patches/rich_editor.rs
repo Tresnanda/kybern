@@ -3503,6 +3503,10 @@ pub(crate) fn image_memory_stats() -> serde_json::Value {
 }
 pub(crate) fn trim_images(window: &mut Window, cx: &mut App) {
     if std::env::var("KYBERN_EDITOR_IMAGE_MEMORY").as_deref() == Ok("0") { return; }
+    if IMAGES.with(|cache| cache.borrow().0.is_empty()) {
+        drain_image_drops(window);
+        return;
+    }
     let protected = editor_image_sources(cx);
     IMAGES.with(|cache| {
         let (map, order) = &mut *cache.borrow_mut();

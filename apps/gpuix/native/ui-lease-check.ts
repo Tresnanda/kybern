@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
-const output='/Users/mymac/projects/ade/previews/gpuix/perf/memory/ui-lease-children.json'
+const output=path.join(process.env.KYBERN_VERIFY_OUTPUT??path.join(import.meta.dir,'build'),'ui-lease-children.json')
+mkdirSync(path.dirname(output),{recursive:true})
 rmSync(output,{force:true})
 const lane=`perf-memory-lease-check-${process.pid}`
 const code=`const child=Bun.spawn(['sleep','60']);require('fs').writeFileSync(${JSON.stringify(output)},JSON.stringify({parent:process.pid,child:child.pid}));setInterval(()=>{},1000)`
