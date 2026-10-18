@@ -89,6 +89,11 @@ The local `native/build/memory-final-pending` gate holds final measurements unti
 that entire validation passes. `pair.py` waits for
 this lane's quiet turn and runs the three-repeat startup/scroll/idle A/B suite;
 `pair.py --memory` uses a separate bounded quiet turn for memory and visuals.
+`pair.py --controls` runs fresh startup controls and matched RPC-input scroll
+controls with native ownership counters, including all memory features disabled.
+The optional `KYBERN_BENCH_RPC_ONLY=1` benchmark hook leaves normal backend
+selection unchanged. The controls replace thread/Markdown rows only after addon
+identity is verified, preserving the original mixed-input artifact separately.
 Both honor build reservations and the current quiet holder's UI priority.
 `pair.py --resume` retries failed/missing benchmark scenarios in fresh processes,
 retains accepted runs, verifies addon/settings/workload identity, and archives

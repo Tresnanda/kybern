@@ -31,13 +31,13 @@ const server=Bun.serve({idleTimeout:255,port:0,hostname:'127.0.0.1',async fetch(
   return Response.json({id:target?.id,offset:target?(renderer.getListScrollTop(target.id)??renderer.getScrollOffset(target.id)):null})
  }
  if(body.action==='counters'){
-  const root=(globalThis as Record<string,unknown>).__benchFiberRoot as {current?:unknown}|undefined
+  const root=(globalThis as Record<string,unknown>).__benchFiberRoot as {current?:unknown;containerInfo?:{nativeRenderer?:{getMemoryStats?:()=>unknown}}}|undefined
   type Fiber={tag?:number;type?:string|{name?:string;type?:{name?:string}};memoizedProps?:{testId?:string};child?:Fiber;sibling?:Fiber}
   const counts:Record<string,{hostNodes:number;reactComponents:number;rowComponents:number}>={},virtualLists:Record<string,{mountedNativeRows:number}>={}
   const stack:{node:Fiber;surface:string}[]=root?.current?[{node:root.current as Fiber,surface:'shell'}]:[]
   let visited=0
   while(stack.length&&visited++<500000){const {node,surface}=stack.pop()!;const test=node.memoizedProps?.testId;const scope=test==='transcript-surface'?'transcript':test==='right-dock'?'dock':test==='thread-list'?'sidebar':surface;const c=counts[scope]??={hostNodes:0,reactComponents:0,rowComponents:0};if(typeof node.type==='string'||node.tag===6)c.hostNodes++;else if(node.type)c.reactComponents++;const name=typeof node.type==='string'?'':node.type?.name??node.type?.type?.name??'';if(name&&/Row|TurnItem/.test(name))c.rowComponents++;if(node.type==='virtual-list'&&Object.keys(virtualLists).length<64){const pending: Fiber[]=node.child?[node.child]:[];let mountedNativeRows=0,budget=500000;while(pending.length&&budget-->0){const child=pending.pop()!;if(child.sibling)pending.push(child.sibling);if(typeof child.type==='string'||child.tag===6)mountedNativeRows++;else if(child.child)pending.push(child.child)}virtualLists[test??`list-${Object.keys(virtualLists).length}`]={mountedNativeRows}};if(node.sibling)stack.push({node:node.sibling,surface});if(node.child)stack.push({node:node.child,surface:scope})}
-  return Response.json({counts,virtualLists,visited,truncated:stack.length>0,builtVirtualChildrenPerFrame:null,markdownParseMs:null,textShapingMs:null,hostMutations:null,imageBytes:null,metalBytes:null,unavailable:'These counters need native instrumentation; not inferred from whole-window render time.'})
+  return Response.json({nativeMemory:root?.containerInfo?.nativeRenderer?.getMemoryStats?.()??null,counts,virtualLists,visited,truncated:stack.length>0,builtVirtualChildrenPerFrame:null,markdownParseMs:null,textShapingMs:null,hostMutations:null,imageBytes:null,metalBytes:null,unavailable:'These counters need native instrumentation; not inferred from whole-window render time.'})
  }
  if(body.action==='wheel-probe')return Response.json({accepted:wheel(body.x!,body.y!,body.delta??0,1,0),now:performance.now()})
  if(body.action==='wheel-drive'){

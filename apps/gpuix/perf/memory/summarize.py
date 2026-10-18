@@ -31,6 +31,8 @@ controls += load(evidence / 'before-extra-final-app/results.json')
 result = {
     'diagnosticControls': {label: [compact(row) for row in load(evidence / label / 'results.json')]
                            for label in ['before-lab', 'image-only', 'arena-only', 'allocator-zones']},
+    'featureControls': {label: load(bench / f'memory-{label}.json') for label in ['before-matched', 'after-disabled', 'after-matched']},
+    'startupControls': {label: load(bench / f'memory-startup-{label}.json') for label in ['disabled', 'enabled', 'baseline']},
     'labBefore': [compact(row) for row in load(evidence / 'before-final-lab/results.json')],
     'labAfter': [compact(row) for row in load(evidence / 'after-final-lab/results.json')],
     'codeRepeatAfter': [compact(row) for row in load(evidence / 'after-code-repeat/results.json')],
@@ -39,8 +41,7 @@ result = {
     'benchBefore': load(bench / 'memory-before-final.json'),
     'benchAfter': load(bench / 'memory-after-final.json'),
 }
-for side in ['Before', 'After']:
-    doc = result[f'bench{side}']
+for doc in [result[f'bench{side}'] for side in ['Before', 'After']] + list(result['startupControls'].values()) + list(result['featureControls'].values()):
     assert not doc['aborted'] and all(row['status'] == 'ok' for row in doc['results'])
     # Raw logs are external. Keep all accepted individual repeats and the
     # source/addon/settings metadata, with just the gate/input evidence.
@@ -76,10 +77,36 @@ def benchmark_table():
                 values = [get(row) for row in runs if get(row) is not None]
                 return statistics.median(values) if values else None
             frames = '/'.join(fmt(median(lambda row: row['frames'][key])) for key in ['p50', 'p95', 'p99'])
+            if median(lambda row: row['frames']['count']) == 0:
+                frames = '—/—/—'
             over = '/'.join(fmt(median(lambda row: row['frames'][key])) for key in ['over16_7', 'over33'])
             resources = [fmt(median(lambda row: row['resources'][key])) for key in ['cpuPercent', 'gpuMs', 'footprintMiB']]
             proxy = fmt(median(lambda row: row['latency']['proxyMs']['p95']))
             rows.append(f"| {scenario} | {side.lower()} | {frames} | {over} | {proxy} | {' | '.join(resources)} |")
+    return '\n'.join(rows)
+
+def startup_controls_table():
+    rows = ['| Fresh control | Startup | Shell median ms | First content median ms |',
+            '|---|---|---:|---:|']
+    for label, doc in result['startupControls'].items():
+        for scenario in ['startup-cold', 'startup-warm']:
+            runs = [row for row in doc['results'] if row['scenario'] == scenario]
+            values = [fmt(statistics.median(row['timings'][key] for row in runs))
+                      for key in ['firstPaintedShellMs', 'firstContentMs']]
+            rows.append(f"| {label} | {scenario} | {' | '.join(values)} |")
+    return '\n'.join(rows)
+
+def feature_controls_table():
+    rows = ['| Control (RPC input) | Scenario | CPU % | Render p95 ms | Footprint MiB |',
+            '|---|---|---:|---:|---:|']
+    for label, doc in result['featureControls'].items():
+        for scenario in ['thread-scroll', 'markdown-scroll']:
+            runs = [row for row in doc['results'] if row['scenario'] == scenario]
+            assert len(runs) == 3 and all(row['evidence']['forcedRpc'] for row in runs)
+            cells = [fmt(statistics.median(row['resources']['cpuPercent'] for row in runs)),
+                     fmt(statistics.median(row['work']['renderMs']['p95'] for row in runs)),
+                     fmt(statistics.median(row['resources']['footprintMiB'] for row in runs))]
+            rows.append(f"| {label} | {scenario} | {' | '.join(cells)} |")
     return '\n'.join(rows)
 
 def work_table():
@@ -95,6 +122,8 @@ def work_table():
             for metric in ['renderMs', 'layoutMs']:
                 samples = [row['work'][metric]['p95'] for row in runs if row['work'][metric]['p95'] is not None]
                 values.append(fmt(statistics.median(samples)) if samples else '—')
+            if statistics.median(row['frames']['count'] for row in runs) == 0:
+                values = ['—', '—']
             commits = fmt(statistics.median(row['work']['reactCommits'] for row in runs))
             rows.append(f"| {scenario} | {side.lower()} | {' | '.join(values)} | {commits} |")
     return '\n'.join(rows)
@@ -129,7 +158,9 @@ full frame distributions, counts, native counters, JS heap observations and
 timestamps are retained in `results.json`. The full-product Home keeps the
 synthetic running sidebar row, whose 200 ms updates are intentional. The
 separate idle-home scenario removes it. Startup submission gaps are not dropped
-animation frames. Latency is offered input to next scene-submission stderr
+animation frames. Idle interval/work distributions are omitted when the median
+window has zero submissions; any first-window transition frames remain in the
+individual raw results. Latency is offered input to next scene-submission stderr
 receipt; physical input-to-present latency is unavailable.
 
 ## Image and code round trip
@@ -159,6 +190,20 @@ XPC services during this fixture and can be confounded by external app launches.
 {startup_table()}
 
 {work_table()}
+
+Thread and Markdown rows use a follow-up matched RPC-input control, with the
+same 120 Hz contact/momentum schedule on both addons. The original Markdown
+comparison selected different AppKit/RPC backends and is archived separately
+under `*-mixed-input.json`; it is excluded from performance claims.
+
+{feature_controls_table()}
+
+The follow-up startup control uses three fresh processes per scenario, ordered
+final addon with all memory features disabled, final addon enabled, then baseline.
+It is a timing control rather than a randomized experiment. Flags and addon
+hashes are retained with each control.
+
+{startup_controls_table()}
 
 Startup content timings and per-frame CPU render/layout distributions remain in
 `results.json`. This 60 Hz display does not demonstrate 120 Hz readiness. The
