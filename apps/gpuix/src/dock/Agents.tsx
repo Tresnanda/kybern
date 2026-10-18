@@ -107,7 +107,7 @@ export function Agents({ thread }: { thread: Thread }) {
     {removing && <Dialog onClose={() => { if (!busy) setRemoving(null) }} width={420} testId="dock-remove-worktree">
       <DialogHeader title="Remove this worktree?" description={`${removing?.title || 'This agent'} left its worktree on disk because it has unmerged changes. Removing it deletes those files from this Mac. The branch is deleted only if already merged.`} onClose={() => { if (!busy) setRemoving(null) }} />
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: 12 }}>
-        <Action disabled={busy} onClick={() => setRemoving(null)}>Cancel</Action>
+        <Action press={false} disabled={busy} onClick={() => setRemoving(null)}>Cancel</Action>
         <Action disabled={busy} onClick={() => void run(async () => { if (removing) await getClient()!.call('delegations.worktree_remove', { thread_id: removing.id, force: true }); setRemoving(null) })}>{busy ? 'Removing…' : 'Remove worktree'}</Action>
       </div>
     </Dialog>}
@@ -164,7 +164,7 @@ const AgentRow = memo(function AgentRow({ row, detailOpen, onToggleTree, onToggl
       {result ? <>
         <Label color={muted(t, 0.65)} size={11}>Result</Label>
         <markdown source={clamp && !expanded ? result.split('\n').slice(0, 8).join('\n').slice(0, 720) : result} theme={cachedMarkdownTheme(t)} />
-        {clamp && <Action onClick={() => setExpanded(!expanded)}>{expanded ? 'Show less' : 'Show more'}</Action>}
+        {clamp && <Action press={false} onClick={() => setExpanded(!expanded)}>{expanded ? 'Show less' : 'Show more'}</Action>}
       </> : <Label color={muted(t, 0.8)} size={12}>{state.phase === 'working' || state.phase === 'waiting' ? 'The result comes back to this thread when the agent finishes.' : 'Open the thread to see its work.'}</Label>}
       {info?.branch && <Label color={muted(t, 0.8)} size={11}>{`Branch · ${info.branch}`}</Label>}
       {info?.head_commit && <Label color={muted(t, 0.8)} size={11}>{`Commit · ${info.head_commit.slice(0, 7)}`}</Label>}
@@ -172,7 +172,7 @@ const AgentRow = memo(function AgentRow({ row, detailOpen, onToggleTree, onToggl
       {!!info?.files_touched?.length && <>
         <Label color={muted(t, 0.65)} size={11}>{`Files touched · ${info.files_touched.length}`}</Label>
         <code code={(allFiles ? info.files_touched : info.files_touched.slice(0, 6)).join('\n')} theme={cachedMarkdownTheme(t)} showLineNumbers={false} />
-        {info.files_touched.length > 6 && <Action onClick={() => setAllFiles(!allFiles)}>{allFiles ? 'Show fewer' : `Show all ${info.files_touched.length} files`}</Action>}
+        {info.files_touched.length > 6 && <Action press={false} onClick={() => setAllFiles(!allFiles)}>{allFiles ? 'Show fewer' : `Show all ${info.files_touched.length} files`}</Action>}
       </>}
       {!!info?.conflicts?.length && <Label color={t.warning} size={11}>{`${info.conflicts.length} ownership conflicts · open the thread for details`}</Label>}
       <ErrorLine error={error} />

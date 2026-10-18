@@ -109,7 +109,7 @@ export function ProjectPane({ thread }: { thread: Thread }) {
     {confirm && <Dialog onClose={() => { if (!busy) setConfirm(null) }} width={430}>
       <DialogHeader title={confirm === 'redo' ? COPY.redoTitle : COPY.resetTitle} description={confirm === 'redo' ? COPY.redoDetail : COPY.resetDetail} onClose={() => { if (!busy) setConfirm(null) }} />
       <div style={{ display: 'flex', justifyContent: 'flex-end', padding: 12, gap: 8 }}>
-        <Action disabled={busy} onClick={() => setConfirm(null)}>Cancel</Action>
+        <Action press={false} disabled={busy} onClick={() => setConfirm(null)}>Cancel</Action>
         <Action disabled={busy} onClick={() => { void (async () => {
           if (confirm === 'reset') { if (await write(null)) setConfirm(null) }
           else { setBusy(true); try { await getClient()!.call('coordinator.setup', { project_id: projectId }); setConfirm(null) } catch (e) { setError(errorText(e)) } finally { setBusy(false) } }

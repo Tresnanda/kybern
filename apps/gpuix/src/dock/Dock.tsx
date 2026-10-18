@@ -26,6 +26,7 @@ import { ArtifactsPane } from './Artifacts.tsx'
 import { NotesPane } from './Notes.tsx'
 import { TasksPane } from './Tasks.tsx'
 import { DockEmpty } from './parts.tsx'
+import { pressTransform } from '../motion/press.ts'
 import { beginTabDrag, isDraggingTab, consumeTabDrag, endTabPending, setTabContext, TabSlot, trackTabDrag } from './reorder.tsx'
 import { chooseTab, closeTab, dockGeometry, finishDockDrag, moveDockDrag, setDock, startDockDrag, useDock, useDockDrag, type DockTab } from './store.ts'
 
@@ -166,13 +167,14 @@ function TabStrip({ threadId, width, coordinator, activeTasks, stats }: { thread
               }
               if (event.key === 'enter' || event.key === 'space') select(panel.id, true)
             }}
+            paintTransform={pressTransform()}
             style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, minWidth: 0, height: 28, paddingLeft: 6, cursor: 'pointer', borderRadius: 8 }}>
             <Icon source={panel.icon} size={14} color={t.textSecondary} />
             <Label color={panel.id === tab ? t.text : t.textSecondary} size={13}>{panel.label}</Label>
             {panel.id === 'activity' && activeTasks > 0 && <Label key={activeTasks} color={t.textSecondary} size={10} paintAnimation={popAnimation()}>{String(activeTasks)}</Label>}
             {panel.id === 'changes' && stats[0] + stats[1] > 0 && <div key={`${stats[0]}:${stats[1]}`} style={{ display: 'flex', gap: 3 }}><Label color={t.green} size={10} paintAnimation={popAnimation()}>{`+${stats[0]}`}</Label><Label color={t.red} size={10} paintAnimation={popAnimation()}>{`−${stats[1]}`}</Label></div>}
           </div>
-          <IconButton icon={N.x} glyph={12} size={24} label={`Close ${panel.label} panel`} onClick={() => closeTab(threadId, panel.id)} testId={`dock-tab-close-${panel.id}`} />
+          <IconButton press icon={N.x} glyph={12} size={24} label={`Close ${panel.label} panel`} onClick={() => closeTab(threadId, panel.id)} testId={`dock-tab-close-${panel.id}`} />
         </div></TabSlot>)}
       </div>
     </div>

@@ -10,6 +10,7 @@ import { ProjectDot } from '../notes/kit.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { StatusGlyph } from './Glyphs.tsx'
 import { chooseFilter, taskTyping, prefs, quickAdd, setTasks, useTasks } from './store.ts'
+import { pressTransform } from '../motion/press.ts'
 
 export function TasksSidebar() {
   const t = useTheme()
@@ -114,7 +115,8 @@ export function TasksSidebar() {
           </div>
         ))}
         <div key="heading" style={{ display: 'flex', height: 42, paddingLeft: 16, paddingRight: 10, paddingBottom: 6, alignItems: 'flex-end' }}>
-          <div onClick={() => prefs({ projectsCollapsed: !p.projectsCollapsed })} style={{ display: 'flex', alignItems: 'center', gap: 4, height: 20, marginLeft: -4, paddingLeft: 4, paddingRight: 4, cursor: 'pointer' }}>
+          {/* `.tk-nav-disclose`: scale 0.96 on press over `--duration-quick` both ways. */}
+          <div onClick={() => prefs({ projectsCollapsed: !p.projectsCollapsed })} paintTransform={pressTransform(true, 0.96, 0.15, 0.15)} style={{ display: 'flex', alignItems: 'center', gap: 4, height: 20, marginLeft: -4, paddingLeft: 4, paddingRight: 4, cursor: 'pointer' }}>
             <Label color={t.textTertiary} size={12} lineHeight={18} weight={500} style={{ pointerEvents: 'none' }}>Projects</Label>
             <Icon source={p.projectsCollapsed ? N.chevronRight : N.chevronDown} size={12} color={t.textTertiary} />
           </div>

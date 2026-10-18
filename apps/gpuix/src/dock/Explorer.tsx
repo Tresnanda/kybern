@@ -170,7 +170,7 @@ function FileViewer({ projectId, path, onClose }: { projectId: string; path: str
   return <>
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 36, paddingLeft: 10, paddingRight: 4, flexShrink: 0, borderBottomWidth: 0.6, borderColor: t.borderLight }}>
       <Label color={t.textSecondary} size={11} truncate style={{ flexGrow: 1 }}>{path.replaceAll('/', ' › ')}</Label>
-      {canPreview && <Action onClick={() => setPreview(!preview)}>{showPreview ? 'Source' : 'Preview'}</Action>}
+      {canPreview && <Action press={false} onClick={() => setPreview(!preview)}>{showPreview ? 'Source' : 'Preview'}</Action>}
       <Menu align="end" minWidth={190} testId="dock-file-actions" trigger={() => <IconButton icon={N.ellipsis} size={28} label="File actions" />}>
         <MenuItem id="relative" label="Copy relative path" onSelect={() => copyText(path)} />
         <MenuItem id="absolute" label="Copy absolute path" disabled={!absolutePath} onSelect={() => { if (absolutePath) copyText(absolutePath) }} />

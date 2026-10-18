@@ -15,6 +15,7 @@ import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { createNote, currentNoteHome, getNotes, newNote, openNote, openQuickNote, recordNote, rpc, setNotes, useNotes, useNotesFeed, type Capture } from './store.ts'
+import { pressTransform } from '../motion/press.ts'
 
 /** Mounted with the palette; the editor and picker themselves unmount when closed. */
 export function NotesOverlays() {
@@ -75,7 +76,7 @@ function QuickNote() {
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, height: 28 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexGrow: 1 }}><Label color={k.fg2} size={NOTES_META} lineHeight={19.5} weight={500}>Esc</Label><Label color={k.fg3} size={NOTES_META} lineHeight={19.5}>saves and closes</Label></div>
-        <div testId="quick-note-discard" tabIndex={0} aria-label="Discard" onClick={discard} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') discard() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 28, paddingLeft: 11.5, paddingRight: 11.5, borderRadius: 10, cursor: 'pointer', hover: { backgroundColor: k.hover } }}><Label color={ink(t, 0.58)} size={14} lineHeight={21} weight={500}>Discard</Label></div>
+        <div testId="quick-note-discard" tabIndex={0} aria-label="Discard" onClick={discard} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') discard() }} paintTransform={pressTransform()} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 28, paddingLeft: 11.5, paddingRight: 11.5, borderRadius: 10, cursor: 'pointer', hover: { backgroundColor: k.hover } }}><Label color={ink(t, 0.58)} size={14} lineHeight={21} weight={500}>Discard</Label></div>
         <div testId="quick-note-save" tabIndex={busy ? -1 : 0} aria-label="Save note" onClick={() => { if (!busy) void finish() }} onKeyDown={(e) => { if (!busy && (e.key === 'enter' || e.key === 'space')) void finish() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 28, paddingLeft: 11.5, paddingRight: 11.5, borderRadius: 10, backgroundColor: t.buttonPrimary, opacity: busy ? 0.6 : 1, cursor: 'pointer' }}><Label color={t.buttonPrimaryText} size={14} lineHeight={21} weight={500}>{busy ? 'Saving…' : 'Save note'}</Label></div>
       </div>
     </div>

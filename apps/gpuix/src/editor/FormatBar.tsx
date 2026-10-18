@@ -12,6 +12,7 @@ import { ink, Label, useTheme } from '../ui.tsx'
 import type { EditorState } from './RichEditor.tsx'
 import { SLASH_ICON } from './icons.ts'
 import { TURN_INTO_ITEMS } from './slash.ts'
+import { pressTransform } from '../motion/press.ts'
 
 const ICONS = {
   bold: glyph(TextBoldIcon), italic: glyph(TextItalicIcon), strike: glyph(TextStrikethroughIcon), code: glyph(SourceCodeIcon),
@@ -32,13 +33,15 @@ function linkLabel(href: string): string {
   return href.replace(/^(https?:\/\/|mailto:|tel:)/i, '').replace(/\/$/, '')
 }
 
-/** `FormatButton`: a 28px square with the icon at 14px, pressed when active. */
+/** `FormatButton`: a 28px square with the icon at 14px, pressed when active. Every control of the desktop's format bar is a
+ *  `press` button (scale 0.97 on :active, `motion/press.ts`). */
 export function FormatButton({ icon, label, shortcut, active, onClick, size = 28, iconSize = 14, testId }: { icon: string; label: string; shortcut?: string; active?: boolean; onClick: () => void; size?: number; iconSize?: number; testId?: string }) {
   const t = useTheme()
   return (
     <Tip label={shortcut ? `${label} ${shortcut}` : label}>
       <div testId={testId ?? `editor-format-${label.toLowerCase().replaceAll(' ', '-')}`} role="button" aria-label={label} aria-selected={active}
         onClick={onClick}
+        paintTransform={pressTransform()}
         style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: size, height: size, borderRadius: size === 28 ? 7 : 6, cursor: 'pointer', backgroundColor: active ? t.buttonSecondary : undefined, hover: { backgroundColor: active ? t.buttonSecondary : t.buttonSecondaryHover } }}>
         <Icon source={icon} size={iconSize} color={active ? t.text : t.textSecondary} />
       </div>
@@ -49,7 +52,7 @@ export function FormatButton({ icon, label, shortcut, active, onClick, size = 28
 function TextButton({ label, onClick, testId, strong }: { label: string; onClick: () => void; testId?: string; strong?: boolean }) {
   const t = useTheme()
   return (
-    <div testId={testId} role="button" onClick={onClick} style={{ display: 'flex', alignItems: 'center', height: 28, paddingLeft: 8, paddingRight: 8, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
+    <div testId={testId} role="button" onClick={onClick} paintTransform={pressTransform()} style={{ display: 'flex', alignItems: 'center', height: 28, paddingLeft: 8, paddingRight: 8, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
       <Label color={strong ? t.text : t.textSecondary} size={14} weight={strong ? 500 : 400} style={{ pointerEvents: 'none' }}>{label}</Label>
     </div>
   )
@@ -70,7 +73,7 @@ export function LinkField({ initial, command, onDone, width = 224 }: { initial: 
   }
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-      <div testId="editor-link-back" role="button" aria-label="Back to formatting" onClick={() => { onDone(); command({ cmd: 'focus' }) }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
+      <div testId="editor-link-back" role="button" aria-label="Back to formatting" onClick={() => { onDone(); command({ cmd: 'focus' }) }} paintTransform={pressTransform()} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
         <Icon source={ICONS.back} size={14} color={t.textSecondary} />
       </div>
       <input ref={input} testId="editor-link-address" aria-label="Link address" value={value} placeholder="Paste a link"
@@ -104,7 +107,7 @@ export function FormatBar({ state, command }: { state: EditorState; command: Com
         : mode === 'turn' ? <div role="menu" aria-label="Turn into" style={{ display: 'flex', flexDirection: 'column', gap: 1, width: 176 }}>
           {TURN_INTO_ITEMS.map(item => {
             const active = item.id === state.block
-            return <div key={item.id} testId={`editor-turn-${item.id}`} role="menuitemradio" aria-selected={active} onClick={() => { if (!active) run({ cmd: 'turnInto', block: item.id }); setMode('buttons') }}
+            return <div key={item.id} testId={`editor-turn-${item.id}`} role="menuitemradio" aria-selected={active} onClick={() => { if (!active) run({ cmd: 'turnInto', block: item.id }); setMode('buttons') }} paintTransform={pressTransform()}
               style={{ display: 'flex', alignItems: 'center', gap: 8, height: 28, paddingLeft: 8, paddingRight: 8, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
               <Icon source={SLASH_ICON[item.icon]} size={14} color={ink(t, 0.8)} />
               <div style={{ flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={14} truncate>{item.title}</Label></div>
@@ -113,7 +116,7 @@ export function FormatBar({ state, command }: { state: EditorState; command: Com
           })}
         </div>
           : <>
-            <div testId="editor-turn-into" role="button" aria-label={`Turn into. Now ${blockTitle}`} onClick={() => setMode('turn')}
+            <div testId="editor-turn-into" role="button" aria-label={`Turn into. Now ${blockTitle}`} onClick={() => setMode('turn')} paintTransform={pressTransform()}
               style={{ display: 'flex', alignItems: 'center', gap: 4, height: 28, paddingLeft: 8, paddingRight: 6, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
               <Label color={t.textSecondary} size={14} truncate style={{ maxWidth: 96, pointerEvents: 'none' }}>{blockTitle}</Label>
               <Icon source={ICONS.chevron} size={12} color={ink(t, 0.4)} />

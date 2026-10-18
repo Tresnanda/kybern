@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { Icon } from '../icons.tsx'
 import { EASE_OUT, ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { muted } from '../nav/overlay.tsx'
+import { pressTransform } from '../motion/press.ts'
 
 export function DockEmpty({ icon, title, body, lineage = false }: { icon: string; title: string; body?: string; lineage?: boolean }) {
   const t = useTheme()
@@ -15,9 +16,11 @@ export function DockEmpty({ icon, title, body, lineage = false }: { icon: string
   </div>
 }
 
-export function Action({ children, onClick, disabled, testId, textSize = 11, secondary = false }: { children: ReactNode; onClick: () => void; disabled?: boolean; testId?: string; textSize?: number; secondary?: boolean }) {
+/** A dock text action: the desktop's kit `Button` (chip/xs/sm) or `press` button, so it squashes on press (`motion/press.ts`).
+ *  `press={false}` where the desktop control does not (alert-dialog closes, "Show more" links, toolbar actions). */
+export function Action({ children, onClick, disabled, testId, textSize = 11, secondary = false, press = true }: { children: ReactNode; onClick: () => void; disabled?: boolean; testId?: string; textSize?: number; secondary?: boolean; press?: boolean }) {
   const t = useTheme()
-  return <div role="button" tabIndex={disabled ? -1 : 0} onKeyDown={(event) => { if (!disabled && (event.key === 'enter' || event.key === 'space')) onClick() }} aria-disabled={disabled} testId={testId} onClick={disabled ? undefined : onClick}
+  return <div role="button" tabIndex={disabled ? -1 : 0} onKeyDown={(event) => { if (!disabled && (event.key === 'enter' || event.key === 'space')) onClick() }} aria-disabled={disabled} testId={testId} onClick={disabled ? undefined : onClick} paintTransform={pressTransform(press && !disabled)}
     style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, minHeight: 28, paddingLeft: 8, paddingRight: 8, borderRadius: 6, backgroundColor: secondary ? t.buttonSecondary : undefined, flexShrink: 0, opacity: disabled ? 0.45 : 1, cursor: disabled ? 'default' : 'pointer', hover: disabled ? {} : { backgroundColor: t.buttonSecondaryHover } }}>
     <Label color={t.textSecondary} size={textSize}>{children}</Label>
   </div>

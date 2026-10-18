@@ -7,6 +7,7 @@ import { PriorityGlyph, StatusGlyph } from './Glyphs.tsx'
 import { Icon } from '../icons.tsx'
 import { useApp } from '../state.ts'
 import { deleteTasks, setTasks, taskState, updateMany, updateTask, useTasks } from './store.ts'
+import { pressTransform } from '../motion/press.ts'
 
 /** `.tk-prop .v`: 28px, 6px padding, a glyph and the value, on the properties panel. */
 function Value({ children }: { children: React.ReactNode }) {
@@ -30,8 +31,9 @@ export function TaskMenus({ ids, property, label, value, bar }: { ids: string[];
           <Label color={ink(t, 0.86)} size={13} lineHeight={19.5}>{property === 'status' ? STATUS_LABEL[first.status] : PRIORITY_LABEL[first.priority]}</Label>
         </Value>
       ) : (
-        // `.tk-selbar .tk-btn` (bar): 32px, 10px padding, 7px gap, the glyph at secondary ink.
+        // `.tk-selbar .tk-btn` (bar): 32px, 10px padding, 7px gap, the glyph at secondary ink; it snaps to 0.97 on press.
         <div
+          paintTransform={bar ? pressTransform(true, 0.97, 0, 0) : undefined}
           style={{
             display: 'flex',
             alignItems: 'center',

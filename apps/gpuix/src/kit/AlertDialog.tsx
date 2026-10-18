@@ -220,8 +220,11 @@ export function KitButton({
   onClick,
   disabled = false,
   testId,
+  press = true,
 }: {
   children?: string
+  /** `[data-slot="button"]` press (0.97). False where Base UI renders it as another part (`alert-dialog-close`), which does not scale. */
+  press?: boolean
   variant?: ButtonVariant
   /** Measured from the desktop in WebKit (1px border included). `sm`: 28 high, 9px side padding, 14/21 text. `chip`: auto height, 8/2 padding, 13/19.5 text (`--app-font-size-ui-sm`). */
   size?: 'default' | 'icon' | 'sm' | 'chip'
@@ -247,7 +250,7 @@ export function KitButton({
       onMouseLeave={() => setHover(false)}
       onClick={() => { if (!disabled) onClick?.() }}
       onKeyDown={(e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) onClick?.() }}
-      paintTransform={pressTransform(!disabled)}
+      paintTransform={pressTransform(press && !disabled)}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -380,10 +383,11 @@ export function AlertDialogFooter({ children, variant = 'default' }: { children:
   )
 }
 
-/** `AlertDialogClose render={<Button variant=… />}`: a footer button that runs `onClick`, then closes. */
+/** `AlertDialogClose render={<Button variant=… />}`: a footer button that runs `onClick`, then closes. Its slot is
+ *  `alert-dialog-close`, so unlike a plain `Button` it does not squash on press. */
 export function AlertDialogClose({ children, variant = 'outline', onClick, disabled, testId }: { children: string; variant?: ButtonVariant; onClick?: () => void; disabled?: boolean; testId?: string }) {
   const ctx = useContext(AlertContext)
-  return <KitButton variant={variant} disabled={disabled} testId={testId} onClick={() => { onClick?.(); ctx?.close() }}>{children}</KitButton>
+  return <KitButton press={false} variant={variant} disabled={disabled} testId={testId} onClick={() => { onClick?.(); ctx?.close() }}>{children}</KitButton>
 }
 
 /** The ghost close glyph (`XIcon`) used by sheets and dialogs. */

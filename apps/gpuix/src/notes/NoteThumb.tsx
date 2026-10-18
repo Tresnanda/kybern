@@ -2,6 +2,8 @@
 // `NoteThumb.tsx` + `.mini` in notes.css). Sizes are ems of one base size.
 import { motion } from '@gpuix/react'
 import { memo, type ReactNode } from 'react'
+import type { PaintTransformProps } from '@gpuix/native/host'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 import type { MiniBlock, MiniDoc, MiniSpan } from '@/state/miniMarkdown'
 import type { NoteSummary } from '../../../../packages/kybern-client/src/types.ts'
 import { FONT_MONO } from '../theme.ts'
@@ -20,6 +22,14 @@ export const NOTE_LIFT_MS = Number(process.env.KYBERN_NOTE_LIFT_MS) || 140
 export const NOTE_LIFT_PX = 2
 /** `--n-ease` (notes.css:36). */
 export const NOTE_EASE: [number, number, number, number] = [0.2, 0, 0, 1]
+/**
+ * `.note-card:active .note-thumb { transform: scale(0.985) }` on the thumb's own `transition: transform 140ms --n-ease`, painted
+ * natively (`paintTransform`, no render per frame). Reduce Motion: no transform.
+ */
+function thumbPress(pressed: boolean): PaintTransformProps | undefined {
+  if (!PATCHED_NATIVE || REDUCED_MOTION) return undefined
+  return { initial: false, animate: { scale: pressed ? 0.985 : 1 }, transition: { duration: NOTE_LIFT_MS / 1000, ease: NOTE_EASE } }
+}
 /** The desktop thumbnail's tick (`Tick` in NoteThumb.tsx). */
 const TICK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path d="M2.2 5.2 4.1 7.1 7.9 3" fill="none" stroke="#000" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'
 const text = (spans: MiniSpan[]) => spans.map((s) => s.text).join('')
@@ -63,7 +73,7 @@ function gap(prev: MiniBlock | undefined, block: MiniBlock, fs: number): number 
   return block.kind === 'paragraph' || block.kind === 'quote' ? 0 : fs * 0.53
 }
 
-export const NoteThumb = memo(function NoteThumb({ note, big, active, lift }: { note: NoteSummary; big: boolean; active: boolean; lift: boolean }) {
+export const NoteThumb = memo(function NoteThumb({ note, big, active, lift, pressed = false }: { note: NoteSummary; big: boolean; active: boolean; lift: boolean; pressed?: boolean }) {
   const t = useTheme()
   const k = notesTokens(t)
   const loaded = useNoteThumb(note)
@@ -83,7 +93,7 @@ export const NoteThumb = memo(function NoteThumb({ note, big, active, lift }: { 
       transition={{ duration: NOTE_LIFT_MS / 1000, ease: NOTE_EASE }}
       style={{ position: 'relative', borderRadius: 12 }}
     >
-    <div style={{ position: 'relative', height: big ? 184 : 156, borderRadius: 12, backgroundColor: k.card, overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: short || empty ? 'center' : 'flex-start', boxShadow: k.cardShadow, borderWidth: t.variant === 'dark' ? 0 : 0.5, borderColor: k.ring, ...(active ? { borderWidth: 2, borderColor: t.composerFocusBorder } : {}), pointerEvents: 'none' }}>
+    <div paintTransform={thumbPress(pressed)} style={{ position: 'relative', height: big ? 184 : 156, borderRadius: 12, backgroundColor: k.card, overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: short || empty ? 'center' : 'flex-start', boxShadow: k.cardShadow, borderWidth: t.variant === 'dark' ? 0 : 0.5, borderColor: k.ring, ...(active ? { borderWidth: 2, borderColor: t.composerFocusBorder } : {}), pointerEvents: 'none' }}>
       {empty ? <div style={{ display: 'flex', justifyContent: 'center' }}><Label color={k.fg4} size={13}>No text yet</Label></div>
         : <div style={{ display: 'flex', flexDirection: 'column', paddingTop: pad.v, paddingBottom: pad.v, paddingLeft: pad.h, paddingRight: pad.h, ...(big ? { maxWidth: fs * 56 + pad.h * 2 } : {}) }}>{body}</div>}
       {!short && !empty && <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 40, borderBottomLeftRadius: 12, borderBottomRightRadius: 12, background: { type: 'linear-gradient', angle: 180, stops: [{ color: clear(k.card), position: 0 }, { color: k.card, position: 1 }] } }} />}

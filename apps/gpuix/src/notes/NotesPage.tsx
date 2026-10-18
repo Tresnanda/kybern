@@ -175,6 +175,8 @@ const NoteCard = memo(function NoteCard({ note, big, list, scope, projectId, act
   const k = notesTokens(t)
   const [play] = useState(enter)
   const [hover, setHover] = useState(false)
+  // `.note-card:active .note-thumb`: a primary press anywhere on the card settles the thumb to scale(0.985) (replacing the lift).
+  const [pressed, setPressed] = useState(false)
   useEffect(() => { onSeen() }, [])
   const { done, total } = note.checklist
   const age = ageLabel(note.updated_at)
@@ -193,8 +195,8 @@ const NoteCard = memo(function NoteCard({ note, big, list, scope, projectId, act
     </motion.div>
   }
   return <motion.div {...motionProps} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, flexBasis: 0, minWidth: 0, position: 'relative' }}>
-    <div testId={`note-card-${note.id}`} tabIndex={0} onFocus={onFocus} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onClick={() => openNote(note.id)} onKeyDown={(e) => { if (e.key === 'enter') openNote(note.id) }} style={{ display: 'flex', flexDirection: 'column', borderRadius: 12, cursor: 'pointer', marginLeft: 0 }}>
-      <NoteThumb note={note} big={big} active={active} lift={hover} />
+    <div testId={`note-card-${note.id}`} tabIndex={0} onFocus={onFocus} onMouseEnter={() => setHover(true)} onMouseLeave={() => { setHover(false); setPressed(false) }} onMouseDown={(e) => { if ((e.button ?? 0) === 0) setPressed(true) }} onMouseUp={() => setPressed(false)} onClick={() => openNote(note.id)} onKeyDown={(e) => { if (e.key === 'enter') openNote(note.id) }} style={{ display: 'flex', flexDirection: 'column', borderRadius: 12, cursor: 'pointer', marginLeft: 0 }}>
+      <NoteThumb note={note} big={big} active={active} lift={hover && !pressed} pressed={pressed} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0, paddingTop: 10, paddingLeft: 2, paddingRight: 2, pointerEvents: 'none' }}>
         <Label color={k.fg} size={NOTES_UI} lineHeight={18} weight={600} truncate>{noteTitle(note)}</Label>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>

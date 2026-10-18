@@ -28,6 +28,7 @@ import type { Theme } from '../theme.ts'
 import { beginProjectDrag, consumeProjectDrag, endProjectPending, trackProjectDrag } from './reorder.tsx'
 import { filterSummary, isFiltering, providerLabel, threadAgents } from './model.ts'
 import { popAnimation, usePopOnChange } from '../kit/Pop.tsx'
+import { pressTransform } from '../motion/press.ts'
 import { FadeBack, Leave, markDisclosure, MarqueeLabel, PadTween, Reveal, TitleSwap } from './motion.tsx'
 
 /** Open or close a project (or Recents); the rows it adds or removes animate as a block. */
@@ -114,8 +115,11 @@ export function IconButton({
   testId,
   children,
   onHover,
+  press = false,
 }: {
   onHover?: (on: boolean) => void
+  /** Desktop `press` (scale 0.97 on :active): only where the desktop control has it; tooltip/menu triggers do not. */
+  press?: boolean
   icon: string
   size?: number
   glyph?: number
@@ -147,6 +151,7 @@ export function IconButton({
         onHover?.(false)
       }}
       onClick={onClick}
+      paintTransform={pressTransform(press && !!onClick)}
       style={{
         display: 'flex',
         alignItems: 'center',

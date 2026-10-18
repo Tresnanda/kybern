@@ -19,6 +19,7 @@ import { IconButton } from '../sidebar/rows.tsx'
 import { TaskWindow, type TaskWindowEntry } from '../tasks/TaskWindow.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { Action, ErrorLine, Section } from './parts.tsx'
+import { pressTransform } from '../motion/press.ts'
 
 export function ScopeHeader({ thread, action }: { thread: Thread; action: React.ReactNode }) {
   const name = useApp(s => s.projects.find(p => p.id === thread.project_id)?.name)
@@ -102,5 +103,6 @@ export function DockSection({ label, count, children }: { label: string; count?:
 }
 export function DockFooter({ children, testId, onClick }: { children: string; testId: string; onClick: () => void }) {
   const t = useTheme()
-  return <div testId={testId} role="button" tabIndex={0} onClick={onClick} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onClick() }} style={{ display: 'flex', alignItems: 'center', height: 28, marginLeft: 6, marginRight: 6, marginTop: 4, marginBottom: 8, paddingLeft: 8, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.hover } }}><Label color={muted(t, 0.7)} size={13}>{children}</Label></div>
+  // `DockFooterLink`: a `press` button.
+  return <div testId={testId} role="button" tabIndex={0} onClick={onClick} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onClick() }} paintTransform={pressTransform()} style={{ display: 'flex', alignItems: 'center', height: 28, marginLeft: 6, marginRight: 6, marginTop: 4, marginBottom: 8, paddingLeft: 8, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.hover } }}><Label color={muted(t, 0.7)} size={13}>{children}</Label></div>
 }
