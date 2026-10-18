@@ -115,3 +115,5 @@ dest=root/'crates/gpui/src/rounded_clip.rs'
 text=(here/'rounded_clip.rs').read_text()
 if not dest.exists() or dest.read_text()!=text:dest.write_text(text)
 print('GPUI backdrop hooks applied')
+
+exec((here / "backdrop_kernel_gpui.py").read_text())
