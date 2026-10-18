@@ -12,9 +12,10 @@
 // covers one crossing; the next (a new generation, which restarts from `initial`) starts, re-phased from the shared
 // clock, while the band is outside the block, so the restart is never visible. No JS runs per frame; the band holds
 // still while the window is hidden.
-import { useGpuixRequired, type PublicInstance, type StyleDesc } from '@gpuix/react'
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useGpuixRequired, type StyleDesc } from '@gpuix/react'
+import { useLayoutEffect, useState } from 'react'
 import { useTheme } from '../ui.tsx'
+import { useLoopVisibility } from '../native/loop-visibility.ts'
 import { useWindowVisible } from './Spin.tsx'
 
 /** One sweep (`skeleton 2s`). */
@@ -54,8 +55,9 @@ export interface SkeletonProps {
 export function Skeleton({ width = '100%', height = 16, radius = 6, view = { width: 1280, height: 820 }, still = false, testId, style }: SkeletonProps) {
   const t = useTheme()
   const renderer = useGpuixRequired()
-  const ref = useRef<PublicInstance>(null)
-  const visible = useWindowVisible()
+  const loop = useLoopVisibility(!still)
+  const ref = loop.ref
+  const visible = useWindowVisible(loop.visible)
   const [pass, setPass] = useState<{ generation: number; from: number; to: number; ms: number } | null>(null)
   const half = bandHalf(view)
   const highlight = t.variant === 'dark' ? 'rgba(255, 255, 255, 0.04)' : 'rgba(255, 255, 255, 0.64)'
@@ -74,7 +76,7 @@ export function Skeleton({ width = '100%', height = 16, radius = 6, view = { wid
     setPass({ generation: ++generation, from: left, to: end, ms: (end - left) / speed })
     return true
   }
-  const run = visible && !still
+  const run = visible && loop.visible
   useLayoutEffect(() => {
     if (!run) { setPass(null); return }
     let tries = 0

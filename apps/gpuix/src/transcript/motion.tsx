@@ -1,3 +1,4 @@
+import { useLoopVisibility } from '../native/loop-visibility.ts'
 import { useTranscriptEntranceLease, useTranscriptFirstMount } from './Window.tsx'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 import { revealBoundary } from './reveal.ts'
@@ -16,17 +17,22 @@ import type { MarkdownStream } from '../native/markdown.ts'
 import { useTheme } from '../ui.tsx'
 
 export function Shimmer({ text, color, size = 14, lineHeight = ROW_LINE }: { text: string; color: string; size?: number; lineHeight?: number }) {
-  // Pixel/idle controls pass, but repeated full-app GPU controls have not yet
-  // met the running-thread gate. Keep native glyph replay explicitly opt-in.
-  if (NATIVE_PAINT_ANIMATIONS && process.env.KYBERN_NATIVE_TEXT_PAINT === '1') return <Label color={color} size={size} lineHeight={lineHeight} truncate paintAnimation={REDUCED_MOTION ? undefined : {kind:'shimmer',cycleMs:1600}}>{text}</Label>
-  return <SampledShimmer text={text} color={color} size={size} lineHeight={lineHeight} />
+  return NATIVE_PAINT_ANIMATIONS && process.env.KYBERN_NATIVE_TEXT_PAINT === '1'
+    ? <NativeShimmer text={text} color={color} size={size} lineHeight={lineHeight} />
+    : <SampledShimmer text={text} color={color} size={size} lineHeight={lineHeight} />
 }
+function NativeShimmer({text,color,size,lineHeight}: {text:string;color:string;size:number;lineHeight:number}) {
+  const loop = useLoopVisibility(!REDUCED_MOTION)
+  return <Label ref={loop.ref} color={color} size={size} lineHeight={lineHeight} truncate paintAnimation={loop.visible ? {kind:'shimmer',cycleMs:1600} : undefined}>{text}</Label>
+}
+
 function SampledShimmer({ text, color, size, lineHeight }: { text: string; color: string; size: number; lineHeight: number }) {
-  const time = useLoaderTime()
+  const loop = useLoopVisibility(!REDUCED_MOTION)
+  const time = useLoaderTime(loop.visible)
   const phase = (time % 1600) / 1600
   const intensity = NATIVE_PAINT_ANIMATIONS ? 1 + .6 * easeInOut(phase < .5 ? phase * 2 : 2 - phase * 2) : [1, 1, 1.18, 1.42, 1.6, 1.42, 1.18, 1][Math.floor(time / 200) % 8]!
   return (
-    <Label color={alpha(color, intensity)} size={size} lineHeight={lineHeight} truncate>
+    <Label ref={loop.ref} color={alpha(color, intensity)} size={size} lineHeight={lineHeight} truncate>
       {text}
     </Label>
   )
@@ -119,15 +125,22 @@ const STREAM_FADE = STREAM_EFFECTS && process.env.KYBERN_STREAM_EFFECTS !== 'car
  * 350 ms smooth-out). The native Markdown draws both: this only reports when each word was born
  * and which half of the blink it is. Reduce Motion keeps a still caret and shows words at once.
  */
-export function useStreamEffects(text: string, live: boolean): MarkdownStream | undefined {
+export function useStreamEffects(text: string, live: boolean, visible = true): MarkdownStream | undefined {
   const t = useTheme()
   const seen = useRef<{ count: number; born: number[] } | null>(null)
   const [phase, setPhase] = useState(true)
   useEffect(() => {
-    if (!live || REDUCED_MOTION || !STREAM_EFFECTS) return
-    const id = setInterval(() => { if (isWindowVisible()) setPhase(value => !value) }, 500)
-    return () => clearInterval(id)
-  }, [live])
+    if (!live || !visible || REDUCED_MOTION || !STREAM_EFFECTS) return
+    let timer: ReturnType<typeof setInterval> | undefined
+    const sync = () => {
+      if (timer) clearInterval(timer)
+      timer = undefined
+      if (isWindowVisible()) timer = setInterval(() => setPhase(value => !value), 500)
+    }
+    const stop = onWindowVisibility(sync)
+    sync()
+    return () => { stop(); clearInterval(timer) }
+  }, [live, visible])
   if (!live || !STREAM_EFFECTS) { seen.current = null; return undefined }
   const count = countWords(text)
   // A row that mounts mid-stream starts at what has arrived: nothing fades in for it.

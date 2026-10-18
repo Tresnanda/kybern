@@ -21,6 +21,7 @@ import { buildWorkHierarchy, shouldRevealLiveText, type Block, type TurnGroup } 
 import type { Diff, RuntimeTask, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { useApp } from '../state.ts'
 import { Icon } from '../icons.tsx'
+import { useLoopVisibility } from '../native/loop-visibility.ts'
 import { MatrixLoader, useLoaderSecond } from '../MatrixLoader.tsx'
 import { clockDuration, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { CopyAction, SaveToNoteAction, UserBubble } from './bubble.tsx'
@@ -61,9 +62,10 @@ export function DateSeparator({ at }: { at: string }) {
 /** The orbit loader animates independently; elapsed labels update once a second. */
 function WorkingHeader({ since }: { since: string }) {
   const t = useTheme()
-  useLoaderSecond(true)
+  const loop = useLoopVisibility()
+  useLoaderSecond(loop.visible)
   return (
-    <div testId="working-header" style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: -2 }}>
+    <div ref={loop.ref} testId="working-header" style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: -2 }}>
       <div style={{ display: 'flex', width: 16, justifyContent: 'center' }}>
         <MatrixLoader alpha={0.7} />
       </div>

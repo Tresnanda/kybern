@@ -1,3 +1,4 @@
+import { useLoopVisibility } from '../native/loop-visibility.ts'
 import { useTranscriptRowLease } from './Window.tsx'
 import { memo, useEffect, useRef, useState } from 'react'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
@@ -154,10 +155,11 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
 })
 
 /** `.visual-reply__skeleton`: a 4% wash over the reserved box, breathing between full and 55% opacity every 1.6s. */
-function Skeleton({ height }: { height: number }) {
+export function Skeleton({ height }: { height: number }) {
   const t = useTheme()
-  const time = useLoaderTime()
+  const loop = useLoopVisibility(!REDUCED_MOTION)
+  const time = useLoaderTime(loop.visible)
   const phase = (time % 1600) / 1600
   const opacity = REDUCED_MOTION ? 1 : 1 - 0.45 * easeInOut(phase < 0.5 ? phase * 2 : 2 - phase * 2)
-  return <div testId="visual-skeleton" role="status" aria-label="Loading visual" style={{ position: 'absolute', top: 0, left: 0, right: 0, height, borderRadius: 10, backgroundColor: ink(t, 0.04), opacity, pointerEvents: 'none' }} />
+  return <div ref={loop.ref} testId="visual-skeleton" role="status" aria-label="Loading visual" style={{ position: 'absolute', top: 0, left: 0, right: 0, height, borderRadius: 10, backgroundColor: ink(t, 0.04), opacity, pointerEvents: 'none' }} />
 }
