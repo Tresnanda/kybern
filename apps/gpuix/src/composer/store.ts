@@ -1,3 +1,4 @@
+import {readAccounts} from '../requests/accounts.ts'
 import { onEnvironmentChange, onEnvironmentLeaving } from '../shell/environment.ts'
 import { load, save } from '../shell/persist.ts'
 // Composer data and actions: the agent catalog, settings and accounts, the open
@@ -154,17 +155,17 @@ export function ensureLoaded() {
   if (cached && !data.providers.length) patch({ providers: cached })
   void loadProviders(false).catch(() => {})
   void client.call('settings.get', {}).then((settings) => { if (getClient() === client) patch({ settings }) }).catch(() => {})
-  void client
-    .call('providers.accounts.list', {})
+  void readAccounts(client)
     .then((r) => { if (getClient() === client) patch({ accounts: r.accounts }) })
     .catch(() => {})
 }
 
 /** Read the account list again (an account was added, changed or removed elsewhere, e.g. Settings). */
-export function refreshComposerAccounts() {
+export function refreshComposerAccounts(accounts?: AccountSummary[]) {
   const client = getClient()
   if (!client) return Promise.resolve()
-  return client.call('providers.accounts.list', {}).then((r) => { if (getClient() === client) patch({ accounts: r.accounts }) }).catch(() => {})
+  if (accounts) { patch({ accounts }); return Promise.resolve() }
+  return readAccounts(client).then((r) => { if (getClient() === client) patch({ accounts: r.accounts }) }).catch(() => {})
 }
 
 let providerLoad: Promise<ProviderStatus[]> | null = null

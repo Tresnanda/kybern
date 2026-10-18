@@ -1,3 +1,4 @@
+import {readAccounts} from '../requests/accounts.ts'
 // Accounts of each agent for the environment this window shows, and their plan limits
 // (`state/accounts.ts` + the per-account half of `state/usageLimits.ts`).
 //
@@ -55,9 +56,11 @@ export function refreshAccounts({ probe = false }: { probe?: boolean } = {}): Pr
   const at = generation
   const request = (async () => {
     try {
-      const result = await client.call('providers.accounts.list', probe ? { refresh: true } : {})
-      if (generation === at) emit({ accounts: result.accounts, legacy: false, loaded: true })
-      void refreshComposerAccounts()
+      const result = await readAccounts(client,probe)
+      if (generation === at) {
+        emit({ accounts: result.accounts, legacy: false, loaded: true })
+        void refreshComposerAccounts(result.accounts)
+      }
       return true
     } catch (error) {
       if (isMethodNotFound(error)) { if (generation === at) emit({ accounts: [], legacy: true, loaded: true }); return true }

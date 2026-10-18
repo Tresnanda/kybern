@@ -14,5 +14,13 @@ export function emptyResult(scenario:Scenario,run:number):Result {return {scenar
 export const fmt = (n:number|null|undefined) => n==null?'—':n.toFixed(2)
 export function table(results:Result[]) {
  const rows=SCENARIOS.flatMap(scenario=>{const group=results.filter(r=>r.scenario===scenario),ok=group.filter(r=>r.status==='ok');if(!group.length)return[];const med=(f:(r:Result)=>number|null)=>percentile(ok.flatMap(r=>f(r)==null?[]:[f(r)!]),.5);return [`| ${scenario} | ${ok.length}/${group.length} | ${fmt(med(r=>r.frames.p50))} / ${fmt(med(r=>r.frames.p95))} / ${fmt(med(r=>r.frames.p99))} | ${fmt(med(r=>r.frames.over16_7))} / ${fmt(med(r=>r.frames.over33))} | ${fmt(med(r=>r.frames.max))} | ${fmt(med(r=>r.latency.proxyMs.p95))} | ${fmt(med(r=>r.resources.cpuPercent))} | ${fmt(med(r=>r.resources.gpuMs))} | ${fmt(med(r=>r.resources.footprintMiB))} | ${group.find(r=>r.reason)?.reason??''} |`]})
- return ['| Scenario | OK/runs | Frame p50/p95/p99 ms | >16.7/>33 | Max gap ms | Latency proxy p95 ms | CPU % | GPU ms/window | MiB | Notes |','|---|---:|---|---|---:|---:|---:|---:|---:|---|',...rows].join('\n')
+ return ['| Scenario | OK/runs | Frame p50/p95/p99 ms | >16.7/>33 | Max gap ms | Latency proxy p95 ms | CPU % | GPU ms/window | MiB | Notes |','|---|---:|---|---|---:|---:|---:|---:|---:|---|',...rows,'',...startupTable(results)].join('\n')
+}
+
+function startupTable(results:Result[]){
+ const rows=SCENARIOS.filter(s=>s.startsWith('startup-')).flatMap(s=>{
+  const ok=results.filter(r=>r.scenario===s&&r.status==='ok')
+  return ok.length?[`| ${s} | ${['firstPaintedShellMs','sidebarPaintMs','firstContentMs','newestContentMs'].map(key=>{const values=ok.flatMap(r=>r.timings[key]==null?[]:[r.timings[key]!]);return `${fmt(percentile(values,.5))} / ${fmt(percentile(values,.9))}`}).join(' | ')} |`]:[]
+ })
+ return rows.length?['| Startup | Shell median/p90 ms | Sidebar median/p90 ms | First content median/p90 ms | Newest content median/p90 ms |','|---|---:|---:|---:|---:|',...rows]:[]
 }

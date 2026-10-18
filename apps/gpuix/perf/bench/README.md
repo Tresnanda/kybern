@@ -205,3 +205,21 @@ AppKit readiness now waits 100 ms after its probe before checking the anchor,
 so frame-coalesced input is observed after paint rather than rejected early.
 
 Screen validity: runners execute `swift /Users/mymac/projects/ade-gpuix-scratch/screen-state.swift` before app launch and before/after measurement (checkout-local equivalent when the shared file is absent). Both endpoints must be unlocked and the display awake. Quiet windows wait without consuming a window while locked, polling once per minute. Every app lease owns `caffeinate -d -w <runner pid>`; killing the runner releases that assertion. Continuous active samples require at least one submission per four seconds and positive GPU time. Intentional idle, clipped, unmounted, and reduced-motion static controls can legitimately have zero submissions/GPU time. Never unlock a session or change its lock/sleep settings for a run.
+
+## Startup milestones
+
+Startup scenarios restore the 3,000-turn conversation and poll native painted
+text for the sidebar, first transcript content and newest answer separately.
+The report includes median/p90 for shell, sidebar, first content and newest
+content; scene-submission gaps remain a separate diagnostic. These are observed
+CPU paint upper bounds, not physical presentation fences.
+
+`startup-cold` restarts its own scratch daemon for every repeat, clearing the
+in-memory projection cache. `startup-warm` primes one launch then retains that
+daemon for its repeats. Neither purges OS filesystem caches. Packaged startup
+also restores the long conversation and uses a fresh scratch daemon per repeat;
+it reuses an existing compiled app and never triggers a release build.
+
+Startup runners hold a scoped `caffeinate -d -u -w <runner pid>` and reject zero/near-zero native submissions (fewer than three after up to two seconds of confirmation outside the recorded milestone clocks); this prevents an asleep display from producing false startup paint measurements. The assertion ends with the runner and does not change power settings.
+
+Startup also checks the shared screen-state Swift probe before and after: locked sessions or asleep displays reject the run. Never try to unlock the user session.
