@@ -8,7 +8,7 @@ import { until } from '../../scripts/dock-waits.ts'
 assertScratchEnv({ KYBERN_URL: '' })
 const data = process.env.KYBERN_DATA_DIR!
 const fixture = JSON.parse(readFileSync(path.join(data, 'fixture.json'), 'utf8')) as { threadId: string }
-const out = '/Users/mymac/projects/ade/previews/gpuix/perf/scroll2/sidebar'
+const out = process.env.SCROLL2_EVIDENCE ?? '/Users/mymac/projects/ade/previews/gpuix/perf/scroll2/sidebar'
 mkdirSync(out, { recursive: true })
 const label = process.argv[2] ?? 'baseline', theme = process.env.KYBERN_APPEARANCE ?? 'dark'
 for (const name of (existsSync(process.env.KYBERN_CLIENT_CONFIG_DIR!) ? readdirSync(process.env.KYBERN_CLIENT_CONFIG_DIR!) : []).filter(name => /^workspace-.*\.json$/.test(name))) rmSync(path.join(process.env.KYBERN_CLIENT_CONFIG_DIR!, name))

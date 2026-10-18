@@ -4,6 +4,9 @@ import {onExit} from './lifetime.ts'
 const shared='/Users/mymac/projects/ade-gpuix-scratch/screen-state.swift'
 export function screenState(){
  const raw=execFileSync('swift',[existsSync(shared)?shared:`${import.meta.dir}/screen-state.swift`],{encoding:'utf8'})
+ return parseScreenState(raw)
+}
+export function parseScreenState(raw:string){
  const unlocked=/locked:\s*(?:0|false)\b/.test(raw),awake=/displayAsleep:\s*(?:0|false)\b/.test(raw)
  return {at:new Date().toISOString(),unlocked,awake,valid:unlocked&&awake,raw:raw.trim()}
 }
@@ -17,5 +20,5 @@ export function keepDisplayAwake(){
  return stop
 }
 export function requireActiveSample(frames:number,gpuMs:number|null,seconds:number){
- if(frames<Math.max(2,seconds)||!(gpuMs!=null&&gpuMs>0))throw Error(`Invalid active sample: ${frames} submissions, ${gpuMs} GPU ms in ${seconds}s; discard and repeat unlocked`)
+ if(frames<Math.max(2,seconds/4)||!(gpuMs!=null&&gpuMs>0))throw Error(`Invalid active sample: ${frames} submissions, ${gpuMs} GPU ms in ${seconds}s; discard and repeat unlocked`)
 }

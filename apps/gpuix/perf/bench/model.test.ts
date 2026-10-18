@@ -59,3 +59,13 @@ test('CPU input-paint probes are sequence-bounded and separate from next-submiss
  expect(input.firstMs.max).toBe(17.5);expect(input.lastMs.p50).toBe(16)
  expect(t.result(mark).proxy.p95).toBeNull()
 })
+
+import {parseScreenState,requireActiveSample} from './screen-state.ts'
+test('locked/asleep and empty active samples cannot be accepted',()=>{
+ expect(parseScreenState('locked: 0 onConsole: 1\ndisplayAsleep: false').valid).toBe(true)
+ for(const raw of ['locked: 1\ndisplayAsleep: false','locked: 0\ndisplayAsleep: true','locked: nil\ndisplayAsleep: 0','unavailable'])expect(parseScreenState(raw).valid).toBe(false)
+ expect(()=>requireActiveSample(0,0,15)).toThrow()
+ expect(()=>requireActiveSample(1,3,15)).toThrow()
+ expect(()=>requireActiveSample(900,0,15)).toThrow()
+ expect(()=>requireActiveSample(75,120,15)).not.toThrow()
+})
