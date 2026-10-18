@@ -61,10 +61,11 @@ that content into compositor layers. A behind-window effect blurs the desktop.
 
 | Surface / current callsite | Desktop source / look | Decision |
 |---|---|---|
-| Window frame, rail, sidebar, title bar | `kit.css:120,174,465`; Tauri vibrancy | (a) Existing native under-window material plus theme fills; no scene blur to remove. Preserve. |
+| Window frame, rail, sidebar, title bar | `kit.css:120,174,465`; `lib/kit/theme/theme.logic.ts:812–821` explicitly sets sidebar CSS filter to none over Tauri vibrancy | (a) Existing native under-window material plus theme fills; no scene blur to remove. Preserve. |
 | Workspace/dock/settings planes | `kybern.css:582–618` translucent theme fills | (a)/(d) Existing shared compositor material and plane fills. No extra pass. Opaque/accessibility retains flat fills. |
 | Composer body (`src/composer.tsx:565`) | `kit.css:2838–2892`, `kybern.css:611–615,647–658` | Current GPUIX has fill/shadow and no scene backdrop. Preserve existing behavior; full-translucency composer parity is a pre-existing gap, not a performance win. |
-| PopupLayer menus, dialogs, palettes, pickers (`src/composer/Menu.tsx:141`) | `kit.css:2946–2956`, `kybern.css:621–623` | (c) Keep one scene blur with existing sigma/tint/order; compositor cannot sample underlying Metal scene. Large sigma retains original 49-tap shader. (d) Existing accessibility/full-translucency gate removes pass. |
+| PopupLayer menus, dialogs, pickers (`src/composer/Menu.tsx:141`) | `kit.css:2946–2956`, `kybern.css:621–623` | (c) Keep one scene blur with existing sigma/tint/order; compositor cannot sample underlying Metal scene. Large sigma retains original 49-tap shader. (d) Existing accessibility/full-translucency gate removes pass. |
+| Command palette (`src/nav/overlay.tsx:884`) | Desktop palette has no backdrop filter | (d) Explicit `material="none"`; preserve fill and separate content entrance blur. |
 | Split drop target + label (`src/split/Workspace.tsx:267–276`) | `kybern.css:133,158` | (c) Preserve intentional separate visible surfaces; each samples live content. (d) Existing accessibility disables blur. |
 | Computer live hover controls (`src/live/ComputerLiveView.tsx:74`) | `kybern.css:445` | (c) Keep one live scene filter; hover and accessibility gates remain. |
 | Preview mini header (`src/preview/MiniChrome.tsx:15`) | `kit.css:3785,3811` | (c) Keep scene filter over moving preview; accessibility fallback remains. |
