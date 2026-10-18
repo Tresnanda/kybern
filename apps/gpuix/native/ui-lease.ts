@@ -6,7 +6,7 @@
  *   bun native/ui-lease.ts <lane> <command> [args…]
  */
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import path from 'node:path'
 import { acquirePreviewUiLock } from '../scripts/preview-ui-lock.ts'
 
@@ -22,7 +22,15 @@ let forcedStop: ReturnType<typeof setTimeout> | undefined
 const signalGroup = (signal: NodeJS.Signals) => {
   if (!active?.pid) return
   try { if (ownsGroup) process.kill(-active.pid, signal); else active.kill(signal) } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ESRCH') return
+    // Darwin/Bun can report EPERM for an empty group after its leader exits.
+    // Suppress it only after verifying no group member remains to clean up.
+    if (code === 'EPERM' && ownsGroup) {
+      const groups = spawnSync('ps', ['-axo', 'pgid='], { encoding: 'utf8' })
+      if (groups.status === 0 && !groups.stdout.split(/\s+/).some(group => Number(group) === active!.pid)) return
+    }
+    throw error
   }
 }
 const run = async (detached = true) => {

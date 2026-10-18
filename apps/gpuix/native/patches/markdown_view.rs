@@ -133,8 +133,8 @@ impl Element for Flow {
                 let mut height = positions.last().map_or(0.0, |(y, h)| y + h);
                 let begin = positions.len();
                 for (index, gap) in gaps.iter().enumerate().skip(begin) {
-                    let mut child = build(index, window);
                     let size = window.measure_markdown(cx, |window, cx| {
+                        let mut child = build(index, window);
                         child.layout_as_root(gpui::size(AvailableSpace::Definite(px(width)), AvailableSpace::MaxContent), window, cx)
                     });
                     height += f32::from(window.pixel_snap(px(*gap)));

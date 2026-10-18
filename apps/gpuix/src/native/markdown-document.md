@@ -33,7 +33,9 @@ limit. Other file reads retain their existing 256KiB cap. Oversized/truncated
 Markdown opens in the existing source view.
 
 First layout measures the complete document to establish exact heights. This is
-cold O(document) work, not a claim of bounded first-paint latency. No frame arena
+cold O(document) work, not a claim of bounded first-paint latency. Each cold
+block uses a disposable element arena and layout engine, so temporary whole-document
+elements do not set the live frame arena’s permanent capacity. No frame arena
 objects or Taffy IDs survive it. Derived visible paint inputs expire after two
 viewport generations; plain geometry and logical copy text remain until close.
 The logical selection catalog preserves copy when input skips every intermediate

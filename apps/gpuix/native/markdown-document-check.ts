@@ -82,6 +82,7 @@ if(process.env.MD_API_ONLY!=='1') for(const [name,source] of Object.entries({
  convo9a:BLOCKS_A, convo9b:BLOCKS_B, convo9c:BLOCKS_C,
  wrappedcode:'```typescript\n'+Array.from({length:80},(_,i)=>`const item${i} = "Unicode 😀é and a long wrapped row ${"content ".repeat(20)}";\n`).join('')+'```\n\nAfter the wrapped fence.',
 
+ wrappedquote:Array.from({length:80},(_,i)=>`> Quote **${i}** with \`inline code\` and ${'long wrapping continuation text '.repeat(20)}\n>\n> > Nested quote **${i}** ${'with more wrapping text '.repeat(15)}\n>\n> After the nested quote.\n>\n`).join(''),
  bidi:('עברית **מודגש** العربية [קישור][ref] 123 text. ').repeat(1500)+'\n\n[ref]: https://example.com/rtl',
  cjk:('漢字かなカナ😀é 組版と改行。').repeat(1800),
  paragraph:'A **bold** [reference][ref] 😀é phrase. '.repeat(1800)+'\n\n[ref]: https://example.com/global',
@@ -97,7 +98,7 @@ if(process.env.MD_API_ONLY!=='1') for(const [name,source] of Object.entries({
   for(const document of ['0','1']) {
    const f=await launchFixture(path.join(import.meta.dir,'markdown-document-lab.tsx'),{KYBERN_APPEARANCE:mode,GPUIX_BACKGROUND:'1',MD_DOCUMENT:document,MD_DOC_SOURCE:file,MD_WRAP:name==='wrappedcode'?'1':'0',...(document==='0'?{NAPI_RS_NATIVE_LIBRARY_PATH:path.join(import.meta.dir,existsSync(path.join(import.meta.dir,'build/markdown-before.node'))?'build/markdown-before.node':'build/gpuix-native.darwin-arm64.node')}:{})})
    try {
-    await f.app.getByTestId('ready').waitFor();await waitForPainted(f.app,name==='wrappedcode'?'item0':name==='convo9a'?'Here is a tour':name==='convo9b'?'Paragraph before':name==='convo9c'?'A table follows':name==='table'?'Name':name==='code'?'item0':name==='list'?'Item':name==='inline'?'inline':name==='quote'?'Quote':name==='semantics'?'Semantics':name==='bidi'?'עברית':name==='cjk'?'漢字':'phrase',60_000)
+    await f.app.getByTestId('ready').waitFor();await waitForPainted(f.app,name==='wrappedcode'?'item0':name==='convo9a'?'Here is a tour':name==='convo9b'?'Paragraph before':name==='convo9c'?'A table follows':name==='table'?'Name':name==='code'?'item0':name==='list'?'Item':name==='inline'?'inline':(name==='quote'||name==='wrappedquote')?'Quote':name==='semantics'?'Semantics':name==='bidi'?'עברית':name==='cjk'?'漢字':'phrase',60_000)
     for(const position of ['top','middle']) {
      if(position==='middle'){await f.app.mouse.wheel({x:300,y:300},0,-3500);await f.app.clock.fastForward(64)}
      await f.app.screenshot({path:`${out}/interior-${name}-${mode}-${document}-${position}.png`})

@@ -18,4 +18,8 @@ try {
  assert.equal(running(pids.child),false,'grandchild survived its lease wrapper')
  assert.ok(!readFileSync('/tmp/kybern-gpuix-ui-queue','utf8').split('\n').includes(lane))
  console.log('ok UI lease interruption: command and grandchild stopped; own queue line and lock released')
+ const normal=Bun.spawn(['bun',path.join(import.meta.dir,'ui-lease.ts'),lane,'bun','-e','process.exit(0)'],{stdout:'inherit',stderr:'inherit'})
+ assert.equal(await normal.exited,0,'normal exit must survive empty process-group cleanup')
+ assert.ok(!readFileSync('/tmp/kybern-gpuix-ui-queue','utf8').split('\n').includes(lane))
+ console.log('ok UI lease normal exit: empty process group cleaned up and lease released')
 } finally {child.kill('SIGTERM')}
