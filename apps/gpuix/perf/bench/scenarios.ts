@@ -1,4 +1,4 @@
-import {requireScreen,requireActiveSample} from './screen-state.ts'
+import {requireScreen,requireActiveSample,screenState} from './screen-state.ts'
 import {watchRun} from './process-gate.ts'
 import {onExit} from './lifetime.ts'
 import {mkdirSync,readFileSync,existsSync,rmSync,writeFileSync} from 'node:fs'
@@ -49,6 +49,7 @@ export async function scenario(name:Scenario,runs:number,fixture:Fixture,evidenc
   const res=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action,...args})});const body=await res.json() as {loaded:boolean;listsLoaded:boolean;blocks:number;firstSeq:number;firstPromptNumber:number;nextBeforeSeq:number|null;streamDeltas:number;error?:string};if(!res.ok)throw Error(body.error);return body
  }
  const start=async(cold=false)=>{
+  screenState('app-launch-before')
   if(cold)rmSync(client,{recursive:true,force:true});mkdirSync(client,{recursive:true});rmSync(path.join(client,'bench-control.json'),{force:true})
   telemetry=new Telemetry()
   requireScreen()
@@ -178,6 +179,6 @@ export async function scenario(name:Scenario,runs:number,fixture:Fixture,evidenc
   results.push(r)
  }
  }catch(error){writeFileSync(path.join(evidence,`${name}-setup-failed.log`),telemetry.raw);for(let run=results.length+1;run<=runs;run++)results.push({...emptyResult(name,run),status:'failed',reason:String(error)})}
- finally{unregister();await launch?.close();proxy?.close()}
+ finally{unregister();await launch?.close();proxy?.close();screenState('app-launch-after')}
  return results
 }

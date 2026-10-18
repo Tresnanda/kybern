@@ -1430,3 +1430,27 @@ text and dispatch entries after a cached child wrote its new state. Such
 state must render again; it cannot replay indices against the prior draw.
 A rollback also invalidates caches recorded in the abandoned transaction.
 Ordinary consecutive draws still reuse the unchanged island.
+
+### Interior rounded-clip upload fast path
+
+`gpu_clip_gpui.py`, `gpu_clip.rs` and `gpu_clip_bounds.rs` simplify only temporary
+Metal instance-upload copies. An axis-aligned primitive whose clipped raster
+rectangle is at least one device pixel inside every rounded ancestor's
+conservative rectangular core needs no rounded-fragment evaluation. Edge and
+corner primitives retain the original chain. Transformed monochrome sprites,
+shadows, paths and backdrops retain their original masks. Scene operations,
+replay/cache generations, hit testing and animation defaults are unchanged.
+Scenes containing backdrops also keep the original upload masks for all
+primitives: repeated streaming pairs did not show a consistent AGX improvement.
+`KYBERN_GPU_CLIP_PRUNE=0` selects the same-binary control. The containment helper
+has a standalone `rustc --edition=2021 --test` check.
+
+`gpu_telemetry_gpui.py` adds opt-in `KYBERN_GPU_TRACE=1` scene/atlas counters.
+`[gpu-scene]` records ordinary instanced draws, separate blur/composite draws,
+primitive/vertex counts, candidate/pruned glyphs, atlas upload/eviction events,
+rounded clip nodes and glyph chain steps/depth, fixed-record instance bytes and
+clipped bounding area. The area is a workload
+proxy, not a hardware overdraw counter. Existing `[paint-gpu]` traces report
+command-buffer elapsed time; per-PID AGX GPU work is measured separately.
+Diagnostics request no frames and remain off by default. Methodology, paired
+measurements and limitations are in `perf/gpu/`.

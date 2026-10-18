@@ -262,3 +262,35 @@ Ordered by expected effect on smooth scrolling across the requested surfaces, th
 - Free workspace space was **91GiB before** clones/dependencies. Final free space after task cleanup was **89GiB** (`df -h`); concurrent lanes share the volume, so the 91→89GiB whole-volume change cannot be attributed to this report. The requested shared clones remain; no large generated build directory remains in the lane.
 
 Remaining acceptance gaps are explicit: this is a prioritized research plan, not an implementation claim. Fresh whole-app/native measurements, physical trackpad/momentum and input-to-present validation, true 120Hz testing, cold startup stages, shaping-cache telemetry and peak-memory attribution remain for the implementation packages.
+
+## GPU follow-up: clip cost versus scene size (perf-gpu)
+
+The pinned Zed renderer writes compact instance arrays and issues instanced draws
+per scene batch, rather than a render pass per text row. Its monochrome shader
+samples an atlas and checks a rectangular clip; it has no GPUIX ancestor rounded
+clip traversal. Sources: [Z:metal_renderer.rs:1491](https://github.com/zed-industries/zed/blob/56934ec0560bce8929025497411de7f5322fb6ca/crates/gpui_apple/src/metal_renderer.rs#L1491),
+[Z:shaders.metal:658](https://github.com/zed-industries/zed/blob/56934ec0560bce8929025497411de7f5322fb6ca/crates/gpui_apple/src/shaders.metal#L658).
+The atlas backend uploads newly built tiles and deallocates removed tiles;
+an instance record uploaded each frame is different from a glyph bitmap upload.
+Sources: [Z:metal_atlas.rs:41](https://github.com/zed-industries/zed/blob/56934ec0560bce8929025497411de7f5322fb6ca/crates/gpui_apple/src/metal_atlas.rs#L41),
+[Z:metal_atlas.rs:229](https://github.com/zed-industries/zed/blob/56934ec0560bce8929025497411de7f5322fb6ca/crates/gpui_apple/src/metal_atlas.rs#L229).
+Zeron inherits these GPUI techniques through its pinned zui fork; the semantic
+viewport work in T1/T3 bounds the instances that reach the renderer. These are
+source comparisons, not a new benchmark of Zed or Zeron.
+
+On the combined GPUIX tip, warm five-second diagnostics found only 13–21 ordinary
+draws per frame, no path geometry and no atlas evictions across six scenarios.
+Markdown/sidebar/thread/PR had zero bitmap uploads in that window. Streaming
+added nine real backdrops (18 blur/composite draws); static scrolling had none.
+The static scenes still repainted the 2560×1640 target, and approximately
+98–99.9% of rounded glyph masks were provably interior to every rounded ancestor.
+Thus the retained per-fragment rounded-chain evaluation was measurable waste;
+per-row Metal passes and atlas eviction churn did not explain these workloads.
+
+`native/patches/gpu_clip*` applies the rectangular fast path only to transient
+upload copies with conservative device-pixel containment. It retains the exact
+corner/edge shader, clips and transform semantics wherever that proof fails.
+It does not remove rounded corners, materials, glyphs or motion. See
+[`gpu/RESULTS.md`](gpu/RESULTS.md) for the paired measurements, frame-tail caveat,
+pixel proof and remaining full-window/blur work. Hardware fragment/overdraw
+counters and real 120Hz presentation remain unmeasured.

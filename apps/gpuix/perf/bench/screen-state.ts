@@ -2,9 +2,12 @@ import {execFileSync,spawn} from 'node:child_process'
 import {existsSync} from 'node:fs'
 import {onExit} from './lifetime.ts'
 const shared='/Users/mymac/projects/ade-gpuix-scratch/screen-state.swift'
-export function screenState(){
- const raw=execFileSync('swift',[existsSync(shared)?shared:`${import.meta.dir}/screen-state.swift`],{encoding:'utf8'})
- return parseScreenState(raw)
+/** With a phase (lane wrappers), an unusable screen throws instead of returning an invalid state. */
+export function screenState(phase?:string){
+ const script=process.env.KYBERN_BENCH_SCREEN_STATE_SCRIPT??(existsSync(shared)?shared:`${import.meta.dir}/screen-state.swift`)
+ const state={phase,...parseScreenState(execFileSync('swift',[script],{encoding:'utf8'}))}
+ if(phase&&!state.valid)throw Error(`Screen gate (${phase}): discard/pause while locked or asleep: ${state.raw}`)
+ return state
 }
 export function parseScreenState(raw:string){
  const unlocked=/locked:\s*(?:0|false)\b/.test(raw),awake=/displayAsleep:\s*(?:0|false)\b/.test(raw)
