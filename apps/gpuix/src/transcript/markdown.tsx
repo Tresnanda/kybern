@@ -1,3 +1,4 @@
+import { useTranscriptRowLease } from './Window.tsx'
 // Native GFM keeps prose, tables and syntax highlighting in single bounded
 // nodes. Code expansion contributes rows to the OUTER transcript virtual list.
 import { memo, useMemo, useState, type ReactNode } from 'react'
@@ -138,6 +139,7 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
   const tasks = useTasks(s => (refs ? s.tasks : NO_TASKS))
   const source = useMemo(() => (refs ? chipifyKybernRefs(text, id => notes.find(n => n.id === id), id => tasks[id]) : text), [text, refs, notes, tasks])
   const [preview, setPreview] = useState<{ title: string; text: string; code: boolean } | null>(null)
+  useTranscriptRowLease(preview !== null)
   const open = async (href: string) => {
     const link = chatLink(href)
     const client = getClient()
@@ -170,6 +172,7 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
 /** Work rows cannot become nested vertical scrollers. Their expanded output
  * opens a separate virtual surface; short output keeps the same native node. */
 export function TextDetail({ text, title, code = false, onClose }: { text: string; title: string; code?: boolean; onClose: () => void }) {
+  useTranscriptRowLease(true)
   const t = useTheme()
   const chunks = useMemo(() => textChunks(text), [text])
   return <Dialog width={760} onClose={onClose} testId="text-detail">

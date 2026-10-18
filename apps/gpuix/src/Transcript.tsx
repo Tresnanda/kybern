@@ -1,3 +1,6 @@
+import { TRANSCRIPT_SCROLL_LAYOUT } from './transcript/scroll-layout.ts'
+import { TranscriptSlot, useTranscriptWindow } from './transcript/Window.tsx'
+import { TranscriptRowStateScope } from './transcript/rowStateScope.ts'
 import { SubagentDivider } from './subagents/Page.tsx'
 import { observeElementBounds, type LayoutRect } from './native/layout.ts'
 // The thread transcript (`views/Transcript.tsx`): turns grouped by the shared
@@ -32,6 +35,7 @@ export const COLUMN = 736
 const COMPOSER_INSET = 192
 const turnKey = (group: TurnGroup, index: number) => group.turnId || group.user?.id || `turn-${index}`
 
+type TurnNodes = Map<string, {row?: PublicInstance | null; user?: PublicInstance | null}>
 type CodeState = { expanded: boolean; wrap: boolean; source?: boolean }
 type SavedAnchor = { key: string; offset: number; tail: boolean; code: Record<string, CodeState> }
 const scrollAnchors = new Map<string, SavedAnchor>()
@@ -52,7 +56,10 @@ export function Transcript() {
   const panelHeight = useRequestPanelHeight()
   const groupTurns = useMemo(() => createTurnGrouper(), [threadId])
   const turns = useMemo(() => groupTurns(blocks), [blocks, groupTurns])
+  const rowStateScope = useMemo(() => new Map<string, unknown>(), [threadId])
   const list = useRef<PublicInstance>(null)
+  const turnNodes = useRef<TurnNodes>(new Map())
+  const [jump, setJump] = useState<{id:string;index:number;generation:number} | null>(null)
   // The virtual list reports no element bounds (its rect is always null), so the
   // viewport size comes from the surface around it, which fills the same box.
   const [surfaceNode, setSurfaceNode] = useState<PublicInstance | null>(null)
@@ -65,6 +72,7 @@ export function Transcript() {
   const [atTail, setAtTail] = useState(true)
   const [overflow, setOverflow] = useState(false)
   const [paneHeight, setPaneHeight] = useState(0)
+  const [paneWidth, setPaneWidth] = useState(0)
   const jumpStop = useRef<(() => void) | null>(null)
   useEffect(() => () => jumpStop.current?.(), [threadId])
   useEffect(() => {
@@ -79,6 +87,7 @@ export function Transcript() {
       const { viewport, top, bottom } = rects
       if (!viewport) return
       setPaneHeight(viewport.height)
+      setPaneWidth(viewport.width)
       if (hasEarlier || (top && bottom)) setOverflow(hasEarlier || bottom!.y + bottom!.height - top!.y > viewport.height + 1)
       // Neither endpoint is painted when restoring into the middle of a long list.
       else setOverflow(true)
@@ -90,7 +99,7 @@ export function Transcript() {
   const navigationItems = useMemo(() => buildNavigation(turns as never), [buildNavigation, turns])
   const railItems = useMemo<RailItem[]>(() => navigationItems.map(item => ({ id: item.id, label: item.label, description: item.description })), [navigationItems])
   const [codeState, setCodeState] = useState<Record<string, CodeState>>({})
-  const [activeRow, setActiveRow] = useState(0)
+  const [activeId, setActiveId] = useState<string | null>(null)
   const nearTop = useRef(false)
 
   useEffect(() => {
@@ -103,44 +112,70 @@ export function Transcript() {
 
   // Every answer block/chunk is a direct virtual-list item. Expanding a 5k
   // line fence never mounts 5k native rows, nor adds a nested scroller.
-  const rows = useMemo(() => turns.flatMap((turn, i) => {
-    const key = turnKey(turn, i)
-    const at = turnTimestamp(turn)
-    const startsDay = !!at && ((!hasEarlier && i === 0) || (i > 0 && calendarDateKey(at) !== calendarDateKey(turnTimestamp(turns[i - 1]!))))
-    const running = turn.running || (i === turns.length - 1 && threadRunning && !turn.end)
-    const result = [{ key, turn, node: <TurnItem turn={turn} threadId={threadId!} isLast={i === turns.length - 1} threadRunning={i === turns.length - 1 && threadRunning} dateAt={startsDay ? at : null} /> }]
-    if (running) return result
-    result.push({ key: `${key}:images`, turn, node: <Row><AnswerImages group={turn} threadId={threadId!} /></Row> })
-    const parts = markdownParts(turn.answer?.text ?? '')
-    for (const [partIndex, part] of parts.entries()) {
-      const partKey = `${key}:answer:${part.key}`
-      const chunks = textChunks(part.text)
-      // Native Markdown owns spacing inside prose; separate virtual parts
-      // share the desktop's collapsed margin at their boundary (`partGap`).
-      if (partIndex > 0) result.push({ key: `${partKey}:before`, turn, node: <div style={{ height: partGap(parts[partIndex - 1]!, part) }} /> })
-      if (part.kind === 'code' && part.language === 'mermaid') {
-        // One row: the header (Preview/Source, expand, copy) and the diagram or its source.
-        const state = codeState[partKey] ?? { expanded: false, wrap: false }
-        result.push({ key: partKey, turn, node: <Row><MermaidBlock code={part.text} source={!!state.source} onSource={source => setCodeState(value => ({ ...value, [partKey]: { ...state, source } }))} /></Row> })
-      } else if (part.kind === 'code') {
-        // Desktop code starts unwrapped; horizontal scrolling preserves long lines.
-        const state = codeState[partKey] ?? { expanded: false, wrap: false }
-        const update = (patch: Partial<typeof state>) => setCodeState(value => ({ ...value, [partKey]: { ...state, ...patch } }))
-        result.push({ key: partKey, turn, node: <Row><CodeHeader part={part} {...state} onWrap={() => update({ wrap: !state.wrap })} onExpand={chunks.length > 1 ? () => update({ expanded: !state.expanded }) : undefined} /></Row> })
-        for (const [chunkIndex, chunk] of (state.expanded ? chunks : chunks.slice(0, 1)).entries()) {
-          result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><CodeChunk text={chunk} language={part.language} wrap={state.wrap} first={chunkIndex === 0} last={!state.expanded || chunkIndex === chunks.length - 1} /></Row> })
+  type RenderRow = {key: string; turn: TurnGroup; node: React.ReactNode; estimate?: number}
+  const rowCache = useMemo(() => new Map<string, {turn: TurnGroup; date: string | null; isLast: boolean; running: boolean; code: typeof codeState; rows: RenderRow[]}>(), [threadId])
+  const rows = useMemo(() => {
+    const keep = new Set<string>()
+    const next = turns.flatMap((turn, i) => {
+      const key = turnKey(turn, i)
+      const at = turnTimestamp(turn)
+      const startsDay = !!at && ((!hasEarlier && i === 0) || (i > 0 && calendarDateKey(at) !== calendarDateKey(turnTimestamp(turns[i - 1]!))))
+      const running = turn.running || (i === turns.length - 1 && threadRunning && !turn.end)
+      const date = startsDay ? at : null, isLast = i === turns.length - 1
+      keep.add(key)
+      const cached = rowCache.get(key)
+      if(cached && cached.turn === turn && cached.date === date && cached.isLast === isLast && cached.running === running && cached.code === codeState) return cached.rows
+      const result: RenderRow[] = [{ key, turn, estimate: (turn.user ? 52 : 0) + (turn.work.length ? 36 : 0) + (startsDay ? 44 : 0), node: <TurnItem nodes={turnNodes.current} turn={turn} threadId={threadId!} isLast={i === turns.length - 1} threadRunning={i === turns.length - 1 && threadRunning} dateAt={startsDay ? at : null} /> }]
+      const remember = () => { rowCache.set(key, {turn, date, isLast, running, code:codeState, rows:result}); return result }
+      if (running) return remember()
+      result.push({ key: `${key}:images`, turn, estimate: turn.images.length * 234, node: <Row><AnswerImages group={turn} threadId={threadId!} /></Row> })
+      const parts = markdownParts(turn.answer?.text ?? '')
+      for (const [partIndex, part] of parts.entries()) {
+        const partKey = `${key}:answer:${part.key}`
+        const chunks = textChunks(part.text)
+        // Native Markdown owns spacing inside prose; separate virtual parts
+        // share the desktop's collapsed margin at their boundary (`partGap`).
+        if (partIndex > 0) result.push({ key: `${partKey}:before`, turn, estimate: partGap(parts[partIndex - 1]!, part), node: <div style={{ height: partGap(parts[partIndex - 1]!, part) }} /> })
+        if (part.kind === 'code' && part.language === 'mermaid') {
+          // One row: the header (Preview/Source, expand, copy) and the diagram or its source.
+          const state = codeState[partKey] ?? { expanded: false, wrap: false }
+          result.push({ key: partKey, turn, node: <Row><MermaidBlock code={part.text} source={!!state.source} onSource={source => setCodeState(value => ({ ...value, [partKey]: { ...state, source } }))} /></Row> })
+        } else if (part.kind === 'code') {
+          // Desktop code starts unwrapped; horizontal scrolling preserves long lines.
+          const state = codeState[partKey] ?? { expanded: false, wrap: false }
+          const update = (patch: Partial<typeof state>) => setCodeState(value => ({ ...value, [partKey]: { ...state, ...patch } }))
+          result.push({ key: partKey, turn, estimate: 27.2, node: <Row><CodeHeader part={part} {...state} onWrap={() => update({ wrap: !state.wrap })} onExpand={chunks.length > 1 ? () => update({ expanded: !state.expanded }) : undefined} /></Row> })
+          for (const [chunkIndex, chunk] of (state.expanded ? chunks : chunks.slice(0, 1)).entries()) {
+            result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><CodeChunk text={chunk} language={part.language} wrap={state.wrap} first={chunkIndex === 0} last={!state.expanded || chunkIndex === chunks.length - 1} /></Row> })
+          }
+        } else {
+          for (const [chunkIndex, chunk] of chunks.entries()) result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><Prose text={chunk} /></Row> })
         }
-      } else {
-        for (const [chunkIndex, chunk] of chunks.entries()) result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><Prose text={chunk} /></Row> })
       }
-    }
-    result.push({ key: `${key}:footer`, turn, node: <Row><TurnFooter group={turn} threadId={threadId!} isLast={i === turns.length - 1} /></Row> })
-    return result
-  }), [turns, hasEarlier, threadId, threadRunning, codeState])
+      result.push({ key: `${key}:footer`, turn, estimate: 35, node: <Row><TurnFooter group={turn} threadId={threadId!} isLast={i === turns.length - 1} /></Row> })
+      return remember()
+    })
+    for(const key of rowCache.keys()) if(!keep.has(key)) rowCache.delete(key)
+    return next
+  }, [turns, hasEarlier, threadId, threadRunning, codeState, rowCache])
   // A top spacer is present even without earlier history.
   const lead = 1
   const count = lead + rows.length + 1
+  const freshUntil = useMemo(() => new Map(turns.map(turn => [turn, Date.parse(turnTimestamp(turn) ?? '') + 3000])), [turns])
+  const now = Date.now()
   const rowKeys = useMemo(() => rows.map(row => row.key), [rows])
+  const estimates = useMemo(() => rows.map(row => row.estimate ?? 160), [rows])
+  const mountWindow = useTranscriptWindow(rowKeys, list, paneHeight, threadId, paneWidth, estimates, index => setActiveId(rows[index]?.turn.user?.id ?? null))
+  // Reuse the element itself for unchanged slots. Memoizing the component alone
+  // still allocates and compares thousands of fresh element/props objects on a
+  // live-tail update or a mount-window boundary.
+  const slotCache = useMemo(() => new Map<string, {mounted:boolean; height:number; node:React.ReactNode; element:React.ReactNode}>(), [threadId])
+  useEffect(() => {
+    const valid = new Set(rowKeys)
+    for(const key of slotCache.keys()) if(!valid.has(key)) slotCache.delete(key)
+  }, [rowKeys, slotCache])
+  const cacheSlots = process.env.KYBERN_TRANSCRIPT_SLOT_CACHE !== '0'
+  const windowed = process.env.KYBERN_TRANSCRIPT_WINDOW !== '0'
   const restored = useRef<string | null>(null)
   const snapshot = useRef({ threadId, rowKeys, atTail, codeState })
   snapshot.current = { threadId, rowKeys, atTail, codeState }
@@ -171,9 +206,10 @@ export function Transcript() {
     const index = rowKeys.indexOf(saved.key)
     if (!pane.frozen && index < 0 && hasEarlier && !loadingEarlier && !earlierError) { void loadEarlier(pane.id); return }
     restored.current = threadId
+    mountWindow.reveal(Math.max(0, index))
     renderer.scrollToItem?.(list.current.id, Math.max(0, index) + 1, saved.offset)
     setAtTail(false)
-    setActiveRow(Math.max(0, index))
+    setActiveId(rows[Math.max(0, index)]?.turn.user?.id ?? null)
   }, [threadId, loaded, rowKeys, codeState, hasEarlier, loadingEarlier, earlierError, renderer])
 
   // Keep the reader's place when an older page is inserted above: read the list's
@@ -212,10 +248,48 @@ export function Transcript() {
     const fresh = seenUser.current !== null
     seenUser.current = latestUser
     if (fresh && list.current) {
+      mountWindow.reveal(rows.length)
       renderer.scrollToItem?.(list.current.id, count)
       setAtTail(true)
+      setActiveId(turns.at(-1)?.user?.id ?? null)
     }
   }, [latestUser, count, renderer, threadId])
+
+  // The destination body now mounts asynchronously. Bind observers after that
+  // commit, by instance id (split/frozen panes may repeat message test ids).
+  useEffect(() => {
+    if(!jump || !list.current) return
+    const {id,index} = jump, nodes = turnNodes.current.get(id)
+    if(!nodes?.row || !nodes.user) return
+    const target = list.current.id
+    const rects: Record<string, LayoutRect | null> = {}
+    // `scrollToItem` redraws at once and that reports new bounds: place from a deferred call, at most
+    // three times, and stop once the offset stops changing, or the observer would chase its own scroll.
+    let placed: number | null = null
+    let attempts = 0
+    let queued: ReturnType<typeof setTimeout> | undefined
+    const place = () => {
+      if (!paneHeight || attempts >= 3 || queued) return
+      queued = setTimeout(() => {
+        queued = undefined
+        // Bounds arrive one host at a time. Read both after the batch,
+        // never capture one fresh rect with the other host's old position.
+        const { row, user } = rects
+        if (!row || !user) return
+        const bubble = user.height - 16
+        const offset = Math.round(user.y - row.y - (paneHeight - bubble) / 2)
+        if (offset === placed) return
+        placed = offset
+        attempts++
+        renderer.scrollToItem?.(target, index + lead, offset)
+      }, 0)
+    }
+    const stops = (['row', 'user'] as const).map(key => observeElementBounds(renderer, nodes[key]!.id, event => { rects[key] = event.rect; place() }))
+    const timer = setTimeout(() => stop(), 1500)
+    const stop = () => { clearTimeout(timer); clearTimeout(queued); stops.forEach(s => s()); jumpStop.current = null }
+    jumpStop.current = stop
+    return stop
+  }, [jump, renderer, paneHeight])
 
   if (!loaded)
     return (
@@ -238,14 +312,17 @@ export function Transcript() {
   // `count` is gpui's at-end sentinel: the list's last pixel, not the last item's top.
   const scrollToBottom = () => {
     if (!list.current) return
+    mountWindow.reveal(rows.length)
     renderer.scrollToItem?.(list.current.id, count)
-    // A programmatic jump reports no new visible range, so the tail state is set here.
+    // A programmatic jump reports no new visible range, so update both states here.
     setAtTail(true)
+    setActiveId(turns.at(-1)?.user?.id ?? null)
   }
 
   return (
-    <div ref={surfaceRef} testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+    <TranscriptRowStateScope.Provider value={rowStateScope}><div ref={surfaceRef} testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
       <virtual-list
+        {...TRANSCRIPT_SCROLL_LAYOUT}
         ref={listRef}
         testId="transcript"
         alignment="top"
@@ -256,8 +333,8 @@ export function Transcript() {
         onVisibleRange={(event) => {
           const start = event.startIndex ?? 0
           const end = event.endIndex ?? count
+          mountWindow.onRange(Math.max(0, start - lead), Math.min(rows.length, end - lead))
           // The reader's place: the first or last prompt at either end, else the row mid-screen (`MessageScroller.activeId`).
-          setActiveRow(end >= count ? rows.length - 1 : start <= lead ? 0 : Math.max(0, Math.floor((start + end) / 2) - lead))
           const tail = end >= count
           if (tail !== atTail) setAtTail(tail)
           // Prefetch while the first turns are on screen (`useEarlierHistory`).
@@ -285,46 +362,30 @@ export function Transcript() {
                 </Row>,
               ]
             : [<div key="__top" ref={topRef} testId={`transcript-top:${pane.id}`} style={{ height: 16 }} />]),
-          ...rows.map(row => <div key={row.key} style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>{row.node}</div>),
+          ...rows.map((row, index) => {
+            const height = mountWindow.height(row.key, row.estimate)
+            const mounted = !windowed || ((freshUntil.get(row.turn) ?? 0) > now && (freshUntil.get(row.turn) ?? 0) < now + 6000) || mountWindow.selected.has(row.key) || row.turn.running || (threadRunning && row.turn === turns.at(-1)) || (index >= mountWindow.range.start && index < mountWindow.range.end)
+            const cached = cacheSlots ? slotCache.get(row.key) : undefined
+            if(cached?.mounted === mounted && cached.height === height && cached.node === row.node) return cached.element
+            const element = <TranscriptSlot key={row.key} rowKey={row.key} height={height} mounted={mounted} measure={mountWindow.measure} sync={mountWindow.sync}>{row.node}</TranscriptSlot>
+            if(cacheSlots) slotCache.set(row.key, {mounted, height, node:row.node, element})
+            return element
+          }),
           <div key="__bottom" ref={bottomRef} testId={`transcript-bottom:${pane.id}`} style={{ height: COMPOSER_INSET + panelHeight }} />,
         ]}
       </virtual-list>
-      {overflow && <MessageRail items={railItems} active={rows[activeRow]?.turn.user?.id ?? null} height={paneHeight} bottomInset={COMPOSER_INSET - 64 + panelHeight} onJump={(id) => {
+      {overflow && <MessageRail items={railItems} active={activeId} height={paneHeight} bottomInset={COMPOSER_INSET - 64 + panelHeight} onJump={(id) => {
         const index = rows.findIndex(row => row.turn.user?.id === id)
         if (index < 0 || !list.current) return
         setAtTail(false)
-        setActiveRow(index)
+        setActiveId(id)
         // The desktop brings the prompt to the middle of the viewport (`navigationModel.scrollToItem`).
         // Mount the turn first, then place it from its measured row and bubble, whatever is scrolled now.
         jumpStop.current?.()
         const target = list.current.id
+        mountWindow.reveal(index)
         renderer.scrollToItem?.(target, index + lead, 0)
-        const rects: Record<string, LayoutRect | null> = {}
-        // `scrollToItem` redraws at once and that reports new bounds: place from a deferred call, at most
-        // three times, and stop once the offset stops changing, or the observer would chase its own scroll.
-        let placed: number | null = null
-        let attempts = 0
-        let queued: ReturnType<typeof setTimeout> | undefined
-        const place = () => {
-          if (!paneHeight || attempts >= 3 || queued) return
-          queued = setTimeout(() => {
-            queued = undefined
-            // Bounds arrive one host at a time. Read both after the batch,
-            // never capture one fresh rect with the other host's old position.
-            const { row, user } = rects
-            if (!row || !user) return
-            const bubble = user.height - 16
-            const offset = Math.round(user.y - row.y - (paneHeight - bubble) / 2)
-            if (offset === placed) return
-            placed = offset
-            attempts++
-            renderer.scrollToItem?.(target, index + lead, offset)
-          }, 0)
-        }
-        const stops = (['row', 'user'] as const).map(key => observeElementBounds(renderer, { testId: `${key === 'row' ? 'turn-row' : 'turn-user'}:${id}` }, event => { rects[key] = event.rect; place() }))
-        const timer = setTimeout(() => stop(), 1500)
-        const stop = () => { clearTimeout(timer); clearTimeout(queued); stops.forEach(s => s()); jumpStop.current = null }
-        jumpStop.current = stop
+        setJump(old => ({id,index,generation:(old?.generation ?? 0)+1}))
       }} />}
       {actionError && (
         <div style={{ position: 'absolute', top: 12, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
@@ -334,7 +395,7 @@ export function Transcript() {
         </div>
       )}
       <ScrollToBottom visible={!atTail} bottom={COMPOSER_INSET - 64 + 24 + panelHeight} onClick={scrollToBottom} />
-    </div>
+    </div></TranscriptRowStateScope.Provider>
   )
 }
 
@@ -348,12 +409,22 @@ function Row({ children }: { children: React.ReactNode }) {
   )
 }
 
-const TurnItem = memo(function TurnItem({ turn, threadId, isLast, threadRunning, dateAt }: { turn: TurnGroup; threadId: string; isLast: boolean; threadRunning: boolean; dateAt: string | null }) {
+const TurnItem = memo(function TurnItem({ turn, threadId, isLast, threadRunning, dateAt, nodes }: { turn: TurnGroup; threadId: string; isLast: boolean; threadRunning: boolean; dateAt: string | null; nodes: TurnNodes }) {
+  const id = turn.user?.id
+  const attach = useCallback((key: 'row' | 'user', node: PublicInstance | null) => {
+    if(!id) return
+    const entry = nodes.get(id) ?? {}
+    entry[key] = node
+    if(entry.row || entry.user) nodes.set(id, entry)
+    else nodes.delete(id)
+  }, [nodes, id])
+  const rowRef = useCallback((node: PublicInstance | null) => attach('row', node), [attach])
+  const userRef = useCallback((node: PublicInstance | null) => attach('user', node), [attach])
   return (
     <Row>
-      <div testId={turn.user ? `turn-row:${turn.user.id}` : undefined} style={{ display: 'flex', flexDirection: 'column' }}>
+      <div ref={rowRef} testId={turn.user ? `turn-row:${turn.user.id}` : undefined} style={{ display: 'flex', flexDirection: 'column' }}>
         {dateAt && <DateSeparator at={dateAt} />}
-        <Turn group={turn} threadId={threadId} isLast={isLast} threadRunning={isLast && threadRunning} />
+        <Turn userRef={userRef} group={turn} threadId={threadId} isLast={isLast} threadRunning={isLast && threadRunning} />
       </div>
     </Row>
   )

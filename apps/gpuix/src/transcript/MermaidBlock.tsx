@@ -1,6 +1,7 @@
 // A settled ```mermaid fence (`components/kybern/MermaidBlock.tsx`): the code header carries a
 // Preview/Source switch with a sliding pill and an expand button; the preview is the rendered
 // diagram as an image (`mermaid.ts`), failures stay readable as source with a note.
+import { useTranscriptRowLease } from './Window.tsx'
 import { memo, useEffect, useRef, useState } from 'react'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { observeElementBounds } from '../native/layout.ts'
@@ -87,6 +88,7 @@ export const MermaidBlock = memo(function MermaidBlock({ code, source, onSource 
 
 /** The expanded view: a dialog of at most min(90vw, 1200px) with the diagram contained in 75% of the window height. */
 function ExpandedDiagram({ image, onClose }: { image: DiagramImage; onClose: () => void }) {
+  useTranscriptRowLease(true)
   const t = useTheme()
   const size = useNativeWindowSize()
   const dialog = Math.min(size.width * 0.9, 1200), inner = dialog - 32

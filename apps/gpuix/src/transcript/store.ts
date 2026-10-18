@@ -6,7 +6,8 @@ import { startupMark } from '../perf/startup.ts'
 // earlier history pages, and per-row disclosure state that must survive a row
 // being unmounted by the virtual list.
 import { spawn } from 'node:child_process'
-import { useMemo, useEffect, useState, useSyncExternalStore } from 'react'
+import { useContext, useMemo, useEffect, useState, useSyncExternalStore } from 'react'
+import { TranscriptRowStateScope } from './rowStateScope.ts'
 import { prependThreadHistory, type Block } from '../../../../packages/kybern-client/src/transcript.ts'
 import { EARLIER_HISTORY_ENTRIES } from '../../../../packages/kybern-client/src/historyPaging.ts'
 import type { ApprovalDecision, Diff, Thread, ThreadEvent, ThreadId, TurnId } from '../../../../packages/kybern-client/src/types.ts'
@@ -36,10 +37,12 @@ const rowState = new Map<string, unknown>()
  *  list and back keeps whether it was open. */
 export function useRowState<T>(key: string, initial: T): [T, (value: T) => void] {
   key = `${usePaneId()}:${key}`
-  const [value, setValue] = useState<T>(() => (rowState.has(key) ? (rowState.get(key) as T) : initial))
+  const scope = useContext(TranscriptRowStateScope)
+  const [value, setValue] = useState<T>(() => (scope?.has(key) ? scope.get(key) as T : rowState.has(key) ? rowState.get(key) as T : initial))
   return [
     value,
     (next: T) => {
+      scope?.set(key, next)
       rowState.delete(key)
       rowState.set(key, next)
       if (rowState.size > 2000) rowState.delete(rowState.keys().next().value!)

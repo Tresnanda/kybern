@@ -91,7 +91,6 @@ echo "== checks"
   bun native/subtree-transform-check.ts
   KYBERN_REGION_PAINT=1 bun native/subtree-transform-check.ts
   bun native/font-weight-check.ts
-  bun native/stroke-draw-check.ts
   bun native/markdown-check.ts
   bun native/diff-check.ts
   bun native/surface-check.ts
@@ -104,6 +103,7 @@ echo "== checks"
   # and released right after (each would otherwise queue on its own, behind this checkout's own line).
   bun native/ui-lease.ts "update-$(basename "$(cd "$app/../.." && pwd)")" sh -c '
     set -e
+    bun native/stroke-draw-check.ts
     bun native/clip-check.ts
     bun native/explorer-motion-check.ts
     bun native/scroll8-check.ts
