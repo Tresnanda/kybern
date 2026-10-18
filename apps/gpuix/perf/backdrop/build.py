@@ -79,7 +79,11 @@ try:
                     ["nice", "-n", "15", "sh", "native/update.sh"],
                     ["pnpm", "exec", "tsc", "-p", "native/tsconfig.json"],
                     ["rustc", "--edition=2021", "--test", "native/patches/backdrop_kernel.rs", "-o", "native/build/backdrop-kernel-tests"],
-                    ["native/build/backdrop-kernel-tests"]]
+                    ["native/build/backdrop-kernel-tests"],
+                    ["bun", "native/ui-lease.ts", "backdrop-kernel", "bun", "perf/backdrop/kernel-check.ts"],
+                    ["bun", "native/ui-lease.ts", "backdrop-product-pairs", "bun", "perf/backdrop/product-visual.ts", "pairs"],
+                    ["bun", "native/ui-lease.ts", "backdrop-accessibility", "bun", "perf/backdrop/product-visual.ts", "accessibility"],
+                    ["bun", "native/ui-lease.ts", "backdrop-compositor", "bun", "perf/backdrop/compositor.ts"]]
         if finish_only: commands = commands[2:]
         for command in commands:
             if not screen_ready(): raise RuntimeError('Locked/asleep: pause native UI validation')
