@@ -52,7 +52,7 @@ test('sidebar bounds follow jumps with bounded bodies, sparse slots and overlay/
   try {
     flushSync(() => root.render(<List />)); await settle()
     expect(mounted.size).toBeLessThan(90); expect(firstMounts.get(0)).toBe(true)
-    expect(hosts.size).toBeLessThan(220)
+    expect(hosts.size).toBeLessThan(220); expect(observers.size).toBe(1)
     // Completion/disclosure owners mount outside the viewport until their
     // lifecycle removes the entry; normal rows remain bounded.
     entries = entries.map((entry,index) => index === 2500 ? {...entry,pinned:true} : entry)

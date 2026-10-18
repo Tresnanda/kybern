@@ -68,6 +68,9 @@ export function SidebarWindow({ entries, list, box, setList }: {
   if (process.env.KYBERN_DEBUG_SIDEBAR === '1') console.error('[sidebar-render]', JSON.stringify({ anchor, at, window: range.current, count: entries.length }))
   const window = range.current
   const pinned = useMemo(() => entries.flatMap((entry, index) => entry.pinned || entry.height === null ? [index] : []), [entries])
+  // The permanent list observer includes native anchor changes; fixed-height
+  // rows do not need a separate position event on every scroll frame.
+  const observeRows = !sparse || process.env.KYBERN_SIDEBAR_LAYOUT === '0' || process.env.KYBERN_SIDEBAR_ROW_OBSERVERS === '1'
   const indices = sparse ? sparseIndices(window.start, window.end, entries.length, [...pinned, ...[...nativeWindow.retained].flatMap(key => { const index = nativeWindow.indices.get(key); return index === undefined ? [] : [index] })]) : entries.map((_,i) => i)
   const traced = useRef(false)
   useLayoutEffect(() => {
@@ -83,13 +86,13 @@ export function SidebarWindow({ entries, list, box, setList }: {
     style={{ flexGrow: 1, minHeight: 0 }}>
     {indices.map(index => { const entry = entries[index]!; return <SidebarSlot key={entry.key} rowKey={entry.key} height={entry.height}
       mounted={sparse || process.env.KYBERN_SIDEBAR_WINDOW === '0' || !!entry.pinned || entry.height === null || (index >= window.start && index < window.end)}
-      sync={sync} render={entry.render} /> })}
+      sync={sync} observe={observeRows} render={entry.render} /> })}
   </virtual-list></SparseRetention.Provider>
 }
 
-const SidebarSlot = memo(function SidebarSlot({ rowKey, height, mounted, sync, render }: {
+const SidebarSlot = memo(function SidebarSlot({ rowKey, height, mounted, sync, observe, render }: {
   rowKey: string; height: number | null; mounted: boolean
-  sync: (frame?: number) => void; render: (firstMount: boolean) => ReactNode
+  sync: (frame?: number) => void; observe: boolean; render: (firstMount: boolean) => ReactNode
 }) {
   const renderer = useGpuixRequired()
   const retention = useContext(SparseRetention)
@@ -107,11 +110,11 @@ const SidebarSlot = memo(function SidebarSlot({ rowKey, height, mounted, sync, r
   if (keep && !lifetime.current.mounted) { lifetime.current.count++; retention?.visited.add(rowKey) }
   lifetime.current.mounted = keep
   useEffect(() => {
-    if (!node.current || !keep) return
+    if (!observe || !node.current || !keep) return
     // Cached scrolling need not change the native visibleRange. Painted slot
     // bounds still advance; every observer shares this one logical-anchor read.
     return observeElementBounds(renderer, node.current.id, ({ frame }) => sync(frame))
-  }, [renderer, keep, sync])
+  }, [renderer, keep, sync, observe])
   return <div ref={node} testId={`sidebar-slot:${rowKey}`} style={{ width: '100%', flexShrink: 0, ...(!keep && height !== null ? { height } : {}) }}>
     {keep ? <RowLease.Provider value={acquire}>{render(lifetime.current.count === 1)}</RowLease.Provider> : null}
   </div>
