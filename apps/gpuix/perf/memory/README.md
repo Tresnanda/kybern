@@ -90,6 +90,9 @@ that entire validation passes. `pair.py` waits for
 this lane's quiet turn and runs the three-repeat startup/scroll/idle A/B suite;
 `pair.py --memory` uses a separate bounded quiet turn for memory and visuals.
 Both honor build reservations and the current quiet holder's UI priority.
+`pair.py --resume` retries failed/missing benchmark scenarios in fresh processes,
+retains accepted runs, verifies addon/settings/workload identity, and archives
+the failed attempt separately before producing the accepted comparison.
 `summarize.py` preserves accepted compact results and generates `RESULTS.md`.
 
 The allocator-relief probe tested both all zones and the explicit default zone.

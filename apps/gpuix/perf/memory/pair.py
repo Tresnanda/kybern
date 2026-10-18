@@ -1,6 +1,8 @@
 """Run the final startup/scroll/idle A/B suite in this lane's quiet turn."""
 from pathlib import Path
 import os
+import json
+import shutil
 import signal
 import subprocess
 import sys
@@ -53,11 +55,19 @@ try:
             ('visual-diff', ['bun', 'perf/memory/visual-diff.ts'], {}),
         ]
     else:
-        jobs = [(label, ['bun', 'perf/bench/run.ts', *scenarios, '--runs', '3',
-                         '--label', label, '--keep-data'],
-                 {'NAPI_RS_NATIVE_LIBRARY_PATH': str(app / 'native/build' / addon)})
-                for label, addon in [('memory-before-final', 'memory-before.node'),
-                                     ('memory-after-final', 'gpuix-native.darwin-arm64.node')]]
+        jobs = []
+        for label, addon in [('memory-before-final', 'memory-before.node'),
+                             ('memory-after-final', 'gpuix-native.darwin-arm64.node')]:
+            result_file = app / 'perf/bench/results' / f'{label}.json'
+            previous = json.loads(result_file.read_text()) if '--resume' in sys.argv and result_file.exists() else None
+            missing = [name for name in scenarios if previous is None or
+                       len([row for row in previous['results'] if row['scenario'] == name and row['status'] == 'ok']) != 3]
+            if not missing:
+                continue
+            run_label = f'{label}-retry' if previous else label
+            jobs.append((run_label, ['bun', 'perf/bench/run.ts', *missing, '--runs', '3',
+                                    '--label', run_label, '--keep-data'],
+                         {'NAPI_RS_NATIVE_LIBRARY_PATH': str(app / 'native/build' / addon)}))
     for label, command, extra in jobs:
         env = dict(os.environ, KYBERN_DATA_DIR=str(data), KYBERN_CLIENT_CONFIG_DIR=str(data / 'client'),
                    KYBERN_URL='', KYBERN_TOKEN='', KYBERN_BENCH_PORT='4332',
@@ -79,6 +89,20 @@ try:
                     queue.write_text('\n'.join(entries) + '\n')
                 time.sleep(1)
             assert child.returncode == 0, f'{label}: see {log.name}'
+            if '--resume' in sys.argv and label.endswith('-retry'):
+                canonical = label.removesuffix('-retry')
+                directory = app / 'perf/bench/results'
+                original = directory / f'{canonical}.json'
+                retry = json.loads((directory / f'{label}.json').read_text())
+                previous = json.loads(original.read_text())
+                assert previous['addonSha256'] == retry['addonSha256']
+                assert previous['renderFlags'] == retry['renderFlags']
+                assert previous['workload']['counts'] == retry['workload']['counts']
+                shutil.copyfile(original, evidence / f'{canonical}-failed-attempt.json')
+                replaced = {row['scenario'] for row in retry['results']}
+                retry['results'] = [row for row in previous['results'] if row['scenario'] not in replaced and row['status'] == 'ok'] + retry['results']
+                retry['recovery'] = {'retainedAcceptedRunsFrom': previous['startedAt'], 'failedAttempt': str(evidence / f'{canonical}-failed-attempt.json')}
+                original.write_text(json.dumps(retry, indent=2) + '\n')
 finally:
     if child is not None and child.poll() is None:
         os.killpg(child.pid, signal.SIGTERM)

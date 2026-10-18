@@ -82,6 +82,23 @@ def benchmark_table():
             rows.append(f"| {scenario} | {side.lower()} | {frames} | {over} | {proxy} | {' | '.join(resources)} |")
     return '\n'.join(rows)
 
+def work_table():
+    rows = ['| Scenario | Side | Render p95 ms (includes layout) | Included layout p95 ms | React commits / window |',
+            '|---|---|---:|---:|---:|']
+    scenarios = list(dict.fromkeys(row['scenario'] for row in result['benchBefore']['results']))
+    for scenario in scenarios:
+        if scenario.startswith('startup'):
+            continue
+        for side in ['Before', 'After']:
+            runs = [row for row in result[f'bench{side}']['results'] if row['scenario'] == scenario]
+            values = []
+            for metric in ['renderMs', 'layoutMs']:
+                samples = [row['work'][metric]['p95'] for row in runs if row['work'][metric]['p95'] is not None]
+                values.append(fmt(statistics.median(samples)) if samples else '—')
+            commits = fmt(statistics.median(row['work']['reactCommits'] for row in runs))
+            rows.append(f"| {scenario} | {side.lower()} | {' | '.join(values)} | {commits} |")
+    return '\n'.join(rows)
+
 def startup_table():
     rows = ['| Startup | Shell ms before → after | First content ms before → after |',
             '|---|---:|---:|']
@@ -140,6 +157,8 @@ XPC services during this fixture and can be confounded by external app launches.
 {benchmark_table()}
 
 {startup_table()}
+
+{work_table()}
 
 Startup content timings and per-frame CPU render/layout distributions remain in
 `results.json`. This 60 Hz display does not demonstrate 120 Hz readiness. The
