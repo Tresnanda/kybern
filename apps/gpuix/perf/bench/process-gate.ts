@@ -13,12 +13,12 @@ export function processInventory(owner=process.pid){
 }
 
 export function watchRun(){
- const before=processInventory(),builds=watchBuilds()
- return {finish(){const after=processInventory();return {...builds.finish(),gpuixProcessesBefore:before.processes,gpuixProcessesAfter:after.processes,foreignProcessesBefore:before.foreign,foreignProcessesAfter:after.foreign,orphanOverlap:before.foreign.length>0||after.foreign.length>0}}}
+ const startedAt=new Date().toISOString(),before=processInventory(),builds=watchBuilds()
+ return {finish(){const after=processInventory();return {...builds.finish(),timedWindowStartedAt:startedAt,timedWindowEndedAt:new Date().toISOString(),gpuixProcessesBefore:before.processes,gpuixProcessesAfter:after.processes,foreignProcessesBefore:before.foreign,foreignProcessesAfter:after.foreign,orphanOverlap:before.foreign.length>0||after.foreign.length>0}}}
 }
 
 export function foreignProcesses(processes:string[],parents:Map<number,number>,owner:number){
  const owned=(pid:number)=>{const seen=new Set<number>();while(pid>1&&!seen.has(pid)){if(pid===owner)return true;seen.add(pid);pid=parents.get(pid)??0}return false}
  // Runners and resource samplers do not own a native window.
- return processes.filter(line=>{const match=line.match(/^(\d+)\s+(.+)$/);return !!match&&!owned(Number(match[1]))&&!/\/(?:run|scenario|sample|profiles|structural)\.(?:ts|mjs)(?:\s|$)/.test(match[2]!)&&/^(?:\/\S*\/)?bun\s+/.test(match[2]!)})
+ return processes.filter(line=>{const match=line.match(/^(\d+)\s+(.+)$/);return !!match&&!owned(Number(match[1]))&&!/\/(?:run|scenario|sample|profiles|structural|ui-lease|quiet)\.(?:ts|mjs)(?:\s|$)/.test(match[2]!)&&/^(?:\/\S*\/)?bun\s+/.test(match[2]!)})
 }

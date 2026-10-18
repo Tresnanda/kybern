@@ -26,9 +26,25 @@ test('build watcher catches a marker removed before the final endpoint',async()=
 
 import {foreignProcesses} from './process-gate.ts'
 test('process gate excludes this runner descendants but rejects cancelled-run orphans',()=>{
- const rows=['20 bun /tmp/ade-gpuix/perf/bench/app.ts','21 bun /tmp/ade-gpuix/perf/sample.ts 15 GPUIX=20','30 bun /tmp/ade-gpuix/native/markdown-fixture.ts','40 /bin/sh -c pgrep -fl "bun .*ade-gpuix"','50 /opt/homebrew/bin/bun /tmp/ade-gpuix/perf/bench/run.ts']
+ const rows=['20 bun /tmp/ade-gpuix/perf/bench/app.ts','21 bun /tmp/ade-gpuix/perf/sample.ts 15 GPUIX=20','30 bun /tmp/ade-gpuix/native/markdown-fixture.ts','40 /bin/sh -c pgrep -fl "bun .*ade-gpuix"','50 /opt/homebrew/bin/bun /tmp/ade-gpuix/perf/bench/run.ts','60 bun native/ui-lease.ts update-ade-gpuix-perf-markdown sh native/check.sh']
  const parents=new Map([[20,10],[21,10],[30,1],[40,1],[50,1]])
  expect(foreignProcesses(rows,parents,10)).toEqual([rows[2]!])
  parents.set(20,1)
  expect(foreignProcesses(rows,parents,10)).toEqual([rows[0]!,rows[2]!])
+})
+
+import {quietOrder,assertQuietTurn} from './build-overlap.ts'
+test('quiet ordering honors the first line and legacy reservation without editing them',()=>{
+ const dir=mkdtempSync(path.join(tmpdir(),'gpuix-bench-quiet-test-'))
+ try{
+  writeFileSync(path.join(dir,'kybern-gpuix-quiet-order'),'perf-transcript\nperf-markdown\nperf-bench\n')
+  writeFileSync(path.join(dir,'kybern-gpuix-quiet.perf-bench'),'')
+  expect(quietOrder(dir)).toEqual(['perf-transcript','perf-markdown','perf-bench'])
+  expect(()=>assertQuietTurn('perf-bench',dir)).toThrow('out of turn')
+  writeFileSync(path.join(dir,'kybern-gpuix-quiet-next.perf-bench'),'')
+  expect(quietOrder(dir)).toEqual(['perf-bench','perf-transcript','perf-markdown'])
+  expect(()=>assertQuietTurn('perf-bench',dir)).not.toThrow()
+  rmSync(path.join(dir,'kybern-gpuix-quiet.perf-bench'))
+  expect(()=>assertQuietTurn('unreserved-normal-run',dir)).not.toThrow()
+ }finally{rmSync(dir,{recursive:true,force:true})}
 })

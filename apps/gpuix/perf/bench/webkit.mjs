@@ -1,5 +1,6 @@
 // Actual desktop frontend in Playwright WebKit; not the native Tauri shell.
 import path from 'node:path'
+import {quietOrder} from './build-overlap.ts'
 import {processInventory} from './process-gate.ts'
 import {createRequire} from 'node:module'
 import {execFileSync,spawn} from 'node:child_process'
@@ -46,7 +47,7 @@ try{
   await primer.close()
  }
  for(let run=1;run<=runs;run++){
-  const processBefore=processInventory(),buildBefore=markers(),seen=new Set(buildBefore),quietBefore=quiet(),r=blank(run)
+  const orderBefore=quietOrder(),processBefore=processInventory(),buildBefore=markers(),seen=new Set(buildBefore),quietBefore=quiet(),r=blank(run)
   const watcher=watch('/tmp',(_event,file)=>{if(String(file).startsWith('kybern-gpuix-native-build.'))seen.add(String(file))})
   try{
    if(!page){
@@ -115,7 +116,7 @@ try{
    r.resources={footprintMiB:Number(match[1]),cpuPercent:Number(match[2]),gpuMs:Number(match[3]),sampleSeconds:Number(match[4])}
    const intervals=metrics.times.slice(1).map((t,i)=>t-metrics.times[i]);r.frames={...dist(intervals),count:metrics.times.length,over16_7:intervals.filter(v=>v>16.7).length,over33:intervals.filter(v=>v>33).length};r.latency.proxyMs=dist(metrics.latencies);r.latency.samples=metrics.latencies.length;r.work.reactCommits=metrics.commits
    r.evidence={...r.evidence,frameSemantics:'requestAnimationFrame cadence; cannot infer idle native submissions or physical presentation',resourcePids:pids,target,scrollHeight:scrolling?await page.locator(target).first().evaluate(el=>el.scrollHeight):null,resourceText:raw}
-  }catch(e){r.status='failed';r.reason=safeError(e)}finally{const processAfter=processInventory();r.evidence.gpuixProcessesBefore=processBefore.processes;r.evidence.gpuixProcessesAfter=processAfter.processes;r.evidence.foreignProcessesBefore=processBefore.foreign;r.evidence.foreignProcessesAfter=processAfter.foreign;if(processBefore.foreign.length||processAfter.foreign.length){r.status='discarded';r.reason='foreign GPUIX process: discarded'};watcher.close();r.evidence.buildMarkersDuring=[...seen];r.evidence.buildMarkersFinal=markers();r.evidence.quietMarkersFinal=quiet();if(seen.size||r.evidence.buildMarkersFinal.length){r.status='discarded';r.reason='build overlap: discarded'};if(run===runs||r.status==='failed'||r.status==='discarded'){await page?.close();page=null}}
+  }catch(e){r.status='failed';r.reason=safeError(e)}finally{const processAfter=processInventory();r.evidence.quietOrderBefore=orderBefore;r.evidence.quietOrderAfter=quietOrder();r.evidence.gpuixProcessesBefore=processBefore.processes;r.evidence.gpuixProcessesAfter=processAfter.processes;r.evidence.foreignProcessesBefore=processBefore.foreign;r.evidence.foreignProcessesAfter=processAfter.foreign;if(processBefore.foreign.length||processAfter.foreign.length){r.status='discarded';r.reason='foreign GPUIX process: discarded'};watcher.close();r.evidence.buildMarkersDuring=[...seen];r.evidence.buildMarkersFinal=markers();r.evidence.quietMarkersFinal=quiet();if(seen.size||r.evidence.buildMarkersFinal.length){r.status='discarded';r.reason='build overlap: discarded'};if(run===runs||r.status==='failed'||r.status==='discarded'){await page?.close();page=null}}
   results.push(r)
  }
 }catch(e){console.error(safeError(e));process.exitCode=1}finally{for(const child of children)child.kill();await browser.close();await server.close();writeFileSync(out,JSON.stringify(results,null,2))}

@@ -10,7 +10,7 @@ import {SCENARIOS,table,emptyResult,type Scenario,type Result} from './model.ts'
 import {scenario} from './scenarios.ts'
 import {lease} from './lease.ts'
 import {processInventory} from './process-gate.ts'
-import {nativeBuildMarkers,quietMarkers} from './build-overlap.ts'
+import {nativeBuildMarkers,quietMarkers,assertQuietTurn} from './build-overlap.ts'
 const args=process.argv.slice(2),selected:Scenario[]=[]
 let runs=3,label='local',seconds=15,warmup=10,keep=false,webkit=false,profile=false
 for(let i=0;i<args.length;i++){
@@ -18,7 +18,7 @@ for(let i=0;i<args.length;i++){
  if(arg==='--runs')runs=Number(args[++i]);else if(arg==='--label')label=args[++i]!;else if(arg==='--seconds')seconds=Number(args[++i]);else if(arg==='--warmup')warmup=Number(args[++i]);else if(arg==='--keep-data')keep=true;else if(arg==='--webkit')webkit=true;else if(arg==='--profile')profile=true;else if(SCENARIOS.includes(arg as Scenario))selected.push(arg as Scenario);else throw Error(`Unknown argument ${arg}; scenarios: ${SCENARIOS.join(', ')}`)
 }
 if(runs*seconds+warmup*runs>220)throw Error('A scenario batch must fit within a four-minute measurement lease')
-if(!/^[a-zA-Z0-9_.-]+$/.test(label)||!Number.isInteger(runs)||runs<1||runs>10||seconds<1||warmup<0)throw Error('Invalid benchmark arguments')
+if(typeof label!=='string'||!Number.isFinite(seconds)||!Number.isFinite(warmup)||!/^[a-zA-Z0-9_.-]+$/.test(label)||!Number.isInteger(runs)||runs<1||runs>10||seconds<1||warmup<0)throw Error('Invalid benchmark arguments')
 const app=path.resolve(import.meta.dir,'../..');process.chdir(app)
 if(process.env.KYBERN_PACING_PARENT_LEASE===path.resolve(app,'../..')&&(selected.length!==1))throw Error('An external UI lease supports one scenario only; let run.ts lease a multi-scenario suite itself')
 const addon=process.env.NAPI_RS_NATIVE_LIBRARY_PATH??path.join(app,'native/build/gpuix-native.darwin-arm64.node')
@@ -42,8 +42,12 @@ let release:(()=>void)|undefined,leaseStarted=0,watchdog:ReturnType<typeof setTi
 try{
  const jobs=(selected.length?selected:[...SCENARIOS]).map(name=>({name,count:runs}))
  while(jobs.length){
+  assertQuietTurn()
   const buildWaiting=performance.now();while(nativeBuildMarkers().length||processInventory().foreign.length)await Bun.sleep(1000);waitMs+=performance.now()-buildWaiting
   const {name,count}=jobs.shift()!,prior=results.length
+  // A missing bundle or unimplemented reference needs no native UI lease.
+  if(name==='startup-packaged'&&!existsSync(process.env.KYBERN_BENCH_PACKAGED_EXECUTABLE??path.join(app,'dist/Kybern GPUIX.app/Contents/MacOS/Kybern GPUIX'))&&!webkit){results.push(...await scenario(name,count,fixture,evidence,{seconds,warmup,profile}));save();continue}
+  if(webkit&&!['startup-cold','startup-warm','open-long','thread-scroll','thread-fling','markdown-scroll','code-scroll','pr-summary','pr-changes','idle-home','idle-thread'].includes(name)){results.push(...Array.from({length:count},(_,i)=>({...emptyResult(name,i+1),host:'desktop frontend in WebKit',status:'skipped' as const,reason:'Reference scenario not implemented'})));save();continue}
   const waiting=performance.now();release=await lease();waitMs+=performance.now()-waiting;leaseStarted=performance.now()
   const markers=nativeBuildMarkers()
   if(markers.length){results.push(...Array.from({length:count},(_,i)=>({...emptyResult(name,i+1),status:'discarded' as const,reason:'build overlap: discarded',evidence:{buildMarkersBefore:markers,buildMarkersAfter:nativeBuildMarkers(),quietMarkersBefore:quietMarkers(),quietMarkersAfter:quietMarkers(),phase:'preflight; timing not started'}})));jobs.push({name,count});save();release();release=undefined;await Bun.sleep(1000);continue}

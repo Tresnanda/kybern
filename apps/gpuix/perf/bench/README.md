@@ -26,9 +26,7 @@ Each attempt gets a separate evidence directory so a retry cannot overwrite its 
 The runner creates no quiet reservation. If reserving one separately, keep it
 under 25 minutes, permit only one quiet window, and let any
 `/tmp/kybern-gpuix-build-next.<lane>` reservation take the next build slot before
-creating a new quiet window. Another lane’s `quiet-next` reservation also blocks
-a new quiet window: queue a `quiet-next` only when none exists, and open quiet
-only on your turn with no active build marker. Existing native builds still
+creating a new quiet window. The `/tmp/kybern-gpuix-quiet-order` file now determines quiet-window order: append your lane with Python and wait until it is first. Legacy `quiet-next.<lane>` reservations take precedence as the first line. `run.ts` creates no quiet window and allows normal leased runs while other lanes wait for quiet time; it refuses an externally created `quiet.perf-bench` marker out of turn. Quiet-order snapshots are recorded with marker evidence. Existing native builds still
 invalidate timing windows. A
 marker at either endpoint or during the run records `build overlap: discarded`; that repeat is
 queued again after releasing the UI lease. Clean repeats replace the discarded
