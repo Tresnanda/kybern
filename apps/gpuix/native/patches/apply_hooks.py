@@ -559,6 +559,7 @@ exec((Path(__file__).parent / "file_drag_hooks.py").read_text())
 exec((Path(__file__).parent / "stream_fade_hooks.py").read_text())
 exec((Path(__file__).parent / "stroke_draw_hooks.py").read_text())
 exec((Path(__file__).parent / "transcript_scroll_hooks.py").read_text())
+exec((Path(__file__).parent / "markdown_document_hooks.py").read_text())
 
 for path, text in pending.items():
     (src / path).write_text(text)

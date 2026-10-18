@@ -1371,10 +1371,17 @@ and `kit/Checkbox.tsx` (`.t-check-path`).
   progress, the end equals a plain render, display-rate frames without renders, none after the end). Strips against the
   desktop's motion CSS in WebKit: `bun native/ui-lease.ts motion10 bun scripts/motion10-strips.ts`.
 
-## One UI lease for update.sh
+## Bounded UI leases for update.sh
 
 `native/ui-lease.ts <lane> <command…>` joins the fair UI queue only when it is about to run, waits for its line to be first
 and the lock free, takes `/tmp/kybern-gpuix-round5-ui-lock`, runs the command with `KYBERN_PACING_PARENT_LEASE` and
 `KYBERN_CLIP_LOCK_HELD` (so `clip-check`, `explorer-motion-check`, `scroll8-check` and `scroll8-input-check` reuse the lease
 instead of queueing behind it), then leaves the queue and releases the lock. `update.sh` runs those four checks together
-under one lease as `update-<checkout>`.
+under one input lease as `update-input-<checkout>`. Geometry and content captures
+have their own bounded leases from `check-update.sh`, so actual-window pixel
+checks cannot race another lane's windows and each batch stays below five minutes.
+Standalone Rust checks run before packaging, inside the marked build phase.
+The lease owns a separate process group for its command. Interruption stops that
+group before releasing the UI, and normal exit removes any orphaned descendants.
+Inherited leases stay in the owning group. `bun native/ui-lease-check.ts` verifies
+that interrupting a command also stops its grandchild.
