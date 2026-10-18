@@ -2,13 +2,14 @@
 // a web view. Run with `pnpm dev` (hot reload) or `pnpm start`.
 // Must stay the first import: it picks the native module before @gpuix loads.
 import './native/local-build.ts'
+import { startupMark } from './perf/startup.ts'
 import { fstatSync, readFileSync } from 'node:fs'
 import { render, useGpuixRequired } from '@gpuix/react'
 import { useEffect, useState, type ReactNode } from 'react'
-import { App } from './App.tsx'
 import { onWindowKeyDown } from './nav/keys.ts'
 import { appearance } from './settings/appearance.ts'
 import { connect } from './state.ts'
+import { startSplitView } from './split/store.ts'
 import { ThemeProvider, VARIANT } from './ui.tsx'
 import { startPerfProbe } from './perf/probe.ts'
 import { installDesktopMaterial } from './native/material.ts'
@@ -25,6 +26,7 @@ function Fonts({ children }: { children: ReactNode }) {
   const renderer = useGpuixRequired()
   const [ready, setReady] = useState(false)
   useEffect(() => {
+    startupMark('fonts-start')
     installFrameSource(renderer)
     // `registerFont` landed after @gpuix/native 0.10.0; until then the UI
     // falls back to installed fonts (SF Pro, Menlo).
@@ -36,6 +38,7 @@ function Fonts({ children }: { children: ReactNode }) {
         console.error(`[fonts] ${file}:`, error)
       }
     }
+    startupMark('fonts-ready')
     setReady(true)
     startPerfProbe(renderer)
     startWindowShell(renderer)
@@ -47,10 +50,20 @@ function Fonts({ children }: { children: ReactNode }) {
   return ready ? children : null
 }
 
+startupMark('modules-ready')
+// Restore selection before the socket opens, so its content can hydrate while
+// the workspace modules and native window initialize.
+startSplitView()
 connect()
 // Packaged builds check the release feed 15 s after launch, then every 6 h (`platform/update.ts`).
 startAppUpdateChecks()
 
+// Resolve the endpoint and start the socket while Bun loads the workspace's
+// page/editor modules. The first render still uses the complete App and fonts.
+const { App } = await import('./App.tsx')
+startupMark('workspace-module-ready')
+
+startupMark('render-start')
 render(
   <ThemeProvider>
     <Fonts>
@@ -81,6 +94,7 @@ render(
     onKeyDown: onWindowKeyDown,
   },
 )
+startupMark('render-returned')
 
 // Put the window back where it was (size and position are saved as it moves).
 installWindowFrame()

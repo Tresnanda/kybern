@@ -25,7 +25,7 @@ import {
   type ThreadId,
   type UsageLimitsResult,
 } from '../../../../packages/kybern-client/src/types.ts'
-import { getClient, getState, set, subscribe } from '../state.ts'
+import { getClient, getState, onThreadActivity, set, subscribe } from '../state.ts'
 import { DEFAULT_FILTER, getNav, setNav, subscribeNav, type NavState } from './store.ts'
 
 const LIMITS_POLL_MS = 60_000
@@ -283,8 +283,8 @@ export function startLive() {
   const events = client.subscribeEvents({ include_tool_output: false }, (event) => { if (getClient() === client) onEvent(event) })
   stops.push(() => events.unsubscribe())
   stops.push(client.onNotification(USAGE_LIMITS_CHANGED_NOTIFICATION, (params) => applyLimits(params as UsageLimitsResult)))
+  stops.push(onThreadActivity(activity => { if (getClient() === client) applyActivity(activity) }))
   const onOpen = () => {
-    void refreshActivity()
     void loadProviders().catch(() => { if (getClient() === client) setNav({ providersLoaded: true }) })
     askLimits()
     void client.call('daemon.info', {}).then((info) => { if (getClient() === client) setNav({ version: info.version ?? null }) }, () => {})

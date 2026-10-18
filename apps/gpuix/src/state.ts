@@ -1,4 +1,7 @@
 import { environmentEndpoint, onEnvironmentChange, registerEnvironmentConnection } from './shell/environment.ts'
+import { startupMark } from './perf/startup.ts'
+import { HistoryPrefetch } from './shell/historyPrefetch.ts'
+import { EARLIER_HISTORY_ENTRIES } from '../../../packages/kybern-client/src/historyPaging.ts'
 // App state: one daemon connection, the project and thread lists, and the open
 // thread's transcript. Transport and transcript folding come from the shared
 // `packages/kybern-client` sources, the same ones desktop and mobile use.
@@ -12,7 +15,7 @@ import {
   type ThreadState,
 } from '../../../packages/kybern-client/src/transcript.ts'
 import { isChildThread } from '../../../packages/kybern-client/src/subagents.ts'
-import type { Project, Thread, ThreadEvent, ThreadId } from '../../../packages/kybern-client/src/types.ts'
+import type { Project, Thread, ThreadActivitySummary, ThreadEvent, ThreadId } from '../../../packages/kybern-client/src/types.ts'
 
 export interface AppState {
   status: ConnectionStatus
@@ -131,8 +134,25 @@ export function subscribe(listener: () => void): () => void {
 let client: KybernClient | null = null
 /** The daemon connection, once `connect()` has run. */
 export const getClient = () => client
-type Session = { open: ThreadState; stop?: () => void; ready?: Promise<void> }
+type Session = { open: ThreadState; history: HistoryPrefetch; historyTimer?: ReturnType<typeof setTimeout>; stop?: () => void; ready?: Promise<void> }
 const sessions = new Map<ThreadId, Session>()
+/** Prepare one immutable older page after the newest content has painted.
+ * No transcript rows are mounted until the reader reaches its existing gate. */
+export function primeThreadHistory(id: ThreadId) {
+  if (process.env.KYBERN_HISTORY_PREFETCH === '0') return
+  const session = sessions.get(id), owner = client
+  if (!session?.open.loaded || session.open.nextBeforeSeq == null || session.open.loadingEarlier || !owner) return
+  clearTimeout(session.historyTimer)
+  session.historyTimer = setTimeout(() => {
+    session.historyTimer = undefined
+    if (owner !== client || sessions.get(id) !== session) return
+    session.history.prime(session.open, (cursor, through) => owner.call('threads.get', {
+      thread_id: id, include_tool_output: false, defer_tool_stream: true,
+      transcript_limit: EARLIER_HISTORY_ENTRIES, before_seq: cursor, through_seq: through,
+    }))
+  }, 250)
+}
+export const takeThreadHistory = (id: ThreadId, base: ThreadState) => sessions.get(id)?.history.take(base)
 function releaseUnused() {
   for (const [id, session] of sessions) if (![...panes.values()].some(p => p.selectedId === id)) {
     sessions.delete(id); session.stop?.()
@@ -169,17 +189,20 @@ export function resetClient() {
   const previous = client
   client = null
   clearTimeout(retryTimer); refreshing = null; refreshAgain = false
+  lastActivity = undefined
   previous?.close()
 }
 
 export async function connect() {
   if (client) return
   const attempt = ++connectionAttempt
+  startupMark('endpoint-start')
   let ep
   try {
     const endpoint = environmentEndpoint()
     ep = endpoint instanceof Promise ? await endpoint : endpoint
     if (attempt !== connectionAttempt) return
+    startupMark('endpoint-ready')
   } catch (error) {
     if (attempt !== connectionAttempt) return
     set({ status: 'failed', statusDetail: error instanceof Error ? error.message : 'Start kybernd, then reconnect' })
@@ -197,7 +220,12 @@ export async function connect() {
   client.onStatus((status, detail) => {
     if (owner !== client) return
     set({ status, statusDetail: detail ?? null })
-    if (status === 'open') void refreshLists()
+    startupMark('connection', { status })
+    if (status === 'open') {
+      // Restored selections do not depend on project Git probes or the sidebar.
+      reloadOpenTranscripts()
+      void refreshLists()
+    }
   })
   client.onNotification('projects.changed', () => void refreshLists())
   client.onNotification('threads.changed', () => void refreshLists())
@@ -207,6 +235,14 @@ export async function connect() {
 let refreshing: Promise<void> | null = null
 let refreshAgain = false
 let retryTimer: ReturnType<typeof setTimeout> | undefined
+const activityListeners = new Set<(activity: ThreadActivitySummary[]) => void>()
+let lastActivity: { owner: KybernClient; activity: ThreadActivitySummary[] } | undefined
+/** Reuse the list read's activity projection instead of issuing another boot RPC. */
+export function onThreadActivity(listener: (activity: ThreadActivitySummary[]) => void) {
+  activityListeners.add(listener)
+  if (lastActivity?.owner === client) listener(lastActivity.activity)
+  return () => { activityListeners.delete(listener) }
+}
 
 /**
  * Reload the project and thread lists. Calls that arrive while one is in flight
@@ -247,11 +283,19 @@ export function refreshLists(): Promise<void> {
 async function loadLists() {
   if (!client) return
   const owner = client
+  startupMark('lists-start')
   const [p, t] = await Promise.all([
     owner.call('projects.list', {}),
-    owner.call('threads.list', {}),
+    owner.call('threads.list', {}).then(result => {
+      if (owner === client) {
+        lastActivity = { owner, activity: result.activity ?? [] }
+        for (const listener of activityListeners) listener(lastActivity.activity)
+      }
+      return result
+    }),
   ])
   if (owner !== client) return
+  startupMark('lists-ready', { projects: p.projects.length, threads: t.threads.length })
   const threads = t.threads
     .filter((th) => !isChildThread(th) && th.status !== 'archived')
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated_at.localeCompare(a.updated_at))
@@ -286,23 +330,34 @@ export async function selectPaneThread(paneId: string, id: ThreadId | null, keep
   if (!id || !client) return
   if (existing) { await existing.ready; return }
   const owner = client
-  const session: Session = { open: emptyThreadState() }
+  const session: Session = { open: emptyThreadState(), history: new HistoryPrefetch() }
+  const discardHistory = () => { clearTimeout(session.historyTimer); session.history.clear() }
+  session.stop = discardHistory
   sessions.set(id, session)
   const valid = () => owner === client && sessions.get(id) === session
   session.ready = (async () => {
+    startupMark('thread-start', { id })
     const res = await owner.call('threads.get', { thread_id: id, transcript_limit: 120, include_tool_output: false })
     if (!valid()) return
-    setThreadOpen(id, seedFromGet(res))
+    startupMark('thread-page-ready', { id, entries: res.transcript.length })
+    const seeded = seedFromGet(res)
+    startupMark('thread-projected', { id, blocks: seeded.blocks.length })
+    setThreadOpen(id, seeded)
+    startupMark('thread-ready', { id, entries: res.transcript.length })
     const sub = owner.subscribeEvents(
       { thread_id: id, after_seq: res.thread.last_seq, include_tool_output: false },
       event => {
         if (!valid()) return
+        // A snapshot from before this event cannot repair newly exposed older
+        // rows. Demand loading keeps its existing in-flight event replay.
+        session.history.clear()
         setThreadOpen(id, applyEvent(session.open, event))
         for (const listener of threadEventListeners) listener(id, event)
         if (state.selectedId === id) for (const listener of openEventListeners) listener(event)
       },
     )
-    session.stop = () => sub.unsubscribe()
+    session.stop = () => { discardHistory(); sub.unsubscribe() }
+    primeThreadHistory(id)
   })()
   try { await session.ready } catch (error) {
     if (valid()) { sessions.delete(id); throw error }
