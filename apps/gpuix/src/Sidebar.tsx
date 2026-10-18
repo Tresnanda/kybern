@@ -3,10 +3,11 @@
 // projects with their threads and Recents. Rows are 28px with an 8px radius;
 // hover and selection share `--sidebar-accent`.
 //
-// GPUI lays out every built element on every frame, so the project list is a
-// `<virtual-list>`: only rows near the viewport are built while a loader ticks.
+// Native virtualization bounds paint; height-correct slots also bound rich
+// React mounts while keeping logical row identities and scroll anchors.
 import { useCallback, useMemo, useState } from 'react'
 import type { PublicInstance } from '@gpuix/react'
+import { SidebarWindow, type SidebarWindowEntry } from './sidebar/Window.tsx'
 import { Icon } from './icons.tsx'
 import { SpinIcon } from './kit/Spin.tsx'
 import { loadProviders } from './nav/live.ts'
@@ -17,7 +18,7 @@ import { getNav, setNav, useNav } from './nav/store.ts'
 import { EnvironmentSwitcher } from './sidebar/EnvironmentSwitcher.tsx'
 import { attentionItems, buildRows, type AttentionKind, type Row } from './sidebar/model.ts'
 import { BlockRow, inProjectBlock, setReorderContext } from './sidebar/reorder.tsx'
-import { DisclosureGroup, diffRows, liveGroups, markDisclosure, withGroups, type Group } from './sidebar/motion.tsx'
+import { DisclosureGroup, diffRows, liveGroups, markDisclosure, withGroups, rowHeight, type Group } from './sidebar/motion.tsx'
 import { Rise } from './motion/kit.tsx'
 import {
   accent,
@@ -31,6 +32,7 @@ import {
   ProjectHeader,
   RecentsHeader,
   resting,
+  rowPhase,
   SectionLabel,
   ThreadRow,
   useAddProject,
@@ -39,11 +41,6 @@ import { getState, useApp } from './state.ts'
 import { isFreeChatProject } from '../../../packages/kybern-client/src/types.ts'
 import { ink, Label, useTheme } from './ui.tsx'
 import type { Theme } from './theme.ts'
-
-
-/** Rows built beyond the viewport (GPUIX default 512px). Every built row is laid out
- *  on every frame, so keep just enough for smooth wheel scrolling. */
-const OVERDRAW = Number(process.env.KYBERN_OVERDRAW ?? 512)
 
 export function Sidebar() {
   const projects = useApp((s) => s.projects)
@@ -127,27 +124,21 @@ export function Sidebar() {
         />
         <PrimaryAction icon={N.clock} label="Resume session" onClick={() => openSessions()} testId="resume-session" />
       </div>
-      <div ref={setBoxNode} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
-      <virtual-list ref={setListNode} estimatedItemHeight={30} overdraw={OVERDRAW} style={{ flexGrow: 1, minHeight: 0 }} testId="thread-list">
-        {[
-          ...withGroups(rows, groups).map((item) =>
-            item.kind === 'group' ? (
-              <div key={`group:${item.group.id}`}>
-                <DisclosureGroup mode={item.group.mode} height={item.group.height} onDone={() => finish(item.group.id)}>
-                  {item.rows.map((row) => blockRow(row, ctx))}
-                </DisclosureGroup>
-              </div>
-            ) : risen.has(item.row.key) ? (
-              <Rise key={item.row.key} kind="row">
-                {blockRow(item.row, ctx)}
-              </Rise>
-            ) : (
-              blockRow(item.row, ctx)
-            ),
-          ),
-          <div key="__end" style={{ height: 6 }} />,
-        ]}
-      </virtual-list>
+      <div testId="sidebar-viewport" ref={setBoxNode} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
+      <SidebarWindow list={listNode} box={boxNode} setList={setListNode} entries={[
+        ...withGroups(rows, groups).map((item): SidebarWindowEntry => item.kind === 'group' ? {
+          key: `group:${item.group.id}`, height: item.group.height, pinned: true,
+          render: () => <DisclosureGroup mode={item.group.mode} height={item.group.height} onDone={() => finish(item.group.id)}>
+            {item.rows.map((row) => blockRow(row, ctx))}
+          </DisclosureGroup>,
+        } : {
+          key: item.row.key, height: rowHeight(item.row),
+          // Completion owns a hold/leave lifecycle even outside the mount window.
+          pinned: item.row.kind === 'child' && ctx.selectedId !== item.row.thread.id && rowPhase(item.row.thread) !== 'working',
+          render: (firstMount) => risen.has(item.row.key) ? <Rise kind="row" play={firstMount}>{blockRow(item.row, ctx)}</Rise> : blockRow(item.row, ctx),
+        }),
+        { key: '__end', height: 6, render: () => <div style={{ height: 6 }} /> },
+      ]} />
       </div>
     </div>
   )

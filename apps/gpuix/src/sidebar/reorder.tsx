@@ -90,6 +90,10 @@ function publish(next: Drag | null) {
   listeners.forEach((fn) => fn())
 }
 let hidden = new Set<string>()
+/** The source block stays alive while its pointer capture/landing owns it. */
+export function useHeldProjectRow(key: string) {
+  return useSyncExternalStore(subscribe, () => hidden.has(key))
+}
 function setHidden(keys: string[]) {
   hidden = new Set(keys)
   listeners.forEach((fn) => fn())
