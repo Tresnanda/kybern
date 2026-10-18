@@ -21,7 +21,7 @@ if mode=='watch':
  # uncaught exceptions, SIGKILL and wrapper group teardown.
  if os.fork():sys.exit(0)
  os.setsid()
- print('watch',pid,flush=True,file=sys.stderr)
+ print('watch',pid,root,flush=True,file=sys.stderr)
  while alive() and token.exists():time.sleep(.5)
  if not token.exists():sys.exit(0)
  print('owner exited',pid,flush=True,file=sys.stderr)

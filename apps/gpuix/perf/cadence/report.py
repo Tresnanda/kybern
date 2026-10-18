@@ -33,12 +33,18 @@ def loops_table():
  return '\n'.join(lines)
 def extra_tables(after):
  lines=['## Settled controls','', '| Scenario | Repeat | Frames | React commits | CPU % | GPU ms/15s | MiB |','|---|---:|---:|---:|---:|---:|---:|']
- for label in ['cadence-after-settled-3','cadence-after-idle-settled20-3']:
+ for label in ['cadence-after-settled-3','cadence-after-idle-settled20-3','cadence-after-idle-limits-3']:
   file=results/(label+'.json')
   if not file.exists():continue
   for r in read(file)['results']:
-   v=r['resources'];lines.append(f"| {r['scenario']} ({20 if 'settled20' in label else 10}s warmup) | {r['run']} | {r['frames']['count']} | {r['work']['reactCommits']} | {fmt(v['cpuPercent'])} | {fmt(v['gpuMs'])} | {fmt(v['footprintMiB'])} |")
- lines+=['','Open/history resource samples begin immediately after the visibility check, so','finite scrolling/scrollbar tails remain in those windows. Occasional late data','commits are shown rather than labelled as continuous animation. The first Home','window at ten seconds contained two finite commits; the separate twenty-second','Home control checks fully settled idle. All three initial thread-idle windows','were already zero-frame.','', '## Per-submission active cost','', '| Scenario | CPU ms/submission | AGX ms/submission | Render p95 ms | Taffy p95 ms |','|---|---:|---:|---:|---:|']
+   v=r['resources'];lines.append(f"| {r['scenario']} ({20 if 'settled20' in label or 'idle-limits' in label else 10}s warmup) | {r['run']} | {r['frames']['count']} | {r['work']['reactCommits']} | {fmt(v['cpuPercent'])} | {fmt(v['gpuMs'])} | {fmt(v['footprintMiB'])} |")
+ lines+=['','## Content visibility timings','','| Scenario | Source | First visible message ms | Settled text ms | Older turn visible ms |','|---|---|---:|---:|---:|']
+ for source in ['before','after']:
+  doc=read(results/f'cadence-{source}-direct-3.json')
+  for name in ['open-long','older-history']:
+   rows=[r for r in doc['results'] if r['scenario']==name and r['status']=='ok']
+   lines.append(f"| {name} | {source} | {fmt(median(rows,'timings.firstVisibleMessageMs'))} | {fmt(median(rows,'timings.settledMs'))} | {fmt(median(rows,'timings.olderHistoryVisibleMs'))} |")
+ lines+=['','Open/history resource samples begin immediately after the visibility check, so','finite scrolling/scrollbar tails remain in those windows. Occasional late data','commits are shown rather than labelled as continuous animation. The first Home','window at ten seconds contained two finite commits; the separate twenty-second','Home control crosses the first minute poll. Its final window exposed one unchanged usage-limits publication; the dedicated idle-limits control verifies its deduplication. All three initial thread-idle windows','were already zero-frame.','', '## Per-submission active cost','', '| Scenario | CPU ms/submission | AGX ms/submission | Render p95 ms | Taffy p95 ms |','|---|---:|---:|---:|---:|']
  for name in ['thread-scroll','thread-fling','sidebar-scroll','explorer-scroll','markdown-scroll','code-scroll']:
   rows=[r for r in after['results'] if r['scenario']==name and r['status']=='ok'];m=lambda p:fmt(median(rows,p))
   lines.append(f"| {name} | {m('evidence.averageProcessCpuMsPerSubmission')} | {m('evidence.averageProcessGpuMsPerSubmission')} | {m('work.renderMs.p95')} | {m('work.layoutMs.p95')} |")
@@ -59,18 +65,24 @@ def extra_tables(after):
    c=r.get('clippedResources')
    if c:
     v=c['resources'];lines.append(f"| {r['scene']} | {source} {mode} | {c['frames']['count']} | {fmt(v['cpuPercent'])} | {fmt(v['gpuMs'])} | {fmt(v['footprintMiB'])} |")
+ lines+=['','## Explicit visible Spin repeat','','| Source | Count | p50/p95/p99 ms | >16.7/>33 | Max gap | CPU % | GPU ms/15s | MiB |','|---|---:|---|---|---:|---:|---:|---:|']
+ for source in ['before','after']:
+  file=out/'loops-repeat'/f'{source}-default-resources.json'
+  if not file.exists():continue
+  for r in read(file):
+   f=r['frames'];v=r['resources'];lines.append(f"| {source} | {f['count']} | {' / '.join(fmt(f[x]) for x in ['p50','p95','p99'])} | {f['over16_7']} / {f['over33']} | {fmt(f['max'])} | {fmt(v['cpuPercent'])} | {fmt(v['gpuMs'])} | {fmt(v['footprintMiB'])} |")
  return '\n'.join(lines)
 before=read(results/'cadence-before-direct-3.json');after=read(results/'cadence-after-direct-3.json')
 text='''# Cadence measurements
 
 Synthetic 300-thread/20-project product dataset, mixed 1,000/3,000-turn
 conversations, 10,000-entry Explorer and long Markdown/code previews. macOS
-60 Hz Retina display, KYBERN_FULL_RATE=1, unchanged combined addon SHA256
+Apple M1, macOS 27.0.1, Bun 1.4.0, 60 Hz Retina display, KYBERN_FULL_RATE=1, unchanged combined addon SHA256
 f7c8af1c2f2558f6c1a5a3ce93b274cfaf5676ebb87ac438d0ad29d45960dc10.
 Each shared-bench source has three successful 15-second windows, ten-second
 warmups, no screenshots or clock manipulation. Before is the exact product
 modules from b14b10f1 via control.ts; after is the visibility-gated source.
-Both use identical fractional direct-handler input. Values below are medians
+Both use identical fractional direct-handler input. The later usage-limits no-op fix is verified separately across the minute boundary; the active table isolates the visibility change. Values below are medians
 across successful repeats, not pooled distributions. GPU is process AGX
 accumulated time and footprint is physical MiB; daemon/WindowServer excluded.
 Physical presentation latency remains unavailable.
@@ -112,6 +124,26 @@ One resource window per isolated scene after ten seconds warmup. Native on/off
 changes display-rate workload and is a gate check, not a matched visual-default
 speedup. Parking checks settle one second then count submissions for 1.2 seconds.
 Mounted-and-clipped Matrix/connection also have a full 15-second resource sample.
+Exact telemetry `windowMs` and resource `sampleSeconds` remain in raw JSON;
+submission counts include sampler endpoint collection. Sparse 200/500/1000 ms
+passive intervals are intended discrete updates, not delayed input frames.
+Passive fixtures offer no input, so their latency proxy is unavailable.
+
+Visible-loop GPU readings varied substantially. Spin's initial before/after
+pair was 252.6 / 1282.4 ms, while an explicit same-source repeat was 59.0 / 62.5
+ms (CPU 4.45 / 4.06%, 925 / 924 submissions). Both repeats retain valid screen,
+build and orphan checks in `loops-repeat/`; none is silently substituted for
+the first pair. These single-pass passive resources do not establish a general
+visible-loop GPU improvement or regression. The durable clipping result is
+zero submissions, commits and AGX work, with CPU returning to the idle range.
+
+The opt-in connection comparison cuts per-display React commits from 924 to
+zero, CPU 6.85 to 3.72%, and GPU 76.7 to 53.6 ms in its one matched 15-second
+control. Its same-period native rotation is retained under the existing opt-in.
+The global native-default gate remains unmet: shimmer's native sample used
+67.4 versus 39.6 ms in its legacy sample, GPU controls have the variance above,
+and no new full-app native on/off acceptance establishes that the historical
+failure is gone. Experimental native defaults remain off.
 
 '''+loops_table()+'\n\n'+extra_tables(after)+'''
 
@@ -138,6 +170,11 @@ warmup and earlier repeats; do not sum them as independent timing samples.
 - `subagents/Elapsed.tsx` / `transcript/Turn.tsx` park informational seconds;
   `transcript/rows.tsx` supplies actual prose visibility to the blink effect.
   `ui.tsx` forwards Label refs without changing its host/style.
+- `nav/limits.ts` / `nav/live.ts` preserve equal cached usage arrays, including
+  all freshness/retry metadata. The integration test observes the real store:
+  repeated cached polls notify nothing, while values, freshness and refreshing
+  changes still publish. The prior minute poll generated one unchanged Home
+  commit/submission at about 60 seconds despite twenty seconds warmup.
 - `perf/bench` repairs input dispatch/precision, retains handler/distance evidence,
   separates native dispatch-to-CPU paint telemetry, and guards leases with
   independent forked sessions plus recoverable root/PID tokens. Queue cleanup
@@ -160,7 +197,10 @@ No screenshots were taken during resource samples.
 
 Screen validity was audited after the parent discovered a locked session from
 about 16:30Z. All accepted shared-bench, supplementary native-input and visual
-runs completed by 16:24:03Z, with positive active submissions/GPU. The later
+runs completed by 16:24:03Z, with positive active submissions/GPU.
+The passive resource suite ran after unlock at 17:26–17:46Z, and its screen
+endpoints are all unlocked/awake. A later idle-limits suite records its own
+screen/build/orphan endpoints. The later
 zero-visible-frame smoke was aborted and discarded before resources. Subsequent
 runs record unlocked/awake Swift endpoints and use runner-scoped caffeinate;
 continuous active zero/near-zero frame or zero GPU samples are rejected.
@@ -172,6 +212,9 @@ See README.md for reproduction, AUDIT.md for passive paths and retained gaps,
 and diagnostics/*cleanup.json for real crash/kill/timeout cleanup controls.
 No native patch or rebuild was required by this source/injector change.
 '''
+cleanup=out/'diagnostics/cleanup.json'
+if cleanup.exists():
+ c=read(cleanup);text+=f"\n\n## Validation and cleanup\n\nRequired product/native/bench/cadence TypeScript checks and source/model tests\npassed; raw command logs and the complete source hash are in diagnostics/.\nNo native patch changed or native build was required.\nFree disk before this lane was approximately 82 GiB; before cleanup\n{c['freeGiBBeforeCleanup']:.2f} GiB and after cleanup {c['freeGiBAfterCleanup']:.2f} GiB\n(actual volume free space, not the sum of removed directory sizes).\nRemoved disposable GPUiX/desktop dependencies, scratch data, compiled wheel\nhelpers and this lane's Swift module cache. No Rust target was created.\nThe inherited signed addon remains for review; requested evidence remains here.\nBranch is gpuix/perf-cadence; FINAL-STATUS.json records final commit/status.\n"
 (app/'perf/cadence/MEASUREMENTS.md').write_text(text)
 (out/'MEASUREMENTS.md').write_text(text)
 # Small JSON and median tables are durable review evidence outside the worktree.

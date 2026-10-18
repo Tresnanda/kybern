@@ -69,3 +69,16 @@ No cleanup removes another live holder's lock. `CADENCE_COORDINATION_DIR` and
 production bound).
 
 Screen validity: runners execute `swift /Users/mymac/projects/ade-gpuix-scratch/screen-state.swift` before app launch and before/after measurement (checkout-local equivalent when the shared file is absent). Both endpoints must be unlocked and the display awake. Quiet windows wait without consuming a window while locked, polling once per minute. Every app lease owns `caffeinate -d -w <runner pid>`; killing the runner releases that assertion. Continuous active samples require at least one submission per four seconds and positive GPU time. Intentional idle, clipped, unmounted, and reduced-motion static controls can legitimately have zero submissions/GPU time. Never unlock a session or change its lock/sleep settings for a run.
+
+`CADENCE_LOOP_EVIDENCE` selects a separate resource output folder for an explicit
+repeat without overwriting the primary controls. Spin's repeat is preserved in
+`loops-repeat/` because first-pass AGX timings varied strongly across otherwise
+matched visible paths. Keep both passes when judging GPU effects.
+
+The final `idle-suite.ts` runs all source checks, then three Home idle windows
+after twenty seconds warmup, crossing the first usage-limits minute poll. It
+requires zero frames, commits and GPU in every window before `cleanup.py`
+removes this lane's disposable dependencies/scratch data under the same quiet
+window. `nav/limits.ts` deduplicates whole cached values; real usage or freshness
+changes continue to publish. The earlier `idle-settled20` control (0/0/1 frames)
+is retained as the failing baseline for this separate final fix.

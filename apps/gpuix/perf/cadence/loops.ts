@@ -7,7 +7,7 @@ import {lease} from '../bench/lease.ts'
 import {Telemetry,parseResources} from '../bench/telemetry.ts'
 import {watchRun} from '../bench/process-gate.ts'
 import {onExit} from '../bench/lifetime.ts'
-const out='/Users/mymac/projects/ade/previews/gpuix/perf/cadence/loops'
+const out=process.env.CADENCE_LOOP_EVIDENCE??'/Users/mymac/projects/ade/previews/gpuix/perf/cadence/loops'
 mkdirSync(out,{recursive:true})
 const root=path.resolve(import.meta.dir,'../../../..'),appdir=path.join(root,'apps/gpuix')
 const label=process.env.CADENCE_SOURCE==='before'?'before':'after',native=process.env.CADENCE_NATIVE==='1',visual=process.env.CADENCE_VISUAL==='1'

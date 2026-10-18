@@ -19,7 +19,8 @@ loader-clock subscription. Native one-shot motions still finish naturally.
 | Terminal focused caret | Existing 500 ms timer with focus/motion gating and hidden-window callback guard | Remaining gap: hidden window suppresses mutations but retains its timer; no terminal change in this lane |
 | Platform-state / occlusion | Existing platform 400 ms visibility poll / window-state refresh | Remaining platform polling, no scene submission unless state changes |
 | Composer slow status text | Existing 15-second informational update | Existing window visibility subscription |
-| Preview recents/discovery/retry, device/login/provider limits polls | Existing data refresh, not continuous animation | Existing component/pane lifetime; no cadence change here |
+| Provider limits minute poll | Existing required cached data refresh | Equal arrays now retain identity; no React/native frame for unchanged cached results; changed values and freshness still publish |
+| Preview recents/discovery/retry, device/login polls | Existing data refresh, not continuous animation | Existing component/pane lifetime; no cadence change here |
 | Pop, check-draw, stroke, entrance/exit tweens | Finite native paint motions | One-shot, no perpetual clock |
 | Drag edge scroll | Demand-based onFrame subscription | Active drag lifetime; not passive |
 | Paced streaming | Demand-based pending events / reveal catch-up | Existing bounded stream lifetime; not passive |
