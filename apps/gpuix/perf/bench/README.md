@@ -156,3 +156,13 @@ packet-rate change or a changed input backend as unmatched input; inspect per-ru
 Validation: `pnpm typecheck`, `pnpm exec tsc -p perf/bench/tsconfig.json`,
 `bun test ./src`, `bun test perf/bench/model.test.ts`, and
 `node --check perf/bench/webkit.mjs`.
+
+The streaming lane also reuses this scenario with
+`KYBERN_BENCH_STREAM_HISTORY=1` (all 1,000 turns, fetched in sequence-bounded
+500-entry pages), `KYBERN_BENCH_STREAM_SCROLL=1` (simultaneous wheel input), and
+`KYBERN_BENCH_STREAM_CATCHUP=1` (replay the nominal 25 deltas/second after a late
+timer instead of silently lowering its rate). Compare actual delivered rates.
+`perf/stream/pair.ts` records the source hashes and source-control flags for
+the staged and paired controls. These options do not change the default suite.
+AppKit readiness now waits 100 ms after its probe before checking the anchor,
+so frame-coalesced input is observed after paint rather than rejected early.

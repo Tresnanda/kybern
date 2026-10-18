@@ -20,6 +20,7 @@ import { useTasks, openTask } from '../tasks/store.ts'
 import { goPage } from '../nav/history.ts'
 import type { NoteSummary, TaskItem } from '../../../../packages/kybern-client/src/types.ts'
 import type { MarkdownStream } from '../native/markdown.ts'
+import { StreamMarkdown } from './StreamMarkdown.tsx'
 
 export type MarkdownPart = { kind: 'prose' | 'code'; text: string; language?: string; key: string }
 const cache = new Map<string, MarkdownPart[]>()
@@ -190,8 +191,9 @@ export const BoundedMarkdown = memo(function BoundedMarkdown({ text, tone = 'bri
   const t = useTheme()
   const chunks = useMemo(() => textChunks(text), [text])
   const [expanded, setExpanded] = useState(false)
+  const Markdown = stream ? StreamMarkdown : 'markdown'
   return <div style={{ display: 'flex', flexDirection: 'column' }}>
-    <markdown source={chunks[0]} theme={withStream(cachedMarkdownTheme(t, tone), stream)} style={{ color: tone === 'bright' ? t.text : muted(t), userSelect: 'text' }} />
+    <Markdown source={chunks[0]} theme={withStream(cachedMarkdownTheme(t, tone), stream)} style={{ color: tone === 'bright' ? t.text : muted(t), userSelect: 'text' }} />
     {chunks.length > 1 && <Button variant="ghost" onClick={() => setExpanded(true)}>Show more</Button>}
     {expanded && <TextDetail text={text} title="Agent response" onClose={() => setExpanded(false)} />}
   </div>

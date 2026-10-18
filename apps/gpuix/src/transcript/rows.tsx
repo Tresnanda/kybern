@@ -39,7 +39,7 @@ import { MidTurnMessage } from './bubble.tsx'
 import { cachedMarkdownTheme, Chevron, CODE, destructive, fg, muted, Para, ROW_LINE, RowIcon, TEXT } from './kit.tsx'
 import { Collapse, Rise } from '../motion/kit.tsx'
 import { Shimmer, SwapOnChange, useFresh, useSmoothText, useStreamEffects } from './motion.tsx'
-import { hydrateToolOutput, useRowState, type ToolBlock } from './store.ts'
+import { hydrateToolOutput, useRowState, usePacedAssistant, type ToolBlock } from './store.ts'
 
 export interface RowContext {
   threadId: ThreadId
@@ -534,6 +534,7 @@ function ToolResult({ block, threadId, surface, item, screenshots }: { block: To
 // ---- reasoning and interim prose ----
 
 const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone, live, thinkingLive }: { block: Extract<Block, { kind: 'assistant' }>; tone: 'bright' | 'muted'; live: boolean; thinkingLive: boolean }) {
+  block = usePacedAssistant(block)
   const t = useTheme()
   const [open, setOpen] = useRowState(`thinking:${block.id}`, false)
   const hasThinking = block.thinking.trim().length > 0

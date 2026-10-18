@@ -83,7 +83,8 @@ export async function scenario(name:Scenario,runs:number,fixture:Fixture,evidenc
    const b=await bounds(app,name==='pr-changes'?'pr-native-diff':'page-pulls');point={x:name==='pr-changes'?b.x+b.width/2:b.x+352+(b.width-352)/2,y:b.y+b.height/2};return
   }
   if(name==='idle-home'||name==='sidebar-scroll'){await control('home');if(name==='sidebar-scroll')point={x:180,y:430};return}
-  await control('open',{thread:name==='streaming'?fixture.manifest.running:fixture.manifest.long3000})
+  await control('open',{thread:name==='streaming'?(process.env.KYBERN_BENCH_STREAM_HISTORY==='1'?fixture.manifest.long1000:fixture.manifest.running):fixture.manifest.long3000})
+  if(name==='streaming'&&process.env.KYBERN_BENCH_STREAM_HISTORY==='1')await control('load-history')
   await bounds(app,'transcript-surface');await painted(app,/BENCH_RESULT|Bench prompt/)
   if(['explorer-scroll','markdown-scroll','code-scroll'].includes(name)){
    await control('explorer',{...(name==='markdown-scroll'?{file:fixture.manifest.markdown}:name==='code-scroll'?{file:fixture.manifest.code}:{})})
@@ -94,14 +95,16 @@ export async function scenario(name:Scenario,runs:number,fixture:Fixture,evidenc
  await delay(1500)
  await setup()
  if(name.startsWith('idle-'))await control('idle')
- const scrolling=name.endsWith('scroll')||name==='thread-fling'||pr
+ const streamWithWheel=name==='streaming'&&process.env.KYBERN_BENCH_STREAM_SCROLL==='1'
+ const scrolling=name.endsWith('scroll')||name==='thread-fling'||pr||streamWithWheel
  if(point&&scrolling){
   const request=async(action:string,args:Record<string,unknown>={})=>{const res=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action,...args})});return await res.json() as {accepted:number;now:number;offset:number[]|null}}
   const target=name==='sidebar-scroll'?'thread-list':name==='explorer-scroll'?'dock-file-tree':name==='markdown-scroll'||name==='code-scroll'?'dock-file-content':name==='pr-summary'?'pr-summary':name==='pr-changes'?'pr-native-diff':'transcript'
   const prior=await request('scroll-state',{target}),before=performance.now()
   const probe=await request('wheel-probe',{...point,delta:-180});clockOffset=(before+performance.now())/2-probe.now
+  await delay(100)
   let changed=await request('scroll-state',{target})
-  if(JSON.stringify(changed.offset)===JSON.stringify(prior.offset)){await request('wheel-probe',{...point,delta:180});changed=await request('scroll-state',{target})}
+  if(JSON.stringify(changed.offset)===JSON.stringify(prior.offset)){await request('wheel-probe',{...point,delta:180});await delay(100);changed=await request('scroll-state',{target})}
   useAppkit=probe.accepted===1&&prior.offset!==null&&JSON.stringify(changed.offset)!==JSON.stringify(prior.offset)
   const mapStart=performance.now(),clock=await request('state');clockMappingRttMs=performance.now()-mapStart;clockOffset=mapStart+clockMappingRttMs/2-clock.now
  }
@@ -163,7 +166,7 @@ export async function scenario(name:Scenario,runs:number,fixture:Fixture,evidenc
    r.timings.resourceWindowMs=stop-resourceStart
    r.evidence={...r.evidence,averageProcessCpuMsPerSubmission:r.frames.count?r.resources.cpuPercent!*r.resources.sampleSeconds!*10/r.frames.count:null,averageProcessGpuMsPerSubmission:r.frames.count?r.resources.gpuMs!/r.frames.count:null,profiled:!!options.profile,warmupSeconds:options.warmup,resourceWindowSeconds:options.seconds,resourceText:sampleText,input:input?.input??'none',packetAckP95:input?input.acks.sort((a,b)=>a-b)[Math.floor(input.acks.length*.95)]:null,maxOutstanding:input?.maxOutstanding??0,drainMs:input?.drainMs??0,sceneTransitionFrames:telemetry.submissions.length-mark.frames,onePersistedRunningThread:!name.startsWith('idle-'),appkitAccepted:useAppkit,clockMappingRttMs,offeredPackets:input?.sent.length??0,inputProductionMs:input?.productionMs??null,offeredPacketsPerNominalSecond:input?input.sent.length/options.seconds:null,offeredPacketsPerSecond:input&&input.productionMs>0?input.sent.length/(input.productionMs/1000):null}
    if(!name.startsWith('idle-')&&scrolling&&r.frames.count<2)throw Error('No submitted frames during scroll: input or scene unavailable')
-   if(streamBefore!=null){const streamAfter=(await control('state')).streamDeltas;r.evidence.offeredDeltas=streamAfter-streamBefore;r.evidence.offeredDeltasPerSecond=(streamAfter-streamBefore)/(r.timings.resourceWindowMs!/1000)}
+   if(streamBefore!=null){const streamed=await control('state');const streamAfter=streamed.streamDeltas;r.evidence.offeredDeltas=streamAfter-streamBefore;r.evidence.offeredDeltasPerSecond=(streamAfter-streamBefore)/(r.timings.resourceWindowMs!/1000);r.evidence.streamWithWheel=streamWithWheel;r.evidence.loadedBlocks=streamed.blocks;r.evidence.fullHistory=process.env.KYBERN_BENCH_STREAM_HISTORY==='1'}
    if(process.env.KYBERN_BENCH_COUNTERS==='1'){const response=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action:'counters'})});r.evidence.counters=await response.json()}
    writeFileSync(path.join(evidence,`${name}-${run}-resources.txt`),sampleText)
   }catch(error){r.status='failed';r.reason=String(error)}finally{for(const child of children){child.kill();await child.exited}for(const unregister of unregisterChildren)unregister()}

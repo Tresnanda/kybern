@@ -1,6 +1,7 @@
 import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
 import { DeferredReads } from '../shell/deferredReads.ts'
 import { startupMark } from '../perf/startup.ts'
+import { createStreamTopology } from './streamBlocks.ts'
 // Transcript-side state and actions, mirroring `apps/desktop/src/state/rpc.ts`
 // for the parts the transcript owns: approvals, saved tool output, turn diffs,
 // earlier history pages, and per-row disclosure state that must survive a row
@@ -310,6 +311,7 @@ export function usePacedBlocks(): Block[] {
   const threadId = useApp(s => s.selectedId)
   const [frame, setFrame] = useState(() => ({ threadId: pane.get().selectedId, blocks: pane.get().open.blocks }))
   useEffect(() => {
+    const topology = createStreamTopology()
     let shown = pane.get().open.blocks
     let last = 0
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -317,7 +319,9 @@ export function usePacedBlocks(): Block[] {
       timer = undefined
       last = Date.now()
       shown = pane.get().open.blocks
-      setFrame({ threadId: pane.get().selectedId, blocks: shown })
+      const blocks = process.env.KYBERN_STREAM_ISOLATE === '0' ? shown : topology(shown)
+      const threadId = pane.get().selectedId
+      setFrame(previous => previous.threadId === threadId && previous.blocks === blocks ? previous : { threadId, blocks })
     }
     const stop = pane.frozen ? () => {} : subscribe(() => {
       if (pane.get().open.blocks === shown || timer) return
@@ -333,6 +337,41 @@ export function usePacedBlocks(): Block[] {
   }, [pane])
   // Never paint a previous thread’s paced frame under the next thread’s id.
   return frame.threadId === threadId ? frame.blocks : pane.get().open.blocks
+}
+
+/** A live row owns its changing text; the transcript above it subscribes only
+ * to grouping transitions. Frozen outgoing panes keep their captured blocks. */
+export function usePacedAssistant(block: Extract<Block, {kind: 'assistant'}>) {
+  const pane = usePaneAccess()
+  const [shown, setShown] = useState(block)
+  useEffect(() => {
+    if (pane.frozen || block.complete || process.env.KYBERN_STREAM_ISOLATE === '0') return
+    let last = 0, timer: ReturnType<typeof setTimeout> | undefined
+    let current = block
+    const read = () => {
+      const blocks = pane.get().open.blocks
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        const candidate = blocks[i]!
+        if (candidate.id === block.id && candidate.kind === 'assistant' && candidate.turnId === block.turnId) return candidate
+      }
+      return block
+    }
+    const flush = () => {
+      timer = undefined
+      last = Date.now()
+      current = read()
+      setShown(current)
+    }
+    const stop = subscribe(() => {
+      if (read() === current || timer) return
+      const wait = PACE_MS - (Date.now() - last)
+      if (wait <= 0) flush()
+      else timer = setTimeout(flush, wait)
+    })
+    flush()
+    return () => { stop(); clearTimeout(timer) }
+  }, [pane, block.id, block.turnId, block.complete])
+  return pane.frozen || block.complete || process.env.KYBERN_STREAM_ISOLATE === '0' || shown.id !== block.id || shown.turnId !== block.turnId ? block : shown
 }
 
 // ---- child threads (subagents and delegations a thread launched) ----

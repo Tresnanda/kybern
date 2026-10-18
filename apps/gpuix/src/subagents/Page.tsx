@@ -4,13 +4,13 @@ import { Icon } from '../icons.tsx'
 import { T } from '../transcript/glyphs.ts'
 import { Elapsed } from './Elapsed.tsx'
 import { motion } from '@gpuix/react'
-import { useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { formatTokenCount, isSubagentQueued, subagentBarState, subagentSpan, subagentThreadPhase, subagentTokenCount } from '../../../../packages/kybern-client/src/subagents.ts'
 import { useNav } from '../nav/store.ts'
 import { openThread } from '../nav/history.ts'
 import { controlSubagent } from '../requests/Activity.tsx'
-import { useApp, usePaneAccess, PaneProvider, type AppState } from '../state.ts'
+import { getThreadOpen, subscribe, useApp, usePaneAccess, PaneProvider, type AppState } from '../state.ts'
 import { Button, Para, muted } from '../transcript/kit.tsx'
 import { copyText } from '../transcript/store.ts'
 import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
@@ -20,18 +20,29 @@ import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 export function SubagentPageMotion({ children }: { children: ReactNode }) {
   const pane = usePaneAccess()
   const id = useApp(s => s.selectedId)
-  const open = useApp(s => s.open)
+  const thread = useApp(s => s.open.thread)
+  useApp(s => process.env.KYBERN_STREAM_ISOLATE === '0' ? s.open : null)
   const child = useNav(s => id ? s.children[id] : undefined)
   const keyboard = useNav(s => s.keyboardNav)
   const t = useTheme()
   const live = pane.get()
   const previous = useRef<{ id: string | null; snapshot: AppState }>({ id, snapshot: live })
+  // Keep the outgoing capture fresh without rendering the page shell for each
+  // text delta. On navigation the old session still exists during publication.
+  useEffect(() => pane.frozen ? undefined : subscribe(() => {
+    const current = pane.get(), before = previous.current
+    if (current.selectedId === before.id) before.snapshot = current
+    else if (before.id) {
+      const open = getThreadOpen(before.id)
+      if (open) before.snapshot = { ...before.snapshot, open }
+    }
+  }), [pane])
   const [exit, setExit] = useState<{ id: string | null; snapshot: AppState; direction: number; token: number } | null>(null)
   const entrance = useRef({ id, direction: 0, token: 0 })
   if (previous.current.id !== id) {
     const before = previous.current
-    const thread = open.thread ?? child
-    const direction = before.snapshot.open.thread?.subagent && before.snapshot.open.thread.parent_thread_id === id ? -1 : thread?.subagent && thread.parent_thread_id === before.id ? 1 : 0
+    const target = thread ?? child
+    const direction = before.snapshot.open.thread?.subagent && before.snapshot.open.thread.parent_thread_id === id ? -1 : target?.subagent && target.parent_thread_id === before.id ? 1 : 0
     const play = !keyboard && !REDUCED_MOTION && direction !== 0
     entrance.current = { id, direction: play ? direction : 0, token: entrance.current.token + 1 }
     setExit(play ? { ...before, direction, token: entrance.current.token } : null)
