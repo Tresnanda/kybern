@@ -1,3 +1,4 @@
+import { SparseRetention, sparseIndices, useSparseList } from './kit/sparseList.tsx'
 import { TRANSCRIPT_SCROLL_LAYOUT } from './transcript/scroll-layout.ts'
 import { TranscriptSlot, useTranscriptWindow } from './transcript/Window.tsx'
 import { TranscriptRowStateScope } from './transcript/rowStateScope.ts'
@@ -174,8 +175,27 @@ export function Transcript() {
     const valid = new Set(rowKeys)
     for(const key of slotCache.keys()) if(!valid.has(key)) slotCache.delete(key)
   }, [rowKeys, slotCache])
+  const sparse = process.env.KYBERN_SPARSE_LIST !== '0' && process.env.KYBERN_GPUIX_NATIVE !== 'npm' && process.env.KYBERN_TRANSCRIPT_WINDOW !== '0'
+  const logicalKeys = useMemo(() => ['__top', ...rowKeys, '__bottom'], [rowKeys])
+  // The mounted footer measures panel-height changes directly; keep that motion
+  // from resending every historical estimate through the native bridge.
+  const logicalEstimates = useMemo(() => [hasEarlier ? 48 : 16, ...estimates, COMPOSER_INSET], [estimates, hasEarlier])
+  const nativeWindow = useSparseList(logicalKeys, logicalEstimates, `${threadId}:${paneWidth}:${t.variant}`)
+  const pinnedCandidates = useMemo(() => rows.flatMap((row,index) => {
+    const live = row.turn.running || (threadRunning && row.turn === turns.at(-1))
+    const until = freshUntil.get(row.turn) ?? 0
+    return live || (until > now && until < now + 6000) ? [{ index: index + 1, live, until }] : []
+  }), [rows, threadRunning, turns, freshUntil])
+  const pinnedRows = pinnedCandidates.filter(pin => pin.live || pin.until > now).map(pin => pin.index)
+  const windowIndices = sparse ? sparseIndices(mountWindow.range.start + 1, mountWindow.range.end + 1, count,
+    [0, count - 1, ...pinnedRows, ...[...nativeWindow.retained, ...mountWindow.selected].flatMap(key => { const index = nativeWindow.indices.get(key); return index === undefined ? [] : [index] })]) : undefined
   const cacheSlots = process.env.KYBERN_TRANSCRIPT_SLOT_CACHE !== '0'
   const windowed = process.env.KYBERN_TRANSCRIPT_WINDOW !== '0'
+  useEffect(() => {
+    if (!windowIndices) return
+    const active = new Set(windowIndices.flatMap(index => logicalKeys[index] ? [logicalKeys[index]!] : []))
+    for (const key of slotCache.keys()) if (!active.has(key)) slotCache.delete(key)
+  }, [sparse, mountWindow.range.start, mountWindow.range.end, nativeWindow.retained, rowKeys])
   const restored = useRef<string | null>(null)
   const snapshot = useRef({ threadId, rowKeys, atTail, codeState })
   snapshot.current = { threadId, rowKeys, atTail, codeState }
@@ -320,14 +340,14 @@ export function Transcript() {
   }
 
   return (
-    <TranscriptRowStateScope.Provider value={rowStateScope}><div ref={surfaceRef} testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+    <TranscriptRowStateScope.Provider value={rowStateScope}><SparseRetention.Provider value={nativeWindow.context}><div ref={surfaceRef} testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
       <virtual-list
         {...TRANSCRIPT_SCROLL_LAYOUT}
+        {...(sparse ? { estimatedItemHeight: 160, itemCount: count, windowStart: windowIndices?.[0] ?? 0, windowIndices, ...nativeWindow.props } : { estimatedItemHeight: 160 })}
         ref={listRef}
         testId="transcript"
         alignment="top"
         followTail
-        estimatedItemHeight={160}
         overdraw={Number(process.env.KYBERN_OVERDRAW ?? 512)}
         style={{ flexGrow: 1, minHeight: 0 }}
         onVisibleRange={(event) => {
@@ -362,9 +382,10 @@ export function Transcript() {
                 </Row>,
               ]
             : [<div key="__top" ref={topRef} testId={`transcript-top:${pane.id}`} style={{ height: 16 }} />]),
-          ...rows.map((row, index) => {
+          ...(windowIndices ? windowIndices.filter(i => i > 0 && i < count - 1).map(i => i - 1) : rows.map((_,i) => i)).map(index => {
+            const row = rows[index]!
             const height = mountWindow.height(row.key, row.estimate)
-            const mounted = !windowed || ((freshUntil.get(row.turn) ?? 0) > now && (freshUntil.get(row.turn) ?? 0) < now + 6000) || mountWindow.selected.has(row.key) || row.turn.running || (threadRunning && row.turn === turns.at(-1)) || (index >= mountWindow.range.start && index < mountWindow.range.end)
+            const mounted = sparse || !windowed || ((freshUntil.get(row.turn) ?? 0) > now && (freshUntil.get(row.turn) ?? 0) < now + 6000) || mountWindow.selected.has(row.key) || row.turn.running || (threadRunning && row.turn === turns.at(-1)) || (index >= mountWindow.range.start && index < mountWindow.range.end)
             const cached = cacheSlots ? slotCache.get(row.key) : undefined
             if(cached?.mounted === mounted && cached.height === height && cached.node === row.node) return cached.element
             const element = <TranscriptSlot key={row.key} rowKey={row.key} height={height} mounted={mounted} measure={mountWindow.measure} sync={mountWindow.sync}>{row.node}</TranscriptSlot>
@@ -395,7 +416,7 @@ export function Transcript() {
         </div>
       )}
       <ScrollToBottom visible={!atTail} bottom={COMPOSER_INSET - 64 + 24 + panelHeight} onClick={scrollToBottom} />
-    </div></TranscriptRowStateScope.Provider>
+    </div></SparseRetention.Provider></TranscriptRowStateScope.Provider>
   )
 }
 
