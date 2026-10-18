@@ -22,7 +22,7 @@ screen_script = '/Users/mymac/projects/ade-gpuix-scratch/screen-state.swift'
 def screen_ready():
     result=subprocess.run(['swift',screen_script],capture_output=True,text=True)
     import re
-    return result.returncode==0 and bool(re.search(r'locked:\s*(?:0|nil)\b',result.stdout)) and bool(re.search(r'displayAsleep:\s*(?:0|false)\b',result.stdout))
+    return result.returncode==0 and bool(re.search(r'locked:\s*0\b',result.stdout)) and bool(re.search(r'displayAsleep:\s*(?:0|false)\b',result.stdout))
 
 def cancelled(_signal, _frame):
     raise KeyboardInterrupt
@@ -49,7 +49,7 @@ try:
     import shutil
     if shutil.disk_usage(root).free < 30*1024**3: raise RuntimeError("Need 30 GiB free")
     marker.write_text(f"{lane} {time.time()}\n")
-    awake=subprocess.Popen(['/usr/bin/caffeinate','-d','-i','-u','-w',str(os.getpid())])
+    awake=subprocess.Popen(['/usr/bin/caffeinate','-d','-w',str(os.getpid())])
     (app / "native/build/backdrop-final-pending").write_text("Full updater pending\n")
     evidence=log.parent/"native-checks"
     old="/Users/mymac/projects/ade/previews/gpuix"

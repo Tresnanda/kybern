@@ -2,7 +2,7 @@ import { writeFileSync, unlinkSync, readdirSync, readFileSync, existsSync } from
 const lane='perf-backdrop', marker=`/tmp/kybern-gpuix-quiet.${lane}`
 const order='/tmp/kybern-gpuix-quiet-order'
 const screenScript='/Users/mymac/projects/ade-gpuix-scratch/screen-state.swift'
-function ready(){const result=Bun.spawnSync(['swift',screenScript],{stdout:'pipe',stderr:'pipe'});const raw=result.stdout.toString();return result.exitCode===0&&/locked:\s*(?:0|nil)\b/.test(raw)&&/displayAsleep:\s*(?:false|0)\b/.test(raw)}
+function ready(){const result=Bun.spawnSync(['swift',screenScript],{stdout:'pipe',stderr:'pipe'});const raw=result.stdout.toString();return result.exitCode===0&&/locked:\s*0\b/.test(raw)&&/displayAsleep:\s*(?:false|0)\b/.test(raw)}
 function queue(remove=false) {
  const result=Bun.spawnSync(['python3','-c',
   `from pathlib import Path
