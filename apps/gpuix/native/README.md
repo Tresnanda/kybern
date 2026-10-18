@@ -1403,3 +1403,14 @@ and the lock free, takes `/tmp/kybern-gpuix-round5-ui-lock`, runs the command wi
 `KYBERN_CLIP_LOCK_HELD` (so `clip-check`, `explorer-motion-check`, `scroll8-check` and `scroll8-input-check` reuse the lease
 instead of queueing behind it), then leaves the queue and releases the lock. `update.sh` runs those four checks together
 under one lease as `update-<checkout>`.
+
+### Motion reconciliation during deferred rows
+
+`motion_frame.rs` shares the global motion reconciliation across the root and
+all deferred virtual rows in one GPUI draw. The key includes the retained-tree
+revision, so a Node commit between root rendering and row prepaint still
+reconciles the new motion description. Styles continue sampling the existing
+clock, and completion notifications are emitted once. A per-window draw epoch
+also covers cached scroll draws that do not rebuild the root view.
+`KYBERN_MOTION_SYNC=0` is the same-binary control for the previous per-row global
+scan; it does not disable motion.
