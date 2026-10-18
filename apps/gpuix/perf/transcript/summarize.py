@@ -15,9 +15,9 @@ print('|---|---|---:|---|---|---:|---:|---:|---:|')
 for r in rows:
  scene='stream' if r['stream'] else r['scenario']
  print(f"| {r['count']} / {scene} | {r['variant']} | {r['frames']} | {n(r['p50'])} / {n(r['p95'])} / {n(r['p99'])} | {r['over16_7']} / {r['over33']} | {n(r['nativeFirstInputToCpuPaintP95'])} | {r['cpuPercent']:.2f} | {r['gpuMs']:.1f} | {r['footprintMiB']:.0f} |")
-print('\n| Turns / scene | Variant | First formatted content ms | Native render / layout p95 ms | React p95 ms | Commits |')
-print('|---|---|---:|---|---:|---:|')
+print('\n| Turns / scene | Variant | First formatted content ms | Input delivery s | Native render / layout p95 ms | React p95 ms | Commits |')
+print('|---|---|---:|---:|---|---:|---:|')
 for r in rows:
  if r['scenario']=='idle':continue
  scene='stream' if r['stream'] else r['scenario']
- print(f"| {r['count']} / {scene} | {r['variant']} | {r['firstVisibleMs']:.0f} | {n(r['renderP95'])} / {n(r['layoutP95'])} | {n(r['reactRenderP95'])} | {r['reactCommits']} |")
+ print(f"| {r['count']} / {scene} | {r['variant']} | {r['firstVisibleMs']:.0f} | {r['input']['productionMs']/1000:.2f} | {n(r['renderP95'])} / {n(r['layoutP95'])} | {n(r['reactRenderP95'])} | {r['reactCommits']} |")

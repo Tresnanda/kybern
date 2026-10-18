@@ -17,6 +17,8 @@ python3 perf/transcript/lease.py bun perf/transcript/final-pair.ts stream
 # Or take/release your turn in the shared quiet-order file automatically:
 python3 perf/transcript/final-run.py
 python3 perf/transcript/summarize.py
+# Short ordered rerun of a rejected 3,000-turn pair, preserving old evidence:
+python3 perf/transcript/retry-run.py
 ```
 
 `slot-pair.ts` compiles the shared bench package's process-local AppKit event injector, then compares the baseline source, body window, reused slot elements, and coalesced wheel path. `p1-pair.ts` preserves the earlier native RPC experiment. The RPC driver caps outstanding requests; compare its offered counts before interpreting throughput. The AppKit driver supplies contact/momentum fields directly to this fixture's own window. Both paths report the admitted input and hash their driver.
@@ -26,6 +28,13 @@ python3 perf/transcript/summarize.py
 Each timing process uses `KYBERN_FULL_RATE=1`, ten seconds of warm-up, fifteen seconds per active/resource sample, and ten seconds of settling before the idle sample. Native submission intervals and dispatch-to-CPU-paint telemetry are not physical display presentation or input-to-photon measurements. There are no screenshots or synthetic clock advances in timing samples.
 
 The lease wrapper uses the shared FIFO UI queue, limits each batch to 290 seconds, and rejects native-build overlap. Keep a build-free quiet reservation for final measurements according to the common perf brief. Separate capture checks use a paused clock to compare pixels in both themes and motion preferences.
+
+Active runs reject a capture with neither native render work nor submissions.
+The native wheel readiness probe after warm-up verifies that the logical anchor
+moves, then normalizes both sources to the tail before sampling. Raw results
+include those anchors; `TRANSCRIPT_PREFLIGHT=0` is a historical control.
+`diagnose.ts` is a separate untimed 3,000-turn AppKit/RPC anchor and screenshot
+probe with coalescing on/off. Do not mix its screenshots into timing samples.
 
 Evidence is written to `/Users/mymac/projects/ade/previews/gpuix/perf/transcript/`; scratch controls and the small event injector go under `/Users/mymac/projects/ade-gpuix-scratch/perf-transcript/`. `TRANSCRIPT_BASE_REF` defaults to `9befd131`. The bench injector/input files resolve from the integrated `perf/bench` directory, with the sibling perf-bench worktree as a temporary fallback.
 

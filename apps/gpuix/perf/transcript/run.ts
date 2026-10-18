@@ -61,6 +61,22 @@ try{
  else{
  await drive(10000)
  await app.mouse.move(point);await control();await Bun.sleep(1000)
+ // Accepted NSEvents alone do not prove a live scroll target. Verify native
+ // movement after warm-up and normalize both variants to the same destination.
+ let preflight:unknown=null
+ if(process.env.TRANSCRIPT_PREFLIGHT!=='0'){
+  const where=async(action='where',args:object={})=>(await (await fetch(`http://127.0.0.1:${port}`,{method:'POST',body:JSON.stringify({action,...args})})).json()) as Promise<{anchor:number[]}>
+  const before=await where()
+  await app.mouse.wheel(point,0,800);await Bun.sleep(100)
+  let moved=await where()
+  if(JSON.stringify(before.anchor)===JSON.stringify(moved.anchor)){
+   await app.mouse.wheel(point,0,-1600);await Bun.sleep(100);moved=await where()
+  }
+  if(JSON.stringify(before.anchor)===JSON.stringify(moved.anchor))throw Error('Native wheel preflight did not move the logical anchor; reject timing')
+  await where('jump',{index:100000000});await Bun.sleep(500)
+  preflight={before:before.anchor,moved:moved.anchor,normalized:(await where()).anchor}
+  console.log('INPUT PREFLIGHT '+JSON.stringify(preflight))
+ }
  const results=[]
  for(const scenario of (process.env.TRANSCRIPT_SCENES??'scroll,fling,idle').split(',')){
  if(scenario==='idle')await Bun.sleep(10000)
@@ -71,11 +87,12 @@ try{
  const input=scenario==='idle'?(await Bun.sleep(15000),null):await drive(15000,scenario==='fling')
  const resource=await new Response(sample.stdout).text();await sample.exited;await profile?.exited
  const fs=frames.slice(first),intervals=fs.slice(1).map((f,i)=>f.native-fs[i]!.native),work=costs.slice(c0)
+ if(scenario!=='idle'&&!work.length&&!fs.length)throw Error('Active input produced no native render work; reject timing')
  const markersAfter=buildMarkers();if(markersAfter.length||observedBuilds.size)throw Error(`Native build overlapped timing; discard and repeat: ${[...observedBuilds,...markersAfter].join(', ')}`)
  checkProcesses(`after ${scenario}`,child.pid)
  const applied=inputPaints.slice(input0)
  const formattedOutput=(await app.call('getPaintedText',{})).text.join('\n');if(!/Prompt |BENCH_RESULT_|Stable syntax|Word |Live |Result |reading position|Paint/.test(formattedOutput))throw Error('Scroll ended without formatted transcript content')
- const r={formattedOutput:true,scenario,count,theme,fullRate:1,startedAt,addonHash,fixtureHash,wheelHash,nativeFirstInputToCpuPaintP95:p(applied.map(v=>v.firstMs),.95),nativeLastInputToCpuPaintP95:p(applied.map(v=>v.lastMs),.95),mergedPacketsMax:Math.max(0,...applied.map(v=>v.packets)),config:{buffer:process.env.KYBERN_TRANSCRIPT_WINDOW_BUFFER??'1',slotCache:process.env.KYBERN_TRANSCRIPT_SLOT_CACHE??'1',window:!label.startsWith('baseline')&&process.env.KYBERN_TRANSCRIPT_WINDOW!=='0',layout:process.env.KYBERN_TRANSCRIPT_LAYOUT??'1',islands:process.env.KYBERN_SCROLL_ISLANDS??'0',coalesce:process.env.KYBERN_SCROLL_COALESCE??'pr',inputFrameDraw:process.env.KYBERN_INPUT_FRAME_DRAW??'0'},firstVisibleMs,frames:fs.length,p50:p([...intervals],.5),p95:p([...intervals],.95),p99:p([...intervals],.99),over16_7:intervals.filter(v=>v>16.7).length,over33:intervals.filter(v=>v>33).length,reactCommits:reactRenders.length-react0,reactRenderP95:p(reactRenders.slice(react0),.95),renderP95:p(work.map(v=>v.render),.95),layoutP95:p(work.map(v=>v.layout),.95),input,resource};results.push(r);console.log(JSON.stringify(r))
+ const r={preflight,formattedOutput:true,scenario,count,theme,fullRate:1,startedAt,addonHash,fixtureHash,wheelHash,nativeFirstInputToCpuPaintP95:p(applied.map(v=>v.firstMs),.95),nativeLastInputToCpuPaintP95:p(applied.map(v=>v.lastMs),.95),mergedPacketsMax:Math.max(0,...applied.map(v=>v.packets)),config:{buffer:process.env.KYBERN_TRANSCRIPT_WINDOW_BUFFER??'1',slotCache:process.env.KYBERN_TRANSCRIPT_SLOT_CACHE??'1',window:!label.startsWith('baseline')&&process.env.KYBERN_TRANSCRIPT_WINDOW!=='0',layout:process.env.KYBERN_TRANSCRIPT_LAYOUT??'1',islands:process.env.KYBERN_SCROLL_ISLANDS??'0',coalesce:process.env.KYBERN_SCROLL_COALESCE??'pr',inputFrameDraw:process.env.KYBERN_INPUT_FRAME_DRAW??'0'},firstVisibleMs,frames:fs.length,p50:p([...intervals],.5),p95:p([...intervals],.95),p99:p([...intervals],.99),over16_7:intervals.filter(v=>v>16.7).length,over33:intervals.filter(v=>v>33).length,reactCommits:reactRenders.length-react0,reactRenderP95:p(reactRenders.slice(react0),.95),renderP95:p(work.map(v=>v.render),.95),layoutP95:p(work.map(v=>v.layout),.95),input,resource};results.push(r);console.log(JSON.stringify(r))
  }
  writeFileSync(`${out}/${label}-${count}-${theme}.json`,JSON.stringify(results,null,2))
  }
