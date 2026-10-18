@@ -9,6 +9,7 @@ import {seed,DEFAULT_DATA} from './seed.ts'
 import {SCENARIOS,table,emptyResult,type Scenario,type Result} from './model.ts'
 import {scenario} from './scenarios.ts'
 import {lease} from './lease.ts'
+import {processInventory} from './process-gate.ts'
 import {nativeBuildMarkers,quietMarkers} from './build-overlap.ts'
 const args=process.argv.slice(2),selected:Scenario[]=[]
 let runs=3,label='local',seconds=15,warmup=10,keep=false,webkit=false,profile=false
@@ -41,7 +42,7 @@ let release:(()=>void)|undefined,leaseStarted=0,watchdog:ReturnType<typeof setTi
 try{
  const jobs=(selected.length?selected:[...SCENARIOS]).map(name=>({name,count:runs}))
  while(jobs.length){
-  const buildWaiting=performance.now();while(nativeBuildMarkers().length)await Bun.sleep(1000);waitMs+=performance.now()-buildWaiting
+  const buildWaiting=performance.now();while(nativeBuildMarkers().length||processInventory().foreign.length)await Bun.sleep(1000);waitMs+=performance.now()-buildWaiting
   const {name,count}=jobs.shift()!,prior=results.length
   const waiting=performance.now();release=await lease();waitMs+=performance.now()-waiting;leaseStarted=performance.now()
   const markers=nativeBuildMarkers()

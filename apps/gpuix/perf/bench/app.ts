@@ -15,7 +15,7 @@ const {dlopen,FFIType}=await import('bun:ffi')
 const defaultWheel=path.join(process.env.KYBERN_DATA_DIR!,'bench-wheel.dylib')
 const wheelLibrary=process.env.KYBERN_BENCH_WHEEL_LIBRARY??(existsSync(defaultWheel)?defaultWheel:path.resolve(process.env.KYBERN_CLIENT_CONFIG_DIR!,'../..','bench-wheel.dylib'))
 const wheel=dlopen(wheelLibrary,{bench_scroll:{args:[FFIType.f64,FFIType.f64,FFIType.f64,FFIType.i32,FFIType.i32],returns:FFIType.i32}}).symbols.bench_scroll
-let sequence=1000000
+let sequence=1000000,streamDeltas=0
 const server=Bun.serve({idleTimeout:255,port:0,hostname:'127.0.0.1',async fetch(req){
  if(req.method!=='POST')return new Response('POST only',{status:405})
  const body=await req.json() as {action:string;thread?:string;file?:string;durationMs?:number;x?:number;y?:number;fling?:boolean;target?:string;delta?:number}
@@ -66,15 +66,19 @@ const server=Bun.serve({idleTimeout:255,port:0,hostname:'127.0.0.1',async fetch(
   const id=state.getState().selectedId!,turn='bench-stream-turn',message='bench-stream-answer',started=performance.now()
   const push=(payload:Record<string,unknown>)=>state.setThreadOpen(id,applyEvent(state.getState().open,{thread_id:id,turn_id:turn,seq:++sequence,at:'2026-10-17T00:00:00Z',...payload} as never))
   push({kind:'turn_started',message_id:'bench-stream-user',message:{parts:[{type:'text',text:'Explain bounded rendering during a long answer.'}]}})
-  let n=0
+  let n=0;streamDeltas=0
   streamTimer=setInterval(()=>{
    if(performance.now()-started>(body.durationMs??60000)){clearInterval(streamTimer);push({kind:'assistant_message_completed',message_id:message,origin:{kind:'root'},text:Array.from({length:n},(_,i)=>`Streaming paragraph ${i}: preserve **formatted output** and Unicode 🌿.\n\n`).join(''),thinking:null});push({kind:'turn_completed',stop_reason:'completed',usage:{input_tokens:100,output_tokens:100},duration_ms:Math.round(performance.now()-started),terminal_message_id:message});return}
+   streamDeltas=n+1
    push({kind:'assistant_text_delta',message_id:message,origin:{kind:'root'},delta:`Streaming paragraph ${n++}: preserve **formatted output** and Unicode 🌿.\n\n`})
   },40)
  }
- const s=state.getState();return Response.json({selected:s.selectedId,loaded:s.open.loaded,blocks:s.open.blocks.length,nextBeforeSeq:s.open.nextBeforeSeq,firstSeq:s.open.blocks[0]?.seq,firstPromptNumber:(()=>{const numbers=s.open.blocks.flatMap(b=>{const text=b.kind==='user'?b.message.parts.flatMap(p=>p.type==='text'?[p.text]:[]).join(''):b.kind==='assistant'?b.text:'';return [...text.matchAll(/(?:Bench prompt |BENCH_RESULT_)(\d+)/g)].map(m=>Number(m[1]))});return numbers.length?Math.min(...numbers):0})(),listsLoaded:s.listsLoaded,now:performance.now()})
+ const s=state.getState();return Response.json({streamDeltas,selected:s.selectedId,loaded:s.open.loaded,blocks:s.open.blocks.length,nextBeforeSeq:s.open.nextBeforeSeq,firstSeq:s.open.blocks[0]?.seq,firstPromptNumber:(()=>{const numbers=s.open.blocks.flatMap(b=>{const text=b.kind==='user'?b.message.parts.flatMap(p=>p.type==='text'?[p.text]:[]).join(''):b.kind==='assistant'?b.text:'';return [...text.matchAll(/(?:Bench prompt |BENCH_RESULT_)(\d+)/g)].map(m=>Number(m[1]))});return numbers.length?Math.min(...numbers):0})(),listsLoaded:s.listsLoaded,now:performance.now()})
  }catch(e){return Response.json({error:String(e)},{status:500})}
 }})
 writeFileSync(path.join(process.env.KYBERN_CLIENT_CONFIG_DIR!,'bench-control.json'),JSON.stringify({port:server.port}))
-process.stdin.on('end',()=>{clearInterval(streamTimer);server.stop(true)})
+process.stdin.on('end',()=>{clearInterval(streamTimer);server.stop(true);process.exit(0)})
+// A forced host cancellation may bypass the runner's signal handlers.
+const parent=process.ppid
+setInterval(()=>{if(process.ppid!==parent)process.exit(0)},1000).unref()
 export {}

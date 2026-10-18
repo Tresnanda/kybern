@@ -1,4 +1,4 @@
-import {watchBuilds} from './build-overlap.ts'
+import {watchRun} from './process-gate.ts'
 import {onExit} from './lifetime.ts'
 import {mkdirSync,readFileSync,existsSync,rmSync,writeFileSync} from 'node:fs'
 import path from 'node:path'
@@ -24,12 +24,12 @@ export async function scenario(name:Scenario,runs:number,fixture:Fixture,evidenc
   const rows:Result[]=[]
   for(let run=1;run<=runs;run++){
    const r=emptyResult(name,run),client=path.join(fixture.data,'client',`${name}-${run}`);mkdirSync(client,{recursive:true})
-   const buildWatch=watchBuilds(),at=performance.now(),t=new Telemetry()
+   const buildWatch=watchRun(),at=performance.now(),t=new Telemetry()
    let f:Launch|undefined
    try{
     f=await launchFixture(path.join(import.meta.dir,'package-entry.ts'),{...fixture.env,KYBERN_CLIENT_CONFIG_DIR:client,KYBERN_GPUIX_CREDENTIALS_DIR:path.join(client,'credentials'),KYBERN_BENCH_PACKAGED_EXECUTABLE:executable,GPUIX_BACKGROUND:'1',KYBERN_FULL_RATE:process.env.KYBERN_FULL_RATE??'1',KYBERN_FRAME_TIMES:'1',KYBERN_GPUIX_THREAD:''},{stderr:t.stderr})
     await bounds(f.app,'app-ready');r.timings.firstPaintedShellMs=performance.now()-at;await painted(f.app,/Bench project/);r.timings.firstContentMs=performance.now()-at;r.host='GPUIX packaged app (stdio wrapper)';r.frames=t.result({frames:0,costs:0,commits:0}).frames;r.evidence={executable,wrapper:'Bun wrapper passes stdio directly to the compiled bundle; wrapper launch overhead is included.'}
-   }catch(error){r.status='failed';r.reason=String(error)}finally{await f?.close();const gate=buildWatch.finish();Object.assign(r.evidence,gate);if(gate.overlap){r.status='discarded';r.reason='build overlap: discarded'}}
+   }catch(error){r.status='failed';r.reason=String(error)}finally{await f?.close();const gate=buildWatch.finish();Object.assign(r.evidence,gate);if(gate.overlap||gate.orphanOverlap){r.status='discarded';r.reason=gate.orphanOverlap?'foreign GPUIX process: discarded':'build overlap: discarded'}}
    rows.push(r)
   }
   return rows
@@ -45,7 +45,7 @@ export async function scenario(name:Scenario,runs:number,fixture:Fixture,evidenc
  const nativeDrive=async(point:Point,ms:number,fling:boolean)=>{const res=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action:'wheel-drive',...point,durationMs:ms,fling})});if(!res.ok)throw Error(await res.text());const data=await res.json() as Awaited<ReturnType<typeof drive>> & {accepted:number};data.sent=data.sent.map(t=>t+clockOffset);if(data.accepted!==data.sent.length)throw Error('AppKit rejected wheel events');return data}
  const inputDrive=(point:Point,ms:number,fling:boolean)=>useAppkit?nativeDrive(point,ms,fling):drive(launch!.app,point,ms,fling)
  const control=async(action:string,args:Record<string,unknown>={})=>{
-  const res=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action,...args})});const body=await res.json() as {loaded:boolean;listsLoaded:boolean;blocks:number;firstSeq:number;firstPromptNumber:number;nextBeforeSeq:number|null;error?:string};if(!res.ok)throw Error(body.error);return body
+  const res=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action,...args})});const body=await res.json() as {loaded:boolean;listsLoaded:boolean;blocks:number;firstSeq:number;firstPromptNumber:number;nextBeforeSeq:number|null;streamDeltas:number;error?:string};if(!res.ok)throw Error(body.error);return body
  }
  const start=async(cold=false)=>{
   if(cold)rmSync(client,{recursive:true,force:true});mkdirSync(client,{recursive:true});rmSync(path.join(client,'bench-control.json'),{force:true})
@@ -64,12 +64,12 @@ export async function scenario(name:Scenario,runs:number,fixture:Fixture,evidenc
  if(startup){
   if(name==='startup-warm'){await start(true);await launch!.close();launch=undefined}
   for(let run=1;run<=runs;run++){
-   const buildWatch=watchBuilds(),r=emptyResult(name,run)
+   const buildWatch=watchRun(),r=emptyResult(name,run)
    try{
     r.timings=await start(name==='startup-cold');r.evidence={cold:name==='startup-cold'?'fresh process and fresh app preferences; OS filesystem cache is not purged':'fresh process with preferences and filesystem cache primed',frameSemantics:'native scene submissions during startup; idle gaps are not dropped animation frames'}
     const m=telemetry.result({frames:0,costs:0,commits:0});r.frames=m.frames;r.work=m.work
    }catch(error){r.status='failed';r.reason=String(error)}finally{
-    const gate=buildWatch.finish();Object.assign(r.evidence,gate);if(gate.overlap){r.status='discarded';r.reason='build overlap: discarded'}
+    const gate=buildWatch.finish();Object.assign(r.evidence,gate);if(gate.overlap||gate.orphanOverlap){r.status='discarded';r.reason=gate.orphanOverlap?'foreign GPUIX process: discarded':'build overlap: discarded'}
     results.push(r);writeFileSync(path.join(evidence,`${name}-${run}.log`),telemetry.raw);await launch?.close();launch=undefined
    }
   }
@@ -105,19 +105,20 @@ export async function scenario(name:Scenario,runs:number,fixture:Fixture,evidenc
   useAppkit=probe.accepted===1&&prior.offset!==null&&JSON.stringify(changed.offset)!==JSON.stringify(prior.offset)
   const mapStart=performance.now(),clock=await request('state');clockMappingRttMs=performance.now()-mapStart;clockOffset=mapStart+clockMappingRttMs/2-clock.now
  }
- if(name==='streaming')await control('stream',{durationMs:options.warmup*1000+runs*(options.seconds+5)*1000+3000})
+ if(name==='streaming'){await control('stream',{durationMs:options.warmup*1000+runs*(options.seconds+5)*1000+3000});await painted(app,/Streaming paragraph/)}
  if(name.startsWith('idle-')){await app.call('blur',{});await app.mouse.move({x:900,y:4})}else if(point)await app.mouse.move(point)
  if(scrolling)await inputDrive(point!,options.warmup*1000,name==='thread-fling');else await delay(options.warmup*1000)
  if(name.startsWith('idle-')){await app.call('blur',{});await delay(500)}
  for(let run=1;run<=runs;run++){
   const r=emptyResult(name,run)
-  let buildWatch:ReturnType<typeof watchBuilds>|undefined
+  let buildWatch:ReturnType<typeof watchRun>|undefined
   try{
    if(name==='open-long')await control('home')
    if(name==='older-history'){await control('home');await control('open',{thread:fixture.manifest.long3000});await bounds(app,'transcript-surface')}
    // The steady state warms once, then three consecutive independent 15 s
    // endpoint samples. Cold/open timings remain separate from resource windows.
-   buildWatch=watchBuilds()
+   const streamBefore=name==='streaming'?(await control('state')).streamDeltas:null
+   buildWatch=watchRun()
    const mark=telemetry.mark(),timed=performance.now()
    if(name==='open-long'){
     const opened=control('open',{thread:fixture.manifest.long3000})
@@ -139,25 +140,28 @@ export async function scenario(name:Scenario,runs:number,fixture:Fixture,evidenc
     r.timings.olderHistoryVisibleMs=performance.now()-timed;r.evidence.firstSeqAfter=after.firstSeq;r.evidence.olderBlocks=after.blocks-before.blocks
    }
    const sampler=Bun.spawn(['bun',path.join(root,'perf/sample.ts'),String(options.seconds),`GPUIX=${launch!.pid}`],{stdout:'pipe',stderr:'pipe'})
+   const unsampler=onExit(async()=>{sampler.kill();await sampler.exited})
    const resourceStart=performance.now()
    const sampleTextPromise=new Response(sampler.stdout).text(),sampleErrorPromise=new Response(sampler.stderr).text()
    const resourceMark=telemetry.mark()
    const profiler=options.profile?Bun.spawn(['sample',String(launch!.pid),'5','-file',path.join(evidence,`profile-${name}-${run}.txt`)],{stdout:'ignore',stderr:'ignore'}):undefined
+   const unprofiler=profiler?onExit(async()=>{profiler.kill();await profiler.exited}):()=>{}
    const input=scrolling?await inputDrive(point!,options.seconds*1000,name==='thread-fling'):undefined
    if(!scrolling)await delay(options.seconds*1000)
    const measured=telemetry.result(resourceMark,input?.sent)
    const sampleText=await sampleTextPromise,sampleError=await sampleErrorPromise
-   if(await sampler.exited)throw Error(sampleError)
-   await profiler?.exited
+   const sampleExit=await sampler.exited;unsampler();if(sampleExit)throw Error(sampleError)
+   await profiler?.exited;unprofiler()
    const stop=performance.now(),m=measured
    r.resources=parseResources(sampleText);if(useAppkit)r.latency.kind='in-process scheduled AppKit NSEvent to next scene-submission stderr receipt; clocks mapped from control RTT; not a physical presentation fence';r.frames=m.frames;r.work=m.work;r.latency.proxyMs=m.proxy;r.latency.samples=m.latencySamples
    r.timings.resourceWindowMs=stop-resourceStart
    r.evidence={...r.evidence,averageProcessCpuMsPerSubmission:r.frames.count?r.resources.cpuPercent!*r.resources.sampleSeconds!*10/r.frames.count:null,averageProcessGpuMsPerSubmission:r.frames.count?r.resources.gpuMs!/r.frames.count:null,profiled:!!options.profile,warmupSeconds:options.warmup,resourceWindowSeconds:options.seconds,resourceText:sampleText,input:input?.input??'none',packetAckP95:input?input.acks.sort((a,b)=>a-b)[Math.floor(input.acks.length*.95)]:null,maxOutstanding:input?.maxOutstanding??0,drainMs:input?.drainMs??0,sceneTransitionFrames:telemetry.submissions.length-mark.frames,onePersistedRunningThread:!name.startsWith('idle-'),appkitAccepted:useAppkit,clockMappingRttMs,offeredPackets:input?.sent.length??0,offeredPacketsPerSecond:input?input.sent.length/options.seconds:null}
    if(!name.startsWith('idle-')&&scrolling&&r.frames.count<2)throw Error('No submitted frames during scroll: input or scene unavailable')
+   if(streamBefore!=null){const streamAfter=(await control('state')).streamDeltas;r.evidence.offeredDeltas=streamAfter-streamBefore;r.evidence.offeredDeltasPerSecond=(streamAfter-streamBefore)/(r.timings.resourceWindowMs!/1000)}
    if(process.env.KYBERN_BENCH_COUNTERS==='1'){const response=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action:'counters'})});r.evidence.counters=await response.json()}
    writeFileSync(path.join(evidence,`${name}-${run}-resources.txt`),sampleText)
   }catch(error){r.status='failed';r.reason=String(error)}
-  if(buildWatch){const gate=buildWatch.finish();Object.assign(r.evidence,gate);if(gate.overlap){r.status='discarded';r.reason='build overlap: discarded'}}
+  if(buildWatch){const gate=buildWatch.finish();Object.assign(r.evidence,gate);if(gate.overlap||gate.orphanOverlap){r.status='discarded';r.reason=gate.orphanOverlap?'foreign GPUIX process: discarded':'build overlap: discarded'}}
   writeFileSync(path.join(evidence,`${name}-${run}.log`),telemetry.raw)
   results.push(r)
  }

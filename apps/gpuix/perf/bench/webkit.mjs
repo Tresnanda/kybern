@@ -1,5 +1,6 @@
 // Actual desktop frontend in Playwright WebKit; not the native Tauri shell.
 import path from 'node:path'
+import {processInventory} from './process-gate.ts'
 import {createRequire} from 'node:module'
 import {execFileSync,spawn} from 'node:child_process'
 import {readFileSync,writeFileSync,readdirSync,watch} from 'node:fs'
@@ -20,6 +21,7 @@ const results=[]
 const blank=run=>({scenario:name,run,host:'desktop frontend in WebKit',status:'ok',fullRate:process.env.KYBERN_FULL_RATE??'1',frames:{...dist([]),count:0,over16_7:0,over33:0},latency:{kind:'DOM wheel event to next requestAnimationFrame; not physical presentation',inputToPresentMs:null,proxyMs:dist([]),samples:0},resources:{cpuPercent:null,gpuMs:null,footprintMiB:null,sampleSeconds:null},timings:{},work:{reactCommits:0,renderMs:dist([]),layoutMs:dist([])},evidence:{browserVersion:browser.version(),browserExecutable:webkit.executablePath()}})
 const auth=process.env.KYBERN_TOKEN||readFileSync(path.join(process.env.KYBERN_DATA_DIR,'daemon.token'),'utf8').trim()
 const url=process.env.KYBERN_URL||`ws://127.0.0.1:${readFileSync(path.join(process.env.KYBERN_DATA_DIR,'daemon.port'),'utf8').trim()}/ws`
+const safeError=e=>String(e).replaceAll(auth,'[redacted scratch token]').replaceAll(encodeURIComponent(auth),'[redacted scratch token]')
 const input=async(page,b,ms,fling=false)=>{
  await page.mouse.move(b.x+b.width/2,b.y+b.height/2)
  const start=performance.now(),pending=new Set();let count=0,maxOutstanding=0
@@ -31,7 +33,8 @@ const input=async(page,b,ms,fling=false)=>{
  }
  const offeredMs=performance.now()-start;await Promise.all(pending);return {offeredMs,drainMs:performance.now()-start-offeredMs,packets:count,maxOutstanding}
 }
-let page
+let page,target,b
+const scrolling=name.endsWith('scroll')||name==='thread-fling'||name.startsWith('pr-')
 process.once('SIGTERM',async()=>{await browser.close();await server.close();process.exit(143)})
 try{
  if(name==='startup-warm'){
@@ -41,9 +44,10 @@ try{
   await primer.close()
  }
  for(let run=1;run<=runs;run++){
-  const buildBefore=markers(),seen=new Set(buildBefore),quietBefore=quiet(),r=blank(run)
+  const processBefore=processInventory(),buildBefore=markers(),seen=new Set(buildBefore),quietBefore=quiet(),r=blank(run)
   const watcher=watch('/tmp',(_event,file)=>{if(String(file).startsWith('kybern-gpuix-native-build.'))seen.add(String(file))})
   try{
+   if(!page){
    page=await browser.newPage({viewport:{width:1280,height:820},deviceScaleFactor:2,colorScheme:'dark'})
    await page.addInitScript(()=>{window.__commits=0;window.__REACT_DEVTOOLS_GLOBAL_HOOK__={supportsFiber:true,renderers:new Map(),inject(){return 1},onCommitFiberRoot(){window.__commits++},onCommitFiberUnmount(){},onScheduleFiberRoot(){}}})
    const launch=performance.now()
@@ -53,7 +57,7 @@ try{
    await page.waitForFunction(async()=>{const {useStore}=await import('/src/state/store.ts');return Object.keys(useStore.getState().projects).length>0})
    r.timings.firstContentMs=performance.now()-launch
    if(name.startsWith('startup-')){const buildAfter=markers();r.evidence.quietMarkersBefore=quietBefore;r.evidence.quietMarkersAfter=quiet();r.evidence.buildMarkersBefore=buildBefore;r.evidence.buildMarkersAfter=buildAfter;if(buildBefore.length||buildAfter.length){r.status='discarded';r.reason='build overlap: discarded'};watcher.close();r.evidence.buildMarkersDuring=[...seen];if(seen.size){r.status='discarded';r.reason='build overlap: discarded'};r.evidence.cold='fresh browser page; browser and Vite process reused (not an OS-cache-cold control)';results.push(r);await page.close();page=null;continue}
-   let target='[data-chat-scroll-container]'
+   target='[data-chat-scroll-container]'
    if(name.startsWith('pr-')){
     await page.getByRole('button',{name:'Pull requests',exact:true}).first().click();await page.locator('[data-pr-row]').first().click()
     if(name==='pr-changes'){await page.getByRole('tab',{name:/^Changes/}).click();await page.locator('[data-pr-diff]').waitFor()}else await page.locator('.pr-summary-body').waitFor()
@@ -71,11 +75,17 @@ try{
      if(name==='markdown-scroll')await page.locator(`${target} strong`).first().waitFor()
     }
    }
-   const scrolling=name.endsWith('scroll')||name==='thread-fling'||name.startsWith('pr-')
-   const b=scrolling?await page.locator(target).first().boundingBox():null
+   b=scrolling?await page.locator(target).first().boundingBox():null
    if(scrolling&&!b)throw Error(`No scroll target ${target}`)
    if(scrolling)await input(page,b,warmup*1000,name==='thread-fling');else await new Promise(r=>setTimeout(r,warmup*1000))
    await page.evaluate(()=>{if(document.activeElement instanceof HTMLElement)document.activeElement.blur()})
+   } // Warm once, then keep the same scene for consecutive endpoint windows.
+   if(name==='open-long'&&run>1){
+    await page.evaluate(async()=>{const {useStore}=await import('/src/state/store.ts');useStore.getState().selectThread(null)})
+    await page.locator('[data-message-role]').first().waitFor({state:'detached'})
+    const at=performance.now();await page.evaluate(async(id)=>{const {useStore}=await import('/src/state/store.ts');const {loadThread}=await import('/src/state/rpc.ts');useStore.getState().selectThread(id);await loadThread(id)},manifest.long3000)
+    await page.locator('[data-message-role]').first().waitFor();r.timings.firstVisibleMessageMs=performance.now()-at
+   }
    // Include XPC services adopted by launchd, as scroll8-webkit.mjs does.
    const processes=table(),owned=new Set([process.pid]);let more=true
    while(more){more=false;for(const[pid,parent]of processes)if(owned.has(parent)&&!owned.has(pid)){owned.add(pid);more=true}}
@@ -102,7 +112,7 @@ try{
    r.resources={footprintMiB:Number(match[1]),cpuPercent:Number(match[2]),gpuMs:Number(match[3]),sampleSeconds:Number(match[4])}
    const intervals=metrics.times.slice(1).map((t,i)=>t-metrics.times[i]);r.frames={...dist(intervals),count:metrics.times.length,over16_7:intervals.filter(v=>v>16.7).length,over33:intervals.filter(v=>v>33).length};r.latency.proxyMs=dist(metrics.latencies);r.latency.samples=metrics.latencies.length;r.work.reactCommits=metrics.commits
    r.evidence={...r.evidence,frameSemantics:'requestAnimationFrame cadence; cannot infer idle native submissions or physical presentation',resourcePids:pids,target,scrollHeight:scrolling?await page.locator(target).first().evaluate(el=>el.scrollHeight):null,resourceText:raw}
-  }catch(e){r.status='failed';r.reason=String(e)}finally{watcher.close();r.evidence.buildMarkersDuring=[...seen];r.evidence.buildMarkersFinal=markers();r.evidence.quietMarkersFinal=quiet();if(seen.size||r.evidence.buildMarkersFinal.length){r.status='discarded';r.reason='build overlap: discarded'};await page?.close();page=null}
+  }catch(e){r.status='failed';r.reason=safeError(e)}finally{const processAfter=processInventory();r.evidence.gpuixProcessesBefore=processBefore.processes;r.evidence.gpuixProcessesAfter=processAfter.processes;r.evidence.foreignProcessesBefore=processBefore.foreign;r.evidence.foreignProcessesAfter=processAfter.foreign;if(processBefore.foreign.length||processAfter.foreign.length){r.status='discarded';r.reason='foreign GPUIX process: discarded'};watcher.close();r.evidence.buildMarkersDuring=[...seen];r.evidence.buildMarkersFinal=markers();r.evidence.quietMarkersFinal=quiet();if(seen.size||r.evidence.buildMarkersFinal.length){r.status='discarded';r.reason='build overlap: discarded'};if(run===runs||r.status==='failed'||r.status==='discarded'){await page?.close();page=null}}
   results.push(r)
  }
-}finally{await browser.close();await server.close();writeFileSync(out,JSON.stringify(results,null,2))}
+}catch(e){console.error(safeError(e));process.exitCode=1}finally{await browser.close();await server.close();writeFileSync(out,JSON.stringify(results,null,2))}

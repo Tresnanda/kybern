@@ -20,20 +20,25 @@ the queue for the next scenario. A 250-second watchdog aborts and cleans up a
 stuck batch before it can monopolize the five-minute lease. Partial result
 documents have `aborted: true` and the process exits unsuccessfully. Input production is time-bounded; at most eight
 RPC packets can remain outstanding on the fallback path. Queue mutations use Python. It records native-build markers before and after every timed/resource run, and
-watches the marker directory during the window to catch short builds. Quiet
+watches the marker directory during the window to catch short builds. The required `pgrep -fl "bun .*ade-gpuix"` inventory is recorded before and after every run; any foreign native app/fixture/lab invalidates it. Process ancestry distinguishes this runner’s children from a cancelled runner’s orphans. Preflight waits for foreign apps to exit; wrappers stop their children, and the native fixture exits on a closed parent pipe or changed parent PID. Quiet
 markers are recorded at both endpoints too; quiet reservations never cause a discard.
 Each attempt gets a separate evidence directory so a retry cannot overwrite its logs.
 The runner creates no quiet reservation. If reserving one separately, keep it
 under 25 minutes, permit only one quiet window, and let any
 `/tmp/kybern-gpuix-build-next.<lane>` reservation take the next build slot before
-creating a new quiet window. Existing native builds still invalidate timing windows. A
+creating a new quiet window. Another lane’s `quiet-next` reservation also blocks
+a new quiet window: queue a `quiet-next` only when none exists, and open quiet
+only on your turn with no active build marker. Existing native builds still
+invalidate timing windows. A
 marker at either endpoint or during the run records `build overlap: discarded`; that repeat is
 queued again after releasing the UI lease. Clean repeats replace the discarded
 measurements for comparison, while the discarded records stay in JSON. Queue wait is excluded when reporting suite
 execution cost. `--seconds 1 --warmup 0` is a smoke check, never a baseline.
 `--keep-data` preserves the deterministic dataset for another run; otherwise
 only this runner's daemon/data are stopped/deleted. A per-data-directory lock
-prevents concurrent runners sharing the seed. External real-daemon endpoints
+prevents concurrent runners sharing the seed. Concurrent lanes must choose their
+own unused `KYBERN_BENCH_PORT` and a new `KYBERN_DATA_DIR` containing `scratch`;
+the seeder refuses to adopt a different fixture’s existing directory. External real-daemon endpoints
 are cleared; UI launch and config paths are explicitly scratch. No model runs,
 GitHub writes, global input, screenshots, or clock manipulation occur.
 
@@ -57,7 +62,9 @@ A cached manifest preserves those UUIDs for matched runs.
   conversations with Markdown, tables, code fences, diffs, tools and image parts.
 - A synthetic running thread; streaming uses production `applyEvent` on this
   process's state at 25 deltas/sec. It does not execute a provider. The stream
-  text and cadence are deterministic and bounded by the scenario lifetime.
+  text and requested cadence are deterministic and bounded by the scenario lifetime.
+  Delivered deltas/sec are recorded so a throttled producer is not mistaken for
+  a matched workload.
 - A scratch git repository with 2,400 root source files and an expanded directory
   of **10,000 files**. Explorer timing expands that directory. The stock sidebar
   shows its normal eight threads per project; all 300 remain in its model.
