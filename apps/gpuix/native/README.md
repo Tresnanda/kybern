@@ -1440,13 +1440,16 @@ conservative rectangular core needs no rounded-fragment evaluation. Edge and
 corner primitives retain the original chain. Transformed monochrome sprites,
 shadows, paths and backdrops retain their original masks. Scene operations,
 replay/cache generations, hit testing and animation defaults are unchanged.
+Scenes containing backdrops also keep the original upload masks for all
+primitives: repeated streaming pairs did not show a consistent AGX improvement.
 `KYBERN_GPU_CLIP_PRUNE=0` selects the same-binary control. The containment helper
 has a standalone `rustc --edition=2021 --test` check.
 
 `gpu_telemetry_gpui.py` adds opt-in `KYBERN_GPU_TRACE=1` scene/atlas counters.
 `[gpu-scene]` records ordinary instanced draws, separate blur/composite draws,
 primitive/vertex counts, candidate/pruned glyphs, atlas upload/eviction events,
-fixed-record instance bytes and clipped bounding area. The area is a workload
+rounded clip nodes and glyph chain steps/depth, fixed-record instance bytes and
+clipped bounding area. The area is a workload
 proxy, not a hardware overdraw counter. Existing `[paint-gpu]` traces report
 command-buffer elapsed time; per-PID AGX GPU work is measured separately.
 Diagnostics request no frames and remain off by default. Methodology, paired

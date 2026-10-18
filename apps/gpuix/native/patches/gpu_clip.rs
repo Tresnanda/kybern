@@ -2,6 +2,10 @@
 // transient GPU upload; retained masks stay intact for replay and transforms.
 include!("gpu_clip_bounds.rs");
 fn gpu_clip_prune(scene: &Scene, mut mask: ContentMask<ScaledPixels>, bounds: Bounds<ScaledPixels>) -> ContentMask<ScaledPixels> {
+    // Streaming/backdrop scenes showed inconsistent AGX work across repeated
+    // pairs. Keep their uploaded masks identical to the original renderer until
+    // blur/encoder dependencies have a separate, reproducible optimization.
+    if !scene.backdrops.is_empty() { return mask; }
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if mask.rounded_clip == 0 || !*ENABLED.get_or_init(|| std::env::var("KYBERN_GPU_CLIP_PRUNE").as_deref() != Ok("0")) { return mask; }
     let bounds=bounds.intersect(&mask.bounds);
