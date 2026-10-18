@@ -11,6 +11,17 @@ static NSWindow *eventWindow(id self, SEL cmd);
 static NSInteger eventWindowNumber(id self, SEL cmd);
 static NSPoint eventLocation(id self, SEL cmd);
 static CGFloat benchDelta;
+static double benchObservedDelta, benchHandlerDelta;
+static int benchHandlerCount;
+static IMP benchOriginalScroll;
+double bench_handler_delta(void) { return benchHandlerDelta; }
+int bench_handler_count(void) { return benchHandlerCount; }
+static void benchHandleScroll(id self, SEL cmd, NSEvent *event) {
+ benchHandlerDelta = event.scrollingDeltaY;
+ benchHandlerCount++;
+ ((void (*)(id,SEL,NSEvent *))benchOriginalScroll)(self,cmd,event);
+}
+double bench_last_delta(void) { return benchObservedDelta; }
 static CGFloat eventDeltaY(id self, SEL cmd) { return benchDelta; }
 static NSEvent *benchEvent(double delta, int phase, int momentum) {
   CGEventRef cg = CGEventCreateScrollWheelEvent(NULL,kCGScrollEventUnitPixel,1,(int32_t)delta);
@@ -19,6 +30,13 @@ static NSEvent *benchEvent(double delta, int phase, int momentum) {
   CGEventSetIntegerValueField(cg,kCGScrollWheelEventIsContinuous,1);
   CGEventSetIntegerValueField(cg,kCGScrollWheelEventScrollPhase,phase);
   CGEventSetIntegerValueField(cg,kCGScrollWheelEventMomentumPhase,momentum);
+  if (benchWindow) {
+   NSPoint screen = [benchWindow convertPointToScreen:benchPoint];
+   NSScreen *main = NSScreen.screens.firstObject;
+   CGEventSetLocation(cg,CGPointMake(screen.x,main.frame.size.height-screen.y));
+   CGEventSetIntegerValueField(cg,kCGMouseEventWindowUnderMousePointer,benchWindow.windowNumber);
+   CGEventSetIntegerValueField(cg,kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent,benchWindow.windowNumber);
+  }
   NSEvent *event = [NSEvent eventWithCGEvent:cg];
   CFRelease(cg);
   if (!event) return nil;
@@ -44,18 +62,37 @@ static NSWindow *eventWindow(id self, SEL cmd) { return benchWindow; }
 static NSInteger eventWindowNumber(id self, SEL cmd) { return benchWindow.windowNumber; }
 static NSPoint eventLocation(id self, SEL cmd) { return benchPoint; }
 // NSEvent created by CoreGraphics carries real precise/phase fields. Dispatch
-// directly to our own window. Only targeting and fractional delta are supplied
+// to our own GPUIView handler. NSWindow synthetic routing drops most tail
+// packets even with exact getters (239/600 vs 600/600 in the handler probe).
+// Only targeting and fractional delta are supplied
 // by the harness; AppKit still carries contact and momentum phases.
+static NSView *benchGPUIView(NSView *view) {
+ if ([NSStringFromClass(view.class) containsString:@"GPUI"]) return view;
+ for (NSView *child in view.subviews) { NSView *found=benchGPUIView(child); if(found)return found; }
+ return nil;
+}
 int bench_scroll(double x, double y, double delta, int phase, int momentum) {
  @autoreleasepool {
   NSWindow *window = NSApp.windows.firstObject;
   if (!window) return 0;
   NSView *view = window.contentView;
   NSPoint local = NSMakePoint(x, view.bounds.size.height-y);
+  benchWindow = window; benchPoint = [view convertPoint:local toView:nil];
   NSEvent *event = benchEvent(delta,phase,momentum);
   if (!event) return 0;
-  benchWindow = window; benchPoint = [view convertPoint:local toView:nil];
-  [window sendEvent:event];
+  NSView *target=benchGPUIView(view);
+  if (!target) return 0;
+  if (!benchOriginalScroll) {
+   Class viewClass=object_getClass(target);
+   Method method=class_getInstanceMethod(viewClass,@selector(scrollWheel:));
+   benchOriginalScroll=method_getImplementation(method);
+   class_replaceMethod(viewClass,@selector(scrollWheel:),(IMP)benchHandleScroll,method_getTypeEncoding(method));
+  }
+  benchHandlerCount=0;benchHandlerDelta=0;
+  benchObservedDelta = event.scrollingDeltaY;
+  if (!getenv("KYBERN_BENCH_DIRECT_VIEW") || strcmp(getenv("KYBERN_BENCH_DIRECT_VIEW"),"0")) {
+   [target scrollWheel:event];
+  } else [window sendEvent:event];
   return 1;
  }
 }

@@ -22,7 +22,9 @@ KYBERN_BENCH_COUNTERS=1 bun perf/bench/run.ts explorer-scroll --runs 1 --label c
 window at a time. It takes the existing atomic preview lease; each scenario owns a separate lease and releases it before joining the end of
 the queue for the next scenario. A 250-second watchdog aborts and cleans up a
 stuck batch before it can monopolize the five-minute lease. Partial result
-documents have `aborted: true` and the process exits unsuccessfully. Input production is time-bounded; at most eight
+documents stay `aborted: true` until the whole suite finishes; SIGKILL therefore
+cannot leave a completed-looking partial checkpoint. `compare.ts` refuses aborted
+inputs. A caught interruption exits unsuccessfully. Input production is time-bounded; at most eight
 RPC packets can remain outstanding on the fallback path. Queue mutations use Python. It records native-build markers before and after every timed/resource run, and
 watches the marker directory during the window to catch short builds. The required `pgrep -fl "bun .*ade-gpuix"` inventory is recorded before and after every run; any foreign native app/fixture/lab invalidates it. Process ancestry distinguishes this runner’s children from a cancelled runner’s orphans. Preflight waits for foreign apps to exit; wrappers stop their children, and the native fixture exits on a closed parent pipe or changed parent PID. Quiet
 markers are recorded at both endpoints too; quiet reservations never cause a discard.
@@ -100,7 +102,7 @@ product, commit counts and a visible, non-activating native window.
 `launchFixture` has one optional stderr observer so telemetry does not fork its
 process lifetime, startup timeout or scratch safety handling.
 
-The AppKit helper attempts process-local real `NSEvent` input with precise pixel
+The AppKit helper supplies process-local synthetic `NSEvent` input with precise pixel
 deltas plus independent contact/momentum phase fields; it never posts global
 input. If AppKit cannot associate that event with this window, the suite records
 that rejection (or a failed offset-change preflight) and reuses `scroll8.ts`'s 120 Hz pipelined native wheel RPC schedule,
@@ -108,15 +110,30 @@ including contact markers, direction reversals and exponential synthetic momentu
 A small harness subclass supplies this process’s window association while the
 concrete NSEvent retains its phase implementation. Its `scrollingDeltaY` and
 `deltaY` getters return the exact offered CGFloat: CoreGraphics stores
-`kCGScrollWheelEventPointDeltaAxis1` as an integer even when its double setter
-is used, and NSEvent otherwise returns zero for fractional momentum below one
-pixel. This previously replaced roughly the last 0.8 seconds of each synthetic
-momentum tail with zero-distance events. The unrelated sidebar loader's 200 ms
-clock then dominated those submission intervals and inflated the next-submission
-proxy; those gaps do not prove delayed scrolling. `KYBERN_BENCH_INTEGER_WHEEL=1`
-reproduces that historical injector for diagnosis only, and is recorded in
-`renderFlags`. Do not compare its resource results to fractional input as if
-both offered the same effective workload.
+`kCGScrollWheelEventPointDeltaAxis1` as an integer even with the double setter.
+That rounded roughly 613 of 1,800 thread-scroll offers to zero. A second defect
+was independent: `NSWindow.sendEvent:` delivered only 239/600 synthetic packets
+to GPUI in a five-second probe, even after preserving the fraction. The default
+now calls this window's actual GPUIView `scrollWheel:` handler, matching the
+independent scroll2/Explorer injectors. The same probe delivered 600/600 packets,
+with handler distance exactly matching offered distance; submission p99 changed
+from 199.97 ms to 19.59 ms and next-submission proxy p95 from 137.67 to 17.20 ms.
+A direct-handler integer probe also delivered 600/600 and had p99 19.01 ms,
+but rounded 205 offers to zero and reduced distance from 1,851.76 to 1,665 px.
+Thus NSWindow routing caused the cadence suppression; fractional getters repair
+independent motion-distance loss. These are injector repairs, not product speedups. Input remains synthetic,
+process-local AppKit events; this does not exercise hardware/OS dispatch.
+
+`KYBERN_BENCH_INTEGER_WHEEL=1` restores historical delta truncation;
+`KYBERN_BENCH_DIRECT_VIEW=0` restores the historical NSWindow route. Both are
+diagnostic controls recorded in `renderFlags`. Do not compare resources across
+these controls as if delivered work matched. Per row, `zeroDistancePackets`,
+`requestedDistance`, `effectiveDistance`, `handledPackets` and `handlerDistance`
+make getter precision and synchronous native-handler delivery separately
+reviewable. The old missing tail left only the visible sidebar MatrixLoader's
+200 ms animation updates. Those gaps do not establish delayed product input.
+`KYBERN_BENCH_NO_RUNNING=1` provides a separate settle control without that
+synthetic running row; default open/older scenarios retain the visible loader.
 
 `wheel-check.m` verifies the actual NSEvent getters and independent contact /
 momentum phases with positive, negative, zero and subpixel input without opening
@@ -186,3 +203,5 @@ timer instead of silently lowering its rate). Compare actual delivered rates.
 the staged and paired controls. These options do not change the default suite.
 AppKit readiness now waits 100 ms after its probe before checking the anchor,
 so frame-coalesced input is observed after paint rather than rejected early.
+
+Screen validity: runners execute `swift /Users/mymac/projects/ade-gpuix-scratch/screen-state.swift` before app launch and before/after measurement (checkout-local equivalent when the shared file is absent). Both endpoints must be unlocked and the display awake. Quiet windows wait without consuming a window while locked, polling once per minute. Every app lease owns `caffeinate -d -w <runner pid>`; killing the runner releases that assertion. Continuous active samples require at least one submission per second and positive GPU time. Intentional idle, clipped, unmounted, and reduced-motion static controls can legitimately have zero submissions/GPU time. Never unlock a session or change its lock/sleep settings for a run.

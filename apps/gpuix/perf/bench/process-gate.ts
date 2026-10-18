@@ -1,3 +1,4 @@
+import {requireScreen,screenState} from './screen-state.ts'
 import {execFileSync,spawnSync} from 'node:child_process'
 import {watchBuilds} from './build-overlap.ts'
 
@@ -13,8 +14,8 @@ export function processInventory(owner=process.pid){
 }
 
 export function watchRun(){
- const startedAt=new Date().toISOString(),before=processInventory(),builds=watchBuilds()
- return {finish(){const after=processInventory();return {...builds.finish(),timedWindowStartedAt:startedAt,timedWindowEndedAt:new Date().toISOString(),gpuixProcessesBefore:before.processes,gpuixProcessesAfter:after.processes,foreignProcessesBefore:before.foreign,foreignProcessesAfter:after.foreign,orphanOverlap:before.foreign.length>0||after.foreign.length>0}}}
+ const screenBefore=requireScreen(),startedAt=new Date().toISOString(),before=processInventory(),builds=watchBuilds()
+ return {finish(){const screenAfter=screenState(),after=processInventory();return {screenBefore,screenAfter,screenInvalid:!screenAfter.valid,...builds.finish(),timedWindowStartedAt:startedAt,timedWindowEndedAt:new Date().toISOString(),gpuixProcessesBefore:before.processes,gpuixProcessesAfter:after.processes,foreignProcessesBefore:before.foreign,foreignProcessesAfter:after.foreign,orphanOverlap:before.foreign.length>0||after.foreign.length>0}}}
 }
 
 export function foreignProcesses(processes:string[],parents:Map<number,number>,owner:number){

@@ -48,3 +48,14 @@ test('quiet ordering honors the first line and legacy reservation without editin
   expect(()=>assertQuietTurn('unreserved-normal-run',dir)).not.toThrow()
  }finally{rmSync(dir,{recursive:true,force:true})}
 })
+
+test('CPU input-paint probes are sequence-bounded and separate from next-submission proxies',()=>{
+ const t=new Telemetry()
+ t.stderr('[scroll-input-paint] packets=8 firstMs=200 lastMs=190 pending=0\n')
+ const mark=t.mark()
+ t.stderr('[scroll-input-paint] packets=2 firstMs=17.5 lastMs=8.2 pending=0\n[scroll-input-paint] packets=1 firstMs=16 lastMs=16 pending=0\n')
+ const input=t.result(mark).nativeInput
+ expect(input.samples).toBe(2);expect(input.packets).toBe(3)
+ expect(input.firstMs.max).toBe(17.5);expect(input.lastMs.p50).toBe(16)
+ expect(t.result(mark).proxy.p95).toBeNull()
+})
