@@ -4,6 +4,30 @@ The client runs on our own build of `@gpuix/native`: the upstream release in
 `VERSION` plus the capabilities below. The upstream checkout is disposable; all
 changes are reconstructed by the checked-in patches and anchored hooks.
 
+## Transcript row geometry and logical anchors
+
+`transcript_scroll_hooks.py` extends the existing scroll8 geometry reuse. Each
+virtual row uses its own retained subtree revision in the cache key, so a live
+sibling does not invalidate settled rows. Existing width, scale, inherited style,
+topology and measured-leaf validation remains in `scroll_taffy.rs`; prepaint and
+paint remain fresh.
+
+Post-paint element observations now include `scrollTop: [itemIndex, offset]` for
+virtual lists. A cloned `ListState` shares the live handle, so deferred observers
+see the logical anchor after paint. Unchanged anchors/bounds emit no callback;
+this adds neither an idle timer nor a frame request. Transcript windowing observes
+the list itself so a programmatic jump can mount a destination even when every
+previous rich body has left the viewport.
+
+The transcript enables `cacheLayout` but keeps ordinary prepaint/bounds. Its
+cached-island path (`KYBERN_SCROLL_ISLANDS=1`) is an experimental control: the
+large-jump/image-overlay verifier exposes stale endpoint bounds that hide the
+message rail. This does not change the existing PR island default.
+
+Checks: `perf/transcript/verify.ts` covers large jumps, rail, Unicode selection
+and offscreen image-overlay owners; `Window.test.tsx` covers bounded body and
+observer ownership. Run the fixture under `perf/transcript/lease.py`.
+
 ## Rounded overflow and Explorer motion (round 7)
 
 `overflow: 'hidden'` plus corner radii now clips descendant quads, glyphs, SVGs,

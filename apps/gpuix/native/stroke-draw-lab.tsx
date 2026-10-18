@@ -25,3 +25,13 @@ function Lab() {
   </div>
 }
 render(<ThemeProvider><Lab /></ThemeProvider>, { title: 'stroke draw', width: 320, height: 160, focus: false })
+
+// OS captures require this owned window to remain visible while the test runs.
+// Raise without activation, and exclude unrelated physical pointer movement.
+const {each,getObjc,nsApp,sel}=await import('../src/native/objc.ts')
+const objc=getObjc(),application=nsApp()
+if(application)each(objc,objc.msg(application,sel(objc,'windows')) as never,window=>{
+  objc.msgSetI64(window,sel(objc,'setLevel:'),3n)
+  objc.msgSetBool(window,sel(objc,'setIgnoresMouseEvents:'),true)
+  objc.msg(window,sel(objc,'orderFrontRegardless'))
+})
