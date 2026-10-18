@@ -1,4 +1,6 @@
 import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
+import { DeferredReads } from '../shell/deferredReads.ts'
+import { startupMark } from '../perf/startup.ts'
 // Transcript-side state and actions, mirroring `apps/desktop/src/state/rpc.ts`
 // for the parts the transcript owns: approvals, saved tool output, turn diffs,
 // earlier history pages, and per-row disclosure state that must survive a row
@@ -9,7 +11,7 @@ import { prependThreadHistory, type Block } from '../../../../packages/kybern-cl
 import { EARLIER_HISTORY_ENTRIES } from '../../../../packages/kybern-client/src/historyPaging.ts'
 import type { ApprovalDecision, Diff, Thread, ThreadEvent, ThreadId, TurnId } from '../../../../packages/kybern-client/src/types.ts'
 import { useNav } from '../nav/store.ts'
-import { getClient, getThreadSession, reloadPaneThread, getThreadOpen, setThreadOpen, getFocusedPaneId, getPane, getPaneState, onThreadEvent, subscribe, useApp, usePaneAccess, usePaneId } from '../state.ts'
+import { getClient, getThreadSession, primeThreadHistory, takeThreadHistory, reloadPaneThread, getThreadOpen, setThreadOpen, getFocusedPaneId, getPane, getPaneState, onThreadEvent, subscribe, useApp, usePaneAccess, usePaneId } from '../state.ts'
 
 export type ToolBlock = Extract<Block, { kind: 'tool' }>
 
@@ -154,6 +156,7 @@ export async function hydrateToolOutput(threadId: ThreadId, block: ToolBlock) {
 const diffs = new Map<string, Diff | null>()
 const diffCell = createCell(0)
 const diffLoads = new Set<string>()
+const diffReads = new DeferredReads(4)
 
 export function useTurnDiff(threadId: ThreadId, turnId: TurnId, enabled: boolean): Diff | undefined {
   useSyncExternalStore(diffCell.subscribe, diffCell.get)
@@ -162,18 +165,19 @@ export function useTurnDiff(threadId: ThreadId, turnId: TurnId, enabled: boolean
   if (enabled && client && !diffs.has(key) && !diffLoads.has(key)) {
     diffLoads.add(key)
     const owner = activeEnvironment()
-    queueMicrotask(() => {
-      if (owner !== activeEnvironment()) return
-      rpc()
-        .call('threads.diff', { thread_id: threadId, turn_id: turnId, include_patch: false })
-        .then((d) => { if (owner === activeEnvironment()) diffs.set(key, d) })
-        .catch(() => { if (owner === activeEnvironment()) diffs.set(key, null) }) // no git, no diff
-        .finally(() => {
-          if (owner !== activeEnvironment()) return
-          diffLoads.delete(key)
-          diffCell.set(diffCell.get() + 1)
-        })
-    })
+    const session = getThreadSession(threadId)
+    const valid = () => owner === activeEnvironment() && client === getClient() && session === getThreadSession(threadId)
+    // A fast thread switch used to stack another 30 metadata reads on the
+    // startup burst and exhaust the daemon's request lane. Newest queued rows
+    // go first; closed sessions never issue their queued reads.
+    void diffReads.run(() => valid() ? client.call('threads.diff', { thread_id: threadId, turn_id: turnId, include_patch: false }) : Promise.resolve(null))
+      .then(d => { if (valid()) diffs.set(key, d) })
+      .catch(() => { if (valid()) diffs.set(key, null) }) // no git, no diff
+      .finally(() => {
+        if (owner !== activeEnvironment()) return
+        diffLoads.delete(key)
+        diffCell.set(diffCell.get() + 1)
+      })
   }
   return diffs.get(key) ?? undefined
 }
@@ -242,25 +246,34 @@ export function loadEarlier(paneId = getFocusedPaneId()): Promise<void> {
   if (pending) return pending
   const base = getThreadOpen(threadId)
   if (!base?.loaded || base.nextBeforeSeq == null || base.loadingEarlier) return Promise.resolve()
+  const cursor = base.nextBeforeSeq
   const owner = activeEnvironment(), client = getClient(), session = getThreadSession(threadId)
   const events: ThreadEvent[] = []
   const stop = onThreadEvent((id, event) => { if (id === threadId) events.push(event) })
   const error = errorFor(threadId)
   error.set(null)
   setThreadOpen(threadId, { ...base, loadingEarlier: true })
-  const valid = () => owner === activeEnvironment() && client === getClient() && earlierLoads.get(threadId) === pendingLoad && getThreadSession(threadId) === session && !!getThreadOpen(threadId)
-  const pendingLoad = rpc().call('threads.get', {
+  const valid = (): boolean => owner === activeEnvironment() && client === getClient() && earlierLoads.get(threadId) === pendingLoad && getThreadSession(threadId) === session && !!getThreadOpen(threadId)
+  const prefetched = takeThreadHistory(threadId, base)
+  const request = () => rpc().call('threads.get', {
     thread_id: threadId, include_tool_output: false, defer_tool_stream: true,
-    transcript_limit: EARLIER_HISTORY_ENTRIES, before_seq: base.nextBeforeSeq, through_seq: base.lastSeq,
-  }).then(page => {
-    if (!valid()) return
-    setThreadOpen(threadId, prependThreadHistory(base, page, events.filter(event => event.seq > base.lastSeq), getThreadOpen(threadId)!))
+    transcript_limit: EARLIER_HISTORY_ENTRIES, before_seq: cursor, through_seq: base.lastSeq,
+  })
+  const pendingLoad: Promise<void> = (prefetched ? prefetched.then(page => page ?? (valid() ? request() : null)) : request()).then(page => {
+    if (!page || !valid()) return
+    const started = performance.now()
+    const next = prependThreadHistory(base, page, events.filter(event => event.seq > base.lastSeq), getThreadOpen(threadId)!)
+    startupMark('history-projected', { cursor, durationMs: performance.now() - started, entries: page.transcript.length })
+    setThreadOpen(threadId, next)
+    startupMark('history-ready', { cursor: base.nextBeforeSeq, entries: page.transcript.length })
+    primeThreadHistory(threadId)
   }).catch(reason => {
     if (!valid()) return
     error.set(errorText(reason))
     setThreadOpen(threadId, { ...getThreadOpen(threadId)!, loadingEarlier: false })
   }).finally(() => { stop(); if (earlierLoads.get(threadId) === pendingLoad) earlierLoads.delete(threadId) })
   earlierLoads.set(threadId, pendingLoad)
+  startupMark('history-start', { cursor: base.nextBeforeSeq, prefetched: !!prefetched })
   return pendingLoad
 }
 

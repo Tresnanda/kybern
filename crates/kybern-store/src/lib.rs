@@ -2270,6 +2270,19 @@ mod tests {
         s.event_append(t.id, Some(turn), EventPayload::ProviderSessionBound { session_id: "root-session".into(), model: None }).unwrap();
         assert!(s.runtime_tasks_for_thread(t.id).unwrap().is_empty(), "the targeted SQL query must include root bindings");
         assert_eq!(s.events_for_thread(t.id).unwrap().len(), 4, "projection repair must not delete history");
+        s.with(|connection| {
+            let plan: String = connection.query_row(
+                "EXPLAIN QUERY PLAN SELECT seq, thread_id, turn_id, at, payload FROM events
+                 WHERE thread_id = ?1 AND seq <= ?2
+                   AND kind IN ('runtime_task_started', 'runtime_task_updated', 'runtime_task_completed', 'provider_session_bound')
+                 ORDER BY seq",
+                params![t.id.to_string(), i64::MAX],
+                |row| row.get(3),
+            )?;
+            assert!(plan.contains("events_runtime_tasks"), "activity must not scan a thread's message/tool history: {plan}");
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]

@@ -1154,9 +1154,15 @@ impl Orchestrator {
     /// when no thread exists yet to issue `git.status`. Publish once per batch.
     pub async fn refresh_projects_git(&self) -> Result<Vec<Project>> {
         let mut changed = false;
-        for project in self.inner.store.projects_list()? {
-            let is_git = Repo::is_repo(std::path::Path::new(&project.path)).await;
-            changed |= self.inner.store.project_set_git_status(project.id, is_git)?;
+        let projects = self.inner.store.projects_list()?;
+        // A list read must not wait for one git subprocess per project in
+        // sequence. Bound process concurrency, and keep store writes/publishing
+        // on this task after every batch completes.
+        for batch in projects.chunks(8) {
+            let probes = batch.iter().map(|project| async { (project.id, Repo::is_repo(std::path::Path::new(&project.path)).await) });
+            for (id, is_git) in futures::future::join_all(probes).await {
+                changed |= self.inner.store.project_set_git_status(id, is_git)?;
+            }
         }
         if changed {
             self.publish_projects();
@@ -4253,6 +4259,36 @@ mod tests {
         assert_eq!(background.kind, RuntimeTaskKind::Process);
         assert!(background.backgrounded);
         assert!(!background.capabilities.stop);
+    }
+
+    #[tokio::test]
+    async fn project_git_refresh_checks_all_batches_and_preserves_order() {
+        let fixture = Fixture::new();
+        let mut repositories = Vec::new();
+        for index in 0..18 {
+            let directory = fixture.root.join(format!("project-{index}"));
+            std::fs::create_dir_all(&directory).unwrap();
+            if index % 3 == 0 {
+                assert!(tokio::process::Command::new("git").arg("init").arg("--quiet").arg(&directory).status().await.unwrap().success());
+            }
+            let mut project = fixture.orchestrator.add_project(directory.to_string_lossy().into_owned(), None).unwrap();
+            if index % 3 == 0 {
+                repositories.push(project.id);
+            }
+            // Every flag is deliberately stale, in both directions.
+            project.is_git = index % 3 != 0;
+            fixture.store.project_update(&project).unwrap();
+        }
+        let before = fixture.store.projects_list().unwrap();
+        let refreshed = fixture.orchestrator.refresh_projects_git().await.unwrap();
+        assert_eq!(
+            before.iter().map(|project| project.id).collect::<Vec<_>>(),
+            refreshed.iter().map(|project| project.id).collect::<Vec<_>>()
+        );
+        for project in refreshed {
+            assert_eq!(project.is_git, repositories.contains(&project.id));
+            assert_eq!(fixture.store.project_get(project.id).unwrap().unwrap().is_git, project.is_git);
+        }
     }
 
     #[tokio::test]
