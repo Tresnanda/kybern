@@ -1,5 +1,6 @@
 import {execFileSync,spawnSync} from 'node:child_process'
 import {watchBuilds} from './build-overlap.ts'
+import {screenState} from './screen-state.ts'
 
 /** Keep the exact required pgrep inventory, then use ancestry to distinguish
  * this runner's children from another lane or an orphan of a cancelled run. */
@@ -13,8 +14,8 @@ export function processInventory(owner=process.pid){
 }
 
 export function watchRun(){
- const startedAt=new Date().toISOString(),before=processInventory(),builds=watchBuilds()
- return {finish(){const after=processInventory();return {...builds.finish(),timedWindowStartedAt:startedAt,timedWindowEndedAt:new Date().toISOString(),gpuixProcessesBefore:before.processes,gpuixProcessesAfter:after.processes,foreignProcessesBefore:before.foreign,foreignProcessesAfter:after.foreign,orphanOverlap:before.foreign.length>0||after.foreign.length>0}}}
+ const screenBefore=screenState('timed-before'),startedAt=new Date().toISOString(),before=processInventory(),builds=watchBuilds()
+ return {finish(){const after=processInventory(),screenAfter=screenState('timed-after');return {...builds.finish(),screenStateBefore:screenBefore,screenStateAfter:screenAfter,timedWindowStartedAt:startedAt,timedWindowEndedAt:new Date().toISOString(),gpuixProcessesBefore:before.processes,gpuixProcessesAfter:after.processes,foreignProcessesBefore:before.foreign,foreignProcessesAfter:after.foreign,orphanOverlap:before.foreign.length>0||after.foreign.length>0}}}
 }
 
 export function foreignProcesses(processes:string[],parents:Map<number,number>,owner:number){
