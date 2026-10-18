@@ -107,9 +107,14 @@ try {
       if (!sidebar) throw Error('Sidebar never painted')
       if (!content) throw Error(`Newest message never painted: ${painted.slice(-1000)}\n${diagnostics.slice(-3000)}`)
       const startupFrames = frames.slice(), startupCosts = costs.slice()
+      // A warm start may finish in only two submissions. Confirm continued
+      // presentation outside all milestone clocks before calling it invalid.
+      const livenessStart=performance.now()
+      while(frameTimestamps.length<3 && performance.now()-livenessStart<1500)await Bun.sleep(20)
+      const livenessWaitMs=performance.now()-livenessStart
       if(frameTimestamps.length < 3)throw Error('Discard: zero/near-zero native submissions; display may be asleep')
       // Native CPU paint visibility is observed; this is not a physical presentation fence.
-      if (visuals) { await Bun.sleep(Number(process.env.KYBERN_STARTUP_VISUAL_SETTLE_MS ?? 1500)); await app.screenshot({ path: output.replace(/\.json$/, '.png') }) }
+      if (visuals) { await app.call('blur', {}); await Bun.sleep(Number(process.env.KYBERN_STARTUP_VISUAL_SETTLE_MS ?? 1500)); await app.screenshot({ path: output.replace(/\.json$/, '.png') }) }
       let resourceText: string | undefined, idleFrames: number | undefined, resourceFrames: number[] | undefined, resourceCosts: typeof costs | undefined
       let input: { packets: number; elapsed: number; maxOutstanding: number; acknowledgements: number[]; targetHz: number } | undefined
       if (resources) {
@@ -187,8 +192,7 @@ try {
       const older = rpcs.slice(firstRpc).find(rpc => rpc.before != null && rpc.end != null && rpc.thread === process.env.KYBERN_STARTUP_THREAD)
       const olderPageReady = older?.end == null ? undefined : older.end - start
       if(appSample && await appSample.exited)throw Error('App startup sample failed')
-      const result = { displayAwake: 'scoped caffeinate -d -u -w runner-pid', diagnostic: !!appSample, fixture: JSON.parse(process.env.KYBERN_COLDSTART_FIXTURE ?? 'null'), frameEncoding: 'intervals-ms', frameTimestamps, iteration, packaged, window: '1280x820', fullRate: 1, historyDelayMs: Number(process.env.KYBERN_STARTUP_HISTORY_DELAY_MS ?? 0), appearance: process.env.KYBERN_APPEARANCE ?? 'dark', handshake, shell, sidebar, firstContent, content, olderPageReady, footprint, openMs, openFootprint, historyMs, historyFootprint, historyApplyMs, historyFrames, startupFrames, startupCosts, timeline, rpcs: rpcs.slice(firstRpc).map(rpc => ({ method: rpc.method, ms: rpc.end == null ? null : rpc.end - rpc.start, fromSpawnMs: rpc.start - start, bytes: rpc.bytes, before: rpc.before, through: rpc.through, limit: rpc.limit, thread: rpc.thread, parent: rpc.parent, turn: rpc.turn })), frames, costs, idleFrames, resourceFrames, resourceCosts, input, resourceText }
-      if(visuals && frames.length < startupFrames.length + 2)throw Error('Discard: near-zero visual submissions during settle')
+      const result = { livenessWaitMs, displayAwake: 'scoped caffeinate -d -u -w runner-pid', diagnostic: !!appSample, fixture: JSON.parse(process.env.KYBERN_COLDSTART_FIXTURE ?? 'null'), frameEncoding: 'intervals-ms', frameTimestamps, iteration, packaged, window: '1280x820', fullRate: 1, historyDelayMs: Number(process.env.KYBERN_STARTUP_HISTORY_DELAY_MS ?? 0), appearance: process.env.KYBERN_APPEARANCE ?? 'dark', handshake, shell, sidebar, firstContent, content, olderPageReady, footprint, openMs, openFootprint, historyMs, historyFootprint, historyApplyMs, historyFrames, startupFrames, startupCosts, timeline, rpcs: rpcs.slice(firstRpc).map(rpc => ({ method: rpc.method, ms: rpc.end == null ? null : rpc.end - rpc.start, fromSpawnMs: rpc.start - start, bytes: rpc.bytes, before: rpc.before, through: rpc.through, limit: rpc.limit, thread: rpc.thread, parent: rpc.parent, turn: rpc.turn })), frames, costs, idleFrames, resourceFrames, resourceCosts, input, resourceText }
       const displayAfter=assertDisplayReady()
       const processesAfter = processCheck(child.pid)
       const markersAfter = buildMarkers()

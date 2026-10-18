@@ -185,6 +185,6 @@ daemon for its repeats. Neither purges OS filesystem caches. Packaged startup
 also restores the long conversation and uses a fresh scratch daemon per repeat;
 it reuses an existing compiled app and never triggers a release build.
 
-Startup runners hold a scoped `caffeinate -d -u -w <runner pid>` and reject zero/near-zero native submissions (fewer than three); this prevents an asleep display from producing false startup paint measurements. The assertion ends with the runner and does not change power settings.
+Startup runners hold a scoped `caffeinate -d -u -w <runner pid>` and reject zero/near-zero native submissions (fewer than three after up to two seconds of confirmation outside the recorded milestone clocks); this prevents an asleep display from producing false startup paint measurements. The assertion ends with the runner and does not change power settings.
 
 Startup also checks the shared screen-state Swift probe before and after: locked sessions or asleep displays reject the run. Never try to unlock the user session.

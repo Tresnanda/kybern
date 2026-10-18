@@ -47,9 +47,9 @@ contend with list RPCs, record SQL query plans/times, and save deterministic
 sequence-bounded response snapshots for exact baseline/candidate comparison.
 
 Resource and active modes wait ten seconds then sample CPU, per-PID GPU time and physical
-footprint for fifteen seconds. Active mode uses the same offered 60 Hz indexed wheel/momentum trace in each version. GPUIX and its daemon are separate groups;
+footprint for fifteen seconds. Active mode uses the same offered 30 Hz indexed wheel/momentum trace (the startup lane found the native automation ACK lane saturates near 50 Hz) in each version. GPUIX and its daemon are separate groups;
 WindowServer is excluded. Visuals settle
-for twenty seconds and capture both themes in a separate run. Only in visual mode, the recording proxy supplies identical representative Codex/Cursor weekly quota values (35% used) in usage responses/notifications, so real account usage changing between captures cannot change the rings. All timing/resource runs keep the daemon’s real responses. Frame timestamps
+for twenty seconds and capture both themes in a separate run, blurring the composer first so caret blink phase cannot differ. Only in visual mode, the recording proxy supplies identical representative Codex/Cursor weekly quota values (35% used) in usage responses/notifications, so real account usage changing between captures cannot change the rings. All timing/resource runs keep the daemon’s real responses. Frame timestamps
 are post-draw scene submissions, not physical presentation fences. Startup gaps
 include intentional waiting and must not be interpreted as animation stutter.
 Handshake is automation/window availability; text observations are CPU-paint
@@ -60,6 +60,6 @@ All raw evidence goes under
 `/Users/mymac/projects/ade/previews/gpuix/perf/coldstart/`, outside commits.
 The generated bundles, targets and disposable installs are removed on completion.
 
-Each UI runner holds scoped `caffeinate -d -u -w <runner pid>` (`-u` wakes an already sleeping display). Runs reject fewer than three startup submissions; resource runs also reject zero GPU time or fewer than two sampled submissions. No power settings are changed. `display-audit.json` classifies earlier diagnostic evidence after the display-sleep discovery; no suspect capture is used for final acceptance.
+Each UI runner holds scoped `caffeinate -d -u -w <runner pid>` (`-u` wakes an already sleeping display). Runs require at least three native submissions; a start that reaches its painted milestones in two submissions gets up to 1.5 seconds of liveness confirmation outside those milestone clocks. Resource runs also reject zero GPU time or fewer than two sampled submissions. No power settings are changed. `display-audit.json` classifies earlier diagnostic evidence after the display-sleep discovery; no suspect capture is used for final acceptance.
 
 Before and after each UI run, `swift /Users/mymac/projects/ade-gpuix-scratch/screen-state.swift` must report `locked: 0` and a false/zero `displayAsleep`. A locked session prevents WindowServer composition even when awake; do not unlock it. Pause UI work and poll about once a minute. Headless store/daemon tests remain usable.

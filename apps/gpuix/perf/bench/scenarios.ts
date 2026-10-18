@@ -30,6 +30,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
   if(!existsSync(executable))return Array.from({length:runs},(_,i)=>({...emptyResult(name,i+1),status:'skipped',reason:'No packaged GPUIX bundle or checkout-local Rust binaries; a Rust packaging build is outside the quick suite.'} as Result))
   const rows:Result[]=[]
   for(let run=1;run<=runs;run++){
+   assertDisplayReady()
    const r=emptyResult(name,run),client=path.join(fixture.data,'client',`${name}-${run}`);mkdirSync(client,{recursive:true})
    const prefsFile=path.join(fixture.data,'gpuix-ui.json')
    const prefs=existsSync(prefsFile)?JSON.parse(readFileSync(prefsFile,'utf8')):{}
@@ -48,7 +49,9 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
      if(r.timings.newestContentMs==null&&/BENCH_RESULT_3000|Result 3000\b/.test(text))r.timings.newestContentMs=ms
      return r.timings.sidebarPaintMs!=null&&r.timings.firstContentMs!=null&&r.timings.newestContentMs!=null
     },'Packaged saved-thread startup never painted',45000)
+    await until(async()=>t.submissions.length>=3,'No continued native startup submissions',2000)
     if(t.submissions.length<3)throw Error('Discard: zero/near-zero native submissions; display may be asleep')
+    assertDisplayReady()
     r.host='GPUIX packaged app (stdio wrapper)';r.frames=t.result({frames:0,costs:0,commits:0}).frames;r.evidence={executable,wrapper:'Bun wrapper passes stdio directly to the compiled bundle; wrapper launch overhead is included.',cold:'fresh daemon projection cache and app process; OS filesystem cache is not purged'}
    }catch(error){r.status='failed';r.reason=String(error)}finally{await f?.close();const gate=buildWatch.finish();Object.assign(r.evidence,gate);if(gate.overlap||gate.orphanOverlap){r.status='discarded';r.reason=gate.orphanOverlap?'foreign GPUIX process: discarded':'build overlap: discarded'}}
    rows.push(r)
@@ -86,6 +89,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
   return {sidebarPaintMs:sidebar,firstContentMs:first,newestContentMs:newest}
  }
  const start=async(cold=false)=>{
+  if(startup)assertDisplayReady()
   if(cold)rmSync(client,{recursive:true,force:true});mkdirSync(client,{recursive:true});rmSync(path.join(client,'bench-control.json'),{force:true})
   if(startup)restoreStartup()
   telemetry=new Telemetry()
@@ -100,6 +104,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
    await until(async()=>{const s=await control('state');return s.listsLoaded},'Lists not loaded')
    await painted(launch.app,/Bench project|Kybern fixture|Linked conversation/)
   }
+  if(startup)assertDisplayReady()
   return {firstPaintedShellMs:shell,...(content??{firstContentMs:performance.now()-at}),firstNativeSubmissionMs:telemetry.submissions[0]?telemetry.submissions[0].received-at:null}
  }
  try{
@@ -110,6 +115,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
    try{
     if(name==='startup-cold')await fixture.restart()
     r.timings=await start(name==='startup-cold');r.evidence={cold:name==='startup-cold'?'fresh daemon projection cache, fresh app process and app preferences; OS filesystem cache is not purged':'fresh process with preferences and filesystem cache primed',frameSemantics:'native scene submissions during startup; idle gaps are not dropped animation frames'}
+    await until(async()=>telemetry.submissions.length>=3,'No continued native startup submissions',2000)
     if(telemetry.submissions.length<3)throw Error('Discard: zero/near-zero native submissions; display may be asleep')
     const m=telemetry.result({frames:0,costs:0,commits:0});r.frames=m.frames;r.work=m.work
    }catch(error){r.status='failed';r.reason=String(error)}finally{
