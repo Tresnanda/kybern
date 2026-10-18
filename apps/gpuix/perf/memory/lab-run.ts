@@ -65,7 +65,7 @@ try {
     writeFileSync(path.join(out, `${name}-resources.txt`), raw)
     rows.push({ name, sceneSubmissionProxyMs: distribution(sceneLatency), sceneSubmissionSamples: sceneLatency.length, fullRate: '1', ...timing, resources: parseResources(raw), attribution: await control({ action: 'stats' }), gate: overlap })
     writeFileSync(path.join(out, 'results.json'), JSON.stringify(rows, null, 2))
-    assert(!overlap.overlap && !overlap.orphanOverlap, 'Contended sample must be rerun')
+    assert(!overlap.overlap && !overlap.orphanOverlap && !overlap.screenInvalid, 'Contended sample must be rerun')
   }
   await measure('home-initial')
   if (process.env.KYBERN_MEMORY_EDITOR_MANY === '1') {
@@ -114,7 +114,10 @@ try {
     const addresses = diagnose('large-allocation-addresses.txt', 'heap', ['--noContent', `--addresses=${pattern}`, String(f.pid)])
     diagnose('large-allocation-calltree.txt', 'malloc_history', [String(f.pid), '-callTree', '-noContent', pattern])
     const pointer = addresses.split('\n').flatMap(line => line.match(/^\s*(0x[0-9a-f]+)\s/i)?.[1] ?? [])[0]
-    if (pointer) diagnose('large-allocation-history-0.txt', 'malloc_history', [String(f.pid), '-fullStacks', pointer])
+    if (pointer) {
+      diagnose('large-allocation-history-0.txt', 'malloc_history', [String(f.pid), '-fullStacks', pointer])
+      diagnose('large-allocation-owners-0.txt', 'leaks', ['--noContent', `--traceTree=${pointer}`, String(f.pid)])
+    }
   }
   if (process.env.KYBERN_MEMORY_RELIEF === '1') {
     writeFileSync(path.join(out, 'allocator-relief.json'), JSON.stringify(await control({ action: 'allocator-relief' }), null, 2))
