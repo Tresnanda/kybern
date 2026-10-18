@@ -1,3 +1,4 @@
+import {assertDisplayReady} from './display-gate.ts'
 import {watchRun} from './process-gate.ts'
 import {onExit} from './lifetime.ts'
 import {mkdirSync,readFileSync,existsSync,rmSync,writeFileSync} from 'node:fs'
@@ -18,17 +19,37 @@ async function painted(app:Launch['app'],pattern:RegExp,timeout=30000){return un
 async function bounds(app:Launch['app'],id:string){return until(async()=>{try{const b=await app.getByTestId(id).bounds();return b.width>0&&b.height>0?b:false}catch{return false}},`No painted bounds: ${id}`)}
 async function click(app:Launch['app'],id:string){const b=await bounds(app,id);await app.mouse.click({x:b.x+b.width/2,y:b.y+b.height/2})}
 export async function scenario(name:Scenario,runs:number,fixture:Fixture,evidence:string,options:{seconds:number;warmup:number;profile?:boolean}):Promise<Result[]>{
+ if(name.startsWith('startup-'))assertDisplayReady()
+ const awake=name.startsWith('startup-')?spawn('caffeinate',['-d','-u','-w',String(process.pid)],{stdio:'ignore'}):undefined
+ const unregister=onExit(()=>{awake?.kill()})
+ try{const results=await runScenario(name,runs,fixture,evidence,options);if(name.startsWith('startup-'))assertDisplayReady();return results}finally{awake?.kill();unregister()}
+}
+async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:string,options:{seconds:number;warmup:number;profile?:boolean}):Promise<Result[]>{
  if(name==='startup-packaged'){
   const executable=process.env.KYBERN_BENCH_PACKAGED_EXECUTABLE??path.join(root,'dist/Kybern GPUIX.app/Contents/MacOS/Kybern GPUIX')
   if(!existsSync(executable))return Array.from({length:runs},(_,i)=>({...emptyResult(name,i+1),status:'skipped',reason:'No packaged GPUIX bundle or checkout-local Rust binaries; a Rust packaging build is outside the quick suite.'} as Result))
   const rows:Result[]=[]
   for(let run=1;run<=runs;run++){
    const r=emptyResult(name,run),client=path.join(fixture.data,'client',`${name}-${run}`);mkdirSync(client,{recursive:true})
+   const prefsFile=path.join(fixture.data,'gpuix-ui.json')
+   const prefs=existsSync(prefsFile)?JSON.parse(readFileSync(prefsFile,'utf8')):{}
+   prefs['kybern.split-view.v1']={version:1,root:{kind:'leaf',id:'main',threadId:fixture.manifest.long3000},focusedPaneId:'main'}
+   writeFileSync(prefsFile,JSON.stringify(prefs))
+   await fixture.restart()
    const buildWatch=watchRun(),at=performance.now(),t=new Telemetry()
    let f:Launch|undefined
    try{
     f=await launchFixture(path.join(import.meta.dir,'package-entry.ts'),{...fixture.env,KYBERN_CLIENT_CONFIG_DIR:client,KYBERN_GPUIX_CREDENTIALS_DIR:path.join(client,'credentials'),KYBERN_BENCH_PACKAGED_EXECUTABLE:executable,GPUIX_BACKGROUND:'1',KYBERN_FULL_RATE:process.env.KYBERN_FULL_RATE??'1',KYBERN_FRAME_TIMES:'1',KYBERN_GPUIX_THREAD:''},{stderr:t.stderr})
-    await bounds(f.app,'app-ready');r.timings.firstPaintedShellMs=performance.now()-at;await painted(f.app,/Bench project/);r.timings.firstContentMs=performance.now()-at;r.host='GPUIX packaged app (stdio wrapper)';r.frames=t.result({frames:0,costs:0,commits:0}).frames;r.evidence={executable,wrapper:'Bun wrapper passes stdio directly to the compiled bundle; wrapper launch overhead is included.'}
+    await bounds(f.app,'app-ready');r.timings.firstPaintedShellMs=performance.now()-at
+    await until(async()=>{
+     const text=(await f!.app.call('getPaintedText',{})).text.join('\n'),ms=performance.now()-at
+     if(r.timings.sidebarPaintMs==null&&text.includes('Bench project'))r.timings.sidebarPaintMs=ms
+     if(r.timings.firstContentMs==null&&/BENCH_RESULT_\d+|Result \d+/.test(text))r.timings.firstContentMs=ms
+     if(r.timings.newestContentMs==null&&/BENCH_RESULT_3000|Result 3000\b/.test(text))r.timings.newestContentMs=ms
+     return r.timings.sidebarPaintMs!=null&&r.timings.firstContentMs!=null&&r.timings.newestContentMs!=null
+    },'Packaged saved-thread startup never painted',45000)
+    if(t.submissions.length<3)throw Error('Discard: zero/near-zero native submissions; display may be asleep')
+    r.host='GPUIX packaged app (stdio wrapper)';r.frames=t.result({frames:0,costs:0,commits:0}).frames;r.evidence={executable,wrapper:'Bun wrapper passes stdio directly to the compiled bundle; wrapper launch overhead is included.',cold:'fresh daemon projection cache and app process; OS filesystem cache is not purged'}
    }catch(error){r.status='failed';r.reason=String(error)}finally{await f?.close();const gate=buildWatch.finish();Object.assign(r.evidence,gate);if(gate.overlap||gate.orphanOverlap){r.status='discarded';r.reason=gate.orphanOverlap?'foreign GPUIX process: discarded':'build overlap: discarded'}}
    rows.push(r)
   }
@@ -47,18 +68,39 @@ export async function scenario(name:Scenario,runs:number,fixture:Fixture,evidenc
  const control=async(action:string,args:Record<string,unknown>={})=>{
   const res=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action,...args})});const body=await res.json() as {loaded:boolean;listsLoaded:boolean;blocks:number;firstSeq:number;firstPromptNumber:number;nextBeforeSeq:number|null;streamDeltas:number;error?:string};if(!res.ok)throw Error(body.error);return body
  }
+ const restoreStartup=()=>{
+  const file=path.join(fixture.data,'gpuix-ui.json')
+  const prefs=existsSync(file)?JSON.parse(readFileSync(file,'utf8')):{}
+  prefs['kybern.split-view.v1']={version:1,root:{kind:'leaf',id:'main',threadId:fixture.manifest.long3000},focusedPaneId:'main'}
+  writeFileSync(file,JSON.stringify(prefs))
+ }
+ const startupPaint=async(app:Launch['app'],at:number)=>{
+  let sidebar:number|null=null,first:number|null=null,newest:number|null=null
+  await until(async()=>{
+   const text=(await app.call('getPaintedText',{})).text.join('\n'),ms=performance.now()-at
+   if(sidebar==null&&text.includes('Bench project'))sidebar=ms
+   if(first==null&&/BENCH_RESULT_\d+|Result \d+/.test(text))first=ms
+   if(newest==null&&/BENCH_RESULT_3000|Result 3000\b/.test(text))newest=ms
+   return sidebar!=null&&first!=null&&newest!=null
+  },'Saved thread or sidebar never painted',45000)
+  return {sidebarPaintMs:sidebar,firstContentMs:first,newestContentMs:newest}
+ }
  const start=async(cold=false)=>{
   if(cold)rmSync(client,{recursive:true,force:true});mkdirSync(client,{recursive:true});rmSync(path.join(client,'bench-control.json'),{force:true})
+  if(startup)restoreStartup()
   telemetry=new Telemetry()
   const at=performance.now()
   launch=await launchFixture(path.join(import.meta.dir,'app.ts'),{...fixture.env,...proxy?.env,KYBERN_BENCH_WHEEL_LIBRARY:path.join(fixture.data,'bench-wheel.dylib'),KYBERN_CLIENT_CONFIG_DIR:client,KYBERN_GPUIX_CREDENTIALS_DIR:path.join(client,'credentials'),KYBERN_GPUIX_THREAD:'',KYBERN_GPUIX_ENVIRONMENT:'local',KYBERN_PACING_BASELINE:'0',KYBERN_PACING_RUNNING_ENTRY:'0',GPUIX_BACKGROUND:'1',KYBERN_APPEARANCE:'dark',KYBERN_REDUCED_MOTION:'0',KYBERN_FULL_RATE:process.env.KYBERN_FULL_RATE??'1',KYBERN_FRAME_TIMES:'1',KYBERN_FRAME_COSTS:'1',KYBERN_PACING_IGNORE_PHYSICAL_MOUSE:'1',KYBERN_PACING_PARENT_LEASE:path.resolve(root,'../..')},{stderr:telemetry.stderr})
   await bounds(launch.app,'app-ready')
   const shell=performance.now()-at
+  const content=startup?await startupPaint(launch.app,at):null
   await until(async()=>existsSync(path.join(client,'bench-control.json')),'Missing benchmark control endpoint')
   controlPort=JSON.parse(readFileSync(path.join(client,'bench-control.json'),'utf8')).port
-  await until(async()=>{const s=await control('state');return s.listsLoaded},'Lists not loaded')
-  await painted(launch.app,/Bench project|Kybern fixture|Linked conversation/)
-  return {firstPaintedShellMs:shell,firstContentMs:performance.now()-at,firstNativeSubmissionMs:telemetry.submissions[0]?telemetry.submissions[0].received-at:null}
+  if(!startup){
+   await until(async()=>{const s=await control('state');return s.listsLoaded},'Lists not loaded')
+   await painted(launch.app,/Bench project|Kybern fixture|Linked conversation/)
+  }
+  return {firstPaintedShellMs:shell,...(content??{firstContentMs:performance.now()-at}),firstNativeSubmissionMs:telemetry.submissions[0]?telemetry.submissions[0].received-at:null}
  }
  try{
  if(startup){
@@ -66,7 +108,9 @@ export async function scenario(name:Scenario,runs:number,fixture:Fixture,evidenc
   for(let run=1;run<=runs;run++){
    const buildWatch=watchRun(),r=emptyResult(name,run)
    try{
-    r.timings=await start(name==='startup-cold');r.evidence={cold:name==='startup-cold'?'fresh process and fresh app preferences; OS filesystem cache is not purged':'fresh process with preferences and filesystem cache primed',frameSemantics:'native scene submissions during startup; idle gaps are not dropped animation frames'}
+    if(name==='startup-cold')await fixture.restart()
+    r.timings=await start(name==='startup-cold');r.evidence={cold:name==='startup-cold'?'fresh daemon projection cache, fresh app process and app preferences; OS filesystem cache is not purged':'fresh process with preferences and filesystem cache primed',frameSemantics:'native scene submissions during startup; idle gaps are not dropped animation frames'}
+    if(telemetry.submissions.length<3)throw Error('Discard: zero/near-zero native submissions; display may be asleep')
     const m=telemetry.result({frames:0,costs:0,commits:0});r.frames=m.frames;r.work=m.work
    }catch(error){r.status='failed';r.reason=String(error)}finally{
     const gate=buildWatch.finish();Object.assign(r.evidence,gate);if(gate.overlap||gate.orphanOverlap){r.status='discarded';r.reason=gate.orphanOverlap?'foreign GPUIX process: discarded':'build overlap: discarded'}

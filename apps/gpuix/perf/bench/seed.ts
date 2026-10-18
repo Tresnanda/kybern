@@ -26,7 +26,7 @@ export async function seed(data = DEFAULT_DATA, port = 4322) {
  if(!existsSync(ownership)&&prior.length&&!existsSync(path.join(data,'bench-manifest.json')))throw Error('Refusing to seed/delete an existing directory not owned by this benchmark')
  writeFileSync(ownership,JSON.stringify({kind:'gpuix-bench-v1',data}))
  if(spawnSync('lsof',['-nP',`-iTCP:${port}`,'-sTCP:LISTEN','-t'],{encoding:'utf8'}).stdout.trim())throw Error('Scratch port is already in use')
- const daemon=spawn(process.env.KYBERN_TEST_DAEMON??'/Applications/kybern.app/Contents/MacOS/kybernd',['--data-dir',data,'--port',String(port)],{stdio:'ignore'})
+ let daemon=spawn(process.env.KYBERN_TEST_DAEMON??'/Applications/kybern.app/Contents/MacOS/kybernd',['--data-dir',data,'--port',String(port)],{stdio:'ignore'})
  const deadline=Date.now()+30000
  let client:Awaited<ReturnType<typeof connect>>|undefined
  try {
@@ -92,9 +92,31 @@ export async function seed(data = DEFAULT_DATA, port = 4322) {
   const runningDb=new Database(path.join(data,'state.sqlite'));try{runningDb.query("UPDATE threads SET status='running' WHERE id=?").run(manifest.running)}finally{runningDb.close()}
   env.KYBERN_URL=`ws://127.0.0.1:${port}/ws`;env.KYBERN_TOKEN=readFileSync(path.join(data,'daemon.token'),'utf8').trim()
   let closed=false,unregister=()=>{}
-  const close=async()=>{if(closed)return;closed=true;client?.close();daemon.kill();if(daemon.exitCode===null)await new Promise<void>(resolve=>daemon.once('exit',()=>resolve()));unregister()}
+  const close=async()=>{if(closed)return;closed=true;client?.close();daemon.kill();if(daemon.exitCode===null&&daemon.signalCode===null)await new Promise<void>(resolve=>daemon.once('exit',()=>resolve()));unregister()}
   unregister=onExit(close)
-  return {data,manifest,env,client,close,remove:()=>{const owner=JSON.parse(readFileSync(ownership,'utf8'));if(owner.kind!=='gpuix-bench-v1'||owner.data!==data)throw Error('Scratch ownership changed; refusing cleanup');rmSync(data,{recursive:true,force:true})}}
+  const restart=async()=>{
+   if(closed)throw Error('Cannot restart a closed scratch fixture')
+   // This marker is fixture-only, with no provider session. Hide it during
+   // restart so orphan recovery does not rewrite the synthetic stream history.
+   const beforeRestart=new Database(path.join(data,'state.sqlite'))
+   const runningHead=beforeRestart.query('SELECT last_seq FROM threads WHERE id=?').get(manifest.running) as {last_seq:number}
+   try{beforeRestart.query("UPDATE threads SET status='idle' WHERE id=?").run(manifest.running)}finally{beforeRestart.close()}
+   client?.close();daemon.kill()
+   if(daemon.exitCode===null&&daemon.signalCode===null)await new Promise<void>(resolve=>daemon.once('exit',()=>resolve()))
+   rmSync(path.join(data,'daemon.port'),{force:true})
+   daemon=spawn(process.env.KYBERN_TEST_DAEMON??'/Applications/kybern.app/Contents/MacOS/kybernd',['--data-dir',data,'--port',String(port)],{stdio:'ignore'})
+   const until=Date.now()+30000
+   while(!existsSync(path.join(data,'daemon.port'))){if(daemon.exitCode!==null||Date.now()>until)throw Error('Scratch daemon restart failed');await Bun.sleep(30)}
+   env.KYBERN_TOKEN=readFileSync(path.join(data,'daemon.token'),'utf8').trim()
+   client=await connect({daemonPid:daemon.pid!,port,token:env.KYBERN_TOKEN,seeded:true})
+   const afterRestart=new Database(path.join(data,'state.sqlite'))
+   try{
+    const head=afterRestart.query('SELECT last_seq FROM threads WHERE id=?').get(manifest.running) as {last_seq:number}
+    if(head.last_seq!==runningHead.last_seq)throw Error('Restart changed the synthetic running thread history')
+    afterRestart.query("UPDATE threads SET status='running' WHERE id=?").run(manifest.running)
+   }finally{afterRestart.close()}
+  }
+  return {data,manifest,env,get client(){return client!},restart,close,remove:()=>{const owner=JSON.parse(readFileSync(ownership,'utf8'));if(owner.kind!=='gpuix-bench-v1'||owner.data!==data)throw Error('Scratch ownership changed; refusing cleanup');rmSync(data,{recursive:true,force:true})}}
  }catch(error){client?.close();daemon.kill();throw error}
 }
 if(import.meta.main){const fixture=await seed(process.env.KYBERN_DATA_DIR??DEFAULT_DATA,Number(process.env.KYBERN_BENCH_PORT??4322));console.log(JSON.stringify(fixture.manifest,null,2));await fixture.close()}

@@ -48,3 +48,10 @@ test('quiet ordering honors the first line and legacy reservation without editin
   expect(()=>assertQuietTurn('unreserved-normal-run',dir)).not.toThrow()
  }finally{rmSync(dir,{recursive:true,force:true})}
 })
+
+test('startup report exposes distinct sidebar, first and newest content median/p90',()=>{
+ const rows=Array.from({length:5},(_,i)=>({...emptyResult('startup-cold',i+1),timings:{firstPaintedShellMs:100+i,sidebarPaintMs:200+i,firstContentMs:300+i,newestContentMs:400+i}}))
+ const report=table(rows)
+ expect(report).toContain('Sidebar median/p90 ms')
+ expect(report).toContain('| startup-cold | 102.00 / 104.00 | 202.00 / 204.00 | 302.00 / 304.00 | 402.00 / 404.00 |')
+})

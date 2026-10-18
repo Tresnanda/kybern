@@ -170,3 +170,21 @@ timer instead of silently lowering its rate). Compare actual delivered rates.
 the staged and paired controls. These options do not change the default suite.
 AppKit readiness now waits 100 ms after its probe before checking the anchor,
 so frame-coalesced input is observed after paint rather than rejected early.
+
+## Startup milestones
+
+Startup scenarios restore the 3,000-turn conversation and poll native painted
+text for the sidebar, first transcript content and newest answer separately.
+The report includes median/p90 for shell, sidebar, first content and newest
+content; scene-submission gaps remain a separate diagnostic. These are observed
+CPU paint upper bounds, not physical presentation fences.
+
+`startup-cold` restarts its own scratch daemon for every repeat, clearing the
+in-memory projection cache. `startup-warm` primes one launch then retains that
+daemon for its repeats. Neither purges OS filesystem caches. Packaged startup
+also restores the long conversation and uses a fresh scratch daemon per repeat;
+it reuses an existing compiled app and never triggers a release build.
+
+Startup runners hold a scoped `caffeinate -d -u -w <runner pid>` and reject zero/near-zero native submissions (fewer than three); this prevents an asleep display from producing false startup paint measurements. The assertion ends with the runner and does not change power settings.
+
+Startup also checks the shared screen-state Swift probe before and after: locked sessions or asleep displays reject the run. Never try to unlock the user session.
