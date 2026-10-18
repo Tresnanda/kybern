@@ -17,7 +17,8 @@ export interface TaskWindowEntry {
 }
 
 /** Native virtualization bounds paint/layout; this also bounds mounted React row trees. */
-export function TaskWindow({ entries, card = false, testId }: { entries: TaskWindowEntry[]; card?: boolean; testId?: string }) {
+/** `underlay` is drawn under the rows, clipped to the list's viewport. */
+export function TaskWindow({ entries, card = false, testId, underlay }: { entries: TaskWindowEntry[]; card?: boolean; testId?: string; underlay?: ReactNode }) {
   const renderer = useGpuixRequired()
   const list = useRef<PublicInstance | null>(null)
   const liveEntries = useRef(entries)
@@ -71,6 +72,7 @@ export function TaskWindow({ entries, card = false, testId }: { entries: TaskWin
   }, [focused])
   return (
     <div {...FILL_ISLAND} ref={setViewport} style={{ display: 'flex', flexGrow: 1, minHeight: 0, width: '100%' }}>
+    {underlay}
     <virtual-list
       ref={(node) => { taskScrollRef(node, list.current, entries.length, (index) => { const key = entries[index]?.key ?? ''; setAnchor(old => old.key === key && old.index === index ? old : {key, index}) }, heights, viewport, entries.map(entry => entry.key)); list.current = node }}
       testId={testId}

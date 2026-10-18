@@ -11,6 +11,7 @@ export function createShiftStore() {
   let shifts = new Map<string, number>()
   let xs = new Map<string, number>()
   let instant = false
+  let snapped = new Set<string>()
   const listeners = new Set<() => void>()
   const emit = () => listeners.forEach((fn) => fn())
   return {
@@ -18,20 +19,20 @@ export function createShiftStore() {
     get: (id: string) => shifts.get(id) ?? 0,
     /** Horizontal offset, for rows that also change column (the board). */
     getX: (id: string) => xs.get(id) ?? 0,
-    /** True while shifts jump instead of spring (the commit that makes the real layout match them). */
-    instant: () => instant,
-    set(next: Map<string, number>, nextX: Map<string, number> = new Map()) {
+    /** True while shifts jump instead of spring (the commit that makes the real layout match them), or for the rows `set` asked to jump. */
+    instant: (id?: string) => instant || (id !== undefined && snapped.has(id)),
+    set(next: Map<string, number>, nextX: Map<string, number> = new Map(), snap: Iterable<string> = []) {
       const differs = (a: Map<string, number>, b: Map<string, number>) => {
         if (a.size !== b.size) return true
         for (const [k, v] of a) if (b.get(k) !== v) return true
         return false
       }
       if (!differs(next, shifts) && !differs(nextX, xs)) return
-      shifts = next; xs = nextX; instant = false; emit()
+      shifts = next; xs = nextX; instant = false; snapped = new Set(snap); emit()
     },
     clear(snap = false) {
       if (!shifts.size && !xs.size) return
-      shifts = new Map(); xs = new Map(); instant = snap; emit()
+      shifts = new Map(); xs = new Map(); instant = snap; snapped = new Set(); emit()
     },
   }
 }
@@ -41,7 +42,7 @@ export type ShiftStore = ReturnType<typeof createShiftStore>
 export function ShiftRow({ store, id, axis = 'y', transition = SPRING.shift, children }: { store: ShiftStore; id: string; axis?: 'x' | 'y' | 'xy'; transition?: MotionTransition; children: ReactNode }) {
   const shift = useSyncExternalStore(store.subscribe, () => store.get(id))
   const shiftX = useSyncExternalStore(store.subscribe, () => store.getX(id))
-  const snap = store.instant()
+  const snap = store.instant(id)
   return (
     <PaintTranslate
       initial={false}

@@ -20,8 +20,10 @@ import { getState } from '../state.ts'
 import { watchPointerRelease } from '../split/release.ts'
 import { cls, getObjc, nsApp, sel } from '../native/objc.ts'
 
-type Region = { node: PublicInstance; status: TaskStatus; ids: string[]; board: boolean }
-type Target = { status: TaskStatus; before: string | null; slot: Rect; action: 'move' | 'send' | 'none'; shifts: Map<string, number> }
+/** `key` is the list group whose header this region's node is (none for a region inferred from rows). */
+type Region = { node: PublicInstance; status: TaskStatus; ids: string[]; board: boolean; key?: string }
+/** `away`: the slot is in another board column, which the held card cannot be translated into (each column clips its own cards). */
+type Target = { status: TaskStatus; before: string | null; slot: Rect; action: 'move' | 'send' | 'none'; shifts: Map<string, number>; away: boolean }
 type Drag = {
   id: string
   x: number
@@ -93,6 +95,23 @@ const velocity = createVelocityTracker()
 let ghostLanded = false
 /** Spring offsets of the rows that make room; see `drag/shift.tsx`. */
 export const taskShift = createShiftStore()
+/** dnd-kit moves the held item into the destination container: a board column it did not start
+ * in draws its dimmed copy in the slot (`TaskDropPlaceholder`). Changes only when the slot moves. */
+type Placeholder = { id: string; status: TaskStatus; slot: Rect; entry: number }
+let placeholder: Placeholder | null = null
+let placeholderEntry = 0
+const placeholderListeners = new Set<() => void>()
+function setPlaceholder(next: Omit<Placeholder, 'entry'> | null) {
+  const same = next && placeholder && next.id === placeholder.id && next.status === placeholder.status
+  if (same && next.slot.x === placeholder!.slot.x && next.slot.y === placeholder!.slot.y && next.slot.height === placeholder!.slot.height) return
+  if (!next && !placeholder) return
+  placeholder = next && { ...next, entry: same ? placeholder!.entry : ++placeholderEntry }
+  placeholderListeners.forEach((fn) => fn())
+}
+export const taskPlaceholder = {
+  get: () => placeholder,
+  subscribe: (fn: () => void) => { placeholderListeners.add(fn); return () => { placeholderListeners.delete(fn) } },
+}
 function publish(value: Drag | null) {
   current = value
   snapshot = value
@@ -105,6 +124,7 @@ export const cancelTaskDrag = () => {
   pending = null
   ghostLanded = false
   taskShift.clear(true)
+  setPlaceholder(null)
   publish(null)
 }
 /** Release the held item without a drop: it springs back to where it was picked up. */
@@ -116,6 +136,7 @@ export function escapeTaskDrag() {
   if (!current.active || !current.source) return cancelTaskDrag()
   if (current.settle) return
   taskShift.clear()
+  setPlaceholder(null)
   publish({ ...current, target: null, settle: { to: homePosition(current), vx: 0, vy: 0, home: true } })
 }
 const subscribe = (fn: () => void) => {
@@ -123,9 +144,10 @@ const subscribe = (fn: () => void) => {
   return () => listeners.delete(fn)
 }
 /** tasks.css dims the held source to .35; dnd-kit's default drop side effect
- * hides it completely while the overlay returns, then restores its opacity. */
+ * hides it completely while the overlay returns, then restores its opacity.
+ * Over another board column the source has left its own column: the placeholder draws it there. */
 export function useTaskDragOpacity(id: string) {
-  return useSyncExternalStore(subscribe, () => current?.active && current.id === id ? current.settle ? 0 : 0.35 : 1)
+  return useSyncExternalStore(subscribe, () => current?.active && current.id === id ? current.settle || current.target?.away ? 0 : 0.35 : 1)
 }
 /** Keep the pressed host alive if the React mount window scrolls past it. */
 export function useHeldTask() {
@@ -141,7 +163,7 @@ export function slotRef(id: string, node: PublicInstance | null) {
   else slots.delete(id)
 }
 export function regionRef(key: string, node: PublicInstance | null, status: TaskStatus, ids: string[], board: boolean) {
-  if (node) regions.set(key, { node, status, ids, board })
+  if (node) regions.set(key, { node, status, ids, board, key })
   else regions.delete(key)
 }
 export function viewportRef(node: PublicInstance | null) {
@@ -272,12 +294,31 @@ function resolveTarget(drag: Drag, x: number, y: number): Target | null {
   // Rows make room only when a drop here would really move the task.
   const reorders = action === 'move' && (task?.status !== region.status || manual)
   const shifts = new Map<string, number>()
-  if (reorders) {
+  if (reorders && region.board) {
     const original = taskState().tasks[drag.id] ? sourceIds(drag) : []
     const gone = original.indexOf(drag.id)
     for (const id of original.slice(gone + 1)) shifts.set(id, (shifts.get(id) ?? 0) - drag.step)
     const at = before ? candidates.indexOf(before) : candidates.length
     for (const id of candidates.slice(at)) shifts.set(id, (shifts.get(id) ?? 0) + drag.step)
+  } else if (reorders) {
+    // The list is one column: dnd-kit's move between groups reflows everything between the source
+    // and its slot, group headers included, by the held row's pitch.
+    const order = drag.sequence
+    const from = order.indexOf(drag.id)
+    const last = candidates.at(-1)
+    const to = before ? order.indexOf(before) : last ? order.indexOf(last) + 1 : from
+    order.forEach((id, i) => {
+      if (id === drag.id) return
+      if (to > from && i > from && i < to) shifts.set(id, -drag.step)
+      if (to < from && i >= to && i < from) shifts.set(id, drag.step)
+    })
+    const home = (drag.rows.get(drag.id) ?? drag.source).y
+    for (const other of drag.regions) {
+      const y = other.bounds.y
+      if (!other.key) continue
+      if (to > from && y > home && y <= region.bounds.y) shifts.set(`header:${other.key}`, -drag.step)
+      if (to < from && y > region.bounds.y && y < home) shifts.set(`header:${other.key}`, drag.step)
+    }
   }
   let y0: number
   const anchor = before ? drag.rows.get(before) : candidates.map((id) => drag.rows.get(id)).filter(Boolean).at(-1)
@@ -290,7 +331,15 @@ function resolveTarget(drag: Drag, x: number, y: number): Target | null {
   const x0 = region.board ? (first?.x ?? region.bounds.x) : drag.source.x
   const slot = { x: x0, y: reorders ? y0 : drag.source.y, width: drag.source.width, height: drag.source.height }
   if (!reorders) { slot.x = drag.source.x }
-  return { status: region.status, before, slot, action, shifts: reorders ? shifts : new Map() }
+  // verticalListSortingStrategy translates the held item itself into its slot, by the rows it passes
+  // (not its own height), so the dimmed source always fills the room the others made. The board
+  // cannot translate a card into another column: there the source hides and a placeholder stands in.
+  const away = reorders && region.board && region.status !== task?.status
+  if (reorders && !away) {
+    const home = drag.rows.get(drag.id) ?? drag.source
+    shifts.set(drag.id, slot.y - home.y)
+  }
+  return { status: region.status, before, slot, action, shifts: reorders ? shifts : new Map(), away }
 }
 /** Ids of the dragged row's own region, in their original order. */
 function sourceIds(drag: Drag) {
@@ -330,9 +379,13 @@ function move(event: EventPayload, remeasure = false) {
   velocity.push(x, y)
   const active = current.active || Math.hypot(x - current.startX, y - current.startY) >= 5
   const target = active ? resolveTarget(current, x, y) : null
-  taskShift.set(target?.shifts ?? new Map())
+  // dnd-kit re-inserts the held item in a container it enters: it appears in its slot at once
+  // and only slides between slots of the same container.
+  const entered = !!target && (current.target?.status ?? taskState().tasks[current.id]?.status) !== target.status
+  taskShift.set(target?.shifts ?? new Map(), new Map(), entered ? [current.id] : [])
+  setPlaceholder(target?.away ? { id: current.id, status: target.status, slot: target.slot } : null)
   const next = { ...current, x, y, active, target }
-  const changed = current.active !== active || (current.target?.action ?? 'move') !== (target?.action ?? 'move')
+  const changed = current.active !== active || (current.target?.action ?? 'move') !== (target?.action ?? 'move') || !!current.target?.away !== !!target?.away
   current = next
   taskCarry.set(x, y)
   if (changed) publish(next)
@@ -357,6 +410,7 @@ function releaseDrag() {
   }
   if (moves && target) {
     const manual = taskState().prefs.ordering === 'manual' && target.status !== 'done' && target.status !== 'canceled'
+    setPlaceholder(null)
     publish({ ...drag, settle: { to: { x: target.slot.x, y: target.slot.y }, vx: v.x, vy: v.y, home: false }, saving: true })
     void updateTask(task.id, { status: target.status, before_id: manual ? target.before : null })
       .catch(() => {})
@@ -369,6 +423,7 @@ function releaseDrag() {
     return
   }
   taskShift.clear()
+  setPlaceholder(null)
   publish({ ...drag, target: null, settle: { to: homePosition(drag), vx: v.x * 0.4, vy: v.y * 0.4, home: true } })
 }
 function finishClick(drag: Drag) {
