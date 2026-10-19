@@ -32,3 +32,9 @@ themes across four window/accessibility modes. It exercises the raw native
 filter even under accessibility overrides, deliberately testing the shader;
 product material gates require the existing live-material check separately.
 Wide sigmas and fractional bounds/radii/masks remain in the lab as controls.
+
+Desktop references are headless WebKit only. Product captures pass `--gpuix-only`
+and may rescore against existing desktop images. Prior headed compositor evidence
+is retained from before the monitor restriction; future runs use headless pages
+and cannot establish compositor pixels. Every native window stays on the built-in
+primary display; never activate/focus a window.

@@ -1,5 +1,5 @@
 // Existing native/WebKit pairs, plus the existing live accessibility check.
-import {mkdirSync,writeFileSync} from 'node:fs'
+import {mkdirSync,writeFileSync,existsSync} from 'node:fs'
 import {onExit} from '../bench/lifetime.ts'
 import {requireScreen,keepDisplayAwake} from '../bench/screen-state.ts'
 import {seed} from '../bench/seed.ts'
@@ -14,7 +14,12 @@ async function run(args:string[],env:Record<string,string>={}){
 try{
  const phase=process.argv[2]??'pairs'
  if(phase==='pairs'){
-  for(const kernel of ['0','1'])await run(['scripts/visual-pair.ts','palette','conversation-model','blur-palette','blur-popover','--theme','both','--fresh','--out',`${out}/kernel-${kernel}`],{KYBERN_BACKDROP_KERNEL:kernel,GPUIX_VISUAL_AREAS:'conversation,settings'})
+  for(const kernel of ['0','1']){
+   const folder=`${out}/kernel-${kernel}`,scenes=['palette','conversation-model','blur-palette','blur-popover']
+   await run(['scripts/visual-pair.ts',...scenes,'--theme','both','--fresh','--gpuix-only','--out',folder],{KYBERN_BACKDROP_KERNEL:kernel,GPUIX_VISUAL_AREAS:'conversation,settings'})
+   // Reuse pre-existing desktop captures; rescore exits before creating any UI.
+   if(existsSync(folder+'/palette-dark-tauri.png'))await run(['scripts/visual-pair.ts',...scenes,'--theme','both','--gpuix-only','--rescore','--out',folder])
+  }
  }else if(phase==='accessibility'){
   const fixture=await seed('/Users/mymac/projects/ade-gpuix-scratch/perf-backdrop-material',4337)
   try{for(const theme of ['dark','light'])await run(['src/platform/verify.material.ts',out+'/accessibility',theme],{...fixture.env,KYBERN_BACKDROP_KERNEL:'1',KYBERN_OPAQUE:'0',KYBERN_REDUCED_TRANSPARENCY:'',KYBERN_INCREASED_CONTRAST:''})}finally{await fixture.close();fixture.remove()}

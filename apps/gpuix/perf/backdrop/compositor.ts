@@ -1,8 +1,8 @@
-// Accepted surface reference: task-owned headed WebKit window, not page snapshots.
+// Headless desktop reference; prior headed captures are retained as evidence.
 import {mkdirSync,writeFileSync} from 'node:fs'
 import {onExit} from '../bench/lifetime.ts'
 import {requireScreen,keepDisplayAwake} from '../bench/screen-state.ts'
-const out='/Users/mymac/projects/ade/previews/gpuix/perf/backdrop/compositor-reference'
+const out='/Users/mymac/projects/ade/previews/gpuix/perf/backdrop/compositor-reference/headless'
 mkdirSync(out,{recursive:true});const before=requireScreen(),stop=keepDisplayAwake()
 const server=Bun.spawn(['../desktop/node_modules/.bin/vite','--config','perf/backdrop/compositor.config.mjs'],{stdout:'ignore',stderr:'inherit'})
 const cleanup=onExit(async()=>{server.kill();await server.exited})
