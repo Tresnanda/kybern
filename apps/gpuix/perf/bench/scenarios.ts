@@ -72,7 +72,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
  const nativeDrive=async(point:Point,ms:number,fling:boolean)=>{const res=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action:'wheel-drive',...point,durationMs:ms,fling})});if(!res.ok)throw Error(await res.text());const data=await res.json() as Awaited<ReturnType<typeof drive>> & {accepted:number;zeroDistancePackets:number;requestedDistance:number;effectiveDistance:number;handledPackets:number;handlerDistance:number};data.sent=data.sent.map(t=>t+clockOffset);if(data.accepted!==data.sent.length)throw Error('AppKit rejected wheel events');return data}
  const inputDrive=(point:Point,ms:number,fling:boolean):Promise<Awaited<ReturnType<typeof drive>> & {zeroDistancePackets?:number;requestedDistance?:number;effectiveDistance?:number;handledPackets?:number;handlerDistance?:number}>=>useAppkit?nativeDrive(point,ms,fling):drive(launch!.app,point,ms,fling)
  const control=async(action:string,args:Record<string,unknown>={})=>{
-  const res=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action,...args})});const body=await res.json() as {loaded:boolean;listsLoaded:boolean;blocks:number;firstSeq:number;firstPromptNumber:number;nextBeforeSeq:number|null;streamDeltas:number;error?:string};if(!res.ok)throw Error(body.error);return body
+  const res=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action,...args})});const body=await res.json() as {uiReady:boolean;loaded:boolean;listsLoaded:boolean;blocks:number;firstSeq:number;firstPromptNumber:number;nextBeforeSeq:number|null;streamDeltas:number;error?:string};if(!res.ok)throw Error(body.error);return body
  }
  const restoreStartup=()=>{
   const file=path.join(fixture.data,'gpuix-ui.json')
@@ -159,6 +159,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
  }
  await delay(1500)
  await setup()
+ if(!pr)await until(async()=>(await control('state')).uiReady,'Provider, settings, target and model catalog not ready',60000)
  if(name.startsWith('idle-'))await control('idle')
  const streamWithWheel=name==='streaming'&&process.env.KYBERN_BENCH_STREAM_SCROLL==='1'
  const scrolling=name.endsWith('scroll')||name==='thread-fling'||pr||streamWithWheel

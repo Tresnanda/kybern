@@ -10,7 +10,7 @@ def med(values):
  return statistics.median(values) if values else None
 for variant in ['0',candidate]:
  d=json.loads((root/f'{prefix}-{variant}.json').read_text());assert not d['aborted']
- provenance[variant]={k:d[k] for k in ['source','addonSha256','hardware','host','display','inputContinuity','fullRate','renderFlags','warmupSeconds','resourceSeconds','workload']}
+ provenance[variant]={k:d[k] for k in ['source','sourceFiles','uiReadiness','addonSha256','hardware','host','display','inputContinuity','fullRate','renderFlags','warmupSeconds','resourceSeconds','workload']}
  for name in dict.fromkeys(r['scenario'] for r in d['results']):
   runs=[r for r in d['results'] if r['scenario']==name and r['status']=='ok'];assert len(runs)==3,(name,variant,len(runs))
   assert all(not r['evidence'].get('overlap') and not r['evidence'].get('orphanOverlap') and not r['evidence'].get('screenInvalid') for r in runs)

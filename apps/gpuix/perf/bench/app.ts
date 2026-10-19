@@ -9,6 +9,7 @@ hook.onCommitFiberRoot=(...args)=>{(globalThis as Record<string,unknown>).__benc
 const state=await import('../../src/state.ts')
 const nav=await import('../../src/nav/store.ts')
 const dock=await import('../../src/dock/store.ts')
+const composer=await import('../../src/composer/store.ts')
 const {showFileInExplorer}=await import('../../src/dock/explorerSelection.ts')
 const {applyEvent,seedFromGet}=await import('../../../../packages/kybern-client/src/transcript.ts')
 let streamTimer:ReturnType<typeof setInterval>|undefined
@@ -20,8 +21,15 @@ const wheel=wheelApi.bench_scroll
 let sequence=1000000,streamDeltas=0
 const server=Bun.serve({idleTimeout:255,port:0,hostname:'127.0.0.1',async fetch(req){
  if(req.method!=='POST')return new Response('POST only',{status:405})
- const body=await req.json() as {action:string;thread?:string;file?:string;durationMs?:number;x?:number;y?:number;fling?:boolean;target?:string;delta?:number}
+ const body=await req.json() as {action:string;thread?:string;file?:string;durationMs?:number;x?:number;y?:number;fling?:boolean;target?:string;delta?:number;limits?:ReturnType<typeof nav.getNav>['limits']}
  try{
+ if(body.action==='visual-limits'){
+  const limits=body.limits??nav.getNav().limits,refreshing:ReturnType<typeof nav.getNav>['limitsRefreshing']=[]
+  // Pixel fixtures compare the same data, including live account-use arcs.
+  // This action is never used by a timing scenario.
+  const restore=()=>{const s=nav.getNav();if(s.limits!==limits||s.limitsRefreshing!==refreshing)nav.setNav({limits,limitsRefreshing:refreshing})}
+  nav.subscribeNav(restore);restore();return Response.json({limits})
+ }
  if(body.action==='scroll-state'){
   const root=(globalThis as Record<string,unknown>).__benchFiberRoot as {containerInfo?:{nativeRenderer?:{getAutomationTree:()=>string;getListScrollTop:(id:number)=>number[]|null;getScrollOffset:(id:number)=>number[]|null}}}|undefined
   const renderer=root?.containerInfo?.nativeRenderer
@@ -92,7 +100,10 @@ const server=Bun.serve({idleTimeout:255,port:0,hostname:'127.0.0.1',async fetch(
    streamDeltas=n
   },40)
  }
- const s=state.getState();return Response.json({streamDeltas,selected:s.selectedId,loaded:s.open.loaded,blocks:s.open.blocks.length,nextBeforeSeq:s.open.nextBeforeSeq,firstSeq:s.open.blocks[0]?.seq,firstPromptNumber:(()=>{const numbers=s.open.blocks.flatMap(b=>{const text=b.kind==='user'?b.message.parts.flatMap(p=>p.type==='text'?[p.text]:[]).join(''):b.kind==='assistant'?b.text:'';return [...text.matchAll(/(?:Bench prompt |BENCH_RESULT_)(\d+)/g)].map(m=>Number(m[1]))});return numbers.length?Math.min(...numbers):0})(),listsLoaded:s.listsLoaded,now:performance.now()})
+ const s=state.getState(),data=composer.getData(),provider=data.target?.state.target.provider??s.open.thread?.provider
+ const catalogKey=s.selectedId&&provider?`${s.selectedId}:${provider.kind}:${provider.instance}`:null
+ const uiReady=nav.getNav().providers.length>0&&data.providers.length>0&&!data.providersLoading&&data.settings!==null&&(!s.selectedId||(data.target?.threadId===s.selectedId&&data.catalog?.key===catalogKey&&!data.catalogLoading))
+ return Response.json({usageReady:nav.getNav().limits.length>0&&!nav.getNav().limitsRefreshing.length,uiReady,streamDeltas,selected:s.selectedId,loaded:s.open.loaded,blocks:s.open.blocks.length,nextBeforeSeq:s.open.nextBeforeSeq,firstSeq:s.open.blocks[0]?.seq,firstPromptNumber:(()=>{const numbers=s.open.blocks.flatMap(b=>{const text=b.kind==='user'?b.message.parts.flatMap(p=>p.type==='text'?[p.text]:[]).join(''):b.kind==='assistant'?b.text:'';return [...text.matchAll(/(?:Bench prompt |BENCH_RESULT_)(\d+)/g)].map(m=>Number(m[1]))});return numbers.length?Math.min(...numbers):0})(),listsLoaded:s.listsLoaded,now:performance.now()})
  }catch(e){return Response.json({error:String(e)},{status:500})}
 }})
 writeFileSync(path.join(process.env.KYBERN_CLIENT_CONFIG_DIR!,'bench-control.json'),JSON.stringify({port:server.port}))

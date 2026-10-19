@@ -71,3 +71,13 @@ waiting for every CPU build. Final A/B samples still reject every build overlap.
 `FLICK_VERIFY_CASES` selects comma-separated cases to resume a completed suite.
 `quiet-check.py` runs the actual quiet wrapper against isolated coordinator
 files and verifies SIGTERM/SIGINT stop its child and grandchild before release.
+
+Steady-state full-app checks also wait for provider lists, settings, the selected
+thread target and its matching model catalog before warmup/captures. Cold CLI
+provider discovery can otherwise add Hand off/composer controls between paired
+images; an arbitrary fixed delay does not establish equal UI state. Preview
+comparisons additionally assert matched actual scroll offsets and real movement.
+
+Full-app pixel captures additionally share one loaded account-usage snapshot
+across both flags/themes. This controls the ring data while keeping all rings,
+colors and motion present. Timing runs never invoke that visual-only control.
