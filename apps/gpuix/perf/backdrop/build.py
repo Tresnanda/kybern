@@ -85,6 +85,7 @@ try:
                CARGO_BUILD_JOBS="4", CARGO_TARGET_DIR=str(app / "native/build/target"),
                KYBERN_VERIFY_OUTPUT="/Users/mymac/projects/ade/previews/gpuix/perf/backdrop/native-checks")
     Path(env["KYBERN_CLIENT_CONFIG_DIR"]).mkdir(parents=True, exist_ok=True)
+    env['KYBERN_BENCH_WHEEL_PREBUILT']=str(app/'native/build/backdrop-bench-wheel.dylib')
     env['KYBERN_WINDOW_GUARD']=str(app/'native/build/backdrop-window-guard')
     env['KYBERN_WINDOW_GUARD_LOG']=str(log.parent/'window-guards.jsonl')
     env['BUN_OPTIONS']='--preload='+str(app/'perf/backdrop/capture-preload.ts')
@@ -103,6 +104,7 @@ try:
         if "--stream-visual-only" in sys.argv: commands = [["bun", "native/ui-lease.ts", "backdrop-stream-visual", "bun", "perf/backdrop/stream-visual.ts"]]
         elif "--compositor-only" in sys.argv: commands = commands[-1:]
         elif finish_only: commands = commands[3:]
+        commands.insert(0,["clang", "-dynamiclib", "-fobjc-arc", "-framework", "Cocoa", "-framework", "CoreGraphics", "perf/bench/wheel.m", "-o", env['KYBERN_BENCH_WHEEL_PREBUILT']])
         for command in commands:
             if not screen_ready(): raise RuntimeError('Locked/asleep: pause native UI validation')
             child = subprocess.Popen(command, cwd=app, env=env, stdout=output,

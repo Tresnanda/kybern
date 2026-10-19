@@ -4,7 +4,7 @@ import {onExit} from './lifetime.ts'
 import { Database } from 'bun:sqlite'
 import { createHash } from 'node:crypto'
 import { spawn, execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, renameSync, readdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, renameSync, readdirSync, copyFileSync } from 'node:fs'
 import path from 'node:path'
 import { assertScratchEnv } from '../../src/requests/harness.ts'
 import { connect, gradientPng } from '../../visual/fixture.ts'
@@ -34,7 +34,9 @@ export async function seed(data = DEFAULT_DATA, port = 4322) {
   if(Number(readFileSync(path.join(data,'daemon.port'),'utf8'))!==port)throw Error('Scratch daemon port mismatch')
   client=await connect({daemonPid:daemon.pid!,port,token:readFileSync(path.join(data,'daemon.token'),'utf8').trim(),seeded:false})
   const wheelTemp=path.join(data,`bench-wheel-${process.pid}.dylib`)
-  execFileSync('clang',['-dynamiclib','-fobjc-arc','-framework','Cocoa','-framework','CoreGraphics',path.join(import.meta.dir,'wheel.m'),'-o',wheelTemp])
+  const prebuiltWheel=process.env.KYBERN_BENCH_WHEEL_PREBUILT
+  if(prebuiltWheel)copyFileSync(prebuiltWheel,wheelTemp)
+  else execFileSync('clang',['-dynamiclib','-fobjc-arc','-framework','Cocoa','-framework','CoreGraphics',path.join(import.meta.dir,'wheel.m'),'-o',wheelTemp])
   renameSync(wheelTemp,path.join(data,'bench-wheel.dylib'))
   let manifest:Manifest
   const manifestFile=path.join(data,'bench-manifest.json')
