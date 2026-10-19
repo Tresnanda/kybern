@@ -9,9 +9,8 @@ Run from `apps/gpuix`:
 
 ```
 python3 perf/backdrop/build.py
-bun native/ui-lease.ts perf-backdrop-kernel bun perf/backdrop/kernel-check.ts
-bun perf/backdrop/quiet.ts bun perf/backdrop/measure.ts diagnosis
-bun perf/backdrop/quiet.ts bun perf/backdrop/measure.ts acceptance
+bun perf/backdrop/quiet.ts bun perf/backdrop/final.ts
+bun perf/backdrop/quiet.ts bun perf/backdrop/final.ts details
 pnpm exec tsc -p perf/backdrop/tsconfig.json
 ```
 
