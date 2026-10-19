@@ -11,6 +11,7 @@
 // One 900 ms timer reads position and appearance; it never reads window size.
 // Every failure falls back to GPUI's default (the window just keeps its size).
 import { dlopen, FFIType, type Pointer } from 'bun:ffi'
+import { readFileSync } from 'node:fs'
 import type { NativeRenderer } from '@gpuix/react'
 import { cls, cstr, each, getObjc, nsApp, sel, type Objc } from '../native/objc.ts'
 import { onWindowResize } from '../native/layout.ts'
@@ -21,7 +22,8 @@ import { refreshAccessibilityDisplay } from '../platform/material.ts'
 
 const FRAME_KEY = 'kybern.window.frame'
 const POLL_MS = 900
-/** Automated runs (`GPUIX_BACKGROUND=1`) open hidden, then show on the Mac's built-in display (or at
+/** Automated runs (`GPUIX_BACKGROUND=1`) open hidden, then show on the hidden test display (id in
+ *  `/tmp/kybern-gpuix-test-display`) or else the Mac's built-in display (or at
  *  `KYBERN_AUTOMATION_WINDOW_FRAME`), never where the user works: GPUI centers new windows on the
  *  focused screen. They never restore or save the user's frame. `KYBERN_TEST_DISPLAY=any` opts out. */
 const automated = process.env.GPUIX_BACKGROUND === '1' && process.env.KYBERN_TEST_DISPLAY !== 'any'
@@ -63,8 +65,13 @@ export function restoreWindowFrame(): boolean {
     const o = getObjc()
     const window = appWindow(o, true)
     if (!window) return false
-    const saved = automated ? (process.env.KYBERN_AUTOMATION_WINDOW_FRAME ?? builtinFrame(o, window)) : load<string | null>(FRAME_KEY, null)
+    const saved = automated ? process.env.KYBERN_AUTOMATION_WINDOW_FRAME : load<string | null>(FRAME_KEY, null)
     if (saved) o.msgSetPtr(window, sel(o, 'setFrameFromString:'), nsString(o, saved))
+    else if (automated) {
+      // A frame string is snapped back onto the main screen, so the test display is set by origin.
+      const origin = automationOrigin(o, window)
+      if (origin) setFrameOrigin(window, sel(o, 'setFrameOrigin:'), origin[0], origin[1])
+    }
     if ((Number(o.msgU64(window, sel(o, 'isVisible'))) & 0xff) === 0) {
       // Automation runs (`GPUIX_BACKGROUND`) must not take the keyboard.
       if (process.env.GPUIX_BACKGROUND === '1') o.msgSetPtr(window, sel(o, 'orderFront:'), null as unknown as Pointer)
@@ -88,21 +95,31 @@ function rectOf(o: Objc, object: Pointer, key: string): Rect | null {
   return n && n.length >= 4 ? [n[0]!, n[1]!, n[2]!, n[3]!] : null
 }
 
-/** A saved-frame string centering `window` (at its current size) on the built-in display; null without one. */
-function builtinFrame(o: Objc, window: Pointer): string | null {
+let setFrameOrigin: (window: Pointer, selector: Pointer, x: number, y: number) => void = (window, selector, x, y) => {
+  // NSPoint is two doubles, passed in floating-point registers like two plain arguments.
+  const { symbols } = dlopen('/usr/lib/libobjc.A.dylib', { objc_msgSend: { args: [FFIType.ptr, FFIType.ptr, FFIType.f64, FFIType.f64], returns: FFIType.void } })
+  setFrameOrigin = (w, s, px, py) => symbols.objc_msgSend(w, s, px, py)
+  setFrameOrigin(window, selector, x, y)
+}
+
+/** The bottom-left origin centering `window` (at its current size) on the test display, else the
+ *  built-in display; null without either. */
+function automationOrigin(o: Objc, window: Pointer): [number, number] | null {
   const { symbols } = dlopen('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics', { CGDisplayIsBuiltin: { args: [FFIType.u32], returns: FFIType.bool } })
-  const size = rectOf(o, window, 'frame')
-  let found: string | null = null
+  let test: number | null = null
+  try { test = Number(readFileSync('/tmp/kybern-gpuix-test-display', 'utf8').trim()) || null } catch { /* No test display. */ }
+  const screens: Array<{ screen: Pointer; id: number }> = []
   each(o, o.msg(cls(o, 'NSScreen')!, sel(o, 'screens')) as Pointer, (screen) => {
-    const info = found || !size ? null : (o.msg(screen, sel(o, 'deviceDescription')) as Pointer | null)
+    const info = o.msg(screen, sel(o, 'deviceDescription')) as Pointer | null
     const number = info && (o.msgPtrArg(info, sel(o, 'objectForKey:'), nsString(o, 'NSScreenNumber')) as Pointer | null)
-    if (!number || !symbols.CGDisplayIsBuiltin(Number(o.msgU64(number, sel(o, 'unsignedIntValue'))))) return
-    const frame = rectOf(o, screen, 'frame'), visible = rectOf(o, screen, 'visibleFrame')
-    if (!frame || !visible) return
-    const [, , w, h] = size!, [vx, vy, vw, vh] = visible
-    found = `${Math.round(vx + Math.max(0, vw - w) / 2)} ${Math.round(vy + Math.max(0, vh - h) / 2)} ${w} ${h} ${frame.join(' ')}`
+    if (number) screens.push({ screen, id: Number(o.msgU64(number, sel(o, 'unsignedIntValue'))) })
   })
-  return found
+  const target = screens.find((s) => s.id === test) ?? screens.find((s) => symbols.CGDisplayIsBuiltin(s.id))
+  const size = rectOf(o, window, 'frame')
+  const visible = target && size ? rectOf(o, target.screen, 'visibleFrame') : null
+  if (!visible || !size) return null
+  const [, , w, h] = size, [vx, vy, vw, vh] = visible
+  return [Math.round(vx + Math.max(0, vw - w) / 2), Math.round(vy + Math.max(0, vh - h) / 2)]
 }
 
 /** Retry until GPUI has opened its window (a few frames after `render`). */
