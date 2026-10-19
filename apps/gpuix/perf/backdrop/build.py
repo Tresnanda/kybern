@@ -74,8 +74,10 @@ try:
                CARGO_BUILD_JOBS="4", CARGO_TARGET_DIR=str(app / "native/build/target"),
                KYBERN_VERIFY_OUTPUT="/Users/mymac/projects/ade/previews/gpuix/perf/backdrop/native-checks")
     Path(env["KYBERN_CLIENT_CONFIG_DIR"]).mkdir(parents=True, exist_ok=True)
+    env['KYBERN_WINDOW_GUARD']=str(app/'native/build/backdrop-window-guard')
+    env['PATH']=str(app/'perf/backdrop')+os.pathsep+env['PATH']
     with log.open("a" if finish_only else "w") as output:
-        commands = [["clang", "-dynamiclib", "-fobjc-arc", "-framework", "Cocoa", "-framework", "CoreGraphics", "perf/explorer/wheel.m", "-o", str(app/"native/build/gpu-wheel.dylib")],
+        commands = [["swiftc", "perf/backdrop/window-guard.swift", "-o", env["KYBERN_WINDOW_GUARD"]], ["clang", "-dynamiclib", "-fobjc-arc", "-framework", "Cocoa", "-framework", "CoreGraphics", "perf/explorer/wheel.m", "-o", str(app/"native/build/gpu-wheel.dylib")],
                     ["nice", "-n", "15", "sh", "native/update.sh"],
                     ["pnpm", "exec", "tsc", "-p", "native/tsconfig.json"],
                     ["rustc", "--edition=2021", "--test", "native/patches/backdrop_kernel.rs", "-o", "native/build/backdrop-kernel-tests"],
@@ -87,7 +89,7 @@ try:
                     ["bun", "native/ui-lease.ts", "backdrop-compositor", "bun", "perf/backdrop/compositor.ts"]]
         if "--stream-visual-only" in sys.argv: commands = [["bun", "native/ui-lease.ts", "backdrop-stream-visual", "bun", "perf/backdrop/stream-visual.ts"]]
         elif "--compositor-only" in sys.argv: commands = commands[-1:]
-        elif finish_only: commands = commands[2:]
+        elif finish_only: commands = commands[3:]
         for command in commands:
             if not screen_ready(): raise RuntimeError('Locked/asleep: pause native UI validation')
             child = subprocess.Popen(command, cwd=app, env=env, stdout=output,

@@ -47,7 +47,7 @@ try {
  // display can keep the retained tree active while no Metal frames submit.
  awake=Bun.spawn(['/usr/bin/caffeinate','-d','-w',String(process.pid),'-t','1500'],{stdout:'ignore',stderr:'ignore'})
  deadline=setTimeout(stop,24*60_000+50_000)
- child=Bun.spawn(process.argv.slice(2),{env:{...process.env,KYBERN_BENCH_SCREEN_STATE_SCRIPT:screenScript},stdin:'inherit',stdout:'inherit',stderr:'inherit'})
+ child=Bun.spawn(process.argv.slice(2),{env:{...process.env,KYBERN_WINDOW_GUARD:new URL('../../native/build/backdrop-window-guard',import.meta.url).pathname,KYBERN_BENCH_SCREEN_STATE_SCRIPT:screenScript},stdin:'inherit',stdout:'inherit',stderr:'inherit'})
  process.exitCode=await child.exited
 } finally {
  if(deadline)clearTimeout(deadline)

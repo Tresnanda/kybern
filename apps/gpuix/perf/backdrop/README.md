@@ -38,3 +38,11 @@ and may rescore against existing desktop images. Prior headed compositor evidenc
 is retained from before the monitor restriction; future runs use headless pages
 and cannot establish compositor pixels. Every native window stays on the built-in
 primary display; never activate/focus a window.
+
+The active acceptance suite is the requested four scenarios. Dedicated idle runs
+set `KYBERN_BENCH_PERSISTED_IDLE=1`, disable the inter-window counter RPC and use
+20s settling followed by three 15s samples. The shared default fixture persists a
+running thread; frontend-only `idle` overrides can be restored by refresh. Raw
+first-iteration idle results remain archived, including late submissions.
+
+Captures and resource windows require the window to be on-screen and wholly inside a built-in display. `window-guard.swift` uses the CoreGraphics on-screen window list and active built-in display bounds; the capture wrapper retries occlusion without moving or focusing windows. Native automation screenshots have the same pre/post guard. Resource windows guard both endpoints and reject invalid measurements.

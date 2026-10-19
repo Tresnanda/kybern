@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""Reject occluded captures; never focus or move a window."""
+import os,subprocess,sys,time
+args=sys.argv[1:]
+if '-l' not in args: raise SystemExit('Only window captures are allowed')
+window=args[args.index('-l')+1]
+guard=os.environ['KYBERN_WINDOW_GUARD']
+deadline=time.monotonic()+90
+while time.monotonic()<deadline:
+ if subprocess.run([guard,'--window',window],stderr=subprocess.DEVNULL).returncode:
+  time.sleep(1);continue
+ result=subprocess.run(['/usr/sbin/screencapture',*args])
+ if result.returncode: raise SystemExit(result.returncode)
+ if subprocess.run([guard,'--window',window],stderr=subprocess.DEVNULL).returncode==0: raise SystemExit(0)
+ time.sleep(1)
+raise SystemExit('Capture discarded: window remained occluded/outside built-in display')

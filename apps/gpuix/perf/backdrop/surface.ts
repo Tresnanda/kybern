@@ -1,3 +1,4 @@
+import {waitForWindow,requireWindow} from './window-guard.ts'
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import {mkdirSync,writeFileSync} from 'node:fs'
@@ -18,6 +19,7 @@ try{for(const kernel of ['0','1']){
   await f.app.getByTestId('glass').waitFor();await drive(f.app,{x:100,y:470},10000)
   for(let run=1;run<=4;run++){
    const idle=run===4;if(idle)await Bun.sleep(1000)
+   await waitForWindow(f.pid)
    const watch=watchRun(),mark=telemetry.mark()
    const sampler=Bun.spawn(['bun','perf/sample.ts','15',`GPUIX=${f.pid}`],{stdout:'pipe',stderr:'pipe'})
    const unsampler=onExit(async()=>{sampler.kill();await sampler.exited})
@@ -25,7 +27,7 @@ try{for(const kernel of ['0','1']){
    const input=idle?undefined:await drive(f.app,{x:100,y:470},15000)
    if(idle)await Bun.sleep(15000)
    const measured=telemetry.result(mark,input?.sent),text=await output,errors=await error
-   assert.equal(await sampler.exited,0,errors);unsampler();const resources=parseResources(text),gate=watch.finish()
+   assert.equal(await sampler.exited,0,errors);unsampler();const resources=parseResources(text),gate=watch.finish();requireWindow(f.pid)
    assert.ok(!gate.overlap&&!gate.orphanOverlap&&!gate.screenInvalid,'Invalid measurement window')
    if(!idle)requireActiveSample(measured.frames.count,resources.gpuMs,15)
    else assert.equal(measured.frames.count,0,'Static frosted surface must park')

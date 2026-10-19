@@ -34,7 +34,8 @@ for label in labels:
 fmt=lambda x:'—' if x is None else f'{x:.2f}'
 lines=[]
 for label,d in summary.items():
- lines+=['## '+label,'','| Scenario | p50/p95/p99 ms | >16.7/>33 | Proxy p95 | CPU % | GPU ms/15s | GPU ms/submission | CPU ms/submission | MiB |','|---|---:|---:|---:|---:|---:|---:|---:|---:|']
+ seconds=d['meta']['resourceSeconds']
+ lines+=['## '+label,'','| Scenario | p50/p95/p99 ms | >16.7/>33 | Proxy p95 | CPU % | GPU ms/'+str(seconds)+'s | GPU ms/submission | CPU ms/submission | MiB |','|---|---:|---:|---:|---:|---:|---:|---:|---:|']
  for name,f in d['scenarios'].items():
   lines.append('| '+name+' | '+ '/'.join(fmt(f['ms'+q]) for q in ['p50','p95','p99'])+' | '+ '/'.join(fmt(f[k]) for k in ['over16_7','over33'])+' | '+ ' | '.join(fmt(f[k]) for k in ['proxyP95','cpuPercent','gpuMs','gpuMsPerSubmission','cpuMsPerSubmission','footprintMiB'])+' |')
  lines+=['']
