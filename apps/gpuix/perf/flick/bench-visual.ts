@@ -27,9 +27,10 @@ try{
     await until(async()=>(await control('state')).listsLoaded,'sidebar data')
     await control('idle');await control('open',{thread:fixture.manifest.long3000});await a.getByTestId('transcript-surface').waitFor()
     for(const view of ['tree','markdown','code']){
+     console.log('preview',theme,flag,view)
      await control('explorer',view==='tree'?{}:{file:view==='markdown'?fixture.manifest.markdown:fixture.manifest.code})
      if(view==='tree'){
-      await a.getByTestId('dock-file-tree-focus').waitFor();await a.getByTestId('dock-file-expanded').click()
+      await a.getByTestId('dock-file-tree-focus').waitFor();await a.getByTestId('dock-file-expanded').waitFor();await a.getByTestId('dock-file-expanded').click()
       await until(async()=>(await a.call('getPaintedText',{})).text.join('\n').includes('row-00000'),'expanded tree')
      }else await until(async()=>new RegExp(view==='code'?'item0|item64':'Result 1|BENCH_RESULT_1').test((await a.call('getPaintedText',{})).text.join('\n')),'formatted preview')
      await a.call('blur',{});await a.mouse.move({x:1200,y:4});await Bun.sleep(1000)
