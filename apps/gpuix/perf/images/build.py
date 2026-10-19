@@ -67,6 +67,7 @@ try:
         output.flush()
         commands = ([] if frames_only else [["nice", "-n", "15", "sh", "native/update.sh"]]) + [
                     ["python3", "perf/images/check-frames.py"],
+                    ["python3", "perf/images/check-large-alloc.py"],
                     ["pnpm", "exec", "tsc", "-p", "native/tsconfig.json"],
                     ["pnpm", "exec", "tsc", "-p", "perf/images/tsconfig.json"]]
         for command in commands:

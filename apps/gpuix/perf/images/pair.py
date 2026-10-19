@@ -44,7 +44,7 @@ try:
     addon = app / 'native/build/gpuix-native.darwin-arm64.node'
     # The archived control predates hidden-display placement. Use its explicit
     # same-binary legacy switches so every A/B opens on the test display.
-    legacy = {'KYBERN_EDITOR_LAYOUT_IMAGE_MEMORY': '0', 'KYBERN_IMAGE_FRAME_MOVE': '0', 'KYBERN_EDITOR_IMAGE_RELIEF': '0'}
+    legacy = {'KYBERN_EDITOR_LAYOUT_IMAGE_MEMORY': '0', 'KYBERN_IMAGE_FRAME_MOVE': '0', 'KYBERN_LARGE_ALLOCATIONS_VM': '0'}
     jobs = [(label, ['bun', 'perf/memory/' + ('visual.ts' if mode == 'visual' else 'lab-run.ts'), label],
              {'NAPI_RS_NATIVE_LIBRARY_PATH': str(addon), 'KYBERN_MEMORY_LANE': lane,
               **({'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_MEMORY_HEAP': '1',
@@ -60,7 +60,7 @@ try:
     if mode == 'allocator':
         common = {'NAPI_RS_NATIVE_LIBRARY_PATH': str(addon), 'KYBERN_MEMORY_LANE': lane,
                   'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1',
-                  'KYBERN_MEMORY_HEAP': '1', 'KYBERN_EDITOR_IMAGE_RELIEF': '0'}
+                  'KYBERN_MEMORY_HEAP': '1', 'KYBERN_EDITOR_IMAGE_RELIEF': '0', 'KYBERN_LARGE_ALLOCATIONS_VM': '0'}
         jobs = [
             ('allocator-cache-on', ['bun', 'perf/memory/lab-run.ts', 'allocator-cache-on'], common),
             ('allocator-cache-off', ['bun', 'perf/memory/lab-run.ts', 'allocator-cache-off'], {**common, 'MallocLargeCache': '0', 'KYBERN_MEMORY_EDITOR_ROUNDS': '2'}),
@@ -69,9 +69,9 @@ try:
         common = {'NAPI_RS_NATIVE_LIBRARY_PATH': str(addon), 'KYBERN_MEMORY_LANE': lane}
         product = {'KYBERN_DATA_DIR': str(data) + '-product', 'KYBERN_MEMORY_GROUPS': 'image-thread', 'KYBERN_MEMORY_IMAGE_THREAD': '1'}
         jobs = [
-            ('control-legacy-note', ['bun', 'perf/memory/lab-run.ts', 'control-legacy-note'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_EDITOR_LAYOUT_IMAGE_MEMORY': '0', 'KYBERN_IMAGE_FRAME_MOVE': '0'}),
-            ('control-owner-note', ['bun', 'perf/memory/lab-run.ts', 'control-owner-note'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_IMAGE_FRAME_MOVE': '0', 'KYBERN_EDITOR_IMAGE_RELIEF': '0'}),
-            ('control-move-note', ['bun', 'perf/memory/lab-run.ts', 'control-move-note'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_EDITOR_IMAGE_RELIEF': '0'}),
+            ('control-legacy-note', ['bun', 'perf/memory/lab-run.ts', 'control-legacy-note'], {**common, **legacy, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1'}),
+            ('control-owner-note', ['bun', 'perf/memory/lab-run.ts', 'control-owner-note'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_IMAGE_FRAME_MOVE': '0', 'KYBERN_LARGE_ALLOCATIONS_VM': '0'}),
+            ('control-move-note', ['bun', 'perf/memory/lab-run.ts', 'control-move-note'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_LARGE_ALLOCATIONS_VM': '0'}),
             ('after-note', ['bun', 'perf/memory/lab-run.ts', 'after-note'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_MEMORY_EDITOR_ROUNDS': '2', 'KYBERN_MEMORY_HEAP': '1'}),
             ('after-lab', ['bun', 'perf/memory/lab-run.ts', 'after-lab'], common),
             ('before-thread', ['bun', 'perf/memory/run.ts', 'before-thread'], {**common, **product, **legacy}),
@@ -83,6 +83,27 @@ try:
             ('lightbox-diff', ['bun', 'perf/images/visual-diff.ts', '--lightbox'], common),
             ('src-tests', ['bun', '-e', r"const {lease}=await import('./perf/memory/lease.ts');const release=await lease();try{const test=Bun.spawn(['bun','test','./src'],{env:{...process.env,KYBERN_PACING_PARENT_LEASE:process.cwd().replace(/\/apps\/gpuix$/,'')},stdout:'inherit',stderr:'inherit'});process.exitCode=await test.exited}finally{release()}"], common),
             ('after-note-stacks', ['bun', 'perf/memory/lab-run.ts', 'after-note-stacks'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_MEMORY_HEAP': '1', 'KYBERN_MEMORY_STACKS': '1'}),
+        ]
+    if mode in ['vm-resources', 'vm-checks']:
+        common = {'NAPI_RS_NATIVE_LIBRARY_PATH': str(addon), 'KYBERN_MEMORY_LANE': lane}
+        system = {**common, 'KYBERN_LARGE_ALLOCATIONS_VM': '0'}
+        note = {'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_MEMORY_EDITOR_ROUNDS': '2', 'KYBERN_MEMORY_HEAP': '1'}
+        product = {'KYBERN_DATA_DIR': str(data) + '-product', 'KYBERN_MEMORY_GROUPS': 'image-thread', 'KYBERN_MEMORY_IMAGE_THREAD': '1'}
+        jobs = [
+            ('before-vm-note', ['bun', 'perf/memory/lab-run.ts', 'before-vm-note'], {**system, **note}),
+            ('after-vm-note', ['bun', 'perf/memory/lab-run.ts', 'after-vm-note'], {**common, **note}),
+            ('before-vm-lab', ['bun', 'perf/memory/lab-run.ts', 'before-vm-lab'], system),
+            ('after-vm-lab', ['bun', 'perf/memory/lab-run.ts', 'after-vm-lab'], common),
+            ('before-vm-thread', ['bun', 'perf/memory/run.ts', 'before-vm-thread'], {**system, **product}),
+            ('after-vm-thread', ['bun', 'perf/memory/run.ts', 'after-vm-thread'], {**common, **product}),
+        ] if mode == 'vm-resources' else [
+            ('before-final', ['bun', 'perf/memory/visual.ts', 'before-final'], system),
+            ('after-final', ['bun', 'perf/memory/visual.ts', 'after-final'], common),
+            ('visual-diff', ['bun', 'perf/images/visual-diff.ts'], common),
+            ('lightbox-before', ['bun', 'perf/images/verify-run.ts'], {**system, 'KYBERN_IMAGE_VERIFY_LABEL': 'before'}),
+            ('lightbox-after', ['bun', 'perf/images/verify-run.ts'], {**common, 'KYBERN_IMAGE_VERIFY_LABEL': 'after'}),
+            ('lightbox-diff', ['bun', 'perf/images/visual-diff.ts', '--lightbox'], common),
+            ('src-tests', ['bun', '-e', r"const {lease}=await import('./perf/memory/lease.ts');const release=await lease();try{const test=Bun.spawn(['bun','test','./src'],{env:{...process.env,KYBERN_PACING_PARENT_LEASE:process.cwd().replace(/\/apps\/gpuix$/,'')},stdout:'inherit',stderr:'inherit'});process.exitCode=await test.exited}finally{release()}"], common),
         ]
     for label, command, extra in jobs:
         env = dict(os.environ, KYBERN_DATA_DIR=str(data), KYBERN_CLIENT_CONFIG_DIR=str(data / 'client'),

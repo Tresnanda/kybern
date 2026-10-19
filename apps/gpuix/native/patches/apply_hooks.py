@@ -569,6 +569,7 @@ exec((Path(__file__).parent / "image_memory_hooks.py").read_text())
 exec((Path(__file__).parent / "automation_display_hooks.py").read_text())
 
 exec((Path(__file__).parent / "image_owner_hooks.py").read_text())
+exec((Path(__file__).parent / "large_alloc_hooks.py").read_text())
 
 for path, text in pending.items():
     (src / path).write_text(text)

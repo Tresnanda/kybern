@@ -1,11 +1,14 @@
 """Collect validated hidden-display image pairs without rewriting other lanes."""
 import json
 import os
+import sys
 from pathlib import Path
 
 out = Path(os.environ.get('KYBERN_MEMORY_EVIDENCE', '/Users/mymac/projects/ade/previews/gpuix/perf/images'))
 names = ['before-note', 'control-legacy-note', 'control-owner-note', 'control-move-note', 'after-note',
          'before-lab', 'after-lab', 'before-thread-app', 'after-thread-app']
+if '--vm' in sys.argv:
+    names = ['before-vm-note', 'after-vm-note', 'before-vm-lab', 'after-vm-lab', 'before-vm-thread-app', 'after-vm-thread-app']
 summary = {}
 for name in names:
     folder = out / name
