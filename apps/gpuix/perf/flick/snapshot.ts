@@ -10,14 +10,21 @@ for(const flag of ['0','1']){
   await f.app.getByTestId('snapshot-ready').waitFor()
   const {port}=JSON.parse(readFileSync(path.join(data,'snapshot-control.json'),'utf8'))
   let previous=10
-  for(const moved of [true,false,true]){
-   const r=await(await fetch(`http://127.0.0.1:${port}`,{method:'POST',body:JSON.stringify({moved})})).json() as {before:{x:number};after:{x:number};tree:unknown}
+  for(const kind of ['tree','image'])for(const moved of kind==='tree'?[true,false,true]:[false,true,false]){
+   const r=await(await fetch(`http://127.0.0.1:${port}`,{method:'POST',body:JSON.stringify({moved,kind})})).json() as {before:{x:number};after:{x:number};tree:unknown}
    const expected=moved?120:10
    const find=(node:any):any=>Array.isArray(node)?node.map(find).find(Boolean):node?.testId==='snapshot-moving'?node:(node?.children??[]).map(find).find(Boolean)
    assert.equal(r.before.x,flag==='1'?previous:expected,'ordinary painted-bounds read must not draw in display-paced mode')
-   assert.equal(find(r.tree)?.bounds?.x,expected,'synchronous tree snapshot must finish its requested paint')
+   if(kind==='tree')assert.equal(find(r.tree)?.bounds?.x,expected,'synchronous tree snapshot must finish its requested paint')
    assert.equal(r.after.x,expected,'snapshot must publish fresh painted bounds')
-   results.push({flag,moved,before:r.before,after:r.after});previous=expected
+   results.push({flag,kind,moved,before:r.before,after:r.after});previous=expected
+  }
+  for(const clock of ['pause','resume']){
+   const moved=clock==='pause',expected=moved?120:10
+   const r=await(await fetch(`http://127.0.0.1:${port}`,{method:'POST',body:JSON.stringify({moved,kind:'tree',clock})})).json() as {before:{x:number};after:{x:number}}
+   assert.equal(r.before.x,clock==='pause'||flag==='0'?expected:120,'controlled clock is eager only until resume')
+   assert.equal(r.after.x,expected,'explicit tree snapshot stays fresh after clock control')
+   results.push({flag,clock,before:r.before,after:r.after})
   }
   await f.app.getByTestId('snapshot-moving').click()
   await f.app.screenshot({path:`${out}/frame-${flag}.png`})

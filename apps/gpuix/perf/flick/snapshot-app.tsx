@@ -15,10 +15,13 @@ function Fixture(){
  return <div testId="snapshot-ready" style={{display:'flex',width:'100%',height:'100%',position:'relative',backgroundColor:'#ffffff'}}><div ref={node=>{movingId=node?.id??0}} testId="snapshot-moving" style={{position:'absolute',left:moved?120:10,top:20,width:80,height:30,backgroundColor:'#2475ca'}}><text style={{color:'#ffffff'}}>Bounds</text></div></div>
 }
 const server=Bun.serve({port:0,hostname:'127.0.0.1',async fetch(req){
- const {moved}=await req.json() as {moved:boolean}
+ const {moved,kind,clock}=await req.json() as {moved:boolean;kind:'tree'|'image';clock?:'pause'|'resume'}
+ if(clock==='pause')(renderer as unknown as {clockPause:()=>number}).clockPause()
+ if(clock==='resume')(renderer as unknown as {clockResume:()=>number}).clockResume()
  flushSync(()=>setMoved(moved))
  const before=renderer.getElementBounds?.(movingId)
- const tree=JSON.parse((renderer as unknown as {getAutomationTree:()=>string}).getAutomationTree())
+ const tree=kind==='tree'?JSON.parse((renderer as unknown as {getAutomationTree:()=>string}).getAutomationTree()):null
+ if(kind==='image')(renderer as unknown as {captureScreenshot:(file:string)=>void}).captureScreenshot(`/Users/mymac/projects/ade/previews/gpuix/perf/flick/snapshot/image-${process.env.KYBERN_INPUT_FRAME_DRAW}-${moved}.png`)
  const after=renderer.getElementBounds?.(movingId)
  return Response.json({before,tree,after})
 }})
