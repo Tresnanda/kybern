@@ -30,7 +30,7 @@ try{for(const kernel of ['0','1']){
    assert.equal(await sampler.exited,0,errors);unsampler();const resources=parseResources(text),gate=watch.finish();requireWindow(f.pid)
    assert.ok(!gate.overlap&&!gate.orphanOverlap&&!gate.screenInvalid,'Invalid measurement window')
    if(!idle)requireActiveSample(measured.frames.count,resources.gpuMs,15)
-   else assert.equal(measured.frames.count,0,'Static frosted surface must park')
+   else {assert.equal(measured.frames.count,0,'Static frosted surface must park');assert.equal(resources.gpuMs,0,'Static frosted surface must perform no GPU work')}
    results.push({kernel,run,idle,fullRate:'1',deviceSigma:32,logicalBlur:16,frames:measured.frames,proxy:measured.proxy,resources,gpuMsPerSubmission:measured.frames.count?resources.gpuMs/measured.frames.count:null,cpuMsPerSubmission:measured.frames.count?resources.cpuPercent*resources.sampleSeconds*10/measured.frames.count:null,inputPackets:input?.sent.length??0,maxOutstanding:input?.maxOutstanding??0,gate})
    writeFileSync(out+'/results.json',JSON.stringify(results,null,2));writeFileSync(`${out}/${kernel}-${run}-resources.txt`,text)
   }

@@ -43,12 +43,19 @@ try:
         time.sleep(1)
     reservation.write_text(f"{lane} {time.time()}\n")
     reserved = True
-    while list(tmp.glob("kybern-gpuix-quiet.*")) or list(tmp.glob("kybern-gpuix-native-build.*")):
-        time.sleep(1)
-    while not screen_ready(): time.sleep(60)
     import shutil
     if shutil.disk_usage(root).free < 30*1024**3: raise RuntimeError("Need 30 GiB free")
-    marker.write_text(f"{lane} {time.time()}\n")
+    while True:
+        if list(tmp.glob("kybern-gpuix-quiet.*")) or list(tmp.glob("kybern-gpuix-native-build.*")):
+            time.sleep(1);continue
+        if not screen_ready(): time.sleep(60);continue
+        if list(tmp.glob("kybern-gpuix-quiet.*")) or list(tmp.glob("kybern-gpuix-native-build.*")): continue
+        marker.write_text(f"{lane} {time.time()}\n")
+        conflict=lambda: list(tmp.glob("kybern-gpuix-quiet.*")) or [p for p in tmp.glob("kybern-gpuix-native-build.*") if p != marker]
+        if conflict(): marker.unlink(missing_ok=True);time.sleep(1);continue
+        time.sleep(.3)
+        if conflict(): marker.unlink(missing_ok=True);time.sleep(1);continue
+        break
     awake=subprocess.Popen(['/usr/bin/caffeinate','-d','-w',str(os.getpid())])
     (app / "native/build/backdrop-final-pending").write_text("Full updater pending\n")
     evidence=log.parent/"native-checks"
