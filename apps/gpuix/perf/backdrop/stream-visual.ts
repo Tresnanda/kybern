@@ -12,7 +12,7 @@ const fixture=await seed('/Users/mymac/projects/ade-gpuix-scratch/perf-backdrop-
 async function until(check:()=>Promise<boolean>,message:string){const end=Date.now()+30000;while(!await check()){if(Date.now()>end)throw Error(message);await Bun.sleep(40)}}
 try{for(const theme of ['dark','light'])for(const kernel of ['0','1']){
  requireScreen();const telemetry=new Telemetry(),client=path.join(fixture.data,'client',theme+kernel);mkdirSync(client,{recursive:true})
- const f=await launchFixture(path.resolve(import.meta.dir,'../bench/app.ts'),{...fixture.env,KYBERN_CLIENT_CONFIG_DIR:client,KYBERN_GPUIX_CREDENTIALS_DIR:path.join(client,'credentials'),KYBERN_GPUIX_THREAD:'',KYBERN_APPEARANCE:theme,KYBERN_BACKDROP_KERNEL:kernel,KYBERN_FULL_RATE:'1',KYBERN_GPU_TRACE:'1',KYBERN_FRAME_TIMES:'1',KYBERN_BENCH_STREAM_CATCHUP:'1',GPUIX_BACKGROUND:'1',KYBERN_PACING_IGNORE_PHYSICAL_MOUSE:'1'},{stderr:telemetry.stderr})
+ const f=await launchFixture(path.resolve(import.meta.dir,'../bench/app.ts'),{...fixture.env,KYBERN_CLIENT_CONFIG_DIR:client,KYBERN_GPUIX_CREDENTIALS_DIR:path.join(client,'credentials'),KYBERN_GPUIX_THREAD:'',KYBERN_AUTOMATION_WINDOW_FRAME:'80 40 1280 820 0 0 1440 900 ',KYBERN_APPEARANCE:theme,KYBERN_BACKDROP_KERNEL:kernel,KYBERN_FULL_RATE:'1',KYBERN_GPU_TRACE:'1',KYBERN_FRAME_TIMES:'1',KYBERN_BENCH_STREAM_CATCHUP:'1',GPUIX_BACKGROUND:'1',KYBERN_PACING_IGNORE_PHYSICAL_MOUSE:'1'},{stderr:telemetry.stderr})
  const unregister=onExit(()=>f.close())
  try{
   await f.app.getByTestId('app-ready').waitFor()
