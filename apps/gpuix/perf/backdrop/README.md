@@ -53,7 +53,7 @@ The shared bench may repeat discarded windows. Raw discards remain in JSON; the 
 
 Retain `native/build/backdrop-before.node` as the unique original reference (SHA256 `1145f7914ae87f5cedd5993fdced48f07ea09a3824aad781dcbd8d78d236a5f8`). The measurement wrapper verifies it; recreating it by copying an already optimized addon would invalidate the comparison.
 
-Production fixtures set `KYBERN_AUTOMATION_WINDOW_FRAME="80 40 1280 820 0 0 1440 900 "` with `GPUIX_BACKGROUND=1`. `shell/window.ts` then opens main hidden, restores that explicit scratch frame on the built-in display, and shows it without activation. This works with the unchanged original addon, and prevents an external-display flash or saved-frame drift during A/B. The guard remains required.
+Production fixtures use the shared automation policy: main opens hidden, computes the actual built-in display's visible frame, restores there and shows without activation. The pacing entry waits for restoration before reordering. This also works with the unchanged original addon and after the screen topology changes. No fixed display origin is assumed; the guard remains required.
 
 The build wrapper compiles `backdrop-bench-wheel.dylib` under its build marker. Quiet runs pass `KYBERN_BENCH_WHEEL_PREBUILT`, so the shared seeder atomically copies that helper into its scratch dataset and does not start Clang inside a quiet window.
 

@@ -23,9 +23,10 @@ if (process.env.KYBERN_PACING_RUNNING_ENTRY === '1') await import('../scripts/na
 else await import('../src/main.tsx')
 // The production window can start hidden for an explicit automation frame.
 // Restore before showing; ordering every window here would bypass main's guard.
-if (process.env.KYBERN_AUTOMATION_WINDOW_FRAME) {
+const automatedDisplay = process.env.GPUIX_BACKGROUND === '1' && process.env.KYBERN_TEST_DISPLAY !== 'any'
+if (automatedDisplay) {
   const {restoreWindowFrame} = await import('../src/shell/window.ts')
-  const deadline = Date.now() + 5000
+  const deadline = Date.now() + 10000
   while (!restoreWindowFrame()) {
     if (Date.now() >= deadline) throw Error('Automation frame could not be restored before showing')
     await Bun.sleep(25)
@@ -37,6 +38,6 @@ const o = getObjc(), app = nsApp()
 if (app) each(o, o.msg(app, sel(o, 'windows')) as Pointer, window => {
   o.msgSetI64(window, sel(o, 'setLevel:'), 3n)
   if(process.env.KYBERN_PACING_IGNORE_PHYSICAL_MOUSE==='1')o.msgSetBool(window,sel(o,'setIgnoresMouseEvents:'),true)
-  if (!process.env.KYBERN_AUTOMATION_WINDOW_FRAME) o.msg(window, sel(o, 'orderFrontRegardless'))
+  if (!automatedDisplay) o.msg(window, sel(o, 'orderFrontRegardless'))
 })
 export {}

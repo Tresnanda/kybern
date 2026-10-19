@@ -10,7 +10,7 @@
 //
 // One 900 ms timer reads position and appearance; it never reads window size.
 // Every failure falls back to GPUI's default (the window just keeps its size).
-import type { Pointer } from 'bun:ffi'
+import { dlopen, FFIType, type Pointer } from 'bun:ffi'
 import type { NativeRenderer } from '@gpuix/react'
 import { cls, cstr, each, getObjc, nsApp, sel, type Objc } from '../native/objc.ts'
 import { onWindowResize } from '../native/layout.ts'
@@ -21,10 +21,11 @@ import { refreshAccessibilityDisplay } from '../platform/material.ts'
 
 const FRAME_KEY = 'kybern.window.frame'
 const POLL_MS = 900
-// Automation chooses an explicit built-in-display frame before showing the
-// window. This also keeps original-addon A/B runs independent of saved frames.
-const automationFrame = process.env.GPUIX_BACKGROUND === '1' ? process.env.KYBERN_AUTOMATION_WINDOW_FRAME : undefined
-const savedFrame = () => automationFrame || load<string | null>(FRAME_KEY, null)
+/** Automated runs (`GPUIX_BACKGROUND=1`) open hidden, then show on the Mac's built-in display (or at
+ *  `KYBERN_AUTOMATION_WINDOW_FRAME`), never where the user works: GPUI centers new windows on the
+ *  focused screen. They never restore or save the user's frame. `KYBERN_TEST_DISPLAY=any` opts out. */
+const automated = process.env.GPUIX_BACKGROUND === '1' && process.env.KYBERN_TEST_DISPLAY !== 'any'
+const savedFrame = () => (automated ? 'automation' : load<string | null>(FRAME_KEY, null))
 
 const mac = process.platform === 'darwin'
 
@@ -57,17 +58,19 @@ export const hasSavedFrame = () => mac && !!savedFrame()
  */
 export function restoreWindowFrame(): boolean {
   if (!mac) return true
-  const saved = savedFrame()
-  if (!saved) return true
+  if (!savedFrame()) return true
   try {
-    const probe = process.env.KYBERN_BUILTIN_DISPLAY_PROBE
-    if (automationFrame && probe && Bun.spawnSync([probe], {stdout:'ignore',stderr:'ignore'}).exitCode !== 0) return false
     const o = getObjc()
     const window = appWindow(o, true)
     if (!window) return false
-    o.msgSetPtr(window, sel(o, 'setFrameFromString:'), nsString(o, saved))
-    if (automationFrame) {
-      const expected = automationFrame.trim().split(/\s+/).slice(0, 4).map(Number)
+    const probe = process.env.KYBERN_BUILTIN_DISPLAY_PROBE
+    if (automated && probe && Bun.spawnSync([probe], {stdout:'ignore',stderr:'ignore'}).exitCode !== 0) return false
+    const builtin = automated ? builtinFrame(o, window) : null
+    if (automated && probe && !builtin) return false
+    const saved = automated ? (process.env.KYBERN_AUTOMATION_WINDOW_FRAME ?? builtin) : load<string | null>(FRAME_KEY, null)
+    if (saved) o.msgSetPtr(window, sel(o, 'setFrameFromString:'), nsString(o, saved))
+    if (automated && saved) {
+      const expected = saved.trim().split(/\s+/).slice(0, 4).map(Number)
       const actual = readFrame(o, window)?.trim().split(/\s+/).slice(0, 4).map(Number)
       if (expected.length !== 4 || expected.some(value => !Number.isFinite(value)) || !actual || actual.length !== 4 || actual.some((value, i) => !Number.isFinite(value) || Math.abs(value - expected[i]!) > .5)) return false
     }
@@ -81,8 +84,34 @@ export function restoreWindowFrame(): boolean {
     }
     return true
   } catch {
-    return !automationFrame
+    return !automated
   }
+}
+
+type Rect = [number, number, number, number]
+/** An NSRect through KVC boxing (`valueForKey:` → NSValue description), so no struct FFI. */
+function rectOf(o: Objc, object: Pointer, key: string): Rect | null {
+  const boxed = o.msgPtrArg(object, sel(o, 'valueForKey:'), nsString(o, key)) as Pointer | null
+  const text = boxed ? String(o.msgCStr(o.msg(boxed, sel(o, 'description')) as Pointer, sel(o, 'UTF8String')) ?? '') : ''
+  const n = text.match(/-?\d+(?:\.\d+)?/g)?.map(Number)
+  return n && n.length >= 4 ? [n[0]!, n[1]!, n[2]!, n[3]!] : null
+}
+
+/** A saved-frame string centering `window` (at its current size) on the built-in display; null without one. */
+function builtinFrame(o: Objc, window: Pointer): string | null {
+  const { symbols } = dlopen('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics', { CGDisplayIsBuiltin: { args: [FFIType.u32], returns: FFIType.bool } })
+  const size = rectOf(o, window, 'frame')
+  let found: string | null = null
+  each(o, o.msg(cls(o, 'NSScreen')!, sel(o, 'screens')) as Pointer, (screen) => {
+    const info = found || !size ? null : (o.msg(screen, sel(o, 'deviceDescription')) as Pointer | null)
+    const number = info && (o.msgPtrArg(info, sel(o, 'objectForKey:'), nsString(o, 'NSScreenNumber')) as Pointer | null)
+    if (!number || !symbols.CGDisplayIsBuiltin(Number(o.msgU64(number, sel(o, 'unsignedIntValue'))))) return
+    const frame = rectOf(o, screen, 'frame'), visible = rectOf(o, screen, 'visibleFrame')
+    if (!frame || !visible) return
+    const [, , w, h] = size!, [vx, vy, vw, vh] = visible
+    found = `${Math.round(vx + Math.max(0, vw - w) / 2)} ${Math.round(vy + Math.max(0, vh - h) / 2)} ${w} ${h} ${frame.join(' ')}`
+  })
+  return found
 }
 
 /** Retry until GPUI has opened its window (a few frames after `render`). */
@@ -90,7 +119,8 @@ export function installWindowFrame() {
   if (frameReady) return
   let tries = 0
   const tick = () => {
-    if (restoreWindowFrame() || ++tries > 40) {
+    // Automated runs start on a busy machine; a window that opens hidden must still appear.
+    if (restoreWindowFrame() || ++tries > (automated ? 400 : 40)) {
       frameReady = true
       return
     }
@@ -149,7 +179,7 @@ export function startWindowShell(renderer: NativeRenderer) {
       const window = appWindow(o)
       if (!window) return
       const frame = readFrame(o, window)
-      if (frameReady && frame && frame !== lastFrame) {
+      if (frameReady && !automated && frame && frame !== lastFrame) {
         lastFrame = frame
         save(FRAME_KEY, frame)
       }

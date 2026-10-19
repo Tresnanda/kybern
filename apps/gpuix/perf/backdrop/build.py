@@ -88,7 +88,7 @@ try:
         shutil.copy2(addon,baseline)
     env = dict(os.environ, KYBERN_DATA_DIR="/Users/mymac/projects/ade-gpuix-scratch/perf-backdrop",
                KYBERN_CLIENT_CONFIG_DIR="/Users/mymac/projects/ade-gpuix-scratch/perf-backdrop/native-client",
-               KYBERN_URL="", KYBERN_TOKEN="", KYBERN_AUTOMATION_WINDOW_FRAME="80 40 1280 820 0 0 1440 900 ", KYBERN_TEST_DISPLAY="builtin", RUSTC_WRAPPER="", CARGO_INCREMENTAL="0",
+               KYBERN_URL="", KYBERN_TOKEN="", KYBERN_TEST_DISPLAY="builtin", RUSTC_WRAPPER="", CARGO_INCREMENTAL="0",
                CARGO_BUILD_JOBS="4", CARGO_TARGET_DIR=str(app / "native/build/target"),
                KYBERN_VERIFY_OUTPUT="/Users/mymac/projects/ade/previews/gpuix/perf/backdrop/native-checks")
     Path(env["KYBERN_CLIENT_CONFIG_DIR"]).mkdir(parents=True, exist_ok=True)
