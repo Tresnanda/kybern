@@ -1,7 +1,10 @@
 // Run beneath quiet.ts. Same addon, kernel flag only, complete realistic fixture.
+import {createHash} from 'node:crypto'
 import {readFileSync,writeFileSync,copyFileSync} from 'node:fs'
 import {onExit} from '../bench/lifetime.ts'
 import type {Result} from '../bench/model.ts'
+const original=new URL('../../native/build/backdrop-before.node',import.meta.url)
+if(createHash('sha256').update(readFileSync(original)).digest('hex')!=='1145f7914ae87f5cedd5993fdced48f07ea09a3824aad781dcbd8d78d236a5f8')throw Error('Original addon baseline does not match the supplied reference')
 const phase=process.argv[2]??'acceptance'
 for(const control of (phase==='original-reverse'?['1','old']:phase==='reverse'?['1','0']:['old','0','1'])) {
  const diagnostic=phase==='diagnosis'

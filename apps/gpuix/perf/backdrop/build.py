@@ -74,7 +74,11 @@ try:
                 (dest.parent if dest.suffix else dest).mkdir(parents=True,exist_ok=True)
     addon=app/"native/build/gpuix-native.darwin-arm64.node"
     baseline=app/"native/build/backdrop-before.node"
-    if not baseline.exists(): shutil.copy2(addon,baseline)
+    if not baseline.exists():
+        import hashlib
+        if hashlib.sha256(addon.read_bytes()).hexdigest() != '1145f7914ae87f5cedd5993fdced48f07ea09a3824aad781dcbd8d78d236a5f8':
+            raise RuntimeError('Missing original addon: restore the supplied 1145f791 baseline before rebuilding')
+        shutil.copy2(addon,baseline)
     env = dict(os.environ, KYBERN_DATA_DIR="/Users/mymac/projects/ade-gpuix-scratch/perf-backdrop",
                KYBERN_CLIENT_CONFIG_DIR="/Users/mymac/projects/ade-gpuix-scratch/perf-backdrop/native-client",
                KYBERN_URL="", KYBERN_TOKEN="", RUSTC_WRAPPER="", CARGO_INCREMENTAL="0",

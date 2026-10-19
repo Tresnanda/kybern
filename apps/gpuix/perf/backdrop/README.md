@@ -50,3 +50,5 @@ Captures and resource windows require the window to be on-screen and wholly insi
 The shared bench may repeat discarded windows. Raw discards remain in JSON; the acceptance wrapper requires the complete requested number of successful samples and excludes discarded samples from summaries.
 
 `window-guards.jsonl` retains accepted/rejected CoreGraphics window IDs, on-screen flags and display/window bounds. Two legacy native fixture viewports use 820-point content height (the native title bar adds 32 points) to fit the built-in display.
+
+Retain `native/build/backdrop-before.node` as the unique original reference (SHA256 `1145f7914ae87f5cedd5993fdced48f07ea09a3824aad781dcbd8d78d236a5f8`). The measurement wrapper verifies it; recreating it by copying an already optimized addon would invalidate the comparison.
