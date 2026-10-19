@@ -151,14 +151,3 @@ try {
   await f.close(); stop(); release(); leave()
 }
 
-// A separate unprofiled process is needed: malloc reads this option at startup.
-// This is an allocator diagnosis, never the normal application configuration.
-if (process.env.KYBERN_MEMORY_STACKS === '1' && process.env.KYBERN_MEMORY_ALLOCATOR_CONTROL !== '0') {
-  const allocatorControl = Bun.spawn(['bun', import.meta.filename, `${label}-allocator-control`], {
-    env: { ...process.env, KYBERN_MEMORY_STACKS: '0', KYBERN_MEMORY_HEAP: '1', KYBERN_EDITOR_IMAGE_RELIEF: '0', MallocLargeCache: '0' },
-    stdout: 'inherit', stderr: 'inherit',
-  })
-  const cancel = onExit(async () => { allocatorControl.kill(); await allocatorControl.exited })
-  assert.equal(await allocatorControl.exited, 0, 'Unprofiled allocator control must finish')
-  cancel()
-}
