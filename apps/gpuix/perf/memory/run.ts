@@ -69,7 +69,7 @@ try {
     if (process.env.KYBERN_MEMORY_LANE === 'perf-images') await assertBuiltInWindow(f.pid)
     if (warmup) { if (scroll) await drive(f.app, scroll, 10000); else await Bun.sleep(10000) }
     await f.app.call('blur', {})
-    if (process.env.KYBERN_MEMORY_LANE === 'perf-images') await assertBuiltInWindow(f.pid)
+    const testDisplayBefore = process.env.KYBERN_MEMORY_LANE === 'perf-images' ? await assertBuiltInWindow(f.pid) : null
     const gate = watchRun(), mark = telemetry.mark()
     const webkit = webkitProcesses().filter(process => !preexistingWebkit.has(process.pid))
     const sampler = Bun.spawn(['bun', path.join(import.meta.dir, '../sample.ts'), '15', `GPUIX=${f.pid}`], { stdout: 'pipe', stderr: 'pipe' })
@@ -84,7 +84,7 @@ try {
     const webkitExit = webSampler ? await webSampler.exited : 0; cancelWeb()
     const input = await offered
     const timing = telemetry.result(mark), overlap = gate.finish()
-    if (process.env.KYBERN_MEMORY_LANE === 'perf-images') await assertBuiltInWindow(f.pid)
+    const testDisplayAfter = process.env.KYBERN_MEMORY_LANE === 'perf-images' ? await assertBuiltInWindow(f.pid) : null
     if (scroll) requireActiveSample(timing.frames.count, parseResources(raw).gpuMs, 15)
     const prefix = `${group}-${name}`
     writeFileSync(path.join(out, `${prefix}-footprint.txt`), execFileSync('footprint', ['-p', String(f.pid)], { encoding: 'utf8' }))
@@ -94,7 +94,7 @@ try {
     }
     const attribution = await control('stats', {}, true) as { diagrams: { completed: number; failed: number } }
     if (name === 'mermaid-jobs-every-3s') assert(attribution.diagrams.completed >= 1, 'Mermaid must actually render')
-    rows.push({ group, name, input, fullRate: '1', ...timing, resources: parseResources(raw), webkitResources: webkitRaw && !webkitExit ? parseResources(webkitRaw) : null, webkitSampleError: webkitExit ? webkitError : null, webkitCandidates: webkit, webkitAttribution: 'New WebKit XPC services during this isolated fixture lease; external app launches can confound attribution. Main GPUIX resources remain separate.', attribution, counters: await control('counters'), gate: overlap })
+    rows.push({ group, name, testDisplayBefore, testDisplayAfter, input, fullRate: '1', ...timing, resources: parseResources(raw), webkitResources: webkitRaw && !webkitExit ? parseResources(webkitRaw) : null, webkitSampleError: webkitExit ? webkitError : null, webkitCandidates: webkit, webkitAttribution: 'New WebKit XPC services during this isolated fixture lease; external app launches can confound attribution. Main GPUIX resources remain separate.', attribution, counters: await control('counters'), gate: overlap })
     writeFileSync(path.join(out, 'results.json'), JSON.stringify(rows, null, 2))
     assert(!overlap.overlap && !overlap.orphanOverlap && !overlap.screenInvalid, 'Contended sample must be rerun')
    }

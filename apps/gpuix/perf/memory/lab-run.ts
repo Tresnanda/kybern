@@ -55,19 +55,19 @@ try {
     await f.app.call('blur', {})
     if (process.env.KYBERN_MEMORY_LANE === 'perf-images') await assertBuiltInWindow(f.pid)
     await Bun.sleep(10000)
-    if (process.env.KYBERN_MEMORY_LANE === 'perf-images') await assertBuiltInWindow(f.pid)
+    const testDisplayBefore = process.env.KYBERN_MEMORY_LANE === 'perf-images' ? await assertBuiltInWindow(f.pid) : null
     const gate = watchRun(), mark = telemetry.mark()
     const sample = Bun.spawn(['bun', path.join(import.meta.dir, '../sample.ts'), '15', `GPUIX=${f.pid}`], { stdout: 'pipe', stderr: 'pipe' })
     const cancel = onExit(async () => { sample.kill(); await sample.exited })
     const raw = await new Response(sample.stdout).text(); assert.equal(await sample.exited, 0); cancel()
     const timing = telemetry.result(mark), overlap = gate.finish()
-    if (process.env.KYBERN_MEMORY_LANE === 'perf-images') await assertBuiltInWindow(f.pid)
+    const testDisplayAfter = process.env.KYBERN_MEMORY_LANE === 'perf-images' ? await assertBuiltInWindow(f.pid) : null
     const footprint = execFileSync('footprint', ['-p', String(f.pid)], { encoding: 'utf8' })
     const vmmap = execFileSync('vmmap', ['-summary', String(f.pid)], { encoding: 'utf8' })
     writeFileSync(path.join(out, `${name}-footprint.txt`), footprint)
     writeFileSync(path.join(out, `${name}-vmmap.txt`), vmmap)
     writeFileSync(path.join(out, `${name}-resources.txt`), raw)
-    rows.push({ name, sceneSubmissionProxyMs: distribution(sceneLatency), sceneSubmissionSamples: sceneLatency.length, fullRate: '1', ...timing, resources: parseResources(raw), attribution: await control({ action: 'stats' }), gate: overlap })
+    rows.push({ name, testDisplayBefore, testDisplayAfter, sceneSubmissionProxyMs: distribution(sceneLatency), sceneSubmissionSamples: sceneLatency.length, fullRate: '1', ...timing, resources: parseResources(raw), attribution: await control({ action: 'stats' }), gate: overlap })
     writeFileSync(path.join(out, 'results.json'), JSON.stringify(rows, null, 2))
     assert(!overlap.overlap && !overlap.orphanOverlap && !overlap.screenInvalid, 'Contended sample must be rerun')
   }

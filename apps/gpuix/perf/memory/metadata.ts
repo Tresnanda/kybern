@@ -13,7 +13,7 @@ export function metadata(out: string, addon: string, sampled = true) {
     memoryFlags: Object.fromEntries(['KYBERN_EDITOR_LAYOUT_IMAGE_MEMORY', 'KYBERN_IMAGE_FRAME_MOVE', 'KYBERN_IMAGE_MEMORY', 'KYBERN_EDITOR_IMAGE_MEMORY', 'KYBERN_FRAME_MEMORY', 'KYBERN_EDITOR_DETACH_MEMORY', 'KYBERN_MEMORY_EDITOR_MANY', 'KYBERN_MEMORY_EDITOR_EDITABLE', 'KYBERN_MEMORY_RELIEF', 'KYBERN_MEMORY_STACKS'].map(key => [key, process.env[key] ?? 'app default'])),
     hardware: command('sysctl', ['-n', 'machdep.cpu.brand_string']),
     macOS: command('sw_vers', ['-productVersion']), bun: Bun.version,
-    fullRate: '1', display: '60 Hz Retina LCD', warmupSeconds: sampled ? 10 : null, resourceSeconds: sampled ? 15 : null,
+    fullRate: '1', display: 'hidden virtual test display, 1440×900 @2x, 60 Hz', warmupSeconds: sampled ? 10 : null, resourceSeconds: sampled ? 15 : null,
     createdAt: new Date().toISOString(),
   }, null, 2))
 }

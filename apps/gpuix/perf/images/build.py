@@ -42,7 +42,7 @@ try:
         raise RuntimeError('Less than 30 GiB available; pause disk-heavy work')
     while True:
         state = subprocess.check_output(['swift', '/Users/mymac/projects/ade-gpuix-scratch/screen-state.swift'], text=True)
-        if 'locked: 0' in state and ('displayAsleep: 0' in state or 'displayAsleep: false' in state):
+        if 'locked: 0' in state and 'testDisplay: ready' in state and ('displayAsleep: 0' in state or 'displayAsleep: false' in state):
             break
         time.sleep(60)
     # Screen checks can take long enough for another lane to acquire quiet.
@@ -76,7 +76,7 @@ try:
                 sys.exit(child.returncode)
         state = subprocess.check_output(['swift', '/Users/mymac/projects/ade-gpuix-scratch/screen-state.swift'], text=True)
         output.write(state)
-        if 'locked: 0' not in state or not ('displayAsleep: 0' in state or 'displayAsleep: false' in state):
+        if 'locked: 0' not in state or 'testDisplay: ready' not in state or not ('displayAsleep: 0' in state or 'displayAsleep: false' in state):
             raise RuntimeError('Native checks invalidated by locked/asleep display; rerun when available')
     awake.terminate()
     awake.wait()

@@ -41,13 +41,16 @@ try:
     started = time.monotonic()
     mode = sys.argv[1]
     label = sys.argv[2]
-    addon = app / 'native/build' / ('images-before.node' if label.startswith('before') else 'gpuix-native.darwin-arm64.node')
+    addon = app / 'native/build/gpuix-native.darwin-arm64.node'
+    # The archived control predates hidden-display placement. Use its explicit
+    # same-binary legacy switches so every A/B opens on the test display.
+    legacy = {'KYBERN_EDITOR_LAYOUT_IMAGE_MEMORY': '0', 'KYBERN_IMAGE_FRAME_MOVE': '0'}
     jobs = [(label, ['bun', 'perf/memory/' + ('visual.ts' if mode == 'visual' else 'lab-run.ts'), label],
              {'NAPI_RS_NATIVE_LIBRARY_PATH': str(addon), 'KYBERN_MEMORY_LANE': lane,
               **({'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_MEMORY_HEAP': '1',
                   **({'KYBERN_MEMORY_STACKS': '1'} if mode == 'stacks' else {})} if mode in ['stacks', 'note'] else {})})]
     if mode == 'baseline':
-        common = {'NAPI_RS_NATIVE_LIBRARY_PATH': str(addon), 'KYBERN_MEMORY_LANE': lane}
+        common = {'NAPI_RS_NATIVE_LIBRARY_PATH': str(addon), 'KYBERN_MEMORY_LANE': lane, **legacy}
         jobs = [
             ('before-note-stacks', ['bun', 'perf/memory/lab-run.ts', 'before-note-stacks'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_MEMORY_HEAP': '1', 'KYBERN_MEMORY_STACKS': '1'}),
             ('before-note', ['bun', 'perf/memory/lab-run.ts', 'before-note'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_MEMORY_HEAP': '1'}),
@@ -62,12 +65,13 @@ try:
             ('control-owner-note', ['bun', 'perf/memory/lab-run.ts', 'control-owner-note'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_IMAGE_FRAME_MOVE': '0'}),
             ('after-note', ['bun', 'perf/memory/lab-run.ts', 'after-note'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_MEMORY_EDITOR_ROUNDS': '2', 'KYBERN_MEMORY_HEAP': '1'}),
             ('after-lab', ['bun', 'perf/memory/lab-run.ts', 'after-lab'], common),
-            ('before-thread', ['bun', 'perf/memory/run.ts', 'before-thread'], {**common, **product, 'NAPI_RS_NATIVE_LIBRARY_PATH': str(app / 'native/build/images-before.node')}),
+            ('before-thread', ['bun', 'perf/memory/run.ts', 'before-thread'], {**common, **product, **legacy}),
             ('after-thread', ['bun', 'perf/memory/run.ts', 'after-thread'], {**common, **product}),
             ('after-final', ['bun', 'perf/memory/visual.ts', 'after-final'], common),
             ('visual-diff', ['bun', 'perf/images/visual-diff.ts'], common),
-            ('lightbox-before', ['bun', 'perf/images/verify-run.ts'], {**common, 'NAPI_RS_NATIVE_LIBRARY_PATH': str(app / 'native/build/images-before.node'), 'KYBERN_IMAGE_VERIFY_LABEL': 'before'}),
+            ('lightbox-before', ['bun', 'perf/images/verify-run.ts'], {**common, **legacy, 'KYBERN_IMAGE_VERIFY_LABEL': 'before'}),
             ('lightbox-after', ['bun', 'perf/images/verify-run.ts'], {**common, 'KYBERN_IMAGE_VERIFY_LABEL': 'after'}),
+            ('src-tests', ['bun', '-e', r"const {lease}=await import('./perf/memory/lease.ts');const release=await lease();try{const test=Bun.spawn(['bun','test','./src'],{env:{...process.env,KYBERN_PACING_PARENT_LEASE:process.cwd().replace(/\/apps\/gpuix$/,'')},stdout:'inherit',stderr:'inherit'});process.exitCode=await test.exited}finally{release()}"], common),
             ('after-note-stacks', ['bun', 'perf/memory/lab-run.ts', 'after-note-stacks'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_MEMORY_HEAP': '1', 'KYBERN_MEMORY_STACKS': '1'}),
         ]
     for label, command, extra in jobs:
