@@ -67,7 +67,13 @@ The historical `perf/scroll-round8-2026-10-17.md` app-wide experiment also recor
 a missing-painted-bounds failure. `getAutomationTree` requests invalidation and
 then reads a snapshot; under deferred drawing that snapshot can precede its
 requested paint. A narrowly scoped explicit snapshot barrier is needed before
-promoting the frame scheduler. Ordinary painted-bounds reads should remain reads.
+promoting the frame scheduler. Ordinary painted-bounds reads should remain
+reads. The updater also caught an immediate-hover screenshot of the prior
+scene; explicit image capture needs
+the same barrier before rasterization. The deterministic spring verifier also
+requires eager painting while its automation clock is paused/set/advanced.
+That exception is scoped to the controlled window and is removed on resume;
+normal runtime input remains on the platform scheduler.
 
 ## Zeron conversation work
 

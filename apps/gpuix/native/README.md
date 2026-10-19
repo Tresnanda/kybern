@@ -1188,22 +1188,23 @@ bounded to 128 roots / 16,384 nodes (8,192 per root), expiring rows after two
 frames outside the visible window. `KYBERN_SCROLL_LAYOUT=0` is the full-layout
 control.
 
-`scroll_input.rs` accumulates precise pixel wheel events for painted PR
-viewports in one pending native slot and applies a merged delta on the next
+`scroll_input.rs` accumulates precise pixel wheel events for painted
+`cacheLayout` viewports (PR, transcript and sidebar) in one pending native slot and applies a merged delta on the next
 platform frame. GPUI List forwards its paint-bounds callback explicitly so
 this gate uses the actual List viewport, including cached frames. Same-direction deltas sum; reversal takes the latest direction.
 Phase markers preserve scroll-axis resets, and clicks/keys/target changes flush
 pending input in order. The physical macOS input path and automation share
 `Window::dispatch_event`; physical native-list scrolling has no JS/RPC hop.
 `KYBERN_SCROLL_COALESCE=0` disables accumulation. `=all` is an experimental
-app-wide precise-wheel mode; the default is PR-only.
+app-wide precise-wheel mode; the default uses painted `cacheLayout` targets.
 
 The native addon uses GPUI `test-support`, whose `App::flush_effects` normally
-draws dirty windows after every update. `KYBERN_INPUT_FRAME_DRAW=1` experimentally
-skips that synchronous test draw and relies on normal platform-frame scheduling
+draws dirty windows after every update. The flick follow-up now skips that
+synchronous test draw by default and relies on normal platform-frame scheduling
 for every input/state update. It preserves event delivery, including pointer
-moves and keys. Keep this opt-in until broader interaction validation supports
-an app-wide default.
+moves and keys. `KYBERN_INPUT_FRAME_DRAW=0` restores the eager control, while
+`1` explicitly selects the default. See `../perf/flick/` for paired measurements
+and the broader interaction/visual validation.
 
 With `KYBERN_FRAME_COSTS=1`, `[scroll-layout-frame]` reports geometry reuse and
 `[scroll-input-paint]` reports native dispatch-to-CPU-paint latency and merged
@@ -1454,3 +1455,35 @@ proxy, not a hardware overdraw counter. Existing `[paint-gpu]` traces report
 command-buffer elapsed time; per-PID AGX GPU work is measured separately.
 Diagnostics request no frames and remain off by default. Methodology, paired
 measurements and limitations are in `perf/gpu/`.
+
+## Display-paced dirty-window drawing (flick)
+
+`flick_frame_gpui.py` selects the existing normal platform-frame path by
+default. The addon enables GPUI's `test-support` feature for automation; its
+eager dirty-window loop inside `flush_effects` can build/layout the same window
+repeatedly before a display callback gets to submit a scene. Fast precise
+wheel bursts exposed intervals with 8–16 native draws and no React commit.
+Native wheel accumulation and the ordinary dirty/needs-present/next-callback
+scheduling remain unchanged. `KYBERN_INPUT_FRAME_DRAW=0` restores the eager
+same-addon control; `1` explicitly selects the new default. This switch adds
+no idle clock, no overscan and no history cache. Measurements and correctness
+evidence are in `../perf/flick/`.
+
+`flick_bounds_hooks.py` preserves synchronous geometry inspection: explicit
+`getAutomationTree` snapshots build a dirty window once through an unborrowed
+window handle. Ordinary `getElementBounds` keeps reading the last painted bounds
+and does not draw. This prevents the historical
+`waitFor()` → `click()` missing-bounds failure when a host exists before its
+first display paint. Ordinary updates and wheel packets still use native frames.
+
+The same explicit snapshot barrier applies to screenshot capture before image
+rasterization. The first end-to-end flick update caught an immediate-hover
+image that still showed the prior frame; capture now paints the requested dirty
+scene through an unborrowed window handle. Ordinary input and painted-bounds
+reads remain display paced.
+
+A window with a manually paused/set/advanced automation clock retains eager
+deterministic test painting until `clock.resume()`. This preserves immediate
+spring start/overshoot checks without enabling the test-support loop during
+normal runtime input. The second complete updater detected that controlled-clock
+compatibility issue; normal flick timing never pauses or advances the clock.
