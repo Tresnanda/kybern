@@ -8,7 +8,8 @@ export async function assertBuiltInWindow(pid: number): Promise<void> {
   // The test-id handshake can complete just before AppKit publishes the window.
   for (let attempt = 0; attempt < 20; attempt++) {
     output = execFileSync('swift', [path.join(import.meta.dir, 'window-onscreen.swift'), String(pid)], { encoding: 'utf8' })
-    assert(output.includes('builtinActive=true'), `MacBook display is unavailable: ${output.trim()}`)
+    const builtInScale = Number(output.match(/builtinActive=true builtinScale=([\d.]+)/)?.[1])
+    assert(builtInScale >= 1.75 && builtInScale <= 2.25, `MacBook Retina display is unavailable: ${output.trim()}`)
     if (output.includes('onscreen=true')) break
     await Bun.sleep(250)
   }
