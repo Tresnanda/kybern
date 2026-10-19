@@ -118,17 +118,25 @@ try {
     const histogram = readFileSync(heapFile, 'utf8')
     const reportedKiB = histogram.match(/Sizes:\s*(\d+)KB\[/)?.[1]
     assert(reportedKiB, 'Heap must report its largest allocation size')
-    const pattern = `malloc[${Number(reportedKiB) * 1024}]`
-    const exact = diagnose('large-allocation-addresses-exact.txt', 'heap', ['--noContent', `--addresses=${pattern}`, String(f.pid)])
-    // Derived non-object names may not match the literal malloc class filter,
-    // even when its size matches the histogram. Sort all live blocks instead.
-    const addresses = /^\s*0x[0-9a-f]+\b/im.test(exact) ? exact : diagnose('large-allocation-addresses.txt', 'heap', ['-s', '-H', '--noContent', '--addresses=all', String(f.pid)])
-    const pointer = addresses.split('\n').flatMap(line => line.match(/^\s*(0x[0-9a-f]+)\b/i)?.[1] ?? [])[0]
-    if (pointer) {
-      diagnose('large-allocation-calltree.txt', 'malloc_history', [String(f.pid), '-callTree', '-noContent', pointer])
-      diagnose('large-allocation-history-0.txt', 'malloc_history', [String(f.pid), '-fullStacks', pointer])
-      diagnose('large-allocation-owners-0.txt', 'leaks', ['--noContent', '--fullStacks', `--traceTree=${pointer}`, String(f.pid)])
-      diagnose('large-allocation-root-paths-0.txt', 'leaks', ['--noContent', '--conservative', `--trace=${pointer}`, String(f.pid)])
+    const decodedBlocks = [...histogram.matchAll(/\b(?:6144|6160)KB\[(\d+)\]/g)].reduce((sum, match) => sum + Number(match[1]), 0)
+    writeFileSync(path.join(out, 'decoded-image-blocks.json'), JSON.stringify({
+      fixture: '24 images; retained blocks were 6144 KiB or 6160 KiB with stack logging', decodedBlocks, largestAllocationKiB: Number(reportedKiB),
+    }, null, 2))
+    // After the fix there is no image-sized live block. Tracing the largest
+    // unrelated font allocation adds no image ownership evidence.
+    if (decodedBlocks > 0) {
+      const pattern = `malloc[${Number(reportedKiB) * 1024}]`
+      const exact = diagnose('large-allocation-addresses-exact.txt', 'heap', ['--noContent', `--addresses=${pattern}`, String(f.pid)])
+      // Derived non-object names may not match the literal malloc class filter,
+      // even when its size matches the histogram. Sort all live blocks instead.
+      const addresses = /^\s*0x[0-9a-f]+\b/im.test(exact) ? exact : diagnose('large-allocation-addresses.txt', 'heap', ['-s', '-H', '--noContent', '--addresses=all', String(f.pid)])
+      const pointer = addresses.split('\n').flatMap(line => line.match(/^\s*(0x[0-9a-f]+)\b/i)?.[1] ?? [])[0]
+      if (pointer) {
+        diagnose('large-allocation-calltree.txt', 'malloc_history', [String(f.pid), '-callTree', '-noContent', pointer])
+        diagnose('large-allocation-history-0.txt', 'malloc_history', [String(f.pid), '-fullStacks', pointer])
+        diagnose('large-allocation-owners-0.txt', 'leaks', ['--noContent', '--fullStacks', `--traceTree=${pointer}`, String(f.pid)])
+        diagnose('large-allocation-root-paths-0.txt', 'leaks', ['--noContent', '--conservative', `--trace=${pointer}`, String(f.pid)])
+      }
     }
   }
   // Run this only after ownership traces and all original resource samples.
