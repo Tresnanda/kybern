@@ -38,6 +38,7 @@ try {
   if(readdirSync('/tmp').some(name=>['kybern-gpuix-native-build.','kybern-gpuix-build-next.','kybern-gpuix-quiet.'].some(prefix=>name.startsWith(prefix))))continue
   writeFileSync(marker,`${lane} start=${new Date().toISOString()} expected_end=${new Date(Date.now()+25*60_000).toISOString()}\n`)
   ownsMarker=true
+  if(readdirSync('/tmp').some(name=>['kybern-gpuix-native-build.','kybern-gpuix-build-next.'].some(prefix=>name.startsWith(prefix)))){unlinkSync(marker);ownsMarker=false;await Bun.sleep(500);continue}
   await Bun.sleep(300)
   if(readdirSync('/tmp').some(name=>['kybern-gpuix-native-build.','kybern-gpuix-build-next.'].some(prefix=>name.startsWith(prefix)))){unlinkSync(marker);ownsMarker=false;await Bun.sleep(500);continue}
   break
