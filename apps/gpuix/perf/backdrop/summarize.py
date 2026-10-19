@@ -3,7 +3,7 @@ import json,re,statistics
 root=Path(__file__).resolve().parents[4]
 app=root/'apps/gpuix'
 out=Path('/Users/mymac/projects/ade/previews/gpuix/perf/backdrop')
-labels=['backdrop-before','backdrop-control','backdrop-after','backdrop-diagnostic-control','backdrop-diagnostic-after','backdrop-stream-reverse-after','backdrop-stream-reverse-control']
+labels=['backdrop-before','backdrop-control','backdrop-after','backdrop-diagnostic-before','backdrop-diagnostic-control','backdrop-diagnostic-after','backdrop-stream-reverse-after','backdrop-stream-reverse-control','backdrop-idle-before','backdrop-idle-control','backdrop-idle-after','backdrop-original-reverse-after','backdrop-original-reverse-before']
 summary={}
 median=lambda xs:statistics.median([x for x in xs if x is not None]) if any(x is not None for x in xs) else None
 for label in labels:
@@ -18,6 +18,8 @@ for label in labels:
   fields.update({k:median([r['frames'][k] for r in rows]) for k in ['count','over16_7','over33']})
   fields.update({k:median([r['resources'][k] for r in rows]) for k in ['cpuPercent','gpuMs','footprintMiB']})
   fields.update({'proxyP95':median([r['latency']['proxyMs']['p95'] for r in rows]),'gpuMsPerSubmission':median([r['evidence'].get('averageProcessGpuMsPerSubmission') for r in rows]),'cpuMsPerSubmission':median([r['evidence'].get('averageProcessCpuMsPerSubmission') for r in rows])})
+  if name.startswith('idle-'):
+   fields['gpuMsPerSubmission']=None;fields['cpuMsPerSubmission']=None
   summary[label]['scenarios'][name]=fields
   if 'diagnostic' in label:
    logs=list((out/label).glob(f'{name}-attempt-*/*.log'))
