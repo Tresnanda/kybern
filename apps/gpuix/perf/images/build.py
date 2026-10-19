@@ -22,7 +22,8 @@ def cancelled(_signal, _frame):
 signal.signal(signal.SIGINT, cancelled)
 signal.signal(signal.SIGTERM, cancelled)
 try:
-    if len(sys.argv) > 1:
+    frames_only = sys.argv[1:] == ['--frames-only']
+    if len(sys.argv) > 1 and not frames_only:
         pid = int(sys.argv[1])
         while True:
             try:
@@ -58,10 +59,11 @@ try:
                KYBERN_VERIFY_OUTPUT="/Users/mymac/projects/ade/previews/gpuix/perf/images/native-checks")
     Path(env["KYBERN_CLIENT_CONFIG_DIR"]).mkdir(parents=True, exist_ok=True)
     awake = subprocess.Popen(['caffeinate', '-d', '-w', str(os.getpid())])
-    with log.open("w") as output:
+    output_log = log.with_name('frame-checks.log') if frames_only else log
+    with output_log.open("w") as output:
         output.write(state)
         output.flush()
-        commands = [["nice", "-n", "15", "sh", "native/update.sh"],
+        commands = ([] if frames_only else [["nice", "-n", "15", "sh", "native/update.sh"]]) + [
                     ["python3", "perf/images/check-frames.py"],
                     ["pnpm", "exec", "tsc", "-p", "native/tsconfig.json"],
                     ["pnpm", "exec", "tsc", "-p", "perf/images/tsconfig.json"]]
