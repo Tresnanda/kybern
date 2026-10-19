@@ -7,7 +7,7 @@ import {launchFixture} from '../../../src/requests/harness.ts'
 import {requireScreen} from '../../bench/screen-state.ts'
 import {requireWindowOnscreen,waitForWindowOnscreen} from '../../bench/window-onscreen.ts'
 const out='/Users/mymac/projects/ade/previews/gpuix/handson-r5/order',data='/Users/mymac/projects/ade-gpuix-scratch/hr5-order-bench'
-const label=process.argv[2]??'after',baseline=label==='before'
+const label=process.argv[2]??'after',baseline=label.startsWith('before')
 if(baseline)prepareBaseline()
 mkdirSync(out,{recursive:true})
 const until=async(check:()=>Promise<boolean>,description:string)=>{const end=Date.now()+30000;for(;;){if(await check())return;if(Date.now()>end)throw Error(description);await Bun.sleep(30)}}

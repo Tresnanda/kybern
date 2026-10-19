@@ -30,8 +30,9 @@ Bun.plugin({name:'hr5-order-controls',setup(build){
     }
     if(body.action==='prepare-images'){
       const s=state.getState(),last=[...s.open.blocks].reverse().find(b=>b.kind==='user')!,sample=s.open.blocks.find(b=>b.kind==='user'&&b.message.parts.some(p=>p.type==='image'))!
-      const image=sample.kind==='user'?sample.message.parts.find(p=>p.type==='image')!:null
-      state.setThreadOpen(s.selectedId!,{...s.open,blocks:s.open.blocks.map(b=>b===last&&b.kind==='user'?{...b,message:{parts:[...b.message.parts,image]}}:b.kind==='assistant'&&b.turnId===last.turnId?{...b,text:'Final answer. Preserve the reading position.'}:b) as any})
+      let image=sample.kind==='user'?sample.message.parts.find(p=>p.type==='image')!:null
+      if(process.env.HR5_ORDER_LARGE_IMAGES==='1')image={type:'image',media_type:'image/png',data:(await import('node:fs')).readFileSync(path.join(process.env.KYBERN_DATA_DIR!,'projects/project-00/fixture.png')).toString('base64')}
+      state.setThreadOpen(s.selectedId!,{...s.open,blocks:s.open.blocks.map(b=>b.kind==='user'?{...b,message:{parts:[...b.message.parts.map(p=>p.type==='image'?image:p),...(b===last?[image]:[])]}}:b.kind==='assistant'&&b.turnId===last.turnId?{...b,text:'Final answer. Preserve the reading position.'}:b) as any})
       return Response.json({prepared:true})
     }
     if(body.action==='position'){(globalThis as any).__orderJump(body.target);return Response.json({positioned:true})}

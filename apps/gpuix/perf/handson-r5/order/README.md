@@ -45,6 +45,10 @@ bun native/ui-lease.ts hr5-order-desktop node perf/handson-r5/order/desktop.mjs
 ```
 
 Pass `before` to either visual runner to prepare/use the original modules.
+For a 640 × 360 original behind the same 64 px thumbnail, set
+`HR5_ORDER_LARGE_IMAGES=1 HR5_ORDER_POSITIONS=middle` and use labels
+`before-large` / `after-large` with `lightbox.ts`; the strip generator selects
+these captures when present.
 `build.py` reserves the shared native-build slot, uses this checkout's one target
 directory, four jobs, no incremental/debug output, and nice 15. It builds only
 the daemon/CLI, runs protocol/project tests and clippy, and writes logs externally.

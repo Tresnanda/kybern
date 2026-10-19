@@ -15,6 +15,7 @@ for theme in ['dark','light']:
                 cells.append((f'{variant}: {description}, {frame["ms"]:.0f} ms',folder/frame['file']))
         strip('startup-'+theme+'-'+temperature+'-strip',cells)
     for reduced,motion in [('0','no-preference'),('1','reduce')]:
-        strip('lightbox-'+theme+'-'+reduced+'-comparison',[(variant+' '+phase,out/f'{variant}-{theme}-{reduced}-middle-{phase}.png') for variant in ['before','after'] for phase in ['before','after']])
-        strip('lightbox-'+theme+'-'+reduced+'-sequence',[(phase,out/f'after-{theme}-{reduced}-middle-{phase}.png') for phase in ['before','open','after']])
+        suffix='-large' if (out/f'after-large-{theme}-{reduced}-middle-after.png').exists() else ''
+        strip('lightbox-'+theme+'-'+reduced+'-comparison',[(variant+' '+phase,out/f'{variant}{suffix}-{theme}-{reduced}-middle-{phase}.png') for variant in ['before','after'] for phase in ['before','after']])
+        strip('lightbox-'+theme+'-'+reduced+'-sequence',[(phase,out/f'after{suffix}-{theme}-{reduced}-middle-{phase}.png') for phase in ['before','open','after']])
         strip('desktop-'+theme+'-'+reduced+'-sequence',[(phase,out/'desktop'/(f'{theme}-{motion}-open.png' if phase=='open' else f'{theme}-{motion}-escape-{phase}.png')) for phase in ['before','open','after']])
