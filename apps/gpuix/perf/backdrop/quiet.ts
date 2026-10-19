@@ -33,10 +33,15 @@ try {
  for(;;){
   if((existsSync(order)?readFileSync(order,'utf8').split('\n').filter(Boolean)[0]:undefined)!==lane || readdirSync('/tmp').some(name=>['kybern-gpuix-native-build.','kybern-gpuix-build-next.','kybern-gpuix-quiet.','kybern-gpuix-quiet-next.'].some(prefix=>name.startsWith(prefix)))){await Bun.sleep(500);continue}
   if(!ready()){await Bun.sleep(60000);continue}
+  // Screen-state evaluation takes time. Recheck the shared slot before and
+  // after publication so a concurrent reservation cannot start a timed run.
+  if(readdirSync('/tmp').some(name=>['kybern-gpuix-native-build.','kybern-gpuix-build-next.','kybern-gpuix-quiet.'].some(prefix=>name.startsWith(prefix))))continue
+  writeFileSync(marker,`${lane} start=${new Date().toISOString()} expected_end=${new Date(Date.now()+25*60_000).toISOString()}\n`)
+  ownsMarker=true
+  await Bun.sleep(300)
+  if(readdirSync('/tmp').some(name=>['kybern-gpuix-native-build.','kybern-gpuix-build-next.'].some(prefix=>name.startsWith(prefix)))){unlinkSync(marker);ownsMarker=false;await Bun.sleep(500);continue}
   break
  }
- writeFileSync(marker,`${lane} start=${new Date().toISOString()} expected_end=${new Date(Date.now()+25*60_000).toISOString()}\n`)
- ownsMarker=true
  // Process-local NSEvents do not reset macOS's display-idle timer. A sleeping
  // display can keep the retained tree active while no Metal frames submit.
  awake=Bun.spawn(['/usr/bin/caffeinate','-d','-w',String(process.pid),'-t','1500'],{stdout:'ignore',stderr:'ignore'})
