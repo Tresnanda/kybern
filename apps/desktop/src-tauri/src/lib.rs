@@ -513,8 +513,14 @@ fn write_image_clipboard(request: tauri::ipc::Request<'_>) -> Result<(), String>
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+    // Automated runs (`KYBERN_NO_ACTIVATE`) must not read or overwrite the
+    // user's saved window position; they open on the primary display instead.
+    let automated = std::env::var_os("KYBERN_NO_ACTIVATE").is_some();
+    let mut builder = tauri::Builder::default();
+    if !automated {
+        builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
+    }
+    builder
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
@@ -531,6 +537,9 @@ pub fn run() {
             if let Some(w) = app.get_webview_window("main") {
                 if std::env::var_os("KYBERN_NO_ACTIVATE").is_none() {
                     let _ = w.set_focus();
+                } else if let Ok(Some(monitor)) = w.primary_monitor() {
+                    let origin = monitor.position();
+                    let _ = w.set_position(tauri::PhysicalPosition::new(origin.x + 48, origin.y + 64));
                 }
                 #[cfg(target_os = "macos")]
                 traffic_lights::install(&w);
