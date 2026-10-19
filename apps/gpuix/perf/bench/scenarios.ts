@@ -98,7 +98,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
   if(startup)restoreStartup()
   // This scratch fixture persists its window frame across scenarios. Drop only
   // that coordinate before launch so AppKit centers every automated window on
-  // the built-in display; never move or activate a window after it opens.
+  // the hidden test display; never move or activate a window after it opens.
   const uiFile=path.join(fixture.data,'gpuix-ui.json')
   if(existsSync(uiFile)){
    const ui=JSON.parse(readFileSync(uiFile,'utf8')) as Record<string,unknown>
@@ -239,7 +239,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
    if(streamBefore!=null){const streamed=await control('state');const streamAfter=streamed.streamDeltas;r.evidence.offeredDeltas=streamAfter-streamBefore;r.evidence.offeredDeltasPerSecond=(streamAfter-streamBefore)/(r.timings.resourceWindowMs!/1000);r.evidence.streamWithWheel=streamWithWheel;r.evidence.loadedBlocks=streamed.blocks;r.evidence.fullHistory=process.env.KYBERN_BENCH_STREAM_HISTORY==='1'}
    if(process.env.KYBERN_BENCH_COUNTERS==='1'){const response=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action:'counters'})});r.evidence.counters=await response.json()}
    writeFileSync(path.join(evidence,`${name}-${run}-resources.txt`),sampleText)
-  }catch(error){r.status=String(error).includes('not onscreen on the built-in display')?'discarded':'failed';r.reason=String(error)}finally{for(const child of children){child.kill();await child.exited}for(const unregister of unregisterChildren)unregister()}
+  }catch(error){r.status=String(error).includes('not onscreen on the hidden test display')?'discarded':'failed';r.reason=String(error)}finally{for(const child of children){child.kill();await child.exited}for(const unregister of unregisterChildren)unregister()}
   if(buildWatch){const gate=buildWatch.finish();Object.assign(r.evidence,gate);if(gate.overlap||gate.orphanOverlap||gate.screenInvalid){r.status='discarded';r.reason=gate.screenInvalid?'locked/asleep screen: discarded':gate.orphanOverlap?'foreign GPUIX process: discarded':'build overlap: discarded'}}
   writeFileSync(path.join(evidence,`${name}-${run}.log`),telemetry.raw)
   results.push(r)
