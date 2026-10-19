@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 out = Path(os.environ.get('KYBERN_MEMORY_EVIDENCE', '/Users/mymac/projects/ade/previews/gpuix/perf/images'))
-names = ['before-note', 'control-legacy-note', 'control-owner-note', 'after-note',
+names = ['before-note', 'control-legacy-note', 'control-owner-note', 'control-move-note', 'after-note',
          'before-lab', 'after-lab', 'before-thread-app', 'after-thread-app']
 summary = {}
 for name in names:

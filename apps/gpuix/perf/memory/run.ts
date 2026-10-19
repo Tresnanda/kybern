@@ -104,7 +104,11 @@ try {
    await control('home'); await measure('home-initial')
    if (group === 'image-thread') {
     await control('open', { thread: fixture.manifest.long1000 })
-    await f.app.getByTestId('response-image').waitFor({ timeoutMs: 30000 })
+    const imageDeadline = Date.now() + 30000
+    while (await f.app.getByTestId('response-image').count() === 0) {
+      assert(Date.now() < imageDeadline, 'Image thread must render image content')
+      await Bun.sleep(50)
+    }
     const viewport = await bounds('transcript-surface')
     await measure('image-thread-scroll', true, { x: viewport.x + viewport.width / 2, y: viewport.y + viewport.height / 2 })
    } else if (group === 'thread-explorer-notes') {

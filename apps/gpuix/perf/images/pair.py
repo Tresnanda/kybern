@@ -44,7 +44,7 @@ try:
     addon = app / 'native/build/gpuix-native.darwin-arm64.node'
     # The archived control predates hidden-display placement. Use its explicit
     # same-binary legacy switches so every A/B opens on the test display.
-    legacy = {'KYBERN_EDITOR_LAYOUT_IMAGE_MEMORY': '0', 'KYBERN_IMAGE_FRAME_MOVE': '0'}
+    legacy = {'KYBERN_EDITOR_LAYOUT_IMAGE_MEMORY': '0', 'KYBERN_IMAGE_FRAME_MOVE': '0', 'KYBERN_EDITOR_IMAGE_RELIEF': '0'}
     jobs = [(label, ['bun', 'perf/memory/' + ('visual.ts' if mode == 'visual' else 'lab-run.ts'), label],
              {'NAPI_RS_NATIVE_LIBRARY_PATH': str(addon), 'KYBERN_MEMORY_LANE': lane,
               **({'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_MEMORY_HEAP': '1',
@@ -62,7 +62,8 @@ try:
         product = {'KYBERN_DATA_DIR': str(data) + '-product', 'KYBERN_MEMORY_GROUPS': 'image-thread', 'KYBERN_MEMORY_IMAGE_THREAD': '1'}
         jobs = [
             ('control-legacy-note', ['bun', 'perf/memory/lab-run.ts', 'control-legacy-note'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_EDITOR_LAYOUT_IMAGE_MEMORY': '0', 'KYBERN_IMAGE_FRAME_MOVE': '0'}),
-            ('control-owner-note', ['bun', 'perf/memory/lab-run.ts', 'control-owner-note'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_IMAGE_FRAME_MOVE': '0'}),
+            ('control-owner-note', ['bun', 'perf/memory/lab-run.ts', 'control-owner-note'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_IMAGE_FRAME_MOVE': '0', 'KYBERN_EDITOR_IMAGE_RELIEF': '0'}),
+            ('control-move-note', ['bun', 'perf/memory/lab-run.ts', 'control-move-note'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_EDITOR_IMAGE_RELIEF': '0'}),
             ('after-note', ['bun', 'perf/memory/lab-run.ts', 'after-note'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_MEMORY_EDITOR_ROUNDS': '2', 'KYBERN_MEMORY_HEAP': '1'}),
             ('after-lab', ['bun', 'perf/memory/lab-run.ts', 'after-lab'], common),
             ('before-thread', ['bun', 'perf/memory/run.ts', 'before-thread'], {**common, **product, **legacy}),

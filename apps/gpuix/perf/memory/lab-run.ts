@@ -131,7 +131,9 @@ try {
       diagnose('large-allocation-root-paths-0.txt', 'leaks', ['--noContent', '--conservative', `--trace=${pointer}`, String(f.pid)])
     }
   }
-  if (process.env.KYBERN_MEMORY_RELIEF === '1') {
+  // Run this only after ownership traces and all original resource samples.
+  // It distinguishes live image retention from freed malloc cache pages.
+  if (process.env.KYBERN_MEMORY_RELIEF === '1' || process.env.KYBERN_MEMORY_STACKS === '1') {
     writeFileSync(path.join(out, 'allocator-relief.json'), JSON.stringify(await control({ action: 'allocator-relief' }), null, 2))
     await measure('home-relief')
   }

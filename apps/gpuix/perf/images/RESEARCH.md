@@ -59,3 +59,21 @@ The fix makes `Lay` hold `Weak<RenderImage>` (`native/patches/image_owner.rs` an
 - [Zed atlas release](https://github.com/zed-industries/zed/blob/56934ec0560bce8929025497411de7f5322fb6ca/crates/gpui/src/window.rs#L5192): dropping atlas tiles does not remove independent CPU Arc owners.
 - [zeron tool-preview ownership](https://github.com/zeronsh/zeron/blob/c526d6f7cfc7a53e5588e3e6c5df7484a14d649f/crates/ui/src/tool_images.rs#L312): hidden rows release their holders; chat switches drain them.
 - [zeron static-frame construction](https://github.com/zeronsh/zeron/blob/c526d6f7cfc7a53e5588e3e6c5df7484a14d649f/crates/ui/src/tool_images.rs#L561): pixels move into a frame, then painters share the outer Arc.
+
+## Darwin allocator retention after the ownership fix
+
+The new hidden-display run removes all 24 live decoded buffers from `heap`,
+but `vmmap -summary` classifies 150 MiB as `Malloc Large (empty)` and dirty
+after the note closes. This explains why physical footprint alone initially
+misidentified the weak-owner fix as ineffective. The native patch now offers
+a one-shot allocator release only after an empty editor cache drops the last
+CPU owners of at least 8 MiB of pixels, with counters for cost and reclaimed
+bytes. It is controlled independently by `KYBERN_EDITOR_IMAGE_RELIEF=0`.
+
+Apple documents `malloc_zone_pressure_relief` as a best-effort release of free
+allocator storage: a null zone examines all zones, zero goal asks for maximal
+relief, and the return value reports released bytes. Source: [Apple libmalloc
+public header](https://github.com/apple-oss-distributions/libmalloc/blob/main/include/malloc/malloc.h).
+The same contract was checked against this machine's macOS SDK header. This
+is a proposed measured trim boundary, not a claim that all malloc storage is
+image-owned; retained live objects remain untouched.
