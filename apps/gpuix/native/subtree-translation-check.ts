@@ -36,8 +36,10 @@ for(const theme of ['dark','light'])for(const reduce of ['0','1']){
     assert.equal(f.islandRenders(),before,'repeated translation rendered a cached island')
     const button=await bounds(buttonId),spring=await bounds(springId)
     const windowId=execFileSync('swift',[path.join(import.meta.dir,'../src/tasks/round7-window-id.swift'),String(f.pid)],{encoding:'utf8'}).trim()
-    const shot=(name:string)=>{const file=path.join(out,`${label}-${name}.png`);execFileSync('screencapture',['-x','-o','-l',windowId,file]);return file}
-    const scoped=shot('scoped');await key('t');await a.getByText('Tick 1; clicks 0').waitFor();const full=shot('full')
+    // Native bounds/text acknowledge scene construction before WindowServer presents it.
+    // Wait outside timing runs so screencapture reads the settled device pixels.
+    const shot=async(name:string)=>{await Bun.sleep(150);const file=path.join(out,`${label}-${name}.png`);execFileSync('screencapture',['-x','-o','-l',windowId,file]);return file}
+    const scoped=await shot('scoped');await key('t');await a.getByText('Tick 1; clicks 0').waitFor();const full=await shot('full')
     const left=pngPixels(scoped),right=pngPixels(full),scale=left.width/600;let changed=0
     for(let y=Math.round(60*scale);y<235*scale;y++)for(let x=Math.round(10*scale);x<490*scale;x++){const p=left.at(x,y),q=right.at(x,y);if(p.some((v,i)=>Math.abs(v-q[i]!)>2))changed++}
     assert.equal(changed,0,'retained glyphs/shadows/rounded clips differ from ordinary render')

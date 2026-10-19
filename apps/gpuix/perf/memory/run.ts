@@ -14,7 +14,7 @@ import { drive } from '../bench/input.ts'
 import { requireActiveSample } from '../bench/screen-state.ts'
 import { imageThread } from '../images/thread-fixture.ts'
 import { onExit } from '../bench/lifetime.ts'
-import { assertBuiltInWindow } from '../images/onscreen.ts'
+import { assertTestDisplayWindow } from '../images/onscreen.ts'
 const label = process.argv[2] ?? 'diagnose'
 const data = process.env.KYBERN_DATA_DIR!
 const addon = process.env.NAPI_RS_NATIVE_LIBRARY_PATH ?? path.resolve(import.meta.dir, '../../native/build', label.startsWith('before') ? 'memory-before.node' : 'gpuix-native.darwin-arm64.node')
@@ -66,10 +66,10 @@ try {
       return
     }
     await f.app.call('blur', {}); await f.app.mouse.move({ x: 900, y: 4 })
-    if (process.env.KYBERN_MEMORY_LANE === 'perf-images') await assertBuiltInWindow(f.pid)
+    if (process.env.KYBERN_MEMORY_LANE === 'perf-images') await assertTestDisplayWindow(f.pid)
     if (warmup) { if (scroll) await drive(f.app, scroll, 10000); else await Bun.sleep(10000) }
     await f.app.call('blur', {})
-    const testDisplayBefore = process.env.KYBERN_MEMORY_LANE === 'perf-images' ? await assertBuiltInWindow(f.pid) : null
+    const testDisplayBefore = process.env.KYBERN_MEMORY_LANE === 'perf-images' ? await assertTestDisplayWindow(f.pid) : null
     const gate = watchRun(), mark = telemetry.mark()
     const webkit = webkitProcesses().filter(process => !preexistingWebkit.has(process.pid))
     const sampler = Bun.spawn(['bun', path.join(import.meta.dir, '../sample.ts'), '15', `GPUIX=${f.pid}`], { stdout: 'pipe', stderr: 'pipe' })
@@ -83,8 +83,8 @@ try {
     const webkitRaw = await webText, webkitError = await webError
     const webkitExit = webSampler ? await webSampler.exited : 0; cancelWeb()
     const input = await offered
-    const timing = telemetry.result(mark), overlap = gate.finish()
-    const testDisplayAfter = process.env.KYBERN_MEMORY_LANE === 'perf-images' ? await assertBuiltInWindow(f.pid) : null
+    const timing = telemetry.result(mark, input?.sent ?? []), overlap = gate.finish()
+    const testDisplayAfter = process.env.KYBERN_MEMORY_LANE === 'perf-images' ? await assertTestDisplayWindow(f.pid) : null
     if (scroll) requireActiveSample(timing.frames.count, parseResources(raw).gpuMs, 15)
     const prefix = `${group}-${name}`
     writeFileSync(path.join(out, `${prefix}-footprint.txt`), execFileSync('footprint', ['-p', String(f.pid)], { encoding: 'utf8' }))

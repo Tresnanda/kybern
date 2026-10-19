@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 
 /** Reject measurements and captures when macOS puts the fixture in another Space. */
-export async function assertBuiltInWindow(pid: number): Promise<string> {
+export async function assertTestDisplayWindow(pid: number): Promise<string> {
   let output = ''
   // The test-id handshake can complete just before AppKit publishes the window.
   for (let attempt = 0; attempt < 20; attempt++) {

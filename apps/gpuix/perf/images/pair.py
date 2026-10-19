@@ -71,6 +71,7 @@ try:
             ('visual-diff', ['bun', 'perf/images/visual-diff.ts'], common),
             ('lightbox-before', ['bun', 'perf/images/verify-run.ts'], {**common, **legacy, 'KYBERN_IMAGE_VERIFY_LABEL': 'before'}),
             ('lightbox-after', ['bun', 'perf/images/verify-run.ts'], {**common, 'KYBERN_IMAGE_VERIFY_LABEL': 'after'}),
+            ('lightbox-diff', ['bun', 'perf/images/visual-diff.ts', '--lightbox'], common),
             ('src-tests', ['bun', '-e', r"const {lease}=await import('./perf/memory/lease.ts');const release=await lease();try{const test=Bun.spawn(['bun','test','./src'],{env:{...process.env,KYBERN_PACING_PARENT_LEASE:process.cwd().replace(/\/apps\/gpuix$/,'')},stdout:'inherit',stderr:'inherit'});process.exitCode=await test.exited}finally{release()}"], common),
             ('after-note-stacks', ['bun', 'perf/memory/lab-run.ts', 'after-note-stacks'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_MEMORY_HEAP': '1', 'KYBERN_MEMORY_STACKS': '1'}),
         ]

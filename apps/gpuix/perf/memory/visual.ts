@@ -8,7 +8,7 @@ import path from 'node:path'
 import { launchFixture } from '../../src/requests/harness.ts'
 import { lease } from './lease.ts'
 import { onExit } from '../bench/lifetime.ts'
-import { assertBuiltInWindow } from '../images/onscreen.ts'
+import { assertTestDisplayWindow } from '../images/onscreen.ts'
 const label = process.argv[2] ?? 'visual'
 const data = process.env.KYBERN_DATA_DIR!
 const addon = process.env.NAPI_RS_NATIVE_LIBRARY_PATH ?? path.resolve(import.meta.dir, '../../native/build', label.startsWith('before') ? 'memory-before.node' : 'gpuix-native.darwin-arm64.node')
@@ -36,7 +36,7 @@ for (const theme of ['dark', 'light']) {
   const stats = async () => (await (await fetch(`http://127.0.0.1:${port}`, { method: 'POST', body: JSON.stringify({ action: 'stats' }) })).json()) as { native: { images: { leasedImages: number; entries: number; dormantBytes: number; dormantBudgetBytes: number }; editorImages: { entries: number } } | null }
   const window = execFileSync('swift', [path.join(import.meta.dir, '../../src/tasks/round7-window-id.swift'), String(f.pid)], { encoding: 'utf8' }).trim()
   const capture = async (name: string) => {
-    if (process.env.KYBERN_MEMORY_LANE === 'perf-images') await assertBuiltInWindow(f.pid)
+    if (process.env.KYBERN_MEMORY_LANE === 'perf-images') await assertTestDisplayWindow(f.pid)
     execFileSync('screencapture', ['-x', '-o', '-l', window, path.join(out, `${theme}-${name}.png`)])
   }
   await scene('image', 0, true); await capture('image-shared')

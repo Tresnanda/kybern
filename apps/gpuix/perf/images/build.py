@@ -31,12 +31,14 @@ try:
             except ProcessLookupError:
                 break
             time.sleep(1)
-    while (list(tmp.glob("kybern-gpuix-native-build.*")) or list(tmp.glob("kybern-gpuix-quiet.*")) or
-           [p for p in tmp.glob("kybern-gpuix-build-next.*") if p != reservation]):
+    # Reserve while a build/quiet window is active, as the shared fairness
+    # contract permits. Waiting for total idleness before reserving can starve
+    # this lane behind each new quiet window. Only one next-build slot exists.
+    while [p for p in tmp.glob("kybern-gpuix-build-next.*") if p != reservation]:
         time.sleep(1)
     reservation.write_text(f"{lane} {time.time()}\n")
     reserved = True
-    while list(tmp.glob("kybern-gpuix-quiet.*")):
+    while list(tmp.glob("kybern-gpuix-quiet.*")) or list(tmp.glob("kybern-gpuix-native-build.*")):
         time.sleep(1)
     if os.statvfs(root).f_bavail * os.statvfs(root).f_frsize < 30 * 1024**3:
         raise RuntimeError('Less than 30 GiB available; pause disk-heavy work')
