@@ -50,6 +50,11 @@ try {
     if (!res.ok) throw Error(await res.text())
     return res.json()
    }
+   if (process.env.KYBERN_MEMORY_REQUIRE_VM === '1') {
+    const state = await control('stats', {}, true) as { native?: { largeAllocations?: { enabled: boolean; thresholdBytes: number } } }
+    assert.equal(state.native?.largeAllocations?.thresholdBytes, 4 * 1024 * 1024, 'Rebuild the VM allocator addon before sampling')
+    assert.equal(state.native?.largeAllocations?.enabled, process.env.KYBERN_LARGE_ALLOCATIONS_VM !== '0')
+   }
    const bounds = async (id: string) => {
     const until = Date.now() + 30000
     while (true) {

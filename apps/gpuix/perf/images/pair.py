@@ -85,7 +85,7 @@ try:
             ('after-note-stacks', ['bun', 'perf/memory/lab-run.ts', 'after-note-stacks'], {**common, 'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_MEMORY_HEAP': '1', 'KYBERN_MEMORY_STACKS': '1'}),
         ]
     if mode in ['vm-resources', 'vm-checks']:
-        common = {'NAPI_RS_NATIVE_LIBRARY_PATH': str(addon), 'KYBERN_MEMORY_LANE': lane}
+        common = {'NAPI_RS_NATIVE_LIBRARY_PATH': str(addon), 'KYBERN_MEMORY_LANE': lane, 'KYBERN_MEMORY_REQUIRE_VM': '1'}
         system = {**common, 'KYBERN_LARGE_ALLOCATIONS_VM': '0'}
         note = {'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1', 'KYBERN_MEMORY_EDITOR_ROUNDS': '2', 'KYBERN_MEMORY_HEAP': '1'}
         product = {'KYBERN_DATA_DIR': str(data) + '-product', 'KYBERN_MEMORY_GROUPS': 'image-thread', 'KYBERN_MEMORY_IMAGE_THREAD': '1'}

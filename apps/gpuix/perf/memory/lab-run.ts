@@ -45,6 +45,11 @@ try {
   }
   const port = JSON.parse(readFileSync(path.join(client, 'memory-control.json'), 'utf8')).port
   const control = async (body: Record<string, unknown>) => (await fetch(`http://127.0.0.1:${port}`, { method: 'POST', body: JSON.stringify(body) })).json()
+  if (process.env.KYBERN_MEMORY_REQUIRE_VM === '1') {
+    const stats = await control({ action: 'stats' }) as { native?: { largeAllocations?: { enabled: boolean; thresholdBytes: number } } }
+    assert.equal(stats.native?.largeAllocations?.thresholdBytes, 4 * 1024 * 1024, 'Rebuild the VM allocator addon before sampling')
+    assert.equal(stats.native?.largeAllocations?.enabled, process.env.KYBERN_LARGE_ALLOCATIONS_VM !== '0', 'Allocator control must match the process launch environment')
+  }
   const scene = async (kind: string, index = 0, peer = false) => {
     const at = performance.now()
     await control({ action: 'scene', kind, index, peer }); await Bun.sleep(120)
@@ -67,7 +72,12 @@ try {
     writeFileSync(path.join(out, `${name}-footprint.txt`), footprint)
     writeFileSync(path.join(out, `${name}-vmmap.txt`), vmmap)
     writeFileSync(path.join(out, `${name}-resources.txt`), raw)
-    rows.push({ name, testDisplayBefore, testDisplayAfter, sceneSubmissionProxyMs: distribution(sceneLatency), sceneSubmissionSamples: sceneLatency.length, fullRate: '1', ...timing, resources: parseResources(raw), attribution: await control({ action: 'stats' }), gate: overlap })
+    const attribution = await control({ action: 'stats' })
+    if (process.env.KYBERN_MEMORY_REQUIRE_VM === '1') {
+      assert.equal(attribution.native.largeAllocations.mapFailures, 0, 'No failed native mappings')
+      assert.equal(attribution.native.largeAllocations.unmapFailures, 0, 'No failed native releases')
+    }
+    rows.push({ name, testDisplayBefore, testDisplayAfter, sceneSubmissionProxyMs: distribution(sceneLatency), sceneSubmissionSamples: sceneLatency.length, fullRate: '1', ...timing, resources: parseResources(raw), attribution, gate: overlap })
     writeFileSync(path.join(out, 'results.json'), JSON.stringify(rows, null, 2))
     assert(!overlap.overlap && !overlap.orphanOverlap && !overlap.screenInvalid, 'Contended sample must be rerun')
   }
