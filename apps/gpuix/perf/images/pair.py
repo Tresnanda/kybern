@@ -77,7 +77,7 @@ try:
     for label, command, extra in jobs:
         env = dict(os.environ, KYBERN_DATA_DIR=str(data), KYBERN_CLIENT_CONFIG_DIR=str(data / 'client'),
                    KYBERN_URL='', KYBERN_TOKEN='', KYBERN_BENCH_PORT='4340',
-                   KYBERN_MEMORY_EVIDENCE=str(evidence), KYBERN_BENCH_EVIDENCE=str(evidence), KYBERN_FULL_RATE='1')
+                   KYBERN_MEMORY_EVIDENCE=str(evidence), KYBERN_BENCH_EVIDENCE=str(evidence), KYBERN_FULL_RATE='1', GPUIX_BACKGROUND='1')
         env.update(extra)
         if '--memory' in sys.argv and 'NAPI_RS_NATIVE_LIBRARY_PATH' not in extra:
             env.pop('NAPI_RS_NATIVE_LIBRARY_PATH', None)
