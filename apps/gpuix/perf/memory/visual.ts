@@ -9,6 +9,7 @@ import { launchFixture } from '../../src/requests/harness.ts'
 import { lease } from './lease.ts'
 import { onExit } from '../bench/lifetime.ts'
 import { assertTestDisplayWindow, capturePresentedPixels } from '../images/onscreen.ts'
+import { pngPixels } from '../../native/clip-pixels.ts'
 const label = process.argv[2] ?? 'visual'
 const data = process.env.KYBERN_DATA_DIR!
 const addon = process.env.NAPI_RS_NATIVE_LIBRARY_PATH ?? path.resolve(import.meta.dir, '../../native/build', label.startsWith('before') ? 'memory-before.node' : 'gpuix-native.darwin-arm64.node')
@@ -40,6 +41,11 @@ for (const theme of ['dark', 'light']) {
     await capturePresentedPixels(file, 1100, 760, async () => {
       if (process.env.KYBERN_MEMORY_LANE === 'perf-images') await assertTestDisplayWindow(f.pid)
       execFileSync('screencapture', ['-x', '-o', '-l', window, file])
+    }, () => {
+      const pixels = pngPixels(file), scale = pixels.width / 1100
+      const background = pixels.at(1070 * scale, pixels.height - 30 * scale)
+      const expected = theme === 'light' ? 245 : 32
+      assert(background.every(value => Math.abs(value - expected) <= 2), `Invalid presented fixture background: ${background}`)
     })
   }
   await scene('image', 0, true); await capture('image-shared')

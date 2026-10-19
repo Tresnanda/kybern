@@ -5,10 +5,10 @@ import path from 'node:path'
 import { assertNonBlackContent } from '../../native/clip-pixels.ts'
 
 /** An all-black OS capture is invalid presentation, never pixel parity. */
-export async function capturePresentedPixels(file: string, width: number, contentHeight: number, take: () => unknown | Promise<unknown>) {
+export async function capturePresentedPixels(file: string, width: number, contentHeight: number, take: () => unknown | Promise<unknown>, validate?: () => void) {
   for (let attempt = 0; ; attempt++) {
     await take()
-    try { assertNonBlackContent(file, width, contentHeight, file); return }
+    try { assertNonBlackContent(file, width, contentHeight, file); validate?.(); return }
     catch (error) {
       copyFileSync(file, file.replace(/\.png$/, `-rejected-${attempt}.png`))
       if (attempt >= 2) throw error
