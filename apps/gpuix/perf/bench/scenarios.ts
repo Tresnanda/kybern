@@ -10,7 +10,7 @@ import {launchFixture} from '../../src/requests/harness.ts'
 import {actionFixture} from '../../src/pulls/verify.fixture.ts'
 import {emptyResult,type Result,type Scenario} from './model.ts'
 import {Telemetry,parseResources} from './telemetry.ts'
-import {requireWindowOnscreen,waitForWindowOnscreen} from './window-onscreen.ts'
+import {requireWindowOnscreen,waitForWindowOnscreen,checkWindowOnscreenAsync} from './window-onscreen.ts'
 import {drive,type Point} from './input.ts'
 import type {seed} from './seed.ts'
 type Fixture=Awaited<ReturnType<typeof seed>>
@@ -108,11 +108,14 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
   telemetry=new Telemetry()
   requireScreen()
   const at=performance.now()
-  launch=await launchFixture(path.join(import.meta.dir,'app.ts'),{...fixture.env,...proxy?.env,KYBERN_BENCH_WHEEL_LIBRARY:path.join(fixture.data,'bench-wheel.dylib'),KYBERN_CLIENT_CONFIG_DIR:client,KYBERN_GPUIX_CREDENTIALS_DIR:path.join(client,'credentials'),KYBERN_GPUIX_THREAD:'',KYBERN_GPUIX_ENVIRONMENT:'local',KYBERN_PACING_BASELINE:'0',KYBERN_PACING_RUNNING_ENTRY:'0',GPUIX_BACKGROUND:'1',KYBERN_APPEARANCE:'dark',KYBERN_REDUCED_MOTION:'0',KYBERN_FULL_RATE:process.env.KYBERN_FULL_RATE??'1',KYBERN_FRAME_TIMES:'1',KYBERN_FRAME_COSTS:'1',KYBERN_PACING_IGNORE_PHYSICAL_MOUSE:'1',KYBERN_PACING_PARENT_LEASE:path.resolve(root,'../..')},{stderr:telemetry.stderr})
+  launch=await launchFixture(process.env.KYBERN_BENCH_APP_ENTRY??path.join(import.meta.dir,'app.ts'),{...fixture.env,...proxy?.env,KYBERN_BENCH_WHEEL_LIBRARY:path.join(fixture.data,'bench-wheel.dylib'),KYBERN_CLIENT_CONFIG_DIR:client,KYBERN_GPUIX_CREDENTIALS_DIR:path.join(client,'credentials'),KYBERN_GPUIX_THREAD:'',KYBERN_GPUIX_ENVIRONMENT:'local',KYBERN_PACING_BASELINE:'0',KYBERN_PACING_RUNNING_ENTRY:'0',GPUIX_BACKGROUND:'1',KYBERN_APPEARANCE:'dark',KYBERN_REDUCED_MOTION:'0',KYBERN_FULL_RATE:process.env.KYBERN_FULL_RATE??'1',KYBERN_FRAME_TIMES:'1',KYBERN_FRAME_COSTS:'1',KYBERN_PACING_IGNORE_PHYSICAL_MOUSE:'1',KYBERN_PACING_PARENT_LEASE:path.resolve(root,'../..')},{stderr:telemetry.stderr})
   await bounds(launch.app,'app-ready')
-  await waitForWindowOnscreen(launch.pid)
+  const placement=startup?checkWindowOnscreenAsync(launch.pid).then(()=>null,error=>({error})):null
+  if(!startup)await waitForWindowOnscreen(launch.pid)
   const shell=performance.now()-at
   const content=startup?await startupPaint(launch.app,at):null
+  const placementFailure=await placement
+  if(placementFailure)throw placementFailure.error
   await until(async()=>existsSync(path.join(client,'bench-control.json')),'Missing benchmark control endpoint')
   controlPort=JSON.parse(readFileSync(path.join(client,'bench-control.json'),'utf8')).port
   if(!startup){

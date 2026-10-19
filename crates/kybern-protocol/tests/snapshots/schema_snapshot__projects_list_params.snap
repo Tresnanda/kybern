@@ -1,0 +1,18 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(ProjectsListParams)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProjectsListParams",
+  "type": "object",
+  "properties": {
+    "refresh_git": {
+      "description": "False returns the stored project index immediately, without probing Git.\nOmitted or true refreshes Git status before returning, as usual.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    }
+  }
+}

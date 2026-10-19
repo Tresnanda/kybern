@@ -7,6 +7,8 @@ import { transcriptWindowRange, transcriptWindowRangeBy } from './windowRange.ts
 const FirstBodyMount = createContext(true)
 export const useTranscriptFirstMount = () => useContext(FirstBodyMount)
 const RowLease = createContext<(() => () => void) | null>(null)
+export const TranscriptFocusRestoration = createContext<((elementId: number) => void) | null>(null)
+export const useTranscriptFocusRestoration = () => useContext(TranscriptFocusRestoration)
 /** An open row-owned overlay must survive scrolling its trigger out of view. */
 export function useTranscriptRowLease(active: boolean) {
   const acquire = useContext(RowLease)

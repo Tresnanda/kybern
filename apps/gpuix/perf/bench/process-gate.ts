@@ -32,5 +32,5 @@ export function watchRun(){
 export function foreignProcesses(processes:string[],parents:Map<number,number>,owner:number){
  const owned=(pid:number)=>{const seen=new Set<number>();while(pid>1&&!seen.has(pid)){if(pid===owner)return true;seen.add(pid);pid=parents.get(pid)??0}return false}
  // Runners and resource samplers do not own a native window.
- return processes.filter(line=>{const match=line.match(/^(\d+)\s+(.+)$/);return !!match&&!owned(Number(match[1]))&&!/\/(?:run|scenario|sample|profiles|structural|ui-lease|quiet)\.(?:ts|mjs)(?:\s|$)/.test(match[2]!)&&/^(?:\/\S*\/)?bun\s+/.test(match[2]!)})
+ return processes.filter(line=>{const match=line.match(/^(\d+)\s+(.+)$/);return !!match&&!owned(Number(match[1]))&&!/\/visual\/fixture\.(?:conversation|settings)\.ts\s+--proxy\b/.test(match[2]!)&&!/\/(?:run|scenario|sample|profiles|structural|ui-lease|quiet)\.(?:ts|mjs)(?:\s|$)/.test(match[2]!)&&/^(?:\/\S*\/)?bun\s+/.test(match[2]!)})
 }

@@ -747,7 +747,11 @@ enum AccountsCmd {
 
 #[derive(Subcommand)]
 enum ProjectsCmd {
-    List,
+    List {
+        /// Return the stored project index without refreshing Git status.
+        #[arg(long)]
+        cached: bool,
+    },
     /// Browse directories on the connected environment.
     Browse {
         path: Option<String>,
@@ -1179,7 +1183,7 @@ pub async fn run() -> Result<()> {
                         let id = resolve_project(&client, &project, false).await?;
                         Some(
                             client
-                                .call::<ProjectsList>(Empty {})
+                                .call::<ProjectsList>(ProjectsListParams::default())
                                 .await?
                                 .projects
                                 .into_iter()
@@ -1303,8 +1307,8 @@ pub async fn run() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Cmd::Projects { cmd } => match cmd {
-            ProjectsCmd::List => {
-                let r = client.call::<ProjectsList>(Empty {}).await?;
+            ProjectsCmd::List { cached } => {
+                let r = client.call::<ProjectsList>(ProjectsListParams { refresh_git: cached.then_some(false) }).await?;
                 if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::projects(&r.projects) }
             }
             ProjectsCmd::Browse { path } => {
@@ -2415,7 +2419,7 @@ async fn resolve_project(client: &Client, key: &str, add_if_missing: bool) -> Re
     if let Ok(id) = key.parse::<ProjectId>() {
         return Ok(id);
     }
-    let list = client.call::<ProjectsList>(Empty {}).await?;
+    let list = client.call::<ProjectsList>(ProjectsListParams::default()).await?;
     if let Some(p) = list.projects.iter().find(|p| p.path == key || p.name == key) {
         return Ok(p.id);
     }

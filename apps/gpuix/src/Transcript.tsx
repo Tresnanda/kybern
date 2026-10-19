@@ -1,6 +1,6 @@
 import { SparseRetention, sparseIndices, useSparseList } from './kit/sparseList.tsx'
 import { TRANSCRIPT_SCROLL_LAYOUT } from './transcript/scroll-layout.ts'
-import { TranscriptSlot, useTranscriptWindow } from './transcript/Window.tsx'
+import { TranscriptFocusRestoration, TranscriptSlot, useTranscriptWindow } from './transcript/Window.tsx'
 import { TranscriptRowStateScope } from './transcript/rowStateScope.ts'
 import { SubagentDivider } from './subagents/Page.tsx'
 import { observeElementBounds, type LayoutRect } from './native/layout.ts'
@@ -59,6 +59,15 @@ export function Transcript() {
   const turns = useMemo(() => groupTurns(blocks), [blocks, groupTurns])
   const rowStateScope = useMemo(() => new Map<string, unknown>(), [threadId])
   const list = useRef<PublicInstance>(null)
+  const restoreFocus = useCallback((elementId: number) => {
+    const node = list.current
+    const anchor = node && renderer.getListScrollTop?.(node.id)
+    // GPUIX focusElement reveals a virtual ancestor at its row's top. Restore
+    // the existing logical offset in the same update, before native painting.
+    // This also preserves List's end sentinel while a real tail is following.
+    renderer.focusElement?.(elementId)
+    if (node && anchor) renderer.scrollToItem?.(node.id, anchor[0]!, anchor[1]!)
+  }, [renderer])
   const turnNodes = useRef<TurnNodes>(new Map())
   const [jump, setJump] = useState<{id:string;index:number;generation:number} | null>(null)
   // The virtual list reports no element bounds (its rect is always null), so the
@@ -340,7 +349,7 @@ export function Transcript() {
   }
 
   return (
-    <TranscriptRowStateScope.Provider value={rowStateScope}><SparseRetention.Provider value={nativeWindow.context}><div ref={surfaceRef} testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+    <TranscriptFocusRestoration.Provider value={restoreFocus}><TranscriptRowStateScope.Provider value={rowStateScope}><SparseRetention.Provider value={nativeWindow.context}><div ref={surfaceRef} testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
       <virtual-list
         {...TRANSCRIPT_SCROLL_LAYOUT}
         {...(sparse ? { estimatedItemHeight: 160, itemCount: count, windowStart: windowIndices?.[0] ?? 0, windowIndices, ...nativeWindow.props } : { estimatedItemHeight: 160 })}
@@ -416,7 +425,7 @@ export function Transcript() {
         </div>
       )}
       <ScrollToBottom visible={!atTail} bottom={COMPOSER_INSET - 64 + 24 + panelHeight} onClick={scrollToBottom} />
-    </div></SparseRetention.Provider></TranscriptRowStateScope.Provider>
+    </div></SparseRetention.Provider></TranscriptRowStateScope.Provider></TranscriptFocusRestoration.Provider>
   )
 }
 

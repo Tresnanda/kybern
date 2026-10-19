@@ -2264,7 +2264,7 @@ export interface Methods {
   "integrations.change": [{ project_id: ProjectId; provider: ProviderKind; id: string; kind: IntegrationKind; scope?: string | null; action: IntegrationAction }, IntegrationChangeResult];
   "integrations.login": [{ thread_id: ThreadId; name: string }, TerminalInfo];
   "daemon.shutdown": [Empty, Empty];
-  "projects.list": [Empty, ProjectsListResult];
+  "projects.list": [{ refresh_git?: boolean }, ProjectsListResult];
   "projects.browse": [{ path?: string }, ProjectsBrowseResult];
   "access.pairing.create": [{ label?: string }, PairingCreateResult];
   "access.exposure.get": [Empty, Exposure];

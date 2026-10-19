@@ -1,4 +1,4 @@
-import {execFileSync} from 'node:child_process'
+import {execFile,execFileSync} from 'node:child_process'
 
 const script=`${import.meta.dir}/window-onscreen.swift`
 
@@ -29,4 +29,14 @@ export async function waitForWindowOnscreen(pid:number,maxWaitMs=180_000){
   if(performance.now()>=end)throw Error(`GPUIX window ${pid} stayed offscreen on the hidden test display at 2x: ${state.raw}`)
   await Bun.sleep(10_000)
  }
+}
+
+/** Startup paint polling must continue while Swift inspects window placement.
+ * The synchronous guard can take several hundred ms and hide the very ordering
+ * that the startup milestones measure. Reject the whole sample if it fails. */
+export async function checkWindowOnscreenAsync(pid:number){
+ const raw=await new Promise<string>((resolve,reject)=>execFile('swift',[script,String(pid)],{encoding:'utf8'},(error,stdout)=>error?reject(error):resolve(stdout)))
+ const state=parseWindowOnscreen(raw)
+ if(!state.valid)throw Error(`GPUIX window ${pid} is not onscreen on the hidden test display at 2x: ${state.raw}`)
+ return state
 }

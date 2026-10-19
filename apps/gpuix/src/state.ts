@@ -232,9 +232,10 @@ export async function connect() {
     set({ status, statusDetail: detail ?? null })
     startupMark('connection', { status })
     if (status === 'open') {
-      // Restored selections do not depend on project Git probes or the sidebar.
-      reloadOpenTranscripts()
+      // Queue the inexpensive navigation index first, then hydrate saved chats
+      // concurrently. Git probes refresh after the index is already usable.
       void refreshLists()
+      reloadOpenTranscripts()
     }
   })
   client.onNotification('projects.changed', () => void refreshLists())
@@ -293,9 +294,10 @@ export function refreshLists(): Promise<void> {
 async function loadLists() {
   if (!client) return
   const owner = client
+  const initial = !state.listsLoaded
   startupMark('lists-start')
   const [p, t] = await Promise.all([
-    owner.call('projects.list', {}),
+    owner.call('projects.list', initial ? { refresh_git: false } : {}),
     owner.call('threads.list', {}).then(result => {
       if (owner === client) {
         lastActivity = { owner, activity: result.activity ?? [] }
@@ -310,6 +312,19 @@ async function loadLists() {
     .filter((th) => !isChildThread(th) && th.status !== 'archived')
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated_at.localeCompare(a.updated_at))
   set({ projects: p.projects, threads, listsLoaded: true })
+  if (initial) {
+    // Preserve the usual Git self-heal without putting one subprocess per
+    // project on the first sidebar paint's critical path. Notifications may
+    // arrive while this runs; a fresh explicit list read remains authoritative.
+    void owner.call('projects.list', {}).then(result => {
+      if (owner !== client || state.projects !== p.projects) return
+      const changed = result.projects.length !== p.projects.length || result.projects.some((project, index) => {
+        const before = p.projects[index]!
+        return project.id !== before.id || project.updated_at !== before.updated_at || project.is_git !== before.is_git
+      })
+      if (changed) set({ projects: result.projects })
+    }, () => {})
+  }
   for (const [paneId, pane] of panes) if (pane.selectedId && !pane.open.loaded && !sessions.has(pane.selectedId)) void selectPaneThread(paneId, pane.selectedId).catch(error => console.error('[pane] Unable to load thread:', error))
   const want = process.env.KYBERN_GPUIX_THREAD
   if (want && !state.selectedId) {

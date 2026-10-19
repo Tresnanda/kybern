@@ -37,6 +37,9 @@ test('process gate excludes this runner descendants but rejects cancelled-run or
  expect(foreignProcesses(rows,parents,10)).toEqual([rows[2]!])
  parents.set(20,1)
  expect(foreignProcesses(rows,parents,10)).toEqual([rows[0]!,rows[2]!])
+ const proxy='70 bun /tmp/ade-gpuix/visual/fixture.conversation.ts --proxy {}'
+ const window='71 bun /tmp/ade-gpuix/visual/fixture.conversation.ts'
+ expect(foreignProcesses([proxy,window],parents,10)).toEqual([window])
 })
 
 import {quietOrder,assertQuietTurn} from './build-overlap.ts'
