@@ -199,7 +199,8 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
    const streamBefore=name==='streaming'?(await control('state')).streamDeltas:null
    r.evidence.windowBefore=requireWindowOnscreen(launch!.pid).windows
    buildWatch=watchRun()
-   if(bridge){await bridge;bridge=undefined;await delay(0);if(bridgeError)throw bridgeError}
+   if(bridge){await bridge;bridge=undefined;if(bridgeError)throw bridgeError}
+   await delay(0)
    const mark=telemetry.mark(),timed=performance.now()
    telemetry.raw+=`[bench-window-start] run=${run} native=${telemetry.submissions.at(-1)?.native??0} js=${timed}\n`
    if(name==='open-long'){
@@ -236,7 +237,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
    if(!scrolling)await delay(options.seconds*1000)
    // Drain the producer's last pipe messages before taking the end snapshot;
    // the subsequent CG read must not leak idle/bridge scenes into this window.
-   if(useAppkit&&scrolling)await delay(0)
+   await delay(0)
    const measured=telemetry.result(resourceMark,input?.sent,scrolling)
    telemetry.raw+=`[bench-window-end] run=${run} native=${telemetry.submissions.at(-1)?.native??0} js=${performance.now()}\n`
    if(useAppkit&&scrolling&&run<runs)bridge=bridgeInput()
