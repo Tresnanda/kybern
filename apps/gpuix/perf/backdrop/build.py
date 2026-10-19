@@ -30,7 +30,7 @@ def cancelled(_signal, _frame):
 signal.signal(signal.SIGINT, cancelled)
 signal.signal(signal.SIGTERM, cancelled)
 try:
-    finish_only = "--finish-checks" in sys.argv
+    finish_only = "--finish-checks" in sys.argv or "--compositor-only" in sys.argv
     if len(sys.argv) > 1 and not finish_only:
         pid = int(sys.argv[1])
         while True:
@@ -84,7 +84,8 @@ try:
                     ["bun", "native/ui-lease.ts", "backdrop-product-pairs", "bun", "perf/backdrop/product-visual.ts", "pairs"],
                     ["bun", "native/ui-lease.ts", "backdrop-accessibility", "bun", "perf/backdrop/product-visual.ts", "accessibility"],
                     ["bun", "native/ui-lease.ts", "backdrop-compositor", "bun", "perf/backdrop/compositor.ts"]]
-        if finish_only: commands = commands[2:]
+        if "--compositor-only" in sys.argv: commands = commands[-1:]
+        elif finish_only: commands = commands[2:]
         for command in commands:
             if not screen_ready(): raise RuntimeError('Locked/asleep: pause native UI validation')
             child = subprocess.Popen(command, cwd=app, env=env, stdout=output,

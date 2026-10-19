@@ -4,7 +4,7 @@ import {onExit} from '../bench/lifetime.ts'
 import {requireScreen,keepDisplayAwake} from '../bench/screen-state.ts'
 const out='/Users/mymac/projects/ade/previews/gpuix/perf/backdrop/compositor-reference'
 mkdirSync(out,{recursive:true});const before=requireScreen(),stop=keepDisplayAwake()
-const server=Bun.spawn(['pnpm','exec','vite','--config','perf/backdrop/compositor.config.mjs'],{stdout:'ignore',stderr:'inherit'})
+const server=Bun.spawn(['../desktop/node_modules/.bin/vite','--config','perf/backdrop/compositor.config.mjs'],{stdout:'ignore',stderr:'inherit'})
 const cleanup=onExit(async()=>{server.kill();await server.exited})
 let child:ReturnType<typeof Bun.spawn>|undefined
 try{
