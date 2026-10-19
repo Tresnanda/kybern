@@ -5,6 +5,7 @@ import {mkdirSync,writeFileSync,readFileSync,existsSync} from 'node:fs'
 import {seed} from '../bench/seed.ts'
 import {launchFixture} from '../../src/requests/harness.ts'
 import {pixels} from '../../native/png.ts'
+import {requireWindowOnscreen,waitForWindowOnscreen} from '../bench/window-onscreen.ts'
 const data='/Users/mymac/projects/ade-gpuix-scratch/perf-flick-bench'
 const out='/Users/mymac/projects/ade/previews/gpuix/perf/flick/preview-visual';mkdirSync(out,{recursive:true})
 const fixture=await seed(data,4339),comparisons:unknown[]=[]
@@ -15,9 +16,10 @@ try{
   for(const flag of ['0','1']){
    const client=path.join(data,`visual-${theme}-${flag}`);mkdirSync(client,{recursive:true})
    writeFileSync(path.join(data,'gpuix-ui.json'),'{}')
-   const f=await launchFixture(path.resolve('perf/bench/app.ts'),{...fixture.env,KYBERN_CLIENT_CONFIG_DIR:client,KYBERN_GPUIX_CREDENTIALS_DIR:path.join(client,'credentials'),KYBERN_BENCH_WHEEL_LIBRARY:path.join(data,'bench-wheel.dylib'),KYBERN_INPUT_FRAME_DRAW:flag,KYBERN_APPEARANCE:theme,KYBERN_REDUCED_MOTION:'0',KYBERN_OPAQUE:'1',KYBERN_WINDOW_SIZE:'1280x820',GPUIX_BACKGROUND:'1',KYBERN_FULL_RATE:'1',KYBERN_PACING_RUNNING_ENTRY:'0',KYBERN_PACING_BASELINE:'0',KYBERN_PACING_IGNORE_PHYSICAL_MOUSE:'1'})
+   const f=await launchFixture(path.resolve('perf/bench/app.ts'),{...fixture.env,KYBERN_CLIENT_CONFIG_DIR:client,KYBERN_GPUIX_CREDENTIALS_DIR:path.join(client,'credentials'),KYBERN_BENCH_WHEEL_LIBRARY:path.join(data,'bench-wheel.dylib'),KYBERN_INPUT_FRAME_DRAW:flag,KYBERN_APPEARANCE:theme,KYBERN_REDUCED_MOTION:'0',KYBERN_OPAQUE:'1',KYBERN_WINDOW_SIZE:'1280x820',GPUIX_BACKGROUND:'1',KYBERN_FULL_RATE:'1',KYBERN_BENCH_LAYER_ZERO:'1',KYBERN_PACING_RUNNING_ENTRY:'0',KYBERN_PACING_BASELINE:'0',KYBERN_PACING_IGNORE_PHYSICAL_MOUSE:'1'})
    const a=f.app;shots[flag]={}
    try{
+    await waitForWindowOnscreen(f.pid)
     await a.getByTestId('app-ready').waitFor()
     const controlFile=path.join(client,'bench-control.json');await until(async()=>existsSync(controlFile),'control endpoint')
     const port=JSON.parse(readFileSync(controlFile,'utf8')).port
@@ -34,7 +36,7 @@ try{
      const box=await a.getByTestId('right-dock').bounds(),point={x:box.x+box.width-90,y:box.y+box.height/2}
      for(const step of [0,1]){
       if(step){await a.mouse.wheel(point,0,-400);await Bun.sleep(700)}
-      const file=`${out}/${theme}-${flag}-${view}-${step}.png`;await a.screenshot({path:file});shots[flag]![`${view}-${step}`]=file
+      const file=`${out}/${theme}-${flag}-${view}-${step}.png`;requireWindowOnscreen(f.pid);await a.screenshot({path:file});shots[flag]![`${view}-${step}`]=file
      }
     }
    }finally{await f.close()}

@@ -2,11 +2,13 @@ import assert from 'node:assert/strict'
 import path from 'node:path'
 import {readFileSync,mkdirSync,writeFileSync} from 'node:fs'
 import {launchFixture} from '../../src/requests/harness.ts'
+import {requireWindowOnscreen,waitForWindowOnscreen} from '../bench/window-onscreen.ts'
 const data='/Users/mymac/projects/ade-gpuix-scratch/perf-flick-snapshot',out='/Users/mymac/projects/ade/previews/gpuix/perf/flick/snapshot';mkdirSync(out,{recursive:true})
 const results=[]
 for(const flag of ['0','1']){
  const f=await launchFixture(path.join(import.meta.dir,'snapshot-app.tsx'),{KYBERN_DATA_DIR:data,KYBERN_CLIENT_CONFIG_DIR:data,KYBERN_URL:'',KYBERN_TOKEN:'',GPUIX_BACKGROUND:'1',KYBERN_INPUT_FRAME_DRAW:flag})
  try{
+  await waitForWindowOnscreen(f.pid)
   await f.app.getByTestId('snapshot-ready').waitFor()
   const {port}=JSON.parse(readFileSync(path.join(data,'snapshot-control.json'),'utf8'))
   let previous=10
@@ -27,7 +29,7 @@ for(const flag of ['0','1']){
    results.push({flag,clock,before:r.before,after:r.after})
   }
   await f.app.getByTestId('snapshot-moving').click()
-  await f.app.screenshot({path:`${out}/frame-${flag}.png`})
+  requireWindowOnscreen(f.pid);await f.app.screenshot({path:`${out}/frame-${flag}.png`})
  }finally{await f.close()}
 }
 writeFileSync(out+'/result.json',JSON.stringify(results,null,2));console.log('PASS synchronous snapshot bounds and display-paced ordinary updates')

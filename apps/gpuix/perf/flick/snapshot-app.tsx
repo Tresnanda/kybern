@@ -6,6 +6,7 @@ import {pathToFileURL} from 'node:url'
 import path from 'node:path'
 import {mkdirSync,writeFileSync} from 'node:fs'
 import {assertScratchEnv} from '../../src/requests/harness.ts'
+import {requireWindowOnscreen} from '../bench/window-onscreen.ts'
 assertScratchEnv(process.env)
 const entry=createRequire(import.meta.url).resolve('@gpuix/react')
 const {flushSync}=await import(pathToFileURL(path.join(path.dirname(entry),'reconciler/reconciler.js')).href)
@@ -21,7 +22,7 @@ const server=Bun.serve({port:0,hostname:'127.0.0.1',async fetch(req){
  flushSync(()=>setMoved(moved))
  const before=renderer.getElementBounds?.(movingId)
  const tree=kind==='tree'?JSON.parse((renderer as unknown as {getAutomationTree:()=>string}).getAutomationTree()):null
- if(kind==='image')(renderer as unknown as {captureScreenshot:(file:string)=>void}).captureScreenshot(`/Users/mymac/projects/ade/previews/gpuix/perf/flick/snapshot/image-${process.env.KYBERN_INPUT_FRAME_DRAW}-${moved}.png`)
+ if(kind==='image'){requireWindowOnscreen(process.pid);(renderer as unknown as {captureScreenshot:(file:string)=>void}).captureScreenshot(`/Users/mymac/projects/ade/previews/gpuix/perf/flick/snapshot/image-${process.env.KYBERN_INPUT_FRAME_DRAW}-${moved}.png`)}
  const after=renderer.getElementBounds?.(movingId)
  return Response.json({before,tree,after})
 }})

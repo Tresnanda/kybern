@@ -15,6 +15,10 @@ with p.open('r+') as f:
 `,order,lane,action])}
 const command=process.argv.slice(2);if(!command.length)throw Error('Pass a command')
 let owned=false,stopped=false,child:ReturnType<typeof spawn>|undefined
+const release=()=>{if(owned&&existsSync(quiet))unlinkSync(quiet);edit('leave')}
+// Bun can terminate on an interactive SIGINT before the awaited child-exit
+// promise resumes; the synchronous exit hook still removes this lane's marker.
+process.once('exit',release)
 const signal=(kind:NodeJS.Signals)=>{if(child?.pid)try{process.kill(-child.pid,kind)}catch(e){if((e as NodeJS.ErrnoException).code!=='ESRCH')throw e}}
 for(const kind of ['SIGTERM','SIGINT'] as const)process.once(kind,()=>{stopped=true;signal(kind)})
 edit('join')
@@ -33,5 +37,5 @@ try{
   try{process.exitCode=await new Promise<number>((resolve,reject)=>{child!.once('error',reject);child!.once('exit',code=>resolve(stopped?130:code??1))})}finally{clearTimeout(timeout);signal('SIGKILL')}
  }
 }finally{
- signal('SIGKILL');if(owned&&existsSync(quiet))unlinkSync(quiet);edit('leave')
+ signal('SIGKILL');process.off('exit',release);release()
 }

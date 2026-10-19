@@ -9,6 +9,7 @@ import {launchFixture} from '../../src/requests/harness.ts'
 import {actionFixture} from '../../src/pulls/verify.fixture.ts'
 import {emptyResult,type Result,type Scenario} from './model.ts'
 import {Telemetry,parseResources} from './telemetry.ts'
+import {requireWindowOnscreen,waitForWindowOnscreen} from './window-onscreen.ts'
 import {drive,type Point} from './input.ts'
 import type {seed} from './seed.ts'
 type Fixture=Awaited<ReturnType<typeof seed>>
@@ -95,11 +96,20 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
   if(startup)assertDisplayReady()
   if(cold)rmSync(client,{recursive:true,force:true});mkdirSync(client,{recursive:true});rmSync(path.join(client,'bench-control.json'),{force:true})
   if(startup)restoreStartup()
+  // This scratch fixture persists its window frame across scenarios. Drop only
+  // that coordinate before launch so AppKit centers every automated window on
+  // the built-in display; never move or activate a window after it opens.
+  const uiFile=path.join(fixture.data,'gpuix-ui.json')
+  if(existsSync(uiFile)){
+   const ui=JSON.parse(readFileSync(uiFile,'utf8')) as Record<string,unknown>
+   if('kybern.window.frame' in ui){delete ui['kybern.window.frame'];writeFileSync(uiFile,JSON.stringify(ui))}
+  }
   telemetry=new Telemetry()
   requireScreen()
   const at=performance.now()
   launch=await launchFixture(path.join(import.meta.dir,'app.ts'),{...fixture.env,...proxy?.env,KYBERN_BENCH_WHEEL_LIBRARY:path.join(fixture.data,'bench-wheel.dylib'),KYBERN_CLIENT_CONFIG_DIR:client,KYBERN_GPUIX_CREDENTIALS_DIR:path.join(client,'credentials'),KYBERN_GPUIX_THREAD:'',KYBERN_GPUIX_ENVIRONMENT:'local',KYBERN_PACING_BASELINE:'0',KYBERN_PACING_RUNNING_ENTRY:'0',GPUIX_BACKGROUND:'1',KYBERN_APPEARANCE:'dark',KYBERN_REDUCED_MOTION:'0',KYBERN_FULL_RATE:process.env.KYBERN_FULL_RATE??'1',KYBERN_FRAME_TIMES:'1',KYBERN_FRAME_COSTS:'1',KYBERN_PACING_IGNORE_PHYSICAL_MOUSE:'1',KYBERN_PACING_PARENT_LEASE:path.resolve(root,'../..')},{stderr:telemetry.stderr})
   await bounds(launch.app,'app-ready')
+  await waitForWindowOnscreen(launch.pid)
   const shell=performance.now()-at
   const content=startup?await startupPaint(launch.app,at):null
   await until(async()=>existsSync(path.join(client,'bench-control.json')),'Missing benchmark control endpoint')
@@ -179,6 +189,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
    // The steady state warms once, then three consecutive independent 15 s
    // endpoint samples. Cold/open timings remain separate from resource windows.
    const streamBefore=name==='streaming'?(await control('state')).streamDeltas:null
+   r.evidence.windowBefore=requireWindowOnscreen(launch!.pid).windows
    buildWatch=watchRun()
    const mark=telemetry.mark(),timed=performance.now()
    telemetry.raw+=`[bench-window-start] run=${run} native=${telemetry.submissions.at(-1)?.native??0} js=${timed}\n`
@@ -214,7 +225,8 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
    unregisterChildren.push(unprofiler)
    const input=scrolling?await inputDrive(point!,options.seconds*1000,name==='thread-fling'):undefined
    if(!scrolling)await delay(options.seconds*1000)
-   const measured=telemetry.result(resourceMark,input?.sent)
+   r.evidence.windowAfter=requireWindowOnscreen(launch!.pid).windows
+   const measured=telemetry.result(resourceMark,input?.sent,scrolling)
    telemetry.raw+=`[bench-window-end] run=${run} native=${telemetry.submissions.at(-1)?.native??0} js=${performance.now()}\n`
    const sampleText=await sampleTextPromise,sampleError=await sampleErrorPromise
    const sampleExit=await sampler.exited;unsampler();if(sampleExit)throw Error(sampleError)
@@ -227,7 +239,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
    if(streamBefore!=null){const streamed=await control('state');const streamAfter=streamed.streamDeltas;r.evidence.offeredDeltas=streamAfter-streamBefore;r.evidence.offeredDeltasPerSecond=(streamAfter-streamBefore)/(r.timings.resourceWindowMs!/1000);r.evidence.streamWithWheel=streamWithWheel;r.evidence.loadedBlocks=streamed.blocks;r.evidence.fullHistory=process.env.KYBERN_BENCH_STREAM_HISTORY==='1'}
    if(process.env.KYBERN_BENCH_COUNTERS==='1'){const response=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action:'counters'})});r.evidence.counters=await response.json()}
    writeFileSync(path.join(evidence,`${name}-${run}-resources.txt`),sampleText)
-  }catch(error){r.status='failed';r.reason=String(error)}finally{for(const child of children){child.kill();await child.exited}for(const unregister of unregisterChildren)unregister()}
+  }catch(error){r.status=String(error).includes('not onscreen on the built-in display')?'discarded':'failed';r.reason=String(error)}finally{for(const child of children){child.kill();await child.exited}for(const unregister of unregisterChildren)unregister()}
   if(buildWatch){const gate=buildWatch.finish();Object.assign(r.evidence,gate);if(gate.overlap||gate.orphanOverlap||gate.screenInvalid){r.status='discarded';r.reason=gate.screenInvalid?'locked/asleep screen: discarded':gate.orphanOverlap?'foreign GPUIX process: discarded':'build overlap: discarded'}}
   writeFileSync(path.join(evidence,`${name}-${run}.log`),telemetry.raw)
   results.push(r)
