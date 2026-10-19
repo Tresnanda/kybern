@@ -104,7 +104,7 @@ try {
   if (process.env.KYBERN_MEMORY_STACKS === '1') {
     const diagnose = (file: string, program: string, args: string[]) => {
       let output: string
-      try { output = execFileSync(program, args, { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: 15000 }) }
+      try { output = execFileSync(program, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 15000 }) }
       catch (error) { const failure = error as Error & { stderr?: Buffer }; output = `${failure.message}\n${failure.stderr?.toString() ?? ''}` }
       writeFileSync(path.join(out, file), output)
       return output
@@ -115,10 +115,13 @@ try {
     const reportedKiB = histogram.match(/Sizes:\s*(\d+)KB\[/)?.[1]
     assert(reportedKiB, 'Heap must report its largest allocation size')
     const pattern = `malloc[${Number(reportedKiB) * 1024}]`
-    const addresses = diagnose('large-allocation-addresses.txt', 'heap', ['--noContent', `--addresses=${pattern}`, String(f.pid)])
-    diagnose('large-allocation-calltree.txt', 'malloc_history', [String(f.pid), '-callTree', '-noContent', pattern])
-    const pointer = addresses.split('\n').flatMap(line => line.match(/^\s*(0x[0-9a-f]+)\s/i)?.[1] ?? [])[0]
+    const exact = diagnose('large-allocation-addresses-exact.txt', 'heap', ['--noContent', `--addresses=${pattern}`, String(f.pid)])
+    // Derived non-object names may not match the literal malloc class filter,
+    // even when its size matches the histogram. Sort all live blocks instead.
+    const addresses = /^\s*0x[0-9a-f]+\b/im.test(exact) ? exact : diagnose('large-allocation-addresses.txt', 'heap', ['-s', '-H', '--noContent', '--addresses=all', String(f.pid)])
+    const pointer = addresses.split('\n').flatMap(line => line.match(/^\s*(0x[0-9a-f]+)\b/i)?.[1] ?? [])[0]
     if (pointer) {
+      diagnose('large-allocation-calltree.txt', 'malloc_history', [String(f.pid), '-callTree', '-noContent', pointer])
       diagnose('large-allocation-history-0.txt', 'malloc_history', [String(f.pid), '-fullStacks', pointer])
       diagnose('large-allocation-owners-0.txt', 'leaks', ['--noContent', '--fullStacks', `--traceTree=${pointer}`, String(f.pid)])
       diagnose('large-allocation-root-paths-0.txt', 'leaks', ['--noContent', '--conservative', `--trace=${pointer}`, String(f.pid)])
