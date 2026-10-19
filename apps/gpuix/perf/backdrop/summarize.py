@@ -5,6 +5,10 @@ app=root/'apps/gpuix'
 out=Path('/Users/mymac/projects/ade/previews/gpuix/perf/backdrop')
 labels=['backdrop-before','backdrop-control','backdrop-after','backdrop-diagnostic-before','backdrop-diagnostic-control','backdrop-diagnostic-after','backdrop-stream-reverse-after','backdrop-stream-reverse-control','backdrop-idle-before','backdrop-idle-control','backdrop-idle-after','backdrop-original-reverse-after','backdrop-original-reverse-before']
 summary={}
+def path_bytes(row):
+ memory=(row['evidence'].get('counters',{}).get('nativeMemory') or {})
+ gauges=memory.get('metalGauges') or []
+ return gauges[4] if len(gauges)>4 else None
 median=lambda xs:statistics.median([x for x in xs if x is not None]) if any(x is not None for x in xs) else None
 for label in labels:
  p=out/(label+'.json')
@@ -20,6 +24,7 @@ for label in labels:
   fields.update({'proxyP95':median([r['latency']['proxyMs']['p95'] for r in rows]),'gpuMsPerSubmission':median([r['evidence'].get('averageProcessGpuMsPerSubmission') for r in rows]),'cpuMsPerSubmission':median([r['evidence'].get('averageProcessCpuMsPerSubmission') for r in rows])})
   if name.startswith('idle-'):
    fields['gpuMsPerSubmission']=None;fields['cpuMsPerSubmission']=None
+  fields['pathIntermediateBytes']=median([path_bytes(r) for r in rows])
   summary[label]['scenarios'][name]=fields
   if 'diagnostic' in label:
    logs=list((out/label).glob(f'{name}-attempt-*/*.log'))
@@ -28,7 +33,8 @@ for label in labels:
    kernel=[(float(s),int(t)) for s,t in re.findall(r'\[backdrop-kernel\] sigma=([0-9.]+) taps=(\d+)',raw)]
    elapsed=[float(x) for x in re.findall(r'\[paint-gpu\] stage=frame ms=([0-9.]+)',raw)][-rows[-1]['frames']['count']:]
    scenes=[dict((k,float(v)) for k,v in re.findall(r'(\w+)=([0-9.]+)',line)) for line in raw.splitlines() if line.startswith('[gpu-scene]')][-rows[-1]['frames']['count']:]
-   fields['diagnostic']={'kernelTapsMedian':median([t for _,t in kernel]),'kernelTapsMin':min([t for _,t in kernel],default=None),'kernelTapsMax':max([t for _,t in kernel],default=None),'kernelRecords':len(kernel),'commandElapsedMedian':median(elapsed),'sceneMedian':{k:median([s.get(k) for s in scenes]) for k in ['draws','backdropDraws','backdrops','batches','quads','glyphs','colorSprites','shadows','paths','pathVertices','rasterArea','instanceBytes','roundedNodes','glyphClipSteps','glyphClipDepthMax','roundedGlyphs','prunedGlyphs','atlasUploads','atlasBytes','atlasEvictions']}}
+   viewports=re.findall(r'\[gpu-scene\].*?viewport=(\d+)x(\d+)',raw)[-rows[-1]['frames']['count']:]
+   fields['diagnostic']={'viewports':sorted(set('x'.join(v) for v in viewports)),'kernelTapsMedian':median([t for _,t in kernel]),'kernelTapsMin':min([t for _,t in kernel],default=None),'kernelTapsMax':max([t for _,t in kernel],default=None),'kernelRecords':len(kernel),'commandElapsedMedian':median(elapsed),'sceneMedian':{k:median([s.get(k) for s in scenes]) for k in ['draws','backdropDraws','backdrops','batches','quads','glyphs','colorSprites','shadows','paths','pathVertices','rasterArea','instanceBytes','roundedNodes','glyphClipSteps','glyphClipDepthMax','roundedGlyphs','prunedGlyphs','atlasUploads','atlasBytes','atlasEvictions']}}
 (out/'summary.json').write_text(json.dumps(summary,indent=2))
 (app/'perf/backdrop/results.json').write_text(json.dumps(summary,indent=2))
 fmt=lambda x:'—' if x is None else f'{x:.2f}'
