@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import path from 'node:path'
 
 /** Reject measurements and captures when macOS puts the fixture in another Space. */
 export async function assertBuiltInWindow(pid: number): Promise<void> {
   let output = ''
   // The test-id handshake can complete just before AppKit publishes the window.
   for (let attempt = 0; attempt < 20; attempt++) {
-    output = execFileSync('swift', ['/Users/mymac/projects/ade-gpuix-scratch/window-onscreen.swift', String(pid)], { encoding: 'utf8' })
+    output = execFileSync('swift', [path.join(import.meta.dir, 'window-onscreen.swift'), String(pid)], { encoding: 'utf8' })
     if (output.includes('onscreen=true')) break
     await Bun.sleep(250)
   }
