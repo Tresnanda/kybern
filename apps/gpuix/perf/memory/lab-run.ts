@@ -11,6 +11,7 @@ import { watchRun } from '../bench/process-gate.ts'
 import { distribution } from '../bench/model.ts'
 import { Telemetry, parseResources } from '../bench/telemetry.ts'
 import { onExit } from '../bench/lifetime.ts'
+import { assertTestDisplayWindow } from '../images/onscreen.ts'
 const label = process.argv[2] ?? 'diagnose'
 const data = process.env.KYBERN_DATA_DIR!
 const addon = process.env.NAPI_RS_NATIVE_LIBRARY_PATH ?? path.resolve(import.meta.dir, '../../native/build', label.startsWith('before') ? 'memory-before.node' : 'gpuix-native.darwin-arm64.node')
@@ -44,6 +45,11 @@ try {
   }
   const port = JSON.parse(readFileSync(path.join(client, 'memory-control.json'), 'utf8')).port
   const control = async (body: Record<string, unknown>) => (await fetch(`http://127.0.0.1:${port}`, { method: 'POST', body: JSON.stringify(body) })).json()
+  if (process.env.KYBERN_MEMORY_REQUIRE_VM === '1') {
+    const stats = await control({ action: 'stats' }) as { native?: { largeAllocations?: { enabled: boolean; thresholdBytes: number } } }
+    assert.equal(stats.native?.largeAllocations?.thresholdBytes, 4 * 1024 * 1024, 'Rebuild the VM allocator addon before sampling')
+    assert.equal(stats.native?.largeAllocations?.enabled, process.env.KYBERN_LARGE_ALLOCATIONS_VM !== '0', 'Allocator control must match the process launch environment')
+  }
   const scene = async (kind: string, index = 0, peer = false) => {
     const at = performance.now()
     await control({ action: 'scene', kind, index, peer }); await Bun.sleep(120)
@@ -52,30 +58,42 @@ try {
   }
   const measure = async (name: string) => {
     await f.app.call('blur', {})
+    if (process.env.KYBERN_MEMORY_LANE === 'perf-images') await assertTestDisplayWindow(f.pid)
     await Bun.sleep(10000)
+    const testDisplayBefore = process.env.KYBERN_MEMORY_LANE === 'perf-images' ? await assertTestDisplayWindow(f.pid) : null
     const gate = watchRun(), mark = telemetry.mark()
     const sample = Bun.spawn(['bun', path.join(import.meta.dir, '../sample.ts'), '15', `GPUIX=${f.pid}`], { stdout: 'pipe', stderr: 'pipe' })
     const cancel = onExit(async () => { sample.kill(); await sample.exited })
     const raw = await new Response(sample.stdout).text(); assert.equal(await sample.exited, 0); cancel()
     const timing = telemetry.result(mark), overlap = gate.finish()
+    const testDisplayAfter = process.env.KYBERN_MEMORY_LANE === 'perf-images' ? await assertTestDisplayWindow(f.pid) : null
     const footprint = execFileSync('footprint', ['-p', String(f.pid)], { encoding: 'utf8' })
     const vmmap = execFileSync('vmmap', ['-summary', String(f.pid)], { encoding: 'utf8' })
     writeFileSync(path.join(out, `${name}-footprint.txt`), footprint)
     writeFileSync(path.join(out, `${name}-vmmap.txt`), vmmap)
     writeFileSync(path.join(out, `${name}-resources.txt`), raw)
-    rows.push({ name, sceneSubmissionProxyMs: distribution(sceneLatency), sceneSubmissionSamples: sceneLatency.length, fullRate: '1', ...timing, resources: parseResources(raw), attribution: await control({ action: 'stats' }), gate: overlap })
+    const attribution = await control({ action: 'stats' })
+    if (process.env.KYBERN_MEMORY_REQUIRE_VM === '1') {
+      assert.equal(attribution.native.largeAllocations.mapFailures, 0, 'No failed native mappings')
+      assert.equal(attribution.native.largeAllocations.unmapFailures, 0, 'No failed native releases')
+    }
+    rows.push({ name, testDisplayBefore, testDisplayAfter, sceneSubmissionProxyMs: distribution(sceneLatency), sceneSubmissionSamples: sceneLatency.length, fullRate: '1', ...timing, resources: parseResources(raw), attribution, gate: overlap })
     writeFileSync(path.join(out, 'results.json'), JSON.stringify(rows, null, 2))
-    assert(!overlap.overlap && !overlap.orphanOverlap, 'Contended sample must be rerun')
+    assert(!overlap.overlap && !overlap.orphanOverlap && !overlap.screenInvalid, 'Contended sample must be rerun')
   }
   await measure('home-initial')
   if (process.env.KYBERN_MEMORY_EDITOR_MANY === '1') {
-    await scene('editor-many')
-    if (process.env.KYBERN_MEMORY_EDITOR_EDITABLE === '1') {
-      const bounds = await f.app.getByTestId('memory-editor-many').bounds()
-      await f.app.mouse.click({ x: bounds.x + 24, y: bounds.y + 12 })
+    const rounds = Number(process.env.KYBERN_MEMORY_EDITOR_ROUNDS ?? '1')
+    assert(Number.isInteger(rounds) && rounds >= 1 && rounds <= 3, 'At most three editable-note round trips per lease')
+    for (let round = 0; round < rounds; round++) {
+      await scene('editor-many')
+      if (process.env.KYBERN_MEMORY_EDITOR_EDITABLE === '1') {
+        const bounds = await f.app.getByTestId('memory-editor-many').bounds()
+        await f.app.mouse.click({ x: bounds.x + 24, y: bounds.y + 12 })
+      }
+      await measure(round ? `editor-many-${round}` : 'editor-many')
+      await scene('home'); await measure(round ? `home-editor-many-${round}` : 'home-editor-many')
     }
-    await measure('editor-many')
-    await scene('home'); await measure('home-editor-many')
   }
   if (process.env.KYBERN_MEMORY_CODE_ONLY !== '1' && process.env.KYBERN_MEMORY_EDITOR_MANY !== '1') {
   for (let round = 0; round < 2; round++) {
@@ -100,7 +118,7 @@ try {
   if (process.env.KYBERN_MEMORY_STACKS === '1') {
     const diagnose = (file: string, program: string, args: string[]) => {
       let output: string
-      try { output = execFileSync(program, args, { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: 15000 }) }
+      try { output = execFileSync(program, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 15000 }) }
       catch (error) { const failure = error as Error & { stderr?: Buffer }; output = `${failure.message}\n${failure.stderr?.toString() ?? ''}` }
       writeFileSync(path.join(out, file), output)
       return output
@@ -110,13 +128,30 @@ try {
     const histogram = readFileSync(heapFile, 'utf8')
     const reportedKiB = histogram.match(/Sizes:\s*(\d+)KB\[/)?.[1]
     assert(reportedKiB, 'Heap must report its largest allocation size')
-    const pattern = `malloc[${Number(reportedKiB) * 1024}]`
-    const addresses = diagnose('large-allocation-addresses.txt', 'heap', ['--noContent', `--addresses=${pattern}`, String(f.pid)])
-    diagnose('large-allocation-calltree.txt', 'malloc_history', [String(f.pid), '-callTree', '-noContent', pattern])
-    const pointer = addresses.split('\n').flatMap(line => line.match(/^\s*(0x[0-9a-f]+)\s/i)?.[1] ?? [])[0]
-    if (pointer) diagnose('large-allocation-history-0.txt', 'malloc_history', [String(f.pid), '-fullStacks', pointer])
+    const decodedBlocks = [...histogram.matchAll(/\b(?:6144|6160)KB\[(\d+)\]/g)].reduce((sum, match) => sum + Number(match[1]), 0)
+    writeFileSync(path.join(out, 'decoded-image-blocks.json'), JSON.stringify({
+      fixture: '24 images; retained blocks were 6144 KiB or 6160 KiB with stack logging', decodedBlocks, largestAllocationKiB: Number(reportedKiB),
+    }, null, 2))
+    // After the fix there is no image-sized live block. Tracing the largest
+    // unrelated font allocation adds no image ownership evidence.
+    if (decodedBlocks > 0) {
+      const pattern = `malloc[${Number(reportedKiB) * 1024}]`
+      const exact = diagnose('large-allocation-addresses-exact.txt', 'heap', ['--noContent', `--addresses=${pattern}`, String(f.pid)])
+      // Derived non-object names may not match the literal malloc class filter,
+      // even when its size matches the histogram. Sort all live blocks instead.
+      const addresses = /^\s*0x[0-9a-f]+\b/im.test(exact) ? exact : diagnose('large-allocation-addresses.txt', 'heap', ['-s', '-H', '--noContent', '--addresses=all', String(f.pid)])
+      const pointer = addresses.split('\n').flatMap(line => line.match(/^\s*(0x[0-9a-f]+)\b/i)?.[1] ?? [])[0]
+      if (pointer) {
+        diagnose('large-allocation-calltree.txt', 'malloc_history', [String(f.pid), '-callTree', '-noContent', pointer])
+        diagnose('large-allocation-history-0.txt', 'malloc_history', [String(f.pid), '-fullStacks', pointer])
+        diagnose('large-allocation-owners-0.txt', 'leaks', ['--noContent', '--fullStacks', `--traceTree=${pointer}`, String(f.pid)])
+        diagnose('large-allocation-root-paths-0.txt', 'leaks', ['--noContent', '--conservative', `--trace=${pointer}`, String(f.pid)])
+      }
+    }
   }
-  if (process.env.KYBERN_MEMORY_RELIEF === '1') {
+  // Run this only after ownership traces and all original resource samples.
+  // It distinguishes live image retention from freed malloc cache pages.
+  if (process.env.KYBERN_MEMORY_RELIEF === '1' || process.env.KYBERN_MEMORY_STACKS === '1') {
     writeFileSync(path.join(out, 'allocator-relief.json'), JSON.stringify(await control({ action: 'allocator-relief' }), null, 2))
     await measure('home-relief')
   }
@@ -125,3 +160,4 @@ try {
   writeFileSync(path.join(out, 'native.log'), telemetry.raw)
   await f.close(); stop(); release(); leave()
 }
+

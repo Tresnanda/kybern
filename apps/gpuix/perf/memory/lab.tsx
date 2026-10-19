@@ -7,11 +7,12 @@ import { writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { dlopen, FFIType, type Pointer } from 'bun:ffi'
 import { each, getObjc, nsApp, sel } from '../../src/native/objc.ts'
-import { RichEditor } from '../../src/editor/RichEditor.tsx'
+import { RichEditor, type RichEditorHandle } from '../../src/editor/RichEditor.tsx'
 import { loadEditorImage } from '../../src/editor/images.ts'
 const imageDir = process.env.KYBERN_MEMORY_IMAGE_DIR ?? path.join(process.env.KYBERN_DATA_DIR!, 'memory-images')
 type Scene = { kind: string; index: number; peer?: boolean }
 let change: (scene: Scene) => void
+let historyEditor: RichEditorHandle | null = null
 let native: ReturnType<typeof useGpuixRequired>
 const light = process.env.KYBERN_APPEARANCE === 'light'
 function Lab() {
@@ -28,7 +29,7 @@ function Lab() {
   }, [])
   const src = path.join(imageDir, `${scene.index}.png`)
   useEffect(() => {
-    if (scene.kind === 'editor') void loadEditorImage(native, null, src)
+    if (scene.kind === 'editor' || scene.kind === 'editor-history') void loadEditorImage(native, null, src)
     if (scene.kind === 'editor-many') for (let index = 0; index < 24; index++) void loadEditorImage(native, null, path.join(imageDir, `${index}.png`))
   }, [src, scene.kind])
   return <div testId="app-ready" style={{ width: '100%', height: '100%', backgroundColor: light ? '#f5f5f5' : '#202020', padding: 24 }}>
@@ -37,6 +38,7 @@ function Lab() {
       <img key={scene.index} testId="memory-image" src={src} style={{ width: 480, height: 320, borderRadius: 12 }} />
       {scene.peer && <img testId="memory-peer" src={path.join(imageDir, '0.png')} style={{ width: 120, height: 80 }} />}
     </div>}
+    {scene.kind === 'editor-history' && <RichEditor ref={value => { historyEditor = value }} value="# Image history" epoch={2000} testId="memory-editor-history" />}
     {scene.kind === 'editor-many' && <RichEditor value={'# Many images\n\n' + Array.from({ length: 24 }, (_, index) => `![Memory ${index}](${path.join(imageDir, `${index}.png`)})\n\n`).join('')} epoch={1000} readOnly={process.env.KYBERN_MEMORY_EDITOR_EDITABLE !== '1'} testId="memory-editor-many" />}
     {scene.kind === 'editor' && <RichEditor key={scene.index} value={`# Image ${scene.index}\n\n![Memory fixture](${src})\n`} epoch={scene.index} readOnly testId="memory-editor" />}
     {scene.kind === 'code' && <code testId="memory-code" code={Array.from({ length: 12000 }, (_, i) => `export const entry${i} = { title: 'Memory fixture ${i}', enabled: true };`).join('\n')} language="typescript" style={{ width: 950, height: 600, color: '#eeeeee', fontFamily: 'Menlo', fontSize: 14 }} />}
@@ -55,6 +57,28 @@ const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
     await loadEditorImage(renderer, null, src)
     assert.equal(renderer.hasRichEditorImage(src), true, 'A failed load can retry')
     return Response.json({ available: true, retried: true })
+  }
+  if (body.action === 'editor-history') {
+    assert(historyEditor, 'Editable history fixture is mounted')
+    const before = historyEditor.command({ cmd: 'getDoc' })
+    const src = path.join(imageDir, '0.png')
+    historyEditor.command({ cmd: 'insertImage', src, alt: 'Undo image' })
+    await loadEditorImage(native, null, src)
+    const inserted = historyEditor.command({ cmd: 'getDoc' })
+    assert(JSON.stringify(inserted).includes(src), 'Inserted image is in document')
+    historyEditor.command({ cmd: 'undo' })
+    assert.deepEqual(historyEditor.command({ cmd: 'getDoc' }), before, 'Undo removes the image and restores the document')
+    historyEditor.command({ cmd: 'redo' })
+    assert.deepEqual(historyEditor.command({ cmd: 'getDoc' }), inserted, 'Redo restores the same image document')
+    return Response.json({ before, inserted, state: historyEditor.command({ cmd: 'getState' }) })
+  }
+  if (body.action === 'editor-select') {
+    assert(historyEditor)
+    const doc = historyEditor.command({ cmd: 'getDoc' }) as { blocks: unknown[] }
+    historyEditor.command({ cmd: 'select', anchor: { block: 0, offset: 0 }, head: { block: doc.blocks.length - 1, offset: 100000 } })
+    const state = historyEditor.command({ cmd: 'getState' }) as { collapsed: boolean }
+    assert.equal(state.collapsed, false, 'Selection spans the image document')
+    return Response.json({ selection: historyEditor.command({ cmd: 'getSelection' }), state })
   }
   if (body.action === 'allocator-relief') {
     const lib = dlopen('/usr/lib/libSystem.B.dylib', {

@@ -1,0 +1,41 @@
+import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
+import { copyFileSync } from 'node:fs'
+import path from 'node:path'
+import { assertNonBlackContent } from '../../native/clip-pixels.ts'
+
+/** An all-black OS capture is invalid presentation, never pixel parity. */
+export async function capturePresentedPixels(file: string, width: number, contentHeight: number, take: () => unknown | Promise<unknown>, validate?: () => void) {
+  for (let attempt = 0; ; attempt++) {
+    await take()
+    try { assertNonBlackContent(file, width, contentHeight, file); validate?.(); return }
+    catch (error) {
+      copyFileSync(file, file.replace(/\.png$/, `-rejected-${attempt}.png`))
+      if (attempt >= 2) throw error
+      await Bun.sleep(150)
+    }
+  }
+}
+
+/** Reject measurements and captures when macOS puts the fixture in another Space. */
+export async function assertTestDisplayWindow(pid: number): Promise<string> {
+  let output = ''
+  // The test-id handshake can complete just before AppKit publishes the window.
+  for (let attempt = 0; attempt < 20; attempt++) {
+    output = execFileSync('swift', [path.join(import.meta.dir, 'window-onscreen.swift'), String(pid)], { encoding: 'utf8' })
+    const testScale = Number(output.match(/testActive=true testScale=([\d.]+)/)?.[1])
+    assert(testScale === 2, `Hidden Retina test display is unavailable: ${output.trim()}`)
+    if (output.includes('onscreen=true')) break
+    await Bun.sleep(250)
+  }
+  const windows = [...output.matchAll(/window \d+ onscreen=true bounds=\{([^}]+)\}/g)].map(match => match[1])
+  assert(windows.length > 0, `GPUIX window is offscreen: ${output.trim() || `pid ${pid} has no window`}`)
+  const withinDisplay = windows.some(line => {
+    const bounds = Object.fromEntries([...line.matchAll(/\b(X|Y|Width|Height)\s*[:=]\s*"?(-?\d+(?:\.\d+)?)/g)].map(([, key, value]) => [key, Number(value)]))
+    return Number.isFinite(bounds.X) && Number.isFinite(bounds.Y) && Number.isFinite(bounds.Width) && Number.isFinite(bounds.Height)
+      && bounds.X >= -1440 && bounds.X < 0 && bounds.Y >= 900 && bounds.Width > 0 && bounds.Height > 0
+      && bounds.X + bounds.Width <= 0 && bounds.Y + bounds.Height <= 1800
+  })
+  assert(withinDisplay, `GPUIX window is outside the hidden test display: ${output.trim()}`)
+  return output.trim()
+}

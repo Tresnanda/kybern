@@ -2,7 +2,7 @@ import { lease as queuedLease } from '../bench/lease.ts'
 import { nativeBuildMarkers, quietMarkers } from '../bench/build-overlap.ts'
 import { processInventory } from '../bench/process-gate.ts'
 
-const foreignQuiet = () => quietMarkers().some(marker => marker !== 'kybern-gpuix-quiet.perf-memory')
+const foreignQuiet = () => quietMarkers().some(marker => marker !== `kybern-gpuix-quiet.${process.env.KYBERN_MEMORY_LANE ?? 'perf-memory'}`)
 
 /** A build may start while this request waits behind another window. */
 export async function lease() {

@@ -107,6 +107,8 @@ exec((here / "gpu_clip_gpui.py").read_text())
 exec((here / "gpu_telemetry_gpui.py").read_text())
 exec((here / "flick_frame_gpui.py").read_text())
 
+exec((here / "image_frames_gpui.py").read_text())
+
 for name, text in pending.items():
     if (root/name).read_text()!=text: (root/name).write_text(text)
 for name in ['backdrop_renderer.rs', 'backdrop.metal']:
