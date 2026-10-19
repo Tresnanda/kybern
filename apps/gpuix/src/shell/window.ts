@@ -21,11 +21,15 @@ import { refreshAccessibilityDisplay } from '../platform/material.ts'
 
 const FRAME_KEY = 'kybern.window.frame'
 const POLL_MS = 900
+// Automation chooses an explicit built-in-display frame before showing the
+// window. This also keeps original-addon A/B runs independent of saved frames.
+const automationFrame = process.env.GPUIX_BACKGROUND === '1' ? process.env.KYBERN_AUTOMATION_WINDOW_FRAME : undefined
+const savedFrame = () => automationFrame || load<string | null>(FRAME_KEY, null)
 
 const mac = process.platform === 'darwin'
 
 /** Saving waits until a saved frame has been restored, or it would overwrite it with the default. */
-let frameReady = !mac || !load<string | null>(FRAME_KEY, null)
+let frameReady = !mac || !savedFrame()
 
 /** The app's window: the first on-screen (or minimized) NSWindow; `hidden` also accepts one not shown yet. */
 function appWindow(o: Objc, hidden = false): Pointer | null {
@@ -44,7 +48,7 @@ function appWindow(o: Objc, hidden = false): Pointer | null {
 const nsString = (o: Objc, text: string) => o.msgPtrArg(cls(o, 'NSString'), sel(o, 'stringWithUTF8String:'), cstr(text)) as Pointer
 
 /** Whether there is a saved frame to restore: `main.tsx` then opens the window hidden. */
-export const hasSavedFrame = () => mac && !!load<string | null>(FRAME_KEY, null)
+export const hasSavedFrame = () => mac && !!savedFrame()
 
 /**
  * Put the window back where it was, then show it. The window opens hidden when
@@ -53,7 +57,7 @@ export const hasSavedFrame = () => mac && !!load<string | null>(FRAME_KEY, null)
  */
 export function restoreWindowFrame(): boolean {
   if (!mac) return true
-  const saved = load<string | null>(FRAME_KEY, null)
+  const saved = savedFrame()
   if (!saved) return true
   try {
     const o = getObjc()

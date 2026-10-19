@@ -52,3 +52,5 @@ The shared bench may repeat discarded windows. Raw discards remain in JSON; the 
 `window-guards.jsonl` retains accepted/rejected CoreGraphics window IDs, on-screen flags and display/window bounds. Two legacy native fixture viewports use 820-point content height (the native title bar adds 32 points) to fit the built-in display.
 
 Retain `native/build/backdrop-before.node` as the unique original reference (SHA256 `1145f7914ae87f5cedd5993fdced48f07ea09a3824aad781dcbd8d78d236a5f8`). The measurement wrapper verifies it; recreating it by copying an already optimized addon would invalidate the comparison.
+
+Production fixtures set `KYBERN_AUTOMATION_WINDOW_FRAME="80 40 1280 820 0 0 1440 900 "` with `GPUIX_BACKGROUND=1`. `shell/window.ts` then opens main hidden, restores that explicit scratch frame on the built-in display, and shows it without activation. This works with the unchanged original addon, and prevents an external-display flash or saved-frame drift during A/B. The guard remains required.
