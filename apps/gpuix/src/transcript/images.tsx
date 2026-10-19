@@ -1,4 +1,4 @@
-import { useTranscriptRowLease } from './Window.tsx'
+import { useTranscriptRowLease, useTranscriptFocusRestoration } from './Window.tsx'
 import { onEnvironmentChange } from '../shell/environment.ts'
 // `components/kybern/ResponseImage.tsx`: a 280px-wide image (rounded 12, 8 when
 // compact) or a 64px thumbnail, with a hairline outline. GPUIX's <img> needs a
@@ -88,6 +88,7 @@ function srcFor(source: string): string | null {
 export function ResponseImage({ source, label = 'Agent image', compact = false, thumbnail = false }: { source: string; label?: string; compact?: boolean; thumbnail?: boolean }) {
   const t = useTheme()
   const renderer = useGpuixRequired()
+  const restoreFocus = useTranscriptFocusRestoration()
   const trigger = useRef<PublicInstance | null>(null)
   const [open, setOpen] = useState(false)
   const size = useMemo(() => imageSize(source), [source])
@@ -103,26 +104,32 @@ export function ResponseImage({ source, label = 'Agent image', compact = false, 
   const height = thumbnail ? 64 : size ? Math.round((width * size.height) / size.width) : 210
   return (
     <>
-    <img
+    <div
       ref={(node) => { trigger.current = node }}
       testId="response-image"
+      tabIndex={0}
+      role="button"
+      aria-label={`Preview ${label}`}
       onClick={() => setOpen(true)}
-      src={src}
-      alt={label}
-      objectFit={thumbnail ? "cover" : "contain"}
-      style={{ width, height, cursor: 'pointer', borderRadius: compact ? 8 : 12, borderWidth: 1, borderColor: outline, marginTop: compact || thumbnail ? 0 : 12, marginBottom: compact || thumbnail ? 0 : 12, flexShrink: 0 }}
-    />
-    {open && <ImageLightbox src={src} label={label} size={size} onClose={() => {
-      setOpen(false)
-      if (trigger.current) renderer.focusElement?.(trigger.current.id)
-    }} />}
+      onKeyDown={event => { if (event.key === 'enter' || event.key === 'space') setOpen(true) }}
+      style={{ display: 'flex', width, height, cursor: 'pointer', marginTop: compact || thumbnail ? 0 : 12, marginBottom: compact || thumbnail ? 0 : 12, flexShrink: 0 }}
+    >
+      <img src={src} alt={label} objectFit={thumbnail ? "cover" : "contain"}
+        style={{ width, height, borderRadius: compact ? 8 : 12, borderWidth: 1, borderColor: outline, pointerEvents: 'none' }} />
+    </div>
+    {open && <ImageLightbox src={src} label={label} size={size} finalFocus={() => {
+      if (trigger.current) {
+        if (restoreFocus) restoreFocus(trigger.current.id)
+        else renderer.focusElement?.(trigger.current.id)
+      }
+    }} onClose={() => setOpen(false)} />}
     </>
   )
 }
 
 /** Native motion has no transform scale; keep the fade and a 4px entrance
  * offset. No JS animation loop; Reduce Motion is opacity only. */
-function ImageLightbox({ src, label, size, onClose }: { src: string; label: string; size: { width: number; height: number } | null; onClose: () => void }) {
+function ImageLightbox({ src, label, size, onClose, finalFocus }: { src: string; label: string; size: { width: number; height: number } | null; onClose: () => void; finalFocus: () => void }) {
   const renderer = useGpuixRequired()
   const window = renderer.getWindowSize?.() ?? { width: 900, height: 600 }
   useTranscriptRowLease(true)
@@ -132,7 +139,7 @@ function ImageLightbox({ src, label, size, onClose }: { src: string; label: stri
   const width = size ? Math.round(size.width * ratio) : maxWidth
   const height = size ? Math.round(size.height * ratio) : maxHeight
   const [closing, setClosing] = useState(false)
-  return <Dialog width={width + 32} onClose={() => setClosing(true)} testId="image-lightbox" instant>
+  return <Dialog width={width + 32} onClose={() => setClosing(true)} finalFocus={finalFocus} testId="image-lightbox" instant>
     <motion.div
       initial={{ opacity: 0, top: REDUCED_MOTION ? 0 : 4 }}
       animate={{ opacity: closing ? 0 : 1, top: closing && !REDUCED_MOTION ? 4 : 0 }}

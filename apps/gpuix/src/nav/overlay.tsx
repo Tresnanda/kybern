@@ -836,6 +836,7 @@ export function Dialog({
   pinTop,
   radius,
   dim = 0.6,
+  finalFocus,
 }: {
   onClose: () => void
   width?: number
@@ -848,13 +849,22 @@ export function Dialog({
   radius?: number
   /** Backdrop opacity (black). */
   dim?: number
+  /** Override restoration, e.g. focus the opener while preserving its list anchor. */
+  finalFocus?: () => void
 }) {
   const t = useTheme()
   const size = useWindowSize({ intervalMs: 250 })
   const { renderer } = useGpuix()
   const [returnFocus] = useState(() => renderer?.getFocusedElementId?.())
+  const focusTarget = useRef(finalFocus)
+  focusTarget.current = finalFocus
   useLayoutEffect(() => () => {
-    if (returnFocus != null) queueMicrotask(() => { try { renderer?.focusElement?.(returnFocus) } catch { /* Window closed. */ } })
+    queueMicrotask(() => {
+      try {
+        if (focusTarget.current) focusTarget.current()
+        else if (returnFocus != null) renderer?.focusElement?.(returnFocus)
+      } catch { /* Window closed. */ }
+    })
   }, [renderer, returnFocus])
   const palette = variant === 'palette'
   // Decided once: a later change must not restart the entrance.

@@ -32,10 +32,10 @@ for(const theme of ['dark','light']){
   assert.equal(await a.getByTestId('image-lightbox').count(),1,'Row-owned image dialog survives scrolling its trigger away')
   assert.ok((await a.getByTestId('image-lightbox').bounds()).width>0,'Focused offscreen row still paints its overlay')
   requireWindowOnscreen(f.pid);await a.screenshot({path:`${out}/verify-${theme}-pinned-image.png`})
-  await a.getByTestId('image-lightbox').press('escape')
+  const overlayAnchor=await command('where')
+  await a.call('keystrokes',{keys:'escape'})
   await until(async()=>await a.getByTestId('image-lightbox').count()===0,'Image dialog closes after offscreen trigger')
-  // Native focus restoration may reveal the offscreen trigger. Establish the
-  // following navigation test's own starting point after that restoration.
+  assert.deepEqual(await command('where'),overlayAnchor,'Closing an offscreen image preserves the current reading anchor and rail')
   await a.call('blur',{})
   console.log('After overlay jump',JSON.stringify(await command('jump',{index:6001})))
   }else await command('jump',{index:2001})
