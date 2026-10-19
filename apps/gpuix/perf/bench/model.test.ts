@@ -88,5 +88,6 @@ import {parseWindowOnscreen} from './window-onscreen.ts'
 test('capture guard requires a visible window contained on the hidden 2x display',()=>{
  const window=(x:number,y:number,scale:number,onscreen=true,width=1280)=>`window 42 onscreen=${onscreen} scale=${scale} bounds={X = ${x}; Y = ${y}; Width = ${width}; Height = 820;}`
  expect(parseWindowOnscreen(window(-1360,940,2)).valid).toBe(true)
+ expect(parseWindowOnscreen(window(-1360,940,2).replace("X = -1360", 'X = "-1360"')).valid).toBe(true)
  for(const raw of [window(80,40,2),window(-1360,940,1),window(-1360,940,2,false),window(-1500,940,2),window(-1360,899,2),window(-1360,1000,2),window(-1360,940,2,true,1400),''])expect(parseWindowOnscreen(raw).valid).toBe(false)
 })
