@@ -103,7 +103,9 @@ Placement and verification:
 
 ## Visual and regression validation
 
-PENDING final mapped visual/lightbox/full source checks in the shared quiet queue. Native rebuild already passed end to end, including all update.sh checks, app typecheck, 2 frame tests, 3 allocator tests plus separately run disabled control, native TypeScript and image-harness TypeScript.
+All **20 functional canvases match exactly** (zero differing pixels) across both themes: shared/evicted/reopened images, editor reload, undo/redo, selected image/text, code and home. Both pinned lightbox canvases also match exactly. No final capture needed a black/background rejection retry. Both controls passed first/middle/tail rail navigation, image overlay surviving trigger disposal, Escape, Unicode native selection after row disposal and formatted final answer. Representative image/selection/lightbox captures were inspected visually. The fresh full `bun test ./src` passed **337 tests, 0 failures, 6,912 assertions across 58 files** in 8.15 seconds, resolving the previous display-missing timeouts.
+
+The full native rebuild passed end to end, including all update.sh checks and `pnpm typecheck`; 2 extracted frame tests; 3 allocator tests plus the separately run disabled control; `pnpm exec tsc -p native/tsconfig.json`; and image-harness TypeScript.
 
 Addon SHA-256 **fe5605070bfa27f79b2e2209f318116100ba8a4a23f4538e15087f61308d1a41**; native source at build: `8920e7cbcaef09df46b49754ab57a2d7e9eab45b`. `codesign --verify` passed. No native code changed after the validated build.
 
@@ -115,10 +117,12 @@ All evidence: `/Users/mymac/projects/ade/previews/gpuix/perf/images/`.
 - `owner-before/`, `owner-exact-filter-miss/`, `before-note-stacks/`: original/rooted owner evidence. `after-vm-note/home-editor-many-heap.txt`: no retained decoded malloc blocks after final close; mmap balance and physical footprint provide the release proof for mapped storage.
 - `allocator-cache-on/`, `allocator-cache-off/`: cache diagnosis. `diagnostic-relief-paired-summary.json`, `diagnostic-noop-relief-native-*`: ineffective relief trial, excluded from final allocator comparison.
 - `native-update.log`, `native-checks/`, `native-validation.json`: full build/check evidence and signed addon identity.
-- Final both-theme visual/lightbox evidence pending queue completion.
+- `before-final-visual/`, `after-final-visual/`, `visual-diff.json`: 20 exact image canvases. `lightbox-before/`, `lightbox-after/`, `lightbox-diff.json`: both-theme overlay/selection/rail captures and 2 exact lightbox canvases. `src-tests.log`, `lightbox-before.log`, `lightbox-after.log`: regression outcomes. `cleanup.json`: removed generated paths, retained artifacts and volume readings.
 
 Remaining gaps: the separate large-code high-water mark; product return-home residual +78 MiB; one active-scroll A/B pair and variable GPU work; physical input-to-presentation and energy unmeasured; no 120 Hz display proof. Existing interaction/appearance checks are required, and no removed content/effect or empty renderer is counted as an optimization.
 
 ## Handoff and cleanup
 
-Branch `gpuix/perf-images`. Final report commit/clean status and cleanup pending completion of the queued regression checks. Free disk before resumption: **91 GiB**; after full mapped rebuild/resource runs: **80 GiB** on the shared volume. Own generated target 1.9 GiB, upstream 185 MiB and dependency tree 188 MiB will be removed after verification, retaining the validated signed addon, runtime dylib and evidence.
+Branch `gpuix/perf-images`; the final report commit is the branch tip reported in the handoff. All source/native changes and this report are committed; `git status --short` is clean. No app, fixture, scratch daemon, build or benchmark from this lane remains alive; its quiet/build/queue entries are released.
+
+Free disk before resumption: **91 GiB**. Cleanup measured **79.7 → 81.6 GiB available** on the shared volume (other lanes also use it). Removed this lane’s 1.9 GiB Rust target, generated upstream 185 MiB, disposable dependencies 188 MiB, test binaries/fixtures, unsafe old addon, scratch daemon/client/image/stack-log data and allocator prototype. No user data, installed daemon, shared research clone, other lane’s output or worktree registration was removed. Retained only the validated **27,350,512-byte signed addon** and **103,024-byte runtime webview dylib** under `native/build/`, plus approximately 151 MiB of requested evidence in the original conversation folder. The addon SHA and signature were verified again after cleanup.

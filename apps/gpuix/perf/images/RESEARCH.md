@@ -82,8 +82,13 @@ C getenv/atomic configuration avoids allocating recursively inside the allocator
 `KYBERN_LARGE_ALLOCATIONS_VM=0` provides the same-binary System control. Counters
 report requested mapped bytes, peak, calls and failures; these are not a physical
 footprint measurement. Native mapping balance, vmmap and footprint must agree.
-Per-frame performance and complete native/image regressions remain acceptance
-checks before keeping this replacement.
+The final same-addon pair meets the note goal (+22/+24 MiB after close),
+returns to +2/+2 MiB across 48-image traversal, and has no >33 ms scroll
+intervals. CPU is 47.17% System versus 47.88% mapped; render p95 is
+7.645 versus 7.876 ms. This single pair shows no clear per-frame regression,
+not a universal throughput guarantee. All 20 both-theme image canvases and
+2 lightbox canvases match exactly; full native update, allocator/frame tests,
+typechecks and 337 source tests pass. Full metrics/limits are in RESULTS.md.
 
 Primary contracts: [Rust GlobalAlloc](https://doc.rust-lang.org/std/alloc/trait.GlobalAlloc.html),
 [Apple mmap/munmap](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/mmap.2.html),
