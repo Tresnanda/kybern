@@ -57,6 +57,14 @@ try:
             ('before-lab', ['bun', 'perf/memory/lab-run.ts', 'before-lab'], common),
             ('before-final', ['bun', 'perf/memory/visual.ts', 'before-final'], common),
         ]
+    if mode == 'allocator':
+        common = {'NAPI_RS_NATIVE_LIBRARY_PATH': str(addon), 'KYBERN_MEMORY_LANE': lane,
+                  'KYBERN_MEMORY_EDITOR_MANY': '1', 'KYBERN_MEMORY_EDITOR_EDITABLE': '1',
+                  'KYBERN_MEMORY_HEAP': '1', 'KYBERN_EDITOR_IMAGE_RELIEF': '0'}
+        jobs = [
+            ('allocator-cache-on', ['bun', 'perf/memory/lab-run.ts', 'allocator-cache-on'], common),
+            ('allocator-cache-off', ['bun', 'perf/memory/lab-run.ts', 'allocator-cache-off'], {**common, 'MallocLargeCache': '0', 'KYBERN_MEMORY_EDITOR_ROUNDS': '2'}),
+        ]
     if mode == 'final':
         common = {'NAPI_RS_NATIVE_LIBRARY_PATH': str(addon), 'KYBERN_MEMORY_LANE': lane}
         product = {'KYBERN_DATA_DIR': str(data) + '-product', 'KYBERN_MEMORY_GROUPS': 'image-thread', 'KYBERN_MEMORY_IMAGE_THREAD': '1'}
