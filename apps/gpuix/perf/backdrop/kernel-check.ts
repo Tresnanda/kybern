@@ -25,11 +25,11 @@ try{
   for(let i=0;i<2;i++){
    const before=files['0']![i]!,after=files['1']![i]!,a=pixels(before),b=pixels(after)
    assert.equal(a.w,b.w);assert.equal(a.h,b.h)
-   let max=0,changed=0,over2=0,over4=0,total=0,sum=0
+   let max=0,changed=0,over2=0,over4=0,total=0,sum=0,low=255,high=0
    for(let y=12;y<a.h-12;y++)for(let x=12;x<a.w-12;x++){
-    const p=a.at(x,y),q=b.at(x,y),d=Math.max(...p.map((v,j)=>Math.abs(v-q[j]!)));total++;max=Math.max(max,d);sum+=d;if(d)changed++;if(d>2)over2++;if(d>4)over4++
+    const p=a.at(x,y),q=b.at(x,y),d=Math.max(...p.map((v,j)=>Math.abs(v-q[j]!)));total++;low=Math.min(low,...p);high=Math.max(high,...p);max=Math.max(max,d);sum+=d;if(d)changed++;if(d>2)over2++;if(d>4)over4++
    }
-   const row={theme,mode,before,after,total,max,changed,over2,over4,meanMaxDelta:sum/total};results.push(row);writeFileSync(out+'/results.json',JSON.stringify(results,null,2));console.log(JSON.stringify(row));assert.equal(over4,0,'Equivalent kernel changed visible output')
+   const row={theme,mode,before,after,total,max,changed,over2,over4,meanMaxDelta:sum/total};results.push(row);writeFileSync(out+'/results.json',JSON.stringify(results,null,2));console.log(JSON.stringify(row));assert.ok(high-low>100,'Missing high-contrast source content');assert.equal(over4,0,'Equivalent kernel changed visible output')
   }
  }
 }finally{stop()}

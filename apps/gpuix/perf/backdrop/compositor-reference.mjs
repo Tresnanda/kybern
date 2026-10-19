@@ -32,5 +32,6 @@ try{for(const theme of ['dark','light'])for(const kind of ['surface','links']){
  await page.mouse.move(5,height-10);await capture()
  if(kind==='surface')console.log(theme,await page.locator('[data-slot="dialog-popup"]').evaluate(e=>({filter:getComputedStyle(e).backdropFilter,bounds:e.getBoundingClientRect().toJSON()})))
  await page.locator('.chat-markdown a').first().hover();await page.waitForTimeout(100);await capture('-hover')
+ if(kind==='surface'){await page.mouse.move(100,470);await page.mouse.wheel(0,55);await page.waitForTimeout(300);await capture('-scroll')}
  await page.close();await new Promise(r=>setTimeout(r,400))
 }}finally{await browser.close();await server.close()}
