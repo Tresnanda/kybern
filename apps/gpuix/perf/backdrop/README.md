@@ -46,3 +46,5 @@ running thread; frontend-only `idle` overrides can be restored by refresh. Raw
 first-iteration idle results remain archived, including late submissions.
 
 Captures and resource windows require the window to be on-screen and wholly inside a built-in display. `window-guard.swift` uses the CoreGraphics on-screen window list and active built-in display bounds; the capture wrapper retries occlusion without moving or focusing windows. Native automation screenshots have the same pre/post guard. Resource windows guard both endpoints and reject invalid measurements.
+
+The shared bench may repeat discarded windows. Raw discards remain in JSON; the acceptance wrapper requires the complete requested number of successful samples and excludes discarded samples from summaries.

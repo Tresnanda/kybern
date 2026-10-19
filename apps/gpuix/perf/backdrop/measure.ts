@@ -10,7 +10,9 @@ for(const control of (phase==='original-reverse'?['1','old']:phase==='reverse'?[
  const unregister=onExit(async()=>{child.kill();await child.exited})
  const code=await child.exited;unregister();if(code)throw Error(`${label} failed`)
  const file=`perf/bench/results/${label}.json`,doc=JSON.parse(readFileSync(file,'utf8'))
- if(doc.aborted||doc.results.some((r:Result)=>r.status!=='ok'||(r.scenario!=='idle-home'&&(r.frames.count<30||(r.resources.gpuMs==null||r.resources.gpuMs<=0)))))throw Error('Invalid active window')
- if(phase==='idle'&&doc.results.some((r:Result)=>r.frames.count!==0||r.resources.gpuMs!==0))throw Error('Settled idle must have zero submissions and GPU work')
+ const accepted:Result[]=doc.results.filter((r:Result)=>r.status==='ok')
+ const expectedRuns=diagnostic?1:3,expectedScenarios=phase==='idle'||phase==='reverse'?1:phase==='original-reverse'?2:4
+ if(doc.aborted||doc.results.some((r:Result)=>r.status==='failed')||accepted.length!==expectedRuns*expectedScenarios||accepted.some(r=>r.scenario!=='idle-home'&&(r.frames.count<30||(r.resources.gpuMs==null||r.resources.gpuMs<=0))))throw Error('Invalid active window')
+ if(phase==='idle'&&accepted.some(r=>r.frames.count!==0||r.resources.gpuMs!==0))throw Error('Settled idle must have zero submissions and GPU work')
  doc.backdropKernel=control;writeFileSync(file,JSON.stringify(doc,null,2));copyFileSync(file,`/Users/mymac/projects/ade/previews/gpuix/perf/backdrop/${label}.json`)
 }
