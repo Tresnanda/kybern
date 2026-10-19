@@ -1478,3 +1478,9 @@ Window/rail/sidebar materials already use AppKit's behind-window compositor
 material. Streaming's nine scene backdrops are per-word blur animations, rather
 than nine persistent window materials. Research, surface decisions, methodology
 and acceptance results live in `perf/backdrop/`.
+
+The reconstructed filter has a separate Metal fragment entry point. The resource
+pair selects the legacy or weighted entry point; only that pair is instantiated.
+`KYBERN_BACKDROP_KERNEL=0` retains the original fragment and skips the kernel
+upload. This prevents the control and optimized path from sharing a shader with
+both loops. Nonfinite/invalid kernels select the legacy entry point on CPU.
