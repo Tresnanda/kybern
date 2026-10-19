@@ -48,3 +48,5 @@ first-iteration idle results remain archived, including late submissions.
 Captures and resource windows require the window to be on-screen and wholly inside a built-in display. `window-guard.swift` uses the CoreGraphics on-screen window list and active built-in display bounds; the capture wrapper retries occlusion without moving or focusing windows. Native automation screenshots have the same pre/post guard. Resource windows guard both endpoints and reject invalid measurements.
 
 The shared bench may repeat discarded windows. Raw discards remain in JSON; the acceptance wrapper requires the complete requested number of successful samples and excludes discarded samples from summaries.
+
+`window-guards.jsonl` retains accepted/rejected CoreGraphics window IDs, on-screen flags and display/window bounds. Two legacy native fixture viewports use 820-point content height (the native title bar adds 32 points) to fit the built-in display.

@@ -48,4 +48,5 @@ function Lab() {
     </div></div>
   </div>
 }
-render(<Lab />, { title: 'Decorated native input and cached scrolling', width: 720, height: 980, focus: false })
+// Fit the built-in 1440×900 display without moving/focusing test windows.
+render(<Lab />, { title: 'Decorated native input and cached scrolling', width: 720, height: 820, focus: false })

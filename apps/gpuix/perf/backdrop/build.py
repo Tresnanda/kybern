@@ -82,6 +82,7 @@ try:
                KYBERN_VERIFY_OUTPUT="/Users/mymac/projects/ade/previews/gpuix/perf/backdrop/native-checks")
     Path(env["KYBERN_CLIENT_CONFIG_DIR"]).mkdir(parents=True, exist_ok=True)
     env['KYBERN_WINDOW_GUARD']=str(app/'native/build/backdrop-window-guard')
+    env['KYBERN_WINDOW_GUARD_LOG']=str(log.parent/'window-guards.jsonl')
     env['BUN_OPTIONS']='--preload='+str(app/'perf/backdrop/capture-preload.ts')
     env['PATH']=str(app/'perf/backdrop')+os.pathsep+env['PATH']
     with log.open("a" if finish_only else "w") as output:
