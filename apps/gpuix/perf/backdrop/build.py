@@ -13,6 +13,7 @@ lane = "perf-backdrop"
 reservation = tmp / f"kybern-gpuix-build-next.{lane}"
 marker = tmp / f"kybern-gpuix-native-build.{lane}"
 log = Path("/Users/mymac/projects/ade/previews/gpuix/perf/backdrop/native-update.log")
+log.parent.mkdir(parents=True,exist_ok=True)
 child = None
 reserved = False
 routing = []
@@ -22,7 +23,12 @@ screen_script = '/Users/mymac/projects/ade-gpuix-scratch/screen-state.swift'
 def screen_ready():
     result=subprocess.run(['swift',screen_script],capture_output=True,text=True)
     import re
-    return result.returncode==0 and bool(re.search(r'locked:\s*0\b',result.stdout)) and bool(re.search(r'displayAsleep:\s*(?:0|false)\b',result.stdout))
+    awake = result.returncode==0 and bool(re.search(r'locked:\s*0\b',result.stdout)) and bool(re.search(r'displayAsleep:\s*(?:0|false)\b',result.stdout))
+    if not awake: return False
+    display=subprocess.run(['swift',str(app/'perf/backdrop/display-ready.swift')],capture_output=True,text=True)
+    if display.stdout.strip():
+        with (log.parent/'display-readiness.jsonl').open('a') as output: output.write(display.stdout.strip()+'\n')
+    return display.returncode==0
 
 def cancelled(_signal, _frame):
     raise KeyboardInterrupt
@@ -39,6 +45,7 @@ try:
             except ProcessLookupError:
                 break
             time.sleep(1)
+    while not screen_ready(): time.sleep(60)
     while [p for p in tmp.glob("kybern-gpuix-build-next.*") if p != reservation]:
         time.sleep(1)
     reservation.write_text(f"{lane} {time.time()}\n")
@@ -81,10 +88,11 @@ try:
         shutil.copy2(addon,baseline)
     env = dict(os.environ, KYBERN_DATA_DIR="/Users/mymac/projects/ade-gpuix-scratch/perf-backdrop",
                KYBERN_CLIENT_CONFIG_DIR="/Users/mymac/projects/ade-gpuix-scratch/perf-backdrop/native-client",
-               KYBERN_URL="", KYBERN_TOKEN="", KYBERN_AUTOMATION_WINDOW_FRAME="80 40 1280 820 0 0 1440 900 ", RUSTC_WRAPPER="", CARGO_INCREMENTAL="0",
+               KYBERN_URL="", KYBERN_TOKEN="", KYBERN_AUTOMATION_WINDOW_FRAME="80 40 1280 820 0 0 1440 900 ", KYBERN_TEST_DISPLAY="builtin", RUSTC_WRAPPER="", CARGO_INCREMENTAL="0",
                CARGO_BUILD_JOBS="4", CARGO_TARGET_DIR=str(app / "native/build/target"),
                KYBERN_VERIFY_OUTPUT="/Users/mymac/projects/ade/previews/gpuix/perf/backdrop/native-checks")
     Path(env["KYBERN_CLIENT_CONFIG_DIR"]).mkdir(parents=True, exist_ok=True)
+    env['KYBERN_BUILTIN_DISPLAY_PROBE']=str(app/'native/build/backdrop-display-ready')
     env['KYBERN_BENCH_WHEEL_PREBUILT']=str(app/'native/build/backdrop-bench-wheel.dylib')
     env['KYBERN_WINDOW_GUARD']=str(app/'native/build/backdrop-window-guard')
     env['KYBERN_WINDOW_GUARD_LOG']=str(log.parent/'window-guards.jsonl')
@@ -105,6 +113,7 @@ try:
         elif "--compositor-only" in sys.argv: commands = commands[-1:]
         elif finish_only: commands = commands[3:]
         commands.insert(0,["clang", "-dynamiclib", "-fobjc-arc", "-framework", "Cocoa", "-framework", "CoreGraphics", "perf/bench/wheel.m", "-o", env['KYBERN_BENCH_WHEEL_PREBUILT']])
+        commands.insert(0,["swiftc", "perf/backdrop/display-ready.swift", "-o", env['KYBERN_BUILTIN_DISPLAY_PROBE']])
         for command in commands:
             if not screen_ready(): raise RuntimeError('Locked/asleep: pause native UI validation')
             child = subprocess.Popen(command, cwd=app, env=env, stdout=output,

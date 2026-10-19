@@ -5,5 +5,5 @@ export function requireWindow(pid:number) {
 }
 export async function waitForWindow(pid:number) {
  const deadline=Date.now()+90000
- for(;;){try{requireWindow(pid);return}catch(error){if(Date.now()>=deadline)throw error;await Bun.sleep(1000)}}
+ for(;;){const probe=process.env.KYBERN_BUILTIN_DISPLAY_PROBE;if(probe)execFileSync(probe,[],{stdio:'pipe'});try{requireWindow(pid);return}catch(error){if(Date.now()>=deadline)throw error;await Bun.sleep(1000)}}
 }

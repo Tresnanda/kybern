@@ -2,7 +2,8 @@ import { writeFileSync, unlinkSync, readdirSync, readFileSync, existsSync } from
 const lane='perf-backdrop', marker=`/tmp/kybern-gpuix-quiet.${lane}`
 const order='/tmp/kybern-gpuix-quiet-order'
 const screenScript='/Users/mymac/projects/ade-gpuix-scratch/screen-state.swift'
-function ready(){const result=Bun.spawnSync(['swift',screenScript],{stdout:'pipe',stderr:'pipe'});const raw=result.stdout.toString();return result.exitCode===0&&/locked:\s*0\b/.test(raw)&&/displayAsleep:\s*(?:false|0)\b/.test(raw)}
+const displayProbe=new URL('../../native/build/backdrop-display-ready',import.meta.url).pathname
+function ready(){const result=Bun.spawnSync(['swift',screenScript],{stdout:'pipe',stderr:'pipe'});const raw=result.stdout.toString();return existsSync(displayProbe)&&Bun.spawnSync([displayProbe],{stdout:'ignore',stderr:'ignore'}).exitCode===0&&result.exitCode===0&&/locked:\s*0\b/.test(raw)&&/displayAsleep:\s*(?:false|0)\b/.test(raw)}
 function queue(remove=false) {
  const result=Bun.spawnSync(['python3','-c',
   `from pathlib import Path
@@ -47,7 +48,7 @@ try {
  // display can keep the retained tree active while no Metal frames submit.
  awake=Bun.spawn(['/usr/bin/caffeinate','-d','-w',String(process.pid),'-t','1500'],{stdout:'ignore',stderr:'ignore'})
  deadline=setTimeout(stop,24*60_000+50_000)
- child=Bun.spawn(process.argv.slice(2),{env:{...process.env,KYBERN_BENCH_WHEEL_PREBUILT:new URL('../../native/build/backdrop-bench-wheel.dylib',import.meta.url).pathname,KYBERN_AUTOMATION_WINDOW_FRAME:'80 40 1280 820 0 0 1440 900 ',KYBERN_WINDOW_GUARD_LOG:'/Users/mymac/projects/ade/previews/gpuix/perf/backdrop/window-guards.jsonl',KYBERN_WINDOW_GUARD:new URL('../../native/build/backdrop-window-guard',import.meta.url).pathname,KYBERN_BENCH_SCREEN_STATE_SCRIPT:screenScript},stdin:'inherit',stdout:'inherit',stderr:'inherit'})
+ child=Bun.spawn(process.argv.slice(2),{env:{...process.env,KYBERN_BUILTIN_DISPLAY_PROBE:displayProbe,BUN_OPTIONS:'--preload='+new URL('./capture-preload.ts',import.meta.url).pathname,KYBERN_TEST_DISPLAY:'builtin',KYBERN_BENCH_WHEEL_PREBUILT:new URL('../../native/build/backdrop-bench-wheel.dylib',import.meta.url).pathname,KYBERN_AUTOMATION_WINDOW_FRAME:'80 40 1280 820 0 0 1440 900 ',KYBERN_WINDOW_GUARD_LOG:'/Users/mymac/projects/ade/previews/gpuix/perf/backdrop/window-guards.jsonl',KYBERN_WINDOW_GUARD:new URL('../../native/build/backdrop-window-guard',import.meta.url).pathname,KYBERN_BENCH_SCREEN_STATE_SCRIPT:screenScript},stdin:'inherit',stdout:'inherit',stderr:'inherit'})
  process.exitCode=await child.exited
 } finally {
  if(deadline)clearTimeout(deadline)

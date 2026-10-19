@@ -60,6 +60,8 @@ export function restoreWindowFrame(): boolean {
   const saved = savedFrame()
   if (!saved) return true
   try {
+    const probe = process.env.KYBERN_BUILTIN_DISPLAY_PROBE
+    if (automationFrame && probe && Bun.spawnSync([probe], {stdout:'ignore',stderr:'ignore'}).exitCode !== 0) return false
     const o = getObjc()
     const window = appWindow(o, true)
     if (!window) return false
