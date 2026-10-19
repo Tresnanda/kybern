@@ -1454,3 +1454,27 @@ proxy, not a hardware overdraw counter. Existing `[paint-gpu]` traces report
 command-buffer elapsed time; per-PID AGX GPU work is measured separately.
 Diagnostics request no frames and remain off by default. Methodology, paired
 measurements and limitations are in `perf/gpu/`.
+
+
+## Backdrop Gaussian kernels (perf-backdrop)
+
+`backdrop_kernel.rs` and the appended `backdrop_kernel_gpui.py` hook retain the
+existing two-pass filter, crop, halo, rounded masks, saturation, opacity and draw
+ordering. Gaussian weights and normalization are computed once on CPU per
+backdrop submission. Device sigma >8 retains all 49 original sample positions.
+For sigma <=8, the original linear samples are reconstructed as texel weights,
+then neighboring texels are paired into hardware-linear samples (<=25 taps;
+Retina streaming word blur uses <=7). Neither material pixels nor scene damage
+are cached; moving underlying content still filters every submitted frame.
+
+`KYBERN_BACKDROP_KERNEL=0` selects the original fragment loop in the same addon.
+No frame source, motion timing, theme value or accessibility gate changes. The
+helper has standalone Rust tests across 804 sigmas and both clamp edges. Native
+legacy/candidate high-contrast comparisons include shifted source, fractional
+bounds and rounded clipping in dark/light across four window/accessibility modes;
+the observed maximum difference is 2/255 per channel, not pixel identity.
+
+Window/rail/sidebar materials already use AppKit's behind-window compositor
+material. Streaming's nine scene backdrops are per-word blur animations, rather
+than nine persistent window materials. Research, surface decisions, methodology
+and acceptance results live in `perf/backdrop/`.

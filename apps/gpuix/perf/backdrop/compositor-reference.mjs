@@ -1,7 +1,7 @@
 const native=new URL('../../native/',import.meta.url).pathname
 import {execFileSync,spawnSync} from 'node:child_process'
 import path from 'node:path'
-const {webkit}=await import('/Users/mymac/projects/component-kit/node_modules/playwright-core/index.mjs')
+const {webkit}=await import(process.env.PLAYWRIGHT_CORE??'/Users/mymac/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright-core/index.mjs')
 const server=await webkit.launchServer({headless:false})
 const browser=await webkit.connect(server.wsEndpoint())
 const out='/Users/mymac/projects/ade/previews/gpuix/perf/backdrop/compositor-reference'
