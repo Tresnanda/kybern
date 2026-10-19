@@ -67,7 +67,7 @@ export function restoreWindowFrame(): boolean {
     if (automationFrame) {
       const expected = automationFrame.trim().split(/\s+/).slice(0, 4).map(Number)
       const actual = readFrame(o, window)?.trim().split(/\s+/).slice(0, 4).map(Number)
-      if (!actual || actual.length !== 4 || actual.some((value, i) => !Number.isFinite(value) || Math.abs(value - expected[i]!) > .5)) return false
+      if (expected.length !== 4 || expected.some(value => !Number.isFinite(value)) || !actual || actual.length !== 4 || actual.some((value, i) => !Number.isFinite(value) || Math.abs(value - expected[i]!) > .5)) return false
     }
     if ((Number(o.msgU64(window, sel(o, 'isVisible'))) & 0xff) === 0) {
       // Automation runs (`GPUIX_BACKGROUND`) must not take the keyboard.
