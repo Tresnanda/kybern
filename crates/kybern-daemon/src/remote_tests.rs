@@ -193,7 +193,7 @@ async fn git_status_refreshes_a_project_registered_before_git_init() {
     assert!(update.projects.iter().find(|project| project.id == thread.project_id).unwrap().is_git);
     let announced = next_projects_changed(&client).await;
     assert!(announced.projects.iter().find(|project| project.id == thread.project_id).unwrap().is_git);
-    let projects = client.call::<ProjectsList>(Empty {}).await.unwrap();
+    let projects = client.call::<ProjectsList>(ProjectsListParams::default()).await.unwrap();
     assert!(projects.projects.iter().find(|project| project.id == thread.project_id).unwrap().is_git);
     client.call::<GitStatusMethod>(GitStatusParams { thread_id: thread.id }).await.unwrap();
     assert!(matches!(changes.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)), "unchanged Git reads stay quiet");
@@ -209,7 +209,9 @@ async fn projects_list_refreshes_git_without_an_existing_thread() {
         tokio::process::Command::new("git").args(["init", "-q", "-b", "main"]).current_dir(&project.path).output().await.unwrap();
     assert!(initialized.status.success());
 
-    let list = client.call::<ProjectsList>(Empty {}).await.unwrap();
+    let cached = client.call::<ProjectsList>(ProjectsListParams { refresh_git: Some(false) }).await.unwrap();
+    assert!(!cached.projects.iter().find(|item| item.id == project.id).unwrap().is_git, "cached boot read does not wait for Git refresh");
+    let list = client.call::<ProjectsList>(ProjectsListParams::default()).await.unwrap();
     assert!(list.projects.iter().find(|item| item.id == project.id).unwrap().is_git, "boot must discover repositories without a thread");
     assert!(next_projects_changed(&client).await.projects.iter().find(|item| item.id == project.id).unwrap().is_git);
 }
@@ -256,8 +258,8 @@ async fn environments_keep_projects_and_identity_separate() {
     let ia = ca.call::<DaemonInfoMethod>(Empty {}).await.unwrap();
     let ib = cb.call::<DaemonInfoMethod>(Empty {}).await.unwrap();
     assert_ne!(ia.environment_id, ib.environment_id);
-    assert_eq!(ca.call::<ProjectsList>(Empty {}).await.unwrap().projects.len(), 1);
-    assert!(cb.call::<ProjectsList>(Empty {}).await.unwrap().projects.is_empty());
+    assert_eq!(ca.call::<ProjectsList>(ProjectsListParams::default()).await.unwrap().projects.len(), 1);
+    assert!(cb.call::<ProjectsList>(ProjectsListParams::default()).await.unwrap().projects.is_empty());
     let reopened = kybern_store::Store::open(&a.state.paths.db).unwrap();
     assert_eq!(reopened.meta_get("environment_id").unwrap().unwrap(), ia.environment_id);
     let browsed = ca.call::<ProjectsBrowse>(ProjectsBrowseParams { path: Some(a.root.to_string_lossy().into_owned()) }).await.unwrap();
@@ -833,7 +835,7 @@ async fn tasks_round_trip_over_rpc_with_notifications_and_error_codes() {
     let desktop = host.client().await;
     let phone = host.client().await;
 
-    let project = desktop.call::<ProjectsList>(Empty {}).await.unwrap().projects.remove(0);
+    let project = desktop.call::<ProjectsList>(ProjectsListParams::default()).await.unwrap().projects.remove(0);
     assert_eq!(project.task_prefix.as_deref(), Some("FIX"), "derived from the project name when it was added");
     let created = desktop.call::<TaskItemsCreate>(task_create(Some(project.id), "Fix login")).await.unwrap();
     assert_eq!(
@@ -1012,7 +1014,15 @@ async fn project_task_prefixes_are_assigned_edited_and_validated_over_rpc() {
         .await
         .unwrap();
     assert_eq!((untouched.name.as_str(), untouched.task_prefix.as_deref()), ("Renamed", Some("KYMA")), "a rename leaves the prefix alone");
-    assert!(client.call::<ProjectsList>(Empty {}).await.unwrap().projects.iter().all(|project| project.task_prefix.is_some()));
+    assert!(
+        client
+            .call::<ProjectsList>(ProjectsListParams::default())
+            .await
+            .unwrap()
+            .projects
+            .iter()
+            .all(|project| project.task_prefix.is_some())
+    );
 }
 
 #[tokio::test]
@@ -1949,7 +1959,15 @@ async fn project_coordinator_overrides_are_set_kept_and_cleared_over_rpc() {
     let replaced = update(json!({ "coordinator": { "lead_workspace": "worktree" } })).await.unwrap().coordinator.unwrap();
     assert_eq!((replaced.lead_workspace, replaced.lead_autonomy), (Some(DelegationWorkspace::Worktree), None));
     assert!(update(json!({ "coordinator": null })).await.unwrap().coordinator.is_none());
-    assert!(client.call::<ProjectsList>(Empty {}).await.unwrap().projects.iter().all(|project| project.coordinator.is_none()));
+    assert!(
+        client
+            .call::<ProjectsList>(ProjectsListParams::default())
+            .await
+            .unwrap()
+            .projects
+            .iter()
+            .all(|project| project.coordinator.is_none())
+    );
 
     // Overrides the daemon could not honor are refused with a way forward.
     for bad in [json!({ "lead_max_children": 99 }), json!({ "role_defaults": { "general": { "model": "m" } } })] {

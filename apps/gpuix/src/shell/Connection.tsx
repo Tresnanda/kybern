@@ -167,9 +167,8 @@ export type WelcomeKind = 'connecting' | 'unavailable' | 'empty'
 export function useWelcome(): WelcomeKind | null {
   const status = useApp((s) => s.status)
   const loaded = useApp((s) => s.listsLoaded)
-  const contentLoaded = useApp((s) => s.open.loaded)
   const nothing = useApp((s) => s.projects.length === 0 && s.threads.length === 0 && s.selectedId === null)
-  if (!loaded && !contentLoaded) return status === 'failed' || status === 'closed' ? 'unavailable' : 'connecting'
+  if (!loaded) return status === 'failed' || status === 'closed' ? 'unavailable' : 'connecting'
   return status === 'open' && nothing ? 'empty' : null
 }
 
