@@ -26,6 +26,7 @@ import { ArtifactsPane } from './Artifacts.tsx'
 import { NotesPane } from './Notes.tsx'
 import { TasksPane } from './Tasks.tsx'
 import { DockEmpty } from './parts.tsx'
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../kit/Empty.tsx'
 import { pressTransform } from '../motion/press.ts'
 import { beginTabDrag, isDraggingTab, consumeTabDrag, endTabPending, setTabContext, TabSlot, trackTabDrag } from './reorder.tsx'
 import { chooseTab, closeTab, dockGeometry, finishDockDrag, moveDockDrag, setDock, startDockDrag, useDock, useDockDrag, type DockTab } from './store.ts'
@@ -101,6 +102,22 @@ function DockContent({ threadId, thread, width }: { threadId: string | null; thr
   return <ThreadDock key={thread.id} thread={thread} width={width} />
 }
 
+/**
+ * Every panel closed. The desktop shows a bare "Add a panel with +." (`RightPanel.tsx`); the user asked for more, so this is the kit's
+ * `Empty` (icon card, title, description) with the same pointer to the tab strip's +. A deliberate divergence from the desktop.
+ */
+function NoPanels() {
+  return (
+    <Empty testId="dock-empty" style={{ padding: 24 }}>
+      <EmptyHeader>
+        <EmptyMedia variant="icon" icon={N.panelRight} />
+        <EmptyTitle>No panels open</EmptyTitle>
+        <EmptyDescription>Add a panel with + to see activity, changes, files and more.</EmptyDescription>
+      </EmptyHeader>
+    </Empty>
+  )
+}
+
 function ThreadDock({ thread, width }: { thread: Thread; width: number }) {
   const t = useTheme()
   const dock = useDock(thread.id)
@@ -111,7 +128,7 @@ function ThreadDock({ thread, width }: { thread: Thread; width: number }) {
   return <>
     <TabStrip threadId={thread.id} width={width} coordinator={!!thread.coordinator_project_id} activeTasks={tasks.tasks.filter(isActiveTask).length} stats={stats} />
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', borderBottomRightRadius: 12 }}>
-      {tab === null ? <div style={{ display: 'flex', flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: 24 }}><Label color={t.textSecondary} size={12}>Add a panel with +.</Label></div>
+      {tab === null ? <NoPanels />
         : tab === 'agents' ? <Agents thread={thread} />
         : tab === 'preview' ? <PreviewPane threadId={thread.id} />
         : tab === 'terminal' ? <TerminalPane threadId={thread.id} width={width} />

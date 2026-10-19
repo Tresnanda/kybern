@@ -9,6 +9,8 @@ import type { PermissionMode, ProviderStatus } from '../../../../packages/kybern
 import { G } from './glyphs.ts'
 import { CheckMark, PickerItem, PickerMenu } from './Menu.tsx'
 import { FooterChip } from './chips.tsx'
+import { useFooterFit } from './footerWidth.tsx'
+import { usePaneCompact } from '../state.ts'
 
 interface ModeInfo {
   mode: PermissionMode
@@ -56,6 +58,8 @@ export function PermissionPicker({
   const effective = MODES.find((m) => m.mode === mode)!
   const info = current ?? { ...effective, label: 'Choose permissions', description: `${effective.label} is not supported by the selected agent` }
   const accent = mode === 'full-access' ? t.fullAccess : mode === 'auto' ? t.link : undefined
+  // `@max-[480px]:sr-only` (and always in a split pane): the label leaves, the icon chip stays.
+  const showLabel = useFooterFit().labels && !usePaneCompact()
 
   return (
     <PickerMenu
@@ -71,9 +75,11 @@ export function PermissionPicker({
           {(color) => (
             <>
               <Icon source={info.icon} size={16} color={color} />
-              <Label color={color} truncate>
-                {info.label}
-              </Label>
+              {showLabel && (
+                <Label color={color} truncate>
+                  {info.label}
+                </Label>
+              )}
             </>
           )}
         </FooterChip>

@@ -1,5 +1,6 @@
 import { clipboardAttachments, type ClipboardImage } from './composer/clipboard.ts'
 import { StatusGlyph } from './composer/StatusGlyph.tsx'
+import { FooterRow, useFooterFit } from './composer/footerWidth.tsx'
 import { TokenTextarea, type TokenTextareaHandle } from './composer/TokenTextarea.tsx'
 import { type InputSelection } from './native/api.ts'
 export { useComposerOverlayHeight, useMeasureComposerOverlay } from './composer/height.ts'
@@ -38,6 +39,7 @@ import {
 } from '../../../packages/kybern-client/src/types.ts'
 import { Icon } from './icons.tsx'
 import { MatrixLoader } from './MatrixLoader.tsx'
+import { Spinner } from './kit/Spinner.tsx'
 import { getClient, setThreadOpen, usePaneCompact, focusPane, getFocusedPaneId, usePaneAccess, getPane, selectPaneThread, setPane, set, useApp } from './state.ts'
 import { FONT_UI } from './theme.ts'
 import { ink, Label, useTheme } from './ui.tsx'
@@ -673,8 +675,8 @@ export function ComposerView(input: ComposerViewProps) {
             </div>
           )}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4, paddingLeft: 12, paddingRight: 12, paddingBottom: 12, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 1, minWidth: 64 }}>
+        <FooterRow style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4, paddingLeft: 12, paddingRight: 12, paddingBottom: 12, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, minWidth: 0 }}>
             <PickerMenu
               testId="composer-plus"
               side="top"
@@ -692,7 +694,7 @@ export function ComposerView(input: ComposerViewProps) {
             </PickerMenu>
             <PermissionPicker locked={props.lockMode} mode={mode} kind={provider?.kind} status={status} onChange={props.onModeChange} />
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4, flexGrow: 1, minWidth: 200 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4, flexGrow: 1, minWidth: 0 }}>
             {provider && props.currentThreadId && <StatusGlyph provider={provider} running={running} />}
             {provider && (
               <ModelPicker
@@ -764,7 +766,7 @@ export function ComposerView(input: ComposerViewProps) {
               </RoundButton></Tip>
             )}
           </div>
-        </div>
+        </FooterRow>
       </div>
     </div>
   )
@@ -781,6 +783,8 @@ function rgbOf(color: string): [number, number, number] {
 /** `COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME` on a `prominent` button: the ink circle, 30% when off. */
 function RoundButton({ children, disabled, onClick, testId }: { children: ReactNode; disabled?: boolean; onClick?: () => void; testId: string }) {
   const t = useTheme()
+  // `surfaceMode === "split" && "!size-7"`: 28px in a split pane.
+  const size = usePaneCompact() ? 28 : 32
   return (
     <div
       testId={testId}
@@ -792,9 +796,9 @@ function RoundButton({ children, disabled, onClick, testId }: { children: ReactN
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        width: 32,
-        height: 32,
-        borderRadius: 16,
+        width: size,
+        height: size,
+        borderRadius: size / 2,
         flexShrink: 0,
         backgroundColor: t.text,
         opacity: disabled ? 0.3 : 1,
@@ -825,6 +829,8 @@ function RunningControls({
 }) {
   const t = useTheme()
   const [hover, setHover] = useState(false)
+  // `@max-[360px]:gap-0 @max-[360px]:px-1.5`: the label goes (it stays for screen readers) and the clock, or the spinner while sending, stands in.
+  const icon = !useFooterFit().model
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
       <div
@@ -835,9 +841,9 @@ function RunningControls({
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 4,
-          paddingLeft: 8,
-          paddingRight: 8,
+          gap: icon ? 0 : 4,
+          paddingLeft: icon ? 6 : 8,
+          paddingRight: icon ? 6 : 8,
           paddingTop: 2,
           paddingBottom: 2,
           borderRadius: 10,
@@ -846,9 +852,11 @@ function RunningControls({
           cursor: canSend ? 'pointer' : 'default',
         }}
       >
-        <Label color={t.text} size={13} weight={500} lineHeight={18}>
-          {sending ? 'Sending…' : steering ? 'Steer now' : 'Queue'}
-        </Label>
+        {icon ? (sending ? <Spinner size={12} color={t.text} /> : <Icon name="clock" size={14} color={t.text} />) : (
+          <Label color={t.text} size={13} weight={500} lineHeight={18}>
+            {sending ? 'Sending…' : steering ? 'Steer now' : 'Queue'}
+          </Label>
+        )}
       </div>
       {canSteer && (
         <PickerMenu
