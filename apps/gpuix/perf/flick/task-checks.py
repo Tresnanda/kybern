@@ -4,7 +4,7 @@ root=pathlib.Path(__file__).resolve().parents[4];app=root/'apps/gpuix'
 data=pathlib.Path('/Users/mymac/projects/ade-gpuix-scratch/perf-flick/tasks')
 out=pathlib.Path('/Users/mymac/projects/ade/previews/gpuix/perf/flick/tasks');out.mkdir(parents=True,exist_ok=True)
 assert not (data/'daemon.port').exists(),'Refusing existing daemon'
-while list(pathlib.Path('/tmp').glob('kybern-gpuix-quiet.*')) or list(pathlib.Path('/tmp').glob('kybern-gpuix-native-build.*')):time.sleep(1)
+while list(pathlib.Path('/tmp').glob('kybern-gpuix-quiet.*')):time.sleep(1)
 data.mkdir(parents=True,exist_ok=True);daemon=None;child=None
 
 def stop(signum,frame):
@@ -19,8 +19,8 @@ try:
   time.sleep(.05)
  for theme,reduced in [('dark','0'),('light','1')]:
   case=out/(theme+'-'+reduced);case.mkdir(parents=True,exist_ok=True)
-  env=dict(os.environ,KYBERN_DATA_DIR=str(data),KYBERN_CLIENT_CONFIG_DIR=str(data/'client'),KYBERN_URL='',KYBERN_TOKEN='',R8_DATA=str(data),R8_OUT=str(case),R7_LOCK_HELD='1',R7_LABEL='sparse',KYBERN_APPEARANCE=theme,KYBERN_REDUCED_MOTION=reduced,KYBERN_FULL_RATE='1')
-  child=subprocess.Popen(['bun','native/ui-lease.ts','perf-flick-tasks','bun','perf/flick/check.ts','tasks-'+theme+'-'+reduced,'bun','src/tasks/round7b-check.ts'],cwd=app,env=env)
+  env=dict(os.environ,KYBERN_DATA_DIR=str(data),KYBERN_CLIENT_CONFIG_DIR=str(data/'client'),KYBERN_URL='',KYBERN_TOKEN='',R8_DATA=str(data),R8_OUT=str(case),R7_LOCK_HELD='1',R7_LABEL='sparse',KYBERN_APPEARANCE=theme,KYBERN_REDUCED_MOTION=reduced,KYBERN_FULL_RATE='1',KYBERN_WINDOW_SIZE='1280x820')
+  child=subprocess.Popen(['bun','native/ui-lease.ts','perf-flick-tasks','bun','perf/flick/check.ts','tasks-'+theme+'-'+reduced,'bun','perf/flick/task-entry.ts'],cwd=app,env=env)
   if child.wait(timeout=285):raise RuntimeError('Task drag verifier failed '+theme)
 finally:
  if child and child.poll() is None:child.terminate();child.wait(timeout=5)
