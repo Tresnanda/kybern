@@ -5,8 +5,8 @@ import {requireWindowOnscreen,waitForWindowOnscreen} from '../bench/window-onscr
 const data='/Users/mymac/projects/ade-gpuix-scratch/perf-flick-follow'
 const out='/Users/mymac/projects/ade/previews/gpuix/perf/flick/follow';mkdirSync(out,{recursive:true})
 const results=[]
-for(const theme of ['dark','light']){
- const f=await launchFixture(import.meta.dir+'/follow-entry.ts',{KYBERN_DATA_DIR:data,KYBERN_CLIENT_CONFIG_DIR:data,KYBERN_URL:'',KYBERN_TOKEN:'',GPUIX_BACKGROUND:'1',KYBERN_APPEARANCE:theme,KYBERN_OPAQUE:'1',KYBERN_REDUCED_MOTION:'1',TRANSCRIPT_TURNS:'1000',TRANSCRIPT_COMPACT:'1'})
+for(const theme of ['dark','light'])for(const flag of ['0','1']){
+ const f=await launchFixture(import.meta.dir+'/follow-entry.ts',{KYBERN_DATA_DIR:data,KYBERN_CLIENT_CONFIG_DIR:data,KYBERN_URL:'',KYBERN_TOKEN:'',GPUIX_BACKGROUND:'1',KYBERN_APPEARANCE:theme,KYBERN_INPUT_FRAME_DRAW:flag,KYBERN_OPAQUE:'1',KYBERN_REDUCED_MOTION:'1',TRANSCRIPT_TURNS:'1000',TRANSCRIPT_COMPACT:'1'})
  try{
   await waitForWindowOnscreen(f.pid)
   const a=f.app;await a.getByTestId('perf-ready').waitFor();await a.getByTestId('message-rail').waitFor();await Bun.sleep(500)
@@ -35,11 +35,12 @@ for(const theme of ['dark','light']){
   const prependedTree=await a.call('getTree',{}),prepended=find(prependedTree.tree,(node:any)=>node?.testId==='turn-user:user-500')
   assert.equal(prepended?.id,before.id,'Prepending older history retains visible row identity')
   const prependBounds=await a.getByTestId('turn-user:user-500').bounds()
+  console.log(JSON.stringify({theme,flag,rowBefore:before.id,rowAfterPrepend:prepended.id,beforeBounds,prependBounds,anchorBefore:anchorBefore.anchor,anchorAfter:anchorAfter.anchor}))
   assert.ok(Math.abs(beforeBounds.y-prependBounds.y)<1,'Prepending older transcript history preserves row pixels')
   await a.getByTestId('scroll-to-bottom').click();await Bun.sleep(700);const bottomBefore=await tail()
   await command('grow');await Bun.sleep(700);const bottomAfter=await tail()
-  requireWindowOnscreen(f.pid);await a.screenshot({path:`${out}/${theme}.png`})
-  results.push({theme,rowId:before.id,anchorBefore,anchorAfter,beforeBounds,afterBounds,prependBounds,bottomBefore,bottomAfter})
+  requireWindowOnscreen(f.pid);await a.screenshot({path:`${out}/${theme}-${flag}.png`})
+  results.push({theme,flag,rowIdAfterPrepend:prepended.id,rowId:before.id,anchorBefore,anchorAfter,beforeBounds,afterBounds,prependBounds,bottomBefore,bottomAfter})
  }finally{await f.close()}
 }
-writeFileSync(out+'/results.json',JSON.stringify(results,null,2));console.log('PASS both themes: stable row identity, away anchor, older transcript prepend, tail growth follow-bottom')
+writeFileSync(out+'/results.json',JSON.stringify(results,null,2));console.log('PASS both themes: stable host during tail growth and prepends, away anchor, tail growth follow-bottom')

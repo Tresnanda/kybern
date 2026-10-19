@@ -35,3 +35,33 @@ test('native anchor changes dispose rich bodies, preserve selected/overlay owner
  }finally{root.unmount()}
  expect(observers.size).toBe(0);expect(mounted.size).toBe(0);expect(hosts.size).toBe(0)
 })
+
+
+test('prepending keys preserves mounted bodies before native metadata reaches its next paint',async()=>{
+ let anchor=[501,0],listId=0,token=0,prepend:()=>void=()=>{}
+ const targets=new Map<number,unknown>(),observers=new Map<number,(error:null,event:unknown)=>void>()
+ const mounted=new Set<string>(),mounts=new Map<string,number>()
+ const renderer={applyBatch(json:string){for(const [op,id,value] of JSON.parse(json))if(op==='createElement'&&value==='virtual-list')listId=id;return []},setWindowKeyEvents(){},setWindowSelectionChange(){},getSelectedText(){return null},getListScrollTop(){return anchor},addLayoutObserver(target:unknown,callback:(error:null,event:unknown)=>void){observers.set(++token,callback);targets.set(token,target);return token},removeLayoutObserver(id:number){observers.delete(id);targets.delete(id)},isLayoutObserverActive(id:number){return observers.has(id)}}
+ function Body({rowKey}:{rowKey:string}){useEffect(()=>{mounted.add(rowKey);mounts.set(rowKey,(mounts.get(rowKey)??0)+1);return()=>{mounted.delete(rowKey)}},[rowKey]);return <text>{rowKey}</text>}
+ function List(){
+  const[keys,setKeys]=useState(()=>Array.from({length:3000},(_,i)=>`row-${i}`)),list=useRef<PublicInstance|null>(null)
+  prepend=()=>setKeys(old=>[...Array.from({length:1000},(_,i)=>`older-${i}`),...old])
+  const window=useTranscriptWindow(keys,list,800,'same-thread')
+  return <virtual-list ref={list}>{keys.slice(window.range.start,window.range.end).map(rowKey=><TranscriptSlot key={rowKey} rowKey={rowKey} mounted={true} height={window.height(rowKey)} measure={window.measure} sync={window.sync}><Body rowKey={rowKey}/></TranscriptSlot>)}</virtual-list>
+ }
+ const root=createRoot(renderer),settle=async()=>{await Bun.sleep(1);flushSync(()=>{});await Bun.sleep(1)}
+ try{
+  flushSync(()=>root.render(<List/>));await settle()
+  expect(mounted.has('row-500')).toBe(true);expect(mounts.get('row-500')).toBe(1)
+  // React has new semantic keys, while List still reports the prior paint's
+  // numeric offset. Reading it against the new key array would evict row-500.
+  flushSync(prepend);await settle()
+  expect(mounted.has('row-500')).toBe(true);expect(mounts.get('row-500')).toBe(1)
+  anchor=[1501,0]
+  const listObserver=[...observers].find(([id])=>targets.get(id)===listId)?.[1]
+  expect(listObserver).toBeDefined()
+  flushSync(()=>listObserver!(null,{elementId:listId,rect:null,scrollTop:anchor,frame:2}));await settle()
+  expect(mounted.has('row-500')).toBe(true);expect(mounts.get('row-500')).toBe(1)
+ }finally{root.unmount()}
+ expect(mounted.size).toBe(0);expect(observers.size).toBe(0)
+})

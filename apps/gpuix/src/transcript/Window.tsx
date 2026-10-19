@@ -85,9 +85,11 @@ export function useTranscriptWindow(keys: readonly string[], list: React.RefObje
     }
     setAnchor(old => old.key === key && old.index === index && Math.abs(old.offset-offset) < 128 ? old : { key, index, offset })
   }, [renderer, list, buffered])
-  // Programmatic initial follow-tail/restore can paint only placeholder rows;
-  // read the native anchor after the committed list exists as well.
-  useEffect(() => { sync() }, [sync, identity, keys.length, width])
+  // Initial follow-tail/restore can paint only placeholder rows. Count changes
+  // instead wait for the list's post-paint observation below: in a deferred
+  // frame its numeric native offset still belongs to the previous key array.
+  // The semantic anchor already keeps those visible bodies mounted meanwhile.
+  useEffect(() => { sync() }, [sync, identity, width])
   // A permanent list observation also advances the window after a jump whose
   // previous rich bodies are all offscreen. Native emits only changed anchors.
   useEffect(() => {
