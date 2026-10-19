@@ -64,6 +64,11 @@ export function restoreWindowFrame(): boolean {
     const window = appWindow(o, true)
     if (!window) return false
     o.msgSetPtr(window, sel(o, 'setFrameFromString:'), nsString(o, saved))
+    if (automationFrame) {
+      const expected = automationFrame.trim().split(/\s+/).slice(0, 4).map(Number)
+      const actual = readFrame(o, window)?.trim().split(/\s+/).slice(0, 4).map(Number)
+      if (!actual || actual.length !== 4 || actual.some((value, i) => !Number.isFinite(value) || Math.abs(value - expected[i]!) > .5)) return false
+    }
     if ((Number(o.msgU64(window, sel(o, 'isVisible'))) & 0xff) === 0) {
       // Automation runs (`GPUIX_BACKGROUND`) must not take the keyboard.
       if (process.env.GPUIX_BACKGROUND === '1') o.msgSetPtr(window, sel(o, 'orderFront:'), null as unknown as Pointer)
@@ -74,7 +79,7 @@ export function restoreWindowFrame(): boolean {
     }
     return true
   } catch {
-    return true
+    return !automationFrame
   }
 }
 

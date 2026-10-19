@@ -21,12 +21,22 @@ if (process.env.KYBERN_PACING_BASELINE === '1') {
 }
 if (process.env.KYBERN_PACING_RUNNING_ENTRY === '1') await import('../scripts/native-perf-fixture.tsx')
 else await import('../src/main.tsx')
+// The production window can start hidden for an explicit automation frame.
+// Restore before showing; ordering every window here would bypass main's guard.
+if (process.env.KYBERN_AUTOMATION_WINDOW_FRAME) {
+  const {restoreWindowFrame} = await import('../src/shell/window.ts')
+  const deadline = Date.now() + 5000
+  while (!restoreWindowFrame()) {
+    if (Date.now() >= deadline) throw Error('Automation frame could not be restored before showing')
+    await Bun.sleep(25)
+  }
+}
 // Keep only our own background fixture visible; never activate it.
 const { each, getObjc, nsApp, sel } = await import('../src/native/objc.ts')
 const o = getObjc(), app = nsApp()
 if (app) each(o, o.msg(app, sel(o, 'windows')) as Pointer, window => {
   o.msgSetI64(window, sel(o, 'setLevel:'), 3n)
   if(process.env.KYBERN_PACING_IGNORE_PHYSICAL_MOUSE==='1')o.msgSetBool(window,sel(o,'setIgnoresMouseEvents:'),true)
-  o.msg(window, sel(o, 'orderFrontRegardless'))
+  if (!process.env.KYBERN_AUTOMATION_WINDOW_FRAME) o.msg(window, sel(o, 'orderFrontRegardless'))
 })
 export {}
