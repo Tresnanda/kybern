@@ -50,6 +50,7 @@ mod mapping {
         enabled
     }
 
+    #[inline]
     fn mapped(layout: Layout) -> bool {
         layout.size() >= THRESHOLD && enabled() && layout.align() <= unsafe { getpagesize() } as usize
     }
@@ -73,6 +74,7 @@ mod mapping {
     // The route depends only on the immutable process configuration and the
     // exact allocation layout. No headers, locks, collections, or idle work.
     unsafe impl GlobalAlloc for Allocator {
+        #[inline]
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
             if mapped(layout) {
                 unsafe { allocate(layout) }
@@ -81,6 +83,7 @@ mod mapping {
             }
         }
 
+        #[inline]
         unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
             if mapped(layout) {
                 unsafe { allocate(layout) }
@@ -89,6 +92,7 @@ mod mapping {
             }
         }
 
+        #[inline]
         unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
             if mapped(layout) {
                 if unsafe { munmap(pointer.cast(), layout.size()) } == 0 {
@@ -102,6 +106,7 @@ mod mapping {
             }
         }
 
+        #[inline]
         unsafe fn realloc(&self, pointer: *mut u8, old: Layout, size: usize) -> *mut u8 {
             let new = unsafe { Layout::from_size_align_unchecked(size, old.align()) };
             if !mapped(old) && !mapped(new) {

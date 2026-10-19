@@ -62,18 +62,33 @@ The fix makes `Lay` hold `Weak<RenderImage>` (`native/patches/image_owner.rs` an
 
 ## Darwin allocator retention after the ownership fix
 
-The new hidden-display run removes all 24 live decoded buffers from `heap`,
-but `vmmap -summary` classifies 150 MiB as `Malloc Large (empty)` and dirty
-after the note closes. This explains why physical footprint alone initially
-misidentified the weak-owner fix as ineffective. The native patch now offers
-a one-shot allocator release only after an empty editor cache drops the last
-CPU owners of at least 8 MiB of pixels, with counters for cost and reclaimed
-bytes. It is controlled independently by `KYBERN_EDITOR_IMAGE_RELIEF=0`.
+On the hidden display, weak layouts remove all 24 live decoded-image blocks,
+but `vmmap` still identifies roughly 120–150 MiB of empty large malloc regions,
+sometimes compressed rather than resident. Footprint remains charged. A bounded
+native `malloc_zone_pressure_relief(NULL, goal)` experiment returned zero bytes
+on both closes (maximum 1 microsecond). That hook was dropped.
 
-Apple documents `malloc_zone_pressure_relief` as a best-effort release of free
-allocator storage: a null zone examines all zones, zero goal asks for maximal
-relief, and the return value reports released bytes. Source: [Apple libmalloc
-public header](https://github.com/apple-oss-distributions/libmalloc/blob/main/include/malloc/malloc.h).
-The same contract was checked against this machine's macOS SDK header. This
-is a proposed measured trim boundary, not a claim that all malloc storage is
-image-owned; retained live objects remain untouched.
+The unprofiled fixture-only `MallocLargeCache=0` control isolates this cause:
+cache-on was 145→318→270 MiB; cache-off was 142→285→170→284→174 MiB.
+Both closed-note residuals (+28/+32 MiB) meet the +40 MiB goal. Every sample's
+screen, hidden 2× display, build and process gates passed. The cache-off flag
+is a diagnosis; the normal application launch environment is unchanged.
+
+The replacement is an addon `#[global_allocator]`: native Rust allocations
+of at least 4 MiB, with alignment no greater than a system page, use anonymous
+zero-filled mappings and `munmap` on release. Small and over-aligned allocations
+retain `System`, and small reallocations keep System's optimized path. A static
+C getenv/atomic configuration avoids allocating recursively inside the allocator.
+`KYBERN_LARGE_ALLOCATIONS_VM=0` provides the same-binary System control. Counters
+report requested mapped bytes, peak, calls and failures; these are not a physical
+footprint measurement. Native mapping balance, vmmap and footprint must agree.
+Per-frame performance and complete native/image regressions remain acceptance
+checks before keeping this replacement.
+
+Primary contracts: [Rust GlobalAlloc](https://doc.rust-lang.org/std/alloc/trait.GlobalAlloc.html),
+[Apple mmap/munmap](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/mmap.2.html),
+[Apple libmalloc pressure-relief API](https://github.com/apple-oss-distributions/libmalloc/blob/main/include/malloc/malloc.h),
+and [large-cache startup control](https://github.com/apple-oss-distributions/libmalloc/blob/main/src/malloc.c).
+The N-API Buffer drop path was inspected: JS-owned buffers release their N-API
+reference, while Rust-owned Vec buffers use their stored length and capacity.
+Native/GPUI source inspection found no foreign malloc buffer adopted as a Vec.
