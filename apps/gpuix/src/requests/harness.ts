@@ -1,4 +1,3 @@
-import {waitForWindow,requireWindow} from '../../perf/backdrop/window-guard.ts'
 import { connectStdio } from '@gpuix/react/automation'
 import { spawn } from 'node:child_process'
 import { realpathSync } from 'node:fs'
@@ -54,17 +53,6 @@ export async function launchFixture(entry: string, env: Record<string, string>, 
       }),
     ])
     clearTimeout(timer)
-    if(process.env.KYBERN_WINDOW_GUARD){
-      const screenshot=app.screenshot.bind(app)
-      app.screenshot=async (...args:Parameters<typeof screenshot>)=>{
-        for(let attempt=0;attempt<3;attempt++){
-          await waitForWindow(child.pid!)
-          const result=await screenshot(...args)
-          try{requireWindow(child.pid!);return result}catch(error){if(attempt===2)throw error}
-        }
-        throw Error('Occluded capture discarded')
-      }
-    }
     // An addon panic after handshake must reject pending input, rather than
     // leave a live test waiting forever on a dead transport.
     const exited = new Promise<never>((_,reject)=>child.once('exit',code=>reject(new Error(`Fixture exited (${code}): ${stderr}`))))

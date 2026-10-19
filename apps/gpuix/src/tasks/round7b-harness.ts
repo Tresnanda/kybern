@@ -1,4 +1,3 @@
-import {waitForWindow,requireWindow} from '../../perf/backdrop/window-guard.ts'
 import {appendFileSync,existsSync,readdirSync,readFileSync,writeFileSync} from 'node:fs'
 import { connectStdio } from '@gpuix/react/automation'
 import { spawn } from 'node:child_process'
@@ -20,17 +19,6 @@ export async function launchFixture(entry: string, env: Record<string, string>) 
       }),
     ])
     clearTimeout(timer)
-    if(process.env.KYBERN_WINDOW_GUARD){
-      const screenshot=app.screenshot.bind(app)
-      app.screenshot=async (...args:Parameters<typeof screenshot>)=>{
-        for(let attempt=0;attempt<3;attempt++){
-          await waitForWindow(child.pid!)
-          const result=await screenshot(...args)
-          try{requireWindow(child.pid!);return result}catch(error){if(attempt===2)throw error}
-        }
-        throw Error('Occluded capture discarded')
-      }
-    }
     return { app, pid: child.pid!, diagnostics: () => stderr, islandRenders: () => islandRenders, close: async () => { await app.close(); if (child.exitCode === null) child.kill() } }
   } catch (error) { clearTimeout(timer); child.kill(); throw error }
 }
