@@ -9,8 +9,9 @@ let on = Set((CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) a
 var displays = [CGDirectDisplayID](repeating:0,count:16)
 var count:UInt32 = 0
 CGGetActiveDisplayList(16,&displays,&count)
+let testID=UInt32((try? String(contentsOfFile: "/tmp/kybern-gpuix-test-display", encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
 let builtins = displays.prefix(Int(count)).filter {id in
- guard CGDisplayIsBuiltin(id) != 0, let mode=CGDisplayCopyDisplayMode(id) else {return false}
+ guard id == testID, CGDisplayBounds(id).minX < 0, CGDisplayBounds(id).minY >= 900, let mode=CGDisplayCopyDisplayMode(id) else {return false}
  return abs(Double(mode.pixelWidth)/Double(max(1,mode.width))-2)<0.01
 }.map {CGDisplayBounds($0)}
 let candidates = all.filter {w in byWindow ? (w[kCGWindowNumber as String] as? Int) == target : (w[kCGWindowOwnerPID as String] as? Int) == target}
@@ -32,12 +33,12 @@ do {
   let id=w[kCGWindowNumber as String] as? Int ?? -1
   return ["window":id,"layer":w[kCGWindowLayer as String] ?? -1,"onscreen":on.contains(id),"bounds":w[kCGWindowBounds as String] ?? [String:Double]()]
  }
- let record:[String:Any] = ["time":Date().timeIntervalSince1970,"selector":args[0],"target":target,"accepted":good,"windows":rows,"builtInBounds":builtins.map {["x":$0.minX,"y":$0.minY,"width":$0.width,"height":$0.height]}]
+ let record:[String:Any] = ["time":Date().timeIntervalSince1970,"selector":args[0],"target":target,"accepted":good,"windows":rows,"testDisplayBounds":builtins.map {["x":$0.minX,"y":$0.minY,"width":$0.width,"height":$0.height]}]
  if var data=try? JSONSerialization.data(withJSONObject:record,options:[.sortedKeys]) {
   data.append(10)
   let fd=open(path,O_WRONLY|O_CREAT|O_APPEND,0o600)
   if fd >= 0 {data.withUnsafeBytes {(bytes:UnsafeRawBufferPointer) in _ = Darwin.write(fd,bytes.baseAddress!,bytes.count)};close(fd)}
  }
 }
-if !good {fputs("Window is occluded or outside the 2x built-in display; capture/sample discarded\n",stderr)}
+if !good {fputs("Window is occluded or outside the 2x hidden test display; capture/sample discarded\n",stderr)}
 exit(good ? 0 : 75)

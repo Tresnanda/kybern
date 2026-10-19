@@ -48,7 +48,7 @@ try {
  // display can keep the retained tree active while no Metal frames submit.
  awake=Bun.spawn(['/usr/bin/caffeinate','-d','-w',String(process.pid),'-t','1500'],{stdout:'ignore',stderr:'ignore'})
  deadline=setTimeout(stop,24*60_000+50_000)
- child=Bun.spawn(process.argv.slice(2),{env:{...process.env,KYBERN_BUILTIN_DISPLAY_PROBE:displayProbe,BUN_OPTIONS:'--preload='+new URL('./capture-preload.ts',import.meta.url).pathname,KYBERN_TEST_DISPLAY:'builtin',KYBERN_BENCH_WHEEL_PREBUILT:new URL('../../native/build/backdrop-bench-wheel.dylib',import.meta.url).pathname,KYBERN_WINDOW_GUARD_LOG:'/Users/mymac/projects/ade/previews/gpuix/perf/backdrop/window-guards.jsonl',KYBERN_WINDOW_GUARD:new URL('../../native/build/backdrop-window-guard',import.meta.url).pathname,KYBERN_BENCH_SCREEN_STATE_SCRIPT:screenScript},stdin:'inherit',stdout:'inherit',stderr:'inherit'})
+ child=Bun.spawn(process.argv.slice(2),{env:{...process.env,KYBERN_BUILTIN_DISPLAY_PROBE:displayProbe,BUN_OPTIONS:'--preload='+new URL('./capture-preload.ts',import.meta.url).pathname,KYBERN_TEST_DISPLAY:'test',KYBERN_BENCH_WHEEL_PREBUILT:new URL('../../native/build/backdrop-bench-wheel.dylib',import.meta.url).pathname,KYBERN_WINDOW_GUARD_LOG:'/Users/mymac/projects/ade/previews/gpuix/perf/backdrop/window-guards.jsonl',KYBERN_WINDOW_GUARD:new URL('../../native/build/backdrop-window-guard',import.meta.url).pathname,KYBERN_BENCH_SCREEN_STATE_SCRIPT:screenScript},stdin:'inherit',stdout:'inherit',stderr:'inherit'})
  process.exitCode=await child.exited
 } finally {
  if(deadline)clearTimeout(deadline)

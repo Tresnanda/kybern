@@ -36,7 +36,7 @@ Wide sigmas and fractional bounds/radii/masks remain in the lab as controls.
 Desktop references are headless WebKit only. Product captures pass `--gpuix-only`
 and may rescore against existing desktop images. Prior headed compositor evidence
 is retained from before the monitor restriction; future runs use headless pages
-and cannot establish compositor pixels. Every native window stays on the active 2× built-in
+and cannot establish compositor pixels. Every native window stays on the hidden 2× test
 display; never activate/focus a window.
 
 The active acceptance suite is the requested four scenarios. Dedicated idle runs
@@ -45,7 +45,7 @@ set `KYBERN_BENCH_PERSISTED_IDLE=1`, disable the inter-window counter RPC and us
 running thread; frontend-only `idle` overrides can be restored by refresh. Raw
 first-iteration idle results remain archived, including late submissions.
 
-Captures and resource windows require the window to be on-screen and wholly inside the 2× built-in display. `window-guard.swift` uses the CoreGraphics on-screen window list and active built-in display bounds; the capture wrapper retries occlusion without moving or focusing windows. Native automation screenshots have the same pre/post guard. Resource windows guard both endpoints and reject invalid measurements.
+Captures and resource windows require the window to be on-screen and wholly inside the 2× hidden test display. `window-guard.swift` uses the CoreGraphics on-screen window list and active test-display bounds; the capture wrapper retries occlusion without moving or focusing windows. Native automation screenshots have the same pre/post guard. Resource windows guard both endpoints and reject invalid measurements.
 
 The shared bench may repeat discarded windows. Raw discards remain in JSON; the acceptance wrapper requires the complete requested number of successful samples and excludes discarded samples from summaries.
 
@@ -53,8 +53,8 @@ The shared bench may repeat discarded windows. Raw discards remain in JSON; the 
 
 Retain `native/build/backdrop-before.node` as the unique original reference (SHA256 `1145f7914ae87f5cedd5993fdced48f07ea09a3824aad781dcbd8d78d236a5f8`). The measurement wrapper verifies it; recreating it by copying an already optimized addon would invalidate the comparison.
 
-Production fixtures use the shared automation policy: main opens hidden, computes the actual built-in display's visible frame, restores there and shows without activation. The pacing entry waits for restoration before reordering. This also works with the unchanged original addon and after the screen topology changes. No fixed display origin is assumed; the guard remains required.
+Production fixtures use the shared automation policy: main opens hidden, computes the hidden test display's visible frame, restores there and shows without activation. The pacing entry waits for restoration before reordering. This also works with the unchanged original addon and after the screen topology changes. No fixed display origin is assumed; the guard remains required.
 
 The build wrapper compiles `backdrop-bench-wheel.dylib` under its build marker. Quiet runs pass `KYBERN_BENCH_WHEEL_PREBUILT`, so the shared seeder atomically copies that helper into its scratch dataset and does not start Clang inside a quiet window.
 
-A built-in display at 2× backing scale must be active. `display-ready.swift` checks the active display inventory before claiming a build slot; a compiled copy checks each Bun fixture before it imports the app. Capture retries also stop immediately when the built-in display disappears. Closed-lid/external-only sessions pause this lane; an awake/unlocked session alone is insufficient. The shared native placement patch from orchestrator commit `29268adf` targets the built-in display for small fixtures; the follow-up uses CoreGraphics point bounds when centering.
+The hidden test display at 2× backing scale must be active. `display-ready.swift` checks the active display inventory before claiming a build slot; a compiled copy checks each Bun fixture before it imports the app. Capture retries also stop immediately when the built-in display disappears. Missing-test-display sessions pause this lane; an awake/unlocked session alone is insufficient. The shared native placement patch from orchestrator commit `29268adf` plus `c1ab6aaf` targets the hidden test display for small fixtures and production apps. Its id comes from `/tmp/kybern-gpuix-test-display`; guards require CG x<0, y>=900 and 2× scale.
