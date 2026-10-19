@@ -4,11 +4,11 @@
 // display-rate frames without renders, and frames stop once it has ended. Reduce Motion: `strokeDraw` omits the prop.
 import '../src/native/local-build.ts'
 import assert from 'node:assert/strict'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { launchFixture } from '../src/tasks/round7b-harness.ts'
-import { pngPixels } from './clip-pixels.ts'
+import { assertNonBlackContent, pngPixels } from './clip-pixels.ts'
 const out = process.env.KYBERN_VERIFY_OUTPUT ?? path.join(import.meta.dir, 'build/stroke-draw'); mkdirSync(out, { recursive: true })
 const scratch = { KYBERN_DATA_DIR: process.env.KYBERN_DATA_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/motion10', KYBERN_CLIENT_CONFIG_DIR: process.env.KYBERN_CLIENT_CONFIG_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/motion10-client', KYBERN_URL: '', KYBERN_TOKEN: '' }
 if (path.resolve(scratch.KYBERN_DATA_DIR) === '/Users/mymac/.kybern') throw Error('Refusing the real data dir')
@@ -30,7 +30,16 @@ for (const theme of ['dark', 'light']) for (const reduce of ['0', '1']) {
     // Ink: pixels in the glyph's box that differ from the background, from an OS capture of the window.
     const ink = async (name: string) => {
       await Bun.sleep(120)
-      const file = path.join(out, `${label}-${name}.png`); execFileSync('screencapture', ['-x', '-o', '-l', windowId, file])
+      const file = path.join(out, `${label}-${name}.png`)
+      for (let attempt = 0; ; attempt++) {
+        execFileSync('screencapture', ['-x', '-o', '-l', windowId, file])
+        try { assertNonBlackContent(file, 320, 160, `${label}-${name}`); break }
+        catch (error) {
+          copyFileSync(file, file.replace(/\.png$/, `-rejected-${attempt}.png`))
+          if (attempt >= 2) throw error
+          await Bun.sleep(150)
+        }
+      }
       const img = pngPixels(file), sc = img.width / 320, top = img.height / sc - 160, bg = img.at(20 * sc, (top + 20) * sc)
       let n = 0
       for (let y = (top + 40) * sc; y < (top + 88) * sc; y++) for (let x = 40 * sc; x < 88 * sc; x++) if (img.at(x, y).some((v, i) => Math.abs(v - bg[i]!) > 24)) n++
