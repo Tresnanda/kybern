@@ -42,6 +42,7 @@ import { MatrixLoader } from '../MatrixLoader.tsx'
 import { FONT_UI } from '../theme.ts'
 import { EASE_OUT, ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { FooterChip } from './chips.tsx'
+import { useFooterFit } from './footerWidth.tsx'
 import { G } from './glyphs.ts'
 import { CheckMark, muted, PickerItem, PickerMenu, PopupLayer, popoverStyle } from './Menu.tsx'
 import { SwapOnChange } from './motion.tsx'
@@ -101,7 +102,7 @@ export function ModelPicker(props: ModelPickerProps) {
     if (triggerRef.current) renderer?.focusElement?.(triggerRef.current.id)
   }
   return (
-    <div style={{ display: 'flex', position: 'relative', minWidth: 164, flexShrink: 1 }}>
+    <div style={{ display: 'flex', position: 'relative', minWidth: 0, flexShrink: 1 }}>
       <div
         ref={(el) => {
           triggerRef.current = el
@@ -1125,6 +1126,7 @@ export function ModelTriggerLabel({
   color: string
 }) {
   const t = useTheme()
+  const fit = useFooterFit()
   return (
     <div testId="model-label" style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1, overflow: 'hidden' }}>
       {account?.color && accountDots[account.color] ? (
@@ -1138,27 +1140,31 @@ export function ModelTriggerLabel({
       ) : (
         <ProviderMark kind={kind} size={14} />
       )}
-      {account && <Label color={t.textSecondary} lineHeight={16} style={{ maxWidth: 96, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{account.name}</Label>}
-      <Label color={t.text} lineHeight={16} style={{ maxWidth: 220, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {model}
-      </Label>
-      {qualifier && (
+      {account && fit.labels && <Label color={t.textSecondary} lineHeight={16} style={{ maxWidth: 96, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{account.name}</Label>}
+      {/* `min-w-0 truncate`: the name takes the shrinking, and goes below 360px. */}
+      {fit.model && (
+        <Label color={t.text} lineHeight={16} truncate>
+          {model}
+        </Label>
+      )}
+      {qualifier && fit.labels && (
         <Label color={t.textSecondary} lineHeight={16} style={{ flexShrink: 0 }}>
           {qualifier}
         </Label>
       )}
       {fast && <Icon source={G.bolt} size={14} color={t.text} />}
-      {effort && (
+      {effort && fit.effort && (
         <Label color={t.textSecondary} lineHeight={16} style={{ flexShrink: 0 }}>
           {effort}
         </Label>
       )}
-      {traits.length > 0 && (
+      {traits.length > 0 && fit.effort && (
         <Label color={t.textSecondary} lineHeight={16} style={{ flexShrink: 0 }}>
           {traits.join(' · ')}
         </Label>
       )}
-      {chevron && <Icon name="chevronDown" size={14} color={color} style={{ opacity: 0.6 }} />}
+      {/* Below 360px the desktop's overflow clip leaves only the mark; a partly clipped chevron would read as a stray mark. */}
+      {chevron && fit.model && <Icon name="chevronDown" size={14} color={color} style={{ opacity: 0.6 }} />}
     </div>
   )
 }

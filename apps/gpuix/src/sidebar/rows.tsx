@@ -342,8 +342,9 @@ export const SectionLabel = memo(function SectionLabel() {
 export const MessageRow = memo(function MessageRow({ text, clearFilter }: { text: string; clearFilter?: boolean }) {
   const t = useTheme()
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 6, paddingLeft: 14, paddingRight: 14, paddingTop: 8, paddingBottom: 8 }}>
-      <Label color={muted(t, clearFilter ? 0.6 : 0.48)}>{text}</Label>
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', columnGap: 6, paddingLeft: 14, paddingRight: 14, paddingTop: 8, paddingBottom: 8, minWidth: 0 }}>
+      {/* `flexShrink` + `minWidth: 0` let the sentence wrap inside the column instead of running out of it. */}
+      <Label color={muted(t, clearFilter ? 0.6 : 0.48)} lineHeight={21} style={{ minWidth: 0, flexShrink: 1 }}>{text}</Label>
       {clearFilter && (
         <div onClick={() => setNav({ filter: DEFAULT_FILTER })} style={{ cursor: 'pointer' }}>
           <Label color={ink(t, 0.85)} style={{ textDecoration: 'underline' }}>

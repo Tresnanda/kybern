@@ -32,8 +32,9 @@ import { COMPUTER_MENTION_PATH, noteMentionPart, taskMentionPart } from '../../.
 import { sharesHome } from '../notes/home.ts'
 import { MentionChips } from './MentionChips.tsx'
 import { tokenIcon } from './token-icons.ts'
-import { getFileIconName } from '../../../desktop/src/lib/kit/fileIcons.ts'
-import { diffFileIcons } from '../native/diff-file-icons.ts'
+import { getAttachmentIconName, getFileIconName } from '../../../desktop/src/lib/kit/fileIcons.ts'
+import { menuFileIcons } from '../native/diff-file-icons.ts'
+import { fileIconColors } from '../native/file-icon-colors.ts'
 import { PriorityGlyph, StatusGlyph } from '../tasks/Glyphs.tsx'
 import { FONT_MONO } from '../theme.ts'
 import {
@@ -68,7 +69,7 @@ type Item =
   | { id: string; type: 'task'; task: TaskItem }
   | { id: string; type: 'thread'; thread: Thread; snippet?: string | null }
   | { id: string; type: 'file'; path: string }
-  | { id: string; type: 'attachment'; label: string; name: string }
+  | { id: string; type: 'attachment'; label: string; name: string; mediaType: string }
   | { id: string; type: 'command'; command: SlashCommand }
   | { id: string; type: 'skill'; skill: SkillInfo }
   | { id: string; type: 'plugin'; skill: SkillInfo }
@@ -290,7 +291,7 @@ export function useCompletion({
       if (filter !== 'all') return byKind[filter]
       const attached: Item[] = attachments
         .filter((a) => a.part.type === 'attachment')
-        .map((a) => ({ label: a.token.slice(1), name: a.part.type === 'attachment' ? a.part.name : '' }))
+        .map((a) => ({ label: a.token.slice(1), name: a.part.type === 'attachment' ? a.part.name : '', mediaType: a.part.type === 'attachment' ? a.part.media_type : '' }))
         .filter((a) => fuzzyScore(a.label, term) != null || fuzzyScore(a.name, term) != null)
         .map((a) => ({ id: `attachment:${a.label}`, type: 'attachment' as const, ...a }))
       // A few of each kind; when only one kind matches, all of it.
@@ -486,20 +487,26 @@ function sectionOf(item: Item | undefined): string | null {
   }
 }
 
-/** The row's leading glyph: `[&_[stroke]]:[stroke-width:2]` on everything but tasks. */
+/**
+ * The row's leading glyph (`views/Composer.tsx`): `[&_[stroke]]:[stroke-width:2]` on everything but tasks and `text-foreground/85`
+ * (full ink when active). Files and attachments are `FileEntryIcon`s and keep their own type colour (`FILE_ICON_COLOR_CLASS_BY_ICON_NAME`).
+ */
 function RowIcon({ item, active }: { item: Item; active: boolean }) {
   const t = useTheme()
-  const color = active ? t.text : t.v('--color-text-foreground'), style = { opacity: active ? 1 : 0.85 }
   if (item.type === 'task') return <StatusGlyph status={item.task.status} />
+  if (item.type === 'file' || item.type === 'attachment') {
+    const kind = item.type === 'file' ? getFileIconName(item.path) : getAttachmentIconName({ name: item.name, mimeType: item.mediaType })
+    const color = fileIconColors[kind] ?? (kind === 'vercel' ? t.text : fileIconColors['code-brackets']!)
+    return <Icon source={menuFileIcons[kind] ?? menuFileIcons['code-brackets']!} size={16} color={color} />
+  }
+  const color = active ? t.text : t.v('--color-text-foreground'), style = { opacity: active ? 1 : 0.85 }
   const source =
     item.type === 'thread' ? G.message
       : item.type === 'note' ? G.note
         : item.type === 'command' ? item.command.icon
           : item.type === 'skill' ? G.skill
             : item.type === 'plugin' ? (item.skill.path === COMPUTER_MENTION_PATH ? G.laptop : G.plugin)
-              : item.type === 'file' ? (diffFileIcons[getFileIconName(item.path)] ?? G.file)
-                : item.type === 'attachment' ? (diffFileIcons[getFileIconName(item.name)] ?? G.file)
-                  : G.file
+              : G.file
   return <Icon source={source} size={16} color={color} style={style} />
 }
 

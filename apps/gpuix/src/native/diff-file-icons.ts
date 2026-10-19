@@ -20,9 +20,12 @@ export const diffFileIcons: Record<string,string> = {
   "vercel": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"black\"><path d=\"m12 1.608 12 20.784H0Z\"></path></svg>"
 }
 
-Object.assign(diffFileIcons, Object.fromEntries(Object.entries({
+const hugeFileIcons={
  'code-brackets':SourceCodeIcon,'file-text':File01Icon,'page-text':File02Icon,
  'file-chart':GridTableIcon,'calendar-days':Calendar03Icon,cmd:CommandLineIcon,lock:Settings01Icon,
  'file-png':Image01Icon,'file-jpg':Image01Icon,'image-alt-text':Image01Icon,'file-pdf':Pdf01Icon,
  'file-zip':FileZipIcon,video:Video01Icon,audio:MusicNote01Icon,'settings-gear-1':Settings01Icon
-}).map(([name,icon])=>[name,glyph(icon,2.5)])))
+}
+Object.assign(diffFileIcons, Object.fromEntries(Object.entries(hugeFileIcons).map(([name,icon])=>[name,glyph(icon,2.5)])))
+/** The composer menu's rows: its `[&_[stroke]]:[stroke-width:2]` rule beats the 2.5 the file glyphs set, brand marks are filled and unchanged. */
+export const menuFileIcons:Record<string,string>={...diffFileIcons,...Object.fromEntries(Object.entries(hugeFileIcons).map(([name,icon])=>[name,glyph(icon,2)]))}

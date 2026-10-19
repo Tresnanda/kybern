@@ -8,10 +8,11 @@ import {Label, useTheme} from '../ui.tsx'
 import {alpha} from '../transcript/kit.tsx'
 import {desktopDiffTheme} from './diff.ts'
 import {diffFileIcons} from './diff-file-icons.ts'
+import {fileIconColors} from './file-icon-colors.ts'
 
 export interface DiffHeaderFile {path:string;oldPath?:string|null;status?:string;additions:number;deletions:number}
-export { colors as fileIconColors }
-const colors:Record<string,string>={audio:'#38bdf8','calendar-days':'#f59e0b',cmd:'#4ade80','code-brackets':'#9ca3af','file-jpg':'#22c55e','file-pdf':'#ef4444','file-png':'#22c55e','file-text':'#94a3b8','file-zip':'#f97316','page-text':'#94a3b8','image-alt-text':'#22c55e',lock:'#f59e0b','settings-gear-1':'#a78bfa',video:'#c084fc',typescript:'#3178c6',markdown:'#6cb6ff',javascript:'#f7df1e',react:'#61dafb',json:'#f5c542',rust:'#dea584',phyton:'#3776ab',git:'#f05032',npm:'#cb3837',bun:'#f4d7a1',java:'#f89820',php:'#777bb4',c:'#659ad2',vue:'#42b883',svelte:'#ff3e00'}
+export { fileIconColors }
+const colors=fileIconColors
 /** Desktop FileDiffHeader geometry; the header stays outside horizontal scrolling. */
 export function NativeDiffHeader({file,open,onToggle,testId}:{file:DiffHeaderFile;open?:boolean;onToggle?:()=>void;testId?:string}) {
  const t=useTheme(),name=file.path.split('/').pop()??file.path,dir=file.path.slice(0,file.path.length-name.length),kind=getFileIconName(file.path)
