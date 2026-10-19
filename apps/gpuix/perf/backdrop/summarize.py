@@ -28,7 +28,7 @@ for label in labels:
    kernel=[(float(s),int(t)) for s,t in re.findall(r'\[backdrop-kernel\] sigma=([0-9.]+) taps=(\d+)',raw)]
    elapsed=[float(x) for x in re.findall(r'\[paint-gpu\] stage=frame ms=([0-9.]+)',raw)][-rows[-1]['frames']['count']:]
    scenes=[dict((k,float(v)) for k,v in re.findall(r'(\w+)=([0-9.]+)',line)) for line in raw.splitlines() if line.startswith('[gpu-scene]')][-rows[-1]['frames']['count']:]
-   fields['diagnostic']={'kernelTapsMedian':median([t for _,t in kernel]),'kernelTapsMin':min([t for _,t in kernel],default=None),'kernelTapsMax':max([t for _,t in kernel],default=None),'kernelRecords':len(kernel),'commandElapsedMedian':median(elapsed),'sceneMedian':{k:median([s.get(k) for s in scenes]) for k in ['draws','backdropDraws','backdrops','batches','glyphs','atlasUploads','atlasBytes','atlasEvictions']}}
+   fields['diagnostic']={'kernelTapsMedian':median([t for _,t in kernel]),'kernelTapsMin':min([t for _,t in kernel],default=None),'kernelTapsMax':max([t for _,t in kernel],default=None),'kernelRecords':len(kernel),'commandElapsedMedian':median(elapsed),'sceneMedian':{k:median([s.get(k) for s in scenes]) for k in ['draws','backdropDraws','backdrops','batches','quads','glyphs','colorSprites','shadows','paths','pathVertices','rasterArea','instanceBytes','roundedNodes','glyphClipSteps','glyphClipDepthMax','roundedGlyphs','prunedGlyphs','atlasUploads','atlasBytes','atlasEvictions']}}
 (out/'summary.json').write_text(json.dumps(summary,indent=2))
 (app/'perf/backdrop/results.json').write_text(json.dumps(summary,indent=2))
 fmt=lambda x:'—' if x is None else f'{x:.2f}'
