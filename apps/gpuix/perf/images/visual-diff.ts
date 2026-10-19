@@ -6,7 +6,7 @@ import { pngPixels } from '../../native/clip-pixels.ts'
 const evidence = process.env.KYBERN_MEMORY_EVIDENCE ?? '/Users/mymac/projects/ade/previews/gpuix/perf/images'
 const rows = []
 for (const theme of ['dark', 'light']) {
-  for (const scene of ['image-shared', 'peer-after-eviction', 'home', 'image-reopened', 'editor', 'editor-reopened', 'code', 'home-after-code', 'editor-history-redo']) {
+  for (const scene of ['image-shared', 'peer-after-eviction', 'home', 'image-reopened', 'editor', 'editor-reopened', 'code', 'home-after-code', 'editor-history-redo', 'editor-history-selected']) {
     const name = `${theme}-${scene}.png`
     const before = pngPixels(path.join(evidence, 'before-final-visual', name))
     const after = pngPixels(path.join(evidence, 'after-final-visual', name))

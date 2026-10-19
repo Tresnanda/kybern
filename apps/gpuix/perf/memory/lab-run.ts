@@ -120,7 +120,8 @@ try {
     const pointer = addresses.split('\n').flatMap(line => line.match(/^\s*(0x[0-9a-f]+)\s/i)?.[1] ?? [])[0]
     if (pointer) {
       diagnose('large-allocation-history-0.txt', 'malloc_history', [String(f.pid), '-fullStacks', pointer])
-      diagnose('large-allocation-owners-0.txt', 'leaks', ['--noContent', `--traceTree=${pointer}`, String(f.pid)])
+      diagnose('large-allocation-owners-0.txt', 'leaks', ['--noContent', '--fullStacks', `--traceTree=${pointer}`, String(f.pid)])
+      diagnose('large-allocation-root-paths-0.txt', 'leaks', ['--noContent', '--conservative', `--trace=${pointer}`, String(f.pid)])
     }
   }
   if (process.env.KYBERN_MEMORY_RELIEF === '1') {

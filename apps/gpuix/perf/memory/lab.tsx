@@ -72,6 +72,14 @@ const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
     assert.deepEqual(historyEditor.command({ cmd: 'getDoc' }), inserted, 'Redo restores the same image document')
     return Response.json({ before, inserted, state: historyEditor.command({ cmd: 'getState' }) })
   }
+  if (body.action === 'editor-select') {
+    assert(historyEditor)
+    const doc = historyEditor.command({ cmd: 'getDoc' }) as { blocks: unknown[] }
+    historyEditor.command({ cmd: 'select', anchor: { block: 0, offset: 0 }, head: { block: doc.blocks.length - 1, offset: 100000 } })
+    const state = historyEditor.command({ cmd: 'getState' }) as { collapsed: boolean }
+    assert.equal(state.collapsed, false, 'Selection spans the image document')
+    return Response.json({ selection: historyEditor.command({ cmd: 'getSelection' }), state })
+  }
   if (body.action === 'allocator-relief') {
     const lib = dlopen('/usr/lib/libSystem.B.dylib', {
       malloc_zone_pressure_relief: { args: [FFIType.ptr, FFIType.u64], returns: FFIType.u64 },

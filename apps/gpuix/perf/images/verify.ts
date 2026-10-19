@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { requireScreen } from '../bench/screen-state.ts'
 import { onExit } from '../bench/lifetime.ts'
 import {readFileSync,mkdirSync,existsSync} from 'node:fs'
 import {launchFixture} from '../../src/requests/harness.ts'
@@ -6,6 +7,7 @@ const out='/Users/mymac/projects/ade/previews/gpuix/perf/images/lightbox-'+(proc
 const data='/Users/mymac/projects/ade-gpuix-scratch/perf-images-verify';mkdirSync(data,{recursive:true})
 const until=async(check:()=>Promise<boolean>,name:string)=>{const end=Date.now()+15000;for(;;){try{if(await check())return}catch{}if(Date.now()>end)throw Error(`Timed out: ${name}`);await Bun.sleep(25)}}
 for(const theme of ['dark','light']){
+ requireScreen()
  const f=await launchFixture(import.meta.dir+'/../transcript/entry.ts',{TRANSCRIPT_TURNS:'1000',KYBERN_DATA_DIR:data,KYBERN_CLIENT_CONFIG_DIR:data,KYBERN_URL:'',KYBERN_TOKEN:'',KYBERN_OPAQUE:'1',KYBERN_APPEARANCE:theme,GPUIX_BACKGROUND:'1'})
  const stop=onExit(f.close)
  try{
@@ -68,6 +70,7 @@ for(const theme of ['dark','light']){
   await a.getByTestId('message-jump-999').waitFor()
   await until(async()=>(await painted()).includes(process.env.TRANSCRIPT_COMPACT==='1'?'Compact answer turn-999.':'BENCH_RESULT_999'),'tail jump mounts exact final content')
   await a.screenshot({path:`${out}/verify-${theme}-tail.png`})
+  requireScreen()
   console.log(`PASS ${theme}: first/middle/tail rail, pinned image overlay, native selection, formatted final answer`)
  }catch(e){await f.app.screenshot({path:`${out}/verify-${theme}-failed.png`}).catch(()=>{});throw e}finally{await f.close();stop()}
 }

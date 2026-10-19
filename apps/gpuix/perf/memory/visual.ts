@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { requireScreen } from '../bench/screen-state.ts'
 import { metadata } from './metadata.ts'
 import { gradientPng } from '../../visual/fixture.ts'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -23,6 +24,7 @@ for (let index = 0; index < 48; index++) {
 }
 for (const theme of ['dark', 'light']) {
  const release = await lease(), leave = onExit(release)
+ const screenBefore = requireScreen()
  const client = path.join(data, `${label}-visual-${theme}`); mkdirSync(client, { recursive: true })
  const f = await launchFixture(path.join(import.meta.dir, 'lab.tsx'), { NAPI_RS_NATIVE_LIBRARY_PATH: addon, KYBERN_MEMORY_IMAGE_DIR: imageDir, KYBERN_DATA_DIR: data, KYBERN_CLIENT_CONFIG_DIR: client, KYBERN_URL: '', KYBERN_TOKEN: '', GPUIX_BACKGROUND: '1', KYBERN_FULL_RATE: '1', KYBERN_APPEARANCE: theme })
  const stop = onExit(f.close)
@@ -56,8 +58,12 @@ for (const theme of ['dark', 'light']) {
   assert(history.ok, await history.clone().text())
   writeFileSync(path.join(out, `${theme}-editor-history.json`), JSON.stringify(await history.json(), null, 2))
   await f.app.call('blur', {}); await Bun.sleep(450); capture('editor-history-redo')
+  const selected = await fetch(`http://127.0.0.1:${port}`, { method: 'POST', body: JSON.stringify({ action: 'editor-select' }) })
+  assert(selected.ok, await selected.clone().text())
+  writeFileSync(path.join(out, `${theme}-editor-selection.json`), JSON.stringify(await selected.json(), null, 2))
+  await Bun.sleep(450); capture('editor-history-selected')
   await scene('code'); capture('code')
   await scene('home'); capture('home-after-code')
-  writeFileSync(path.join(out, `${theme}-ownership.json`), JSON.stringify({ leased, closed, editorClosed, reopened: await stats() }, null, 2))
+  writeFileSync(path.join(out, `${theme}-ownership.json`), JSON.stringify({ screenBefore, screenAfter: requireScreen(), leased, closed, editorClosed, reopened: await stats() }, null, 2))
  } finally { await f.close(); stop(); release(); leave() }
 }
