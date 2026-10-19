@@ -12,10 +12,13 @@ p=pathlib.Path(sys.argv[1]);p.touch(exist_ok=True)
 with p.open('r+') as f:
  fcntl.flock(f,fcntl.LOCK_EX)
  a=[x for x in f.read().splitlines() if x];lane=sys.argv[2]
- if sys.argv[3]=='join' and lane not in a:a.append(lane)
+ if sys.argv[3]=='join' and lane not in a:
+  quiet=pathlib.Path('/tmp')/('kybern-gpuix-quiet.'+pathlib.Path(sys.argv[4]).name.removeprefix('ade-gpuix-'))
+  if quiet.exists():a.insert(min(1,len(a)),lane)
+  else:a.append(lane)
  if sys.argv[3]=='leave':a=[x for x in a if x!=lane]
  f.seek(0);f.write(''.join(x+'\\n' for x in a));f.truncate()
-`,queue,lane,add?'join':'leave'])}
+`,queue,lane,add?'join':'leave',path.resolve(import.meta.dir,'../../../..')])}
 export function cleanupStaleLease(root:string){
  const reap=(pid:number,token?:string)=>execFileSync('python3',[watcher,'reap',String(pid),root,`perf-bench-${pid}`,lock,queue,...(token?[token]:[])])
  try{

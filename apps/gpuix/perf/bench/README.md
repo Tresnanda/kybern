@@ -223,3 +223,21 @@ it reuses an existing compiled app and never triggers a release build.
 Startup runners hold a scoped `caffeinate -d -u -w <runner pid>` and reject zero/near-zero native submissions (fewer than three after up to two seconds of confirmation outside the recorded milestone clocks); this prevents an asleep display from producing false startup paint measurements. The assertion ends with the runner and does not change power settings.
 
 Startup also checks the shared screen-state Swift probe before and after: locked sessions or asleep displays reject the run. Never try to unlock the user session.
+
+## Full-history fling and submission attribution
+
+`KYBERN_BENCH_HISTORY_TURNS=3000` makes `thread-fling` load all sequence-bounded
+pages before warm-up, then asserts exactly 3,000 user turns. The ordinary bench
+opens the newest bounded page; the dataset containing 3,000 turns alone does
+not mean all history is loaded. The option leaves other scenarios unchanged.
+`evidence.loadedHistoryTurns` identifies the explicitly loaded fling only.
+The existing streaming full-history control still expects 1,000 by default.
+
+`inputPreflight` retains the target, point and before/probe/after native offsets;
+the probe additionally records actual handler count and delta. This makes a
+fallback to wheel RPC inspectable. The raw log's `bench-window-start/end`
+markers bound each sample. `perf/flick/attribute.py` uses the recorded ending
+submission and exact measured frame count to emit every interval over 16.7 ms,
+with native draw/layout costs, React commits and input-paint probes. Its counts
+must agree with the result JSON. Categories are correlations; uninstrumented
+JS/GC/shaping work is not inferred from a short native draw.

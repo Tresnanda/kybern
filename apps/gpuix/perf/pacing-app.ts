@@ -25,7 +25,9 @@ else await import('../src/main.tsx')
 const { each, getObjc, nsApp, sel } = await import('../src/native/objc.ts')
 const o = getObjc(), app = nsApp()
 if (app) each(o, o.msg(app, sel(o, 'windows')) as Pointer, window => {
-  o.msgSetI64(window, sel(o, 'setLevel:'), 3n)
+  // Level 0 is needed when a run verifies layer-0 on-screen ownership with
+  // CGWindowList. It still uses orderFrontRegardless without activation.
+  o.msgSetI64(window, sel(o, 'setLevel:'), process.env.KYBERN_BENCH_LAYER_ZERO==='1'?0n:3n)
   if(process.env.KYBERN_PACING_IGNORE_PHYSICAL_MOUSE==='1')o.msgSetBool(window,sel(o,'setIgnoresMouseEvents:'),true)
   o.msg(window, sel(o, 'orderFrontRegardless'))
 })

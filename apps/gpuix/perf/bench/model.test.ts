@@ -5,6 +5,12 @@ test('frame quantiles and empty samples retain missingness',()=>{expect(distribu
 test('native stream parser handles split lines and uses submission timestamps',()=>{
  const t=new Telemetry();t.stderr('[kybern-sub');t.stderr('mit] 0\n[kybern-work] renderMs=4.2 layoutMs=2.1 layoutCalls=7\n[pacing-commit] 2\n[kybern-submit] 16.6\n[kybern-submit] 55\n');const r=t.result({frames:0,costs:0,commits:0});expect(r.frames.count).toBe(3);expect(r.frames.over16_7).toBe(1);expect(r.frames.over33).toBe(1);expect(r.frames.max).toBeCloseTo(38.4);expect(r.work.layoutMs.p50).toBe(2.1);expect(r.work.reactCommits).toBe(1)
 })
+test('continuous scroll counts a stall before its first measured submission',()=>{
+ const t=new Telemetry();t.stderr('[kybern-submit] 100\n')
+ const mark=t.mark();t.stderr('[kybern-submit] 5100\n[kybern-submit] 5116.7\n')
+ expect(t.result(mark,[],true).frames).toMatchObject({count:2,over33:1,max:5000})
+ expect(t.result(mark).frames.over33).toBe(0)
+})
 test('resource parser reads only the total and preserves actual sample interval',()=>{expect(parseResources('  total                                      241.0 MiB  cpu  12.34%  gpu   456.7 ms over 15.08s')).toEqual({footprintMiB:241,cpuPercent:12.34,gpuMs:456.7,sampleSeconds:15.08});expect(()=>parseResources('failed')).toThrow()})
 test('missing runs never render as zero performance',()=>{const r=emptyResult('thread-scroll',1);r.status='failed';r.reason='No scene';expect(table([r])).toContain('0/1');expect(table([r])).toContain('— / — / —')})
 
@@ -75,4 +81,13 @@ test('startup report exposes distinct sidebar, first and newest content median/p
  const report=table(rows)
  expect(report).toContain('Sidebar median/p90 ms')
  expect(report).toContain('| startup-cold | 102.00 / 104.00 | 202.00 / 204.00 | 302.00 / 304.00 | 402.00 / 404.00 |')
+})
+
+
+import {parseWindowOnscreen} from './window-onscreen.ts'
+test('capture guard requires a visible window contained on the hidden 2x display',()=>{
+ const window=(x:number,y:number,scale:number,onscreen=true,width=1280)=>`window 42 onscreen=${onscreen} scale=${scale} bounds={X = ${x}; Y = ${y}; Width = ${width}; Height = 820;}`
+ expect(parseWindowOnscreen(window(-1360,940,2)).valid).toBe(true)
+ expect(parseWindowOnscreen(window(-1360,940,2).replace("X = -1360", 'X = "-1360"')).valid).toBe(true)
+ for(const raw of [window(80,40,2),window(-1360,940,1),window(-1360,940,2,false),window(-1500,940,2),window(-1360,899,2),window(-1360,1000,2),window(-1360,940,2,true,1400),''])expect(parseWindowOnscreen(raw).valid).toBe(false)
 })

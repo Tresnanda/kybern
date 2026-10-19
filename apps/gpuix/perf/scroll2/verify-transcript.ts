@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict'
 import {readFileSync,mkdirSync,existsSync} from 'node:fs'
 import {launchFixture} from '../../src/requests/harness.ts'
+import {requireWindowOnscreen,waitForWindowOnscreen} from '../bench/window-onscreen.ts'
 const out='/Users/mymac/projects/ade/previews/gpuix/perf/scroll2/transcript'+(process.env.TRANSCRIPT_COMPACT==='1'?'/compact':'');mkdirSync(out,{recursive:true})
 const data='/Users/mymac/projects/ade-gpuix-scratch/perf-scroll2';mkdirSync(data,{recursive:true})
 const until=async(check:()=>Promise<boolean>,name:string)=>{const end=Date.now()+15000;for(;;){try{if(await check())return}catch{}if(Date.now()>end)throw Error(`Timed out: ${name}`);await Bun.sleep(25)}}
 for(const theme of ['dark','light']){
  const f=await launchFixture((process.env.SCROLL2_SYNTHETIC==='1'?import.meta.dir+'/list-fixture.tsx':import.meta.dir+'/../transcript/entry.ts'),{TRANSCRIPT_TURNS:'1000',KYBERN_DATA_DIR:data,KYBERN_CLIENT_CONFIG_DIR:data,KYBERN_URL:'',KYBERN_TOKEN:'',KYBERN_OPAQUE:'1',KYBERN_APPEARANCE:theme,GPUIX_BACKGROUND:'1'})
  try{
+  await waitForWindowOnscreen(f.pid)
   const a=f.app;await a.getByTestId('perf-ready').waitFor();await a.getByTestId('message-rail').waitFor();await Bun.sleep(500)
   const port=JSON.parse(readFileSync(data+'/transcript-control.json','utf8')).port
   const command=async(action:string,args:object={})=>{const r=await fetch(`http://127.0.0.1:${port}`,{method:'POST',body:JSON.stringify({action,...args})});if(!r.ok)throw Error(await r.text());return r.json() as Promise<{selected:string|null}>}
@@ -16,7 +18,7 @@ for(const theme of ['dark','light']){
   await a.getByTestId('message-jump-0').waitFor()
   await a.getByTestId('message-jump-0').click()
   await until(async()=>(await painted()).includes('Prompt 0:'),'first rail target mounts')
-  await a.screenshot({path:`${out}/verify-${theme}-first.png`})
+  requireWindowOnscreen(f.pid);await a.screenshot({path:`${out}/verify-${theme}-first.png`})
   const row=await a.getByTestId('turn-user:user-0').bounds(),surface=await a.getByTestId('transcript-surface').bounds()
   assert.ok(row.y>=surface.y-1 && row.y<surface.y+surface.height,'First prompt stays in viewport')
   await Bun.sleep(1600) // Finish the rail's finite centering observation before unrelated gestures.
@@ -29,7 +31,7 @@ for(const theme of ['dark','light']){
   await Bun.sleep(150)
   assert.equal(await a.getByTestId('image-lightbox').count(),1,'Row-owned image dialog survives scrolling its trigger away')
   assert.ok((await a.getByTestId('image-lightbox').bounds()).width>0,'Focused offscreen row still paints its overlay')
-  await a.screenshot({path:`${out}/verify-${theme}-pinned-image.png`})
+  requireWindowOnscreen(f.pid);await a.screenshot({path:`${out}/verify-${theme}-pinned-image.png`})
   await a.getByTestId('image-lightbox').press('escape')
   await until(async()=>await a.getByTestId('image-lightbox').count()===0,'Image dialog closes after offscreen trigger')
   // Native focus restoration may reveal the offscreen trigger. Establish the
@@ -44,7 +46,7 @@ for(const theme of ['dark','light']){
   await a.getByTestId('message-jump-500').waitFor()
   await a.getByTestId('message-jump-500').click()
   await until(async()=>(await painted()).includes('Prompt 500:'),'middle rail target mounts')
-  await a.screenshot({path:`${out}/verify-${theme}-middle.png`})
+  requireWindowOnscreen(f.pid);await a.screenshot({path:`${out}/verify-${theme}-middle.png`})
   if(process.env.TRANSCRIPT_COMPACT==='1'){
     await Bun.sleep(1600)
     const first=await a.getByTestId('transcript-slot:turn-500:answer:0:0').getByType('markdown').bounds(),next=await a.getByTestId('transcript-slot:turn-501:answer:0:0').getByType('markdown').bounds()
@@ -65,7 +67,7 @@ for(const theme of ['dark','light']){
   await a.getByTestId('scroll-to-bottom').click()
   await a.getByTestId('message-jump-999').waitFor()
   await until(async()=>(await painted()).includes(process.env.TRANSCRIPT_COMPACT==='1'?'Compact answer turn-999.':'BENCH_RESULT_999'),'tail jump mounts exact final content')
-  await a.screenshot({path:`${out}/verify-${theme}-tail.png`})
+  requireWindowOnscreen(f.pid);await a.screenshot({path:`${out}/verify-${theme}-tail.png`})
   console.log(`PASS ${theme}: first/middle/tail rail, pinned image overlay, native selection, formatted final answer`)
- }catch(e){const {writeFileSync}=await import('node:fs');writeFileSync(`${out}/verify-${theme}-failed-tree.json`,JSON.stringify(await f.app.call('getTree',{})));await f.app.screenshot({path:`${out}/verify-${theme}-failed.png`}).catch(()=>{});throw e}finally{await f.close()}
+ }catch(e){const {writeFileSync}=await import('node:fs');writeFileSync(`${out}/verify-${theme}-failed-tree.json`,JSON.stringify(await f.app.call('getTree',{})));try{requireWindowOnscreen(f.pid);await f.app.screenshot({path:`${out}/verify-${theme}-failed.png`})}catch{}throw e}finally{await f.close()}
 }
