@@ -34,7 +34,7 @@ pub fn size<T>(width:T,height:T)->Size<T> { Size {width,height} }
 impl<T> Size<T> { pub fn map<U>(self,mut f:impl FnMut(T)->U)->Size<U> { size(f(self.width),f(self.height)) } }
 """ + f'\n#[path = "{source}"] mod assets;\n')
 try:
-    subprocess.run(['rustc', '+1.97.1', '--edition=2024', '--test', str(harness),
+    subprocess.run(['nice', '-n', '15', 'rustc', '+1.97.1', '--edition=2024', '--test', str(harness),
                     '--extern', 'image=' + library('image'), '--extern', 'smallvec=' + library('smallvec'),
                     '-L', 'dependency=' + str(deps), '-o', str(build / 'image-frames-tests')], check=True)
     subprocess.run([str(build / 'image-frames-tests')], check=True)
