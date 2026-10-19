@@ -30,7 +30,7 @@ def cancelled(_signal, _frame):
 signal.signal(signal.SIGINT, cancelled)
 signal.signal(signal.SIGTERM, cancelled)
 try:
-    finish_only = "--finish-checks" in sys.argv or "--compositor-only" in sys.argv
+    finish_only = "--finish-checks" in sys.argv or "--compositor-only" in sys.argv or "--stream-visual-only" in sys.argv
     if len(sys.argv) > 1 and not finish_only:
         pid = int(sys.argv[1])
         while True:
@@ -81,10 +81,12 @@ try:
                     ["rustc", "--edition=2021", "--test", "native/patches/backdrop_kernel.rs", "-o", "native/build/backdrop-kernel-tests"],
                     ["native/build/backdrop-kernel-tests"],
                     ["bun", "native/ui-lease.ts", "backdrop-kernel", "bun", "perf/backdrop/kernel-check.ts"],
+                    ["bun", "native/ui-lease.ts", "backdrop-stream-visual", "bun", "perf/backdrop/stream-visual.ts"],
                     ["bun", "native/ui-lease.ts", "backdrop-product-pairs", "bun", "perf/backdrop/product-visual.ts", "pairs"],
                     ["bun", "native/ui-lease.ts", "backdrop-accessibility", "bun", "perf/backdrop/product-visual.ts", "accessibility"],
                     ["bun", "native/ui-lease.ts", "backdrop-compositor", "bun", "perf/backdrop/compositor.ts"]]
-        if "--compositor-only" in sys.argv: commands = commands[-1:]
+        if "--stream-visual-only" in sys.argv: commands = [["bun", "native/ui-lease.ts", "backdrop-stream-visual", "bun", "perf/backdrop/stream-visual.ts"]]
+        elif "--compositor-only" in sys.argv: commands = commands[-1:]
         elif finish_only: commands = commands[2:]
         for command in commands:
             if not screen_ready(): raise RuntimeError('Locked/asleep: pause native UI validation')
