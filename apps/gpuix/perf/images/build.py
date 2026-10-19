@@ -49,9 +49,27 @@ try:
         time.sleep(60)
     # Screen checks can take long enough for another lane to acquire quiet.
     # Keep the reservation while waiting; recheck immediately before marking.
-    while list(tmp.glob("kybern-gpuix-quiet.*")) or list(tmp.glob("kybern-gpuix-native-build.*")):
+    while True:
+        while list(tmp.glob("kybern-gpuix-quiet.*")) or list(tmp.glob("kybern-gpuix-native-build.*")):
+            time.sleep(1)
+        marked_at = time.time()
+        marker.write_text(f"{lane} {marked_at}\n")
+        # A competing lane can pass its preflight in the same instant. The
+        # later marker yields, retaining its reservation until it can build.
+        earlier = []
+        for other in tmp.glob("kybern-gpuix-native-build.*"):
+            if other == marker:
+                continue
+            try:
+                began = float(other.read_text().split()[1])
+            except (OSError, ValueError, IndexError):
+                began = 0
+            if (began, other.name) < (marked_at, marker.name):
+                earlier.append(other)
+        if not earlier:
+            break
+        marker.unlink(missing_ok=True)
         time.sleep(1)
-    marker.write_text(f"{lane} {time.time()}\n")
     reservation.unlink(missing_ok=True)
     reserved = False
     env = dict(os.environ, KYBERN_DATA_DIR="/Users/mymac/projects/ade-gpuix-scratch/perf-images-native",
