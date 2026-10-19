@@ -2,6 +2,7 @@
 import {App} from '@gpuix/react/automation'
 import {waitForWindow,requireWindow} from './window-guard.ts'
 const displayProbe=process.env.KYBERN_BUILTIN_DISPLAY_PROBE
+if(displayProbe&&process.env.GPUIX_BACKGROUND!=='1')throw Error('Backdrop validation requires GPUIX_BACKGROUND=1 before any native window opens')
 if(displayProbe&&Bun.spawnSync([displayProbe],{stdout:'ignore',stderr:'ignore'}).exitCode!==0)throw Error('Hidden test display unavailable; no fixture will launch')
 if(process.env.KYBERN_WINDOW_GUARD){
  const screenshot=App.prototype.screenshot
