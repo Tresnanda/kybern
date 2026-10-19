@@ -9,6 +9,17 @@ export function processInventory(owner=process.pid){
  if(inventory.status!==0&&inventory.status!==1)throw Error('Unable to inventory GPUIX processes')
  const parents=new Map(execFileSync('ps',['-Ao','pid=,ppid='],{encoding:'utf8'}).trim().split('\n').map(line=>{const [pid,parent]=line.trim().split(/\s+/).map(Number);return [pid!,parent!] as const}))
  const processes=(inventory.stdout??'').trim().split('\n').filter(Boolean)
+ // pgrep's path query misses `bun src/main.tsx` launched from an app cwd.
+ // Resolve only likely relative GPUIX windows so a foreign orphan cannot
+ // silently invalidate an otherwise quiet measurement.
+ const relative=execFileSync('ps',['-Ao','pid=,command='],{encoding:'utf8'}).split('\n')
+ for(const line of relative){
+  const match=line.trim().match(/^(\d+)\s+((?:\/\S*\/)?bun\s+(?:src\/main\.tsx|perf\/bench\/app\.ts)(?:\s.*)?)$/)
+  if(!match||processes.some(p=>p.startsWith(`${match[1]} `)))continue
+  let cwd=''
+  try{cwd=execFileSync('lsof',['-a','-p',match[1]!,'-d','cwd','-Fn'],{encoding:'utf8'}).split('\n').find(p=>p.startsWith('n'))?.slice(1)??''}catch{continue}
+  if(/\/apps\/gpuix$/.test(cwd))processes.push(`${match[1]} ${match[2]} [cwd=${cwd}]`)
+ }
  const foreign=foreignProcesses(processes,parents,owner)
  return {processes,foreign}
 }

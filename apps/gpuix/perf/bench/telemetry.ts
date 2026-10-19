@@ -18,8 +18,13 @@ export class Telemetry {
   }
  }
  mark(){return {frames:this.submissions.length,costs:this.costs.length,commits:this.commits,paints:this.inputPaints.length}}
- result(mark:{frames:number;costs:number;commits:number;paints?:number},sent:number[]=[]){
+ result(mark:{frames:number;costs:number;commits:number;paints?:number},sent:number[]=[],includeBoundaryInterval=false){
   const frames=this.submissions.slice(mark.frames),intervals=frames.slice(1).map((v,i)=>v.native-frames[i]!.native)
+  // A continuous scroll can stall before its first measured submission. Keep
+  // the gap from the warmup's last scene instead of reporting only the smooth
+  // tail after that stall. Idle and one-off scenarios have no continuous frame
+  // expectation, so their preceding gap is not a missed animation interval.
+  if(includeBoundaryInterval&&frames.length&&mark.frames>0)intervals.unshift(frames[0]!.native-this.submissions[mark.frames-1]!.native)
   const latency=sent.flatMap(at=>{const next=frames.find(f=>f.received>=at);return next?[next.received-at]:[]})
   const costs=this.costs.slice(mark.costs),paints=this.inputPaints.slice(mark.paints??0)
   return {frames:{...distribution(intervals),count:frames.length,over16_7:intervals.filter(v=>v>16.7).length,over33:intervals.filter(v=>v>33).length},proxy:distribution(latency),latencySamples:latency.length,nativeInput:{samples:paints.length,packets:paints.reduce((n,p)=>n+p.packets,0),firstMs:distribution(paints.map(p=>p.first)),lastMs:distribution(paints.map(p=>p.last)),meaning:"GPUI dispatch to CPU scene construction; excludes OS and host queue, GPU and physical presentation"},work:{reactCommits:this.commits-mark.commits,renderMs:distribution(costs.map(c=>c.render)),layoutMs:distribution(costs.map(c=>c.layout))}}

@@ -5,13 +5,17 @@ Usage: python3 perf/flick/attribute.py <bench-json> <output-directory>
 import csv,json,re,sys
 from pathlib import Path
 source=Path(sys.argv[1]);out=Path(sys.argv[2]);out.mkdir(parents=True,exist_ok=True)
-doc=json.loads(source.read_text());summary=[]
+doc=json.loads(source.read_text());summary=[];seen={}
 for result in doc["results"]:
- if result["status"]!="ok":continue
  name=result["scenario"];run=result["run"]
- # Retried attempts may reset run numbers; choose only logs with matching valid windows.
- logs=sorted(Path(doc["evidence"]).glob(f"{name}-attempt-*/{name}-{run}.log"))
- for log in logs:
+ # Retries reset run numbers. Match each result to its attempt in result order,
+ # including discarded windows, so a valid retry is never attributed to its
+ # discarded predecessor's log.
+ key=(name,run);index=seen.get(key,0);seen[key]=index+1
+ if result["status"]!="ok":continue
+ logs=sorted(Path(doc["evidence"]).glob(f"{name}-attempt-*/{name}-{run}.log"),key=lambda p:int(p.parent.name.rsplit('-',1)[1]))
+ assert index<len(logs),(name,run,index,len(logs))
+ for log in logs[index:index+1]:
   rows=[];all_frames=[];cut=None;last=None;work=[];layouts=[];commits=0;packets=0;first=[];last_input=[]
   for line in log.read_text().splitlines():
    end=re.search(r"\[bench-window-end\] run=(\d+) native=([\d.]+)",line)
@@ -31,7 +35,10 @@ for result in doc["results"]:
   if cut is None:continue
   if not result['frames']['count']:continue
   measured=[r for r in all_frames if r['nativeMs']<=cut][-result['frames']['count']:]
-  rows=[r for r in measured[1:] if r['gapMs']>16.7]
+  # Continuous wheel workloads include the transition from the warmup's last
+  # submission to the first measured one. A stall there must not disappear.
+  continuous=name.endswith('scroll') or name=='thread-fling'
+  rows=[r for r in (measured if continuous else measured[1:]) if r['gapMs']>16.7]
   assert len(rows)==result['frames']['over16_7'], (name,run,len(rows),result['frames'])
   assert sum(r['over33'] for r in rows)==result['frames']['over33']
   if not rows:continue
