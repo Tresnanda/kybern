@@ -21,7 +21,8 @@ try:
   case=out/(theme+'-'+reduced);case.mkdir(parents=True,exist_ok=True)
   env=dict(os.environ,KYBERN_DATA_DIR=str(data),KYBERN_CLIENT_CONFIG_DIR=str(data/'client'),KYBERN_URL='',KYBERN_TOKEN='',R8_DATA=str(data),R8_OUT=str(case),R7_LOCK_HELD='1',R7_LABEL='sparse',KYBERN_APPEARANCE=theme,KYBERN_REDUCED_MOTION=reduced,KYBERN_FULL_RATE='1',KYBERN_WINDOW_SIZE='1280x820')
   child=subprocess.Popen(['bun','native/ui-lease.ts','perf-flick-tasks','bun','perf/flick/check.ts','tasks-'+theme+'-'+reduced,'bun','perf/flick/task-entry.ts'],cwd=app,env=env)
-  if child.wait(timeout=285):raise RuntimeError('Task drag verifier failed '+theme)
+  # Queue time is separate: check.ts bounds the active UI batch to 285 s.
+  if child.wait():raise RuntimeError('Task drag verifier failed '+theme)
 finally:
  if child and child.poll() is None:child.terminate();child.wait(timeout=5)
  if daemon and daemon.poll() is None:daemon.terminate();daemon.wait(timeout=5)
