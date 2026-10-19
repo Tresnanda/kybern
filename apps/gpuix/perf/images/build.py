@@ -44,7 +44,13 @@ try:
         if 'locked: 0' in state and ('displayAsleep: 0' in state or 'displayAsleep: false' in state):
             break
         time.sleep(60)
+    # Screen checks can take long enough for another lane to acquire quiet.
+    # Keep the reservation while waiting; recheck immediately before marking.
+    while list(tmp.glob("kybern-gpuix-quiet.*")):
+        time.sleep(1)
     marker.write_text(f"{lane} {time.time()}\n")
+    reservation.unlink(missing_ok=True)
+    reserved = False
     env = dict(os.environ, KYBERN_DATA_DIR="/Users/mymac/projects/ade-gpuix-scratch/perf-images-native",
                KYBERN_CLIENT_CONFIG_DIR="/Users/mymac/projects/ade-gpuix-scratch/perf-images-native/native-client",
                KYBERN_URL="", KYBERN_TOKEN="", RUSTC_WRAPPER="", CARGO_INCREMENTAL="0",
