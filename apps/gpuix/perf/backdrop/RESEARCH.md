@@ -97,3 +97,7 @@ comparisons must establish the hardware precision limits before acceptance.
 MPS/downsampling would change this shader's low-sigma discrete filter and its
 RGBA intermediate rounding; those are broader visual changes. Kernel folding
 is the narrowest candidate supported by the measured streaming source.
+
+## Scratch clear follow-up to measure
+
+`native/patches/backdrop_renderer.rs:34–45` retains the componentwise maximum scratch extent and supplies a clear color for the horizontal encoder. GPUI's `new_command_encoder_for_texture` uses attachment `MTLLoadAction::Clear`, so a small later crop still clears the retained attachment. The horizontal quad writes its current crop; vertical sampling clamps to that crop. This is a concrete candidate for a separate load/store or render-area experiment, especially after a large popup. It is not evidence of a measured bottleneck, and is deliberately kept separate from the shader-kernel A/B.
