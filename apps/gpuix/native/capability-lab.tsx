@@ -42,4 +42,5 @@ function Lab() {
     </virtual-list>
   </div>
 }
-render(<Lab />, { title: 'Native selection and font check', width: 700, height: 900, focus: false })
+// Fit the built-in 1440×900 display without moving/focusing test windows.
+render(<Lab />, { title: 'Native selection and font check', width: 700, height: 820, focus: false })

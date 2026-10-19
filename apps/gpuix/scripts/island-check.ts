@@ -7,7 +7,7 @@
  *  5. an island that changes after mount repaints (no stale replay); covered
  *     by check 1, since the lab flips a label inside an island at 800 ms.
  */
-import { readFileSync, mkdirSync, rmSync } from 'node:fs'
+import { readFileSync, mkdirSync, rmSync, cpSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { launch } from '@gpuix/react/automation'
@@ -61,5 +61,10 @@ const results = [
   ['islands inside a virtual list render (inline fallback)', listPlain.a.equals(listIsland.a)],
 ] as const
 for (const [name, ok] of results) console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}`)
+if(results.some(([,ok])=>!ok)&&process.env.KYBERN_VERIFY_OUTPUT){
+  const failure=path.join(process.env.KYBERN_VERIFY_OUTPUT,'island-failure')
+  mkdirSync(failure,{recursive:true});cpSync(dir,failure,{recursive:true})
+  console.error(`Island comparison evidence: ${failure}`)
+}
 rmSync(dir, { recursive: true, force: true })
 if (results.some(([, ok]) => !ok)) process.exit(1)

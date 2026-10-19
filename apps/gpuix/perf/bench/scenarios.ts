@@ -1,3 +1,4 @@
+import {waitForWindow,requireWindow} from '../backdrop/window-guard.ts'
 import {requireScreen,requireActiveSample,screenState} from './screen-state.ts'
 import {assertDisplayReady} from './display-gate.ts'
 import {watchRun} from './process-gate.ts'
@@ -247,6 +248,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
    const sampleExit=await sampler.exited;unsampler();if(sampleExit)throw Error(sampleError)
    await profiler?.exited;unprofiler()
    const stop=performance.now(),m=measured
+   requireWindow(launch!.pid)
    r.resources=parseResources(sampleText);if(useAppkit)r.latency.kind='in-process scheduled AppKit NSEvent to next scene-submission stderr receipt; clocks mapped from control RTT; not a physical presentation fence';r.frames=m.frames;r.work=m.work;r.latency.proxyMs=m.proxy;r.latency.samples=m.latencySamples
    r.timings.resourceWindowMs=stop-resourceStart
    r.evidence={...r.evidence,nativeDispatchToCpuPaint:m.nativeInput,averageProcessCpuMsPerSubmission:r.frames.count?r.resources.cpuPercent!*r.resources.sampleSeconds!*10/r.frames.count:null,averageProcessGpuMsPerSubmission:r.frames.count?r.resources.gpuMs!/r.frames.count:null,inputPreflight,loadedHistoryTurns:name==='thread-fling'&&process.env.KYBERN_BENCH_HISTORY_TURNS?Number(process.env.KYBERN_BENCH_HISTORY_TURNS):null,profiled:!!options.profile,continuityBridgeMs:useAppkit&&scrolling?5000:0,warmupSeconds:options.warmup,resourceWindowSeconds:options.seconds,resourceText:sampleText,input:input?.input??'none',packetAckP95:input?input.acks.sort((a,b)=>a-b)[Math.floor(input.acks.length*.95)]:null,maxOutstanding:input?.maxOutstanding??0,drainMs:input?.drainMs??0,sceneTransitionFrames:telemetry.submissions.length-mark.frames,onePersistedRunningThread:!name.startsWith('idle-')&&process.env.KYBERN_BENCH_NO_RUNNING!=='1',appkitAccepted:useAppkit,forcedRpc:process.env.KYBERN_BENCH_RPC_ONLY==='1',clockMappingRttMs,offeredPackets:input?.sent.length??0,inputProductionMs:input?.productionMs??null,...(input&&'zeroDistancePackets' in input?{zeroDistancePackets:input.zeroDistancePackets,requestedDistance:input.requestedDistance,effectiveDistance:input.effectiveDistance,handledPackets:input.handledPackets,handlerDistance:input.handlerDistance}:{}),offeredPacketsPerNominalSecond:input?input.sent.length/options.seconds:null,offeredPacketsPerSecond:input&&input.productionMs>0?input.sent.length/(input.productionMs/1000):null}
@@ -254,7 +256,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
    if(streamBefore!=null){const streamed=await control('state');const streamAfter=streamed.streamDeltas;r.evidence.offeredDeltas=streamAfter-streamBefore;r.evidence.offeredDeltasPerSecond=(streamAfter-streamBefore)/(r.timings.resourceWindowMs!/1000);r.evidence.streamWithWheel=streamWithWheel;r.evidence.loadedBlocks=streamed.blocks;r.evidence.fullHistory=process.env.KYBERN_BENCH_STREAM_HISTORY==='1'}
    if(process.env.KYBERN_BENCH_COUNTERS==='1'){const response=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action:'counters'})});r.evidence.counters=await response.json()}
    writeFileSync(path.join(evidence,`${name}-${run}-resources.txt`),sampleText)
-  }catch(error){r.status=String(error).includes('not onscreen on the hidden test display')?'discarded':'failed';r.reason=String(error)}finally{for(const child of children){child.kill();await child.exited}for(const unregister of unregisterChildren)unregister()}
+  }catch(error){r.status=(String(error).includes('not onscreen on the hidden test display')||String(error).includes('backdrop-window-guard'))?'discarded':'failed';r.reason=String(error)}finally{for(const child of children){child.kill();await child.exited}for(const unregister of unregisterChildren)unregister()}
   if(buildWatch){const gate=buildWatch.finish();Object.assign(r.evidence,gate);if(gate.overlap||gate.orphanOverlap||gate.screenInvalid){r.status='discarded';r.reason=gate.screenInvalid?'locked/asleep screen: discarded':gate.orphanOverlap?'foreign GPUIX process: discarded':'build overlap: discarded'}}
   writeFileSync(path.join(evidence,`${name}-${run}.log`),telemetry.raw)
   results.push(r)
