@@ -12,8 +12,10 @@ build = app / 'native/build'
 deps = build / 'target/release/deps'
 def library(name):
     found = list(deps.glob(f'lib{name}-*.rlib'))
-    assert len(found) == 1, f'Expected one {name} native dependency: {found}'
-    return str(found[0])
+    assert found, f'Missing {name} native dependency in {deps}'
+    # Repeated update.sh runs can leave both an older and a current crate hash.
+    # The newest release rlib matches the reconstructed source build.
+    return str(max(found, key=lambda file: (file.stat().st_mtime_ns, file.name)))
 source = app / 'native/upstream/zed/crates/gpui/src/assets.rs'
 harness = build / 'image-frames-tests.rs'
 harness.write_text("""
