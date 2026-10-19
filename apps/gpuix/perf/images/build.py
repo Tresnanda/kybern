@@ -49,7 +49,7 @@ try:
         time.sleep(60)
     # Screen checks can take long enough for another lane to acquire quiet.
     # Keep the reservation while waiting; recheck immediately before marking.
-    while list(tmp.glob("kybern-gpuix-quiet.*")):
+    while list(tmp.glob("kybern-gpuix-quiet.*")) or list(tmp.glob("kybern-gpuix-native-build.*")):
         time.sleep(1)
     marker.write_text(f"{lane} {time.time()}\n")
     reservation.unlink(missing_ok=True)
@@ -57,7 +57,7 @@ try:
     env = dict(os.environ, KYBERN_DATA_DIR="/Users/mymac/projects/ade-gpuix-scratch/perf-images-native",
                KYBERN_CLIENT_CONFIG_DIR="/Users/mymac/projects/ade-gpuix-scratch/perf-images-native/native-client",
                KYBERN_URL="", KYBERN_TOKEN="", RUSTC_WRAPPER="", CARGO_INCREMENTAL="0",
-               CARGO_BUILD_JOBS="4", CARGO_TARGET_DIR=str(app / "native/build/target"),
+               CARGO_BUILD_JOBS="4", CARGO_TARGET_DIR=str(app / "native/build/target"), GPUIX_BACKGROUND="1",
                KYBERN_VERIFY_OUTPUT="/Users/mymac/projects/ade/previews/gpuix/perf/images/native-checks")
     Path(env["KYBERN_CLIENT_CONFIG_DIR"]).mkdir(parents=True, exist_ok=True)
     awake = subprocess.Popen(['caffeinate', '-d', '-w', str(os.getpid())])

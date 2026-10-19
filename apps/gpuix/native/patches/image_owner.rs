@@ -50,10 +50,11 @@ fn release_editor_image_pages(released_pixels: usize) {
         unsafe extern "C" {
             fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
         }
-        // Zero asks the allocator to release its available cached pages.
-        // All decoded image Arcs in this batch have already been dropped.
+        // Bound the requested relief to this batch (allowing allocator size
+        // class rounding), capped at 256 MiB. All batch Arcs are already gone.
+        let goal = released_pixels.saturating_mul(2).min(256 * 1024 * 1024);
         let started = std::time::Instant::now();
-        let bytes = unsafe { malloc_zone_pressure_relief(std::ptr::null_mut(), 0) };
+        let bytes = unsafe { malloc_zone_pressure_relief(std::ptr::null_mut(), goal) };
         let elapsed = started.elapsed().as_micros();
         EDITOR_IMAGE_RELIEF.with(|stats| {
             let (calls, released, total, max) = stats.get();
