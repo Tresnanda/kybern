@@ -24,7 +24,7 @@ const stop=()=>{
  if(stopping)return
  stopping=true
  if(child)child.kill('SIGTERM')
- else {queue(true);process.exit(130)}
+ else {if(ownsMarker){unlinkSync(marker);ownsMarker=false}queue(true);process.exit(130)}
 }
 process.once('SIGINT',stop);process.once('SIGTERM',stop)
 let deadline: ReturnType<typeof setTimeout> | undefined

@@ -21,10 +21,11 @@ try{for(const theme of ['dark','light'])for(const kernel of ['0','1']){
   const control=async(action:string,args:Record<string,unknown>={})=>{const res=await fetch(`http://127.0.0.1:${port}`,{method:'POST',body:JSON.stringify({action,...args})});if(!res.ok)throw Error(await res.text());return await res.json()}
   await until(async()=>(await control('state')).listsLoaded,'Lists not loaded')
   await control('open',{thread:fixture.manifest.running});await f.app.getByTestId('transcript-surface').waitFor()
+  const streamStart=telemetry.raw.length
   await control('stream',{durationMs:8000})
   await until(async()=>/Streaming paragraph/.test((await f.app.call('getPaintedText',{})).text.join(' ')),'Stream text not painted')
   for(const frame of [1,2]){await Bun.sleep(700);await f.app.screenshot({path:`${out}/${theme}-${kernel}-${frame}.png`})}
-  assert.ok(/\[backdrop-kernel\]/.test(telemetry.raw),'Streaming must exercise blur passes')
-  audit.push({theme,kernel,screen:requireScreen(),streamDeltas:(await control('state')).streamDeltas,backdropRecords:telemetry.raw.match(/\[backdrop-kernel\]/g)?.length})
+  assert.ok(/\[backdrop-kernel\]/.test(telemetry.raw.slice(streamStart)),'Streaming must exercise blur passes')
+  audit.push({theme,kernel,screen:requireScreen(),streamDeltas:(await control('state')).streamDeltas,backdropRecords:telemetry.raw.slice(streamStart).match(/\[backdrop-kernel\]/g)?.length})
  }finally{await f.close();unregister();writeFileSync(`${out}/${theme}-${kernel}.log`,telemetry.raw)}
 }writeFileSync(out+'/results.json',JSON.stringify(audit,null,2))}finally{await fixture.close();fixture.remove();stop()}
