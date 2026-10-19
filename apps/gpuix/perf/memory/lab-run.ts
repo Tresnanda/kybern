@@ -11,6 +11,7 @@ import { watchRun } from '../bench/process-gate.ts'
 import { distribution } from '../bench/model.ts'
 import { Telemetry, parseResources } from '../bench/telemetry.ts'
 import { onExit } from '../bench/lifetime.ts'
+import { assertBuiltInWindow } from '../images/onscreen.ts'
 const label = process.argv[2] ?? 'diagnose'
 const data = process.env.KYBERN_DATA_DIR!
 const addon = process.env.NAPI_RS_NATIVE_LIBRARY_PATH ?? path.resolve(import.meta.dir, '../../native/build', label.startsWith('before') ? 'memory-before.node' : 'gpuix-native.darwin-arm64.node')
@@ -52,12 +53,15 @@ try {
   }
   const measure = async (name: string) => {
     await f.app.call('blur', {})
+    if (process.env.KYBERN_MEMORY_LANE === 'perf-images') assertBuiltInWindow(f.pid)
     await Bun.sleep(10000)
+    if (process.env.KYBERN_MEMORY_LANE === 'perf-images') assertBuiltInWindow(f.pid)
     const gate = watchRun(), mark = telemetry.mark()
     const sample = Bun.spawn(['bun', path.join(import.meta.dir, '../sample.ts'), '15', `GPUIX=${f.pid}`], { stdout: 'pipe', stderr: 'pipe' })
     const cancel = onExit(async () => { sample.kill(); await sample.exited })
     const raw = await new Response(sample.stdout).text(); assert.equal(await sample.exited, 0); cancel()
     const timing = telemetry.result(mark), overlap = gate.finish()
+    if (process.env.KYBERN_MEMORY_LANE === 'perf-images') assertBuiltInWindow(f.pid)
     const footprint = execFileSync('footprint', ['-p', String(f.pid)], { encoding: 'utf8' })
     const vmmap = execFileSync('vmmap', ['-summary', String(f.pid)], { encoding: 'utf8' })
     writeFileSync(path.join(out, `${name}-footprint.txt`), footprint)
