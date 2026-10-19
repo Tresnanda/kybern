@@ -2,7 +2,7 @@
 import os,pathlib,subprocess,time,signal,json
 root=pathlib.Path(__file__).resolve().parents[4];app=root/'apps/gpuix'
 out=pathlib.Path('/Users/mymac/projects/ade/previews/gpuix/perf/flick');out.mkdir(parents=True,exist_ok=True)
-cases=[('synchronous-snapshot',['bun','perf/flick/snapshot.ts'],{}),('transcript-pixels',['bun','perf/flick/visual.ts'],{}),('transcript',['bun','perf/flick/reuse.ts','perf/scroll2/verify-transcript.ts'],{}),('cross-turn-copy',['bun','perf/flick/reuse.ts','perf/scroll2/verify-transcript.ts'],{'TRANSCRIPT_COMPACT':'1'}),('list-anchors',['bun','perf/flick/reuse.ts','perf/scroll2/verify-list.ts'],{}),('preview-pixels',['bun','perf/flick/bench-visual.ts'],{})]
+cases=[('follow-bottom',['bun','perf/flick/follow.ts'],{}),('synchronous-snapshot',['bun','perf/flick/snapshot.ts'],{}),('transcript-pixels',['bun','perf/flick/visual.ts'],{}),('transcript',['bun','perf/flick/reuse.ts','perf/scroll2/verify-transcript.ts'],{}),('cross-turn-copy',['bun','perf/flick/reuse.ts','perf/scroll2/verify-transcript.ts'],{'TRANSCRIPT_COMPACT':'1'}),('list-anchors',['bun','perf/flick/reuse.ts','perf/scroll2/verify-list.ts'],{}),('preview-pixels',['bun','perf/flick/bench-visual.ts'],{})]
 child=None
 def stop(signum,frame):
  if child and child.poll() is None:child.terminate()
