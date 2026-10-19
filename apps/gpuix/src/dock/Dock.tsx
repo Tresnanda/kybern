@@ -26,7 +26,7 @@ import { ArtifactsPane } from './Artifacts.tsx'
 import { NotesPane } from './Notes.tsx'
 import { TasksPane } from './Tasks.tsx'
 import { DockEmpty } from './parts.tsx'
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../kit/Empty.tsx'
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../kit/Empty.tsx'
 import { pressTransform } from '../motion/press.ts'
 import { beginTabDrag, isDraggingTab, consumeTabDrag, endTabPending, setTabContext, TabSlot, trackTabDrag } from './reorder.tsx'
 import { chooseTab, closeTab, dockGeometry, finishDockDrag, moveDockDrag, setDock, startDockDrag, useDock, useDockDrag, type DockTab } from './store.ts'
@@ -104,16 +104,28 @@ function DockContent({ threadId, thread, width }: { threadId: string | null; thr
 
 /**
  * Every panel closed. The desktop shows a bare "Add a panel with +." (`RightPanel.tsx`); the user asked for more, so this is the kit's
- * `Empty` (icon card, title, description) with the same pointer to the tab strip's +. A deliberate divergence from the desktop.
+ * `Empty` (icon card, title, description) plus the `+` menu's panels as quick actions, from the same `PANELS` list and `chooseTab`,
+ * so they stay in step with the menu. A deliberate divergence from the desktop.
  */
-function NoPanels() {
+function NoPanels({ threadId, coordinator }: { threadId: string; coordinator: boolean }) {
+  const t = useTheme()
+  const panels = PANELS.filter((panel) => panel.id !== 'project' || coordinator)
   return (
     <Empty testId="dock-empty" style={{ padding: 24 }}>
       <EmptyHeader>
         <EmptyMedia variant="icon" icon={N.panelRight} />
         <EmptyTitle>No panels open</EmptyTitle>
-        <EmptyDescription>Add a panel with + to see activity, changes, files and more.</EmptyDescription>
+        <EmptyDescription>Panels show a thread's activity, changes, files and more.</EmptyDescription>
       </EmptyHeader>
+      <EmptyContent style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 6 }}>
+        {panels.map((panel) => (
+          <div key={panel.id} testId={`dock-empty-${panel.id}`} role="button" aria-label={`Open ${panel.label} panel`} onClick={() => chooseTab(threadId, panel.id)} paintTransform={pressTransform()}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, paddingLeft: 8, paddingRight: 10, borderRadius: 8, cursor: 'pointer', borderWidth: 1, borderColor: t.v('--border'), hover: { backgroundColor: t.buttonSecondaryHover } }}>
+            <Icon source={panel.icon} size={14} color={t.textSecondary} />
+            <Label color={t.text} size={13}>{panel.label}</Label>
+          </div>
+        ))}
+      </EmptyContent>
     </Empty>
   )
 }
@@ -128,7 +140,7 @@ function ThreadDock({ thread, width }: { thread: Thread; width: number }) {
   return <>
     <TabStrip threadId={thread.id} width={width} coordinator={!!thread.coordinator_project_id} activeTasks={tasks.tasks.filter(isActiveTask).length} stats={stats} />
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', borderBottomRightRadius: 12 }}>
-      {tab === null ? <NoPanels />
+      {tab === null ? <NoPanels threadId={thread.id} coordinator={!!thread.coordinator_project_id} />
         : tab === 'agents' ? <Agents thread={thread} />
         : tab === 'preview' ? <PreviewPane threadId={thread.id} />
         : tab === 'terminal' ? <TerminalPane threadId={thread.id} width={width} />

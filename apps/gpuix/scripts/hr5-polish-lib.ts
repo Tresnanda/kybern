@@ -16,12 +16,12 @@ export async function threadId(title: string) {
   return thread.id
 }
 
-export interface LaunchOptions { theme: 'dark' | 'light'; size?: string; thread?: string; reduced?: boolean; env?: Record<string, string>; sidebar?: number }
+export interface LaunchOptions { theme: 'dark' | 'light'; size?: string; thread?: string; reduced?: boolean; env?: Record<string, string>; sidebar?: number; ui?: Record<string, unknown> }
 
 /** One GPUIX window on the hidden test display against the scratch daemon, with a clean saved layout. */
 export async function launch(options: LaunchOptions) {
   Bun.spawnSync(['sh', '-c', `rm -f '${SEEDED.dataDir}/gpuix-ui.json' '${SEEDED.clientDir}'/workspace-*.json`])
-  if (options.sidebar) await Bun.write(`${SEEDED.dataDir}/gpuix-ui.json`, JSON.stringify({ 'kybern.sidebar.width': options.sidebar }))
+  if (options.sidebar || options.ui) await Bun.write(`${SEEDED.dataDir}/gpuix-ui.json`, JSON.stringify({ ...(options.sidebar ? { 'kybern.sidebar.width': options.sidebar } : {}), ...options.ui }))
   const thread = options.thread ? await threadId(options.thread) : undefined
   const app = await start({
     light: options.theme === 'light',

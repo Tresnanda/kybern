@@ -3,9 +3,9 @@
  *   bun scripts/hr5-polish-states.ts [dock|mention ...]
  */
 import assert from 'node:assert/strict'
-import { launch, onTestDisplay, OUT, waitUntil } from './hr5-polish-lib.ts'
+import { launch, onTestDisplay, OUT, threadId, waitUntil } from './hr5-polish-lib.ts'
 const which = process.argv.slice(2).filter((a) => !a.startsWith('-'))
-const run = (name: string) => which.length === 0 || which.includes(name)
+const run = (name: string) => which.length === 0 ? name !== 'dock-narrow' : which.includes(name)
 for (const theme of ['dark', 'light'] as const) {
   if (run('dock')) {
     const app = await launch({ theme, thread: 'Narrow composer' })
@@ -27,7 +27,22 @@ for (const theme of ['dark', 'light'] as const) {
       await Bun.sleep(800); await app.clock.fastForward(16)
       assert.ok(onTestDisplay(app.pid), 'test display')
       await app.screenshot({ path: `${OUT}/dock-empty-gpuix-${theme}.png` })
-      console.log('dock', theme, 'painted', String((await app.call('getPaintedText', {})).text).includes('No panels open'))
+      const painted = String((await app.call('getPaintedText', {})).text).includes('No panels open')
+      // Quick action: choosing a panel here opens it exactly as the + menu does.
+      await app.getByTestId('dock-empty-terminal').click()
+      await waitUntil(async () => (await app.getByTestId('dock-tab-terminal').count()) > 0 && (await app.getByTestId('dock-empty').count()) === 0, 8000, 'quick action opens the panel')
+      console.log('dock', theme, 'painted', painted)
+    } finally { await app.closeAll() }
+  }
+  if (run('dock-narrow')) {
+    // The narrowest dock the app allows (416), open with no panels (saved dock choice for the thread).
+    const app = await launch({ theme, thread: 'Narrow composer', ui: { 'kybern.dock.choices': [[await threadId('Narrow composer'), { open: true, tabs: [], tab: null, width: 416, instant: false }]] } })
+    try {
+      await waitUntil(async () => (await app.getByTestId('dock-empty').count()) > 0, 15_000, 'empty dock')
+      await Bun.sleep(1000); await app.clock.fastForward(16)
+      assert.ok(onTestDisplay(app.pid), 'test display')
+      console.log('dock bounds', JSON.stringify(await app.getByTestId('dock-empty').bounds()))
+      await app.screenshot({ path: `${OUT}/dock-empty-narrow-gpuix-${theme}.png` })
     } finally { await app.closeAll() }
   }
   if (run('mention')) {
