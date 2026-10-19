@@ -47,4 +47,5 @@ function Lab() {
     </virtual-list></div>
   </div>
 }
-render(<Lab/>,{title:'Rounded overflow capability',width:760,height:850,focus:false})
+// Leave room for the native title bar on the built-in 1440×900 display.
+render(<Lab/>,{title:'Rounded overflow capability',width:760,height:820,focus:false})
