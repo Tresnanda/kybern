@@ -2,7 +2,7 @@
 import {App} from '@gpuix/react/automation'
 import {waitForWindow,requireWindow} from './window-guard.ts'
 const displayProbe=process.env.KYBERN_BUILTIN_DISPLAY_PROBE
-if(displayProbe&&Bun.spawnSync([displayProbe],{stdout:'ignore',stderr:'ignore'}).exitCode!==0)throw Error('Built-in display unavailable; no fixture will launch')
+if(displayProbe&&Bun.spawnSync([displayProbe],{stdout:'ignore',stderr:'ignore'}).exitCode!==0)throw Error('Hidden test display unavailable; no fixture will launch')
 if(process.env.KYBERN_WINDOW_GUARD){
  const screenshot=App.prototype.screenshot
  const pids=new WeakMap<App,number>()
