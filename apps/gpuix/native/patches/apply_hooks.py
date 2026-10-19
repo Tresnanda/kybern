@@ -567,6 +567,8 @@ exec((Path(__file__).parent / "motion_frame_hooks.py").read_text())
 
 exec((Path(__file__).parent / "image_memory_hooks.py").read_text())
 
+exec((Path(__file__).parent / "image_owner_hooks.py").read_text())
+
 for path, text in pending.items():
     (src / path).write_text(text)
 print(f"hooks applied to {len(pending)} files")
