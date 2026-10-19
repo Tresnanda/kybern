@@ -39,7 +39,7 @@ contract; implementation conclusions below come from the actual clones.
 - ZUI snapshots the visible region plus 3-sigma halo, invokes a cached native
   MPS Gaussian kernel, then composites the result in draw order.
   [metal_renderer.rs:1000–1106](https://github.com/zeronsh/zui/blob/361ff20b919fdfb80199ee6d9aed725300cb7d54/crates/gpui_macos/src/metal_renderer.rs#L1000).
-  Scratch allocation reuse is quantized to 64px extents, bounded at four pairs
+  Scratch allocation reuse matches exact 64px extent buckets, explicitly avoiding a formerly large menu texture for a small surface. It is bounded at four pairs
   / 32MiB (one oversized pair allowed), with release after blur-free frames.
   [metal_renderer.rs:1357–1448](https://github.com/zeronsh/zui/blob/361ff20b919fdfb80199ee6d9aed725300cb7d54/crates/gpui_macos/src/metal_renderer.rs#L1357).
   This caches **resources/kernels**, not stale backdrop pixels. Each draw still
@@ -101,3 +101,7 @@ is the narrowest candidate supported by the measured streaming source.
 ## Scratch clear follow-up to measure
 
 `native/patches/backdrop_renderer.rs:34–45` retains the componentwise maximum scratch extent and supplies a clear color for the horizontal encoder. GPUI's `new_command_encoder_for_texture` uses attachment `MTLLoadAction::Clear`, so a small later crop still clears the retained attachment. The horizontal quad writes its current crop; vertical sampling clamps to that crop. This is a concrete candidate for a separate load/store or render-area experiment, especially after a large popup. It is not evidence of a measured bottleneck, and is deliberately kept separate from the shader-kernel A/B.
+
+## Encoder continuation in ZUI
+
+ZUI resumes one target encoder after its Gaussian pass, composites `draw_backdrop_blurs` into it, then uses that same encoder for the following ordinary primitive batch. [metal_renderer.rs:1096–1140](https://github.com/zeronsh/zui/blob/361ff20b919fdfb80199ee6d9aed725300cb7d54/crates/gpui_macos/src/metal_renderer.rs#L1096). GPUIX instead ends the vertical encoder in `backdrop_renderer.rs:43,48`, then immediately opens another target encoder in the backdrop batch hook (`backdrop_gpui.py:69–72`). Reusing the composite encoder is a separate candidate: it could remove one attachment continuation per visible backdrop while preserving both filter draws, source ordering, bounds and rounded masks. It must be measured independently of kernel folding.

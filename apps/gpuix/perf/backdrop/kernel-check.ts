@@ -29,7 +29,7 @@ try{
    for(let y=12;y<a.h-12;y++)for(let x=12;x<a.w-12;x++){
     const p=a.at(x,y),q=b.at(x,y),d=Math.max(...p.map((v,j)=>Math.abs(v-q[j]!)));total++;low=Math.min(low,...p);high=Math.max(high,...p);max=Math.max(max,d);sum+=d;if(d)changed++;if(d>2)over2++;if(d>4)over4++
    }
-   const row={theme,mode,before,after,total,max,changed,over2,over4,meanMaxDelta:sum/total};results.push(row);writeFileSync(out+'/results.json',JSON.stringify(results,null,2));console.log(JSON.stringify(row));assert.ok(high-low>100,'Missing high-contrast source content');assert.equal(over4,0,'Equivalent kernel changed visible output')
+   const row={theme,mode,before,after,total,max,changed,over2,over4,meanMaxDelta:sum/total};results.push(row);writeFileSync(out+'/results.json',JSON.stringify(results,null,2));console.log(JSON.stringify(row));assert.ok(high-low>100,'Missing high-contrast source content');assert.equal(over2,0,'Equivalent kernel exceeded the validated 2/255 channel tolerance')
   }
  }
 }finally{stop()}
