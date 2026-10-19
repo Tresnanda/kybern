@@ -53,15 +53,15 @@ try {
   }
   const measure = async (name: string) => {
     await f.app.call('blur', {})
-    if (process.env.KYBERN_MEMORY_LANE === 'perf-images') assertBuiltInWindow(f.pid)
+    if (process.env.KYBERN_MEMORY_LANE === 'perf-images') await assertBuiltInWindow(f.pid)
     await Bun.sleep(10000)
-    if (process.env.KYBERN_MEMORY_LANE === 'perf-images') assertBuiltInWindow(f.pid)
+    if (process.env.KYBERN_MEMORY_LANE === 'perf-images') await assertBuiltInWindow(f.pid)
     const gate = watchRun(), mark = telemetry.mark()
     const sample = Bun.spawn(['bun', path.join(import.meta.dir, '../sample.ts'), '15', `GPUIX=${f.pid}`], { stdout: 'pipe', stderr: 'pipe' })
     const cancel = onExit(async () => { sample.kill(); await sample.exited })
     const raw = await new Response(sample.stdout).text(); assert.equal(await sample.exited, 0); cancel()
     const timing = telemetry.result(mark), overlap = gate.finish()
-    if (process.env.KYBERN_MEMORY_LANE === 'perf-images') assertBuiltInWindow(f.pid)
+    if (process.env.KYBERN_MEMORY_LANE === 'perf-images') await assertBuiltInWindow(f.pid)
     const footprint = execFileSync('footprint', ['-p', String(f.pid)], { encoding: 'utf8' })
     const vmmap = execFileSync('vmmap', ['-summary', String(f.pid)], { encoding: 'utf8' })
     writeFileSync(path.join(out, `${name}-footprint.txt`), footprint)

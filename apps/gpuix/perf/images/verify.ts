@@ -21,7 +21,7 @@ for(const theme of ['dark','light']){
   await a.getByTestId('message-jump-0').waitFor()
   await a.getByTestId('message-jump-0').click()
   await until(async()=>(await painted()).includes('Prompt 0:'),'first rail target mounts')
-  assertBuiltInWindow(f.pid); await a.screenshot({path:`${out}/verify-${theme}-first.png`})
+  await assertBuiltInWindow(f.pid); await a.screenshot({path:`${out}/verify-${theme}-first.png`})
   const row=await a.getByTestId('turn-user:user-0').bounds(),surface=await a.getByTestId('transcript-surface').bounds()
   assert.ok(row.y>=surface.y-1 && row.y<surface.y+surface.height,'First prompt stays in viewport')
   await Bun.sleep(1600) // Finish the rail's finite centering observation before unrelated gestures.
@@ -34,7 +34,7 @@ for(const theme of ['dark','light']){
   await Bun.sleep(150)
   assert.equal(await a.getByTestId('image-lightbox').count(),1,'Row-owned image dialog survives scrolling its trigger away')
   assert.ok((await a.getByTestId('image-lightbox').bounds()).width>0,'Focused offscreen row still paints its overlay')
-  assertBuiltInWindow(f.pid); await a.screenshot({path:`${out}/verify-${theme}-pinned-image.png`})
+  await assertBuiltInWindow(f.pid); await a.screenshot({path:`${out}/verify-${theme}-pinned-image.png`})
   await a.getByTestId('image-lightbox').press('escape')
   await until(async()=>await a.getByTestId('image-lightbox').count()===0,'Image dialog closes after offscreen trigger')
   // Native focus restoration may reveal the offscreen trigger. Establish the
@@ -49,7 +49,7 @@ for(const theme of ['dark','light']){
   await a.getByTestId('message-jump-500').waitFor()
   await a.getByTestId('message-jump-500').click()
   await until(async()=>(await painted()).includes('Prompt 500:'),'middle rail target mounts')
-  assertBuiltInWindow(f.pid); await a.screenshot({path:`${out}/verify-${theme}-middle.png`})
+  await assertBuiltInWindow(f.pid); await a.screenshot({path:`${out}/verify-${theme}-middle.png`})
   if(process.env.TRANSCRIPT_COMPACT==='1'){
     await Bun.sleep(1600)
     const first=await a.getByTestId('transcript-slot:turn-500:answer:0:0').getByType('markdown').bounds(),next=await a.getByTestId('transcript-slot:turn-501:answer:0:0').getByType('markdown').bounds()
@@ -70,8 +70,8 @@ for(const theme of ['dark','light']){
   await a.getByTestId('scroll-to-bottom').click()
   await a.getByTestId('message-jump-999').waitFor()
   await until(async()=>(await painted()).includes(process.env.TRANSCRIPT_COMPACT==='1'?'Compact answer turn-999.':'BENCH_RESULT_999'),'tail jump mounts exact final content')
-  assertBuiltInWindow(f.pid); await a.screenshot({path:`${out}/verify-${theme}-tail.png`})
+  await assertBuiltInWindow(f.pid); await a.screenshot({path:`${out}/verify-${theme}-tail.png`})
   requireScreen()
   console.log(`PASS ${theme}: first/middle/tail rail, pinned image overlay, native selection, formatted final answer`)
- }catch(e){try{assertBuiltInWindow(f.pid);await f.app.screenshot({path:`${out}/verify-${theme}-failed.png`})}catch{}throw e}finally{await f.close();stop()}
+ }catch(e){try{await assertBuiltInWindow(f.pid);await f.app.screenshot({path:`${out}/verify-${theme}-failed.png`})}catch{}throw e}finally{await f.close();stop()}
 }
