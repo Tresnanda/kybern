@@ -1,6 +1,6 @@
 # Backdrop GPU optimization
 
-Status: blocked before final acceptance. No GPU speedup is accepted, and the candidate must not be merged as a proven optimization. The active built-in display is unavailable; the lane is waiting without launching apps.
+Status: parked at the orchestrator’s explicit request before final acceptance. No GPU speedup is accepted, and the candidate must not be merged as a proven optimization. The built-in 2× display briefly returned at about 05:03Z, but the lane was then instructed to park. The waiting build was stopped before starting; no automatic resume remains.
 
 ## References and surface decisions
 
@@ -72,4 +72,4 @@ Earlier updater capture failures occurred before any blur state, while the built
 
 Pending a full rebuild with the shared placement patch, fresh production visual checks, viewport-matched paired resource measurements, exact-zero idle verification and cleanup. Current headless checks pass: pnpm typecheck, native tsc, perf/backdrop tsc, and 337 source tests (0 failures, 6912 assertions; `headless-tests-latest.log`). The standalone kernel tests passed 2/2 across 804 sigmas. Original reference addon SHA256 remains `1145f7914ae87f5cedd5993fdced48f07ea09a3824aad781dcbd8d78d236a5f8`.
 
-Generated native targets/dependencies are temporarily retained for the pending rebuild; they are not committed. No fixture app or scratch daemon remains running. The wrapper only polls for an active built-in display before claiming a slot. No inactive-display sample is accepted. Encoder continuation and scratch-size buckets are cited research candidates, not active changes. Pre-existing desktop/composer full-translucency parity remains outside this kernel optimization. No source-damage-based pixel cache is implemented. Pass/encoder count remains unchanged; this change reduces filter arithmetic and eligible sample reads.
+Generated native targets/dependencies are temporarily retained for the pending rebuild; they are not committed. No fixture app or scratch daemon remains running. The wrapper is stopped and its reservation is removed; resume requires an explicit new invocation. No inactive-display sample is accepted. Encoder continuation and scratch-size buckets are cited research candidates, not active changes. Pre-existing desktop/composer full-translucency parity remains outside this kernel optimization. No source-damage-based pixel cache is implemented. Pass/encoder count remains unchanged; this change reduces filter arithmetic and eligible sample reads.
