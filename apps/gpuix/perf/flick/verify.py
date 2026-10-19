@@ -11,7 +11,6 @@ signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
 def run(label,command,extra):
  global child
  for attempt in range(4):
-  while list(pathlib.Path('/tmp').glob('kybern-gpuix-native-build.*')):time.sleep(1)
   env=dict(os.environ,KYBERN_DATA_DIR='/Users/mymac/projects/ade-gpuix-scratch/perf-flick-checks',KYBERN_CLIENT_CONFIG_DIR='/Users/mymac/projects/ade-gpuix-scratch/perf-flick-checks',KYBERN_URL='',KYBERN_TOKEN='',KYBERN_FULL_RATE='1',**extra)
   gate_file=out/'checks'/f'{label}-gate.json';gate_file.unlink(missing_ok=True)
   with (out/('verify-'+label+'.log')).open('w') as log:

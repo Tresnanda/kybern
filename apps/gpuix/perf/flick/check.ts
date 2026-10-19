@@ -12,6 +12,8 @@ for(const signal of ['SIGTERM','SIGINT'] as const)process.once(signal,()=>child.
 const watchdog=setTimeout(()=>child.kill('SIGTERM'),285000)
 let code=1
 try{code=await child.exited;process.exitCode=code}finally{
- clearTimeout(watchdog);child.kill();await child.exited;stopAwake();const gate=watch.finish();writeFileSync(`${out}/${label}-gate.json`,JSON.stringify({code,...gate},null,2))
- if(gate.overlap||gate.orphanOverlap||gate.screenInvalid)throw Error('Invalid visual/check batch: see gate evidence')
+ clearTimeout(watchdog);child.kill();await child.exited;stopAwake();const gate=watch.finish();writeFileSync(`${out}/${label}-gate.json`,JSON.stringify({code,...gate,timingEvidence:false,buildOverlapIsContext:true},null,2))
+ // This runner produces deterministic pixels and interaction assertions, not
+ // performance evidence. Exclusive UI ownership still prevents other windows.
+ if(gate.orphanOverlap||gate.screenInvalid)throw Error('Invalid visual/check batch: see gate evidence')
 }

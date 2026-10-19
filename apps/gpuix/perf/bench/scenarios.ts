@@ -178,6 +178,14 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
  if(name.startsWith('idle-')){await app.call('blur',{});await app.mouse.move({x:900,y:4})}else if(point)await app.mouse.move(point)
  if(scrolling)await inputDrive(point!,options.warmup*1000,name==='thread-fling');else await delay(options.warmup*1000)
  if(name.startsWith('idle-')){await app.call('blur',{});await delay(500)}
+ // Keep actual AppKit input flowing while the controller reads CG metadata and
+ // inventories processes. Those synchronous checks block its stderr callbacks;
+ // without a bridge, buffered idle frames masquerade as scroll-boundary stalls.
+ // Bridges are outside the resource windows. RPC fallback has a controller-owned
+ // producer, so cannot make this continuity guarantee while it is blocked.
+ let bridge:Promise<void>|undefined,bridgeError:unknown
+ const bridgeInput=()=>inputDrive(point!,5000,name==='thread-fling').then(()=>{},error=>{bridgeError=error})
+ if(useAppkit&&scrolling)bridge=bridgeInput()
  for(let run=1;run<=runs;run++){
   const r=emptyResult(name,run)
   let buildWatch:ReturnType<typeof watchRun>|undefined
@@ -191,6 +199,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
    const streamBefore=name==='streaming'?(await control('state')).streamDeltas:null
    r.evidence.windowBefore=requireWindowOnscreen(launch!.pid).windows
    buildWatch=watchRun()
+   if(bridge){await bridge;bridge=undefined;await delay(0);if(bridgeError)throw bridgeError}
    const mark=telemetry.mark(),timed=performance.now()
    telemetry.raw+=`[bench-window-start] run=${run} native=${telemetry.submissions.at(-1)?.native??0} js=${timed}\n`
    if(name==='open-long'){
@@ -225,16 +234,20 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
    unregisterChildren.push(unprofiler)
    const input=scrolling?await inputDrive(point!,options.seconds*1000,name==='thread-fling'):undefined
    if(!scrolling)await delay(options.seconds*1000)
-   r.evidence.windowAfter=requireWindowOnscreen(launch!.pid).windows
+   // Drain the producer's last pipe messages before taking the end snapshot;
+   // the subsequent CG read must not leak idle/bridge scenes into this window.
+   if(useAppkit&&scrolling)await delay(0)
    const measured=telemetry.result(resourceMark,input?.sent,scrolling)
    telemetry.raw+=`[bench-window-end] run=${run} native=${telemetry.submissions.at(-1)?.native??0} js=${performance.now()}\n`
+   if(useAppkit&&scrolling&&run<runs)bridge=bridgeInput()
+   r.evidence.windowAfter=requireWindowOnscreen(launch!.pid).windows
    const sampleText=await sampleTextPromise,sampleError=await sampleErrorPromise
    const sampleExit=await sampler.exited;unsampler();if(sampleExit)throw Error(sampleError)
    await profiler?.exited;unprofiler()
    const stop=performance.now(),m=measured
    r.resources=parseResources(sampleText);if(useAppkit)r.latency.kind='in-process scheduled AppKit NSEvent to next scene-submission stderr receipt; clocks mapped from control RTT; not a physical presentation fence';r.frames=m.frames;r.work=m.work;r.latency.proxyMs=m.proxy;r.latency.samples=m.latencySamples
    r.timings.resourceWindowMs=stop-resourceStart
-   r.evidence={...r.evidence,nativeDispatchToCpuPaint:m.nativeInput,averageProcessCpuMsPerSubmission:r.frames.count?r.resources.cpuPercent!*r.resources.sampleSeconds!*10/r.frames.count:null,averageProcessGpuMsPerSubmission:r.frames.count?r.resources.gpuMs!/r.frames.count:null,inputPreflight,loadedHistoryTurns:name==='thread-fling'&&process.env.KYBERN_BENCH_HISTORY_TURNS?Number(process.env.KYBERN_BENCH_HISTORY_TURNS):null,profiled:!!options.profile,warmupSeconds:options.warmup,resourceWindowSeconds:options.seconds,resourceText:sampleText,input:input?.input??'none',packetAckP95:input?input.acks.sort((a,b)=>a-b)[Math.floor(input.acks.length*.95)]:null,maxOutstanding:input?.maxOutstanding??0,drainMs:input?.drainMs??0,sceneTransitionFrames:telemetry.submissions.length-mark.frames,onePersistedRunningThread:!name.startsWith('idle-')&&process.env.KYBERN_BENCH_NO_RUNNING!=='1',appkitAccepted:useAppkit,forcedRpc:process.env.KYBERN_BENCH_RPC_ONLY==='1',clockMappingRttMs,offeredPackets:input?.sent.length??0,inputProductionMs:input?.productionMs??null,...(input&&'zeroDistancePackets' in input?{zeroDistancePackets:input.zeroDistancePackets,requestedDistance:input.requestedDistance,effectiveDistance:input.effectiveDistance,handledPackets:input.handledPackets,handlerDistance:input.handlerDistance}:{}),offeredPacketsPerNominalSecond:input?input.sent.length/options.seconds:null,offeredPacketsPerSecond:input&&input.productionMs>0?input.sent.length/(input.productionMs/1000):null}
+   r.evidence={...r.evidence,nativeDispatchToCpuPaint:m.nativeInput,averageProcessCpuMsPerSubmission:r.frames.count?r.resources.cpuPercent!*r.resources.sampleSeconds!*10/r.frames.count:null,averageProcessGpuMsPerSubmission:r.frames.count?r.resources.gpuMs!/r.frames.count:null,inputPreflight,loadedHistoryTurns:name==='thread-fling'&&process.env.KYBERN_BENCH_HISTORY_TURNS?Number(process.env.KYBERN_BENCH_HISTORY_TURNS):null,profiled:!!options.profile,continuityBridgeMs:useAppkit&&scrolling?5000:0,warmupSeconds:options.warmup,resourceWindowSeconds:options.seconds,resourceText:sampleText,input:input?.input??'none',packetAckP95:input?input.acks.sort((a,b)=>a-b)[Math.floor(input.acks.length*.95)]:null,maxOutstanding:input?.maxOutstanding??0,drainMs:input?.drainMs??0,sceneTransitionFrames:telemetry.submissions.length-mark.frames,onePersistedRunningThread:!name.startsWith('idle-')&&process.env.KYBERN_BENCH_NO_RUNNING!=='1',appkitAccepted:useAppkit,forcedRpc:process.env.KYBERN_BENCH_RPC_ONLY==='1',clockMappingRttMs,offeredPackets:input?.sent.length??0,inputProductionMs:input?.productionMs??null,...(input&&'zeroDistancePackets' in input?{zeroDistancePackets:input.zeroDistancePackets,requestedDistance:input.requestedDistance,effectiveDistance:input.effectiveDistance,handledPackets:input.handledPackets,handlerDistance:input.handlerDistance}:{}),offeredPacketsPerNominalSecond:input?input.sent.length/options.seconds:null,offeredPacketsPerSecond:input&&input.productionMs>0?input.sent.length/(input.productionMs/1000):null}
    if(scrolling||name==='streaming')requireActiveSample(r.frames.count,r.resources.gpuMs,options.seconds)
    if(streamBefore!=null){const streamed=await control('state');const streamAfter=streamed.streamDeltas;r.evidence.offeredDeltas=streamAfter-streamBefore;r.evidence.offeredDeltasPerSecond=(streamAfter-streamBefore)/(r.timings.resourceWindowMs!/1000);r.evidence.streamWithWheel=streamWithWheel;r.evidence.loadedBlocks=streamed.blocks;r.evidence.fullHistory=process.env.KYBERN_BENCH_STREAM_HISTORY==='1'}
    if(process.env.KYBERN_BENCH_COUNTERS==='1'){const response=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action:'counters'})});r.evidence.counters=await response.json()}

@@ -10,7 +10,7 @@ def med(values):
  return statistics.median(values) if values else None
 for variant in ['0',candidate]:
  d=json.loads((root/f'{prefix}-{variant}.json').read_text());assert not d['aborted']
- provenance[variant]={k:d[k] for k in ['source','addonSha256','hardware','host','display','fullRate','renderFlags','warmupSeconds','resourceSeconds','workload']}
+ provenance[variant]={k:d[k] for k in ['source','addonSha256','hardware','host','display','inputContinuity','fullRate','renderFlags','warmupSeconds','resourceSeconds','workload']}
  for name in dict.fromkeys(r['scenario'] for r in d['results']):
   runs=[r for r in d['results'] if r['scenario']==name and r['status']=='ok'];assert len(runs)==3,(name,variant,len(runs))
   assert all(not r['evidence'].get('overlap') and not r['evidence'].get('orphanOverlap') and not r['evidence'].get('screenInvalid') for r in runs)
@@ -18,7 +18,7 @@ for variant in ['0',candidate]:
    for endpoint in ['windowBefore','windowAfter']:
     assert any(w.get('onscreen') and w.get('scale')==2 and -1440<=w['x']<0 and w['y']>=900 and w['x']+w['width']<=0 and w['y']+w['height']<=1800 for w in r['evidence'][endpoint]), (name,variant,endpoint)
    assert not r['evidence'].get('profiled')
-   if name.endswith('scroll') or name=='thread-fling':assert r['evidence']['appkitAccepted']
+   if name.endswith('scroll') or name=='thread-fling':assert r['evidence']['appkitAccepted'] and r['evidence']['continuityBridgeMs']==5000
    if name=='thread-fling':assert r['evidence']['loadedHistoryTurns']==3000
   row={'scenario':name,'variant':variant,'runs':len(runs),'frames':{key:med([r['frames'][key] for r in runs]) for key in ['p50','p95','p99','count','over16_7']},'worstGapMs':max([r['frames']['max'] or 0 for r in runs]),'over33ByRun':[r['frames']['over33'] for r in runs],'proxyP95':med([r['latency']['proxyMs']['p95'] for r in runs]),'nativeDispatchPaintFirstP95':med([r['evidence'].get('nativeDispatchToCpuPaint',{}).get('firstMs',{}).get('p95') for r in runs]),'cpuPercent':med([r['resources']['cpuPercent'] for r in runs]),'gpuMs':med([r['resources']['gpuMs'] for r in runs]),'footprintMiB':med([r['resources']['footprintMiB'] for r in runs]),'renderP95':med([r['work']['renderMs']['p95'] for r in runs]),'layoutP95':med([r['work']['layoutMs']['p95'] for r in runs]),'cpuMsPerSubmission':med([r['evidence'].get('averageProcessCpuMsPerSubmission') for r in runs]),'gpuMsPerSubmission':med([r['evidence'].get('averageProcessGpuMsPerSubmission') for r in runs]),'historyVisibleMs':med([r['timings'].get('olderHistoryVisibleMs') for r in runs]),'input':[{k:r['evidence'].get(k) for k in ['input','appkitAccepted','offeredPackets','handledPackets','requestedDistance','effectiveDistance','handlerDistance','inputProductionMs','loadedHistoryTurns']} for r in runs]}
   rows.append(row)
