@@ -67,6 +67,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
  const client=path.join(fixture.data,'client',name)
  let controlPort=0
  let useAppkit=false,clockOffset=0,clockMappingRttMs=0
+ let inputPreflight:unknown=null
  const nativeDrive=async(point:Point,ms:number,fling:boolean)=>{const res=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action:'wheel-drive',...point,durationMs:ms,fling})});if(!res.ok)throw Error(await res.text());const data=await res.json() as Awaited<ReturnType<typeof drive>> & {accepted:number;zeroDistancePackets:number;requestedDistance:number;effectiveDistance:number;handledPackets:number;handlerDistance:number};data.sent=data.sent.map(t=>t+clockOffset);if(data.accepted!==data.sent.length)throw Error('AppKit rejected wheel events');return data}
  const inputDrive=(point:Point,ms:number,fling:boolean):Promise<Awaited<ReturnType<typeof drive>> & {zeroDistancePackets?:number;requestedDistance?:number;effectiveDistance?:number;handledPackets?:number;handlerDistance?:number}>=>useAppkit?nativeDrive(point,ms,fling):drive(launch!.app,point,ms,fling)
  const control=async(action:string,args:Record<string,unknown>={})=>{
@@ -138,7 +139,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
   }
   if(name==='idle-home'||name==='sidebar-scroll'){await control('home');if(name==='sidebar-scroll')point={x:180,y:430};return}
   await control('open',{thread:name==='streaming'?(process.env.KYBERN_BENCH_STREAM_HISTORY==='1'?fixture.manifest.long1000:fixture.manifest.running):fixture.manifest.long3000})
-  if(name==='streaming'&&process.env.KYBERN_BENCH_STREAM_HISTORY==='1')await control('load-history')
+  if((name==='streaming'&&process.env.KYBERN_BENCH_STREAM_HISTORY==='1')||(name==='thread-fling'&&process.env.KYBERN_BENCH_HISTORY_TURNS))await control('load-history')
   await bounds(app,'transcript-surface');await painted(app,/BENCH_RESULT|Bench prompt/)
   if(['explorer-scroll','markdown-scroll','code-scroll'].includes(name)){
    await control('explorer',{...(name==='markdown-scroll'?{file:fixture.manifest.markdown}:name==='code-scroll'?{file:fixture.manifest.code}:{})})
@@ -160,6 +161,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
   let changed=await request('scroll-state',{target})
   if(JSON.stringify(changed.offset)===JSON.stringify(prior.offset)){await request('wheel-probe',{...point,delta:180});await delay(100);changed=await request('scroll-state',{target})}
   useAppkit=probe.accepted===1&&prior.offset!==null&&JSON.stringify(changed.offset)!==JSON.stringify(prior.offset)&&process.env.KYBERN_BENCH_RPC_ONLY!=='1'
+  inputPreflight={target,point,prior,probe,changed};
   const mapStart=performance.now(),clock=await request('state');clockMappingRttMs=performance.now()-mapStart;clockOffset=mapStart+clockMappingRttMs/2-clock.now
  }
  if(name==='streaming'){await control('stream',{durationMs:options.warmup*1000+runs*(options.seconds+5)*1000+3000});await painted(app,/Streaming paragraph/)}
@@ -179,6 +181,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
    const streamBefore=name==='streaming'?(await control('state')).streamDeltas:null
    buildWatch=watchRun()
    const mark=telemetry.mark(),timed=performance.now()
+   telemetry.raw+=`[bench-window-start] run=${run} native=${telemetry.submissions.at(-1)?.native??0} js=${timed}\n`
    if(name==='open-long'){
     const opened=control('open',{thread:fixture.manifest.long3000})
     await bounds(app,'transcript-surface');await painted(app,/BENCH_RESULT|Bench prompt/);r.timings.firstVisibleMessageMs=performance.now()-timed
@@ -212,13 +215,14 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
    const input=scrolling?await inputDrive(point!,options.seconds*1000,name==='thread-fling'):undefined
    if(!scrolling)await delay(options.seconds*1000)
    const measured=telemetry.result(resourceMark,input?.sent)
+   telemetry.raw+=`[bench-window-end] run=${run} native=${telemetry.submissions.at(-1)?.native??0} js=${performance.now()}\n`
    const sampleText=await sampleTextPromise,sampleError=await sampleErrorPromise
    const sampleExit=await sampler.exited;unsampler();if(sampleExit)throw Error(sampleError)
    await profiler?.exited;unprofiler()
    const stop=performance.now(),m=measured
    r.resources=parseResources(sampleText);if(useAppkit)r.latency.kind='in-process scheduled AppKit NSEvent to next scene-submission stderr receipt; clocks mapped from control RTT; not a physical presentation fence';r.frames=m.frames;r.work=m.work;r.latency.proxyMs=m.proxy;r.latency.samples=m.latencySamples
    r.timings.resourceWindowMs=stop-resourceStart
-   r.evidence={...r.evidence,nativeDispatchToCpuPaint:m.nativeInput,averageProcessCpuMsPerSubmission:r.frames.count?r.resources.cpuPercent!*r.resources.sampleSeconds!*10/r.frames.count:null,averageProcessGpuMsPerSubmission:r.frames.count?r.resources.gpuMs!/r.frames.count:null,profiled:!!options.profile,warmupSeconds:options.warmup,resourceWindowSeconds:options.seconds,resourceText:sampleText,input:input?.input??'none',packetAckP95:input?input.acks.sort((a,b)=>a-b)[Math.floor(input.acks.length*.95)]:null,maxOutstanding:input?.maxOutstanding??0,drainMs:input?.drainMs??0,sceneTransitionFrames:telemetry.submissions.length-mark.frames,onePersistedRunningThread:!name.startsWith('idle-')&&process.env.KYBERN_BENCH_NO_RUNNING!=='1',appkitAccepted:useAppkit,forcedRpc:process.env.KYBERN_BENCH_RPC_ONLY==='1',clockMappingRttMs,offeredPackets:input?.sent.length??0,inputProductionMs:input?.productionMs??null,...(input&&'zeroDistancePackets' in input?{zeroDistancePackets:input.zeroDistancePackets,requestedDistance:input.requestedDistance,effectiveDistance:input.effectiveDistance,handledPackets:input.handledPackets,handlerDistance:input.handlerDistance}:{}),offeredPacketsPerNominalSecond:input?input.sent.length/options.seconds:null,offeredPacketsPerSecond:input&&input.productionMs>0?input.sent.length/(input.productionMs/1000):null}
+   r.evidence={...r.evidence,nativeDispatchToCpuPaint:m.nativeInput,averageProcessCpuMsPerSubmission:r.frames.count?r.resources.cpuPercent!*r.resources.sampleSeconds!*10/r.frames.count:null,averageProcessGpuMsPerSubmission:r.frames.count?r.resources.gpuMs!/r.frames.count:null,inputPreflight,loadedHistoryTurns:name==='thread-fling'&&process.env.KYBERN_BENCH_HISTORY_TURNS?Number(process.env.KYBERN_BENCH_HISTORY_TURNS):null,profiled:!!options.profile,warmupSeconds:options.warmup,resourceWindowSeconds:options.seconds,resourceText:sampleText,input:input?.input??'none',packetAckP95:input?input.acks.sort((a,b)=>a-b)[Math.floor(input.acks.length*.95)]:null,maxOutstanding:input?.maxOutstanding??0,drainMs:input?.drainMs??0,sceneTransitionFrames:telemetry.submissions.length-mark.frames,onePersistedRunningThread:!name.startsWith('idle-')&&process.env.KYBERN_BENCH_NO_RUNNING!=='1',appkitAccepted:useAppkit,forcedRpc:process.env.KYBERN_BENCH_RPC_ONLY==='1',clockMappingRttMs,offeredPackets:input?.sent.length??0,inputProductionMs:input?.productionMs??null,...(input&&'zeroDistancePackets' in input?{zeroDistancePackets:input.zeroDistancePackets,requestedDistance:input.requestedDistance,effectiveDistance:input.effectiveDistance,handledPackets:input.handledPackets,handlerDistance:input.handlerDistance}:{}),offeredPacketsPerNominalSecond:input?input.sent.length/options.seconds:null,offeredPacketsPerSecond:input&&input.productionMs>0?input.sent.length/(input.productionMs/1000):null}
    if(scrolling||name==='streaming')requireActiveSample(r.frames.count,r.resources.gpuMs,options.seconds)
    if(streamBefore!=null){const streamed=await control('state');const streamAfter=streamed.streamDeltas;r.evidence.offeredDeltas=streamAfter-streamBefore;r.evidence.offeredDeltasPerSecond=(streamAfter-streamBefore)/(r.timings.resourceWindowMs!/1000);r.evidence.streamWithWheel=streamWithWheel;r.evidence.loadedBlocks=streamed.blocks;r.evidence.fullHistory=process.env.KYBERN_BENCH_STREAM_HISTORY==='1'}
    if(process.env.KYBERN_BENCH_COUNTERS==='1'){const response=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action:'counters'})});r.evidence.counters=await response.json()}

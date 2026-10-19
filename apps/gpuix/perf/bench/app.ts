@@ -41,7 +41,7 @@ const server=Bun.serve({idleTimeout:255,port:0,hostname:'127.0.0.1',async fetch(
   while(stack.length&&visited++<500000){const {node,surface}=stack.pop()!;const test=node.memoizedProps?.testId;const scope=test==='transcript-surface'?'transcript':test==='right-dock'?'dock':test==='thread-list'?'sidebar':surface;const c=counts[scope]??={hostNodes:0,reactComponents:0,rowComponents:0};if(typeof node.type==='string'||node.tag===6)c.hostNodes++;else if(node.type)c.reactComponents++;const name=typeof node.type==='string'?'':node.type?.name??node.type?.type?.name??'';if(name&&/Row|TurnItem/.test(name))c.rowComponents++;if(node.type==='virtual-list'&&Object.keys(virtualLists).length<64){const pending: Fiber[]=node.child?[node.child]:[];let mountedNativeRows=0,budget=500000;while(pending.length&&budget-->0){const child=pending.pop()!;if(child.sibling)pending.push(child.sibling);if(typeof child.type==='string'||child.tag===6)mountedNativeRows++;else if(child.child)pending.push(child.child)}virtualLists[test??`list-${Object.keys(virtualLists).length}`]={mountedNativeRows}};if(node.sibling)stack.push({node:node.sibling,surface});if(node.child)stack.push({node:node.child,surface:scope})}
   return Response.json({nativeMemory:root?.containerInfo?.nativeRenderer?.getMemoryStats?.()??null,counts,virtualLists,visited,truncated:stack.length>0,builtVirtualChildrenPerFrame:null,markdownParseMs:null,textShapingMs:null,hostMutations:null,imageBytes:null,metalBytes:null,unavailable:'These counters need native instrumentation; not inferred from whole-window render time.'})
  }
- if(body.action==='wheel-probe')return Response.json({accepted:wheel(body.x!,body.y!,body.delta??0,1,0),now:performance.now()})
+ if(body.action==='wheel-probe')return Response.json({accepted:wheel(body.x!,body.y!,body.delta??0,1,0),handled:wheelApi.bench_handler_count(),delta:wheelApi.bench_handler_delta(),now:performance.now()})
  if(body.action==='wheel-drive'){
   const sent:number[]=[],start=performance.now(),count=Math.floor((body.durationMs??15000)*120/1000)
   let accepted=0,lastPhase=-1,zeroDistancePackets=0,requestedDistance=0,effectiveDistance=0,handledPackets=0,handlerDistance=0
@@ -71,7 +71,7 @@ const server=Bun.serve({idleTimeout:255,port:0,hostname:'127.0.0.1',async fetch(
    transcript=[...earlier.transcript,...transcript];cursor=earlier.next_before_seq
   }
   state.setThreadOpen(id,seedFromGet({...page,transcript,next_before_seq:null}))
-  if(state.getState().open.blocks.filter(b=>b.kind==='user').length!==1000)throw Error('Expected exactly 1,000 historical turns')
+  if(state.getState().open.blocks.filter(b=>b.kind==='user').length!==Number(process.env.KYBERN_BENCH_HISTORY_TURNS??1000))throw Error('Unexpected historical turn count')
  }
  if(body.action==='idle'){state.set({threads:state.getState().threads.map(t=>t.status==='running'?{...t,status:'idle'}:t)})}
  if(body.action==='home'){nav.setNav({page:'home',keyboardNav:true});await state.selectThread(null)}

@@ -51,8 +51,23 @@ momentum events/deltas; Zed's native touch-gesture momentum path in
 `crates/gpui/src/window.rs:5884–5886,5959–5967` is distinct. The display link's
 main-queue source coalesces vsync notifications (`gpui_macos/src/display_link.rs:297`),
 not arbitrary wheel packets. GPUIX's own `scroll_input.rs` adds a bounded pending
-batch and is currently enabled for PR targets only; extending its scope needs
-behavior and actual scheduling measurements.
+batch for painted `cacheLayout` targets (`native/patches/scroll_hooks.py:23–33`),
+which now include transcript and sidebar as well as PR lists. Its default mode
+is still named `pr`; that name does not limit the current renderer's target
+discovery to PRs. Global `all` mode remains a separate experiment.
+
+Zed `crates/gpui/src/app.rs:2104–2134` limits the eager test draw loop to
+`GpuiMode::Test`, then schedules ordinary frames for dirty windows, pending
+presentation or next-frame callbacks. Selecting that ordinary scheduler is the
+relevant transfer when a release embedding accidentally pays test draw work
+between display callbacks. The pinned GPUIX fork already has a diagnostic switch
+for that loop; this lane measures it before changing its default.
+
+The historical `perf/scroll-round8-2026-10-17.md` app-wide experiment also records
+a missing-painted-bounds failure. `getAutomationTree` requests invalidation and
+then reads a snapshot; under deferred drawing that snapshot can precede its
+requested paint. A narrowly scoped explicit snapshot barrier is needed before
+promoting the frame scheduler. Ordinary painted-bounds reads should remain reads.
 
 ## Zeron conversation work
 
@@ -90,3 +105,12 @@ retains an Arc layout separately. GPUIX's rollback/draw-generation guard must
 remain around paint reuse; prior scroll2 evidence reproduced a crash when ranges
 were replayed against the wrong frame. Cache lifetime, invalidation and memory
 must be measured together before adding a history cache.
+
+## Documentation cross-check
+
+Context7 resolve + docs were run on October 19 for GPUI (`/websites/rs_gpui`),
+following the checkout's documentation rule. The generated [ListState docs](https://docs.rs/gpui/latest/gpui/struct.ListState.html)
+and [List source docs](https://docs.rs/gpui/latest/src/gpui/elements/list.rs.html)
+confirm local lazy measurement and pixel overdraw. The exact implementation
+claims above use the revisioned read-only clones; current published docs are
+not substituted for the pinned native fork.
