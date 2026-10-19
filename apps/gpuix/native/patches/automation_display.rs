@@ -9,18 +9,6 @@
 unsafe extern "C" {
     fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
     fn CGDisplayIsBuiltin(display: u32) -> u32;
-    fn CGDisplayBounds(display: u32) -> CGRect;
-}
-
-#[cfg(target_os = "macos")]
-#[repr(C)]
-#[derive(Clone, Copy)]
-#[allow(dead_code)]
-struct CGRect {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
 }
 
 /// The built-in display for an automated run, else `None` (GPUI's default).
@@ -47,14 +35,17 @@ pub(crate) fn display() -> Option<gpui::DisplayId> {
 }
 
 /// `Bounds::centered(None, ..)`, but on the automation display when there is
-/// one. The platform window places these bounds relative to that display, in
-/// points (CGDisplayBounds; GPUI's own display size is not in points here).
+/// one. The platform window places these bounds relative to that display.
 pub(crate) fn centered(size: gpui::Size<gpui::Pixels>, cx: &gpui::App) -> gpui::Bounds<gpui::Pixels> {
-    #[cfg(target_os = "macos")]
-    if let Some(id) = display() {
-        let area = unsafe { CGDisplayBounds(u64::from(id) as u32) };
-        let inset = |outer: f64, inner: gpui::Pixels| gpui::px(((outer as f32 - inner.as_f32()) / 2.0).max(0.0));
-        return gpui::Bounds { origin: gpui::point(inset(area.width, size.width), inset(area.height, size.height)), size };
+    match display().and_then(|id| cx.find_display(id)) {
+        Some(screen) => {
+            let area = screen.bounds().size;
+            let inset = |outer: gpui::Pixels, inner: gpui::Pixels| gpui::px(((outer.as_f32() - inner.as_f32()) / 2.0).max(0.0));
+            gpui::Bounds {
+                origin: gpui::point(inset(area.width, size.width), inset(area.height, size.height)),
+                size,
+            }
+        }
+        None => gpui::Bounds::centered(None, size, cx),
     }
-    gpui::Bounds::centered(None, size, cx)
 }
