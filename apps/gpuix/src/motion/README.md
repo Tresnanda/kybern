@@ -26,8 +26,8 @@ Tier 1 starts on the frame its element first paints. A `paintTransform` that mou
 a `Rise`, a `Swap`) is timed from the React batch that mounted it, so its mount frame already shows the first step;
 the layout tween it replaced paints its mount frame at the initial value (invisible for a fade) and shows its first
 step one frame later. Input → first visible step on the model picker in the 3,000-turn bench thread
-(`../../perf/motion-native/latency.ts`, `KYBERN_POPUP_MOTION=layout` is the control): see `../../native/README.md` →
-"Motion latency" for the numbers. What remains of that latency is the mount frame itself (the popup's island renders
+(`../../perf/motion-native/latency.ts`, `KYBERN_POPUP_MOTION=layout` is the control): 45 ms p50 vs 62 ms for the old tween
+(`../../native/README.md` → "Motion latency"). What remains of that latency is the mount frame itself (the popup's island renders
 and lays out), not the motion. Scopes that rest at identity and will move again (a `Presence` exit, a hover reveal
 hiding) pass `retain: true` (the helpers below do), so their next change is retained from its first frame too.
 
