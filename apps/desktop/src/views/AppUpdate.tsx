@@ -1,5 +1,5 @@
-import { AnimatePresence, usePresence } from "motion/react"
-import { useEffect, useMemo, useRef, type MouseEvent } from "react"
+import { AnimatePresence } from "motion/react"
+import { useMemo, useRef, type MouseEvent } from "react"
 
 import { Logo, Spinner } from "@/components/kybern/bits"
 import { Markdown } from "@/components/kybern/Markdown"
@@ -35,6 +35,7 @@ import {
 import { releasePresentation } from "@/lib/releaseNotes"
 import { openExternal } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
+import { useToastPresence } from "@/views/useToastPresence"
 
 let detailsTrigger: HTMLElement | null = null
 
@@ -62,7 +63,7 @@ function detailsFocusTarget() {
   return document.querySelector<HTMLElement>('[data-testid="composer-editor"]')
 }
 
-function ReleaseArtwork({ compact = false }: { compact?: boolean }) {
+export function ReleaseArtwork({ compact = false }: { compact?: boolean }) {
   return (
     <div
       data-release-artwork
@@ -95,40 +96,7 @@ function UpdateAnnouncement({
     () => releasePresentation(version, notes),
     [version, notes]
   )
-  const [present, safeToRemove] = usePresence()
-  const element = useRef<HTMLElement>(null)
-  const remove = useRef(safeToRemove)
-  useEffect(() => {
-    remove.current = safeToRemove
-  }, [safeToRemove])
-  useEffect(() => {
-    const node = element.current
-    if (!node) return
-    let timer: ReturnType<typeof setTimeout> | undefined
-    if (present) {
-      node.getBoundingClientRect()
-      node.classList.add("is-open")
-    } else {
-      node.classList.remove("is-open")
-      const duration = getComputedStyle(node)
-        .getPropertyValue("--toast-close")
-        .trim()
-      const ms = duration.endsWith("ms")
-        ? parseFloat(duration)
-        : parseFloat(duration) * 1000
-      timer = setTimeout(
-        () => remove.current?.(),
-        matchMedia("(prefers-reduced-motion: reduce)").matches
-          ? 0
-          : Number.isFinite(ms)
-            ? ms
-            : 250
-      )
-    }
-    return () => {
-      if (timer !== undefined) clearTimeout(timer)
-    }
-  }, [present])
+  const { element, present } = useToastPresence()
 
   return (
     <aside

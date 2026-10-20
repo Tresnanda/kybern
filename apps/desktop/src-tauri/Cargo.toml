@@ -36,6 +36,8 @@ tauri-plugin-os = "2.3.2"
 tauri-plugin-dialog = "2.7.3"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-updater = "2.11.0"
+minisign-verify = "=0.2.5"
+base64.workspace = true
 
 [dev-dependencies]
 tauri = { version = "2.11.5", features = ["test"] }

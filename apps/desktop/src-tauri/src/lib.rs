@@ -20,6 +20,7 @@ use tauri_plugin_dialog::DialogExt;
 
 mod cli;
 mod environments;
+mod gpuix_install;
 mod notifications;
 mod preview_relay;
 mod remote;
@@ -573,6 +574,10 @@ pub fn run() {
             cli::cli_install,
             cli::cli_uninstall,
             cli::cli_remove_other,
+            gpuix_install::gpuix_installed,
+            gpuix_install::gpuix_status,
+            gpuix_install::install_gpuix,
+            gpuix_install::open_gpuix,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -10,6 +10,7 @@ import { ThemeProvider } from "@/components/theme-provider"
 import { TooltipProvider } from "@/components/kit/tooltip"
 import { isTauri, platform } from "@/lib/tauri"
 import { startAppUpdateChecks } from "@/lib/appUpdate"
+import { startGpuixPrompt } from "@/lib/gpuix"
 import { boot } from "@/state/rpc"
 import { installRuntimeErrorReporting } from "@/lib/runtimeErrors"
 import { showRuntimeError } from "@/components/kybern/runtimeErrorNotice"
@@ -40,6 +41,7 @@ if (import.meta.hot) import.meta.hot.dispose(stopErrorReporting)
 
 void boot()
 startAppUpdateChecks()
+void startGpuixPrompt()
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
