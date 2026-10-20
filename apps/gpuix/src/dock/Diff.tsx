@@ -11,6 +11,7 @@ import { desktopDiffTheme } from '../native/diff.ts'
 import { NativeDiffHeader } from '../native/DiffView.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { ErrorLine } from './parts.tsx'
+import { LoadingLines } from './loading.tsx'
 
 export function openWeb(url: string) {
   // Only web links from daemon records; never hand arbitrary schemes to macOS.
@@ -119,7 +120,7 @@ const FileDiff = memo(function FileDiff({ file, threadId }: { file: FileChange; 
       <NativeDiffHeader file={file} open={open} onToggle={() => setOpen(!open)} testId={`dock-file-diff-${file.path}`} />
       {open && <>
         <ErrorLine error={error} retry={() => setReload((n) => n + 1)} />
-        {file.binary ? <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>Binary file changed</Label> : patch === null ? !error && <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>Loading diff…</Label> : patch ? <diff testId={`dock-native-diff-${file.path}`} patch={patch} scroll={file.additions + file.deletions > 200} style={{ userSelect: 'text', ...(file.additions + file.deletions > 200 ? { height: 360 } : {}) }} theme={desktopDiffTheme(t, false)} /> : <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>No text changes</Label>}
+        {file.binary ? <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>Binary file changed</Label> : patch === null ? !error && <LoadingLines lines={4} testId={`dock-diff-loading-${file.path}`} /> : patch ? <diff testId={`dock-native-diff-${file.path}`} patch={patch} scroll={file.additions + file.deletions > 200} style={{ userSelect: 'text', ...(file.additions + file.deletions > 200 ? { height: 360 } : {}) }} theme={desktopDiffTheme(t, false)} /> : <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>No text changes</Label>}
         {truncated && <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>This diff is too large to show in full. Open the file in your editor to see the remaining changes.</Label>}
       </>}
     </div>
