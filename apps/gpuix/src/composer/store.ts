@@ -300,6 +300,7 @@ export async function sendToThread(threadId: ThreadId, message: UserMessage, del
     queueing.add(item.id)
     patch((d) => ({ queued: { ...d.queued, [threadId]: [...(d.queued[threadId] ?? []), item] } }))
     try {
+      await inflight.get(threadId)
       await client.call('queue.add', item)
     } catch (e) {
       patch((d) => ({ queued: { ...d.queued, [threadId]: (d.queued[threadId] ?? []).filter((m) => m.id !== item.id) } }))
@@ -310,7 +311,18 @@ export async function sendToThread(threadId: ThreadId, message: UserMessage, del
   }
   const send: PendingSend = { id: crypto.randomUUID(), threadId, message, at: new Date().toISOString(), delivery, state: 'sending' }
   addPending(send)
-  void deliverPending(send)
+  const before = inflight.get(threadId)
+  if (delivery === 'steer') { void (before ?? Promise.resolve()).then(() => deliverPending(send)); return }
+  track(threadId, deliverPending(send))
+}
+
+/** A thread's send the daemon has not answered yet. A follow-up (queued or steered) waits for it, so it cannot reach the
+ *  daemon first and overtake it: a worktree thread's send can take seconds, while `queue.add` on a thread that is not
+ *  running yet starts its turn at once. Never rejects (`deliverPending` catches). */
+const inflight = new Map<ThreadId, Promise<void>>()
+function track(threadId: ThreadId, done: Promise<void>) {
+  inflight.set(threadId, done)
+  void done.then(() => { if (inflight.get(threadId) === done) inflight.delete(threadId) })
 }
 
 async function deliverPending(send: PendingSend) {
@@ -332,7 +344,8 @@ export function retryPending(threadId: ThreadId, id: string) {
   const live = thread?.status === 'running' || thread?.status === 'awaiting-approval'
   const next: PendingSend = { ...send, delivery: send.delivery === 'steer' && !live ? 'send' : send.delivery, state: 'sending', error: undefined }
   addPending(next)
-  void deliverPending(next)
+  if (next.delivery === 'send') track(threadId, deliverPending(next))
+  else void deliverPending(next)
 }
 
 /** What the composer held when it sent: the text with its chips and the attachments with their previews. */

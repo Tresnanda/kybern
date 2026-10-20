@@ -177,6 +177,7 @@ function ThreadComposer({ thread }: { thread: Thread }) {
               : undefined
       }
       running={running}
+      starting={starting && thread.status !== 'running' && thread.status !== 'awaiting-approval'}
       onStop={() => void interruptThread(threadId).catch(() => {})}
       onSend={(message, delivery) => sendToThread(threadId, message, delivery)}
       canSteer={handoffSelected || STEERABLE.includes(thread.provider.kind)}
@@ -337,6 +338,9 @@ export interface ComposerViewProps {
   thread?: Thread
   placeholder?: string
   running?: boolean
+  /** `running` only because a send has not been answered yet: Enter still queues behind it, but the button shows that send
+   *  in flight, not Stop (there is no turn to stop yet). */
+  starting?: boolean
   onStop?: () => void
   onSend: (message: UserMessage, delivery: 'send' | 'queue' | 'steer') => Promise<void>
   canSteer?: boolean
@@ -778,7 +782,7 @@ export function ComposerView(input: ComposerViewProps) {
                 onPromptMode={setPromptMode}
               />
             )}
-            <SendButton running={!!running} sending={sending} canSend={canSend} steering={steering} disabledReason={disabledReason} onSubmit={() => void submit()} onStop={props.onStop} />
+            <SendButton running={!!running && !props.starting} sending={sending || !!props.starting} canSend={canSend} steering={steering} disabledReason={disabledReason} onSubmit={() => void submit()} onStop={props.onStop} />
           </div>
         </FooterRow>
       </div>
