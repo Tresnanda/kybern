@@ -4,7 +4,11 @@
 // desktop updater plugin polls (see plugins.updater.endpoints in tauri.conf.json).
 //
 // Usage: node scripts/updater-manifest.mjs [--tag vX.Y.Z] [--repo owner/name]
-//        [--notes-file path/to/release-notes.md]
+//        [--notes-file path/to/release-notes.md] [--dist dir]
+//
+// When dist/ also holds scripts/bundle-gpuix.sh's kybern-gpuix_<version>_aarch64
+// .app.tar.gz and its .sig, the manifest gets a `darwin-aarch64-gpuix` entry
+// for the separate Kybern GPUIX app (its updater reads only that key).
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -24,7 +28,7 @@ if (!version) {
   process.exit(1)
 }
 const tag = args.tag || `v${version}`
-const dist = join(root, "dist")
+const dist = args.dist ? resolve(args.dist) : join(root, "dist")
 const notesFile = args["notes-file"]
 const releaseNotes = notesFile && existsSync(notesFile) ? readFileSync(notesFile, "utf8").trim() : ""
 
@@ -36,6 +40,14 @@ for (const file of readdirSync(dist).filter((name) => /^updater-.*\.json$/.test(
 if (Object.keys(platforms).length === 0) {
   console.error("no dist/updater-*.json fragments; run scripts/desktop-artifacts.mjs for each target first")
   process.exit(1)
+}
+
+const gpuixAsset = `kybern-gpuix_${version}_aarch64.app.tar.gz`
+if (existsSync(join(dist, gpuixAsset)) && existsSync(join(dist, `${gpuixAsset}.sig`))) {
+  platforms["darwin-aarch64-gpuix"] = {
+    signature: readFileSync(join(dist, `${gpuixAsset}.sig`), "utf8").trim(),
+    url: `https://github.com/${repo}/releases/download/${tag}/${gpuixAsset}`,
+  }
 }
 
 const manifest = {
