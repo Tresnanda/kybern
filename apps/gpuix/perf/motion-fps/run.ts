@@ -80,6 +80,10 @@ const SCENES: Record<string, { open: (app: Launch['app'], control: (a: string, b
     before: () => setTasks('running'), after: () => setTasks('restore'),
     open: async (app, c) => { await c('home'); await click(app, 'rail-tasks'); await click(app, 'task-filter-all'); if (await app.getByTestId('task-view-board').count()) await click(app, 'task-view-board') },
   },
+  // Transient motions in a heavy window (the 3,000-turn thread), each toggled 12 times.
+  'sidebar-toggle': { open: async (_, c) => { await c('idle'); await c('open', { thread: manifest.long3000 }) }, transient: { ms: 220, trigger: app => click(app, 'sidebar-toggle') } },
+  'dock-toggle': { open: async (_, c) => { await c('idle'); await c('open', { thread: manifest.long3000 }) }, transient: { ms: 300, trigger: app => click(app, 'dock-toggle') } },
+  'model-picker': { open: async (_, c) => { await c('idle'); await c('open', { thread: manifest.long3000 }) }, transient: { ms: 250, trigger: async (app, i) => { if (i % 2) await app.keyboard.press('Escape'); else await click(app, 'model-picker') } } },
 }
 
 const results: unknown[] = []
@@ -129,14 +133,18 @@ for (const name of scenarios) for (let repeat = 1; repeat <= repeats; repeat++) 
       Object.assign(row, { frames: { ...distribution(all), count: all.length, over16_7: all.filter(v => v > 16.7).length, over33: all.filter(v => v > 33).length }, framesPerMotion: samples.map(s => s.length + 1), fullDraws: draws, work: t.result({ frames: 0, costs: 0, commits: 0 }).work })
     } else {
       const mark = t.mark(), c0 = cpuSeconds(f.pid), g0 = gpuNs().get(f.pid) ?? 0, s0 = performance.now()
+      // Diagnostic only: `sample` itself costs CPU, so a profiled row is never a resource result.
+      const profile = process.env.MOTION_PROFILE === '1' ? Bun.spawn(['sample', String(f.pid), String(Math.min(seconds, 10)), '-file', path.join(OUT, `profile-${label}-${name}.txt`)], { stdout: 'pipe', stderr: 'pipe' }) : undefined
+      if (profile) row.profiled = true
       await delay(seconds * 1000)
+      if (profile) { await profile.exited; row.profileOutput = (await new Response(profile.stderr).text()).slice(-500) + (await new Response(profile.stdout).text()).slice(-300) }
       const elapsed = (performance.now() - s0) / 1000, c1 = cpuSeconds(f.pid), g1 = gpuNs().get(f.pid) ?? 0
       const r = t.result(mark)
       Object.assign(row, { seconds: elapsed, frames: r.frames, fps: r.frames.count / elapsed, fullDraws: t.costs.length - mark.costs, work: r.work, cpuPercent: 100 * (c1 - c0) / elapsed, gpuMs: (g1 - g0) / 1e6, footprintMiB: footprintMiB(f.pid) })
     }
     requireScreen(); requireWindowOnscreen(f.pid)
     const markers1 = buildMarkers(), foreign = [...foreign0, ...foreignApps(f.pid)]
-    row.valid = !markers0.length && !markers1.length && !foreign.length
+    row.valid = !markers0.length && !markers1.length && !foreign.length && !row.profiled
     row.buildMarkers = [...markers0, ...markers1]; row.foreign = foreign
     writeFileSync(path.join(OUT, `log-${label}-${name}-${repeat}.txt`), t.raw.split('\n').filter(l => !/\[kybern-(submit|frame|work)\]|\[pacing-commit\]/.test(l)).slice(-400).join('\n'))
   } catch (error) { row.valid = false; row.error = String(error).slice(0, 2000) }

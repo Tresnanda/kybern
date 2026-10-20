@@ -1,4 +1,4 @@
-import { useLoopVisibility } from '../native/loop-visibility.ts'
+import { useLoopRunning } from '../native/loop-visibility.ts'
 import { useTranscriptRowLease } from './Window.tsx'
 import { memo, useEffect, useRef, useState } from 'react'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
@@ -13,7 +13,7 @@ import { Icon } from '../icons.tsx'
 import { T } from './glyphs.ts'
 import { PopupLayer } from '../composer/Menu.tsx'
 import { Tip } from '../nav/overlay.tsx'
-import { useLoaderTime, easeInOut } from '../MatrixLoader.tsx'
+import { useLoaderTime, easeInOut, NATIVE_PAINT_ANIMATIONS } from '../MatrixLoader.tsx'
 import { webHost } from '../native/webview.ts'
 import { observeElementBounds, type ElementBoundsEvent } from '../native/layout.ts'
 import { useNativeWindowSize } from '../native/layout-hooks.ts'
@@ -154,12 +154,19 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
   </div>
 })
 
-/** `.visual-reply__skeleton`: a 4% wash over the reserved box, breathing between full and 55% opacity every 1.6s. */
+/** `.visual-reply__skeleton`: a 4% wash over the reserved box, breathing between full and 55% opacity every 1.6s
+ * (ease-in-out each way). Paint-only: each 800 ms half is one native `paintTransform` opacity tween, and its
+ * completion retargets the other way, so frames run at display rate with one React commit per half cycle. */
 export function Skeleton({ height }: { height: number }) {
   const t = useTheme()
-  const loop = useLoopVisibility(!REDUCED_MOTION)
-  const time = useLoaderTime(loop.visible)
+  const loop = useLoopRunning(!REDUCED_MOTION)
+  const native = NATIVE_PAINT_ANIMATIONS && loop.running
+  const time = useLoaderTime(loop.visible && !NATIVE_PAINT_ANIMATIONS)
+  const [dim, setDim] = useState(true)
   const phase = (time % 1600) / 1600
-  const opacity = REDUCED_MOTION ? 1 : 1 - 0.45 * easeInOut(phase < 0.5 ? phase * 2 : 2 - phase * 2)
-  return <div ref={loop.ref} testId="visual-skeleton" role="status" aria-label="Loading visual" style={{ position: 'absolute', top: 0, left: 0, right: 0, height, borderRadius: 10, backgroundColor: ink(t, 0.04), opacity, pointerEvents: 'none' }} />
+  const opacity = REDUCED_MOTION || NATIVE_PAINT_ANIMATIONS ? 1 : 1 - 0.45 * easeInOut(phase < 0.5 ? phase * 2 : 2 - phase * 2)
+  return <div ref={loop.ref} testId="visual-skeleton" role="status" aria-label="Loading visual"
+    {...(native ? { paintTransform: { initial: { opacity: 1 }, animate: { opacity: dim ? 0.55 : 1 }, transition: { duration: 0.8, ease: [0.42, 0, 0.58, 1] } } } : {})}
+    onMotionComplete={native ? () => setDim(value => !value) : undefined}
+    style={{ position: 'absolute', top: 0, left: 0, right: 0, height, borderRadius: 10, backgroundColor: ink(t, 0.04), opacity, pointerEvents: 'none' }} />
 }

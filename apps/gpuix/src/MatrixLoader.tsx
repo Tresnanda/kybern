@@ -6,23 +6,24 @@
 // the grid reads as a disc.
 //
 // WebKit animates those keyframes in its compositor. Native paintAnimation
-// evaluates the same curves at native display callbacks without React work.
-// The diagnostic JS path and non-declarative motion share the frame source.
-// The diagnostic React path shares one clock across all visible loaders.
-// The clock runs only while a loader is mounted and the window is visible, and
-// never under Reduce Motion (loaders then hold their rest frame).
+// evaluates the same curves at native display callbacks without React work,
+// only while the loader is painted inside its clip and the window is on screen,
+// and never under Reduce Motion (loaders then hold their rest frame). The
+// comparison React path shares one clock across all visible loaders.
 import { useCallback, useSyncExternalStore } from 'react'
-import { useLoopVisibility } from './native/loop-visibility.ts'
+import { useLoopRunning } from './native/loop-visibility.ts'
+import { PATCHED_NATIVE } from './native/local-build.ts'
 import { onFrame } from './native/frame.ts'
 import { isWindowVisible, onWindowVisibility } from './native/visibility.ts'
 import { ink, REDUCED_MOTION, useTheme } from './ui.tsx'
 
-// Full-app native-loop acceptance remains opt-in: repeated GPU controls did not
-// meet the approved gate, and the smooth JS fallback regressed running CPU.
-// Preserve the approved stepped loader appearance outside that experiment.
-// Its clock subscribes only while at least one loader is actually painted.
-// The onFrame API is independent of this legacy clock.
-export const NATIVE_PAINT_ANIMATIONS = process.env.KYBERN_NATIVE_PAINT_ANIMATIONS === '1'
+// Loops are native display-rate paint animations by default (perf/motion-fps-2026-10-20.md): every
+// frame re-evaluates the desktop keyframes on retained paint, with no React commit, element render or
+// layout. `KYBERN_NATIVE_PAINT_ANIMATIONS=0` (and the stock npm addon, which cannot paint them) selects
+// the historical stepped 5 Hz React clock, kept only as a comparison control.
+export const NATIVE_PAINT_ANIMATIONS = PATCHED_NATIVE && process.env.KYBERN_NATIVE_PAINT_ANIMATIONS !== '0'
+/** Live labels pulse their glyph tint natively; `KYBERN_NATIVE_TEXT_PAINT=0` samples it from React instead. */
+export const NATIVE_TEXT_PAINT = NATIVE_PAINT_ANIMATIONS && process.env.KYBERN_NATIVE_TEXT_PAINT !== '0'
 const TICK_MS = Number(process.env.KYBERN_LOADER_TICK_MS ?? (NATIVE_PAINT_ANIMATIONS ? 0 : 200))
 let now = 0
 let stopFrame: (() => void) | undefined
@@ -141,7 +142,7 @@ export function MatrixLoader({
   rgb?: readonly [number, number, number]
 }) {
   const t = useTheme()
-  const loop = useLoopVisibility(!REDUCED_MOTION)
+  const loop = useLoopRunning(!REDUCED_MOTION)
   const time = useLoaderSnapshot(() => now, loop.visible && !NATIVE_PAINT_ANIMATIONS)
   const isRounded = rounded ?? (variant === 'orbit' || variant === 'pulse')
   const d = delays(variant, cycle)
@@ -157,7 +158,7 @@ export function MatrixLoader({
             const hidden = isRounded && ROUNDED_GAPS.has(i)
             const phase = REDUCED_MOTION ? 1 : ((((time - d[i]!) % cycle) + cycle) % cycle) / cycle
             const opacity = hidden ? 0 : NATIVE_PAINT_ANIMATIONS && !REDUCED_MOTION ? 1 : pulseOpacity(phase)
-            return <div key={c} {...(NATIVE_PAINT_ANIMATIONS && loop.visible && !REDUCED_MOTION && !hidden ? { paintAnimation: { kind: 'matrix', cycleMs: cycle, delayMs: d[i] } } : {})} style={{ width: dot, height: dot, borderRadius: 0.5, backgroundColor: rgb ? `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha * opacity})` : ink(t, alpha * opacity) }} />
+            return <div key={c} {...(NATIVE_PAINT_ANIMATIONS && loop.running && !REDUCED_MOTION && !hidden ? { paintAnimation: { kind: 'matrix', cycleMs: cycle, delayMs: d[i] } } : {})} style={{ width: dot, height: dot, borderRadius: 0.5, backgroundColor: rgb ? `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha * opacity})` : ink(t, alpha * opacity) }} />
           })}
         </div>
       ))}

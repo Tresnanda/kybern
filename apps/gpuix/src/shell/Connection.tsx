@@ -15,7 +15,7 @@ import { motion } from '@gpuix/react'
 import { useEffect, useRef, useState } from 'react'
 import { restartLive } from '../nav/live.ts'
 import { EASE } from '../motion/kit.tsx'
-import { useLoopVisibility } from '../native/loop-visibility.ts'
+import { useLoopRunning, useLoopVisibility } from '../native/loop-visibility.ts'
 import { ISLAND, NATIVE_PAINT_ANIMATIONS, useLoaderStep } from '../MatrixLoader.tsx'
 import { connect, getClient, getState, resetClient, selectThread, set, useApp } from '../state.ts'
 import { ink, Label, LOGO_SVG, REDUCED_MOTION, useTheme } from '../ui.tsx'
@@ -53,10 +53,10 @@ function LegacySpinner({ size, color }: { size: number; color: string }) {
   return <svg ref={loop.ref} source={LEGACY_SPINNER[step]!} style={{width:size,height:size,color,flexShrink:0}} />
 }
 function ContinuousSpinner({ size, color }: { size: number; color: string }) {
-  const loop = useLoopVisibility(!REDUCED_MOTION)
+  const loop = useLoopRunning(!REDUCED_MOTION)
   return <div ref={loop.ref} {...ISLAND} style={{ width: size, height: size, position: 'relative', flexShrink: 0, pointerEvents: 'none' }}>
     <svg source={SPINNER_RING} style={{ width: size, height: size, color, pointerEvents: 'none' }} />
-    <svg {...(loop.visible ? {paintAnimation:{kind:"rotate",cycleMs:1300}} : {})} source={SPINNER_ARC} style={{ position: 'absolute', left: 0, top: 0, width: size, height: size, color, pointerEvents: 'none' }} />
+    <svg {...(loop.running ? {paintAnimation:{kind:"rotate",cycleMs:1300}} : {})} source={SPINNER_ARC} style={{ position: 'absolute', left: 0, top: 0, width: size, height: size, color, pointerEvents: 'none' }} />
   </div>
 }
 

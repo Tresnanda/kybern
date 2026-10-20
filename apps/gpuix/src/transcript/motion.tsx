@@ -1,4 +1,4 @@
-import { useLoopVisibility } from '../native/loop-visibility.ts'
+import { useLoopRunning, useLoopVisibility } from '../native/loop-visibility.ts'
 import { useTranscriptEntranceLease, useTranscriptFirstMount } from './Window.tsx'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 import { revealBoundary } from './reveal.ts'
@@ -8,7 +8,7 @@ import { revealBoundary } from './reveal.ts'
 import { useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
 import { smoothAdvance, type SmoothState } from '../../../desktop/src/lib/smoothStream.ts'
 import type { StyleDesc } from '@gpuix/react'
-import { useLoaderTime, easeInOut, NATIVE_PAINT_ANIMATIONS } from '../MatrixLoader.tsx'
+import { useLoaderTime, easeInOut, NATIVE_PAINT_ANIMATIONS, NATIVE_TEXT_PAINT } from '../MatrixLoader.tsx'
 import { Swap } from '../motion/kit.tsx'
 import { REDUCED_MOTION, Label } from '../ui.tsx'
 import { alpha, ROW_LINE } from './kit.tsx'
@@ -17,13 +17,13 @@ import type { MarkdownStream } from '../native/markdown.ts'
 import { useTheme } from '../ui.tsx'
 
 export function Shimmer({ text, color, size = 14, lineHeight = ROW_LINE }: { text: string; color: string; size?: number; lineHeight?: number }) {
-  return NATIVE_PAINT_ANIMATIONS && process.env.KYBERN_NATIVE_TEXT_PAINT === '1'
+  return NATIVE_TEXT_PAINT
     ? <NativeShimmer text={text} color={color} size={size} lineHeight={lineHeight} />
     : <SampledShimmer text={text} color={color} size={size} lineHeight={lineHeight} />
 }
 function NativeShimmer({text,color,size,lineHeight}: {text:string;color:string;size:number;lineHeight:number}) {
-  const loop = useLoopVisibility(!REDUCED_MOTION)
-  return <Label ref={loop.ref} color={color} size={size} lineHeight={lineHeight} truncate paintAnimation={loop.visible ? {kind:'shimmer',cycleMs:1600} : undefined}>{text}</Label>
+  const loop = useLoopRunning(!REDUCED_MOTION)
+  return <Label ref={loop.ref} color={color} size={size} lineHeight={lineHeight} truncate paintAnimation={loop.running ? {kind:'shimmer',cycleMs:1600} : undefined}>{text}</Label>
 }
 
 function SampledShimmer({ text, color, size, lineHeight }: { text: string; color: string; size: number; lineHeight: number }) {
