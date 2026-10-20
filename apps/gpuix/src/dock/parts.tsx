@@ -3,15 +3,22 @@ import type { ReactNode } from 'react'
 import { Icon } from '../icons.tsx'
 import { EASE_OUT, ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { muted } from '../nav/overlay.tsx'
+import { Rise } from '../motion/kit.tsx'
 import { pressTransform } from '../motion/press.ts'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 
+/**
+ * A dock panel's empty state. Like the kit's `Empty` it runs `.t-stagger` on mount: the icon, the title and the description rise
+ * 12 px into place from a 3 px blur, 70 ms apart (`Rise kind="stagger"`, paint-only). Reduce Motion: no entrance, as the desktop.
+ */
 export function DockEmpty({ icon, title, body, lineage = false }: { icon: string; title: string; body?: string; lineage?: boolean }) {
   const t = useTheme()
+  const play = !REDUCED_MOTION
   return <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, alignItems: 'center', justifyContent: 'center', gap: lineage ? 12 : 8, paddingLeft: 32, paddingRight: 32, paddingTop: lineage ? 0 : 32, paddingBottom: lineage ? 40 : 32 }}>
-    <Icon source={icon} size={20} color={lineage ? ink(t, 0.35) : muted(t, 0.5)} />
+    <Rise kind="stagger" index={0} play={play} style={{ alignItems: 'center' }}><Icon source={icon} size={20} color={lineage ? ink(t, 0.35) : muted(t, 0.5)} /></Rise>
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: lineage ? 4 : 8, maxWidth: 256 }}>
-      <Label color={lineage ? ink(t, 0.85) : t.text} size={13} weight={500}>{title}</Label>
-      {body && <Label color={lineage ? ink(t, 0.55) : muted(t, 0.65)} size={12} lineHeight={20} style={{ maxWidth: 256, textAlign: 'center' }}>{body}</Label>}
+      <Rise kind="stagger" index={1} play={play} style={{ alignItems: 'center' }}><Label color={lineage ? ink(t, 0.85) : t.text} size={13} weight={500}>{title}</Label></Rise>
+      {body && <Rise kind="stagger" index={2} play={play} style={{ alignItems: 'center' }}><Label color={lineage ? ink(t, 0.55) : muted(t, 0.65)} size={12} lineHeight={20} style={{ maxWidth: 256, textAlign: 'center' }}>{body}</Label></Rise>}
     </div>
   </div>
 }
@@ -54,7 +61,10 @@ export function SwitchRow({ title, detail, checked, disabled, onChange, testId }
       <Label color={muted(t, 0.65)} size={13} lineHeight={18.2} style={{ whiteSpace: 'normal' }}>{detail}</Label>
     </div>
     <div style={{ width: 32, height: 20, marginTop: 2, flexShrink: 0, position: 'relative', borderRadius: 10, backgroundColor: checked ? t.switchOn : t.switchOff, borderWidth: 1, borderColor: checked ? t.switchOn : t.switchOffBorder }}>
-      <motion.div initial={false} animate={{ left: checked ? 14 : 2 }} transition={{ duration: REDUCED_MOTION ? 0 : 0.2, ease: EASE_OUT }} style={{ position: 'absolute', top: 1, width: 16, height: 16, borderRadius: 8, backgroundColor: '#ffffff' }} />
+      {PATCHED_NATIVE
+        // The thumb only moves: a paint-only translation (no layout per frame) from its off slot.
+        ? <div paintTransform={{ initial: false, animate: { translateX: checked ? 12 : 0 }, transition: { duration: REDUCED_MOTION ? 0 : 0.2, ease: EASE_OUT } }} style={{ position: 'absolute', left: 2, top: 1, width: 16, height: 16, borderRadius: 8, backgroundColor: '#ffffff' }} />
+        : <motion.div initial={false} animate={{ left: checked ? 14 : 2 }} transition={{ duration: REDUCED_MOTION ? 0 : 0.2, ease: EASE_OUT }} style={{ position: 'absolute', top: 1, width: 16, height: 16, borderRadius: 8, backgroundColor: '#ffffff' }} />}
     </div>
   </div>
 }
