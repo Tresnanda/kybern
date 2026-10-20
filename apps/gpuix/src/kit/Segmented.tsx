@@ -10,6 +10,7 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { Tip } from '../nav/overlay.tsx'
 import { over } from '../theme.ts'
 import { DURATION, EASE } from '../motion/kit.tsx'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { FocusRing, useFocusRing, withAlpha } from './Switch.tsx'
 
@@ -117,21 +118,35 @@ export function Segmented({ options, value, onChange, busy = false, 'aria-label'
     >
       {/* `box-shadow: inset 0 1px 2px rgba(0,0,0,.25 | .06)`: a soft shade under the top edge. */}
       <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 3, pointerEvents: 'none', background: { type: 'linear-gradient', angle: 180, stops: [{ color: `rgba(0, 0, 0, ${dark ? 0.2 : 0.05})`, position: 0 }, { color: 'rgba(0, 0, 0, 0)', position: 1 }] } }} />
-      {pill && (
-        <motion.div
-          initial={false}
-          animate={{ left: pill.x, width: pill.w }}
-          transition={{ duration: slide ? DURATION.fast : 0, ease: [...EASE.smoothOut] as [number, number, number, number] }}
-          style={{
-            position: 'absolute', top: 1, height: segmentHeight, borderRadius: 6, borderWidth: 1, pointerEvents: 'none',
-            borderColor: ink(t, dark ? 0.07 : 0.05), backgroundColor: thumbFill,
-            boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 1.5 / 2, spreadRadius: 0, color: `rgba(0, 0, 0, ${dark ? 0.16 : 0.04})` },
-          }}
-        >
-          {/* `inset 0 1px 0 rgba(255,255,255,.04 | .5)`: the raised rim's top highlight. */}
-          <div style={{ position: 'absolute', left: 1, right: 1, top: 0, height: 1, backgroundColor: `rgba(255, 255, 255, ${dark ? 0.04 : 0.5})`, pointerEvents: 'none' }} />
-        </motion.div>
-      )}
+      {pill && (() => {
+        const style = {
+          position: 'absolute', top: 1, height: segmentHeight, borderRadius: 6, borderWidth: 1, pointerEvents: 'none',
+          borderColor: ink(t, dark ? 0.07 : 0.05), backgroundColor: thumbFill,
+          boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 1.5 / 2, spreadRadius: 0, color: `rgba(0, 0, 0, ${dark ? 0.16 : 0.04})` },
+        } as const
+        // `inset 0 1px 0 rgba(255,255,255,.04 | .5)`: the raised rim's top highlight.
+        const rim = <div style={{ position: 'absolute', left: 1, right: 1, top: 0, height: 1, backgroundColor: `rgba(255, 255, 255, ${dark ? 0.04 : 0.5})`, pointerEvents: 'none' }} />
+        const ease = [...EASE.smoothOut] as [number, number, number, number]
+        // Equal-width segments (`fill`, or labels that happen to match): the pill only moves, so it slides as a paint-only translation
+        // from the first segment's slot (no layout or render per frame). Different widths also change the pill's width, which needs the
+        // layout tween.
+        const first = boxes?.[options[0]!.value]
+        if (first && PATCHED_NATIVE && options.every((o) => Math.abs((boxes?.[o.value]?.w ?? -1) - pill.w) < 0.5)) {
+          return (
+            <div
+              paintTransform={{ initial: false, animate: { translateX: pill.x - first.x }, transition: { duration: slide ? DURATION.fast : 0, ease } }}
+              style={{ ...style, left: first.x, width: pill.w }}
+            >
+              {rim}
+            </div>
+          )
+        }
+        return (
+          <motion.div initial={false} animate={{ left: pill.x, width: pill.w }} transition={{ duration: slide ? DURATION.fast : 0, ease }} style={style}>
+            {rim}
+          </motion.div>
+        )
+      })()}
       {options.map((option) => {
         const selected = option.value === value
         const blocked = !!option.unavailable

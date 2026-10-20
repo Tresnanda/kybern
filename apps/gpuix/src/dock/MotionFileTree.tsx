@@ -9,11 +9,13 @@ import { getFileIconName } from '../../../desktop/src/lib/kit/fileIcons.ts'
 import { diffFileIcons } from '../native/diff-file-icons.ts'
 import { fileIconColors } from '../native/DiffView.tsx'
 import { alpha } from '../transcript/kit.tsx'
+import { Spinner } from '../kit/Spinner.tsx'
+import { useAfter } from './loading.tsx'
 
 export type TreeRow = { key: string; path: string; name: string; kind: string; depth: number; position: number; setSize: number }
 
-export function MotionFileTreeRows({ rows, open, selected, focus, virtual, window, search = false, activate }: {
-  rows: TreeRow[]; open: ReadonlySet<string>; selected: string | null; focus: number; virtual: boolean; window?: TreeWindow; search?: boolean; activate: (row: TreeRow, index: number) => void
+export function MotionFileTreeRows({ rows, open, loading, selected, focus, virtual, window, search = false, activate }: {
+  rows: TreeRow[]; open: ReadonlySet<string>; /** Folders whose listing is being read: their chevron slot shows a spinner once the wait passes 150 ms. */ loading?: ReadonlySet<string>; selected: string | null; focus: number; virtual: boolean; window?: TreeWindow; search?: boolean; activate: (row: TreeRow, index: number) => void
 }) {
   const reduce = REDUCED_MOTION || virtual || search
   const t = useTheme(), capability = treeMotionCapabilities(useGpuixRequired())
@@ -27,7 +29,7 @@ export function MotionFileTreeRows({ rows, open, selected, focus, virtual, windo
   // row bodies are disposable outside the viewport buffer, like TaskWindow.
   const children = rows.map((row, index) => {
     const mounted = !window || index >= window.start && index < window.end
-    const body = mounted ? <FileTreeRow key={row.key} row={row} index={index} open={open.has(row.path)} selected={selected === row.path} focused={focus === index} reduce={reduce} search={search} hover={reduce ? undefined : () => setHovered(row.key)} activate={activate} /> : null
+    const body = mounted ? <FileTreeRow key={row.key} row={row} index={index} open={open.has(row.path)} busy={!!loading?.has(row.path)} selected={selected === row.path} focused={focus === index} reduce={reduce} search={search} hover={reduce ? undefined : () => setHovered(row.key)} activate={activate} /> : null
     return window ? <div key={row.key} style={{ height: TREE_ROW_HEIGHT, width: '100%', flexShrink: 0 }}>{body}</div> : body
   })
   if (reduce) return children
@@ -38,21 +40,26 @@ export function MotionFileTreeRows({ rows, open, selected, focus, virtual, windo
   </div>
 }
 
-const FileTreeRow = memo(function FileTreeRow({ row, index, open, selected, focused, reduce, search, hover, activate }: {
-  row: TreeRow; index: number; open: boolean; selected: boolean; focused: boolean; reduce: boolean; search: boolean; hover?: () => void; activate: (row: TreeRow, index: number) => void
+const FileTreeRow = memo(function FileTreeRow({ row, index, open, busy, selected, focused, reduce, search, hover, activate }: {
+  row: TreeRow; index: number; open: boolean; busy: boolean; selected: boolean; focused: boolean; reduce: boolean; search: boolean; hover?: () => void; activate: (row: TreeRow, index: number) => void
 }) {
   const t = useTheme(), renderer = useGpuixRequired()
   const capability = treeMotionCapabilities(renderer)
   const folder = row.kind === 'directory', disabled = row.kind === 'loading' || row.kind === 'empty'
   const testId = `dock-file-${row.path || 'root'}${['loading', 'error', 'empty'].includes(row.kind) ? `-${row.kind}` : ''}`
   const rotation: TreeMotionStyle = { rotate: open ? 90 : 0, opacity: folder ? 0.75 : 0 }
+  // A folder that is still reading shows a spinner in place of its chevron, but only for a wait long enough to notice (the chevron
+  // stays mounted underneath state-wise: `reading` is false for every row that is not loading, so this costs one bailed-out state).
+  const reading = useAfter(busy)
+
   const delay = Math.min(row.position * 0.025, 0.1)
   const content = <div role="treeitem" aria-level={row.depth + 1} aria-posinset={row.position} aria-setsize={row.setSize} aria-expanded={folder ? open : undefined} aria-selected={selected} aria-disabled={disabled || undefined} testId={testId} onMouseEnter={hover} onClick={!disabled ? () => activate(row, index) : undefined} style={{ display: 'flex', position: 'relative', alignItems: 'center', gap: 6, width: '100%', height: 28, flexShrink: 0, paddingLeft: 6 + row.depth * 14, paddingRight: 8, borderRadius: 6, cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.42 : 1, backgroundColor: selected ? t.buttonSecondary : focused ? t.selected : 'transparent', hover: hover ? undefined : { backgroundColor: selected ? t.buttonSecondary : t.buttonSecondaryHover } }}>
     {row.depth > 0 && (reduce
       ? <div style={{ position: 'absolute', top: 0, left: 13 + (row.depth - 1) * 14, width: 1, height: 28, backgroundColor: alpha(t.border, 0.7), pointerEvents: 'none' }} />
       : <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 28, opacity: 1 }} transition={TREE_BRANCH} style={{ position: 'absolute', top: 0, left: 13 + (row.depth - 1) * 14, width: 1, backgroundColor: alpha(t.border, 0.7), pointerEvents: 'none' }} />)}
     {!search && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, flexShrink: 0, pointerEvents: 'none' }}>
-      {reduce
+      {reading ? <Spinner size={12} color={alpha(t.text, 0.7)} />
+      : reduce
         ? <svg testId={`dock-chevron-${row.path}`} source={open && !capability.rotate ? N.chevronDown : N.chevronRight} {...({ rotate: capability.rotate && open ? 90 : 0 } as object)} style={{ width: 14, height: 14, color: alpha(t.text, 0.85), opacity: folder ? 0.75 : 0, pointerEvents: 'none' }} />
         : <TreeSvg testId={`dock-chevron-${row.path}`} source={open && !capability.rotate ? N.chevronDown : N.chevronRight} initial={false} animate={capability.rotate ? rotation : { opacity: folder ? 0.75 : 0 }} transition={treeSpring('swap', capability.physical)} style={{ width: 14, height: 14, color: alpha(t.text, 0.85), pointerEvents: 'none' }} />}
     </div>}

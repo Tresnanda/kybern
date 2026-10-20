@@ -1,7 +1,7 @@
 import { onEnvironmentChange } from '../shell/environment.ts'
 // The Agents pane retains completed children (unlike the sidebar's temporary
 // ChildRow). Tree ordering, phases, result clamps and workspace copy are shared.
-import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   canRemoveWorktree, canStopDelegation, childState, childStartedAt, childEndedAt,
   delegationRoleLabel, diffstatLabel, lineageCounts, lineageRows, lineageSummary,
@@ -14,8 +14,10 @@ import { errorText } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
 import { openThread } from '../nav/history.ts'
 import { Dialog, DialogHeader, muted } from '../nav/overlay.tsx'
-import { getNav, setNav } from '../nav/store.ts'
-import { Chevron, IconButton } from '../sidebar/rows.tsx'
+import { getNav, setNav, useNav } from '../nav/store.ts'
+import { useDock } from './store.ts'
+import { Chevron } from '../sidebar/rows.tsx'
+import { Collapse, Rise, SwapOnChange } from '../motion/kit.tsx'
 import { getClient } from '../state.ts'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { clockDuration, ink, Label, modelLabel, ProviderMark, useTheme } from '../ui.tsx'
@@ -39,6 +41,8 @@ export function Agents({ thread }: { thread: Thread }) {
   const [detail, setDetail] = useState(() => initialChoices(thread.id).detail)
   const [removing, setRemoving] = useState<Thread | null>(null)
   const [busy, setBusy] = useState(false)
+  const dockKeyboard = useNav((s) => s.keyboardNav)
+  const dockInstant = useDock(thread.id).instant || dockKeyboard
 
   useEffect(() => {
     const client = getClient()
@@ -79,6 +83,17 @@ export function Agents({ thread }: { thread: Thread }) {
   }, [thread.id, thread.project_id, reload])
 
   const rows = useMemo(() => lineageRows(threads, thread.id, { expanded: tree }), [threads, thread.id, tree])
+  // `t-row-enter`: a row that appears after the list first showed (a new child, or children revealed by expanding) rises in; the
+  // rows of the first load and of a thread switch render plainly. `fresh` keeps a row's flag for its whole life, so it never replays.
+  const seen = useRef(new Set<string>())
+  const fresh = useRef(new Set<string>())
+  const seeded = useRef(false)
+  for (const row of rows) {
+    if (seen.current.has(row.thread.id)) continue
+    seen.current.add(row.thread.id)
+    if (seeded.current) fresh.current.add(row.thread.id)
+  }
+  if (loaded) seeded.current = true
   const counts = useMemo(() => lineageCounts(threads, thread.id), [threads, thread.id])
   const stoppable = useMemo(() => stoppableDescendants(lineageRows(threads, thread.id, { expanded: Object.fromEntries(threads.map((th) => [th.id, true])) })), [threads, thread.id])
   const toggleTree = useCallback((id: string, open: boolean) => setTree((previous) => {
@@ -94,13 +109,13 @@ export function Agents({ thread }: { thread: Thread }) {
 
   return <>
     <ErrorLine error={error} retry={() => setReload((n) => n + 1)} />
-    {!rows.length ? loaded && !error ? <DockEmpty lineage icon={N.users} title="No agents yet" body="Ask the agent to delegate work to another agent; children appear here." /> : null : <>
+    {!rows.length ? loaded && !error ? <DockEmpty lineage instant={dockInstant} icon={N.users} title="No agents yet" body="Ask the agent to delegate work to another agent; children appear here." /> : null : <>
       <Section label={lineageSummary(counts) || `${counts.total} ${counts.total === 1 ? 'agent' : 'agents'}`}>
         {stoppable.length >= 2 && <Action disabled={busy} onClick={() => void run(() => Promise.all(stoppable.map((th) => getClient()!.call('threads.interrupt', { thread_id: th.id }))))}>Stop all</Action>}
       </Section>
       <div {...FILL_ISLAND} style={{ display: 'flex', flexGrow: 1, minHeight: 0 }}>
         <virtual-list testId="dock-agents-list" style={{ width: '100%', height: '100%' }}>
-          {rows.map((row) => <AgentRow key={row.thread.id} row={row} detailOpen={!!detail[row.thread.id]} onToggleTree={toggleTree} onToggleDetail={toggleDetail} onRemove={setRemoving} />)}
+          {rows.map((row) => <AgentRow key={row.thread.id} row={row} fresh={fresh.current.has(row.thread.id)} detailOpen={!!detail[row.thread.id]} onToggleTree={toggleTree} onToggleDetail={toggleDetail} onRemove={setRemoving} />)}
         </virtual-list>
       </div>
     </>}
@@ -114,8 +129,8 @@ export function Agents({ thread }: { thread: Thread }) {
   </>
 }
 
-const AgentRow = memo(function AgentRow({ row, detailOpen, onToggleTree, onToggleDetail, onRemove }: {
-  row: LineageRow<Thread>; detailOpen: boolean
+const AgentRow = memo(function AgentRow({ row, fresh, detailOpen, onToggleTree, onToggleDetail, onRemove }: {
+  row: LineageRow<Thread>; fresh: boolean; detailOpen: boolean
   onToggleTree: (id: string, open: boolean) => void; onToggleDetail: (id: string) => void; onRemove: (thread: Thread) => void
 }) {
   const t = useTheme()
@@ -140,18 +155,23 @@ const AgentRow = memo(function AgentRow({ row, detailOpen, onToggleTree, onToggl
       else await getClient()!.call('threads.interrupt', { thread_id: thread.id })
     } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
   }
-  return <div style={{ paddingLeft: 6, paddingRight: 6, paddingBottom: 1 }}>
+  return <Rise kind="row" play={fresh}><div style={{ paddingLeft: 6, paddingRight: 6, paddingBottom: 1 }}>
     <div style={{ display: 'flex', minHeight: 62, alignItems: 'flex-start', paddingTop: 6, paddingBottom: 6, paddingLeft: 3 + level * 14, paddingRight: 6, borderRadius: 10, hover: { backgroundColor: t.buttonSecondaryHover } }}>
       <div style={{ width: 22, flexShrink: 0 }}>
-        {childCount > 0 && <IconButton icon={open ? N.chevronDown : N.chevronRight} size={22} label={open ? 'Collapse agents' : 'Expand agents'} onClick={() => onToggleTree(thread.id, !open)} testId={`dock-agent-tree-${thread.id}`} />}
+        {childCount > 0 && <TreeToggle open={open} onClick={() => onToggleTree(thread.id, !open)} testId={`dock-agent-tree-${thread.id}`} />}
       </div>
       <div role="button" testId={`dock-agent-${thread.id}`} onClick={() => onToggleDetail(thread.id)} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, flexGrow: 1, minWidth: 0, cursor: 'pointer' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: 6, backgroundColor: t.buttonSecondary }}><ProviderMark kind={thread.provider.kind} size={12} /></div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flexGrow: 1, minWidth: 0 }}>
           <Label color={ink(t, 0.9)} size={13} lineHeight={20} truncate>{thread.title || 'Untitled'}</Label>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
-            {state.phase === 'working' ? <MatrixLoader /> : <Icon source={state.phase === 'done' ? N.check : state.phase === 'failed' ? N.info : N.clock} size={12} color={state.phase === 'failed' ? t.red : muted(t, 0.7)} />}
-            <Label color={state.phase === 'failed' ? t.red : muted(t, 0.85)} size={11} truncate>{`${state.word} · ${role}${thread.model ? ` · ${modelLabel(thread.model)}` : ''}`}</Label>
+            {/* The phase glyph and word cross-swap (`t-icon-swap`, `t-text-swap`) when a child finishes, fails or waits. */}
+            <SwapOnChange kind="icon" active={state.phase} style={{ width: 12, height: 12, flexShrink: 0 }}>
+              {state.phase === 'working' ? <MatrixLoader /> : <Icon source={state.phase === 'done' ? N.check : state.phase === 'failed' ? N.info : N.clock} size={12} color={state.phase === 'failed' ? t.red : muted(t, 0.7)} />}
+            </SwapOnChange>
+            <SwapOnChange active={state.word} style={{ flexGrow: 1, minWidth: 0, justifyContent: 'flex-start' }} innerStyle={{ flexGrow: 1, minWidth: 0, justifyContent: 'flex-start' }} leavingStyle={{ right: 0 }}>
+              <Label color={state.phase === 'failed' ? t.red : muted(t, 0.85)} size={11} truncate>{`${state.word} · ${role}${thread.model ? ` · ${modelLabel(thread.model)}` : ''}`}</Label>
+            </SwapOnChange>
           </div>
           {info && <Label color={muted(t, 0.7)} size={10} truncate>{`${workspaceLabel(info)}${info.diffstat ? ` · ${diffstatLabel(info.diffstat)}` : ''}`}</Label>}
         </div>
@@ -159,7 +179,7 @@ const AgentRow = memo(function AgentRow({ row, detailOpen, onToggleTree, onToggl
         <Chevron open={detailOpen} color={muted(t, 0.6)} size={12} />
       </div>
     </div>
-    {detailOpen && <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 50 + level * 14, paddingRight: 10, paddingBottom: 10 }}>
+    <Collapse open={detailOpen}><div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 50 + level * 14, paddingRight: 10, paddingBottom: 10 }}>
       {info?.error && <Label color={t.red} size={12}>{info.error}</Label>}
       {result ? <>
         <Label color={muted(t, 0.65)} size={11}>Result</Label>
@@ -181,8 +201,18 @@ const AgentRow = memo(function AgentRow({ row, detailOpen, onToggleTree, onToggl
         {(canStopDelegation(thread) || (thread.subagent && state.phase === 'working' && thread.subagent.capabilities?.stop !== false)) && <Action disabled={busy} onClick={() => void stop()}>{busy ? 'Stopping…' : 'Stop'}</Action>}
         {canRemoveWorktree(info) && <Action onClick={() => onRemove(thread)}>Remove worktree</Action>}
       </div>
-    </div>}
-  </div>
+    </div></Collapse>
+  </div></Rise>
 })
+
+/** The tree's expand toggle: a 22 px ghost button whose chevron turns with the children it reveals (`DisclosureChevron`, 220 ms). */
+function TreeToggle({ open, onClick, testId }: { open: boolean; onClick: () => void; testId: string }) {
+  const t = useTheme()
+  const [hover, setHover] = useState(false)
+  return <div testId={testId} role="button" aria-label={open ? 'Collapse agents' : 'Expand agents'} onClick={onClick} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: 6, flexShrink: 0, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
+    <Chevron open={open} size={14} color={hover ? ink(t, 0.82) : muted(t, 0.6)} />
+  </div>
+}
 
 onEnvironmentChange(() => { choices.clear() })

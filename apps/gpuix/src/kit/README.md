@@ -55,8 +55,13 @@ does not close it, →, Enter and Space open it and light the first item, ← / 
 `AlertDialog` (props `open`/`defaultOpen`/`onOpenChange`, `width` 512, `testId`) with `AlertDialogHeader`, `AlertDialogTitle`,
 `AlertDialogDescription`, `AlertDialogFooter` (`variant: 'default' | 'bare'`), `AlertDialogClose` (`variant` outline, `onClick`).
 `Sheet` (`side` right/left/top/bottom, `variant`, `showCloseButton`, `dismissible`, `width` 448) with `SheetHeader`, `SheetTitle`,
-`SheetDescription`, `SheetPanel`, `SheetFooter`, `SheetClose`. The alert card fades (the desktop's 0.98 scale needs a subtree
-scale GPUIX lacks); the sheet fades and slides 32px; both take 200 ms in and out. They keep an Escape stack (the innermost
+`SheetDescription`, `SheetPanel`, `SheetFooter`, `SheetClose`. The alert card fades and scales from 0.98; the sheet fades and slides
+32px; both take 200 ms in and out. `ModalLayer` runs them as paint-only `paintTransform`s on the layer's content (the anchored
+surface itself carries no fill, so a scrim's colour belongs in the content `style`, where it fades at its true alpha; no layout or
+render per frame). `nav/overlay.tsx`'s `Dialog` does the same through `PopupLayer appear="dialog" | "scrim"`: scrim fade 250 ms,
+card from 0.96 with a 2 px blur, exit 150 ms (0.98). A pointer close (the X, a press outside, `useDialogClose()`) plays the exit and
+then calls `onClose`; Escape and `instant` (shortcut-opened) close at once; a caller that unmounts the dialog itself closes at once.
+They keep an Escape stack (the innermost
 overlay closes first: a `Select` inside a `Sheet`; `useEscapeLayer(open)` returns `claim()` for Escape and `isTop()` for outside
 presses, and `nav/overlay.tsx`'s `Dialog` defers to `kitOverlayOpen()`) and return focus to the opener. Neither traps Tab yet.
 The window size is read only while one is mounted (`WindowSized`). `ModalLayer`, `useEscapeLayer`, `usePresence`, `WindowSized`
@@ -73,7 +78,8 @@ and `KitButton` (the desktop `Button`: `variant` default/outline/destructive/…
 - `TimePicker` (`value` "HH:MM", `onChange`, `width` 168): two scrolling columns.
 - `Select` (`options: SelectEntry[]` = `{value,label,disabled?} | {group} | {separator:true}`, `value`/`defaultValue`/`onValueChange`,
   `placeholder`, `size` xs/sm/default/lg, `variant`, `surface` settings/composer, `side`, `align`, `sideOffset`, `width`, `label`):
-  item-aligned popup like Base UI, type-ahead, check indicator.
+  item-aligned popup like Base UI, type-ahead, check indicator. A popup the pointer opened scales in from 0.98 (150 ms, about the
+  selected row when it is laid over the trigger) and leaves in 80 ms; opened or closed from the keyboard it is instant.
 - `Combobox` (`items`, `value`/`onValueChange`, `multiple` (chips), `placeholder`, `showTrigger`, `showClear`, `emptyText`,
   `itemToLabel`, `filter`, `width`): filtering input with a popup list and the empty state.
 
@@ -102,6 +108,13 @@ text or icon leaf, as a native paint animation (`native/patches/pop_gpui.py`, th
 layout per frame, frames stop when the curve ends). It plays when the leaf mounts; give it a new `key` to play again.
 `usePopOnChange(active)` is true once `active` turned on after first render (virtual rows do not re-pop on scroll-in).
 Leaves only: a box with a background does not scale (no subtree scale in the renderer yet).
+
+- `HoverCard`, `Tip` (`nav/overlay.tsx`), `Menu`, `ContextMenu` and `MenuSub`: popups stay mounted through their exit (`PopupLayer`
+  `leaving`/`onLeft`): menus 150 ms to 0.99, tooltips and hover cards 80 ms. A close from the keyboard (Escape, Enter on an item)
+  unmounts at once; a tooltip or card that opened `instant` leaves at once too; submenus leave with the root menu.
+- `Switch`, `Segmented` (equal-width segments) and `Toggle`'s `Fill` move or fade as paint-only transforms; `Badge` pops a numeric
+  label when it changes after mount (`useCountPop`).
+- `dock/loading.tsx` `LoadingLines`, `useAfter`: a skeleton that only shows after 150 ms of waiting (never a flash for fast reads).
 
 ## Motion helpers outside `kit/`
 
