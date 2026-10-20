@@ -77,7 +77,8 @@ export function Label({
   truncate?: boolean
   style?: StyleDesc
   ref?: import('react').Ref<import('@gpuix/react').PublicInstance>
-  paintAnimation?: { kind: 'shimmer' | 'pop'; cycleMs: number; delayMs?: number }
+  /** `shimmer` with `highlight`: a band of that colour sweeps across the text (`.t-shimmer`); without it, a brightness pulse. `hue`: a hue loop. */
+  paintAnimation?: { kind: 'shimmer' | 'pop' | 'hue'; cycleMs: number; delayMs?: number; highlight?: string }
 }) {
   return (
     <text ref={ref}

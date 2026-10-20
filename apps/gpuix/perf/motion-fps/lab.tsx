@@ -21,7 +21,7 @@ function Lab() {
     if (e.key === 'h') setShown(v => !v)
     if (e.key === 'o') setOverlay(v => !v)
     if (e.key === 'g') setMoved(v => !v)
-    if (e.key === 'x') { const n = ++probes; void caProbe(1500).then(result => { writeFileSync(path.join(process.env.MOTION_LAB_OUT!, `${n}.json`), JSON.stringify(result)); setNote(`Probe ${n}`) }) }
+    if (e.key === 'x') { const n = ++probes; void caProbe(2200).then(result => { writeFileSync(path.join(process.env.MOTION_LAB_OUT!, `${n}.json`), JSON.stringify(result)); setNote(`Probe ${n}`) }) }
   }} style={{ width: '100%', height: '100%', padding: 24, display: 'flex', flexDirection: 'column', gap: 16, backgroundColor: light ? '#fafafa' : '#202020' }}>
     <text testId="note" style={{ color: fg }}>{note}</text>
     {shown && <div testId="loops" style={{ display: 'flex', alignItems: 'center', gap: 24, height: 40, marginLeft: moved ? 12 : 0 }}>
