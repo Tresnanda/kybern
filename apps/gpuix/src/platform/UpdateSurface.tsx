@@ -34,7 +34,7 @@ const ARTWORK = (() => {
 
 /** `--toast-open` 350 ms / `--toast-close` 250 ms, `--toast-ease`, 16px rise, scale `--scale-medium` and a 2px blur (motion.css:68-96). */
 const TOAST_HIDDEN = { opacity: 0, translateY: 16, scale: SCALE.medium, blur: BLUR.small } as const
-const TOAST_ENTER: PaintTransformProps | undefined = PATCHED_NATIVE && !REDUCED_MOTION
+const TOAST_ENTER = (): PaintTransformProps | undefined => PATCHED_NATIVE && !REDUCED_MOTION
   ? { initial: TOAST_HIDDEN, animate: { opacity: 1, translateY: 0, scale: 1, blur: 0 }, transition: { duration: 0.35, ease: [...EASE.smoothOut] } }
   : undefined
 const TOAST_EXIT = { to: TOAST_HIDDEN, duration: 0.25, ease: EASE.smoothOut } as const
@@ -113,7 +113,7 @@ function UpdateAnnouncement({ version, notes, leaving, onGone }: { version: stri
   // The card enters and leaves by paint (`t-toast`: 16px, scale 0.97 and a 2px blur, 350 / 250 ms) with no layout per frame. Reduce
   // Motion shows it at once and fades it out over 100 ms (`Presence`).
   return <anchored position={{ x: size.width - 16, y: size.height - 16 }} anchor="bottomRight" fit="snap" snapMargin={16} deferred priority={5} occlude style={{ borderRadius: 24 }}>
-    <Presence show={!leaving} enter={TOAST_ENTER} exit={TOAST_EXIT} onGone={onGone} style={{ borderRadius: 24 }}>
+    <Presence show={!leaving} enter={TOAST_ENTER()} exit={TOAST_EXIT} onGone={onGone} style={{ borderRadius: 24 }}>
     <div testId="update-announcement" aria-label="Kybern update available" style={{ display: 'flex', flexDirection: 'column', position: 'relative', width: Math.min(352, size.width - 32), borderRadius: 24, borderWidth: 1, borderColor: t.border, backgroundColor: t.popover, boxShadow: surfaceShadow(t), overflow: 'hidden' }}>
       <ReleaseArtwork compact />
       <ArtworkClose testId="update-announcement-dismiss" label="Dismiss update announcement" onClick={dismissUpdateAnnouncement} />
