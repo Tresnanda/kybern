@@ -45,10 +45,11 @@ impl Window {
         cx: &mut App,
     ) -> Vec<Option<AnyMouseListener>> {
         // Unlike input propagation, every hover owner must observe a leave.
-        for phase in [DispatchPhase::Capture, DispatchPhase::Bubble] {
-            for listener in listeners.iter_mut().flatten() {
-                listener(event, phase, self, cx);
-            }
+        for listener in listeners.iter_mut().flatten() {
+            listener(event, DispatchPhase::Capture, self, cx);
+        }
+        for listener in listeners.iter_mut().rev().flatten() {
+            listener(event, DispatchPhase::Bubble, self, cx);
         }
         listeners
     }

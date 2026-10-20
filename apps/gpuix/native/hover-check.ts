@@ -33,6 +33,10 @@ for (const theme of ['dark', 'light']) {
     checks.scrollEnter = (await read('row-4')).includes('hover true') && p.y >= current.y && p.y < current.y + current.height
     await shot('scroll')
     await a.mouse.move(await a.getByTestId('row--1').center()); await Bun.sleep(200)
+    await a.mouse.down(await a.getByTestId('row--1').center());await Bun.sleep(200)
+    checks.pressRetainsHover=(await read('row--1')).includes('hover true')
+    await a.mouse.move({x:580,y:620},{pressedButton:0});await a.mouse.up({x:580,y:620})
+    await a.mouse.move(await a.getByTestId('row--1').center());await Bun.sleep(200)
     await a.mouse.click(await a.getByTestId('row--1').center()); await Bun.sleep(500)
     checks.reflowLeave = !(await read('row--1')).includes('hover true')
     await shot('controls')

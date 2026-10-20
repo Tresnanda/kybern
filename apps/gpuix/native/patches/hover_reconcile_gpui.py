@@ -35,7 +35,11 @@ edit(d, anchor, '''                window.on_hover_reconcile({
                         if phase != DispatchPhase::Bubble { return; }
                         if event.retired && !*was_hovered.borrow() { return; }
                         let Some(hovered) = event.hovered(&hitbox, window) else { return };
-                        let hovered = hovered && has_mouse_down.borrow().is_none() && !cx.has_active_drag();
+                        // Preserve a pressed owner still under the pointer,
+                        // like ordinary GPUI paint. A press alone must not
+                        // synthesize leave and cancel pending JS row drags.
+                        if !event.retired && hovered && has_mouse_down.borrow().is_some() { return; }
+                        let hovered = hovered && !cx.has_active_drag();
                         if hovered != *was_hovered.borrow() {
                             let update_hover = update_hover.clone();
                             window.defer(cx, move |window, cx| update_hover(hovered, window, cx));
