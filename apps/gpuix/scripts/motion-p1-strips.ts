@@ -91,7 +91,7 @@ const T = [0, 40, 80, 120, 160, 250, 400]
 
 // ─── lab ──────────────────────────────────────────────────────────────────
 const LAB_CROPS: Record<string, Crop> = {
-  glyph: { x: 24, y: 24, w: 40, h: 40 }, row: { x: 16, y: 84, w: 272, h: 40 }, title: { x: 24, y: 90, w: 200, h: 28 }, edge: { x: 216, y: 84, w: 72, h: 40 },
+  glyph: { x: 24, y: 24, w: 40, h: 40 }, handoff: { x: 16, y: 184, w: 272, h: 44 }, row: { x: 16, y: 84, w: 272, h: 40 }, title: { x: 24, y: 90, w: 200, h: 28 }, edge: { x: 216, y: 84, w: 72, h: 40 },
 }
 async function lab(theme: string, reduced: string, dir: string) {
   await session(`lab ${theme}-${reduced === '1' ? 'reduced' : 'normal'}`, dir, 'scripts/motion-p1-lab.tsx', { KYBERN_APPEARANCE: theme, KYBERN_REDUCED_MOTION: reduced }, LAB_CROPS, async ({ a, run, sleep }) => {
@@ -106,6 +106,10 @@ async function lab(theme: string, reduced: string, dir: string) {
     // The row's hover: actions in (150 ms, 4 px) and out (100 ms) while the resting glyph fades back over them.
     await run('reveal-in', () => key('h'), [0, 30, 60, 100, 150, 250], ['edge'])
     await run('reveal-out', () => key('h'), [0, 30, 60, 100, 150, 250], ['edge'])
+    // P1.16: the hand-off target's trailing slot (the dialog itself needs a live provider list): hover reveals the arrow, starting swaps the loader in.
+    await run('handoff-hover', () => key('k'), [0, 40, 80, 150, 250], ['handoff'])
+    await run('handoff-busy', () => key('k'), [0, 60, 125, 190, 250, 400], ['handoff'])
+    await run('handoff-done', () => key('k'), [0, 60, 125, 190, 250, 400], ['handoff'])
     await a.clock.resume()
   }, 2)
 }

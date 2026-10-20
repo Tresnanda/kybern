@@ -11,6 +11,20 @@ import { N } from './glyphs.ts'
 import { Dialog, DialogHeader, muted } from './overlay.tsx'
 import { setNav, useNav } from './store.ts'
 
+/** The target row's trailing slot: the arrow fades in with a 4px slide on hover and out over 100 ms (`t-reveal`); the loader swaps in for it when the hand-off starts (`IconSwap`). */
+export function HandoffTrailing({ busy, hover }: { busy: boolean; hover: boolean }) {
+  const t = useTheme()
+  return (
+    <SwapOnChange kind="icon" active={busy ? 'busy' : 'idle'} style={{ width: 16, height: 16, flexShrink: 0 }}>
+      {busy ? <MatrixLoader /> : (
+        <div paintTransform={revealTransform(hover)} style={{ display: 'flex' }}>
+          <Icon source={N.arrowRight} size={14} color={muted(t, 1)} />
+        </div>
+      )}
+    </SwapOnChange>
+  )
+}
+
 export function HandoffDialog() {
   const handoff = useNav((s) => s.handoff)
   if (!handoff) return null
@@ -84,14 +98,7 @@ function HandoffBody({ threadId, target }: { threadId: string; target: string | 
                   </Label>
                 )}
               </div>
-              {/* The arrow fades in with a 4px slide on hover and out over 100 ms (`t-reveal`); the loader swaps in for it when the hand-off starts (`IconSwap`). */}
-              <SwapOnChange kind="icon" active={busy === p.kind ? 'busy' : 'idle'} style={{ width: 16, height: 16, flexShrink: 0 }}>
-                {busy === p.kind ? <MatrixLoader /> : (
-                  <div paintTransform={revealTransform(hover === p.kind)} style={{ display: 'flex' }}>
-                    <Icon source={N.arrowRight} size={14} color={muted(t, 1)} />
-                  </div>
-                )}
-              </SwapOnChange>
+              <HandoffTrailing busy={busy === p.kind} hover={hover === p.kind} />
             </div>
           )
         })}

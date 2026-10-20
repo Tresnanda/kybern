@@ -10,6 +10,7 @@ import { Icon } from '../src/icons.tsx'
 import { StatusGlyph, IconButton, accent, resting } from '../src/sidebar/rows.tsx'
 import { FadeBack, MarqueeLabel, Reveal, TitleSwap } from '../src/sidebar/motion.tsx'
 import { muted } from '../src/nav/overlay.tsx'
+import { HandoffTrailing } from '../src/nav/Handoff.tsx'
 
 let commits = 0
 const STEPS = [
@@ -21,12 +22,13 @@ const at = (x: number, y: number, w: number, h: number) => ({ position: 'absolut
 
 function Lab() {
   const t = useTheme()
-  const [step, setStep] = useState(0), [title, setTitle] = useState(0), [hover, setHover] = useState(false)
+  const [step, setStep] = useState(0), [title, setTitle] = useState(0), [hover, setHover] = useState(false), [target, setTarget] = useState(0)
   const s = STEPS[step % STEPS.length]!
   const action = (k: string) => {
     if (k === 'g') setStep(n => n + 1)
     if (k === 't') setTitle(n => n + 1)
     if (k === 'h') setHover(v => !v)
+    if (k === 'k') setTarget(n => n + 1)
   }
   const text = TITLES[title % 2]!
   return (
@@ -51,7 +53,13 @@ function Lab() {
           </Reveal>
         </div>
       </div>
-      <div style={at(24, 140, 256, 20)}><Label color={t.textSecondary} size={11}>g status · t title · h hover</Label></div>
+      {/* A hand-off target's trailing slot: k steps idle → hover → busy → idle */}
+      <div testId="handoff" style={{ ...at(24, 190, 256, 32), alignItems: 'center', gap: 10, paddingLeft: 10, paddingRight: 10, borderRadius: 10, ...(target % 3 ? { backgroundColor: t.buttonSecondaryHover } : {}) }}>
+        <ProviderMark kind="codex" size={16} />
+        <div style={{ flexGrow: 1 }}><Label color={t.text}>Codex</Label></div>
+        <HandoffTrailing busy={target % 3 === 2} hover={target % 3 === 1} />
+      </div>
+      <div style={at(24, 140, 256, 20)}><Label color={t.textSecondary} size={11}>g status · t title · h hover · k hand-off</Label></div>
       <div style={{ ...at(24, 170, 24, 24) }}><Icon source={N.clock} size={12} color={t.text} /></div>
     </div>
   )
