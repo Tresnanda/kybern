@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.1
+
+<!-- kybern-release-title: Kybern GPUIX fixes from daily use -->
+<!-- kybern-release-summary: Sidebar hover and clicks behave, New chat opens a free chat, and the usage popover, delegated messages and dock icon match the desktop app. -->
+
+- Keep hover on sidebar rows in Kybern GPUIX. A row redrawn under a resting pointer lost its hover, and clicking a project could pick it up for reordering; a press now becomes a drag only after it moves past the row's edge or more than a few pixels.
+- Open a free chat from **New chat** in Kybern GPUIX, as in the desktop app, instead of a draft in the most recent project. The project menu under the composer is now **Chat location** and lists Free chat above your projects.
+- Rebuild the context ring's popover in Kybern GPUIX to match the desktop app: prompt cache, context window with a meter, and account limits with meters, reset times and pace. It opens on hover and stays open while the pointer is inside it.
+- Shorten long delegated tasks, questions and results in Kybern GPUIX behind **Show more**, show the sender's mark inline in their chip, and keep a message's Copy and Save to note buttons visible while you move onto them.
+- Show the task kind icon in Kybern GPUIX's background-task strip, and switch its dock icon to the dark and tinted versions with the system appearance.
+
 ## 0.10.0
 
 <!-- kybern-release-title: Kybern GPUIX, a native desktop app -->
