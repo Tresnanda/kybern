@@ -207,6 +207,10 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
   }, [leaving])
   // Materializing: the glass filter moves inside the transformed box (it scales and fades with the popup), and the
   // layer's own backing is transparent. An explicit `{ blur: 0 }` is how an anchored layer asks for that.
+  // A leaving popup is already closed: it answers no keys or outside presses (an Enter just after a pointer pick would run
+  // the picked item again during the 150 ms exit).
+  const { onKeyDown, onKeyUp, onMouseDownOutside, ...rest } = props as typeof props & { onKeyDown?: unknown; onKeyUp?: unknown; onMouseDownOutside?: unknown }
+  const input = leaving ? {} : { onKeyDown, onKeyUp, onMouseDownOutside }
   const glassBackdrop = material === 'none' || !glass ? undefined : explicitBackdrop ?? {...BACKDROP.glass, radius: radius ?? 16}
   const innerStyle = glass && material !== 'none' && (style as StyleDesc | undefined)?.backgroundColor ? {...style as StyleDesc,backgroundColor:backdropTint((style as StyleDesc).backgroundColor!)} : style
   return (
@@ -223,7 +227,8 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
     >
       <div testId={webLayer.id} style={{ display: 'flex' }}>
       <div
-        {...props}
+        {...rest}
+        {...(input as object)}
         ref={ref}
         {...(transform ? {
           paintTransform: transform,
