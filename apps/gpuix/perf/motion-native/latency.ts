@@ -79,9 +79,39 @@ function parse(line: string): Event | undefined {
   return { t: Number(m[1]), kind: kind.trim(), values, missing }
 }
 
-/** Popups and entrances, each opened by a click and closed again (Escape), in the 3,000-turn bench thread. */
-const SCENES: Record<string, { open: (c: (a: string, b?: object) => Promise<unknown>) => Promise<void>; trigger: string; close: (app: Launch['app']) => Promise<void>; ms: number }> = {
-  'model-picker': { open: async c => { await c('idle'); await c('open', { thread: manifest.long3000 }) }, trigger: 'model-picker', close: app => app.getByTestId('app-ready').press('escape'), ms: 250 },
+type Bounds = { x: number; y: number; width: number; height: number }
+type Scene = {
+  /** `enter`: the click mounts the motion; `exit`: the pointer leaving starts it on an element that is already at rest. */
+  kind: 'enter' | 'exit'
+  open: (c: (a: string, b?: object) => Promise<unknown>) => Promise<void>
+  target: (app: Launch['app']) => Promise<Bounds>
+  prepare: (app: Launch['app'], b: Bounds) => Promise<void>
+  act: (app: Launch['app'], b: Bounds) => Promise<void>
+  reset: (app: Launch['app']) => Promise<void>
+  ms: number
+}
+const centre = (b: Bounds) => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 })
+/** Popups and entrances opened by a click and closed again (Escape); exits started by the pointer leaving; all in the
+ *  3,000-turn bench thread. */
+const SCENES: Record<string, Scene> = {
+  'model-picker': {
+    kind: 'enter', ms: 250,
+    open: async c => { await c('idle'); await c('open', { thread: manifest.long3000 }) },
+    target: app => bounds(app, 'model-picker'),
+    // Park, then click: a hover change right before the click would be a different workload.
+    prepare: async (app, b) => { await app.mouse.move(centre(b)); await delay(300) },
+    act: (app, b) => app.mouse.click(centre(b)),
+    reset: app => app.getByTestId('app-ready').press('escape'),
+  },
+  // A sidebar thread row's hover actions (`sidebar/motion.tsx` Reveal → Presence exit, 100 ms).
+  'reveal-exit': {
+    kind: 'exit', ms: 100,
+    open: async c => { await c('idle'); await c('open', { thread: manifest.long3000 }) },
+    target: async app => { for (const id of manifest.threads.slice(0, 40)) { try { for (const { bounds: b } of await app.getByTestId(`thread-${id}`).all()) if (b && b.width > 0 && b.y > 60) return b } catch {} } throw Error('No sidebar thread row') },
+    prepare: async (app, b) => { await app.mouse.move(centre(b)); await delay(600) },
+    act: async app => { const w = (await app.call('initialize', { protocolVersion: 1, client: 'latency' })).window; await app.mouse.move({ x: w.width - 6, y: w.height - 6 }) },
+    reset: async () => {},
+  },
 }
 
 const fixture = await seed(DATA, PORT)
@@ -117,21 +147,21 @@ for (const name of scenarios) {
     await scene.open(control)
     await delay(4000)
     requireScreen(); requireWindowOnscreen(f.pid)
-    const b = await bounds(app, scene.trigger)
+    const b = await scene.target(app)
     const samples: Record<string, unknown>[] = []
     for (let i = 0; i < opens; i++) {
-      // Park, then click: a hover change right before the click would be a different workload.
-      await app.mouse.move({ x: b.x + b.width / 2, y: b.y + b.height / 2 })
-      await delay(300)
+      await scene.prepare(app, b)
       const from = events.length
-      await app.mouse.click({ x: b.x + b.width / 2, y: b.y + b.height / 2 })
+      await scene.act(app, b)
       await delay(scene.ms + 350)
       const after = events.slice(from)
       const before = events.slice(Math.max(0, from - 400), from)
       const old = new Set(before.flatMap(e => e.kind === 'present' || e.kind === 'motion' ? [...e.values.keys()] : []).concat(['draw', 'layout']))
+      const shown = new Map([...before].reverse().find(e => e.kind === 'present')?.values ?? [])
       const down = after.find(e => e.kind === 'input down'), up = after.find(e => e.kind === 'input up')
       const batch = after.find(e => e.kind === 'batch' && up && e.t >= up.t) ?? after.find(e => e.kind === 'batch')
-      const input = up && batch && batch.t >= up.t ? up : down
+      // Exits start from the React batch the pointer move caused (the same clock point on every addon).
+      const input = scene.kind === 'exit' ? after.find(e => e.kind === 'batch') : up && batch && batch.t >= up.t ? up : down
       let motion = new Map<string, number>(), firstPaint: number | undefined, firstVisible: number | undefined, visibleValue: number | undefined
       let presents = 0, renders = 0, missing = 0, firstPaintPresents = 0
       for (const e of after) {
@@ -139,18 +169,22 @@ for (const name of scenarios) {
         if (e.t > input.t + scene.ms + 300) break
         if (e.kind === 'render') { renders++; motion = new Map() }
         if (e.kind === 'motion') motion = e.values
-        if (e.kind === 'ptx-tick') missing += (e.missing ?? []).filter(id => !old.has(id)).length
+        if (e.kind === 'ptx-tick') missing += (e.missing ?? []).filter(id => scene.kind === 'exit' || !old.has(id)).length
         if (e.kind !== 'present') continue
         presents++
-        const fresh = [...e.values].filter(([id]) => !old.has(id)).concat([...motion].filter(([id]) => !old.has(id)))
+        // Enter: a scope (or layout-tween element) that was not on screen before. Exit: one that was at rest (opacity 1, or
+        // untagged and so absent) and now shows its first step out.
+        const fresh = scene.kind === 'exit'
+          ? [...e.values].filter(([id, v]) => v < 0.99 && (shown.get(id) ?? 1) >= 0.99)
+          : [...e.values].filter(([id]) => !old.has(id)).concat([...motion].filter(([id]) => !old.has(id)))
         if (fresh.length && firstPaint === undefined) { firstPaint = e.t - input.t; firstPaintPresents = presents }
-        const visible = fresh.filter(([, v]) => v > 0.01)
-        if (visible.length && firstVisible === undefined) { firstVisible = e.t - input.t; visibleValue = Math.max(...visible.map(([, v]) => v)) }
+        const visible = scene.kind === 'exit' ? fresh : fresh.filter(([, v]) => v > 0.01)
+        if (visible.length && firstVisible === undefined) { firstVisible = e.t - input.t; visibleValue = scene.kind === 'exit' ? Math.min(...visible.map(([, v]) => v)) : Math.max(...visible.map(([, v]) => v)) }
       }
-      if (i % 1 === 0) await scene.close(app)
+      await scene.reset(app)
       await delay(400)
-      const timeline = input ? after.filter(e => e.t >= input.t - 20 && e.t <= input.t + 120).map(e => `${(e.t - input.t).toFixed(1)} ${e.kind}${[...e.values].filter(([id]) => !old.has(id)).map(([id, v]) => ` ${id}:${v}`).join('')}`) : []
-      // Phases of the mount frame: React batch, the render that follows it, and that render's present.
+      const timeline = input ? after.filter(e => e.t >= input.t - 20 && e.t <= input.t + 120).map(e => `${(e.t - input.t).toFixed(1)} ${e.kind}${[...e.values].filter(([id]) => scene.kind === 'exit' ? !['draw', 'layout'].includes(id) : !old.has(id)).map(([id, v]) => ` ${id}:${v}`).join('')}`) : []
+      // Phases of the first frame: React batch, the render that follows it, and that render's present.
       const mountRender = batch ? after.find(e => e.kind === 'render' && e.t >= batch.t) : undefined
       const mountPresent = mountRender ? after.find(e => e.kind === 'present' && e.t >= mountRender.t) : undefined
       const mountWork = mountRender ? after.find(e => e.kind === 'work' && e.t >= mountRender.t) : undefined

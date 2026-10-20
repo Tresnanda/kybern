@@ -12,14 +12,22 @@ import type { PaintTransformProps, PaintTransformValue } from '@gpuix/native/hos
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { REDUCED_MOTION } from '../ui.tsx'
-import { BLUR, DISCLOSURE, DISTANCE, DURATION, EASE, SCALE, SPRING, type Ease } from './tokens.ts'
+import { BLUR, DISCLOSURE, DISTANCE, DURATION, EASE, HOVER_FADE, SCALE, SPRING, type Ease } from './tokens.ts'
 
 // The desktop's tokens (`motion.css:13-74`) live in `tokens.ts` (a leaf, because `ui.tsx` -> `press.ts` -> this module ->
 // `ui.tsx` is an import cycle); they are re-exported here, so callers keep importing them from `motion/kit.tsx`.
-export { BLUR, DISCLOSURE, DISTANCE, DURATION, EASE, SCALE, SPRING, type Ease }
+export { BLUR, DISCLOSURE, DISTANCE, DURATION, EASE, HOVER_FADE, SCALE, SPRING, type Ease }
 
 const tween = (duration: number, ease: Ease, delay = 0) => ({ duration, ease: [...ease] as [number, number, number, number], delay })
 const bezier = (ease: Ease) => [...ease] as [number, number, number, number]
+
+/**
+ * Spread on a window's root: every `hover` / `active` background or border colour below it eases over `HOVER_FADE`
+ * (native `hoverTransition`, painted in place after the flip). A press lands at once; a rest colour changed by state (a
+ * selection moved by the keyboard) stays instant. `KYBERN_HOVER_FADE=0` (the measurement control) and the stock addon snap.
+ * Colour is not motion, so Reduce Motion keeps it, like the desktop's `transition-colors`.
+ */
+export const HOVER_FADE_ROOT: { hoverTransition?: typeof HOVER_FADE } = PATCHED_NATIVE && process.env.KYBERN_HOVER_FADE !== '0' ? { hoverTransition: HOVER_FADE } : {}
 
 /** What a `paintTransform` rests at: every field at its neutral value (a retarget back from any exit lands here). */
 export const IDENTITY: Required<PaintTransformValue> = { opacity: 1, scale: 1, rotate: 0, translateX: 0, translateY: 0, blur: 0 }
@@ -179,6 +187,8 @@ export function revealTransform(shown: boolean, slide = true): PaintTransformPro
     initial: false,
     animate: { opacity: shown ? 1 : 0, translateX: shown || !slide || REDUCED_MOTION ? 0 : DISTANCE.micro },
     transition: { duration: shown ? DURATION.quick : 0.1, ease: bezier(EASE.out) },
+    // Shown is the rest (identity): stay retained, so hiding is paint-only from its first frame.
+    retain: true,
   }
 }
 

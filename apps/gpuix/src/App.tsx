@@ -41,7 +41,7 @@ import { NavRail } from './nav/NavRail.tsx'
 import { Palette } from './nav/Palette.tsx'
 import { SessionsDialog } from './nav/Sessions.tsx'
 import { getNav, pointerNav, useNav, type Page } from './nav/store.ts'
-import { EASE, Rise } from './motion/kit.tsx'
+import { EASE, HOVER_FADE_ROOT, Rise } from './motion/kit.tsx'
 import { drawerSlide } from './shell/motion.ts'
 import { EXIT, Presence } from './motion/Presence.tsx'
 import { PATCHED_NATIVE } from './native/local-build.ts'
@@ -122,6 +122,7 @@ function Workspace() {
   return (
     <div
       testId="app-ready"
+      {...HOVER_FADE_ROOT}
       // kybern.css:26–35: chrome inherits select-none; document bodies opt in.
       // Any press makes later navigation pointer-driven again (`keyboardNav`).
       onMouseDown={pointerNav}

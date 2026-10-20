@@ -56,6 +56,8 @@ export function presenceTransform({ show, enter, exit, generation, fresh }: { sh
     ...(enter?.origin ? { origin: enter.origin } : {}),
     ...(show && fresh && enter?.keyframes ? { keyframes: enter.keyframes } : {}),
     generation,
+    // Shown is the rest (identity): stay retained, so the exit is paint-only from its first frame instead of a render.
+    retain: true,
   }
 }
 
