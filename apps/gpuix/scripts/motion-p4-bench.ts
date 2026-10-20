@@ -26,7 +26,7 @@ const painted = async (prefix: string) => {
   return false
 }
 const click = async (id: string) => { const c = await a.getByTestId(id).center(); await a.mouse.click(c) }
-const stats = (intervals: number[]) => ({ frames: intervals.length + 1, p50: +pct(intervals, 0.5).toFixed(1), p95: +pct(intervals, 0.95).toFixed(1), p99: +pct(intervals, 0.99).toFixed(1), over16: intervals.filter(x => x > 16.7).length, over33: intervals.filter(x => x > 33.4).length })
+const stats = (intervals: number[]) => ({ frames: intervals.length + 1, drops25: intervals.filter(x => x >= 25).length, series: intervals.map(x => +x.toFixed(1)), p50: +pct(intervals, 0.5).toFixed(1), p95: +pct(intervals, 0.95).toFixed(1), p99: +pct(intervals, 0.99).toFixed(1), over16: intervals.filter(x => x > 16.7).length, over33: intervals.filter(x => x > 33.4).length })
 const intervalsSince = (from: number) => { const t = f.frameTimes().slice(from); const out: number[] = []; for (let i = 1; i < t.length; i++) out.push(t[i]! - t[i - 1]!); return out }
 async function open(rail: string, first: string, after?: () => Promise<void>) {
   const times: number[] = [], frames: number[] = []
