@@ -35,6 +35,11 @@ function AddButton({ testId, onClick, shown }: { testId: string; onClick: () => 
   )
 }
 
+/** What the group and column counts are counted over: a count that changes with it shows at once instead of popping (`CountPop`). */
+function useCountContext() {
+  return useTasks((s) => `${s.prefs.filter}|${s.prefs.view}|${s.prefs.grouping}|${s.prefs.showDone}|${s.prefs.showCanceled}|${s.query}`)
+}
+
 export function TaskList({
   groups,
   sequence,
@@ -47,6 +52,7 @@ export function TaskList({
   const t = useTheme()
   const p = useTasks((s) => s.prefs)
   const quick = useTasks((s) => s.quick)
+  const countContext = useCountContext()
   const [hoverGroup, setHoverGroup] = useState<string | null>(null)
   const shown: TaskGroup[] =
     quick && !groups.some((g) => g.key === quick.groupKey)
@@ -102,7 +108,7 @@ export function TaskList({
                 size={13}
                 style={{ pointerEvents: 'none', userSelect: 'none' }}
               >{`${group.label}${collapsed ? ' ›' : ''}`}</Label>
-              <CountPop value={group.tasks.length} color={t.textTertiary} size={13} style={{ pointerEvents: 'none', userSelect: 'none' }} />
+              <CountPop value={group.tasks.length} context={countContext} color={t.textTertiary} size={13} style={{ pointerEvents: 'none', userSelect: 'none' }} />
             </div>
             {(!group.status || group.status === 'inbox' || group.status === 'todo') && (
               <AddButton
@@ -374,6 +380,7 @@ export function TaskBoard({
   const size = useWindowSize({ intervalMs: 300 })
   const sidebar = useSidebarWidth()
   const quick = useTasks((s) => s.quick)
+  const countContext = useCountContext()
   const [hoverColumn, setHoverColumn] = useState<string | null>(null)
   // `.tk-col`: equal columns of at least 196px between 16px gutters, 12px apart.
   const available = size.width - 52 - sidebar - 8 - 32
@@ -406,7 +413,7 @@ export function TaskBoard({
             <Label color={t.text} size={13} lineHeight={19.5} weight={500}>
               {STATUS_LABEL[column.status]}
             </Label>
-            <CountPop value={column.tasks.length} color={t.textTertiary} size={13} lineHeight={19.5} />
+            <CountPop value={column.tasks.length} context={countContext} color={t.textTertiary} size={13} lineHeight={19.5} />
             <div style={{ flexGrow: 1 }} />
             {(column.status === 'inbox' || column.status === 'todo') && (
               <div testId={`task-board-add-${column.status}`} onClick={() => quickAdd(column.status as 'inbox' | 'todo')} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 7, marginRight: -4, opacity: hoverColumn === column.status ? 1 : 0, cursor: 'pointer', hover: { backgroundColor: ink(t, 0.05) } }}>
