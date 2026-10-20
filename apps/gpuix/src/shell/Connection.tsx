@@ -8,13 +8,16 @@ import { useEnvironment } from './environment.ts'
 //   {env}"), when the environment is unavailable, and when there is nothing to
 //   open yet ("Add a project to begin").
 //
-// The banner slides in 4px and fades over 200 ms (ease-out) and leaves in 120 ms.
-// Under Reduce Motion it only fades. The spinner uses the shared loader
-// clock, which parks while it is not on screen.
-import { motion } from '@gpuix/react'
-import { useEffect, useRef, useState } from 'react'
+// The banner slides in 4px and fades over 200 ms (ease-out) and leaves in 120 ms,
+// both by paint (`Presence`: no layout or render per frame). Under Reduce Motion it
+// only fades. The spinner uses the shared loader clock, which parks while it is not
+// on screen.
+import type { PaintTransformProps } from '@gpuix/native/host'
+import { useEffect, useState } from 'react'
 import { restartLive } from '../nav/live.ts'
 import { EASE } from '../motion/kit.tsx'
+import { Presence } from '../motion/Presence.tsx'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { useLoopRunning, useLoopVisibility } from '../native/loop-visibility.ts'
 import { ISLAND, NATIVE_PAINT_ANIMATIONS, useLoaderStep } from '../MatrixLoader.tsx'
 import { connect, getClient, getState, resetClient, selectThread, set, useApp } from '../state.ts'
@@ -60,7 +63,14 @@ function ContinuousSpinner({ size, color }: { size: number; color: string }) {
   </div>
 }
 
-type Phase = 'out' | 'in' | 'leaving'
+/** The banner's entrance: 4px down into place over 200 ms ease-out (opacity only under Reduce Motion). */
+const BANNER_ENTER = (): PaintTransformProps | undefined => {
+  if (!PATCHED_NATIVE) return undefined
+  const ease = [...EASE.out] as [number, number, number, number]
+  if (REDUCED_MOTION) return { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: 0.2, ease } }
+  return { initial: { opacity: 0, translateY: -4 }, animate: { opacity: 1, translateY: 0 }, transition: { duration: 0.2, ease } }
+}
+const BANNER_EXIT = { to: { opacity: 0, translateY: -4 }, duration: 0.12, ease: EASE.out } as const
 
 /** Mount once inside the content card; it overlays the top of the card. */
 export function ConnectionBanner() {
@@ -69,29 +79,16 @@ export function ConnectionBanner() {
   const status = useApp((s) => s.status)
   const detail = useApp((s) => s.statusDetail)
   const show = status === 'reconnecting' || status === 'failed'
-  const [phase, setPhase] = useState<Phase>(show ? 'in' : 'out')
-  // What the banner said last, so it can finish leaving with its own words.
-  const last = useRef({ status, detail })
-  if (show) last.current = { status, detail }
-  if (show && phase !== 'in') setPhase('in')
-  if (!show && phase === 'in') setPhase('leaving')
-  if (phase === 'out') return null
-  const failed = last.current.status === 'failed'
-  const shown = phase === 'in'
-  const rise = REDUCED_MOTION ? 0 : -4
+  // `Presence` keeps what the banner said last, so it can finish leaving with its own words.
+  const failed = status === 'failed'
   return (
     <div
       testId="connection-banner"
       role="status"
       style={{ position: 'absolute', top: 56, left: 12, right: 12, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}
     >
-      <motion.div
-        initial={{ opacity: 0, top: rise }}
-        animate={{ opacity: shown ? 1 : 0, top: shown ? 0 : rise }}
-        transition={{ duration: shown ? 0.2 : 0.12, ease: [...EASE.out] }}
-        onMotionComplete={() => {
-          if (!shown) setPhase('out')
-        }}
+      <Presence show={show} enter={BANNER_ENTER()} exit={BANNER_EXIT} style={{ flexDirection: 'row' }}>
+      <div
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -113,7 +110,7 @@ export function ConnectionBanner() {
           <>
             <div style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, backgroundColor: t.red }} />
             <Label color={t.text} size={13} lineHeight={21} style={{ flexShrink: 1, minWidth: 0 }}>
-              {`${NAME}: ${last.current.detail ?? 'Connection failed'}`}
+              {`${NAME}: ${detail ?? 'Connection failed'}`}
             </Label>
             <ReconnectButton />
           </>
@@ -125,7 +122,8 @@ export function ConnectionBanner() {
             </Label>
           </>
         )}
-      </motion.div>
+      </div>
+      </Presence>
     </div>
   )
 }

@@ -323,7 +323,17 @@ function swapTransforms(kind: 'text' | 'icon', generation: number): { enter: Pai
  * motion"); callers that keep one `Swap` mounted for the life of a control pass it. Reduce Motion: a 150 ms opacity fade of
  * the incoming state, no copy kept. Stock addon: the new state just replaces the old.
  */
-export function Swap({ active, children, style, kind = 'text', still = false }: { active: string; children: ReactNode; style?: StyleDesc; kind?: 'text' | 'icon'; still?: boolean }) {
+export function Swap({ active, children, style, kind = 'text', still = false, innerStyle, leavingStyle }: {
+  active: string
+  children: ReactNode
+  style?: StyleDesc
+  kind?: 'text' | 'icon'
+  still?: boolean
+  /** Extra style for the incoming and the outgoing child's box (a truncating title needs `minWidth: 0` / `flexGrow: 1` on both). */
+  innerStyle?: StyleDesc
+  /** Extra style for the outgoing copy only (`right: 0` keeps a truncating title inside the wrapper while it leaves). */
+  leavingStyle?: StyleDesc
+}) {
   const first = useRef(active)
   const changed = useRef(false)
   if (active !== first.current) changed.current = true
@@ -341,7 +351,7 @@ export function Swap({ active, children, style, kind = 'text', still = false }: 
   return (
     <div style={base}>
       {/* The outgoing copy paints last: a blur pass blurs what is painted under it, so the incoming state must not sit above the old one at the start. */}
-      <div key={active} paintTransform={enter} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div key={active} paintTransform={enter} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', ...innerStyle }}>
         {children}
       </div>
       {leaving && out && (
@@ -350,8 +360,8 @@ export function Swap({ active, children, style, kind = 'text', still = false }: 
           paintTransform={out.leave}
           onMotionComplete={event => { if (event.motionGeneration === leaving.id) setLeaving(current => (current?.id === leaving.id ? null : current)) }}
           style={kind === 'icon'
-            ? { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }
-            : { position: 'absolute', left: 0, top: 0, display: 'flex', alignItems: 'center', pointerEvents: 'none' }}
+            ? { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', ...innerStyle, ...leavingStyle }
+            : { position: 'absolute', left: 0, top: 0, display: 'flex', alignItems: 'center', pointerEvents: 'none', ...innerStyle, ...leavingStyle }}
         >
           {leaving.node}
         </div>
@@ -365,6 +375,6 @@ export function Swap({ active, children, style, kind = 'text', still = false }: 
  * change cross-swaps, including the very first one (the previous state is kept for its exit). Use this, not a plain div
  * until the first change and a `Swap` after it: that would lose the outgoing state of the first change.
  */
-export function SwapOnChange({ active, children, style, kind = 'text' }: { active: string; children: ReactNode; style?: StyleDesc; kind?: 'text' | 'icon' }) {
-  return <Swap active={active} style={style} kind={kind} still>{children}</Swap>
+export function SwapOnChange({ active, children, style, kind = 'text', innerStyle, leavingStyle }: { active: string; children: ReactNode; style?: StyleDesc; kind?: 'text' | 'icon'; innerStyle?: StyleDesc; leavingStyle?: StyleDesc }) {
+  return <Swap active={active} style={style} kind={kind} innerStyle={innerStyle} leavingStyle={leavingStyle} still>{children}</Swap>
 }

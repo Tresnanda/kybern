@@ -3,7 +3,7 @@
 // frontend: header 16/16/4, title 15/18.75, description 14/22.75, panel gap 16,
 // field label 13/19.5 w500, hint 13/21.125, buttons h32 radius 10, disabled 64%).
 // The kit has no dialog header, 28px icon button, h-8 input or xs button yet; `Switch` and `Spinner` are the shared ones.
-import { motion, useWindowSize } from '@gpuix/react'
+import { useWindowSize } from '@gpuix/react'
 import { useState, type ReactNode } from 'react'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
@@ -11,6 +11,7 @@ import { Spinner } from '../shell/Connection.tsx'
 import { FONT_MONO, FONT_UI } from '../theme.ts'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { pressTransform } from '../motion/press.ts'
+import { Chevron } from '../motion/Chevron.tsx'
 
 const TRIANGLE = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10"><path d="M1.6 0.4 9.2 5 1.6 9.6Z" fill="#000"/></svg>'
 
@@ -86,11 +87,11 @@ export function EnvInput({ label, value, onChange, testId, placeholder, disabled
   return <input {...extra} tabIndex={0} testId={testId} aria-label={label} aria-invalid={invalid} autoFocus={autoFocus} placeholder={placeholder} value={value} readOnly={disabled} onChange={(e) => onChange(e.value ?? '')} onFocus={() => setFocused(true)} onBlur={() => { setFocused(false); onBlur?.() }} onSubmit={onSubmit} style={{ width: '100%', height: 32, minWidth: 0, borderWidth: 1, borderColor: border, borderRadius: 10, paddingLeft: 12, paddingRight: 12, fontFamily: mono ? FONT_MONO : FONT_UI, fontSize: 14, color: t.text, backgroundColor: t.variant === 'dark' ? ink(t, .025) : t.v('--background'), opacity: disabled ? 0.64 : 1 }} />
 }
 
-/** The `<details>` summary the desktop shows: a small solid triangle that turns down when open. */
+/** The `<details>` summary the desktop shows: a small solid triangle that turns down when open (220 ms, the disclosure curve). */
 export function Disclosure({ label, open, toggle, testId }: { label: string; open: boolean; toggle: () => void; testId?: string }) {
   const t = useTheme()
   return <div testId={testId} role="button" tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') toggle() }} style={{ display: 'flex', alignItems: 'center', alignSelf: 'flex-start', gap: 5, paddingTop: 4, paddingBottom: 4, cursor: 'pointer' }}>
-    <motion.svg source={TRIANGLE} initial={false} animate={{ rotate: open ? 90 : 0 }} transition={{ duration: 0 }} style={{ width: 11, height: 11, color: t.textSecondary, flexShrink: 0 }} />
+    <Chevron source={TRIANGLE} size={11} color={t.textSecondary} open={open} />
     <Hint>{label}</Hint>
   </div>
 }
