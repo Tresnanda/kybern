@@ -6,7 +6,7 @@ const tag = `rest-${scheme}${reduced ? "-reduced" : ""}`
 const { browser, page } = await open({ scheme, reduced })
 
 // Queue (2.7 chip group already running; 2.27 row leave).
-await thread(page, "SCENE_LIVE")
+await thread(page, process.env.LIVE_TITLE || "SCENE_LIVE")
 const editor = page.locator('[data-testid="composer-editor"]')
 await editor.click()
 await page.keyboard.type("queued follow up")

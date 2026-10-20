@@ -108,7 +108,7 @@ const EMPTY_RUNTIME_TASKS: RuntimeTask[] = []
 const ROW = "mx-auto w-full min-w-0 max-w-[var(--app-chat-max-width,46rem)]"
 // Fine pointers get a 2px rise with the fade; touch and reduced motion fade only.
 const HOVER_REVEAL =
-  "opacity-0 motion-safe:pointer-fine:translate-y-0.5 transition-[opacity,translate] duration-[var(--duration-quick)] ease-[var(--ease-out)] pointer-events-none group-hover:translate-y-0 group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:translate-y-0 group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto"
+  "opacity-0 motion-safe:pointer-fine:translate-y-0.5 transition-[opacity,translate] duration-[var(--duration-quick)] ease-[var(--ease-out)] pointer-events-none motion-safe:pointer-fine:group-hover:translate-y-0 group-hover:opacity-100 group-hover:pointer-events-auto motion-safe:pointer-fine:group-focus-within:translate-y-0 group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto"
 
 const turnKey = (group: TurnGroup, index: number) => group.turnId || group.user?.id || `turn-${index}`
 const estimateTurnSize = (group: TurnGroup) => 120 + Math.max(80, (group.answer?.text.length ?? 0) / 75 * 20)
