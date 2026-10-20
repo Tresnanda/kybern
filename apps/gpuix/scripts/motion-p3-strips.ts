@@ -18,10 +18,10 @@ const scratch = { KYBERN_DATA_DIR: '/Users/mymac/projects/ade-gpuix-scratch/moti
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 type Crop = { x: number; y: number; w: number; h: number }
 const crops: Record<string, Crop> = {
-  menu: { x: 0, y: 0, w: 260, h: 240 }, ctx: { x: 300, y: 40, w: 240, h: 130 }, tips: { x: 520, y: 0, w: 240, h: 100 }, dialog: { x: 200, y: 170, w: 560, h: 260 },
+  menu: { x: 0, y: 0, w: 260, h: 240 }, ctx: { x: 300, y: 40, w: 240, h: 130 }, tips: { x: 470, y: 0, w: 300, h: 110 }, dialog: { x: 200, y: 170, w: 560, h: 260 },
   alert: { x: 200, y: 170, w: 560, h: 260 }, sheet: { x: 560, y: 0, w: 400, h: 300 }, select: { x: 0, y: 250, w: 260, h: 170 }, hover: { x: 290, y: 250, w: 240, h: 150 },
   segmented: { x: 8, y: 336, w: 220, h: 40 }, switch: { x: 240, y: 340, w: 60, h: 36 }, badge: { x: 330, y: 340, w: 130, h: 36 }, empty: { x: 560, y: 100, w: 260, h: 220 },
-  loading: { x: 8, y: 416, w: 380, h: 130 }, full: { x: 0, y: 0, w: 960, h: 600 },
+  loading: { x: 8, y: 416, w: 380, h: 130 }, preview: { x: 416, y: 416, w: 308, h: 48 }, full: { x: 0, y: 0, w: 960, h: 600 },
 }
 for (const theme of themes) for (const reduced of reduceds) {
   const label = `${theme}-${reduced === '1' ? 'reduced' : 'normal'}`, dir = path.join(root, label)
@@ -45,7 +45,7 @@ for (const theme of themes) for (const reduced of reduceds) {
     await a.clock.pause()
     /** `real` is wall-clock time for things on real timers (a hover delay) before the stepped frames start. */
     const run = async (id: string, strip: string, trigger: () => Promise<void>, offsets: number[], settle = 800, real = 0) => {
-      if (only.length && !only.some(o => id.startsWith(o))) { await trigger(); await sleep(real); await a.clock.fastForward(settle); return }
+      if (only.length && !only.some(o => id.startsWith(o))) { await trigger(); await sleep(Math.max(real, 120)); await shot('skip'); await a.clock.fastForward(settle); await shot('skip'); return }
       await trigger(); await sleep(real)
       if (cost) {
         const c0 = commits(), i0 = f.islandRenders()
@@ -74,7 +74,7 @@ for (const theme of themes) for (const reduced of reduceds) {
     await run('ctx-escape', 'ctx', () => key('escape'), [0, 40, 100])
     // P3.13: tooltips. The hover delay (600 ms) runs on a real timer; the paused clock then steps the 150 ms scale-in; a neighbour opens at once.
     const tipA = await center('tip-a'), tipB = await center('tip-b')
-    await run('tip-open', 'tips', () => a.mouse.move(tipA), [0, 40, 80, 120, 160, 250, 400], 800, 800)
+    await run('tip-open', 'tips', () => a.mouse.move(tipA), [0, 16, 32, 48, 64, 96, 150, 250], 800, 800)
     await run('tip-chain-a-to-b', 'tips', () => a.mouse.move(tipB), [0, 40, 80, 120, 200, 300])
     await run('tip-close', 'tips', () => a.mouse.move(off), [0, 40, 80, 120, 200])
     // P3.14: dialog by pointer (scrim + card), close by X (exit), close by outside press, Escape (instant), shortcut-opened (instant both ways)
@@ -110,6 +110,11 @@ for (const theme of themes) for (const reduced of reduceds) {
     await run('switch-off', 'switch', () => key('v'), [0, 40, 80, 120, 160, 200, 300])
     await run('badge-count', 'badge', () => key('n'), [0, 60, 125, 190, 250, 400])
     await run('empty-stagger', 'empty', () => key('e'), [0, 70, 140, 210, 300, 500, 800])
+    await run('preview-reload-swap', 'preview', () => key('r'), [0, 60, 125, 190, 250, 400])
+    await run('preview-reload-back', 'preview', () => key('r'), [0, 60, 125, 190, 250, 400])
+    await run('preview-dim', 'preview', () => key('i'), [0, 40, 80, 150, 250])
+    await run('preview-reveal-in', 'preview', () => key('h'), [0, 30, 60, 100, 150, 250])
+    await run('preview-reveal-out', 'preview', () => key('h'), [0, 30, 60, 100, 150])
     await run('loading-after-delay', 'loading', () => key('l'), [0, 100, 150, 200, 300, 450, 700])
     await a.clock.resume()
   } finally { await f.close() }

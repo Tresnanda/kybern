@@ -99,13 +99,13 @@ export function PreviewChrome({ threadId }: { threadId: string }) {
 }
 
 /** A nav button that is unavailable: it eases to 35 % (`transition-opacity duration-150`) instead of switching. */
-function Dim({ on, children }: { on: boolean; children: ReactNode }) {
+export function Dim({ on, children }: { on: boolean; children: ReactNode }) {
   const dim = fadeTo(on ? 1 : 0.35)
   return <div paintTransform={dim.paintTransform} style={dim.style}>{children}</div>
 }
 
 /** Reload while idle, Stop while a page loads: the glyph swaps like `t-icon-swap` (the old one shrinks and blurs out, the new one grows in). */
-function ReloadButton({ loading, onClick }: { loading: boolean; onClick: () => void }) {
+export function ReloadButton({ loading, onClick }: { loading: boolean; onClick: () => void }) {
   const t = useTheme()
   const [hover, setHover] = useState(false)
   const label = loading ? 'Stop loading' : 'Reload'

@@ -11,9 +11,9 @@ import { PATCHED_NATIVE } from '../native/local-build.ts'
  * A dock panel's empty state. Like the kit's `Empty` it runs `.t-stagger` on mount: the icon, the title and the description rise
  * 12 px into place from a 3 px blur, 70 ms apart (`Rise kind="stagger"`, paint-only). Reduce Motion: no entrance, as the desktop.
  */
-export function DockEmpty({ icon, title, body, lineage = false }: { icon: string; title: string; body?: string; lineage?: boolean }) {
+export function DockEmpty({ icon, title, body, lineage = false, instant = false }: { icon: string; title: string; body?: string; lineage?: boolean; /** Opened from the keyboard: no entrance. */ instant?: boolean }) {
   const t = useTheme()
-  const play = !REDUCED_MOTION
+  const play = !REDUCED_MOTION && !instant
   return <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, alignItems: 'center', justifyContent: 'center', gap: lineage ? 12 : 8, paddingLeft: 32, paddingRight: 32, paddingTop: lineage ? 0 : 32, paddingBottom: lineage ? 40 : 32 }}>
     <Rise kind="stagger" index={0} play={play} style={{ alignItems: 'center' }}><Icon source={icon} size={20} color={lineage ? ink(t, 0.35) : muted(t, 0.5)} /></Rise>
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: lineage ? 4 : 8, maxWidth: 256 }}>

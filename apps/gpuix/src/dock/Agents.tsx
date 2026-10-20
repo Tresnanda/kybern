@@ -14,7 +14,8 @@ import { errorText } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
 import { openThread } from '../nav/history.ts'
 import { Dialog, DialogHeader, muted } from '../nav/overlay.tsx'
-import { getNav, setNav } from '../nav/store.ts'
+import { getNav, setNav, useNav } from '../nav/store.ts'
+import { useDock } from './store.ts'
 import { Chevron } from '../sidebar/rows.tsx'
 import { Collapse, Rise, SwapOnChange } from '../motion/kit.tsx'
 import { getClient } from '../state.ts'
@@ -40,6 +41,8 @@ export function Agents({ thread }: { thread: Thread }) {
   const [detail, setDetail] = useState(() => initialChoices(thread.id).detail)
   const [removing, setRemoving] = useState<Thread | null>(null)
   const [busy, setBusy] = useState(false)
+  const dockKeyboard = useNav((s) => s.keyboardNav)
+  const dockInstant = useDock(thread.id).instant || dockKeyboard
 
   useEffect(() => {
     const client = getClient()
@@ -106,7 +109,7 @@ export function Agents({ thread }: { thread: Thread }) {
 
   return <>
     <ErrorLine error={error} retry={() => setReload((n) => n + 1)} />
-    {!rows.length ? loaded && !error ? <DockEmpty lineage icon={N.users} title="No agents yet" body="Ask the agent to delegate work to another agent; children appear here." /> : null : <>
+    {!rows.length ? loaded && !error ? <DockEmpty lineage instant={dockInstant} icon={N.users} title="No agents yet" body="Ask the agent to delegate work to another agent; children appear here." /> : null : <>
       <Section label={lineageSummary(counts) || `${counts.total} ${counts.total === 1 ? 'agent' : 'agents'}`}>
         {stoppable.length >= 2 && <Action disabled={busy} onClick={() => void run(() => Promise.all(stoppable.map((th) => getClient()!.call('threads.interrupt', { thread_id: th.id }))))}>Stop all</Action>}
       </Section>

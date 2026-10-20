@@ -1,7 +1,7 @@
 // P3 motion lab: the real overlay and kit pieces in fixed spots, driven by keys and real mouse events from motion-p3-strips.ts.
 // Every widget is the shipped component; only its inputs are scripted.
 // x context menu · d dialog (pointer) · k dialog opened by a shortcut (instant) · a alert dialog · s sheet · n badge count
-// e empty state remount · v switch · g segmented · l skeleton loading (delayed) · b busy list loader
+// r preview reload↔stop · i preview nav dim · h reveal control · e empty state remount · v switch · g segmented · l skeleton loading (delayed) · b busy list loader
 import '../src/native/local-build.ts'
 import { render } from '@gpuix/react'
 import { Profiler, useState } from 'react'
@@ -16,6 +16,8 @@ import { Switch } from '../src/kit/Switch.tsx'
 import { Badge } from '../src/kit/Badge.tsx'
 import { DockEmpty } from '../src/dock/parts.tsx'
 import { LoadingLines } from '../src/dock/loading.tsx'
+import { Dim, ReloadButton } from '../src/preview/Chrome.tsx'
+import { revealTransform } from '../src/motion/kit.tsx'
 import { N } from '../src/nav/glyphs.ts'
 import { Icon } from '../src/icons.tsx'
 
@@ -31,7 +33,7 @@ function Lab() {
   const t = useTheme()
   const [ctx, setCtx] = useState(false), [dialog, setDialog] = useState<'closed' | 'pointer' | 'key'>('closed'), [alert, setAlert] = useState(false), [sheet, setSheet] = useState(false)
   const [count, setCount] = useState(3), [empty, setEmpty] = useState(0), [on, setOn] = useState(false), [seg, setSeg] = useState('a'), [loading, setLoading] = useState(false)
-  const [choice, setChoice] = useState<string | null>('b')
+  const [choice, setChoice] = useState<string | null>('b'), [pload, setPload] = useState(false), [pdim, setPdim] = useState(true), [reveal, setReveal] = useState(false)
   const action = (k: string) => {
     if (k === 'x') setCtx(v => !v)
     if (k === 'd') setDialog(v => (v === 'closed' ? 'pointer' : 'closed'))
@@ -40,6 +42,9 @@ function Lab() {
     if (k === 's') setSheet(v => !v)
     if (k === 'n') setCount(v => v + 1)
     if (k === 'e') setEmpty(v => v + 1)
+    if (k === 'r') setPload(v => !v)
+    if (k === 'i') setPdim(v => !v)
+    if (k === 'h') setReveal(v => !v)
     if (k === 'v') setOn(v => !v)
     if (k === 'g') setSeg(v => (v === 'a' ? 'b' : v === 'b' ? 'c' : 'a'))
     if (k === 'l') setLoading(v => !v)
@@ -78,6 +83,12 @@ function Lab() {
         <div testId="badge" style={{ display: 'flex', gap: 6 }}><Badge variant="secondary">{String(count)}</Badge><Badge variant="outline">New</Badge></div>
       </div>
       <div testId="empty" style={{ ...at(560, 100, 260, 220) }}><div key={empty} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, width: 260 }}><DockEmpty lineage icon={N.users} title="No agents yet" body="Ask the agent to delegate work to another agent; children appear here." /></div></div>
+      <div testId="preview" style={{ ...at(420, 420, 300, 40), alignItems: 'center', gap: 8, paddingLeft: 8, borderRadius: 10, backgroundColor: fill }}>
+        <Dim on={pdim}><div style={{ display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center' }}><Icon source={N.arrowLeft} size={14} color={t.text} /></div></Dim>
+        <Dim on><ReloadButton loading={pload} onClick={() => {}} /></Dim>
+        <div style={{ flexGrow: 1 }} />
+        <div paintTransform={revealTransform(reveal)} style={{ display: 'flex', width: 24, height: 24, marginRight: 8, alignItems: 'center', justifyContent: 'center', ...(reveal ? {} : { pointerEvents: 'none' }) }}><Icon source={N.plus} size={14} color={t.text} /></div>
+      </div>
       <div testId="loading" style={{ ...at(16, 420, 360, 120), flexDirection: 'column' }}>{loading && <LoadingLines />}</div>
       {dialog !== 'closed' && (
         <Dialog onClose={() => setDialog('closed')} width={420} testId="dialog" instant={dialog === 'key'}>

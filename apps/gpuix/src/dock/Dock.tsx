@@ -131,12 +131,12 @@ function DockContent({ threadId, thread, width }: { threadId: string | null; thr
  * `Empty` (icon card, title, description) plus the `+` menu's panels as quick actions, from the same `PANELS` list and `chooseTab`,
  * so they stay in step with the menu. A deliberate divergence from the desktop.
  */
-function NoPanels({ threadId, coordinator }: { threadId: string; coordinator: boolean }) {
+function NoPanels({ threadId, coordinator, instant }: { threadId: string; coordinator: boolean; instant: boolean }) {
   const t = useTheme()
   const panels = PANELS.filter((panel) => panel.id !== 'project' || coordinator)
   return (
     <Empty testId="dock-empty" style={{ padding: 24 }}>
-      <EmptyHeader>
+      <EmptyHeader play={!instant}>
         <EmptyMedia variant="icon" icon={N.panelRight} />
         <EmptyTitle>No panels open</EmptyTitle>
         <EmptyDescription>Panels show a thread's activity, changes, files and more.</EmptyDescription>
@@ -172,7 +172,7 @@ function ThreadDock({ thread, width }: { thread: Thread; width: number }) {
   return <>
     <TabStrip threadId={thread.id} width={width} coordinator={!!thread.coordinator_project_id} activeTasks={tasks.tasks.filter(isActiveTask).length} stats={stats} />
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', borderBottomRightRadius: 12 }}>
-      {tab === null ? <NoPanels threadId={thread.id} coordinator={!!thread.coordinator_project_id} /> : <PaneEnter key={tab} tab={tab} play={entering.current === tab}>
+      {tab === null ? <NoPanels threadId={thread.id} coordinator={!!thread.coordinator_project_id} instant={dock.instant || keyboard} /> : <PaneEnter key={tab} tab={tab} play={entering.current === tab}>
         {tab === 'agents' ? <Agents thread={thread} />
         : tab === 'preview' ? <PreviewPane threadId={thread.id} />
         : tab === 'terminal' ? <TerminalPane threadId={thread.id} width={width} />
