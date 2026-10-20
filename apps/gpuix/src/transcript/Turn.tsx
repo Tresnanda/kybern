@@ -11,7 +11,7 @@ import { AgentItemCard } from '../coordinator/AgentItem.tsx'
 // folded under "Worked for"), then the answer with its error/stopped lines,
 // the "Edited N files" card and the footer.
 import { SubagentDivider } from '../subagents/Page.tsx'
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { calendarDateKey, calendarDateLabel, elapsedSince, plural } from '../../../desktop/src/lib/format.ts'
 import { clockTime } from './clock.ts'
 import { isImageGenerationTool } from '../../../desktop/src/lib/toolActivity.ts'
@@ -20,6 +20,9 @@ import { isAgentLaunchBlock, isDelegationLaunchBlock, isOrchestrationBlock } fro
 import { buildWorkHierarchy, shouldRevealLiveText, type Block, type TurnGroup } from '../../../../packages/kybern-client/src/transcript.ts'
 import type { Diff, RuntimeTask, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { useApp } from '../state.ts'
+import { TranscriptTail } from './Window.tsx'
+import { isWindowVisible } from '../native/visibility.ts'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { Icon } from '../icons.tsx'
 import { useLoopVisibility } from '../native/loop-visibility.ts'
 import { MatrixLoader, useLoaderSecond } from '../MatrixLoader.tsx'
@@ -117,6 +120,23 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
     return { agentBlocks, disclosureBlocks }
   }, [hierarchy, tasksByToolCall])
   const [expanded, setExpanded] = useRowState(`work:${group.turnId}`, false)
+  // The fold: when this turn settles while it is on screen at the tail, the "Worked for" disclosure first shows its work, then closes
+  // with the same 220 ms height tween as a click (the rows fold away instead of vanishing). A turn first rendered settled, one the reader
+  // has scrolled away from, a hidden window and Reduce Motion skip it; the anchor logic in `Transcript.tsx` is untouched.
+  const tail = useContext(TranscriptTail)
+  const wasRunning = useRef(running)
+  const [folding, setFolding] = useState(false)
+  if (running) wasRunning.current = true
+  else if (wasRunning.current) {
+    wasRunning.current = false
+    if (PATCHED_NATIVE && !REDUCED_MOTION && tail.current && isWindowVisible()) setFolding(true)
+  }
+  useEffect(() => {
+    if (!folding) return
+    // One beat for the expanded rows to paint, so the close has a height to measure.
+    const timer = setTimeout(() => { setFolding(false); setExpanded(false) }, 64)
+    return () => clearTimeout(timer)
+  }, [folding])
   const hasLiveWork = group.work.some(
     (b) =>
       (b.kind === 'tool' && !b.complete) ||
@@ -162,9 +182,9 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
                 <Label color={muted(t)} lineHeight={ROW_LINE} truncate style={{ flexGrow: 1, hover: { color: t.text } }}>
                   {group.end ? `Worked for ${clockDuration(group.end.durationMs)}` : 'Worked'}
                 </Label>
-                <Chevron open={expanded} color={muted(t, 0.65)} />
+                <Chevron open={expanded || folding} color={muted(t, 0.65)} />
               </div>
-              <Collapse open={expanded} testId={`worked-panel-${group.turnId}`}>
+              <Collapse open={expanded || folding} testId={`worked-panel-${group.turnId}`}>
                 <div style={{ paddingTop: 2, marginLeft: 22 }}>
                   <WorkRows compact blocks={settled.disclosureBlocks} ctx={ctx} />
                 </div>

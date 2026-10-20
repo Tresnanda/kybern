@@ -1,6 +1,6 @@
 import { SparseRetention, sparseIndices, useSparseList } from './kit/sparseList.tsx'
 import { TRANSCRIPT_SCROLL_LAYOUT } from './transcript/scroll-layout.ts'
-import { TranscriptFocusRestoration, TranscriptSlot, useTranscriptWindow } from './transcript/Window.tsx'
+import { TranscriptFocusRestoration, TranscriptSlot, TranscriptTail, useTranscriptWindow } from './transcript/Window.tsx'
 import { TranscriptRowStateScope } from './transcript/rowStateScope.ts'
 import { SubagentDivider } from './subagents/Page.tsx'
 import { observeElementBounds, type LayoutRect } from './native/layout.ts'
@@ -83,6 +83,8 @@ export function Transcript() {
   const bottomRef = useCallback((node: PublicInstance | null) => setBottomNode(node), [])
   const surfaceRef = useCallback((node: PublicInstance | null) => setSurfaceNode(node), [])
   const [atTail, setAtTail] = useState(true)
+  const tailRef = useRef(true)
+  tailRef.current = atTail
   const [overflow, setOverflow] = useState(false)
   const [paneHeight, setPaneHeight] = useState(0)
   const [paneWidth, setPaneWidth] = useState(0)
@@ -352,7 +354,7 @@ export function Transcript() {
   }
 
   return (
-    <TranscriptFocusRestoration.Provider value={restoreFocus}><TranscriptRowStateScope.Provider value={rowStateScope}><SparseRetention.Provider value={nativeWindow.context}><div ref={surfaceRef} testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+    <TranscriptTail.Provider value={tailRef}><TranscriptFocusRestoration.Provider value={restoreFocus}><TranscriptRowStateScope.Provider value={rowStateScope}><SparseRetention.Provider value={nativeWindow.context}><div ref={surfaceRef} testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
       <virtual-list
         {...TRANSCRIPT_SCROLL_LAYOUT}
         {...(sparse ? { estimatedItemHeight: 160, itemCount: count, windowStart: windowIndices?.[0] ?? 0, windowIndices, ...nativeWindow.props } : { estimatedItemHeight: 160 })}
@@ -429,7 +431,7 @@ export function Transcript() {
       )}
       <BottomFade visible={!atTail} bottom={COMPOSER_INSET - 64 + panelHeight} />
       <ScrollToBottom visible={!atTail} bottom={COMPOSER_INSET - 64 + 24 + panelHeight} onClick={scrollToBottom} />
-    </div></SparseRetention.Provider></TranscriptRowStateScope.Provider></TranscriptFocusRestoration.Provider>
+    </div></SparseRetention.Provider></TranscriptRowStateScope.Provider></TranscriptFocusRestoration.Provider></TranscriptTail.Provider>
   )
 }
 
