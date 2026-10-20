@@ -28,13 +28,15 @@ export function processInventory(owner=process.pid){
   const windows=spawnSync('swift',['/Users/mymac/projects/ade-gpuix-scratch/window-onscreen.swift',match[1]!],{encoding:'utf8'})
   if(sample.status===0&&sample.stdout.trim()&&fixtureProxyExempt(match[2]!,cpu,windows.status===0?windows.stdout:null)){
    proxyExemptions.push(line)
-   processes[i]=`${line} [windowless-fixture-proxy cpu=${cpu}%]`
+   processes[i]=`${line} [http-proxy, windowless cpu=${cpu}%]`
   }
  }
- const foreign=foreignProcesses(processes.filter(line=>!line.includes('[windowless-fixture-proxy cpu=')),parents,owner)
+ const foreign=foreignProcesses(processes.filter(line=>!line.includes('[http-proxy, windowless cpu=')),parents,owner)
  return {processes,foreign,proxyExemptions}
 }
 
+// Recheck the exemption independently at both endpoints; gaining a window
+// or reaching 1% CPU restores foreign-process rejection.
 export function watchRun(){
  const screenBefore=requireScreen(),startedAt=new Date().toISOString(),before=processInventory(),builds=watchBuilds()
  return {finish(){const screenAfter=screenState(),after=processInventory();return {screenBefore,screenAfter,screenInvalid:!screenAfter.valid,...builds.finish(),timedWindowStartedAt:startedAt,timedWindowEndedAt:new Date().toISOString(),gpuixProcessesBefore:before.processes,gpuixProcessesAfter:after.processes,foreignProcessesBefore:before.foreign,foreignProcessesAfter:after.foreign,orphanOverlap:before.foreign.length>0||after.foreign.length>0}}}

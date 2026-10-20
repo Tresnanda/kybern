@@ -204,7 +204,7 @@ hardware and guarded hidden-display identity remained the same throughout. Two s
 support regression checking, not a general battery/performance guarantee.
 
 The process gate's only new overlap exemption is a verified windowless
-`bun …/visual/fixture.*.ts --proxy` below 1% CPU. It remains tagged in inventory;
+`bun …/visual/fixture.*.ts --proxy` below 1% CPU. It remains tagged `http-proxy, windowless` in inventory at both endpoints;
 visible, busy or unverified helpers still invalidate a measurement.
 
 Discarded captures and failed gate runs remain under `diagnostics/`. The
