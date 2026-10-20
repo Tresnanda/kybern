@@ -1212,6 +1212,42 @@ impl Store {
         })
     }
 
+    /// Whether `text` appears in one of the thread's own messages (a prompt, a steered message or a completed reply).
+    /// Searched newest first in bounded batches, releasing the connection between them, as JSON-encoded in the payload.
+    pub fn thread_mentions(&self, thread_id: ThreadId, text: &str) -> Result<bool> {
+        if text.is_empty() {
+            return Ok(false);
+        }
+        let encoded = serde_json::to_string(text)?;
+        let needle = &encoded[1..encoded.len() - 1];
+        let thread = thread_id.to_string();
+        let mut before = i64::MAX;
+        loop {
+            let (found, last) = self.with(|c| {
+                let mut st = c.prepare_cached(
+                    "SELECT seq, instr(payload, ?3) > 0 FROM events
+                     WHERE thread_id = ?1 AND seq < ?2 AND kind IN ('assistant_message_completed', 'turn_started', 'message_steered')
+                     ORDER BY seq DESC LIMIT 128",
+                )?;
+                let mut rows = st.query(params![thread, before, needle])?;
+                let mut last = None;
+                while let Some(row) = rows.next()? {
+                    if row.get::<_, bool>(1)? {
+                        return Ok((true, None));
+                    }
+                    last = Some(row.get::<_, i64>(0)?);
+                }
+                Ok((false, last))
+            })?;
+            match (found, last) {
+                (true, _) => return Ok(true),
+                (false, Some(seq)) => before = seq,
+                (false, None) => return Ok(false),
+            }
+            std::thread::yield_now();
+        }
+    }
+
     /// Keep a hydrated transcript aligned with the thread's acknowledged head.
     ///
     /// Read in bounded batches, releasing the connection between them: a long thread (tens of thousands of events,
@@ -2115,6 +2151,50 @@ mod tests {
         assert!(events.windows(2).all(|pair| pair[0].seq < pair[1].seq));
         let through = events[400].seq;
         assert_eq!(store.events_for_thread_through(thread.id, through).unwrap().len(), 401);
+    }
+
+    #[test]
+    fn thread_mentions_finds_text_in_the_threads_own_messages_only() {
+        let (store, thread) = thread_fixture();
+        let shot = "/Users/someone/Desktop/booking \"form\" 7 h spät.png";
+        store
+            .event_append(
+                thread.id,
+                None,
+                EventPayload::AssistantMessageCompleted {
+                    message_id: Uuid::now_v7(),
+                    origin: EventOrigin::Root,
+                    text: format!("![Booking form]({shot})"),
+                    thinking: None,
+                },
+            )
+            .unwrap();
+        // Many later messages: the search walks back across bounded batches.
+        for i in 0..300 {
+            store
+                .event_append(
+                    thread.id,
+                    None,
+                    EventPayload::AssistantMessageCompleted {
+                        message_id: Uuid::now_v7(),
+                        origin: EventOrigin::Root,
+                        text: format!("reply {i}"),
+                        thinking: None,
+                    },
+                )
+                .unwrap();
+        }
+        store
+            .event_append(
+                thread.id,
+                None,
+                EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "/tmp/notice.png".into(), data: None },
+            )
+            .unwrap();
+        assert!(store.thread_mentions(thread.id, shot).unwrap());
+        assert!(!store.thread_mentions(thread.id, "/Users/someone/Desktop/other.png").unwrap());
+        assert!(!store.thread_mentions(thread.id, "/tmp/notice.png").unwrap(), "only messages count, not notices");
+        assert!(!store.thread_mentions(Uuid::now_v7(), shot).unwrap());
     }
 
     fn thread_fixture() -> (Store, Thread) {

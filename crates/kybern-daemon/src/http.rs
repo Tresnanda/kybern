@@ -187,6 +187,23 @@ mod tests {
     }
 
     #[test]
+    fn protected_folders_stay_closed_for_outside_images() {
+        let home = std::path::Path::new("/Users/someone");
+        let data = std::path::Path::new("/Users/someone/.kybern");
+        for path in [
+            "/Users/someone/.ssh/id.png",
+            "/Users/someone/.kybern/assets/x.png",
+            "/private/etc/x.png",
+            "/Users/someone/Library/Keychains/x.png",
+        ] {
+            assert!(super::protected_location(std::path::Path::new(path), Some(home), data), "{path}");
+        }
+        assert!(!super::protected_location(std::path::Path::new("/Users/someone/Desktop/shot.png"), Some(home), data));
+        assert_eq!(super::percent_decode("a%20b%C3%A4.png").as_deref(), Some("a bä.png"));
+        assert_eq!(super::percent_decode("plain.png"), None);
+    }
+
+    #[test]
     fn accepts_tauri_and_vite_origins() {
         for origin in ["http://tauri.localhost", "tauri://localhost", "http://localhost:1420", "http://127.0.0.1:5173"] {
             assert_eq!(allowed_asset_origin(&headers(origin)).unwrap(), origin);
@@ -233,15 +250,10 @@ async fn get_thread_image(
         let Ok(root) = tokio::fs::canonicalize(&thread.cwd).await else {
             return (StatusCode::NOT_FOUND, "thread folder is unavailable").into_response();
         };
-        let Ok(path) = tokio::fs::canonicalize(root.join(&query.path)).await else {
-            return (StatusCode::NOT_FOUND, "image file is unavailable").into_response();
+        let path = match thread_image_path(&state, id, &root, &query.path).await {
+            Ok(path) => path,
+            Err(refusal) => return refusal.into_response(),
         };
-        if !path.starts_with(&root) {
-            return (StatusCode::FORBIDDEN, "image must be inside the thread folder").into_response();
-        }
-        if !tokio::fs::metadata(&path).await.is_ok_and(|meta| meta.is_file()) {
-            return (StatusCode::NOT_FOUND, "image file is unavailable").into_response();
-        }
         // Acquire before reading compressed data, and keep ownership inside
         // spawn_blocking so a cancelled HTTP request cannot oversubscribe decodes.
         static DECODES: std::sync::LazyLock<std::sync::Arc<tokio::sync::Semaphore>> =
@@ -282,6 +294,108 @@ async fn get_thread_image(
     }
     .await;
     with_asset_cors(response, origin)
+}
+
+/// The file a thread's image reference names, or why it is refused. `reference` is the path as the message wrote it:
+/// relative to the thread's folder, absolute, `~/…` or `file://…` (percent-encoding is tried when the literal path is
+/// missing). It is canonicalized first, so `..` and symlinks are judged by where they land. Only image files (by
+/// extension here, by content when read) are served. Inside the thread's folder any folder works, hidden ones such as
+/// `.screenshots` included, except Git internals. Outside it, the reference must appear in one of this thread's own
+/// messages, so the route cannot be used to read arbitrary files, and protected folders stay closed regardless.
+async fn thread_image_path(
+    state: &AppState,
+    thread_id: Uuid,
+    root: &std::path::Path,
+    reference: &str,
+) -> Result<std::path::PathBuf, (StatusCode, &'static str)> {
+    const UNAVAILABLE: (StatusCode, &str) = (StatusCode::NOT_FOUND, "image file is unavailable");
+    let reference = reference.trim();
+    let literal = reference.strip_prefix("file://localhost").or_else(|| reference.strip_prefix("file://")).unwrap_or(reference);
+    let home = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf());
+    let locate = |raw: &str| -> Option<std::path::PathBuf> {
+        if raw.is_empty() {
+            return None;
+        }
+        Some(match raw.strip_prefix("~/") {
+            Some(rest) => home.as_ref()?.join(rest),
+            None => root.join(raw),
+        })
+    };
+    let mut found = None;
+    for raw in [Some(literal.to_string()), percent_decode(literal)].into_iter().flatten() {
+        if let Some(candidate) = locate(&raw)
+            && let Ok(path) = tokio::fs::canonicalize(&candidate).await
+        {
+            found = Some(path);
+            break;
+        }
+    }
+    let path = found.ok_or(UNAVAILABLE)?;
+    if !tokio::fs::metadata(&path).await.is_ok_and(|meta| meta.is_file()) {
+        return Err(UNAVAILABLE);
+    }
+    let image_extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ["png", "jpg", "jpeg", "gif", "webp", "avif"].contains(&ext.to_ascii_lowercase().as_str()));
+    if !image_extension {
+        return Err((StatusCode::UNSUPPORTED_MEDIA_TYPE, "use a PNG, JPEG, GIF, WebP, or AVIF image"));
+    }
+    if let Ok(inside) = path.strip_prefix(root) {
+        if inside.components().any(|part| part.as_os_str() == ".git") {
+            return Err((StatusCode::FORBIDDEN, "images inside Git internals are not served"));
+        }
+        return Ok(path);
+    }
+    if protected_location(&path, home.as_deref(), &state.paths.root) {
+        return Err((StatusCode::FORBIDDEN, "images in protected folders are not served"));
+    }
+    let store = state.store.clone();
+    let needle = reference.to_string();
+    let named = tokio::task::spawn_blocking(move || store.thread_mentions(thread_id, &needle)).await;
+    if !matches!(named, Ok(Ok(true))) {
+        return Err((StatusCode::FORBIDDEN, "image must be inside the thread folder"));
+    }
+    Ok(path)
+}
+
+/// Folders an outside-the-workspace image is never read from, even when a message names it: credentials, keychains,
+/// system configuration and Kybern's own data.
+fn protected_location(path: &std::path::Path, home: Option<&std::path::Path>, data_dir: &std::path::Path) -> bool {
+    let canonical_data = std::fs::canonicalize(data_dir).unwrap_or_else(|_| data_dir.to_path_buf());
+    if path.starts_with(&canonical_data) || path.starts_with(data_dir) {
+        return true;
+    }
+    if ["/etc", "/private/etc", "/private/var/db", "/System", "/dev", "/proc", "/var/db"].iter().any(|prefix| path.starts_with(prefix)) {
+        return true;
+    }
+    home.is_some_and(|home| {
+        [".ssh", ".gnupg", ".aws", ".kube", ".docker", ".config/gcloud", ".netrc", "Library/Keychains", "Library/Cookies"]
+            .iter()
+            .any(|folder| path.starts_with(home.join(folder)))
+    })
+}
+
+fn percent_decode(text: &str) -> Option<String> {
+    if !text.contains('%') {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && let Some(hex) = text.get(i + 1..i + 3)
+            && let Ok(byte) = u8::from_str_radix(hex, 16)
+        {
+            out.push(byte);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 fn image_mime(bytes: &[u8]) -> Option<&'static str> {
