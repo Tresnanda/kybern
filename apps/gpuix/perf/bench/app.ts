@@ -85,6 +85,8 @@ const server=Bun.serve({idleTimeout:255,port:0,hostname:'127.0.0.1',async fetch(
  if(body.action==='home'){nav.setNav({page:'home',keyboardNav:true});await state.selectThread(null)}
  if(body.action==='explorer'){dock.setDock(state.getState().selectedId,{open:true,tabs:['explorer'],tab:'explorer',width:538,instant:true});if(body.file)showFileInExplorer(state.getState().selectedId!,state.getState().open.thread!.project_id!,body.file)}
  if(body.action==='dock-close')dock.setDock(state.getState().selectedId,{open:false,instant:true})
+ // A live turn without a token stream: the working header's passive loops only (perf/motion-fps).
+ if(body.action==='turn-started'){const id=state.getState().selectedId!;state.setThreadOpen(id,applyEvent(state.getState().open,{thread_id:id,turn_id:'bench-live-turn',seq:++sequence,at:'2026-10-17T00:00:00Z',kind:'turn_started',message_id:'bench-live-user',message:{parts:[{type:'text',text:'Check the native client.'}]}} as never),false)}
  if(body.action==='stream'){
   clearInterval(streamTimer)
   const id=state.getState().selectedId!,turn='bench-stream-turn',message='bench-stream-answer',started=performance.now()
