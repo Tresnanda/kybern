@@ -149,17 +149,20 @@ for (const name of scenarios) for (let repeat = 1; repeat <= repeats; repeat++) 
     await delay(warmup * 1000)
     requireScreen(); requireWindowOnscreen(f.pid)
     if (scene.transient) {
-      const samples: number[][] = [], draws: number[] = []
+      const samples: number[][] = [], draws: number[] = [], drawCosts: number[][] = []
       for (let i = 0; i < 12; i++) {
         const mark = t.mark()
         await scene.transient.trigger(app, i)
         await delay(scene.transient.ms + 250)
         const frames = t.submissions.slice(mark.frames).map(s => s.native)
-        samples.push(frames.slice(1).map((v, j) => v - frames[j]!).filter(v => v < scene.transient!.ms + 100))
+        // Intervals that start inside the motion (first submission + duration); the settle/unmount frame after
+        // the last visible step is not part of the motion.
+        samples.push(frames.slice(1).map((v, j) => v - frames[j]!).filter((_, j) => frames[j]! - frames[0]! < scene.transient!.ms))
         draws.push(t.costs.length - mark.costs)
+        drawCosts.push(t.costs.slice(mark.costs).map(c => Math.round(c.render * 10) / 10))
       }
       const all = samples.flat()
-      Object.assign(row, { frames: { ...distribution(all), count: all.length, over16_7: all.filter(v => v > 16.7).length, over33: all.filter(v => v > 33).length }, framesPerMotion: samples.map(s => s.length + 1), fullDraws: draws, work: t.result({ frames: 0, costs: 0, commits: 0 }).work })
+      Object.assign(row, { frames: { ...distribution(all), count: all.length, over16_7: all.filter(v => v > 16.7).length, over33: all.filter(v => v > 33).length }, framesPerMotion: samples.map(s => s.length + 1), intervals: samples.map(s => s.map(v => Math.round(v * 10) / 10)), drawCosts, fullDraws: draws, work: t.result({ frames: 0, costs: 0, commits: 0 }).work })
     } else {
       const mark = t.mark(), c0 = cpuSeconds(f.pid), g0 = gpuNs().get(f.pid) ?? 0, s0 = performance.now()
       // Diagnostic only: `sample` itself costs CPU, so a profiled row is never a resource result.
