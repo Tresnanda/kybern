@@ -75,7 +75,7 @@ for (const [appearance, reduced] of modes) {
     {
       const width = async (name: string) => {
         const file = path.join(out, `press-${name}-${mode}.png`); await a.screenshot({ path: file })
-        const img = pngPixels(file), sc = img.width / (await a.call('initialize', { protocolVersion: 1, client: 'editor-check' })).window.width
+        const img = pngPixels(file), sc = img.width / 900 // the lab window's logical width
         const y = Math.round((layout.y + item.ty + item.lineHeight / 2) * sc), bg = img.at(Math.round((layout.x + item.listX - 10) * sc), y)
         let x0 = Infinity, x1 = -Infinity
         for (let x = Math.round((layout.x + item.listX - 6) * sc); x < (layout.x + item.listX + 24) * sc; x++) if (img.at(x, y).some((v, i) => Math.abs(v - bg[i]!) > 30)) { x0 = Math.min(x0, x); x1 = Math.max(x1, x) }
@@ -90,6 +90,7 @@ for (const [appearance, reduced] of modes) {
       if (reduced === '1') assert.ok(Math.abs(held - rest) <= 1, `Reduce Motion: the box did not squash (${rest} -> ${held})`)
       else assert.ok(held < rest * 0.96 && held > rest * 0.86, `a held box squashes to 0.92 (${rest} -> ${held})`)
       assert.ok(Math.abs(back - rest) <= 1, `the box returns to its size on release (${rest} -> ${back})`)
+      console.log(`checklist press ${mode}: box ${rest} px at rest, ${held} px held, ${back} px after release`)
       await tail('- [ ] Check\n')
       await a.mouse.click(box); await tail('- [x] Check\n')
     }
