@@ -11,14 +11,15 @@
 //!   "keyframes": [{"offset": .6, "rotate": 4, "scale": 1.06, "translateY": -1}],
 //!   "origin": [.5, .5],
 //!   "press": {"scale": .97, "down": {"duration": .08, "ease": [...]}, "up": {"duration": .15, "ease": [...]}},
-//!   "generation": 1 }
+//!   "generation": 1, "retain": true }
 //! ```
 //! Missing values are the identity (scale 1, opacity 1, others 0). `keyframes` are CSS-style
 //! intermediate stops between the start (`initial`, or the current value on a retarget) and
 //! `animate`; each segment uses `ease`, and a property absent from a stop interpolates across
 //! it. Changing `animate`, `keyframes` or `generation` retargets from the value on screen; a new `generation` with an
 //! `initial` value restarts from that value instead.
-//! `press` is the desktop's `:active` squash, driven natively by mouse down/up on the host.
+//! `press` is the desktop's `:active` squash, driven natively by mouse down/up on the host. `retain` keeps the
+//! scope tagged at rest (identity), so an exit or reveal that starts later is retained from its first frame.
 use crate::{renderer::GpuixView, retained_tree::RetainedTree};
 use gpui::{
     AnyElement, App, Bounds, DispatchPhase, Element, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
@@ -121,6 +122,10 @@ struct Source {
     press: Option<Press>,
     #[serde(default)]
     generation: Option<f64>,
+    /// Keep the scope's retained paint while it rests at identity, so the next change (an exit, a hover reveal
+    /// hiding) is a retained update from its first frame instead of a render.
+    #[serde(default)]
+    retain: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
 struct KeyStop {
@@ -276,7 +281,7 @@ impl Track {
     }
     /// Paint the scope (and keep its base primitives) while it can change without a render.
     fn tagged(&self, now: Instant) -> bool {
-        self.source.press.is_some() || self.active(now) || !self.value(now).is_identity()
+        self.source.press.is_some() || self.source.retain || self.active(now) || !self.value(now).is_identity()
     }
 }
 

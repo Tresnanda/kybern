@@ -22,6 +22,7 @@ edit(w, '    pub fn dispatch_event(&mut self, event: PlatformInput, cx: &mut App
                 PlatformInput::MouseDown(_) => kybern_motion_trace(format_args!("input down")),
                 PlatformInput::MouseUp(_) => kybern_motion_trace(format_args!("input up")),
                 PlatformInput::KeyDown(_) => kybern_motion_trace(format_args!("input key")),
+                PlatformInput::MouseMove(_) => kybern_motion_trace(format_args!("input move")),
                 _ => {}
             }
         }

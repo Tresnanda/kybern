@@ -77,7 +77,7 @@ index 37cc70406f67838394b07664259720cf9dd9f748..09a5c21aacf092351270d6322bee5e84
          }),
          result: okSchema,
 diff --git a/dist/host.d.ts b/dist/host.d.ts
-index cc6b7ef926c5c3122fff6107341913364a215710..0c2d48d87de78adb90589d7647b883700b3492f3 100644
+index cc6b7ef926c5c3122fff6107341913364a215710..a1a2942b404762c9c0c4928a672a54604e130f00 100644
 --- a/dist/host.d.ts
 +++ b/dist/host.d.ts
 @@ -5,6 +5,10 @@ export * from "./mutations.js";
@@ -107,7 +107,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..0c2d48d87de78adb90589d7647b88370
      /** Duration in seconds. */
      duration?: number;
      /** Delay in seconds. */
-@@ -274,7 +287,45 @@ export interface HighlightSpec {
+@@ -274,7 +287,55 @@ export interface HighlightSpec {
      /** Corner radius of the wash. Defaults to 2. */
      radius?: number;
  }
@@ -139,8 +139,18 @@ index cc6b7ef926c5c3122fff6107341913364a215710..0c2d48d87de78adb90589d7647b88370
 +    /** Native `:active` squash on primary mouse down. */
 +    press?: { scale: number; down?: PaintTransformTiming; up?: PaintTransformTiming };
 +    generation?: number;
++    /** Keep the retained paint at rest, so an exit or reveal that starts later is paint-only from its first frame. */
++    retain?: boolean;
++}
++export interface HoverTransition {
++    /** Seconds. */
++    duration?: number;
++    /** cubic-bezier control points. */
++    ease?: [number, number, number, number];
 +}
  export interface HostProps {
++    /** Ease `hover` / `active` background and border colour changes; inherited by descendants, `false` opts out. */
++    hoverTransition?: HoverTransition | false;
 +    /** Paint-only subtree scale / rotation / opacity / blur; layout never moves. */
 +    paintTransform?: PaintTransformProps;
 +    /** A Finder drag entered (`hovered: true`) or left (`hovered: false`) this element. */
@@ -153,7 +163,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..0c2d48d87de78adb90589d7647b88370
      style?: StyleDesc;
      /** Primary button only, like the DOM. Use `onAuxClick` for the others. */
      onClick?: (event: EventPayload) => void;
-@@ -287,7 +338,7 @@ export interface HostProps {
+@@ -287,7 +348,7 @@ export interface HostProps {
      onMouseMove?: (event: EventPayload) => void;
      /** Fires when user clicks OUTSIDE this element. Use for "click outside to close". */
      onMouseDownOutside?: (event: EventPayload) => void;
@@ -162,7 +172,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..0c2d48d87de78adb90589d7647b88370
      onKeyUp?: (event: EventPayload) => void;
      onFocus?: (event: EventPayload) => void;
      onBlur?: (event: EventPayload) => void;
-@@ -342,6 +393,10 @@ export interface HostProps {
+@@ -342,6 +403,10 @@ export interface HostProps {
      motion?: MotionProps;
  }
  export interface InputProps extends HostProps {
@@ -173,7 +183,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..0c2d48d87de78adb90589d7647b88370
      /** External editor value. Native edits apply immediately and report through onChange. */
      value?: string;
      placeholder?: string;
-@@ -405,6 +460,8 @@ export interface SvgProps extends HostProps {
+@@ -405,6 +470,8 @@ export interface SvgProps extends HostProps {
   * scroller, so `whiteSpace` and `overflowX` do nothing.
   */
  export interface CodeProps extends HostProps {
@@ -182,7 +192,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..0c2d48d87de78adb90589d7647b88370
      /** The source to display. Rendered one div per line at an exact line height. */
      code?: string;
      /** Language alias such as "ts", "rust", "bash". Beats `path` for detection. */
-@@ -468,7 +525,7 @@ export type WindowSizeHost = Pick<GpuixRenderer, "getWindowSize">;
+@@ -468,7 +535,7 @@ export type WindowSizeHost = Pick<GpuixRenderer, "getWindowSize">;
  export type WindowInsetsHost = Pick<GpuixRenderer, "getWindowInsets">;
  export type SelectionHost = Pick<GpuixRenderer, "getSelectedText">;
  /** `applyBatch` plus the live renderer methods a host may also expose. */
@@ -205,7 +215,7 @@ index dc645f7af4cca2917a59c340b185b539c7c34e0f..4cdffbfaa6af9d3162c583024eb22bdb
  export declare const RESERVED_PROPS: ReadonlySet<string>;
  export declare const BUILT_IN_TYPES: ReadonlySet<string>;
 diff --git a/dist/mutations.js b/dist/mutations.js
-index 7d0eda6cb58127462067cb9d5a442a9ea606c671..9d19d987f848e81d396210913899ab4f53cb053d 100644
+index 7d0eda6cb58127462067cb9d5a442a9ea606c671..bf95cd27061c0c2390a6ed8aa87991b0afac6e78 100644
 --- a/dist/mutations.js
 +++ b/dist/mutations.js
 @@ -1,5 +1,6 @@
@@ -253,7 +263,7 @@ index 7d0eda6cb58127462067cb9d5a442a9ea606c671..9d19d987f848e81d396210913899ab4f
  ];
  export const EVENT_PROP_NAMES = new Set(EVENT_PROPS.map(([name]) => name));
  export const RESERVED_PROPS = new Set([
-@@ -94,6 +105,16 @@ export const UNIVERSAL_PROPS = new Set([
+@@ -94,6 +105,17 @@ export const UNIVERSAL_PROPS = new Set([
      "autoFocus",
      "tabIndex",
      "motion",
@@ -262,6 +272,7 @@ index 7d0eda6cb58127462067cb9d5a442a9ea606c671..9d19d987f848e81d396210913899ab4f
 +    "paintAnimation",
 +    "paintTranslate",
 +    "paintTransform",
++    "hoverTransition",
 +    "cache",
 +    "windowDrag",
 +    "interceptKeys",

@@ -2,7 +2,7 @@
  *
  *   bun perf/motion-native/latency.ts <label> <scenario...> [--env K=V ...] [--opens 12] [--keep-data]
  *
- * Seeds the shared bench dataset (perf/bench/seed.ts) on scratch port 4371 and launches the full app through
+ * Seeds the shared bench dataset (perf/bench/seed.ts) on scratch port 4379 and launches the full app through
  * perf/bench/app.ts on the hidden test display (one UI lease per scenario), with the native motion trace on
  * (`KYBERN_MOTION_TRACE=1`, native/patches/motion_trace_gpui.py). Every open is a real pointer click; the trace puts
  * the click, React batches, renders, retained `paintTransform` ticks and presents on one native clock:
@@ -16,7 +16,7 @@
  *
  * Results append to previews/motion/native/latency.jsonl with the addon hash and env.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { seed } from '../bench/seed.ts'
@@ -27,7 +27,8 @@ import { waitForWindowOnscreen, requireWindowOnscreen } from '../bench/window-on
 import { launchFixture } from '../../src/requests/harness.ts'
 
 const DATA = '/Users/mymac/projects/ade-gpuix-scratch/motion-native/bench'
-const PORT = 4371
+// The lane's port 4371 is taken by another lane's seed server; 4379 is this probe's own.
+const PORT = Number(process.env.MOTION_PORT ?? 4379)
 const OUT = '/Users/mymac/projects/ade/previews/motion/native'
 const root = path.resolve(import.meta.dir, '../..')
 const addon = process.env.MOTION_ADDON ?? path.join(root, 'native/build/gpuix-native.darwin-arm64.node')
@@ -58,9 +59,14 @@ async function bounds(app: Launch['app'], id: string) {
 }
 
 /** `[mtrace] <ms> <kind> id:value …` (motion_trace_gpui.py / motion_trace_hooks.py / subtree_transform.rs). */
+let lastT = 0
 function parse(line: string): Event | undefined {
+  // Window draw costs (KYBERN_FRAME_COSTS) carry no clock: they follow the trace record before them.
+  const work = /\[kybern-work\] renderMs=([\d.]+) layoutMs=([\d.]+)/.exec(line)
+  if (work) return { t: lastT, kind: 'work', values: new Map([['draw', Number(work[1])], ['layout', Number(work[2])]]) }
   const m = /\[mtrace\] ([\d.]+) (.*)$/.exec(line)
   if (!m) return undefined
+  lastT = Number(m[1])
   const words = m[2]!.trim().split(/\s+/)
   let kind = words.shift()!
   if (kind === 'input' || kind === 'ptx-tick') kind += ' ' + (kind === 'input' ? words.shift() : '')
@@ -88,15 +94,16 @@ for (const name of scenarios) {
   let f: Launch | undefined
   const events: Event[] = []
   let remainder = ''
+  const raw: string[] = []
   const row: Record<string, unknown> = { label, scenario: name, at: new Date().toISOString(), addon: sha, env: extraEnv }
   try {
     const client = path.join(DATA, 'client', `${label}-${name}`); mkdirSync(client, { recursive: true })
     const markers0 = buildMarkers(), foreign0 = foreignApps(0)
     f = await launchFixture(path.join(root, 'perf/bench/app.ts'), {
       ...fixture.env, KYBERN_CLIENT_CONFIG_DIR: client, KYBERN_GPUIX_CREDENTIALS_DIR: path.join(client, 'credentials'),
-      GPUIX_BACKGROUND: '1', KYBERN_MOTION_TRACE: '1', KYBERN_PACING_IGNORE_PHYSICAL_MOUSE: '1',
+      GPUIX_BACKGROUND: '1', KYBERN_MOTION_TRACE: '1', KYBERN_FRAME_COSTS: '1', KYBERN_PACING_IGNORE_PHYSICAL_MOUSE: '1',
       KYBERN_GPUIX_THREAD: '', KYBERN_APPEARANCE: extraEnv.KYBERN_APPEARANCE ?? 'dark', NAPI_RS_NATIVE_LIBRARY_PATH: addon, ...extraEnv,
-    }, { stderr: chunk => { const lines = (remainder + chunk).split('\n'); remainder = lines.pop() ?? ''; for (const l of lines) { const e = parse(l); if (e) events.push(e) } } })
+    }, { stderr: chunk => { if (process.env.MOTION_RAW_LOG) raw.push(chunk); const lines = (remainder + chunk).split('\n'); remainder = lines.pop() ?? ''; for (const l of lines) { const e = parse(l); if (e) events.push(e) } } })
     const app = f.app
     await bounds(app, 'app-ready')
     const controlFile = path.join(client, 'bench-control.json')
@@ -121,7 +128,7 @@ for (const name of scenarios) {
       await delay(scene.ms + 350)
       const after = events.slice(from)
       const before = events.slice(Math.max(0, from - 400), from)
-      const old = new Set(before.flatMap(e => e.kind === 'present' || e.kind === 'motion' ? [...e.values.keys()] : []))
+      const old = new Set(before.flatMap(e => e.kind === 'present' || e.kind === 'motion' ? [...e.values.keys()] : []).concat(['draw', 'layout']))
       const down = after.find(e => e.kind === 'input down'), up = after.find(e => e.kind === 'input up')
       const batch = after.find(e => e.kind === 'batch' && up && e.t >= up.t) ?? after.find(e => e.kind === 'batch')
       const input = up && batch && batch.t >= up.t ? up : down
@@ -142,19 +149,25 @@ for (const name of scenarios) {
       }
       if (i % 1 === 0) await scene.close(app)
       await delay(400)
-      samples.push({ input: input?.kind, batchAfterInputMs: batch && input ? batch.t - input.t : undefined, firstPaint, firstVisible, visibleValue, firstPaintPresents, renders, missing })
+      const timeline = input ? after.filter(e => e.t >= input.t - 20 && e.t <= input.t + 120).map(e => `${(e.t - input.t).toFixed(1)} ${e.kind}${[...e.values].filter(([id]) => !old.has(id)).map(([id, v]) => ` ${id}:${v}`).join('')}`) : []
+      // Phases of the mount frame: React batch, the render that follows it, and that render's present.
+      const mountRender = batch ? after.find(e => e.kind === 'render' && e.t >= batch.t) : undefined
+      const mountPresent = mountRender ? after.find(e => e.kind === 'present' && e.t >= mountRender.t) : undefined
+      const mountWork = mountRender ? after.find(e => e.kind === 'work' && e.t >= mountRender.t) : undefined
+      const phases = input && mountRender && mountPresent ? { renderAfterInput: mountRender.t - input.t, mountFrame: mountPresent.t - mountRender.t, mountDraw: mountWork?.values.get('draw'), mountLayout: mountWork?.values.get('layout') } : {}
+      samples.push({ ...phases, timeline, input: input?.kind, batchAfterInputMs: batch && input ? batch.t - input.t : undefined, firstPaint, firstVisible, visibleValue, firstPaintPresents, renders, missing })
     }
     const pick = (k: string) => samples.map(s => s[k] as number | undefined).filter((v): v is number => typeof v === 'number')
-    Object.assign(row, { samples, firstPaint: distribution(pick('firstPaint')), firstVisible: distribution(pick('firstVisible')), batch: distribution(pick('batchAfterInputMs')), renders: distribution(pick('renders')), missing: pick('missing').reduce((a, b) => a + b, 0), unseen: samples.filter(s => s.firstVisible === undefined).length })
+    Object.assign(row, { samples, firstPaint: distribution(pick('firstPaint')), firstVisible: distribution(pick('firstVisible')), batch: distribution(pick('batchAfterInputMs')), renders: distribution(pick('renders')), renderAfterInput: distribution(pick('renderAfterInput')), mountFrame: distribution(pick('mountFrame')), mountDraw: distribution(pick('mountDraw')), mountLayout: distribution(pick('mountLayout')), visibleValue: distribution(pick('visibleValue')), missing: pick('missing').reduce((a, b) => a + b, 0), unseen: samples.filter(s => s.firstVisible === undefined).length })
     requireScreen(); requireWindowOnscreen(f.pid)
     const markers1 = buildMarkers(), foreign = [...foreign0, ...foreignApps(f.pid)]
     row.valid = !markers0.length && !markers1.length && !foreign.length
     row.buildMarkers = [...markers0, ...markers1]; row.foreign = foreign
   } catch (error) { row.valid = false; row.error = String(error).slice(0, 2000) }
-  finally { await f?.close(); release() }
+  finally { await f?.close(); release(); if (raw.length) writeFileSync(path.join(OUT, `raw-${label}-${name}.txt`), raw.join('')) }
   appendFileSync(path.join(OUT, 'latency.jsonl'), JSON.stringify(row) + '\n')
   const d = (k: string) => { const v = row[k] as { p50?: number; p95?: number; mean?: number } | undefined; return v ? `${v.p50?.toFixed(1)}/${v.p95?.toFixed(1)}` : '-' }
-  console.log(`${label} ${name} valid=${row.valid} firstVisible p50/p95=${d('firstVisible')} firstPaint=${d('firstPaint')} batch=${d('batch')} renders=${d('renders')} missing=${row.missing} unseen=${row.unseen}${row.error ? ' ERROR ' + row.error : ''}`)
+  console.log(`${label} ${name} valid=${row.valid} firstVisible p50/p95=${d('firstVisible')} firstPaint=${d('firstPaint')} batch=${d('batch')} render=${d('renderAfterInput')} mountFrame=${d('mountFrame')} draw=${d('mountDraw')} layout=${d('mountLayout')} value=${d('visibleValue')} renders=${d('renders')} missing=${row.missing} unseen=${row.unseen}${row.error ? ' ERROR ' + row.error : ''}`)
 }
 await fixture.close()
 if (!keep) fixture.remove()
