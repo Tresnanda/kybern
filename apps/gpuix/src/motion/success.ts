@@ -39,7 +39,8 @@ export function successStroke(): StrokeAnimation | undefined {
 /**
  * `.rail-usage-arc` (`stroke-dashoffset` 400 ms `--ease-out`): a ring's arc draws itself in from empty when its `<svg>` mounts or its
  * `key` changes, over `--duration-slow`. `dash` is the arc's dash length in the SVG's user units (the circumference for a full ring).
- * Spread on the `<svg source>`: `<svg paintAnimation={arcDraw(dash)} key={drawKey} />`. Value-to-value tweening (old → new) needs
+ * `dash` must be the length of the arc's own path (see `ringArc`): the native draw sets `stroke-dasharray: dash`, so a dashed full
+ * circle (`dasharray="length circumference"`) would repeat its dash. Spread on the `<svg source>` (the prop is not in `SvgProps`, as in `SuccessCheck`): `<svg key={drawKey} source={arc.source} {...(draw ? { paintAnimation: draw } : {})} />` with `const draw = arcDraw(arc.length)`. Value-to-value tweening (old → new) needs
  * native N2, so callers re-key only when the value moves by 5 points or more (`arcKey`), and a small refresh does not redraw.
  * `undefined` under Reduce Motion (the arc shows at its value) or with the stock addon.
  */
@@ -50,4 +51,19 @@ export function arcDraw(dash: number): StrokeAnimation | undefined {
 /** The `key` for an arc whose value is `percent` (0..100): constant within a 5-point step, so only a real move redraws it. */
 export function arcKey(percent: number): number {
   return Math.round(percent / 5)
+}
+
+/**
+ * A ring's arc as its own SVG path, so `arcDraw(length)` draws exactly it: from 12 o'clock clockwise, `fraction` (0..1) of a circle
+ * of `radius` centred in a `size` box, round-capped. Returns the SVG `source` (black, tinted by `style.color`) and the path `length`
+ * to pass to `arcDraw`. A full circle is drawn as two half arcs (a single SVG arc cannot close on itself).
+ */
+export function ringArc({ size, radius, strokeWidth, fraction }: { size: number; radius: number; strokeWidth: number; fraction: number }): { source: string; length: number } {
+  const f = Math.min(1, Math.max(0, fraction)), c = size / 2, angle = f * 2 * Math.PI
+  const point = (a: number) => `${(c + radius * Math.sin(a)).toFixed(3)} ${(c - radius * Math.cos(a)).toFixed(3)}`
+  const d = f >= 0.9999
+    ? `M ${point(0)} A ${radius} ${radius} 0 1 1 ${point(Math.PI)} A ${radius} ${radius} 0 1 1 ${point(0)}`
+    : `M ${point(0)} A ${radius} ${radius} 0 ${f > 0.5 ? 1 : 0} 1 ${point(angle)}`
+  const source = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" fill="none"><path d="${d}" stroke="#000" stroke-width="${strokeWidth}" stroke-linecap="round"/></svg>`
+  return { source, length: f * 2 * Math.PI * radius }
 }

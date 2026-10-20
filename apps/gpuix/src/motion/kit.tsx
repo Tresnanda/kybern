@@ -340,6 +340,10 @@ export function Swap({ active, children, style, kind = 'text', still = false }: 
   const base = { position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', ...style } as const
   return (
     <div style={base}>
+      {/* The outgoing copy paints last: a blur pass blurs what is painted under it, so the incoming state must not sit above the old one at the start. */}
+      <div key={active} paintTransform={enter} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        {children}
+      </div>
       {leaving && out && (
         <div
           key={`out-${leaving.id}`}
@@ -352,9 +356,6 @@ export function Swap({ active, children, style, kind = 'text', still = false }: 
           {leaving.node}
         </div>
       )}
-      <div key={active} paintTransform={enter} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        {children}
-      </div>
     </div>
   )
 }
