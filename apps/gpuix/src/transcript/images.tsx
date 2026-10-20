@@ -5,7 +5,7 @@ import { onEnvironmentChange } from '../shell/environment.ts'
 // box, so the size comes from the image header (PNG, JPEG, GIF, WebP) read once
 // per source.
 import { closeSync, openSync, readSync } from 'node:fs'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
 import { ImageActions } from '../platform/ImageActions.tsx'
@@ -91,6 +91,10 @@ function srcFor(source: string): string | null {
 export function ResponseImage({ source, label = 'Agent image', compact = false, thumbnail = false, at }: { source: string; label?: string; compact?: boolean; thumbnail?: boolean; at?: string }) {
   const t = useTheme()
   const fresh = useFresh(at)
+  // `t-img` starts when the bitmap has decoded (`<img onLoad>`), not on mount, so the blur resolves over the picture
+  // itself; a decode that never reports does not hide it for long.
+  const [decoded, setDecoded] = useState(!fresh)
+  useEffect(() => { if (decoded) return; const id = setTimeout(() => setDecoded(true), 1500); return () => clearTimeout(id) }, [decoded])
   const renderer = useGpuixRequired()
   const restoreFocus = useTranscriptFocusRestoration()
   const trigger = useRef<PublicInstance | null>(null)
@@ -108,7 +112,7 @@ export function ResponseImage({ source, label = 'Agent image', compact = false, 
   const height = thumbnail ? 64 : size ? Math.round((width * size.height) / size.width) : 210
   return (
     <>
-    <Rise kind="image" play={fresh} style={{ flexShrink: 0 }}>
+    <Rise kind="image" play={fresh} hold={!decoded} style={{ flexShrink: 0 }}>
     <div
       ref={(node) => { trigger.current = node }}
       testId="response-image"
@@ -119,7 +123,7 @@ export function ResponseImage({ source, label = 'Agent image', compact = false, 
       onKeyDown={event => { if (event.key === 'enter' || event.key === 'space') setOpen(true) }}
       style={{ display: 'flex', width, height, cursor: 'pointer', marginTop: compact || thumbnail ? 0 : 12, marginBottom: compact || thumbnail ? 0 : 12, flexShrink: 0 }}
     >
-      <img src={src} alt={label} objectFit={thumbnail ? "cover" : "contain"}
+      <img src={src} alt={label} objectFit={thumbnail ? "cover" : "contain"} onLoad={decoded ? undefined : () => setDecoded(true)}
         style={{ width, height, borderRadius: compact ? 8 : 12, borderWidth: 1, borderColor: outline, pointerEvents: 'none' }} />
     </div>
     </Rise>
