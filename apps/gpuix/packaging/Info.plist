@@ -9,6 +9,7 @@
 <key>CFBundleVersion</key><string>1</string>
 <key>CFBundleShortVersionString</key><string>0.0.1</string>
 <key>CFBundleIconFile</key><string>icon.icns</string>
+<key>CFBundleIconName</key><string>icon-composer</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 </dict></plist>
