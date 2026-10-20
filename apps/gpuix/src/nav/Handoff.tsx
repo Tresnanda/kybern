@@ -5,6 +5,7 @@ import { Icon } from '../icons.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
 import { useApp } from '../state.ts'
 import { Label, ProviderMark, useTheme } from '../ui.tsx'
+import { revealTransform, SwapOnChange } from '../motion/kit.tsx'
 import { errorText, handOff } from './actions.ts'
 import { N } from './glyphs.ts'
 import { Dialog, DialogHeader, muted } from './overlay.tsx'
@@ -83,7 +84,14 @@ function HandoffBody({ threadId, target }: { threadId: string; target: string | 
                   </Label>
                 )}
               </div>
-              {busy === p.kind ? <MatrixLoader /> : hover === p.kind && <Icon source={N.arrowRight} size={14} color={muted(t, 1)} />}
+              {/* The arrow fades in with a 4px slide on hover and out over 100 ms (`t-reveal`); the loader swaps in for it when the hand-off starts (`IconSwap`). */}
+              <SwapOnChange kind="icon" active={busy === p.kind ? 'busy' : 'idle'} style={{ width: 16, height: 16, flexShrink: 0 }}>
+                {busy === p.kind ? <MatrixLoader /> : (
+                  <div paintTransform={revealTransform(hover === p.kind)} style={{ display: 'flex' }}>
+                    <Icon source={N.arrowRight} size={14} color={muted(t, 1)} />
+                  </div>
+                )}
+              </SwapOnChange>
             </div>
           )
         })}

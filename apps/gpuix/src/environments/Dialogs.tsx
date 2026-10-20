@@ -5,8 +5,9 @@ import { Dialog } from '../nav/overlay.tsx'
 import { Switch } from '../kit/Switch.tsx'
 import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
 import { getClient } from '../state.ts'
-import { motion } from '@gpuix/react'
-import { EASE_OUT, ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { DURATION, EASE } from '../motion/tokens.ts'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { copyText, errorText } from '../transcript/store.ts'
 import { toast } from '../shell/toasts.tsx'
 import { connectEnvironment, forgetEnvironment, saveEnvironment, setupSshEnvironment } from './actions.ts'
@@ -46,7 +47,8 @@ function EnvironmentForm({ profile, close }: { profile?: EnvironmentProfile; clo
 function EnvironmentChooser({ mode, previous, keyboard, busy, onChange }: { mode: string; previous: string; keyboard: boolean; busy: boolean; onChange: (mode: string, keyboard: boolean) => void }) {
   const t = useTheme()
   return <div role="tablist" aria-label="How to reach the machine" style={{ display: 'flex', position: 'relative', padding: 4, height: 39.5, width: '100%', gap: 4, borderRadius: 10, backgroundColor: t.buttonSecondary }}>
-    <motion.div initial={{ translateX: previous === 'ssh' ? 0 : 237 }} animate={{ translateX: mode === 'ssh' ? 0 : 237 }} transition={{ duration: keyboard || REDUCED_MOTION ? 0 : .22, ease: EASE_OUT }} style={{ position: 'absolute', top: 4, left: 4, width: 233, height: 31.5, borderRadius: 8, backgroundColor: t.v('--sidebar-accent-active'), pointerEvents: 'none' }} />
+    {/* `t-tabs-pill`: 250 ms smooth-out, by paint. The chooser is remounted with each form, so it starts from where the pill was; the keyboard and Reduce Motion put it in place. */}
+    <div paintTransform={PATCHED_NATIVE ? { initial: keyboard || REDUCED_MOTION ? false : { translateX: previous === 'ssh' ? 0 : 237 }, animate: { translateX: mode === 'ssh' ? 0 : 237 }, transition: { duration: DURATION.fast, ease: [...EASE.smoothOut] } } : undefined} style={{ position: 'absolute', top: 4, left: 4 + (PATCHED_NATIVE ? 0 : mode === 'ssh' ? 0 : 237), width: 233, height: 31.5, borderRadius: 8, backgroundColor: t.v('--sidebar-accent-active'), pointerEvents: 'none' }} />
     {[['ssh', 'Over SSH'], ['address', 'Address or invitation']].map(([id, label]) => <div key={id} testId={`environment-tab-${id}`} role="tab" aria-selected={mode === id} tabIndex={busy ? -1 : 0} onClick={() => { if (!busy) onChange(id!, false) }} onKeyDown={e => { if (!busy && (e.key === 'enter' || e.key === 'space')) onChange(id!, true) }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 233, height: 31.5, cursor: 'pointer', opacity: busy ? 0.6 : 1 }}><Label color={mode === id ? t.v('--sidebar-accent-foreground') : ink(t, 0.95)} size={13} lineHeight={19.5}>{label}</Label></div>)}
   </div>
 }
