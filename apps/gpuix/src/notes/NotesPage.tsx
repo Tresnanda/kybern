@@ -63,7 +63,7 @@ export function NotesGallery() {
   const matches = useMemo(() => filterNotes(all, filter).filter((n) => !query || noteMatchesQuery(n, query) || (hits?.query === query && hits.ids.has(n.id))), [all, filter, query, hits])
   // A note deleted from its menu keeps its card for the exit (`useLeavingNotes`); a keyboard delete removes it at once.
   const { list: visible, leaving, gone } = useLeavingNotes(matches, all)
-  const fresh = useFreshNotes(visible, `${loaded}|${JSON.stringify(filter)}|${query}|${prefs.layout}|${prefs.group}|${prefs.sort}|${cols}`)
+  const fresh = useFreshNotes(matches, `${loaded}|${JSON.stringify(filter)}|${query}|${prefs.layout}|${prefs.group}|${prefs.sort}|${cols}`)
   const sections = useMemo(() => gallerySections(visible, { ...prefs, projects: projectMap, projectOrder: [], flat: !!query || filter.kind === 'deleted' }), [visible, prefs, projectMap, query, filter.kind])
   const rows = useMemo(() => {
     const out: Row[] = [{ key: 'filters', kind: 'filters' }]
