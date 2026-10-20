@@ -1162,6 +1162,59 @@ async fn response_images_require_auth_and_stay_on_the_owning_host() {
 }
 
 #[tokio::test]
+async fn response_images_from_hidden_folders_and_named_outside_files_render_while_other_files_stay_closed() {
+    let host = Host::start().await;
+    let other = Host::start().await;
+    let thread = host.thread();
+    let http = reqwest::Client::new();
+    let url = format!("{}/threads/{}/image", host.url, thread.id);
+    let get = |path: String| {
+        let request = http.get(&url).bearer_auth(&host.state.bootstrap_token).query(&[("path", path)]);
+        async move { request.send().await.unwrap().status() }
+    };
+    let png = b"\x89PNG\r\n\x1a\nfixture";
+    // Agents and tools such as Playwright write screenshots into dot-folders of the workspace.
+    std::fs::create_dir_all(host.root.join(".screenshots/times")).unwrap();
+    std::fs::write(host.root.join(".screenshots/times/trip-1280.png"), png).unwrap();
+    std::fs::write(host.root.join(".screenshots/times/Buchungsformular 7 h spät.png"), png).unwrap();
+    assert_eq!(get(".screenshots/times/trip-1280.png".into()).await, reqwest::StatusCode::OK);
+    assert_eq!(get("./.screenshots/times/trip-1280.png".into()).await, reqwest::StatusCode::OK);
+    assert_eq!(get(".screenshots/times/Buchungsformular%207%20h%20sp%C3%A4t.png".into()).await, reqwest::StatusCode::OK);
+    assert_eq!(get(host.root.join(".screenshots/times/trip-1280.png").to_string_lossy().into()).await, reqwest::StatusCode::OK);
+    assert_eq!(get(".screenshots/missing.png".into()).await, reqwest::StatusCode::NOT_FOUND);
+    // Never Git internals, never a file that is not an image by name and by content.
+    std::fs::create_dir_all(host.root.join(".git")).unwrap();
+    std::fs::write(host.root.join(".git/shot.png"), png).unwrap();
+    assert_eq!(get(".git/shot.png".into()).await, reqwest::StatusCode::FORBIDDEN);
+    std::fs::write(host.root.join(".env"), b"SECRET=1").unwrap();
+    assert_eq!(get(".env".into()).await, reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    std::fs::write(host.root.join(".screenshots/env.png"), b"SECRET=1").unwrap();
+    assert_eq!(get(".screenshots/env.png".into()).await, reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    // Outside the folder: only a file this conversation itself names.
+    let outside = other.root.join("outside shot.png");
+    std::fs::write(&outside, png).unwrap();
+    let reference = outside.to_string_lossy().to_string();
+    assert_eq!(get(reference.clone()).await, reqwest::StatusCode::FORBIDDEN);
+    host.state
+        .store
+        .event_append(
+            thread.id,
+            None,
+            EventPayload::AssistantMessageCompleted {
+                message_id: Uuid::now_v7(),
+                origin: EventOrigin::Root,
+                text: format!("Here it is:\n\n![Booking form, desktop]({reference})"),
+                thinking: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(get(reference).await, reqwest::StatusCode::OK);
+    // Naming one outside file opens no other.
+    std::fs::write(other.root.join("unnamed.png"), png).unwrap();
+    assert_eq!(get(other.root.join("unnamed.png").to_string_lossy().into()).await, reqwest::StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn harness_updates_wait_for_turns_and_block_new_sends_during_installation() {
     let host = Host::start().await;
     let mut thread = host.thread();

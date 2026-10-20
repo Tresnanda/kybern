@@ -7,10 +7,11 @@
 // region the way the desktop's grid shell does. Instead the rows a toggle adds or
 // removes travel together as one list item for the 220 ms of the tween
 // (`DisclosureGroup`), then flatten back into ordinary virtual rows.
-import { motion, useGpuix, type PublicInstance, type StyleDesc } from '@gpuix/react'
+import { motion, useGpuix, type MotionTransition, type PublicInstance, type StyleDesc } from '@gpuix/react'
 import type { PaintTransformProps } from '@gpuix/native/host'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { PaintTranslate } from '../drag/PaintTranslate.tsx'
 import { DISCLOSURE, DISTANCE, DURATION, EASE, SwapOnChange } from '../motion/kit.tsx'
 import { EXIT, Presence } from '../motion/Presence.tsx'
 import { Label, REDUCED_MOTION } from '../ui.tsx'
@@ -187,25 +188,37 @@ export function MarqueeLabel({ hover, text, color, lineHeight = 20 }: { hover: b
   const duration = Math.max(MARQUEE_MIN_MS, Math.round((overflow / MARQUEE_SPEED) * 1000)) / 1000
   return (
     <div ref={box} style={{ display: 'flex', flexGrow: 1, minWidth: 0, height: lineHeight, overflow: 'hidden', pointerEvents: 'none', userSelect: 'none' }}>
-      <motion.div
-        initial={false}
-        animate={{ left: panning ? -overflow : 0 }}
+      <Pan
+        to={panning ? -overflow : 0}
         transition={panning ? (REDUCED_MOTION ? { duration: 0 } : { duration, ease: [0, 0, 1, 1], delay: (MARQUEE_DELAY_MS - MARQUEE_MEASURE_MS) / 1000 }) : { duration: REDUCED_MOTION ? 0 : MARQUEE_BACK, ease: [...EASE.out] as [number, number, number, number] }}
-        style={{ display: 'flex', position: 'relative', flexShrink: 0 }}
       >
         <div ref={inner} style={{ display: 'flex', flexShrink: 0 }}>
           <Label color={color} lineHeight={lineHeight} style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
             {text}
           </Label>
         </div>
-      </motion.div>
+      </Pan>
     </div>
   )
 }
 
-/** `transition-[padding] duration-150 ease-out`: room for the revealed actions opens smoothly. */
+/**
+ * The marquee's pan: a paint-only translation of the retained label (`paintTranslate`), so a seconds-long pan re-renders
+ * nothing per frame; the stock addon keeps the `left` layout tween.
+ */
+function Pan({ to, transition, children }: { to: number; transition: MotionTransition; children: ReactNode }) {
+  const style = { display: 'flex', position: 'relative', flexShrink: 0 } as const
+  if (!PATCHED_NATIVE) return <motion.div initial={false} animate={{ left: to }} transition={transition} style={style}>{children}</motion.div>
+  return <PaintTranslate animate={{ translateX: to }} transition={transition} style={style}>{children}</PaintTranslate>
+}
+
+/**
+ * The room the revealed actions need at a row's trailing edge (the desktop's `transition-[padding] duration-150`). It changes at
+ * once: a width tween re-laid out and re-rendered the whole sidebar list on every frame of every hover (~10 renders, 7-13 ms
+ * each), and the actions' own fade (`Reveal`) covers the title's new edge.
+ */
 export function PadTween({ width, cancelGap = 0 }: { width: number; /** The parent's flex gap, cancelled so 0 adds nothing. */ cancelGap?: number }) {
-  return <motion.div initial={false} animate={{ width }} transition={tween(DURATION.quick, EASE.out)} style={{ flexShrink: 0, height: 1, marginLeft: -cancelGap }} />
+  return <div style={{ flexShrink: 0, width, height: 1, marginLeft: -cancelGap }} />
 }
 
 /**

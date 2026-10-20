@@ -15,6 +15,9 @@ import { IconButton } from '../sidebar/rows.tsx'
 import { Menu, MenuItem } from '../nav/overlay.tsx'
 import { N } from '../nav/glyphs.ts'
 import { ink, Label, useTheme } from '../ui.tsx'
+import { revealTransform } from '../motion/kit.tsx'
+import { pressRow } from '../shell/motion.ts'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { Floating } from '../live/Floating.tsx'
 import { Action, DockEmpty, ErrorLine } from '../dock/parts.tsx'
 import { floatingPreview, openPreview, previewState, setPreview, showPreview, subscribePreviews, usePreview } from './store.ts'
@@ -79,7 +82,7 @@ export function PreviewPane({ threadId }: { threadId: string }) {
     : sorted.length || recents.length ? <virtual-list style={{ flexGrow: 1, minHeight: 0, width: '100%' }}><div style={{ paddingLeft: 12, paddingRight: 12, paddingTop: 16, paddingBottom: 16 }}>
       <DockSection label={environment.local ? 'Local servers' : `Servers on ${environment.name}`} count={servers.length} />
       <div style={{ display: 'flex', flexDirection: 'column', marginLeft: 12, marginRight: 12, padding: 4, borderRadius: 10, backgroundColor: t.buttonSecondary }}>
-        {shown.map(server => <div key={server.url} testId={`preview-server-${server.port}`} role="button" tabIndex={0} onClick={() => void openPreview(threadId, server.url)} onKeyDown={e => { if (e.key === 'enter') void openPreview(threadId, server.url) }} style={{ display: 'flex', alignItems: 'center', gap: 10, height: 44, paddingLeft: 10, paddingRight: 10, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.hover } }}>
+        {shown.map(server => <div key={server.url} testId={`preview-server-${server.port}`} role="button" tabIndex={0} onClick={() => void openPreview(threadId, server.url)} onKeyDown={e => { if (e.key === 'enter') void openPreview(threadId, server.url) }} style={{ display: 'flex', alignItems: 'center', gap: 10, height: 44, paddingLeft: 10, paddingRight: 10, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.hover }, ...pressRow(t, t.hover) }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 5, backgroundColor: t.v('--color-background-elevated-secondary'), position: 'relative', flexShrink: 0 }}><Icon source={N.globe} size={13} color={t.textSecondary} />{/* `size-1.5 bg-emerald-500 ring-[1.5px] ring-(button-secondary)` */}<div style={{ position: 'absolute', right: -3.5, bottom: -3.5, width: 9, height: 9, borderRadius: 4.5, backgroundColor: t.buttonSecondary, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: 'oklch(0.696 0.17 162.48)' }} /></div></div>
           <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={ink(t, 0.9)} size={14} lineHeight={21} truncate>{server.title && server.title.length <= 48 ? server.title : server.process_name ?? server.host}</Label><Label color={muted(t, 0.7)} size={13} lineHeight={19.5} truncate>{[server.process_name, server.cwd?.split('/').filter(Boolean).slice(-3).join('/')].filter(Boolean).join(' · ')}</Label></div>
           <Label color={t.textSecondary} size={13}>{new URL(server.url).host}</Label>
@@ -100,9 +103,9 @@ function RecentRow({ recent, index, now, open, forget }: { recent: PreviewRecent
   const location = recent.kind === 'file' ? `…/${recent.value.split('/').filter(Boolean).slice(0, -1).slice(-2).join('/')}` : (() => { const url = new URL(recent.value); return `${url.host}${url.pathname === '/' ? '' : url.pathname}` })()
   const relative = relativeTime(new Date(recent.at).toISOString(), now), ago = relative === 'now' ? 'just now' : relative.includes(' ') || /^[A-Z]/.test(relative) ? relative : `${relative} ago`
   return <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} style={{ display: 'flex', alignItems: 'center', height: 44, gap: 8, paddingLeft: 10, paddingRight: 10, borderRadius: 6, hover: { backgroundColor: t.hover } }}>
-    <div testId={`preview-recent-${index}`} role="button" tabIndex={0} onClick={open} onFocus={() => setHover(true)} onBlur={() => setHover(false)} onKeyDown={e => { if (e.key === 'enter') open() }} style={{ display: 'flex', flexGrow: 1, minWidth: 0, alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+    <div testId={`preview-recent-${index}`} role="button" tabIndex={0} onClick={open} onFocus={() => setHover(true)} onBlur={() => setHover(false)} onKeyDown={e => { if (e.key === 'enter') open() }} style={{ display: 'flex', flexGrow: 1, minWidth: 0, alignItems: 'center', gap: 10, cursor: 'pointer', borderRadius: 6, ...pressRow(t, t.hover) }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 5, backgroundColor: t.v('--color-background-elevated-secondary') }}><Icon source={recent.kind === 'file' ? ICONS.file : N.globe} size={13} color={t.textSecondary} /></div><div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={ink(t, 0.9)} size={14} lineHeight={21} truncate>{title}</Label><Label color={muted(t, 0.7)} size={13} lineHeight={19.5} truncate>{`${location} · ${ago}`}</Label></div>
-    </div><div style={{ opacity: hover ? 1 : 0 }}><IconButton press testId={`preview-forget-${index}`} icon={N.x} label={`Remove ${title} from recent`} onHover={setHover} size={24} onClick={forget} /></div>
+    </div><div paintTransform={revealTransform(hover)} style={{ ...(hover ? {} : { pointerEvents: 'none' }), ...(PATCHED_NATIVE ? {} : { opacity: hover ? 1 : 0 }) }}><IconButton press testId={`preview-forget-${index}`} icon={N.x} label={`Remove ${title} from recent`} onHover={setHover} size={24} onClick={forget} /></div>
   </div>
 }
 function DeviceToolbar({ threadId }: { threadId: string }) {

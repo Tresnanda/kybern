@@ -10,6 +10,7 @@ import { MeterFill } from '../motion/Meter.tsx'
 import { ink, ProviderMark, useTheme } from '../ui.tsx'
 import { useBoxWidth } from './useBoxWidth.ts'
 import type { Theme } from '../theme.ts'
+import { ringValue } from '../motion/success.ts'
 
 /** `--account-*` (`kit.css:3365-3384`), light then dark. */
 const ACCOUNT_RGB: Record<AccountColor, readonly [string, string]> = {
@@ -49,11 +50,8 @@ export function AccountAvatar({ kind, color, instance, size = 28 }: { kind: Prov
 }
 
 const R = 10.25
-const CIRCUMFERENCE = 2 * Math.PI * R
-function ringSvg(left: number, stroke: number) {
-  const head = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">'
-  const length = (Math.max(0, Math.min(100, left)) / 100) * CIRCUMFERENCE
-  return { track: `${head}<circle cx="12" cy="12" r="${R}" stroke="#000" stroke-width="${stroke}"/></svg>`, arc: `${head}<circle cx="12" cy="12" r="${R}" stroke="#000" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="${length.toFixed(3)} ${CIRCUMFERENCE.toFixed(3)}" transform="rotate(-90 12 12)"/></svg>` }
+function ringTrack(stroke: number) {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="${R}" stroke="#000" stroke-width="${stroke}"/></svg>`
 }
 
 export function toneColor(t: Theme, tone: ReturnType<typeof limitTone>) {
@@ -63,8 +61,9 @@ export function toneColor(t: Theme, tone: ReturnType<typeof limitTone>) {
 /** A small ring filled with what is left of a limit, in the tone of how close it is to running out (`AccountUsageRing`). */
 export function AccountUsageRing({ left, size = 20 }: { left: number; size?: number }) {
   const t = useTheme()
-  const svg = ringSvg(left, 2.5)
-  return <div style={{ position: 'relative', width: size, height: size, flexShrink: 0, pointerEvents: 'none' }}><svg source={svg.track} style={{ position: 'absolute', left: 0, top: 0, width: size, height: size, color: ink(t, 0.12), pointerEvents: 'none' }} /><svg source={svg.arc} style={{ position: 'absolute', left: 0, top: 0, width: size, height: size, color: toneColor(t, limitTone(100 - left)), pointerEvents: 'none' }} /></div>
+  // A refreshed limit eases from the old value to the new one (native ring, N2); it mounts at its value.
+  const arc = ringValue({ size: 24, radius: R, strokeWidth: 2.5, fraction: Math.max(0, Math.min(100, left)) / 100 })
+  return <div style={{ position: 'relative', width: size, height: size, flexShrink: 0, pointerEvents: 'none' }}><svg source={ringTrack(2.5)} style={{ position: 'absolute', left: 0, top: 0, width: size, height: size, color: ink(t, 0.12), pointerEvents: 'none' }} />{left > 0 && <svg source={arc.source} {...(arc.paintAnimation ? { paintAnimation: arc.paintAnimation } : {})} style={{ position: 'absolute', left: 0, top: 0, width: size, height: size, color: toneColor(t, limitTone(100 - left)), pointerEvents: 'none' }} />}</div>
 }
 
 /**

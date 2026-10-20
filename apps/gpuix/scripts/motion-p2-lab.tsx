@@ -8,7 +8,8 @@ import { render } from '@gpuix/react'
 import { Profiler, useState } from 'react'
 import { ThemeProvider, useTheme, Label, ink } from '../src/ui.tsx'
 import { Collapse } from '../src/motion/kit.tsx'
-import { Attachments, QueuedPanel, SendButton } from '../src/Composer.tsx'
+import { Attachments, SendButton } from '../src/Composer.tsx'
+import { ComposerTray } from '../src/requests/ComposerTray.tsx'
 import { TrayChip } from '../src/composer/chips.tsx'
 import { Dim } from '../src/composer/motion.tsx'
 import { EffortSlider } from '../src/composer/ModelPicker.tsx'
@@ -64,7 +65,7 @@ function Lab() {
     <div testId="app-ready" onKeyDown={e => key(e.key ?? '')} style={{ position: 'relative', width: '100%', height: '100%', backgroundColor: t.surface }}>
       <div testId="send-slot" style={at(16, 16, 60, 44)}><SendButton running={running} sending={sending} canSend steering={false} onSubmit={() => {}} onStop={() => {}} /></div>
       <div testId="attachments" style={{ ...at(100, 24, 440, 84), flexDirection: 'column' }}><Attachments items={attachments} uploading={0} onRemove={a => setAttachments(list => list.filter(item => item.id !== a.id))} /></div>
-      <div testId="queued" style={{ ...at(560, 16, 560, 140), flexDirection: 'column', justifyContent: 'flex-end', alignItems: 'center' }}><QueuedPanel threadId="lab" items={queue} /></div>
+      <div testId="queued" style={{ ...at(560, 16, 560, 140), flexDirection: 'column', justifyContent: 'flex-end', alignItems: 'center' }}>{queue.length > 0 && <div style={{ display: 'flex', flexDirection: 'column', width: '93.33%', borderWidth: 1, borderBottomWidth: 0, borderColor: t.border, borderTopLeftRadius: 18.2, borderTopRightRadius: 18.2, backgroundColor: t.popover }}><ComposerTray data={{ threadId: 'lab', subagents: [], tasks: [], helpers: [], queued: queue as never }} /></div>}</div>
       <div testId="tray" style={at(16, 140, 200, 36)}><TrayChip testId="tray-chip" icon={G.clock} label="main" /></div>
       <div testId="slider" style={{ ...at(240, 130, 300, 70), flexDirection: 'column', borderRadius: 12, backgroundColor: card }}>
         <EffortSlider efforts={['low', 'medium', 'high', 'xhigh', 'max']} value={effort} disabled={false} onEscape={() => {}} onChange={async next => { setEffort(next); return true }} />

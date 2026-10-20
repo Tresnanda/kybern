@@ -15,8 +15,11 @@
 // - Placement: `alignItemWithTrigger` (the desktop default, mouse-opened) lays the popup over the trigger with
 //   the selected row's text on the trigger's value text (popup 1px right of the trigger, rows `anchor + 20`
 //   wide), kept 10px inside the window. Otherwise it opens 4px below (`side`/`align`, composer: `end`).
-// - Motion: none. The desktop popup has no transition classes (`document.getAnimations()` is empty while it
-//   opens and closes), so it appears and disappears at once here too, in every mode.
+// - Motion: the desktop popup has no transition classes (`document.getAnimations()` is empty while it opens and
+//   closes). GPUIX adds a small one for popups opened with the pointer (the motion phase asks for more life than
+//   the desktop has): a paint-only scale from 0.98 with an opacity fade, 150 ms `--ease-out` in and 80 ms out,
+//   about the trigger side (about the selected row's centre when the popup is laid over the trigger). A popup
+//   opened from the keyboard (Enter, Space, ↑/↓) and every close by key appear and disappear at once.
 //
 // Keyboard (Base UI Select): on the trigger Enter, Space, ↓ and ↑ open; a typed letter selects the next
 // matching option without opening. In the popup ↑/↓, Home/End move the highlight (skipping disabled rows), a
@@ -24,7 +27,7 @@
 // Escape belongs to the innermost overlay (`useEscapeLayer`): a select inside a sheet closes first.
 import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { useLayoutEffect, useRef, useState } from 'react'
-import { muted, surfaceShadow } from '../composer/Menu.tsx'
+import { muted, PopupLayer, surfaceShadow } from '../composer/Menu.tsx'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { useSettingsModal } from '../settings/controls.tsx'
@@ -112,6 +115,17 @@ export function Select({
   const reveal = useRef(false)
   const escape = useEscapeLayer(open)
   useSettingsModal(open)
+  // Motion only for a popup the pointer opened and closed. `key` is the last input kind (a key press or a mouse press); the
+  // popup stays mounted through its exit (`leaving`) unless the close came from the keyboard.
+  const key = useRef(false)
+  const [still, setStill] = useState(false)
+  const [present, setPresent] = useState(false)
+  const instantClose = useRef(false)
+  if (open) {
+    if (!present) setPresent(true)
+    instantClose.current = false
+  } else if (present && instantClose.current) setPresent(false)
+  const leaving = !open && present
 
   const s = SURFACE[surface]
   const m = TRIGGER[size]
@@ -128,7 +142,8 @@ export function Select({
       // Base UI highlights the selected option when the popup opens.
       setActive(selected && !selected.disabled ? selected.value : null)
       reveal.current = true
-    }
+      setStill(key.current)
+    } else instantClose.current = key.current
     setOpenState(next)
     if (!next) focusTrigger()
   }
@@ -200,7 +215,7 @@ export function Select({
         tabIndex={disabled ? -1 : 0}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
-        onMouseDown={() => { pressedWhileOpen.current = open }}
+        onMouseDown={() => { key.current = false; pressedWhileOpen.current = open }}
         onClick={() => {
           if (disabled) return
           if (dismissedByOutside.current) { dismissedByOutside.current = false; return }
@@ -208,6 +223,7 @@ export function Select({
           setOpen(!open)
         }}
         onKeyDown={(e) => {
+          key.current = true
           if (disabled || open) return
           if (e.key === 'enter' || e.key === 'space' || e.key === 'down' || e.key === 'up') return setOpen(true)
           const c = printable(e)
@@ -239,62 +255,64 @@ export function Select({
         </Label>
         <Icon source={N.chevronDown} size={12} color={variant === 'ghost' && (hover || open) ? t.text : triggerColor === t.textSecondary ? t.textSecondary : t.text} style={{ opacity: 0.5, pointerEvents: 'none' }} />
       </div>
-      {open && (
-        <anchored
+      {(open || leaving) && (
+        <PopupLayer
           {...(aligned && at
-            ? {
-                position: {
-                  x: at.x + 1,
-                  y: Math.max(EDGE, Math.min(windowH - EDGE - popupHeight, at.y + (m.height - s.row) / 2 - 1 - s.pad - rowsHeight(anchorValue))),
-                },
-                anchor: 'topLeft' as const,
-              }
-            : { side, align: align ?? (surface === 'composer' ? 'end' : 'start'), gap: sideOffset })}
+            ? (() => {
+                const y = Math.max(EDGE, Math.min(windowH - EDGE - popupHeight, at.y + (m.height - s.row) / 2 - 1 - s.pad - rowsHeight(anchorValue)))
+                // Laid over the trigger: grow about the selected row's centre, which sits on the trigger's.
+                const originY = Math.min(1, Math.max(0, (at.y + m.height / 2 - y) / popupHeight))
+                return { position: { x: at.x + 1, y }, anchor: 'topLeft' as const, materialize: { origin: [0, originY] as [number, number] } }
+              })()
+            : { side, align: align ?? (surface === 'composer' ? 'end' : 'start'), sideOffset })}
+          kind="tooltip"
+          material="none"
+          still={still}
+          leaving={leaving}
+          onLeft={() => setPresent(false)}
           fit="snap"
-          snapMargin={8}
-          deferred
           priority={7}
-          style={{ borderRadius: s.radius }}
+          testId={testId ? `${testId}-popup` : undefined}
+          ref={(el: PublicInstance | null) => { listRef.current = el }}
+          role="listbox"
+          tabIndex={0}
+          autoFocus
+          onMouseDown={() => { key.current = false }}
+          onMouseDownOutside={() => {
+            key.current = false
+            dismissedByOutside.current = true
+            queueMicrotask(() => { dismissedByOutside.current = false })
+            setOpen(false)
+          }}
+          onKeyDown={(e) => {
+            key.current = true
+            if (e.key === 'escape') { if (escape.claim()) setOpen(false) }
+            else if (e.key === 'tab') setOpen(false)
+            else if (e.key === 'down') move('next')
+            else if (e.key === 'up') move('prev')
+            else if (e.key === 'home') move('first')
+            else if (e.key === 'end') move('last')
+            else if ((e.key === 'enter' || e.key === 'space') && active) pick(active)
+            else {
+              const c = printable(e)
+              const hit = c ? typeahead(c, active) : undefined
+              if (hit) { setActive(hit.value); reveal.current = true }
+            }
+          }}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            minWidth: aligned && at ? at.w + 22 : (at?.w ?? (width ?? 144)),
+            maxHeight,
+            padding: s.pad,
+            borderRadius: s.radius,
+            borderWidth: 1,
+            borderColor: t.border,
+            backgroundColor: t.v('--popover'),
+            boxShadow: surfaceShadow(t),
+            overflowY: 'scroll',
+          }}
         >
-          <div
-            testId={testId ? `${testId}-popup` : undefined}
-            ref={(el) => { listRef.current = el }}
-            role="listbox"
-            tabIndex={0}
-            autoFocus
-            onMouseDownOutside={() => {
-              dismissedByOutside.current = true
-              queueMicrotask(() => { dismissedByOutside.current = false })
-              setOpen(false)
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'escape') { if (escape.claim()) setOpen(false) }
-              else if (e.key === 'tab') setOpen(false)
-              else if (e.key === 'down') move('next')
-              else if (e.key === 'up') move('prev')
-              else if (e.key === 'home') move('first')
-              else if (e.key === 'end') move('last')
-              else if ((e.key === 'enter' || e.key === 'space') && active) pick(active)
-              else {
-                const c = printable(e)
-                const hit = c ? typeahead(c, active) : undefined
-                if (hit) { setActive(hit.value); reveal.current = true }
-              }
-            }}
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              minWidth: aligned && at ? at.w + 22 : (at?.w ?? (width ?? 144)),
-              maxHeight,
-              padding: s.pad,
-              borderRadius: s.radius,
-              borderWidth: 1,
-              borderColor: t.border,
-              backgroundColor: t.v('--popover'),
-              boxShadow: surfaceShadow(t),
-              overflowY: 'scroll',
-            }}
-          >
             {options.map((e, i) => {
               if (!isOption(e)) {
                 if ('group' in e) return (
@@ -333,8 +351,7 @@ export function Select({
                 </div>
               )
             })}
-          </div>
-        </anchored>
+        </PopupLayer>
       )}
     </div>
   )

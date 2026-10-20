@@ -32,7 +32,7 @@ export const EXIT = {
 } as const satisfies Record<string, Exit>
 
 /** What a `paintTransform` rests at, with every field set (so a retarget back from any exit lands exactly there). */
-const REST: PaintTransformValue = { opacity: 1, scale: 1, rotate: 0, translateX: 0, translateY: 0, blur: 0 }
+const REST: PaintTransformValue = { opacity: 1, scale: 1, scaleX: 1, scaleY: 1, shadowOpacity: 1, rotate: 0, translateX: 0, translateY: 0, blur: 0 }
 const ENTER_DEFAULT = { duration: DURATION.quick, ease: [...EASE.out] as [number, number, number, number] }
 
 let presenceGeneration = 4_000_000
@@ -56,6 +56,8 @@ export function presenceTransform({ show, enter, exit, generation, fresh }: { sh
     ...(enter?.origin ? { origin: enter.origin } : {}),
     ...(show && fresh && enter?.keyframes ? { keyframes: enter.keyframes } : {}),
     generation,
+    // Shown is the rest (identity): stay retained, so the exit is paint-only from its first frame instead of a render.
+    retain: true,
   }
 }
 

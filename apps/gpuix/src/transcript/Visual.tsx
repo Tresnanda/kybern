@@ -23,6 +23,7 @@ import { visualTheme } from '../preview/theme.ts'
 import { launchBrowser } from '../preview/browser.ts'
 import { useNav } from '../nav/store.ts'
 import { EXIT, Presence } from '../motion/Presence.tsx'
+import { webDocumentEnter } from '../motion/kit.tsx'
 
 const heights = new Map<string, number>()
 const placements = new Map<string, () => void>()
@@ -72,7 +73,8 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
     let alive = true, ticket: string | undefined, generation = 0
     let documentReady = false, watchdog: ReturnType<typeof setTimeout> | undefined, fallback: ReturnType<typeof setTimeout> | undefined
     const loading = setTimeout(() => { if (alive && !documentReady) setSkeleton(true) }, 200)
-    const reveal = () => { documentReady = true; clearTimeout(watchdog); clearTimeout(fallback); clearTimeout(loading); if (alive) { setLoaded(true); setSkeleton(false); setError('') } }
+    // The document fades in (native, N3) as the skeleton fades out; the fade is queued before the slot shows it.
+    const reveal = () => { documentReady = true; clearTimeout(watchdog); clearTimeout(fallback); clearTimeout(loading); if (alive) { webDocumentEnter(id, webHost.present); setLoaded(true); setSkeleton(false); setError('') } }
     setError(''); setLoaded(false); setSkeleton(false); ready.current = false
     const stop = webHost.subscribe(event => {
       if (event.id !== id || !alive || (event.generation !== undefined && event.generation !== generation)) return
@@ -149,7 +151,7 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
         </PopupLayer>
       </div>}
     </div>}
-    {/* The skeleton fades out when the document is ready (the web view itself appears at once: native alpha is N3). */}
+    {/* The skeleton fades out when the document is ready, while the document itself fades in (`webDocumentEnter`). */}
     <Presence show={skeleton && !loaded && !error} exit={EXIT.backdrop} style={{ position: 'absolute', top: 0, left: 0, right: 0, height }}><Skeleton height={height} /></Presence>
     {error && <div testId="visual-error" style={{ position: 'absolute', top: 0, left: 0, right: 0, height, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, paddingTop: Math.min(height * 0.35, 160), paddingLeft: 16, paddingRight: 16, borderRadius: 10, borderWidth: 1, borderColor: t.border, backgroundColor: ink(t, 0.04) }}>
       <Label color={t.text} weight={500} style={{ textAlign: 'center' }}>{`Couldn’t load “${visual.title}”`}</Label>

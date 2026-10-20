@@ -1212,13 +1212,80 @@ impl Store {
         })
     }
 
+    /// Whether `text` appears in one of the thread's own messages (a prompt, a steered message or a completed reply).
+    /// Searched newest first in bounded batches, releasing the connection between them, as JSON-encoded in the payload.
+    pub fn thread_mentions(&self, thread_id: ThreadId, text: &str) -> Result<bool> {
+        if text.is_empty() {
+            return Ok(false);
+        }
+        let encoded = serde_json::to_string(text)?;
+        let needle = &encoded[1..encoded.len() - 1];
+        let thread = thread_id.to_string();
+        let mut before = i64::MAX;
+        loop {
+            let (found, last) = self.with(|c| {
+                let mut st = c.prepare_cached(
+                    "SELECT seq, instr(payload, ?3) > 0 FROM events
+                     WHERE thread_id = ?1 AND seq < ?2 AND kind IN ('assistant_message_completed', 'turn_started', 'message_steered')
+                     ORDER BY seq DESC LIMIT 128",
+                )?;
+                let mut rows = st.query(params![thread, before, needle])?;
+                let mut last = None;
+                while let Some(row) = rows.next()? {
+                    if row.get::<_, bool>(1)? {
+                        return Ok((true, None));
+                    }
+                    last = Some(row.get::<_, i64>(0)?);
+                }
+                Ok((false, last))
+            })?;
+            match (found, last) {
+                (true, _) => return Ok(true),
+                (false, Some(seq)) => before = seq,
+                (false, None) => return Ok(false),
+            }
+            std::thread::yield_now();
+        }
+    }
+
     /// Keep a hydrated transcript aligned with the thread's acknowledged head.
+    ///
+    /// Read in bounded batches, releasing the connection between them: a long thread (tens of thousands of events,
+    /// hundreds of MB) took the lock for a second or more, and every other read and write waited, a user's send among
+    /// them (0.8 s measured for a 230 MB thread; ~20 ms now). Events only append with increasing `seq`, so the batches
+    /// join into the same ordered list.
     pub fn events_for_thread_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<Vec<ThreadEvent>> {
-        self.with(|c| {
-            let mut st =
-                c.prepare("SELECT seq, thread_id, turn_id, at, payload FROM events WHERE thread_id = ?1 AND seq <= ?2 ORDER BY seq")?;
-            Ok(st.query_map(params![thread_id.to_string(), through_seq], row_to_event)?.collect::<Result<Vec<_>, _>>()?)
-        })
+        const BATCH: i64 = 256;
+        const BATCH_BYTES: usize = 256 * 1024;
+        let thread = thread_id.to_string();
+        let mut events = Vec::new();
+        let mut after = 0;
+        loop {
+            let (more, last) = self.with(|c| {
+                let mut st = c.prepare_cached(
+                    "SELECT seq, thread_id, turn_id, at, payload FROM events WHERE thread_id = ?1 AND seq > ?2 AND seq <= ?3 ORDER BY seq LIMIT ?4",
+                )?;
+                let mut rows = st.query(params![thread, after, through_seq, BATCH])?;
+                let (mut count, mut bytes, mut last) = (0, 0usize, None);
+                while let Some(row) = rows.next()? {
+                    bytes = bytes.saturating_add(row.get_ref(4)?.as_bytes().map_or(0, <[u8]>::len));
+                    let event = row_to_event(row)?;
+                    last = Some(event.seq);
+                    events.push(event);
+                    count += 1;
+                    if bytes >= BATCH_BYTES {
+                        return Ok((true, last));
+                    }
+                }
+                Ok((count == BATCH, last))
+            })?;
+            match last {
+                Some(seq) if more => after = seq,
+                _ => return Ok(events),
+            }
+            // The std mutex is not fair: re-locking at once would win against a waiting thread nearly every time.
+            std::thread::yield_now();
+        }
     }
 
     /// Fold bounded batches outside the connection lock. A saved long thread
@@ -2069,6 +2136,66 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn events_for_thread_reads_every_event_in_order_across_bounded_batches() {
+        let (store, thread) = thread_fixture();
+        // More events than one batch holds, and payloads that end batches by size first.
+        let big = "x".repeat(40 * 1024);
+        for i in 0..700 {
+            let text = if i % 50 == 0 { big.clone() } else { format!("event {i}") };
+            store.event_append(thread.id, None, EventPayload::ProviderNotice { level: NoticeLevel::Info, text, data: None }).unwrap();
+        }
+        let events = store.events_for_thread(thread.id).unwrap();
+        assert_eq!(events.len(), 700);
+        assert!(events.windows(2).all(|pair| pair[0].seq < pair[1].seq));
+        let through = events[400].seq;
+        assert_eq!(store.events_for_thread_through(thread.id, through).unwrap().len(), 401);
+    }
+
+    #[test]
+    fn thread_mentions_finds_text_in_the_threads_own_messages_only() {
+        let (store, thread) = thread_fixture();
+        let shot = "/Users/someone/Desktop/booking \"form\" 7 h spät.png";
+        store
+            .event_append(
+                thread.id,
+                None,
+                EventPayload::AssistantMessageCompleted {
+                    message_id: Uuid::now_v7(),
+                    origin: EventOrigin::Root,
+                    text: format!("![Booking form]({shot})"),
+                    thinking: None,
+                },
+            )
+            .unwrap();
+        // Many later messages: the search walks back across bounded batches.
+        for i in 0..300 {
+            store
+                .event_append(
+                    thread.id,
+                    None,
+                    EventPayload::AssistantMessageCompleted {
+                        message_id: Uuid::now_v7(),
+                        origin: EventOrigin::Root,
+                        text: format!("reply {i}"),
+                        thinking: None,
+                    },
+                )
+                .unwrap();
+        }
+        store
+            .event_append(
+                thread.id,
+                None,
+                EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "/tmp/notice.png".into(), data: None },
+            )
+            .unwrap();
+        assert!(store.thread_mentions(thread.id, shot).unwrap());
+        assert!(!store.thread_mentions(thread.id, "/Users/someone/Desktop/other.png").unwrap());
+        assert!(!store.thread_mentions(thread.id, "/tmp/notice.png").unwrap(), "only messages count, not notices");
+        assert!(!store.thread_mentions(Uuid::now_v7(), shot).unwrap());
+    }
 
     fn thread_fixture() -> (Store, Thread) {
         let store = Store::open_in_memory().unwrap();

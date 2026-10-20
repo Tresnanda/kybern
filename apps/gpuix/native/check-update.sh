@@ -17,6 +17,10 @@ geometry)
   KYBERN_REGION_PAINT=1 bun native/subtree-transform-check.ts
   bun native/font-weight-check.ts
   bun native/stroke-draw-check.ts
+  # Paint-only hover colour fades (patches/hover_fade_*): dark, light, Reduce Motion, KYBERN_HOVER_FADE=0.
+  bun native/hover-fade-check.ts
+  # Rings that ease between values (stroke_draw from/to/retarget, N2).
+  bun native/ring-check.ts
   # Compositor loops (patches/compositor_loops_*): CA layers, curves, hand-back; and the scene path control.
   bun perf/motion-fps/lab-check.ts
   bun perf/motion-fps/lab-check.ts --light
@@ -30,6 +34,10 @@ content)
   bun native/diff-check.ts
   bun native/surface-check.ts
   bun native/link-check.ts
+  # A multi-word link hovers as one link (link_hover_hooks.py).
+  bun native/link-hover-check.ts
+  # Embedded web documents: input, navigation policy, identity, and the Core Animation fade/scale (N3).
+  bun native/webview-check.ts
   for check in layout-check syntax-check syntax-lifecycle-check syntax-large-check; do
     bun "native/$check.ts"
   done

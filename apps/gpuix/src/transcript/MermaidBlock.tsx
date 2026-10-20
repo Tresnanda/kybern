@@ -12,7 +12,7 @@ import { Label, ink, useTheme } from '../ui.tsx'
 import { useNativeWindowSize } from '../native/layout-hooks.ts'
 import { CopyAction } from './bubble.tsx'
 import { CODE, muted } from './kit.tsx'
-import { CodeChunk, textChunks } from './markdown.tsx'
+import { CodeChunk, lineChunks } from './markdown.tsx'
 import { T } from './glyphs.ts'
 import { renderMermaid, type DiagramImage } from './mermaid.ts'
 
@@ -63,7 +63,7 @@ export const MermaidBlock = memo(function MermaidBlock({ code, source, onSource 
   const inner = Math.max(40, width - 2 * CANVAS.side)
   const imageHeight = image ? Math.min(CANVAS.maxHeight, inner * image.height / image.width) : 0
   const outline = ink(t, 0.1)
-  const chunks = textChunks(code)
+  const chunks = lineChunks(code)
   return <div ref={el => { node.current = el; setMounted(el) }} testId="mermaid-block" data-state={diagram.status} style={{ display: 'flex', flexDirection: 'column', borderRadius: CODE.radius, overflow: 'hidden', backgroundColor: t.codeSurface }}>
     <div testId="code-header" style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 40, paddingTop: 6, paddingBottom: 6, paddingLeft: 8, paddingRight: 8 }}>
       <div style={{ display: 'flex', flexGrow: 1, minWidth: 0, alignItems: 'center' }}>

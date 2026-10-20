@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { launchFixture } from '../requests/harness.ts'
+import { pngPixels } from '../../native/clip-pixels.ts'
 
 const out = process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previews/gpuix/phase2/editor9/check'
 const scratch = process.env.KYBERN_EDITOR_SCRATCH ?? '/Users/mymac/projects/ade-gpuix-scratch/phase2-editor9'
@@ -70,6 +71,29 @@ for (const [appearance, reduced] of modes) {
     await a.mouse.click({ x: layout.x + item.listX + 8, y: layout.y + item.ty + item.lineHeight / 2 })
     await tail('- [x] Check\n')
     await a.screenshot({ path: path.join(out, `edited-${mode}.png`) })
+    // A held checklist box squashes to 0.92 about its centre (`input:active { scale: .92 }`, N6) and returns on release.
+    {
+      const width = async (name: string) => {
+        const file = path.join(out, `press-${name}-${mode}.png`); await a.screenshot({ path: file })
+        const img = pngPixels(file), sc = img.width / 900 // the lab window's logical width
+        const y = Math.round((layout.y + item.ty + item.lineHeight / 2) * sc), bg = img.at(Math.round((layout.x + item.listX - 10) * sc), y)
+        let x0 = Infinity, x1 = -Infinity
+        for (let x = Math.round((layout.x + item.listX - 6) * sc); x < (layout.x + item.listX + 24) * sc; x++) if (img.at(x, y).some((v, i) => Math.abs(v - bg[i]!) > 30)) { x0 = Math.min(x0, x); x1 = Math.max(x1, x) }
+        return x1 - x0
+      }
+      const box = { x: layout.x + item.listX + 8, y: layout.y + item.ty + item.lineHeight / 2 }
+      const rest = await width('rest')
+      await a.call('mouseDown', { ...box, button: 0 }); await Bun.sleep(150)
+      const held = await width('held')
+      await a.call('mouseUp', { ...box, button: 0 }); await Bun.sleep(250)
+      const back = await width('back')
+      if (reduced === '1') assert.ok(Math.abs(held - rest) <= 1, `Reduce Motion: the box did not squash (${rest} -> ${held})`)
+      else assert.ok(held < rest * 0.96 && held > rest * 0.86, `a held box squashes to 0.92 (${rest} -> ${held})`)
+      assert.ok(Math.abs(back - rest) <= 1, `the box returns to its size on release (${rest} -> ${back})`)
+      console.log(`checklist press ${mode}: box ${rest} px at rest, ${held} px held, ${back} px after release`)
+      await tail('- [ ] Check\n')
+      await a.mouse.click(box); await tail('- [x] Check\n')
+    }
 
     // Selection across blocks: delete, then undo restores the exact Markdown.
     const edited = await source()

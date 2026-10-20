@@ -32,6 +32,7 @@ import { COMPUTER_MENTION_PATH, noteMentionPart, taskMentionPart } from '../../.
 import { sharesHome } from '../notes/home.ts'
 import { MentionChips } from './MentionChips.tsx'
 import { tokenIcon } from './token-icons.ts'
+import type { TokenReference } from './token-text.ts'
 import { getAttachmentIconName, getFileIconName } from '../../../desktop/src/lib/kit/fileIcons.ts'
 import { menuFileIcons } from '../native/diff-file-icons.ts'
 import { fileIconColors } from '../native/file-icon-colors.ts'
@@ -73,6 +74,15 @@ type Item =
   | { id: string; type: 'command'; command: SlashCommand }
   | { id: string; type: 'skill'; skill: SkillInfo }
   | { id: string; type: 'plugin'; skill: SkillInfo }
+
+// The chip each picked token renders as. A pick passes its chip to the edit that inserts it, and `tokens` lists the same
+// chips for later renders, so both read from these.
+const mentionReference = (r: { token: string; part: { path: string } }): TokenReference => { const kind = mentionTokenKind(r.part.path); return { token: r.token, label: inlineTokenLabel(kind, r.token), icon: tokenIcon(kind, r.token) } }
+const threadReference = (r: { token: string }): TokenReference => ({ token: r.token, label: inlineTokenLabel('thread', r.token), icon: tokenIcon('thread', r.token) })
+const fileReference = (path: string): TokenReference => ({ token: `@${path}`, label: path, icon: tokenIcon('file', `@${path}`) })
+export const skillReference = (skill: Pick<SkillInfo, 'name' | 'display_name' | 'path' | 'scope'>): TokenReference => skill.scope === 'plugin'
+  ? { token: `@${skill.display_name ?? skill.name}`, label: skill.display_name ?? skill.name, icon: tokenIcon(skill.path === COMPUTER_MENTION_PATH ? 'computer' : 'plugin', '') }
+  : { token: `$${skill.name}`, label: skill.name, icon: tokenIcon('skill', '') }
 
 function rankSkills(skills: readonly SkillInfo[], query: string, limit = 12, scope: 'skill' | 'plugin' = 'skill'): SkillInfo[] {
   return skills
@@ -142,7 +152,8 @@ export function useCompletion({
   setText: (text: string) => void
   caret?: number
   composing?: boolean
-  edit?: (start: number, end: number, replacement: string) => boolean
+  /** `added`: the chip the replacement introduces (see `TokenTextareaHandle.edit`). */
+  edit?: (start: number, end: number, replacement: string, added?: readonly TokenReference[]) => boolean
   projectId?: ProjectId
   provider?: { kind: ProviderKind; instance: string }
   currentThreadId?: string
@@ -332,10 +343,13 @@ export function useCompletion({
           ? 'No matching skills'
           : 'No matching commands or skills'
 
-  const replace = (start: number, token: string) => {
-    if (/\s/.test(text[caret] ?? '') && token.endsWith(' ')) token = token.slice(0, -1)
-    if (edit) return edit(start, caret, token)
-    setText(`${text.slice(0, start)}${token}${text.slice(caret)}`)
+  const replace = (start: number, token: string, added?: TokenReference) => {
+    // Whitespace already after the caret stands in for the token's own trailing space; the replacement takes it over so
+    // the caret lands after it, ready for the next word, instead of gluing typing onto the chip.
+    const end = /\s/.test(text[caret] ?? '') && token.endsWith(' ') ? caret + 1 : caret
+    if (end > caret) token = token.slice(0, -1) + text[caret]
+    if (edit) return edit(start, end, token, added ? [added] : undefined)
+    setText(`${text.slice(0, start)}${token}${text.slice(end)}`)
     return true
   }
 
@@ -345,24 +359,24 @@ export function useCompletion({
     if ((item.type === 'note' || item.type === 'task') && mention) {
       const part = item.type === 'note' ? noteMentionPart({ id: item.note.id, title: noteTitle(item.note) }) : taskMentionPart(item.task)
       const reference = createComposerMentionReference(part, mentionRefs, threadRefs.map(r => r.token))
-      if (replace(mention.start, `${reference.token} `)) setMentionRefs(list => [...list.filter(r => r.part.path !== part.path), reference])
+      if (replace(mention.start, `${reference.token} `, mentionReference(reference))) setMentionRefs(list => [...list.filter(r => r.part.path !== part.path), reference])
     } else if (item.type === 'thread' && mention) {
       const project = projects.find((p) => p.id === item.thread.project_id)
       const reference = createComposerThreadReference(item.thread, threadRefs, project?.name ?? 'Free chat')
-      if (replace(mention.start, `${reference.token} `)) setThreadRefs((list) => [...list.filter((r) => r.part.thread_id !== item.thread.id), reference])
+      if (replace(mention.start, `${reference.token} `, threadReference(reference))) setThreadRefs((list) => [...list.filter((r) => r.part.thread_id !== item.thread.id), reference])
     } else if (item.type === 'file' && mention) {
-      if (replace(mention.start, `@${item.path} `)) setMentioned((set) => new Set(set).add(item.path))
+      if (replace(mention.start, `@${item.path} `, fileReference(item.path))) setMentioned((set) => new Set(set).add(item.path))
     } else if (item.type === 'attachment' && mention) {
       replace(mention.start, `@${item.label} `)
     } else if (item.type === 'plugin' && mention) {
-      if (replace(mention.start, `@${item.skill.display_name ?? item.skill.name} `)) setPicked((map) => new Map(map).set(item.skill.path, item.skill))
+      if (replace(mention.start, `@${item.skill.display_name ?? item.skill.name} `, skillReference(item.skill))) setPicked((map) => new Map(map).set(item.skill.path, item.skill))
     } else if (item.type === 'command' && slash) {
       if (item.command.insert) replace(slash.start, `/${item.command.invocation ?? item.command.name} `)
       else if (replace(slash.start, '')) item.command.run()
     } else if (item.type === 'skill') {
       const trigger = skill ?? slash
       if (!trigger) return
-      if (replace(trigger.start, `$${item.skill.name} `)) setPicked((map) => new Map(map).set(item.skill.name.toLowerCase(), item.skill))
+      if (replace(trigger.start, `$${item.skill.name} `, skillReference(item.skill))) setPicked((map) => new Map(map).set(item.skill.name.toLowerCase(), item.skill))
     }
   }
 
@@ -441,12 +455,10 @@ export function useCompletion({
     ) : null
 
   const tokens = [
-    ...mentionRefs.map(r => { const kind = mentionTokenKind(r.part.path); return { token: r.token, label: inlineTokenLabel(kind, r.token), icon: tokenIcon(kind, r.token) } }),
-    ...threadRefs.map(r => ({ token: r.token, label: inlineTokenLabel('thread', r.token), icon: tokenIcon('thread', r.token) })),
-    ...[...mentioned].map(path => ({ token: `@${path}`, label: path, icon: tokenIcon('file', `@${path}`) })),
-    ...[...picked.values()].map(skill => skill.scope === 'plugin'
-      ? { token: `@${skill.display_name ?? skill.name}`, label: skill.display_name ?? skill.name, icon: tokenIcon(skill.path === COMPUTER_MENTION_PATH ? 'computer' : 'plugin', '') }
-      : { token: `$${skill.name}`, label: skill.name, icon: tokenIcon('skill', '') }),
+    ...mentionRefs.map(mentionReference),
+    ...threadRefs.map(threadReference),
+    ...[...mentioned].map(fileReference),
+    ...[...picked.values()].map(skillReference),
   ].filter(r => text.includes(r.token))
   return { menu, onKey, buildParts, reset, tokens, open: open && items.length > 0 }
 }

@@ -1,6 +1,7 @@
 import {readAccounts} from '../requests/accounts.ts'
 import { onEnvironmentChange, onEnvironmentLeaving } from '../shell/environment.ts'
 import { load, save } from '../shell/persist.ts'
+import { addPending, pendingFor, updatePending, type PendingSend } from './pending.ts'
 // Composer data and actions: the agent catalog, settings and accounts, the open
 // thread's next-message target, queued follow-ups, and the home screen's draft
 // choices. Every RPC here is the one the desktop uses (`state/rpc.ts`,
@@ -269,29 +270,83 @@ export async function setThreadModel(threadId: ThreadId, model: string | undefin
 
 // ---- sending ----
 
+/** Optimistic follow-ups whose `queue.add` has not answered yet. */
+const queueing = new Set<string>()
+
 export async function loadQueue(threadId: ThreadId) {
   const client = rpc()
   try {
     const r = await client.call('queue.list', { thread_id: threadId })
     if (getClient() !== client) return
-    patch((d) => ({ queued: { ...d.queued, [threadId]: r.messages.filter((m) => m.thread_id === threadId) } }))
+    // Follow-ups still on their way to `queue.add` keep their place: a reload must not blink them out.
+    patch((d) => {
+      const listed = r.messages.filter((m) => m.thread_id === threadId)
+      const local = (d.queued[threadId] ?? []).filter((m) => queueing.has(m.id) && !listed.some((l) => l.id === m.id))
+      return { queued: { ...d.queued, [threadId]: [...listed, ...local] } }
+    })
   } catch {
     // Older daemons have no queue.
   }
 }
 
+/** Optimistic: a send or steer shows as a pending user block on this frame and this returns before the daemon answers;
+ * a rejection stays on that block as "Not sent" with Retry (`pending.ts`). A queued follow-up joins the queue list at
+ * once and rejects (the composer gets the text back) when `queue.add` fails. */
 export async function sendToThread(threadId: ThreadId, message: UserMessage, delivery: 'send' | 'queue' | 'steer') {
-  if (delivery === 'send') {
-    await rpc().call('threads.send', { thread_id: threadId, message })
+  if (delivery === 'queue') {
+    const client = rpc(), item: QueuedMessage = { id: crypto.randomUUID(), thread_id: threadId, message }
+    queueing.add(item.id)
+    patch((d) => ({ queued: { ...d.queued, [threadId]: [...(d.queued[threadId] ?? []), item] } }))
+    try {
+      await client.call('queue.add', item)
+    } catch (e) {
+      patch((d) => ({ queued: { ...d.queued, [threadId]: (d.queued[threadId] ?? []).filter((m) => m.id !== item.id) } }))
+      throw e
+    } finally { queueing.delete(item.id) }
+    if (getClient() === client) await loadQueue(threadId)
     return
   }
-  if (delivery === 'steer') {
-    await rpc().call('threads.steer', { thread_id: threadId, id: crypto.randomUUID(), message })
-    return
+  const send: PendingSend = { id: crypto.randomUUID(), threadId, message, at: new Date().toISOString(), delivery, state: 'sending' }
+  addPending(send)
+  void deliverPending(send)
+}
+
+async function deliverPending(send: PendingSend) {
+  try {
+    if (send.delivery === 'send') await rpc().call('threads.send', { thread_id: send.threadId, message: send.message, message_id: send.id })
+    else await rpc().call('threads.steer', { thread_id: send.threadId, id: send.id, message: send.message })
+    updatePending(send.threadId, send.id, { state: 'accepted' })
+  } catch (e) {
+    updatePending(send.threadId, send.id, { state: 'failed', error: errorText(e) })
   }
-  const client = rpc()
-  await client.call('queue.add', { thread_id: threadId, id: crypto.randomUUID(), message })
-  if (getClient() === client) await loadQueue(threadId)
+}
+
+/** Retry a failed send with its own id: a daemon that did accept it answers with the same turn (`turn_started_receipt`). A
+ * steer whose turn has ended goes as a normal send. */
+export function retryPending(threadId: ThreadId, id: string) {
+  const send = pendingFor(threadId).find((p) => p.id === id && p.state === 'failed')
+  if (!send) return
+  const thread = getState().threads.find((t) => t.id === threadId) ?? getState().open.thread
+  const live = thread?.status === 'running' || thread?.status === 'awaiting-approval'
+  const next: PendingSend = { ...send, delivery: send.delivery === 'steer' && !live ? 'send' : send.delivery, state: 'sending', error: undefined }
+  addPending(next)
+  void deliverPending(next)
+}
+
+// A failed send's Edit puts its text back into that thread's composer (`ComposerView` registers by draft key).
+const restorers = new Map<string, (text: string) => void>()
+export function onComposerRestore(draftKey: string, restore: (text: string) => void) {
+  restorers.set(draftKey, restore)
+  return () => { if (restorers.get(draftKey) === restore) restorers.delete(draftKey) }
+}
+/** `draftKey` without its pane prefix (`main:thread:<id>`): the focused pane's composer first, else any showing it. */
+export function restoreToComposer(draftKey: string, text: string): boolean {
+  const keys = [...restorers.keys()].filter((key) => key === draftKey || key.endsWith(`:${draftKey}`))
+  const focused = `${getFocusedPaneId()}:${draftKey}`
+  const restore = restorers.get(keys.includes(focused) ? focused : keys[0] ?? '')
+  if (!restore) return false
+  restore(text)
+  return true
 }
 
 export async function removeQueued(threadId: ThreadId, id: string) {

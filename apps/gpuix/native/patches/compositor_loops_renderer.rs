@@ -91,7 +91,19 @@ impl MetalRenderer {
         let named = |name: &std::ffi::CStr| -> *mut objc::runtime::Object { msg_send![objc::class!(CAMediaTimingFunction), functionWithName: string(name)] };
         let animation: *mut objc::runtime::Object;
         let mut delay = l.delay_ms / 1000.;
-        if l.rotate {
+        if let Some(highlight) = l.band {
+            // A banded shimmer glyph: its colour, sampled at its own position across the label (`shimmer_band_weight`), linear.
+            animation = msg_send![objc::class!(CAKeyframeAnimation), animationWithKeyPath: string(c"backgroundColor")];
+            let n = 48;
+            let colors: Vec<*mut objc::runtime::Object> = (0..=n).map(|k| {
+                let c: gpui::Rgba = gpui::shimmer_band_mix(l.color, highlight, gpui::shimmer_band_weight(l.band_u, k as f64 / n as f64)).into();
+                CGColorCreateSRGB(c.r as f64, c.g as f64, c.b as f64, c.a as f64) as *mut objc::runtime::Object
+            }).collect();
+            let _: () = msg_send![animation, setValues: array(&colors)];
+            for color in colors { CGColorRelease(color as *mut c_void); }
+            let times: Vec<_> = (0..=n).map(|k| number(k as f64 / n as f64)).collect();
+            let _: () = msg_send![animation, setKeyTimes: array(&times)];
+        } else if l.rotate {
             // GPUI turns clockwise on screen; an unflipped CA layer turns clockwise for negative angles.
             animation = msg_send![objc::class!(CABasicAnimation), animationWithKeyPath: string(c"transform.rotation.z")];
             let _: () = msg_send![animation, setFromValue: number(0.)];
@@ -143,7 +155,7 @@ impl MetalRenderer {
             }, |(_, layer)| layer);
             // The shimmer's layer carries its clamped peak alpha; its opacity animates down from there.
             let mut rgba: gpui::Rgba = l.color.into();
-            if l.shimmer { rgba.a = (l.color.a * 1.6).min(1.0); }
+            if l.shimmer && l.band.is_none() { rgba.a = (l.color.a * 1.6).min(1.0); }
             unsafe {
                 let _: () = msg_send![layer, setFrame: frame];
                 let _: () = msg_send![layer, setCornerRadius: l.radius as f64 / scale];
@@ -166,10 +178,11 @@ impl MetalRenderer {
                     let _: () = msg_send![layer, setMask: mask];
                 }
                 // The model value shows during a leaf's delay, like the scene's rest frame.
-                let rest = if l.shimmer { compositor_shimmer(l.color.a, 0.) as f32 } else if l.breathe || l.rotate { 1f32 } else { 0.22f32 };
+                let rest = if l.band.is_some() { 1f32 } else if l.shimmer { compositor_shimmer(l.color.a, 0.) as f32 } else if l.breathe || l.rotate { 1f32 } else { 0.22f32 };
                 let _: () = msg_send![layer, setOpacity: rest];
                 let same_curve = existing.is_some_and(|(shown, _)| shown.cycle_ms == l.cycle_ms && shown.delay_ms == l.delay_ms && shown.breathe == l.breathe
-                    && shown.shimmer == l.shimmer && shown.rotate == l.rotate && shown.started == l.started && (!l.shimmer || shown.color.a == l.color.a));
+                    && shown.shimmer == l.shimmer && shown.rotate == l.rotate && shown.started == l.started && (!l.shimmer || shown.color.a == l.color.a)
+                    && shown.band == l.band && shown.band_u == l.band_u && (l.band.is_none() || shown.color == l.color));
                 if !same_curve {
                     let animation = Self::compositor_animation(l, layer);
                     let key: *mut objc::runtime::Object = msg_send![objc::class!(NSString), stringWithUTF8String: c"kybern-loop".as_ptr()];

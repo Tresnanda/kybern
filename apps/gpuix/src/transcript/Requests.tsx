@@ -31,6 +31,8 @@ import { Icon } from '../icons.tsx'
 import { PanelEnter, PanelPresence } from '../requests/Panel.tsx'
 import { SecretRequestPanel } from '../requests/Secret.tsx'
 import { ActivityPanels, useRequestActivity } from '../requests/Activity.tsx'
+import { ComposerTray, trayVisible } from '../requests/ComposerTray.tsx'
+import { loadQueue, useComposer } from '../composer/store.ts'
 import { CoordinatorCard } from '../coordinator/Cards.tsx'
 import { useApp, usePaneAccess } from '../state.ts'
 import { FONT_MONO, FONT_UI, over } from '../theme.ts'
@@ -62,17 +64,28 @@ export function ThreadRequests() {
 }
 
 function RequestStack({ threadId }: { threadId: string }) {
+  const pane = usePaneAccess()
   const pending = useApp((s) => s.open.pendingApprovals ?? EMPTY)
   const questions = useApp((s) => s.open.pendingQuestions ?? EMPTY)
+  const running = useApp((s) => s.open.thread?.status === 'running' || s.open.thread?.status === 'awaiting-approval')
+  const queued = useComposer((d) => d.queued[threadId] ?? EMPTY)
+  useEffect(() => {
+    if (!pane.frozen) void loadQueue(threadId)
+  }, [threadId, running, pane.frozen])
   const approval = pending[0] ?? null
   const activity = useRequestActivity(threadId)
-  const visible = !!(approval || questions[0] || activity.visible)
+  // Subagents, background tasks, helpers and queued follow-ups share one tray (`ComposerTray`) in this surface.
+  const tray = { threadId, subagents: activity.strip?.rows ?? EMPTY, tasks: activity.active, helpers: activity.helpers, queued }
+  const showTray = trayVisible(tray)
+  const request = !!(approval || questions[0])
+  const visible = !!(request || activity.visible || showTray)
   const closed = !!approval && ((isUserInput(approval) && !connectorApproval(approval)) || ownForm(approval))
   return (
     <PanelPresence show={visible}><StackedPanel closed={closed}>
       {/* `t-panel-enter`: each request rises into the stack as it arrives. */}
       <ActivityPanels threadId={threadId} data={activity} />
-      {(approval || questions[0]) && <PanelEnter key={approval ? approval.id : questions[0]!.id}>
+      <PanelPresence show={showTray}><PanelEnter><ComposerTray data={tray} divided={request} /></PanelEnter></PanelPresence>
+      {request && <PanelEnter key={approval ? approval.id : questions[0]!.id}>
         {approval ? (
           <ApprovalRequestCard threadId={threadId} approval={approval} count={pending.length} />
         ) : (
