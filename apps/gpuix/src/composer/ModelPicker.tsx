@@ -892,7 +892,7 @@ function CardHeader({ leading, trailing, children }: { leading?: ReactNode; trai
  * pointer, release commits. Pointer moves glide on the ease-out (none under
  * Reduce Motion); keys move instantly.
  */
-function EffortSlider({
+export function EffortSlider({
   efforts,
   value,
   disabled,

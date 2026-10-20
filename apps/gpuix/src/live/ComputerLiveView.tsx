@@ -9,7 +9,7 @@ import { useDock } from '../dock/store.ts'
 import { IconButton } from '../sidebar/rows.tsx'
 import { N } from '../nav/glyphs.ts'
 import { EASE_OUT, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { DURATION, EASE } from '../motion/kit.tsx'
+import { EASE } from '../motion/kit.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { Floating } from './Floating.tsx'
 import { actionParts } from './action.ts'
@@ -88,7 +88,7 @@ function Live({ threadId, running, insetBottom }: { threadId: string; running: b
       <Scrim height={width >= 260 ? 76 : 56} />
       <div style={{ position: 'absolute', left: 12, right: 12, bottom: 10, display: 'flex', flexDirection: 'column', gap: 1, pointerEvents: 'none' }}>{width >= 260 && <Label color="rgba(255,255,255,0.72)" size={11} lineHeight={14} weight={500} truncate>{frame.app}</Label>}<Caption action={frame.action ?? (running ? 'Working' : 'Done')} live={running} /></div>
       {ripples.map(ripple => <Ripple key={ripple.id} x={ripple.x * width} y={ripple.y * width / aspect} onDone={() => setRipples(list => list.filter(item => item.id !== ripple.id))} />)}
-      <div onMouseEnter={() => setOverControls(true)} onMouseLeave={() => setOverControls(false)} paintTransform={controlsTransform(hovered)} backdrop={hovered && BACKDROP_ALLOWED ? {...BACKDROP.liveControls,radius:8} : undefined} style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 4, ...(PATCHED_NATIVE ? {} : { opacity: hovered ? 1 : 0 }), pointerEvents: hovered ? 'auto' : 'none', backgroundColor: BACKDROP_ALLOWED ? 'rgba(0,0,0,.45)' : t.popover, borderRadius: 8 }}><IconButton icon={N.window} size={28} label={expanded ? 'Show smaller' : 'Show larger'} onClick={() => setExpanded(!expanded)} /><IconButton icon={N.x} size={28} testId="computer-live-close" label="Hide until the next task" onClick={() => setClosing('dismiss')} /></div>
+      <LiveControls hovered={hovered} expanded={expanded} onEnter={() => setOverControls(true)} onLeave={() => setOverControls(false)} onToggle={() => setExpanded(!expanded)} onClose={() => setClosing('dismiss')} />
     </div>
   </Floating>
 }
@@ -122,15 +122,21 @@ function Caption({ action, live }: { action: string; live: boolean }) {
 }
 
 /** `.computer-live-controls`: the buttons rise 4 px into place over 200 ms on hover and settle back in 120 ms (opacity only under Reduce Motion). */
-function controlsTransform(shown: boolean) {
+export function controlsTransform(shown: boolean) {
   if (!PATCHED_NATIVE) return undefined
   return { initial: false as const, animate: { opacity: shown ? 1 : 0, translateY: shown || REDUCED_MOTION ? 0 : 4 }, transition: { duration: shown ? 0.2 : 0.12, ease: [...EASE.out] as [number, number, number, number] } }
 }
 /** `.computer-live-marker`: a 24 px ring that grows from 40% to 160% while fading from 50% over 480 ms, then removes itself. */
-function Ripple({ x, y, onDone }: { x: number; y: number; onDone: () => void }) {
+export function Ripple({ x, y, onDone }: { x: number; y: number; onDone: () => void }) {
   return <div
     paintTransform={{ initial: { scale: 0.4, opacity: 0.5 }, animate: { scale: 1.6, opacity: 0 }, transition: { duration: 0.48, ease: [...EASE.out] } }}
     onMotionComplete={onDone}
     style={{ position: 'absolute', left: x - 12, top: y - 12, width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#ffffff', pointerEvents: 'none' }}
   />
+}
+
+/** The hover buttons in the card's top-right corner: they rise into place when the pointer is over the card or themselves. */
+export function LiveControls({ hovered, expanded, onEnter, onLeave, onToggle, onClose }: { hovered: boolean; expanded: boolean; onEnter: () => void; onLeave: () => void; onToggle: () => void; onClose: () => void }) {
+  const t = useTheme()
+  return <div onMouseEnter={onEnter} onMouseLeave={onLeave} paintTransform={controlsTransform(hovered)} backdrop={hovered && BACKDROP_ALLOWED ? {...BACKDROP.liveControls,radius:8} : undefined} style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 4, ...(PATCHED_NATIVE ? {} : { opacity: hovered ? 1 : 0 }), pointerEvents: hovered ? 'auto' : 'none', backgroundColor: BACKDROP_ALLOWED ? 'rgba(0,0,0,.45)' : t.popover, borderRadius: 8 }}><IconButton icon={N.window} size={28} label={expanded ? 'Show smaller' : 'Show larger'} onClick={onToggle} /><IconButton icon={N.x} size={28} testId="computer-live-close" label="Hide until the next task" onClick={onClose} /></div>
 }

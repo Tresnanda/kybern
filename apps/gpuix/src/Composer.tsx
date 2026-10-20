@@ -749,25 +749,30 @@ export function ComposerView(input: ComposerViewProps) {
                 onPromptMode={setPromptMode}
               />
             )}
-            {/* One button for send, sending and stop, so the glyph can cross-swap (`IconSwap`, P2.2); a keyboard send still swaps because it reports state. */}
-            <Tip label={running ? 'Stop generation' : disabledReason ?? (steering ? 'Steer now ⌘↵' : 'Send ↵')}>
-              <RoundButton testId={running ? 'stop' : 'send'} disabled={running ? false : !canSend} onClick={running ? props.onStop : () => void submit()}>
-                {/* `IconSwap` arrow ↔ spinner while sending, arrow ↔ stop square while the thread runs (`Composer.tsx:1441`); the spinner is the shared-clock loader. */}
-                <SwapOnChange kind="icon" active={running ? 'stop' : sending ? 'sending' : 'send'} style={{ width: 20, height: 20 }}>
-                  {running ? (
-                    <Icon source={G.stop} size={10} color={t.v('--color-background-elevated-primary-opaque')} />
-                  ) : sending ? (
-                    <MatrixLoader rgb={rgbOf(t.v('--color-background-elevated-primary-opaque'))} alpha={1} gap={1.5} />
-                  ) : (
-                    <Icon name="send" size={20} color={t.v('--color-background-elevated-primary-opaque')} />
-                  )}
-                </SwapOnChange>
-              </RoundButton>
-            </Tip>
+            <SendButton running={!!running} sending={sending} canSend={canSend} steering={steering} disabledReason={disabledReason} onSubmit={() => void submit()} onStop={props.onStop} />
           </div>
         </FooterRow>
       </div>
     </div>
+  )
+}
+
+/**
+ * One button for send, sending and stop, so the glyph can cross-swap (`IconSwap`: the arrow shrinks and blurs out while the
+ * spinner or the stop square grows in). A keyboard send still swaps because it reports state, not navigation, and never delays input.
+ */
+export function SendButton({ running, sending, canSend, steering, disabledReason, onSubmit, onStop }: { running: boolean; sending: boolean; canSend: boolean; steering: boolean; disabledReason?: string | null; onSubmit: () => void; onStop?: () => void }) {
+  const t = useTheme()
+  const ink = t.v('--color-background-elevated-primary-opaque')
+  return (
+    <Tip label={running ? 'Stop generation' : disabledReason ?? (steering ? 'Steer now ⌘↵' : 'Send ↵')}>
+      <RoundButton testId={running ? 'stop' : 'send'} disabled={running ? false : !canSend} onClick={running ? onStop : onSubmit}>
+        {/* `IconSwap` arrow ↔ spinner while sending, arrow ↔ stop square while the thread runs (`Composer.tsx:1441`); the spinner is the shared-clock loader. */}
+        <SwapOnChange kind="icon" active={running ? 'stop' : sending ? 'sending' : 'send'} style={{ width: 20, height: 20 }}>
+          {running ? <Icon source={G.stop} size={10} color={ink} /> : sending ? <MatrixLoader rgb={rgbOf(ink)} alpha={1} gap={1.5} /> : <Icon name="send" size={20} color={ink} />}
+        </SwapOnChange>
+      </RoundButton>
+    </Tip>
   )
 }
 
@@ -911,7 +916,7 @@ function RunningControls({
 }
 
 /** Image tiles and file cards above the editor (`Composer.tsx:1143-1171`). */
-function Attachments({ items, uploading, onRemove }: { items: Attachment[]; uploading: number; onRemove: (a: Attachment) => void }) {
+export function Attachments({ items, uploading, onRemove }: { items: Attachment[]; uploading: number; onRemove: (a: Attachment) => void }) {
   const t = useTheme()
   const elevated = t.v('--color-background-elevated-secondary')
   // Only the ✕ removal leaves with an exit; sending clears the tray at once.
@@ -1019,7 +1024,7 @@ function RemoveButton({ onClick, testId }: { onClick: () => void; testId?: strin
 const QUEUED_ROW = 32
 
 /** Queued follow-ups stacked above the card (`QueuedPanel` in `views/Thread.tsx`). Rows that were there when the thread opened paint plainly; a row added later enters, a removed row collapses, and the last one takes the panel with it. */
-function QueuedPanel({ threadId, items }: { threadId: string; items: readonly { id: string; message: UserMessage }[] }) {
+export function QueuedPanel({ threadId, items }: { threadId: string; items: readonly { id: string; message: UserMessage }[] }) {
   const t = useTheme()
   const renderer = useGpuixRequired()
   const dark = t.variant === 'dark'
