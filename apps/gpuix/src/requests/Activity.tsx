@@ -1,10 +1,11 @@
 import { Icon } from '../icons.tsx'
 import { G } from '../composer/glyphs.ts'
+import { T } from '../transcript/glyphs.ts'
 import { accountNeedsSignIn } from '../../../desktop/src/lib/accountUi.ts'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { observeElementBounds } from '../native/layout.ts'
 import { type ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Thread, ThreadMessageRecord } from '../../../../packages/kybern-client/src/types.ts'
+import type { RuntimeTask, Thread, ThreadMessageRecord } from '../../../../packages/kybern-client/src/types.ts'
 import { heldHeadline, messageSenderName, plainLine, purposeLabel } from '../../../../packages/kybern-client/src/delegations.ts'
 import { stripSubagents, stripLabel, stoppableSubagents, subagentThreadPhase, subagentTypeLabel, subagentSpan, subagentPhaseWord } from '../../../../packages/kybern-client/src/subagents.ts'
 import { useRuntimeTasks, isActiveTask } from '../dock/Activity.tsx'
@@ -64,6 +65,31 @@ export function useRequestActivity(threadId: string | null) {
   return { held, setHeld, helpers, strip, active, target, thread, visible: !!(held.length || helpers.length || strip || active.length || target?.pending_permission_mode || target?.quota_limited) }
 }
 
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+/** `activeTaskSummary` (`lib/runtimeActivity.ts`). */
+function activeTaskSummary(tasks: RuntimeTask[]) {
+  const agents = tasks.filter(task => task.kind === 'agent').length
+  const background = tasks.length - agents
+  if (agents > 0) return `${plural(agents, 'agent')} working${background > 0 ? ` · ${plural(background, 'background task')}` : ''}`
+  return plural(background, 'background task')
+}
+/** `RuntimeActivityPanel` (`views/Thread.tsx`): the primary task's kind icon, the summary, then its title. */
+function RuntimeActivityRow({ tasks, onView }: { tasks: RuntimeTask[]; onView: () => void }) {
+  const t = useTheme()
+  const foreground = tasks.find(task => !task.backgrounded)
+  const primary = foreground ?? tasks[0]
+  const detail = primary?.title
+  const icon = primary?.kind === 'process' ? T.terminal : primary?.kind === 'agent' ? T.robot : G.workflow
+  return <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <Icon source={icon} size={14} color={t.textSecondary} style={primary?.kind === 'process' ? { marginTop: 1 } : undefined} />
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexGrow: 1, minWidth: 0 }}>
+      <Label color={ink(t, 0.85)} size={12} weight={500} truncate style={{ flexShrink: 0, maxWidth: '100%' }}>{activeTaskSummary(tasks)}</Label>
+      {detail && <Label color={muted(t, 0.55)} size={12} truncate style={{ minWidth: 0 }}>{`· ${detail}`}</Label>}
+    </div>
+    <Button variant="ghost" testId="runtime-view" onClick={onView}>View activity</Button>
+  </div>
+}
+
 export function ActivityPanels({ threadId, data }: { threadId: string; data: ReturnType<typeof useRequestActivity> }) {
   const { held, setHeld, helpers, strip, active, target, thread } = data
   const t = useTheme()
@@ -84,7 +110,7 @@ export function ActivityPanels({ threadId, data }: { threadId: string; data: Ret
     <PanelPresence show={!!strip}>{strip && <PanelEnter><ActivityBody testId="subagent-strip"><div style={{ display: 'flex', justifyContent: 'space-between' }}><Button variant="ghost" onClick={() => setStripOpen(!stripOpen)}>{`${stripLabel(strip.rows.length, strip.working)} ${stripOpen ? '⌃' : '⌄'}`}</Button>{stoppableSubagents(strip.rows).length >= 2 && <Button variant="ghost" testId="subagents-stop-all" onClick={() => { for (const child of stoppableSubagents(strip.rows)) void controlSubagent(child, 'stop') }}>Stop all</Button>}</div>
       {stripOpen && <virtual-list style={{ width: '100%', height: Math.min(176, strip.rows.length * 28) }}>{strip.rows.map(child => <SubagentRow key={child.id} thread={child} />)}</virtual-list>}
     </ActivityBody></PanelEnter>}</PanelPresence>
-    <PanelPresence show={active.length > 0}><PanelEnter><ActivityBody testId="runtime-activity-panel"><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Label color={t.text} size={12} truncate style={{ flexGrow: 1 }}>{`${active.filter(task => task.kind === 'agent').length ? `${active.filter(task => task.kind === 'agent').length} ${active.filter(task => task.kind === 'agent').length === 1 ? 'agent' : 'agents'} working` : `${active.length} background ${active.length === 1 ? 'task' : 'tasks'}`} · ${(active.find(task => !task.backgrounded) ?? active[0])?.title}`}</Label><Button variant="ghost" testId="runtime-view" onClick={() => showDock(threadId, 'activity')}>View activity</Button></div></ActivityBody></PanelEnter></PanelPresence>
+    <PanelPresence show={active.length > 0}><PanelEnter><ActivityBody testId="runtime-activity-panel"><RuntimeActivityRow tasks={active} onView={() => showDock(threadId, 'activity')} /></ActivityBody></PanelEnter></PanelPresence>
     <PanelPresence show={held.length > 0}><PanelEnter><HeldMessages messages={held} onDone={id => setHeld(items => items.filter(m => m.id !== id))} /></PanelEnter></PanelPresence>
   </>
 }
