@@ -184,6 +184,9 @@ struct Track {
     pressed: bool,
     settled: bool,
     blur_seen: bool,
+    /// A tick found no retained paint and asked for a render; until the scope is found again (it was hidden, never
+    /// painted), further ticks do not ask again.
+    fallback: bool,
 }
 impl Track {
     fn new(source: Source, now: Instant) -> Self {
@@ -202,6 +205,7 @@ impl Track {
             pressed: false,
             settled: false,
             blur_seen: false,
+            fallback: false,
         };
         track.settled = !track.active(now);
         track.blur_seen = track.has_blur();
@@ -484,6 +488,15 @@ pub(crate) fn tick(view: &mut GpuixView, window: &mut Window, cx: &mut gpui::Con
         (updates, active, settled, rerender)
     });
     let (found, missing): (Vec<_>, Vec<_>) = updates.into_iter().partition(|(id, _)| window.has_subtree_transform(*id));
+    // One fallback render per scope that has no retained paint; a scope that render did not paint (hidden) waits for the
+    // next ordinary render instead of rendering the window every frame of its tween.
+    let missing: Vec<_> = TRACKS.with(|tracks| {
+        let mut tracks = tracks.borrow_mut();
+        for (id, _) in &found {
+            if let Some(track) = tracks.get_mut(id) { track.fallback = false; }
+        }
+        missing.into_iter().filter(|(id, _)| tracks.get_mut(id).is_some_and(|track| !std::mem::replace(&mut track.fallback, true))).collect()
+    });
     if gpui::kybern_motion_trace_enabled() {
         let list = |v: &[(u64, SubtreeTransformValue)]| v.iter().map(|(id, value)| format!(" {id}:{:.3}", value.opacity)).collect::<String>();
         gpui::kybern_motion_trace(format_args!("ptx-tick found{} missing{}", list(&found), list(&missing)));

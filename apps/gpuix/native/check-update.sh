@@ -17,6 +17,8 @@ geometry)
   KYBERN_REGION_PAINT=1 bun native/subtree-transform-check.ts
   bun native/font-weight-check.ts
   bun native/stroke-draw-check.ts
+  # Paint-only hover colour fades (patches/hover_fade_*): dark, light, Reduce Motion, KYBERN_HOVER_FADE=0.
+  bun native/hover-fade-check.ts
   # Compositor loops (patches/compositor_loops_*): CA layers, curves, hand-back; and the scene path control.
   bun perf/motion-fps/lab-check.ts
   bun perf/motion-fps/lab-check.ts --light

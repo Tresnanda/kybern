@@ -179,6 +179,7 @@ impl Window {
     /// `transform_subtrees`. Use it in both prepaint (hitboxes) and paint.
     pub fn with_subtree_transform<R>(&mut self, id: u64, origin: Point<Pixels>, value: SubtreeTransformValue, f: impl FnOnce(&mut Self) -> R) -> R {
         let outer = self.content_mask();
+        self.next_frame.scene.transform_scopes.insert(id);
         self.subtree_transform.scopes.push((id, origin, value, outer));
         self.sync_subtree_transform();
         let result = f(self);
@@ -241,9 +242,9 @@ impl Window {
         node.set_bounds(a11y_rect(visual, self.scale_factor()));
         self.subtree_transform.a11y.insert(id, (base, context));
     }
-    /// Whether the rendered scene holds paint from scope `id`.
+    /// Whether the rendered scene painted scope `id` (it may have drawn nothing: then a retained update has nothing to move).
     pub fn has_subtree_transform(&self, id: u64) -> bool {
-        self.rendered_frame.scene.transform_bases.values().any(|(_, context)| context.contains(id))
+        self.rendered_frame.scene.transform_scopes.contains(&id) || self.rendered_frame.scene.transform_bases.values().any(|(_, context)| context.contains(id))
     }
     /// Re-transform retained paint, hitboxes and accessibility bounds of the given scopes
     /// from their untransformed bases. Scopes without retained paint are ignored; callers
