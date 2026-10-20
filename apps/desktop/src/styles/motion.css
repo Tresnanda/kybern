@@ -237,7 +237,7 @@
   animation: t-text-swap-in var(--duration-fast) var(--ease-smooth-out) both;
 }
 .t-text-swap > [data-swap="out"] {
-  animation: t-text-swap-out var(--duration-quick) var(--ease-in-out) both;
+  animation: t-text-swap-out var(--duration-quick) var(--ease-exit) both;
   pointer-events: none;
 }
 @keyframes t-text-swap-in {
