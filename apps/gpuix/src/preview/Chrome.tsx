@@ -39,7 +39,7 @@ export function PreviewChrome({ threadId }: { threadId: string }) {
     return observeElementBounds(renderer, input.current.id, event => {
       if (!event.rect || focused || !input.current) return
       focused = true; renderer.focusElement?.(input.current.id)
-      nativeCapabilities(renderer).setInputSelection(input.current.id, 0, draft.length, false)
+      try { nativeCapabilities(renderer).setInputSelection(input.current.id, 0, draft.length, false) } catch { /* host text not committed yet */ }
     })
   }, [renderer, editing, focus])
   const submit = async () => {
