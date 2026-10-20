@@ -7,6 +7,7 @@
 import { orderProjects, threadMatchesFilter } from '@/state/sidebarOrganize'
 import { nestedThreadRows } from '../../../../packages/kybern-client/src/threadRows.ts'
 import { isChildThread, visibleSubagentThreads } from '../../../../packages/kybern-client/src/subagents.ts'
+import { isChildWorking } from '../../../../packages/kybern-client/src/delegations.ts'
 import {
   FREE_CHAT_PROJECT_ID,
   isFreeChatProject,
@@ -73,6 +74,17 @@ export function attentionItems(threads: readonly Thread[], nav: Pick<NavState, '
     if (kind) items.push({ thread, kind })
   }
   return items.sort((a, b) => RANK[a.kind] - RANK[b.kind] || b.thread.updated_at.localeCompare(a.thread.updated_at))
+}
+
+/** Rows that finished and left (or were dismissed). A child that works again (a delegated child re-woken by a message)
+ *  comes back: a dismissal ends that child's last run, not the child. */
+export function dismissedChildren(nav: Pick<NavState, 'dismissed' | 'children'>): Set<string> {
+  const ids = new Set<string>()
+  for (const id of Object.keys(nav.dismissed)) {
+    const child = nav.children[id]
+    if (!child || !isChildWorking(child)) ids.add(id)
+  }
+  return ids
 }
 
 export function isFiltering(filter: SidebarFilter) {
@@ -203,7 +215,7 @@ export function buildRows(input: SidebarInput): Row[] {
 
       const shownChildren = visibleSubagentThreads(childrenByProject.get(project.id) ?? [], {
         selectedId: input.selectedId,
-        dismissed: new Set(Object.keys(nav.dismissed)),
+        dismissed: dismissedChildren(nav),
         now: input.now,
       })
       const withChildren = new Set(shownChildren.map((t) => t.parent_thread_id))
