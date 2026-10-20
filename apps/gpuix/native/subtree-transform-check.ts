@@ -2,6 +2,8 @@
 // hit testing follows the transformed paint, the native press squash works with real mouse down/up, an animated
 // transform presents frames without renders, layout or island wakes, and the layout slot never moves.
 import '../src/native/local-build.ts'
+import {requireScreen} from '../perf/bench/screen-state.ts'
+import {waitForWindowOnscreen,requireWindowOnscreen} from '../perf/bench/window-onscreen.ts'
 import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -17,7 +19,7 @@ for (const theme of ['dark', 'light']) for (const reduce of ['0', '1']) {
   const all = () => { try { return readFileSync(log, 'utf8') } catch { return '' } }
   const f = await launchFixture(path.join(import.meta.dir, 'subtree-transform-lab.tsx'), { GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: theme, KYBERN_REDUCED_MOTION: reduce, KYBERN_FULL_RATE: '1', KYBERN_DEBUG_ISLANDS: '1', KYBERN_FRAME_COSTS: '1', KYBERN_FRAME_TIMES: '1', ...scratch })
   try {
-    const a = f.app; await a.getByTestId('app-ready').waitFor()
+    const a = f.app; await a.getByTestId('app-ready').waitFor();await waitForWindowOnscreen(f.pid)
     const root = (await a.getByTestId('app-ready').element()).id
     const bounds = async (testId: string) => a.getByTestId(testId).bounds()
     await a.call('focus', { elementId: root })
@@ -26,6 +28,7 @@ for (const theme of ['dark', 'light']) for (const reduce of ['0', '1']) {
     const count = (pattern: RegExp) => (all().match(pattern) ?? []).length
     const windowId = execFileSync('swift', [path.join(import.meta.dir, '../src/tasks/round7-window-id.swift'), String(f.pid)], { encoding: 'utf8' }).trim()
     const shot = (name: string) => {
+      requireScreen();requireWindowOnscreen(f.pid)
       const file = path.join(out, `${label}-${name}.png`)
       execFileSync('screencapture', ['-x', '-o', '-l', windowId, file])
       assertNonBlackContent(file, 520, 300, `${label}/${name}`)

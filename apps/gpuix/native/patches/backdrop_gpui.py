@@ -120,3 +120,5 @@ if not dest.exists() or dest.read_text()!=text:dest.write_text(text)
 print('GPUI backdrop hooks applied')
 
 exec((here / "backdrop_kernel_gpui.py").read_text())
+
+exec((here / "hover_reconcile_gpui.py").read_text())
