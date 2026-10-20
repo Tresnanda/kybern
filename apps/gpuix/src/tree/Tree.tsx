@@ -55,8 +55,19 @@ export const TreeMotion = createContext<TreeMotionState | null>(null)
 
 const bezier = (ease: readonly [number, number, number, number]) => [...ease] as [number, number, number, number]
 const ORIGIN: Record<Segment['draw'], [number, number]> = { down: [0.5, 0], right: [0, 0.5], corner: [0, 0], none: [0.5, 0.5] }
-const HIDDEN: PaintTransformValue = { scale: 0.02, opacity: 0 }
-const REST: PaintTransformValue = { scale: 1, opacity: 1 }
+// A stem grows along its length only, a tick along its width (one-axis scale, native N5); the elbow scales from its corner.
+const HIDDEN: Record<Segment['draw'], PaintTransformValue> = {
+  down: { scaleY: 0.02, opacity: 0 },
+  right: { scaleX: 0.02, opacity: 0 },
+  corner: { scale: 0.02, opacity: 0 },
+  none: { opacity: 0 },
+}
+const REST: Record<Segment['draw'], PaintTransformValue> = {
+  down: { scaleY: 1, opacity: 1 },
+  right: { scaleX: 1, opacity: 1 },
+  corner: { scale: 1, opacity: 1 },
+  none: { opacity: 1 },
+}
 /** Opacity reaches full a quarter of the way in, so the line reads as drawing rather than fading. */
 const DRAW_KEYS = [{ offset: 0.25, opacity: 1 }]
 
@@ -79,7 +90,7 @@ function rowStart(motion: TreeMotionState) {
 
 function drawTransform(segment: Segment, kind: 'in' | 'out' | 'rest', start: number, gen: number, change = false): PaintTransformProps | undefined {
   if (!PATCHED_NATIVE) return undefined
-  if (kind === 'rest') return { initial: false, animate: REST, transition: { duration: DURATION.quick, ease: bezier(EASE.out) }, origin: ORIGIN[segment.draw], generation: gen }
+  if (kind === 'rest') return { initial: false, animate: REST[segment.draw], transition: { duration: DURATION.quick, ease: bezier(EASE.out) }, origin: ORIGIN[segment.draw], generation: gen }
   if (REDUCED_MOTION) {
     return kind === 'in'
       ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease: bezier(EASE.out) }, generation: gen }
@@ -89,8 +100,8 @@ function drawTransform(segment: Segment, kind: 'in' | 'out' | 'rest', start: num
   // A piece added to a settled row (the old last child's tee) starts at once: the elbow it replaces is already gone.
   const delay = start + (change && segment.key === 'tee' ? 0 : segmentDelay(segment, kind === 'out'))
   return kind === 'in'
-    ? { initial: HIDDEN, animate: REST, keyframes: DRAW_KEYS, transition: { duration: segment.draw === 'down' ? m.slice : m.tick, delay, ease: bezier(EASE.out) }, origin: ORIGIN[segment.draw], generation: gen }
-    : { initial: false, animate: HIDDEN, transition: { duration: m.leave, delay, ease: bezier(EASE.out) }, origin: ORIGIN[segment.draw], generation: gen }
+    ? { initial: HIDDEN[segment.draw], animate: REST[segment.draw], keyframes: DRAW_KEYS, transition: { duration: segment.draw === 'down' ? m.slice : m.tick, delay, ease: bezier(EASE.out) }, origin: ORIGIN[segment.draw], generation: gen }
+    : { initial: false, animate: HIDDEN[segment.draw], transition: { duration: m.leave, delay, ease: bezier(EASE.out) }, origin: ORIGIN[segment.draw], generation: gen }
 }
 
 /**
