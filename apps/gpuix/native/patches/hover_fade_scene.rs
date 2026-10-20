@@ -32,12 +32,16 @@ impl Scene {
         let now = crate::window::kybern_animation_now();
         let mut running = false;
         let mut damage: Option<Bounds<ScaledPixels>> = None;
+        // A finished fade writes its final colour once and leaves the map, so later scene rebuilds (every retained tick
+        // replays and finishes the scene) do not map quad slots for it again.
+        let mut finished = Vec::new();
         for (&index, (tag, kind)) in &self.color_fades {
             let ((background, border), active) = tag.value(now);
             if active {
                 running = true;
-            } else if !tag.mark_finished() {
-                continue;
+            } else {
+                finished.push(index);
+                if !tag.mark_finished() { continue; }
             }
             let Some(&slot) = self.color_fade_slots.get(&index) else { continue };
             let tint = |quad: &mut Quad| {
@@ -59,6 +63,10 @@ impl Scene {
                 self.quads[slot].order = order;
             }
             damage = Some(damage.map_or(quad.bounds, |d| d.union(&quad.bounds)));
+        }
+        for index in finished {
+            self.color_fades.remove(&index);
+            self.color_fade_slots.remove(&index);
         }
         if let Some(bounds) = damage {
             self.passive_paint_regions.entry(u64::MAX - 10).and_modify(|old| *old = old.union(&bounds)).or_insert(bounds);
