@@ -339,8 +339,11 @@ export function onComposerRestore(draftKey: string, restore: (text: string) => v
   restorers.set(draftKey, restore)
   return () => { if (restorers.get(draftKey) === restore) restorers.delete(draftKey) }
 }
+/** `draftKey` without its pane prefix (`main:thread:<id>`): the focused pane's composer first, else any showing it. */
 export function restoreToComposer(draftKey: string, text: string): boolean {
-  const restore = restorers.get(draftKey)
+  const keys = [...restorers.keys()].filter((key) => key === draftKey || key.endsWith(`:${draftKey}`))
+  const focused = `${getFocusedPaneId()}:${draftKey}`
+  const restore = restorers.get(keys.includes(focused) ? focused : keys[0] ?? '')
   if (!restore) return false
   restore(text)
   return true
