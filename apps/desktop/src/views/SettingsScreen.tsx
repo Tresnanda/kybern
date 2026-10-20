@@ -1,6 +1,7 @@
 import { Integrations } from "./Integrations"
 import { AccountsHeaderAction, AccountsSettings } from "./settings/AccountsSettings"
 import { canSelfUpdate, checkForAppUpdate, installAppUpdate, useAppUpdate } from "@/lib/appUpdate"
+import { gpuixErrorParts, gpuixStepLabel, installGpuix, openGpuix, refreshGpuixStatus, useGpuix } from "@/lib/gpuix"
 import { cliInstall, cliRemoveOther, cliStatus, cliUninstall, isTauri, notificationPermission, notify, openExternal, type CliStatus, type NotificationPermissionState } from "@/lib/tauri"
 // Dedicated settings screen. The workspace remains mounted behind it for a lossless return.
 
@@ -1292,11 +1293,38 @@ function AppUpdateRow() {
   )
 }
 
+/** Where to find Kybern GPUIX after the one-time card is gone: install it, or open it. */
+function GpuixRow() {
+  const supported = useGpuix((state) => state.supported)
+  const installed = useGpuix((state) => state.installed)
+  const phase = useGpuix((state) => state.phase)
+  const step = useGpuix((state) => state.step)
+  const progress = useGpuix((state) => state.progress)
+  const error = useGpuix((state) => state.error)
+  useEffect(() => { void refreshGpuixStatus() }, [])
+  if (!supported) return null
+  const installing = phase === "installing"
+  const failure = phase === "error" && error ? gpuixErrorParts(error) : null
+  return (
+    <Row title="Kybern GPUIX" description={<>
+      <span className="block">A native app that uses about 60% less memory and runs next to this one with the same projects and chats.</span>
+      {failure && <span role="alert" className="mt-1 block text-destructive">{failure.message} Or run <code className="selectable font-mono text-[0.95em] break-all">{failure.command}</code> in Terminal.</span>}
+    </>}>
+      <Button size="sm" variant="chrome-outline" disabled={installing} onClick={() => void (installed
+        ? openGpuix().catch((cause) => toast.error("Unable to open Kybern GPUIX", { description: String(cause) }))
+        : installGpuix())}>
+        {installing ? gpuixStepLabel(step, progress) : installed ? "Open" : phase === "error" ? "Try again" : "Install"}
+      </Button>
+    </Row>
+  )
+}
+
 function About() {
   const info = useStore((s) => s.info)
   return <>
     <Section title="About">
       <AppUpdateRow />
+      {isTauri() && <GpuixRow />}
       <Row title="Daemon" description={info?.version ?? "…"} />
       <Row title="Protocol" description={info ? String(info.protocol_version) : "…"} />
       <Row title="Host" description={info ? `${info.hostname} · ${info.os} ${info.arch}` : "…"} />

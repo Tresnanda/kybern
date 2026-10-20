@@ -2808,12 +2808,14 @@ name = "kybern-desktop"
 version = "0.9.1"
 dependencies = [
  "anyhow",
+ "base64 0.23.1",
  "block2",
  "httparse",
  "keyring",
  "kybern-client",
  "kybern-protocol",
  "log",
+ "minisign-verify",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",

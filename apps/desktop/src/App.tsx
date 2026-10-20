@@ -40,6 +40,7 @@ import { ThreadSidebar } from "@/views/Sidebar"
 import { SplitThreads } from "@/views/SplitThreads"
 import { ThreadView } from "@/views/Thread"
 import { AppUpdateSurface } from "@/views/AppUpdate"
+import { GpuixPromptSurface } from "@/views/GpuixPrompt"
 import { SurfaceHeader, TitlebarSlotProvider } from "@/views/chrome"
 import { useNotesSync } from "@/views/notes/useNotesSync"
 import { QuickNote } from "@/views/notes/QuickNote"
@@ -98,7 +99,7 @@ function useDockWidth(containerRef: React.RefObject<HTMLDivElement | null>) {
 
 export default function App() {
   const epoch = useEnvironments((s) => s.epoch)
-  return <><Workspace key={epoch} /><AppUpdateSurface /></>
+  return <><Workspace key={epoch} /><AppUpdateSurface /><GpuixPromptSurface /></>
 }
 
 function Workspace() {
