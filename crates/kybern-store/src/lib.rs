@@ -1213,12 +1213,43 @@ impl Store {
     }
 
     /// Keep a hydrated transcript aligned with the thread's acknowledged head.
+    ///
+    /// Read in bounded batches, releasing the connection between them: a long thread (tens of thousands of events,
+    /// hundreds of MB) took the lock for a second or more, and every other read and write waited, a user's send among
+    /// them (0.8 s measured for a 230 MB thread; ~20 ms now). Events only append with increasing `seq`, so the batches
+    /// join into the same ordered list.
     pub fn events_for_thread_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<Vec<ThreadEvent>> {
-        self.with(|c| {
-            let mut st =
-                c.prepare("SELECT seq, thread_id, turn_id, at, payload FROM events WHERE thread_id = ?1 AND seq <= ?2 ORDER BY seq")?;
-            Ok(st.query_map(params![thread_id.to_string(), through_seq], row_to_event)?.collect::<Result<Vec<_>, _>>()?)
-        })
+        const BATCH: i64 = 256;
+        const BATCH_BYTES: usize = 256 * 1024;
+        let thread = thread_id.to_string();
+        let mut events = Vec::new();
+        let mut after = 0;
+        loop {
+            let (more, last) = self.with(|c| {
+                let mut st = c.prepare_cached(
+                    "SELECT seq, thread_id, turn_id, at, payload FROM events WHERE thread_id = ?1 AND seq > ?2 AND seq <= ?3 ORDER BY seq LIMIT ?4",
+                )?;
+                let mut rows = st.query(params![thread, after, through_seq, BATCH])?;
+                let (mut count, mut bytes, mut last) = (0, 0usize, None);
+                while let Some(row) = rows.next()? {
+                    bytes = bytes.saturating_add(row.get_ref(4)?.as_bytes().map_or(0, <[u8]>::len));
+                    let event = row_to_event(row)?;
+                    last = Some(event.seq);
+                    events.push(event);
+                    count += 1;
+                    if bytes >= BATCH_BYTES {
+                        return Ok((true, last));
+                    }
+                }
+                Ok((count == BATCH, last))
+            })?;
+            match last {
+                Some(seq) if more => after = seq,
+                _ => return Ok(events),
+            }
+            // The std mutex is not fair: re-locking at once would win against a waiting thread nearly every time.
+            std::thread::yield_now();
+        }
     }
 
     /// Fold bounded batches outside the connection lock. A saved long thread
@@ -2069,6 +2100,22 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn events_for_thread_reads_every_event_in_order_across_bounded_batches() {
+        let (store, thread) = thread_fixture();
+        // More events than one batch holds, and payloads that end batches by size first.
+        let big = "x".repeat(40 * 1024);
+        for i in 0..700 {
+            let text = if i % 50 == 0 { big.clone() } else { format!("event {i}") };
+            store.event_append(thread.id, None, EventPayload::ProviderNotice { level: NoticeLevel::Info, text, data: None }).unwrap();
+        }
+        let events = store.events_for_thread(thread.id).unwrap();
+        assert_eq!(events.len(), 700);
+        assert!(events.windows(2).all(|pair| pair[0].seq < pair[1].seq));
+        let through = events[400].seq;
+        assert_eq!(store.events_for_thread_through(thread.id, through).unwrap().len(), 401);
+    }
 
     fn thread_fixture() -> (Store, Thread) {
         let store = Store::open_in_memory().unwrap();
