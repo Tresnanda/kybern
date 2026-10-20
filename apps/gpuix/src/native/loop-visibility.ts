@@ -1,5 +1,6 @@
 import { useGpuix, type PublicInstance } from '@gpuix/react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { isWindowVisible, onWindowVisibility } from './visibility.ts'
 import { observeElementBounds, type ElementBoundsEvent } from './layout.ts'
 
 /** Paint observers do not schedule frames. Buffered and retained rows can stay
@@ -23,4 +24,14 @@ export function useLoopVisibility(active = true) {
   }, [renderer, canObserve, active])
   // Stock addon has no paint observer; retain its previous behavior.
   return { ref, visible: active && (!canObserve || visible) }
+}
+
+/** `useLoopVisibility` plus window visibility: `running` is when a native paint loop should be on. Native loops
+ * present frames until their prop is removed, so a covered, minimized or other-Space window must drop it; the
+ * visibility poll (`visibility.ts`) runs only while such a loop is painted. */
+export function useLoopRunning(active = true) {
+  const loop = useLoopVisibility(active)
+  const subscribe = useCallback((listener: () => void) => loop.visible ? onWindowVisibility(listener) : () => {}, [loop.visible])
+  const shown = useSyncExternalStore(subscribe, isWindowVisible)
+  return { ref: loop.ref, visible: loop.visible, running: loop.visible && shown }
 }
