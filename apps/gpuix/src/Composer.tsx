@@ -61,6 +61,9 @@ import { Leave, Pop, SwapOnChange, useLeavingList } from './composer/motion.tsx'
 import { Rise } from './motion/kit.tsx'
 import { Presence } from './motion/Presence.tsx'
 import { DropHighlight } from './motion/DropHighlight.tsx'
+import { AttachmentLightbox } from './composer/Lightbox.tsx'
+
+type TileRect = { x: number; y: number; width: number; height: number }
 import { hoverPressTransform } from './motion/press.ts'
 import {
   createThread,
@@ -588,6 +591,7 @@ export function ComposerView(input: ComposerViewProps) {
             items={attachments}
             uploading={uploading}
             onRemove={(a) => setAttachments((list) => list.filter((item) => item.id !== a.id))}
+            onPreviewClose={focusEditor}
           />
           <div style={{ position: 'relative', display: 'flex' }}>
             {/* GPUIX paints its own placeholder in a fixed grey; this one is the kit's muted × 40%. */}
@@ -912,8 +916,19 @@ function RunningControls({
 }
 
 /** Image tiles and file cards above the editor (`Composer.tsx:1143-1171`). */
-export function Attachments({ items, uploading, onRemove }: { items: Attachment[]; uploading: number; onRemove: (a: Attachment) => void }) {
+export function Attachments({ items, uploading, onRemove, onPreviewClose }: { items: Attachment[]; uploading: number; onRemove: (a: Attachment) => void; onPreviewClose?: () => void }) {
   const t = useTheme()
+  const renderer = useGpuixRequired()
+  // A clicked image tile expands into the lightbox, zooming out of the tile's rect (`composer/Lightbox.tsx`).
+  const tiles = useRef(new Map<string, PublicInstance>())
+  const [expanded, setExpanded] = useState<{ id: string; from: TileRect | null } | null>(null)
+  const tileRect = (id: string): TileRect | null => {
+    const node = tiles.current.get(id)
+    const box = node ? renderer.getElementBounds?.(node.id) : null
+    // The image paints inside the tile's 1px border.
+    return box ? { x: box.x + 1, y: box.y + 1, width: box.width - 2, height: box.height - 2 } : null
+  }
+  const open = expanded ? items.find(a => a.id === expanded.id) : undefined
   const elevated = t.v('--color-background-elevated-secondary')
   // Only the ✕ removal leaves with an exit; sending clears the tray at once.
   const removed = useRef(new Set<string>())
@@ -928,10 +943,17 @@ export function Attachments({ items, uploading, onRemove }: { items: Attachment[
         <Pop>
           {a.media_type.startsWith('image/') ? (
             <div
+              ref={(node) => { if (node) tiles.current.set(a.id, node); else tiles.current.delete(a.id) }}
               testId={`attachment-${a.label}`}
-              style={{ position: 'relative', width: 64, height: 64, flexShrink: 0, borderRadius: 12, borderWidth: 1, borderColor: t.borderLight, backgroundColor: elevated, overflow: 'hidden' }}
+              role="button"
+              tabIndex={0}
+              aria-label={`Preview ${a.name}`}
+              // The × is a child, so its press never reaches this handler: removing does not open the preview.
+              onClick={() => setExpanded({ id: a.id, from: tileRect(a.id) })}
+              onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') setExpanded({ id: a.id, from: null }) }}
+              style={{ position: 'relative', width: 64, height: 64, flexShrink: 0, borderRadius: 12, borderWidth: 1, borderColor: t.borderLight, backgroundColor: elevated, overflow: 'hidden', cursor: 'pointer' }}
             >
-              <img src={a.path} objectFit="cover" style={{ width: 62, height: 62, borderRadius: 11 }} />
+              <img src={a.path} objectFit="cover" style={{ width: 62, height: 62, borderRadius: 11, pointerEvents: 'none' }} />
               <div style={{ position: 'absolute', left: 4, bottom: 4, paddingLeft: 4, paddingRight: 4, borderRadius: 6, backgroundColor: 'rgba(0, 0, 0, 0.55)' }}>
                 <Label color="#ffffff" size={10} lineHeight={16} weight={500}>{`@${a.label}`}</Label>
               </div>
@@ -985,6 +1007,7 @@ export function Attachments({ items, uploading, onRemove }: { items: Attachment[
           </Label>
         </div>
       )}
+      {open && expanded && <AttachmentLightbox key={open.id} source={open.path} label={open.name} from={expanded.from} tile={() => tileRect(open.id)} onClose={() => { setExpanded(null); onPreviewClose?.() }} />}
     </div>
   )
 }
