@@ -105,7 +105,9 @@ export function UsagePage() {
     const timer = setTimeout(() => setPanePlay(false), 700)
     return () => clearTimeout(timer)
   }, [panePlay, data])
-  const changePeriod = (p: Period) => { if (getNav().keyboardNav) statSalt.current++; setEntryPlayed(true); setPeriod(p); setActiveDay(null) }
+  // A period chosen from the keyboard also settles the daily bars at once (`keyedPeriod`); a pointer change slides them to the new heights.
+  const keyedPeriod = useRef(false)
+  const changePeriod = (p: Period) => { keyedPeriod.current = getNav().keyboardNav; if (keyedPeriod.current) statSalt.current++; setEntryPlayed(true); setPeriod(p); setActiveDay(null) }
   const changeGroup = (g: UsageGroup, byKey = false) => { setEntryPlayed(true); setGroup(g); setPanePlay(!byKey && !getNav().keyboardNav) }
   const refreshAll = () => { refresh(n => n + 1); refreshAccounts(n => n + 1); askLimits(true) }
   const sections: { key: string; content: ReactNode }[] = [
@@ -141,7 +143,7 @@ export function UsagePage() {
           const height = Math.max(2, d.n / chartMax * 118)
           const play = entryMotion && !entryPlayed
           return <div key={d.key} style={{ flexGrow: 1, flexBasis: 0, minWidth: 0 }}><Tip label={`${dayLabel(d.key)}: ${d.n.toLocaleString()} input and output tokens`}><div tabIndex={0} testId={`usage-bar-${i}`} onMouseEnter={() => setActiveDay(`${dayLabel(d.key)} · ${tokens(d.n)} tokens`)} onMouseLeave={() => setActiveDay(null)} style={{ ...column, justifyContent: 'flex-end', height: 118, width: '100%' }}>
-            <DayBar height={height} faint={!d.n} play={play} index={i} color={t.text} />
+            <DayBar height={height} faint={!d.n} play={play} instant={keyedPeriod.current} index={i} color={t.text} />
           </div></Tip></div>
         })}
       </div>
@@ -187,7 +189,7 @@ onEnvironmentChange(() => { const value = Number(load('usage.plan-cost', null));
  * On the first load by pointer the bars grow in from empty, the first five 25 ms apart; later period and group switches retarget in place.
  */
 const CHART = 118
-function DayBar({ height, faint, play, index, color }: { height: number; faint: boolean; play: boolean; index: number; color: string }) {
+function DayBar({ height, faint, play, instant, index, color }: { height: number; faint: boolean; play: boolean; instant: boolean; index: number; color: string }) {
   const [grow] = useState(play && !REDUCED_MOTION)
   const opacity = faint ? .12 : .65
   const box = { width: '100%', borderTopLeftRadius: 3, borderTopRightRadius: 3, backgroundColor: color, hover: { opacity: 1 } } as const
@@ -198,7 +200,7 @@ function DayBar({ height, faint, play, index, color }: { height: number; faint: 
         paintTransform={{
           initial: grow ? { translateY: CHART - 2, opacity: 0 } : false,
           animate: { translateY: CHART - height, opacity: 1 },
-          transition: { duration: REDUCED_MOTION ? 0 : DURATION.slow, delay: grow ? Math.min(index, 4) * 0.025 : 0, ease: [...EASE.out] },
+          transition: { duration: REDUCED_MOTION || instant ? 0 : DURATION.slow, delay: grow ? Math.min(index, 4) * 0.025 : 0, ease: [...EASE.out] },
         }}
         style={{ ...box, height: CHART, flexShrink: 0, opacity }}
       />
