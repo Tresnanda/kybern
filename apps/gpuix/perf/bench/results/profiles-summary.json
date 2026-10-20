@@ -1,0 +1,113 @@
+[
+  {
+    "scenario": "explorer-scroll",
+    "profile": "/Users/mymac/projects/ade/previews/gpuix/perf/bench/profiles-ef2251e2/explorer-scroll-attempt-1/profile-explorer-scroll-1.txt",
+    "mainThreadSamples": 2717,
+    "note": "Largest inclusive stack count; categories overlap. Missing symbols are unavailable, not zero.",
+    "taffy": {
+      "count": 1,
+      "symbol": "_RINvNtNtCsbcIDFvsQUXz_5taffy7compute7flexbox22compute_flexbox_layoutINtNtNtB6_4tree10taffy_tree9TaffyViewNtNtCsbnu44KtSfNi_4gpui5taffy11NodeContextNCNvMB1H_NtB1H_17TaffyLayoutEngine14compute_layouts_0EEB1J_  (in gpuix-native.darwin-arm64.node) + 5832  [0x12fe7c19c]"
+    },
+    "prepaint": {
+      "count": 1647,
+      "symbol": "_RNvMs4_NtCsbnu44KtSfNi_4gpui7elementNtB5_10AnyElement16prepaint_as_root  (in gpuix-native.darwin-arm64.node) + 144  [0x12fe55374]"
+    },
+    "elementBuild": {
+      "count": 17,
+      "symbol": "_RNvNtCs6C4z4iCdzvu_12gpuix_native8renderer13build_element  (in gpuix-native.darwin-arm64.node) + 10736  [0x12f7648a4]"
+    },
+    "motionStateSync": {
+      "count": 899,
+      "symbol": "_RNvNtCs6C4z4iCdzvu_12gpuix_native8renderer18sync_motion_states  (in gpuix-native.darwin-arm64.node) + 1368  [0x12f76b35c]"
+    },
+    "motionSample": {
+      "count": 90,
+      "symbol": "_RNvMs0_NtCs6C4z4iCdzvu_12gpuix_native6motionNtB5_11MotionState6sample  (in gpuix-native.darwin-arm64.node) + 644  [0x12f912cec]"
+    },
+    "textShaping": null,
+    "markdownParse": null,
+    "gpuSubmit": {
+      "count": 4,
+      "symbol": "-[_MTLCommandQueue _submitAvailableCommandBuffers]  (in Metal) + 544  [0x19d595758]"
+    },
+    "nextDrawable": null,
+    "reactCommit": null
+  },
+  {
+    "scenario": "thread-fling",
+    "profile": "/Users/mymac/projects/ade/previews/gpuix/perf/bench/profiles-ef2251e2/thread-fling-attempt-1/profile-thread-fling-1.txt",
+    "mainThreadSamples": 2589,
+    "note": "Largest inclusive stack count; categories overlap. Missing symbols are unavailable, not zero.",
+    "taffy": {
+      "count": 45,
+      "symbol": "_RINvNtNtCsbcIDFvsQUXz_5taffy7compute7flexbox22compute_flexbox_layoutINtNtNtB6_4tree10taffy_tree9TaffyViewNtNtCsbnu44KtSfNi_4gpui5taffy11NodeContextNCNvMB1H_NtB1H_17TaffyLayoutEngine14compute_layouts_0EEB1J_  (in gpuix-native.darwin-arm64.node) + 22684  [0x12d3f4370]"
+    },
+    "prepaint": {
+      "count": 507,
+      "symbol": "_RNvMs4_NtCsbnu44KtSfNi_4gpui7elementNtB5_10AnyElement16prepaint_as_root  (in gpuix-native.darwin-arm64.node) + 144  [0x12d3c9374]"
+    },
+    "elementBuild": {
+      "count": 141,
+      "symbol": "_RNvNtCs6C4z4iCdzvu_12gpuix_native8renderer13build_element  (in gpuix-native.darwin-arm64.node) + 10736  [0x12ccd88a4]"
+    },
+    "motionStateSync": {
+      "count": 241,
+      "symbol": "_RNvNtCs6C4z4iCdzvu_12gpuix_native8renderer18sync_motion_states  (in gpuix-native.darwin-arm64.node) + 1368  [0x12ccdf35c]"
+    },
+    "motionSample": {
+      "count": 68,
+      "symbol": "_RNvMs0_NtCs6C4z4iCdzvu_12gpuix_native6motionNtB5_11MotionState6sample  (in gpuix-native.darwin-arm64.node) + 0  [0x12ce86a68]"
+    },
+    "textShaping": {
+      "count": 1,
+      "symbol": "_RNvMs_NtCsbnu44KtSfNi_4gpui11text_systemNtB4_16WindowTextSystem10shape_text  (in gpuix-native.darwin-arm64.node) + 936  [0x12d3ddbfc]"
+    },
+    "markdownParse": null,
+    "gpuSubmit": {
+      "count": 3,
+      "symbol": "-[_MTLCommandQueue _submitAvailableCommandBuffers]  (in Metal) + 544  [0x19d595758]"
+    },
+    "nextDrawable": {
+      "count": 1,
+      "symbol": "-[CAMetalLayer nextDrawable]  (in QuartzCore) + 140  [0x19b018aa0]"
+    },
+    "reactCommit": null
+  },
+  {
+    "scenario": "thread-scroll",
+    "profile": "/Users/mymac/projects/ade/previews/gpuix/perf/bench/profiles-ef2251e2/thread-scroll-attempt-1/profile-thread-scroll-1.txt",
+    "mainThreadSamples": 2459,
+    "note": "Largest inclusive stack count; categories overlap. Missing symbols are unavailable, not zero.",
+    "taffy": {
+      "count": 24,
+      "symbol": "_RINvNtNtCsbcIDFvsQUXz_5taffy7compute7flexbox22compute_flexbox_layoutINtNtNtB6_4tree10taffy_tree9TaffyViewNtNtCsbnu44KtSfNi_4gpui5taffy11NodeContextNCNvMB1H_NtB1H_17TaffyLayoutEngine14compute_layouts_0EEB1J_  (in gpuix-native.darwin-arm64.node) + 22684  [0x12b4d4370]"
+    },
+    "prepaint": {
+      "count": 980,
+      "symbol": "_RNvMs4_NtCsbnu44KtSfNi_4gpui7elementNtB5_10AnyElement16prepaint_as_root  (in gpuix-native.darwin-arm64.node) + 144  [0x12b4a9374]"
+    },
+    "elementBuild": {
+      "count": 36,
+      "symbol": "_RNvNtCs6C4z4iCdzvu_12gpuix_native8renderer13build_element  (in gpuix-native.darwin-arm64.node) + 10736  [0x12adb88a4]"
+    },
+    "motionStateSync": {
+      "count": 510,
+      "symbol": "_RNvNtCs6C4z4iCdzvu_12gpuix_native8renderer18sync_motion_states  (in gpuix-native.darwin-arm64.node) + 1368  [0x12adbf35c]"
+    },
+    "motionSample": {
+      "count": 62,
+      "symbol": "_RNvMs0_NtCs6C4z4iCdzvu_12gpuix_native6motionNtB5_11MotionState6sample  (in gpuix-native.darwin-arm64.node) + 644  [0x12af66cec]"
+    },
+    "textShaping": {
+      "count": 1,
+      "symbol": "_RNvMs_NtCsbnu44KtSfNi_4gpui11text_systemNtB4_16WindowTextSystem10shape_text  (in gpuix-native.darwin-arm64.node) + 936  [0x12b4bdbfc]"
+    },
+    "markdownParse": null,
+    "gpuSubmit": {
+      "count": 2,
+      "symbol": "-[_MTLCommandQueue _submitAvailableCommandBuffers]  (in Metal) + 544  [0x19d595758]"
+    },
+    "nextDrawable": null,
+    "reactCommit": null
+  }
+]

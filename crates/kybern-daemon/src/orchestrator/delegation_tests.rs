@@ -138,6 +138,31 @@ impl Delegating {
     }
 
     async fn with_mode(mode: PermissionMode) -> Self {
+        Self::build(mode, None).await
+    }
+
+    /// A parent whose stored target is a model alias (`opus`) that its provider
+    /// then reports by its canonical id (`claude-opus-5-5`), as Claude Code does.
+    async fn with_aliased_model() -> Self {
+        let target = |provider| SessionTarget { provider, model: Some("opus".into()), effort: Some("high".into()) };
+        let t = Self::build(PermissionMode::Supervised, Some(Box::new(target))).await;
+        t.fixture
+            .orchestrator
+            .process_driver_event(
+                t.parent.id,
+                &t.live,
+                DriverEvent::SessionBound { session_id: "provider-session".into(), model: Some("claude-opus-5-5".into()) },
+                false,
+            )
+            .await
+            .unwrap();
+        let parent = t.fixture.store.thread_get(t.parent.id).unwrap().unwrap();
+        assert_eq!((parent.model.as_deref(), parent.status), (Some("claude-opus-5-5"), ThreadStatus::Running));
+        assert_eq!(t.fixture.orchestrator.thread_target(t.parent.id).unwrap().target.model.as_deref(), Some("opus"));
+        t
+    }
+
+    async fn build(mode: PermissionMode, target: Option<Box<dyn Fn(ProviderInstance) -> SessionTarget>>) -> Self {
         let spawned = Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut drivers = DriverRegistry::default();
         drivers.register(Arc::new(ScriptedDriver { kind: ProviderKind::ClaudeCode, spawned: spawned.clone() }));
@@ -149,6 +174,10 @@ impl Delegating {
         parent.title = "Parent thread".into();
         parent.permission_mode = mode;
         fixture.store.thread_upsert(&parent).unwrap();
+        if let Some(target) = target {
+            let target = serde_json::to_string(&target(parent.provider.clone())).unwrap();
+            fixture.store.meta_set(&format!("target:{}", parent.id), &target).unwrap();
+        }
         let (live, _, parent_messages) = fixture.park_recording(&parent, Instant::now()).await;
         fixture.orchestrator.send(parent.id, UserMessage::text("coordinate the work")).await.unwrap();
         live.turn_ready.notified().await;
@@ -530,6 +559,83 @@ async fn children_finishing_together_wake_a_running_parent_with_one_steered_batc
 }
 
 #[tokio::test]
+async fn a_child_finishing_steers_an_aliased_parent_without_interrupting_it_or_its_other_children() {
+    // Issue #110: the parent's stored target says `opus`, its row the reported
+    // `claude-opus-5-5`. That is no model switch, so results are steered into
+    // the running turn and the sibling keeps running.
+    let t = Delegating::with_aliased_model().await;
+    let a = t.delegate(json!({"task": "task alpha"})).await;
+    let b = t.delegate(json!({"task": "task beta"})).await;
+    let (alpha, beta) = (t.agent("task alpha").await, t.agent("task beta").await);
+    alpha.finish("alpha is done").await;
+
+    eventually(|| async {
+        let messages = t.parent_messages.lock().await;
+        messages.iter().any(|message| matches!(message.parts.as_slice(), [ContentPart::AgentResults { .. }])).then_some(())
+    })
+    .await;
+    let events = t.fixture.store.events_for_thread(t.parent.id).unwrap();
+    assert!(
+        events.iter().any(|event| matches!(&event.payload, EventPayload::MessageSteered { message, .. } if matches!(message.parts.as_slice(), [ContentPart::AgentResults { .. }]))),
+        "the results are steered into the running turn"
+    );
+    assert!(!events.iter().any(|event| matches!(event.payload, EventPayload::TurnCompleted { .. } | EventPayload::TurnFailed { .. })));
+    assert_eq!(t.fixture.store.thread_get(t.parent.id).unwrap().unwrap().status, ThreadStatus::Running);
+    assert_eq!(t.delegation(&a["task_id"]).delegation.unwrap().status, DelegationStatus::Completed);
+    assert_eq!(t.delegation(&b["task_id"]).delegation.unwrap().status, DelegationStatus::Running);
+    assert_eq!(beta.interrupts.load(Ordering::SeqCst), 0);
+    // The next turn keeps the live session: the alias is not a reconfiguration.
+    t.end_parent_turn().await;
+    t.fixture.orchestrator.send(t.parent.id, UserMessage::text("next step")).await.unwrap();
+    t.live.turn_ready.notified().await;
+    let parent = t.fixture.store.thread_get(t.parent.id).unwrap().unwrap();
+    assert_eq!(parent.model.as_deref(), Some("claude-opus-5-5"));
+    assert!(Arc::ptr_eq(&t.fixture.orchestrator.inner.sessions.lock().await[&t.parent.id], &t.live));
+}
+
+#[tokio::test]
+async fn a_real_target_switch_queues_agent_results_instead_of_interrupting_the_parent() {
+    let t = Delegating::new().await;
+    let b = t.delegate(json!({"task": "task beta"})).await;
+    let a = t.delegate(json!({"task": "task alpha"})).await;
+    let (alpha, beta) = (t.agent("task alpha").await, t.agent("task beta").await);
+    // The user picked another model for the next turn while this one runs.
+    let mut target = t.fixture.orchestrator.thread_target(t.parent.id).unwrap().target;
+    target.model = Some("sonnet".into());
+    t.fixture.store.meta_set(&format!("target:{}", t.parent.id), &serde_json::to_string(&target).unwrap()).unwrap();
+    alpha.finish("alpha is done").await;
+
+    let items = eventually(|| async { t.queued_results().into_iter().next() }).await;
+    assert_eq!(items[0].task_id.to_string(), a["task_id"].as_str().unwrap());
+    assert_eq!(t.fixture.store.thread_get(t.parent.id).unwrap().unwrap().status, ThreadStatus::Running);
+    assert_eq!(t.delegation(&b["task_id"]).delegation.unwrap().status, DelegationStatus::Running);
+    assert_eq!(beta.interrupts.load(Ordering::SeqCst), 0);
+    assert!(!t.parent_messages.lock().await.iter().any(|m| matches!(m.parts.as_slice(), [ContentPart::AgentResults { .. }])));
+}
+
+#[tokio::test]
+async fn a_user_steer_that_switches_model_restarts_the_turn_but_keeps_the_children() {
+    let t = Delegating::new().await;
+    let b = t.delegate(json!({"task": "task beta"})).await;
+    let beta = t.agent("task beta").await;
+    let mut target = t.fixture.orchestrator.thread_target(t.parent.id).unwrap().target;
+    target.model = Some("sonnet".into());
+    t.fixture.store.meta_set(&format!("target:{}", t.parent.id), &serde_json::to_string(&target).unwrap()).unwrap();
+    // The recording session never acknowledges the interrupt, so the grace
+    // deadline settles the turn before the message starts the next one.
+    let steered = t
+        .fixture
+        .orchestrator
+        .steer(methods::QueuedMessage { id: Uuid::now_v7(), thread_id: t.parent.id, message: UserMessage::text("use sonnet now") })
+        .await
+        .unwrap();
+    assert!(t.fixture.store.turn_started_receipt(steered.message_id).unwrap().is_some(), "the message started a new turn");
+    assert_eq!(t.fixture.store.thread_get(t.parent.id).unwrap().unwrap().model.as_deref(), Some("sonnet"));
+    assert_eq!(t.delegation(&b["task_id"]).delegation.unwrap().status, DelegationStatus::Running);
+    assert_eq!(beta.interrupts.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn results_queue_for_an_idle_parent_and_late_results_merge_into_the_queued_message() {
     let t = Delegating::new().await;
     t.delegate(json!({"task": "first job"})).await;
@@ -659,7 +765,7 @@ async fn stopping_the_parent_cascades_and_lineage_stop_cancels_only_below_the_ch
 
     // Lineage Stop on a child (threads.interrupt on it) cancels it and what it launched, not its sibling.
     t.end_parent_turn().await;
-    t.fixture.orchestrator.interrupt(child_a.id).await.unwrap();
+    t.fixture.orchestrator.stop_thread(child_a.id, "test").await.unwrap();
     assert_eq!(t.delegation(&a["task_id"]).delegation.unwrap().status, DelegationStatus::Cancelled);
     assert_eq!(t.delegation(&grand["task_id"]).delegation.unwrap().status, DelegationStatus::Cancelled);
     assert_eq!(t.delegation(&b["task_id"]).delegation.unwrap().status, DelegationStatus::Running);
@@ -676,7 +782,7 @@ async fn stopping_the_parent_cascades_and_lineage_stop_cancels_only_below_the_ch
     assert_eq!((items.len(), items[0].status), (1, DelegationStatus::Cancelled));
 
     // Stopping the parent stops what is left.
-    t.fixture.orchestrator.interrupt(t.parent.id).await.ok();
+    t.fixture.orchestrator.stop_thread(t.parent.id, "test").await.ok();
     assert_eq!(t.delegation(&b["task_id"]).delegation.unwrap().status, DelegationStatus::Cancelled);
     assert_eq!(agent_b.interrupts.load(Ordering::SeqCst), 1);
 }
@@ -982,7 +1088,7 @@ async fn a_stopping_parent_cannot_delegate_and_the_flag_lifts_afterwards() {
 
     // A real stop flags the thread while it runs and clears the flag when done.
     let child = t.fixture.store.delegation_children(t.parent.id).unwrap().remove(0);
-    t.fixture.orchestrator.interrupt(t.parent.id).await.ok();
+    t.fixture.orchestrator.stop_thread(t.parent.id, "test").await.ok();
     assert!(!t.fixture.orchestrator.delegation_is_stopping(t.parent.id));
     assert_eq!(t.fixture.store.thread_get(child.id).unwrap().unwrap().delegation.unwrap().status, DelegationStatus::Cancelled);
 }

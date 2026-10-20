@@ -1,0 +1,121 @@
+// Kybern on GPUIX: the desktop client's look, painted by Zed's GPUI instead of
+// a web view. Run with `pnpm dev` (hot reload) or `pnpm start`.
+// Must stay the first import: it picks the native module before @gpuix loads.
+import './native/local-build.ts'
+import { startupMark } from './perf/startup.ts'
+import { fstatSync, readFileSync } from 'node:fs'
+import { render, useGpuixRequired } from '@gpuix/react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { onWindowKeyDown } from './nav/keys.ts'
+import { appearance } from './settings/appearance.ts'
+import { connect } from './state.ts'
+import { startSplitView } from './split/store.ts'
+import { ThemeProvider, VARIANT } from './ui.tsx'
+import { startPerfProbe } from './perf/probe.ts'
+import { installDesktopMaterial } from './native/material.ts'
+import { OPAQUE_WINDOW } from './platform/material.ts'
+import { startAppUpdateChecks } from './platform/update.ts'
+import { installFrameSource } from './native/frame.ts'
+import { hasSavedFrame, installWindowFrame, startWindowShell } from './shell/window.ts'
+import { startEnvironmentWindow } from './windows/window.ts'
+
+// The terminal draws xterm's weights (300 text, 500 bold); italics are their own family until GPUIX styles take `fontStyle`.
+const FONTS = ['CalSans-Regular.ttf', 'JetBrainsMono-Regular.ttf', 'JetBrainsMono-Light.ttf', 'JetBrainsMono-Medium.ttf', 'JetBrainsMono-LightItalic.ttf', 'JetBrainsMono-MediumItalic.ttf']
+
+function Fonts({ children }: { children: ReactNode }) {
+  const renderer = useGpuixRequired()
+  const [ready, setReady] = useState(false)
+  useEffect(() => {
+    startupMark('fonts-start')
+    installFrameSource(renderer)
+    // `registerFont` landed after @gpuix/native 0.10.0; until then the UI
+    // falls back to installed fonts (SF Pro, Menlo).
+    const register = (renderer as { registerFont?: (bytes: Uint8Array) => void }).registerFont
+    for (const file of register ? FONTS : []) {
+      try {
+        register!.call(renderer, readFileSync(new URL(`./assets/fonts/${file}`, import.meta.url)))
+      } catch (error) {
+        console.error(`[fonts] ${file}:`, error)
+      }
+    }
+    startupMark('fonts-ready')
+    setReady(true)
+    startPerfProbe(renderer)
+    startWindowShell(renderer)
+    // One window per environment across processes; the title names the environment (`windows/`).
+    startEnvironmentWindow(renderer)
+    // Debug: minimize after launch to check that hidden windows stop their loops.
+    if (process.env.KYBERN_DEBUG_MINIMIZE) setTimeout(() => renderer.minimizeWindow?.(), Number(process.env.KYBERN_DEBUG_MINIMIZE))
+  }, [renderer])
+  return ready ? children : null
+}
+
+startupMark('modules-ready')
+// Restore selection before the socket opens, so its content can hydrate while
+// the workspace modules and native window initialize.
+startSplitView()
+connect()
+// Packaged builds check the release feed 15 s after launch, then every 6 h (`platform/update.ts`).
+startAppUpdateChecks()
+
+// Resolve the endpoint and start the socket while Bun loads the workspace's
+// page/editor modules. The first render still uses the complete App and fonts.
+const { App } = await import('./App.tsx')
+startupMark('workspace-module-ready')
+
+startupMark('render-start')
+render(
+  <ThemeProvider>
+    <Fonts>
+      <App />
+    </Fonts>
+  </ThemeProvider>,
+  {
+    title: 'Kybern',
+    appName: 'Kybern',
+    // `KYBERN_WINDOW_SIZE=WxH` lets the pair tool match a real Tauri window's size.
+    width: Number(process.env.KYBERN_WINDOW_SIZE?.split('x')[0]) || 1280,
+    height: Number(process.env.KYBERN_WINDOW_SIZE?.split('x')[1]) || 820,
+    titlebarTransparent: true,
+    // The desktop's macOS window is always translucent (under-window vibrancy,
+    // desktop #39) with the frame painted at 88% over it; "Use translucent
+    // surfaces" only makes the content glass (`platform/material.ts`).
+    windowBackground: OPAQUE_WINDOW ? 'opaque' : 'blurred',
+    trafficLightX: 16,
+    trafficLightY: 16,
+    ...(process.env.KYBERN_PERF_PROBE === '1' ? { debugFrameOverlay: 'minimal' as const } : {}),
+    minWidth: 900,
+    minHeight: 600,
+    // An agent checking its own work must not take the keyboard from the user.
+    focus: process.env.GPUIX_BACKGROUND !== '1',
+    // A saved frame is restored before the window is shown (`shell/window.ts`).
+    show: !hasSavedFrame(),
+    // Window shortcuts (⌘N, ⌘B, ⌘K, ⌘[ ⌘], ⌘↑, ⌘,): `nav/keys.ts`.
+    onKeyDown: onWindowKeyDown,
+  },
+)
+startupMark('render-returned')
+
+// Put the window back where it was (size and position are saved as it moves).
+installWindowFrame()
+
+// GPUI's blur is colourless; give it the desktop's vibrancy material.
+if (!OPAQUE_WINDOW) installDesktopMaterial(process.env.KYBERN_APPEARANCE || appearance().theme === 'system' ? VARIANT : appearance().theme as 'light' | 'dark')
+
+// Automation drives the app over a stdin pipe (`@gpuix/react/automation`). If the
+// driving script dies without `close()`, the pipe ends: quit instead of
+// lingering as an orphaned window.
+if (process.env.GPUIX_BACKGROUND === '1' && isPipe(0)) {
+  process.stdin.on('end', () => process.exit(0))
+  process.stdin.on('close', () => process.exit(0))
+}
+
+function isPipe(fd: number): boolean {
+  try {
+    // Bun and Node spawn pipes as socket pairs on macOS; a shell pipe is a FIFO.
+    const stat = fstatSync(fd)
+    return stat.isFIFO() || stat.isSocket()
+  } catch {
+    return false
+  }
+}

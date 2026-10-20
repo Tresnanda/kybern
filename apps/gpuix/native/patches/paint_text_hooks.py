@@ -1,0 +1,10 @@
+edit('paint_replay.rs', '    use crate::style::DimensionValue::Pixels;', '''    use crate::style::DimensionValue::Pixels;
+    if enabled() && element.element_type == "text" && element.events.is_empty()
+        && style.hover.is_none() && style.active.is_none() && style.box_shadow.is_none()
+        && style.background.is_none() && style.background_color.is_none()
+        && style.color.is_some() && !element.custom_props.contains_key("motion")
+        && !element.custom_props.contains_key("backdrop")
+        && element.custom_props.get("paintAnimation").and_then(|v| v.get("kind")).and_then(|v| v.as_str()) == Some("shimmer")
+    { return Some(2); }''')
+edit('paint_replay.rs', 'if mode != "matrix" && mode != "breathe"', 'if mode != "matrix" && mode != "breathe" && mode != "shimmer"')
+edit('paint_replay.rs', 'breathe: mode == "breathe", started:', 'breathe: mode == "breathe", shimmer: mode == "shimmer", started:')

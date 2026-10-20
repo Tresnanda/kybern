@@ -1,0 +1,4 @@
+#!/bin/sh
+# Link Mach-O with Rust's bundled LLVM linker. Xcode 27's ld (ld-27037) writes a
+# misaligned LINKEDIT string pool for libgpuix_native, which dyld rejects.
+exec "$(rustc --print sysroot)/lib/rustlib/aarch64-apple-darwin/bin/rust-lld" -flavor darwin "$@"

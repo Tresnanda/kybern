@@ -1,0 +1,56 @@
+{
+  "at": "2026-10-18T08:35:06.134438+00:00",
+  "baseCommit": "5af3ec5884637bb20cc289ccfddbc1d115c7c848",
+  "addonSha256": "10bf708e7c26df2f7b7e9aeba692a6a0b608a1c9259258b6ad7fca7dd21bbf46",
+  "files": {
+    "src/state.ts": {
+      "sha256": "f609fb13a1b97d79a59a8f7942246ca5622c00bbcbabfb5683bc1aebfb9ad993",
+      "modifiedAt": "2026-10-18T07:37:34.178537+00:00"
+    },
+    "src/subagents/Page.tsx": {
+      "sha256": "3a3807afe487f08a8ba38a5de8fa972540998632009bc545e175adef458217d1",
+      "modifiedAt": "2026-10-18T07:40:52.839894+00:00"
+    },
+    "src/transcript/store.ts": {
+      "sha256": "541b148858f9d60d6ff61b2a3057e8272c734cf3494a9f031705f2ed9a573f92",
+      "modifiedAt": "2026-10-18T07:34:22.749285+00:00"
+    },
+    "src/transcript/rows.tsx": {
+      "sha256": "5d24cd765fbea69e733ad9bc45ee98419c64bacd6e64b996e65848bd9c741c50",
+      "modifiedAt": "2026-10-18T07:34:22.749746+00:00"
+    },
+    "src/transcript/markdown.tsx": {
+      "sha256": "0085f4cd1c89e1ded1741ba39822402667a6b3bfe94b8308a5702036f703fda5",
+      "modifiedAt": "2026-10-18T07:36:06.990895+00:00"
+    },
+    "src/transcript/streamBlocks.ts": {
+      "sha256": "fcc15ba851de6c83ab7530af6c230dddd3dd469ae9b79eb237969cbfe8b46d31",
+      "modifiedAt": "2026-10-18T07:32:11.026719+00:00"
+    },
+    "src/transcript/eventFrame.ts": {
+      "sha256": "9bd830a8a2e80b43fd97bbf1bf442a168ae51dc33946a4ed5d8441324ebabe27",
+      "modifiedAt": "2026-10-18T07:37:17.941582+00:00"
+    },
+    "src/transcript/streamDocument.ts": {
+      "sha256": "88c3fe482667b6fd243c70a326de837e5727c7ecc0e32f9e20dc62ccf04a8da9",
+      "modifiedAt": "2026-10-18T08:13:24.934118+00:00"
+    },
+    "src/transcript/StreamMarkdown.tsx": {
+      "sha256": "e3048dc656e6dc7f9cd9e512cfe2d5b6cc652b775cd6edf9809aad6464bf7539",
+      "modifiedAt": "2026-10-18T08:13:24.934723+00:00"
+    },
+    "perf/bench/app.ts": {
+      "sha256": "5943765dcef38f77696b838b1d008b93b6c4b8692fcdcfd471e0710aa7257efe",
+      "modifiedAt": "2026-10-18T07:53:58.268543+00:00"
+    },
+    "perf/bench/scenarios.ts": {
+      "sha256": "9e4bc03ec40a811bb15611f91785c8fa887b124dad337cc44b970f0154dcf8e5",
+      "modifiedAt": "2026-10-18T07:53:58.268751+00:00"
+    },
+    "perf/bench/run.ts": {
+      "sha256": "16ec56d09177aba2f91a313f91ff42167dd02a0ed5cd8d714da4883e86ebc9c1",
+      "modifiedAt": "2026-10-18T08:09:45.791730+00:00"
+    }
+  },
+  "note": "Reviewed final product source; product last changed at 08:13:24Z, before final app launches. Initial wheel launch manifest at 08:12 predates the stale-reply guard; this manifest corrects that provenance without altering raw captures."
+}

@@ -1,0 +1,92 @@
+--- a/apps/gpuix/src/pulls/PrTabs.tsx
++++ b/apps/gpuix/src/pulls/PrTabs.tsx
+@@ -2,6 +2,7 @@
+ import { N } from '../nav/glyphs.ts'
+ import { FONT_MONO } from '../theme.ts'
+ import { alpha, cachedMarkdownTheme as markdownTheme } from '../transcript/kit.tsx'
++import { DesktopDiff } from '../native/DiffView.tsx'
+ import { memo, useMemo, useState } from 'react'
+ import { relativeTime } from '@/lib/format'
+ import { reviewDraftIsStale, toggleReviewFinding } from '@/state/prReviewModel'
+@@ -29,14 +30,14 @@
+         <div style={{ ...column, flexGrow: 1, minHeight: 0 }}>
+           {!file ? <Label color={t.textSecondary} size={13}>{data ? 'No changed files on this page.' : 'Loading changes…'}</Label> : <>
+             <div style={{ ...row, justifyContent: 'space-between', minHeight: 32 }}><Label color={t.text} size={12} truncate>{file.path}</Label><Button onClick={() => { if (review.detail) void prFileUrl(review.detail.pull_request.url, file.path).then(openUrl) }}>Open on GitHub</Button></div>
+-            {file.patch ? <diff key={file.path} testId="pr-native-diff" patch={patch} wordDiff scroll theme={{ appearance: t.variant }} onLineClick={e => {
++            {file.patch ? <DesktopDiff key={file.path} testId="pr-native-diff" patch={patch} scroll onLineClick={e => {
+               if (stale) { setLineError('This draft belongs to a different commit. Resolve the previous draft before choosing a new inline anchor.'); return }
+               if (pending?.body.trim()) { setLineError('Add this comment to the review or cancel it before choosing another line.'); return }
+               const line = e.newLine && e.newLine > 0 ? e.newLine : e.oldLine
+               if (!line || line < 1) return
+               setLineError(null)
+               review.updateDraft({ pendingInline: { path: file.path, line, side: e.newLine && e.newLine > 0 ? 'RIGHT' : 'LEFT', body: '' } })
+-            }} style={{ flexGrow: 1, minHeight: 100, color: t.text, fontSize: 12, borderWidth: 1, borderColor: t.border, borderRadius: 8 }} /> : <Label color={t.textSecondary} size={12}>No patch available for this file.</Label>}
++            }} style={{ flexGrow: 1, minHeight: 100, color: t.text, fontSize: 12 }} /> : <Label color={t.textSecondary} size={12}>No patch available for this file.</Label>}
+             {file.patch_truncated && <Label color={t.textSecondary} size={11}>GitHub omitted or truncated this patch. Open the pull request on GitHub to read the full file.</Label>}
+           </>}
+         </div>
+--- a/apps/gpuix/src/dock/Diff.tsx
++++ b/apps/gpuix/src/dock/Diff.tsx
+@@ -8,7 +8,8 @@
+ import { N } from '../nav/glyphs.ts'
+ import { Chevron, IconButton } from '../sidebar/rows.tsx'
+ import { getClient, onOpenEvent, useApp } from '../state.ts'
+-import { cachedMarkdownTheme } from '../transcript/kit.tsx'
++import { desktopDiffTheme } from '../native/diff.ts'
++import { NativeDiffHeader } from '../native/DiffView.tsx'
+ import { Label, useTheme } from '../ui.tsx'
+ import { ErrorLine, Section } from './parts.tsx'
+ 
+@@ -113,15 +114,11 @@
+     return () => { current = false }
+   }, [open, patch, file.path, file.binary, threadId, reload])
+   return <div style={{ paddingLeft: 8, paddingRight: 8, paddingBottom: 6 }}>
+-    <div style={{ display: 'flex', flexDirection: 'column', borderWidth: 0.6, borderColor: t.borderLight, borderRadius: 8 }}>
+-      <div testId={`dock-file-diff-${file.path}`} role="button" onClick={() => setOpen(!open)} style={{ display: 'flex', alignItems: 'center', gap: 6, height: 34, paddingLeft: 8, paddingRight: 8, cursor: 'pointer', borderRadius: 8, backgroundColor: t.codeSurface }}>
+-        <Chevron open={open} color={t.textSecondary} size={12} />
+-        <Label color={t.text} size={12} truncate style={{ flexGrow: 1 }}>{file.path}</Label>
+-        <Label color={t.green} size={10}>{`+${file.additions}`}</Label><Label color={t.red} size={10}>{`−${file.deletions}`}</Label>
+-      </div>
++    <div style={{ display: 'flex', flexDirection: 'column', borderWidth: 1, borderColor: t.border, borderRadius: 6, overflow: 'hidden' }}>
++      <NativeDiffHeader file={file} open={open} onToggle={() => setOpen(!open)} testId={`dock-file-diff-${file.path}`} />
+       {open && <>
+         <ErrorLine error={error} retry={() => setReload((n) => n + 1)} />
+-        {file.binary ? <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>Binary file changed</Label> : patch === null ? !error && <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>Loading diff…</Label> : patch ? <diff testId={`dock-native-diff-${file.path}`} patch={patch} wordDiff scroll={file.additions + file.deletions > 200} style={file.additions + file.deletions > 200 ? { height: 360 } : undefined} theme={cachedMarkdownTheme(t)} /> : <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>No text changes</Label>}
++        {file.binary ? <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>Binary file changed</Label> : patch === null ? !error && <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>Loading diff…</Label> : patch ? <diff testId={`dock-native-diff-${file.path}`} patch={patch} scroll={file.additions + file.deletions > 200} style={file.additions + file.deletions > 200 ? { height: 360 } : undefined} theme={desktopDiffTheme(t, false)} /> : <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>No text changes</Label>}
+         {truncated && <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>This diff is too large to show in full. Open the file in your editor to see the remaining changes.</Label>}
+       </>}
+     </div>
+--- a/apps/gpuix/src/transcript/Turn.tsx
++++ b/apps/gpuix/src/transcript/Turn.tsx
+@@ -1,3 +1,4 @@
++import { desktopDiffTheme } from '../native/diff.ts'
+ import { VisualCard } from './Visual.tsx'
+ import { agentItemTool, agentItemWriteResult, parseAgentItemResult, placeItemCards } from '../../../desktop/src/lib/agentItemTools.ts'
+ import { AgentItemCard } from '../coordinator/AgentItem.tsx'
+@@ -404,10 +405,8 @@
+             <Para color={t.red} size={11} style={{ paddingLeft: 12, paddingTop: 8, paddingBottom: 8 }}>Unable to load this file’s changes.</Para>
+           ) : patch ? (
+             <>
+-              {/* The native diff always paints a file header; it sits clipped above the
+-                  wrapper's top edge, so the card's file row stays the only header. */}
+               <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
+-                <diff patch={patch.text} wordDiff maxLines={400} theme={bodyDiffTheme(t)} style={{ minWidth: 0, marginTop: -DIFF_HEADER }} />
++                <diff patch={patch.text} scroll={file.additions + file.deletions > 200} theme={desktopDiffTheme(t, false)} style={file.additions + file.deletions > 200 ? { minWidth: 0, height: 360 } : { minWidth: 0 }} />
+               </div>
+               {patch.truncated && <Para color={muted(t, 0.75)} size={11} style={{ paddingLeft: 12, paddingTop: 6, paddingBottom: 8 }}>The patch was truncated.</Para>}
+             </>
+@@ -421,13 +420,4 @@
+ 
+ 
+ /** A known file-header height for the native diff, so it can be clipped exactly. */
+-const DIFF_HEADER = 30
+-const bodyThemes = new WeakMap<object, ReturnType<typeof cachedMarkdownTheme>>()
+-function bodyDiffTheme(t: ReturnType<typeof useTheme>): ReturnType<typeof cachedMarkdownTheme> {
+-  const cached = bodyThemes.get(t)
+-  if (cached) return cached
+-  const base = cachedMarkdownTheme(t)
+-  const theme = { ...base, metrics: { ...base.metrics, diffFileHeaderHeight: DIFF_HEADER } }
+-  bodyThemes.set(t, theme)
+-  return theme
+-}
++

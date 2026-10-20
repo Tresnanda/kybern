@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "jsxImportSource": "@gpuix/react",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": [
+      "bun"
+    ],
+    "paths": {
+      "@/*": [
+        "./../desktop/src/*"
+      ]
+    }
+  },
+  "include": [
+    "src",
+    "scripts",
+    "assets.d.ts"
+  ]
+}

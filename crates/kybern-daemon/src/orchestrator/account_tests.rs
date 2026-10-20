@@ -93,6 +93,33 @@ fn quota_recovery_requires_the_latest_interrupted_turn_and_its_own_report() {
     assert!(!accounts::quota_limited_turn(ThreadStatus::Failed, &switched, now));
 }
 
+#[test]
+fn target_quota_evidence_matches_full_history_after_each_transition() {
+    let fixture = Fixture::new();
+    let thread = fixture.thread(ThreadStatus::Idle);
+    let turn = Uuid::now_v7();
+    let other_turn = Uuid::now_v7();
+    let start = || EventPayload::TurnStarted { message_id: Uuid::now_v7(), message: UserMessage::text("task") };
+    for (owner, payload) in [
+        (turn, start()),
+        (turn, EventPayload::TurnFailed { error: "5-hour usage limit reached".into() }),
+        (other_turn, EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "unrelated".repeat(10_000), data: None }),
+        (turn, EventPayload::TurnResumed),
+        (turn, EventPayload::TurnFailed { error: "weekly quota".into() }),
+        (other_turn, start()),
+        (turn, EventPayload::TurnFailed { error: "weekly quota".into() }),
+        (other_turn, EventPayload::TurnFailed { error: "weekly quota".into() }),
+        (turn, EventPayload::SessionTransitioned {
+            from: thread.provider.clone(), to: thread.provider.clone(), native_resume: false, text: "transition".into(),
+        }),
+    ] {
+        fixture.orchestrator.emit(thread.id, Some(owner), payload).unwrap();
+        let all = fixture.orchestrator.inner.store.events_for_thread(thread.id).unwrap();
+        assert_eq!(fixture.orchestrator.thread_target(thread.id).unwrap().quota_limited,
+            crate::orchestrator::accounts::quota_limited_turn(thread.status, &all, chrono::Utc::now().timestamp()));
+    }
+}
+
 #[tokio::test]
 async fn successful_quota_report_does_not_authorize_switch_continue() {
     let fixture = Fixture::new();

@@ -607,6 +607,15 @@ impl SessionActivityTime {
     }
 }
 
+/// Who is steering a turn. Only a person's message may restart the turn on a
+/// newly selected target; Kybern's own deliveries (agent results, thread
+/// messages) are queued for the next turn instead.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum SteerSource {
+    Client,
+    Kybern,
+}
+
 struct ActiveTurn {
     id: TurnId,
     /// Distinguishes repeated native continuations of the same persisted turn.
@@ -1145,9 +1154,15 @@ impl Orchestrator {
     /// when no thread exists yet to issue `git.status`. Publish once per batch.
     pub async fn refresh_projects_git(&self) -> Result<Vec<Project>> {
         let mut changed = false;
-        for project in self.inner.store.projects_list()? {
-            let is_git = Repo::is_repo(std::path::Path::new(&project.path)).await;
-            changed |= self.inner.store.project_set_git_status(project.id, is_git)?;
+        let projects = self.inner.store.projects_list()?;
+        // A list read must not wait for one git subprocess per project in
+        // sequence. Bound process concurrency, and keep store writes/publishing
+        // on this task after every batch completes.
+        for batch in projects.chunks(8) {
+            let probes = batch.iter().map(|project| async { (project.id, Repo::is_repo(std::path::Path::new(&project.path)).await) });
+            for (id, is_git) in futures::future::join_all(probes).await {
+                changed |= self.inner.store.project_set_git_status(id, is_git)?;
+            }
         }
         if changed {
             self.publish_projects();
@@ -1709,7 +1724,11 @@ impl Orchestrator {
 
     /// Deliver new user input within the current native turn. The turn gate also
     /// serializes retries, so a lost RPC reply does not send the prompt twice.
-    pub async fn steer(&self, mut params: methods::QueuedMessage) -> Result<methods::ThreadsSendResult> {
+    pub async fn steer(&self, params: methods::QueuedMessage) -> Result<methods::ThreadsSendResult> {
+        self.steer_from(params, SteerSource::Client).await
+    }
+
+    pub(super) async fn steer_from(&self, mut params: methods::QueuedMessage, source: SteerSource) -> Result<methods::ThreadsSendResult> {
         self.ensure_not_subagent(params.thread_id)?;
         self.resolve_attachments(&mut params.message);
         let receipt = || -> Result<Option<methods::ThreadsSendResult>> {
@@ -1745,7 +1764,13 @@ impl Orchestrator {
                 )?
             } else {
                 let target = self.thread_target(thread.id)?.target;
-                if target.provider != thread.provider || target.model != thread.model || target.effort != thread.effort {
+                if self.target_differs(&thread, &target)? {
+                    // Restarting the turn on the new target is the user's call;
+                    // Kybern's own deliveries wait for that turn in the queue.
+                    anyhow::ensure!(
+                        source == SteerSource::Client,
+                        "This thread switches model or account on its next turn, so the message waits for that turn."
+                    );
                     let mode = self.pending_permission_for(&thread, &target.provider)?.unwrap_or(thread.permission_mode);
                     let mut receiving = thread.clone();
                     receiving.provider_session_id = self.compatible_native_session(&thread, &target.provider)?;
@@ -1760,9 +1785,16 @@ impl Orchestrator {
                 target
             }
         };
-        if target.provider != thread.provider || target.model != thread.model || target.effort != thread.effort {
+        if self.target_differs(&thread, &target)? {
             if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
-                self.interrupt(thread.id).await?;
+                tracing::info!(
+                    thread_id = %thread.id,
+                    from = ?(&thread.provider, &thread.model, &thread.effort),
+                    to = ?(&target.provider, &target.model, &target.effort),
+                    "steering message restarts the turn on its new target"
+                );
+                // Only this thread's turn restarts; what it delegated keeps running.
+                self.interrupt_turn(thread.id, "a steering message switches model or account").await?;
             }
             for _ in 0..100 {
                 if self
@@ -1984,7 +2016,10 @@ impl Orchestrator {
         Ok(())
     }
 
-    pub async fn interrupt(&self, thread_id: ThreadId) -> Result<()> {
+    /// Stop a thread's turn and everything it delegated (user Stop, Lineage Stop).
+    /// `cause` names who asked, for `daemon.log`.
+    pub async fn stop_thread(&self, thread_id: ThreadId, cause: &str) -> Result<()> {
+        tracing::info!(%thread_id, cause, "stopping the thread and its delegated agents");
         // Interrupting a subagent thread stops that subagent, not its parent.
         if self.inner.store.thread_get(thread_id)?.is_some_and(|thread| thread.subagent.is_some()) {
             self.stop_runtime_task(thread_id, "").await?;
@@ -1995,6 +2030,13 @@ impl Orchestrator {
         // delegated child stopped directly (Lineage Stop) is cancelled and its
         // parent told.
         self.delegation_stop(thread_id, true).await
+    }
+
+    /// Interrupt only this thread's own turn, for a switch of model, account or
+    /// permissions. Its delegated agents keep running.
+    pub(super) async fn interrupt_turn(&self, thread_id: ThreadId, cause: &str) -> Result<()> {
+        tracing::info!(%thread_id, cause, "interrupting the thread's turn");
+        self.interrupt_with_grace(thread_id, Duration::from_secs(5)).await
     }
 
     async fn interrupt_with_grace(&self, thread_id: ThreadId, grace: Duration) -> Result<()> {
@@ -2018,6 +2060,7 @@ impl Orchestrator {
                 }
             };
             if !matches!(tokio::time::timeout(grace, stopped).await, Ok(Ok(()))) {
+                tracing::info!(%thread_id, grace_ms = grace.as_millis() as u64, "provider did not finish interrupting in time; closing its session");
                 this.force_interrupt(thread_id, &live, response_id).await?;
             }
             Ok::<_, anyhow::Error>(())
@@ -3429,7 +3472,12 @@ impl Orchestrator {
                 let changed = t.provider_session_id.as_deref() != Some(&session_id) || (model.is_some() && t.model != model);
                 t.provider_session_id = Some(session_id.clone());
                 if let Some(m) = model.clone() {
+                    let admitted = self.admitted_selection(&t)?;
                     t.model = Some(m);
+                    // The selection (`opus`) still describes the row's canonical model.
+                    if let Some(selected) = admitted {
+                        self.record_admitted(&t, &selected)?;
+                    }
                 }
                 if let Some(mut selected) = self.stored_target(&t)?
                     && selected.provider == t.provider
@@ -4211,6 +4259,36 @@ mod tests {
         assert_eq!(background.kind, RuntimeTaskKind::Process);
         assert!(background.backgrounded);
         assert!(!background.capabilities.stop);
+    }
+
+    #[tokio::test]
+    async fn project_git_refresh_checks_all_batches_and_preserves_order() {
+        let fixture = Fixture::new();
+        let mut repositories = Vec::new();
+        for index in 0..18 {
+            let directory = fixture.root.join(format!("project-{index}"));
+            std::fs::create_dir_all(&directory).unwrap();
+            if index % 3 == 0 {
+                assert!(tokio::process::Command::new("git").arg("init").arg("--quiet").arg(&directory).status().await.unwrap().success());
+            }
+            let mut project = fixture.orchestrator.add_project(directory.to_string_lossy().into_owned(), None).unwrap();
+            if index % 3 == 0 {
+                repositories.push(project.id);
+            }
+            // Every flag is deliberately stale, in both directions.
+            project.is_git = index % 3 != 0;
+            fixture.store.project_update(&project).unwrap();
+        }
+        let before = fixture.store.projects_list().unwrap();
+        let refreshed = fixture.orchestrator.refresh_projects_git().await.unwrap();
+        assert_eq!(
+            before.iter().map(|project| project.id).collect::<Vec<_>>(),
+            refreshed.iter().map(|project| project.id).collect::<Vec<_>>()
+        );
+        for project in refreshed {
+            assert_eq!(project.is_git, repositories.contains(&project.id));
+            assert_eq!(fixture.store.project_get(project.id).unwrap().unwrap().is_git, project.is_git);
+        }
     }
 
     #[tokio::test]
@@ -7334,7 +7412,7 @@ for line in sys.stdin:
             .unwrap();
         let child = child_of(&fixture, thread.id, "task-1");
         // Interrupting the child thread (or tasks.stop with its id) stops that subagent only.
-        o.interrupt(child.id).await.unwrap();
+        o.stop_thread(child.id, "test").await.unwrap();
         assert_eq!(*stopped.lock().await, ["task-1"]);
         assert_eq!(child_of(&fixture, thread.id, "task-1").subagent.unwrap().status, RuntimeTaskStatus::Stopping);
         o.handle_driver_event(

@@ -1,0 +1,11 @@
+import { webkit } from '/Users/mymac/projects/component-kit/node_modules/playwright-core/index.mjs'
+const [port, token, vite] = process.argv.slice(2)
+const b = await webkit.launch()
+const ctx = await b.newContext({ viewport: { width: 1280, height: 820 }, deviceScaleFactor: 2, colorScheme: 'dark' })
+const p = await ctx.newPage()
+p.on('console', (m) => console.log('console', m.text().slice(0, 200)))
+await p.goto(`http://localhost:${vite}/?url=ws://127.0.0.1:${port}/ws&token=${token}`)
+await p.waitForTimeout(5000)
+await p.screenshot({ path: '/Users/mymac/projects/ade/previews/gpuix/visual/probe.png' })
+console.log(await p.evaluate(() => [...document.querySelectorAll('button')].slice(0, 30).map((b) => b.getAttribute('aria-label') || b.textContent?.trim().slice(0, 20))))
+await b.close()

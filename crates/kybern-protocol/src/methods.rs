@@ -396,11 +396,18 @@ method!(DaemonUpdateRun, "daemon_update.run", Some(Scope::OrchestrationOperate),
 
 // ---- projects ----
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectsListParams {
+    /// False returns the stored project index immediately, without probing Git.
+    /// Omitted or true refreshes Git status before returning, as usual.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_git: Option<bool>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProjectsListResult {
     pub projects: Vec<Project>,
 }
-method!(ProjectsList, "projects.list", Some(Scope::OrchestrationRead), Empty, ProjectsListResult);
+method!(ProjectsList, "projects.list", Some(Scope::OrchestrationRead), ProjectsListParams, ProjectsListResult);
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ProjectsBrowseParams {

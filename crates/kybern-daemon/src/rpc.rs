@@ -180,7 +180,15 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             tokio::spawn(crate::self_update::tick(state.clone()));
             ok(record)
         }
-        ProjectsList::NAME => ok(ProjectsListResult { projects: state.orchestrator.refresh_projects_git().await.map_err(internal)? }),
+        ProjectsList::NAME => {
+            let p: ProjectsListParams = parse_or_default(params)?;
+            let projects = if p.refresh_git == Some(false) {
+                state.store.projects_list().map_err(internal)?
+            } else {
+                state.orchestrator.refresh_projects_git().await.map_err(internal)?
+            };
+            ok(ProjectsListResult { projects })
+        }
         ProjectsBrowse::NAME => {
             let p: ProjectsBrowseParams = parse_or_default(params)?;
             ok(crate::files::browse_directories(p.path).await.map_err(bad)?)
@@ -469,7 +477,8 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         ThreadsInterrupt::NAME => {
             let p: ThreadsInterruptParams = parse(params)?;
-            state.orchestrator.interrupt(p.thread_id).await.map_err(bad)?;
+            let cause = format!("threads.interrupt from client {:?} (connection {})", ctx.principal.label, ctx.id);
+            state.orchestrator.stop_thread(p.thread_id, &cause).await.map_err(bad)?;
             ok(Empty {})
         }
         ThreadMessagesList::NAME => {

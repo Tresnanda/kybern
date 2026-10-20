@@ -504,6 +504,11 @@ const MIGRATIONS: &[&str] = &[
     ",
     // v25: a project's Coordinator settings overrides (JSON of `CoordinatorOverrides`).
     "ALTER TABLE projects ADD COLUMN coordinator TEXT;",
+    // v26: the thread-list activity projection reads sparse lifecycle metadata,
+    // not every message/tool payload in each conversation. Include root-session
+    // bindings: they suppress providers that reported their root as a child.
+    "CREATE INDEX events_runtime_tasks ON events(thread_id, seq)
+      WHERE kind IN ('runtime_task_started', 'runtime_task_updated', 'runtime_task_completed', 'provider_session_bound');",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

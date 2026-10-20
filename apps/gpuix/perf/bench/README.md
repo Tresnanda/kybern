@@ -1,0 +1,243 @@
+# Shared GPUIX benchmark
+
+Recorded results and interpretation: [baseline-ef2251e2](BASELINE.md). This is
+the original product control, with three successful repeats of each available
+native scenario; it does not measure later integration optimizations.
+
+Run from `apps/gpuix` with the existing patched native addon and frozen dependencies:
+
+```sh
+bun perf/bench/run.ts --runs 3 --label baseline-ef2251e2
+bun perf/bench/run.ts markdown-scroll code-scroll explorer-scroll --runs 3 --label after
+bun perf/bench/compare.ts perf/bench/results/baseline-ef2251e2.json perf/bench/results/after.json
+bun perf/bench/scenario.ts thread-scroll             # one result document on stdout
+bun perf/bench/run.ts pr-summary pr-changes thread-scroll markdown-scroll code-scroll --webkit --runs 3 --label desktop-webkit
+bun perf/bench/run.ts markdown-scroll --runs 1 --seconds 5 --warmup 10 --profile --label diagnose
+bun perf/bench/profiles.ts /path/to/profile-*.txt
+bun perf/bench/structural.ts  # headless 300 / 3,000 / 10,000 row mount counts
+KYBERN_BENCH_COUNTERS=1 bun perf/bench/run.ts explorer-scroll --runs 1 --label counts
+```
+
+`run.ts` starts one scratch daemon on **4322**, seeds once, and uses one native
+window at a time. It takes the existing atomic preview lease; each scenario owns a separate lease and releases it before joining the end of
+the queue for the next scenario. A 250-second watchdog aborts and cleans up a
+stuck batch before it can monopolize the five-minute lease. Partial result
+documents stay `aborted: true` until the whole suite finishes; SIGKILL therefore
+cannot leave a completed-looking partial checkpoint. `compare.ts` refuses aborted
+inputs. A caught interruption exits unsuccessfully. Input production is time-bounded; at most eight
+RPC packets can remain outstanding on the fallback path. Queue mutations use Python. It records native-build markers before and after every timed/resource run, and
+watches the marker directory during the window to catch short builds. The required `pgrep -fl "bun .*ade-gpuix"` inventory is recorded before and after every run; any foreign native app/fixture/lab invalidates it. Process ancestry distinguishes this runner’s children from a cancelled runner’s orphans. Preflight waits for foreign apps to exit; wrappers stop their children, and the native fixture exits on a closed parent pipe or changed parent PID. Quiet
+markers are recorded at both endpoints too; quiet reservations never cause a discard.
+Each attempt gets a separate evidence directory so a retry cannot overwrite its logs.
+The runner creates no quiet reservation. If reserving one separately, keep it
+under 25 minutes, permit only one quiet window, and let any
+`/tmp/kybern-gpuix-build-next.<lane>` reservation take the next build slot before
+creating a new quiet window. The `/tmp/kybern-gpuix-quiet-order` file now determines quiet-window order: append your lane with Python and wait until it is first. Legacy `quiet-next.<lane>` reservations take precedence as the first line. `run.ts` creates no quiet window and allows normal leased runs while other lanes wait for quiet time; it refuses an externally created `quiet.perf-bench` marker out of turn. Quiet-order snapshots are recorded with marker evidence. Existing native builds still
+invalidate timing windows. A
+marker at either endpoint or during the run records `build overlap: discarded`; that repeat is
+queued again after releasing the UI lease. Clean repeats replace the discarded
+measurements for comparison, while the discarded records stay in JSON. Queue wait is excluded when reporting suite
+execution cost. `--seconds 1 --warmup 0` is a smoke check, never a baseline.
+`--keep-data` preserves the deterministic dataset for another run; otherwise
+only this runner's daemon/data are stopped/deleted. A per-data-directory lock
+prevents concurrent runners sharing the seed. Concurrent lanes must choose their
+own unused `KYBERN_BENCH_PORT` and a new `KYBERN_DATA_DIR` containing `scratch`;
+the seeder refuses to adopt a different fixture’s existing directory. External real-daemon endpoints
+are cleared; UI launch and config paths are explicitly scratch. No model runs,
+GitHub writes, global input, screenshots, or clock manipulation occur.
+
+Results are `results/<label>.json` and a median table in `results/<label>.md`.
+Raw bounded diagnostic logs and resource samples are in
+`/Users/mymac/projects/ade/previews/gpuix/perf/bench/<label>/`; override only with
+`KYBERN_BENCH_EVIDENCE`. Retain small baseline JSON, not generated logs, binaries,
+or the scratch dataset. `--webkit` labels its host **desktop frontend in WebKit**;
+it is not a Tauri binary. It reuses the installed Playwright runtime; no downloads.
+Vite may discover a lazy dependency and reload a first-use page. Such a window
+is a failed measurement and must be rerun after its dependency cache is primed;
+do not combine input from across a reload. Wheel rejections are handled without
+leaving an unhandled cleanup promise.
+
+## Workload and scenarios
+
+`seed.ts` reuses `visual/fixture.ts`'s RPC connection and gradient PNG generator,
+the SQL event technique in `pacing-fixture.ts`, and `harness.ts`'s scratch guard.
+Records use real daemon RPCs. Provider events are synthetic SQLite rows because
+there is no event-import RPC. Titles, order, event IDs, timestamps and content
+are deterministic; daemon-generated project/thread UUIDs differ on a fresh seed.
+A cached manifest preserves those UUIDs for matched runs.
+
+- 300 threads in 20 projects, 20 notes and 20 tasks; settled 1,000/3,000-turn
+  conversations with Markdown, tables, code fences, diffs, tools and image parts.
+- A synthetic running thread; streaming uses production `applyEvent` on this
+  process's state at 25 deltas/sec. It does not execute a provider. The stream
+  text and requested cadence are deterministic and bounded by the scenario lifetime.
+  Delivered deltas/sec are recorded so a throttled producer is not mistaken for
+  a matched workload.
+- A scratch git repository with 2,400 root source files and an expanded directory
+  of **10,000 files**. Explorer timing expands that directory. The stock sidebar
+  shows its normal eight threads per project; all 300 remain in its model.
+- `long.md`: 93,853 bytes / 1,776 lines, inside the product's rendered Markdown
+  preview limit. `long.ts`: 3,000 lines, inside the 256 KiB read limit.
+- `huge.md` and `huge.ts`: approximately 2 MiB each. These explicitly exercise
+  existing product limits when opened manually: large Markdown becomes source,
+  and file reads stop at 256 KiB with the normal truncation notice. They are
+  seeded stress inputs; the default preview timings use the complete long files.
+- PR scenarios reuse `actionFixture({long:true})`: a long description and
+  2,400-line patches, using its in-memory RPC server; no GitHub network access.
+
+The default suite covers fresh-preferences and warm-preferences dev startup,
+opening a long thread, one earlier-history page after upward native wheel input,
+thread wheel bursts and a fast fling, sidebar, expanded Explorer, Markdown/code
+file previews, PR Summary/Changes, a long streaming answer and genuinely settled
+Home/thread idle with composer focus parked so a caret does not animate. The synthetic running sidebar row is made idle in process only
+for the two settled-idle scenarios. Other scenarios retain it.
+Packaged startup is explicitly skipped when checkout-local daemon/CLI artifacts
+are missing; obtaining them would require a separate Rust packaging build.
+
+## Measurement contract
+
+All native numbers state **KYBERN_FULL_RATE=1** by default. No other rendering
+optimization flags are enabled. `pacing-app.ts` supplies the unchanged full
+product, commit counts and a visible, non-activating native window.
+`launchFixture` has one optional stderr observer so telemetry does not fork its
+process lifetime, startup timeout or scratch safety handling.
+
+The AppKit helper supplies process-local synthetic `NSEvent` input with precise pixel
+deltas plus independent contact/momentum phase fields; it never posts global
+input. If AppKit cannot associate that event with this window, the suite records
+that rejection (or a failed offset-change preflight) and reuses `scroll8.ts`'s 120 Hz pipelined native wheel RPC schedule,
+including contact markers, direction reversals and exponential synthetic momentum.
+A small harness subclass supplies this process’s window association while the
+concrete NSEvent retains its phase implementation. Its `scrollingDeltaY` and
+`deltaY` getters return the exact offered CGFloat: CoreGraphics stores
+`kCGScrollWheelEventPointDeltaAxis1` as an integer even with the double setter.
+That rounded roughly 613 of 1,800 thread-scroll offers to zero. A second defect
+was independent: `NSWindow.sendEvent:` delivered only 239/600 synthetic packets
+to GPUI in a five-second probe, even after preserving the fraction. The default
+now calls this window's actual GPUIView `scrollWheel:` handler, matching the
+independent scroll2/Explorer injectors. The same probe delivered 600/600 packets,
+with handler distance exactly matching offered distance; submission p99 changed
+from 199.97 ms to 19.59 ms and next-submission proxy p95 from 137.67 to 17.20 ms.
+A direct-handler integer probe also delivered 600/600 and had p99 19.01 ms,
+but rounded 205 offers to zero and reduced distance from 1,851.76 to 1,665 px.
+Thus NSWindow routing caused the cadence suppression; fractional getters repair
+independent motion-distance loss. These are injector repairs, not product speedups. Input remains synthetic,
+process-local AppKit events; this does not exercise hardware/OS dispatch.
+
+`KYBERN_BENCH_INTEGER_WHEEL=1` restores historical delta truncation;
+`KYBERN_BENCH_DIRECT_VIEW=0` restores the historical NSWindow route. Both are
+diagnostic controls recorded in `renderFlags`. Do not compare resources across
+these controls as if delivered work matched. Per row, `zeroDistancePackets`,
+`requestedDistance`, `effectiveDistance`, `handledPackets` and `handlerDistance`
+make getter precision and synchronous native-handler delivery separately
+reviewable. The old missing tail left only the visible sidebar MatrixLoader's
+200 ms animation updates. Those gaps do not establish delayed product input.
+`KYBERN_BENCH_NO_RUNNING=1` provides a separate settle control without that
+synthetic running row; default open/older scenarios retain the visible loader.
+
+`wheel-check.m` verifies the actual NSEvent getters and independent contact /
+momentum phases with positive, negative, zero and subpixel input without opening
+a window. Run `clang -fobjc-arc -framework AppKit -framework CoreGraphics
+perf/bench/wheel-check.m -o <scratch-output>` then that executable. The corrected
+AppKit backend and RPC backend both retain fractional momentum. An untimed
+offset-change preflight must confirm that AppKit actually scrolls the target.
+`KYBERN_BENCH_RPC_ONLY=1` forces the existing RPC schedule for a matched-input
+control; each row records `forcedRpc`. With `KYBERN_BENCH_COUNTERS=1`, capable
+addons also return `counters.nativeMemory` after the sample. Metal gauges require
+`KYBERN_MEMORY_COUNTERS=1`; disabled gauges must not be interpreted as zero usage.
+The JSON states the accepted input backend, producer wall time, actual packet rate and packets per nominal second. A dispatch that finishes after the nominal deadline remains visible in the producer duration. A slow
+in-process AppKit callback can throttle the producer; the fallback also bounds
+backlog and truncates unoffered packets at the real-time deadline. This limits
+matched-input claims across very different renderer speeds. A fast fling uses a larger ramp and
+decay. Input-to-physical-present is **null**: neither backend exposes that fence.
+The separate offered-input-to-next-native-submission stderr-receipt proxy includes
+transport/delivery delay and can include unrelated animation submissions. It is
+not an input-to-photon claim. WebKit uses DOM-wheel-to-rAF instead.
+
+Frame p50/p95/p99, >16.7/>33 counts and maximum gap come from native **scene
+submission** timestamps, not debug-frame durations. Startup and discontinuous
+stream/idle gaps are not evidence of missed continuous-animation frames.
+Opening/earlier-history timings use real-clock painted-text/bounds inspection;
+inspection is an upper bound on visibility and native painted text may include
+clipped runs. Settled-open means loaded state plus 250 ms of unchanged painted text; it does not mean all 3,000 turns were mounted. Older-history visibility
+requires a lower first sequence and painted transcript content, not a daemon
+response alone. These limits are kept explicit in the baseline.
+
+For active/idle resources a scenario warms for ten seconds, then keeps that
+scene active across three consecutive independent 15-second endpoint windows.
+The suite reuses `perf/sample.ts`: actual process CPU-time delta, AGX per-PID
+accumulated GPU milliseconds and `footprint` physical MiB. Samples include the
+app only; daemon and WindowServer are excluded. WebKit includes its browser and
+newly launched/adopted WebContent/GPU/Networking processes. GPU ms / submission
+is an average of process work, not per-frame GPU duration. Startup transition
+resources remain null rather than pretending that a post-startup 15-second
+window measures launch cost. No energy or 120 Hz display claim is made.
+
+`KYBERN_FRAME_COSTS` supplies existing render/Taffy durations. Optional
+`KYBERN_BENCH_COUNTERS=1` traverses at most 500,000 mounted fibers once after each
+window, outside its timing, and reports host/component/row-component counts by surface and mounted direct
+native rows for at most 64 virtual lists. Row-component totals include wrappers;
+the per-list row count is the useful retained-child measurement.
+Unavailable native built-child, Markdown parse/flatten, shaping, host mutation,
+image and Metal byte counters remain explicit nulls. Adding native hooks belongs
+to a later instrumentation change, not a source-only benchmark pretending to
+measure them. `profiles.ts` reports inclusive stack counts; categories overlap.
+Profiled runs are separate from the baseline because `sample` perturbs scheduling.
+
+Comparison uses medians of successful runs. Differences below **3 CPU percentage
+points** and **1 ms frame p95** are flagged as noise, not wins. A difference above
+those thresholds alone does not prove significance. Match input backend, flags,
+workload, host and duration when comparing. The comparison flags a >5% offered
+packet-rate change or a changed input backend as unmatched input; inspect per-run distributions.
+
+Validation: `pnpm typecheck`, `pnpm exec tsc -p perf/bench/tsconfig.json`,
+`bun test ./src`, `bun test perf/bench/model.test.ts`, and
+`node --check perf/bench/webkit.mjs`.
+
+The streaming lane also reuses this scenario with
+`KYBERN_BENCH_STREAM_HISTORY=1` (all 1,000 turns, fetched in sequence-bounded
+500-entry pages), `KYBERN_BENCH_STREAM_SCROLL=1` (simultaneous wheel input), and
+`KYBERN_BENCH_STREAM_CATCHUP=1` (replay the nominal 25 deltas/second after a late
+timer instead of silently lowering its rate). Compare actual delivered rates.
+`perf/stream/pair.ts` records the source hashes and source-control flags for
+the staged and paired controls. These options do not change the default suite.
+AppKit readiness now waits 100 ms after its probe before checking the anchor,
+so frame-coalesced input is observed after paint rather than rejected early.
+
+Screen validity: runners execute `swift /Users/mymac/projects/ade-gpuix-scratch/screen-state.swift` before app launch and before/after measurement (checkout-local equivalent when the shared file is absent). Both endpoints must be unlocked and the display awake. Quiet windows wait without consuming a window while locked, polling once per minute. Every app lease owns `caffeinate -d -w <runner pid>`; killing the runner releases that assertion. Continuous active samples require at least one submission per four seconds and positive GPU time. Intentional idle, clipped, unmounted, and reduced-motion static controls can legitimately have zero submissions/GPU time. Never unlock a session or change its lock/sleep settings for a run.
+
+## Startup milestones
+
+Startup scenarios restore the 3,000-turn conversation and poll native painted
+text for the sidebar, first transcript content and newest answer separately.
+The report includes median/p90 for shell, sidebar, first content and newest
+content; scene-submission gaps remain a separate diagnostic. These are observed
+CPU paint upper bounds, not physical presentation fences.
+
+`startup-cold` restarts its own scratch daemon for every repeat, clearing the
+in-memory projection cache. `startup-warm` primes one launch then retains that
+daemon for its repeats. Neither purges OS filesystem caches. Packaged startup
+also restores the long conversation and uses a fresh scratch daemon per repeat;
+it reuses an existing compiled app and never triggers a release build.
+
+Startup runners hold a scoped `caffeinate -d -u -w <runner pid>` and reject zero/near-zero native submissions (fewer than three after up to two seconds of confirmation outside the recorded milestone clocks); this prevents an asleep display from producing false startup paint measurements. The assertion ends with the runner and does not change power settings.
+
+Startup also checks the shared screen-state Swift probe before and after: locked sessions or asleep displays reject the run. Never try to unlock the user session.
+
+## Full-history fling and submission attribution
+
+`KYBERN_BENCH_HISTORY_TURNS=3000` makes `thread-fling` load all sequence-bounded
+pages before warm-up, then asserts exactly 3,000 user turns. The ordinary bench
+opens the newest bounded page; the dataset containing 3,000 turns alone does
+not mean all history is loaded. The option leaves other scenarios unchanged.
+`evidence.loadedHistoryTurns` identifies the explicitly loaded fling only.
+The existing streaming full-history control still expects 1,000 by default.
+
+`inputPreflight` retains the target, point and before/probe/after native offsets;
+the probe additionally records actual handler count and delta. This makes a
+fallback to wheel RPC inspectable. The raw log's `bench-window-start/end`
+markers bound each sample. `perf/flick/attribute.py` uses the recorded ending
+submission and exact measured frame count to emit every interval over 16.7 ms,
+with native draw/layout costs, React commits and input-paint probes. Its counts
+must agree with the result JSON. Categories are correlations; uninstrumented
+JS/GC/shaping work is not inferred from a short native draw.

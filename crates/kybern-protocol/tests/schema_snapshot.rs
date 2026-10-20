@@ -39,6 +39,16 @@ fn settings_schema_is_stable() {
 }
 
 #[test]
+fn projects_list_can_return_the_index_without_git_probes() {
+    insta::assert_json_snapshot!("projects_list_params", schema_for!(ProjectsListParams));
+    let legacy: ProjectsListParams = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert_eq!(legacy.refresh_git, None);
+    assert_eq!(serde_json::to_value(legacy).unwrap(), serde_json::json!({}));
+    let cached: ProjectsListParams = serde_json::from_value(serde_json::json!({ "refresh_git": false })).unwrap();
+    assert_eq!(cached.refresh_git, Some(false));
+}
+
+#[test]
 fn wire_examples_roundtrip() {
     let ev = ThreadEvent {
         seq: 7,

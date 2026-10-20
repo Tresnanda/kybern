@@ -516,9 +516,31 @@ function meaningfulCommandTokens(segment: string): string[] {
 }
 
 function positionalArgs(args: readonly string[]): string[] {
-  return args.filter(
-    (arg) => arg.length > 0 && !arg.startsWith("-") && arg !== "--"
-  )
+  const positional: string[] = []
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!
+    // Redirections and here-doc markers are not operands; a bare operator
+    // also consumes its target (`> out.txt`, `<< 'EOF'`).
+    if (/^\d*(?:>>?|<<?-?|&>)$/.test(arg)) {
+      i += 1
+      continue
+    }
+    if (/^\d*(?:>>?|<<?-?|&>)/.test(arg)) continue
+    if (arg.length > 0 && !arg.startsWith("-") && arg !== "--")
+      positional.push(arg)
+  }
+  return positional
+}
+
+/** The file a command writes through `>`/`>>`, if any. */
+function redirectTarget(args: readonly string[]): string | undefined {
+  for (let i = 0; i < args.length; i += 1) {
+    const match = /^\d*>>?(.*)$/.exec(args[i]!)
+    if (!match) continue
+    const target = match[1] || args[i + 1]
+    if (target && target !== "/dev/null" && !target.startsWith("&")) return target
+  }
+  return undefined
 }
 
 function commandLine(rawCommand: string, complete: boolean): ToolActivityLine {
@@ -534,8 +556,12 @@ function commandLine(rawCommand: string, complete: boolean): ToolActivityLine {
   const args = tokens.slice(1)
   const positional = positionalArgs(args)
 
-  if (READ_COMMANDS.has(tool))
+  if (READ_COMMANDS.has(tool)) {
+    // `cat > file <<'EOF'` writes the file rather than reading it.
+    const written = tool === "cat" ? redirectTarget(args) : undefined
+    if (written) return line("edit", compactPath(written), complete)
     return line("read", compactPath(positional.at(-1)) || "a file", complete)
+  }
   if (SEARCH_COMMANDS.has(tool)) {
     const query = positional[0]
     const path = positional.length > 1 ? compactPath(positional.at(-1)) : ""

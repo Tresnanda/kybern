@@ -1,0 +1,110 @@
+diff --git a/dist/components/index.d.ts b/dist/components/index.d.ts
+index b67a2533955af43ac03ee03fc89ddb8693a77a63..546eb975e7698c75f43ff60dcdc514c8afdd0d45 100644
+--- a/dist/components/index.d.ts
++++ b/dist/components/index.d.ts
+@@ -15,6 +15,9 @@ export declare const gpuixComponents: {
+ };
+ export type GpuixComponentType = keyof typeof gpuixComponents;
+ export interface MotionDivProps extends MotionProps {
++    windowDrag?: boolean;
++    cache?: boolean | "fill";
++    testId?: string;
+     children?: ReactNode;
+     style?: StyleDesc;
+     onClick?: Props["onClick"];
+@@ -35,6 +38,7 @@ export interface MotionDivProps extends MotionProps {
+ }
+ /** Native animations with a Motion-like declarative React API. */
+ export declare const motion: {
++    readonly svg: import("react").ForwardRefExoticComponent<MotionDivProps & { source?: string; src?: string } & import("react").RefAttributes<import("../types/host.js").Instance>>;
+     readonly div: import("react").ForwardRefExoticComponent<MotionDivProps & import("react").RefAttributes<import("../types/host.js").Instance>>;
+ };
+ //# sourceMappingURL=index.d.ts.map
+\ No newline at end of file
+diff --git a/dist/components/index.js b/dist/components/index.js
+index f9fdf3ff14da834fcbf0a1536ad345b9dd701aa9..543781d3c871467cf2751c055eeb5c5a023f5693 100644
+--- a/dist/components/index.js
++++ b/dist/components/index.js
+@@ -14,6 +14,9 @@ function motionStyleKey(style) {
+         style.bottom,
+         style.left,
+         style.borderRadius,
++        style.rotate,
++        style.translateX,
++        style.translateY,
+     ];
+ }
+ export { AnimatePresence, PresenceContext, useIsPresent, usePresence, } from "./animate-presence.js";
+@@ -44,6 +47,13 @@ const MotionDiv = forwardRef(function MotionDiv({ initial, animate, exit, transi
+         transition?.duration,
+         transition?.delay,
+         transition?.ease,
++        transition?.stiffness,
++        transition?.damping,
++        transition?.mass,
++        transition?.type,
++        transition?.bounce,
++        transition?.velocityX,
++        transition?.velocityY,
+     ]);
+     const generation = useMemo(() => ++nextMotionGeneration, [motionKey]);
+     const motionDescription = {
+@@ -69,9 +79,58 @@ const MotionDiv = forwardRef(function MotionDiv({ initial, animate, exit, transi
+     }
+     return createElement("div", hostProps);
+ });
++const MotionSvg = forwardRef(function MotionSvg({ initial, animate, exit, transition, onMotionComplete, ...props }, ref) {
++    const presence = useContext(PresenceContext);
++    const [isPresent, safeToRemove] = usePresence();
++    const resolvedInitial = presence?.initial === false ? false : initial;
++    const resolvedAnimate = !isPresent && exit ? exit : animate;
++    useEffect(() => {
++        if (!isPresent && !exit)
++            safeToRemove?.();
++    }, [exit, isPresent, safeToRemove]);
++    const motionKey = JSON.stringify([
++        isPresent,
++        motionStyleKey(resolvedInitial),
++        motionStyleKey(resolvedAnimate),
++        transition?.duration,
++        transition?.delay,
++        transition?.ease,
++        transition?.stiffness,
++        transition?.damping,
++        transition?.mass,
++        transition?.type,
++        transition?.bounce,
++        transition?.velocityX,
++        transition?.velocityY,
++    ]);
++    const generation = useMemo(() => ++nextMotionGeneration, [motionKey]);
++    const motionDescription = {
++        generation,
++        isExit: !isPresent && exit !== undefined,
++        initial: resolvedInitial,
++        animate: resolvedAnimate,
++        transition,
++    };
++    const hostProps = {
++        ...props,
++        ref,
++        motion: motionDescription,
++    };
++    if (!isPresent || onMotionComplete) {
++        hostProps.onMotionComplete = (event) => {
++            if (event.motionGeneration !== generation)
++                return;
++            onMotionComplete?.(event);
++            if (!isPresent)
++                safeToRemove?.();
++        };
++    }
++    return createElement("svg", hostProps);
++});
+ /** Native animations with a Motion-like declarative React API. */
+ export const motion = {
+     div: MotionDiv,
++    svg: MotionSvg,
+ };
+ // There is no `VirtualList` React wrapper. Windowing on the React side is the
+ // app's job: pass `itemCount`, `estimatedItemHeight` and `windowStart` to the

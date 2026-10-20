@@ -12,6 +12,17 @@ struct Binding {
     through: EventSeq,
 }
 
+/// The selection a thread was last admitted with, and the model and effort its
+/// row held for it. A provider may rewrite the row's model to its canonical id
+/// (Claude Code runs `opus` as `claude-opus-5-5`), so a target compared with
+/// the row alone mistakes every alias for a model switch.
+#[derive(Serialize, Deserialize)]
+struct AdmittedTarget {
+    selected: SessionTarget,
+    model: Option<String>,
+    effort: Option<String>,
+}
+
 impl Orchestrator {
     pub(super) async fn session_admission(&self, thread_id: ThreadId) -> Arc<Mutex<()>> {
         self.inner.session_admission.lock().await.entry(thread_id).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
@@ -91,8 +102,15 @@ impl Orchestrator {
             account_override: override_id.is_some(),
             effective_permission_mode: thread.permission_mode,
             pending_permission_mode,
-            quota_limited: quota_limited_turn(thread.status, &self.inner.store.events_for_thread(thread.id)?, Utc::now().timestamp()),
+            quota_limited: self.thread_quota_limited(&thread)?,
         })
+    }
+
+    fn thread_quota_limited(&self, thread: &Thread) -> Result<bool> {
+        if !matches!(thread.status, ThreadStatus::Failed | ThreadStatus::Idle) {
+            return Ok(false);
+        }
+        Ok(quota_limited_turn(thread.status, &self.inner.store.latest_turn_quota_events(thread.id)?, Utc::now().timestamp()))
     }
 
     pub async fn set_thread_target(&self, params: methods::ThreadTargetParams) -> Result<methods::ThreadTargetState> {
@@ -319,9 +337,38 @@ impl Orchestrator {
         self.inner.store.meta_set(&Self::binding_key(thread), &serde_json::to_string(&binding)?)
     }
 
+    /// The selection the thread's current model and effort were admitted for,
+    /// while its row still describes that admission.
+    pub(super) fn admitted_selection(&self, thread: &Thread) -> Result<Option<SessionTarget>> {
+        let Some(saved) = self.inner.store.meta_get(&format!("admitted_target:{}", thread.id))?.filter(|s| !s.is_empty()) else {
+            return Ok(None);
+        };
+        let admitted: AdmittedTarget = serde_json::from_str(&saved)?;
+        Ok((admitted.selected.provider == thread.provider && admitted.model == thread.model && admitted.effort == thread.effort)
+            .then_some(admitted.selected))
+    }
+
+    pub(super) fn record_admitted(&self, thread: &Thread, selected: &SessionTarget) -> Result<()> {
+        let admitted = AdmittedTarget { selected: selected.clone(), model: thread.model.clone(), effort: thread.effort.clone() };
+        self.inner.store.meta_set(&format!("admitted_target:{}", thread.id), &serde_json::to_string(&admitted)?)
+    }
+
+    /// Whether `target` needs another provider, model or effort than `thread`
+    /// runs. It matches the row, or the selection the row was admitted for.
+    pub(super) fn target_differs(&self, thread: &Thread, target: &SessionTarget) -> Result<bool> {
+        if thread.provider != target.provider {
+            return Ok(true);
+        }
+        if thread.model == target.model && thread.effort == target.effort {
+            return Ok(false);
+        }
+        Ok(self.admitted_selection(thread)?.as_ref() != Some(target))
+    }
+
     /// Called under the send admission gate, before appending the user's intent.
     pub(super) fn admit_target(&self, thread: &mut Thread, target: SessionTarget) -> Result<()> {
         self.ensure_account_signed_in(&target.provider)?;
+        let selected = target.clone();
         let provider_changed = thread.provider != target.provider;
         let binding =
             self.inner.store.meta_get(&Self::binding_key(thread))?.map(|saved| serde_json::from_str::<Binding>(&saved)).transpose()?;
@@ -331,9 +378,9 @@ impl Orchestrator {
             .as_deref()
             .or(binding.as_ref().map(|binding| binding.environment_fingerprint.as_str()))
             .is_some_and(|previous| previous != fingerprint);
-        let model_changed = thread.model != target.model || thread.effort != target.effort;
+        let model_changed = self.target_differs(thread, &target)?;
         if !provider_changed && !model_changed && !configuration_changed {
-            return Ok(());
+            return self.record_admitted(thread, &selected);
         }
         // A target selection never grants additional authority. Validate the effective
         // mode for the receiving native binding before writing any transition state.
@@ -375,7 +422,7 @@ impl Orchestrator {
                 },
             )?;
         }
-        Ok(())
+        self.record_admitted(thread, &selected)
     }
 
     pub(super) fn portable_message(&self, thread: &Thread, message: &UserMessage) -> Result<UserMessage> {
@@ -518,14 +565,14 @@ impl Orchestrator {
             let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
             let Some(mode) = self.pending_permission_for(&thread, &thread.provider)? else { return Ok(thread) };
             let selected = self.thread_target(thread_id)?.target;
-            if !stop_now && (selected.provider != thread.provider || selected.model != thread.model || selected.effort != thread.effort) {
+            if !stop_now && self.target_differs(&thread, &selected)? {
                 return Ok(thread);
             }
             // Receiving-target choices launch with that target's next message;
             // the outgoing native process must never receive its permissions.
             if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
                 ensure!(stop_now, "Permission change is waiting for this turn to finish.");
-                self.interrupt(thread_id).await?;
+                self.interrupt_turn(thread_id, "a permission change was applied now").await?;
                 for _ in 0..100 {
                     if self
                         .inner
@@ -567,9 +614,8 @@ impl Orchestrator {
         }
         let thread = self.inner.store.thread_get(params.thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
         ensure!(thread.status != ThreadStatus::Archived, "Unarchive this conversation before continuing.");
-        let events = self.inner.store.events_for_thread(thread.id)?;
         ensure!(
-            quota_limited_turn(thread.status, &events, Utc::now().timestamp()),
+            self.thread_quota_limited(&thread)?,
             "The latest turn was not interrupted by a confirmed 5-hour or weekly account limit. Retry your prompt normally."
         );
         ensure!(
@@ -585,7 +631,7 @@ impl Orchestrator {
             self.inner.store.meta_set(&operation_key, &signature)?;
         }
         if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
-            self.interrupt(thread.id).await?;
+            self.interrupt_turn(thread.id, "continuing on another account after a usage limit").await?;
             for _ in 0..100 {
                 if self
                     .inner

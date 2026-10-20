@@ -1,0 +1,171 @@
+--- a/apps/gpuix/src/composer/Menu.tsx
++++ b/apps/gpuix/src/composer/Menu.tsx
+@@ -1,3 +1,5 @@
++import {BACKDROP} from '../native/backdrop.ts'
++import {useBackdropMaterial,backdropTint} from '../native/backdrop-material.ts'
+ // The composer's picker menus (`ComposerPickerMenuPopup` + `components/kit/menu.tsx`,
+ // "normal" picker size in `kit.css:2960`): a 0.65rem-radius opaque popover with a
+ // 1px border and the composer's soft shadow, 4px body padding, 26px option rows
+@@ -81,6 +83,7 @@
+   priority?: number
+   occlude?: boolean
+   still?: boolean
++  material?: 'popup' | 'none'
+   fade?: { opacity?: number; rise?: number }
+ }>(function PopupLayer(
+   {
+@@ -97,12 +100,15 @@
+     occlude = true,
+     still: stillProp = false,
+     fade,
++    material = 'popup',
++    backdrop: explicitBackdrop,
+     style,
+     children,
+     ...props
+   },
+   ref,
+ ) {
++  const glass = useBackdropMaterial()
+   const [generation] = useState(() => ++popupGeneration)
+   // Decided on mount: a later change must not restart or drop the tween.
+   // Reduce Motion skips the tween entirely: a zero-length native opacity motion
+@@ -127,6 +133,7 @@
+     : { side, align, gap: sideOffset, offset: side === 'left' || side === 'right' ? { x: 0, y: alignOffset } : { x: alignOffset, y: 0 } }
+   return (
+     <anchored
++      backdrop={material === 'none' ? undefined : explicitBackdrop ?? (glass ? {...BACKDROP.glass, radius: radius ?? 16} : undefined)}
+       {...((still ? {} : { motion }) as object)}
+       style={{ ...(radius !== undefined ? { borderRadius: radius } : {}), ...(fade?.opacity !== undefined ? { opacity } : {}) }}
+       {...placement}
+@@ -136,7 +143,7 @@
+       priority={priority}
+       occlude={occlude}
+     >
+-      <div {...props} ref={ref} style={style}>
++      <div {...props} ref={ref} style={glass && material !== 'none' && (style as StyleDesc | undefined)?.backgroundColor ? {...style as StyleDesc,backgroundColor:backdropTint((style as StyleDesc).backgroundColor!)} : style}>
+         {children}
+       </div>
+     </anchored>
+--- a/apps/gpuix/src/nav/overlay.tsx
++++ b/apps/gpuix/src/nav/overlay.tsx
+@@ -525,6 +525,7 @@
+     <>
+       <PopupLayer
+         still={still}
++        material="none"
+         fade={{ opacity: dim }}
+         position={{ x: 0, y: 0 }}
+         priority={3}
+@@ -533,6 +534,7 @@
+       />
+       <PopupLayer
+         still={still}
++        material={palette ? 'none' : 'popup'}
+         fade={{ rise: DISTANCE.micro }}
+         position={{ x: Math.round((size.width - cardWidth) / 2), y: pinTop !== undefined ? pinTop : Math.round((top + size.height - bottom) / 2) }}
+         anchor={pinTop !== undefined ? 'topLeft' : 'leftCenter'}
+--- a/apps/gpuix/src/nav/Palette.tsx
++++ b/apps/gpuix/src/nav/Palette.tsx
+@@ -216,6 +216,7 @@
+ 
+   let index = -1
+   return (
++    // CommandDialogPopup has no backdrop filter, including full translucency.
+     <Dialog onClose={close} width={672} variant="palette" testId="palette" instant={getNav().keyboardNav}>
+       <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, paddingLeft: 0, paddingRight: 0 }}>
+         <div style={{ paddingLeft: 10, paddingRight: 10, paddingTop: 6, paddingBottom: 6 }}>
+--- a/apps/gpuix/src/split/Workspace.tsx
++++ b/apps/gpuix/src/split/Workspace.tsx
+@@ -1,3 +1,5 @@
++import {BACKDROP} from '../native/backdrop.ts'
++import {BACKDROP_ALLOWED} from '../native/backdrop-material.ts'
+ import { Icon } from '../icons.tsx'
+ import { N } from '../nav/glyphs.ts'
+ import { ThreadHeader } from '../nav/TitleBar.tsx'
+@@ -174,10 +176,10 @@
+   </div>}
+     <AnimatePresence>{rect && zone && <motion.div key={`${target!.id}-${zone}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: REDUCED_MOTION ? 0 : .15, ease: [.22, 1, .36, 1] }} style={{ position: 'absolute', left: rect.x, top: rect.y - originY, width: rect.width, height: rect.height, pointerEvents: 'none', backgroundColor: alpha(t.surface, .22) }}>
+       {!whole && <div style={{ position: 'absolute', ...(zone === 'left' || zone === 'right' ? { left: rect.width / 2, top: 8, bottom: 8, width: 1 } : { top: rect.height / 2, left: 8, right: 8, height: 1 }), backgroundColor: alpha(t.v('--color-border-focus'), .58), pointerEvents: 'none' }} />}
+-      <div testId="pane-drop-highlight" style={{ position: 'absolute', left: !whole && zone === 'right' ? rect.width / 2 + 4 : 8, top: !whole && zone === 'bottom' ? rect.height / 2 + 4 : 8, width: rect.width / (!whole && (zone === 'left' || zone === 'right') ? 2 : 1) - (!whole && (zone === 'left' || zone === 'right') ? 12 : 16), height: rect.height / (!whole && (zone === 'top' || zone === 'bottom') ? 2 : 1) - (!whole && (zone === 'top' || zone === 'bottom') ? 12 : 16), borderRadius: 10, borderWidth: 1, borderColor: alpha(t.v('--color-border-focus'), .64), backgroundColor: alpha(t.surface, .38), boxShadow: { offsetX: 0, offsetY: 12, blurRadius: 36, spreadRadius: 0, color: 'rgba(0,0,0,.12)' }, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
++      <div backdrop={BACKDROP_ALLOWED ? BACKDROP.drop : undefined} testId="pane-drop-highlight" style={{ position: 'absolute', left: !whole && zone === 'right' ? rect.width / 2 + 4 : 8, top: !whole && zone === 'bottom' ? rect.height / 2 + 4 : 8, width: rect.width / (!whole && (zone === 'left' || zone === 'right') ? 2 : 1) - (!whole && (zone === 'left' || zone === 'right') ? 12 : 16), height: rect.height / (!whole && (zone === 'top' || zone === 'bottom') ? 2 : 1) - (!whole && (zone === 'top' || zone === 'bottom') ? 12 : 16), borderRadius: 10, borderWidth: 1, borderColor: alpha(t.v('--color-border-focus'), .64), backgroundColor: alpha(t.surface, .38), boxShadow: { offsetX: 0, offsetY: 12, blurRadius: 36, spreadRadius: 0, color: 'rgba(0,0,0,.12)' }, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+         {/* GPUIX chooses backgroundColor over background; paint the gradient separately. */}
+         <div style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', borderRadius: 10, pointerEvents: 'none', background: { type: 'linear-gradient', angle: 180, stops: [{ color: alpha(t.v('--color-background-accent'), .18), position: 0 }, { color: alpha(t.v('--color-background-accent'), .08), position: 1 }] } }} />
+-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, borderRadius: 8, borderWidth: 1, borderColor: alpha(t.v('--color-border-focus'), .42), backgroundColor: alpha(t.popover, .88), pointerEvents: 'none' }}><Icon source={whole || zone === 'left' || zone === 'right' ? N.splitRight : N.splitDown} size={16} color={t.text} /><Label color={t.text} size={12} weight={500}>{whole ? 'Open here' : ({ left: 'Split left', right: 'Split right', top: 'Split above', bottom: 'Split below' })[zone]}</Label></div>
++        <div backdrop={BACKDROP_ALLOWED ? BACKDROP.dropLabel : undefined} style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, borderRadius: 8, borderWidth: 1, borderColor: alpha(t.v('--color-border-focus'), .42), backgroundColor: alpha(t.popover, .88), pointerEvents: 'none' }}><Icon source={whole || zone === 'left' || zone === 'right' ? N.splitRight : N.splitDown} size={16} color={t.text} /><Label color={t.text} size={12} weight={500}>{whole ? 'Open here' : ({ left: 'Split left', right: 'Split right', top: 'Split above', bottom: 'Split below' })[zone]}</Label></div>
+       </div>
+     </motion.div>}</AnimatePresence>
+   </>
+--- a/apps/gpuix/src/live/Floating.tsx
++++ b/apps/gpuix/src/live/Floating.tsx
+@@ -1,3 +1,4 @@
++import '../native/backdrop.ts'
+ import { useGpuix, type PublicInstance, type EventPayload } from '@gpuix/react'
+ import { observeElementBounds, type LayoutRect } from '../native/layout.ts'
+ import { useEffect, useRef, useState, type ReactNode } from 'react'
+@@ -62,7 +63,7 @@
+   const vertical = corner.startsWith('top') ? { top: 12 } : { bottom: 12 + insetBottom }
+   return <div ref={container} testId={`${testId}-bounds`} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' }}>
+     <div style={{ position: 'absolute', width, height, ...(drag ? { left: drag.left + drag.dx, top: drag.top + drag.dy } : { ...horizontal, ...vertical }), pointerEvents: 'none' }}>
+-    <anchored side="bottom" align="start" gap={-height} deferred priority={0} occlude snapMargin={8}
++    <anchored backdrop={{blur:0}} side="bottom" align="start" gap={-height} deferred priority={0} occlude snapMargin={8}
+       {...(!drag && snap && !REDUCED_MOTION ? { motion: { generation: snap.generation, isExit: false, initial: { translateX: snap.x, translateY: snap.y }, animate: { translateX: 0, translateY: 0 }, transition: { type: 'spring', duration: 0.4, bounce: 0, velocityX: snap.vx, velocityY: snap.vy } } } as object : !drag && !entered.current ? { motion: { generation: 0, isExit: false, initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.fast, ease: [...EASE.smoothOut] } } } as object : {})}
+       onMotionComplete={() => { entered.current = true }}
+       style={{ borderRadius: 16 }}>
+--- a/apps/gpuix/src/live/ComputerLiveView.tsx
++++ b/apps/gpuix/src/live/ComputerLiveView.tsx
+@@ -1,3 +1,5 @@
++import {BACKDROP} from '../native/backdrop.ts'
++import {BACKDROP_ALLOWED} from '../native/backdrop-material.ts'
+ import { motion, useGpuix, type ImgInstance } from '@gpuix/react'
+ import { useCallback, useEffect, useRef, useState } from 'react'
+ import type { ComputerFrame, Settings } from '../../../../packages/kybern-client/src/types.ts'
+@@ -60,9 +62,9 @@
+   return <Floating insetBottom={insetBottom} storageKey="kybern.computerLiveView.corner" testId="computer-live" width={width} height={width / aspect} overlayDrag insetEnd={dock.open ? Math.min(dock.width, 538) : 0}>
+     <div onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)} style={{ position: 'relative', flexGrow: 1, minHeight: 0 }}>{previous && <motion.div key={imageRevision - 1} initial={false} animate={{ opacity: 1 }} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' }}><FrameImage frame={previous} /></motion.div>}
+       <motion.div key={imageRevision} initial={previous && !REDUCED_MOTION ? { opacity: 0 } : false} animate={{ opacity: 1 }} transition={{ duration: 0.18, ease: EASE_OUT }} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' }}><FrameImage frame={frame} current /></motion.div>{frame.point && <div style={{ position: 'absolute', left: Math.max(0, Math.min(1, frame.point[0])) * width - 7, top: Math.max(0, Math.min(1, frame.point[1])) * width / aspect - 7, width: 14, height: 14, borderRadius: 7, borderWidth: 2, borderColor: '#ffffff', backgroundColor: 'rgba(40,110,245,0.6)', pointerEvents: 'none' }} />}
+-      <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 76, borderBottomLeftRadius: 16, borderBottomRightRadius: 16, pointerEvents: 'none', background: { type: 'linear-gradient', angle: 180, stops: [{ color: 'rgba(0,0,0,0)', position: 0 }, { color: 'rgba(0,0,0,0.66)', position: 1 }] } }} />
++      <div backdrop={BACKDROP_ALLOWED ? BACKDROP.liveScrim : undefined} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 76, borderBottomLeftRadius: 16, borderBottomRightRadius: 16, pointerEvents: 'none', background: { type: 'linear-gradient', angle: 180, stops: [{ color: 'rgba(0,0,0,0)', position: 0 }, { color: 'rgba(0,0,0,0.66)', position: 1 }] } }} />
+       <div style={{ position: 'absolute', left: 12, right: 12, bottom: 10, display: 'flex', flexDirection: 'column', gap: 2, pointerEvents: 'none' }}><Label color="rgba(255,255,255,0.7)" size={11} truncate>{frame.app}</Label><Label color="#ffffff" size={12} truncate>{frame.action ?? (running ? 'Working' : 'Done')}</Label></div>
+-      <div style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 4, opacity: hovered ? 1 : 0, pointerEvents: hovered ? 'auto' : 'none', backgroundColor: t.popover, borderRadius: 8 }}><IconButton icon={N.window} size={28} label={expanded ? 'Show smaller' : 'Show larger'} onClick={() => setExpanded(!expanded)} /><IconButton icon={N.x} size={28} testId="computer-live-close" label="Hide until the next task" onClick={() => { setDismissed(true); setFrame(null); setPrevious(null) }} /></div>
++      <div backdrop={hovered && BACKDROP_ALLOWED ? {...BACKDROP.liveControls,radius:8} : undefined} style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 4, opacity: hovered ? 1 : 0, pointerEvents: hovered ? 'auto' : 'none', backgroundColor: BACKDROP_ALLOWED ? 'rgba(0,0,0,.45)' : t.popover, borderRadius: 8 }}><IconButton icon={N.window} size={28} label={expanded ? 'Show smaller' : 'Show larger'} onClick={() => setExpanded(!expanded)} /><IconButton icon={N.x} size={28} testId="computer-live-close" label="Hide until the next task" onClick={() => { setDismissed(true); setFrame(null); setPrevious(null) }} /></div>
+     </div>
+   </Floating>
+ }
+--- a/apps/gpuix/src/preview/Preview.tsx
++++ b/apps/gpuix/src/preview/Preview.tsx
+@@ -1,3 +1,5 @@
++import {BACKDROP} from '../native/backdrop.ts'
++import {BACKDROP_ALLOWED,backdropTint} from '../native/backdrop-material.ts'
+ import { Icon } from '../icons.tsx'
+ import { DockSection } from '../dock/Notes.tsx'
+ import { muted } from '../nav/overlay.tsx'
+@@ -81,5 +83,5 @@
+ function MiniPlayer({ threadId, insetBottom }: { threadId: string; insetBottom: number }) {
+   const t = useTheme(), s = usePreview(threadId), entry = s.entries[s.index]
+   if (!s.floating || !entry) return null
+-  return <Floating insetBottom={insetBottom} storageKey="kybern.preview.corner" testId="preview-mini" width={320} height={158}><Section label={entry.title}><IconButton icon={N.panelRight} size={24} testId="preview-mini-return" label="Return to panel" onClick={() => { setPreview(threadId, { floating: false }); showPreview(threadId) }} /><IconButton icon={N.x} size={24} testId="preview-mini-close" label="Close preview" onClick={() => closePreview(threadId)} /></Section><Label color={t.textSecondary} size={12} truncate style={{ padding: 12 }}>{entry.address}</Label><Label color={t.textTertiary} size={11} style={{ paddingLeft: 12 }}>{s.opened ? 'Opened in browser' : 'Preview opens in your browser.'}</Label><Action testId="preview-mini-open" onClick={() => launchPreview(threadId)}>Open in browser</Action></Floating>
++  return <Floating insetBottom={insetBottom} storageKey="kybern.preview.corner" testId="preview-mini" width={320} height={158}><div backdrop={BACKDROP_ALLOWED ? BACKDROP.previewHeader : undefined} style={{backgroundColor:BACKDROP_ALLOWED ? backdropTint(t.popover) : t.popover}}><Section label={entry.title}><IconButton icon={N.panelRight} size={24} testId="preview-mini-return" label="Return to panel" onClick={() => { setPreview(threadId, { floating: false }); showPreview(threadId) }} /><IconButton icon={N.x} size={24} testId="preview-mini-close" label="Close preview" onClick={() => closePreview(threadId)} /></Section></div><Label color={t.textSecondary} size={12} truncate style={{ padding: 12 }}>{entry.address}</Label><Label color={t.textTertiary} size={11} style={{ paddingLeft: 12 }}>{s.opened ? 'Opened in browser' : 'Preview opens in your browser.'}</Label><Action testId="preview-mini-open" onClick={() => launchPreview(threadId)}>Open in browser</Action></Floating>
+ }
+--- a/apps/gpuix/src/transcript/kit.tsx
++++ b/apps/gpuix/src/transcript/kit.tsx
+@@ -179,7 +179,7 @@
+     border: t.border,
+     codeText: text,
+     codeWash: t.codeSurface,
+-    markdown: transcriptMarkdownStyle(text, t.textSecondary, t.border, t.codeSurface, TEXT.size, CODE.size),
++    markdown: {...transcriptMarkdownStyle(text, t.textSecondary, t.border, t.codeSurface, TEXT.size, CODE.size),link:{color:t.v('--color-token-text-link-foreground'),underline:'hover' as const}},
+     bg: t.codeSurface,
+     fontSans: FONT_UI,
+     fontMono: FONT_MONO,
+--- a/apps/gpuix/src/notes/NoteBlock.tsx
++++ b/apps/gpuix/src/notes/NoteBlock.tsx
+@@ -17,7 +17,7 @@
+     const fill = over(k.fill, t.surface)
+     const plain: SyntaxTheme = Object.fromEntries(['comment', 'keyword', 'string', 'stringSpecial', 'escape', 'number', 'boolean', 'typeName', 'typeBuiltin', 'constructor', 'function', 'functionBuiltin', 'macroName', 'property', 'constant', 'variable', 'variableSpecial', 'parameter', 'operator', 'punctuation', 'tag', 'attribute', 'label'].map((key) => [key, k.fg1])) as unknown as SyntaxTheme
+     // `.note-prose pre`: a filled card with plain ink, no border, no syntax colours (the desktop does not highlight here).
+-    return { ...base, accent: t.textTertiary, bg: fill, border: fill, codeText: k.fg, codeWash: k.fill, markdown: notesMarkdownStyle(k.fg, k.fg2, k.fg4, k.fill, 16.1538, k.fg3), syntax: plain, text: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.86)' : 'rgba(13, 13, 13, 0.86)', metrics: { ...base.metrics, mdTextSize: 16.1538, mdLineHeight: 25.846, mdBlockGap: 15.02, mdHeadingSizes: [18.3077, 18.3077, 16.1538, 16.1538], mdHeadingLineHeights: [23.8, 23.8, 23.4, 23.4], codeTextSize: 13.46, codeLineHeight: 22.6, mdCodePaddingX: 16, mdCodePaddingY: 14, mdCodeRadius: 10, mdInlineCodeRadius: 5, mdCodeHeaderTextSize: 0.01, mdCodeHeaderPaddingY: 0 } } }, [t])
++    return { ...base, accent: t.textTertiary, bg: fill, border: fill, codeText: k.fg, codeWash: k.fill, markdown: {...notesMarkdownStyle(k.fg, k.fg2, k.fg4, k.fill, 16.1538, k.fg3),link:{color:t.v('--color-token-text-link-foreground'),underline:'always' as const}}, syntax: plain, text: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.86)' : 'rgba(13, 13, 13, 0.86)', metrics: { ...base.metrics, mdTextSize: 16.1538, mdLineHeight: 25.846, mdBlockGap: 15.02, mdHeadingSizes: [18.3077, 18.3077, 16.1538, 16.1538], mdHeadingLineHeights: [23.8, 23.8, 23.4, 23.4], codeTextSize: 13.46, codeLineHeight: 22.6, mdCodePaddingX: 16, mdCodePaddingY: 14, mdCodeRadius: 10, mdInlineCodeRadius: 5, mdCodeHeaderTextSize: 0.01, mdCodeHeaderPaddingY: 0 } } }, [t])
+   // Atom-only blocks preserve their exact Markdown in the editor. Inline references
+   // keep the surrounding Markdown and gain live, actionable status chips below it.
+   const image = /^!\[((?:\\.|[^\]])*)\]\((kybern:\/\/asset\/[a-f\d-]{36}|https?:\/\/[^\s)]+)\)\s*$/i.exec(body)
