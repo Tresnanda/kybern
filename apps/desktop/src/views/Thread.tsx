@@ -36,7 +36,7 @@ import { DisclosureChevron } from "@/components/kit/DisclosureChevron"
 import { DisclosureRegion } from "@/components/kit/DisclosureRegion"
 import { IconButton } from "@/components/kit/icon-button"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
-import { ComposerPanelStack, ComposerStackedPanel, COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME } from "@/components/kit/chat/ComposerStackedPanel"
+import { ComposerPanelLeavingContext, ComposerPanelStack, ComposerStackedPanel, COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME } from "@/components/kit/chat/ComposerStackedPanel"
 import { ComposerStackedPanelRow, ComposerStackedPanelRowMain } from "@/components/kit/chat/ComposerStackedPanelContent"
 import { Menu, MenuGroup, MenuItem, MenuSeparator, MenuShortcut, MenuTrigger } from "@/components/kit/menu"
 import { PROVIDER_LABEL, basename, mod, toolLine } from "@/lib/format"
@@ -285,6 +285,10 @@ export function ThreadView({
   // A subagent thread is read-only; the subagent page replaces the composer with its own bar.
   const hideInput = (!!approval && ((isUserInput(approval) && !connector) || ownForm)) || !!thread?.subagent
 
+  // The request card (approval, question, secret, Coordinator proposal) stays on screen for its
+  // 150 ms exit once it resolves; the decision itself is sent immediately.
+  const requestCardId = approval ? `approval:${approval.id}` : questions[0] ? `question:${questions[0].id}` : null
+
   const answer = (n: number): boolean => {
     if (!approval || ownForm || (isUserInput(approval) && !connector) || (approval.tool_name === "ExitPlanMode" && n === 2)) return false
     // Each git card covers one action: no "for this session", and a merge only from its own button.
@@ -363,6 +367,15 @@ export function ThreadView({
     },
     [threadId, thread?.project_id, thread?.provider, freeChat, canCompact, nativeCommands, set],
   )
+
+  const requestCard = approval ? (
+    secretRequest ? <SecretRequestPanel key={approval.id} approval={approval} input={secretRequest} count={pending.length} />
+      : briefProposal ? <BriefProposalPanel key={approval.id} approval={approval} input={briefProposal} count={pending.length} />
+      : settingsProposal ? <SettingsProposalPanel key={approval.id} approval={approval} input={settingsProposal} count={pending.length} />
+      : gitCard ? <GitApprovalPanel key={approval.id} approval={approval} input={gitCard} count={pending.length} onChoose={answer} />
+      : connector ? <ConnectorApprovalPanel key={approval.id} approval={approval} connector={connector} count={pending.length} onChoose={answer} /> : notesTasksConsent(approval) ? <NotesTasksApprovalPanel key={approval.id} consent={notesTasksConsent(approval)!} count={pending.length} onChoose={answer} /> : computerConsent(approval) ? <ComputerApprovalPanel key={approval.id} consent={computerConsent(approval)!} count={pending.length} onChoose={answer} onAlways={() => respondApproval(approval.id, { decision: "submit", response: { scope: "always" } }).catch((e) => toast.error("Unable to respond", { description: errorText(e) }))} /> : isUserInput(approval) ? <UserInputPanel key={approval.id} approval={approval} count={pending.length} /> : <ApprovalPanel key={approval.id} approval={approval} count={pending.length} onChoose={answer} />
+  ) : questions[0] ? <AsyncQuestionPanel key={questions[0].id} threadId={threadId} request={questions[0]} count={questions.length} /> : null
+  const heldCard = useHeldRequestCard(threadId, requestCardId, requestCard)
 
   if (!thread) return null
 
@@ -496,14 +509,7 @@ export function ThreadView({
                   {otherActiveTasks.length > 0 && <RuntimeActivityPanel tasks={otherActiveTasks} />}
                   <HeldMessagesPanel threadId={threadId} />
                   {queued.length > 0 && <QueuedPanel threadId={threadId} />}
-                  {!approval && questions[0] && <AsyncQuestionPanel key={questions[0].id} threadId={threadId} request={questions[0]} count={questions.length} />}
-                  {approval && (
-                    secretRequest ? <SecretRequestPanel key={approval.id} approval={approval} input={secretRequest} count={pending.length} />
-                      : briefProposal ? <BriefProposalPanel key={approval.id} approval={approval} input={briefProposal} count={pending.length} />
-                      : settingsProposal ? <SettingsProposalPanel key={approval.id} approval={approval} input={settingsProposal} count={pending.length} />
-                      : gitCard ? <GitApprovalPanel key={approval.id} approval={approval} input={gitCard} count={pending.length} onChoose={answer} />
-                      : connector ? <ConnectorApprovalPanel key={approval.id} approval={approval} connector={connector} count={pending.length} onChoose={answer} /> : notesTasksConsent(approval) ? <NotesTasksApprovalPanel key={approval.id} consent={notesTasksConsent(approval)!} count={pending.length} onChoose={answer} /> : computerConsent(approval) ? <ComputerApprovalPanel key={approval.id} consent={computerConsent(approval)!} count={pending.length} onChoose={answer} onAlways={() => respondApproval(approval.id, { decision: "submit", response: { scope: "always" } }).catch((e) => toast.error("Unable to respond", { description: errorText(e) }))} /> : isUserInput(approval) ? <UserInputPanel key={approval.id} approval={approval} count={pending.length} /> : <ApprovalPanel key={approval.id} approval={approval} count={pending.length} onChoose={answer} />
-                  )}
+                  {requestCard ?? (heldCard && <ComposerPanelLeavingContext value>{heldCard}</ComposerPanelLeavingContext>)}
                 </ComposerPanelStack>
               }
             />}
@@ -651,6 +657,8 @@ export function QueuedPanel({ threadId }: { threadId: ThreadId }) {
 
 function QueuedRow({ item, divided }: { item: import("@/protocol").QueuedMessage; divided: boolean }) {
   const [entered, setEntered] = useState(false)
+  // Removal: the row pops out for 150 ms, then the delete is sent.
+  const [leaving, setLeaving] = useState(false)
   // A message from another thread or a batch of delegated results reads from its parts, not from prompt text.
   const structured = structuredMessageSummary(item.message)
   const preview = structured ? { purpose: structured, body: structuredMessageBody(item.message) ?? "" } : null
@@ -665,18 +673,31 @@ function QueuedRow({ item, divided }: { item: import("@/protocol").QueuedMessage
       if (save) {
         await rpc().call("queue.update", { ...item, message: replacePromptText(item.message, edit ?? promptText(item.message)) })
         setEdit(null)
-      } else await removeQueuedMessage(item.thread_id, item.id)
-    } catch (error) { toast.error("Unable to update follow-up", { description: errorText(error) }) }
+      } else {
+        if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          setLeaving(true)
+          await new Promise((resolve) => window.setTimeout(resolve, 150))
+        }
+        await removeQueuedMessage(item.thread_id, item.id)
+      }
+    } catch (error) {
+      setLeaving(false)
+      toast.error("Unable to update follow-up", { description: errorText(error) })
+    }
     finally { setBusy(false) }
   }
-  return <ComposerStackedPanelRow compact data-testid="queued-follow-up-row" onAnimationEnd={(event) => { if (event.target === event.currentTarget) setEntered(true) }} className={cn(!entered && "t-row-enter", divided && COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME)}>
+  return <ComposerStackedPanelRow compact data-testid="queued-follow-up-row" onAnimationEnd={(event) => { if (event.target === event.currentTarget) setEntered(true) }} className={cn(!entered && "t-row-enter", leaving && "t-pop-out", divided && COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME)}>
     <ComposerStackedPanelRowMain>
       <SteerIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
       <div className="min-w-0 flex-1">
-        {edit === null ? <button type="button" aria-expanded={showBody} onClick={() => setShowBody(value => !value)} className="w-full text-start">
-          <span className="flex min-w-0 items-center gap-2"><span className={cn(COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME, "min-w-0 flex-1")}>{structured ?? (promptText(item.message) || "Queued follow-up")}</span><DisclosureChevron open={showBody} /></span>
-          {showBody && <span className="block whitespace-pre-wrap break-words py-2 text-sm font-normal leading-relaxed">{preview?.body ?? promptText(item.message)}</span>}
-        </button>
+        {edit === null ? <>
+          <button type="button" aria-expanded={showBody} onClick={() => setShowBody(value => !value)} className="w-full text-start">
+            <span className="flex min-w-0 items-center gap-2"><span className={cn(COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME, "min-w-0 flex-1")}>{structured ?? (promptText(item.message) || "Queued follow-up")}</span><DisclosureChevron open={showBody} /></span>
+          </button>
+          <DisclosureRegion open={showBody}>
+            <span className="block whitespace-pre-wrap break-words py-2 text-sm font-normal leading-relaxed">{preview?.body ?? promptText(item.message)}</span>
+          </DisclosureRegion>
+        </>
           : <Textarea aria-label="Edit queued prompt" value={edit} disabled={busy} onChange={(e) => setEdit(e.target.value)} size="sm" />}
         {contextCount > 0 && <span className="block text-xs text-muted-foreground">{contextCount} attached context {contextCount === 1 ? "item" : "items"}</span>}
       </div>
@@ -731,6 +752,24 @@ function permissionBody(input: JsonValue): string {
     if (typeof v === "string" && v.trim()) return v
   }
   return JSON.stringify(input, null, 2)
+}
+
+/**
+ * The request card that just resolved, held for its exit. Returns null while a card is showing
+ * (the live one renders itself) and for any thread other than the one that held it. A new card
+ * arriving during the exit replaces the leaving one at once.
+ */
+function useHeldRequestCard(threadId: ThreadId, id: string | null, node: ReactNode): ReactNode {
+  const [held, setHeld] = useState<{ threadId: ThreadId; id: string; node: ReactNode } | null>(null)
+  if (id && node && (held?.id !== id || held.threadId !== threadId)) setHeld({ threadId, id, node })
+  const leaving = !id && held?.threadId === threadId
+  useEffect(() => {
+    if (!leaving) return
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    const timer = window.setTimeout(() => setHeld(null), reduced ? 0 : 150)
+    return () => window.clearTimeout(timer)
+  }, [leaving])
+  return leaving ? held.node : null
 }
 
 export function ApprovalPanel({ approval, count, onChoose }: { approval: ApprovalRequest; count: number; onChoose: (n: number) => void }) {

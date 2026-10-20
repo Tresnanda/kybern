@@ -15,7 +15,7 @@ import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type R
 import { openAddAccount } from "@/components/kybern/accounts/AddAccountSheet"
 import { ProviderMark } from "@/components/kybern/bits"
 import { FollowDefaultsLine, ModelPickerTabs } from "@/components/kybern/ModelPickerTabs"
-import { TextSwap } from "@/components/kybern/motion"
+import { IconSwap, TextSwap, usePresence } from "@/components/kybern/motion"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
 import { Menu, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/kit/menu"
 import { Kbd } from "@/components/kit/kbd"
@@ -108,6 +108,9 @@ interface ModelPickerProps {
 
 export function ModelPicker(props: ModelPickerProps) {
   const [open, setOpen] = useState(false)
+  // The content stays mounted through the popup's exit, so the real list shrinks and fades
+  // instead of an empty shell.
+  const panel = usePresence(open, 200)
   const inputRef = useRef<HTMLInputElement>(null)
   return (
     <PopoverPrimitive.Root
@@ -129,7 +132,7 @@ export function ModelPicker(props: ModelPickerProps) {
               "transition-[opacity,scale,filter] duration-[var(--duration-fast)] ease-[var(--ease-smooth-out)] data-ending-style:duration-[var(--duration-quick)] data-starting-style:scale-[var(--scale-medium)] data-starting-style:opacity-0 data-starting-style:blur-[var(--blur-small)] data-ending-style:scale-[var(--scale-tiny)] data-ending-style:opacity-0 motion-reduce:transition-none",
             )}
           >
-            {open && <ModelPickerPanel {...props} inputRef={inputRef} close={() => setOpen(false)} />}
+            {panel.mounted && <ModelPickerPanel {...props} inputRef={inputRef} close={() => setOpen(false)} />}
           </PopoverPrimitive.Popup>
         </PopoverPrimitive.Positioner>
       </PopoverPrimitive.Portal>
@@ -909,6 +912,8 @@ function PickerRow({
   onPick: () => void
   onStar: () => void
 }) {
+  // The star pops once when a pointer click makes this model a favorite; ⌘D stays instant.
+  const [starPop, setStarPop] = useState(false)
   const base = cn(
     "flex w-full min-w-0 cursor-default select-none items-center gap-2 rounded-[0.4rem] px-2 text-left text-[length:var(--app-font-size-ui,12px)] outline-none",
     selected
@@ -973,6 +978,7 @@ function PickerRow({
           onMouseDown={(event) => event.preventDefault()}
           onClick={(event) => {
             event.stopPropagation()
+            setStarPop(!favorite)
             onStar()
           }}
           className={cn(
@@ -982,7 +988,12 @@ function PickerRow({
             (favorite && !starOnHover) || active ? "opacity-100" : "opacity-0",
           )}
         >
-          {favorite ? <StarFilledIcon className="size-3" /> : <StarIcon className="size-3" />}
+          <IconSwap
+            tempo="quick"
+            active={favorite ? "b" : "a"}
+            a={<StarIcon className="size-3" />}
+            b={<StarFilledIcon className={cn("size-3", starPop && "t-pop")} />}
+          />
         </button>
       )}
     </div>
