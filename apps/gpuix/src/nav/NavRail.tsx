@@ -3,8 +3,7 @@
 // rings and Settings at the foot. Every button has a tooltip on the right.
 import { FILL_ISLAND } from '../MatrixLoader.tsx'
 import { useTasks } from '../tasks/store.ts'
-import { motion } from '@gpuix/react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   PROVIDER_NAMES,
   bindingLimit,
@@ -20,7 +19,7 @@ import {
 } from '@/lib/providerUsage'
 import type { ProviderKind, ProviderLimits } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
-import { EASE_OUT, ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import type { Theme } from '../theme.ts'
 import { N } from './glyphs.ts'
 import { goPage } from './history.ts'
@@ -36,6 +35,10 @@ import { CardAccounts, useCardEntry } from '../usage/CardAccounts.tsx'
 import { AccountDot } from '../usage/AccountMark.tsx'
 import { useAccountsFeed, useDefaultAccount } from '../usage/accounts.ts'
 import { pressTransform } from '../motion/press.ts'
+import { DURATION, EASE } from '../motion/kit.tsx'
+import { arcDraw, arcKey, ringArc } from '../motion/success.ts'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { fadeTo, pressRow } from '../shell/motion.ts'
 
 const RAIL = 52
 const RAIL_ITEMS: { page: Page; icon: string; label: string }[] = [
@@ -51,7 +54,8 @@ const railIdle = (t: Theme) => ink(t, 0.62)
 const railHover = (t: Theme) => ink(t, 0.06)
 const railActive = (t: Theme) => ink(t, 0.1)
 
-const SLIDE = REDUCED_MOTION ? { duration: 0 } : { duration: 0.22, ease: EASE_OUT }
+/** A button and the gap under it: the pill travels one step per destination. */
+const STEP = 42
 
 export function NavRail() {
   const page = useNav((s) => s.page)
@@ -59,17 +63,19 @@ export function NavRail() {
   const t = useTheme()
   const destination = settingsOpen ? null : page
   const index = RAIL_ITEMS.findIndex((item) => item.page === destination)
+  // ⌘1…⌘5 and the other shortcuts jump; a click slides (`keyboardNav` is cleared by any press).
+  const keyboard = useNav((s) => s.keyboardNav)
+  const jump = REDUCED_MOTION || keyboard
   return (
     // A cached island sized by its row (`cache="fill"`, native/README.md).
     // Empty rail space drags the window; the button groups do not (desktop `NavRail`).
     <div {...FILL_ISLAND} windowDrag style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: RAIL, flexShrink: 0, paddingBottom: 12 - 8 }}>
       <div windowDrag={false} style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 6, position: 'relative' }}>
-        {/* One sliding pill marks the active destination (`motion.css:396`). */}
-        <motion.div
-          initial={false}
-          animate={{ top: 6 + Math.max(index, 0) * 42, opacity: index < 0 ? 0 : 1 }}
-          transition={SLIDE}
-          style={{ position: 'absolute', left: 0, width: 36, height: 36, borderRadius: 10, backgroundColor: railActive(t), pointerEvents: 'none' }}
+        {/* One sliding pill marks the active destination (`t-tabs-pill`, 250 ms smooth-out). It sits in the first destination's slot
+            and is moved by paint (`paintTransform`): no layout or render per frame, where the old `top` tween re-laid out the window. */}
+        <div
+          paintTransform={PATCHED_NATIVE ? { initial: false, animate: { translateY: Math.max(index, 0) * STEP, opacity: index < 0 ? 0 : 1 }, transition: { duration: jump ? 0 : DURATION.fast, ease: [...EASE.smoothOut] } } : undefined}
+          style={{ position: 'absolute', left: 0, top: 6, width: 36, height: 36, borderRadius: 10, backgroundColor: railActive(t), pointerEvents: 'none', ...(PATCHED_NATIVE ? {} : { top: 6 + Math.max(index, 0) * STEP, opacity: index < 0 ? 0 : 1 }) }}
         />
         {RAIL_ITEMS.map((item) => (
           <RailButton key={item.page} icon={item.icon} label={item.label} active={item.page === destination} onClick={() => goPage(item.page)} testId={`rail-${item.page}`} />
@@ -154,16 +160,12 @@ function TasksReviewDot() {
 const CARD_INNER = 320 - 32
 
 const R = 10.25
-const CIRCUMFERENCE = 2 * Math.PI * R
 
-/** A 24px ring: the track, and an arc for what is left, starting at 12 o'clock. */
-function ringSvg(left: number | null): { track: string; arc: string | null } {
-  const head = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">'
-  const track = `${head}<circle cx="12" cy="12" r="${R}" stroke="#000" stroke-width="2"/></svg>`
-  if (left === null) return { track, arc: null }
-  const length = (Math.max(0, Math.min(100, left)) / 100) * CIRCUMFERENCE
-  const arc = `${head}<circle cx="12" cy="12" r="${R}" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-dasharray="${length.toFixed(3)} ${CIRCUMFERENCE.toFixed(3)}" transform="rotate(-90 12 12)"/></svg>`
-  return { track, arc }
+/** A 24px ring: the track, and an arc for what is left, starting at 12 o'clock (the arc is its own path, so `arcDraw` can stroke it in). */
+const RING_TRACK = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="${R}" stroke="#000" stroke-width="2"/></svg>`
+function ringSvg(left: number | null): { track: string; arc: { source: string; length: number } | null } {
+  if (left === null || left <= 0) return { track: RING_TRACK, arc: null }
+  return { track: RING_TRACK, arc: ringArc({ size: 24, radius: R, strokeWidth: 2, fraction: Math.min(100, left) / 100 }) }
 }
 
 function toneColor(t: Theme, tone: ReturnType<typeof limitTone>) {
@@ -225,6 +227,10 @@ function UsageRing({
   const left = used === null ? null : 100 - used
   const stale = used === null || limitsStale(entry, now)
   const svg = ringSvg(left)
+  // `.rail-usage-arc` (400 ms ease-out): the arc strokes itself in when it first has a value and again when it moves 5 points or
+  // more (`arcKey`); a smaller refresh just resizes it. Old → new tweening needs the native N2 item. Stale data dims (150 ms).
+  const draw = svg.arc ? arcDraw(svg.arc.length) : undefined
+  const dim = fadeTo(stale ? 0.5 : 1)
   return (
     <div style={{ display: 'flex', position: 'relative' }}>
       <div
@@ -246,9 +252,9 @@ function UsageRing({
           hover: { backgroundColor: railHover(t) },
         }}
       >
-        <div style={{ position: 'relative', width: 24, height: 24, opacity: stale ? 0.5 : 1, pointerEvents: 'none' }}>
+        <div paintTransform={dim.paintTransform} style={{ position: 'relative', width: 24, height: 24, pointerEvents: 'none', ...dim.style }}>
           <svg source={svg.track} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color: ink(t, 0.12), pointerEvents: 'none' }} />
-          {svg.arc && <svg source={svg.arc} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color: toneColor(t, limitTone(used)), pointerEvents: 'none' }} />}
+          {svg.arc && <svg key={arcKey(left ?? 0)} source={svg.arc.source} {...(draw ? { paintAnimation: draw } : {})} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color: toneColor(t, limitTone(used)), pointerEvents: 'none' }} />}
           <div style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
             <ProviderMark kind={entry.provider} size={11} />
           </div>
@@ -280,6 +286,9 @@ function DefaultDot({ kind }: { kind: ProviderKind }) {
   return color ? <div style={{ position: 'absolute', right: -4, top: -4, pointerEvents: 'none' }}><AccountDot color={color} /></div> : null
 }
 
+/** A clickable row of the usage card: padded and pulled back by the same amount, so the text does not move and a held row has a body to darken. */
+const cardRow = { cursor: 'pointer', borderRadius: 6, paddingLeft: 6, paddingRight: 6, paddingTop: 2, paddingBottom: 2, marginLeft: -6, marginRight: -6, marginTop: -2, marginBottom: -2 } as const
+
 /** A provider's limits (`AccountsUsageCard`, default account only). Opening re-reads them. */
 function UsageCard({ entry: global }: { entry: ProviderLimits }) {
   const t = useTheme()
@@ -301,7 +310,7 @@ function UsageCard({ entry: global }: { entry: ProviderLimits }) {
         <Label color={t.text} size={14} weight={500} truncate style={{ flexGrow: 1 }}>
           {name}
         </Label>
-        <div onClick={() => goPage('usage')} style={{ cursor: 'pointer' }}>
+        <div onClick={() => goPage('usage')} style={{ ...cardRow, ...pressRow(t, t.buttonSecondaryHover) }}>
           <Label color={small}>Usage details</Label>
         </div>
       </div>
@@ -353,10 +362,10 @@ function UsageCard({ entry: global }: { entry: ProviderLimits }) {
       </Label>
       <div style={{ height: 1, marginLeft: -4, marginRight: -4, backgroundColor: ink(t, 0.07) }} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: -4, marginBottom: -4 }}>
-        <div onClick={() => openSettingsTab('accounts')} style={{ cursor: 'pointer' }}>
+        <div onClick={() => openSettingsTab('accounts')} style={{ ...cardRow, ...pressRow(t, t.buttonSecondaryHover) }}>
           <Label color={small}>Manage accounts…</Label>
         </div>
-        <div onClick={() => showDialog({ kind: 'account', provider: entry.provider })} style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+        <div onClick={() => showDialog({ kind: 'account', provider: entry.provider })} style={{ ...cardRow, display: 'flex', alignItems: 'center', gap: 4, ...pressRow(t, t.buttonSecondaryHover) }}>
           <Icon source={N.plus} size={12} color={small} />
           <Label color={small}>Add account</Label>
         </div>
