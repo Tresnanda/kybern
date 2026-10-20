@@ -2788,6 +2788,7 @@ dependencies = [
  "kybern-git",
  "kybern-protocol",
  "kybern-store",
+ "libc",
  "portable-pty",
  "rand 0.10.2",
  "reqwest",

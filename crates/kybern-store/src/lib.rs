@@ -1212,40 +1212,69 @@ impl Store {
         })
     }
 
-    /// Whether `text` appears in one of the thread's own messages (a prompt, a steered message or a completed reply).
-    /// Searched newest first in bounded batches, releasing the connection between them, as JSON-encoded in the payload.
-    pub fn thread_mentions(&self, thread_id: ThreadId, text: &str) -> Result<bool> {
-        if text.is_empty() {
-            return Ok(false);
+    /// The text of the thread's own messages (prompts, steered messages and completed replies, never reasoning or tool
+    /// output) whose stored payload contains `needle` (as JSON-encoded there), newest first among `after < seq <
+    /// before`. `instr` is only a prefilter: callers judge the returned text. One batch per call, bounded by rows and by
+    /// the payload bytes scanned, so the connection is released between batches; the second value is the next `before`,
+    /// or `None` when the range is exhausted.
+    pub fn thread_message_texts_containing(
+        &self,
+        thread_id: ThreadId,
+        needle: &str,
+        after: EventSeq,
+        before: EventSeq,
+    ) -> Result<(Vec<String>, Option<EventSeq>)> {
+        const BATCH: i64 = 128;
+        const BATCH_BYTES: i64 = 1024 * 1024;
+        if needle.is_empty() {
+            return Ok((Vec::new(), None));
         }
-        let encoded = serde_json::to_string(text)?;
+        let encoded = serde_json::to_string(needle)?;
         let needle = &encoded[1..encoded.len() - 1];
-        let thread = thread_id.to_string();
-        let mut before = i64::MAX;
-        loop {
-            let (found, last) = self.with(|c| {
-                let mut st = c.prepare_cached(
-                    "SELECT seq, instr(payload, ?3) > 0 FROM events
-                     WHERE thread_id = ?1 AND seq < ?2 AND kind IN ('assistant_message_completed', 'turn_started', 'message_steered')
-                     ORDER BY seq DESC LIMIT 128",
-                )?;
-                let mut rows = st.query(params![thread, before, needle])?;
-                let mut last = None;
-                while let Some(row) = rows.next()? {
-                    if row.get::<_, bool>(1)? {
-                        return Ok((true, None));
-                    }
-                    last = Some(row.get::<_, i64>(0)?);
+        let (payloads, next) = self.with(|c| {
+            let mut st = c.prepare_cached(
+                "SELECT seq, octet_length(payload), CASE WHEN instr(payload, ?4) > 0 THEN payload END FROM events
+                 WHERE thread_id = ?1 AND seq > ?2 AND seq < ?3 AND kind IN ('assistant_message_completed', 'turn_started', 'message_steered')
+                 ORDER BY seq DESC LIMIT ?5",
+            )?;
+            let mut rows = st.query(params![thread_id.to_string(), after, before, needle, BATCH])?;
+            let (mut payloads, mut count, mut bytes, mut last) = (Vec::new(), 0, 0i64, None);
+            while let Some(row) = rows.next()? {
+                last = Some(row.get::<_, EventSeq>(0)?);
+                bytes = bytes.saturating_add(row.get::<_, Option<i64>>(1)?.unwrap_or(0));
+                if let Some(payload) = row.get::<_, Option<String>>(2)? {
+                    payloads.push(payload);
                 }
-                Ok((false, last))
-            })?;
-            match (found, last) {
-                (true, _) => return Ok(true),
-                (false, Some(seq)) => before = seq,
-                (false, None) => return Ok(false),
+                count += 1;
+                if bytes >= BATCH_BYTES {
+                    break;
+                }
             }
-            std::thread::yield_now();
-        }
+            let more = count == BATCH || bytes >= BATCH_BYTES;
+            Ok((payloads, last.filter(|_| more)))
+        })?;
+        let texts = payloads
+            .iter()
+            .filter_map(|payload| match serde_json::from_str::<EventPayload>(payload).ok()? {
+                EventPayload::AssistantMessageCompleted { text, .. } => Some(text),
+                EventPayload::TurnStarted { message, .. } | EventPayload::MessageSteered { message, .. } => Some(message.plain_text()),
+                _ => None,
+            })
+            .collect();
+        Ok((texts, next))
+    }
+
+    /// The newest message event of the thread (see `thread_message_texts_containing`), 0 when there is none.
+    pub fn thread_last_message_seq(&self, thread_id: ThreadId) -> Result<EventSeq> {
+        self.with(|c| {
+            c.query_row(
+                "SELECT COALESCE(MAX(seq), 0) FROM events
+                 WHERE thread_id = ?1 AND kind IN ('assistant_message_completed', 'turn_started', 'message_steered')",
+                [thread_id.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+        })
     }
 
     /// Keep a hydrated transcript aligned with the thread's acknowledged head.
@@ -2154,7 +2183,7 @@ mod tests {
     }
 
     #[test]
-    fn thread_mentions_finds_text_in_the_threads_own_messages_only() {
+    fn message_texts_containing_returns_only_the_threads_own_message_text() {
         let (store, thread) = thread_fixture();
         let shot = "/Users/someone/Desktop/booking \"form\" 7 h spät.png";
         store
@@ -2191,10 +2220,41 @@ mod tests {
                 EventPayload::ProviderNotice { level: NoticeLevel::Info, text: "/tmp/notice.png".into(), data: None },
             )
             .unwrap();
-        assert!(store.thread_mentions(thread.id, shot).unwrap());
-        assert!(!store.thread_mentions(thread.id, "/Users/someone/Desktop/other.png").unwrap());
-        assert!(!store.thread_mentions(thread.id, "/tmp/notice.png").unwrap(), "only messages count, not notices");
-        assert!(!store.thread_mentions(Uuid::now_v7(), shot).unwrap());
+        store
+            .event_append(
+                thread.id,
+                None,
+                EventPayload::AssistantMessageCompleted {
+                    message_id: Uuid::now_v7(),
+                    origin: EventOrigin::Root,
+                    text: "done".into(),
+                    thinking: Some("/tmp/thought.png".into()),
+                },
+            )
+            .unwrap();
+        // Walk back batch by batch, as the image route does.
+        let texts = |needle: &str, id: ThreadId| {
+            let (mut all, mut before, mut batches) = (Vec::new(), i64::MAX, 0);
+            loop {
+                let (texts, next) = store.thread_message_texts_containing(id, needle, 0, before).unwrap();
+                all.extend(texts);
+                batches += 1;
+                match next {
+                    Some(seq) => before = seq,
+                    None => return (all, batches),
+                }
+            }
+        };
+        let (found, batches) = texts(shot, thread.id);
+        assert_eq!(found, [format!("![Booking form]({shot})")]);
+        assert!(batches > 2, "the search walks back across bounded batches");
+        assert!(texts("/Users/someone/Desktop/other.png", thread.id).0.is_empty());
+        assert!(texts("/tmp/notice.png", thread.id).0.is_empty(), "only messages count, not notices");
+        assert_eq!(texts("/tmp/thought.png", thread.id).0, ["done"], "the payload matched, but only the reply text is returned");
+        assert!(texts(shot, Uuid::now_v7()).0.is_empty());
+        let last = store.thread_last_message_seq(thread.id).unwrap();
+        assert!(last > 0);
+        assert_eq!(store.thread_message_texts_containing(thread.id, "reply", last, i64::MAX).unwrap(), (Vec::new(), None));
     }
 
     fn thread_fixture() -> (Store, Thread) {
