@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.0
+
+<!-- kybern-release-title: Kybern GPUIX, a native desktop app -->
+<!-- kybern-release-summary: A new native desktop app built on GPUI ships next to the existing one, using about 60% less memory and far less CPU, with a faster, steadier daemon underneath. -->
+
+- Add **Kybern GPUIX**, a native desktop app for Apple silicon Macs built on Zed's GPUI. It does everything the current desktop app does, renders without a web view, and uses about 60% less memory and 20–40% less CPU while scrolling, idling at zero frames. It installs next to the current app as its own app with its own updates: `curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-gpuix-mac-install.sh | sh`. The current desktop app keeps working and updating as before.
+- Offer Kybern GPUIX once in the current desktop app after it updates: one click downloads it, checks its signature with the updater key and installs it into Applications. Settings › About keeps an Install or Open button for it.
+- Stop an agent's message to another thread from interrupting that thread's running turn. Messages from Kybern itself now queue unless they are explicitly sent to steer, so delegated agents are no longer cancelled when a sibling finishes.
+- Start faster: the sidebar's projects arrive before Git is probed, saved threads hydrate alongside the lists, and activity, account and quota reads are no longer repeated or blocked behind each other. A large-history daemon answers `threads.list` in milliseconds instead of seconds.
+- Show a `cat > file <<EOF` command as an edit of that file instead of a read of `<<EOF`.
+
 ## 0.9.1
 
 <!-- kybern-release-title: A Coordinator that sets itself up -->
