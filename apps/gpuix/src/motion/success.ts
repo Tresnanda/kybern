@@ -11,7 +11,7 @@
 import type { PaintTransformProps } from '@gpuix/native/host'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { REDUCED_MOTION } from '../ui.tsx'
-import { DURATION, EASE } from './kit.tsx'
+import { DURATION, EASE } from './tokens.ts'
 
 export function successTransform(): PaintTransformProps | undefined {
   if (!PATCHED_NATIVE || REDUCED_MOTION) return undefined
@@ -26,12 +26,28 @@ export function successTransform(): PaintTransformProps | undefined {
 export type StrokeAnimation = { kind: 'stroke'; cycleMs: number; delayMs: number; dash: number; ease: [number, number, number, number] }
 
 /** `t-check-draw` on an `<svg>`'s paths: `stroke-dasharray: dash`, offset `dash` -> 0 over `--duration-fast` (smooth-out) after `delayMs`. */
-export function strokeDraw(dash: number, delayMs: number): StrokeAnimation | undefined {
+export function strokeDraw(dash: number, delayMs: number, timing: { cycleMs?: number; ease?: readonly [number, number, number, number] } = {}): StrokeAnimation | undefined {
   if (!PATCHED_NATIVE || REDUCED_MOTION) return undefined
-  return { kind: 'stroke', cycleMs: DURATION.fast * 1000, delayMs, dash, ease: [...EASE.smoothOut] }
+  return { kind: 'stroke', cycleMs: timing.cycleMs ?? DURATION.fast * 1000, delayMs, dash, ease: [...(timing.ease ?? EASE.smoothOut)] }
 }
 
 /** `.t-success path`: dasharray 32, drawn after `--duration-quick`. */
 export function successStroke(): StrokeAnimation | undefined {
   return strokeDraw(32, DURATION.quick * 1000)
+}
+
+/**
+ * `.rail-usage-arc` (`stroke-dashoffset` 400 ms `--ease-out`): a ring's arc draws itself in from empty when its `<svg>` mounts or its
+ * `key` changes, over `--duration-slow`. `dash` is the arc's dash length in the SVG's user units (the circumference for a full ring).
+ * Spread on the `<svg source>`: `<svg paintAnimation={arcDraw(dash)} key={drawKey} />`. Value-to-value tweening (old → new) needs
+ * native N2, so callers re-key only when the value moves by 5 points or more (`arcKey`), and a small refresh does not redraw.
+ * `undefined` under Reduce Motion (the arc shows at its value) or with the stock addon.
+ */
+export function arcDraw(dash: number): StrokeAnimation | undefined {
+  return strokeDraw(dash, 0, { cycleMs: DURATION.slow * 1000, ease: EASE.out })
+}
+
+/** The `key` for an arc whose value is `percent` (0..100): constant within a 5-point step, so only a real move redraws it. */
+export function arcKey(percent: number): number {
+  return Math.round(percent / 5)
 }
