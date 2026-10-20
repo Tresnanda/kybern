@@ -10,7 +10,9 @@ const macos = path.join(app, 'Contents/MacOS')
 const addon = path.join(root, 'native/build/gpuix-native.darwin-arm64.node')
 if (!existsSync(addon)) throw Error('Build the patched native addon first (native/README.md)')
 execFileSync('bun', [path.join(root, 'native/build-webview.ts')], { stdio: 'inherit' })
-const binaries = ['kybern', 'kybernd'].map(name => ({ name, source: path.resolve(root, '../../target/debug', name) }))
+// Local packaging takes the debug daemon and CLI; releases point KYBERN_BIN_DIR at `target/release`.
+const binDir = process.env.KYBERN_BIN_DIR ? path.resolve(process.env.KYBERN_BIN_DIR) : path.resolve(root, '../../target/debug')
+const binaries = ['kybern', 'kybernd'].map(name => ({ name, source: path.join(binDir, name) }))
 for (const { source } of binaries) if (!existsSync(source)) throw Error(`Build this checkout's daemon and CLI before packaging: ${source}`)
 const version = /\[workspace\.package\]\s*\nversion\s*=\s*"([^"]+)"/.exec(readFileSync(path.join(root, '../../Cargo.toml'), 'utf8'))?.[1]
 if (!version) throw Error('Missing workspace release version')

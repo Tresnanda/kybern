@@ -7,6 +7,10 @@
 #   ./update.sh            rebuild the pinned version (VERSION)
 #   ./update.sh 0.11.0     move to @gpuix/native@0.11.0 (also bumps the npm
 #                          packages and recreates the JS patch)
+#   KYBERN_NATIVE_CHECKS=0 ./update.sh
+#                          build, align, sign and load-check the addon, but skip
+#                          the typecheck and on-screen native checks (CI
+#                          runners have no usable display)
 #
 # Steps: fetch upstream at the tag → reset packages/native/src → copy
 # patches/*.rs → apply patches/apply_hooks.py (fails loudly, writing
@@ -85,6 +89,11 @@ if [ "$version" != "$pinned" ]; then
     rm -rf "$edit"
   )
   echo "$version" > VERSION
+fi
+
+if [ "${KYBERN_NATIVE_CHECKS:-1}" = "0" ]; then
+  echo "done: GPUIX $version with Kybern patches (on-screen checks skipped)"
+  exit 0
 fi
 
 echo "== checks"

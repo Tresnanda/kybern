@@ -69,6 +69,13 @@ Applications and opens it with no prompt:
 curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-mac-install.sh | sh
 ```
 
+Apple Silicon Macs can also install **Kybern GPUIX**, the native GPUI client,
+as a separate app next to the Tauri one (it updates itself from the same feed):
+
+```sh
+curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-gpuix-mac-install.sh | sh
+```
+
 Or download the DMG from the
 [release page](https://github.com/Tresnanda/kybern/releases/latest) and drag
 kybern into Applications. Kybern is not notarized by Apple, so the first launch
@@ -353,7 +360,7 @@ validate packages and warm caches. Publishing is a separate action.
 
 | Release unit | Version and delivery |
 | --- | --- |
-| Daemon, CLI, and desktop | Share the Rust workspace/Tauri version. `scripts/release.sh X.Y.Z` updates these versions and pushes `vX.Y.Z`. The release and desktop workflows build in parallel and attach their packages to the same GitHub Release. Desktop packages include the daemon. |
+| Daemon, CLI, and desktop | Share the Rust workspace/Tauri version. `scripts/release.sh X.Y.Z` updates these versions and pushes `vX.Y.Z`. The release and desktop workflows build in parallel and attach their packages to the same GitHub Release. Desktop packages include the daemon.The `gpuix` job of `desktop.yml` also builds Kybern GPUIX (`apps/gpuix`, Apple Silicon only) and attaches `kybern-gpuix_<version>_aarch64.app.tar.gz` plus its signature; `latest.json` carries it as `darwin-aarch64-gpuix`. |
 | Android and iOS mobile app | Use `expo.version` in `apps/mobile/app.json`, independent of the desktop release number. EAS builds use the selected commit and profile. Android `versionCode` and iOS `buildNumber` identify individual binaries; EAS manages these remotely. Preview and production builds increment them automatically. |
 | Wire protocol | `PROTOCOL_VERSION` is a compatibility contract, not an app release number. Bump it for breaking wire changes and update both clients and the daemon together. Additive features may still require a newer daemon even when the protocol number is unchanged. |
 
