@@ -33,6 +33,16 @@ const f = await launchFixture(path.join(import.meta.dir, 'app.ts'), {
 const app = f.app
 const shots: Record<string, string> = {}
 async function shot(name: string) { const file = path.join(OUT, `${name}.png`); await app.screenshot({ path: file }); shots[name] = file; return file }
+let windowId = 0
+/** OS capture of the window (what WindowServer shows): instant even mid-motion, where an automation screenshot waits for the
+ *  paused clock's motion to settle. */
+function osShot(name: string) {
+  windowId ||= Number(/window (\d+) onscreen=true/.exec(execFileSync('swift', [path.join(root, 'perf/bench/window-onscreen.swift'), String(f.pid)], { encoding: 'utf8' }))?.[1])
+  const file = path.join(OUT, `${name}.png`)
+  execFileSync('screencapture', ['-x', '-o', '-l', String(windowId), file])
+  shots[name] = file
+  return file
+}
 async function bounds(id: string) {
   for (let i = 0; i < 200; i++) {
     try { for (const { bounds: b } of await app.getByTestId(id).all()) if (b && b.width > 0 && b.height > 0 && b.x >= 0 && b.y >= 0) return b } catch {}
@@ -104,7 +114,7 @@ try {
       await act(); await sleep(120)
       const frames: string[] = []
       let now = 0
-      for (const o of at) { if (o > now) await app.clock.fastForward(o - now); now = o; await sleep(40); frames.push(await shot(`${name}-${String(o).padStart(3, '0')}`)) }
+      for (const o of at) { if (o > now) await app.clock.fastForward(o - now); now = o; await sleep(60); frames.push(osShot(`${name}-${String(o).padStart(3, '0')}`)) }
       await app.clock.resume(); await sleep(300)
       crop(`strip-${name}`, frames, rect, 3)
     }
@@ -113,8 +123,9 @@ try {
     await strip('sidebar-collapse', () => click(`children-${tree.parent}`), sideStrip, [0, 20, 40, 60, 90, 120, 160, 220, 300])
     await strip('sidebar-expand', () => click(`children-${tree.parent}`), sideStrip)
     await strip('sidebar-arrive', async () => { await control('tree-control.json', 'add-child', { parent: tree.parent, title: 'Check the elbow moves to the new child' }) }, { ...sideStrip, height: 240 })
-    const w = await bounds(`worked-${lastTurn}`)
-    const workedStrip = { x: w.x - 16, y: w.y - 8, width: Math.min(w.width + 32, 720), height: 420 }
+    // The transcript keeps its tail in place, so an opening group grows upward: frame its last rows.
+    const surface = await bounds('transcript-surface')
+    const workedStrip = { x: surface.x + 90, y: surface.y + surface.height - 760, width: 600, height: 420 }
     await strip('worked-collapse', () => click(`worked-${lastTurn}`), workedStrip, [0, 20, 40, 60, 90, 120, 160, 220, 300])
     await strip('worked-expand', () => click(`worked-${lastTurn}`), workedStrip)
   }

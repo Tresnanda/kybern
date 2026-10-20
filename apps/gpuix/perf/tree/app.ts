@@ -2,8 +2,17 @@
 //   TREE_SIDEBAR=1   working children under the first thread of every project, two levels deep under the tree parent
 //   TREE_OPEN=work,group,tool   transcript disclosures of those kinds start open
 // A second control server (tree-control.json) adds or settles children while the window is up.
+//   TREE_SOURCE=<commit>   the sidebar, transcript and dock files the tree lane touched, as they were at that commit (A/B)
 import { writeFileSync } from 'node:fs'
 import path from 'node:path'
+if (process.env.TREE_SOURCE) Bun.plugin({ name: 'tree-source', setup(build) {
+  build.onLoad({ filter: /\/src\/(?:Sidebar\.tsx|sidebar\/(?:rows\.tsx|model\.ts)|transcript\/(?:rows|Turn)\.tsx|dock\/Agents\.tsx)$/ }, args => {
+    const root = path.resolve(import.meta.dir, '../../../..')
+    const source = Bun.spawnSync(['git', 'show', `${process.env.TREE_SOURCE}:${path.relative(root, args.path)}`], { cwd: root })
+    if (source.exitCode) throw Error(source.stderr.toString())
+    return { contents: source.stdout.toString(), loader: args.path.endsWith('.ts') ? 'ts' : 'tsx' }
+  })
+} })
 await import('../bench/app.ts')
 const state = await import('../../src/state.ts')
 const nav = await import('../../src/nav/store.ts')
