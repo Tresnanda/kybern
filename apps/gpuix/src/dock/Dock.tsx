@@ -28,6 +28,7 @@ import { TasksPane } from './Tasks.tsx'
 import { DockEmpty } from './parts.tsx'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../kit/Empty.tsx'
 import { pressTransform } from '../motion/press.ts'
+import { leftSource } from '../drag/leave.ts'
 import { beginTabDrag, isDraggingTab, consumeTabDrag, endTabPending, setTabContext, TabSlot, trackTabDrag } from './reorder.tsx'
 import { chooseTab, closeTab, dockGeometry, finishDockDrag, moveDockDrag, setDock, startDockDrag, useDock, useDockDrag, type DockTab } from './store.ts'
 
@@ -186,7 +187,7 @@ function TabStrip({ threadId, width, coordinator, activeTasks, stats }: { thread
         {tabs.map((panel, i) => <TabSlot key={panel.id} id={panel.id}><div style={{ display: 'flex', alignItems: 'center', height: 28, width: widths[i], flexShrink: 0, borderRadius: 8, hover: { backgroundColor: t.buttonSecondaryHover } }}>
           <div ref={(node) => { if (node) tabRefs.current.set(panel.id, node); else tabRefs.current.delete(panel.id) }} testId={`dock-tab-${panel.id}`} role="tab" aria-selected={panel.id === tab} tabIndex={panel.id === tab ? 0 : -1} onClick={() => { if (!consumeTabDrag(panel.id)) select(panel.id) }}
             onMouseDown={(e) => { const node = tabRefs.current.get(panel.id); beginTabDrag(panel.id, e, renderer, node && renderer?.getElementBounds?.(node.id) ? { ...renderer.getElementBounds(node.id)!, width: widths[i]!, height: 28 } : null) }}
-            onMouseMove={trackTabDrag} onMouseUp={endTabPending} onMouseLeave={(e) => { if (!isDraggingTab()) trackTabDrag(e, true); endTabPending() }}
+            onMouseMove={trackTabDrag} onMouseUp={endTabPending} onMouseLeave={(e) => { if (!leftSource(e, renderer)) return; if (!isDraggingTab()) trackTabDrag(e, true); endTabPending() }}
             onKeyDown={(event) => {
               if (event.key === 'left' || event.key === 'right') {
                 const next = tabs[(i + (event.key === 'left' ? tabs.length - 1 : 1)) % tabs.length]!.id

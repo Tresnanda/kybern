@@ -16,9 +16,12 @@ afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }) })
 test.skipIf(!existsSync(cli))('accepts what `tauri signer sign` writes for a release archive', () => {
   dir = mkdtempSync(path.join(tmpdir(), 'kybern-sign-'))
   const key = path.join(dir, 'updater.key'), archive = path.join(dir, 'Kybern GPUIX.app.tar.gz')
-  execFileSync('node', [cli, 'signer', 'generate', '--ci', '-p', '', '-w', key], { stdio: 'pipe' })
+  const env = { ...process.env }
+  // The app's native loader override must not select GPUIX as Tauri's addon.
+  delete env.NAPI_RS_NATIVE_LIBRARY_PATH
+  execFileSync('node', [cli, 'signer', 'generate', '--ci', '-p', '', '-w', key], { stdio: 'pipe', env })
   writeFileSync(archive, 'kybern gpuix release archive')
-  execFileSync('node', [cli, 'signer', 'sign', '-f', key, '-p', '', archive], { stdio: 'pipe' })
+  execFileSync('node', [cli, 'signer', 'sign', '-f', key, '-p', '', archive], { stdio: 'pipe', env })
   // The updater feed carries the .sig file's text as-is; the public key is the base64 of the .pub file.
   const signature = readFileSync(`${archive}.sig`, 'utf8').trim()
   const pubkey = readFileSync(`${key}.pub`, 'utf8').trim()

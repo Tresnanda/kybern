@@ -22,6 +22,8 @@ writeFileSync(path.join(resources, 'version'), version)
 cpSync(path.join(root, 'packaging/Info.plist'), path.join(app, 'Contents/Info.plist'))
 execFileSync('/usr/libexec/PlistBuddy', ['-c', `Set :CFBundleShortVersionString ${version}`, path.join(app, 'Contents/Info.plist')])
 cpSync(path.join(root, '../desktop/src-tauri/icons/icon.icns'), path.join(resources, 'icon.icns'))
+// The Icon Composer icon (`CFBundleIconName`): dark, clear and tinted appearances; `icon.icns` is the light fallback.
+cpSync(path.join(root, '../desktop/src-tauri/icons/Assets.car'), path.join(resources, 'Assets.car'))
 cpSync(addon, path.join(resources, path.basename(addon)))
 cpSync(path.join(root, 'native/build/kybern-webview.dylib'), path.join(resources, 'kybern-webview.dylib'))
 // Mermaid for transcript diagrams (`src/transcript/mermaid.ts` runs it in a hidden WKWebView).

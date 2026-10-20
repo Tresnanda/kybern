@@ -8,7 +8,7 @@ const out=process.env.HR5_OUT??'/Users/mymac/projects/ade/previews/gpuix/handson
 let active:ReturnType<typeof spawn>|undefined
 for(const signal of ['SIGTERM','SIGINT'] as const)process.once(signal,()=>{active?.kill(signal)})
 mkdirSync(out,{recursive:true});mkdirSync(SCRATCH,{recursive:true})
-if(!SCRATCH.includes('/hr5-hover'))throw Error('Set VISUAL_SCRATCH to this lane')
+if(!SCRATCH.includes('/hr5-hover')&&!SCRATCH.includes('/sidebar-fix-'))throw Error('Set VISUAL_SCRATCH to this lane')
 process.env.KYBERN_DATA_DIR=DATA_DIR;process.env.KYBERN_CLIENT_CONFIG_DIR=CLIENT_DIR;process.env.KYBERN_GPUIX_CREDENTIALS_DIR=CREDS_DIR
 execFileSync('clang',['-dynamiclib','-fobjc-arc','-framework','Cocoa','perf/hover/input.m','-o',path.join(SCRATCH,'hover-input.dylib')])
 let state=await startDaemon(true),vitePid:number|undefined

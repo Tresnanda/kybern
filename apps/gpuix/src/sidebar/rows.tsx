@@ -27,6 +27,7 @@ import { getClient, getState, toggleProject as toggleProjectState } from '../sta
 import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
 import type { Theme } from '../theme.ts'
 import { beginProjectDrag, consumeProjectDrag, endProjectPending, trackProjectDrag } from './reorder.tsx'
+import { leftSource } from '../drag/leave.ts'
 import { filterSummary, isFiltering, providerLabel, threadAgents } from './model.ts'
 import { popAnimation, usePopOnChange } from '../kit/Pop.tsx'
 import { pressTransform } from '../motion/press.ts'
@@ -389,7 +390,7 @@ export const ProjectHeader = memo(function ProjectHeader({
           onMouseDown={(e) => beginProjectDrag(project.id, e, renderer, (headerRef.current && renderer?.getElementBounds?.(headerRef.current.id)) || null)}
           onMouseMove={trackProjectDrag}
           onMouseUp={endProjectPending}
-          onMouseLeave={(e) => { trackProjectDrag(e, true); endProjectPending() }}
+          onMouseLeave={(e) => { if (!leftSource(e, renderer)) return; trackProjectDrag(e, true); endProjectPending() }}
           onAuxClick={menu.onAuxClick}
           onClick={() => {
             if (consumeProjectDrag(project.id)) return

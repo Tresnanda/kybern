@@ -5,6 +5,7 @@ import { useSidebarWidth } from '../shell/layout.ts'
 import { beginTaskDrag, trackTaskDrag, endPendingDrag, endTaskDrag, taskDragConsumesClick, regionRef, rowRef, taskPlaceholder, taskShift, useTaskDragOpacity, viewportRef } from './drag.tsx'
 import { ShiftRow } from '../drag/shift.tsx'
 import { PaintTranslate } from '../drag/PaintTranslate.tsx'
+import { leftSource } from '../drag/leave.ts'
 import { TASK_SORT_MOTION } from './motion.ts'
 import { TaskWindow, type TaskWindowEntry } from './TaskWindow.tsx'
 import { isGroupCollapsed, isOpenStatus, latestRun, runOutcome, STATUS_LABEL, type TaskGroup } from '@/state/tasksModel'
@@ -175,7 +176,7 @@ export const TaskRow = memo(function TaskRow({
           aria-label={`${task.key} ${task.title}`}
           onFocus={() => setTasks({ focused: task.id })}
           onMouseEnter={() => setHover(true)}
-          onMouseLeave={(e) => { setHover(false); if (draggable) trackTaskDrag(e, true); endPendingDrag() }}
+          onMouseLeave={(e) => { setHover(false); if (!leftSource(e, renderer)) return; if (draggable) trackTaskDrag(e, true); endPendingDrag() }}
           onMouseDown={(e) => beginTaskDrag(task.id, e, renderer, sequence, draggable)}
           onMouseMove={draggable ? (e) => trackTaskDrag(e) : undefined}
           onMouseUp={endTaskDrag}
@@ -250,7 +251,7 @@ export const TaskRow = memo(function TaskRow({
             onMouseDown={(e) => beginTaskDrag(task.id, e, renderer, sequence, draggable)}
             onMouseMove={draggable ? (e) => trackTaskDrag(e) : undefined}
             onMouseUp={endTaskDrag}
-            onMouseLeave={(e) => { if (draggable) trackTaskDrag(e, true); endPendingDrag() }}
+            onMouseLeave={(e) => { if (!leftSource(e, renderer)) return; if (draggable) trackTaskDrag(e, true); endPendingDrag() }}
             onClick={(e) => {
               if (taskDragConsumesClick()) return
               if (e.modifiers?.cmd || e.modifiers?.ctrl || e.modifiers?.shift) pick(task.id, sequence, !!e.modifiers?.shift)

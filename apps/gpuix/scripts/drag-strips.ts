@@ -69,7 +69,8 @@ async function strip(plan: Plan, dir: string, cancel = false) {
 }
 async function realtime(plan: Plan) {
   const { app, from, to } = plan
-  await app.mouse.move(from); await app.clock.fastForward(32); await app.mouse.down(from)
+  await app.clock.resume()
+  await app.mouse.move(from); await sleep(32); await app.mouse.down(from)
   for (const p of path2(from, to, 90)) { await app.mouse.move(p, { pressedButton: 0 }); await sleep(8) }
   await app.getByTestId(layerFor()).waitFor({ timeoutMs:3000 })
   if (plan.source) {
