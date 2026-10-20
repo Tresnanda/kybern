@@ -82,6 +82,46 @@ describe('bounded transcript Markdown', () => {
     expect(chunks.join('').length).toBe(huge.length + (chunks.length - 3) * '| A | B |\n|---|---|\n'.length)
   })
 
+  // A fence never ends inside a piece: a piece ends outside every fence it opened. Review 2026-10-21: a reply with a
+  // Python block of 20 blank-line-separated `def`s cut at a `def`, so pieces held [1, 0, 1] fences, the middle one
+  // rendered as prose and the last one's closing fence swallowed the text after it.
+  const openAtEnd = (piece: string) => {
+    let fence = ''
+    for (const line of piece.split('\n')) {
+      const m = /^(\s*)(`{3,}|~{3,})(.*)$/.exec(line)
+      if (fence) { if (m && m[2]![0] === fence[0] && m[2]!.length >= fence.length && !m[3]!.trim()) fence = '' }
+      else if (m && !(m[2]![0] === '`' && m[3]!.includes('`'))) fence = m[2]!
+    }
+    return fence
+  }
+  const defs = (n: number, indent = '') => Array.from({ length: n }, (_, i) => [`${indent}def step_${i}(value):`, `${indent}    total = value * ${i}`, `${indent}    return total`, '']).flat()
+  test('a fenced code block with blank-line-separated defs is never cut', () => {
+    const source = ['Here is the module:', '', '```python', ...defs(20), '```', '', 'After the code, plain text.'].join('\n')
+    const chunks = textChunks(source)
+    expect(chunks.join('')).toBe(source)
+    expect(chunks.map(openAtEnd)).toEqual(chunks.map(() => ''))
+    expect(chunks.at(-1)).toContain('After the code')
+    expect(chunks.find(chunk => chunk.includes('def step_19'))).toContain('```python')
+    // Streaming: no prefix cuts inside the fence either.
+    for (let end = 1; end <= source.length; end += 17) expect(textChunks(source.slice(0, end)).slice(0, -1).map(openAtEnd).every(f => !f)).toBe(true)
+  })
+  test('tilde fences, info strings and fences indented in a list are tracked; inline backticks are not fences', () => {
+    const intro = Array.from({ length: 30 }, (_, i) => `Line ${i} of the intro.`)
+    const source = [...intro, '', '- The module:', '', '  ~~~py title="step.py"', ...defs(12).map(l => (l ? l : '')), '  ~~~', '', '```not a fence```', '', ...defs(12), 'Done.'].join('\n')
+    const chunks = textChunks(source)
+    expect(chunks.join('')).toBe(source)
+    expect(chunks.map(openAtEnd)).toEqual(chunks.map(() => ''))
+    expect(chunks.length).toBeGreaterThan(1)
+  })
+  test('only a pathological fence splits inside, closing it and opening it again so both halves stay code', () => {
+    const source = ['Intro', '', '```ts', ...Array.from({ length: 700 }, (_, i) => (i % 3 === 2 ? '' : `const value${i} = ${i}`)), '```', '', 'After'].join('\n')
+    const chunks = textChunks(source)
+    expect(chunks.length).toBeGreaterThan(2)
+    expect(chunks.map(openAtEnd)).toEqual(chunks.map(() => ''))
+    expect(chunks.slice(1, -1).every(chunk => chunk.startsWith('```ts\n') && /\n```\n+$/.test(chunk))).toBe(true)
+    expect(chunks.at(-1)).toContain('After')
+  })
+
   // Thread 01a159cb… (ridenation-web), event 1851999: both rendered as blue links, and clicking said the folder was hidden.
   test('images on their own lines become image parts, with captions and sources as written', () => {
     const reply = 'Before.\n\n![Booking form, desktop](.screenshots/times/trip-1280.png)\n![Booking form, Indonesian, 7 h late](.screenshots/times/trip-390-id-extra-day.png)\n\nAfter.'

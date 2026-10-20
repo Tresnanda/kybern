@@ -132,14 +132,19 @@ const HARD_LINES = TOOL_RESULT_LINE_LIMIT * 8
 const HARD_CHARS = TOOL_RESULT_CHAR_LIMIT * 8
 const TABLE_DELIMITER = /^ {0,3}\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/
 
+/** A fence marker at any indentation (list items nest fences deeper than CommonMark's three spaces): indent, marker, rest. */
+const FENCE = /^(\s*)(`{3,}|~{3,})(.*)$/
+
 /**
  * Markdown prose in bounded pieces that are each a whole run of blocks. A piece ends only before a line that starts a
  * new top-level block after a blank line (column 0: not an indented continuation or code), so a table, list, quote or
  * paragraph is never cut in two; cutting between a table's header and delimiter rows turned the rest of the table into
- * a paragraph of pipes. A piece aims for 32 lines or 8 KB, takes the last boundary in reach, else grows to the next one,
- * and only past 8x that splits inside a block, repeating a table's header and delimiter so the rest stays a table.
- * Every piece but the last ends with its newline; joined (minus repeated headers) they are the source. Prefix-stable:
- * appending text never moves an earlier cut, so streamed pieces keep their identity.
+ * a paragraph of pipes. Inside a fenced code block nothing is a block start (a `def` after a blank line is code), at
+ * any indentation and with either marker. A piece aims for 32 lines or 8 KB, takes the last boundary in reach, else
+ * grows to the next one, and only past 8x that splits inside a block, repeating a table's header and delimiter so the
+ * rest stays a table, or closing a fence and opening it again in the next piece so both halves stay code.
+ * Every piece but the last ends with its newline; joined (minus repeated headers and fences) they are the source.
+ * Prefix-stable: appending text never moves an earlier cut, so streamed pieces keep their identity.
  */
 export function textChunks(text: string): string[] {
   if (text.length < TOOL_RESULT_CHAR_LIMIT && lineCount(text) <= TOOL_RESULT_LINE_LIMIT) return [text]
@@ -147,8 +152,9 @@ export function textChunks(text: string): string[] {
   const out: string[] = []
   let first = 0, carried = '', chars = 0, cut = -1
   let table: { header: string; at: number } | null = null
-  const close = (end: number, carry = '') => {
-    out.push(carried + lines.slice(first, end).join('\n') + '\n')
+  let fence: { marker: string; opener: string; indent: string } | null = null
+  const close = (end: number, carry = '', closing = '') => {
+    out.push(carried + lines.slice(first, end).join('\n') + '\n' + closing)
     carried = carry
     first = end
     cut = -1
@@ -156,15 +162,25 @@ export function textChunks(text: string): string[] {
   }
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!
-    if (table && (!line.trim() || !line.includes('|'))) table = null
-    if (!table && i > 0 && line.includes('-') && lines[i - 1]!.includes('|') && TABLE_DELIMITER.test(line)) table = { header: `${lines[i - 1]}\n${line}\n`, at: i }
-    if (i > first && !lines[i - 1]!.trim() && /^\S/.test(line)) cut = i
+    if (!fence) {
+      if (table && (!line.trim() || !line.includes('|'))) table = null
+      if (!table && i > 0 && line.includes('-') && lines[i - 1]!.includes('|') && TABLE_DELIMITER.test(line)) table = { header: `${lines[i - 1]}\n${line}\n`, at: i }
+      if (i > first && !lines[i - 1]!.trim() && /^\S/.test(line)) cut = i
+    }
     const size = i - first
     if ((size >= TOOL_RESULT_LINE_LIMIT || chars >= TOOL_RESULT_CHAR_LIMIT) && cut > first) {
       close(cut)
       for (let j = first; j < i; j++) chars += lines[j]!.length + 1
     } else if (size >= HARD_LINES || chars >= HARD_CHARS) {
-      close(i, table && i > table.at ? table.header : '')
+      if (fence) close(i, `${fence.opener}\n`, `${fence.indent}${fence.marker}\n`)
+      else close(i, table && i > table.at ? table.header : '')
+    }
+    const marker = FENCE.exec(line)
+    if (fence) {
+      if (marker && marker[2]![0] === fence.marker[0] && marker[2]!.length >= fence.marker.length && !marker[3]!.trim()) fence = null
+    } else if (marker && !(marker[2]![0] === '`' && marker[3]!.includes('`'))) {
+      fence = { marker: marker[2]!, opener: line, indent: marker[1]! }
+      table = null
     }
     chars += line.length + 1
   }
