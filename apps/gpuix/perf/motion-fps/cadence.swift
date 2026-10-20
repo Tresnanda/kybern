@@ -10,6 +10,8 @@ import AppKit
 import CoreMedia
 import ScreenCaptureKit
 
+// A CLI process needs its WindowServer connection before ScreenCaptureKit (CGS_REQUIRE_INIT).
+_ = NSApplication.shared
 let args = CommandLine.arguments
 let pid = Int32(args[1])!, seconds = Double(args[2])!
 let crop = CGRect(x: Double(args[3])!, y: Double(args[4])!, width: Double(args[5])!, height: Double(args[6])!)
@@ -17,7 +19,7 @@ let pngs = args.count > 7 ? URL(fileURLWithPath: args[7]) : nil
 if let pngs { try FileManager.default.createDirectory(at: pngs, withIntermediateDirectories: true) }
 
 final class Sink: NSObject, SCStreamOutput {
-  var frames = 0, changes: [Double] = [], last: Int?, saved = 0, scale = 2.0
+  var frames = 0, changes: [Double] = [], last: Int?, saved = 0, scale = 2.0, whole = 0, lastWhole: UInt64?
   func stream(_ stream: SCStream, didOutputSampleBuffer buffer: CMSampleBuffer, of type: SCStreamOutputType) {
     guard type == .screen, let image = buffer.imageBuffer,
           let info = (CMSampleBufferGetSampleAttachmentsArray(buffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]])?.first,
@@ -30,6 +32,10 @@ final class Sink: NSObject, SCStreamOutput {
     let x1 = min(width, Int(crop.maxX * scale)), y1 = min(height, Int(crop.maxY * scale))
     var hash = 1469598103934665603 as UInt64
     for y in y0..<y1 { for x in (x0 * 4)..<(x1 * 4) { hash = (hash ^ UInt64(base[y * row + x])) &* 1099511628211 } }
+    // Whole-window changes (sparse sample), to tell a static crop from a stale stream.
+    var full = 1469598103934665603 as UInt64
+    for y in stride(from: 0, to: height, by: 7) { for x in stride(from: 0, to: width * 4, by: 28) { full = (full ^ UInt64(base[y * row + x])) &* 1099511628211 } }
+    if full != lastWhole { whole += 1; lastWhole = full }
     let key = Int(truncatingIfNeeded: hash)
     let t = CMSampleBufferGetPresentationTimeStamp(buffer).seconds * 1000
     if key != last { changes.append(t); last = key
@@ -49,11 +55,15 @@ Task {
   do {
     let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
     guard let window = content.windows.filter({ $0.owningApplication?.processID == pid && $0.frame.width > 200 }).max(by: { $0.frame.width < $1.frame.width }) else { print("error: no window"); exit(2) }
+    // A display stream filtered to this window reads WindowServer's composited output (CA layers included); a
+    // desktop-independent window stream returned stale content for the hidden test display.
+    guard let display = content.displays.first(where: { $0.frame.contains(CGPoint(x: window.frame.midX, y: window.frame.midY)) }) else { print("error: no display"); exit(2) }
     let config = SCStreamConfiguration()
+    config.sourceRect = CGRect(x: window.frame.minX - display.frame.minX, y: window.frame.minY - display.frame.minY, width: window.frame.width, height: window.frame.height)
     config.width = Int(window.frame.width * 2); config.height = Int(window.frame.height * 2)
     config.minimumFrameInterval = CMTime(value: 1, timescale: 60)
     config.queueDepth = 8; config.showsCursor = false
-    let stream = SCStream(filter: SCContentFilter(desktopIndependentWindow: window), configuration: config, delegate: nil)
+    let stream = SCStream(filter: SCContentFilter(display: display, including: [window]), configuration: config, delegate: nil)
     try stream.addStreamOutput(sink, type: .screen, sampleHandlerQueue: DispatchQueue(label: "cadence"))
     try await stream.startCapture()
     try await Task.sleep(nanoseconds: UInt64(seconds * 1e9))
@@ -65,5 +75,5 @@ done.wait()
 let d = zip(sink.changes.dropFirst(), sink.changes).map { $0 - $1 }.sorted()
 func p(_ q: Double) -> Double { d.isEmpty ? 0 : d[min(d.count - 1, Int(Double(d.count) * q))] }
 let span = (sink.changes.last ?? 0) - (sink.changes.first ?? 0)
-print(String(format: "{\"frames\":%d,\"changes\":%d,\"changesPerSecond\":%.2f,\"p50\":%.2f,\"p95\":%.2f,\"p99\":%.2f,\"over25\":%d,\"over50\":%d}",
-  sink.frames, sink.changes.count, span > 0 ? Double(sink.changes.count - 1) / span * 1000 : 0, p(0.5), p(0.95), p(0.99), d.filter { $0 > 16.7 * 1.5 }.count, d.filter { $0 > 33.4 * 1.5 }.count))
+print(String(format: "{\"frames\":%d,\"wholeChanges\":%d,\"changes\":%d,\"changesPerSecond\":%.2f,\"p50\":%.2f,\"p95\":%.2f,\"p99\":%.2f,\"over25\":%d,\"over50\":%d}",
+  sink.frames, sink.whole, sink.changes.count, span > 0 ? Double(sink.changes.count - 1) / span * 1000 : 0, p(0.5), p(0.95), p(0.99), d.filter { $0 > 16.7 * 1.5 }.count, d.filter { $0 > 33.4 * 1.5 }.count))

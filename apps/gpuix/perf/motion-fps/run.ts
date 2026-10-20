@@ -59,7 +59,8 @@ async function until<T>(check: () => Promise<T | false | null | undefined>, mess
   for (;;) { const v = await check(); if (v) return v; if (performance.now() > end) throw Error(message); await delay(30) }
 }
 async function bounds(app: Launch['app'], id: string) {
-  return until(async () => { try { const b = await app.getByTestId(id).bounds(); return b.width > 0 && b.height > 0 ? b : false } catch { return false } }, `No bounds: ${id}`)
+  // The first match that is actually painted (lists keep hidden or offscreen copies).
+  return until(async () => { try { for (const { bounds: b } of await app.getByTestId(id).all()) { if (b && b.width > 0 && b.height > 0 && b.x >= 0 && b.y >= 0) return b } return false } catch { return false } }, `No bounds: ${id}`)
 }
 async function click(app: Launch['app'], id: string) { const b = await bounds(app, id); await app.mouse.click({ x: b.x + b.width / 2, y: b.y + b.height / 2 }) }
 
@@ -192,15 +193,42 @@ for (const name of scenarios) for (let repeat = 1; repeat <= repeats; repeat++) 
       const shot = Bun.spawnSync(['screencapture', '-x', '-o', '-l', String(id), file])
       row.shot = shot.exitCode === 0 ? file : shot.stderr.toString()
     }
+    // Evidence: MOTION_STRIP=N back-to-back OS window captures of the animated element (each ~0.1 s apart, so a
+    // strip shows the curve's progression, not the frame rate), assembled 4x by strip.swift with capture times.
+    if (Number(process.env.MOTION_STRIP ?? 0) > 0 && scene.cadence) {
+      const id = Number(/window (\d+) onscreen=true/.exec(Bun.spawnSync(['swift', path.join(root, 'perf/bench/window-onscreen.swift'), String(f.pid)]).stdout.toString())?.[1])
+      const b = await bounds(app, scene.cadence), dir = path.join(OUT, 'strips', `${label}-${name}-os`); mkdirSync(dir, { recursive: true })
+      const files: string[] = [], times: number[] = [], t0 = performance.now()
+      for (let n = 0; n < Number(process.env.MOTION_STRIP); n++) { const file = path.join(dir, `${String(n).padStart(2, '0')}.png`); Bun.spawnSync(['screencapture', '-x', '-o', '-l', String(id), file]); files.push(file); times.push(Math.round(performance.now() - t0)) }
+      const pad = 4, out = path.join(OUT, 'strips', `${label}-${name}.png`)
+      Bun.spawnSync(['swift', path.join(import.meta.dir, 'strip.swift'), out, String(b.x - pad), String(b.y - pad), String(Math.min(b.width, 200) + 2 * pad), String(b.height + 2 * pad), ...files])
+      row.strip = { file: out, ms: times }
+    }
+    // Diagnostic: two OS captures of the animated element, 250 ms apart.
+    if (process.env.MOTION_SHOT2 === '1' && scene.cadence) {
+      const id = Number(/window (\d+) onscreen=true/.exec(Bun.spawnSync(['swift', path.join(root, 'perf/bench/window-onscreen.swift'), String(f.pid)]).stdout.toString())?.[1])
+      const b = await bounds(app, scene.cadence), dir = path.join(OUT, 'shots', `${label}-${name}-pair`); mkdirSync(dir, { recursive: true })
+      for (const n of [0, 1]) {
+        Bun.spawnSync(['screencapture', '-x', '-o', '-l', String(id), path.join(dir, `${n}.png`)])
+        Bun.spawnSync(['sips', '-c', String(Math.round(b.height * 2 + 40)), String(Math.round(b.width * 2 + 40)), '--cropOffset', String(Math.round(b.y * 2 - 20)), String(Math.round(b.x * 2 - 20)), path.join(dir, `${n}.png`), '--out', path.join(dir, `crop-${n}.png`)])
+        await delay(250)
+      }
+    }
     // Displayed cadence of the animated element, as composited (perf/motion-fps/cadence.swift).
     const target = scene.cadence
     if (target && process.env.MOTION_CADENCE !== '0') {
       const b = await bounds(app, target)
-      const strip = path.join(OUT, 'strips', `${label}-${name}`)
+      const strip = path.join(OUT, 'strips', `${label}-${name}`), pad = Number(process.env.MOTION_CADENCE_PAD ?? 2)
       const probe = path.join(DATA, 'motion-cadence')
       if (!existsSync(probe)) Bun.spawnSync(['swiftc', '-O', '-o', probe, path.join(import.meta.dir, 'cadence.swift')])
-      const out = Bun.spawnSync([probe, String(f.pid), '3', String(b.x - 2), String(b.y - 2), String(b.width + 4), String(b.height + 4), strip])
+      const out = Bun.spawnSync([probe, String(f.pid), '3', String(b.x - pad), String(b.y - pad), String(b.width + 2 * pad), String(b.height + 2 * pad), strip])
       try { row.cadence = JSON.parse(out.stdout.toString().trim().split('\n').at(-1)!) } catch { row.cadence = { error: out.stdout.toString() + out.stderr.toString() } }
+      // Diagnostic: extra crops "x,y,w,h;..." in window points.
+      for (const extra of (process.env.MOTION_CADENCE_EXTRA ?? '').split(';').filter(Boolean)) {
+        const [x, y, w, h] = extra.split(',')
+        const more = Bun.spawnSync([probe, String(f.pid), '2', x!, y!, w!, h!, `${strip}-${x}-${y}`])
+        console.log(`[cadence ${extra}]`, more.stdout.toString().trim().split('\n').at(-1))
+      }
     }
     requireScreen(); requireWindowOnscreen(f.pid)
     const markers1 = buildMarkers(), foreign = [...foreign0, ...foreignApps(f.pid)]

@@ -99,7 +99,7 @@ function LegacyRunningGlyph({ source, color }: { source: string; color: string }
   const loop = useLoopVisibility(!REDUCED_MOTION)
   const step = useLoaderStep(loop.visible)
   const opacity = REDUCED_MOTION ? 1 : .55 + .45 * (1 - Math.cos(step * Math.PI / 4)) / 2
-  return <div ref={loop.ref} {...ISLAND} style={{ width: 14, height: 14, flexShrink: 0, pointerEvents: 'none' }}><svg source={source} style={{ width: 14, height: 14, color, opacity, pointerEvents: 'none' }} /></div>
+  return <div ref={loop.ref} testId="task-running-glyph" {...ISLAND} style={{ width: 14, height: 14, flexShrink: 0, pointerEvents: 'none' }}><svg source={source} style={{ width: 14, height: 14, color, opacity, pointerEvents: 'none' }} /></div>
 }
 function RunningPaint({ ring, color, opacity }: { ring: string; color: string; opacity: number }) {
   const loop = useLoopRunning(!REDUCED_MOTION)
