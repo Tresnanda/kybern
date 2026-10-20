@@ -1587,6 +1587,31 @@ The sidebar uses one hover owner around each row and its revealed controls.
 It no longer counts nested child enters/leaves, whose balance changes when a
 control unmounts. Native ancestor-preserving hit testing supplies that ownership.
 
+`hover_owner_gpui.py` and `hover_owner_hooks.py` keep that ownership across
+cached-view and ordinary virtual-row paints. Those paths have different GPUI
+global element IDs and can own different hover-state cells for the same retained
+host. Every div/text host hitbox carries its renderer entity and retained host ID.
+A retired listener sends no leave while its replacement hitbox is hovered;
+relocated, occluded and removed owners still leave. This prevents an old path's
+deferred leave from overwriting the replacement path's enter. It adds no timer
+or frame source and leaves GPUI's focus, capture and ordinary hit-test identities
+unchanged. Hover payloads also include the current pointer position, so pending
+drag sources can distinguish leaving their bounds from a hover-state change.
+
+`perf/hover/sidebar-check.ts` probes eight scratch projects with passive React
+state snapshots before image capture, parked project/thread/coordinator hover,
+stationary presses, small pointer jitter and intentional project drags. Its
+test-only entry instruments the real sidebar without changing native input.
+`sidebar-build.py` rebuilds under the whole-run native marker and isolates the
+updater's data, port and captures. It uses native window-image capture when
+WindowServer capture is unavailable; this does not establish OS presentation
+latency. The focused passive snapshots guard against capture repairing hover.
+`snapshot_strokes_gpui.py` and `snapshot_strokes_hooks.py` sample retained stroke
+tiles after an explicit snapshot redraw, before image rasterization. This keeps
+native captures faithful to paused animation clocks; normal presentation still
+uses its existing callback. The unchanged stroke checker verifies delay, partial
+ink, monotonic progress, the completed glyph and idle frames with this path.
+
 The desktop's `styles/kybern.css:26–35` is the selection policy: chrome inherits
 `userSelect: 'none'`; prose, Markdown and source bodies opt in to `'text'`.
 `Label` also defaults to none for anchored UI. Native inputs and the rich editor
