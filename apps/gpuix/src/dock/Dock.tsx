@@ -1,9 +1,15 @@
 // Native right dock. Only the chosen pane is mounted; the shell keeps it through
-// the 220 ms exit, just like App's thread panel. Each painted edge owns its radii.
+// its exit, just like App's thread panel. Each painted edge owns its radii.
+//
+// Motion (P3): the dock opens and closes on a 300 ms critically damped spring (the desktop's 420/42/0.7 spring, see `dockSlide`) while its content
+// fades (250 ms in, 150 ms out; paint-only); a pane switched to by pointer enters as `t-pane` (opacity, 4 px, scale 0.995;
+// the terminal fades only, the preview's native web view is not moved); a tab added from the + menu grows in (opacity and
+// scale 0.97, 150 ms) and a closed one leaves (120 ms) before the strip closes the gap. Shortcut toggles and keyboard tab
+// changes are instant.
 import { popAnimation } from '../kit/Pop.tsx'
 import { motion, useGpuix, type PublicInstance } from '@gpuix/react'
 import { useSidebarWidth, useWindowWidth } from '../shell/layout.ts'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { DOCK_ICONS } from './icons.ts'
 import { Icon } from '../icons.tsx'
@@ -28,11 +34,25 @@ import { TasksPane } from './Tasks.tsx'
 import { DockEmpty } from './parts.tsx'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../kit/Empty.tsx'
 import { pressTransform } from '../motion/press.ts'
+import { DURATION, EASE, enterTransform } from '../motion/kit.tsx'
+import { nextPresenceGeneration, presenceTransform } from '../motion/Presence.tsx'
+import { useLeavingList } from '../composer/motion.tsx'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { leftSource } from '../drag/leave.ts'
 import { beginTabDrag, isDraggingTab, consumeTabDrag, endTabPending, setTabContext, TabSlot, trackTabDrag } from './reorder.tsx'
 import { chooseTab, closeTab, dockGeometry, finishDockDrag, moveDockDrag, setDock, startDockDrag, useDock, useDockDrag, type DockTab } from './store.ts'
 
-const SLIDE = { duration: 0.22, ease: EASE_OUT }
+/** The tab pill (`t-tabs-pill`): 250 ms smooth-out. */
+const SLIDE = { duration: DURATION.fast, ease: [...EASE.smoothOut] as [number, number, number, number] }
+/**
+ * The dock's width (`App.tsx`: stiffness 420, damping 42, mass 0.7, an overdamped spring that is visually done in ~300 ms). The width
+ * is a layout tween (every frame re-lays out the window), and the physical spring's tail takes ~850 ms to fall under half a pixel,
+ * all of it per-frame relayout nobody can see (measured: 45 island renders over 450 ms against 19 for the old 220 ms tween). The
+ * critically damped duration spring has the same shape and ends at 300 ms.
+ */
+const dockSlide = () => ({ type: 'spring' as const, duration: 0.3, bounce: 0 })
+/** The spring ends at 300 ms; the guard that releases the content after a close waits a little longer. */
+const DOCK_EXIT_GUARD_MS = 420
 const PANELS: { id: DockTab; label: string; icon: string; width: number }[] = [
   { id: 'agents', label: 'Agents', icon: N.users, width: 100 },
   { id: 'project', label: 'Project', icon: N.note, width: 104 },
@@ -65,7 +85,7 @@ export function Dock({ sidebarOpen }: { sidebarOpen: boolean }) {
     if (open || !mounted || still) return
     // GPUIX 0.10 can omit motionComplete when the final frame has zero width
     // inside a cached parent. A one-shot exit guard also releases the content.
-    const timer = setTimeout(() => setMounted(false), 260)
+    const timer = setTimeout(() => setMounted(false), DOCK_EXIT_GUARD_MS)
     return () => clearTimeout(timer)
   }, [open, mounted, still, threadId])
   if (!mounted && !open) return null
@@ -82,10 +102,15 @@ function DockShell({ threadId, open, mounted, setMounted, sidebarOpen, still, ba
   const dock = useDock(threadId)
   const geometry = dockGeometry(windowWidth, sidebarOpen ? sidebarWidth : 0, dock.width)
   const thread = useApp((s) => s.open.thread?.id === threadId ? s.open.thread : s.threads.find((th) => th.id === threadId))
-  return <motion.div {...{ testId: 'right-dock' }} initial={still ? false : { width: 0 }} animate={{ width: open ? geometry.width : 0 }} transition={still ? { duration: 0 } : SLIDE}
+  // The content fades with the width: in over 250 ms, out over 150 ms (`generation` follows `open`, so a reversal retargets).
+  const phase = useRef({ open, generation: nextPresenceGeneration(), mounted: 0 })
+  if (phase.current.mounted === 0) phase.current.mounted = phase.current.generation
+  if (phase.current.open !== open) phase.current = { ...phase.current, open, generation: nextPresenceGeneration() }
+  const fade = still ? undefined : presenceTransform({ show: open, enter: { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.fast, ease: [...EASE.smoothOut] } }, exit: { to: { opacity: 0 }, duration: DURATION.quick }, generation: phase.current.generation, fresh: phase.current.generation === phase.current.mounted })
+  return <motion.div {...{ testId: 'right-dock' }} initial={still ? false : { width: 0 }} animate={{ width: open ? geometry.width : 0 }} transition={still ? { duration: 0 } : dockSlide()}
     onMotionComplete={() => setMounted(open)}
     style={{ display: 'flex', flexDirection: 'column', flexShrink: 0, height: '100%', minHeight: 0, overflow: 'hidden', position: geometry.overlay ? 'absolute' : 'relative', ...(geometry.overlay ? { top: 0, right: 0, bottom: 0, boxShadow: { offsetX: -8, offsetY: 0, blurRadius: 24, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.16)' } } : {}), borderTopRightRadius: 12, borderBottomRightRadius: 12 }}>
-    <div testId={geometry.overlay ? 'dock-overlay' : 'dock-inline'} style={{ display: 'flex', flexDirection: 'column', width: geometry.width, height: '100%', flexShrink: 0, minHeight: 0, borderLeftWidth: 0.6, borderColor: t.borderLight, backgroundColor: background, borderTopRightRadius: 12, borderBottomRightRadius: 12 }}>
+    <div testId={geometry.overlay ? 'dock-overlay' : 'dock-inline'} paintTransform={fade} style={{ display: 'flex', flexDirection: 'column', width: geometry.width, height: '100%', flexShrink: 0, minHeight: 0, borderLeftWidth: 0.6, borderColor: t.borderLight, backgroundColor: background, borderTopRightRadius: 12, borderBottomRightRadius: 12 }}>
       {mounted && <DockContent key={threadId ?? 'home'} threadId={threadId} thread={thread ?? null} width={geometry.width} />}
     </div>
     <div testId="dock-resize" role="separator" aria-label="Resize right sidebar" tabIndex={0}
@@ -108,12 +133,12 @@ function DockContent({ threadId, thread, width }: { threadId: string | null; thr
  * `Empty` (icon card, title, description) plus the `+` menu's panels as quick actions, from the same `PANELS` list and `chooseTab`,
  * so they stay in step with the menu. A deliberate divergence from the desktop.
  */
-function NoPanels({ threadId, coordinator }: { threadId: string; coordinator: boolean }) {
+function NoPanels({ threadId, coordinator, instant }: { threadId: string; coordinator: boolean; instant: boolean }) {
   const t = useTheme()
   const panels = PANELS.filter((panel) => panel.id !== 'project' || coordinator)
   return (
     <Empty testId="dock-empty" style={{ padding: 24 }}>
-      <EmptyHeader>
+      <EmptyHeader play={!instant}>
         <EmptyMedia variant="icon" icon={N.panelRight} />
         <EmptyTitle>No panels open</EmptyTitle>
         <EmptyDescription>Panels show a thread's activity, changes, files and more.</EmptyDescription>
@@ -138,11 +163,19 @@ function ThreadDock({ thread, width }: { thread: Thread; width: number }) {
   const [stats, setStats] = useState<[number, number]>([0, 0])
   const onStats = useCallback((adds: number, dels: number) => setStats((previous) => previous[0] === adds && previous[1] === dels ? previous : [adds, dels]), [])
   const tab = dock.tab === 'project' && !thread.coordinator_project_id ? dock.tabs.find((id) => id !== 'project') ?? null : dock.tab
+  const keyboard = useNav((s) => s.keyboardNav)
+  // `t-pane`: only a pane switched to after the dock was up, by pointer, enters (the first pane, keyboard and instant changes do not).
+  const seen = useRef<DockTab | null | undefined>(undefined)
+  const entering = useRef<DockTab | null>(null)
+  if (seen.current !== tab) {
+    entering.current = seen.current !== undefined && !dock.instant && !keyboard ? tab : null
+    seen.current = tab
+  }
   return <>
     <TabStrip threadId={thread.id} width={width} coordinator={!!thread.coordinator_project_id} activeTasks={tasks.tasks.filter(isActiveTask).length} stats={stats} />
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', borderBottomRightRadius: 12 }}>
-      {tab === null ? <NoPanels threadId={thread.id} coordinator={!!thread.coordinator_project_id} />
-        : tab === 'agents' ? <Agents thread={thread} />
+      {tab === null ? <NoPanels threadId={thread.id} coordinator={!!thread.coordinator_project_id} instant={dock.instant || keyboard} /> : <PaneEnter key={tab} tab={tab} play={entering.current === tab}>
+        {tab === 'agents' ? <Agents thread={thread} />
         : tab === 'preview' ? <PreviewPane threadId={thread.id} />
         : tab === 'terminal' ? <TerminalPane threadId={thread.id} width={width} />
         : tab === 'review' ? <ReviewPane thread={thread} width={width} />
@@ -153,8 +186,37 @@ function ThreadDock({ thread, width }: { thread: Thread; width: number }) {
         : tab === 'changes' ? <DiffPane thread={thread} onStats={onStats} />
         : tab === 'explorer' ? <Explorer key={thread.project_id} projectId={thread.project_id} width={width} />
         : tab === 'project' && thread.coordinator_project_id ? <ProjectPane thread={thread} /> : null}
+      </PaneEnter>}
     </div>
   </>
+}
+
+/**
+ * The pane of the chosen tab. `play` (decided once per tab by the caller) enters it as `t-pane`: opacity 0 → 1, 4 px low and
+ * scale 0.995 → 1, 250 ms smooth-out, paint-only. The terminal only fades (its text must not shift), and the preview never
+ * moves: its page is a native web view that a paint transform cannot carry. The outgoing pane unmounts at once (GPUIX releases it).
+ */
+function PaneEnter({ tab, play, children }: { tab: DockTab; play: boolean; children: React.ReactNode }) {
+  const transform = !play || !PATCHED_NATIVE || tab === 'preview' ? undefined
+    : tab === 'terminal' ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease: [...EASE.out] as [number, number, number, number] } }
+    : enterTransform('pane')
+  return <div paintTransform={transform} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0, overflow: 'hidden' }}>{children}</div>
+}
+
+/** A tab that was just added: it grows in from opacity 0 and scale 0.97 over 150 ms (`--ease-out`); the others render plainly. */
+function TabEnter({ fresh, children }: { fresh: boolean; children: React.ReactNode }) {
+  const enter = fresh && PATCHED_NATIVE
+    ? { initial: REDUCED_MOTION ? { opacity: 0 } : { opacity: 0, scale: 0.97 }, animate: REDUCED_MOTION ? { opacity: 1 } : { opacity: 1, scale: 1 }, transition: { duration: DURATION.quick, ease: [...EASE.out] as [number, number, number, number] } }
+    : undefined
+  return <div paintTransform={enter} style={{ display: 'flex', alignItems: 'center', height: 28, flexShrink: 0 }}>{children}</div>
+}
+
+let tabLeaveGeneration = 8_000_000
+/** A closed tab: it fades and shrinks to 0.97 over 120 ms (`--ease-out`), non-interactive, then `onDone` unmounts it and the strip closes the gap. */
+function TabLeave({ onDone, children }: { onDone: () => void; children: React.ReactNode }) {
+  const generation = useMemo(() => ++tabLeaveGeneration, [])
+  return <div paintTransform={{ initial: { opacity: 1, scale: 1 }, animate: REDUCED_MOTION ? { opacity: 0 } : { opacity: 0, scale: 0.97 }, transition: { duration: 0.12, ease: [...EASE.out] as [number, number, number, number] }, generation }}
+    onMotionComplete={(event) => { if (event.motionGeneration === generation) onDone() }} style={{ display: 'flex', alignItems: 'center', height: 28, flexShrink: 0, pointerEvents: 'none' }}>{children}</div>
 }
 
 function TabStrip({ threadId, width, coordinator, activeTasks, stats }: { threadId: string | null; width: number; coordinator: boolean; activeTasks: number; stats: [number, number] }) {
@@ -166,13 +228,17 @@ function TabStrip({ threadId, width, coordinator, activeTasks, stats }: { thread
   const tabRefs = useRef(new Map<DockTab, PublicInstance>())
   const rowRef = useRef<PublicInstance | null>(null)
   const panels = PANELS.filter((panel) => panel.id !== 'project' || coordinator)
-  const tabs = dock.tabs.flatMap((id) => { const panel = panels.find((p) => p.id === id); return panel ? [panel] : [] })
-  const tab = dock.tab === 'project' && !coordinator ? tabs[0]?.id ?? null : dock.tab
+  const liveTabs = useMemo(() => dock.tabs.flatMap((id) => { const panel = PANELS.filter((p) => p.id !== 'project' || coordinator).find((p) => p.id === id); return panel ? [panel] : [] }), [dock.tabs, coordinator])
+  // A closed tab stays in the strip for its 120 ms exit (pointer closes only), so the gap closes after it has faded.
+  const [entries, gone] = useLeavingList(liveTabs, () => !keyboard && !dock.instant)
+  const tabs = entries.map((entry) => entry.item)
+  const tab = dock.tab === 'project' && !coordinator ? liveTabs[0]?.id ?? null : dock.tab
   const widths = tabs.map((panel) => panel.width + (panel.id === 'activity' && activeTasks ? 18 : panel.id === 'changes' && stats[0] + stats[1] ? 65 : 0))
   const index = tabs.findIndex((p) => p.id === tab)
   const left = widths.slice(0, Math.max(0, index)).reduce((n, value) => n + value + 4, 0)
   const selectedWidth = widths[index] ?? 0
-  setTabContext({ threadId, ids: tabs.map((p) => p.id), widths, icons: tabs.map((p) => p.icon), labels: tabs.map((p) => p.label), scroll: scroll.current, row: rowRef.current })
+  const liveWidths = widths.filter((_, i) => !entries[i]!.leaving)
+  setTabContext({ threadId, ids: liveTabs.map((p) => p.id), widths: liveWidths, icons: liveTabs.map((p) => p.icon), labels: liveTabs.map((p) => p.label), scroll: scroll.current, row: rowRef.current })
   const select = (id: DockTab, instant = false) => { setDock(threadId, { instant }); chooseTab(threadId, id) }
   useEffect(() => {
     // One post-commit scroll so a newly added chip is brought into view.
@@ -184,13 +250,14 @@ function TabStrip({ threadId, width, coordinator, activeTasks, stats }: { thread
       <div ref={rowRef} style={{ display: 'flex', alignItems: 'center', position: 'relative', gap: 4, height: 28, flexShrink: 0 }}>
         {tab && <motion.div initial={false} animate={{ left, width: selectedWidth }} transition={REDUCED_MOTION || keyboard || dock.instant ? { duration: 0 } : SLIDE}
           style={{ position: 'absolute', top: 0, height: 28, borderRadius: 8, backgroundColor: t.buttonSecondary, pointerEvents: 'none' }} />}
-        {tabs.map((panel, i) => <TabSlot key={panel.id} id={panel.id}><div style={{ display: 'flex', alignItems: 'center', height: 28, width: widths[i], flexShrink: 0, borderRadius: 8, hover: { backgroundColor: t.buttonSecondaryHover } }}>
+        {entries.map((entry, i) => { const panel = entry.item; const chip = (<div style={{ display: 'flex', alignItems: 'center', height: 28, width: widths[i], flexShrink: 0, borderRadius: 8, hover: { backgroundColor: t.buttonSecondaryHover } }}>
           <div ref={(node) => { if (node) tabRefs.current.set(panel.id, node); else tabRefs.current.delete(panel.id) }} testId={`dock-tab-${panel.id}`} role="tab" aria-selected={panel.id === tab} tabIndex={panel.id === tab ? 0 : -1} onClick={() => { if (!consumeTabDrag(panel.id)) select(panel.id) }}
             onMouseDown={(e) => { const node = tabRefs.current.get(panel.id); beginTabDrag(panel.id, e, renderer, node && renderer?.getElementBounds?.(node.id) ? { ...renderer.getElementBounds(node.id)!, width: widths[i]!, height: 28 } : null) }}
             onMouseMove={trackTabDrag} onMouseUp={endTabPending} onMouseLeave={(e) => { if (!leftSource(e, renderer)) return; if (!isDraggingTab()) trackTabDrag(e, true); endTabPending() }}
             onKeyDown={(event) => {
               if (event.key === 'left' || event.key === 'right') {
-                const next = tabs[(i + (event.key === 'left' ? tabs.length - 1 : 1)) % tabs.length]!.id
+                const at = liveTabs.findIndex((p) => p.id === panel.id)
+                const next = liveTabs[(at + (event.key === 'left' ? liveTabs.length - 1 : 1)) % liveTabs.length]!.id
                 select(next, true)
                 const node = tabRefs.current.get(next)
                 if (node) renderer?.focusElement?.(node.id)
@@ -205,7 +272,9 @@ function TabStrip({ threadId, width, coordinator, activeTasks, stats }: { thread
             {panel.id === 'changes' && stats[0] + stats[1] > 0 && <div key={`${stats[0]}:${stats[1]}`} style={{ display: 'flex', gap: 3 }}><Label color={t.green} size={10} paintAnimation={popAnimation()}>{`+${stats[0]}`}</Label><Label color={t.red} size={10} paintAnimation={popAnimation()}>{`−${stats[1]}`}</Label></div>}
           </div>
           <IconButton press icon={N.x} glyph={12} size={24} label={`Close ${panel.label} panel`} onClick={() => closeTab(threadId, panel.id)} testId={`dock-tab-close-${panel.id}`} />
-        </div></TabSlot>)}
+        </div>)
+          return entry.leaving ? <TabLeave key={panel.id} onDone={() => gone(panel.id)}>{chip}</TabLeave> : <TabEnter key={panel.id} fresh={entry.fresh}><TabSlot id={panel.id}>{chip}</TabSlot></TabEnter>
+        })}
       </div>
     </div>
     <Menu align="end" minWidth={176} testId="dock-add" trigger={() => <IconButton icon={N.plus} size={28} label="Add panel" />}>

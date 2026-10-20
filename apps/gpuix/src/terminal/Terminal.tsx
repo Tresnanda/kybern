@@ -12,6 +12,9 @@ import { Icon } from '../icons.tsx'
 import { DOCK_ICONS } from '../dock/icons.ts'
 import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { Action, ErrorLine } from '../dock/parts.tsx'
+import { DURATION, EASE, revealTransform } from '../motion/kit.tsx'
+import { fadeTo } from '../shell/motion.ts'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { VT, cellWidth, type Line, type Pen } from './vt.ts'
 import { glyphRects, isCustomGlyph } from './glyphs.ts'
 import { allRange, lineRange, selectedText, selectionByIndex, selectionColumns, wordRange, type TerminalSelection } from './selection.ts'
@@ -93,6 +96,14 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
     const off = getClient()!.onNotification('terminal.exited', () => void refresh())
     return () => { live = false; alive.current = false; off() }
   }, [threadId, connected])
+  // The tab switched to by the pointer fades in over 150 ms (opacity only: terminal text must not shift). The first tab, and a tab
+  // that is only the first to be selected after the list loaded, render plainly.
+  const shown = useRef<string | undefined>(undefined)
+  const fadeFor = useRef<string | null>(null)
+  if (shown.current !== current?.id) {
+    fadeFor.current = shown.current !== undefined && current ? current.id : null
+    shown.current = current?.id
+  }
   const label = (tab: TerminalInfo, index: number) => {
     const kind = kinds.current.get(tab.id)
     if (kind && kind !== 'shell') return `${providers.find(p => p.kind === kind)?.display_name ?? kind} ${tabs.filter((x, i) => i <= index && (kinds.current.get(x.id) ?? 'shell') === kind).length}`
@@ -117,7 +128,9 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
       </div>
     </div>
     <ErrorLine error={error} retry={() => void refresh()} />
-    {current ? <Screen key={current.id} info={current} width={width} onTitle={title => setTitles(old => old[current.id] === title ? old : { ...old, [current.id]: title })} onExit={() => void close(current.id)} /> : <Action onClick={() => void create()}>Open terminal</Action>}
+    {current ? <div key={current.id} paintTransform={PATCHED_NATIVE && fadeFor.current === current.id ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease: [...EASE.out] as [number, number, number, number] } } : undefined} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0 }}>
+      <Screen info={current} width={width} onTitle={title => setTitles(old => old[current.id] === title ? old : { ...old, [current.id]: title })} onExit={() => void close(current.id)} />
+    </div> : <Action onClick={() => void create()}>Open terminal</Action>}
   </div>
 }
 
@@ -125,10 +138,17 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
 function TabChip({ id, kind, title, active, onSelect, onClose }: { id: string; kind: string; title: string; active: boolean; onSelect: () => void; onClose: () => void }) {
   const t = useTheme()
   const [hover, setHover] = useState(false)
+  const glyph = fadeTo(hover ? 0 : 1)
   return <div role="button" tabIndex={0} testId={`terminal-tab-${id}`} aria-label={title} onClick={onSelect} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onSelect() }}
     style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, paddingLeft: 6, paddingRight: 10, flexShrink: 0, borderRadius: 8, cursor: 'pointer', backgroundColor: active ? t.buttonSecondary : hover ? t.buttonSecondaryHover : undefined }}>
-    <div role="button" aria-label={`Close ${title}`} testId={`terminal-tab-close-${id}`} onClick={() => onClose()} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, borderRadius: 8, flexShrink: 0, backgroundColor: hover ? t.buttonSecondaryHover : undefined, hover: { backgroundColor: t.buttonSecondary } }}>
-      {hover ? <Icon source={N.x} size={14} color={t.text} /> : kind === 'shell' ? <Icon source={DOCK_ICONS.terminal} size={14} color={t.text} /> : <ProviderMark kind={kind} size={14} />}
+    {/* The glyph hands over to the close X on hover: both stay mounted and fade (the glyph out, the X in via `t-reveal`), so nothing pops. */}
+    <div role="button" aria-label={`Close ${title}`} testId={`terminal-tab-close-${id}`} onClick={() => onClose()} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', width: 16, height: 16, borderRadius: 8, flexShrink: 0, backgroundColor: hover ? t.buttonSecondaryHover : undefined, hover: { backgroundColor: t.buttonSecondary } }}>
+      <div paintTransform={glyph.paintTransform} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', ...glyph.style }}>
+        {kind === 'shell' ? <Icon source={DOCK_ICONS.terminal} size={14} color={t.text} /> : <ProviderMark kind={kind} size={14} />}
+      </div>
+      <div paintTransform={revealTransform(hover, false)} style={{ position: 'absolute', left: 1, top: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', ...(PATCHED_NATIVE ? {} : { opacity: hover ? 1 : 0 }) }}>
+        <Icon source={N.x} size={14} color={t.text} />
+      </div>
     </div>
     <Label size={13} color={active || hover ? t.text : t.textSecondary} truncate style={{ maxWidth: 160 }}>{title}</Label>
   </div>

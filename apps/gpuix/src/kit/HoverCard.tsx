@@ -1,8 +1,9 @@
 // `PreviewCard` (components/kit/preview-card.tsx): a hover-opened, interactive card. Unlike a tooltip
 // it stays open while the pointer is on the card, so it can hold controls. One card is visible
-// app-wide (`hoverController.ts`); a card opened right after another closed (`skip`) appears without motion.
+// app-wide (`hoverController.ts`); a card opened right after another closed (`skip`) appears without motion. Otherwise it
+// scales in from 0.98 about its trigger side over 150 ms (paint-only, `PopupLayer kind="tooltip"`) and leaves in 80 ms.
 import type { StyleDesc } from '@gpuix/react'
-import { useRef, type ReactElement, type ReactNode } from 'react'
+import { useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { popoverStyle, PopupLayer } from '../composer/Menu.tsx'
 import { useTheme } from '../ui.tsx'
 import { hoverTrigger, HoverScopeProvider, useHover } from './hover.tsx'
@@ -48,14 +49,22 @@ export function HoverCard({
   const t = useTheme()
   const { ctl, state } = useHover({ delay, closeDelay, skip, hoverable: true })
   const pressed = useRef(false)
+  // Kept mounted through the 80 ms exit once the card closes (an `instant` card leaves at once, like it arrived).
+  const shown = state.active !== null
+  const [present, setPresent] = useState(shown)
+  if (shown && !present) setPresent(true)
+  const leaving = !shown && present
   if (disabled) return trigger
   return (
     <div style={{ display: 'flex', position: 'relative', alignItems: 'start', minWidth: 0, ...rootStyle }}>
       {hoverTrigger(ctl, true, trigger, pressed, false)}
-      {state.active !== null && (
+      {(shown || leaving) && (
         <PopupLayer
           testId={testId}
+          kind="tooltip"
           still={state.instant}
+          leaving={leaving}
+          onLeft={() => setPresent(false)}
           side={side}
           align={align}
           sideOffset={sideOffset}

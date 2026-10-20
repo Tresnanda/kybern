@@ -8,9 +8,9 @@
 // `focus-visible:ring-N ring-offset-M`, drawn outside the control's box and shown only for keyboard focus.
 import { motion, type StyleDesc } from '@gpuix/react'
 import { useRef, useState } from 'react'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { over } from '../theme.ts'
 import { useTheme } from '../ui.tsx'
-import { PATCHED_NATIVE } from '../native/local-build.ts'
 
 /** CSS `ease-out` (the keyword, not the `--ease-out` token). */
 const CSS_EASE_OUT: [number, number, number, number] = [0, 0, 0.58, 1]
@@ -125,27 +125,31 @@ export function Switch({ checked: checkedProp, defaultChecked = false, onChecked
       style={{ position: 'relative', width: 32, height: 20, flexShrink: 0, cursor: disabled ? 'not-allowed' : 'pointer', ...style }}
     >
       <div style={{ ...layer, borderColor: d(t.switchOffBorder, t.switchOff), backgroundColor: d(t.switchOff) }} />
-      <motion.div initial={false} animate={{ opacity: checked ? 1 : 0 }} transition={{ duration: 0.2, ease: TW_EASE }} style={{ ...layer, borderColor: d(t.switchOn), backgroundColor: d(t.switchOn) }} />
-      {/* Travel (left) and stretch (width) run on their own curves, so they sit on two nested tweens. */}
-      <motion.div initial={false} animate={{ left: checked ? 13 : 1 }} transition={{ duration: 0.2, ease: CSS_EASE_OUT }} style={{ position: 'absolute', top: 1, width: 18, height: 18, pointerEvents: 'none' }}>
-        {/* `ring-1 ring-black/5` around the 16px thumb, then the thumb with `shadow-sm`. */}
-        {PATCHED_NATIVE
-          ? <div
-            // The desktop's `scale-x-110` itself (paint-only, N5): no layout per frame.
+      {PATCHED_NATIVE
+        ? <div paintTransform={{ initial: false, animate: { opacity: checked ? 1 : 0 }, transition: { duration: 0.2, ease: TW_EASE } }} style={{ ...layer, borderColor: d(t.switchOn), backgroundColor: d(t.switchOn) }} />
+        : <motion.div initial={false} animate={{ opacity: checked ? 1 : 0 }} transition={{ duration: 0.2, ease: TW_EASE }} style={{ ...layer, borderColor: d(t.switchOn), backgroundColor: d(t.switchOn) }} />}
+      {/* Travel and stretch run on their own curves, so they sit on two nested layers: the travel is a paint-only translation of
+          the whole thumb, the held stretch the desktop's `scale-x-110` itself (N5), both with no layout per frame. */}
+      {PATCHED_NATIVE
+        ? <div paintTransform={{ initial: false, animate: { translateX: checked ? 12 : 0 }, transition: { duration: 0.2, ease: CSS_EASE_OUT } }} style={{ position: 'absolute', left: 1, top: 1, width: 18, height: 18, pointerEvents: 'none' }}>
+          <div
             paintTransform={{ initial: false, animate: { scaleX: pressed && !disabled ? 1.1 : 1 }, transition: { duration: 0.1, delay: 0.1, ease: [...CSS_EASE] }, origin: [checked ? 1 : 0, 0.5] }}
+            // `ring-1 ring-black/5` around the 16px thumb, then the thumb with `shadow-sm`.
             style={{ position: 'absolute', top: 0, left: 0, width: 18, height: 18, borderRadius: 9, backgroundColor: disabled ? d('rgba(0, 0, 0, 0.05)', track) : 'rgba(0, 0, 0, 0.05)', pointerEvents: 'none', display: 'flex', paddingLeft: 1, paddingRight: 1, paddingTop: 1, paddingBottom: 1 }}
           >
             {thumb}
           </div>
-          : <motion.div
+        </div>
+        : <motion.div initial={false} animate={{ left: checked ? 13 : 1 }} transition={{ duration: 0.2, ease: CSS_EASE_OUT }} style={{ position: 'absolute', top: 1, width: 18, height: 18, pointerEvents: 'none' }}>
+          <motion.div
             initial={false}
             animate={{ left: checked ? -grow : 0, width: 18 + grow }}
             transition={{ duration: 0.1, delay: 0.1, ease: CSS_EASE }}
             style={{ position: 'absolute', top: 0, height: 18, borderRadius: 9, backgroundColor: disabled ? d('rgba(0, 0, 0, 0.05)', track) : 'rgba(0, 0, 0, 0.05)', pointerEvents: 'none', display: 'flex', paddingLeft: 1, paddingRight: 1, paddingTop: 1, paddingBottom: 1 }}
           >
             {thumb}
-          </motion.div>}
-      </motion.div>
+          </motion.div>
+        </motion.div>}
       <FocusRing visible={focus.visible} radius={10} color={withAlpha(t.v('--color-border-focus'), 0.6)} offsetColor={t.v('--background')} />
     </div>
   )

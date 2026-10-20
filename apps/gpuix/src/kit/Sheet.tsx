@@ -10,7 +10,7 @@
 //
 // Motion: the scrim fades over 200 ms with Tailwind's default curve; the panel fades and slides 32px from
 // its edge over 200 ms `--ease-in-out`, in and out (Base UI keeps it mounted through `data-ending-style`; the
-// desktop exit is as long as the enter). Both are native tweens on the anchored layers. Reduce Motion keeps
+// desktop exit is as long as the enter). Both are paint-only `paintTransform`s (no layout per frame). Reduce Motion keeps
 // the fades and drops the slide. Escape and a click on the scrim close it; focus returns to the opener.
 import { createContext, useContext, useState, type ReactNode } from 'react'
 import { muted } from '../composer/Menu.tsx'
@@ -85,9 +85,8 @@ export function Sheet({
           ease={EASE_DEFAULT}
           position={{ x: 0, y: 0 }}
           priority={5}
-          backing="rgba(0, 0, 0, 0.6)"
           testId={testId ? `${testId}-backdrop` : undefined}
-          style={{ width: size.width, height: size.height }}
+          style={{ width: size.width, height: size.height, backgroundColor: 'rgba(0, 0, 0, 0.6)' }}
         />
         <ModalLayer
           phase={presence.phase}

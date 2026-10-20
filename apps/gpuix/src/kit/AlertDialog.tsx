@@ -6,10 +6,10 @@
 // (`max-w-lg`, 16px window margin), radius 22 (`rounded-3xl`), 1px `--color-border-light`, `bg-popover`, the
 // `0 16px 50px -12px` lift; header 16/16/8 with 6px gap, title 18/22.5 semibold, description 14/19.25 muted;
 // footer 12/16 with 8px gaps, buttons right-aligned. Escape closes it; a backdrop click does NOT (Base UI
-// AlertDialog). Motion: the scrim fades over 200 ms `--ease-out`, the card fades over 200 ms `--ease-in-out`
-// both ways (Base UI keeps the popup mounted through `data-ending-style`). The desktop card also scales from
-// 0.98, which GPUIX cannot do to a subtree: the opacity, duration and curve are kept and the scale is dropped.
-// Reduce Motion: the desktop has no reduced variant here; GPUIX keeps the fades (kit rule: fades stay).
+// AlertDialog). Motion: the scrim fades over 200 ms `--ease-out`, the card fades and scales from 0.98 over 200 ms
+// `--ease-in-out` both ways (Base UI keeps the popup mounted through `data-ending-style`). Both are `paintTransform`s on
+// the layer's content (paint-only: no layout or render per frame; the anchored surface itself stays transparent).
+// Reduce Motion: opacity only, the same fade.
 import { useGpuix, useWindowSize, type StyleDesc } from '@gpuix/react'
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { muted } from '../composer/Menu.tsx'
@@ -20,6 +20,8 @@ import { useSettingsModal } from '../settings/controls.tsx'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import type { Theme } from '../theme.ts'
 import { pressTransform } from '../motion/press.ts'
+import { SCALE } from '../motion/tokens.ts'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 
 // ─── Escape stack ─────────────────────────────────────────────────────────
 
@@ -99,8 +101,11 @@ export const EASE_IN_OUT_CSS: Ease = [0.77, 0, 0.175, 1]
 export const EASE_DEFAULT: Ease = [0.4, 0, 0.2, 1]
 
 /**
- * One `<anchored>` layer that fades (and optionally slides) in and out natively. The tween runs on the anchored
- * surface itself, which carries its own fill (`backing`), so GPUI's dark backing never shows through.
+ * One `<anchored>` layer that fades (and optionally slides and scales) in and out natively. The motion is a `paintTransform` on the
+ * layer's content (a retained-subtree transform: no layout, render or island work per frame), and the anchored surface carries no
+ * fill of its own (`backdrop={{ blur: 0 }}` drops GPUI's opaque backing), so the content's `style` paints the scrim colour or the
+ * card, and a scrim fades at its true alpha. Entering starts from `offset`/`scale`/opacity 0; an exit tweens back to them, and an
+ * interrupted one retargets from what is on screen.
  */
 export function ModalLayer({
   phase,
@@ -109,10 +114,10 @@ export function ModalLayer({
   duration,
   ease,
   offset,
+  scale,
   position,
   anchor = 'topLeft',
   priority,
-  backing,
   radius,
   testId,
   focus,
@@ -128,10 +133,11 @@ export function ModalLayer({
   ease: Ease
   /** Where the layer slides from (and back to), in px; dropped under Reduce Motion. */
   offset?: { top?: number; left?: number }
+  /** The scale the layer grows from (and shrinks back to), about its centre; dropped under Reduce Motion. */
+  scale?: number
   position: { x: number; y: number }
   anchor?: 'topLeft' | 'leftCenter' | 'bottomLeft'
   priority: number
-  backing?: string
   radius?: number
   testId?: string
   focus?: boolean
@@ -140,20 +146,25 @@ export function ModalLayer({
   style?: StyleDesc
   children?: ReactNode
 }) {
-  const away = { opacity: 0, top: REDUCED_MOTION ? 0 : (offset?.top ?? 0), left: REDUCED_MOTION ? 0 : (offset?.left ?? 0) }
-  const here = { opacity: 1, top: 0, left: 0 }
-  const motion = { generation: gen, isExit: false, initial: phase === 'enter' ? away : here, animate: phase === 'enter' ? here : away, transition: { duration, ease } }
+  const away = { opacity: 0, translateX: REDUCED_MOTION ? 0 : (offset?.left ?? 0), translateY: REDUCED_MOTION ? 0 : (offset?.top ?? 0), scale: REDUCED_MOTION ? 1 : (scale ?? 1) }
+  const here = { opacity: 1, translateX: 0, translateY: 0, scale: 1 }
+  // `initial` belongs to the mount: re-opening during an exit retargets from what is on screen instead of restarting.
+  const mounted = useRef(gen).current
+  const paintTransform = PATCHED_NATIVE
+    ? { initial: phase === 'enter' && gen === mounted ? away : (false as const), animate: phase === 'enter' ? here : away, transition: { duration, ease }, generation: gen }
+    : undefined
   return (
     <anchored
-      {...({ motion } as object)}
-      onMotionComplete={(event) => onExited?.(event as { motionGeneration?: number })}
+      backdrop={PATCHED_NATIVE ? { blur: 0 } : undefined}
+      {...(PATCHED_NATIVE ? {} : { motion: { generation: gen, isExit: false, initial: phase === 'enter' ? { opacity: 0 } : { opacity: 1 }, animate: { opacity: phase === 'enter' ? 1 : 0 }, transition: { duration, ease } } } as object)}
+      onMotionComplete={(event) => { if (!PATCHED_NATIVE) onExited?.(event as { motionGeneration?: number }) }}
       position={position}
       anchor={anchor}
       fit="snap"
       snapMargin={0}
       deferred
       priority={priority}
-      style={{ ...(backing ? { backgroundColor: backing } : {}), ...(radius !== undefined ? { borderRadius: radius } : {}) }}
+      style={{ ...(radius !== undefined ? { borderRadius: radius } : {}) }}
     >
       <div
         testId={testId}
@@ -162,6 +173,7 @@ export function ModalLayer({
         onKeyDown={onKeyDown}
         onMouseDown={pointerNav}
         onMouseDownOutside={onMouseDownOutside}
+        {...(paintTransform ? { paintTransform, onMotionComplete: (event: { motionGeneration?: number }) => { if (phase === 'exit' && event.motionGeneration === gen) onExited?.(event) } } : {})}
         style={{ ...(phase === 'exit' ? { pointerEvents: 'none' } : {}), ...style }}
       >
         {children}
@@ -320,9 +332,8 @@ export function AlertDialog({
           ease={EASE_OUT_CSS}
           position={{ x: 0, y: 0 }}
           priority={5}
-          backing="rgba(0, 0, 0, 0.6)"
           testId={testId ? `${testId}-backdrop` : undefined}
-          style={{ width: size.width, height: size.height }}
+          style={{ width: size.width, height: size.height, backgroundColor: 'rgba(0, 0, 0, 0.6)' }}
         />
         <ModalLayer
           phase={presence.phase}
@@ -330,6 +341,7 @@ export function AlertDialog({
           onExited={presence.done}
           duration={DURATION}
           ease={EASE_IN_OUT_CSS}
+          scale={SCALE.small}
           position={{ x: Math.round((size.width - cardWidth) / 2), y: size.height / 2 }}
           anchor="leftCenter"
           priority={6}

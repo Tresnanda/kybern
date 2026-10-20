@@ -78,7 +78,10 @@ export function TokenTextarea({ references, editorRef, nativeRef, onEditorError,
       // React host value updates are batched after effects. Restore the range
       // after that commit rather than having the host overwrite it again.
       const restore = setTimeout(() => {
-        if (node.current?.id === id && live.current.source === expected && !read().composing) nativeCapabilities(renderer).setInputSelection(id, start, end, reversed)
+        if (node.current?.id !== id || live.current.source !== expected || read().composing) return
+        // The host text can still differ from this projection (a chip registered a render later); a range
+        // the native input rejects must not become an uncaught error that takes the window down.
+        try { nativeCapabilities(renderer).setInputSelection(id, start, end, reversed) } catch (error) { console.warn('composer: caret restore skipped', error) }
       }, 0)
       caret.current = null
       return () => clearTimeout(restore)
