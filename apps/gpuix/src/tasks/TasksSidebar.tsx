@@ -12,7 +12,9 @@ import { StatusGlyph } from './Glyphs.tsx'
 import { chooseFilter, taskTyping, prefs, quickAdd, setTasks, useTasks } from './store.ts'
 import { pressTransform } from '../motion/press.ts'
 import { Chevron } from '../motion/Chevron.tsx'
-import { Collapse } from '../motion/kit.tsx'
+import { motion } from '@gpuix/react'
+import { DISCLOSURE, EASE } from '../motion/tokens.ts'
+import { REDUCED_MOTION } from '../ui.tsx'
 import { CountPop } from './CountPop.tsx'
 
 export function TasksSidebar() {
@@ -129,8 +131,9 @@ export function TasksSidebar() {
           </Tip>
         </div>
         {rows.map(({ project, pinned, visible }) => (
-          // Pinned and current projects stay; the rest fold away with the heading's chevron (`Collapse`: height + opacity, 220 ms).
-          <div key={project.id} style={{ display: 'flex', flexDirection: 'column' }}><Collapse open={visible} height={30} closeDuration={0.18}><div style={{ display: 'flex', paddingLeft: 8, paddingRight: 8 }}>
+          // Pinned and current projects stay; the rest fold away with the heading's chevron (height + opacity, 220 ms; the rows are one
+          // known height, so no measuring pass is needed and a folded row stays mounted at height 0).
+          <motion.div key={project.id} initial={false} animate={{ height: visible ? 30 : 0, opacity: visible ? 1 : 0 }} transition={{ duration: REDUCED_MOTION ? 0 : visible ? DISCLOSURE : 0.18, ease: [...EASE.out] }} style={{ display: 'flex', flexDirection: 'column', flexShrink: 0, overflow: 'hidden' }}><div style={{ display: 'flex', paddingLeft: 8, paddingRight: 8 }}>
             <div style={{ flexGrow: 1, minWidth: 0 }} onAuxClick={(e) => { if (e.isRightClick || e.button === 2) setMenu({ id: project.id, at: { x: e.x ?? 0, y: e.y ?? 0 } }) }}>
               {row(
                 `project:${project.id}`,
@@ -140,7 +143,7 @@ export function TasksSidebar() {
                 pinned ? <Icon source={N.pin} size={12} color={ink(t, 0.28)} style={{ marginRight: -3 }} /> : undefined,
               )}
             </div>
-          </div></Collapse></div>
+          </div></motion.div>
         ))}
       </virtual-list>
       {(counts.running > 0 || counts.needs_review > 0) && (

@@ -46,8 +46,8 @@ function harness() {
 const note = (id: string): NoteSummary => ({ id, title: id } as NoteSummary)
 const a = note('a'), b = note('b'), c = note('c')
 let release: (id: string) => void = () => {}
-function Gallery({ visible: list, all, context = 'x' }: { visible: NoteSummary[]; all: NoteSummary[]; context?: string }) {
-  const leaving = useLeavingNotes(list, all)
+function Gallery({ visible: list, context = 'x' }: { visible: NoteSummary[]; all?: NoteSummary[]; context?: string }) {
+  const leaving = useLeavingNotes(list)
   const fresh = useFreshNotes(list, context)
   release = leaving.gone
   return <div>{leaving.list.map(n => <div key={n.id} testId={`${n.id}${leaving.leaving.has(n.id) ? '*' : ''}${fresh.has(n.id) ? '+' : ''}`} />)}</div>
@@ -56,7 +56,7 @@ function Gallery({ visible: list, all, context = 'x' }: { visible: NoteSummary[]
 native('a pointer-deleted note keeps its card until released; a keyboard delete removes it at once', () => {
   const h = harness(), full = [a, b, c]
   h.render(<Gallery visible={full} all={full} />)
-  markNoteLeaving('b')
+  markNoteLeaving(b)
   h.render(<Gallery visible={[a, c]} all={full} />)
   expect(h.ids()).toEqual(['a', 'c', 'b*'])
   release('b')
@@ -68,7 +68,7 @@ native('a pointer-deleted note keeps its card until released; a keyboard delete 
 
 native('a mark made before the gallery mounted keeps the deleted card from the full list', () => {
   const h = harness()
-  markNoteLeaving('c')
+  markNoteLeaving(c)
   h.render(<Gallery visible={[a, b]} all={[a, b, c]} />)
   expect(h.ids()).toEqual(['a', 'b', 'c*'])
 })

@@ -42,22 +42,28 @@ export function thumbLift(lifted: boolean): PaintTransformProps | undefined {
 
 // ─── Deleting a note: the card leaves by pointer, instantly by keyboard ───────────────────────────────────────────────
 
-const marked = new Map<string, number>()
-/** A pointer delete (menu) marks its note so the gallery lets the card leave; the keyboard path never marks. */
-export function markNoteLeaving(id: string) {
-  marked.set(id, Date.now() + 3000)
+const marked = new Map<string, { note: NoteSummary; until: number }>()
+/** A pointer delete (menu) marks its note (as it was, so the card fades where it stood) for the gallery; the keyboard path never marks. */
+export function markNoteLeaving(note: NoteSummary) {
+  marked.set(note.id, { note, until: Date.now() + 3000 })
 }
-function takeMark(id: string): boolean {
-  const until = marked.get(id)
+function takeMark(id: string): NoteSummary | null {
+  const entry = marked.get(id)
   marked.delete(id)
-  return until !== undefined && until > Date.now()
+  return entry && entry.until > Date.now() ? entry.note : null
+}
+function freshMarks(): NoteSummary[] {
+  const now = Date.now(), out: NoteSummary[] = []
+  for (const [id, entry] of marked) { marked.delete(id); if (entry.until > now) out.push(entry.note) }
+  return out
 }
 
 /** `EXIT.row`-like card exit: the card fades and settles to 0.97 over 150 ms. */
 export function cardLeave(generation: number): PaintTransformProps | undefined {
   if (!PATCHED_NATIVE) return undefined
   return {
-    initial: false,
+    // From where the card stands (a ghost mounts already leaving, so `initial: false` would start it at the end).
+    initial: REDUCED_MOTION ? { opacity: 1 } : { opacity: 1, scale: 1 },
     animate: REDUCED_MOTION ? { opacity: 0 } : { opacity: 0, scale: 0.97 },
     transition: { duration: REDUCED_MOTION ? 0.1 : DURATION.quick, ease: bezier(EASE.smoothOut) },
     generation,
@@ -68,20 +74,20 @@ let ghostGeneration = 6_100_000
 /**
  * The notes to draw: `visible` plus the notes a pointer delete just removed, kept for their 150 ms exit. A delete from the
  * editor's menu lands on a gallery that never had the card, so a mark that is still fresh when the gallery mounts keeps that
- * note's card (from `all`, the unfiltered list) fading out as the page arrives. `gone(id)` (called when a card's exit completes)
+ * note's card (as it was when it was deleted) fading out as the page arrives. `gone(id)` (called when a card's exit completes)
  * drops them. Filters, searches, sorts and keyboard deletes never keep anything.
  */
-export function useLeavingNotes(visible: NoteSummary[], all: NoteSummary[]) {
+export function useLeavingNotes(visible: NoteSummary[]) {
   const [ghosts, setGhosts] = useState<{ note: NoteSummary; generation: number }[]>(() => {
     if (!PATCHED_NATIVE || !isWindowVisible()) return []
-    return all.filter(note => !visible.some(v => v.id === note.id) && takeMark(note.id)).map(note => ({ note, generation: ++ghostGeneration }))
+    return freshMarks().filter(note => !visible.some(v => v.id === note.id)).map(note => ({ note, generation: ++ghostGeneration }))
   })
   const previous = useRef(visible)
   if (previous.current !== visible) {
     const before = previous.current
     previous.current = visible
     const canLeave = PATCHED_NATIVE && isWindowVisible()
-    const removed = before.filter(note => !visible.some(v => v.id === note.id) && takeMark(note.id))
+    const removed = before.filter(note => !visible.some(v => v.id === note.id)).flatMap(note => takeMark(note.id) ?? [])
     if (canLeave && removed.length) setGhosts(current => [...current.filter(g => !visible.some(v => v.id === g.note.id)), ...removed.map(note => ({ note, generation: ++ghostGeneration }))])
     else if (ghosts.some(g => visible.some(v => v.id === g.note.id))) setGhosts(current => current.filter(g => !visible.some(v => v.id === g.note.id)))
   }
