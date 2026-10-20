@@ -34,6 +34,7 @@ struct Partial {
     scale: Option<f32>,
     scale_x: Option<f32>,
     scale_y: Option<f32>,
+    shadow_opacity: Option<f32>,
     rotate: Option<f32>,
     translate_x: Option<f32>,
     translate_y: Option<f32>,
@@ -46,6 +47,7 @@ impl Partial {
             scale: self.scale.unwrap_or(base.scale),
             scale_x: self.scale_x.unwrap_or(base.scale_x),
             scale_y: self.scale_y.unwrap_or(base.scale_y),
+            shadow_opacity: self.shadow_opacity.unwrap_or(base.shadow_opacity),
             rotate: self.rotate.unwrap_or(base.rotate),
             translate_x: self.translate_x.unwrap_or(base.translate_x),
             translate_y: self.translate_y.unwrap_or(base.translate_y),
@@ -54,11 +56,11 @@ impl Partial {
         }
     }
     fn get(&self, field: usize) -> Option<f32> {
-        [self.scale, self.rotate, self.translate_x, self.translate_y, self.opacity, self.blur, self.scale_x, self.scale_y][field]
+        [self.scale, self.rotate, self.translate_x, self.translate_y, self.opacity, self.blur, self.scale_x, self.scale_y, self.shadow_opacity][field]
     }
 }
 fn field(value: &SubtreeTransformValue, field: usize) -> f32 {
-    [value.scale, value.rotate, value.translate_x, value.translate_y, value.opacity, value.blur, value.scale_x, value.scale_y][field]
+    [value.scale, value.rotate, value.translate_x, value.translate_y, value.opacity, value.blur, value.scale_x, value.scale_y, value.shadow_opacity][field]
 }
 fn set_field(value: &mut SubtreeTransformValue, field: usize, to: f32) {
     match field {
@@ -69,7 +71,8 @@ fn set_field(value: &mut SubtreeTransformValue, field: usize, to: f32) {
         4 => value.opacity = to,
         5 => value.blur = to,
         6 => value.scale_x = to,
-        _ => value.scale_y = to,
+        7 => value.scale_y = to,
+        _ => value.shadow_opacity = to,
     }
 }
 
@@ -143,7 +146,7 @@ struct KeyStop {
 fn parse(value: &serde_json::Value) -> Option<Source> {
     let source: Source = serde_json::from_value(value.clone()).ok()?;
     let finite = |p: &Partial| {
-        [p.scale, p.rotate, p.translate_x, p.translate_y, p.opacity, p.blur, p.scale_x, p.scale_y].iter().flatten().all(|v| v.is_finite())
+        [p.scale, p.rotate, p.translate_x, p.translate_y, p.opacity, p.blur, p.scale_x, p.scale_y, p.shadow_opacity].iter().flatten().all(|v| v.is_finite())
             && [p.scale, p.scale_x, p.scale_y].iter().flatten().all(|s| *s > 0.0)
     };
     let timing = |t: &Timing| t.duration.is_finite() && t.duration >= 0.0 && t.delay.is_finite() && t.delay >= 0.0 && t.ease.iter().all(|v| v.is_finite());
@@ -273,7 +276,7 @@ impl Track {
     fn value(&self, now: Instant) -> SubtreeTransformValue {
         let p = self.progress(now);
         let mut out = self.to;
-        for f in 0..8 {
+        for f in 0..9 {
             // The stops that set this property, with the start and the target at the ends.
             let mut points = vec![(0.0, field(&self.from, f))];
             points.extend(self.stops.iter().filter_map(|k| k.value.get(f).map(|v| (k.offset, v))));
@@ -285,6 +288,7 @@ impl Track {
             set_field(&mut out, f, v0 + (v1 - v0) * e);
         }
         out.opacity = out.opacity.clamp(0.0, 1.0);
+        out.shadow_opacity = out.shadow_opacity.clamp(0.0, 1.0);
         out.blur = out.blur.max(0.0);
         out.scale = out.scale.max(0.0001);
         out.scale_x = out.scale_x.max(0.0001);

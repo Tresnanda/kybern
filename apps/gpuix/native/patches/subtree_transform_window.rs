@@ -17,6 +17,8 @@ pub struct SubtreeTransformValue {
     /// One-axis multipliers of `scale` (N5: a switch thumb's held stretch, a bar filling from one end).
     pub scale_x: f32,
     pub scale_y: f32,
+    /// Multiplies only the subtree's drop shadows (N8: a card's lift shadow fades in as the card rises).
+    pub shadow_opacity: f32,
     pub rotate: f32,
     pub translate_x: f32,
     pub translate_y: f32,
@@ -25,7 +27,7 @@ pub struct SubtreeTransformValue {
 }
 impl Default for SubtreeTransformValue {
     fn default() -> Self {
-        Self { scale: 1.0, scale_x: 1.0, scale_y: 1.0, rotate: 0.0, translate_x: 0.0, translate_y: 0.0, opacity: 1.0, blur: 0.0 }
+        Self { scale: 1.0, scale_x: 1.0, scale_y: 1.0, shadow_opacity: 1.0, rotate: 0.0, translate_x: 0.0, translate_y: 0.0, opacity: 1.0, blur: 0.0 }
     }
 }
 impl SubtreeTransformValue {
@@ -110,6 +112,7 @@ pub struct SubtreeTransformContext {
     masks: Vec<(Bounds<Pixels>, Option<crate::RoundedClip>, usize)>,
     matrix: Affine,
     opacity: f32,
+    shadow_opacity: f32,
     blur: f32,
     scale_factor: f32,
     visual_mask: ContentMask<Pixels>,
@@ -126,6 +129,7 @@ impl SubtreeTransformContext {
         let compose = |depth: usize| scopes[..depth].iter().fold(Affine::IDENTITY, |m, (_, origin, value)| m.then(Affine::about(value, *origin)));
         let matrix = compose(scopes.len());
         let opacity = scopes.iter().map(|(_, _, v)| v.opacity.clamp(0.0, 1.0)).product();
+        let shadow_opacity = scopes.iter().map(|(_, _, v)| v.shadow_opacity.clamp(0.0, 1.0)).product();
         let blur = scopes.last().map_or(0.0, |(_, _, v)| v.blur.max(0.0));
         // The mask at the outermost scope stays put; masks established inside follow the
         // scopes that were active when they were pushed.
@@ -150,7 +154,7 @@ impl SubtreeTransformContext {
             }
             mask.bounds = mask.bounds.intersect(&visual);
         }
-        Self { scopes, outer, masks, matrix, opacity, blur, scale_factor, visual_mask: mask }
+        Self { scopes, outer, masks, matrix, opacity, shadow_opacity, blur, scale_factor, visual_mask: mask }
     }
     /// A replacement when any of `values` changes one of this context's scopes.
     fn updated(
@@ -383,7 +387,7 @@ impl crate::scene::Primitive {
                 corners(&mut p.corner_radii);
                 corners(&mut p.element_corner_radii);
                 p.blur_radius.0 *= s;
-                p.color.a *= opacity;
+                p.color.a *= opacity * context.shadow_opacity;
                 p.content_mask = mask;
             }
             Self::Quad(p) => {

@@ -32,7 +32,7 @@ export const EXIT = {
 } as const satisfies Record<string, Exit>
 
 /** What a `paintTransform` rests at, with every field set (so a retarget back from any exit lands exactly there). */
-const REST: PaintTransformValue = { opacity: 1, scale: 1, scaleX: 1, scaleY: 1, rotate: 0, translateX: 0, translateY: 0, blur: 0 }
+const REST: PaintTransformValue = { opacity: 1, scale: 1, scaleX: 1, scaleY: 1, shadowOpacity: 1, rotate: 0, translateX: 0, translateY: 0, blur: 0 }
 const ENTER_DEFAULT = { duration: DURATION.quick, ease: [...EASE.out] as [number, number, number, number] }
 
 let presenceGeneration = 4_000_000

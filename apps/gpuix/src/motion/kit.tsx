@@ -30,7 +30,7 @@ const bezier = (ease: Ease) => [...ease] as [number, number, number, number]
 export const HOVER_FADE_ROOT: { hoverTransition?: typeof HOVER_FADE } = PATCHED_NATIVE && process.env.KYBERN_HOVER_FADE !== '0' ? { hoverTransition: HOVER_FADE } : {}
 
 /** What a `paintTransform` rests at: every field at its neutral value (a retarget back from any exit lands here). */
-export const IDENTITY: Required<PaintTransformValue> = { opacity: 1, scale: 1, scaleX: 1, scaleY: 1, rotate: 0, translateX: 0, translateY: 0, blur: 0 }
+export const IDENTITY: Required<PaintTransformValue> = { opacity: 1, scale: 1, scaleX: 1, scaleY: 1, shadowOpacity: 1, rotate: 0, translateX: 0, translateY: 0, blur: 0 }
 
 /** The neutral value for exactly the fields `from` sets, so a tween never touches a field it was not asked to. */
 function restOf(from: PaintTransformValue): PaintTransformValue {
@@ -102,6 +102,7 @@ export function Rise({
   kind = 'row',
   index = 0,
   play = true,
+  hold = false,
   style,
   testId,
 }: {
@@ -110,12 +111,15 @@ export function Rise({
   /** Position in a staggered group (`t-stagger` uses index × 70 ms). */
   index?: number
   play?: boolean
+  /** Wait at the entrance's first frame (an image still decoding: `<img onLoad>`); it plays when `hold` turns false. */
+  hold?: boolean
   style?: StyleDesc
   testId?: string
 }) {
   if (!play) return <div testId={testId} style={{ display: 'flex', flexDirection: 'column', ...style }}>{children}</div>
+  const enter = enterTransform(kind, index)
   return (
-    <div paintTransform={enterTransform(kind, index)} style={{ display: 'flex', flexDirection: 'column', position: 'relative', ...style }}>
+    <div paintTransform={enter && hold && enter.initial ? { ...enter, animate: enter.initial } : enter} style={{ display: 'flex', flexDirection: 'column', position: 'relative', ...style }}>
       {testId ? <div testId={testId} style={{ display: 'flex', flexDirection: 'column' }}>{children}</div> : children}
     </div>
   )
