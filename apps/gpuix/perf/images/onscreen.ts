@@ -30,11 +30,14 @@ export async function assertTestDisplayWindow(pid: number): Promise<string> {
   }
   const windows = [...output.matchAll(/window \d+ onscreen=true bounds=\{([^}]+)\}/g)].map(match => match[1])
   assert(windows.length > 0, `GPUIX window is offscreen: ${output.trim() || `pid ${pid} has no window`}`)
+  const display = Object.fromEntries([...output.matchAll(/\b(displayX|displayY|displayWidth|displayHeight)=(-?\d+(?:\.\d+)?)/g)].map(([, key, value]) => [key, Number(value)]))
+  assert(Object.values(display).length === 4 && display.displayWidth > 0 && display.displayHeight > 0, `Hidden display bounds are unavailable: ${output.trim()}`)
   const withinDisplay = windows.some(line => {
     const bounds = Object.fromEntries([...line.matchAll(/\b(X|Y|Width|Height)\s*[:=]\s*"?(-?\d+(?:\.\d+)?)/g)].map(([, key, value]) => [key, Number(value)]))
     return Number.isFinite(bounds.X) && Number.isFinite(bounds.Y) && Number.isFinite(bounds.Width) && Number.isFinite(bounds.Height)
-      && bounds.X >= -1440 && bounds.X < 0 && bounds.Y >= 900 && bounds.Width > 0 && bounds.Height > 0
-      && bounds.X + bounds.Width <= 0 && bounds.Y + bounds.Height <= 1800
+      && bounds.X >= display.displayX && bounds.Y >= display.displayY && bounds.Width > 0 && bounds.Height > 0
+      && bounds.X + bounds.Width <= display.displayX + display.displayWidth
+      && bounds.Y + bounds.Height <= display.displayY + display.displayHeight
   })
   assert(withinDisplay, `GPUIX window is outside the hidden test display: ${output.trim()}`)
   return output.trim()

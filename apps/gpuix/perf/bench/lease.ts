@@ -14,7 +14,7 @@ with p.open('r+') as f:
  a=[x for x in f.read().splitlines() if x];lane=sys.argv[2]
  if sys.argv[3]=='join' and lane not in a:
   quiet=pathlib.Path('/tmp')/('kybern-gpuix-quiet.'+pathlib.Path(sys.argv[4]).name.removeprefix('ade-gpuix-'))
-  if quiet.exists():a.insert(min(1,len(a)),lane)
+  if quiet.exists():a.insert(min(1 if pathlib.Path('/tmp/kybern-gpuix-round5-ui-lock').exists() else 0,len(a)),lane)
   else:a.append(lane)
  if sys.argv[3]=='leave':a=[x for x in a if x!=lane]
  f.seek(0);f.write(''.join(x+'\\n' for x in a));f.truncate()
