@@ -204,7 +204,7 @@ export const WorkRows = memo(function WorkRows({
 function ApprovalStatus({ decided, color }: { decided: boolean; color: string }) {
   const [answeredAtMount] = useState(decided)
   return (
-    <SwapOnChange active={decided ? 'done' : 'waiting'} style={{ flexShrink: 0 }}>
+    <SwapOnChange kind="icon" active={decided ? 'done' : 'waiting'} style={{ flexShrink: 0 }}>
       <div style={{ display: 'flex', width: 20, height: 20, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
         {decided ? <SuccessCheck size={16} color={color} play={!answeredAtMount} /> : <MatrixLoader />}
       </div>
@@ -309,7 +309,7 @@ export const WorkRow = memo(function WorkRow({
     case 'tool':
       return <ToolRow block={block} ctx={ctx} />
     case 'image':
-      return <ResponseImage source={block.source} />
+      return <ResponseImage source={block.source} at={block.at} />
     case 'assistant':
       return <AssistantWorkRow block={block} tone={tone} live={live} thinkingLive={thinking} />
     case 'runtime_task':
@@ -552,7 +552,7 @@ const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone, live, thi
         <div style={{ display: 'flex', flexDirection: 'column', paddingTop: 4, paddingBottom: 4 }}>
           <div testId={`thought-${block.id}`} onClick={() => setOpen(!open)} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
             {/* `IconSwap` spinner → brain and `TextSwap` "Thinking" → "Thought". */}
-            <SwapOnChange active={thinkingLive ? 'live' : 'done'} style={{ flexShrink: 0 }}>
+            <SwapOnChange kind="icon" active={thinkingLive ? 'live' : 'done'} style={{ flexShrink: 0 }}>
               {thinkingLive ? (
                 <div style={{ display: 'flex', width: 20, height: 20, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                   <MatrixLoader />

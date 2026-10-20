@@ -22,6 +22,7 @@ import { Dialog } from '../nav/overlay.tsx'
 import { visualTheme } from '../preview/theme.ts'
 import { launchBrowser } from '../preview/browser.ts'
 import { useNav } from '../nav/store.ts'
+import { EXIT, Presence } from '../motion/Presence.tsx'
 
 const heights = new Map<string, number>()
 const placements = new Map<string, () => void>()
@@ -55,6 +56,8 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
   const [loaded, setLoaded] = useState(false), [skeleton, setSkeleton] = useState(false)
   // The pointer is over the figure (reported by its wrapper) or the control; the control hides a beat after both leave.
   const [overFigure, setOverFigure] = useState(false), [overControl, setOverControl] = useState(false), [showControl, setShowControl] = useState(false)
+  // The control stays mounted through its exit (`PopupLayer leaving`); it arrives with the popup's own fade and scale.
+  const [controlMounted, setControlMounted] = useState(false)
   useEffect(() => {
     if (overFigure || overControl) { setShowControl(true); return }
     const id = setTimeout(() => setShowControl(false), 120)
@@ -104,6 +107,7 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
   const [expandedHeight, expandedWidth] = [Math.max(100, size.height - 32 - 44 - 2), Math.max(320, size.width - 32)]
   const frame = <VisualSlot id={id} height={expanded ? expandedHeight : height} active={active && loaded && !error} onHover={setOverFigure} />
   const control = showControl && loaded && !error && !expanded
+  if (control && !controlMounted) setControlMounted(true)
   return <div testId="visual-card" data-status={error ? 'error' : loaded ? 'ready' : 'loading'} style={{ display: 'flex', flexDirection: 'column', marginTop: 8, marginBottom: 8, position: 'relative' }}>
     {expanded ? <>
       <div style={{ height, width: '100%' }} />
@@ -120,8 +124,8 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
     </> : <div style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
       {frame}
       {/* The glass control sits 8px inside the top-right corner (`.visual-reply__open`). It is an anchored layer so it paints above the native document. */}
-      {control && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 0 }}>
-        <PopupLayer kind="tooltip" side="bottom" align="end" sideOffset={8} alignOffset={-8} material="none" occlude style={{ borderRadius: 14 }}>
+      {controlMounted && !expanded && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 0 }}>
+        <PopupLayer leaving={!control} onLeft={() => setControlMounted(false)} kind="tooltip" side="bottom" align="end" sideOffset={8} alignOffset={-8} material="none" occlude style={{ borderRadius: 14 }}>
           <Tip label="Expand preview" side="bottom" size={28}>
             <div
               testId="visual-expand"
@@ -145,7 +149,8 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
         </PopupLayer>
       </div>}
     </div>}
-    {skeleton && !loaded && !error && <Skeleton height={height} />}
+    {/* The skeleton fades out when the document is ready (the web view itself appears at once: native alpha is N3). */}
+    <Presence show={skeleton && !loaded && !error} exit={EXIT.backdrop} style={{ position: 'absolute', top: 0, left: 0, right: 0, height }}><Skeleton height={height} /></Presence>
     {error && <div testId="visual-error" style={{ position: 'absolute', top: 0, left: 0, right: 0, height, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, paddingTop: Math.min(height * 0.35, 160), paddingLeft: 16, paddingRight: 16, borderRadius: 10, borderWidth: 1, borderColor: t.border, backgroundColor: ink(t, 0.04) }}>
       <Label color={t.text} weight={500} style={{ textAlign: 'center' }}>{`Couldn’t load “${visual.title}”`}</Label>
       {error && <Label color={t.textSecondary} size={13} style={{ textAlign: 'center', lineClamp: 2 }}>{error}</Label>}

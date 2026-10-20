@@ -11,7 +11,9 @@ import { Dialog, DialogHeader } from '../nav/overlay.tsx'
 import { ImageActions } from '../platform/ImageActions.tsx'
 import { imageSource } from '../../../desktop/src/lib/responseImages.ts'
 import { EASE_OUT, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { Rise } from '../motion/kit.tsx'
 import { alpha, muted, Para } from './kit.tsx'
+import { useFresh } from './motion.tsx'
 
 const sizes = new Map<string, { width: number; height: number } | null>()
 
@@ -85,8 +87,10 @@ function srcFor(source: string): string | null {
   return target.kind === 'local' ? target.value : target.value
 }
 
-export function ResponseImage({ source, label = 'Agent image', compact = false, thumbnail = false }: { source: string; label?: string; compact?: boolean; thumbnail?: boolean }) {
+/** `at` is when the image arrived: one that just did resolves from a blur (`t-img`, 400 ms); history and recycled rows paint plainly. */
+export function ResponseImage({ source, label = 'Agent image', compact = false, thumbnail = false, at }: { source: string; label?: string; compact?: boolean; thumbnail?: boolean; at?: string }) {
   const t = useTheme()
+  const fresh = useFresh(at)
   const renderer = useGpuixRequired()
   const restoreFocus = useTranscriptFocusRestoration()
   const trigger = useRef<PublicInstance | null>(null)
@@ -104,6 +108,7 @@ export function ResponseImage({ source, label = 'Agent image', compact = false, 
   const height = thumbnail ? 64 : size ? Math.round((width * size.height) / size.width) : 210
   return (
     <>
+    <Rise kind="image" play={fresh} style={{ flexShrink: 0 }}>
     <div
       ref={(node) => { trigger.current = node }}
       testId="response-image"
@@ -117,6 +122,7 @@ export function ResponseImage({ source, label = 'Agent image', compact = false, 
       <img src={src} alt={label} objectFit={thumbnail ? "cover" : "contain"}
         style={{ width, height, borderRadius: compact ? 8 : 12, borderWidth: 1, borderColor: outline, pointerEvents: 'none' }} />
     </div>
+    </Rise>
     {open && <ImageLightbox src={src} label={label} size={size} finalFocus={() => {
       if (trigger.current) {
         if (restoreFocus) restoreFocus(trigger.current.id)

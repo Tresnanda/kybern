@@ -183,7 +183,7 @@ export const AnswerImages = memo(function AnswerImages({ group, threadId }: { gr
   const t = useTheme()
   const imageTools = useMemo(() => group.work.filter((b): b is ToolBlock => b.kind === 'tool' && b.origin.kind === 'root' && isImageGenerationTool(b.call)), [group.work])
   const images = useMemo(() => {
-    const all = [...group.images.map((image) => ({ source: image.source, label: 'Agent image' })), ...imageTools.flatMap((b) => responseImages(b.output))]
+    const all = [...group.images.map((image) => ({ source: image.source, label: 'Agent image', at: image.at })), ...imageTools.flatMap((b) => responseImages(b.output).map((image) => ({ ...image, at: b.at })))]
     return [...new Map(all.map((image) => [image.source, image])).values()]
   }, [group.images, imageTools])
   // Generated images are answer content even while the fold is closed
@@ -195,7 +195,7 @@ export const AnswerImages = memo(function AnswerImages({ group, threadId }: { gr
           {images.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               {images.map((image) => (
-                <ResponseImage key={image.source} source={image.source} label={image.label} />
+                <ResponseImage key={image.source} source={image.source} label={image.label} at={image.at} />
               ))}
             </div>
           )}

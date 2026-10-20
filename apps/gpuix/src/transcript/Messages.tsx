@@ -14,6 +14,7 @@ import { T } from './glyphs.ts'
 import { Button, Chevron, Para, fg, muted } from './kit.tsx'
 import { PanelPresence, PanelEnter, keyboardAnswer } from '../requests/Panel.tsx'
 import { clear } from '../notes/kit.tsx'
+import { SwapOnChange } from '../motion/kit.tsx'
 import { over } from '../theme.ts'
 import { BoundedMarkdown, TextDetail } from './markdown.tsx'
 import { useRowState, type ToolBlock } from './store.ts'
@@ -95,7 +96,7 @@ function ResultRow({ item }: { item: AgentResultItem }) {
   const [expanded, setExpanded] = useRowState(`result:${item.task_id}`, false)
   return <div style={{ display: 'flex', flexDirection: 'column', paddingTop: 8, paddingBottom: 8, borderTopWidth: 1, borderColor: t.border }}>
     <div testId={`result-toggle-${item.task_id}`} role="button" tabIndex={0} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') { keyboardAnswer(); setExpanded(!expanded) } }} onClick={() => setExpanded(!expanded)} style={{ display: 'flex', gap: 8, alignItems: 'center', minHeight: 28, cursor: 'pointer' }}>
-      <ProviderMark kind={item.provider} size={14} /><Label color={t.text} size={13} truncate style={{ flexGrow: 1 }}>{item.title}</Label><Label color={item.status === 'failed' ? t.red : muted(t)} size={12}>{phase.word}</Label><Chevron open={expanded} color={muted(t)} />
+      <ProviderMark kind={item.provider} size={14} /><Label color={t.text} size={13} truncate style={{ flexGrow: 1 }}>{item.title}</Label><SwapOnChange active={phase.word} style={{ flexShrink: 0 }}><Label color={item.status === 'failed' ? t.red : muted(t)} size={12}>{phase.word}</Label></SwapOnChange><Chevron open={expanded} color={muted(t)} />
     </div>
     <Para color={muted(t)} size={11}>{[item.role, item.model, item.workspace === 'worktree' ? 'Worktree' : 'Shared workspace', item.conflicts?.length ? `${item.conflicts.length} ${item.conflicts.length === 1 ? 'conflict' : 'conflicts'}` : ''].filter(Boolean).join(' · ')}</Para>
     {!expanded && <Para color={muted(t)} size={12} style={{ lineClamp: 2 }}>{resultPreview(item)}</Para>}
@@ -122,7 +123,7 @@ export function SentToRow({ block, threadId }: { block: ToolBlock; threadId: str
   const [expanded, setExpanded] = useRowState(`sent:${block.id}`, false)
   const title = target?.title || child?.title || 'another thread'
   return <div testId="sent-to-row" style={{ display: 'flex', flexDirection: 'column', paddingTop: 4, paddingBottom: 4 }}>
-    <div testId={`sent-toggle-${block.id}`} role="button" tabIndex={0} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') { keyboardAnswer(); setExpanded(!expanded) } }} onClick={() => setExpanded(!expanded)} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 28, cursor: 'pointer' }}><Icon source={purposeIcon(input.purpose)} size={14} color={muted(t)} /><Label color={muted(t)} truncate style={{ flexGrow: 1 }}>{`${block.complete ? 'Sent to' : 'Sending to'} ${title} · ${purposeLabel(input.purpose)}`}</Label><Label color={block.isError || live.state === 'failed' ? t.red : muted(t)} size={12}>{live.word}</Label><Chevron open={expanded} color={muted(t)} /></div>
+    <div testId={`sent-toggle-${block.id}`} role="button" tabIndex={0} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') { keyboardAnswer(); setExpanded(!expanded) } }} onClick={() => setExpanded(!expanded)} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 28, cursor: 'pointer' }}><Icon source={purposeIcon(input.purpose)} size={14} color={muted(t)} /><Label color={muted(t)} truncate style={{ flexGrow: 1 }}>{`${block.complete ? 'Sent to' : 'Sending to'} ${title} · ${purposeLabel(input.purpose)}`}</Label><SwapOnChange active={live.word} style={{ flexShrink: 0 }}><Label color={block.isError || live.state === 'failed' ? t.red : muted(t)} size={12}>{live.word}</Label></SwapOnChange><Chevron open={expanded} color={muted(t)} /></div>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginLeft: 22 }}>
       <Para color={muted(t)} size={12} style={{ lineClamp: 1 }}>{`“${plainLine(input.body, 160)}”`}</Para>
       {live.reply && <Para color={muted(t)} size={12} style={{ lineClamp: 1 }}>{`Reply: “${plainLine(live.reply.body, 160)}”`}</Para>}

@@ -597,7 +597,7 @@ function QuestionSteps({
               Previous
             </Button>
           )}
-          <Button disabled={busy || !canContinue} onClick={next} iconAfter={reviewing ? undefined : T.arrowRight} testId="question-next">
+          <Button swap disabled={busy || !canContinue} onClick={next} iconAfter={reviewing ? undefined : T.arrowRight} testId="question-next">
             {busy ? 'Sending…' : reviewing ? (questions.length === 1 ? 'Send answer' : 'Send answers') : step === questions.length - 1 ? 'Review answers' : 'Next'}
           </Button>
         </div>
@@ -823,6 +823,7 @@ function UserInputPanel({ approval, count }: { approval: ApprovalRequest; count:
           </>
         ) : (
           <Button
+            swap
             disabled={busy || (approval.tool_name === 'ui_select' && !value)}
             onClick={() => {
               if (!elicitation) return void submit({ value })
