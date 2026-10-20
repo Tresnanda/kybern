@@ -33,13 +33,18 @@ function rpc() {
 // ---- row state (`useTranscriptRowState`) ----
 
 const rowState = new Map<string, unknown>()
+/** Perf harnesses only (`perf/tree`): the starting value of a row nobody has toggled yet; undefined keeps the row's own. */
+let rowDefault: ((key: string) => unknown) | null = null
+export function setRowStateDefault(value: ((key: string) => unknown) | null) {
+  rowDefault = value
+}
 
 /** Disclosure state keyed by row identity: a row scrolled out of the virtual
  *  list and back keeps whether it was open. */
 export function useRowState<T>(key: string, initial: T): [T, (value: T) => void] {
   key = `${usePaneId()}:${key}`
   const scope = useContext(TranscriptRowStateScope)
-  const [value, setValue] = useState<T>(() => (scope?.has(key) ? scope.get(key) as T : rowState.has(key) ? rowState.get(key) as T : initial))
+  const [value, setValue] = useState<T>(() => (scope?.has(key) ? scope.get(key) as T : rowState.has(key) ? rowState.get(key) as T : (rowDefault?.(key) as T | undefined) ?? initial))
   return [
     value,
     (next: T) => {
