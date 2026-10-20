@@ -22,12 +22,14 @@ in the scene at 60 Hz cost 12–14% CPU and 0.9–3.3 s GPU per 15 s. A tier-2 f
 (5–9 ms CPU there; fine for 60 Hz, not for 120 Hz). A tier-3 loop at 60 Hz was measured at ~35–50% CPU and
 was rejected. **Never drive a loop from React state.**
 
-One caveat for tier 1: a `paintTransform` whose element mounts in the same commit (a popup's content) can
-take its first retained step a frame late, because the native tick falls back to a full render when the
-scope has not been tagged yet. For input-triggered popups that is +5–8 ms to the first visible step on
-average (measured on the model picker), so `PopupLayer` and the `Rise`/`Popup`/`Swap` helpers keep their
-tier-2 `motion` for now; use tier 1 for motion on elements that are already mounted (press, toggles, pills,
-drag, reorder, scroll-linked and long or continuous motion).
+Tier 1 starts on the frame its element first paints. A `paintTransform` that mounts with an `initial` value (a popup,
+a `Rise`, a `Swap`) is timed from the React batch that mounted it, so its mount frame already shows the first step;
+the layout tween it replaced paints its mount frame at the initial value (invisible for a fade) and shows its first
+step one frame later. Input → first visible step on the model picker in the 3,000-turn bench thread
+(`../../perf/motion-native/latency.ts`, `KYBERN_POPUP_MOTION=layout` is the control): see `../../native/README.md` →
+"Motion latency" for the numbers. What remains of that latency is the mount frame itself (the popup's island renders
+and lays out), not the motion. Scopes that rest at identity and will move again (a `Presence` exit, a hover reveal
+hiding) pass `retain: true` (the helpers below do), so their next change is retained from its first frame too.
 
 ## Tier 1: paint-only primitives
 
@@ -56,8 +58,13 @@ the paint like a CSS transform.
 - `blur` is a backdrop pass over the subtree; a settled blur (0) drops it. Prefer a 2–4 px blur on entrances
   instead of a bare opacity crossfade.
 - Rotation is exact for glyphs, SVGs and paths; boxes rotate their centres only. Rotate icon subtrees.
+- `scaleX` / `scaleY` multiply `scale` on one axis about `origin` (a held switch thumb's `scale-x-110`, a bar filling
+  from one end); corners stay round at the smaller stretch. `shadowOpacity` fades only the subtree's drop shadows.
+- `retain: true` keeps the scope's retained paint while it rests at identity: use it on anything that will exit or
+  hide later (`presenceTransform` and `revealTransform` set it), so that change is paint-only from its first frame.
 - Ready-made: `pressTransform()` (`press.ts`, `:active` squash), `popTransform()` (`../kit/Pop.tsx`, `t-pop`),
-  `successTransform()` (`success.ts`, `t-success`), `materialize` on popup layers (`../composer/Menu.tsx`).
+  `successTransform()` (`success.ts`, `t-success`), `materialize` on popup layers (`../composer/Menu.tsx`),
+  `Rise hold` (wait at the first frame, e.g. until `<img onLoad>` reports the bitmap decoded).
 
 ### `paintTransform.press`: native `:active`
 
@@ -85,10 +92,11 @@ size does not change.
 | --- | --- | --- |
 | `matrix` (`cycleMs`, `delayMs`) | div fill | The matrix-loader dot pulse (rest 22% → full at 15% → rest at 45%). |
 | `breathe` (`cycleMs`) | div fill or SVG | Opacity 1 → 0.45 → 1, ease-in-out. |
-| `shimmer` (`cycleMs`) | `Label` text | Glyph brightness pulse 1 → 1.6 → 1 (the live label). |
+| `shimmer` (`cycleMs`, `highlight`) | `Label` text | `.t-shimmer`: a soft band of `highlight` sweeps across the text, glyph by glyph (the live label, 2 s). Without `highlight`, a brightness pulse 1 → 1.6 → 1. |
+| `hue` (`cycleMs`) | div fill, SVG or `Label` | `hue-rotate(0 → 360deg) saturate(1.2)`; scene only (not composited). |
 | `rotate` (`cycleMs`) | square SVG | `animate-spin`. |
 | `pop` (`cycleMs`, `delayMs`) | text or SVG leaf | `t-pop` once on mount, then stops asking for frames. |
-| `stroke` (`cycleMs`, `delayMs`, `dash`, `ease`) | `<svg source>` | `t-check-draw` stroke draw-in, once. |
+| `stroke` (`cycleMs`, `delayMs`, `dash`, `ease`, `from`, `to`, `retarget`) | `<svg source>` | `t-check-draw` stroke draw-in, once; with `from`/`to`/`retarget` a ring that eases from value to value (`ringValue` in `success.ts`). |
 
 The leaf must be passive: fixed size, no children (except a `Label`'s text), no handlers, no hover/active
 style, no border, shadow or backdrop. Loops run until the prop is removed, so **always gate them**:
@@ -123,8 +131,18 @@ Use the existing components rather than new loops: `MatrixLoader`, `kit/Spin.tsx
   `opacity`, `translateX/Y`), use `paintTransform`/`paintTranslate` instead: identical pixels, tier-1 cost.
 - Height/width motions are legitimate (`Collapse` in `kit.tsx`, the sidebar width, the environment inset), but
   wrap expensive neighbours in islands so the per-frame relayout stays small.
-- Hover styles (`style.hover`) switch instantly; there is no CSS `transition` on style props. A hover fade
-  needs state + `paintTransform` opacity or a tier-2 `motion` opacity on an overlay layer.
+- Hover and press colours (`style.hover` / `style.active` background and border colours) fade natively under the
+  window root's `hoverTransition` (`HOVER_FADE_ROOT` in `kit.tsx`, 90 ms): the flip renders once, the frames after it
+  re-tint the quads in place. A press lands at once and eases back on release; a rest colour changed by state (a
+  selection moved by the keyboard) stays instant; `hoverTransition={false}` opts a subtree out. Text colour and
+  other hover properties still switch at once.
+
+## Embedded web documents
+
+Previews and visual replies are native WKWebViews, outside the GPUI scene, so `paintTransform` cannot fade them.
+`webHost.present(id, to, { from, duration, ease, origin })` (`../native/webview.ts`) fades and scales the document's
+layer in Core Animation (no app frames); `webDocumentEnter(id, webHost.present)` (`kit.tsx`) is the 150 ms entrance.
+Call it before the document is first shown.
 
 ## Islands (`cache`)
 
@@ -170,7 +188,7 @@ const enter = REDUCED_MOTION
 
 ## Tokens
 
-`DURATION`, `EASE`, `DISTANCE`, `ENTER`, `POPUP`, `DISCLOSURE` in `kit.tsx` mirror the desktop's
+`DURATION`, `EASE`, `DISTANCE`, `ENTER`, `POPUP`, `DISCLOSURE`, `HOVER_FADE` in `kit.tsx` mirror the desktop's
 `styles/motion.css`. Hover < 100 ms, press 80/150 ms, menus 150–250 ms, panels 200–300 ms, pages 250–400 ms;
 exits ≈30% faster than entrances; keyboard-driven and 100+/day actions stay instant.
 
@@ -184,3 +202,7 @@ exits ≈30% faster than entrances; keyboard-driven and 100+/day actions stay in
 - Curves: the native checks pause the automation clock (`app.clock.pause()`, `app.clock.set(ms)`) and compare frames against
   the desktop CSS in WebKit (`native/subtree-transform-check.ts`, `scripts/render9-strips.ts`).
 - Idle: after the motion ends the window must submit no frames (`idle-home`, `idle-thread` scenarios).
+- Input → first visible step and fallback renders: `bun perf/motion-native/latency.ts <label> model-picker
+  reveal-exit` (native `KYBERN_MOTION_TRACE=1`: input, batches, renders, retained ticks and presents on one clock).
+- Hover fades, rings, web documents, checklist press: `native/hover-fade-check.ts`, `native/ring-check.ts`,
+  `native/webview-check.ts`, `src/editor/check.ts` (all in, or next to, `native/update.sh`).
