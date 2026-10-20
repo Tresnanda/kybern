@@ -125,3 +125,4 @@ exec((here / "code_memory_gpui.py").read_text())
 
 exec((here / "code_frame_gpui.py").read_text())
 exec((here / "code_collect_gpui.py").read_text())
+exec((here / "hover_reconcile_gpui.py").read_text())

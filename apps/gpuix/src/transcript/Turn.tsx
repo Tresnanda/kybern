@@ -408,7 +408,7 @@ function EditedFileRow({ file, threadId, turnId, first, border }: { file: Diff['
           ) : patch ? (
             <>
               <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
-                <diff patch={patch.text} scroll={file.additions + file.deletions > 200} theme={desktopDiffTheme(t, false)} style={file.additions + file.deletions > 200 ? { minWidth: 0, height: 360 } : { minWidth: 0 }} />
+                <diff patch={patch.text} scroll={file.additions + file.deletions > 200} theme={desktopDiffTheme(t, false)} style={{ userSelect: 'text', minWidth: 0, ...(file.additions + file.deletions > 200 ? { height: 360 } : {}) }} />
               </div>
               {patch.truncated && <Para color={muted(t, 0.75)} size={11} style={{ paddingLeft: 12, paddingTop: 6, paddingBottom: 8 }}>The patch was truncated.</Para>}
             </>

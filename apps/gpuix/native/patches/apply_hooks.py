@@ -577,3 +577,5 @@ exec((Path(__file__).parent / "code_small_hooks.py").read_text())
 for path, text in pending.items():
     (src / path).write_text(text)
 print(f"hooks applied to {len(pending)} files")
+
+exec((Path(__file__).parent / "selection_surface_hooks.py").read_text())

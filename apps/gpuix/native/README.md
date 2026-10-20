@@ -1562,3 +1562,43 @@ unused chunks immediately. Nested deferred clears and event arenas do not
 notify. `KYBERN_CODE_POST_FRAME_MEMORY=0` selects the earlier 8 MiB pump-only
 policy in the same addon, including its original arena slack. Collection stays
 event driven; there is no idle timer, frame request or glyph eviction.
+
+
+## Hover reconciliation after layout (hands-on round 5)
+
+`hover_reconcile_gpui.py` and `hover_reconcile.rs` deliver a dedicated native
+hover reconciliation event after a completed layout. It reaches both replayed
+cached listeners and the prior frame's retired listeners. Existing GPUI
+`on_hover` and `:hover` state changes defer their callbacks/invalidation until
+after drawing. Rebuilt hitboxes match by global element identity; retired
+owners receive a leave. No mouse movement, drag or text-selection event is
+synthesized. Retained translations/transforms use their existing presentation
+callback to re-hit-test their updated geometry and update the cursor.
+
+The pinned GPUI and the research Zed checkout already update `mouse_hit_test`
+after prepaint, and uncached div painting already reconciles `on_hover`. Cached
+paint bypasses that div code, while listeners that leave the rendered list
+previously received no leave. The new event travels through the ordinary cached
+mouse-listener ranges, including sparse rows, without a second registry, cache,
+idle clock or timer. Notifications occur only on an actual hover transition.
+`KYBERN_HOVER_RECONCILE=0` is a same-addon diagnostic control.
+
+The sidebar uses one hover owner around each row and its revealed controls.
+It no longer counts nested child enters/leaves, whose balance changes when a
+control unmounts. Native ancestor-preserving hit testing supplies that ownership.
+
+The desktop's `styles/kybern.css:26–35` is the selection policy: chrome inherits
+`userSelect: 'none'`; prose, Markdown and source bodies opt in to `'text'`.
+`Label` also defaults to none for anchored UI. Native inputs and the rich editor
+retain their own selection models. `selection_surface_hooks.py` also makes
+custom code, Markdown and diff surfaces register their explicit selection
+start region through `bounds_tracker`, just like host div/text nodes. Inherited
+selectability alone could not override a select-none ancestor's start region.
+
+`bun native/hover-check.ts` verifies stationary-pointer list retirement, the new
+row's enter, layout reflow, retained translation/transform, prose selection, clearing a
+selection on a control and parked frames in both themes. The list caches its
+root like the sidebar; separate cached controls exercise paint replay. `perf/hover/` holds the
+full-app audit, AppKit double-click bridge, native rebuild wrapper and benchmark
+coordination. Results and limits belong in its report, not in timing claims
+inferred from screenshots.

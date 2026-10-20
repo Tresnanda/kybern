@@ -69,7 +69,7 @@ export const DocumentMarkdown = memo(function DocumentMarkdown(props: MarkdownPr
   useEffect(() => { owner.current?.enqueue(source) }, [renderer, source])
   if (error) throw error
   if (!ready) return null
-  return createElement('markdown', { ...props, source: '', document: ready.id, revision: ready.revision })
+  return createElement('markdown', { ...props, style: { userSelect: 'text', ...props.style }, source: '', document: ready.id, revision: ready.revision })
 })
 
 export type MarkdownRangeProps = Omit<MarkdownProps, 'source'> & {

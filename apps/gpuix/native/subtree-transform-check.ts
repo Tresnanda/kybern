@@ -2,6 +2,8 @@
 // hit testing follows the transformed paint, the native press squash works with real mouse down/up, an animated
 // transform presents frames without renders, layout or island wakes, and the layout slot never moves.
 import '../src/native/local-build.ts'
+import {requireScreen} from '../perf/bench/screen-state.ts'
+import {waitForWindowOnscreen,requireWindowOnscreen} from '../perf/bench/window-onscreen.ts'
 import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -17,7 +19,7 @@ for (const theme of ['dark', 'light']) for (const reduce of ['0', '1']) {
   const all = () => { try { return readFileSync(log, 'utf8') } catch { return '' } }
   const f = await launchFixture(path.join(import.meta.dir, 'subtree-transform-lab.tsx'), { GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: theme, KYBERN_REDUCED_MOTION: reduce, KYBERN_FULL_RATE: '1', KYBERN_DEBUG_ISLANDS: '1', KYBERN_FRAME_COSTS: '1', KYBERN_FRAME_TIMES: '1', ...scratch })
   try {
-    const a = f.app; await a.getByTestId('app-ready').waitFor()
+    const a = f.app; await a.getByTestId('app-ready').waitFor();await waitForWindowOnscreen(f.pid)
     const root = (await a.getByTestId('app-ready').element()).id
     const bounds = async (testId: string) => a.getByTestId(testId).bounds()
     await a.call('focus', { elementId: root })
@@ -25,7 +27,8 @@ for (const theme of ['dark', 'light']) for (const reduce of ['0', '1']) {
     const wait = async (check: () => Promise<boolean> | boolean, name: string) => { const deadline = Date.now() + 6000; while (!await check()) { assert.ok(Date.now() < deadline, name); await Bun.sleep(10) } }
     const count = (pattern: RegExp) => (all().match(pattern) ?? []).length
     const windowId = execFileSync('swift', [path.join(import.meta.dir, '../src/tasks/round7-window-id.swift'), String(f.pid)], { encoding: 'utf8' }).trim()
-    const shot = (name: string) => {
+    const shot = async (name: string) => {
+      requireScreen();await waitForWindowOnscreen(f.pid,20_000);requireWindowOnscreen(f.pid)
       const file = path.join(out, `${label}-${name}.png`)
       execFileSync('screencapture', ['-x', '-o', '-l', windowId, file])
       assertNonBlackContent(file, 520, 300, `${label}/${name}`)
@@ -45,8 +48,8 @@ for (const theme of ['dark', 'light']) for (const reduce of ['0', '1']) {
       // first blur (it adds the blur pass).
       assert.ok(count(/\[kybern-work\]/g) - renders <= keyBaseline + (state === 's' || state === 'b' ? 1 : 0), `${state}: a transform value change rendered the window`)
       assert.equal(f.islandRenders(), islands, `${state}: a transform woke an island`)
-      const retained = shot(`${state}-retained`); await key('t'); tick++; await a.getByText(`Tick ${tick}; clicks 0; presses 0`).waitFor(); await settle()
-      const full = shot(`${state}-full`)
+      const retained = await shot(`${state}-retained`); await key('t'); tick++; await a.getByText(`Tick ${tick}; clicks 0; presses 0`).waitFor(); await settle()
+      const full = await shot(`${state}-full`)
       const left = pngPixels(retained), right = pngPixels(full), scale = left.width / 520; let changed = 0
       for (let y = Math.round(87 * scale); y < 300 * scale; y++) for (let x = Math.round(10 * scale); x < 280 * scale; x++) { const p = left.at(x, y), q = right.at(x, y); if (p.some((v, i) => Math.abs(v - q[i]!) > 3)) changed++ }
       assert.ok(changed < 40, `${state}: retained paint differs from an ordinary render (${changed} px)`)
@@ -66,13 +69,13 @@ for (const theme of ['dark', 'light']) for (const reduce of ['0', '1']) {
     await a.mouse.down({ x: island.x + 20, y: island.y + 20 }); await settle(); await a.mouse.up({ x: island.x + 20, y: island.y + 20 }); await settle()
     const baseline = count(/\[kybern-work\]/g) - base0, before = count(/\[kybern-work\]/g)
     await a.mouse.down({ x: press.x + press.width / 2, y: press.y + press.height / 2 }); await settle()
-    const down = pngPixels(shot('press-down')), sc = down.width / 520, top = down.height / sc - 300, bg = theme === 'light' ? 0xf5 : 0x20
+    const down = pngPixels(await shot('press-down')), sc = down.width / 520, top = down.height / sc - 300, bg = theme === 'light' ? 0xf5 : 0x20
     assert.ok(Math.abs(down.at(corner.x * sc, (corner.y + top) * sc)[0]! - bg) < 6, 'pressed button did not shrink')
     const pressRenders = count(/\[kybern-work\]/g) - before
     await a.mouse.up({ x: press.x + press.width / 2, y: press.y + press.height / 2 }); await a.getByText(`Tick ${tick}; clicks 1; presses 1`).waitFor(); await settle()
     // The release also renders for the click (the probe measured 2 for any onClick element, transformed or not).
     assert.ok(count(/\[kybern-work\]/g) - before <= baseline + 2, `press rendered beyond the input baseline (${pressRenders} on down)`)
-    const up = pngPixels(shot('press-up'))
+    const up = pngPixels(await shot('press-up'))
     assert.ok(Math.abs(up.at(corner.x * sc, (corner.y + top) * sc)[0]! - 0x90) < 8, 'released button did not return')
     // An animated transform: display-rate frames, no renders.
     await key('a'); await settle()

@@ -7,6 +7,8 @@ import {promisify} from 'node:util'
 const exec=promisify(execFile)
 import {launchFixture} from '../scripts/idle-harness.ts'
 import {pixels} from './png.ts'
+import {requireScreen} from '../perf/bench/screen-state.ts'
+import {waitForWindowOnscreen,requireWindowOnscreen} from '../perf/bench/window-onscreen.ts'
 const out=process.env.KYBERN_VERIFY_OUTPUT??path.join(import.meta.dir,'build','paint-check')
 mkdirSync(out,{recursive:true})
 for(const mode of ['dark','light']) {
@@ -17,10 +19,11 @@ for(const mode of ['dark','light']) {
   try {
    await a.getByTestId('app-ready').waitFor({timeoutMs:60000})
    await a.getByTestId('fill').waitFor()
+   await waitForWindowOnscreen(f.pid)
    await a.getByTestId('park').hover()
    const root=(await a.getByTestId('app-ready').element()).id
    const windowId=(await exec('swift',[path.join(import.meta.dir,'surface-window-id.swift'),String(f.pid),'3'])).stdout.trim()
-   const capture=async(file:string)=>{await exec('screencapture',['-x','-o','-l',windowId,file])}
+   const capture=async(file:string)=>{requireScreen();await waitForWindowOnscreen(f.pid,20_000);requireWindowOnscreen(f.pid);await exec('screencapture',['-x','-o','-l',windowId,file])}
    const key=async(key:string)=>{await a.call('keyDown',{elementId:root,key})}
    const sample=async(file:string,id:string,dx=20,dy=20)=>{const b=await a.getByTestId(id).bounds(),png=pixels(file),scale=png.w/600;return png.at((b.x+dx)*scale,png.h-340*scale+(b.y+dy)*scale)}
    const shot=async(name:string,ready?:(file:string)=>Promise<boolean>)=>{
@@ -29,10 +32,13 @@ for(const mode of ['dark','light']) {
     images.push(file);return file
    }
    const painted=async(text:string)=>{const deadline=Date.now()+8000;while(!(await a.call('getPaintedText',{})).text.join('\n').includes(text)){assert.ok(Date.now()<deadline);await Bun.sleep(10)}}
-   // WindowServer can publish the window before its finite show transition settles.
-   // The initial OS capture must compare the settled surfaces, like later states.
-   await Bun.sleep(400)
-   await shot('initial')
+   // Layout/automation readiness can precede the first WindowServer present.
+   // Require the actual initial fills before comparing scoped/full pixels.
+   await shot('initial',async file=>{
+    const expected=[['fill',[221,85,51]],['svg',[85,170,119]],['parent',mode==='light'?[221,221,221]:[51,51,51]]] as const
+    for(const [id,rgb]of expected){const actual=await sample(file,id,id==='parent'?300:20,id==='parent'?80:20);if(rgb.some((value,i)=>Math.abs(value-actual[i]!)>2))return false}
+    return true
+   })
    const before=f.counts()
    for(let i=0;i<4;i++) {
     await key('c')

@@ -7,11 +7,16 @@
  *  5. an island that changes after mount repaints (no stale replay); covered
  *     by check 1, since the lab flips a label inside an island at 800 ms.
  */
-import { readFileSync, mkdirSync, rmSync, cpSync } from 'node:fs'
+import { mkdirSync, rmSync, cpSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { launch } from '@gpuix/react/automation'
 import { PATCHED_NATIVE } from '../src/native/local-build.ts'
+import { pixels } from '../native/png.ts'
+
+// PNG compression can differ for identical RGBA scanlines. Check decoded
+// pixels, including alpha, for both equality and actual animation changes.
+const equalPixels=(a:ReturnType<typeof pixels>,b:ReturnType<typeof pixels>)=>a.w===b.w&&a.h===b.h&&a.channels===b.channels&&a.data.equals(b.data)
 
 if (!PATCHED_NATIVE) throw new Error('native/build/gpuix-native.darwin-arm64.node is missing: run native/update.sh')
 const dir = path.join(tmpdir(), `island-check-${process.pid}`)
@@ -33,16 +38,16 @@ async function shots(mode: string, still: boolean, list = false, hover = false) 
     const b = path.join(dir, `${tag}-b.png`)
     const h = path.join(dir, `${tag}-hover.png`)
     await app.screenshot({ path: a })
-    const first = readFileSync(a)
+    const first = pixels(a)
     const deadline = Date.now() + 3000
     do {
       await app.screenshot({ path: b })
-      if (still || !first.equals(readFileSync(b))) break
+      if (still || !equalPixels(first,pixels(b))) break
       await new Promise(resolve => setTimeout(resolve, 50))
     } while (Date.now() < deadline)
     await app.getByText('Thread row 3 with a reasonably long title').hover()
     await app.screenshot({ path: h })
-    return { a: readFileSync(a), b: readFileSync(b), hover: readFileSync(h) }
+    return { a: pixels(a), b: pixels(b), hover: pixels(h) }
   } finally { await app.close() }
 }
 
@@ -54,11 +59,11 @@ const live = await shots('island', false)
 const listPlain = await shots('plain', true, true)
 const listIsland = await shots('island', true, true)
 const results = [
-  ['rows identical plain vs island', plain.a.equals(island.a)],
-  ['hover identical plain vs island', plainHover.hover.equals(islandHover.hover)],
-  ['hover repaints inside an island', !island.a.equals(islandHover.hover)],
-  ['loader animates inside an island', !live.a.equals(live.b)],
-  ['islands inside a virtual list render (inline fallback)', listPlain.a.equals(listIsland.a)],
+  ['rows identical plain vs island', equalPixels(plain.a,island.a)],
+  ['hover identical plain vs island', equalPixels(plainHover.hover,islandHover.hover)],
+  ['hover repaints inside an island', !equalPixels(island.a,islandHover.hover)],
+  ['loader animates inside an island', !equalPixels(live.a,live.b)],
+  ['islands inside a virtual list render (inline fallback)', equalPixels(listPlain.a,listIsland.a)],
 ] as const
 for (const [name, ok] of results) console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}`)
 if(results.some(([,ok])=>!ok)&&process.env.KYBERN_VERIFY_OUTPUT){

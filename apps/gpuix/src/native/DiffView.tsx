@@ -34,7 +34,7 @@ type Props = Omit<DiffProps,'theme'|'wordDiff'|'collapsedPaths'|'onToggleFile'>
 export const DesktopDiff = memo(function DesktopDiff({patch='',style,testId,scroll,...props}:Props) {
  const chunks=useMemo(()=>patch.split(/(?=^diff --git )/m).filter(Boolean).map(text=>({text,file:parseUnifiedDiff(text.replace(/\n$/, ''))[0]})),[patch])
  return <div style={{display:'flex',flexDirection:'column',minWidth:0,...style}}>
- {chunks.map(({text,file},i)=>file?<DiffCard key={file.path} patch={text} file={file} testId={i&&testId?`${testId}-${i}`:testId} forceScroll={!!scroll} {...props}/>:<diff key={i} patch={text} testId={testId} {...props}/>)}
+ {chunks.map(({text,file},i)=>file?<DiffCard key={file.path} patch={text} file={file} testId={i&&testId?`${testId}-${i}`:testId} forceScroll={!!scroll} {...props}/>:<diff style={{userSelect:'text'}} key={i} patch={text} testId={testId} {...props}/>)}
  </div>
 })
 function DiffCard({file,patch,forceScroll,maxLines,onShowMore,...props}:Omit<Props,'scroll'|'style'> & {file:ReturnType<typeof parseUnifiedDiff>[number];forceScroll:boolean}) {
@@ -43,6 +43,6 @@ function DiffCard({file,patch,forceScroll,maxLines,onShowMore,...props}:Omit<Pro
  const theme=useMemo(()=>desktopDiffTheme(t,false),[t])
  return <div style={{display:'flex',flexDirection:'column',flexShrink:0,minWidth:0,borderWidth:1,borderColor:t.border,borderRadius:6,overflow:'hidden'}}>
  <NativeDiffHeader file={file} open={open} onToggle={()=>setOpen(!open)} testId={`diff-header-${file.path}`}/>
- {open&&(file.binary?<Label size={11} color={alpha(t.textSecondary,0.75)} style={{padding:12}}>Binary file changed.</Label>:!file.hunks.length?<Label size={11} color={alpha(t.textSecondary,0.75)} style={{padding:12}}>No textual changes.</Label>:<diff {...props} patch={patch} maxLines={maxLines??visible} onShowMore={e=>{setVisible(n=>n+600);onShowMore?.(e)}} theme={theme} scroll={bounded} style={bounded?{height:Math.min(360,count*21.45+file.hunks.length*25.45),minWidth:0}:{minWidth:0}}/>)}
+ {open&&(file.binary?<Label size={11} color={alpha(t.textSecondary,0.75)} style={{padding:12}}>Binary file changed.</Label>:!file.hunks.length?<Label size={11} color={alpha(t.textSecondary,0.75)} style={{padding:12}}>No textual changes.</Label>:<diff {...props} patch={patch} maxLines={maxLines??visible} onShowMore={e=>{setVisible(n=>n+600);onShowMore?.(e)}} theme={theme} scroll={bounded} style={{userSelect:'text',minWidth:0,...(bounded?{height:Math.min(360,count*21.45+file.hunks.length*25.45)}:{})}}/>)}
  </div>
 }

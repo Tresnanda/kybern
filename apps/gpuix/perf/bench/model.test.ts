@@ -89,10 +89,17 @@ test('startup report exposes distinct sidebar, first and newest content median/p
 
 import {parseWindowOnscreen} from './window-onscreen.ts'
 test('capture guard requires a visible window contained on the hidden 2x display',()=>{
+ const display='test-display 4 scale=2 bounds={X = -1440; Y = 900; Width = 1440; Height = 900;}\n'
  const window=(x:number,y:number,scale:number,onscreen=true,width=1280)=>`window 42 onscreen=${onscreen} scale=${scale} bounds={X = ${x}; Y = ${y}; Width = ${width}; Height = 820;}`
- expect(parseWindowOnscreen(window(-1360,940,2)).valid).toBe(true)
- expect(parseWindowOnscreen(window(-1360,940,2).replace("X = -1360", 'X = "-1360"')).valid).toBe(true)
- for(const raw of [window(80,40,2),window(-1360,940,1),window(-1360,940,2,false),window(-1500,940,2),window(-1360,899,2),window(-1360,1000,2),window(-1360,940,2,true,1400),''])expect(parseWindowOnscreen(raw).valid).toBe(false)
+ expect(parseWindowOnscreen(display+window(-1360,940,2)).valid).toBe(true)
+ expect(parseWindowOnscreen(display+window(-1360,940,2).replace("X = -1360", 'X = "-1360"')).valid).toBe(true)
+ for(const raw of [window(80,40,2),window(-1360,940,1),window(-1360,940,2,false),window(-1500,940,2),window(-1360,899,2),window(-1360,1000,2),window(-1360,940,2,true,1400),''])expect(parseWindowOnscreen(display+raw).valid).toBe(false)
+ const primary=display.replace('X = -1440; Y = 900','X = 0; Y = 0')
+ expect(parseWindowOnscreen(primary+window(80,40,2)).valid).toBe(true)
+ expect(parseWindowOnscreen(primary+window(-1360,940,2)).valid).toBe(false)
+ expect(parseWindowOnscreen(window(80,40,2)).valid).toBe(false)
+ expect(parseWindowOnscreen(primary.replace('display 4','display 0')+window(80,40,2)).valid).toBe(false)
+ expect(parseWindowOnscreen(primary.replace('scale=2','scale=1')+window(80,40,2)).valid).toBe(false)
 })
 
 

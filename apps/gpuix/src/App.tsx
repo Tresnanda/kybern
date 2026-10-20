@@ -120,11 +120,12 @@ function Workspace() {
   return (
     <div
       testId="app-ready"
+      // kybern.css:26–35: chrome inherits select-none; document bodies opt in.
       // Any press makes later navigation pointer-driven again (`keyboardNav`).
       onMouseDown={pointerNav}
       onMouseMove={taskDragging || splitDragging ? (event) => { if (taskDragging) trackTaskDrag(event); if (splitDragging) trackThreadDrag(event) } : undefined}
       onMouseUp={splitDragging ? finishSplitDrag : undefined}
-      style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: OPAQUE_WINDOW && t.variant === 'light' ? over(t.frame, '#ffffff') : t.frame, position: 'relative' }}
+      style={{ userSelect: 'none', display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: OPAQUE_WINDOW && t.variant === 'light' ? over(t.frame, '#ffffff') : t.frame, position: 'relative' }}
     >
       <TitleBar panelOpen={panelOpen} />
       <div style={{ display: 'flex', position: 'absolute', left: 0, right: 0, bottom: 0, top: TITLEBAR, paddingRight: INSET, paddingBottom: INSET }}>
