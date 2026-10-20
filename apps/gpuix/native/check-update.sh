@@ -17,6 +17,11 @@ geometry)
   KYBERN_REGION_PAINT=1 bun native/subtree-transform-check.ts
   bun native/font-weight-check.ts
   bun native/stroke-draw-check.ts
+  # Compositor loops (patches/compositor_loops_*): CA layers, curves, hand-back; and the scene path control.
+  bun perf/motion-fps/lab-check.ts
+  bun perf/motion-fps/lab-check.ts --light
+  bun perf/motion-fps/lab-check.ts --reduced
+  KYBERN_COMPOSITOR_LOOPS=0 bun perf/motion-fps/lab-check.ts
   ;;
 content)
   bun native/markdown-check.ts

@@ -7,6 +7,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useWindowSize } from '@gpuix/react'
+import type { PaintTransformProps } from '@gpuix/native/host'
 import { ArrowRight01Icon, ArrowUpRight01Icon, Cancel01Icon, Download04Icon } from '@hugeicons/core-free-icons'
 import { releasePresentation } from '@/lib/releaseNotes'
 import { glyph, Icon } from '../icons.tsx'
@@ -19,6 +20,9 @@ import { openUrl } from '../pulls/PrStates.tsx'
 import { ink, Label, LOGO_SVG, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { canSelfUpdate, closeUpdateDetails, dismissUpdateAnnouncement, installAppUpdate, openUpdateDetails, useAppUpdate } from './update.ts'
 import { pressTransform } from '../motion/press.ts'
+import { BLUR, EASE, SCALE } from '../motion/kit.tsx'
+import { Presence } from '../motion/Presence.tsx'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 
 const ICON = { download: glyph(Download04Icon), arrowRight: glyph(ArrowRight01Icon), arrowUpRight: glyph(ArrowUpRight01Icon), x: glyph(Cancel01Icon) }
 
@@ -28,9 +32,12 @@ const ARTWORK = (() => {
   return packaged && existsSync(packaged) ? packaged : fileURLToPath(new URL('../../../desktop/public/release-background.png', import.meta.url))
 })()
 
-/** `--toast-open` 350 ms / `--toast-close` 250 ms, `--toast-ease`, 16px rise (motion.css:68-96). */
-const TOAST_EASE = [0.22, 1, 0.36, 1]
-let generation = 3_000_000
+/** `--toast-open` 350 ms / `--toast-close` 250 ms, `--toast-ease`, 16px rise, scale `--scale-medium` and a 2px blur (motion.css:68-96). */
+const TOAST_HIDDEN = { opacity: 0, translateY: 16, scale: SCALE.medium, blur: BLUR.small } as const
+const TOAST_ENTER: PaintTransformProps | undefined = PATCHED_NATIVE && !REDUCED_MOTION
+  ? { initial: TOAST_HIDDEN, animate: { opacity: 1, translateY: 0, scale: 1, blur: 0 }, transition: { duration: 0.35, ease: [...EASE.smoothOut] } }
+  : undefined
+const TOAST_EXIT = { to: TOAST_HIDDEN, duration: 0.25, ease: EASE.smoothOut } as const
 
 function useUpdateLabel() {
   const phase = useAppUpdate(s => s.phase)
@@ -99,19 +106,14 @@ export function RailUpdateButton() {
 }
 
 /** Infrequent update notices use the toast transition and never take focus. */
-function UpdateAnnouncement({ version, notes, leaving }: { version: string; notes: string | null; leaving: boolean }) {
+function UpdateAnnouncement({ version, notes, leaving, onGone }: { version: string; notes: string | null; leaving: boolean; onGone: () => void }) {
   const t = useTheme()
   const size = useWindowSize({ intervalMs: 250 })
   const release = useMemo(() => releasePresentation(version, notes), [version, notes])
-  const [motion, setMotion] = useState(() => ({ generation: ++generation, leaving: false }))
-  if (leaving !== motion.leaving) setMotion({ generation: ++generation, leaving })
-  const animation = motion.leaving
-    ? { initial: { opacity: 1, top: 0 }, animate: { opacity: 0, top: 16 }, transition: { duration: 0.25, ease: TOAST_EASE } }
-    : { initial: { opacity: 0, top: 16 }, animate: { opacity: 1, top: 0 }, transition: { duration: 0.35, ease: TOAST_EASE } }
-  // Reduced motion shows and removes the card at once: a zero-length motion
-  // would hold its initial (transparent) state.
-  return <anchored {...(REDUCED_MOTION ? {} : { motion: { generation: motion.generation, isExit: motion.leaving, ...animation } } as object)}
-    position={{ x: size.width - 16, y: size.height - 16 }} anchor="bottomRight" fit="snap" snapMargin={16} deferred priority={5} occlude style={{ borderRadius: 24 }}>
+  // The card enters and leaves by paint (`t-toast`: 16px, scale 0.97 and a 2px blur, 350 / 250 ms) with no layout per frame. Reduce
+  // Motion shows it at once and fades it out over 100 ms (`Presence`).
+  return <anchored position={{ x: size.width - 16, y: size.height - 16 }} anchor="bottomRight" fit="snap" snapMargin={16} deferred priority={5} occlude style={{ borderRadius: 24 }}>
+    <Presence show={!leaving} enter={TOAST_ENTER} exit={TOAST_EXIT} onGone={onGone} style={{ borderRadius: 24 }}>
     <div testId="update-announcement" aria-label="Kybern update available" style={{ display: 'flex', flexDirection: 'column', position: 'relative', width: Math.min(352, size.width - 32), borderRadius: 24, borderWidth: 1, borderColor: t.border, backgroundColor: t.popover, boxShadow: surfaceShadow(t), overflow: 'hidden' }}>
       <ReleaseArtwork compact />
       <ArtworkClose testId="update-announcement-dismiss" label="Dismiss update announcement" onClick={dismissUpdateAnnouncement} />
@@ -124,6 +126,7 @@ function UpdateAnnouncement({ version, notes, leaving }: { version: string; note
         </div>
       </div>
     </div>
+    </Presence>
   </anchored>
 }
 
@@ -186,10 +189,5 @@ export function AppUpdateSurface() {
 }
 
 function AnnouncementPresence({ version, notes, visible, onGone }: { version: string; notes: string | null; visible: boolean; onGone: () => void }) {
-  useEffect(() => {
-    if (visible) return
-    const timer = setTimeout(onGone, REDUCED_MOTION ? 0 : 260)
-    return () => clearTimeout(timer)
-  }, [visible, onGone])
-  return <UpdateAnnouncement version={version} notes={notes} leaving={!visible} />
+  return <UpdateAnnouncement version={version} notes={notes} leaving={!visible} onGone={onGone} />
 }

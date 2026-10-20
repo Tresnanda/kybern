@@ -18,6 +18,10 @@ import { createVelocityTracker } from '../drag/velocity.ts'
 import { watchPointerRelease } from './release.ts'
 import { cls, getObjc, nsApp, sel } from '../native/objc.ts'
 import { onEnvironmentChange } from '../shell/environment.ts'
+import { EASE } from '../motion/tokens.ts'
+import { Presence } from '../motion/Presence.tsx'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { getNav } from '../nav/store.ts'
 import { DOCKED_INSET, ENVIRONMENT_MOTION, setEnvironmentDock, useEnvironmentPanel, useEnvironmentInstant } from '../environment/store.ts'
 import { canSplitPane, collectThreadPanes, closePane, getSplitRoot, resizePane, splitPane, useFocusedPane, useSplitRoot, type Pane } from './store.ts'
 
@@ -128,8 +132,18 @@ function Leaf({ id, split, children }: { id: string; split: boolean; children: R
   return <PaneProvider id={id} compact={split}><div ref={ref} testId={`pane-${id}`} onMouseDown={() => focusPane(id)} onFocus={() => focusPane(id)} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', position: 'relative' }}>
     {split && <PaneHeaderOrNone id={id} />}
     <LeafBody id={id} focused={focused}><LeafContent id={id} split={split}>{children}</LeafContent></LeafBody>
-    {split && focused && <div style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, borderWidth: 1, borderColor: alpha(t.v('--color-border-focus'), .28), pointerEvents: 'none' }} />}
+    {split && <FocusRing focused={focused} color={alpha(t.v('--color-border-focus'), .28)} />}
   </div></PaneProvider>
+}
+/** `.split-thread-pane::after`: the focused pane's ring fades in and out over 120 ms. Focus moved from the keyboard (⌘⌥←/→) swaps it at once. Paint-only. */
+function FocusRing({ focused, color }: { focused: boolean; color: string }) {
+  const keyboard = getNav().keyboardNav
+  const enter = PATCHED_NATIVE && !keyboard ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: 0.12, ease: [...EASE.out] as [number, number, number, number] } } : undefined
+  return (
+    <Presence show={focused} enter={enter} exit={{ to: { opacity: 0 }, duration: keyboard ? 0 : 0.12, ease: EASE.out }} style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, pointerEvents: 'none' }}>
+      <div style={{ flexGrow: 1, borderWidth: 1, borderColor: color, pointerEvents: 'none' }} />
+    </Presence>
+  )
 }
 /** Hosts the thread content. The Environment panel docks at its top-right and insets the content, like `Thread.tsx` (`ENVIRONMENT_DOCKED_CONTENT_INSET_PX`). */
 function LeafBody({ id, focused, children }: { id: string; focused: boolean; children: ReactNode }) {

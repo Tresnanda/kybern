@@ -1,0 +1,27 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(ThreadFilesResolveParams)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ThreadFilesResolveParams",
+  "description": "Find which of an answer's file references name a file in the conversation's\nworkspace, so a client can show them as file links.",
+  "type": "object",
+  "properties": {
+    "thread_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "paths": {
+      "description": "Paths as written, without a `:line` or `#L` suffix: relative to the\nthread cwd, absolute inside it, or a bare file name. At most 200.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "thread_id",
+    "paths"
+  ]
+}

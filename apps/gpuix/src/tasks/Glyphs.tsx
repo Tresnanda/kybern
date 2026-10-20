@@ -1,4 +1,4 @@
-import { useLoopVisibility } from '../native/loop-visibility.ts'
+import { useLoopRunning, useLoopVisibility } from '../native/loop-visibility.ts'
 import { ISLAND, NATIVE_PAINT_ANIMATIONS, useLoaderStep } from '../MatrixLoader.tsx'
 import { motion } from '@gpuix/react'
 import type { TaskPriority, TaskStatus } from '../../../../packages/kybern-client/src/types.ts'
@@ -99,12 +99,12 @@ function LegacyRunningGlyph({ source, color }: { source: string; color: string }
   const loop = useLoopVisibility(!REDUCED_MOTION)
   const step = useLoaderStep(loop.visible)
   const opacity = REDUCED_MOTION ? 1 : .55 + .45 * (1 - Math.cos(step * Math.PI / 4)) / 2
-  return <div ref={loop.ref} {...ISLAND} style={{ width: 14, height: 14, flexShrink: 0, pointerEvents: 'none' }}><svg source={source} style={{ width: 14, height: 14, color, opacity, pointerEvents: 'none' }} /></div>
+  return <div ref={loop.ref} testId="task-running-glyph" {...ISLAND} style={{ width: 14, height: 14, flexShrink: 0, pointerEvents: 'none' }}><svg source={source} style={{ width: 14, height: 14, color, opacity, pointerEvents: 'none' }} /></div>
 }
 function RunningPaint({ ring, color, opacity }: { ring: string; color: string; opacity: number }) {
-  const loop = useLoopVisibility(!REDUCED_MOTION)
-  return <div ref={loop.ref} {...ISLAND} style={{ width: 14, height: 14, flexShrink: 0, pointerEvents: 'none',position:'relative' }}>
+  const loop = useLoopRunning(!REDUCED_MOTION)
+  return <div ref={loop.ref} testId="task-running-glyph" {...ISLAND} style={{ width: 14, height: 14, flexShrink: 0, pointerEvents: 'none',position:'relative' }}>
     <svg source={ring} style={{width:14,height:14,color,pointerEvents:'none'}}/>
-    <svg {...(NATIVE_PAINT_ANIMATIONS && loop.visible ? {paintAnimation:{kind:'breathe',cycleMs:3200}} : {})} source={wrap('<path d="M7 7V3.6A3.4 3.4 0 0 1 7 10.4Z" fill="currentColor"/>')} style={{position:'absolute',left:0,top:0,width:14,height:14,color,opacity,pointerEvents:'none'}}/>
+    <svg {...(NATIVE_PAINT_ANIMATIONS && loop.running ? {paintAnimation:{kind:'breathe',cycleMs:3200}} : {})} source={wrap('<path d="M7 7V3.6A3.4 3.4 0 0 1 7 10.4Z" fill="currentColor"/>')} style={{position:'absolute',left:0,top:0,width:14,height:14,color,opacity,pointerEvents:'none'}}/>
   </div>
 }

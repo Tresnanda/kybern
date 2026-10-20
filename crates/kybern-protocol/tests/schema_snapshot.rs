@@ -92,6 +92,12 @@ fn thread_file_read_schema_is_stable() {
 }
 
 #[test]
+fn thread_files_resolve_schema_is_stable() {
+    insta::assert_json_snapshot!(schema_for!(ThreadFilesResolveParams));
+    insta::assert_json_snapshot!(schema_for!(ThreadFilesResolveResult));
+}
+
+#[test]
 fn notes_wire_shape_is_stable() {
     insta::assert_json_snapshot!("note_schema", schema_for!(Note));
     insta::assert_json_snapshot!("notes_changed_notification", schema_for!(NotesChangedNotification));

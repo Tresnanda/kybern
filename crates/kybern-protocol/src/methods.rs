@@ -1900,6 +1900,24 @@ pub struct ThreadFileReadParams {
 }
 method!(ThreadFileRead, "threads.files.read", Some(Scope::OrchestrationRead), ThreadFileReadParams, FilesReadResult);
 
+/// Find which of an answer's file references name a file in the conversation's
+/// workspace, so a client can show them as file links.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadFilesResolveParams {
+    pub thread_id: ThreadId,
+    /// Paths as written, without a `:line` or `#L` suffix: relative to the
+    /// thread cwd, absolute inside it, or a bare file name. At most 200.
+    pub paths: Vec<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadFilesResolveResult {
+    /// One entry per requested path, in order: the file relative to the thread
+    /// cwd (what `threads.files.read` opens), or null when the path names no
+    /// file, a file outside the workspace, or a bare name shared by several files.
+    pub paths: Vec<Option<String>>,
+}
+method!(ThreadFilesResolve, "threads.files.resolve", Some(Scope::OrchestrationRead), ThreadFilesResolveParams, ThreadFilesResolveResult);
+
 // ---- skills ----
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -2988,6 +3006,7 @@ registry!(
     FilesList,
     FilesRead,
     ThreadFileRead,
+    ThreadFilesResolve,
     SkillsList,
     IntegrationsList,
     HtmlPublish,

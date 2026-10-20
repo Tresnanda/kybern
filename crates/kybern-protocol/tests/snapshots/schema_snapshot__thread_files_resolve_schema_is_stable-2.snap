@@ -1,0 +1,24 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(ThreadFilesResolveResult)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ThreadFilesResolveResult",
+  "type": "object",
+  "properties": {
+    "paths": {
+      "description": "One entry per requested path, in order: the file relative to the thread\ncwd (what `threads.files.read` opens), or null when the path names no\nfile, a file outside the workspace, or a bare name shared by several files.",
+      "type": "array",
+      "items": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    }
+  },
+  "required": [
+    "paths"
+  ]
+}

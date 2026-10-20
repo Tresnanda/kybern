@@ -242,6 +242,48 @@ pub async fn read_thread_file(root: &Path, source: &str, max_bytes: u64) -> Resu
     read_file(&root, &relative.to_string_lossy(), max_bytes.clamp(1, 1024 * 1024)).await
 }
 
+/// Most paths one `threads.files.resolve` call may ask about.
+pub const MAX_RESOLVE_PATHS: usize = 200;
+
+/// Which of an answer's file references name a file `read_thread_file` can
+/// open, as paths relative to the thread cwd. A path that exists under the cwd
+/// (or an absolute one inside it) resolves to itself; otherwise a relative
+/// path or bare file name resolves when exactly one indexed file ends with it.
+pub async fn resolve_thread_files(indexes: &FileIndexCache, cwd: &Path, paths: &[String]) -> Result<Vec<Option<String>>> {
+    let root = tokio::fs::canonicalize(cwd).await?;
+    let mut index = None;
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let path = path.trim();
+        if path.is_empty() || path.contains(['\0', '\\']) {
+            out.push(None);
+            continue;
+        }
+        let mut found = existing_file(&root, path).await;
+        if found.is_none() && !path.starts_with('/') {
+            if index.is_none() {
+                index = Some(indexes.list(cwd).await?);
+            }
+            let name = path.trim_start_matches("./");
+            let suffix = format!("/{name}");
+            let mut matches = index.as_ref().unwrap().iter().filter(|file| *file == name || file.ends_with(&suffix));
+            found = match (matches.next(), matches.next()) {
+                (Some(only), None) => resolve(&root, only).is_ok_and(|path| path.is_file()).then(|| only.clone()),
+                _ => None,
+            };
+        }
+        out.push(found);
+    }
+    Ok(out)
+}
+
+/// `path` under `root` (canonical) when it is an openable file inside it.
+async fn existing_file(root: &Path, path: &str) -> Option<String> {
+    let canon = tokio::fs::canonicalize(root.join(path)).await.ok()?;
+    let relative = canon.strip_prefix(root).ok()?.to_string_lossy().into_owned();
+    (canon.is_file() && resolve(root, &relative).is_ok()).then_some(relative)
+}
+
 /// Read up to `max_bytes` of a project file; binary files return no content.
 pub async fn read_file(root: &Path, rel: &str, max_bytes: u64) -> Result<kybern_protocol::methods::FilesReadResult> {
     use std::io::Read;
@@ -319,7 +361,59 @@ pub async fn browse_directories(path: Option<String>) -> anyhow::Result<kybern_p
 mod tests {
     use std::sync::Arc;
 
-    use super::{CachedIndex, FileIndexCache, MAX_INDEX_SLOTS, rank};
+    use super::{CachedIndex, FileIndexCache, MAX_INDEX_SLOTS, rank, resolve_thread_files};
+
+    #[tokio::test]
+    async fn resolves_answer_file_references_against_the_workspace() {
+        let base = std::env::temp_dir().join(format!("kybern-resolve-test-{}", uuid::Uuid::new_v4()));
+        let dir = &base.join("workspace");
+        for file in
+            ["src/dashboard/UnlockPremium.tsx", "src/server/email/templates.ts", "a/index.ts", "b/index.ts", ".env", "docs/My File.md"]
+        {
+            std::fs::create_dir_all(dir.join(file).parent().unwrap()).unwrap();
+            std::fs::write(dir.join(file), "x").unwrap();
+        }
+        std::fs::create_dir_all(dir.join("panduan")).unwrap();
+        std::fs::write(base.join("secret.ts"), "x").unwrap();
+        let canonical = std::fs::canonicalize(dir).unwrap();
+        let paths = [
+            "src/dashboard/UnlockPremium.tsx",
+            "UnlockPremium.tsx",
+            "email/templates.ts",
+            "index.ts",
+            "/panduan",
+            "/api/health",
+            "panduan",
+            ".env",
+            "docs/My File.md",
+            &canonical.join("src/server/email/templates.ts").to_string_lossy(),
+            &base.join("secret.ts").to_string_lossy(),
+            "../secret.ts",
+            "test.everlace.cc",
+        ]
+        .map(String::from);
+        let resolved = resolve_thread_files(&FileIndexCache::default(), dir, &paths).await.unwrap();
+        assert_eq!(
+            resolved,
+            [
+                Some("src/dashboard/UnlockPremium.tsx"),
+                Some("src/dashboard/UnlockPremium.tsx"),
+                Some("src/server/email/templates.ts"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some("docs/My File.md"),
+                Some("src/server/email/templates.ts"),
+                None,
+                None,
+                None,
+            ]
+            .map(|path| path.map(String::from))
+        );
+        std::fs::remove_dir_all(&base).unwrap();
+    }
 
     #[test]
     fn ranks_file_name_matches_first() {
