@@ -17,7 +17,8 @@ if (path.resolve(scratch.KYBERN_DATA_DIR) === '/Users/mymac/.kybern') throw Erro
 const W = 420, H = 140
 const BOXES: Record<string, number> = { wash: 20, solid: 84, scoped: 148, optout: 212, state: 276, press: 340 }
 const results: unknown[] = []
-for (const [label, env] of [['dark', {}], ['light', { KYBERN_APPEARANCE: 'light' }], ['reduced', { KYBERN_REDUCED_MOTION: '1' }], ['snap', { KYBERN_HOVER_FADE: '0' }]] as const) {
+const MODES: [string, Record<string, string>][] = [['dark', {}], ['light', { KYBERN_APPEARANCE: 'light' }], ['reduced', { KYBERN_REDUCED_MOTION: '1' }], ['snap', { KYBERN_HOVER_FADE: '0' }]]
+for (const [label, env] of MODES) {
   const log = path.join(out, `${label}.log`); rmSync(log, { force: true }); process.env.R7_LOG = log
   const all = () => { try { return readFileSync(log, 'utf8') } catch { return '' } }
   const f = await launchFixture(path.join(import.meta.dir, 'hover-fade-lab.tsx'), { GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: 'dark', KYBERN_FULL_RATE: '1', KYBERN_FRAME_COSTS: '1', KYBERN_FRAME_TIMES: '1', ...scratch, ...env })

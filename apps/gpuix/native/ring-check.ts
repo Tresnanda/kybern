@@ -15,7 +15,8 @@ const scratch = { KYBERN_DATA_DIR: process.env.KYBERN_DATA_DIR ?? '/Users/mymac/
 if (path.resolve(scratch.KYBERN_DATA_DIR) === '/Users/mymac/.kybern') throw Error('Refusing the real data dir')
 const W = 320, H = 140
 const results: unknown[] = []
-for (const [label, env] of [['dark', {}], ['light', { KYBERN_APPEARANCE: 'light' }], ['reduced', { KYBERN_REDUCED_MOTION: '1' }]] as const) {
+const MODES: [string, Record<string, string>][] = [['dark', {}], ['light', { KYBERN_APPEARANCE: 'light' }], ['reduced', { KYBERN_REDUCED_MOTION: '1' }]]
+for (const [label, env] of MODES) {
   const log = path.join(out, `${label}.log`); rmSync(log, { force: true }); process.env.R7_LOG = log
   const all = () => { try { return readFileSync(log, 'utf8') } catch { return '' } }
   const f = await launchFixture(path.join(import.meta.dir, 'ring-lab.tsx'), { GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: 'dark', KYBERN_FULL_RATE: '1', KYBERN_FRAME_COSTS: '1', KYBERN_FRAME_TIMES: '1', ...scratch, ...env })

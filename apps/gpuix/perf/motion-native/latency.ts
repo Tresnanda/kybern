@@ -25,6 +25,7 @@ import { distribution } from '../bench/model.ts'
 import { requireScreen } from '../bench/screen-state.ts'
 import { waitForWindowOnscreen, requireWindowOnscreen } from '../bench/window-onscreen.ts'
 import { launchFixture } from '../../src/requests/harness.ts'
+import { cpuSeconds, gpuNs, footprintMiB } from '../../scripts/idle-metrics.ts'
 
 const DATA = '/Users/mymac/projects/ade-gpuix-scratch/motion-native/bench'
 // The lane's port 4371 is taken by another lane's seed server; 4379 is this probe's own.
@@ -103,6 +104,24 @@ const SCENES: Record<string, Scene> = {
     act: (app, b) => app.mouse.click(centre(b)),
     reset: app => app.getByTestId('app-ready').press('escape'),
   },
+  // The pointer moving down the sidebar's thread rows, one row per action: hover fills (N1) and reveals, for their cost.
+  'hover-rows': {
+    kind: 'exit', ms: 150,
+    open: async c => { await c('idle'); await c('open', { thread: manifest.long3000 }) },
+    target: async app => { for (const id of manifest.threads.slice(0, 40)) { try { for (const { bounds: b } of await app.getByTestId(`thread-${id}`).all()) if (b && b.width > 0 && b.y > 60) return b } catch {} } throw Error('No sidebar thread row') },
+    prepare: async () => {},
+    act: (() => { let n = 0; return async (app: Launch['app'], b: Bounds) => { n = (n + 1) % 8; await app.mouse.move({ x: b.x + b.width / 2, y: b.y + b.height / 2 + n * b.height }) } })(),
+    reset: async () => {},
+  },
+  // A title-bar tooltip leaving when the pointer does (`nav/overlay.tsx` Tooltip → PopupLayer `leaving`, 80 ms).
+  'tooltip-exit': {
+    kind: 'exit', ms: 80,
+    open: async c => { await c('idle'); await c('open', { thread: manifest.long3000 }) },
+    target: app => bounds(app, 'sidebar-toggle'),
+    prepare: async (app, b) => { await app.mouse.move(centre(b)); await delay(1400) },
+    act: async app => { const w = (await app.call('initialize', { protocolVersion: 1, client: 'latency' })).window; await app.mouse.move({ x: w.width - 6, y: w.height - 6 }) },
+    reset: async () => {},
+  },
   // A sidebar thread row's hover actions (`sidebar/motion.tsx` Reveal → Presence exit, 100 ms).
   'reveal-exit': {
     kind: 'exit', ms: 100,
@@ -149,6 +168,8 @@ for (const name of scenarios) {
     requireScreen(); requireWindowOnscreen(f.pid)
     const b = await scene.target(app)
     const samples: Record<string, unknown>[] = []
+    // Resources over the whole run of actions (CPU %, AGX GPU ms, footprint), and presents/renders per action.
+    const c0 = cpuSeconds(f.pid), g0 = gpuNs().get(f.pid) ?? 0, s0 = performance.now(), e0 = events.length
     for (let i = 0; i < opens; i++) {
       await scene.prepare(app, b)
       const from = events.length
@@ -191,8 +212,15 @@ for (const name of scenarios) {
       const phases = input && mountRender && mountPresent ? { renderAfterInput: mountRender.t - input.t, mountFrame: mountPresent.t - mountRender.t, mountDraw: mountWork?.values.get('draw'), mountLayout: mountWork?.values.get('layout') } : {}
       samples.push({ ...phases, timeline, input: input?.kind, batchAfterInputMs: batch && input ? batch.t - input.t : undefined, firstPaint, firstVisible, visibleValue, firstPaintPresents, renders, missing })
     }
+    const elapsed = (performance.now() - s0) / 1000, run = events.slice(e0)
+    const resources = { seconds: elapsed, cpuPercent: 100 * (cpuSeconds(f.pid) - c0) / elapsed, gpuMs: ((gpuNs().get(f.pid) ?? 0) - g0) / 1e6, footprintMiB: footprintMiB(f.pid),
+      presentsPerAction: run.filter(e => e.kind === 'present').length / opens, rendersPerAction: run.filter(e => e.kind === 'render').length / opens }
+    // Idle: once everything has settled the window presents nothing.
+    await delay(1500)
+    const idle0 = events.filter(e => e.kind === 'present').length; await delay(3000)
+    const idlePresents = events.filter(e => e.kind === 'present').length - idle0
     const pick = (k: string) => samples.map(s => s[k] as number | undefined).filter((v): v is number => typeof v === 'number')
-    Object.assign(row, { samples, firstPaint: distribution(pick('firstPaint')), firstVisible: distribution(pick('firstVisible')), batch: distribution(pick('batchAfterInputMs')), renders: distribution(pick('renders')), renderAfterInput: distribution(pick('renderAfterInput')), mountFrame: distribution(pick('mountFrame')), mountDraw: distribution(pick('mountDraw')), mountLayout: distribution(pick('mountLayout')), visibleValue: distribution(pick('visibleValue')), missing: pick('missing').reduce((a, b) => a + b, 0), unseen: samples.filter(s => s.firstVisible === undefined).length })
+    Object.assign(row, { samples, firstPaint: distribution(pick('firstPaint')), firstVisible: distribution(pick('firstVisible')), batch: distribution(pick('batchAfterInputMs')), renders: distribution(pick('renders')), renderAfterInput: distribution(pick('renderAfterInput')), mountFrame: distribution(pick('mountFrame')), mountDraw: distribution(pick('mountDraw')), mountLayout: distribution(pick('mountLayout')), visibleValue: distribution(pick('visibleValue')), missing: pick('missing').reduce((a, b) => a + b, 0), unseen: samples.filter(s => s.firstVisible === undefined).length, resources, idlePresents })
     requireScreen(); requireWindowOnscreen(f.pid)
     const markers1 = buildMarkers(), foreign = [...foreign0, ...foreignApps(f.pid)]
     row.valid = !markers0.length && !markers1.length && !foreign.length
@@ -201,7 +229,7 @@ for (const name of scenarios) {
   finally { await f?.close(); release(); if (raw.length) writeFileSync(path.join(OUT, `raw-${label}-${name}.txt`), raw.join('')) }
   appendFileSync(path.join(OUT, 'latency.jsonl'), JSON.stringify(row) + '\n')
   const d = (k: string) => { const v = row[k] as { p50?: number; p95?: number; mean?: number } | undefined; return v ? `${v.p50?.toFixed(1)}/${v.p95?.toFixed(1)}` : '-' }
-  console.log(`${label} ${name} valid=${row.valid} firstVisible p50/p95=${d('firstVisible')} firstPaint=${d('firstPaint')} batch=${d('batch')} render=${d('renderAfterInput')} mountFrame=${d('mountFrame')} draw=${d('mountDraw')} layout=${d('mountLayout')} value=${d('visibleValue')} renders=${d('renders')} missing=${row.missing} unseen=${row.unseen}${row.error ? ' ERROR ' + row.error : ''}`)
+  console.log(`${label} ${name} valid=${row.valid} firstVisible p50/p95=${d('firstVisible')} firstPaint=${d('firstPaint')} batch=${d('batch')} render=${d('renderAfterInput')} mountFrame=${d('mountFrame')} draw=${d('mountDraw')} layout=${d('mountLayout')} value=${d('visibleValue')} renders=${d('renders')} missing=${row.missing} unseen=${row.unseen} ${JSON.stringify(row.resources)} idle=${row.idlePresents}${row.error ? ' ERROR ' + row.error : ''}`)
 }
 await fixture.close()
 if (!keep) fixture.remove()
