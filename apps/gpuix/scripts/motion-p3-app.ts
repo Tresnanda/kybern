@@ -85,8 +85,10 @@ try {
   await run('pane-to-explorer', [PANE], () => click('dock-tab-explorer'), [0, 40, 80, 120, 160, 250, 400], 4, 200)
   await run('tab-close-explorer', [TABS, PANE], () => click('dock-tab-close-explorer'), [0, 40, 80, 120, 160, 250, 400], 4, 200)
   // V-kbd: arrow keys between tabs change the pane at once.
+  await click('dock-add'); await sleep(400); await click('dock-add-explorer'); await sleep(1500)
   await app.getByTestId('dock-tab-agents').click(); await sleep(600)
   await run('pane-kbd', [PANE], async () => { await app.call('focus', { elementId: (await app.getByTestId('dock-tab-agents').element()).id }); await key('right') }, [0, 40, 100], 3, 200)
+  await click('dock-tab-close-explorer'); await sleep(600)
   // P3.9: terminal tabs.
   await click('dock-add'); await sleep(400); await click('dock-add-terminal'); await sleep(2500)
   await run('terminal-new-tab', [PANE], () => click('terminal-new'), [0, 40, 80, 120, 160, 250, 400], 4, 1500)

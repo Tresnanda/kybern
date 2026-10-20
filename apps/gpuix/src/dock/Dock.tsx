@@ -1,7 +1,7 @@
 // Native right dock. Only the chosen pane is mounted; the shell keeps it through
 // its exit, just like App's thread panel. Each painted edge owns its radii.
 //
-// Motion (P3): the dock opens and closes on the desktop's width spring (stiffness 420, damping 42, mass 0.7) while its content
+// Motion (P3): the dock opens and closes on a 300 ms critically damped spring (the desktop's 420/42/0.7 spring, see `dockSlide`) while its content
 // fades (250 ms in, 150 ms out; paint-only); a pane switched to by pointer enters as `t-pane` (opacity, 4 px, scale 0.995;
 // the terminal fades only, the preview's native web view is not moved); a tab added from the + menu grows in (opacity and
 // scale 0.97, 150 ms) and a closed one leaves (120 ms) before the strip closes the gap. Shortcut toggles and keyboard tab
@@ -38,16 +38,20 @@ import { DURATION, EASE, enterTransform } from '../motion/kit.tsx'
 import { nextPresenceGeneration, presenceTransform } from '../motion/Presence.tsx'
 import { useLeavingList } from '../composer/motion.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
-import { treeMotionCapabilities } from './fileTreeMotion.ts'
 import { leftSource } from '../drag/leave.ts'
 import { beginTabDrag, isDraggingTab, consumeTabDrag, endTabPending, setTabContext, TabSlot, trackTabDrag } from './reorder.tsx'
 import { chooseTab, closeTab, dockGeometry, finishDockDrag, moveDockDrag, setDock, startDockDrag, useDock, useDockDrag, type DockTab } from './store.ts'
 
 /** The tab pill (`t-tabs-pill`): 250 ms smooth-out. */
 const SLIDE = { duration: DURATION.fast, ease: [...EASE.smoothOut] as [number, number, number, number] }
-/** The dock's width (`App.tsx`): the desktop's spring; an addon without physical springs gets the duration spring closest to it. */
-const dockSlide = (physical: boolean) => physical ? { type: 'spring' as const, stiffness: 420, damping: 42, mass: 0.7 } : { type: 'spring' as const, duration: 0.3, bounce: 0 }
-/** The spring settles in about 300 ms; the guard that releases the content after a close waits a little longer. */
+/**
+ * The dock's width (`App.tsx`: stiffness 420, damping 42, mass 0.7, an overdamped spring that is visually done in ~300 ms). The width
+ * is a layout tween (every frame re-lays out the window), and the physical spring's tail takes ~850 ms to fall under half a pixel,
+ * all of it per-frame relayout nobody can see (measured: 45 island renders over 450 ms against 19 for the old 220 ms tween). The
+ * critically damped duration spring has the same shape and ends at 300 ms.
+ */
+const dockSlide = () => ({ type: 'spring' as const, duration: 0.3, bounce: 0 })
+/** The spring ends at 300 ms; the guard that releases the content after a close waits a little longer. */
 const DOCK_EXIT_GUARD_MS = 420
 const PANELS: { id: DockTab; label: string; icon: string; width: number }[] = [
   { id: 'agents', label: 'Agents', icon: N.users, width: 100 },
@@ -98,14 +102,12 @@ function DockShell({ threadId, open, mounted, setMounted, sidebarOpen, still, ba
   const dock = useDock(threadId)
   const geometry = dockGeometry(windowWidth, sidebarOpen ? sidebarWidth : 0, dock.width)
   const thread = useApp((s) => s.open.thread?.id === threadId ? s.open.thread : s.threads.find((th) => th.id === threadId))
-  const { renderer } = useGpuix()
-  const physical = !!renderer && treeMotionCapabilities(renderer).physical
   // The content fades with the width: in over 250 ms, out over 150 ms (`generation` follows `open`, so a reversal retargets).
   const phase = useRef({ open, generation: nextPresenceGeneration(), mounted: 0 })
   if (phase.current.mounted === 0) phase.current.mounted = phase.current.generation
   if (phase.current.open !== open) phase.current = { ...phase.current, open, generation: nextPresenceGeneration() }
   const fade = still ? undefined : presenceTransform({ show: open, enter: { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.fast, ease: [...EASE.smoothOut] } }, exit: { to: { opacity: 0 }, duration: DURATION.quick }, generation: phase.current.generation, fresh: phase.current.generation === phase.current.mounted })
-  return <motion.div {...{ testId: 'right-dock' }} initial={still ? false : { width: 0 }} animate={{ width: open ? geometry.width : 0 }} transition={still ? { duration: 0 } : dockSlide(physical)}
+  return <motion.div {...{ testId: 'right-dock' }} initial={still ? false : { width: 0 }} animate={{ width: open ? geometry.width : 0 }} transition={still ? { duration: 0 } : dockSlide()}
     onMotionComplete={() => setMounted(open)}
     style={{ display: 'flex', flexDirection: 'column', flexShrink: 0, height: '100%', minHeight: 0, overflow: 'hidden', position: geometry.overlay ? 'absolute' : 'relative', ...(geometry.overlay ? { top: 0, right: 0, bottom: 0, boxShadow: { offsetX: -8, offsetY: 0, blurRadius: 24, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.16)' } } : {}), borderTopRightRadius: 12, borderBottomRightRadius: 12 }}>
     <div testId={geometry.overlay ? 'dock-overlay' : 'dock-inline'} paintTransform={fade} style={{ display: 'flex', flexDirection: 'column', width: geometry.width, height: '100%', flexShrink: 0, minHeight: 0, borderLeftWidth: 0.6, borderColor: t.borderLight, backgroundColor: background, borderTopRightRadius: 12, borderBottomRightRadius: 12 }}>

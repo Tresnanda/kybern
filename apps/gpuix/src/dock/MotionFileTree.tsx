@@ -48,8 +48,10 @@ const FileTreeRow = memo(function FileTreeRow({ row, index, open, busy, selected
   const folder = row.kind === 'directory', disabled = row.kind === 'loading' || row.kind === 'empty'
   const testId = `dock-file-${row.path || 'root'}${['loading', 'error', 'empty'].includes(row.kind) ? `-${row.kind}` : ''}`
   const rotation: TreeMotionStyle = { rotate: open ? 90 : 0, opacity: folder ? 0.75 : 0 }
-  // A folder that is still reading shows a spinner in place of its chevron, but only for a wait long enough to notice.
+  // A folder that is still reading shows a spinner in place of its chevron, but only for a wait long enough to notice (the chevron
+  // stays mounted underneath state-wise: `reading` is false for every row that is not loading, so this costs one bailed-out state).
   const reading = useAfter(busy)
+
   const delay = Math.min(row.position * 0.025, 0.1)
   const content = <div role="treeitem" aria-level={row.depth + 1} aria-posinset={row.position} aria-setsize={row.setSize} aria-expanded={folder ? open : undefined} aria-selected={selected} aria-disabled={disabled || undefined} testId={testId} onMouseEnter={hover} onClick={!disabled ? () => activate(row, index) : undefined} style={{ display: 'flex', position: 'relative', alignItems: 'center', gap: 6, width: '100%', height: 28, flexShrink: 0, paddingLeft: 6 + row.depth * 14, paddingRight: 8, borderRadius: 6, cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.42 : 1, backgroundColor: selected ? t.buttonSecondary : focused ? t.selected : 'transparent', hover: hover ? undefined : { backgroundColor: selected ? t.buttonSecondary : t.buttonSecondaryHover } }}>
     {row.depth > 0 && (reduce
