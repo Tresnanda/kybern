@@ -104,7 +104,7 @@ function HighlightedCode({ code, name, dark, live }: { code: string; name: strin
   )
 }
 
-export const CodeBlock = memo(function CodeBlock({ code, lang, live = false, stateKey = "code", preview, actions, header }: { code: string; lang?: string; live?: boolean; stateKey?: string; preview?: ReactNode; actions?: ReactNode; header?: ReactNode }) {
+export const CodeBlock = memo(function CodeBlock({ code, lang, live = false, stateKey = "code", preview, actions, header, bodyKey, bodyEnter = false }: { code: string; lang?: string; live?: boolean; stateKey?: string; preview?: ReactNode; actions?: ReactNode; header?: ReactNode; bodyKey?: string; bodyEnter?: boolean }) {
   const dark = useIsDark()
   const [wrap, setWrap] = useTranscriptRowState(stateKey, false)
   const [copied, flashCopied] = useCopiedFlag()
@@ -145,7 +145,14 @@ export const CodeBlock = memo(function CodeBlock({ code, lang, live = false, sta
         </span>
       </div>
       <div className="chat-markdown-codeblock__body [&_pre]:!bg-transparent">
-        {preview ?? <HighlightedCode key={highlightKey} code={code} name={name} dark={dark} live={live} />}
+        {bodyKey ? (
+          // A body that swaps between views (diagram preview and source) enters as a keyed pane.
+          <div key={bodyKey} className={bodyEnter ? "t-appear" : undefined} data-blur="off">
+            {preview ?? <HighlightedCode key={highlightKey} code={code} name={name} dark={dark} live={live} />}
+          </div>
+        ) : (
+          preview ?? <HighlightedCode key={highlightKey} code={code} name={name} dark={dark} live={live} />
+        )}
       </div>
     </div>
   )

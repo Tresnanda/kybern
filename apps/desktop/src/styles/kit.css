@@ -3540,7 +3540,18 @@ html[data-full-translucency] .chat-scroll-fade {
   contain: none;
 }
 .visual-reply:modal .visual-reply__open { display: none; }
-.visual-reply:modal::backdrop { background: rgb(0 0 0 / 0.6); }
+.visual-reply:modal::backdrop {
+  background: rgb(0 0 0 / 0.6);
+  animation: visual-backdrop-in var(--duration-fast) var(--ease-out) backwards;
+}
+.visual-reply:modal[data-closing]::backdrop {
+  animation: visual-backdrop-out 200ms var(--ease-exit) forwards;
+}
+@keyframes visual-backdrop-in { from { opacity: 0; } }
+@keyframes visual-backdrop-out { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .visual-reply:modal::backdrop { animation-duration: var(--duration-quick); }
+}
 .visual-reply__expanded-header {
   display: flex;
   align-items: center;

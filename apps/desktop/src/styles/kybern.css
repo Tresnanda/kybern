@@ -971,11 +971,26 @@ textarea.question-panel-field { min-height: 4.75em; }
   font-size: var(--app-font-size-ui-sm, 11px);
   text-wrap: pretty;
 }
-.question-panel-footer button { transition: scale var(--duration-quick) var(--ease-out); }
+.question-panel-footer button {
+  transition:
+    scale var(--duration-micro) var(--ease-out),
+    background-color var(--duration-quick) var(--ease-out),
+    color var(--duration-quick) var(--ease-out),
+    border-color var(--duration-quick) var(--ease-out);
+}
 .question-panel-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.625rem; margin-inline-start: auto; }
 .question-panel-footer button:active:not(:disabled) { scale: 0.96; }
+/* A step change slides the new step in from the side it came from (--dir: 1 forward, -1 back).
+   Nudge and fade only, no blur: the panel sits inside the composer glass. */
+.question-step-enter {
+  animation: question-step-enter var(--duration-fast) var(--ease-smooth-out) backwards;
+}
+@keyframes question-step-enter {
+  from { opacity: 0; transform: translateX(calc(var(--dir, 1) * var(--distance-base))); }
+}
 .question-panel-error { flex-shrink: 0; padding: 0.5rem 1rem 0; color: var(--destructive); font-size: var(--app-font-size-ui-sm, 11px); }
 @media (prefers-reduced-motion: reduce) {
   .question-panel-option, .question-panel-field, .question-panel-footer button { transition: none; }
   .question-panel-footer button:active:not(:disabled) { scale: 1; }
+  .question-step-enter { animation: t-fade-in var(--duration-quick) var(--ease-out) backwards; }
 }
