@@ -2513,6 +2513,10 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Per-thread lock around snapshots and everything that rewrites the thread's files under them (revert, PR checkout,
+    /// worktree and delegated worktree removal). Lock order: `workspace_ops`, then the thread's admission gate, then this lock. Nothing that holds
+    /// it waits on admission or `workspace_ops`: the "before" snapshot runs in the spawned turn start after admission is
+    /// released, and the "after" snapshot in its own task. The turn-end path waits on it while holding no other lock.
     fn checkpoint_lock(&self, thread_id: ThreadId) -> Arc<Mutex<()>> {
         self.inner.checkpoint_locks.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).entry(thread_id).or_default().clone()
     }
@@ -2745,15 +2749,17 @@ impl Orchestrator {
     /// Reset the working tree to the snapshot taken before `turn_id`.
     pub async fn revert(&self, thread_id: ThreadId, turn_id: TurnId) -> Result<(String, bool)> {
         self.ensure_not_subagent(thread_id)?;
-        let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
-        if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
-            return Err(anyhow!("thread is busy; interrupt it first"));
-        }
-        if self.inner.store.runtime_tasks_for_thread(thread_id)?.iter().any(|task| task.status.is_active()) {
-            return Err(anyhow!("background work is active; stop it before rewinding"));
-        }
-        // A finished turn's "after" snapshot may still be running.
+        self.ensure_revertible(thread_id)?;
+        // A finished turn's "after" snapshot may still be running, for minutes on a large tree. Wait for it without the
+        // admission gate, so sends are not held back meanwhile; whatever started in that time is caught below.
+        drop(self.checkpoint_lock(thread_id).lock_owned().await);
+        let admission = self.session_admission(thread_id).await;
+        let _admission = admission.lock().await;
         let checkpoint = self.checkpoint_lock(thread_id).lock_owned().await;
+        // Under both locks nothing can start a turn or a snapshot, so check again what the wait may have changed.
+        let thread = self.ensure_revertible(thread_id).map_err(|error| {
+            anyhow!("The thread started new work while the rewind waited for its last checkpoint ({error}). Rewind again when it finishes.")
+        })?;
         let all = self.inner.store.checkpoints_for_thread(thread_id)?;
         let idx = all.iter().position(|c| c.turn_id == turn_id).ok_or_else(|| anyhow!("no checkpoint for that turn"))?;
         let c = all[idx].clone();
@@ -2770,10 +2776,11 @@ impl Orchestrator {
 
         // Conversation rewind: the next session forks the provider conversation, keeping
         // turns before `turn_id`. If this is the first turn, start over with a fresh session.
-        let driver_supports_fork = self.inner.drivers.get(thread.provider.kind).is_some_and(|d| d.supports_fork());
+        // Update the current record: a background title or binding change may have written it since.
+        let mut t = self.inner.store.thread_get(thread_id)?.unwrap_or(thread);
+        let driver_supports_fork = self.inner.drivers.get(t.provider.kind).is_some_and(|d| d.supports_fork());
         let anchors = |c: &Checkpoint| TurnAnchors { turn_id: c.provider_turn_id.clone(), previous_end: c.provider_turn_end.clone() };
-        let mut t = thread.clone();
-        let conversation_rewound = if idx == 0 || thread.provider_session_id.is_none() {
+        let conversation_rewound = if idx == 0 || t.provider_session_id.is_none() {
             t.provider_session_id = None;
             true
         } else if driver_supports_fork && (c.provider_turn_id.is_some() || all[idx - 1].provider_turn_end.is_some()) {
@@ -2788,6 +2795,18 @@ impl Orchestrator {
         t.status = ThreadStatus::Idle;
         self.update_thread(t)?;
         Ok((c.before, conversation_rewound))
+    }
+
+    /// The thread, if nothing is running in it that a rewind would pull the files from under.
+    fn ensure_revertible(&self, thread_id: ThreadId) -> Result<Thread> {
+        let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
+            return Err(anyhow!("thread is busy; interrupt it first"));
+        }
+        if self.inner.store.runtime_tasks_for_thread(thread_id)?.iter().any(|task| task.status.is_active()) {
+            return Err(anyhow!("background work is active; stop it before rewinding"));
+        }
+        Ok(thread)
     }
 
     /// `@Computer`: warm the driver, and in a chat whose process started before
@@ -6001,6 +6020,47 @@ mod tests {
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&shown.stdout), "agent output\n");
         assert!(!fixture.root.join("edited.txt").exists(), "the revert restored the snapshot taken before the turn");
+    }
+
+    #[tokio::test]
+    async fn review_revert_waiting_on_after_snapshot_races_a_new_send() {
+        let fixture = Fixture::new();
+        let git =
+            |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(&fixture.root).args(args).status().unwrap().success());
+        git(&["init", "-q"]);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        fixture.orchestrator.send(thread.id, UserMessage::text("edit a file")).await.unwrap();
+        live.turn_ready.notified().await;
+        let turn_id = live.turn.lock().await.as_ref().unwrap().id;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while fixture.store.checkpoint_get(turn_id).unwrap().is_none() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
+        // The after snapshot of a large tree is still running.
+        let slow = fixture.orchestrator.checkpoint_lock(thread.id).lock_owned().await;
+        let reverting = {
+            let orchestrator = fixture.orchestrator.clone();
+            tokio::spawn(async move { orchestrator.revert(thread.id, turn_id).await })
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Thread is Idle, so a new message (user, queue or another thread) starts a turn.
+        let next = fixture.orchestrator.send(thread.id, UserMessage::text("next")).await;
+        eprintln!("send during revert wait: {:?}", next.as_ref().map(|r| r.0));
+        let status_before = fixture.store.thread_get(thread.id).unwrap().unwrap().status;
+        drop(slow);
+        let reverted = tokio::time::timeout(Duration::from_secs(5), reverting).await.unwrap().unwrap();
+        eprintln!("revert result: {:?}", reverted.as_ref().map(|r| r.1));
+        let status_after = fixture.store.thread_get(thread.id).unwrap().unwrap().status;
+        eprintln!("status while next turn runs: before revert finished {status_before:?}, after {status_after:?}");
+        assert!(next.is_err() || reverted.is_err(), "a revert must not proceed under a turn that started while it waited");
+        // The send was not held back by the wait, and the failed revert left the new turn's record alone.
+        assert!(next.is_ok() && status_after == ThreadStatus::Running, "{status_after:?}");
     }
 
     #[tokio::test]
