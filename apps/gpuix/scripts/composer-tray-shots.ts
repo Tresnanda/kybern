@@ -20,12 +20,15 @@ mkdirSync(out, { recursive: true })
 for (const theme of themes) {
   const client = path.join(SCRATCH, `client-${theme}`)
   rmSync(client, { recursive: true, force: true })
+  // Composer drafts (and their attachments) persist per data dir: start every capture from an empty composer.
+  rmSync(path.join(SCRATCH, 'data', 'gpuix-ui.json'), { force: true })
   const app = await launch({
     command: 'bun', args: [path.resolve(import.meta.dir, '../src/main.tsx')],
     env: {
       GPUIX_BACKGROUND: '1', KYBERN_OPAQUE: '1', KYBERN_APPEARANCE: theme, KYBERN_URL: ready.url, KYBERN_TOKEN: ready.token,
       KYBERN_DATA_DIR: path.join(SCRATCH, 'data'), KYBERN_CLIENT_CONFIG_DIR: client, KYBERN_GPUIX_CREDENTIALS_DIR: path.join(SCRATCH, 'credentials'),
       KYBERN_GPUIX_THREAD: ready.title, KYBERN_REDUCED_MOTION: arg('--reduced', '0'),
+      NAPI_RS_NATIVE_LIBRARY_PATH: path.resolve(import.meta.dir, '../native/build/gpuix-native.darwin-arm64.node'),
       ...(attach ? { KYBERN_GPUIX_ATTACH: Array.from({ length: attach }, (_, i) => (i % 2 ? SECOND : IMAGE)).join(',') } : {}),
     },
   })
@@ -38,7 +41,7 @@ for (const theme of themes) {
     const full = path.join(out, `${tag}-${theme}-full.png`)
     await app.screenshot({ path: full })
     const box = await app.getByTestId('composer-overlay').bounds()
-    const crop = process.argv.includes('--expand') ? { x: 0, y: 0, w: 0, h: 0 } : { x: box.x - 16, y: box.y - 300, w: box.width + 32, h: box.height + 316 }
+    const crop = process.argv.includes('--expand') ? { x: 0, y: 0, w: 0, h: 0 } : attach ? { x: box.x - 16, y: box.y - 60, w: box.width + 32, h: box.height + 76 } : { x: box.x - 16, y: box.y - 300, w: box.width + 32, h: box.height + 316 }
     if (crop.w) execFileSync('swift', [path.join(import.meta.dir, 'render9-grid.swift'), path.join(out, `${tag}-${theme}.png`), String(crop.x * 2), String(Math.max(0, crop.y) * 2), String(crop.w * 2), String((crop.h + Math.min(0, crop.y)) * 2), '1', 'top:0', full])
     console.log(`[tray] ${tag} ${theme}`)
   } finally { await app.close() }

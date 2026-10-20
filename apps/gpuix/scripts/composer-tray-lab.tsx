@@ -32,6 +32,7 @@ function Lab() {
   const [queue, setQueue] = useState<QueuedMessage[]>([queued(1)])
   const [queueN, setQueueN] = useState(2)
   const [shown, setShown] = useState(true)
+  const [attachments, setAttachments] = useState(() => [attachment(1, IMAGE), attachment(2, SECOND)])
   const subagents = [
     sub('s1', 'Study zeron/zui/zed animation architecture', 'Explore', 'completed', 382, 180),
     sub('s2', 'Measure tray frame cost while the answer streams', 'general-purpose', measureDone ? 'completed' : 'running', 74, measureDone ? 0 : null),
@@ -59,7 +60,7 @@ function Lab() {
       </div>
       {/* Attachments in a composer card for the lightbox. */}
       <div testId="attachments-card" style={{ position: 'absolute', left: 40, top: 520, width: 736, display: 'flex', flexDirection: 'column', paddingTop: 14, paddingLeft: 16, paddingRight: 16, paddingBottom: 40, borderRadius: 19.2, borderWidth: 1, borderColor: border, backgroundColor: t.variant === 'dark' ? t.composer : '#ffffff' }}>
-        <Attachments items={[attachment(1, IMAGE), attachment(2, SECOND)]} uploading={0} onRemove={() => {}} />
+        <Attachments items={attachments} uploading={0} onRemove={a => setAttachments(list => list.filter(item => item.id !== a.id))} />
         <div style={{ height: 1, backgroundColor: ink(t, 0) }} />
       </div>
     </div>

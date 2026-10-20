@@ -66,6 +66,8 @@ if (!parent) {
   threads = (await client.call('threads.list', {})).threads
   parent = threads.find(t => t.title === PARENT_TITLE)!
 }
+// The daemon's crash recovery settles a turn it finds running at startup: mark the fixture's turn running again.
+{ const db = new Database(path.join(DATA, 'state.sqlite')); db.exec('PRAGMA busy_timeout = 5000'); db.prepare('UPDATE threads SET status = ?2 WHERE id = ?1').run(parent.id, 'running'); db.close() }
 client.close?.()
 
 // ---- proxy: queue + background task ----
