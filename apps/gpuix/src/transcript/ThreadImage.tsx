@@ -69,9 +69,11 @@ function useThreadImage(threadId: string | null, source: string) {
     if (!threadId) return
     const hit = cache.get(key)
     if (hit) { setState(s => (s.key === key && s.image === hit ? s : { key, image: hit, attempt: 0 })); return }
-    const abort = new AbortController()
+    const abort = new AbortController(), attempt = current.attempt
     let retry: ReturnType<typeof setTimeout> | undefined
-    const run = (attempt: number) => {
+    // `again`: the one automatic retry. It keeps `attempt`, which counts Retry presses only (the effect reloads when it
+    // changes, so storing the retry there made a third request).
+    const run = (again: boolean) => {
       void load(threadId, source, abort.signal).then(image => {
         if (abort.signal.aborted) return
         remember(key, image)
@@ -80,11 +82,11 @@ function useThreadImage(threadId: string | null, source: string) {
         if (abort.signal.aborted) return
         const known = 'reason' in failure ? failure : imageFailure(0, '')
         // Missing, or the connection hiccupped: it may be written moments after the reply. Once.
-        if (attempt === 0 && (known.status === 404 || known.status === 0)) { retry = setTimeout(() => run(1), RETRY_MS); return }
+        if (!again && attempt === 0 && (known.status === 404 || known.status === 0)) { retry = setTimeout(() => run(true), RETRY_MS); return }
         setState({ key, failure: known, attempt })
       })
     }
-    run(current.attempt)
+    run(false)
     return () => { abort.abort(); clearTimeout(retry) }
     // `attempt` changes only through Retry, which reloads.
   }, [key, current.attempt])
