@@ -20,8 +20,19 @@ export function processInventory(owner=process.pid){
   try{cwd=execFileSync('lsof',['-a','-p',match[1]!,'-d','cwd','-Fn'],{encoding:'utf8'}).split('\n').find(p=>p.startsWith('n'))?.slice(1)??''}catch{continue}
   if(/\/apps\/gpuix$/.test(cwd))processes.push(`${match[1]} ${match[2]} [cwd=${cwd}]`)
  }
- const foreign=foreignProcesses(processes,parents,owner)
- return {processes,foreign}
+ const proxyExemptions:string[]=[]
+ for(let i=0;i<processes.length;i++){
+  const line=processes[i]!,match=line.match(/^(\d+)\s+((?:\/\S*\/)?bun\s+.*\/visual\/fixture\.[^/\s]+\.ts\s+--proxy(?:\s|$).*)$/)
+  if(!match)continue
+  const sample=spawnSync('ps',['-p',match[1]!,'-o','%cpu='],{encoding:'utf8'}),cpu=Number(sample.stdout.trim())
+  const windows=spawnSync('swift',['/Users/mymac/projects/ade-gpuix-scratch/window-onscreen.swift',match[1]!],{encoding:'utf8'})
+  if(sample.status===0&&sample.stdout.trim()&&fixtureProxyExempt(match[2]!,cpu,windows.status===0?windows.stdout:null)){
+   proxyExemptions.push(line)
+   processes[i]=`${line} [windowless-fixture-proxy cpu=${cpu}%]`
+  }
+ }
+ const foreign=foreignProcesses(processes.filter(line=>!line.includes('[windowless-fixture-proxy cpu=')),parents,owner)
+ return {processes,foreign,proxyExemptions}
 }
 
 export function watchRun(){
@@ -33,4 +44,9 @@ export function foreignProcesses(processes:string[],parents:Map<number,number>,o
  const owned=(pid:number)=>{const seen=new Set<number>();while(pid>1&&!seen.has(pid)){if(pid===owner)return true;seen.add(pid);pid=parents.get(pid)??0}return false}
  // Runners and resource samplers do not own a native window.
  return processes.filter(line=>{const match=line.match(/^(\d+)\s+(.+)$/);return !!match&&!owned(Number(match[1]))&&!/\/(?:run|scenario|sample|profiles|structural|ui-lease|quiet)\.(?:ts|mjs)(?:\s|$)/.test(match[2]!)&&/^(?:\/\S*\/)?bun\s+/.test(match[2]!)})
+}
+
+/** A fixture name alone is insufficient: preserve active or visible helpers. */
+export function fixtureProxyExempt(command:string,cpu:number,windows:string|null){
+ return /^(?:\/\S*\/)?bun\s+.*\/visual\/fixture\.[^/\s]+\.ts\s+--proxy(?:\s|$)/.test(command)&&Number.isFinite(cpu)&&cpu>=0&&cpu<1&&windows!==null&&windows.trim()===''
 }
