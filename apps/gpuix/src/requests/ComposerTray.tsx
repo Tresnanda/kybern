@@ -95,16 +95,17 @@ function TrayHeader({ counts, subagents, tasks, open, onToggle }: { counts: Tray
       style={{ display: 'flex', alignItems: 'center', gap: 8, height: 36, paddingLeft: 14, paddingRight: 8, cursor: 'pointer', minWidth: 0 }}
     >
       <StatusGlyph phase={state} />
-      <div style={{ display: 'flex', alignItems: 'center', flexGrow: 1, flexShrink: 1, minWidth: 0, overflow: 'hidden' }}>
-        {segments.map((s, i) => (
-          <div key={s.key} style={{ display: 'flex', alignItems: 'center', flexShrink: i === 0 ? 1 : 0, minWidth: i === 0 ? 0 : undefined }}>
-            {i > 0 && <Label color={ink(t, 0.3)} size={12} lineHeight={16} style={{ paddingLeft: 5, paddingRight: 5 }}>·</Label>}
-            <SwapOnChange active={s.text} style={{ justifyContent: 'flex-start', minWidth: 0 }}>
+      {/* The whole line swaps as one (`TextSwap`): swapping a single segment would slide its neighbours under the outgoing copy. */}
+      <SwapOnChange active={label} style={{ justifyContent: 'flex-start', flexGrow: 1, flexShrink: 1, minWidth: 0, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
+          {segments.map((s, i) => (
+            <div key={s.key} style={{ display: 'flex', alignItems: 'center', flexShrink: i === 0 ? 1 : 0, minWidth: i === 0 ? 0 : undefined }}>
+              {i > 0 && <Label color={ink(t, 0.3)} size={12} lineHeight={16} style={{ paddingLeft: 5, paddingRight: 5 }}>·</Label>}
               <Label color={s.tone === 'failed' ? t.red : s.tone === 'lead' ? ink(t, 0.85) : ink(t, 0.55)} size={12} lineHeight={16} weight={500} truncate>{s.text}</Label>
-            </SwapOnChange>
-          </div>
-        ))}
-      </div>
+            </div>
+          ))}
+        </div>
+      </SwapOnChange>
       {open && stoppable.length >= 2 && <HeaderButton testId="subagents-stop-all" onClick={() => { for (const child of stoppable) void controlSubagent(child, 'stop') }}>Stop all</HeaderButton>}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, flexShrink: 0 }}>
         <Chevron open={open} source={T.chevronDown} turn={180} size={12} color={ink(t, 0.45)} />
