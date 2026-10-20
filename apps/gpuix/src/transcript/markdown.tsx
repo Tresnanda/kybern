@@ -23,8 +23,33 @@ import { goPage } from '../nav/history.ts'
 import type { NoteSummary, TaskItem } from '../../../../packages/kybern-client/src/types.ts'
 import type { MarkdownStream } from '../native/markdown.ts'
 import { StreamMarkdown } from './StreamMarkdown.tsx'
+import { ThreadImage, ThreadImagePreview } from './ThreadImage.tsx'
+import { localImageLink } from '../../../desktop/src/lib/responseImages.ts'
 
-export type MarkdownPart = { kind: 'prose' | 'code'; text: string; language?: string; key: string }
+/** `image`: a Markdown image on a line of its own (`text` is its source as written, `alt` its caption). */
+export type MarkdownPart = { kind: 'prose' | 'code' | 'image'; text: string; language?: string; alt?: string; key: string }
+
+const IMAGE = /!\[([^\]\n]*)\]\((?:<([^>\n]+)>|([^()\s]+(?:\([^()\s]*\)[^()\s]*)*))(?:\s+"[^"\n]*")?\)/g
+const IMAGE_LINE = new RegExp(`^ {0,3}(?:${IMAGE.source}\\s*)+$`)
+export type TextSegment = { kind: 'text'; text: string } | { kind: 'image'; source: string; alt: string }
+/** Split images that stand on their own lines out of Markdown text (outside fences), so they render as images: native
+ *  Markdown paints them as links. Inline images inside a sentence stay where they are. */
+export function splitImages(text: string): TextSegment[] {
+  if (!text.includes('![')) return [{ kind: 'text', text }]
+  const out: TextSegment[] = []
+  let lines: string[] = [], fence = ''
+  const flush = () => { const joined = lines.join('\n'); if (joined.trim()) out.push({ kind: 'text', text: joined }); lines = [] }
+  for (const line of text.split('\n')) {
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)
+    if (fence) { if (marker && marker[1]![0] === fence[0] && marker[1]!.length >= fence.length) fence = ''; lines.push(line); continue }
+    if (marker) { fence = marker[1]!; lines.push(line); continue }
+    if (!IMAGE_LINE.test(line)) { lines.push(line); continue }
+    flush()
+    for (const m of line.matchAll(IMAGE)) out.push({ kind: 'image', alt: m[1]!.trim(), source: (m[2] ?? m[3])! })
+  }
+  flush()
+  return out.length ? out : [{ kind: 'text', text }]
+}
 const cache = new Map<string, MarkdownPart[]>()
 /** Top-level fences only: nested list/quote fences remain native Markdown. */
 export function markdownParts(source: string): MarkdownPart[] {
@@ -33,10 +58,13 @@ export function markdownParts(source: string): MarkdownPart[] {
   const parts: MarkdownPart[] = []
   const lines = source.split('\n')
   let prose: string[] = [], code: string[] = [], fence = '', language = ''
-  const push = (kind: MarkdownPart['kind'], text: string, lang?: string) => {
-    if (text) parts.push({ kind, text, language: lang, key: String(parts.length) })
+  const push = (kind: MarkdownPart['kind'], text: string, lang?: string, alt?: string) => {
+    if (text) parts.push({ kind, text, language: lang, ...(alt !== undefined ? { alt } : {}), key: String(parts.length) })
   }
-  const flush = () => { push('prose', prose.join('\n')); prose = [] }
+  const flush = () => {
+    for (const segment of splitImages(prose.join('\n'))) segment.kind === 'image' ? push('image', segment.source, undefined, segment.alt) : push('prose', segment.text)
+    prose = []
+  }
   for (const line of lines) {
     const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
     if (fence) {
@@ -67,7 +95,7 @@ const HEADING_SCALE = [1.75, 1.55, 1.35, 1.2, 1.1, 1] // `.chat-markdown h1..h6`
  * heading `1.1em` above and `.35em` below, everything else .65rem.
  */
 export function edgeMargin(part: MarkdownPart | undefined, edge: 'start' | 'end'): number {
-  if (!part || part.kind === 'code') return BLOCK_MARGIN
+  if (!part || part.kind !== 'prose') return BLOCK_MARGIN
   const lines = part.text.split('\n')
   const line = (edge === 'start' ? lines.find(l => l.trim()) : [...lines].reverse().find(l => l.trim())) ?? ''
   if (/^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(line)) return RULE_MARGIN
@@ -81,8 +109,9 @@ export function edgeMargin(part: MarkdownPart | undefined, edge: 'start' | 'end'
 /** The collapsed gap between two neighbouring parts. */
 export const partGap = (before: MarkdownPart, after: MarkdownPart) => Math.max(edgeMargin(before, 'end'), edgeMargin(after, 'start'))
 
-/** Bound lines and characters, including a pathological single long line. */
-export function textChunks(text: string): string[] {
+/** Bound lines and characters, including a pathological single long line. It splits anywhere, so it is for code and
+ *  plain text; Markdown prose goes through `textChunks`. */
+export function lineChunks(text: string): string[] {
   const chunks: string[] = []
   let start = 0, lines = 0
   for (let i = 0; i < text.length; i++) {
@@ -95,6 +124,58 @@ export function textChunks(text: string): string[] {
   }
   if (start < text.length || !chunks.length) chunks.push(text.slice(start))
   return chunks
+}
+
+/** Past this a piece splits inside a block (only pathological answers: a 256-line table, one giant list). */
+const HARD_LINES = TOOL_RESULT_LINE_LIMIT * 8
+const HARD_CHARS = TOOL_RESULT_CHAR_LIMIT * 8
+const TABLE_DELIMITER = /^ {0,3}\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/
+
+/**
+ * Markdown prose in bounded pieces that are each a whole run of blocks. A piece ends only before a line that starts a
+ * new top-level block after a blank line (column 0: not an indented continuation or code), so a table, list, quote or
+ * paragraph is never cut in two; cutting between a table's header and delimiter rows turned the rest of the table into
+ * a paragraph of pipes. A piece aims for 32 lines or 8 KB, takes the last boundary in reach, else grows to the next one,
+ * and only past 8x that splits inside a block, repeating a table's header and delimiter so the rest stays a table.
+ * Every piece but the last ends with its newline; joined (minus repeated headers) they are the source. Prefix-stable:
+ * appending text never moves an earlier cut, so streamed pieces keep their identity.
+ */
+export function textChunks(text: string): string[] {
+  if (text.length < TOOL_RESULT_CHAR_LIMIT && lineCount(text) <= TOOL_RESULT_LINE_LIMIT) return [text]
+  const lines = text.split('\n')
+  const out: string[] = []
+  let first = 0, carried = '', chars = 0, cut = -1
+  let table: { header: string; at: number } | null = null
+  const close = (end: number, carry = '') => {
+    out.push(carried + lines.slice(first, end).join('\n') + '\n')
+    carried = carry
+    first = end
+    cut = -1
+    chars = carry.length
+  }
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
+    if (table && (!line.trim() || !line.includes('|'))) table = null
+    if (!table && i > 0 && line.includes('-') && lines[i - 1]!.includes('|') && TABLE_DELIMITER.test(line)) table = { header: `${lines[i - 1]}\n${line}\n`, at: i }
+    if (i > first && !lines[i - 1]!.trim() && /^\S/.test(line)) cut = i
+    const size = i - first
+    if ((size >= TOOL_RESULT_LINE_LIMIT || chars >= TOOL_RESULT_CHAR_LIMIT) && cut > first) {
+      close(cut)
+      for (let j = first; j < i; j++) chars += lines[j]!.length + 1
+    } else if (size >= HARD_LINES || chars >= HARD_CHARS) {
+      close(i, table && i > table.at ? table.header : '')
+    }
+    chars += line.length + 1
+  }
+  out.push(carried + lines.slice(first).join('\n'))
+  // A single line longer than any bound (a pasted blob) still splits, by characters.
+  return out.some(piece => piece.length > HARD_CHARS * 2) ? out.flatMap(piece => (piece.length > HARD_CHARS * 2 ? lineChunks(piece) : [piece])) : out
+}
+
+function lineCount(text: string) {
+  let n = 1
+  for (let i = text.indexOf('\n'); i >= 0 && n <= TOOL_RESULT_LINE_LIMIT; i = text.indexOf('\n', i + 1)) n++
+  return n
 }
 
 /** `.chat-markdown-codeblock__header` / `__action` (kit.css): 1.6px 6.4px 1.6px 9.6px
@@ -164,10 +245,13 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
   }, [text, refs, notes, tasks, fileOf])
   const [preview, setPreview] = useState<{ title: string; text: string; code: boolean; line?: number; whole?: boolean } | null>(null)
   useTranscriptRowLease(preview !== null)
+  const [image, setImage] = useState<string | null>(null)
   const open = async (href: string) => {
     const link = chatLink(href)
     const client = getClient()
     if (!client) return
+    // An image link (or an inline image native Markdown paints as a link) opens the image, wherever its folder is.
+    if (localImageLink(href) || (link.kind === 'file' && /\.(?:png|jpe?g|gif|webp|avif)$/i.test(link.path))) { setImage(href); return }
     try {
       if (link.kind === 'external') { spawn('open', [link.url]).on('error', e => reportError('Unable to open link', e)); return }
       if (link.kind === 'file') {
@@ -185,6 +269,7 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
   const shown = preview && fromLine(preview.text, preview.whole ? undefined : preview.line)
   return <>
     <markdown source={source} theme={cachedMarkdownTheme(t)} onLinkClick={e => { if (e.value) void open(e.value) }} style={{ color: t.text, userSelect: 'text' }} />
+    {image && threadId && <ThreadImagePreview threadId={threadId} source={image} onClose={() => setImage(null)} />}
     {preview && shown && <Dialog width={720} onClose={() => setPreview(null)} testId="chat-link-preview">
       <DialogHeader title={preview.title} onClose={() => setPreview(null)} />
       {shown.start > 1 && <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 16, paddingRight: 16 }}>
@@ -192,7 +277,7 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
         <Button testId="chat-link-whole-file" variant="ghost" onClick={() => setPreview({ ...preview, whole: true })}>Show whole file</Button>
       </div>}
       <virtual-list style={{ height: 480 }} estimatedItemHeight={300} overdraw={240}>
-        {textChunks(shown.text).map((chunk, i) => <div key={i} style={{ padding: 16 }}>{preview.code ? <CodeChunk text={chunk} wrap={true} /> : <markdown source={chunk} theme={cachedMarkdownTheme(t)} style={{ color: t.text, userSelect: 'text' }} />}</div>)}
+        {(preview.code ? lineChunks(shown.text) : textChunks(shown.text)).map((chunk, i) => <div key={i} style={{ padding: 16 }}>{preview.code ? <CodeChunk text={chunk} wrap={true} /> : <markdown source={chunk} theme={cachedMarkdownTheme(t)} style={{ color: t.text, userSelect: 'text' }} />}</div>)}
       </virtual-list>
     </Dialog>}
   </>
@@ -203,7 +288,7 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
 export function TextDetail({ text, title, code = false, onClose }: { text: string; title: string; code?: boolean; onClose: () => void }) {
   useTranscriptRowLease(true)
   const t = useTheme()
-  const chunks = useMemo(() => textChunks(text), [text])
+  const chunks = useMemo(() => (code ? lineChunks(text) : textChunks(text)), [text, code])
   return <Dialog width={760} onClose={onClose} testId="text-detail">
     <DialogHeader title={title} onClose={onClose} />
     <div style={{ display: 'flex', justifyContent: 'flex-end', paddingRight: 16 }}><CopyAction text={text} /></div>
@@ -215,14 +300,28 @@ export function TextDetail({ text, title, code = false, onClose }: { text: strin
   </Dialog>
 }
 
-export const BoundedMarkdown = memo(function BoundedMarkdown({ text, tone = 'bright', stream }: { text: string; tone?: 'bright' | 'muted'; stream?: MarkdownStream }) {
+/** An agent's reply, always whole: `textChunks` pieces (whole blocks each) stacked with the margin the blocks would have
+ *  between them in one document. Only the last piece streams, so a live reply re-parses its tail only; settled pieces
+ *  keep their nodes. Clamping is the caller's choice (`ClampedMarkdown` for agent-to-agent messages), never a cut here. */
+export const BoundedMarkdown = memo(function BoundedMarkdown({ text, tone = 'bright', stream, at }: { text: string; tone?: 'bright' | 'muted'; stream?: MarkdownStream; at?: string }) {
   const t = useTheme()
-  const chunks = useMemo(() => textChunks(text), [text])
-  const [expanded, setExpanded] = useState(false)
-  const Markdown = stream ? StreamMarkdown : 'markdown'
+  const threadId = usePaneAccess().get().selectedId
+  // Text pieces and the images that stand on their own lines between them, in order.
+  const pieces = useMemo(() => splitImages(text).flatMap((segment): ({ kind: 'text'; text: string } | { kind: 'image'; source: string; alt: string })[] =>
+    segment.kind === 'image' ? [segment] : textChunks(segment.text).map(chunk => ({ kind: 'text', text: chunk }))), [text])
+  const theme = cachedMarkdownTheme(t, tone), style = { color: tone === 'bright' ? t.text : muted(t), userSelect: 'text' as const }
   return <div style={{ display: 'flex', flexDirection: 'column' }}>
-    <Markdown source={chunks[0]} theme={withStream(cachedMarkdownTheme(t, tone), stream)} style={{ color: tone === 'bright' ? t.text : muted(t), userSelect: 'text' }} />
-    {chunks.length > 1 && <Button variant="ghost" onClick={() => setExpanded(true)}>Show more</Button>}
-    {expanded && <TextDetail text={text} title="Agent response" onClose={() => setExpanded(false)} />}
+    {pieces.map((piece, i) => {
+      const last = i === pieces.length - 1, before = pieces[i - 1]
+      const gap = !before ? 0 : before.kind === 'text' && piece.kind === 'text' ? chunkGap(before.text, piece.text) : BLOCK_MARGIN
+      if (piece.kind === 'image') return <div key={i} style={{ display: 'flex', ...(gap ? { marginTop: gap } : {}) }}><ThreadImage threadId={threadId} source={piece.source} alt={piece.alt} at={at} /></div>
+      const Markdown = stream && last ? StreamMarkdown : 'markdown'
+      return <div key={i} style={{ display: 'flex', flexDirection: 'column', ...(gap ? { marginTop: gap } : {}) }}>
+        <Markdown source={piece.text} theme={last ? withStream(theme, stream) : theme} style={style} />
+      </div>
+    })}
   </div>
 })
+
+/** The collapsed margin between two neighbouring prose pieces, as between parts (`partGap`). */
+export const chunkGap = (before: string, after: string) => partGap({ kind: 'prose', text: before, key: '' }, { kind: 'prose', text: after, key: '' })

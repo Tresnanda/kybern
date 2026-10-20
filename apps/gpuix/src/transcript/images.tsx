@@ -5,7 +5,7 @@ import { onEnvironmentChange } from '../shell/environment.ts'
 // box, so the size comes from the image header (PNG, JPEG, GIF, WebP) read once
 // per source.
 import { closeSync, openSync, readSync } from 'node:fs'
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { motion, useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
 import { ImageActions } from '../platform/ImageActions.tsx'
@@ -135,7 +135,7 @@ export function ResponseImage({ source, label = 'Agent image', compact = false, 
 
 /** Native motion has no transform scale; keep the fade and a 4px entrance
  * offset. No JS animation loop; Reduce Motion is opacity only. */
-function ImageLightbox({ src, label, size, onClose, finalFocus }: { src: string; label: string; size: { width: number; height: number } | null; onClose: () => void; finalFocus: () => void }) {
+export function ImageLightbox({ src, label, size, onClose, finalFocus, body }: { src: string; label: string; size: { width: number; height: number } | null; onClose: () => void; finalFocus: () => void; body?: ReactNode }) {
   const renderer = useGpuixRequired()
   const window = renderer.getWindowSize?.() ?? { width: 900, height: 600 }
   useTranscriptRowLease(true)
@@ -154,8 +154,10 @@ function ImageLightbox({ src, label, size, onClose, finalFocus }: { src: string;
       style={{ display: 'flex', flexDirection: 'column', position: 'relative' }}
     >
       <DialogHeader title={label} onClose={() => setClosing(true)} />
-      <ImageActions source={src} label={label} />
-      <div style={{ padding: 16, paddingTop: 0 }}><img src={src} alt={label} objectFit="contain" style={{ width, height, borderRadius: 8 }} /></div>
+      {body ?? <>
+        <ImageActions source={src} label={label} />
+        <div style={{ padding: 16, paddingTop: 0 }}><img src={src} alt={label} objectFit="contain" style={{ width, height, borderRadius: 8 }} /></div>
+      </>}
     </motion.div>
   </Dialog>
 }

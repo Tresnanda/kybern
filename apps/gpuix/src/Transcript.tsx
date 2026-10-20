@@ -21,7 +21,8 @@ import { BLUR, DISTANCE, DURATION, EASE } from './motion/kit.tsx'
 import { Presence } from './motion/Presence.tsx'
 import { PATCHED_NATIVE } from './native/local-build.ts'
 import { useAppearance } from './settings/appearance.ts'
-import { CodeChunk, CodeHeader, markdownParts, partGap, Prose, textChunks } from './transcript/markdown.tsx'
+import { chunkGap, CodeChunk, CodeHeader, lineChunks, markdownParts, partGap, Prose, textChunks } from './transcript/markdown.tsx'
+import { ThreadImage } from './transcript/ThreadImage.tsx'
 import { MermaidBlock } from './transcript/MermaidBlock.tsx'
 import { MessageRail, type RailItem } from './transcript/rail.tsx'
 import { createTranscriptNavigation } from '../../desktop/src/lib/transcriptNavigation.ts'
@@ -160,11 +161,14 @@ export function Transcript() {
       const parts = markdownParts(turn.answer?.text ?? '')
       for (const [partIndex, part] of parts.entries()) {
         const partKey = `${key}:answer:${part.key}`
-        const chunks = textChunks(part.text)
+        const chunks = part.kind === 'code' ? lineChunks(part.text) : textChunks(part.text)
         // Native Markdown owns spacing inside prose; separate virtual parts
         // share the desktop's collapsed margin at their boundary (`partGap`).
         if (partIndex > 0) result.push({ key: `${partKey}:before`, turn, estimate: partGap(parts[partIndex - 1]!, part), node: <div style={{ height: partGap(parts[partIndex - 1]!, part) }} /> })
-        if (part.kind === 'code' && part.language === 'mermaid') {
+        if (part.kind === 'image') {
+          // A Markdown image on its own line (`splitImages`): the image itself, or why it cannot show.
+          result.push({ key: partKey, turn, estimate: 234, node: <Row><ThreadImage threadId={threadId!} source={part.text} alt={part.alt ?? ''} at={turn.answer?.at} /></Row> })
+        } else if (part.kind === 'code' && part.language === 'mermaid') {
           // One row: the header (Preview/Source, expand, copy) and the diagram or its source.
           const state = codeState[partKey] ?? { expanded: false, wrap: false }
           result.push({ key: partKey, turn, node: <Row><MermaidBlock code={part.text} source={!!state.source} onSource={source => setCodeState(value => ({ ...value, [partKey]: { ...state, source } }))} /></Row> })
@@ -177,7 +181,11 @@ export function Transcript() {
             result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><CodeChunk text={chunk} language={part.language} wrap={state.wrap} first={chunkIndex === 0} last={!state.expanded || chunkIndex === chunks.length - 1} /></Row> })
           }
         } else {
-          for (const [chunkIndex, chunk] of chunks.entries()) result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><Prose text={chunk} /></Row> })
+          for (const [chunkIndex, chunk] of chunks.entries()) {
+            // Pieces are whole blocks (`textChunks`); between them goes the margin those blocks have in one document.
+            if (chunkIndex > 0) result.push({ key: `${partKey}:${chunkIndex}:before`, turn, estimate: chunkGap(chunks[chunkIndex - 1]!, chunk), node: <div style={{ height: chunkGap(chunks[chunkIndex - 1]!, chunk) }} /> })
+            result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><Prose text={chunk} /></Row> })
+          }
         }
       }
       result.push({ key: `${key}:footer`, turn, estimate: 35, node: <Row><TurnFooter group={turn} threadId={threadId!} isLast={i === turns.length - 1} /></Row> })
