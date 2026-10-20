@@ -344,9 +344,12 @@ export function useCompletion({
           : 'No matching commands or skills'
 
   const replace = (start: number, token: string, added?: TokenReference) => {
-    if (/\s/.test(text[caret] ?? '') && token.endsWith(' ')) token = token.slice(0, -1)
-    if (edit) return edit(start, caret, token, added ? [added] : undefined)
-    setText(`${text.slice(0, start)}${token}${text.slice(caret)}`)
+    // Whitespace already after the caret stands in for the token's own trailing space; the replacement takes it over so
+    // the caret lands after it, ready for the next word, instead of gluing typing onto the chip.
+    const end = /\s/.test(text[caret] ?? '') && token.endsWith(' ') ? caret + 1 : caret
+    if (end > caret) token = token.slice(0, -1) + text[caret]
+    if (edit) return edit(start, end, token, added ? [added] : undefined)
+    setText(`${text.slice(0, start)}${token}${text.slice(end)}`)
     return true
   }
 
