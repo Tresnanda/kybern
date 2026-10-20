@@ -5,10 +5,12 @@ dependency); allocation, ownership, destructors and scope logic stay intact.
 """
 from pathlib import Path
 import subprocess
+import json
 
 native = Path(__file__).resolve().parents[1]
 source = (native / 'upstream/zed/crates/gpui/src/arena.rs').read_text()
 source = source.replace('log::debug!', 'eprintln!').replace('log::trace!', 'eprintln!')
+source = '#[path = ' + json.dumps(str(native / 'patches/code_frame.rs')) + ']\nmod code_frame;\n' + source
 generated = native / 'build/memory-arena-tests.rs'
 binary = native / 'build/memory-arena-tests'
 generated.write_text(source)

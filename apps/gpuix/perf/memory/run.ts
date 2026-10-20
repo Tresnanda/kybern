@@ -51,8 +51,13 @@ try {
     return res.json()
    }
    if (process.env.KYBERN_MEMORY_REQUIRE_VM === '1') {
-    const state = await control('stats', {}, true) as { native?: { largeAllocations?: { enabled: boolean; thresholdBytes: number } } }
-    assert.equal(state.native?.largeAllocations?.thresholdBytes, 4 * 1024 * 1024, 'Rebuild the VM allocator addon before sampling')
+    const state = await control('stats', {}, true) as { native?: { largeAllocations?: { enabled: boolean; thresholdBytes: number }; smallAllocator?: { enabled: boolean; postFrameEnabled: boolean; frameCollections: number } } }
+    assert.equal(state.native?.largeAllocations?.thresholdBytes, (process.env.KYBERN_CODE_MEMORY === '0' ? 4 * 1024 * 1024 : 64 * 1024), 'Rebuild the VM allocator addon before sampling')
+    if (process.env.KYBERN_MEMORY_REQUIRE_SMALL === '1') assert.equal(state.native?.smallAllocator?.enabled, process.env.KYBERN_CODE_MEMORY !== '0' && process.env.KYBERN_CODE_SMALL_MEMORY !== '0', 'Rebuild the Rust small-allocator addon before sampling')
+    if (process.env.KYBERN_MEMORY_REQUIRE_POST === '1') {
+      assert.equal(state.native?.smallAllocator?.postFrameEnabled, process.env.KYBERN_CODE_POST_FRAME_MEMORY !== '0')
+      assert.equal(typeof state.native?.smallAllocator?.frameCollections, 'number', 'Rebuild the frame-completion collector addon before sampling')
+    }
     assert.equal(state.native?.largeAllocations?.enabled, process.env.KYBERN_LARGE_ALLOCATIONS_VM !== '0')
    }
    const bounds = async (id: string) => {
@@ -71,10 +76,10 @@ try {
       return
     }
     await f.app.call('blur', {}); await f.app.mouse.move({ x: 900, y: 4 })
-    if (process.env.KYBERN_MEMORY_LANE === 'perf-images') await assertTestDisplayWindow(f.pid)
+    if (['perf-images', 'hr5-memory'].includes(process.env.KYBERN_MEMORY_LANE ?? '')) await assertTestDisplayWindow(f.pid)
     if (warmup) { if (scroll) await drive(f.app, scroll, 10000); else await Bun.sleep(10000) }
     await f.app.call('blur', {})
-    const testDisplayBefore = process.env.KYBERN_MEMORY_LANE === 'perf-images' ? await assertTestDisplayWindow(f.pid) : null
+    const testDisplayBefore = ['perf-images', 'hr5-memory'].includes(process.env.KYBERN_MEMORY_LANE ?? '') ? await assertTestDisplayWindow(f.pid) : null
     const gate = watchRun(), mark = telemetry.mark()
     const webkit = webkitProcesses().filter(process => !preexistingWebkit.has(process.pid))
     const sampler = Bun.spawn(['bun', path.join(import.meta.dir, '../sample.ts'), '15', `GPUIX=${f.pid}`], { stdout: 'pipe', stderr: 'pipe' })
@@ -89,7 +94,7 @@ try {
     const webkitExit = webSampler ? await webSampler.exited : 0; cancelWeb()
     const input = await offered
     const timing = telemetry.result(mark, input?.sent ?? []), overlap = gate.finish()
-    const testDisplayAfter = process.env.KYBERN_MEMORY_LANE === 'perf-images' ? await assertTestDisplayWindow(f.pid) : null
+    const testDisplayAfter = ['perf-images', 'hr5-memory'].includes(process.env.KYBERN_MEMORY_LANE ?? '') ? await assertTestDisplayWindow(f.pid) : null
     if (scroll) requireActiveSample(timing.frames.count, parseResources(raw).gpuMs, 15)
     const prefix = `${group}-${name}`
     writeFileSync(path.join(out, `${prefix}-footprint.txt`), execFileSync('footprint', ['-p', String(f.pid)], { encoding: 'utf8' }))
@@ -99,6 +104,11 @@ try {
     }
     const attribution = await control('stats', {}, true) as { diagrams: { completed: number; failed: number } }
     if (name === 'mermaid-jobs-every-3s') assert(attribution.diagrams.completed >= 1, 'Mermaid must actually render')
+    if (process.env.KYBERN_MEMORY_HR5_CODE === '1' && name === 'note-images') {
+      const images = (attribution as unknown as { native: { editorImages: { entries: number; cpuAndGpuPixelBytesEstimate: number } } }).native.editorImages
+      assert.equal(images.entries, 24, 'The heavy product note must actually decode all 24 image sources')
+      assert(images.cpuAndGpuPixelBytesEstimate > 0)
+    }
     rows.push({ group, name, testDisplayBefore, testDisplayAfter, input, fullRate: '1', ...timing, resources: parseResources(raw), webkitResources: webkitRaw && !webkitExit ? parseResources(webkitRaw) : null, webkitSampleError: webkitExit ? webkitError : null, webkitCandidates: webkit, webkitAttribution: 'New WebKit XPC services during this isolated fixture lease; external app launches can confound attribution. Main GPUIX resources remain separate.', attribution, counters: await control('counters'), gate: overlap })
     writeFileSync(path.join(out, 'results.json'), JSON.stringify(rows, null, 2))
     assert(!overlap.overlap && !overlap.orphanOverlap && !overlap.screenInvalid, 'Contended sample must be rerun')
@@ -125,6 +135,18 @@ try {
     await control('home'); await control('open', { thread: fixture.manifest.long3000 })
     await control('explorer', { file: fixture.manifest.markdown }); await Bun.sleep(1500)
     await control('explorer', { file: fixture.manifest.code }); await measure('explorer-code')
+    if (process.env.KYBERN_MEMORY_HR5_CODE === '1') {
+      await f.app.getByTestId('dock-file-close').click()
+      await Bun.sleep(150)
+      assert.equal(await f.app.getByTestId('dock-code-chunk-0').count(), 0, 'Real Close file removes the code view')
+      const closed = await control('stats', {}, true) as { syntax: { documents: number; sourceBytes: number } }
+      assert.equal(closed.syntax.documents, 0, 'Closing the file releases the registered syntax document')
+      assert.equal(closed.syntax.sourceBytes, 0)
+      await measure('explorer-code-closed')
+      const reopenAt = performance.now()
+      await control('explorer', { file: fixture.manifest.code }); await bounds('dock-code-chunk-0')
+      writeFileSync(path.join(out, 'file-reopen.json'), JSON.stringify({ requestToPaintedBoundsMs: performance.now() - reopenAt, meaning: 'Full product file read, parse, native paint and bounds RPC; not physical presentation' }, null, 2))
+    }
     await control('dock-close'); await control('note', { note: note.id }, true); await measure('note-images')
    } else if (group === 'terminal-stream') {
     await control('open', { thread: fixture.manifest.long1000 }); await control('terminal', {}, true)

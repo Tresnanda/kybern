@@ -1516,3 +1516,49 @@ pair selects the legacy or weighted entry point; only that pair is instantiated.
 `KYBERN_BACKDROP_KERNEL=0` retains the original fragment and skips the kernel
 upload. This prevents the control and optimized path from sharing a shader with
 both loops. Nonfinite/invalid kernels select the legacy entry point on CPU.
+
+## Code-close allocation release (hands-on round 5)
+
+`code_alloc.rs`, included by the appended `code_memory_hooks.py`, extends the
+existing mapped allocator from 4 MiB to **64 KiB** buffers. Large code builds
+many 1 MiB frame-arena chunks and intermediate tables; Darwin otherwise retains
+their freed small-zone pages. `KYBERN_CODE_MEMORY=0` restores the 4 MiB boundary
+in the same addon. `code_frame.rs` / `code_frame_gpui.py` also return excess
+dispatch-node Vec capacity in both frame buffers after an eightfold workload
+collapse; index-based node identities stay intact. `KYBERN_CODE_FRAME_MEMORY=0`
+isolates the allocator-only path. `KYBERN_LARGE_ALLOCATIONS_VM=0` still selects
+System for all allocations. These changes release allocations only; text layout,
+syntax, selection, atlas keys and frame scheduling are unchanged.
+
+The appended `code_memory_gpui.py` supplies read-only shaped-layout counts and
+the real per-App arena capacity. `getMemoryStats().appElementArenaBytes` is the
+App's arena; the retained `elementArenaBytes` compatibility gauge reads the
+fallback thread-local arena. `syntaxCache` reports the bounded neutral cache;
+registered syntax documents keep their separate `getSyntaxDocumentStats()` API.
+Counters add neither timers nor frame requests. Run `python3 native/code-alloc-test.py`
+after reconstruction for the default, old-boundary and disabled allocator tests.
+
+Ownership proof, Zed comparison and caveats: `../perf/memory/HR5-RESEARCH.md`.
+
+The same frame policy releases spare `LineLayoutCache` map/used-key capacity
+at frame completion, while retaining all live keys and index order.
+`textLayoutCapacities` reports those eight aggregate capacities separately from
+`textLayouts`' four live counts. The cleared backup uses the active frame's
+workload, preserving warm capacity while a large document remains open.
+
+Code-close small allocations use a private Rust-only mimalloc 0.1.52 instance
+(exact libmimalloc-sys 0.1.49; libc override/interpose features are disabled).
+`KYBERN_CODE_SMALL_MEMORY=0` isolates the 64 KiB mmap + frame-capacity change
+without the small allocator. `KYBERN_CODE_MEMORY=0` restores the full legacy
+allocator/frame control in the same addon. When mapped buffers release at least
+8 MiB, the existing AppKit pump coalesces one `mi_collect(true)` after destructors
+run. It adds no frame or timer; `smallAllocator` reports its event count.
+
+`code_collect_gpui.py` also notifies that private collector after the drawn
+App's element arena has cleared. Destruction of a large reconciler batch or
+release of a syntax/Markdown document requests one collection at that boundary;
+a request survives an earlier AppKit pump. Large arena contraction returns its
+unused chunks immediately. Nested deferred clears and event arenas do not
+notify. `KYBERN_CODE_POST_FRAME_MEMORY=0` selects the earlier 8 MiB pump-only
+policy in the same addon, including its original arena slack. Collection stays
+event driven; there is no idle timer, frame request or glyph eviction.

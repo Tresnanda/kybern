@@ -29,6 +29,9 @@ for(const mode of ['dark','light']) {
     images.push(file);return file
    }
    const painted=async(text:string)=>{const deadline=Date.now()+8000;while(!(await a.call('getPaintedText',{})).text.join('\n').includes(text)){assert.ok(Date.now()<deadline);await Bun.sleep(10)}}
+   // WindowServer can publish the window before its finite show transition settles.
+   // The initial OS capture must compare the settled surfaces, like later states.
+   await Bun.sleep(400)
    await shot('initial')
    const before=f.counts()
    for(let i=0;i<4;i++) {
