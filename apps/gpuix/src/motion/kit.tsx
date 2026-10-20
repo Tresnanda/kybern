@@ -96,6 +96,7 @@ export function Rise({
   play = true,
   style,
   testId,
+  paint,
 }: {
   children: ReactNode
   kind?: EnterKind
@@ -104,8 +105,10 @@ export function Rise({
   play?: boolean
   style?: StyleDesc
   testId?: string
+  /** The transform it carries when it does not play its own entrance (a tree row rising with its group). */
+  paint?: PaintTransformProps
 }) {
-  if (!play) return <div testId={testId} style={{ display: 'flex', flexDirection: 'column', ...style }}>{children}</div>
+  if (!play) return <div testId={testId} paintTransform={paint} style={{ display: 'flex', flexDirection: 'column', ...style }}>{children}</div>
   return (
     <div paintTransform={enterTransform(kind, index)} style={{ display: 'flex', flexDirection: 'column', position: 'relative', ...style }}>
       {testId ? <div testId={testId} style={{ display: 'flex', flexDirection: 'column' }}>{children}</div> : children}
