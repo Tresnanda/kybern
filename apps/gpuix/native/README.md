@@ -1668,3 +1668,23 @@ also run with `KYBERN_COMPOSITOR_LOOPS=0` for the scene path). It asserts zero a
 layer per part, the curves and clockwise turn rates from live `presentationLayer` samples, upright glyph masks
 (rendered in place with `renderInContext`), hand-back under a covering box, layout shifts and clean unmount.
 Measurements: `../perf/motion-fps-2026-10-20.md`.
+
+## One hover per link in inline flow (chatfix)
+
+A paragraph with inline code is laid out by `markdown_inline.rs` as one text
+fragment per word, and each fragment hit-tested and underlined only its own
+slice of a hovered link, so a multi-word link underlined word by word.
+`link_hover_hooks.py` (one `exec` line in `apply_hooks.py`) moves hover to the
+flow: prepaint finds the hovered link once from the token geometry (binary
+search to the pointer's line; a partly linked word is shaped once), every
+fragment underlines its slice (`SelectableText::hover_range`, bridged into the
+next fragment so there is no hairline gap), and one mouse-move listener per
+flow refreshes only when the hovered link changes. Clicks stay per fragment.
+Single-run paragraphs keep upstream behaviour. No timers; idle stays at 0
+frames.
+
+Check: `link-hover-check.ts` (first, middle and last word of a link wrapped onto
+two lines, an inline-code link, the single-run control, both themes). This
+session's environment may export `NAPI_RS_NATIVE_LIBRARY_PATH` for the
+installed app's addon; `local-build.ts` then keeps it, so set the variable to
+`native/build/gpuix-native.darwin-arm64.node` explicitly when checking a build.

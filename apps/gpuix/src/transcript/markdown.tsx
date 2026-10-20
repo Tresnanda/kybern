@@ -4,6 +4,7 @@ import { useTranscriptRowLease } from './Window.tsx'
 import { memo, useMemo, useState, type ReactNode } from 'react'
 import { spawn } from 'node:child_process'
 import { chatLink } from '../../../../packages/kybern-client/src/chatLinks.ts'
+import { fileRefCandidates, linkifyFileRefs } from '../../../../packages/kybern-client/src/fileRefs.ts'
 import { TOOL_RESULT_CHAR_LIMIT, TOOL_RESULT_LINE_LIMIT } from '../../../desktop/src/lib/toolResultText.ts'
 import { getClient, usePaneAccess } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
@@ -15,6 +16,7 @@ import { Icon } from '../icons.tsx'
 import { T } from './glyphs.ts'
 import { reportError } from './store.ts'
 import { chipifyKybernRefs } from './refs.ts'
+import { useFileRefs } from './fileRefs.ts'
 import { useNotes, openNote } from '../notes/store.ts'
 import { useTasks, openTask } from '../tasks/store.ts'
 import { goPage } from '../nav/history.ts'
@@ -127,6 +129,20 @@ export const CodeChunk = memo(function CodeChunk({ text, language, wrap, first =
 const NO_NOTES: NoteSummary[] = []
 const NO_TASKS: Record<string, TaskItem> = {}
 
+/** Lines shown above a linked line, so the preview starts with some context. */
+const LINE_CONTEXT = 3
+/** The file from a little above `line` (1-based), and the line it starts at. */
+export function fromLine(text: string, line: number | undefined): { text: string; start: number } {
+  if (!line || line <= LINE_CONTEXT + 1) return { text, start: 1 }
+  let start = 1, index = 0
+  while (start < line - LINE_CONTEXT) {
+    const next = text.indexOf('\n', index)
+    if (next < 0) return { text, start: 1 }
+    index = next + 1; start++
+  }
+  return { text: text.slice(index), start }
+}
+
 /** `withStream`: the live answer's caret and fading words go in the cached theme's `markdown` block. */
 export function withStream<T extends { markdown: object }>(theme: T, stream: MarkdownStream | undefined): T {
   return stream ? { ...theme, markdown: { ...theme.markdown, stream } } : theme
@@ -138,8 +154,15 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
   const refs = text.includes('kybern://')
   const notes = useNotes(s => (refs ? s.notes : NO_NOTES))
   const tasks = useTasks(s => (refs ? s.tasks : NO_TASKS))
-  const source = useMemo(() => (refs ? chipifyKybernRefs(text, id => notes.find(n => n.id === id), id => tasks[id]) : text), [text, refs, notes, tasks])
-  const [preview, setPreview] = useState<{ title: string; text: string; code: boolean } | null>(null)
+  // Inline code that names a workspace file reads as a link once the daemon confirms it.
+  const threadId = pane.get().selectedId
+  const candidates = useMemo(() => fileRefCandidates(text), [text])
+  const fileOf = useFileRefs(threadId, candidates)
+  const source = useMemo(() => {
+    const chips = refs ? chipifyKybernRefs(text, id => notes.find(n => n.id === id), id => tasks[id]) : text
+    return chips.includes('`') ? linkifyFileRefs(chips, fileOf) : chips
+  }, [text, refs, notes, tasks, fileOf])
+  const [preview, setPreview] = useState<{ title: string; text: string; code: boolean; line?: number; whole?: boolean } | null>(null)
   useTranscriptRowLease(preview !== null)
   const open = async (href: string) => {
     const link = chatLink(href)
@@ -151,7 +174,7 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
         const threadId = pane.get().selectedId
         if (!threadId) return
         const file = await client.call('threads.files.read', { thread_id: threadId, path: link.path })
-        setPreview({ title: link.path, text: file.content, code: true })
+        setPreview({ title: link.line ? `${link.path}:${link.line}` : link.path, text: file.content, code: true, line: link.line })
       } else if (link.kind === 'kybern') {
         // A chip opens the note or task page, as on the desktop.
         if (link.target === 'note') openNote(link.id)
@@ -159,12 +182,17 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
       }
     } catch (e) { reportError('Unable to open link', e) }
   }
+  const shown = preview && fromLine(preview.text, preview.whole ? undefined : preview.line)
   return <>
     <markdown source={source} theme={cachedMarkdownTheme(t)} onLinkClick={e => { if (e.value) void open(e.value) }} style={{ color: t.text, userSelect: 'text' }} />
-    {preview && <Dialog width={720} onClose={() => setPreview(null)} testId="chat-link-preview">
+    {preview && shown && <Dialog width={720} onClose={() => setPreview(null)} testId="chat-link-preview">
       <DialogHeader title={preview.title} onClose={() => setPreview(null)} />
+      {shown.start > 1 && <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 16, paddingRight: 16 }}>
+        <Label color={muted(t)} style={{ flexGrow: 1 }}>{`From line ${shown.start}`}</Label>
+        <Button testId="chat-link-whole-file" variant="ghost" onClick={() => setPreview({ ...preview, whole: true })}>Show whole file</Button>
+      </div>}
       <virtual-list style={{ height: 480 }} estimatedItemHeight={300} overdraw={240}>
-        {textChunks(preview.text).map((chunk, i) => <div key={i} style={{ padding: 16 }}>{preview.code ? <CodeChunk text={chunk} wrap={true} /> : <markdown source={chunk} theme={cachedMarkdownTheme(t)} style={{ color: t.text, userSelect: 'text' }} />}</div>)}
+        {textChunks(shown.text).map((chunk, i) => <div key={i} style={{ padding: 16 }}>{preview.code ? <CodeChunk text={chunk} wrap={true} /> : <markdown source={chunk} theme={cachedMarkdownTheme(t)} style={{ color: t.text, userSelect: 'text' }} />}</div>)}
       </virtual-list>
     </Dialog>}
   </>

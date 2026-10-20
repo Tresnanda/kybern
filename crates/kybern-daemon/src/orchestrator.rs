@@ -422,6 +422,10 @@ type RetainedSessions = HashMap<(ThreadId, String), (ProviderInstance, Arc<LiveS
 struct Inner {
     commands: std::sync::Mutex<()>,
     session_admission: Mutex<HashMap<ThreadId, Arc<Mutex<()>>>>,
+    /// One checkpoint at a time per thread, so a turn's "after" snapshot,
+    /// taken once the turn has ended, lands before the next turn's "before"
+    /// and before a revert.
+    checkpoint_locks: std::sync::Mutex<HashMap<ThreadId, Arc<Mutex<()>>>>,
     workspace_ops: Mutex<()>,
     question_answers: Mutex<()>,
     lead_commands: Mutex<()>,
@@ -727,6 +731,7 @@ impl Orchestrator {
             inner: Arc::new(Inner {
                 commands: std::sync::Mutex::new(()),
                 session_admission: Mutex::new(HashMap::new()),
+                checkpoint_locks: std::sync::Mutex::new(HashMap::new()),
                 workspace_ops: Mutex::new(()),
                 question_answers: Mutex::new(()),
                 lead_commands: Mutex::new(()),
@@ -2484,8 +2489,31 @@ impl Orchestrator {
         Ok(())
     }
 
+    fn checkpoint_lock(&self, thread_id: ThreadId) -> Arc<Mutex<()>> {
+        self.inner.checkpoint_locks.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).entry(thread_id).or_default().clone()
+    }
+
     /// Snapshot the working tree for a turn. Silently skipped for non-git projects.
     async fn checkpoint(&self, thread: &Thread, turn_id: TurnId, which: &str) {
+        let _checkpoint = self.checkpoint_lock(thread.id).lock_owned().await;
+        self.checkpoint_locked(thread, turn_id, which).await;
+    }
+
+    /// Take a turn's "after" snapshot without holding up its end: hashing a
+    /// large tree can take minutes, and clients show the turn as working
+    /// until `TurnCompleted`. The lock is taken here, before the turn ends,
+    /// so the next turn's "before" snapshot and a revert wait for this one.
+    async fn checkpoint_after_turn(&self, thread: &Thread, turn_id: TurnId) {
+        let checkpoint = self.checkpoint_lock(thread.id).lock_owned().await;
+        let this = self.clone();
+        let thread = thread.clone();
+        tokio::spawn(async move {
+            this.checkpoint_locked(&thread, turn_id, "after").await;
+            drop(checkpoint);
+        });
+    }
+
+    async fn checkpoint_locked(&self, thread: &Thread, turn_id: TurnId, which: &str) {
         let repo = Repo::new(&thread.cwd);
         if !Repo::is_repo(std::path::Path::new(&thread.cwd)).await {
             return;
@@ -2700,11 +2728,14 @@ impl Orchestrator {
         if self.inner.store.runtime_tasks_for_thread(thread_id)?.iter().any(|task| task.status.is_active()) {
             return Err(anyhow!("background work is active; stop it before rewinding"));
         }
+        // A finished turn's "after" snapshot may still be running.
+        let checkpoint = self.checkpoint_lock(thread_id).lock_owned().await;
         let all = self.inner.store.checkpoints_for_thread(thread_id)?;
         let idx = all.iter().position(|c| c.turn_id == turn_id).ok_or_else(|| anyhow!("no checkpoint for that turn"))?;
         let c = all[idx].clone();
         let repo = Repo::new(&thread.cwd);
         repo.restore(&c.before).await?;
+        drop(checkpoint);
         self.emit(thread_id, Some(turn_id), EventPayload::WorkspaceReverted { to_turn_id: turn_id, commit: c.before.clone() })?;
 
         if let Some(live) = self.inner.sessions.lock().await.remove(&thread_id) {
@@ -3154,7 +3185,7 @@ impl Orchestrator {
             return Ok(());
         }
         if let Some(thread) = self.inner.store.thread_get(thread_id)? {
-            self.checkpoint(&thread, turn_id, "after").await;
+            self.checkpoint_after_turn(&thread, turn_id).await;
         }
         Ok(())
     }
@@ -3818,7 +3849,7 @@ impl Orchestrator {
                 if has_active_tasks {
                     live.deferred_checkpoints.lock().await.insert(turn_id);
                 } else {
-                    self.checkpoint(&t, turn_id, "after").await;
+                    self.checkpoint_after_turn(&t, turn_id).await;
                 }
                 self.emit(
                     thread_id,
@@ -3851,7 +3882,7 @@ impl Orchestrator {
                 if has_active_tasks {
                     live.deferred_checkpoints.lock().await.insert(turn_id);
                 } else {
-                    self.checkpoint(&t, turn_id, "after").await;
+                    self.checkpoint_after_turn(&t, turn_id).await;
                 }
                 self.emit(thread_id, Some(turn_id), EventPayload::TurnFailed { error: error.clone() })?;
                 // A failed turn may have hit a plan limit.
@@ -5889,6 +5920,63 @@ mod tests {
                 .iter()
                 .any(|event| { matches!(event.payload, EventPayload::TurnCompleted { stop_reason: StopReason::Interrupted, .. }) })
         );
+    }
+
+    #[tokio::test]
+    async fn a_turn_ends_before_its_after_checkpoint_and_the_next_snapshot_waits_for_it() {
+        let fixture = Fixture::new();
+        let git =
+            |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(&fixture.root).args(args).status().unwrap().success());
+        git(&["init", "-q"]);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        fixture.orchestrator.send(thread.id, UserMessage::text("edit a file")).await.unwrap();
+        live.turn_ready.notified().await;
+        let turn_id = live.turn.lock().await.as_ref().unwrap().id;
+        // The before snapshot is taken once the turn is ready.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while fixture.store.checkpoint_get(turn_id).unwrap().is_none() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        std::fs::write(fixture.root.join("edited.txt"), "agent output\n").unwrap();
+
+        // Hold the thread's checkpoint lock, as a slow snapshot of a large tree would.
+        let slow = fixture.orchestrator.checkpoint_lock(thread.id).lock_owned().await;
+        let ending = {
+            let (orchestrator, live) = (fixture.orchestrator.clone(), live.clone());
+            tokio::spawn(async move { orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await })
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        // The turn has not ended while an earlier snapshot runs; the after
+        // snapshot is queued behind it, never skipped.
+        assert!(!ending.is_finished());
+        drop(slow);
+        tokio::time::timeout(Duration::from_secs(2), ending).await.unwrap().unwrap().unwrap();
+        let ended = fixture.store.events_for_thread(thread.id).unwrap();
+        let completed = ended.iter().find(|event| matches!(event.payload, EventPayload::TurnCompleted { .. })).expect("turn ended").seq;
+        assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Idle);
+
+        // A revert waits for the after snapshot, which lands after the turn ended.
+        fixture.orchestrator.revert(thread.id, turn_id).await.unwrap();
+        let events = fixture.store.events_for_thread(thread.id).unwrap();
+        let after = events
+            .iter()
+            .find(|event| matches!(&event.payload, EventPayload::CheckpointUpdated { checkpoint } if checkpoint.after.is_some()))
+            .expect("the after checkpoint is recorded");
+        assert!(after.seq > completed, "the checkpoint follows the turn's end");
+        let checkpoint = fixture.store.checkpoint_get(turn_id).unwrap().unwrap();
+        let shown = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&fixture.root)
+            .args(["show", &format!("{}:edited.txt", checkpoint.after.unwrap())])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&shown.stdout), "agent output\n");
+        assert!(!fixture.root.join("edited.txt").exists(), "the revert restored the snapshot taken before the turn");
     }
 
     #[tokio::test]

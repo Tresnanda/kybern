@@ -702,6 +702,17 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
             ok(crate::files::read_thread_file(std::path::Path::new(&thread.cwd), &p.path, p.max_bytes).await.map_err(bad)?)
         }
+        ThreadFilesResolve::NAME => {
+            let p: ThreadFilesResolveParams = parse(params)?;
+            if p.paths.len() > crate::files::MAX_RESOLVE_PATHS {
+                return Err(RpcError::invalid_params(format!("Send at most {} paths at a time.", crate::files::MAX_RESOLVE_PATHS)));
+            }
+            let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            let paths = crate::files::resolve_thread_files(&state.file_indexes, std::path::Path::new(&thread.cwd), &p.paths)
+                .await
+                .map_err(internal)?;
+            ok(ThreadFilesResolveResult { paths })
+        }
         HtmlPublish::NAME => {
             let p: HtmlPublishParams = parse(params)?;
             let turn = state
