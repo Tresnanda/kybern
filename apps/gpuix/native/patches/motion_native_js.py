@@ -1,5 +1,5 @@
 # Motion-native additions to the @gpuix/native JS bridge (lane gpuix-native), executed from patch_js.py after
-# render9_js.py (shares its edit table): `hoverTransition` (hover_fade.rs) and `paintTransform.retain`.
+# render9_js.py (shares its edit table): `hoverTransition` (hover_fade.rs), `paintTransform.retain`, `scaleX`/`scaleY`.
 edit('dist/mutations.js', '    "paintTransform",\n', '    "paintTransform",\n    "hoverTransition",\n')
 edit('dist/host.d.ts', '    generation?: number;\n}\nexport interface HostProps {', '''    generation?: number;
     /** Keep the retained paint at rest, so an exit or reveal that starts later is paint-only from its first frame. */
@@ -14,3 +14,4 @@ export interface HoverTransition {
 export interface HostProps {
     /** Ease `hover` / `active` background and border colour changes; inherited by descendants, `false` opts out. */
     hoverTransition?: HoverTransition | false;''')
+edit('dist/host.d.ts', 'export interface PaintTransformValue {\n    scale?: number;\n', 'export interface PaintTransformValue {\n    scale?: number;\n    /** One-axis multipliers of `scale` about the origin (corners stay round at the smaller one). */\n    scaleX?: number;\n    scaleY?: number;\n')

@@ -30,7 +30,7 @@ const bezier = (ease: Ease) => [...ease] as [number, number, number, number]
 export const HOVER_FADE_ROOT: { hoverTransition?: typeof HOVER_FADE } = PATCHED_NATIVE && process.env.KYBERN_HOVER_FADE !== '0' ? { hoverTransition: HOVER_FADE } : {}
 
 /** What a `paintTransform` rests at: every field at its neutral value (a retarget back from any exit lands here). */
-export const IDENTITY: Required<PaintTransformValue> = { opacity: 1, scale: 1, rotate: 0, translateX: 0, translateY: 0, blur: 0 }
+export const IDENTITY: Required<PaintTransformValue> = { opacity: 1, scale: 1, scaleX: 1, scaleY: 1, rotate: 0, translateX: 0, translateY: 0, blur: 0 }
 
 /** The neutral value for exactly the fields `from` sets, so a tween never touches a field it was not asked to. */
 function restOf(from: PaintTransformValue): PaintTransformValue {
@@ -387,4 +387,15 @@ export function Swap({ active, children, style, kind = 'text', still = false, in
  */
 export function SwapOnChange({ active, children, style, kind = 'text', innerStyle, leavingStyle }: { active: string; children: ReactNode; style?: StyleDesc; kind?: 'text' | 'icon'; innerStyle?: StyleDesc; leavingStyle?: StyleDesc }) {
   return <Swap active={active} style={style} kind={kind} innerStyle={innerStyle} leavingStyle={leavingStyle} still>{children}</Swap>
+}
+
+// ─── Embedded documents ───────────────────────────────────────────────────
+
+/**
+ * A native web document (preview, visual reply) arriving with the desktop's 150 ms fade (`kit.css` 3643, `.visual-reply`
+ * frame): its WKWebView layer fades in Core Animation, so the app presents no frames (`webHost.present`, N3). Call it right
+ * before the document is first shown. Opacity only, so Reduce Motion keeps it; the stock addon has no embedded documents.
+ */
+export function webDocumentEnter(id: string, present: (id: string, to: { opacity: number }, motion: { from: { opacity: number }; duration: number; ease: readonly number[] }) => void) {
+  present(id, { opacity: 1 }, { from: { opacity: 0 }, duration: DURATION.quick, ease: EASE.out })
 }

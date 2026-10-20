@@ -77,7 +77,7 @@ index 37cc70406f67838394b07664259720cf9dd9f748..09a5c21aacf092351270d6322bee5e84
          }),
          result: okSchema,
 diff --git a/dist/host.d.ts b/dist/host.d.ts
-index cc6b7ef926c5c3122fff6107341913364a215710..a1a2942b404762c9c0c4928a672a54604e130f00 100644
+index cc6b7ef926c5c3122fff6107341913364a215710..b9b8add6e6b03d137ca8e34a35de7128307c3966 100644
 --- a/dist/host.d.ts
 +++ b/dist/host.d.ts
 @@ -5,6 +5,10 @@ export * from "./mutations.js";
@@ -107,12 +107,15 @@ index cc6b7ef926c5c3122fff6107341913364a215710..a1a2942b404762c9c0c4928a672a5460
      /** Duration in seconds. */
      duration?: number;
      /** Delay in seconds. */
-@@ -274,7 +287,55 @@ export interface HighlightSpec {
+@@ -274,7 +287,58 @@ export interface HighlightSpec {
      /** Corner radius of the wash. Defaults to 2. */
      radius?: number;
  }
 +export interface PaintTransformValue {
 +    scale?: number;
++    /** One-axis multipliers of `scale` about the origin (corners stay round at the smaller one). */
++    scaleX?: number;
++    scaleY?: number;
 +    /** Clockwise degrees. */
 +    rotate?: number;
 +    translateX?: number;
@@ -163,7 +166,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..a1a2942b404762c9c0c4928a672a5460
      style?: StyleDesc;
      /** Primary button only, like the DOM. Use `onAuxClick` for the others. */
      onClick?: (event: EventPayload) => void;
-@@ -287,7 +348,7 @@ export interface HostProps {
+@@ -287,7 +351,7 @@ export interface HostProps {
      onMouseMove?: (event: EventPayload) => void;
      /** Fires when user clicks OUTSIDE this element. Use for "click outside to close". */
      onMouseDownOutside?: (event: EventPayload) => void;
@@ -172,7 +175,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..a1a2942b404762c9c0c4928a672a5460
      onKeyUp?: (event: EventPayload) => void;
      onFocus?: (event: EventPayload) => void;
      onBlur?: (event: EventPayload) => void;
-@@ -342,6 +403,10 @@ export interface HostProps {
+@@ -342,6 +406,10 @@ export interface HostProps {
      motion?: MotionProps;
  }
  export interface InputProps extends HostProps {
@@ -183,7 +186,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..a1a2942b404762c9c0c4928a672a5460
      /** External editor value. Native edits apply immediately and report through onChange. */
      value?: string;
      placeholder?: string;
-@@ -405,6 +470,8 @@ export interface SvgProps extends HostProps {
+@@ -405,6 +473,8 @@ export interface SvgProps extends HostProps {
   * scroller, so `whiteSpace` and `overflowX` do nothing.
   */
  export interface CodeProps extends HostProps {
@@ -192,7 +195,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..a1a2942b404762c9c0c4928a672a5460
      /** The source to display. Rendered one div per line at an exact line height. */
      code?: string;
      /** Language alias such as "ts", "rust", "bash". Beats `path` for detection. */
-@@ -468,7 +535,7 @@ export type WindowSizeHost = Pick<GpuixRenderer, "getWindowSize">;
+@@ -468,7 +538,7 @@ export type WindowSizeHost = Pick<GpuixRenderer, "getWindowSize">;
  export type WindowInsetsHost = Pick<GpuixRenderer, "getWindowInsets">;
  export type SelectionHost = Pick<GpuixRenderer, "getSelectedText">;
  /** `applyBatch` plus the live renderer methods a host may also expose. */

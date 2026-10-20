@@ -14,6 +14,9 @@
 #[allow(missing_docs)]
 pub struct SubtreeTransformValue {
     pub scale: f32,
+    /// One-axis multipliers of `scale` (N5: a switch thumb's held stretch, a bar filling from one end).
+    pub scale_x: f32,
+    pub scale_y: f32,
     pub rotate: f32,
     pub translate_x: f32,
     pub translate_y: f32,
@@ -22,7 +25,7 @@ pub struct SubtreeTransformValue {
 }
 impl Default for SubtreeTransformValue {
     fn default() -> Self {
-        Self { scale: 1.0, rotate: 0.0, translate_x: 0.0, translate_y: 0.0, opacity: 1.0, blur: 0.0 }
+        Self { scale: 1.0, scale_x: 1.0, scale_y: 1.0, rotate: 0.0, translate_x: 0.0, translate_y: 0.0, opacity: 1.0, blur: 0.0 }
     }
 }
 impl SubtreeTransformValue {
@@ -44,10 +47,11 @@ struct Affine {
 }
 impl Affine {
     const IDENTITY: Self = Self { a: 1.0, b: 0.0, c: 0.0, d: 1.0, tx: 0.0, ty: 0.0 };
-    /// `T(origin + translate) · R(rotate) · S(scale) · T(-origin)`.
+    /// `T(origin + translate) · R(rotate) · S(scale · scaleX, scale · scaleY) · T(-origin)`.
     fn about(value: &SubtreeTransformValue, origin: Point<Pixels>) -> Self {
         let (sin, cos) = value.rotate.to_radians().sin_cos();
-        let (a, b, c, d) = (cos * value.scale, -sin * value.scale, sin * value.scale, cos * value.scale);
+        let (sx, sy) = (value.scale * value.scale_x, value.scale * value.scale_y);
+        let (a, b, c, d) = (cos * sx, -sin * sy, sin * sx, cos * sy);
         let (ox, oy) = (origin.x.as_f32(), origin.y.as_f32());
         Self { a, b, c, d, tx: ox + value.translate_x - a * ox - b * oy, ty: oy + value.translate_y - c * ox - d * oy }
     }
@@ -85,11 +89,15 @@ impl Affine {
         }
         (x0, y0, x1 - x0, y1 - y0)
     }
-    /// A rectangle that keeps its axes: its centre follows the map, its size the magnitude.
+    /// How much the map stretches each axis (its column lengths); equal for a uniform scale.
+    fn axes(&self) -> (f32, f32) {
+        ((self.a * self.a + self.c * self.c).sqrt(), (self.b * self.b + self.d * self.d).sqrt())
+    }
+    /// A rectangle that keeps its axes: its centre follows the map, its width and height the axis stretches.
     fn rect(&self, x: f32, y: f32, w: f32, h: f32) -> (f32, f32, f32, f32) {
-        let s = self.magnitude();
+        let (sx, sy) = self.axes();
         let (cx, cy) = self.apply(x + w / 2.0, y + h / 2.0);
-        (cx - w * s / 2.0, cy - h * s / 2.0, w * s, h * s)
+        (cx - w * sx / 2.0, cy - h * sy / 2.0, w * sx, h * sy)
     }
 }
 
@@ -127,7 +135,8 @@ impl SubtreeTransformContext {
             let (x, y, w, h) = m.envelope(bounds.origin.x.as_f32(), bounds.origin.y.as_f32(), bounds.size.width.as_f32(), bounds.size.height.as_f32());
             let visual = Bounds::new(point(px(x), px(y)), size(px(w), px(h)));
             if let Some(shape) = rounded {
-                let s = m.magnitude();
+                let (sx, sy) = m.axes();
+                let s = sx.min(sy);
                 let (rx, ry, rw, rh) = m.rect(shape.bounds[0], shape.bounds[1], shape.bounds[2], shape.bounds[3]);
                 let r = shape.radii;
                 let (id, generation) = pool.intern(
@@ -326,6 +335,9 @@ impl crate::scene::Primitive {
         let factor = context.scale_factor;
         let m = context.matrix.scaled(factor);
         let s = m.magnitude();
+        // Under a one-axis stretch, corners stay round at the smaller stretch and each border follows its own axis.
+        let (sx, sy) = m.axes();
+        let r = sx.min(sy);
         let opacity = context.opacity;
         // The scope's mask, narrowed by the primitive's own clip mapped through the transform: GPUI paints a
         // border-only quad as four strips, each clipped to its strip, and other paint narrows its mask the same way.
@@ -338,10 +350,10 @@ impl crate::scene::Primitive {
             *b = Bounds::new(point(ScaledPixels(x), ScaledPixels(y)), size(ScaledPixels(w), ScaledPixels(h)));
         };
         let corners = |c: &mut Corners<ScaledPixels>| {
-            c.top_left.0 *= s;
-            c.top_right.0 *= s;
-            c.bottom_right.0 *= s;
-            c.bottom_left.0 *= s;
+            c.top_left.0 *= r;
+            c.top_right.0 *= r;
+            c.bottom_right.0 *= r;
+            c.bottom_left.0 *= r;
         };
         let sprite = |t: &mut TransformationMatrix| {
             let r = t.rotation_scale;
@@ -352,7 +364,7 @@ impl crate::scene::Primitive {
         match self {
             Self::Backdrop(p) => {
                 rect(&mut p.bounds);
-                p.radius.0 *= s;
+                p.radius.0 *= r;
                 // The scope's own blur pass (painted with a unit blur and the -1 marker) follows its value.
                 if p.fade_top < 0.0 {
                     p.blur = ScaledPixels(context.blur * factor * s);
@@ -377,17 +389,17 @@ impl crate::scene::Primitive {
             Self::Quad(p) => {
                 rect(&mut p.bounds);
                 corners(&mut p.corner_radii);
-                p.border_widths.top.0 *= s;
-                p.border_widths.right.0 *= s;
-                p.border_widths.bottom.0 *= s;
-                p.border_widths.left.0 *= s;
+                p.border_widths.top.0 *= sy;
+                p.border_widths.right.0 *= sx;
+                p.border_widths.bottom.0 *= sy;
+                p.border_widths.left.0 *= sx;
                 p.background = p.background.opacity(opacity);
                 p.border_color.a *= opacity;
                 p.content_mask = mask;
             }
             Self::Underline(p) => {
                 rect(&mut p.bounds);
-                p.thickness.0 *= s;
+                p.thickness.0 *= sy;
                 p.color.a *= opacity;
                 p.content_mask = mask;
             }
