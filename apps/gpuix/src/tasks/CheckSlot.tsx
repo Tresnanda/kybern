@@ -5,7 +5,6 @@
 import type { ReactNode } from 'react'
 import { EASE, DURATION } from '../motion/tokens.ts'
 import { EXIT, Presence } from '../motion/Presence.tsx'
-import { fadeTo } from '../shell/motion.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { REDUCED_MOTION } from '../ui.tsx'
 
@@ -14,7 +13,9 @@ const OUT = { to: EXIT.reveal.to, duration: DURATION.micro }
 
 export function CheckSlot({ show, base, over, width = 26, height = 30, align = 'start' }: { show: boolean; base?: ReactNode; over: ReactNode; width?: number; height?: number; align?: 'start' | 'end' }) {
   const instant = REDUCED_MOTION || !PATCHED_NATIVE
-  const dim = fadeTo(show ? 0 : 1, DURATION.micro)
+  // The base glyph fades with the checkbox; `retain` keeps its scope tagged at rest so the first hover of a row is paint-only from its first frame.
+  const opacity = show ? 0 : 1
+  const dim = { paintTransform: instant ? undefined : { initial: false as const, animate: { opacity }, transition: { duration: DURATION.micro, ease: [...EASE.out] as [number, number, number, number] }, retain: true }, style: instant ? { opacity } : {} }
   const layer = { position: 'absolute', left: 0, top: (height - 30) / 2, display: 'flex' } as const
   return (
     <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: align === 'end' ? 'flex-end' : 'flex-start', width, height, flexShrink: 0 }}>

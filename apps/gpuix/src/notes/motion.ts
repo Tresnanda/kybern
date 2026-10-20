@@ -42,7 +42,9 @@ export const NOTE_EASE: [number, number, number, number] = [0.2, 0, 0, 1]
  */
 export function thumbLift(lifted: boolean, pressed = false): PaintTransformProps | undefined {
   if (!PATCHED_NATIVE || REDUCED_MOTION) return undefined
-  return { initial: false, animate: { translateY: lifted && !pressed ? -NOTE_LIFT_PX : 0, scale: pressed ? 0.985 : 1 }, transition: { duration: NOTE_LIFT_MS / 1000, ease: NOTE_EASE } }
+  // `retain` keeps the scope tagged at rest: without it the first hover of every card renders the window once (an extra present between
+  // wheel frames while the cards move under the pointer).
+  return { initial: false, animate: { translateY: lifted && !pressed ? -NOTE_LIFT_PX : 0, scale: pressed ? 0.985 : 1 }, transition: { duration: NOTE_LIFT_MS / 1000, ease: NOTE_EASE }, retain: true }
 }
 
 // ─── Deleting a note: the card leaves by pointer, instantly by keyboard ───────────────────────────────────────────────

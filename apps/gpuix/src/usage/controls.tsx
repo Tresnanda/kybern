@@ -26,7 +26,7 @@ export function SlidingPill({ x, width, equal, instant, top = 3, height = 28, ra
   const duration = REDUCED_MOTION || instant ? 0 : DURATION.fast
   const ease = [...EASE.smoothOut] as [number, number, number, number]
   const box = { position: 'absolute', top, height, borderRadius: radius, backgroundColor: color, pointerEvents: 'none' } as const
-  if (equal && PATCHED_NATIVE) return <div paintTransform={{ initial: false, animate: { translateX: x }, transition: { duration, ease } }} style={{ ...box, left: 3, width }} />
+  if (equal && PATCHED_NATIVE) return <div paintTransform={{ initial: false, animate: { translateX: x }, transition: { duration, ease }, retain: true }} style={{ ...box, left: 3, width }} />
   if (equal) return <div style={{ ...box, left: 3 + x, width }} />
   return <motion.div initial={false} animate={{ left: 3 + x, width }} transition={{ duration, ease }} style={box} />
 }
