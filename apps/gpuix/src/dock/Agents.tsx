@@ -163,7 +163,7 @@ const AgentRow = memo(function AgentRow({ row, detailOpen, onToggleTree, onToggl
       {info?.error && <Label color={t.red} size={12}>{info.error}</Label>}
       {result ? <>
         <Label color={muted(t, 0.65)} size={11}>Result</Label>
-        <markdown source={clamp && !expanded ? result.split('\n').slice(0, 8).join('\n').slice(0, 720) : result} theme={cachedMarkdownTheme(t)} />
+        <markdown style={{ userSelect: 'text' }} source={clamp && !expanded ? result.split('\n').slice(0, 8).join('\n').slice(0, 720) : result} theme={cachedMarkdownTheme(t)} />
         {clamp && <Action press={false} onClick={() => setExpanded(!expanded)}>{expanded ? 'Show less' : 'Show more'}</Action>}
       </> : <Label color={muted(t, 0.8)} size={12}>{state.phase === 'working' || state.phase === 'waiting' ? 'The result comes back to this thread when the agent finishes.' : 'Open the thread to see its work.'}</Label>}
       {info?.branch && <Label color={muted(t, 0.8)} size={11}>{`Branch · ${info.branch}`}</Label>}
@@ -171,7 +171,7 @@ const AgentRow = memo(function AgentRow({ row, detailOpen, onToggleTree, onToggl
       {!!info?.owns?.length && <Label color={muted(t, 0.8)} size={11}>{`Owns · ${info.owns.join(', ')}`}</Label>}
       {!!info?.files_touched?.length && <>
         <Label color={muted(t, 0.65)} size={11}>{`Files touched · ${info.files_touched.length}`}</Label>
-        <code code={(allFiles ? info.files_touched : info.files_touched.slice(0, 6)).join('\n')} theme={cachedMarkdownTheme(t)} showLineNumbers={false} />
+        <code style={{ userSelect: 'text' }} code={(allFiles ? info.files_touched : info.files_touched.slice(0, 6)).join('\n')} theme={cachedMarkdownTheme(t)} showLineNumbers={false} />
         {info.files_touched.length > 6 && <Action press={false} onClick={() => setAllFiles(!allFiles)}>{allFiles ? 'Show fewer' : `Show all ${info.files_touched.length} files`}</Action>}
       </>}
       {!!info?.conflicts?.length && <Label color={t.warning} size={11}>{`${info.conflicts.length} ownership conflicts · open the thread for details`}</Label>}

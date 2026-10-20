@@ -65,24 +65,15 @@ const amberDot = (t: Theme) => (t.variant === 'dark' ? 'rgba(255, 210, 48, 0.9)'
 /** amber-600 / dark:amber-300/90 (the "Pending" word). */
 const amberText = (t: Theme) => (t.variant === 'dark' ? 'rgba(255, 210, 48, 0.9)' : '#e17100')
 
-/**
- * Hover for a row and the controls it reveals. GPUIX gives a positioned child
- * its own hitbox that occludes the row, so moving onto a revealed button sends
- * the row `mouseLeave`; the buttons report their own hover through `keep` so
- * the row stays revealed while the pointer is on any of them.
+/** One native ancestor owns the entire row, including its revealed controls.
+ * Child enter/leave counters become unbalanced when controls unmount on reflow.
  */
 function useHover() {
-  const [self, setSelf] = useState(false)
-  const [kept, setKept] = useState(0)
-  return {
-    hover: self || kept > 0,
-    bind: {
-      onMouseEnter: () => setSelf(true),
-      onMouseLeave: () => setSelf(false),
-    },
-    /** For each revealed control: true on enter, false on leave (balanced, so a count). */
-    keep: (on: boolean) => setKept((n) => Math.max(0, n + (on ? 1 : -1))),
-  }
+  const [hover, setHover] = useState(false)
+  return { hover, bind: {
+    onMouseEnter: () => setHover(true),
+    onMouseLeave: () => setHover(false),
+  } }
 }
 
 /** Right-click opens a context menu at the pointer. */
@@ -228,7 +219,7 @@ function Guides({ depth }: { depth: number }) {
 }
 
 /** The expand control for a row's nested children (`size-6` at 5 + 20·depth). */
-function ChildToggle({ depth, open, onToggle, label, onHover, testId }: { depth: number; open: boolean; onToggle: () => void; label: string; onHover: (on: boolean) => void; testId?: string }) {
+function ChildToggle({ depth, open, onToggle, label, testId }: { depth: number; open: boolean; onToggle: () => void; label: string; testId?: string }) {
   const t = useTheme()
   const { hover, bind } = useHover()
   return (
@@ -236,14 +227,7 @@ function ChildToggle({ depth, open, onToggle, label, onHover, testId }: { depth:
       testId={testId}
       aria-label={label}
       role="button"
-      onMouseEnter={() => {
-        bind.onMouseEnter()
-        onHover(true)
-      }}
-      onMouseLeave={() => {
-        bind.onMouseLeave()
-        onHover(false)
-      }}
+      {...bind}
       onClick={onToggle}
       style={{ position: 'absolute', left: 5 + depth * 20, top: 2, width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, cursor: 'pointer' }}
     >
@@ -267,7 +251,7 @@ export function useAddProject() {
 
 export const SectionLabel = memo(function SectionLabel() {
   const t = useTheme()
-  const { hover, bind, keep } = useHover()
+  const { hover, bind } = useHover()
   const filter = useNav((s) => s.filter)
   const threads = useNav(() => getState().threads)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -290,7 +274,7 @@ export const SectionLabel = memo(function SectionLabel() {
           </>
         )}
         {shown && (
-          <div onMouseEnter={() => keep(true)} onMouseLeave={() => keep(false)} style={{ position: 'absolute', top: 4, right: 6, display: 'flex', alignItems: 'center' }}>
+          <div style={{ position: 'absolute', top: 4, right: 6, display: 'flex', alignItems: 'center' }}>
             <RevealIf play={!filtering}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <Menu
@@ -299,7 +283,7 @@ export const SectionLabel = memo(function SectionLabel() {
               align="end"
               minWidth={192}
               testId="sidebar-filter"
-              trigger={() => <IconButton icon={N.filter} label="Filter threads" tooltip={menuOpen ? undefined : 'Filter threads'} active={filtering} onHover={keep} />}
+              trigger={() => <IconButton icon={N.filter} label="Filter threads" tooltip={menuOpen ? undefined : 'Filter threads'} active={filtering} />}
             >
               <MenuLabel>Show</MenuLabel>
               {(['all', 'pinned', 'working'] as const).map((value) => (
@@ -328,7 +312,7 @@ export const SectionLabel = memo(function SectionLabel() {
                 </>
               )}
             </Menu>
-            <IconButton icon={N.plus} label="Add project" tooltip="Add project" onClick={() => void onAddProject()} testId="add-project" onHover={keep} />
+            <IconButton icon={N.plus} label="Add project" tooltip="Add project" onClick={() => void onAddProject()} testId="add-project" />
             </div>
             </RevealIf>
           </div>
@@ -379,7 +363,7 @@ export const ProjectHeader = memo(function ProjectHeader({
   canMoveDown: boolean
 }) {
   const t = useTheme()
-  const { hover, bind, keep } = useHover()
+  const { hover, bind } = useHover()
   const menu = useContextMenu()
   const { renderer } = useGpuix()
   const headerRef = useRef<PublicInstance | null>(null)
@@ -397,15 +381,14 @@ export const ProjectHeader = memo(function ProjectHeader({
   }
   return (
     <div style={{ paddingTop: first ? 0 : 12, ...INSET }}>
-      <div style={{ position: 'relative' }}>
+      <div {...bind} style={{ position: 'relative' }}>
         <div
           testId={`project-${project.id}`}
           ref={headerRef}
-          {...bind}
           onMouseDown={(e) => beginProjectDrag(project.id, e, renderer, (headerRef.current && renderer?.getElementBounds?.(headerRef.current.id)) || null)}
           onMouseMove={trackProjectDrag}
           onMouseUp={endProjectPending}
-          onMouseLeave={(e) => { trackProjectDrag(e, true); endProjectPending(); bind.onMouseLeave() }}
+          onMouseLeave={(e) => { trackProjectDrag(e, true); endProjectPending() }}
           onAuxClick={menu.onAuxClick}
           onClick={() => {
             if (consumeProjectDrag(project.id)) return
@@ -448,17 +431,15 @@ export const ProjectHeader = memo(function ProjectHeader({
               role="button"
               aria-label={open ? 'Collapse' : 'Expand'}
               onClick={() => toggleProject(project.id)}
-              onMouseEnter={() => keep(true)}
-              onMouseLeave={() => keep(false)}
               style={{ position: 'absolute', left: 8, top: 6, width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, cursor: 'pointer' }}
             >
               <Reveal slide={false}>
                 <Chevron open={open} color={ink(t, 0.8)} />
               </Reveal>
             </div>
-            <div onMouseEnter={() => keep(true)} onMouseLeave={() => keep(false)} style={{ position: 'absolute', top: 4, right: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{ position: 'absolute', top: 4, right: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
               <Reveal>
-                <IconButton icon={N.newThread} label="New thread" tooltip="New thread" onClick={() => newThread(project.id)} testId={`project-new-${project.id}`} onHover={keep} />
+                <IconButton icon={N.newThread} label="New thread" tooltip="New thread" onClick={() => newThread(project.id)} testId={`project-new-${project.id}`} />
               </Reveal>
             </div>
           </>
@@ -517,7 +498,7 @@ export const ThreadRow = memo(function ThreadRow({
   onToggleChildren: (id: string, open: boolean) => void
 }) {
   const t = useTheme()
-  const { hover, bind, keep } = useHover()
+  const { hover, bind } = useHover()
   const menu = useContextMenu()
   const [renaming, setRenaming] = useState(false)
   useSidebarRowLease(renaming)
@@ -538,7 +519,7 @@ export const ThreadRow = memo(function ThreadRow({
   }
   return (
     <div style={{ paddingTop: 2, ...INSET }}>
-      <div style={{ position: 'relative' }}>
+      <div {...bind} style={{ position: 'relative' }}>
         <Guides depth={depth} />
         <div
           testId={`thread-${thread.id}`}
@@ -546,8 +527,6 @@ export const ThreadRow = memo(function ThreadRow({
           onMouseDown={e => beginThreadDrag(thread.id, e, () => renderer?.clearSelection?.(), { title: thread.title || 'Untitled', kind: thread.provider.kind, bounds: () => (rowRef.current ? renderer?.getElementBounds?.(rowRef.current.id) : null) ?? null })}
           onMouseMove={trackThreadDrag}
           onMouseUp={finishSplitDrag}
-          {...bind}
-          onMouseLeave={bind.onMouseLeave}
           onAuxClick={menu.onAuxClick}
           onClick={() => {
             if (!consumeThreadDrag(thread.id) && !renaming) openThread(thread.id)
@@ -606,12 +585,12 @@ export const ThreadRow = memo(function ThreadRow({
             depth={depth}
             open={childrenOpen}
             onToggle={() => onToggleChildren(thread.id, !childrenOpen)}
-            onHover={keep}
+
             testId={`children-${thread.id}`}
             label={`${childrenOpen ? 'Collapse' : 'Expand'} ${childCount} nested ${childCount === 1 ? 'thread' : 'threads'} of ${thread.title || 'Untitled'}`}
           />
         )}
-        <div onMouseEnter={() => keep(true)} onMouseLeave={() => keep(false)} style={{ position: 'absolute', top: 0, bottom: 0, right: 6, display: 'flex', alignItems: 'center' }}>
+        <div style={{ position: 'absolute', top: 0, bottom: 0, right: 6, display: 'flex', alignItems: 'center' }}>
           {reveal ? (
             <Reveal>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -620,7 +599,7 @@ export const ThreadRow = memo(function ThreadRow({
                 glyph={15}
                 color={muted(t, 0.34)}
                 label={thread.pinned ? 'Unpin' : 'Pin'}
-                onHover={keep}
+
                 testId={`pin-${thread.id}`}
                 onClick={() => void updateThread(thread.id, { pinned: !thread.pinned }).catch((e) => console.error('[sidebar] Unable to pin:', errorText(e)))}
               />
@@ -630,7 +609,7 @@ export const ThreadRow = memo(function ThreadRow({
                 color={muted(t, 0.42)}
                 hoverColor={ink(t, 0.89)}
                 label="Archive"
-                onHover={keep}
+
                 testId={`archive-${thread.id}`}
                 onClick={() => void archiveThread(thread.id).catch((e) => console.error('[sidebar] Unable to archive:', errorText(e)))}
               />
@@ -711,7 +690,7 @@ export const ChildRow = memo(function ChildRow({
   onToggleChildren: (id: string, open: boolean) => void
 }) {
   const t = useTheme()
-  const { hover, bind, keep } = useHover()
+  const { hover, bind } = useHover()
   const menu = useContextMenu()
   const { renderer } = useGpuix()
   const rowRef = useRef<PublicInstance | null>(null)
@@ -742,7 +721,7 @@ export const ChildRow = memo(function ChildRow({
   const wasRevealed = useWasRevealed(reveal)
   const body = (
     <div style={{ paddingTop: 3, paddingBottom: 1, ...INSET }}>
-      <div style={{ position: 'relative' }}>
+      <div {...bind} style={{ position: 'relative' }}>
         <Guides depth={level} />
         <div
           testId={`child-${thread.id}`}
@@ -750,8 +729,6 @@ export const ChildRow = memo(function ChildRow({
           onMouseDown={e => beginThreadDrag(thread.id, e, () => renderer?.clearSelection?.(), { title: thread.title || 'Untitled', kind: thread.provider.kind, bounds: () => (rowRef.current ? renderer?.getElementBounds?.(rowRef.current.id) : null) ?? null })}
           onMouseMove={trackThreadDrag}
           onMouseUp={finishSplitDrag}
-          {...bind}
-          onMouseLeave={bind.onMouseLeave}
           onAuxClick={menu.onAuxClick}
           onClick={() => { if (!consumeThreadDrag(thread.id)) openThread(thread.id) }}
           style={{
@@ -785,16 +762,16 @@ export const ChildRow = memo(function ChildRow({
             depth={level}
             open={childrenOpen}
             onToggle={() => onToggleChildren(thread.id, !childrenOpen)}
-            onHover={keep}
+
             testId={`children-${thread.id}`}
             label={`${childrenOpen ? 'Collapse' : 'Expand'} ${childCount} nested ${delegated ? 'agent' : 'subagent'}${childCount === 1 ? '' : 's'}`}
           />
         )}
         {/* No glyph while it works: its presence says so, and the parent shows the loader. */}
-        <div onMouseEnter={() => keep(true)} onMouseLeave={() => keep(false)} style={{ position: 'absolute', top: 0, bottom: 0, right: 6, display: 'flex', alignItems: 'center' }}>
+        <div style={{ position: 'absolute', top: 0, bottom: 0, right: 6, display: 'flex', alignItems: 'center' }}>
           {reveal ? (
             <Reveal>
-              <IconButton icon={N.x} glyph={15} color={muted(t, 0.45)} hoverColor={ink(t, 0.89)} label="Dismiss" tooltip="Dismiss" onClick={() => setLeaveAsked(true)} onHover={keep} />
+              <IconButton icon={N.x} glyph={15} color={muted(t, 0.45)} hoverColor={ink(t, 0.89)} label="Dismiss" tooltip="Dismiss" onClick={() => setLeaveAsked(true)} />
             </Reveal>
           ) : (
             !working && (

@@ -233,7 +233,7 @@ function HowToSignIn({ kind }: { kind: ProviderKind }) {
   return <Menu testId={`account-how-${kind}`} align="end" width={288} fit="switch" panel={{ borderRadius: 18, padding: 16 }} onOpenChange={setOpen} trigger={() => <div style={{ display: 'flex', alignItems: 'center', minHeight: 28, paddingLeft: 9, paddingRight: 9, borderWidth: 1, borderColor: t.border, borderRadius: 8, hover: { backgroundColor: t.buttonTertiaryHover } }}><Label color={t.text} size={14} lineHeight={21}>How to sign in</Label></div>}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <Label color={t.text} size={14} lineHeight={21} weight={500}>How to sign in</Label>
-      <markdown source={`Run \`${command}\` in your terminal. Kybern picks it up automatically.`} theme={description} />
+      <markdown style={{ userSelect: 'text' }} source={`Run \`${command}\` in your terminal. Kybern picks it up automatically.`} theme={description} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, height: 34, paddingLeft: 10, paddingRight: 4, borderWidth: 1, borderColor: t.border, borderRadius: 10 }}>
         <Label color={t.text} size={13} lineHeight={19.5} font={FONT_MONO} truncate>{command}</Label>
         <div testId="account-copy-command" role="button" tabIndex={0} aria-label={done ? 'Copied' : 'Copy command'} onClick={copy} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') copy() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, flexShrink: 0, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>

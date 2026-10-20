@@ -178,7 +178,7 @@ function Brief({ projectId, summary, onSave }: { projectId: string; summary: Not
     {editing ? <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 8, paddingRight: 8 }}>
       <textarea testId="dock-brief-editor" value={body} onChange={(e) => { const text = e.value ?? ''; setBody(text); briefDrafts.set(projectId, { body: text, base }) }} placeholder={PROJECT_SPACE_COPY.briefPlaceholder} style={{ height: 160, width: '100%', fontSize: 12, color: t.text, backgroundColor: t.buttonSecondary, borderRadius: 8, padding: 8 }} />
       <Action disabled={busy} testId="dock-brief-save" onClick={() => void save()}>{busy ? 'Saving…' : 'Save brief'}</Action>
-    </div> : note?.body ? <div style={{ paddingLeft: 8, paddingRight: 8, maxHeight: 180, overflow: 'hidden' }}><markdown source={note.body} theme={cachedMarkdownTheme(t)} /></div> : <Hint>{summary?.preview || PROJECT_SPACE_COPY.briefEmpty}</Hint>}
+    </div> : note?.body ? <div style={{ paddingLeft: 8, paddingRight: 8, maxHeight: 180, overflow: 'hidden' }}><markdown style={{ userSelect: 'text' }} source={note.body} theme={cachedMarkdownTheme(t)} /></div> : <Hint>{summary?.preview || PROJECT_SPACE_COPY.briefEmpty}</Hint>}
     <div style={{ paddingTop: 6, paddingBottom: 6, paddingLeft: 8, paddingRight: 8 }}><Label color={t.textTertiary} size={13} lineHeight={16}>{PROJECT_SPACE_COPY.briefOwner}</Label></div>
     </div>
     <div style={{ height: 8 }} />
@@ -198,7 +198,7 @@ function NoteDialog({ summary, onClose }: { summary: NoteSummary; onClose: () =>
     <DialogHeader title={summary.title} onClose={onClose} />
     <ErrorLine error={error} />
     <div style={{ height: 420, overflow: 'scroll', padding: 16 }}>
-      {body !== null ? <markdown source={body} theme={cachedMarkdownTheme(t)} /> : !error && <Label color={t.textSecondary} size={12}>Loading note…</Label>}
+      {body !== null ? <markdown style={{ userSelect: 'text' }} source={body} theme={cachedMarkdownTheme(t)} /> : !error && <Label color={t.textSecondary} size={12}>Loading note…</Label>}
     </div>
   </Dialog>
 }

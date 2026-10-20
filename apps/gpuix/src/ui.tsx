@@ -83,6 +83,8 @@ export function Label({
       {...(paintAnimation ? { paintAnimation } : {})}
       style={{
         color,
+        // UI labels also appear in anchored overlays outside the app root.
+        userSelect: 'none',
         fontSize: size,
         fontFamily: font,
         ...(lineHeight ? { lineHeight } : {}),
