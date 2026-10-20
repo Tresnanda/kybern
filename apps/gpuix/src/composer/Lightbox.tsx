@@ -4,7 +4,7 @@
 // scrim and the toolbar (name, Copy, Download, Close) fade with a small nudge. Escape and a keyboard open are instant; Reduce
 // Motion fades only. Every frame is paint-only (`paintTransform`): no React render, layout or island work while it moves.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useGpuixRequired } from '@gpuix/react'
+import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import type { PaintTransformProps, PaintTransformValue } from '@gpuix/native/host'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
@@ -61,6 +61,7 @@ export function AttachmentLightbox({ source, label, from, tile, onClose }: { sou
   const rect = lightboxRect(window, size)
   const animate = PATCHED_NATIVE && !!from
   const web = useWebOcclusion(undefined, 0, 0.6)
+  const root = useRef<PublicInstance | null>(null)
   // `closing`: the exit's target (back into the tile, or a fade when the tile is gone or motion is reduced).
   const [closing, setClosing] = useState<{ generation: number; to: PaintTransformValue | null } | null>(null)
   const done = useRef(false)
@@ -94,8 +95,12 @@ export function AttachmentLightbox({ source, label, from, tile, onClose }: { sou
     // child so it can fade. The web occlusion keeps an embedded browser preview under the scrim.
     <anchored backdrop={{ blur: 0 }} position={{ x: 0, y: 0 }} fit="snap" snapMargin={0} deferred priority={4} occlude>
       <div testId={web.id} style={{ display: 'flex' }}>
-      <div testId="attachment-lightbox" tabIndex={0} autoFocus
-        onKeyDown={(e: { key?: string }) => { if (e.key === 'escape' && !kitOverlayOpen()) close(true) }}
+      <div ref={root} testId="attachment-lightbox" tabIndex={0} autoFocus
+        onKeyDown={(e: { key?: string; modifiers?: { shift?: boolean } }) => {
+          if (e.key === 'escape' && !kitOverlayOpen()) close(true)
+          // Modal while open: Tab and Shift-Tab wrap among its own stops instead of reaching the window behind it.
+          else if (e.key === 'tab' && root.current) (e.modifiers?.shift ? renderer.focusPreviousWithin : renderer.focusNextWithin)?.call(renderer, root.current.id)
+        }}
         style={{ position: 'relative', width: window.width, height: window.height }}
       >
       {/* The scrim takes outside clicks; the image and toolbar sit above it. */}
@@ -103,7 +108,8 @@ export function AttachmentLightbox({ source, label, from, tile, onClose }: { sou
       <div paintTransform={fade(-DISTANCE.micro)} style={{ position: 'absolute', left: rect.x, top: rect.y - BAR - GAP, width: rect.width, height: BAR, display: 'flex', alignItems: 'center', paddingLeft: 16, paddingRight: 116, borderRadius: 14, borderWidth: 1, borderColor: t.borderLight, backgroundColor: t.popover }}>
         <Label color={t.text} size={13} weight={500} truncate>{label}</Label>
         <ImageActions source={source} label={label} />
-        <div testId="attachment-lightbox-close" role="button" aria-label="Close preview" onClick={() => close(false)}
+        <div testId="attachment-lightbox-close" role="button" aria-label="Close preview" tabIndex={0} onClick={() => close(false)}
+          onKeyDown={(e: { key?: string }) => { if (e.key === 'enter' || e.key === 'space') close(true) }}
           style={{ position: 'absolute', top: 10, right: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: t.buttonTertiaryHover } }}>
           <Icon source={N.x} size={14} color={t.iconSecondary} />
         </div>
