@@ -38,6 +38,18 @@ export const COLUMN = 736
 /** The floating composer's height plus 64 (`bottomInset + 64`, `Transcript.tsx:479`). */
 const COMPOSER_INSET = 192
 const turnKey = (group: TurnGroup, index: number) => group.turnId || group.user?.id || `turn-${index}`
+/** An optimistic send (`composer/pending.ts`) renders as turn `pending:<message id>`; the daemon's turn for that message
+ * keeps the pending row's key, so the row stays mounted (no remount, jump or replayed entrance) when the real id arrives. */
+function keyTurns(aliases: Map<string, string>) {
+  return (group: TurnGroup, index: number) => {
+    const user = group.user?.id
+    if (group.turnId.startsWith('pending:') && user) {
+      aliases.set(user, group.turnId)
+      if (aliases.size > 32) aliases.delete(aliases.keys().next().value!)
+    }
+    return (user && aliases.get(user)) || turnKey(group, index)
+  }
+}
 
 type TurnNodes = Map<string, {row?: PublicInstance | null; user?: PublicInstance | null}>
 type CodeState = { expanded: boolean; wrap: boolean; source?: boolean }
@@ -129,10 +141,11 @@ export function Transcript() {
   // line fence never mounts 5k native rows, nor adds a nested scroller.
   type RenderRow = {key: string; turn: TurnGroup; node: React.ReactNode; estimate?: number}
   const rowCache = useMemo(() => new Map<string, {turn: TurnGroup; date: string | null; isLast: boolean; running: boolean; code: typeof codeState; rows: RenderRow[]}>(), [threadId])
+  const keyOf = useMemo(() => keyTurns(new Map()), [threadId])
   const rows = useMemo(() => {
     const keep = new Set<string>()
     const next = turns.flatMap((turn, i) => {
-      const key = turnKey(turn, i)
+      const key = keyOf(turn, i)
       const at = turnTimestamp(turn)
       const startsDay = !!at && ((!hasEarlier && i === 0) || (i > 0 && calendarDateKey(at) !== calendarDateKey(turnTimestamp(turns[i - 1]!))))
       const running = turn.running || (i === turns.length - 1 && threadRunning && !turn.end)

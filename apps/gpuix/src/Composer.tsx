@@ -62,6 +62,7 @@ import { Rise } from './motion/kit.tsx'
 import { Presence } from './motion/Presence.tsx'
 import { DropHighlight } from './motion/DropHighlight.tsx'
 import { AttachmentLightbox } from './composer/Lightbox.tsx'
+import { usePendingSends } from './composer/pending.ts'
 
 type TileRect = { x: number; y: number; width: number; height: number }
 import { hoverPressTransform } from './motion/press.ts'
@@ -69,6 +70,7 @@ import {
   createThread,
   ensureLoaded,
   errorText,
+  onComposerRestore,
   getData,
   interruptThread,
   loadCatalog,
@@ -107,7 +109,9 @@ export function Composer({ thread, tray }: { thread: Thread | null; tray?: React
 function ThreadComposer({ thread }: { thread: Thread }) {
   const pane = usePaneAccess()
   const threadId = thread.id
-  const running = thread.status === 'running' || thread.status === 'awaiting-approval'
+  // A send the daemon has not answered yet already counts as the running turn: the next Enter queues behind it.
+  const starting = usePendingSends(threadId).some((p) => p.delivery === 'send' && p.state === 'sending')
+  const running = thread.status === 'running' || thread.status === 'awaiting-approval' || starting
   const target = useComposer((d) => (d.target?.threadId === threadId ? d.target.state : null))
   const providers = useComposer((d) => d.providers)
   const accounts = useComposer((d) => d.accounts)
@@ -482,21 +486,31 @@ export function ComposerView(input: ComposerViewProps) {
       setError('Choose a supported permission mode for the selected agent before sending.')
       return
     }
+    // The message leaves the composer on this frame; the send runs behind it. Thread sends show at once as a pending
+    // bubble and report a rejection there (`composer/pending.ts`); other callers get the draft back with the error.
+    const parts = buildParts(), draft = { text, attachments }
     setSending(true)
     setError(null)
+    setText('')
+    setAttachments([])
+    drafts.delete(props.draftKey)
+    focusEditor()
     try {
-      await props.onSend({ parts: buildParts() }, running ? (delivery === 'steer' && props.canSteer ? 'steer' : 'queue') : 'send')
-      setText('')
-      setAttachments([])
+      await props.onSend({ parts }, running ? (delivery === 'steer' && props.canSteer ? 'steer' : 'queue') : 'send')
       completion.reset()
-      drafts.delete(props.draftKey)
-      focusEditor()
     } catch (e) {
+      // Only into an empty composer: what was typed meanwhile is never overwritten.
+      setText((current) => current || draft.text)
+      setAttachments((current) => (current.length ? current : draft.attachments))
       setError(`Unable to send: ${errorText(e)}`)
     } finally {
       setSending(false)
     }
   }
+  useEffect(() => onComposerRestore(props.draftKey, (restored) => {
+    setText((current) => (current.trim() ? `${current}\n\n${restored}` : restored))
+    focusEditor()
+  }), [props.draftKey])
 
   const addClipboardImage = async (image: ClipboardImage) => {
     setUploading((n) => n + 1)
