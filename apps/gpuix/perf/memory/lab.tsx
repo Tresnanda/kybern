@@ -8,6 +8,8 @@ import path from 'node:path'
 import { dlopen, FFIType, type Pointer } from 'bun:ffi'
 import { each, getObjc, nsApp, sel } from '../../src/native/objc.ts'
 import { RichEditor, type RichEditorHandle } from '../../src/editor/RichEditor.tsx'
+import { registerBrandFonts } from '../../src/native/fonts.ts'
+import { FileCode } from '../../src/dock/Explorer.tsx'
 import { loadEditorImage } from '../../src/editor/images.ts'
 const imageDir = process.env.KYBERN_MEMORY_IMAGE_DIR ?? path.join(process.env.KYBERN_DATA_DIR!, 'memory-images')
 type Scene = { kind: string; index: number; peer?: boolean }
@@ -20,6 +22,7 @@ function Lab() {
   const [scene, setScene] = useState<Scene>({ kind: 'home', index: 0 })
   change = setScene
   useEffect(() => {
+    if (process.env.KYBERN_MEMORY_CODE_KIND === 'code-virtual' || process.env.KYBERN_MEMORY_CODE_VISUAL === '1') registerBrandFonts(native)
     const o = getObjc(), app = nsApp()
     if (app) each(o, o.msg(app, sel(o, 'windows')) as Pointer, window => {
       o.msgSetI64(window, sel(o, 'setLevel:'), 3n)
@@ -41,6 +44,7 @@ function Lab() {
     {scene.kind === 'editor-history' && <RichEditor ref={value => { historyEditor = value }} value="# Image history" epoch={2000} testId="memory-editor-history" />}
     {scene.kind === 'editor-many' && <RichEditor value={'# Many images\n\n' + Array.from({ length: 24 }, (_, index) => `![Memory ${index}](${path.join(imageDir, `${index}.png`)})\n\n`).join('')} epoch={1000} readOnly={process.env.KYBERN_MEMORY_EDITOR_EDITABLE !== '1'} testId="memory-editor-many" />}
     {scene.kind === 'editor' && <RichEditor key={scene.index} value={`# Image ${scene.index}\n\n![Memory fixture](${src})\n`} epoch={scene.index} readOnly testId="memory-editor" />}
+    {scene.kind === 'code-virtual' && <div style={{ display: 'flex', width: 950, height: 600 }}><FileCode content={Array.from({ length: 12000 }, (_, i) => `export const entry${i} = { title: 'Memory fixture ${i}', enabled: true };`).join('\n')} path="memory.ts" /></div>}
     {scene.kind === 'code' && <code testId="memory-code" code={Array.from({ length: 12000 }, (_, i) => `export const entry${i} = { title: 'Memory fixture ${i}', enabled: true };`).join('\n')} language="typescript" style={{ width: 950, height: 600, color: '#eeeeee', fontFamily: 'Menlo', fontSize: 14 }} />}
   </div>
 }
@@ -48,6 +52,13 @@ render(<Lab />, { title: 'Memory residency fixture', width: 1100, height: 760, f
 const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
   const body = await req.json() as Scene & { action: string }
   if (body.action === 'scene') change(body)
+  // Owner diagnostics are opt-in and never run inside a timed window.
+  if (body.action === 'gc') Bun.gc(true)
+  if (body.action === 'snapshot') {
+    const file = path.join(process.env.KYBERN_CLIENT_CONFIG_DIR!, `heap-${body.kind}.heapsnapshot`)
+    writeFileSync(file, Bun.generateHeapSnapshot('v8'))
+    return Response.json({ file })
+  }
   if (body.action === 'editor-retry') {
     const renderer = native as unknown as { setRichEditorImage: (src: string, bytes: Buffer) => void; hasRichEditorImage?: (src: string) => boolean }
     if (!renderer.hasRichEditorImage) return Response.json({ available: false })
@@ -94,7 +105,7 @@ const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
     return Response.json({ variants })
   }
   const stats = (native as unknown as { getMemoryStats?: () => unknown }).getMemoryStats?.()
-  return Response.json({ heap: heapStats(), memory: process.memoryUsage(), native: stats ?? null })
+  return Response.json({ heap: heapStats(), memory: process.memoryUsage(), native: stats ?? null, syntax: (native as unknown as { getSyntaxDocumentStats?: () => unknown }).getSyntaxDocumentStats?.() ?? null })
 } })
 writeFileSync(path.join(process.env.KYBERN_CLIENT_CONFIG_DIR!, 'memory-control.json'), JSON.stringify({ port: server.port }))
 process.stdin.on('end', () => { server.stop(true); process.exit(0) })
