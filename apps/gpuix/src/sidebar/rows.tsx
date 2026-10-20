@@ -29,19 +29,20 @@ import type { Theme } from '../theme.ts'
 import { beginProjectDrag, consumeProjectDrag, endProjectPending, trackProjectDrag } from './reorder.tsx'
 import { leftSource } from '../drag/leave.ts'
 import { filterSummary, isFiltering, providerLabel, threadAgents } from './model.ts'
-import { popAnimation, usePopOnChange } from '../kit/Pop.tsx'
+import { popAnimation, popTransform, usePopOnChange } from '../kit/Pop.tsx'
 import { pressTransform } from '../motion/press.ts'
+import { Chevron } from '../motion/Chevron.tsx'
+import { SwapOnChange } from '../motion/kit.tsx'
+import { pressRow } from '../shell/motion.ts'
 import { FadeBack, Leave, markDisclosure, MarqueeLabel, PadTween, Reveal, TitleSwap } from './motion.tsx'
+
+/** `DisclosureChevron`: a chevron that turns down with its content (220 ms, `motion/Chevron.tsx`). Rows re-export it for their callers. */
+export { Chevron }
 
 /** Open or close a project (or Recents); the rows it adds or removes animate as a block. */
 function toggleProject(id: string) {
   markDisclosure()
   toggleProjectState(id)
-}
-
-/** `Reveal` unless the content is pinned on screen (an active filter keeps its toolbar shown). */
-function RevealIf({ play, children }: { play: boolean; children: ReactNode }) {
-  return play ? <Reveal>{children}</Reveal> : <>{children}</>
 }
 
 /** Whether a row has been hovered since it mounted: its glyph fades back only after a hover. */
@@ -173,24 +174,34 @@ export function IconButton({
   )
 }
 
-/** `DisclosureChevron`: chevron-right, turned down when open (instant). */
-export function Chevron({ open, size = 14, color }: { open: boolean; size?: number; color: string }) {
-  return <Icon source={open ? N.chevronDown : N.chevronRight} size={size} color={color} />
+export function Dot({ color, pop = false }: { color: string; /** Pops in (`t-pop`) when it mounts. */ pop?: boolean }) {
+  return <div paintTransform={pop ? popTransform() : undefined} style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: color, flexShrink: 0 }} />
 }
 
-export function Dot({ color }: { color: string }) {
-  return <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: color, flexShrink: 0 }} />
-}
+type GlyphState = 'pending' | 'working' | 'failed' | 'monitoring' | 'unread' | 'pinned' | 'none'
 
-/** `StatusGlyph`: pending, working, failed, monitoring, unread, in that order. */
-export function StatusGlyph({ status, activity, unread }: { status: Thread['status'] | null; activity?: ThreadActivityState; unread?: boolean }) {
+/**
+ * `StatusGlyph`: pending, working, failed, monitoring, unread, in that order (then the pin of a pinned thread). A change cross-swaps
+ * the way `IconSwap` does (the old glyph shrinks and blurs out while the new one grows in, 250 ms), and a failed or unread dot that
+ * appears after the row first rendered also pops, like "Pending". The box keeps its size, so the swap never moves the row.
+ */
+export function StatusGlyph({ status, activity, unread, pinned = false }: { status: Thread['status'] | null; activity?: ThreadActivityState; unread?: boolean; pinned?: boolean }) {
   const t = useTheme()
-  if (status === 'awaiting-approval') return <Dot color={amberDot(t)} />
-  if (status === 'running' || activity === 'working') return <MatrixLoader cycle={1600} />
-  if (status === 'failed') return <Dot color={t.red} />
-  if (activity === 'monitoring') return <Icon source={N.clock} size={12} color={muted(t, 0.75)} />
-  if (unread) return <Dot color={t.link} />
-  return null
+  const state: GlyphState = status === 'awaiting-approval' ? 'pending' : status === 'running' || activity === 'working' ? 'working' : status === 'failed' ? 'failed' : activity === 'monitoring' ? 'monitoring' : unread ? 'unread' : pinned ? 'pinned' : 'none'
+  const pop = usePopOnChange(state === 'failed' || state === 'unread')
+  const glyph =
+    state === 'pending' ? <Dot color={amberDot(t)} />
+    : state === 'working' ? <MatrixLoader cycle={1600} />
+    : state === 'failed' ? <Dot color={t.red} pop={pop} />
+    : state === 'monitoring' ? <Icon source={N.clock} size={12} color={muted(t, 0.75)} />
+    : state === 'unread' ? <Dot color={t.link} pop={pop} />
+    : state === 'pinned' ? <Icon source={N.pinFilled} size={12} color={muted(t, 0.34)} />
+    : null
+  return (
+    <SwapOnChange kind="icon" active={state} style={{ width: 15, height: 15 }}>
+      {glyph}
+    </SwapOnChange>
+  )
 }
 
 /** `DraftMarker`: the 12px pencil for an unsent composer draft. */
@@ -274,9 +285,9 @@ export const SectionLabel = memo(function SectionLabel() {
             </Label>
           </>
         )}
-        {shown && (
-          <div style={{ position: 'absolute', top: 4, right: 6, display: 'flex', alignItems: 'center' }}>
-            <RevealIf play={!filtering}>
+        {/* Mounted for the label's life: the controls leave with a fade when the pointer does (`Reveal`). */}
+        <div style={{ position: 'absolute', top: 4, right: 6, display: 'flex', alignItems: 'center' }}>
+            <Reveal show={shown} still={filtering}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <Menu
               open={menuOpen}
@@ -315,9 +326,8 @@ export const SectionLabel = memo(function SectionLabel() {
             </Menu>
             <IconButton icon={N.plus} label="Add project" tooltip="Add project" onClick={() => void onAddProject()} testId="add-project" />
             </div>
-            </RevealIf>
-          </div>
-        )}
+            </Reveal>
+        </div>
       </div>
     </div>
   )
@@ -369,6 +379,7 @@ export const ProjectHeader = memo(function ProjectHeader({
   const menu = useContextMenu()
   const { renderer } = useGpuix()
   const headerRef = useRef<PublicInstance | null>(null)
+  const wasHovered = useWasRevealed(hover)
   const move = (offset: -1 | 1) => {
     const visible = getState()
       .projects.map((p) => p.id)
@@ -407,10 +418,16 @@ export const ProjectHeader = memo(function ProjectHeader({
             borderRadius: 8,
             cursor: 'pointer',
             ...(active ? { backgroundColor: accentActive(t) } : hover ? { backgroundColor: accent(t) } : {}),
+            ...pressRow(t, active ? accentActive(t) : accent(t)),
           }}
         >
           <div style={{ display: 'flex', width: 16, height: 16, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            {!hover && <Icon source={open ? N.folderOpen : N.folder} size={16} color={resting(t)} />}
+            {/* The folder fades back in as the disclosure control leaves. */}
+            {!hover && (
+              <FadeBack play={wasHovered}>
+                <Icon source={open ? N.folderOpen : N.folder} size={16} color={resting(t)} />
+              </FadeBack>
+            )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexGrow: 1, minWidth: 0 }}>
             <Label color={active ? t.text : resting(t)} truncate>
@@ -425,27 +442,23 @@ export const ProjectHeader = memo(function ProjectHeader({
             </div>
           )}
         </div>
-        {hover && (
-          <>
-            {/* The folder gives way to the disclosure control on hover. */}
-            <div
-              testId={`project-toggle-${project.id}`}
-              role="button"
-              aria-label={open ? 'Collapse' : 'Expand'}
-              onClick={() => toggleProject(project.id)}
-              style={{ position: 'absolute', left: 8, top: 6, width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, cursor: 'pointer' }}
-            >
-              <Reveal slide={false}>
-                <Chevron open={open} color={ink(t, 0.8)} />
-              </Reveal>
-            </div>
-            <div style={{ position: 'absolute', top: 4, right: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Reveal>
-                <IconButton icon={N.newThread} label="New thread" tooltip="New thread" onClick={() => newThread(project.id)} testId={`project-new-${project.id}`} />
-              </Reveal>
-            </div>
-          </>
-        )}
+        {/* The folder gives way to the disclosure control on hover; both leave with a fade when the pointer does. */}
+        <div
+          testId={`project-toggle-${project.id}`}
+          role="button"
+          aria-label={open ? 'Collapse' : 'Expand'}
+          onClick={() => toggleProject(project.id)}
+          style={{ position: 'absolute', left: 8, top: 6, width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, cursor: 'pointer', ...(hover ? {} : { pointerEvents: 'none' }) }}
+        >
+          <Reveal show={hover} slide={false}>
+            <Chevron open={open} color={ink(t, 0.8)} />
+          </Reveal>
+        </div>
+        <div style={{ position: 'absolute', top: 4, right: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Reveal show={hover}>
+            <IconButton icon={N.newThread} label="New thread" tooltip="New thread" onClick={() => newThread(project.id)} testId={`project-new-${project.id}`} />
+          </Reveal>
+        </div>
       </div>
       {menu.at && (
         <ContextMenu at={menu.at} onClose={menu.close} testId="project-menu">
@@ -544,6 +557,7 @@ export const ThreadRow = memo(function ThreadRow({
             cursor: 'pointer',
             userSelect: 'none',
             ...(selected ? { backgroundColor: accentActive(t) } : reveal ? { backgroundColor: accent(t) } : {}),
+            ...pressRow(t, selected ? accentActive(t) : accent(t)),
           }}
         >
           <div style={{ display: 'flex', width: 12, height: 12, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -592,9 +606,17 @@ export const ThreadRow = memo(function ThreadRow({
             label={`${childrenOpen ? 'Collapse' : 'Expand'} ${childCount} nested ${childCount === 1 ? 'thread' : 'threads'} of ${thread.title || 'Untitled'}`}
           />
         )}
+        {/* The resting glyph and the hover actions share the row's right edge: the glyph fades back in as the actions fade out. The glyph box stays
+            mounted so a status change cross-swaps (`StatusGlyph`); it is passive, so the actions above it keep the pointer. */}
+        {!reveal && (
+          <div style={{ position: 'absolute', top: 0, bottom: 0, right: 6, display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>
+            <FadeBack play={wasRevealed} style={{ width: 15 }}>
+              <StatusGlyph status={thread.status} activity={activity} unread={unread} pinned={thread.pinned} />
+            </FadeBack>
+          </div>
+        )}
         <div style={{ position: 'absolute', top: 0, bottom: 0, right: 6, display: 'flex', alignItems: 'center' }}>
-          {reveal ? (
-            <Reveal>
+          <Reveal show={reveal}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <IconButton
                 icon={thread.pinned ? N.pinFilled : N.pin}
@@ -616,18 +638,7 @@ export const ThreadRow = memo(function ThreadRow({
                 onClick={() => void archiveThread(thread.id).catch((e) => console.error('[sidebar] Unable to archive:', errorText(e)))}
               />
             </div>
-            </Reveal>
-          ) : (
-            (hasGlyph || thread.pinned) && (
-              <FadeBack play={wasRevealed} style={{ width: 15 }}>
-                {hasGlyph ? (
-                  <StatusGlyph status={thread.status} activity={activity} unread={unread} />
-                ) : (
-                  <Icon source={N.pinFilled} size={12} color={muted(t, 0.34)} />
-                )}
-              </FadeBack>
-            )
-          )}
+          </Reveal>
         </div>
       </div>
       {menu.at && (
@@ -744,6 +755,7 @@ export const ChildRow = memo(function ChildRow({
             overflow: 'hidden',
             cursor: 'pointer',
             ...(selected ? { backgroundColor: accentActive(t) } : hover ? { backgroundColor: accent(t) } : {}),
+            ...pressRow(t, selected ? accentActive(t) : accent(t)),
           }}
         >
           <div style={{ display: 'flex', width: 12, height: 12, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -770,24 +782,23 @@ export const ChildRow = memo(function ChildRow({
           />
         )}
         {/* No glyph while it works: its presence says so, and the parent shows the loader. */}
+        {!reveal && !working && (
+          <div style={{ position: 'absolute', top: 0, bottom: 0, right: 6, display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>
+            <FadeBack play={wasRevealed} style={{ width: 15 }} testId={`child-result-${thread.id}`}>
+              {phase === 'failed' ? (
+                <Dot color={t.red} />
+              ) : phase === 'stopped' ? (
+                <Icon source={N.stop} size={8} color={muted(t, 0.45)} />
+              ) : (
+                <Icon source={N.check} size={12} color={muted(t, 0.55)} />
+              )}
+            </FadeBack>
+          </div>
+        )}
         <div style={{ position: 'absolute', top: 0, bottom: 0, right: 6, display: 'flex', alignItems: 'center' }}>
-          {reveal ? (
-            <Reveal>
-              <IconButton icon={N.x} glyph={15} color={muted(t, 0.45)} hoverColor={ink(t, 0.89)} label="Dismiss" tooltip="Dismiss" onClick={() => setLeaveAsked(true)} />
-            </Reveal>
-          ) : (
-            !working && (
-              <FadeBack play={wasRevealed} style={{ width: 15 }} testId={`child-result-${thread.id}`}>
-                {phase === 'failed' ? (
-                  <Dot color={t.red} />
-                ) : phase === 'stopped' ? (
-                  <Icon source={N.stop} size={8} color={muted(t, 0.45)} />
-                ) : (
-                  <Icon source={N.check} size={12} color={muted(t, 0.55)} />
-                )}
-              </FadeBack>
-            )
-          )}
+          <Reveal show={reveal}>
+            <IconButton icon={N.x} glyph={15} color={muted(t, 0.45)} hoverColor={ink(t, 0.89)} label="Dismiss" tooltip="Dismiss" onClick={() => setLeaveAsked(true)} />
+          </Reveal>
         </div>
       </div>
       {menu.at && (
@@ -828,7 +839,7 @@ export const CreateCoordinatorRow = memo(function CreateCoordinatorRow({ project
       <div
         testId={`create-coordinator-${project.id}`}
         onClick={() => newThread(project.id, 'coordinator')}
-        style={{ display: 'flex', alignItems: 'center', gap: 8, height: 28, paddingLeft: 32, paddingRight: 8, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: accent(t) } }}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, height: 28, paddingLeft: 32, paddingRight: 8, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: accent(t) }, ...pressRow(t, accent(t)) }}
       >
         <Icon source={N.users} size={12} color={resting(t)} />
         <Label color={resting(t)} truncate>
@@ -874,7 +885,7 @@ export const RecentsHeader = memo(function RecentsHeader({ open }: { open: boole
       <div
         testId="recents"
         onClick={() => toggleProject(FREE_CHAT_PROJECT_ID)}
-        style={{ display: 'flex', alignItems: 'center', gap: 4, height: 28, paddingLeft: 8, paddingRight: 8, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: accent(t) } }}
+        style={{ display: 'flex', alignItems: 'center', gap: 4, height: 28, paddingLeft: 8, paddingRight: 8, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: accent(t) }, ...pressRow(t, accent(t)) }}
       >
         <Label color={muted(t, 0.58)}>Recents</Label>
         <Chevron open={open} size={12} color={muted(t, 0.65)} />

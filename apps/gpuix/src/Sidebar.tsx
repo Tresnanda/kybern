@@ -19,7 +19,8 @@ import { EnvironmentSwitcher } from './sidebar/EnvironmentSwitcher.tsx'
 import { attentionItems, buildRows, type AttentionKind, type Row } from './sidebar/model.ts'
 import { BlockRow, inProjectBlock, setReorderContext } from './sidebar/reorder.tsx'
 import { DisclosureGroup, diffRows, liveGroups, markDisclosure, withGroups, rowHeight, type Group } from './sidebar/motion.tsx'
-import { Rise } from './motion/kit.tsx'
+import { Rise, SwapOnChange } from './motion/kit.tsx'
+import { pressRow } from './shell/motion.ts'
 import {
   accent,
   accentActive,
@@ -41,6 +42,10 @@ import { getState, useApp } from './state.ts'
 import { isFreeChatProject } from '../../../packages/kybern-client/src/types.ts'
 import { ink, Label, useTheme } from './ui.tsx'
 import type { Theme } from './theme.ts'
+
+/** `useState(() => !isLaunching())` (`views/Sidebar.tsx`): the list's first appearance at launch is plain; a surface mounted later, by the rail or ⌘B, enters. */
+const LAUNCH_MS = 3000
+const surfaceEnters = () => performance.now() > LAUNCH_MS && !getNav().keyboardNav && !getNav().panelInstant
 
 export function Sidebar() {
   const projects = useApp((s) => s.projects)
@@ -107,11 +112,14 @@ export function Sidebar() {
   const [boxNode, setBoxNode] = useState<PublicInstance | null>(null)
   setReorderContext(rows, listNode, boxNode)
   const ctx = { selectedId: onHome ? selectedId : null, activity, unread, composerDrafts, toggleChildren, toggleMore }
+  // `sidebar-surface-enter`: the actions and the list rise 4px into place when the panel appears (not at launch, not from the keyboard).
+  const [enter] = useState(surfaceEnters)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
       <BrandRow />
       <EnvironmentSwitcher />
+      <Rise kind="surface" play={enter} style={{ flexGrow: 1, minHeight: 0 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingLeft: 6, paddingRight: 6, paddingTop: 4, paddingBottom: 6 }}>
         <PrimaryAction
           icon={N.newThread}
@@ -140,6 +148,7 @@ export function Sidebar() {
         { key: '__end', height: 6, render: () => <div style={{ height: 6 }} /> },
       ]} />
       </div>
+      </Rise>
     </div>
   )
 }
@@ -300,7 +309,12 @@ function AppMenu() {
       <MenuSeparator />
       <MenuItem
         id="reload"
-        {...(check.state === 'checking' ? { iconNode: <SpinIcon source={N.loader} size={16} color={ink(t, 0.8)} /> } : { icon: check.state === 'idle' ? N.refresh : N.circleCheck })}
+        iconNode={
+          // `IconSwap`: refresh ↔ spinner ↔ check cross-swap in the menu's icon slot.
+          <SwapOnChange kind="icon" active={check.state} style={{ width: 16, height: 16 }}>
+            {check.state === 'checking' ? <SpinIcon source={N.loader} size={16} color={ink(t, 0.8)} /> : <Icon source={check.state === 'idle' ? N.refresh : N.circleCheck} size={16} color={ink(t, 0.8)} />}
+          </SwapOnChange>
+        }
         label="Reload agents"
         keepOpen
         detail={check.state === 'checking' ? 'Checking…' : check.state === 'done' ? (check.ready === 1 ? '1 ready' : `${check.ready} ready`) : undefined}
@@ -406,6 +420,7 @@ function PrimaryAction({
         borderRadius: 8,
         cursor: 'pointer',
         ...(active ? { backgroundColor: accentActive(t) } : hover ? { backgroundColor: accent(t) } : {}),
+        ...pressRow(t, active ? accentActive(t) : accent(t)),
       }}
     >
       <div style={{ display: 'flex', width: 16, height: 16, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
