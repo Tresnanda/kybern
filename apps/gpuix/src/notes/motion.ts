@@ -30,14 +30,19 @@ export const noteBannerIn = () => riseIn(4, 0.18)
 /** A gallery card's entrance: 170 ms from 6 px, 25 ms apart for the first four (no blur: many cards at once). */
 export const cardIn = (index: number) => riseIn(6, 0.17, 0, Math.min(index, 3) * 0.025)
 
-/** `.note-thumb` hover lift: `translateY(-2px)` over 140 ms `--n-ease` (the pressed settle uses the same curve). */
+/** `.note-thumb` hover lift: `translateY(-2px)` over 140 ms on `--n-ease` (the pressed settle uses the same curve). */
 export const NOTE_LIFT_MS = Number(process.env.KYBERN_NOTE_LIFT_MS) || 140
 export const NOTE_LIFT_PX = 2
 /** `--n-ease` (notes.css:36). */
 export const NOTE_EASE: [number, number, number, number] = [0.2, 0, 0, 1]
-export function thumbLift(lifted: boolean): PaintTransformProps | undefined {
+/**
+ * The thumbnail's one paint scope: it lifts 2 px while hovered and settles to `scale(0.985)` while a primary press is held
+ * (`.note-card:active .note-thumb`, replacing the lift). One scope per card, not one for the lift and one for the press: a gallery
+ * of a few hundred cards keeps its scroll cost. Reduce Motion: no transform.
+ */
+export function thumbLift(lifted: boolean, pressed = false): PaintTransformProps | undefined {
   if (!PATCHED_NATIVE || REDUCED_MOTION) return undefined
-  return { initial: false, animate: { translateY: lifted ? -NOTE_LIFT_PX : 0 }, transition: { duration: NOTE_LIFT_MS / 1000, ease: NOTE_EASE } }
+  return { initial: false, animate: { translateY: lifted && !pressed ? -NOTE_LIFT_PX : 0, scale: pressed ? 0.985 : 1 }, transition: { duration: NOTE_LIFT_MS / 1000, ease: NOTE_EASE } }
 }
 
 // ─── Deleting a note: the card leaves by pointer, instantly by keyboard ───────────────────────────────────────────────

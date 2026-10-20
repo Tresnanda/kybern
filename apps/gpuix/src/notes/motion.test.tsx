@@ -92,6 +92,7 @@ native('a bulk arrival of more than twelve notes enters plainly', () => {
 native('the card entrance staggers the first four and lifts translate paint-only', () => {
   expect(cardIn(0)!.transition!.delay).toBe(0)
   expect(cardIn(9)!.transition!.delay).toBeCloseTo(0.075)
-  expect(thumbLift(true)!.animate).toEqual({ translateY: -2 })
-  expect(thumbLift(false)!.animate).toEqual({ translateY: 0 })
+  expect(thumbLift(true)!.animate).toEqual({ translateY: -2, scale: 1 })
+  expect(thumbLift(false)!.animate).toEqual({ translateY: 0, scale: 1 })
+  expect(thumbLift(false, true)!.animate).toEqual({ translateY: 0, scale: 0.985 })
 })
