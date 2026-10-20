@@ -8,7 +8,24 @@
    Rules of thumb baked in here:
    - transform / opacity / filter only; never layout properties.
    - enters use --ease-smooth-out, exits are ~30% faster than enters.
-   - no bare cross-fades: a fade always carries a small blur or a nudge. */
+   - no bare cross-fades: a fade always carries a small blur or a nudge.
+
+   Shared primitives for the rest of the app (reduced-motion rules for all of
+   them sit in the final block of this file):
+   - --ease-exit            token for every exit curve.
+   - .t-appear              enter/exit of a conditionally rendered small surface
+                            (transition-based, so rapid toggles retarget). Pair
+                            with usePresence() and [data-leaving]; variants
+                            data-blur="off", data-from="above" | "scale".
+   - .t-page-enter          keyed page root: opacity + 6px rise, no blur.
+   - .t-delayed-in          loader that only shows when work is slow (--delay).
+   - .t-shake               error confirmation; remove on animationend.
+   - .t-flash               "this just landed" tint on a pseudo-element.
+   - .t-pop-out             exit partner of .t-pop (use with usePresence).
+   - .t-stagger[data-tempo="quick"]   40ms-step stagger, 250ms per item.
+   - .t-icon-swap[data-tempo="quick"] 150ms IconSwap (IconSwap tempo="quick").
+   - useFlipList()          lib/flip.ts: transform-only list reorder/remove.
+   - [data-loop-paused] and inactive .t-pane pause shimmer/skeleton/breathe. */
 
 :root {
   --duration-stagger: 40ms;
@@ -21,6 +38,10 @@
 
   --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  /* Every exit: starts at full speed and accelerates away, so a leaving
+     surface gets out of the way instead of lingering. Pair with
+     --duration-quick (about 40% shorter than the enter). */
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   --ease-linear: linear;
@@ -252,12 +273,14 @@
   display: grid;
   place-items: center;
 }
+/* The incoming icon settles with the signature entrance curve; the outgoing one
+   leaves quicker on the exit curve (see the data-active="false" rule below). */
 .t-icon-swap > * {
   grid-area: 1 / 1;
   transition:
-    opacity var(--duration-fast) var(--ease-in-out),
-    transform var(--duration-fast) var(--ease-in-out),
-    filter var(--duration-fast) var(--ease-in-out);
+    opacity var(--duration-fast) var(--ease-smooth-out),
+    transform var(--duration-fast) var(--ease-smooth-out),
+    filter var(--duration-fast) var(--ease-smooth-out);
 }
 /* Promote only while a swap is in flight. A resting icon is plain content in
    its row's layer; hundreds of permanently promoted glyphs used to cost a
@@ -270,6 +293,12 @@
   transform: scale(0.6);
   filter: blur(var(--blur-small));
   pointer-events: none;
+  transition-duration: var(--duration-quick);
+  transition-timing-function: var(--ease-exit);
+}
+/* tempo="quick" (IconSwap prop): frequent glyph flips such as copy -> check. */
+.t-icon-swap[data-tempo="quick"] > * {
+  transition-duration: var(--duration-quick);
 }
 .t-icon-swap > [data-active="true"] {
   opacity: 1;
@@ -387,6 +416,21 @@
   }
 }
 
+/* Quick tempo: a shorter, smaller stagger for empty states and the Draft screen
+   (40ms step, 250ms per item, 6px rise). Add data-tempo="quick" next to .t-stagger. */
+.t-stagger[data-tempo="quick"] > * {
+  animation-name: t-stagger-in-quick;
+  animation-duration: var(--duration-fast);
+  animation-delay: calc(var(--i, 0) * var(--duration-stagger));
+}
+@keyframes t-stagger-in-quick {
+  from {
+    opacity: 0;
+    transform: translateY(var(--distance-small));
+    filter: blur(var(--blur-small));
+  }
+}
+
 /* ─── Sliding tabs ──────────────────────────────────────────────────────────
    The active pill is one element that travels between tabs. Position and
    width come from JS (--x / --w); the first paint sets them without motion. */
@@ -407,7 +451,8 @@
     width var(--duration-fast) var(--ease-smooth-out),
     height var(--duration-fast) var(--ease-smooth-out),
     opacity var(--duration-quick) var(--ease-out);
-  will-change: transform, width, height;
+  /* Transform only: width and height change rarely, on a tiny element. */
+  will-change: transform;
 }
 .t-tabs-pill[data-ready="false"] {
   transition: none;
@@ -425,24 +470,36 @@
 }
 
 /* ─── Pane switch ───────────────────────────────────────────────────────────
-   Panes that stay mounted while hidden (dock tabs). Hidden panes sit slightly
-   scaled and lifted so the cross-fade has direction; no blur here because
-   the terminal pane owns a WebGL canvas. */
+   Panes that stay mounted while hidden (dock tabs). A hidden pane sits 4px low;
+   it never scales, because a scale resamples the terminal's WebGL canvas and
+   makes the preview iframe layer resize every frame. The exit is quick, the
+   enter settles on the entrance curve, and a pane mounted later (an added
+   panel) enters from the hidden pose through @starting-style. No blur: the
+   terminal pane owns a WebGL canvas. Resting transform is none, so a pane is
+   not a containing block for position: fixed descendants. */
 .t-pane {
   transition:
-    opacity var(--duration-fast) var(--ease-smooth-out),
-    transform var(--duration-fast) var(--ease-smooth-out);
+    opacity var(--duration-quick) var(--ease-exit),
+    transform var(--duration-quick) var(--ease-exit);
   /* Let WebKit promote only during the transition. A permanent will-change
      keeps every inactive dock pane in its own graphics backing store. */
 }
 .t-pane[data-active="false"] {
   opacity: 0;
-  transform: translateY(var(--distance-micro)) scale(0.995);
+  transform: translateY(var(--distance-micro));
   pointer-events: none;
 }
 .t-pane[data-active="true"] {
   opacity: 1;
-  transform: translateY(0) scale(1);
+  transform: none;
+  transition-duration: var(--duration-fast);
+  transition-timing-function: var(--ease-smooth-out);
+}
+@starting-style {
+  .t-pane[data-active="true"] {
+    opacity: 0;
+    transform: translateY(var(--distance-micro));
+  }
 }
 
 /* ─── Section swap ──────────────────────────────────────────────────────────
@@ -635,6 +692,183 @@
     max-width 0s 0s;
 }
 
+/* ─── Appear (small conditional surfaces) ───────────────────────────────────
+   Enter/exit for popovers' siblings: chips, banners, inline panels, badges that
+   mount and unmount. Transition-based, so a rapid toggle retargets from the
+   painted state instead of restarting. Usage:
+
+     const { mounted, leaving } = usePresence(show)
+     {mounted && <div className="t-appear" data-leaving={leaving || undefined}>…</div>}
+
+   Enter: 250ms smooth-out, 4px rise + 2px blur. Exit: 150ms ease-exit, same
+   pose. Variants (data attributes): data-blur="off" for anything inside glass
+   or over a canvas, data-from="above" to enter from the top, data-from="scale"
+   for chips and panes (scale 0.97 instead of a rise). */
+.t-appear {
+  transition:
+    opacity var(--duration-fast) var(--ease-smooth-out),
+    transform var(--duration-fast) var(--ease-smooth-out),
+    filter var(--duration-fast) var(--ease-smooth-out);
+}
+@starting-style {
+  .t-appear {
+    opacity: 0;
+    transform: translateY(var(--distance-micro));
+    filter: blur(var(--blur-small));
+  }
+}
+.t-appear[data-leaving] {
+  opacity: 0;
+  transform: translateY(var(--distance-micro));
+  filter: blur(var(--blur-small));
+  pointer-events: none;
+  transition-duration: var(--duration-quick);
+  transition-timing-function: var(--ease-exit);
+}
+.t-appear[data-blur="off"],
+.t-appear[data-blur="off"][data-leaving] {
+  filter: none;
+}
+@starting-style {
+  .t-appear[data-blur="off"] {
+    filter: none;
+  }
+}
+.t-appear[data-from="above"][data-leaving] {
+  transform: translateY(calc(var(--distance-micro) * -1));
+}
+@starting-style {
+  .t-appear[data-from="above"] {
+    transform: translateY(calc(var(--distance-micro) * -1));
+  }
+}
+.t-appear[data-from="scale"][data-leaving] {
+  transform: scale(var(--scale-medium));
+}
+@starting-style {
+  .t-appear[data-from="scale"] {
+    transform: scale(var(--scale-medium));
+  }
+}
+
+/* ─── Shared fades ──────────────────────────────────────────────────────────
+   Opacity-only keyframes, used by the reduced-motion paths below (never as a
+   standalone entrance: a bare fade needs a nudge or a blur). */
+@keyframes t-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes t-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+/* ─── Page enter ────────────────────────────────────────────────────────────
+   For a keyed page root (Notes, Tasks, Usage, PRs, settings sections): opacity
+   plus a 6px rise. No blur: the perf guide forbids blurring whole panes. The
+   `backwards` fill keeps no layer alive after the animation ends. Only add it
+   for pointer navigation to a fresh page; keyboard and launch stay instant. */
+.t-page-enter {
+  animation: t-page-enter var(--duration-fast) var(--ease-smooth-out) backwards;
+}
+@keyframes t-page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--distance-small));
+  }
+}
+
+/* ─── Delayed in ────────────────────────────────────────────────────────────
+   A loader that should only show when work is slow: invisible for --delay
+   (default 150ms), then fades in over 150ms. Set style={{ "--delay": "400ms" }}
+   to change the wait. Backwards fill, never forwards. */
+.t-delayed-in {
+  animation: t-fade-in var(--duration-quick) var(--ease-out) var(--delay, 150ms) backwards;
+}
+
+/* ─── Shake ─────────────────────────────────────────────────────────────────
+   Error confirmation (wrong code, failed save, invalid input): rare or
+   occasional only. Remove the class on animationend and re-add it (key bump)
+   to replay. The error colour and text carry the message under reduced motion. */
+.t-shake {
+  animation: t-shake 320ms var(--ease-in-out);
+}
+@keyframes t-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-3px);
+  }
+  40% {
+    transform: translateX(3px);
+  }
+  60% {
+    transform: translateX(-2px);
+  }
+  80% {
+    transform: translateX(2px);
+  }
+}
+
+/* ─── Flash ─────────────────────────────────────────────────────────────────
+   "This just landed": a 14% accent tint that fades out over 700ms. It plays on
+   a pseudo-element's opacity, so the content never moves, which makes it safe
+   for keyboard-driven moves. Add the class, remove it on animationend. The
+   element gets position: relative unless it is already absolute/fixed/sticky
+   (utility class); give it a border-radius so the tint follows it. */
+.t-flash:where(:not(.absolute, .fixed, .sticky)) {
+  position: relative;
+}
+.t-flash::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: color-mix(in oklab, var(--color-accent-blue, currentColor) 14%, transparent);
+  animation: t-flash 700ms var(--ease-out) both;
+}
+@keyframes t-flash {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* ─── Pop out ───────────────────────────────────────────────────────────────
+   Exit partner of .t-pop for badges and counts: shrink to 85% while fading,
+   150ms on the exit curve. Use with usePresence(show, 150) and apply the class
+   while `leaving`; swap to .t-pop while shown. */
+.t-pop-out {
+  animation: t-pop-out var(--duration-quick) var(--ease-exit) both;
+  pointer-events: none;
+}
+@keyframes t-pop-out {
+  to {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+}
+
+/* ─── Paused loops ──────────────────────────────────────────────────────────
+   Looping indicators stop while clipped, offscreen, in a hidden window or in an
+   inactive dock pane, without resetting their phase. Attach
+   observeLoopVisibility (or the useLoopVisibility ref hook) to the looping
+   element to get [data-loop-paused]; panes need nothing. */
+.t-shimmer[data-loop-paused]::before,
+.t-pane[data-active="false"] .t-shimmer::before,
+.t-pane[data-active="false"] .task-glyph-breathe,
+.t-pane[data-active="false"] .animate-skeleton,
+[data-loop-paused] .animate-skeleton {
+  animation-play-state: paused;
+}
+
 /* ─── Reduced motion ────────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   .t-matrix i,
@@ -648,7 +882,10 @@
   .t-success,
   .t-success path,
   .t-pop,
-  .t-text-swap > * {
+  .t-text-swap > *,
+  .t-shake,
+  .animate-skeleton,
+  .t-shimmer::before {
     animation: none !important;
   }
   .t-check-path,
@@ -664,6 +901,38 @@
   .t-img,
   .t-marquee > span {
     transition: none !important;
+  }
+  /* New primitives. Appear keeps an opacity-only fade at quick speed. */
+  .t-appear {
+    transition: opacity var(--duration-quick) var(--ease-out) !important;
+  }
+  .t-appear[data-leaving],
+  .t-appear[data-from][data-leaving],
+  .t-appear[data-blur][data-leaving] {
+    transform: none !important;
+    filter: none !important;
+  }
+  @starting-style {
+    .t-appear,
+    .t-appear[data-from],
+    .t-appear[data-blur] {
+      transform: none !important;
+      filter: none !important;
+    }
+  }
+  .t-page-enter {
+    animation: t-fade-in var(--duration-quick) var(--ease-out) backwards;
+  }
+  /* Keeps the delay, drops the fade. */
+  .t-delayed-in {
+    animation-duration: 1ms !important;
+  }
+  /* Opacity-only tint, just shorter. */
+  .t-flash::after {
+    animation-duration: 400ms;
+  }
+  .t-pop-out {
+    animation-name: t-fade-out;
   }
   .t-img[data-loaded="false"] {
     opacity: 1;
