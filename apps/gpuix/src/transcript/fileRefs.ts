@@ -17,6 +17,8 @@ const pending = new Map<string, Set<string>>()
 const asking = new Set<string>()
 const versions = new Map<string, number>()
 const listeners = new Map<string, Set<() => void>>()
+/** Per thread, how many mounted rows show each path: those answers are never evicted from under their links. */
+const inUse = new Map<string, Map<string, number>>()
 let timer: ReturnType<typeof setTimeout> | null = null
 
 function known(threadId: string): Map<string, Known> {
@@ -34,8 +36,10 @@ function ask(threadId: string, paths: readonly string[]) {
   const cache = known(threadId), now = Date.now()
   let queue = pending.get(threadId)
   for (const path of paths) {
-    const key = `${threadId}\n${path}`
-    if (fresh(cache.get(path), now) || asking.has(key)) continue
+    const key = `${threadId}\n${path}`, entry = cache.get(path)
+    // Least recently shown first out: a path a row shows again moves to the end.
+    if (fresh(entry, now)) { cache.delete(path); cache.set(path, entry!); continue }
+    if (asking.has(key)) continue
     if (!queue) pending.set(threadId, queue = new Set())
     queue.add(path)
   }
@@ -67,10 +71,30 @@ async function resolve(threadId: string, paths: string[]) {
     for (const key of keys) asking.delete(key)
   }
   const cache = known(threadId), at = Date.now()
-  if (cache.size + paths.length > MAX_PATHS) cache.clear()
-  paths.forEach((path, i) => cache.set(path, { file: files[i] ?? null, at }))
+  paths.forEach((path, i) => { cache.delete(path); cache.set(path, { file: files[i] ?? null, at }) })
+  evictUnused(cache, inUse.get(threadId), MAX_PATHS)
   versions.set(threadId, (versions.get(threadId) ?? 0) + 1)
   for (const listener of listeners.get(threadId) ?? []) listener()
+}
+
+/** Drops the least recently shown answers until `cache` holds `max`, keeping every path a mounted row shows (clearing it
+ *  all, as before, turned visible file links back into code once a long thread passed `MAX_PATHS` spans). */
+export function evictUnused(cache: Map<string, unknown>, shown: ReadonlyMap<string, number> | undefined, max: number) {
+  if (cache.size <= max) return
+  for (const path of cache.keys()) {
+    if (cache.size <= max) break
+    if (!shown?.get(path)) cache.delete(path)
+  }
+}
+
+function show(threadId: string, paths: readonly string[]) {
+  let counts = inUse.get(threadId)
+  if (!counts) inUse.set(threadId, counts = new Map())
+  for (const path of paths) counts.set(path, (counts.get(path) ?? 0) + 1)
+  return () => {
+    for (const path of paths) { const n = (counts.get(path) ?? 1) - 1; if (n > 0) counts.set(path, n); else counts.delete(path) }
+    if (!counts.size && inUse.get(threadId) === counts) inUse.delete(threadId)
+  }
 }
 
 function subscribe(threadId: string, listener: () => void) {
@@ -91,7 +115,7 @@ export function useFileRefs(threadId: string | null | undefined, paths: readonly
     useMemo(() => (listener: () => void) => (active ? subscribe(active, listener) : () => {}), [active]),
     () => (active ? versions.get(active) ?? 0 : 0),
   )
-  useEffect(() => { if (active) ask(active, paths) }, [active, paths])
+  useEffect(() => { if (!active) return; ask(active, paths); return show(active, paths) }, [active, paths])
   return useMemo(() => {
     const cache = active ? threads.get(active) : undefined
     return (path: string) => cache?.get(path)?.file
@@ -100,6 +124,6 @@ export function useFileRefs(threadId: string | null | undefined, paths: readonly
 
 /** Test seam: forget every cached lookup. */
 export function resetFileRefs() {
-  threads.clear(); pending.clear(); asking.clear(); versions.clear()
+  threads.clear(); pending.clear(); asking.clear(); versions.clear(); inUse.clear()
   if (timer) { clearTimeout(timer); timer = null }
 }
