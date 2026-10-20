@@ -5,7 +5,10 @@ import { isAccountColor, isCliInstance, type AccountColor } from '../../../deskt
 import type { LimitPace } from '../../../desktop/src/lib/providerUsage.ts'
 import { limitTone } from '../../../desktop/src/lib/providerUsage.ts'
 import type { ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
+import { useState } from 'react'
+import { MeterFill } from '../motion/Meter.tsx'
 import { ink, ProviderMark, useTheme } from '../ui.tsx'
+import { useBoxWidth } from './useBoxWidth.ts'
 import type { Theme } from '../theme.ts'
 import { ringValue } from '../motion/success.ts'
 
@@ -64,6 +67,20 @@ export function AccountUsageRing({ left, size = 20 }: { left: number; size?: num
 }
 
 /**
+ * The fill of a limit bar (`.limit-meter-track > span`, width 400 ms `--ease-out`): a paint-only `MeterFill` once the track's width is
+ * known, so a refreshed value slides to its new length without a layout. Until then (one frame) a static fill of the same length stands in,
+ * so a bar never shows empty; with `play` the bar instead starts empty and grows in when it first mounts (fresh content only).
+ */
+export function LimitFill({ left, color, play = false, height = 4, radius = 2 }: { left: number; color: string; play?: boolean; height?: number; radius?: number }) {
+  const [ref, width] = useBoxWidth()
+  const [grow] = useState(play)
+  const value = Math.max(0, Math.min(100, left))
+  return <div ref={ref} style={{ display: 'flex', width: '100%', height, flexShrink: 0 }}>
+    {width > 0 ? <MeterFill value={value / 100} length={width} thickness={height} radius={radius} color={color} play={grow} /> : !grow && <div style={{ width: `${value}%`, height, borderRadius: radius, backgroundColor: color }} />}
+  </div>
+}
+
+/**
  * What is left of a plan limit, as a bar that drains as it is used (`LimitMeter`). The tick marks
  * where even spending across the window would leave it: fill past the tick is reserve, fill short of
  * it means usage is running ahead of time.
@@ -72,7 +89,7 @@ export function LimitMeter({ left, pace, label }: { left: number; pace: LimitPac
   const t = useTheme()
   const tone = limitTone(100 - left)
   return <div role="meter" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(left)} style={{ position: 'relative', width: '100%', paddingTop: 3, paddingBottom: 3 }}>
-    <div style={{ display: 'flex', height: 4, borderRadius: 2, overflow: 'hidden', backgroundColor: ink(t, 0.1) }}><div style={{ width: `${Math.max(0, Math.min(100, left))}%`, height: 4, borderRadius: 2, backgroundColor: tone === 'critical' ? t.v('--destructive') : tone === 'warning' ? t.warning : ink(t, 0.65) }} /></div>
+    <div style={{ display: 'flex', height: 4, borderRadius: 2, overflow: 'hidden', backgroundColor: ink(t, 0.1) }}><LimitFill left={left} color={tone === 'critical' ? t.v('--destructive') : tone === 'warning' ? t.warning : ink(t, 0.65)} /></div>
     {pace && <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${pace.evenLeft}%`, pointerEvents: 'none' }}><div style={{ position: 'absolute', right: -0.75, top: 0, bottom: 0, width: 1.5, borderRadius: 1, backgroundColor: ink(t, 0.45), pointerEvents: 'none' }} /></div>}
   </div>
 }

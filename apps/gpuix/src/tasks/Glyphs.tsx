@@ -5,6 +5,7 @@ import type { TaskPriority, TaskStatus } from '../../../../packages/kybern-clien
 import { EASE_OUT, ink, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { useNav } from '../nav/store.ts'
 import { Icon } from '../icons.tsx'
+import { SwapOnChange } from '../motion/kit.tsx'
 import { N } from '../nav/glyphs.ts'
 
 // Paths mirror desktop TaskGlyphs.tsx; SVG is the native renderer's single node.
@@ -20,7 +21,16 @@ export function statusGlyphSource(status: TaskStatus, t: ReturnType<typeof useTh
       : `${ring}${status === 'running' ? '<path d="M7 7V3.6A3.4 3.4 0 0 1 7 10.4Z" fill="currentColor"/>' : status === 'needs_review' ? '<path d="M7 7V3.6A3.4 3.4 0 1 1 3.6 7Z" fill="currentColor"/>' : ''}`
   return { svg: wrap(body), color }
 }
+/**
+ * The status glyph. When a task's status changes (todo → running → done) the old glyph leaves while the new one scales in
+ * (`t-icon-swap`, `Swap kind="icon"`); a glyph that mounts, such as a recycled virtual row, paints plainly. The monochrome
+ * sidebar filter glyphs never change, so they skip the wrapper.
+ */
 export function StatusGlyph({ status, mono = false }: { status: TaskStatus; mono?: boolean }) {
+  if (mono) return <StatusGlyphBody status={status} mono />
+  return <SwapOnChange kind="icon" active={status} style={{ width: 14, height: 14, flexShrink: 0 }}><StatusGlyphBody status={status} /></SwapOnChange>
+}
+function StatusGlyphBody({ status, mono = false }: { status: TaskStatus; mono?: boolean }) {
   const t = useTheme()
   const color = mono
     ? t.textSecondary
