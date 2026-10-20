@@ -102,4 +102,9 @@ describe('bounded transcript Markdown', () => {
     const fenced = '- item\n\n  ```md\n![shot](a.png)\n  ```'
     expect(splitImages(fenced)).toEqual([{ kind: 'text', text: fenced }])
   })
+
+  test('a bare image path with spaces still counts as an image line', () => {
+    expect(splitImages('![Booking form, outside](/tmp/out/Booking form spät.png)')).toEqual([{ kind: 'image', alt: 'Booking form, outside', source: '/tmp/out/Booking form spät.png' }])
+    expect(splitImages('![x](shots/a (1).png "Title")')).toEqual([{ kind: 'image', alt: 'x', source: 'shots/a (1).png' }])
+  })
 })

@@ -107,7 +107,9 @@ function LocalThreadImage({ threadId, source, label, at }: { threadId: string | 
   if (!image.failure) return <ImageCard label={label} loading />
   const local = environment.local && cwd
   const file = local ? path.resolve(cwd, decodeURIComponent(reference(source).replace(/^file:\/\/(localhost)?/, ''))) : null
-  return <ImageCard label={label} reason={image.failure.reason} onRetry={image.retry}
+  // Retry helps only when the file may still appear or the connection failed.
+  const retryable = image.failure.status === 404 || image.failure.status === 0 || image.failure.status >= 500
+  return <ImageCard label={label} reason={image.failure.reason} onRetry={retryable ? image.retry : undefined}
     onReveal={file ? () => { spawn('open', image.failure!.status === 404 ? [path.dirname(file)] : ['-R', file]).on('error', () => {}) } : undefined} />
 }
 

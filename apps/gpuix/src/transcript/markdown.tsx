@@ -29,7 +29,8 @@ import { localImageLink } from '../../../desktop/src/lib/responseImages.ts'
 /** `image`: a Markdown image on a line of its own (`text` is its source as written, `alt` its caption). */
 export type MarkdownPart = { kind: 'prose' | 'code' | 'image'; text: string; language?: string; alt?: string; key: string }
 
-const IMAGE = /!\[([^\]\n]*)\]\((?:<([^>\n]+)>|([^()\s]+(?:\([^()\s]*\)[^()\s]*)*))(?:\s+"[^"\n]*")?\)/g
+// Bare destinations may hold spaces: agents write `![x](/path/Booking form.png)` without the `<…>` CommonMark wants.
+const IMAGE = /!\[([^\]\n]*)\]\((?:<([^>\n]+)>|([^()\s](?:[^()\n]*?(?:\([^()\n]*\))?)*?))(?:\s+"[^"\n]*")?\s*\)/g
 const IMAGE_LINE = new RegExp(`^ {0,3}(?:${IMAGE.source}\\s*)+$`)
 export type TextSegment = { kind: 'text'; text: string } | { kind: 'image'; source: string; alt: string }
 /** Split images that stand on their own lines out of Markdown text (outside fences), so they render as images: native
