@@ -455,7 +455,8 @@ function SendFailed({ threadId, id, error, parts }: { threadId: ThreadId; id: st
   const t = useTheme()
   return (
     <Rise kind="row" style={{ alignItems: 'flex-end', width: '100%' }}>
-      <div testId="send-failed" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, paddingTop: 8, maxWidth: '80%' }}>
+      {/* Below the bubble's hover footer (Copy, Save to note), which reaches 28 px under it. */}
+      <div testId="send-failed" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, paddingTop: 30, maxWidth: '80%' }}>
         <Label color={t.v('--destructive')} size={META.size} lineHeight={META.lineHeight} truncate style={{ flexShrink: 1 }}>
           {`Not sent. ${error ?? 'The daemon did not answer.'}`}
         </Label>
