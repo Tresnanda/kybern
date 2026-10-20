@@ -71,19 +71,48 @@ function setTasks(status: 'running' | 'restore') {
 }
 
 /** Each scenario prepares its view after launch; `motion` (transient) returns the trigger and its duration. */
-const SCENES: Record<string, { open: (app: Launch['app'], control: (a: string, b?: object) => Promise<unknown>) => Promise<void>; transient?: { ms: number; trigger: (app: Launch['app'], i: number) => Promise<void> }; before?: () => void; after?: () => void }> = {
+const SCENES: Record<string, { cadence?: string; open: (app: Launch['app'], control: (a: string, b?: object) => Promise<unknown>) => Promise<void>; transient?: { ms: number; trigger: (app: Launch['app'], i: number) => Promise<void> }; before?: () => void; after?: () => void }> = {
   'idle-home': { open: async (_, c) => { await c('idle'); await c('home') } },
   'idle-thread': { open: async (_, c) => { await c('idle'); await c('open', { thread: manifest.long3000 }) } },
-  'home-running': { open: async (_, c) => { await c('home') } },
-  'thread-running': { open: async (app, c) => { await c('open', { thread: manifest.running }); await c('turn-started'); await bounds(app, 'working-header') } },
+  'home-running': { cadence: 'matrix-loader', open: async (_, c) => { await c('home') } },
+  'thread-running': { cadence: 'working-header', open: async (app, c) => { await c('open', { thread: manifest.running }); await c('turn-started'); await bounds(app, 'working-header') } },
   'tasks-running': {
+    cadence: 'task-running-glyph',
     before: () => setTasks('running'), after: () => setTasks('restore'),
     open: async (app, c) => { await c('home'); await click(app, 'rail-tasks'); await click(app, 'task-filter-all'); if (await app.getByTestId('task-view-board').count()) await click(app, 'task-view-board') },
   },
   // Transient motions in a heavy window (the 3,000-turn thread), each toggled 12 times.
   'sidebar-toggle': { open: async (_, c) => { await c('idle'); await c('open', { thread: manifest.long3000 }) }, transient: { ms: 220, trigger: app => click(app, 'sidebar-toggle') } },
   'dock-toggle': { open: async (_, c) => { await c('idle'); await c('open', { thread: manifest.long3000 }) }, transient: { ms: 300, trigger: app => click(app, 'dock-toggle') } },
-  'model-picker': { open: async (_, c) => { await c('idle'); await c('open', { thread: manifest.long3000 }) }, transient: { ms: 250, trigger: async (app, i) => { if (i % 2) await app.keyboard.press('Escape'); else await click(app, 'model-picker') } } },
+  'model-picker': { open: async (_, c) => { await c('idle'); await c('open', { thread: manifest.long3000 }) }, transient: { ms: 250, trigger: async (app, i) => { if (i % 2) await app.getByTestId('app-ready').press('escape'); else await click(app, 'model-picker') } } },
+}
+
+/** CSS ease-in-out, the curve both the scene and the CA layers use. */
+function easeInOut(x: number) {
+  const bez = (t: number, a: number, b: number) => 3 * a * t * (1 - t) ** 2 + 3 * b * t * t * (1 - t) + t ** 3
+  let lo = 0, hi = 1
+  for (let i = 0; i < 24; i++) { const mid = (lo + hi) / 2; if (bez(mid, 0.42, 0.58) < x) lo = mid; else hi = mid }
+  return bez((lo + hi) / 2, 0, 1)
+}
+const matrixCurve = (phase: number) => phase < 0.15 ? 0.22 + 0.78 * easeInOut(phase / 0.15) : phase < 0.45 ? 1 - 0.78 * easeInOut((phase - 0.15) / 0.3) : 0.22
+/** Every layer sits on a dot of the loader at `b` (12 orbit dots: 2 pt, 4 pt pitch, corners hidden), and its sampled
+ *  presentation opacity fits the matrix curve at one phase; the fitted phases differ by the orbit's cycle/8 steps. */
+function checkLayers(probe: { layers: { frame: string; color: number[]; radius: number }[]; samples: { t: number; opacity: number[] }[] }, b: { x: number; y: number; width: number; height: number }, height: number) {
+  const cycle = Number(process.env.MOTION_CA_CYCLE ?? 1600)
+  const dots = [0, 1, 2, 3].flatMap(r => [0, 1, 2, 3].map(c => ({ r, c }))).filter(({ r, c }) => !((r === 0 || r === 3) && (c === 0 || c === 3)))
+  const frames = probe.layers.map(l => (l.frame.match(/-?[\d.]+/g) ?? []).map(Number))
+  // AppKit layer frames: bottom-left origin in points.
+  const placed = frames.map(([x, y, w, h]) => dots.some(({ r, c }) => Math.abs(x! - (b.x + c * 4)) < 0.01 && Math.abs(height - y! - h! - (b.y + r * 4)) < 0.01 && Math.abs(w! - 2) < 0.01 && Math.abs(h! - 2) < 0.01))
+  const fits = probe.layers.map((_, i) => {
+    let best = { phase: 0, error: Infinity }
+    for (let phase = 0; phase < cycle; phase += 1) {
+      let error = 0
+      for (const s of probe.samples) error = Math.max(error, Math.abs(s.opacity[i]! - matrixCurve((((s.t - phase) % cycle) + cycle) % cycle / cycle)))
+      if (error < best.error) best = { phase, error }
+    }
+    return best
+  })
+  return { layers: probe.layers.length, samples: probe.samples.length, placed: placed.filter(Boolean).length, maxCurveError: Math.max(...fits.map(f => f.error)), phases: fits.map(f => f.phase), colors: [...new Set(probe.layers.map(l => l.color.map(v => v.toFixed(3)).join(',')))], radii: [...new Set(probe.layers.map(l => l.radius))] }
 }
 
 const results: unknown[] = []
@@ -142,6 +171,31 @@ for (const name of scenarios) for (let repeat = 1; repeat <= repeats; repeat++) 
       const r = t.result(mark)
       Object.assign(row, { seconds: elapsed, frames: r.frames, fps: r.frames.count / elapsed, fullDraws: t.costs.length - mark.costs, work: r.work, cpuPercent: 100 * (c1 - c0) / elapsed, gpuMs: (g1 - g0) / 1e6, footprintMiB: footprintMiB(f.pid) })
     }
+    // Compositor loops: layer geometry/fill against the loader, and live opacity against the native curve.
+    if (process.env.MOTION_CA_PROBE === '1' && scene.cadence) {
+      const b = await bounds(app, scene.cadence)
+      const probe = await control('ca-probe', { durationMs: 2000 }) as { metal?: string[]; layers: { frame: string; color: number[]; radius: number; modelOpacity: number }[]; samples: { t: number; opacity: number[] }[] }
+      const metal = Number(probe.metal?.[0]?.match(/-?[\d.]+/g)?.[3])
+      row.caProbe = { ...checkLayers(probe, b, metal), metalHeight: metal }
+      writeFileSync(path.join(OUT, `ca-probe-${label}-${name}.json`), JSON.stringify({ bounds: b, ...probe }))
+    }
+    // OS window capture (includes Core Animation sublayers, unlike the automation screenshot).
+    if (process.env.MOTION_SHOT === '1') {
+      const id = Number(/window (\d+) onscreen=true/.exec(Bun.spawnSync(['swift', path.join(root, 'perf/bench/window-onscreen.swift'), String(f.pid)]).stdout.toString())?.[1])
+      const file = path.join(OUT, 'shots', `${label}-${name}.png`); mkdirSync(path.dirname(file), { recursive: true })
+      const shot = Bun.spawnSync(['screencapture', '-x', '-o', '-l', String(id), file])
+      row.shot = shot.exitCode === 0 ? file : shot.stderr.toString()
+    }
+    // Displayed cadence of the animated element, as composited (perf/motion-fps/cadence.swift).
+    const target = scene.cadence
+    if (target && process.env.MOTION_CADENCE !== '0') {
+      const b = await bounds(app, target)
+      const strip = path.join(OUT, 'strips', `${label}-${name}`)
+      const probe = path.join(DATA, 'motion-cadence')
+      if (!existsSync(probe)) Bun.spawnSync(['swiftc', '-O', '-o', probe, path.join(import.meta.dir, 'cadence.swift')])
+      const out = Bun.spawnSync([probe, String(f.pid), '3', String(b.x - 2), String(b.y - 2), String(b.width + 4), String(b.height + 4), strip])
+      try { row.cadence = JSON.parse(out.stdout.toString().trim().split('\n').at(-1)!) } catch { row.cadence = { error: out.stdout.toString() + out.stderr.toString() } }
+    }
     requireScreen(); requireWindowOnscreen(f.pid)
     const markers1 = buildMarkers(), foreign = [...foreign0, ...foreignApps(f.pid)]
     row.valid = !markers0.length && !markers1.length && !foreign.length && !row.profiled
@@ -152,7 +206,7 @@ for (const name of scenarios) for (let repeat = 1; repeat <= repeats; repeat++) 
   appendFileSync(path.join(OUT, 'results.jsonl'), JSON.stringify(row) + '\n')
   results.push(row)
   const fr = row.frames as { p50: number; p95: number; p99: number; count: number; over16_7: number; over33: number } | undefined
-  console.log(`${label} ${name}#${repeat} valid=${row.valid} frames=${fr?.count} p50/p95/p99=${fr?.p50?.toFixed(2)}/${fr?.p95?.toFixed(2)}/${fr?.p99?.toFixed(2)} >16.7=${fr?.over16_7} >33=${fr?.over33} draws=${JSON.stringify(row.fullDraws)} commits=${(row.work as { reactCommits?: number } | undefined)?.reactCommits} cpu=${(row.cpuPercent as number | undefined)?.toFixed(2)} gpu=${(row.gpuMs as number | undefined)?.toFixed(1)} MiB=${(row.footprintMiB as number | undefined)?.toFixed(0)}${row.error ? ' ERROR ' + row.error : ''}`)
+  console.log(`${label} ${name}#${repeat}${row.caProbe ? ' ca=' + JSON.stringify(row.caProbe) : ''}${row.cadence ? ' displayed=' + JSON.stringify(row.cadence) : ''} valid=${row.valid} frames=${fr?.count} p50/p95/p99=${fr?.p50?.toFixed(2)}/${fr?.p95?.toFixed(2)}/${fr?.p99?.toFixed(2)} >16.7=${fr?.over16_7} >33=${fr?.over33} draws=${JSON.stringify(row.fullDraws)} commits=${(row.work as { reactCommits?: number } | undefined)?.reactCommits} cpu=${(row.cpuPercent as number | undefined)?.toFixed(2)} gpu=${(row.gpuMs as number | undefined)?.toFixed(1)} MiB=${(row.footprintMiB as number | undefined)?.toFixed(0)}${row.error ? ' ERROR ' + row.error : ''}`)
 }
 await fixture.close()
 if (!keep) fixture.remove()

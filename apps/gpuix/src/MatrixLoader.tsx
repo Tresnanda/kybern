@@ -150,7 +150,7 @@ export function MatrixLoader({
   return (
     // Native paint loops evaluate the desktop keyframes without React commits.
     // The diagnostic JS path uses the same binary for controlled A/B samples.
-    <div ref={loop.ref} {...ISLAND} style={{ display: 'flex', flexDirection: 'column', gap, width: size, height: size, flexShrink: 0 }}>
+    <div ref={loop.ref} testId="matrix-loader" {...ISLAND} style={{ display: 'flex', flexDirection: 'column', gap, width: size, height: size, flexShrink: 0 }}>
       {[0, 1, 2, 3].map((r) => (
         <div key={r} style={{ display: 'flex', gap }}>
           {[0, 1, 2, 3].map((c) => {

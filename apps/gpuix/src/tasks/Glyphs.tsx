@@ -103,7 +103,7 @@ function LegacyRunningGlyph({ source, color }: { source: string; color: string }
 }
 function RunningPaint({ ring, color, opacity }: { ring: string; color: string; opacity: number }) {
   const loop = useLoopRunning(!REDUCED_MOTION)
-  return <div ref={loop.ref} {...ISLAND} style={{ width: 14, height: 14, flexShrink: 0, pointerEvents: 'none',position:'relative' }}>
+  return <div ref={loop.ref} testId="task-running-glyph" {...ISLAND} style={{ width: 14, height: 14, flexShrink: 0, pointerEvents: 'none',position:'relative' }}>
     <svg source={ring} style={{width:14,height:14,color,pointerEvents:'none'}}/>
     <svg {...(NATIVE_PAINT_ANIMATIONS && loop.running ? {paintAnimation:{kind:'breathe',cycleMs:3200}} : {})} source={wrap('<path d="M7 7V3.6A3.4 3.4 0 0 1 7 10.4Z" fill="currentColor"/>')} style={{position:'absolute',left:0,top:0,width:14,height:14,color,opacity,pointerEvents:'none'}}/>
   </div>
