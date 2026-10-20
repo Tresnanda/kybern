@@ -17,7 +17,8 @@ import { load as loadEnvironmentPreference, save as saveEnvironmentPreference } 
 // The composer (`views/Composer.tsx`, `composerPickerStyles.ts`): a 19.2px-radius
 // card with the editor on top and a footer of 28px chips (+ menu, permission
 // mode, model and effort), then the 32px round send button, which becomes the
-// stop control while the thread runs. Queued follow-ups stack above the card.
+// stop control while the thread runs. Queued follow-ups live in the composer tray above
+// the card (`requests/ComposerTray.tsx`).
 //
 // `ThreadComposer` and `DraftComposer` wire it the way `views/Thread.tsx` and
 // `views/Draft.tsx` do; the pickers and data live in `src/composer/`.
@@ -83,7 +84,6 @@ import {
 } from './composer/store.ts'
 
 export const COMPOSER_RADIUS = 19.2
-const NO_QUEUED: readonly never[] = []
 const DEFAULT_PLACEHOLDER = 'Ask anything, @ to mention, $ skills, or / commands'
 /** Agents whose running turn accepts steering (`views/Thread.tsx:388`). */
 const STEERABLE = ['claude-code', 'codex', 'pi', 'omp']
@@ -110,16 +110,12 @@ function ThreadComposer({ thread }: { thread: Thread }) {
   const accounts = useComposer((d) => d.accounts)
   const catalog = useComposer((d) => d.catalog)
   const catalogLoading = useComposer((d) => d.catalogLoading)
-  const queued = useComposer((d) => d.queued[threadId])
   const approval = useApp((s) => (s.open.thread?.id === threadId ? s.open.pendingApprovals[0] : null))
   const projectName = useApp(s => s.projects.find(p => p.id === thread.coordinator_project_id)?.name)
 
   useEffect(() => {
     if (!pane.frozen) void loadTarget(threadId)
   }, [threadId, thread.status, thread.provider.instance, thread.model, pane.frozen])
-  useEffect(() => {
-    if (!pane.frozen) void loadQueue(threadId)
-  }, [threadId, running, pane.frozen])
 
   const provider = target?.target.provider ?? thread.provider
   const catalogKey = `${threadId}:${provider.kind}:${provider.instance}`
@@ -189,7 +185,6 @@ function ThreadComposer({ thread }: { thread: Thread }) {
       onProviderChange={coordinator ? running ? undefined : (next, choice) => switchHarness(next, choice?.model, choice?.effort) : (next, choice) => chooseTarget(next, choice?.model, choice?.effort, !choice?.pinAccount)}
       catalogLoading={catalogLoading === catalogKey}
       onReloadModels={(force) => loadCatalog(threadId, provider, thread.project_id, force).then(() => {})}
-      above={<QueuedPanel key={threadId} threadId={threadId} items={queued ?? NO_QUEUED} />}
     />
   )
 }
@@ -1019,82 +1014,4 @@ function RemoveButton({ onClick, testId }: { onClick: () => void; testId?: strin
       <Icon source={G.x} size={12} color={t.surface} />
     </div>
   )
-}
-
-/** One queued row: 4px + 24px remove button + 4px; rows after the first add a 1px divider. */
-const QUEUED_ROW = 32
-
-/** Queued follow-ups stacked above the card (`QueuedPanel` in `views/Thread.tsx`). Rows that were there when the thread opened paint plainly; a row added later enters, a removed row collapses, and the last one takes the panel with it. */
-export function QueuedPanel({ threadId, items }: { threadId: string; items: readonly { id: string; message: UserMessage }[] }) {
-  const t = useTheme()
-  const renderer = useGpuixRequired()
-  const dark = t.variant === 'dark'
-  const border = dark ? 'rgba(252, 252, 252, 0.036)' : 'rgba(13, 13, 13, 0.076)'
-  const [entries, gone] = useLeavingList(items)
-  const panel = useRef<PublicInstance | null>(null)
-  // The panel's last measured height: when the last row goes, the whole panel collapses from it.
-  const height = useRef(0)
-  const empty = entries.length > 0 && entries.every((entry) => entry.leaving)
-  useEffect(() => {
-    const id = panel.current?.id
-    const bounds = id != null && !empty ? renderer.getElementBounds?.(id) : null
-    if (bounds && bounds.height > 0) height.current = bounds.height
-  }, [entries.length, empty, renderer])
-  if (!entries.length) return null
-  const live = entries.filter((entry) => !entry.leaving).length
-  const body = (
-    <div
-      ref={(el) => { panel.current = el }}
-      testId="queued-panel"
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        width: '93.33%',
-        marginBottom: -1,
-        borderTopLeftRadius: COMPOSER_RADIUS,
-        borderTopRightRadius: COMPOSER_RADIUS,
-        borderTopWidth: 1,
-        borderLeftWidth: 1,
-        borderRightWidth: 1,
-        borderColor: border,
-        backgroundColor: dark ? t.composer : 'rgba(255, 255, 255, 0.37)',
-        paddingBottom: 4,
-      }}
-    >
-      <div style={{ display: 'flex', paddingLeft: 12, paddingRight: 12, paddingTop: 8 }}>
-        <Label color={t.textSecondary} size={12}>{`Queued · ${empty ? entries.length : live}`}</Label>
-      </div>
-      {/* `t-row-enter` on each row as it arrives (`QueuedRow` in `views/Thread.tsx`). */}
-      {entries.map(({ item, leaving, fresh }, i) => {
-        const row = (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              paddingLeft: 10,
-              paddingRight: 6,
-              paddingTop: 4,
-              paddingBottom: 4,
-              ...(i > 0 ? { borderTopWidth: 1, borderColor: border } : {}),
-            }}
-          >
-            <Icon source={G.clock} size={14} color={t.textSecondary} />
-            <Label color={ink(t, 0.85)} size={12} weight={500} truncate style={{ flexGrow: 1 }}>
-              {promptText(item.message) || 'Queued follow-up'}
-            </Label>
-            <div
-              onClick={() => void removeQueued(threadId, item.id).catch(() => {})}
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}
-            >
-              <Icon source={G.x} size={12} color={t.textTertiary} />
-            </div>
-          </div>
-        )
-        if (leaving && !empty) return <Leave key={item.id} height={QUEUED_ROW + (i > 0 ? 1 : 0)} onDone={() => gone(item.id)}>{row}</Leave>
-        return <Rise key={item.id} kind="row" play={fresh && !leaving}>{row}</Rise>
-      })}
-    </div>
-  )
-  return empty ? <Leave height={height.current || 64} onDone={() => gone()}>{body}</Leave> : body
 }

@@ -15,6 +15,8 @@ export interface QueuedPreview {
   images: string[];
   /** Image parts and image attachments, counted together. */
   imageCount: number;
+  /** Nothing but images: the row can lead with a thumbnail instead of a glyph. */
+  imagesOnly: boolean;
 }
 
 const isImageAttachment = (part: ContentPart) => part.type === "attachment" && part.media_type.startsWith("image/");
@@ -50,14 +52,14 @@ export function queuedPreview(message: Pick<UserMessage, "parts">): QueuedPrevie
     const items = agentResultItems(message.parts);
     const inbound = threadMessagePart(message.parts);
     const detail = items ? items.map((item) => item.title).join(", ") : inbound ? plainLine(inbound.body, 200) : null;
-    return { text: structured, detail: detail || null, kind: "update", images, imageCount };
+    return { text: structured, detail: detail || null, kind: "update", images, imageCount, imagesOnly: false };
   }
   const words = message.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join(" ").replace(/\s+/g, " ").trim();
   const labels = message.parts.flatMap((part) => partLabel(part) ?? []);
-  if (words) return { text: words, detail: null, kind: "prompt", images, imageCount };
-  if (labels.length) return { text: labels.join(" "), detail: null, kind: "prompt", images, imageCount };
-  if (imageCount) return { text: imageCount === 1 ? "Image" : `${imageCount} images`, detail: null, kind: "prompt", images, imageCount };
-  return { text: "Queued follow-up", detail: null, kind: "prompt", images, imageCount };
+  if (words) return { text: words, detail: null, kind: "prompt", images, imageCount, imagesOnly: false };
+  if (labels.length) return { text: labels.join(" "), detail: null, kind: "prompt", images, imageCount, imagesOnly: false };
+  if (imageCount) return { text: imageCount === 1 ? "Image" : `${imageCount} images`, detail: null, kind: "prompt", images, imageCount, imagesOnly: true };
+  return { text: "Queued follow-up", detail: null, kind: "prompt", images, imageCount, imagesOnly: false };
 }
 
 /**

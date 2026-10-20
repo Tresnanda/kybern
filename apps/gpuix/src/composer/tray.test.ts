@@ -10,7 +10,7 @@ test('a queued prompt shows its words, collapsed to one line', () => {
 // The "Queued follow-up" placeholder came from reading only `text` parts: these messages have none.
 test('an image-only follow-up reads as an image with its thumbnail, not a placeholder', () => {
   const preview = queuedPreview({ parts: [{ type: 'image', media_type: 'image/png', data: 'AAAA' }] })
-  expect(preview).toMatchObject({ text: 'Image', imageCount: 1, images: ['data:image/png;base64,AAAA'] })
+  expect(preview).toMatchObject({ text: 'Image', imageCount: 1, imagesOnly: true, images: ['data:image/png;base64,AAAA'] })
   const two = queuedPreview({ parts: [{ type: 'image', media_type: 'image/png', data: 'AAAA' }, { type: 'attachment', asset_id: 'a', name: 'b.jpg', media_type: 'image/jpeg', size: 1 }] })
   expect(two.text).toBe('2 images')
   expect(two.imageCount).toBe(2)
