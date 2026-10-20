@@ -74,7 +74,7 @@ export function LimitMeter({ left, pace, label }: { left: number; pace: LimitPac
   const tone = limitTone(100 - left)
   return <div role="meter" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(left)} style={{ position: 'relative', width: '100%', paddingTop: 3, paddingBottom: 3 }}>
     <div style={{ display: 'flex', height: 4, borderRadius: 2, overflow: 'hidden', backgroundColor: ink(t, 0.1) }}><div style={{ width: `${Math.max(0, Math.min(100, left))}%`, height: 4, borderRadius: 2, backgroundColor: tone === 'critical' ? t.v('--destructive') : tone === 'warning' ? t.warning : ink(t, 0.65) }} /></div>
-    {pace && <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${pace.evenLeft}%`, borderRightWidth: 1.5, borderColor: ink(t, 0.45), pointerEvents: 'none' }} />}
+    {pace && <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${pace.evenLeft}%`, pointerEvents: 'none' }}><div style={{ position: 'absolute', right: -0.75, top: 0, bottom: 0, width: 1.5, borderRadius: 1, backgroundColor: ink(t, 0.45), pointerEvents: 'none' }} /></div>}
   </div>
 }
 
