@@ -9,6 +9,7 @@ import { onEnvironmentChange } from '../shell/environment.ts'
 // adding one.
 import { useSyncExternalStore } from 'react'
 import { getState, selectDraft, selectThread, subscribe } from '../state.ts'
+import { patchDraft } from '../composer/store.ts'
 import { getNav, setNav, subscribeNav, type NavEntry, type NavHistory, type Page } from './store.ts'
 import { loadView, saveView } from '../environments/workspace.ts'
 
@@ -261,7 +262,14 @@ export function openThread(id: string) {
 /** `newThread()` (`state/nav.ts`): a project's draft, or a free chat. */
 export function newThread(projectId?: string, purpose?: 'thread' | 'coordinator') {
   setNav({ page: 'home' })
-  selectDraft(projectId, purpose)
+  if (projectId) selectDraft(projectId, purpose)
+  else selectFreeDraft()
+}
+
+/** `selectFreeDraft`: without a project the composer would fall back to the most recent one. */
+function selectFreeDraft() {
+  selectDraft()
+  patchDraft({ projectId: null, worktree: null, baseBranch: null })
 }
 
 /**
@@ -274,7 +282,7 @@ export function goPage(page: Page) {
   setNav({ settingsOpen: false })
   if (page !== 'home') return setNav({ page })
   if (nav.settingsOpen && nav.page === 'home') return
-  if (nav.page === 'home') return selectDraft()
+  if (nav.page === 'home') return selectFreeDraft()
   const s = getState()
   if (s.selectedId && !s.threads.some((t) => t.id === s.selectedId) && !getNav().children[s.selectedId]) selectDraft()
   setNav({ page: 'home' })

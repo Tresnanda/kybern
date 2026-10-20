@@ -61,10 +61,11 @@ export function LandingTray({ projectId, useWorktree }: { projectId: ProjectId |
   )
 }
 
-/** `ProjectTrayChip`. */
+/** `ProjectTrayChip`, plus the Free chat choice of the Free chat chip's menu (a Coordinator always has a project). */
 function ProjectChip({ projectId, projects }: { projectId: ProjectId; projects: Project[] }) {
   const t = useTheme()
   const current = projects.find((p) => p.id === projectId)
+  const coordinator = useApp((s) => s.draft.purpose === 'coordinator')
   return (
     <PickerMenu
       testId="tray-project"
@@ -74,7 +75,15 @@ function ProjectChip({ projectId, projects }: { projectId: ProjectId; projects: 
       minWidth={224}
       trigger={(open) => <TrayChip icon={G.folder} label={current?.name ?? 'Choose a project'} pressed={open} strong={!current} />}
     >
-      <PickerLabel>Project</PickerLabel>
+      <PickerLabel>{coordinator ? 'Project' : 'Chat location'}</PickerLabel>
+      {!coordinator && (
+        <PickerItem id="free" onSelect={() => patchDraft({ projectId: null, worktree: null, baseBranch: null })}>
+          <Icon source={G.message} size={18} color={t.text} style={{ opacity: 0.8 }} />
+          <Label color={t.text} truncate style={{ flexGrow: 1 }}>
+            Free chat
+          </Label>
+        </PickerItem>
+      )}
       {projects.map((p) => (
         <PickerItem key={p.id} id={p.id} onSelect={() => patchDraft({ projectId: p.id, worktree: null, baseBranch: null })}>
           <Icon name="folder" size={18} color={t.text} style={{ opacity: 0.8 }} />
