@@ -1,6 +1,7 @@
 # Reconcile real hover after layout, including unchanged cached paint.
 w = "crates/gpui/src/window.rs"
-edit(w, "        self.next_frame.clear();\n        let current_focus_path", "        self.reconcile_layout_hover(cx);\n        self.next_frame.clear();\n        let current_focus_path")
+# Anchored on the swap so it also composes with code_frame_gpui.py, which appends after the clear.
+edit(w, "        mem::swap(&mut self.rendered_frame, &mut self.next_frame);\n        self.next_frame.clear();", "        mem::swap(&mut self.rendered_frame, &mut self.next_frame);\n        self.reconcile_layout_hover(cx);\n        self.next_frame.clear();")
 pending[w] += "\ninclude!(\"hover_reconcile.rs\");\n"
 dest = root / "crates/gpui/src/hover_reconcile.rs"
 source = (here / "hover_reconcile.rs").read_text()
