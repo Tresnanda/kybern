@@ -34,6 +34,10 @@ content)
   bun native/diff-check.ts
   bun native/surface-check.ts
   bun native/link-check.ts
+  # A multi-word link hovers as one link (link_hover_hooks.py).
+  bun native/link-hover-check.ts
+  # Embedded web documents: input, navigation policy, identity, and the Core Animation fade/scale (N3).
+  bun native/webview-check.ts
   for check in layout-check syntax-check syntax-lifecycle-check syntax-large-check; do
     bun "native/$check.ts"
   done
