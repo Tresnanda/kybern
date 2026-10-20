@@ -1,6 +1,5 @@
 // A gallery card's miniature: the note's first blocks drawn small (desktop
 // `NoteThumb.tsx` + `.mini` in notes.css). Sizes are ems of one base size.
-import { motion } from '@gpuix/react'
 import { memo, type ReactNode } from 'react'
 import type { PaintTransformProps } from '@gpuix/native/host'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
@@ -9,19 +8,11 @@ import type { NoteSummary } from '../../../../packages/kybern-client/src/types.t
 import { FONT_MONO } from '../theme.ts'
 import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { clear, notesTokens } from './kit.tsx'
+import { NOTE_EASE, NOTE_LIFT_MS, thumbLift } from './motion.ts'
 import { useNoteThumb } from './thumbs.ts'
 
 const SHORT_LINES = 4
-/**
- * Hover lift (`.note-thumb`, notes.css:309): `translateY(-2px)` over 140 ms on `--n-ease`. The desktop's
- * lifted shadow is a `::before` inside the `overflow: hidden` thumb, so its outer shadow is clipped and
- * only the translation shows; the card therefore keeps its resting shadow here too. The duration is one
- * constant (the user found 140 ms a touch quick; 180 ms is the candidate; `KYBERN_NOTE_LIFT_MS` overrides it for comparison runs).
- */
-export const NOTE_LIFT_MS = Number(process.env.KYBERN_NOTE_LIFT_MS) || 140
-export const NOTE_LIFT_PX = 2
-/** `--n-ease` (notes.css:36). */
-export const NOTE_EASE: [number, number, number, number] = [0.2, 0, 0, 1]
+export { NOTE_EASE, NOTE_LIFT_MS, NOTE_LIFT_PX } from './motion.ts'
 /**
  * `.note-card:active .note-thumb { transform: scale(0.985) }` on the thumb's own `transition: transform 140ms --n-ease`, painted
  * natively (`paintTransform`, no render per frame). Reduce Motion: no transform.
@@ -86,18 +77,12 @@ export const NoteThumb = memo(function NoteThumb({ note, big, active, lift, pres
   const pad = short ? { v: fs * 1.2, h: fs * 2 } : { v: fs * (big ? 1.73 : 1.87), h: fs * 2 }
   const body: ReactNode = doc.blocks.map((block, i) => <div key={i} style={{ marginTop: gap(doc.blocks[i - 1], block, fs) }}><Block block={block} fs={fs} k={k} /></div>)
   return (
-    <motion.div
-      testId={`note-thumb-${note.id}`}
-      initial={false}
-      animate={{ top: lift && !REDUCED_MOTION ? -NOTE_LIFT_PX : 0 }}
-      transition={{ duration: NOTE_LIFT_MS / 1000, ease: NOTE_EASE }}
-      style={{ position: 'relative', borderRadius: 12 }}
-    >
+    <div testId={`note-thumb-${note.id}`} paintTransform={thumbLift(lift)} style={{ position: 'relative', borderRadius: 12 }}>
     <div paintTransform={thumbPress(pressed)} style={{ position: 'relative', height: big ? 184 : 156, borderRadius: 12, backgroundColor: k.card, overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: short || empty ? 'center' : 'flex-start', boxShadow: k.cardShadow, borderWidth: t.variant === 'dark' ? 0 : 0.5, borderColor: k.ring, ...(active ? { borderWidth: 2, borderColor: t.composerFocusBorder } : {}), pointerEvents: 'none' }}>
       {empty ? <div style={{ display: 'flex', justifyContent: 'center' }}><Label color={k.fg4} size={13}>No text yet</Label></div>
         : <div style={{ display: 'flex', flexDirection: 'column', paddingTop: pad.v, paddingBottom: pad.v, paddingLeft: pad.h, paddingRight: pad.h, ...(big ? { maxWidth: fs * 56 + pad.h * 2 } : {}) }}>{body}</div>}
       {!short && !empty && <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 40, borderBottomLeftRadius: 12, borderBottomRightRadius: 12, background: { type: 'linear-gradient', angle: 180, stops: [{ color: clear(k.card), position: 0 }, { color: k.card, position: 1 }] } }} />}
     </div>
-    </motion.div>
+    </div>
   )
 })
