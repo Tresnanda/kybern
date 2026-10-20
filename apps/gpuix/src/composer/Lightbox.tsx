@@ -17,6 +17,7 @@ import { ImageActions } from '../platform/ImageActions.tsx'
 import { imageSize } from '../transcript/images.tsx'
 import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { useWebOcclusion } from '../native/web-occlusion.ts'
+import { useNativeWindowSize } from '../native/layout-hooks.ts'
 
 /** `LIGHTBOX_OPEN_MS` / `LIGHTBOX_CLOSE_MS` and their curves (`components/kybern/ResponseImage.tsx:18-22`). */
 const OPEN = { duration: 0.3, ease: [0.32, 0.72, 0, 1] as [number, number, number, number] }
@@ -56,7 +57,8 @@ export function lightboxRect(window: { width: number; height: number }, size: { 
 export function AttachmentLightbox({ source, label, from, tile, onClose }: { source: string; label: string; from: Rect | null; tile: () => Rect | null; onClose: () => void }) {
   const t = useTheme()
   const renderer = useGpuixRequired()
-  const window = renderer.getWindowSize?.() ?? { width: 900, height: 600 }
+  // Follows window resizes (a read during render alone kept the open preview at the size it opened with).
+  const window = useNativeWindowSize()
   const size = useMemo(() => imageSize(source), [source])
   const rect = lightboxRect(window, size)
   const animate = PATCHED_NATIVE && !!from

@@ -12,18 +12,21 @@ const { createRoot, flushSync } = await import(pathToFileURL(path.join(path.dirn
 const { handleGpuixEvent } = await import(pathToFileURL(path.join(path.dirname(entry), 'reconciler/event-registry.js')).href)
 
 // Review 2026-10-21: Tab left the open preview for the window behind it.
-test('Tab and Shift-Tab wrap inside the open preview', () => {
-  const custom = new Map<number, Record<string, any>>(), moves: string[] = []
+test('Tab and Shift-Tab wrap inside the open preview, and it follows window resizes', () => {
+  const custom = new Map<number, Record<string, any>>(), style = new Map<number, Record<string, any>>(), moves: string[] = []
+  let resized: ((error: Error | null, event: unknown) => void) | undefined
   const renderer = {
     applyBatch(json: string) {
       for (const [op, id, a, b] of JSON.parse(json) as [string, number, any, any][]) {
         if (op === 'createElement') custom.set(id, {})
         else if (op === 'setCustomProp') custom.get(id)![a] = b
+        else if (op === 'setStyle') style.set(id, a)
       }
       return []
     },
     setWindowKeyEvents() {}, setWindowSelectionChange() {},
-    addLayoutObserver: () => 1, removeLayoutObserver() {}, isLayoutObserverActive: () => true,
+    addLayoutObserver: (target: unknown, callback: (error: Error | null, event: unknown) => void) => { if (target === null) resized = callback; return 1 },
+    removeLayoutObserver() {}, isLayoutObserverActive: () => true,
     getWindowSize: () => ({ width: 1200, height: 800 }),
     focusNextWithin: (id: number) => moves.push(`next:${id}`),
     focusPreviousWithin: (id: number) => moves.push(`previous:${id}`),
@@ -37,5 +40,9 @@ test('Tab and Shift-Tab wrap inside the open preview', () => {
   fire({ key: 'tab', modifiers: {} })
   fire({ key: 'tab', modifiers: { shift: true } })
   expect(moves).toEqual([`next:${box}`, `previous:${box}`])
+  // Review 2026-10-21: it kept the size it opened with when the window was resized.
+  expect(style.get(box)).toMatchObject({ width: 1200, height: 800 })
+  flushSync(() => resized!(null, { width: 900, height: 640, scaleFactor: 2, frame: 1 }))
+  expect(style.get(box)).toMatchObject({ width: 900, height: 640 })
   root.unmount()
 })
