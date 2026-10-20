@@ -14,6 +14,7 @@ import { FULL_TRANSLUCENCY, OPAQUE_WINDOW, fullTranslucency, useAccessibilityDis
 import { Icon, type IconName } from './icons.tsx'
 import { PROVIDER_IMAGES, PROVIDER_VECTORS } from './providerMarks.ts'
 import { pressTransform } from './motion/press.ts'
+import { EASE } from './motion/tokens.ts'
 
 function systemVariant(): 'dark' | 'light' {
   const forced = process.env.KYBERN_APPEARANCE
@@ -31,7 +32,7 @@ function systemReducedMotion(): boolean {
 export const VARIANT = systemVariant()
 export const REDUCED_MOTION = systemReducedMotion()
 /** Strong ease-out for UI entering or moving (Emil Kowalski's `--ease-out`). */
-export const EASE_OUT: [number, number, number, number] = [0.23, 1, 0.32, 1]
+export const EASE_OUT: [number, number, number, number] = [...EASE.out]
 
 const ThemeContext = createContext<Theme>(THEMES[VARIANT])
 export const ThemeProvider = ({ children }: { children: ReactNode }) => {
