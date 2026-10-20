@@ -1,3 +1,4 @@
+import { useTreeSlot } from '../tree/Tree.tsx'
 import { useTranscriptRowLease } from './Window.tsx'
 import { InboundMessage, DelegatedResults } from './Messages.tsx'
 // The user's message (`UserBubble` in `views/Transcript.tsx`): attachments and
@@ -237,10 +238,12 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
 
 /** An inline bubble for a message sent mid-turn (`WorkRow` case "user"). */
 export function MidTurnMessage({ parts, at }: { parts: ContentPart[]; at: string }) {
+  // Inside a work group the stem runs past the message (`../tree`).
+  const tree = useTreeSlot()
   return (
-    <div style={{ paddingTop: 12, paddingBottom: 16 }}>
+    <div paintTransform={tree.rise} style={{ position: 'relative', paddingTop: 12, paddingBottom: 16 }}>
       <UserBubble parts={parts} at={at} />
+      {tree.lines}
     </div>
   )
 }
-

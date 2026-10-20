@@ -34,7 +34,8 @@ import { alpha, Button, cachedMarkdownTheme, Chevron, fg, META, muted, Para, ROW
 import { over } from '../theme.ts'
 import { Collapse, Rise } from '../motion/kit.tsx'
 import { Shimmer } from './motion.tsx'
-import { WorkRows, type RowContext } from './rows.tsx'
+import { GROUP_TREE, HEADER_STEM, WorkRows, type RowContext } from './rows.tsx'
+import { markTreeOpen, TreeGroup, TreeLines } from '../tree/Tree.tsx'
 import { filePatch, hydrateToolOutput, loadFilePatch, reportError, revertTo, useChildThreads, useRowState, useTurnDiff, type ToolBlock } from './store.ts'
 
 const isTaskActive = (task: RuntimeTask) => task.status === 'pending' || task.status === 'running' || task.status === 'waiting' || task.status === 'stopping'
@@ -177,7 +178,8 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
           {settled.agentBlocks.length > 0 && <WorkRows compact blocks={settled.agentBlocks} ctx={ctx} />}
           {settled.disclosureBlocks.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', paddingTop: 4, paddingBottom: 4 }}>
-              <div testId={`worked-${group.turnId}`} onClick={() => setExpanded(!expanded)} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <div testId={`worked-${group.turnId}`} onClick={() => { if (!expanded) markTreeOpen(); setExpanded(!expanded) }} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                {(expanded || folding) && <TreeLines shape={HEADER_STEM} />}
                 <RowIcon source={T.hammer} color={muted(t)} />
                 <Label color={muted(t)} lineHeight={ROW_LINE} truncate style={{ flexGrow: 1, hover: { color: t.text } }}>
                   {group.end ? `Worked for ${clockDuration(group.end.durationMs)}` : 'Worked'}
@@ -186,7 +188,9 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
               </div>
               <Collapse open={expanded || folding} testId={`worked-panel-${group.turnId}`}>
                 <div style={{ paddingTop: 2, marginLeft: 22 }}>
-                  <WorkRows compact blocks={settled.disclosureBlocks} ctx={ctx} />
+                  <TreeGroup {...GROUP_TREE} inset={2} gap={2} open={expanded || folding}>
+                    <WorkRows compact blocks={settled.disclosureBlocks} ctx={ctx} />
+                  </TreeGroup>
                 </div>
               </Collapse>
             </div>

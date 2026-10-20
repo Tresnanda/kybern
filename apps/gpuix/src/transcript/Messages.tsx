@@ -1,3 +1,4 @@
+import { useTreeSlot } from '../tree/Tree.tsx'
 import { memo, useMemo, useState, type ReactNode } from 'react'
 import type { AgentResultItem, ThreadMessagePart } from '../../../../packages/kybern-client/src/types.ts'
 import { delegationState, messageSenderName, plainLine, purposeLabel, resultNeedsClamp, resultPreview } from '../../../../packages/kybern-client/src/delegations.ts'
@@ -122,7 +123,8 @@ export function SentToRow({ block, threadId }: { block: ToolBlock; threadId: str
   const live = liveSend(result, record, reply, block.complete, block.isError)
   const [expanded, setExpanded] = useRowState(`sent:${block.id}`, false)
   const title = target?.title || child?.title || 'another thread'
-  return <div testId="sent-to-row" style={{ display: 'flex', flexDirection: 'column', paddingTop: 4, paddingBottom: 4 }}>
+  const tree = useTreeSlot()
+  return <div testId="sent-to-row" paintTransform={tree.rise} style={{ position: 'relative', display: 'flex', flexDirection: 'column', paddingTop: 4, paddingBottom: 4 }}>
     <div testId={`sent-toggle-${block.id}`} role="button" tabIndex={0} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') { keyboardAnswer(); setExpanded(!expanded) } }} onClick={() => setExpanded(!expanded)} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 28, cursor: 'pointer' }}><Icon source={purposeIcon(input.purpose)} size={14} color={muted(t)} /><Label color={muted(t)} truncate style={{ flexGrow: 1 }}>{`${block.complete ? 'Sent to' : 'Sending to'} ${title} · ${purposeLabel(input.purpose)}`}</Label><SwapOnChange active={live.word} style={{ flexShrink: 0 }}><Label color={block.isError || live.state === 'failed' ? t.red : muted(t)} size={12}>{live.word}</Label></SwapOnChange><Chevron open={expanded} color={muted(t)} /></div>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginLeft: 22 }}>
       <Para color={muted(t)} size={12} style={{ lineClamp: 1 }}>{`“${plainLine(input.body, 160)}”`}</Para>
@@ -132,5 +134,6 @@ export function SentToRow({ block, threadId }: { block: ToolBlock; threadId: str
       <PanelPresence show={expanded}><PanelEnter><div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 8 }}><DetailSection label="Message"><ClampedMarkdown id={`sent:${block.id}`} text={input.body} fade={t.v('--app-opaque-content-surface')} /></DetailSection>{live.reply && <DetailSection label="Reply"><ClampedMarkdown id={`sent-reply:${block.id}`} text={live.reply.body} fade={t.v('--app-opaque-content-surface')} /></DetailSection>}{result?.waitTimedOut && !live.reply && <Para color={muted(t)} size={12}>No reply yet. It will arrive here when the thread answers.</Para>}</div></PanelEnter></PanelPresence>
       {(expanded || live.held) && input.threadId && <div style={{ display: 'flex' }}><Button variant="subtle" onClick={() => openThread(input.threadId)}>Open</Button></div>}
     </div>
+    {tree.lines}
   </div>
 }
