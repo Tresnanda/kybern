@@ -2,6 +2,7 @@ import { clipboardAttachments, type ClipboardImage } from './composer/clipboard.
 import { StatusGlyph } from './composer/StatusGlyph.tsx'
 import { FooterRow, useFooterFit } from './composer/footerWidth.tsx'
 import { TokenTextarea, type TokenTextareaHandle } from './composer/TokenTextarea.tsx'
+import type { TokenReference } from './composer/token-text.ts'
 import { type InputSelection } from './native/api.ts'
 export { useComposerOverlayHeight, useMeasureComposerOverlay } from './composer/height.ts'
 import { useMeasureComposerOverlay } from './composer/height.ts'
@@ -16,7 +17,8 @@ import { load as loadEnvironmentPreference, save as saveEnvironmentPreference } 
 // The composer (`views/Composer.tsx`, `composerPickerStyles.ts`): a 19.2px-radius
 // card with the editor on top and a footer of 28px chips (+ menu, permission
 // mode, model and effort), then the 32px round send button, which becomes the
-// stop control while the thread runs. Queued follow-ups stack above the card.
+// stop control while the thread runs. Queued follow-ups live in the composer tray above
+// the card (`requests/ComposerTray.tsx`).
 //
 // `ThreadComposer` and `DraftComposer` wire it the way `views/Thread.tsx` and
 // `views/Draft.tsx` do; the pickers and data live in `src/composer/`.
@@ -59,6 +61,9 @@ import { Leave, Pop, SwapOnChange, useLeavingList } from './composer/motion.tsx'
 import { Rise } from './motion/kit.tsx'
 import { Presence } from './motion/Presence.tsx'
 import { DropHighlight } from './motion/DropHighlight.tsx'
+import { AttachmentLightbox } from './composer/Lightbox.tsx'
+
+type TileRect = { x: number; y: number; width: number; height: number }
 import { hoverPressTransform } from './motion/press.ts'
 import {
   createThread,
@@ -82,7 +87,6 @@ import {
 } from './composer/store.ts'
 
 export const COMPOSER_RADIUS = 19.2
-const NO_QUEUED: readonly never[] = []
 const DEFAULT_PLACEHOLDER = 'Ask anything, @ to mention, $ skills, or / commands'
 /** Agents whose running turn accepts steering (`views/Thread.tsx:388`). */
 const STEERABLE = ['claude-code', 'codex', 'pi', 'omp']
@@ -109,16 +113,12 @@ function ThreadComposer({ thread }: { thread: Thread }) {
   const accounts = useComposer((d) => d.accounts)
   const catalog = useComposer((d) => d.catalog)
   const catalogLoading = useComposer((d) => d.catalogLoading)
-  const queued = useComposer((d) => d.queued[threadId])
   const approval = useApp((s) => (s.open.thread?.id === threadId ? s.open.pendingApprovals[0] : null))
   const projectName = useApp(s => s.projects.find(p => p.id === thread.coordinator_project_id)?.name)
 
   useEffect(() => {
     if (!pane.frozen) void loadTarget(threadId)
   }, [threadId, thread.status, thread.provider.instance, thread.model, pane.frozen])
-  useEffect(() => {
-    if (!pane.frozen) void loadQueue(threadId)
-  }, [threadId, running, pane.frozen])
 
   const provider = target?.target.provider ?? thread.provider
   const catalogKey = `${threadId}:${provider.kind}:${provider.instance}`
@@ -188,7 +188,6 @@ function ThreadComposer({ thread }: { thread: Thread }) {
       onProviderChange={coordinator ? running ? undefined : (next, choice) => switchHarness(next, choice?.model, choice?.effort) : (next, choice) => chooseTarget(next, choice?.model, choice?.effort, !choice?.pinAccount)}
       catalogLoading={catalogLoading === catalogKey}
       onReloadModels={(force) => loadCatalog(threadId, provider, thread.project_id, force).then(() => {})}
-      above={<QueuedPanel key={threadId} threadId={threadId} items={queued ?? NO_QUEUED} />}
     />
   )
 }
@@ -386,10 +385,10 @@ export function ComposerView(input: ComposerViewProps) {
     const next = tokenEditor.current.selection()
     setSelection(old => old.start === next.start && old.end === next.end && old.composing === next.composing && old.reversed === next.reversed ? old : next)
   }
-  const edit = (start: number, end: number, replacement: string) => {
+  const edit = (start: number, end: number, replacement: string, added?: readonly TokenReference[]) => {
     if (!editor.current || props.readOnly) return false
     try {
-      if (!tokenEditor.current?.edit(start, end, replacement)) return false
+      if (!tokenEditor.current?.edit(start, end, replacement, added)) return false
       readSelection()
       focusEditor()
       return true
@@ -592,6 +591,7 @@ export function ComposerView(input: ComposerViewProps) {
             items={attachments}
             uploading={uploading}
             onRemove={(a) => setAttachments((list) => list.filter((item) => item.id !== a.id))}
+            onPreviewClose={focusEditor}
           />
           <div style={{ position: 'relative', display: 'flex' }}>
             {/* GPUIX paints its own placeholder in a fixed grey; this one is the kit's muted × 40%. */}
@@ -916,8 +916,25 @@ function RunningControls({
 }
 
 /** Image tiles and file cards above the editor (`Composer.tsx:1143-1171`). */
-export function Attachments({ items, uploading, onRemove }: { items: Attachment[]; uploading: number; onRemove: (a: Attachment) => void }) {
+export function Attachments({ items, uploading, onRemove, onPreviewClose }: { items: Attachment[]; uploading: number; onRemove: (a: Attachment) => void; onPreviewClose?: () => void }) {
   const t = useTheme()
+  const renderer = useGpuixRequired()
+  // A clicked image tile expands into the lightbox, zooming out of the tile's rect (`composer/Lightbox.tsx`).
+  const tiles = useRef(new Map<string, PublicInstance>())
+  const [expanded, setExpanded] = useState<{ id: string; from: TileRect | null } | null>(null)
+  const tileRect = (id: string): TileRect | null => {
+    const node = tiles.current.get(id)
+    const box = node ? renderer.getElementBounds?.(node.id) : null
+    // The image paints inside the tile's 1px border.
+    return box ? { x: box.x + 1, y: box.y + 1, width: box.width - 2, height: box.height - 2 } : null
+  }
+  const open = expanded ? items.find(a => a.id === expanded.id) : undefined
+  // GPUIX delivers a click to the × and to the tile under it: a press that started on a tile's × never opens the preview.
+  const pressingRemove = useRef<string | null>(null)
+  const openPreview = (id: string, from: TileRect | null) => {
+    if (pressingRemove.current === id) { pressingRemove.current = null; return }
+    setExpanded({ id, from })
+  }
   const elevated = t.v('--color-background-elevated-secondary')
   // Only the ✕ removal leaves with an exit; sending clears the tray at once.
   const removed = useRef(new Set<string>())
@@ -932,14 +949,20 @@ export function Attachments({ items, uploading, onRemove }: { items: Attachment[
         <Pop>
           {a.media_type.startsWith('image/') ? (
             <div
+              ref={(node) => { if (node) tiles.current.set(a.id, node); else tiles.current.delete(a.id) }}
               testId={`attachment-${a.label}`}
-              style={{ position: 'relative', width: 64, height: 64, flexShrink: 0, borderRadius: 12, borderWidth: 1, borderColor: t.borderLight, backgroundColor: elevated, overflow: 'hidden' }}
+              role="button"
+              tabIndex={0}
+              aria-label={`Preview ${a.name}`}
+              onClick={() => openPreview(a.id, tileRect(a.id))}
+              onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') openPreview(a.id, null) }}
+              style={{ position: 'relative', width: 64, height: 64, flexShrink: 0, borderRadius: 12, borderWidth: 1, borderColor: t.borderLight, backgroundColor: elevated, overflow: 'hidden', cursor: 'pointer' }}
             >
-              <img src={a.path} objectFit="cover" style={{ width: 62, height: 62, borderRadius: 11 }} />
+              <img src={a.path} objectFit="cover" style={{ width: 62, height: 62, borderRadius: 11, pointerEvents: 'none' }} />
               <div style={{ position: 'absolute', left: 4, bottom: 4, paddingLeft: 4, paddingRight: 4, borderRadius: 6, backgroundColor: 'rgba(0, 0, 0, 0.55)' }}>
                 <Label color="#ffffff" size={10} lineHeight={16} weight={500}>{`@${a.label}`}</Label>
               </div>
-              <RemoveButton testId={`remove-attachment-${a.label}`} onClick={() => remove(a)} />
+              <RemoveButton testId={`remove-attachment-${a.label}`} onMouseDown={() => { pressingRemove.current = a.id }} onClick={() => remove(a)} />
             </div>
           ) : (
             <div
@@ -989,17 +1012,19 @@ export function Attachments({ items, uploading, onRemove }: { items: Attachment[
           </Label>
         </div>
       )}
+      {open && expanded && <AttachmentLightbox key={open.id} source={open.path} label={open.name} from={expanded.from} tile={() => tileRect(open.id)} onClose={() => { setExpanded(null); onPreviewClose?.() }} />}
     </div>
   )
 }
 
 /** A 20px ink disc with a 12px ×, top-right. */
-function RemoveButton({ onClick, testId }: { onClick: () => void; testId?: string }) {
+function RemoveButton({ onClick, onMouseDown, testId }: { onClick: () => void; onMouseDown?: () => void; testId?: string }) {
   const t = useTheme()
   return (
     <div
       testId={testId}
       onClick={onClick}
+      onMouseDown={onMouseDown}
       style={{
         position: 'absolute',
         top: 4,
@@ -1018,82 +1043,4 @@ function RemoveButton({ onClick, testId }: { onClick: () => void; testId?: strin
       <Icon source={G.x} size={12} color={t.surface} />
     </div>
   )
-}
-
-/** One queued row: 4px + 24px remove button + 4px; rows after the first add a 1px divider. */
-const QUEUED_ROW = 32
-
-/** Queued follow-ups stacked above the card (`QueuedPanel` in `views/Thread.tsx`). Rows that were there when the thread opened paint plainly; a row added later enters, a removed row collapses, and the last one takes the panel with it. */
-export function QueuedPanel({ threadId, items }: { threadId: string; items: readonly { id: string; message: UserMessage }[] }) {
-  const t = useTheme()
-  const renderer = useGpuixRequired()
-  const dark = t.variant === 'dark'
-  const border = dark ? 'rgba(252, 252, 252, 0.036)' : 'rgba(13, 13, 13, 0.076)'
-  const [entries, gone] = useLeavingList(items)
-  const panel = useRef<PublicInstance | null>(null)
-  // The panel's last measured height: when the last row goes, the whole panel collapses from it.
-  const height = useRef(0)
-  const empty = entries.length > 0 && entries.every((entry) => entry.leaving)
-  useEffect(() => {
-    const id = panel.current?.id
-    const bounds = id != null && !empty ? renderer.getElementBounds?.(id) : null
-    if (bounds && bounds.height > 0) height.current = bounds.height
-  }, [entries.length, empty, renderer])
-  if (!entries.length) return null
-  const live = entries.filter((entry) => !entry.leaving).length
-  const body = (
-    <div
-      ref={(el) => { panel.current = el }}
-      testId="queued-panel"
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        width: '93.33%',
-        marginBottom: -1,
-        borderTopLeftRadius: COMPOSER_RADIUS,
-        borderTopRightRadius: COMPOSER_RADIUS,
-        borderTopWidth: 1,
-        borderLeftWidth: 1,
-        borderRightWidth: 1,
-        borderColor: border,
-        backgroundColor: dark ? t.composer : 'rgba(255, 255, 255, 0.37)',
-        paddingBottom: 4,
-      }}
-    >
-      <div style={{ display: 'flex', paddingLeft: 12, paddingRight: 12, paddingTop: 8 }}>
-        <Label color={t.textSecondary} size={12}>{`Queued · ${empty ? entries.length : live}`}</Label>
-      </div>
-      {/* `t-row-enter` on each row as it arrives (`QueuedRow` in `views/Thread.tsx`). */}
-      {entries.map(({ item, leaving, fresh }, i) => {
-        const row = (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              paddingLeft: 10,
-              paddingRight: 6,
-              paddingTop: 4,
-              paddingBottom: 4,
-              ...(i > 0 ? { borderTopWidth: 1, borderColor: border } : {}),
-            }}
-          >
-            <Icon source={G.clock} size={14} color={t.textSecondary} />
-            <Label color={ink(t, 0.85)} size={12} weight={500} truncate style={{ flexGrow: 1 }}>
-              {promptText(item.message) || 'Queued follow-up'}
-            </Label>
-            <div
-              onClick={() => void removeQueued(threadId, item.id).catch(() => {})}
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}
-            >
-              <Icon source={G.x} size={12} color={t.textTertiary} />
-            </div>
-          </div>
-        )
-        if (leaving && !empty) return <Leave key={item.id} height={QUEUED_ROW + (i > 0 ? 1 : 0)} onDone={() => gone(item.id)}>{row}</Leave>
-        return <Rise key={item.id} kind="row" play={fresh && !leaving}>{row}</Rise>
-      })}
-    </div>
-  )
-  return empty ? <Leave height={height.current || 64} onDone={() => gone()}>{body}</Leave> : body
 }

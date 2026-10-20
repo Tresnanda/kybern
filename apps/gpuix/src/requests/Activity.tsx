@@ -1,30 +1,25 @@
 import { Icon } from '../icons.tsx'
 import { G } from '../composer/glyphs.ts'
-import { T } from '../transcript/glyphs.ts'
 import { accountNeedsSignIn } from '../../../desktop/src/lib/accountUi.ts'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { observeElementBounds } from '../native/layout.ts'
 import { type ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { RuntimeTask, Thread, ThreadMessageRecord } from '../../../../packages/kybern-client/src/types.ts'
+import type { Thread, ThreadMessageRecord } from '../../../../packages/kybern-client/src/types.ts'
 import { heldHeadline, messageSenderName, plainLine, purposeLabel } from '../../../../packages/kybern-client/src/delegations.ts'
-import { stripSubagents, stripLabel, stoppableSubagents, subagentThreadPhase, subagentTypeLabel, subagentSpan, subagentPhaseWord } from '../../../../packages/kybern-client/src/subagents.ts'
+import { stripSubagents } from '../../../../packages/kybern-client/src/subagents.ts'
 import { useRuntimeTasks, isActiveTask } from '../dock/Activity.tsx'
 import { chooseTab, setDock } from '../dock/store.ts'
 import { onLiveEvent } from '../nav/live.ts'
 import { setNav, useNav } from '../nav/store.ts'
-import { openThread } from '../nav/history.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { getClient, useApp } from '../state.ts'
 import { loadTarget, useComposer } from '../composer/store.ts'
-import { Button, Chevron, Para, muted } from '../transcript/kit.tsx'
-import { Collapse, Rise, revealTransform } from '../motion/kit.tsx'
-import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { Button, Para, muted } from '../transcript/kit.tsx'
+import { Collapse, Rise } from '../motion/kit.tsx'
 import { errorText, reportError } from '../transcript/store.ts'
-import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
+import { Label, useTheme } from '../ui.tsx'
 import { PanelEnter, PanelPresence } from './Panel.tsx'
 import { PickerMenu, PickerItem } from '../composer/Menu.tsx'
-import { Elapsed } from '../subagents/Elapsed.tsx'
-import { SubagentHover } from '../subagents/Hover.tsx'
 
 function ActivityBody({ children, testId }: { children: ReactNode; testId?: string }) {
   const t = useTheme()
@@ -67,37 +62,10 @@ export function useRequestActivity(threadId: string | null) {
   return { held, setHeld, helpers, strip, active, target, thread, visible: !!(held.length || helpers.length || strip || active.length || target?.pending_permission_mode || target?.quota_limited) }
 }
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
-/** `activeTaskSummary` (`lib/runtimeActivity.ts`). */
-function activeTaskSummary(tasks: RuntimeTask[]) {
-  const agents = tasks.filter(task => task.kind === 'agent').length
-  const background = tasks.length - agents
-  if (agents > 0) return `${plural(agents, 'agent')} working${background > 0 ? ` · ${plural(background, 'background task')}` : ''}`
-  return plural(background, 'background task')
-}
-/** `RuntimeActivityPanel` (`views/Thread.tsx`): the primary task's kind icon, the summary, then its title. */
-function RuntimeActivityRow({ tasks, onView }: { tasks: RuntimeTask[]; onView: () => void }) {
-  const t = useTheme()
-  const foreground = tasks.find(task => !task.backgrounded)
-  const primary = foreground ?? tasks[0]
-  const detail = primary?.title
-  const icon = primary?.kind === 'process' ? T.terminal : primary?.kind === 'agent' ? T.robot : G.workflow
-  return <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-    <Icon source={icon} size={14} color={t.textSecondary} style={primary?.kind === 'process' ? { marginTop: 1 } : undefined} />
-    <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexGrow: 1, minWidth: 0 }}>
-      <Label color={ink(t, 0.85)} size={12} weight={500} truncate style={{ flexShrink: 0, maxWidth: '100%' }}>{activeTaskSummary(tasks)}</Label>
-      {detail && <Label color={muted(t, 0.55)} size={12} truncate style={{ minWidth: 0 }}>{`· ${detail}`}</Label>}
-    </div>
-    <Button variant="ghost" testId="runtime-view" onClick={onView}>View activity</Button>
-  </div>
-}
-
 export function ActivityPanels({ threadId, data }: { threadId: string; data: ReturnType<typeof useRequestActivity> }) {
-  const { held, setHeld, helpers, strip, active, target, thread } = data
+  const { held, setHeld, target, thread } = data
   const t = useTheme()
   const changed = !!target && !!thread && (target.target.provider.kind !== thread.provider.kind || target.target.provider.instance !== thread.provider.instance)
-  const [helpersOpen, setHelpersOpen] = useState(false)
-  const [stripOpen, setStripOpen] = useState(true)
   const [applying, setApplying] = useState(false)
   return <>
     <PanelPresence show={!!target?.pending_permission_mode}><PanelEnter><ActivityBody testId="permission-change-panel"><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -105,14 +73,6 @@ export function ActivityPanels({ threadId, data }: { threadId: string; data: Ret
       {!changed && <Button variant="ghost" testId="permission-apply" disabled={applying} onClick={() => { setApplying(true); const owner = activeEnvironment(); const client = getClient()!; void client.call('threads.permissions.apply', { thread_id: threadId }).then(() => { if (owner === activeEnvironment()) return loadTarget(threadId) }).catch(e => { if (owner === activeEnvironment()) reportError('Unable to apply permissions', e) }).finally(() => setApplying(false)) }}>Stop and apply now</Button>}
     </div></ActivityBody></PanelEnter></PanelPresence>
     <PanelPresence show={!!target?.quota_limited && !!thread}>{thread && <LimitRecovery thread={thread} />}</PanelPresence>
-    <PanelPresence show={helpers.length > 0}><PanelEnter><ActivityBody testId="helper-threads-panel">
-      <div style={{ display: 'flex', justifyContent: 'space-between' }}><Button variant="ghost" onClick={() => setHelpersOpen(!helpersOpen)} trailing={<Chevron open={helpersOpen} source={T.chevronDown} turn={180} size={12} color={t.textSecondary} />}>{`${helpers.length} ${helpers.length === 1 ? 'helper' : 'helpers'}${helpers.some(c => c.status === 'awaiting-approval') ? ` · ${helpers.filter(c => c.status === 'awaiting-approval').length} need approval` : helpers.some(c => c.status === 'running') ? ` · ${helpers.filter(c => c.status === 'running').length} working` : ''}`}</Button><Button variant="ghost" onClick={() => showDock(threadId, 'agents')}>Details</Button></div>
-      <Collapse open={helpersOpen} height={Math.min(176, helpers.length * 32)}><virtual-list style={{ width: '100%', height: Math.min(176, helpers.length * 32) }}>{helpers.map(child => <div key={child.id} onClick={() => openThread(child.id)} testId={`helper-${child.id}`} style={{ display: 'flex', alignItems: 'center', height: 32, gap: 8, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}><ProviderMark kind={child.provider.kind} size={12} /><Label color={t.text} size={12} truncate style={{ flexGrow: 1 }}>{child.title || 'Untitled'}</Label><Label color={child.status === 'failed' ? t.red : t.textSecondary} size={10}>{child.status === 'running' ? 'Working' : child.status === 'awaiting-approval' ? 'Needs approval' : child.status === 'failed' ? 'Failed' : 'Idle'}</Label></div>)}</virtual-list></Collapse>
-    </ActivityBody></PanelEnter></PanelPresence>
-    <PanelPresence show={!!strip}>{strip && <PanelEnter><ActivityBody testId="subagent-strip"><div style={{ display: 'flex', justifyContent: 'space-between' }}><Button variant="ghost" onClick={() => setStripOpen(!stripOpen)} trailing={<Chevron open={stripOpen} source={T.chevronDown} turn={180} size={12} color={t.textSecondary} />}>{stripLabel(strip.rows.length, strip.working)}</Button>{stoppableSubagents(strip.rows).length >= 2 && <Button variant="ghost" testId="subagents-stop-all" onClick={() => { for (const child of stoppableSubagents(strip.rows)) void controlSubagent(child, 'stop') }}>Stop all</Button>}</div>
-      <Collapse open={stripOpen} height={Math.min(176, strip.rows.length * 28)}><virtual-list style={{ width: '100%', height: Math.min(176, strip.rows.length * 28) }}>{strip.rows.map(child => <SubagentRow key={child.id} thread={child} />)}</virtual-list></Collapse>
-    </ActivityBody></PanelEnter>}</PanelPresence>
-    <PanelPresence show={active.length > 0}><PanelEnter><ActivityBody testId="runtime-activity-panel"><RuntimeActivityRow tasks={active} onView={() => showDock(threadId, 'activity')} /></ActivityBody></PanelEnter></PanelPresence>
     <PanelPresence show={held.length > 0}><PanelEnter><HeldMessages messages={held} onDone={id => setHeld(items => items.filter(m => m.id !== id))} /></PanelEnter></PanelPresence>
   </>
 }
@@ -121,33 +81,6 @@ export async function controlSubagent(thread: Thread, action: 'stop' | 'backgrou
   try { await getClient()!.call(action === 'stop' ? 'tasks.stop' : 'tasks.background', { thread_id: thread.id }) }
   catch (e) { reportError(`Unable to ${action === 'stop' ? 'stop subagent' : 'run in background'}`, e) }
 }
-function SubagentAction({ thread, action, visible }: { thread: Thread; action: 'stop' | 'background'; visible: boolean }) {
-  const t = useTheme()
-  const label = action === 'stop' ? `Stop ${thread.title || 'subagent'}` : `Run ${thread.title || 'subagent'} in background`
-  return <div testId={`subagent-${action}-${thread.id}`} role="button" aria-label={label} tabIndex={visible ? 0 : -1}
-    onClick={() => void controlSubagent(thread, action)} onKeyDown={event => { if (event.key === 'enter' || event.key === 'space') void controlSubagent(thread, action) }}
-    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
-    <Icon source={action === 'stop' ? G.stop : G.background} size={12} color={ink(t, .48)} />
-  </div>
-}
-export const SubagentRow = memo(function SubagentRow({ thread }: { thread: Thread }) {
-  const t = useTheme(), phase = subagentThreadPhase(thread), info = thread.subagent!
-  const [hover, setHover] = useState(false), span = subagentSpan(thread)
-  const canBackground = phase === 'working' && info.capabilities?.background === true && !info.backgrounded
-  const canStop = phase === 'working' && info.capabilities?.stop !== false
-  const actions = (canBackground || canStop) && hover
-  return <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onFocus={() => setHover(true)} onBlur={() => setHover(false)} style={{ display: 'flex', alignItems: 'center', height: 28, borderRadius: 7, backgroundColor: hover ? t.buttonSecondaryHover : 'transparent' }}>
-    <SubagentHover thread={thread}><div testId={`subagent-open-${thread.id}`} role="button" tabIndex={0} onClick={() => openThread(thread.id)} onKeyDown={event => { if (event.key === 'enter' || event.key === 'space') openThread(thread.id) }} style={{ display: 'flex', alignItems: 'center', gap: 8, flexGrow: 1, minWidth: 0, height: 28, paddingLeft: 6, cursor: 'pointer' }}><ProviderMark kind={thread.provider.kind} size={14} /><Label color={ink(t, .85)} size={14} weight={500} truncate>{thread.title || 'Subagent'}</Label><Label color={ink(t, .45)} size={14} truncate>{[subagentTypeLabel(info.agent_type), thread.model].filter(Boolean).join(' · ')}</Label></div></SubagentHover>
-    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', minWidth: 52, paddingLeft: 8, paddingRight: 6, flexShrink: 0, height: 28 }}>
-      {/* The elapsed time and the row's actions trade places on hover (`t-reveal`: 150 ms in with a 4 px slide, 100 ms out). */}
-      <div paintTransform={revealTransform(!actions, false)} style={{ ...(PATCHED_NATIVE ? {} : { opacity: actions ? 0 : 1 }), pointerEvents: 'none' }}>{span && <Elapsed startedAt={span.startedAt} endedAt={span.endedAt} />}</div>
-      <div paintTransform={revealTransform(actions)} style={{ position: 'absolute', right: 2, top: 3, display: 'flex', gap: 2, ...(PATCHED_NATIVE ? {} : { opacity: actions ? 1 : 0 }), pointerEvents: actions ? undefined : 'none' }}>
-        {canBackground && <SubagentAction thread={thread} action="background" visible={actions} />}
-        {canStop && <SubagentAction thread={thread} action="stop" visible={actions} />}
-      </div>
-    </div>
-  </div>
-})
 // Measure visible rows so a short card has no blank tail; long held-message
 // lists still mount only the rows inside the capped viewport.
 function HeldMessages({ messages, onDone }: { messages: ThreadMessageRecord[]; onDone: (id: string) => void }) {

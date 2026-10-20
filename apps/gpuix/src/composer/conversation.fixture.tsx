@@ -33,7 +33,7 @@ const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req, s) { if (s
     case 'coordinator.get': result = coordinator; break
     case 'coordinator.open': coordinator = { id: 'coordinator', title: 'Project coordinator', project_id: project.id, coordinator_project_id: project.id, provider: p.provider, model: p.model, permission_mode: p.permission_mode, status: 'idle', created_at: at, updated_at: at, last_seq: 0 } as Thread; result = { thread: coordinator, created: true }; record = { method, params: p }; break
     case 'coordinator.switch_harness': coordinator = { ...coordinator!, provider: p.provider, model: p.model }; result = coordinator; record = { method, params: p }; break
-    case 'skills.list': result = { skills: [{ name: 'Computer', display_name: 'Computer', path: 'kybern://computer', scope: 'plugin', enabled: true, description: 'Use your computer' }] }; break
+    case 'skills.list': result = { skills: [{ name: 'Computer', display_name: 'Computer', path: 'kybern://computer', scope: 'plugin', enabled: true, description: 'Use your computer' }, { name: 'review-ui', display_name: 'Review UI', path: '/skills/review-ui/SKILL.md', scope: 'user', enabled: true, description: 'Review an interface change' }] }; break
     case 'files.search': result = { files: [] }; break
     case 'threads.search': result = { threads: [] }; break
     case 'notes.list': result = { notes: [{ id: 'note', title: 'Release notes', project_id: project.id, scope: 'project', updated_at: at, preview: '' }] }; break
