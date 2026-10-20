@@ -214,9 +214,8 @@ export const ENVIRONMENT_PANEL_SURFACE_CLASS_NAME = `relative overflow-hidden ro
 export const ENVIRONMENT_PANEL_MOTION_CLASS =
   "transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none";
 
-/** Transcript/composer right inset when the docked Environment card opens. */
-export const ENVIRONMENT_CONTENT_INSET_MOTION_CLASS =
-  "transition-[padding-right] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none";
+// The transcript/composer right inset when the docked Environment card opens snaps: a padding
+// transition re-lays the whole transcript out every frame. Only the card itself slides.
 
 /** Match the composer outer edges, including its 1px surface border. */
 export const COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME =
@@ -231,7 +230,7 @@ export const COMPOSER_COMMAND_MENU_INLINE_WRAPPER_CLASS_NAME =
  *  composer picker. The `elevated-secondary-opaque` token lightens toward white,
  *  which is invisible on the near-white popover surface, so it is not used here. */
 export const COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME =
-  `flex min-h-9 cursor-pointer select-none items-center gap-2.5 ${COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME} px-2.5 py-1.5 text-start transition-colors duration-100 hover:bg-[var(--color-background-button-secondary-hover)] data-highlighted:bg-[var(--color-background-button-secondary-hover)] motion-reduce:transition-none`;
+  `flex min-h-9 cursor-pointer select-none items-center gap-2.5 ${COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME} px-2.5 py-1.5 text-start hover:bg-[var(--color-background-button-secondary-hover)] data-highlighted:bg-[var(--color-background-button-secondary-hover)]`;
 
 /** Active command menu row — keyboard-selected pill fill. */
 export const COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME =

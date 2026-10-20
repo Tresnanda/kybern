@@ -87,7 +87,6 @@ import { canSplitPane, type PaneId } from "@/state/splitView"
 import { isRuntimeTaskActive, useStore } from "@/state/store"
 import { windowHoldsTranscript } from "@/state/windowSurfaceState"
 
-import { ENVIRONMENT_CONTENT_INSET_MOTION_CLASS } from "@/components/kit/chat/composerPickerStyles"
 
 import { AccountRequestSequence } from "@/state/accountRequests"
 import { Composer, type ComposerHandle, type SlashCommand } from "./Composer"
@@ -425,14 +424,14 @@ export function ThreadView({
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
       <Header threadId={threadId} splitPaneId={splitPaneId} />
       <div ref={page} className="relative flex min-h-0 flex-1 flex-col">
-        <div className={cn("flex min-h-0 flex-1 flex-col", ENVIRONMENT_CONTENT_INSET_MOTION_CLASS)} style={{ paddingRight: envOpen ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX : 0 }}>
+        <div className="flex min-h-0 flex-1 flex-col" style={{ paddingRight: envOpen ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX : 0 }}>
           <Transcript threadId={threadId} bottomInset={overlayHeight} surfaceMode={splitPaneId ? "split" : "single"} />
         </div>
         <EnvironmentPanel threadId={threadId} open={envOpen} />
         {thread.provider.kind !== "codex" && <ComputerLiveView threadId={threadId} running={running} insetEnd={envOpen ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX : 0} insetBottom={overlayHeight} />}
         <div
           ref={overlay}
-          className={cn("pointer-events-none absolute inset-x-0 bottom-0 z-10 flex max-h-full flex-col pb-3 sm:pb-4", CHAT_COLUMN_GUTTER, ENVIRONMENT_CONTENT_INSET_MOTION_CLASS)}
+          className={cn("pointer-events-none absolute inset-x-0 bottom-0 z-10 flex max-h-full flex-col pb-3 sm:pb-4", CHAT_COLUMN_GUTTER)}
           style={{
             paddingRight: envOpen
               ? `calc(${ENVIRONMENT_DOCKED_CONTENT_INSET_PX}px + var(--thread-chat-gutter, ${CHAT_COLUMN_GUTTER_PX}px))`
