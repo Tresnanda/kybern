@@ -929,6 +929,12 @@ export function Attachments({ items, uploading, onRemove, onPreviewClose }: { it
     return box ? { x: box.x + 1, y: box.y + 1, width: box.width - 2, height: box.height - 2 } : null
   }
   const open = expanded ? items.find(a => a.id === expanded.id) : undefined
+  // GPUIX delivers a click to the × and to the tile under it: a press that started on a tile's × never opens the preview.
+  const pressingRemove = useRef<string | null>(null)
+  const openPreview = (id: string, from: TileRect | null) => {
+    if (pressingRemove.current === id) { pressingRemove.current = null; return }
+    setExpanded({ id, from })
+  }
   const elevated = t.v('--color-background-elevated-secondary')
   // Only the ✕ removal leaves with an exit; sending clears the tray at once.
   const removed = useRef(new Set<string>())
@@ -948,16 +954,15 @@ export function Attachments({ items, uploading, onRemove, onPreviewClose }: { it
               role="button"
               tabIndex={0}
               aria-label={`Preview ${a.name}`}
-              // The × is a child, so its press never reaches this handler: removing does not open the preview.
-              onClick={() => setExpanded({ id: a.id, from: tileRect(a.id) })}
-              onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') setExpanded({ id: a.id, from: null }) }}
+              onClick={() => openPreview(a.id, tileRect(a.id))}
+              onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') openPreview(a.id, null) }}
               style={{ position: 'relative', width: 64, height: 64, flexShrink: 0, borderRadius: 12, borderWidth: 1, borderColor: t.borderLight, backgroundColor: elevated, overflow: 'hidden', cursor: 'pointer' }}
             >
               <img src={a.path} objectFit="cover" style={{ width: 62, height: 62, borderRadius: 11, pointerEvents: 'none' }} />
               <div style={{ position: 'absolute', left: 4, bottom: 4, paddingLeft: 4, paddingRight: 4, borderRadius: 6, backgroundColor: 'rgba(0, 0, 0, 0.55)' }}>
                 <Label color="#ffffff" size={10} lineHeight={16} weight={500}>{`@${a.label}`}</Label>
               </div>
-              <RemoveButton testId={`remove-attachment-${a.label}`} onClick={() => remove(a)} />
+              <RemoveButton testId={`remove-attachment-${a.label}`} onMouseDown={() => { pressingRemove.current = a.id }} onClick={() => remove(a)} />
             </div>
           ) : (
             <div
@@ -1013,12 +1018,13 @@ export function Attachments({ items, uploading, onRemove, onPreviewClose }: { it
 }
 
 /** A 20px ink disc with a 12px ×, top-right. */
-function RemoveButton({ onClick, testId }: { onClick: () => void; testId?: string }) {
+function RemoveButton({ onClick, onMouseDown, testId }: { onClick: () => void; onMouseDown?: () => void; testId?: string }) {
   const t = useTheme()
   return (
     <div
       testId={testId}
       onClick={onClick}
+      onMouseDown={onMouseDown}
       style={{
         position: 'absolute',
         top: 4,
