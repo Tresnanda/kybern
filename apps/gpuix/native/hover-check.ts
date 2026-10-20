@@ -11,7 +11,7 @@ mkdirSync(out, { recursive: true })
 const baseline = process.argv.includes('--baseline'), results: unknown[] = []
 for (const theme of ['dark', 'light']) {
   requireScreen()
-  const f = await launchFixture(path.join(import.meta.dir, 'hover-lab.tsx'), { GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: theme, KYBERN_FRAME_TIMES: '1', KYBERN_CLIENT_CONFIG_DIR: '/Users/mymac/projects/ade-gpuix-scratch/hr5-hover-lab-client' })
+  const f = await launchFixture(path.join(import.meta.dir, 'hover-lab.tsx'), { GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: theme, KYBERN_FRAME_TIMES: '1', KYBERN_CLIENT_CONFIG_DIR: process.env.KYBERN_CLIENT_CONFIG_DIR ?? '/Users/mymac/projects/ade-gpuix-scratch/hr5-hover-lab-client' })
   const a = f.app, checks: Record<string, boolean> = {}
   const read = async (id: string) => (await a.getByTestId(id).textContent()) ?? ''
   const shot = async (label: string) => {

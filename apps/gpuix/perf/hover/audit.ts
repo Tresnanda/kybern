@@ -91,7 +91,7 @@ for(const name of names){
     requireScreen();await waitForWindowOnscreen(f.pid,10000)
     const state=requireWindowOnscreen(f.pid)
     if(state.windows.some(window=>window.onscreen&&window.width===viewportWidth&&window.height===820)){
-     execFileSync('screencapture',['-x','-o','-l',id,file])
+     if(process.env.HR5_NATIVE_CAPTURE==='1')await a.screenshot({path:file});else execFileSync('screencapture',['-x','-o','-l',id,file])
      const png=readFileSync(file),width=png.readUInt32BE(16),height=png.readUInt32BE(20)
      if(width===viewportWidth*2&&height===1640)return file
      rejectedCaptures.push({suffix,width,height});record.checks.rejectedCaptures=rejectedCaptures
