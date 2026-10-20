@@ -36,15 +36,15 @@ export const NOTE_LIFT_PX = 2
 /** `--n-ease` (notes.css:36). */
 export const NOTE_EASE: [number, number, number, number] = [0.2, 0, 0, 1]
 /**
- * The thumbnail's one paint scope: it lifts 2 px while hovered and settles to `scale(0.985)` while a primary press is held
- * (`.note-card:active .note-thumb`, replacing the lift). One scope per card, not one for the lift and one for the press: a gallery
- * of a few hundred cards keeps its scroll cost. Reduce Motion: no transform.
+ * The thumbnail's paint scope (one for the lift and the press squash, `scale(0.985)` while a primary press is held). It exists only while
+ * the card is hot (hovered or pressed) and for the return tween after: a scope that rests at identity is untagged, so its first change
+ * renders the window once (an extra present between wheel frames while cards move under the pointer), and tagging a few hundred resting
+ * scopes (`retain`) costs a second retained present on every scroll frame (measured). Mounting the scope in the hover's own commit has
+ * neither. Reduce Motion: no transform.
  */
 export function thumbLift(lifted: boolean, pressed = false): PaintTransformProps | undefined {
   if (!PATCHED_NATIVE || REDUCED_MOTION) return undefined
-  // `retain` keeps the scope tagged at rest: without it the first hover of every card renders the window once (an extra present between
-  // wheel frames while the cards move under the pointer).
-  return { initial: false, animate: { translateY: lifted && !pressed ? -NOTE_LIFT_PX : 0, scale: pressed ? 0.985 : 1 }, transition: { duration: NOTE_LIFT_MS / 1000, ease: NOTE_EASE }, retain: true }
+  return { initial: { translateY: 0, scale: 1 }, animate: { translateY: lifted && !pressed ? -NOTE_LIFT_PX : 0, scale: pressed ? 0.985 : 1 }, transition: { duration: NOTE_LIFT_MS / 1000, ease: NOTE_EASE } }
 }
 
 // ─── Deleting a note: the card leaves by pointer, instantly by keyboard ───────────────────────────────────────────────
