@@ -962,12 +962,15 @@ export function Attachments({ items, uploading, onRemove, onPreviewClose }: { it
     return box ? { x: box.x + 1, y: box.y + 1, width: box.width - 2, height: box.height - 2 } : null
   }
   const open = expanded ? items.find(a => a.id === expanded.id) : undefined
-  // GPUIX delivers a click to the × and to the tile under it: a press that started on a tile's × never opens the preview.
-  const pressingRemove = useRef<string | null>(null)
-  const openPreview = (id: string, from: TileRect | null) => {
-    if (pressingRemove.current === id) { pressingRemove.current = null; return }
-    setExpanded({ id, from })
+  // GPUIX delivers a click to the × and to the tile under it, so a click on a tile's × never opens the preview. Decided by
+  // where the click is, not by a flag from the press: a press on the × released elsewhere has no click to clear one, and
+  // the flag swallowed the next click on that tile.
+  const removes = useRef(new Map<string, PublicInstance>())
+  const onRemoveButton = (id: string, e: { x?: number; y?: number }) => {
+    const node = removes.current.get(id), box = node ? renderer.getElementBounds?.(node.id) : null
+    return !!box && e.x !== undefined && e.y !== undefined && e.x >= box.x && e.x < box.x + box.width && e.y >= box.y && e.y < box.y + box.height
   }
+  const openPreview = (id: string, from: TileRect | null) => setExpanded({ id, from })
   const elevated = t.v('--color-background-elevated-secondary')
   // Only the ✕ removal leaves with an exit; sending clears the tray at once.
   const removed = useRef(new Set<string>())
@@ -987,7 +990,7 @@ export function Attachments({ items, uploading, onRemove, onPreviewClose }: { it
               role="button"
               tabIndex={0}
               aria-label={`Preview ${a.name}`}
-              onClick={() => openPreview(a.id, tileRect(a.id))}
+              onClick={(e: { x?: number; y?: number }) => { if (!onRemoveButton(a.id, e)) openPreview(a.id, tileRect(a.id)) }}
               onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') openPreview(a.id, null) }}
               style={{ position: 'relative', width: 64, height: 64, flexShrink: 0, borderRadius: 12, borderWidth: 1, borderColor: t.borderLight, backgroundColor: elevated, overflow: 'hidden', cursor: 'pointer' }}
             >
@@ -995,7 +998,7 @@ export function Attachments({ items, uploading, onRemove, onPreviewClose }: { it
               <div style={{ position: 'absolute', left: 4, bottom: 4, paddingLeft: 4, paddingRight: 4, borderRadius: 6, backgroundColor: 'rgba(0, 0, 0, 0.55)' }}>
                 <Label color="#ffffff" size={10} lineHeight={16} weight={500}>{`@${a.label}`}</Label>
               </div>
-              <RemoveButton testId={`remove-attachment-${a.label}`} onMouseDown={() => { pressingRemove.current = a.id }} onClick={() => remove(a)} />
+              <RemoveButton testId={`remove-attachment-${a.label}`} nodeRef={(node) => { if (node) removes.current.set(a.id, node); else removes.current.delete(a.id) }} onClick={() => remove(a)} />
             </div>
           ) : (
             <div
@@ -1051,13 +1054,13 @@ export function Attachments({ items, uploading, onRemove, onPreviewClose }: { it
 }
 
 /** A 20px ink disc with a 12px ×, top-right. */
-function RemoveButton({ onClick, onMouseDown, testId }: { onClick: () => void; onMouseDown?: () => void; testId?: string }) {
+function RemoveButton({ onClick, nodeRef, testId }: { onClick: () => void; nodeRef?: (node: PublicInstance | null) => void; testId?: string }) {
   const t = useTheme()
   return (
     <div
+      ref={nodeRef}
       testId={testId}
       onClick={onClick}
-      onMouseDown={onMouseDown}
       style={{
         position: 'absolute',
         top: 4,
