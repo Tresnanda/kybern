@@ -364,6 +364,18 @@ async fn permission_restart_waits_for_workspace_and_send_admission_in_consistent
 }
 
 #[tokio::test]
+async fn a_plain_send_is_not_held_back_by_another_threads_workspace_operation() {
+    let fixture = Fixture::new();
+    let thread = fixture.thread(ThreadStatus::Idle);
+    // Another thread's worktree removal or PR checkout holds this for its whole git run.
+    let workspace = fixture.orchestrator.inner.workspace_ops.lock().await;
+    let sent = tokio::time::timeout(Duration::from_secs(2), fixture.orchestrator.send(thread.id, UserMessage::text("hello"))).await;
+    drop(workspace);
+    sent.expect("a send outside managed worktrees must not wait for the workspace lock").unwrap();
+    assert!(fixture.store.events_for_thread(thread.id).unwrap().iter().any(|event| matches!(event.payload, EventPayload::TurnStarted { .. })));
+}
+
+#[tokio::test]
 async fn outgoing_background_service_keeps_original_native_owner_and_suppresses_root_prose() {
     let fixture = Fixture::new();
     let thread = fixture.thread(ThreadStatus::Idle);

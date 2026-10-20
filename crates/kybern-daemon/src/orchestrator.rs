@@ -1540,41 +1540,58 @@ impl Orchestrator {
         queued: bool,
         retryable: bool,
     ) -> Result<(TurnId, MessageId, bool)> {
-        let _workspace = self.inner.workspace_ops.lock().await;
-        let admission_gate = self.session_admission(thread_id).await;
-        let _admission = admission_gate.lock().await;
-        let current = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
-        let target = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
-        self.restore_worktree_if_cleaned(&target).await?;
-        if target.subagent.is_some() {
-            return Err(anyhow!(subagents::READ_ONLY_ERROR));
-        }
-        let selected_target = if queued {
-            self.inner
-                .store
-                .meta_get(&format!("queue_target:{message_id}"))?
-                .map(|s| serde_json::from_str(&s))
-                .transpose()?
-                .unwrap_or(self.thread_target(thread_id)?.target)
-        } else {
-            self.inner
-                .store
-                .meta_get(&format!("quota_target:{message_id}"))?
-                .or(self.inner.store.meta_get(&format!("steer_target:{message_id}"))?)
-                .map(|saved| serde_json::from_str(&saved))
-                .transpose()?
-                .unwrap_or(self.thread_target(thread_id)?.target)
+        // The daemon-wide workspace lock serializes worktree and checkout operations across threads. A send needs it only
+        // when it may restore or work inside a managed worktree, or apply a permission change; otherwise another thread's
+        // worktree removal or PR checkout would hold this message back for its whole git run. The thread's own admission
+        // gate still orders the send against operations on this thread. Lock order stays workspace, then admission.
+        let mut _workspace = None;
+        let (_admission, current, selected_target, selected_mode) = loop {
+            let admission = self.session_admission(thread_id).await.lock_owned().await;
+            let current = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+            if current.subagent.is_some() {
+                return Err(anyhow!(subagents::READ_ONLY_ERROR));
+            }
+            let selected_target = if queued {
+                self.inner
+                    .store
+                    .meta_get(&format!("queue_target:{message_id}"))?
+                    .map(|s| serde_json::from_str(&s))
+                    .transpose()?
+                    .unwrap_or(self.thread_target(thread_id)?.target)
+            } else {
+                self.inner
+                    .store
+                    .meta_get(&format!("quota_target:{message_id}"))?
+                    .or(self.inner.store.meta_get(&format!("steer_target:{message_id}"))?)
+                    .map(|saved| serde_json::from_str(&saved))
+                    .transpose()?
+                    .unwrap_or(self.thread_target(thread_id)?.target)
+            };
+            let selected_mode = if queued {
+                self.inner
+                    .store
+                    .meta_get(&format!("queue_permission:{message_id}"))?
+                    .map(|saved| serde_json::from_str(&saved))
+                    .transpose()?
+            } else {
+                self.inner
+                    .store
+                    .meta_get(&format!("steer_permission:{message_id}"))?
+                    .map(|saved| serde_json::from_str(&saved))
+                    .transpose()?
+                    .or(self.pending_permission_for(&current, &selected_target.provider)?)
+            };
+            let changes_permission = selected_target.provider == current.provider
+                && !matches!(current.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)
+                && selected_mode.is_some_and(|mode| mode != current.permission_mode);
+            if _workspace.is_none() && (changes_permission || self.send_needs_workspace(&current)) {
+                drop(admission);
+                _workspace = Some(self.inner.workspace_ops.lock().await);
+                continue;
+            }
+            break (admission, current, selected_target, selected_mode);
         };
-        let selected_mode = if queued {
-            self.inner.store.meta_get(&format!("queue_permission:{message_id}"))?.map(|saved| serde_json::from_str(&saved)).transpose()?
-        } else {
-            self.inner
-                .store
-                .meta_get(&format!("steer_permission:{message_id}"))?
-                .map(|saved| serde_json::from_str(&saved))
-                .transpose()?
-                .or(self.pending_permission_for(&current, &selected_target.provider)?)
-        };
+        self.restore_worktree_if_cleaned(&current).await?;
         if selected_target.provider == current.provider
             && !matches!(current.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)
             && let Some(mode) = selected_mode
@@ -1676,6 +1693,13 @@ impl Orchestrator {
             }
         });
         Ok((turn_id, message_id, true))
+    }
+
+    /// Whether a send must hold the daemon-wide workspace lock: its worktree folder is missing (restored under the lock), or
+    /// it runs inside a managed worktree that another thread's removal or checkout could change underneath it.
+    fn send_needs_workspace(&self, thread: &Thread) -> bool {
+        thread.worktree.as_ref().is_some_and(|worktree| !std::path::Path::new(&worktree.path).exists())
+            || std::path::Path::new(&thread.cwd).starts_with(&self.inner.paths.worktrees)
     }
 
     pub fn enqueue(&self, message: methods::QueuedMessage) -> Result<()> {
