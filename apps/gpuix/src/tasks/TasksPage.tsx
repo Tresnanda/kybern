@@ -1,5 +1,5 @@
 import { SelectionBar } from './SelectionBar.tsx'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   boardColumns,
   filterLabel,
@@ -15,7 +15,11 @@ import { getNav, setNav } from '../nav/store.ts'
 import { Menu, MenuItem, MenuSeparator } from '../nav/overlay.tsx'
 import { useApp } from '../state.ts'
 import { Button, Segmented, selectOwnsEscape } from '../settings/controls.tsx'
-import { ink, Label, useTheme } from '../ui.tsx'
+import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { Rise } from '../motion/kit.tsx'
+import { Presence } from '../motion/Presence.tsx'
+import { EASE } from '../motion/tokens.ts'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { cancelTaskDrag, draggingTask, escapeTaskDrag } from './drag.tsx'
 import { TaskList, TaskBoard } from './TaskList.tsx'
 import { TaskDetail } from './TaskDetail.tsx'
@@ -184,7 +188,7 @@ export function TasksPage() {
   return (
     <div testId="page-tasks" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, width: '100%' }}>
       {task ? (
-        <TaskDetail key={task.id} task={task} sequence={sequence} />
+        <DetailEnter key={task.id}><TaskDetail task={task} sequence={sequence} /></DetailEnter>
       ) : (
         <>
           {s.error && (
@@ -229,9 +233,31 @@ export function TasksPage() {
           {s.prefs.showHints && <Hints selecting={selected.length > 0} />}
         </>
       )}
-      {s.composer && <RunComposer key={s.composer.join(',')} ids={s.composer} />}
+      <RunDock show={!!s.composer}>{s.composer ? <RunComposer key={s.composer.join(',')} ids={s.composer} /> : null}</RunDock>
     </div>
   )
+}
+
+/**
+ * A task page that a click opened rises in (`t-section-enter`: 250 ms from 6 px with a 2 px blur); Enter, j/k and the arrow keys show it
+ * at once, and going back to the list has no motion (a frequent move). Keyed by task, so previous/next replays it like the desktop.
+ */
+function DetailEnter({ children }: { children: ReactNode }) {
+  const [play] = useState(() => !getNav().keyboardNav)
+  return <Rise kind="section" play={play} style={{ flexGrow: 1, minHeight: 0 }}>{children}</Rise>
+}
+
+/**
+ * The run composer and batch composer dock (`dockMotion.ts`): in from 16 px low over 260 ms on `--ease-drawer`, out 10 px low over 160 ms;
+ * ⌘↵ shows and hides it at once. Reduce Motion fades.
+ */
+function RunDock({ show, children }: { show: boolean; children: ReactNode }) {
+  const keyboard = getNav().keyboardNav
+  const drawer = [...EASE.drawer] as [number, number, number, number]
+  const enter = keyboard || !PATCHED_NATIVE ? undefined : REDUCED_MOTION
+    ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: 0.15, ease: drawer } }
+    : { initial: { opacity: 0, translateY: 16 }, animate: { opacity: 1, translateY: 0 }, transition: { duration: 0.26, ease: drawer } }
+  return <Presence show={show} enter={enter} exit={{ to: REDUCED_MOTION ? { opacity: 0 } : { opacity: 0, translateY: 10 }, duration: keyboard ? 0 : 0.16, ease: EASE.drawer }}>{children}</Presence>
 }
 
 function Hints({ selecting }: { selecting: boolean }) {

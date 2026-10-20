@@ -11,6 +11,9 @@ import { ink, Label, useTheme } from '../ui.tsx'
 import { StatusGlyph } from './Glyphs.tsx'
 import { chooseFilter, taskTyping, prefs, quickAdd, setTasks, useTasks } from './store.ts'
 import { pressTransform } from '../motion/press.ts'
+import { Chevron } from '../motion/Chevron.tsx'
+import { Collapse } from '../motion/kit.tsx'
+import { CountPop } from './CountPop.tsx'
 
 export function TasksSidebar() {
   const t = useTheme()
@@ -39,7 +42,7 @@ export function TasksSidebar() {
     p.pinnedProjects,
     p.projectsCollapsed,
     p.filter.startsWith('project:') ? p.filter.slice(8) : null,
-  ).filter((r) => r.visible)
+  )
   const row = (filter: TaskFilter, label: string, count: number, glyph: React.ReactNode, trailing?: React.ReactNode) => (
     <div
       testId={`task-filter-${filter}`}
@@ -62,9 +65,7 @@ export function TasksSidebar() {
         {label}
       </Label>
       {trailing}
-      <Label color={t.textTertiary} size={12} style={{ pointerEvents: 'none' }}>
-        {String(count)}
-      </Label>
+      <CountPop value={count} color={t.textTertiary} size={12} style={{ pointerEvents: 'none' }} />
     </div>
   )
   return (
@@ -116,19 +117,20 @@ export function TasksSidebar() {
         ))}
         <div key="heading" style={{ display: 'flex', height: 42, paddingLeft: 16, paddingRight: 10, paddingBottom: 6, alignItems: 'flex-end' }}>
           {/* `.tk-nav-disclose`: scale 0.96 on press over `--duration-quick` both ways. */}
-          <div onClick={() => prefs({ projectsCollapsed: !p.projectsCollapsed })} paintTransform={pressTransform(true, 0.96, 0.15, 0.15)} style={{ display: 'flex', alignItems: 'center', gap: 4, height: 20, marginLeft: -4, paddingLeft: 4, paddingRight: 4, cursor: 'pointer' }}>
+          <div testId="task-projects-toggle" onClick={() => prefs({ projectsCollapsed: !p.projectsCollapsed })} paintTransform={pressTransform(true, 0.96, 0.15, 0.15)} style={{ display: 'flex', alignItems: 'center', gap: 4, height: 20, marginLeft: -4, paddingLeft: 4, paddingRight: 4, cursor: 'pointer' }}>
             <Label color={t.textTertiary} size={12} lineHeight={18} weight={500} style={{ pointerEvents: 'none' }}>Projects</Label>
-            <Icon source={p.projectsCollapsed ? N.chevronRight : N.chevronDown} size={12} color={t.textTertiary} />
+            <Chevron open={!p.projectsCollapsed} size={12} color={t.textTertiary} />
           </div>
           <div style={{ flexGrow: 1 }} />
           <Tip label="Add project" side="right">
-            <div testId="task-add-project" onClick={() => { void addProject() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, marginRight: -4, marginBottom: -3, borderRadius: 6, opacity: hover || !rows.length ? 1 : 0, cursor: 'pointer', hover: { backgroundColor: ink(t, 0.05) } }}>
+            <div testId="task-add-project" onClick={() => { void addProject() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, marginRight: -4, marginBottom: -3, borderRadius: 6, opacity: hover || !rows.some((r) => r.visible) ? 1 : 0, cursor: 'pointer', hover: { backgroundColor: ink(t, 0.05) } }}>
               <Icon source={N.plus} size={14} color={t.textTertiary} />
             </div>
           </Tip>
         </div>
-        {rows.map(({ project, pinned }) => (
-          <div key={project.id} style={{ display: 'flex', paddingLeft: 8, paddingRight: 8 }}>
+        {rows.map(({ project, pinned, visible }) => (
+          // Pinned and current projects stay; the rest fold away with the heading's chevron (`Collapse`: height + opacity, 220 ms).
+          <div key={project.id} style={{ display: 'flex', flexDirection: 'column' }}><Collapse open={visible} height={30} closeDuration={0.18}><div style={{ display: 'flex', paddingLeft: 8, paddingRight: 8 }}>
             <div style={{ flexGrow: 1, minWidth: 0 }} onAuxClick={(e) => { if (e.isRightClick || e.button === 2) setMenu({ id: project.id, at: { x: e.x ?? 0, y: e.y ?? 0 } }) }}>
               {row(
                 `project:${project.id}`,
@@ -138,7 +140,7 @@ export function TasksSidebar() {
                 pinned ? <Icon source={N.pin} size={12} color={ink(t, 0.28)} style={{ marginRight: -3 }} /> : undefined,
               )}
             </div>
-          </div>
+          </div></Collapse></div>
         ))}
       </virtual-list>
       {(counts.running > 0 || counts.needs_review > 0) && (
