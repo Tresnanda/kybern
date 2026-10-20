@@ -195,6 +195,7 @@ function SessionPicker({ projectId: initialProject }: { projectId: string | null
         <div style={{ flexGrow: 1 }} />
         <div
           role="button"
+          testId="sessions-refresh"
           aria-label="Refresh sessions"
           onClick={() => {
             if (loading || opening) return

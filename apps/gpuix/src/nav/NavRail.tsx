@@ -310,7 +310,7 @@ function UsageCard({ entry: global }: { entry: ProviderLimits }) {
         <Label color={t.text} size={14} weight={500} truncate style={{ flexGrow: 1 }}>
           {name}
         </Label>
-        <div onClick={() => goPage('usage')} style={{ ...cardRow, ...pressRow(t, t.buttonSecondaryHover) }}>
+        <div testId="usage-card-details" onClick={() => goPage('usage')} style={{ ...cardRow, ...pressRow(t, t.buttonSecondaryHover) }}>
           <Label color={small}>Usage details</Label>
         </div>
       </div>
@@ -362,7 +362,7 @@ function UsageCard({ entry: global }: { entry: ProviderLimits }) {
       </Label>
       <div style={{ height: 1, marginLeft: -4, marginRight: -4, backgroundColor: ink(t, 0.07) }} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: -4, marginBottom: -4 }}>
-        <div onClick={() => openSettingsTab('accounts')} style={{ ...cardRow, ...pressRow(t, t.buttonSecondaryHover) }}>
+        <div testId="usage-card-accounts" onClick={() => openSettingsTab('accounts')} style={{ ...cardRow, ...pressRow(t, t.buttonSecondaryHover) }}>
           <Label color={small}>Manage accounts…</Label>
         </div>
         <div onClick={() => showDialog({ kind: 'account', provider: entry.provider })} style={{ ...cardRow, display: 'flex', alignItems: 'center', gap: 4, ...pressRow(t, t.buttonSecondaryHover) }}>
