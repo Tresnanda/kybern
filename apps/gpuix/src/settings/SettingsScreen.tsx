@@ -1,14 +1,17 @@
 import { AccountsHeaderAction } from './Accounts.tsx'
 import { onEnvironmentChange, useEnvironment } from '../shell/environment.ts'
-import { motion, useGpuix } from '@gpuix/react'
-import { useEffect, useState } from 'react'
+import { useGpuix } from '@gpuix/react'
+import { useEffect, useMemo, useState } from 'react'
 import { setSettingsTitle } from './Breadcrumb.tsx'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { S } from './glyphs.ts'
 import { getNav, setNav } from '../nav/store.ts'
-import { EASE_OUT, ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { settingsOverlayOwnsEscape, TextField } from './controls.tsx'
+import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { enterTransform } from '../motion/kit.tsx'
+import { DURATION, EASE } from '../motion/tokens.ts'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { SectionEnter, settingsOverlayOwnsEscape, TextField } from './controls.tsx'
 import { useSettings, useSettingsConnection } from './store.ts'
 import { General, Agents } from './primary.tsx'
 import { Accounts, Integrations, Computer, Background } from './secondary.tsx'
@@ -48,17 +51,20 @@ export function SettingsScreen() {
   // Keep pointer navigation batched with its local keyboard/search state.
   // External rail/menu entries notify this mounted screen, or seed lastTab.
   useEffect(() => {
-    const changed = () => { setTab(lastTab); setQuery('') }
+    const changed = () => { setTab(lastTab); setQuery(''); setPointerSwitch(false) }
     tabListeners.add(changed)
     return () => { tabListeners.delete(changed) }
   }, [])
   const [keyboard, setKeyboard] = useState(false)
+  // A tab chosen by pointer rises in (heading and first section, `settings-section-in`); the keyboard, search and links from elsewhere show it at once.
+  const [pointerSwitch, setPointerSwitch] = useState(false)
+  const sectionEnter = useMemo(() => { let n = 0; return { play: pointerSwitch, next: () => n++ } }, [tab, pointerSwitch])
   const { settings, error } = useSettings()
   useSettingsConnection()
   useEffect(() => {
     return () => { if (previousFocus != null) queueMicrotask(() => renderer?.focusElement?.(previousFocus)) }
   }, [renderer, previousFocus])
-  const select = (next: Tab, key = false) => { openSettingsTab(next); setKeyboard(key); setQuery('') }
+  const select = (next: Tab, key = false) => { openSettingsTab(next); setKeyboard(key); setPointerSwitch(!key && next !== tab); setQuery('') }
   const close = (fromKeyboard = false) => setNav({ settingsOpen: false, keyboardNav: fromKeyboard, panelInstant: fromKeyboard })
   const current = TABS.find((item) => item[0] === tab)!
   const matches = TABS.filter((item) => `${item[1]} ${item[2]} ${item[4]}`.toLowerCase().includes(query.trim().toLowerCase()))
@@ -79,7 +85,8 @@ export function SettingsScreen() {
       <div testId="settings-back" tabIndex={0} autoFocus onClick={() => close()} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') close(true) }} style={{ display: 'flex', alignItems: 'center', height: 28, gap: 8, paddingLeft: 8, borderRadius: 8, hover: { backgroundColor: t.hover } }}><Icon source={N.arrowLeft} size={16} color={t.iconSecondary} /><Label color={t.text} size={14} lineHeight={21}>Back to workspace</Label></div>
       <div style={{ display: 'flex', position: 'relative', paddingTop: 8, paddingBottom: 8 }}><div style={{ position: 'absolute', left: 12, top: 16, pointerEvents: 'none' }}><Icon source={N.search} size={14} color={t.textSecondary} /></div><TextField testId="settings-search" tabIndex={0} onFocus={() => setSearchFocused(true)} onBlur={() => setSearchFocused(false)} label="Search settings" placeholder="Search settings…" style={{ position: 'relative', left: -0.5, top: -0.5, height: 31, borderRadius: 10, paddingLeft: 38, fontSize: 14, backgroundColor: t.inputGroupFill, borderColor: searchFocused ? ink(t, .3) : t.v('--input') }} value={query} onChange={setQuery} width="100%" onSubmit={() => { if (matches[0]) select(matches[0][0], true) }} onKeyDown={(e) => { if (e.key === 'escape' && !settingsOverlayOwnsEscape()) { if (query) setQuery(''); else close(true) } }} /></div>
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
-        {!query && pillTop >= 0 && <motion.div initial={false} animate={{ top: pillTop }} transition={{ duration: keyboard || REDUCED_MOTION ? 0 : 0.22, ease: EASE_OUT }} style={{ position: 'absolute', left: 0, right: 0, height: 28, borderRadius: 6, backgroundColor: t.v('--sidebar-accent-active') }} />}
+        {/* `t-tabs` (250 ms smooth-out): the pill sits in the first row's slot and is moved by paint (`paintTransform` translation); the keyboard moves it at once. */}
+        {!query && pillTop >= 0 && <div paintTransform={PATCHED_NATIVE ? { initial: false, animate: { translateY: pillTop }, transition: { duration: keyboard || REDUCED_MOTION ? 0 : DURATION.fast, ease: [...EASE.smoothOut] } } : undefined} style={{ position: 'absolute', left: 0, right: 0, top: PATCHED_NATIVE ? 0 : pillTop, height: 28, borderRadius: 6, backgroundColor: t.v('--sidebar-accent-active'), pointerEvents: 'none' }} />}
         {rows.map((row) => 'group' in row ? <div key={row.group} style={{ display: 'flex', alignItems: 'flex-start', paddingTop: 4, height: 33, marginTop: rows.indexOf(row) === 0 ? 0 : 12, paddingLeft: 8 }}><Label color={t.textSecondary} size={14} lineHeight={21} weight={500}>{row.group}</Label></div> : <div key={row.item[0]} testId={`settings-tab-${row.item[0]}`} tabIndex={0} aria-label={row.item[1]} onClick={() => select(row.item[0])} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') select(row.item[0], true) }} style={{ display: 'flex', position: 'relative', alignItems: 'center', height: 28, marginBottom: 2, paddingLeft: 8, gap: 8, borderRadius: 6, hover: { backgroundColor: row.item[0] === tab ? 'transparent' : t.hover } }}><Icon source={row.item[3]} size={16} color={t.text} /><Label color={t.text} size={14} lineHeight={21}>{row.item[1]}</Label></div>)}
         {!matches.length && <div style={{ padding: 8 }}><Label color={t.textSecondary} size={14} lineHeight={21}>{`No settings match “${query}”.`}</Label><div testId="settings-clear-search" tabIndex={0} onClick={() => setQuery('')} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') setQuery('') }} style={{ padding: 8, borderRadius: 8, hover: { backgroundColor: t.hover } }}><Label color={t.text} size={14}>Clear search</Label></div></div>}
       </div>
@@ -87,12 +94,12 @@ export function SettingsScreen() {
     </div>
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, minHeight: 0 }}>
       {error && <div style={{ padding: 16 }}><Label color={t.red} size={13}>{error}</Label></div>}
-      <virtual-list key={tab} testId="settings-content" style={{ flexGrow: 1, minHeight: 0 }}>
-        <div key="heading" style={{ display: 'flex', justifyContent: 'center', width: '100%', paddingTop: 26, paddingBottom: 34, paddingLeft: 40, paddingRight: 40 }}><div style={{ display: 'flex', flexDirection: 'column', width: '100%', maxWidth: 680, gap: 9, position: 'relative' }}><div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:16}}><Label color={t.text} size={28} lineHeight={33.6} weight={600}>{current[1]}</Label>{tab === 'accounts' && <AccountsHeaderAction/>}</div><Label color={t.textSecondary} size={14} lineHeight={22.4} style={{maxWidth:tab === 'accounts' ? 520 : undefined}}>{current[2]}</Label></div></div>
+      <SectionEnter.Provider value={sectionEnter}><virtual-list key={tab} testId="settings-content" style={{ flexGrow: 1, minHeight: 0 }}>
+        <div key="heading" paintTransform={pointerSwitch ? enterTransform('section') : undefined} style={{ display: 'flex', justifyContent: 'center', width: '100%', paddingTop: 26, paddingBottom: 34, paddingLeft: 40, paddingRight: 40 }}><div style={{ display: 'flex', flexDirection: 'column', width: '100%', maxWidth: 680, gap: 9, position: 'relative' }}><div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:16}}><Label color={t.text} size={28} lineHeight={33.6} weight={600}>{current[1]}</Label>{tab === 'accounts' && <AccountsHeaderAction/>}</div><Label color={t.textSecondary} size={14} lineHeight={22.4} style={{maxWidth:tab === 'accounts' ? 520 : undefined}}>{current[2]}</Label></div></div>
         {!settings && <div key="loading" style={{ padding: 40 }}><Label color={t.textSecondary}>Reading settings…</Label></div>}
         {settings && content}
         <div key="bottom" style={{ height: 64 }} />
-      </virtual-list>
+      </virtual-list></SectionEnter.Provider>
     </div>
   </div>
 }
