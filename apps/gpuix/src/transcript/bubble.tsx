@@ -92,6 +92,9 @@ function messageText(parts: ContentPart[]): string {
   return text
 }
 
+/** The footer's height: `pt-1` over a 24px action. */
+const FOOTER_HEIGHT = 28
+
 export const UserBubble = memo(function UserBubble({ parts, at, pending = false, clampLines }: { parts: ContentPart[]; at: string; pending?: boolean; clampLines?: number }) {
   const t = useTheme()
   const [hover, setHover] = useState(false)
@@ -142,7 +145,7 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
             testId="user-bubble"
             onMouseEnter={() => setHover(true)}
             onMouseLeave={() => setHover(false)}
-            style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1, maxWidth: '80%', position: 'relative', opacity: pending ? 0.7 : 1 }}
+            style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1, maxWidth: '80%', position: 'relative', opacity: pending ? 0.7 : 1, paddingBottom: FOOTER_HEIGHT, marginBottom: -FOOTER_HEIGHT }}
           >
             {files.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, maxWidth: 240, marginBottom: 4 }}>
@@ -199,17 +202,21 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
               <Label color={muted(t)} size={12}>{expanded ? 'Show less' : 'Show full prompt'}</Label>
             </div>}
 
-            {/* Hover footer below the bubble (`absolute top-full right-0 pt-1`). */}
+            {/* Hover footer below the bubble (`absolute top-full right-0 pt-1`). The owner's own bounds
+                reach down over it (`FOOTER_HEIGHT` padding, cancelled by the margin), so the pointer keeps
+                hover while it travels onto Copy; hidden, it takes no pointer so it shows no hand. */}
             <div
+              testId="user-footer"
               style={{
                 position: 'absolute',
                 right: 2,
-                bottom: -28,
+                bottom: 0,
                 display: 'flex',
                 alignItems: 'center',
                 gap: 8,
                 paddingTop: 4,
                 opacity: hover ? 1 : 0,
+                ...(hover ? {} : { pointerEvents: 'none' as const }),
               }}
             >
               <Label color={muted(t, 0.45)} size={META.size} lineHeight={META.lineHeight}>

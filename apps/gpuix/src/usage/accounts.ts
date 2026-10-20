@@ -10,7 +10,7 @@ import {readAccounts} from '../requests/accounts.ts'
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import { accountFor, defaultAccountFor, isCliInstance, legacyAccounts } from '../../../desktop/src/lib/accounts.ts'
 import { PROVIDER_NAMES } from '../../../desktop/src/lib/providerUsage.ts'
-import { USAGE_LIMITS_CHANGED_NOTIFICATION, type AccountSummary, type ProviderKind, type ProviderLimits, type ProviderSettings, type UsageLimitsResult } from '../../../../packages/kybern-client/src/types.ts'
+import { USAGE_LIMITS_CHANGED_NOTIFICATION, type AccountSummary, type ProviderInstance, type ProviderKind, type ProviderLimits, type ProviderSettings, type UsageLimitsParams, type UsageLimitsResult } from '../../../../packages/kybern-client/src/types.ts'
 import { errorText } from '../nav/actions.ts'
 import { useNav } from '../nav/store.ts'
 import { toast } from '../shell/toasts.tsx'
@@ -172,10 +172,19 @@ export function mergeAccountLimits(previous: ProviderLimits[], incoming: Provide
  * while a surface that shows them is open); without it the daemon answers from its cache.
  */
 export function askAccountLimits({ refresh = false }: { refresh?: boolean } = {}) {
+  readAccountLimits({ all_accounts: true, ...(refresh ? { refresh: true } : {}) })
+}
+
+/** Like `askAccountLimits` for the listed accounts only, answered from the daemon's cache (`loadAccountLimits`). */
+export function loadAccountLimits(instances: ProviderInstance[]) {
+  readAccountLimits({ instances })
+}
+
+function readAccountLimits(extra: Pick<UsageLimitsParams, 'all_accounts' | 'refresh' | 'instances'>) {
   const client = getClient()
   if (!client) return
   const at = generation
-  void client.call('usage.limits', { cached: true, all_accounts: true, ...(refresh ? { refresh: true } : {}) }).then(
+  void client.call('usage.limits', { cached: true, ...extra }).then(
     (result) => { if (generation === at) emit({ limits: mergeAccountLimits(state.limits, result.accounts) }) },
     () => { /* keep the last values; the next ask or notification catches up */ },
   )

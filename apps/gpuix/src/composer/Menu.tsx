@@ -29,6 +29,8 @@ import { Icon } from '../icons.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
 import type { Theme } from '../theme.ts'
 import { DURATION, EASE, POPUP } from '../motion/kit.tsx'
+import type { PaintTransformProps } from '@gpuix/native/host'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { REDUCED_MOTION } from '../ui.tsx'
 import { G } from './glyphs.ts'
 import { WebLayer, useWebOcclusion } from '../native/web-occlusion.ts'
@@ -88,6 +90,14 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
   fade?: { opacity?: number; rise?: number }
   /** Fill of the `<anchored>` surface itself, replacing GPUI's opaque dark backing (a translucent scrim). */
   backing?: string
+  /**
+   * `data-starting-style:scale-[var(--scale-medium)] opacity-0` from `--transform-origin` (`popover.tsx`): the
+   * popup scales up from 97% and fades in over 250 ms (`--ease-smooth-out`) about `origin` (fractions of its box,
+   * the trigger's side). Paint-only (`paintTransform`), so no render or layout runs per frame. The anchored
+   * layer's own motion is off and its opaque backing made transparent, so the whole popup arrives as one
+   * material. Reduce Motion fades in 150 ms with no scale; the stock addon just shows the popup.
+   */
+  materialize?: { origin: [number, number] }
 }>(function PopupLayer(
   {
     side = 'bottom',
@@ -104,6 +114,7 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
     still: stillProp = false,
     fade,
     backing,
+    materialize,
     material = 'popup',
     backdrop: explicitBackdrop,
     style,
@@ -118,7 +129,7 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
   // Decided on mount: a later change must not restart or drop the tween.
   // Reduce Motion skips the tween entirely: a zero-length native opacity motion
   // can leave the popup at its initial opacity 0, so it would never show.
-  const [still] = useState(stillProp || REDUCED_MOTION)
+  const [still] = useState(stillProp || REDUCED_MOTION || !!materialize)
   const { duration, ease, distance } = POPUP[kind]
   const d = REDUCED_MOTION ? 0 : distance
   const opacity = fade?.opacity ?? 1
@@ -136,9 +147,13 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
   const placement = position
     ? { position, ...(anchor ? { anchor } : {}) }
     : { side, align, gap: sideOffset, offset: side === 'left' || side === 'right' ? { x: 0, y: alignOffset } : { x: alignOffset, y: 0 } }
+  // Materializing: the glass filter moves inside the transformed box (it scales and fades with the popup), and the
+  // layer's own backing is transparent. An explicit `{ blur: 0 }` is how an anchored layer asks for that.
+  const arrive = materialize && PATCHED_NATIVE ? materializeTransform(materialize.origin) : undefined
+  const glassBackdrop = material === 'none' || !glass ? undefined : explicitBackdrop ?? {...BACKDROP.glass, radius: radius ?? 16}
   return (
     <anchored
-      backdrop={material === 'none' || !glass ? undefined : explicitBackdrop ?? {...BACKDROP.glass, radius: radius ?? 16}}
+      backdrop={arrive ? { blur: 0 } : glassBackdrop}
       {...((still ? {} : { motion }) as object)}
       style={{ ...(radius !== undefined ? { borderRadius: radius } : {}), ...(fade?.opacity !== undefined ? { opacity } : {}), ...(backing ? { backgroundColor: backing } : {}) }}
       {...placement}
@@ -149,13 +164,20 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
       occlude={occlude}
     >
       <div testId={webLayer.id} style={{ display: 'flex' }}>
-      <div {...props} ref={ref} style={glass && material !== 'none' && (style as StyleDesc | undefined)?.backgroundColor ? {...style as StyleDesc,backgroundColor:backdropTint((style as StyleDesc).backgroundColor!)} : style}>
+      <div {...props} ref={ref} {...(arrive ? { paintTransform: arrive, ...(glassBackdrop ? { backdrop: glassBackdrop } : {}) } : {})} style={glass && material !== 'none' && (style as StyleDesc | undefined)?.backgroundColor ? {...style as StyleDesc,backgroundColor:backdropTint((style as StyleDesc).backgroundColor!)} : style}>
         <WebLayer.Provider value={webLayer.layer}>{children}</WebLayer.Provider>
       </div>
       </div>
     </anchored>
   )
 })
+
+/** The popup open of `popover.tsx`: scale 0.97 -> 1 and opacity 0 -> 1, 250 ms `--ease-smooth-out`; Reduce Motion fades only. */
+function materializeTransform(origin: [number, number]): PaintTransformProps {
+  return REDUCED_MOTION
+    ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease: [...EASE.smoothOut] }, origin }
+    : { initial: { scale: 0.97, opacity: 0 }, animate: { scale: 1, opacity: 1 }, transition: { duration: DURATION.fast, ease: [...EASE.smoothOut] }, origin }
+}
 
 /** `text-muted-foreground/N`: the muted ink at N% of its own alpha. */
 export function muted(t: Theme, fraction: number): string {
