@@ -18,6 +18,7 @@ import { startAppUpdateChecks } from './platform/update.ts'
 import { installFrameSource } from './native/frame.ts'
 import { hasSavedFrame, installWindowFrame, startWindowShell } from './shell/window.ts'
 import { startEnvironmentWindow } from './windows/window.ts'
+import { installRuntimeSafetyNet } from './shell/errors.ts'
 
 // The terminal draws xterm's weights (300 text, 500 bold); italics are their own family until GPUIX styles take `fontStyle`.
 const FONTS = ['CalSans-Regular.ttf', 'JetBrainsMono-Regular.ttf', 'JetBrainsMono-Light.ttf', 'JetBrainsMono-Medium.ttf', 'JetBrainsMono-LightItalic.ttf', 'JetBrainsMono-MediumItalic.ttf']
@@ -64,6 +65,8 @@ const { App } = await import('./App.tsx')
 startupMark('workspace-module-ready')
 
 startupMark('render-start')
+// Before `render`, so a throw from a timer or promise degrades to a toast instead of GPUIX's full-window error screen.
+installRuntimeSafetyNet()
 render(
   <ThemeProvider>
     <Fonts>
