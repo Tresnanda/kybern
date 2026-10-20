@@ -6,6 +6,8 @@ export type IconSwapState = {
 }
 
 export const ICON_SWAP_TRANSITION_MS = 250
+/** Settle time of `IconSwap tempo="quick"`; matches `--duration-quick`. */
+export const ICON_SWAP_QUICK_MS = 150
 
 export function advanceIconSwap(state: IconSwapState, active: IconSwapKey): IconSwapState {
   if (state.shown === active) return state
