@@ -5,11 +5,10 @@ import { revealBoundary } from './reveal.ts'
 // The existing port's live-state brightness pulse follows native display time.
 // Simple native glyph tint avoids React and layout work on every pulse frame.
 // Reduce Motion holds the plain muted label.
-import { useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useReducer, useRef, useState } from 'react'
 import { smoothAdvance, type SmoothState } from '../../../desktop/src/lib/smoothStream.ts'
 import type { StyleDesc } from '@gpuix/react'
 import { useLoaderTime, easeInOut, NATIVE_PAINT_ANIMATIONS } from '../MatrixLoader.tsx'
-import { Swap } from '../motion/kit.tsx'
 import { REDUCED_MOTION, Label } from '../ui.tsx'
 import { alpha, ROW_LINE } from './kit.tsx'
 import { PACE_MS } from './store.ts'
@@ -57,19 +56,10 @@ export function useFresh(at: string | undefined): boolean {
   return fresh
 }
 
-/**
- * `IconSwap` / `TextSwap` for a state that flips after mount (spinner → brain,
- * "Thinking" → "Thought", copy → check). The first paint renders plainly
- * (desktop: "The first paint renders without motion"); only a change plays the
- * kit's `Swap`, one 250 ms burst.
- */
-export function SwapOnChange({ active, children, style }: { active: string; children: ReactNode; style?: StyleDesc }) {
-  const [first] = useState(active)
-  const [changed, setChanged] = useState(false)
-  if (!changed && active !== first) setChanged(true)
-  if (!changed) return <div style={{ display: 'flex', position: 'relative', alignItems: 'center', justifyContent: 'center', ...style }}>{children}</div>
-  return <Swap active={active} style={style}>{children}</Swap>
-}
+// `IconSwap` / `TextSwap` for a state that flips after mount (spinner → brain, "Thinking" → "Thought", copy → check). The first
+// paint renders plainly (desktop: "The first paint renders without motion"); every change after it cross-swaps and keeps the
+// outgoing state for its exit. Pass `kind="icon"` for glyphs.
+export { SwapOnChange } from '../motion/kit.tsx'
 
 // ---- paced streaming reveal ----
 
