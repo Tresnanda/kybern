@@ -12,7 +12,7 @@ import { activeEnvironment } from '../shell/environment.ts'
 // Each row is memoized and owns its hover state, so moving the pointer re-renders
 // one row and a list update re-renders only the rows whose props changed.
 import { useGpuix, type PublicInstance } from '@gpuix/react'
-import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { childState, canStopDelegation } from '../../../../packages/kybern-client/src/delegations.ts'
 import { SUBAGENT_SIDEBAR_HOLD_MS, subagentThreadPhase, type SubagentPhase } from '../../../../packages/kybern-client/src/subagents.ts'
 import { FREE_CHAT_PROJECT_ID, type Project, type Thread, type ThreadActivityState } from '../../../../packages/kybern-client/src/types.ts'
@@ -34,6 +34,7 @@ import { pressTransform } from '../motion/press.ts'
 import { Chevron } from '../motion/Chevron.tsx'
 import { SwapOnChange } from '../motion/kit.tsx'
 import { pressRow } from '../shell/motion.ts'
+import { TICK_GAP, TreeLines, type TreeShape } from '../tree/Tree.tsx'
 import { FadeBack, Leave, markDisclosure, MarqueeLabel, PadTween, Reveal, TitleSwap } from './motion.tsx'
 
 /** `DisclosureChevron`: a chevron that turns down with its content (220 ms, `motion/Chevron.tsx`). Rows re-export it for their callers. */
@@ -214,23 +215,31 @@ function DraftMarker() {
   )
 }
 
-/** Vertical guides at x = 17 + 20·level, one per nesting level. */
-function Guides({ depth }: { depth: number }) {
-  const t = useTheme()
-  if (depth === 0) return null
-  return (
-    <>
-      {Array.from({ length: depth }, (_, level) => (
-        <div
-          key={level}
-          style={{ position: 'absolute', top: -2, bottom: 0, left: 17 + level * 20, width: 1, backgroundColor: ink(t, 0.15), pointerEvents: 'none' }}
-        />
-      ))}
-    </>
-  )
+/**
+ * Tree connectors for a nested row (`../tree`), in the row box's coordinates (the `INSET` padding included). A parent at
+ * level L hangs its children from a stem under its provider mark (x = 44 + 20·L); each child's tick stops 3px short
+ * of its own mark, the last child ends the stem in the elbow, and a child with children of its own wears its chevron
+ * on the junction. `anchor` is the mark's centre line.
+ */
+function rowTree({ depth, last, rails, open, toggle, anchor }: { depth: number; last: boolean; rails: number; open: boolean; toggle: boolean; anchor: number }): TreeShape {
+  const stem = (level: number) => INSET.paddingLeft + 38 + level * 20
+  const outer: number[] = []
+  for (let level = 0; level < depth - 1; level++) if (rails & (1 << level)) outer.push(stem(level))
+  return {
+    anchor,
+    rails: outer,
+    ...(depth > 0 ? { branch: { x: stem(depth - 1), joint: toggle ? 'toggle' : 'node', last, tickEnd: INSET.paddingLeft + 32 + depth * 20 - TICK_GAP } } : {}),
+    // Under the 12px mark, a hairline gap below its glyph.
+    ...(open ? { below: { x: stem(depth), from: anchor + 6 + TICK_GAP } } : {}),
+  }
 }
 
-/** The expand control for a row's nested children (`size-6` at 5 + 20·depth). */
+function useRowTree(input: Parameters<typeof rowTree>[0]) {
+  const { depth, last, rails, open, toggle, anchor } = input
+  return useMemo(() => rowTree({ depth, last, rails, open, toggle, anchor }), [depth, last, rails, open, toggle, anchor])
+}
+
+/** The expand control for a row's nested children (`size-6`). */
 function ChildToggle({ depth, open, onToggle, label, testId }: { depth: number; open: boolean; onToggle: () => void; label: string; testId?: string }) {
   const t = useTheme()
   const { hover, bind } = useHover()
@@ -241,7 +250,8 @@ function ChildToggle({ depth, open, onToggle, label, testId }: { depth: number; 
       role="button"
       {...bind}
       onClick={onToggle}
-      style={{ position: 'absolute', left: 5 + depth * 20, top: 2, width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, cursor: 'pointer' }}
+      // A root row's chevron leads its mark; a nested row's sits on its parent's stem, under the parent's mark.
+      style={{ position: 'absolute', left: depth === 0 ? 5 : 6 + depth * 20, top: 2, width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, cursor: 'pointer' }}
     >
       <Chevron open={open} color={hover ? t.text : muted(t, 1)} />
     </div>
@@ -495,6 +505,8 @@ export const ThreadRow = memo(function ThreadRow({
   childCount,
   childrenOpen,
   nested,
+  last = false,
+  rails = 0,
   selected,
   activity,
   unread,
@@ -506,6 +518,8 @@ export const ThreadRow = memo(function ThreadRow({
   childCount: number
   childrenOpen: boolean
   nested: boolean
+  last?: boolean
+  rails?: number
   selected: boolean
   activity: ThreadActivityState | undefined
   unread: boolean
@@ -526,6 +540,7 @@ export const ThreadRow = memo(function ThreadRow({
   const reveal = hover && !renaming
   const pendingPop = usePopOnChange(thread.status === 'awaiting-approval')
   const wasRevealed = useWasRevealed(reveal)
+  const tree = useRowTree({ depth, last, rails, open: nested && childrenOpen && childCount > 0, toggle: childCount > 0, anchor: 16 })
   const commitRename = () => {
     setRenaming(false)
     const next = title.trim()
@@ -533,9 +548,8 @@ export const ThreadRow = memo(function ThreadRow({
     else setTitle(thread.title)
   }
   return (
-    <div style={{ paddingTop: 2, ...INSET }}>
+    <div style={{ position: 'relative', paddingTop: 2, ...INSET }}>
       <div {...bind} style={{ position: 'relative' }}>
-        <Guides depth={depth} />
         <div
           testId={`thread-${thread.id}`}
           ref={rowRef}
@@ -641,6 +655,7 @@ export const ThreadRow = memo(function ThreadRow({
           </Reveal>
         </div>
       </div>
+      {nested && <TreeLines shape={tree} />}
       {menu.at && (
         <ContextMenu at={menu.at} onClose={menu.close} testId="thread-menu">
           <MenuItem
@@ -692,6 +707,8 @@ export const ChildRow = memo(function ChildRow({
   depth,
   childCount,
   childrenOpen,
+  last = false,
+  rails = 0,
   selected,
   onToggleChildren,
 }: {
@@ -699,6 +716,8 @@ export const ChildRow = memo(function ChildRow({
   depth: number
   childCount: number
   childrenOpen: boolean
+  last?: boolean
+  rails?: number
   selected: boolean
   onToggleChildren: (id: string, open: boolean) => void
 }) {
@@ -732,10 +751,10 @@ export const ChildRow = memo(function ChildRow({
   const reveal = hover && !working && !leaving
   const pendingPop = usePopOnChange(thread.status === 'awaiting-approval')
   const wasRevealed = useWasRevealed(reveal)
+  const tree = useRowTree({ depth: level, last, rails, open: childrenOpen && childCount > 0, toggle: childCount > 0, anchor: 17 })
   const body = (
-    <div style={{ paddingTop: 3, paddingBottom: 1, ...INSET }}>
+    <div style={{ position: 'relative', paddingTop: 3, paddingBottom: 1, ...INSET }}>
       <div {...bind} style={{ position: 'relative' }}>
-        <Guides depth={level} />
         <div
           testId={`child-${thread.id}`}
           ref={rowRef}
@@ -801,6 +820,7 @@ export const ChildRow = memo(function ChildRow({
           </Reveal>
         </div>
       </div>
+      <TreeLines shape={tree} />
       {menu.at && (
         <ContextMenu at={menu.at} onClose={menu.close} testId="child-menu">
           <MenuItem id="open" label="Open" onSelect={() => openThread(thread.id)} />
