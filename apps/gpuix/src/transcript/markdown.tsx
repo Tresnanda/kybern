@@ -1,7 +1,8 @@
 import { useTranscriptRowLease } from './Window.tsx'
 // Native GFM keeps prose, tables and syntax highlighting in single bounded
 // nodes. Code expansion contributes rows to the OUTER transcript virtual list.
-import { memo, useMemo, useState, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { spawn } from 'node:child_process'
 import { chatLink } from '../../../../packages/kybern-client/src/chatLinks.ts'
 import { fileRefCandidates, linkifyFileRefs } from '../../../../packages/kybern-client/src/fileRefs.ts'
@@ -25,6 +26,8 @@ import type { MarkdownStream } from '../native/markdown.ts'
 import { StreamMarkdown } from './StreamMarkdown.tsx'
 import { ThreadImage, ThreadImagePreview } from './ThreadImage.tsx'
 import { localImageLink } from '../../../desktop/src/lib/responseImages.ts'
+import { observeElementBounds, type ElementBoundsEvent } from '../native/layout.ts'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 
 /** `image`: a Markdown image on a line of its own (`text` is its source as written, `alt` its caption). */
 export type MarkdownPart = { kind: 'prose' | 'code' | 'image'; text: string; language?: string; alt?: string; key: string }
@@ -317,28 +320,104 @@ export function TextDetail({ text, title, code = false, onClose }: { text: strin
   </Dialog>
 }
 
+/** `KYBERN_REPLY_CULL=0` keeps every piece of a long reply mounted (the A/B control for `BoundedMarkdown`'s culling). */
+const REPLY_CULL = PATCHED_NATIVE && process.env.KYBERN_REPLY_CULL !== '0'
+/** Pieces stay mounted this far above and below the visible part of a reply, so a scroll finds them painted. */
+const OVERSCAN = Number(process.env.KYBERN_REPLY_OVERSCAN ?? 600)
+
+type Piece = { kind: 'text'; text: string } | { kind: 'image'; source: string; alt: string }
+type Measured = { piece: Piece; width: number; height: number }
+
 /** An agent's reply, always whole: `textChunks` pieces (whole blocks each) stacked with the margin the blocks would have
- *  between them in one document. Only the last piece streams, so a live reply re-parses its tail only; settled pieces
- *  keep their nodes. Clamping is the caller's choice (`ClampedMarkdown` for agent-to-agent messages), never a cut here. */
+ *  between them in one document. Only the last piece streams, so a live reply re-parses its tail only. GPUIX lays out
+ *  every mounted element each frame and native Markdown builds an element per block, so a long reply that grows (or
+ *  just follows the tail) re-lays out all of it; pieces well outside the visible part are therefore spacers of their
+ *  measured height, and a frame lays out what is on screen. Clamping is the caller's choice (`ClampedMarkdown` for
+ *  agent-to-agent messages), never a cut here. */
 export const BoundedMarkdown = memo(function BoundedMarkdown({ text, tone = 'bright', stream, at }: { text: string; tone?: 'bright' | 'muted'; stream?: MarkdownStream; at?: string }) {
   const t = useTheme()
   const threadId = usePaneAccess().get().selectedId
   // Text pieces and the images that stand on their own lines between them, in order.
-  const pieces = useMemo(() => splitImages(text).flatMap((segment): ({ kind: 'text'; text: string } | { kind: 'image'; source: string; alt: string })[] =>
+  const pieces = useMemo(() => splitImages(text).flatMap((segment): Piece[] =>
     segment.kind === 'image' ? [segment] : textChunks(segment.text).map(chunk => ({ kind: 'text', text: chunk }))), [text])
-  const theme = cachedMarkdownTheme(t, tone), style = { color: tone === 'bright' ? t.text : muted(t), userSelect: 'text' as const }
-  return <div style={{ display: 'flex', flexDirection: 'column' }}>
+  const gaps = useMemo(() => pieces.map((piece, i) => {
+    const before = pieces[i - 1]
+    return !before ? 0 : before.kind === 'text' && piece.kind === 'text' ? chunkGap(before.text, piece.text) : BLOCK_MARGIN
+  }), [pieces])
+  const theme = cachedMarkdownTheme(t, tone)
+  // One style object per colour: a new object every streamed render would update every piece's node.
+  const color = tone === 'bright' ? t.text : muted(t)
+  const style = useMemo(() => ({ color, userSelect: 'text' as const }), [color])
+  const renderer = useGpuix()?.renderer as { addLayoutObserver?: unknown; getWindowSize?: () => { height: number } } | undefined
+  const cull = REPLY_CULL && pieces.length > 2 && typeof renderer?.addLayoutObserver === 'function'
+  // Heights of mounted pieces (at the width they painted at), the reply's last bounds, and the pieces drawn as spacers.
+  const heights = useRef(new Map<number, Measured>())
+  const bounds = useRef<ElementBoundsEvent | null>(null)
+  const [culled, setCulled] = useState<{ key: string; set: ReadonlySet<number> }>({ key: '', set: new Set() })
+  const latest = useRef({ pieces, gaps })
+  latest.current = { pieces, gaps }
+  const recompute = useCallback(() => {
+    const rect = bounds.current?.rect, clip = bounds.current?.clippedRect
+    if (!rect) return
+    const { pieces, gaps } = latest.current
+    // The visible part in reply coordinates; offscreen, the window stands in for the transcript viewport.
+    const view = clip && clip.height > 0 && clip.width > 0 ? { top: clip.y - rect.y, bottom: clip.y + clip.height - rect.y } : { top: -rect.y, bottom: (renderer?.getWindowSize?.().height ?? 0) - rect.y }
+    const next: number[] = []
+    let y = 0
+    for (let i = 0; i < pieces.length - 1; i++) {
+      y += gaps[i]!
+      const known = heights.current.get(i)
+      // From the first piece without a current height on, offsets are unknown: keep the rest mounted.
+      if (!known || known.piece !== pieces[i] && !samePiece(known.piece, pieces[i]!) || Math.abs(known.width - rect.width) >= 0.5) break
+      if (y + known.height < view.top - OVERSCAN || y > view.bottom + OVERSCAN) next.push(i)
+      y += known.height
+    }
+    const key = next.join(',')
+    setCulled(old => (old.key === key ? old : { key, set: new Set(next) }))
+  }, [renderer])
+  const column = useRef<PublicInstance | null>(null)
+  useEffect(() => {
+    if (!cull || !column.current) return
+    return observeElementBounds(renderer!, column.current.id, event => { bounds.current = event; recompute() })
+  }, [renderer, cull, recompute])
+  const measure = useCallback((index: number, piece: Piece, width: number, height: number) => {
+    const old = heights.current.get(index)
+    if (old && old.piece === piece && old.width === width && old.height === height) return
+    heights.current.set(index, { piece, width, height })
+    recompute()
+  }, [recompute])
+  return <div ref={column} style={{ display: 'flex', flexDirection: 'column' }}>
     {pieces.map((piece, i) => {
-      const last = i === pieces.length - 1, before = pieces[i - 1]
-      const gap = !before ? 0 : before.kind === 'text' && piece.kind === 'text' ? chunkGap(before.text, piece.text) : BLOCK_MARGIN
-      if (piece.kind === 'image') return <div key={i} style={{ display: 'flex', ...(gap ? { marginTop: gap } : {}) }}><ThreadImage threadId={threadId} source={piece.source} alt={piece.alt} at={at} /></div>
-      const Markdown = stream && last ? StreamMarkdown : 'markdown'
-      return <div key={i} style={{ display: 'flex', flexDirection: 'column', ...(gap ? { marginTop: gap } : {}) }}>
-        <Markdown source={piece.text} theme={last ? withStream(theme, stream) : theme} style={style} />
-      </div>
+      const last = i === pieces.length - 1, gap = gaps[i]!
+      const spacer = cull && culled.set.has(i) ? heights.current.get(i) : undefined
+      if (spacer) return <div key={i} style={{ height: spacer.height, flexShrink: 0, ...(gap ? { marginTop: gap } : {}) }} />
+      const body = piece.kind === 'image'
+        ? <ThreadImage threadId={threadId} source={piece.source} alt={piece.alt} at={at} />
+        : (() => { const Markdown = stream && last ? StreamMarkdown : 'markdown'; return <Markdown source={piece.text} theme={last ? withStream(theme, stream) : theme} style={style} /> })()
+      const flex = piece.kind === 'image' ? { display: 'flex' as const } : { display: 'flex' as const, flexDirection: 'column' as const }
+      if (!cull || last) return <div key={i} style={{ ...flex, ...(gap ? { marginTop: gap } : {}) }}>{body}</div>
+      return <MeasuredPiece key={i} index={i} piece={piece} gap={gap} flex={flex} onMeasure={measure}>{body}</MeasuredPiece>
     })}
   </div>
 })
+
+const samePiece = (a: Piece, b: Piece) => a.kind === 'text' ? b.kind === 'text' && a.text === b.text : b.kind === 'image' && a.source === b.source && a.alt === b.alt
+
+/** A mounted piece that reports its painted height whenever it changes (a first paint can still be short). */
+function MeasuredPiece({ index, piece, gap, flex, onMeasure, children }: { index: number; piece: Piece; gap: number; flex: { display: 'flex'; flexDirection?: 'column' }; onMeasure: (index: number, piece: Piece, width: number, height: number) => void; children: ReactNode }) {
+  const renderer = useGpuix()?.renderer
+  const ref = useRef<PublicInstance | null>(null)
+  const report = useRef({ index, piece, onMeasure })
+  report.current = { index, piece, onMeasure }
+  useEffect(() => {
+    if (!renderer || !ref.current) return
+    return observeElementBounds(renderer, ref.current.id, event => {
+      const rect = event.rect
+      if (rect && rect.height > 0) report.current.onMeasure(report.current.index, report.current.piece, rect.width, rect.height)
+    })
+  }, [renderer])
+  return <div ref={ref} style={{ ...flex, ...(gap ? { marginTop: gap } : {}) }}>{children}</div>
+}
 
 /** The collapsed margin between two neighbouring prose pieces, as between parts (`partGap`). */
 export const chunkGap = (before: string, after: string) => partGap({ kind: 'prose', text: before, key: '' }, { kind: 'prose', text: after, key: '' })
