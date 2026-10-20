@@ -71,6 +71,7 @@ export function Button({
   icon,
   iconAfter,
   swap,
+  trailing,
 }: {
   children?: ReactNode
   variant?: Variant
@@ -81,6 +82,8 @@ export function Button({
   iconAfter?: string
   /** A label that reports state ("Send" → "Sending…"): the old text leaves while the new one rises in (`TextSwap`). */
   swap?: boolean
+  /** After the label (a rotating `Chevron`). */
+  trailing?: ReactNode
 }) {
   const t = useTheme()
   const color =
@@ -137,6 +140,7 @@ export function Button({
             </Label>
       )}
       {iconAfter && <Icon source={iconAfter} size={16} color={color} style={{ opacity: 0.8 }} />}
+      {trailing}
     </div>
   )
 }

@@ -17,7 +17,10 @@ import { Icon } from './icons.tsx'
 import { MatrixLoader } from './MatrixLoader.tsx'
 import { subscribe, useApp, usePaneAccess, usePaneCompact } from './state.ts'
 import { Label, REDUCED_MOTION, useTheme } from './ui.tsx'
-import { DISTANCE, DURATION, EASE } from './motion/kit.tsx'
+import { BLUR, DISTANCE, DURATION, EASE } from './motion/kit.tsx'
+import { Presence } from './motion/Presence.tsx'
+import { PATCHED_NATIVE } from './native/local-build.ts'
+import { useAppearance } from './settings/appearance.ts'
 import { CodeChunk, CodeHeader, markdownParts, partGap, Prose, textChunks } from './transcript/markdown.tsx'
 import { MermaidBlock } from './transcript/MermaidBlock.tsx'
 import { MessageRail, type RailItem } from './transcript/rail.tsx'
@@ -424,6 +427,7 @@ export function Transcript() {
           </div>
         </div>
       )}
+      <BottomFade visible={!atTail} bottom={COMPOSER_INSET - 64 + panelHeight} />
       <ScrollToBottom visible={!atTail} bottom={COMPOSER_INSET - 64 + 24 + panelHeight} onClick={scrollToBottom} />
     </div></SparseRetention.Provider></TranscriptRowStateScope.Provider></TranscriptFocusRestoration.Provider>
   )
@@ -463,23 +467,18 @@ const TurnItem = memo(function TurnItem({ turn, threadId, isLast, threadRunning,
 /** 32px round button with an arrow (`size-8 rounded-full border bg-elevated-primary-opaque`).
  *  The desktop moves it between `translate-y-0 opacity-100` and `-translate-y-1
  *  scale-95 opacity-0 blur-[2px]` over `--duration-fast` / `--ease-smooth-out`,
- *  both ways. GPUIX keeps the fade and the 4px drift (hidden sits 4px higher)
- *  and drops scale and blur; Reduce Motion keeps only the fade. */
+ *  both ways. Here the same values run on the paint-only `Presence`: it appears
+ *  mid-scroll, so nothing may re-lay out the window per frame. The exit is
+ *  faster (150 ms). Reduce Motion fades only. */
 export function ScrollToBottom({ visible, bottom, onClick }: { visible: boolean; bottom: number; onClick: () => void }) {
   const t = useTheme()
-  const [mounted, setMounted] = useState(visible)
-  if (visible && !mounted) setMounted(true)
-  if (!mounted) return null
-  const hidden = bottom + (REDUCED_MOTION ? 0 : DISTANCE.micro)
+  const hidden = { opacity: 0, translateY: -DISTANCE.micro, scale: 0.95, blur: BLUR.small }
   return (
-    <motion.div
-      initial={{ opacity: 0, bottom: hidden }}
-      animate={{ opacity: visible ? 1 : 0, bottom: visible ? bottom : hidden }}
-      transition={{ duration: REDUCED_MOTION ? DURATION.quick : DURATION.fast, ease: [...EASE.smoothOut] as [number, number, number, number] }}
-      onMotionComplete={() => {
-        if (!visible) setMounted(false)
-      }}
-      style={{ position: 'absolute', left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}
+    <Presence
+      show={visible}
+      enter={{ initial: REDUCED_MOTION ? { opacity: 0 } : hidden, animate: { opacity: 1, translateY: 0, scale: 1, blur: 0 }, transition: { duration: REDUCED_MOTION ? DURATION.quick : DURATION.fast, ease: [...EASE.smoothOut] as [number, number, number, number] }, origin: [0.5, 1] }}
+      exit={{ to: hidden, duration: 0.15 }}
+      style={{ position: 'absolute', left: 0, right: 0, bottom, alignItems: 'center', pointerEvents: 'none' }}
     >
       <div
         testId="scroll-to-bottom"
@@ -504,6 +503,25 @@ export function ScrollToBottom({ visible, bottom, onClick }: { visible: boolean;
       >
         <Icon source={T.arrowDown} size={14} color={t.text} />
       </div>
-    </motion.div>
+    </Presence>
+  )
+}
+
+/**
+ * `.chat-scroll-fade` (kit.css:3333): a 32 px wash from the surface up into the transcript, just above the composer, that says
+ * "there is more below" while the view is away from the tail. It fades in and out over 150 ms (`--ease-out`, paint-only; no
+ * movement) instead of tracking the scroll offset, and, like the desktop, it is not drawn on a translucent window. The first
+ * render is at rest: opening a thread already scrolled away shows it at once.
+ */
+export function BottomFade({ visible, bottom }: { visible: boolean; bottom: number }) {
+  const t = useTheme()
+  const { translucent } = useAppearance()
+  if (translucent) return null
+  return (
+    <div
+      testId="transcript-bottom-fade"
+      paintTransform={PATCHED_NATIVE ? { initial: false, animate: { opacity: visible ? 1 : 0 }, transition: { duration: DURATION.quick, ease: [...EASE.out] as [number, number, number, number] } } : undefined}
+      style={{ position: 'absolute', left: 0, right: 0, bottom, height: 32, pointerEvents: 'none', ...(PATCHED_NATIVE ? {} : { opacity: visible ? 1 : 0 }), background: { type: 'linear-gradient', angle: 180, stops: [{ color: alpha(t.surface, 0), position: 0 }, { color: t.surface, position: 1 }] } }}
+    />
   )
 }

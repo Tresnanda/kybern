@@ -9,6 +9,8 @@ import { useDock } from '../dock/store.ts'
 import { IconButton } from '../sidebar/rows.tsx'
 import { N } from '../nav/glyphs.ts'
 import { EASE_OUT, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { DURATION, EASE } from '../motion/kit.tsx'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { Floating } from './Floating.tsx'
 import { actionParts } from './action.ts'
 import { Shimmer } from '../transcript/motion.tsx'
@@ -54,24 +56,39 @@ function Live({ threadId, running, insetBottom }: { threadId: string; running: b
   const [overBody, setOverBody] = useState(false), [overControls, setOverControls] = useState(false)
   const hovered = overBody || overControls
   const [dismissed, setDismissed] = useState(false)
-  useEffect(() => { if (running) { setDismissed(false); setFrame(null); setPrevious(null) } }, [running])
+  // Hiding (the ✕ or the 12 s after a task ends) fades the card out first; `closing` carries which one it is.
+  const [closing, setClosing] = useState<'dismiss' | 'idle' | null>(null)
+  useEffect(() => { if (running) { setDismissed(false); setClosing(null); setFrame(null); setPrevious(null) } }, [running])
+  const left = () => { if (closing === 'dismiss') setDismissed(true); setClosing(null); setFrame(null); setPrevious(null) }
+  // `.computer-live-marker`: a ring ripples out from where the agent clicked (480 ms, at most three alive, none under Reduce Motion).
+  const [ripples, setRipples] = useState<{ id: number; x: number; y: number }[]>([])
+  const lastClick = useRef('')
   useEffect(() => {
-    if (!running || dismissed) return
+    const point = frame?.point
+    if (!frame || !point || !PATCHED_NATIVE || REDUCED_MOTION) return
+    const key = `${point[0]},${point[1]},${frame.action ?? ''}`
+    if (key === lastClick.current) return
+    lastClick.current = key
+    setRipples(list => [...list.slice(-2), { id: frame.seq, x: Math.max(0, Math.min(1, point[0])), y: Math.max(0, Math.min(1, point[1])) }])
+  }, [frame?.seq])
+  useEffect(() => {
+    if (!running || dismissed || closing) return
     const poll = new FramePoller(threadId, p => getClient()!.call('computer.frame', p), acceptFrame)
     const off = onWindowVisibility(visible => poll.show(visible))
     poll.show(isWindowVisible())
     return () => { poll.stop(); off() }
-  }, [threadId, running, dismissed])
-  useEffect(() => { if (running || !frame) return; const timer = setTimeout(() => setFrame(null), 12_000); return () => clearTimeout(timer) }, [running, !!frame])
+  }, [threadId, running, dismissed, !!closing])
+  useEffect(() => { if (running || !frame) return; const timer = setTimeout(() => setClosing(current => current ?? 'idle'), 12_000); return () => clearTimeout(timer) }, [running, !!frame])
   if (!frame || dismissed) return null
   const aspect = frame.width > 0 && frame.height > 0 ? frame.width / frame.height : 1.6
   const width = Math.max(208, Math.min(expanded ? 520 : 320, (expanded ? 480 : 360) * aspect))
-  return <Floating insetBottom={insetBottom} storageKey="kybern.computerLiveView.corner" testId="computer-live" width={width} height={width / aspect} overlayDrag cardStyle={LIVE_CARD} insetEnd={dock.open ? Math.min(dock.width, 538) : 0}>
+  return <Floating insetBottom={insetBottom} storageKey="kybern.computerLiveView.corner" testId="computer-live" width={width} height={width / aspect} overlayDrag leaving={!!closing} onLeft={left} cardStyle={LIVE_CARD} insetEnd={dock.open ? Math.min(dock.width, 538) : 0}>
     <div onMouseEnter={() => setOverBody(true)} onMouseLeave={() => setOverBody(false)} style={{ position: 'relative', flexGrow: 1, minHeight: 0 }}>{previous && <motion.div key={imageRevision - 1} initial={false} animate={{ opacity: 1 }} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' }}><FrameImage frame={previous} /></motion.div>}
       <motion.div key={imageRevision} initial={previous && !REDUCED_MOTION ? { opacity: 0 } : false} animate={{ opacity: 1 }} transition={{ duration: 0.18, ease: EASE_OUT }} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' }}><FrameImage frame={frame} current /></motion.div>{frame.point && <div style={{ position: 'absolute', left: Math.max(0, Math.min(1, frame.point[0])) * width - 7, top: Math.max(0, Math.min(1, frame.point[1])) * width / aspect - 7, width: 14, height: 14, borderRadius: 7, borderWidth: 2, borderColor: '#ffffff', backgroundColor: 'rgba(40,110,245,0.6)', pointerEvents: 'none' }} />}
       <Scrim height={width >= 260 ? 76 : 56} />
       <div style={{ position: 'absolute', left: 12, right: 12, bottom: 10, display: 'flex', flexDirection: 'column', gap: 1, pointerEvents: 'none' }}>{width >= 260 && <Label color="rgba(255,255,255,0.72)" size={11} lineHeight={14} weight={500} truncate>{frame.app}</Label>}<Caption action={frame.action ?? (running ? 'Working' : 'Done')} live={running} /></div>
-      <div onMouseEnter={() => setOverControls(true)} onMouseLeave={() => setOverControls(false)} backdrop={hovered && BACKDROP_ALLOWED ? {...BACKDROP.liveControls,radius:8} : undefined} style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 4, opacity: hovered ? 1 : 0, pointerEvents: hovered ? 'auto' : 'none', backgroundColor: BACKDROP_ALLOWED ? 'rgba(0,0,0,.45)' : t.popover, borderRadius: 8 }}><IconButton icon={N.window} size={28} label={expanded ? 'Show smaller' : 'Show larger'} onClick={() => setExpanded(!expanded)} /><IconButton icon={N.x} size={28} testId="computer-live-close" label="Hide until the next task" onClick={() => { setDismissed(true); setFrame(null); setPrevious(null) }} /></div>
+      {ripples.map(ripple => <Ripple key={ripple.id} x={ripple.x * width} y={ripple.y * width / aspect} onDone={() => setRipples(list => list.filter(item => item.id !== ripple.id))} />)}
+      <div onMouseEnter={() => setOverControls(true)} onMouseLeave={() => setOverControls(false)} paintTransform={controlsTransform(hovered)} backdrop={hovered && BACKDROP_ALLOWED ? {...BACKDROP.liveControls,radius:8} : undefined} style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 4, ...(PATCHED_NATIVE ? {} : { opacity: hovered ? 1 : 0 }), pointerEvents: hovered ? 'auto' : 'none', backgroundColor: BACKDROP_ALLOWED ? 'rgba(0,0,0,.45)' : t.popover, borderRadius: 8 }}><IconButton icon={N.window} size={28} label={expanded ? 'Show smaller' : 'Show larger'} onClick={() => setExpanded(!expanded)} /><IconButton icon={N.x} size={28} testId="computer-live-close" label="Hide until the next task" onClick={() => setClosing('dismiss')} /></div>
     </div>
   </Floating>
 }
@@ -102,4 +119,18 @@ function Caption({ action, live }: { action: string; live: boolean }) {
       : live && index === lead && !part.subject ? <Shimmer key={index} text={part.text} color="rgba(255,255,255,0.62)" size={12} lineHeight={16} />
       : <Label key={index} color={part.subject ? '#ffffff' : 'rgba(255,255,255,0.62)'} size={12} lineHeight={16} weight={part.subject ? 500 : undefined} truncate>{part.text}</Label>)}
   </div>
+}
+
+/** `.computer-live-controls`: the buttons rise 4 px into place over 200 ms on hover and settle back in 120 ms (opacity only under Reduce Motion). */
+function controlsTransform(shown: boolean) {
+  if (!PATCHED_NATIVE) return undefined
+  return { initial: false as const, animate: { opacity: shown ? 1 : 0, translateY: shown || REDUCED_MOTION ? 0 : 4 }, transition: { duration: shown ? 0.2 : 0.12, ease: [...EASE.out] as [number, number, number, number] } }
+}
+/** `.computer-live-marker`: a 24 px ring that grows from 40% to 160% while fading from 50% over 480 ms, then removes itself. */
+function Ripple({ x, y, onDone }: { x: number; y: number; onDone: () => void }) {
+  return <div
+    paintTransform={{ initial: { scale: 0.4, opacity: 0.5 }, animate: { scale: 1.6, opacity: 0 }, transition: { duration: 0.48, ease: [...EASE.out] } }}
+    onMotionComplete={onDone}
+    style={{ position: 'absolute', left: x - 12, top: y - 12, width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#ffffff', pointerEvents: 'none' }}
+  />
 }
