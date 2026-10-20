@@ -151,15 +151,21 @@ export function popupOrigin(side: Side = 'bottom', align: Align = 'start'): [num
   }
 }
 
+/** `KYBERN_POPUP_BLUR=1` restores the desktop's 2 px blur on menu opens (the A/B control for `popupTransform`). */
+const POPUP_BLUR = process.env.KYBERN_POPUP_BLUR === '1'
+
 /**
- * The paint-only open of a popup (`menu.tsx:104`, `popover.tsx:64`): scale `--scale-medium` (0.97) and a 2 px blur → rest and
- * opacity 0 → 1, 250 ms `--ease-smooth-out`, about `origin`. `kind: 'tooltip'` (`tooltip.tsx`): scale 0.98 and opacity only,
- * 150 ms `--ease-out`. Reduce Motion fades 150 ms; `undefined` with the stock addon.
+ * The paint-only open of a popup (`menu.tsx:104`, `popover.tsx:64`): scale `--scale-medium` (0.97) → rest and opacity 0 → 1,
+ * 250 ms `--ease-smooth-out`, about `origin`. The desktop also clears a 2 px blur; here a tween that used blur ends with a
+ * full window render (native drops the backdrop pass), 21-30 ms on a long thread, which drops a frame on every menu open,
+ * so menus (opened 100+ times a day) scale and fade only; rare surfaces (the dialog's `appear`) keep the blur.
+ * `kind: 'tooltip'` (`tooltip.tsx`): scale 0.98 and opacity only, 150 ms `--ease-out`. Reduce Motion fades 150 ms;
+ * `undefined` with the stock addon.
  */
 export function popupTransform(origin: [number, number] = [0.5, 0.5], kind: keyof typeof POPUP = 'menu'): PaintTransformProps | undefined {
   if (!PATCHED_NATIVE) return undefined
   if (REDUCED_MOTION) return { ...REDUCED_FADE, origin }
-  const initial: PaintTransformValue = kind === 'tooltip' ? { opacity: 0, scale: SCALE.small } : { opacity: 0, scale: SCALE.medium, blur: BLUR.small }
+  const initial: PaintTransformValue = kind === 'tooltip' ? { opacity: 0, scale: SCALE.small } : { opacity: 0, scale: SCALE.medium, ...(POPUP_BLUR ? { blur: BLUR.small } : {}) }
   return { initial, animate: restOf(initial), transition: tween(POPUP[kind].duration, POPUP[kind].ease), origin }
 }
 

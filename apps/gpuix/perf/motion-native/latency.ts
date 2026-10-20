@@ -12,7 +12,9 @@
  *   (the default popup) that is the scope's presented opacity; for the layout tween (`KYBERN_POPUP_MOTION=layout`)
  *   the `motion` opacity sampled by the render before that present;
  * - `renders`: full window renders between the click and the end of the motion; `missing`: retained ticks that fell
- *   back to a render because the scope was not in the presented scene yet.
+ *   back to a render because the scope was not in the presented scene yet;
+ * - `frames`: intervals between presents from the first one after the click to the end of the motion, over all opens
+ *   (p50/p95/max and the count over 33 ms): whether the motion itself holds 60 fps.
  *
  * Results append to previews/motion/native/latency.jsonl with the addon hash and env.
  */
@@ -27,10 +29,10 @@ import { waitForWindowOnscreen, requireWindowOnscreen } from '../bench/window-on
 import { launchFixture } from '../../src/requests/harness.ts'
 import { cpuSeconds, gpuNs, footprintMiB } from '../../scripts/idle-metrics.ts'
 
-const DATA = '/Users/mymac/projects/ade-gpuix-scratch/motion-native/bench'
+const DATA = process.env.MOTION_DATA ?? '/Users/mymac/projects/ade-gpuix-scratch/motion-native/bench'
 // The lane's port 4371 is taken by another lane's seed server; 4379 is this probe's own.
 const PORT = Number(process.env.MOTION_PORT ?? 4379)
-const OUT = '/Users/mymac/projects/ade/previews/motion/native'
+const OUT = process.env.MOTION_OUT ?? '/Users/mymac/projects/ade/previews/motion/native'
 const root = path.resolve(import.meta.dir, '../..')
 const addon = process.env.MOTION_ADDON ?? path.join(root, 'native/build/gpuix-native.darwin-arm64.node')
 
@@ -102,6 +104,24 @@ const SCENES: Record<string, Scene> = {
     // Park, then click: a hover change right before the click would be a different workload.
     prepare: async (app, b) => { await app.mouse.move(centre(b)); await delay(300) },
     act: (app, b) => app.mouse.click(centre(b)),
+    reset: app => app.getByTestId('app-ready').press('escape'),
+  },
+  // The composer's permission mode picker (a smaller menu than the model picker).
+  'mode-picker': {
+    kind: 'enter', ms: 250,
+    open: async c => { await c('idle'); await c('open', { thread: manifest.long3000 }) },
+    target: app => bounds(app, 'mode-picker'),
+    prepare: async (app, b) => { await app.mouse.move(centre(b)); await delay(300) },
+    act: (app, b) => app.mouse.click(centre(b)),
+    reset: app => app.getByTestId('app-ready').press('escape'),
+  },
+  // A sidebar thread row's context menu at the pointer (right click).
+  'context-menu': {
+    kind: 'enter', ms: 250,
+    open: async c => { await c('idle'); await c('open', { thread: manifest.long3000 }) },
+    target: async app => { for (const id of manifest.threads.slice(0, 40)) { try { for (const { bounds: b } of await app.getByTestId(`thread-${id}`).all()) if (b && b.width > 0 && b.y > 60) return b } catch {} } throw Error('No sidebar thread row') },
+    prepare: async (app, b) => { await app.mouse.move(centre(b)); await delay(300) },
+    act: (app, b) => app.mouse.click(centre(b), { button: 2 }),
     reset: app => app.getByTestId('app-ready').press('escape'),
   },
   // The pointer moving down the sidebar's thread rows, one row per action: hover fills (N1) and reveals, for their cost.
@@ -184,7 +204,8 @@ for (const name of scenarios) {
       // Exits start from the React batch the pointer move caused (the same clock point on every addon).
       const input = scene.kind === 'exit' ? after.find(e => e.kind === 'batch') : up && batch && batch.t >= up.t ? up : down
       let motion = new Map<string, number>(), firstPaint: number | undefined, firstVisible: number | undefined, visibleValue: number | undefined
-      let presents = 0, renders = 0, missing = 0, firstPaintPresents = 0
+      let presents = 0, renders = 0, missing = 0, firstPaintPresents = 0, lastPresent: number | undefined
+      const intervals: number[] = []
       for (const e of after) {
         if (!input || e.t < input.t) continue
         if (e.t > input.t + scene.ms + 300) break
@@ -193,6 +214,8 @@ for (const name of scenarios) {
         if (e.kind === 'ptx-tick') missing += (e.missing ?? []).filter(id => scene.kind === 'exit' || !old.has(id)).length
         if (e.kind !== 'present') continue
         presents++
+        if (lastPresent !== undefined && e.t <= input.t + scene.ms) intervals.push(e.t - lastPresent)
+        lastPresent = e.t
         // Enter: a scope (or layout-tween element) that was not on screen before. Exit: one that was at rest (opacity 1, or
         // untagged and so absent) and now shows its first step out.
         const fresh = scene.kind === 'exit'
@@ -210,7 +233,7 @@ for (const name of scenarios) {
       const mountPresent = mountRender ? after.find(e => e.kind === 'present' && e.t >= mountRender.t) : undefined
       const mountWork = mountRender ? after.find(e => e.kind === 'work' && e.t >= mountRender.t) : undefined
       const phases = input && mountRender && mountPresent ? { renderAfterInput: mountRender.t - input.t, mountFrame: mountPresent.t - mountRender.t, mountDraw: mountWork?.values.get('draw'), mountLayout: mountWork?.values.get('layout') } : {}
-      samples.push({ ...phases, timeline, input: input?.kind, batchAfterInputMs: batch && input ? batch.t - input.t : undefined, firstPaint, firstVisible, visibleValue, firstPaintPresents, renders, missing })
+      samples.push({ ...phases, intervals, timeline, input: input?.kind, batchAfterInputMs: batch && input ? batch.t - input.t : undefined, firstPaint, firstVisible, visibleValue, firstPaintPresents, renders, missing })
     }
     const elapsed = (performance.now() - s0) / 1000, run = events.slice(e0)
     const resources = { seconds: elapsed, cpuPercent: 100 * (cpuSeconds(f.pid) - c0) / elapsed, gpuMs: ((gpuNs().get(f.pid) ?? 0) - g0) / 1e6, footprintMiB: footprintMiB(f.pid),
@@ -220,7 +243,9 @@ for (const name of scenarios) {
     const idle0 = events.filter(e => e.kind === 'present').length; await delay(3000)
     const idlePresents = events.filter(e => e.kind === 'present').length - idle0
     const pick = (k: string) => samples.map(s => s[k] as number | undefined).filter((v): v is number => typeof v === 'number')
-    Object.assign(row, { samples, firstPaint: distribution(pick('firstPaint')), firstVisible: distribution(pick('firstVisible')), batch: distribution(pick('batchAfterInputMs')), renders: distribution(pick('renders')), renderAfterInput: distribution(pick('renderAfterInput')), mountFrame: distribution(pick('mountFrame')), mountDraw: distribution(pick('mountDraw')), mountLayout: distribution(pick('mountLayout')), visibleValue: distribution(pick('visibleValue')), missing: pick('missing').reduce((a, b) => a + b, 0), unseen: samples.filter(s => s.firstVisible === undefined).length, resources, idlePresents })
+    const frames = samples.flatMap(s => s.intervals as number[]).sort((a, b) => a - b)
+    const frameStats = frames.length ? { count: frames.length, p50: frames[Math.floor(frames.length * 0.5)], p95: frames[Math.min(frames.length - 1, Math.floor(frames.length * 0.95))], max: frames.at(-1), over33: frames.filter(v => v > 33.4).length } : null
+    Object.assign(row, { frames: frameStats, samples, firstPaint: distribution(pick('firstPaint')), firstVisible: distribution(pick('firstVisible')), batch: distribution(pick('batchAfterInputMs')), renders: distribution(pick('renders')), renderAfterInput: distribution(pick('renderAfterInput')), mountFrame: distribution(pick('mountFrame')), mountDraw: distribution(pick('mountDraw')), mountLayout: distribution(pick('mountLayout')), visibleValue: distribution(pick('visibleValue')), missing: pick('missing').reduce((a, b) => a + b, 0), unseen: samples.filter(s => s.firstVisible === undefined).length, resources, idlePresents })
     requireScreen(); requireWindowOnscreen(f.pid)
     const markers1 = buildMarkers(), foreign = [...foreign0, ...foreignApps(f.pid)]
     row.valid = !markers0.length && !markers1.length && !foreign.length
@@ -229,7 +254,7 @@ for (const name of scenarios) {
   finally { await f?.close(); release(); if (raw.length) writeFileSync(path.join(OUT, `raw-${label}-${name}.txt`), raw.join('')) }
   appendFileSync(path.join(OUT, 'latency.jsonl'), JSON.stringify(row) + '\n')
   const d = (k: string) => { const v = row[k] as { p50?: number; p95?: number; mean?: number } | undefined; return v ? `${v.p50?.toFixed(1)}/${v.p95?.toFixed(1)}` : '-' }
-  console.log(`${label} ${name} valid=${row.valid} firstVisible p50/p95=${d('firstVisible')} firstPaint=${d('firstPaint')} batch=${d('batch')} render=${d('renderAfterInput')} mountFrame=${d('mountFrame')} draw=${d('mountDraw')} layout=${d('mountLayout')} value=${d('visibleValue')} renders=${d('renders')} missing=${row.missing} unseen=${row.unseen} ${JSON.stringify(row.resources)} idle=${row.idlePresents}${row.error ? ' ERROR ' + row.error : ''}`)
+  console.log(`${label} ${name} valid=${row.valid} frames=${JSON.stringify(row.frames)} firstVisible p50/p95=${d('firstVisible')} firstPaint=${d('firstPaint')} batch=${d('batch')} render=${d('renderAfterInput')} mountFrame=${d('mountFrame')} draw=${d('mountDraw')} layout=${d('mountLayout')} value=${d('visibleValue')} renders=${d('renders')} missing=${row.missing} unseen=${row.unseen} ${JSON.stringify(row.resources)} idle=${row.idlePresents}${row.error ? ' ERROR ' + row.error : ''}`)
 }
 await fixture.close()
 if (!keep) fixture.remove()

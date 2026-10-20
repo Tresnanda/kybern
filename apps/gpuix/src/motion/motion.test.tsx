@@ -104,7 +104,8 @@ native('popup origin follows the trigger corner and the open values match menu.t
   expect(popupOrigin('top', 'start')).toEqual([0, 1])
   expect(popupOrigin('right', 'center')).toEqual([0, 0.5])
   expect(popupOrigin('left', 'center')).toEqual([1, 0.5])
-  expect(popupTransform([0, 0])!.initial).toEqual({ opacity: 0, scale: 0.97, blur: 2 })
+  // No blur on menus: a settling blur costs a full window render (`popupTransform`).
+  expect(popupTransform([0, 0])!.initial).toEqual({ opacity: 0, scale: 0.97 })
   expect(popupTransform([0, 0])!.transition!.duration).toBe(0.25)
   expect(popupTransform([0, 0], 'tooltip')!.initial).toEqual({ opacity: 0, scale: 0.98 })
   expect(popupTransform([0, 0], 'tooltip')!.transition!.duration).toBe(0.15)
