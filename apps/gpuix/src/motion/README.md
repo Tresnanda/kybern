@@ -11,13 +11,23 @@ that pass on each frame.
 
 | Tier | Tools | Per frame | Use for |
 | --- | --- | --- | --- |
+| 0. Compositor | settled `paintAnimation` loops (matrix, breathe, shimmer, rotate) | Nothing in the app: Core Animation runs the curve in WindowServer. The window presents no frames until the scene changes. | Every continuous loop. You get it automatically by using the loop components below. |
 | 1. Paint-only | `paintTransform`, `paintTranslate`, `paintAnimation`, `paintTransform.press` | Native display callback re-maps retained paint. No React, no element build, no Taffy layout, no island wake. Then one scene replay + GPU submit. | Everything that moves, scales, fades, rotates or pulses without changing layout. **Default choice.** |
 | 2. Native tween | `motion.div` / `motion={…}` (opacity, top/left/right/bottom, width, height, borderRadius, translateX/Y, SVG rotate), `<anchored motion>` | No React, but the native host re-renders and re-lays out the window (cached islands replay) every frame. | Things that must change layout: disclosure height, panel width, sliding pills whose width changes. Keep them short (≤ 300 ms). |
 | 3. JS per frame | `onFrame` (`native/frame.ts`), `useLoaderTime` | A React commit, then tier 2's work, every frame. | Nothing that loops. Only computations that cannot be expressed natively, and then only for one-shot motions. |
 
-A tier-1 frame in a long thread costs well under a millisecond of CPU; a tier-2 frame re-lays out every
-uncached element in the window, so its cost grows with what is on screen. A tier-3 loop at 60 Hz was measured
-at ~35% CPU and was rejected. **Never drive a loop from React state.**
+Measured in the 3,000-turn bench thread (`../../perf/motion-fps-2026-10-20.md`): a settled loop costs
+nothing (Home with a running thread: 1.1% CPU, ~6 ms GPU per 15 s, the same as idle); the same loop painted
+in the scene at 60 Hz cost 12–14% CPU and 0.9–3.3 s GPU per 15 s. A tier-2 frame re-renders the window
+(5–9 ms CPU there; fine for 60 Hz, not for 120 Hz). A tier-3 loop at 60 Hz was measured at ~35–50% CPU and
+was rejected. **Never drive a loop from React state.**
+
+One caveat for tier 1: a `paintTransform` whose element mounts in the same commit (a popup's content) can
+take its first retained step a frame late, because the native tick falls back to a full render when the
+scope has not been tagged yet. For input-triggered popups that is +5–8 ms to the first visible step on
+average (measured on the model picker), so `PopupLayer` and the `Rise`/`Popup`/`Swap` helpers keep their
+tier-2 `motion` for now; use tier 1 for motion on elements that are already mounted (press, toggles, pills,
+drag, reorder, scroll-linked and long or continuous motion).
 
 ## Tier 1: paint-only primitives
 
@@ -84,12 +94,17 @@ The leaf must be passive: fixed size, no children (except a `Label`'s text), no 
 style, no border, shadow or backdrop. Loops run until the prop is removed, so **always gate them**:
 
 ```tsx
-const loop = useLoopVisibility(!REDUCED_MOTION)   // painted inside its clip?
-const shown = useWindowVisible(loop.visible)       // window on screen? (kit/Spin.tsx)
+const loop = useLoopRunning(!REDUCED_MOTION)       // native/loop-visibility.ts: painted in its clip + window shown
 <svg ref={loop.ref} source={ARC}
-  {...(loop.visible && shown ? { paintAnimation: { kind: 'rotate', cycleMs: 1300 } } : {})}
+  {...(loop.running ? { paintAnimation: { kind: 'rotate', cycleMs: 1300 } } : {})}
   style={{ width: 14, height: 14, color }} />
 ```
+
+Once a loop's leaf has stayed put for one frame, is unclipped and nothing is painted over it, it moves to Core
+Animation (tier 0) by itself (`native/README.md` → "Compositor loops"). To keep that working: give loaders a
+fixed slot (don't let a label next to them reflow every second), keep them out of clipped scroll edges and
+out of a `paintTransform` that is fading or blurring, and prefer single-colour glyphs (subpixel text stays in
+the scene). A loop that is moving, clipped or covered still animates smoothly in the scene at display rate.
 
 Use the existing components rather than new loops: `MatrixLoader`, `kit/Spin.tsx` (`SpinIcon`),
 `kit/Spinner.tsx`, `kit/Skeleton.tsx`, `transcript/motion.tsx` (`Shimmer`), `tasks/Glyphs.tsx`
@@ -123,7 +138,10 @@ height.
 ## What makes motion choppy
 
 - A loop driven by React state or a timer (`setInterval`, `useLoaderTime`, `useLoaderStep`): it either steps
-  (the historical 5 Hz loaders) or commits React 60 times a second.
+  (the historical 5 Hz loaders, still what `KYBERN_NATIVE_PAINT_ANIMATIONS=0` and the stock addon show) or
+  commits React 60 times a second.
+- A loop whose bounds change every frame or second (a loader inside a row whose width tracks a ticking label):
+  it can never settle into the compositor and keeps the window presenting at 60 Hz.
 - A tier-2 tween of `top`/`left`/`opacity` in a heavy window: correct pixels, but every frame re-lays out the
   window; long threads push frames over 16.7 ms.
 - Starting motion and heavy work in the same frame (mounting a large subtree as it fades in). Mount first,
@@ -158,6 +176,8 @@ exits ≈30% faster than entrances; keyboard-driven and 100+/day actions stay in
 
 ## Checking your animation
 
+- Loops in the compositor: `bun perf/motion-fps/lab-check.ts` (layers, curves, hand-back); add your component
+  to `perf/motion-fps/lab.tsx` if it is a new loop. `MOTION_CA_PROBE=1` on `run.ts` probes a scenario.
 - Frame rate and cost: `bun perf/motion-fps/run.ts <label> <scenario>` (scratch daemon, hidden test display,
   shared UI lease) reports submission intervals p50/p95/p99, frames over 16.7/33 ms, full draws (window
   relayouts), React commits, CPU, GPU and footprint. Add a scenario for a new loop or a heavy transition.

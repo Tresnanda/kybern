@@ -608,10 +608,11 @@ The pinned GPUI already implements `Window::request_animation_frame()` through
 `on_next_frame`/`schedule_frame`, with `gpui_macos/src/display_link.rs` supplying
 CVDisplayLink pacing and idle suspension. Native motion uses this path. The shared
 The shared source now supports display-rate JS sampling and native matrix/task
-loops without React commits. Full-app loop integration is still explicitly
-opt-in with `KYBERN_NATIVE_PAINT_ANIMATIONS=1`; the historical coarse clock remains
-outside that experiment because its smooth JS replacement regressed running CPU.
-That coarse behavior remains an unresolved pacing defect. Elapsed labels have a
+loops without React commits. Since motion/fps (2026-10-20) native loops are the
+default with the patched addon (`KYBERN_NATIVE_PAINT_ANIMATIONS=0` /
+`KYBERN_NATIVE_TEXT_PAINT=0` select the old 5 Hz React clock and React-sampled
+live labels for comparisons), and settled loops run in Core Animation
+("Compositor loops" below). Elapsed labels have a
 separate visibility-aware seconds clock. Round-seven measurements and remaining
 acceptance gaps are in `../perf/pacing-round7-2026-10-17.md`.
 
@@ -1166,9 +1167,10 @@ inactive full-rate motion are enabled by default; `KYBERN_VSYNC_WAKE=0` and
 `KYBERN_FULL_RATE=0` select the historical paths for comparisons.
 `KYBERN_REGION_PAINT=1` opts into retained damage rendering; the target is allocated
 only during eligible passive loops and released when they park. Path/filter
-scenes use full rendering. `KYBERN_NATIVE_TEXT_PAINT=1` opts into passive glyph
-tint. Both remain opt-in because repeated full-app GPU controls did not reliably
-meet the running-thread gate. `frame-check.ts` captures actual window pixels plus bounded
+scenes use full rendering; it remains opt-in. Passive glyph tint
+(`KYBERN_NATIVE_TEXT_PAINT`) is on by default since motion/fps; settled loops
+then run in Core Animation ("Compositor loops"), which removed the GPU cost
+that kept both opt-in. `frame-check.ts` captures actual window pixels plus bounded
 submission cadence, callback backpressure, unsubscribe, minimize and unmount.
 
 The original experiment is retained at `gpuix/native` `f9e5e2a7`. Round seven
@@ -1627,3 +1629,42 @@ root like the sidebar; separate cached controls exercise paint replay. `perf/hov
 full-app audit, AppKit double-click bridge, native rebuild wrapper and benchmark
 coordination. Results and limits belong in its report, not in timing claims
 inferred from screenshots.
+
+## Compositor loops (motion/fps, 2026-10-20)
+
+Native paint loops (`paintAnimation` matrix / breathe / shimmer / rotate) used to present the whole window
+at display rate: a scene replay, a full 2560×1640 GPU pass and a present 60 times a second (~3.5 ms GPU per
+frame in the bench fixture). `compositor_loops_gpui.py` + `compositor_loops_renderer.rs` hand a loop to Core
+Animation instead, the way WebKit runs CSS keyframes:
+
+- **Eligible leaves:** every primitive of the tagged leaf is a solid borderless fill (`matrix`, `breathe`) or a
+  monochrome sprite (`breathe`, `shimmer`, `rotate`: SVG glyphs and text glyphs; subpixel text stays in the
+  scene); its bounds lie fully inside its content mask and every rounded clip (conservative containment as in
+  `gpu_clip_bounds.rs`); any enclosing `paintTransform` scope is at rest (opacity 1, no blur; a moving one
+  changes the bounds); nothing painted after it reaches its bounds (backdrop and shadow halos included; the
+  leaf's own glyphs may touch). Pops, stroke draws and fades never qualify.
+- **Hand-off:** `Window::present` promotes a leaf once all its parts have the same bounds on two consecutive
+  presents; the scene repaints it transparent (`repaint_tagged_inner`), `animate_tagged` and
+  `has_native_paint_animation` skip it, so with nothing else animating the window stops requesting frames.
+  The renderer keeps one `CALayer` per part as a sublayer of the Metal layer: the fill colour with its
+  corner radius, or the colour masked by the sprite's coverage tile copied once from the shared-storage glyph
+  atlas (the shader's `color.a *= coverage`). A repeating `CAKeyframeAnimation` on `opacity` carries the
+  native curve (CA's `easeInEaseOut` is CSS `ease-in-out`), the shimmer's 1 → 1.6 gain is sampled into 33
+  keyframes relative to its clamped peak, and `transform.rotation.z` turns clockwise once per cycle. Its
+  `beginTime` is the leaf's `started` instant plus delay, so the phase continues exactly.
+- **Hand-back:** a new scene recomputes candidates per `paint_generation`. A leaf that moved, became
+  clipped, got covered (a popup, tooltip or drag ghost), changed colour or unmounted leaves the set; any
+  change to the set commits in one `CATransaction` with that Metal frame (`presentsWithTransaction` for that
+  frame only), so a leaf is never drawn twice or not at all. Scrolling therefore paints loops in the scene
+  and returns them to CA one frame after the list settles.
+- **Off switches:** `KYBERN_COMPOSITOR_LOOPS=0`, a paused automation clock (strips), `KYBERN_PAINT_PHASE_MS`
+  and `KYBERN_SCOPED_BUFFERS=0` keep scene painting. Screenshots (`captureScreenshot`) refresh the scene, so
+  they paint the leaf themselves; OS window captures show the CA layers. `KYBERN_DEBUG_COMPOSITOR=1` logs
+  candidates, rejections and layer counts.
+
+Hidden and minimized windows: React already removes loop props there (`useLoopRunning`), and WindowServer
+does not composite them. Check: `bun perf/motion-fps/lab-check.ts [--light] [--reduced]` (in `check-update.sh`;
+also run with `KYBERN_COMPOSITOR_LOOPS=0` for the scene path). It asserts zero app frames once settled, one
+layer per part, the curves and clockwise turn rates from live `presentationLayer` samples, upright glyph masks
+(rendered in place with `renderInContext`), hand-back under a covering box, layout shifts and clean unmount.
+Measurements: `../perf/motion-fps-2026-10-20.md`.

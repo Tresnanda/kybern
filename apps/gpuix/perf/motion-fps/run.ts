@@ -29,7 +29,8 @@ const DATA = '/Users/mymac/projects/ade-gpuix-scratch/motion-fps'
 const PORT = 4361
 const OUT = '/Users/mymac/projects/ade/previews/motion/fps'
 const root = path.resolve(import.meta.dir, '../..')
-const addon = path.join(root, 'native/build/gpuix-native.darwin-arm64.node')
+// MOTION_ADDON selects another build (the v0.10.1 control is kept as native/build/before.node).
+const addon = process.env.MOTION_ADDON ?? path.join(root, 'native/build/gpuix-native.darwin-arm64.node')
 
 const argv = process.argv.slice(2)
 const flag = (name: string) => { const i = argv.indexOf(name); if (i < 0) return undefined; const v = argv[i + 1]; argv.splice(i, 2); return v }
@@ -81,6 +82,8 @@ const SCENES: Record<string, { cadence?: string; open: (app: Launch['app'], cont
     before: () => setTasks('running'), after: () => setTasks('restore'),
     open: async (app, c) => { await c('home'); await click(app, 'rail-tasks'); await click(app, 'task-filter-all'); if (await app.getByTestId('task-view-board').count()) await click(app, 'task-view-board') },
   },
+  // A long streamed answer (bench app: 25 deltas/s) in the running thread, for the whole sample.
+  streaming: { open: async (app, c) => { await c('open', { thread: manifest.running }); await c('stream', { durationMs: 120000 }); await bounds(app, 'working-header') } },
   // Transient motions in a heavy window (the 3,000-turn thread), each toggled 12 times.
   'sidebar-toggle': { open: async (_, c) => { await c('idle'); await c('open', { thread: manifest.long3000 }) }, transient: { ms: 220, trigger: app => click(app, 'sidebar-toggle') } },
   'dock-toggle': { open: async (_, c) => { await c('idle'); await c('open', { thread: manifest.long3000 }) }, transient: { ms: 300, trigger: app => click(app, 'dock-toggle') } },
