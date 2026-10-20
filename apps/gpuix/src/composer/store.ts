@@ -28,7 +28,9 @@ import type {
   ThreadId,
   ThreadTargetState,
   UserMessage,
+  ContentPart,
 } from '../../../../packages/kybern-client/src/types.ts'
+import type { DraftReferences } from './Completion.tsx'
 import type { FavoriteModel } from '../../../../packages/kybern-client/src/models.ts'
 
 export interface DraftChoices {
@@ -333,19 +335,30 @@ export function retryPending(threadId: ThreadId, id: string) {
   void deliverPending(next)
 }
 
-// A failed send's Edit puts its text back into that thread's composer (`ComposerView` registers by draft key).
-const restorers = new Map<string, (text: string) => void>()
-export function onComposerRestore(draftKey: string, restore: (text: string) => void) {
+/** What the composer held when it sent: the text with its chips and the attachments with their previews. */
+export interface SentDraft {
+  text: string
+  attachments: readonly { id: string; name: string; media_type: string; size: number; label: string; path: string }[]
+  references: DraftReferences | null
+}
+// Keyed by the sent message's parts: a pending send keeps that array as its bubble's message, and it goes with it.
+const sentDrafts = new WeakMap<readonly ContentPart[], SentDraft>()
+export function rememberSentDraft(parts: readonly ContentPart[], draft: SentDraft) { sentDrafts.set(parts, draft) }
+
+// A failed send's Edit puts the whole draft back into that thread's composer (`ComposerView` registers by draft key).
+const restorers = new Map<string, (draft: SentDraft) => void>()
+export function onComposerRestore(draftKey: string, restore: (draft: SentDraft) => void) {
   restorers.set(draftKey, restore)
   return () => { if (restorers.get(draftKey) === restore) restorers.delete(draftKey) }
 }
-/** `draftKey` without its pane prefix (`main:thread:<id>`): the focused pane's composer first, else any showing it. */
-export function restoreToComposer(draftKey: string, text: string): boolean {
+/** `draftKey` without its pane prefix (`main:thread:<id>`): the focused pane's composer first, else any showing it. Restores
+ *  the draft `parts` were sent from; without one (sent elsewhere), `fallbackText`. */
+export function restoreToComposer(draftKey: string, parts: readonly ContentPart[], fallbackText: string): boolean {
   const keys = [...restorers.keys()].filter((key) => key === draftKey || key.endsWith(`:${draftKey}`))
   const focused = `${getFocusedPaneId()}:${draftKey}`
   const restore = restorers.get(keys.includes(focused) ? focused : keys[0] ?? '')
   if (!restore) return false
-  restore(text)
+  restore(sentDrafts.get(parts) ?? { text: fallbackText, attachments: [], references: null })
   return true
 }
 

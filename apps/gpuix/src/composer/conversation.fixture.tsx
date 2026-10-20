@@ -8,7 +8,8 @@ import { Draft } from '../Draft.tsx'
 import { ThemeProvider, Label, useTheme } from '../ui.tsx'
 import { Button } from '../transcript/kit.tsx'
 import { onWindowKeyDown } from '../nav/keys.ts'
-import { patch } from './store.ts'
+import { patch, restoreToComposer } from './store.ts'
+import { messageText } from '../transcript/bubble.tsx'
 import { useState } from 'react'
 import { useGpuixRequired } from '@gpuix/react'
 const at = new Date().toISOString()
@@ -16,7 +17,11 @@ const providers: ProviderStatus[] = ['claude-code', 'codex'].map(kind => ({ kind
 let coordinator: Thread | null = null
 let record: unknown = null
 const project = { id: 'project', name: 'Fixture project', path: '/tmp', is_git: false, created_at: at, updated_at: at }
-const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req, s) { if (s.upgrade(req)) return; return new Response('fixture') }, websocket: { message(ws, raw) {
+let uploads = 0
+const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req, s) {
+  // An attachment upload (`uploadBytes`): one asset per file.
+  if (req.method === 'POST' && new URL(req.url).pathname === '/assets') { const bytes = await req.arrayBuffer(); return Response.json({ id: `asset-${++uploads}`, name: req.headers.get('x-kybern-filename') ?? 'file', media_type: req.headers.get('content-type') ?? 'application/octet-stream', size: bytes.byteLength }) }
+  if (s.upgrade(req)) return; return new Response('fixture') }, websocket: { message(ws, raw) {
   const { id, method, params: p = {} } = JSON.parse(String(raw)); let result: unknown = {}
   switch (method) {
     case 'daemon.info': result = { protocol_version: PROTOCOL_VERSION, environment_id: 'p3-conversation', version: 'fixture' }; break
@@ -68,6 +73,8 @@ function Fixture() {
     <Button testId="coordinator-draft" onClick={() => { selectDraft('project', 'coordinator'); setDraft(true) }}>Set up Coordinator</Button>
     <text testId="rpc-record" style={{ color: t.text }}>{JSON.stringify(record)}</text>
     <text testId="message-record" style={{ color: t.text }}>{JSON.stringify(sent)}</text>
+    {/* A failed send's Edit (`SendFailed` in transcript/Turn.tsx) with the parts the composer just sent. */}
+    <Button testId="restore-sent" onClick={() => { if (sent) restoreToComposer('conversation', sent.parts, messageText(sent.parts)) }}>Restore last send</Button>
     <text testId="overlay-height" style={{ color: t.text }}>{String(overlayHeight)}</text>
     <text testId="connected" style={{ color: t.text }}>{status}</text>
     {!draft && <div style={{ flexGrow: 1 }} />}

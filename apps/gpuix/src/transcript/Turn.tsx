@@ -462,7 +462,7 @@ function SendFailed({ threadId, id, error, parts }: { threadId: ThreadId; id: st
         </Label>
         <Button variant="subtle" testId="send-retry" onClick={() => retryPending(threadId, id)}>Retry</Button>
         <Button variant="ghost" testId="send-edit" onClick={() => {
-          if (restoreToComposer(`thread:${threadId}`, messageText(parts))) removePending(threadId, id)
+          if (restoreToComposer(`thread:${threadId}`, parts, messageText(parts))) removePending(threadId, id)
         }}>Edit</Button>
       </div>
     </Rise>

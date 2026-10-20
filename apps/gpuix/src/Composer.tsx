@@ -71,6 +71,7 @@ import {
   ensureLoaded,
   errorText,
   onComposerRestore,
+  rememberSentDraft,
   getData,
   interruptThread,
   loadCatalog,
@@ -489,6 +490,7 @@ export function ComposerView(input: ComposerViewProps) {
     // The message leaves the composer on this frame; the send runs behind it. Thread sends show at once as a pending
     // bubble and report a rejection there (`composer/pending.ts`); other callers get the draft back with the error.
     const parts = buildParts(), draft = { text, attachments }
+    rememberSentDraft(parts, { text, attachments, references: completion.snapshot() })
     setSending(true)
     setError(null)
     setText('')
@@ -507,8 +509,21 @@ export function ComposerView(input: ComposerViewProps) {
       setSending(false)
     }
   }
-  useEffect(() => onComposerRestore(props.draftKey, (restored) => {
-    setText((current) => (current.trim() ? `${current}\n\n${restored}` : restored))
+  const attachmentsNow = useRef(attachments)
+  attachmentsNow.current = attachments
+  useEffect(() => onComposerRestore(props.draftKey, (draft) => {
+    // A label the draft's own attachments took meanwhile is renumbered, in the restored text too.
+    const taken = attachmentsNow.current.map((a) => a.label), renamed = new Map<string, string>()
+    const restored = draft.attachments.filter((a) => !attachmentsNow.current.some((b) => b.id === a.id)).map((a) => {
+      if (!taken.includes(a.label)) { taken.push(a.label); return a }
+      const label = nextAttachmentLabel(a.media_type, [...taken, ...draft.attachments.map((b) => b.label)])
+      taken.push(label); renamed.set(a.label, label)
+      return { ...a, label }
+    })
+    const text = renamed.size ? draft.text.replace(/@([A-Za-z]+\d+)\b/g, (token, label: string) => (renamed.has(label) ? `@${renamed.get(label)}` : token)) : draft.text
+    setText((current) => (current.trim() ? `${current}\n\n${text}` : text))
+    if (restored.length) setAttachments((list) => [...list, ...restored])
+    if (draft.references) completion.restore(draft.references)
     focusEditor()
   }), [props.draftKey])
 

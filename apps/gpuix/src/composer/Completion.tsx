@@ -131,7 +131,9 @@ const parentPath = (p: string) => (p.lastIndexOf('/') === -1 ? '' : p.slice(0, p
 
 // Native text buffers remount across navigation. Keep the associated wire parts
 // with the draft, bounded independently of transcript history.
-const referenceDrafts = new Map<string, { mentioned: Set<string>; picked: Map<string, SkillInfo>; threads: ComposerThreadReference[]; mentions: ComposerMentionReference[] }>()
+/** The chips a draft's text carries (mentioned files, picked skills, thread and item references). */
+export type DraftReferences = { mentioned: Set<string>; picked: Map<string, SkillInfo>; threads: ComposerThreadReference[]; mentions: ComposerMentionReference[] }
+const referenceDrafts = new Map<string, DraftReferences>()
 onEnvironmentChange(() => referenceDrafts.clear())
 
 export function useCompletion({
@@ -435,6 +437,14 @@ export function useCompletion({
     setThreadRefs([])
     setMentionRefs([])
   }
+  const snapshot = (): DraftReferences => ({ mentioned, picked, threads: threadRefs, mentions: mentionRefs })
+  /** Adds a sent draft's chips back (a failed send's Edit); setters only, so a stale closure is safe. */
+  const restore = (refs: DraftReferences) => {
+    setMentioned(set => new Set([...set, ...refs.mentioned]))
+    setPicked(map => new Map([...map, ...refs.picked]))
+    setThreadRefs(list => [...list.filter(r => !refs.threads.some(t => t.part.thread_id === r.part.thread_id)), ...refs.threads])
+    setMentionRefs(list => [...list.filter(r => !refs.mentions.some(m => m.part.path === r.part.path)), ...refs.mentions])
+  }
 
   const menu = (width: number) =>
     open ? (
@@ -460,7 +470,7 @@ export function useCompletion({
     ...[...mentioned].map(fileReference),
     ...[...picked.values()].map(skillReference),
   ].filter(r => text.includes(r.token))
-  return { menu, onKey, buildParts, reset, tokens, open: open && items.length > 0 }
+  return { menu, onKey, buildParts, reset, snapshot, restore, tokens, open: open && items.length > 0 }
 }
 
 const NO_NOTES: NoteSummary[] = []
