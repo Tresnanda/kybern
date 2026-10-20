@@ -6,7 +6,8 @@ final markdown), SCENE_APPROVAL (waits on a Bash permission), SCENE_QUESTION
 (AskUserQuestion), SCENE_LIVE (a long slow stream that stays running), SCENE_FAIL,
 SCENE_SUBAGENT (a native Claude subagent that works for a while, then completes),
 SCENE_DELEGATE (two kybern_agent_delegate calls, the delegation rows),
-SCENE_LONG (a settled turn with a long answer: tables, code, a mermaid fence).
+SCENE_LONG (a settled turn with a long answer: tables, code, a mermaid fence),
+SCENE_STREAM (a fast ~25 s stream of prose, a table and code: the streaming/scroll workload).
 """
 import json, os, sys, threading, time, uuid
 
@@ -201,11 +202,24 @@ def scene_long(cwd):
     assistant(m2, [{"type": "text", "text": LONG}])
     result(LONG)
 
+def scene_stream(cwd):
+    mid = "m_" + uuid.uuid4().hex[:8]
+    emit({"type": "stream_event", "event": {"type": "message_start", "message": {"id": mid}}})
+    para = "The jobs table is scanned on every poll and the planner picks a sequential scan, so each service pays for it. "
+    text = ""
+    for i in range(40):
+        text += f"## Finding {i}\n\n" + para * 3 + "\n\n| Service | Cost |\n| --- | --- |\n| jobs | %d |\n| queue | %d |\n\n" % (i, i * 2)
+        if i % 5 == 0:
+            text += "```sql\nSELECT * FROM jobs WHERE state = 'queued' ORDER BY id LIMIT 100;\n```\n\n"
+    stream_text(mid, text, 0.012, 0)
+    assistant(mid, [{"type": "text", "text": text}])
+    result(text)
+
 def run(frame):
     cwd = os.getcwd()
     content = json.dumps(frame.get("message", {}), ensure_ascii=False)
     emit({"type": "system", "subtype": "init", "session_id": SID, "model": "claude-fixture", "tools": ["Read", "Bash", "Edit"]})
-    for key, fn in (("SCENE_APPROVAL", scene_approval), ("SCENE_QUESTION", scene_question), ("SCENE_LIVE", scene_live), ("SCENE_FAIL", scene_fail), ("SCENE_SUBAGENT", scene_subagent), ("SCENE_DELEGATE", scene_delegate), ("SCENE_LONG", scene_long), ("SCENE_WORK", scene_work)):
+    for key, fn in (("SCENE_APPROVAL", scene_approval), ("SCENE_QUESTION", scene_question), ("SCENE_LIVE", scene_live), ("SCENE_FAIL", scene_fail), ("SCENE_SUBAGENT", scene_subagent), ("SCENE_DELEGATE", scene_delegate), ("SCENE_LONG", scene_long), ("SCENE_STREAM", scene_stream), ("SCENE_WORK", scene_work)):
         if key in content:
             return fn(cwd)
     mid = "m_" + uuid.uuid4().hex[:8]

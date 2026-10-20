@@ -108,7 +108,7 @@ const EMPTY_RUNTIME_TASKS: RuntimeTask[] = []
 const ROW = "mx-auto w-full min-w-0 max-w-[var(--app-chat-max-width,46rem)]"
 // Fine pointers get a 2px rise with the fade; touch and reduced motion fade only.
 const HOVER_REVEAL =
-  "opacity-0 pointer-fine:translate-y-0.5 transition-[opacity,translate] duration-[var(--duration-quick)] ease-[var(--ease-out)] motion-reduce:translate-y-0 pointer-events-none group-hover:translate-y-0 group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:translate-y-0 group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto"
+  "opacity-0 motion-safe:pointer-fine:translate-y-0.5 transition-[opacity,translate] duration-[var(--duration-quick)] ease-[var(--ease-out)] pointer-events-none group-hover:translate-y-0 group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:translate-y-0 group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto"
 
 const turnKey = (group: TurnGroup, index: number) => group.turnId || group.user?.id || `turn-${index}`
 const estimateTurnSize = (group: TurnGroup) => 120 + Math.max(80, (group.answer?.text.length ?? 0) / 75 * 20)
@@ -1561,10 +1561,10 @@ const WorkRow = memo(function WorkRow({
         return (
           <div className="rounded-lg py-1">
             <div className="flex w-full min-w-0 items-center gap-2">
-              <span className={cn("flex size-5 shrink-0 items-center justify-center transition-colors duration-[var(--duration-fast)]", block.decision?.decision === "deny" ? "text-destructive/85" : block.decision ? "text-foreground/75" : "text-muted-foreground")}>
+              <span className={cn("flex size-5 shrink-0 items-center justify-center transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]", block.decision?.decision === "deny" ? "text-destructive/85" : block.decision ? "text-foreground/75" : "text-muted-foreground")}>
                 {approvalRowIcon(block.approval, block.decision)}
               </span>
-              <p className={cn("min-w-0 truncate leading-6 transition-colors duration-[var(--duration-fast)]", block.decision?.decision === "deny" ? "text-destructive/85" : block.decision ? "text-foreground/80" : "text-muted-foreground")} style={CHAT_FONT} title={text}>
+              <p className={cn("min-w-0 truncate leading-6 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]", block.decision?.decision === "deny" ? "text-destructive/85" : block.decision ? "text-foreground/80" : "text-muted-foreground")} style={CHAT_FONT} title={text}>
                 <TextSwap text={text} />
               </p>
             </div>

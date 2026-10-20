@@ -55,7 +55,10 @@ export async function open({ scheme = "dark", width = 1440, height = 900, reduce
 
 /** Open a thread from the sidebar by (part of) its title. */
 export async function thread(page, title) {
-  await page.getByText(title, { exact: false }).first().click()
+  const row = page.getByText(title, { exact: false }).first()
+  // Older threads sit under "Show N more".
+  if (!(await row.isVisible().catch(() => false))) await page.getByText(/^Show \d+ more$/).first().click({ timeout: 2000 }).catch(() => {})
+  await row.click()
   await page.waitForTimeout(900)
 }
 
@@ -99,7 +102,7 @@ export async function runningAnimations(page, { loopsOnly = false } = {}) {
 
 /**
  * Frame intervals and long tasks while `action()` runs (typically a scroll or a wait over a
- * streaming turn). Returns p50/p95/p99, frames over 16.7 / 33 ms, long-task count and the peak
+ * streaming turn). Returns p50/p95/p99, frames over 20 / 33 ms (a 60 Hz frame is 16.7 ms, so 16.7 itself is just jitter), long-task count and the peak
  * number of simultaneously running animations.
  */
 export async function frames(page, action, { ms = 4000 } = {}) {
@@ -120,6 +123,42 @@ export async function frames(page, action, { ms = 4000 } = {}) {
     const s = window.__frames; s.stop = true
     const d = s.dts.slice(2).sort((a, b) => a - b)
     const q = (p) => +(d[Math.min(d.length - 1, Math.floor(d.length * p))] ?? 0).toFixed(1)
-    return { frames: d.length, p50: q(0.5), p95: q(0.95), p99: q(0.99), over17: d.filter((x) => x > 16.7).length, over33: d.filter((x) => x > 33).length, longTasks: s.long, peakAnimations: s.peak }
+    return { frames: d.length, p50: q(0.5), p95: q(0.95), p99: q(0.99), over20: d.filter((x) => x > 20).length, over33: d.filter((x) => x > 33).length, longTasks: s.long, peakAnimations: s.peak }
   })
+}
+
+/**
+ * Frame strip: arm a frame loop that pauses every finite animation and transition the moment it
+ * starts, run `action`, then step each to a fraction of its own duration and screenshot
+ * (`<label>-f20.png`, ...). Headless screenshots are too slow to catch a 250 ms motion, so this is
+ * the reliable way to see the middle of one.
+ */
+export async function scrub(page, label, action, fractions = [0.2, 0.5, 0.8], { wait = 450 } = {}) {
+  await page.evaluate(() => {
+    window.__scrubbed = new Set()
+    window.__scrubStop = false
+    const loop = () => {
+      for (const a of document.getAnimations()) {
+        if (window.__scrubbed.has(a) || a.playState !== "running") continue
+        const t = a.effect?.getComputedTiming()
+        if (!t || !Number.isFinite(t.endTime) || t.iterations === Infinity) continue
+        window.__scrubbed.add(a); a.pause()
+      }
+      if (!window.__scrubStop) requestAnimationFrame(loop)
+    }
+    requestAnimationFrame(loop)
+  })
+  await action()
+  await page.waitForTimeout(wait)
+  await page.evaluate(() => { window.__scrubStop = true })
+  for (const f of fractions) {
+    await page.evaluate((f) => window.__scrubbed.forEach((a) => {
+      const t = a.effect.getComputedTiming()
+      a.currentTime = (t.delay || 0) + f * (t.duration || 0)
+    }), f)
+    await page.waitForTimeout(60)
+    await page.screenshot({ path: `${OUT}/${label}-f${Math.round(f * 100)}.png` })
+  }
+  await page.evaluate(() => window.__scrubbed.forEach((a) => a.play()))
+  await page.waitForTimeout(800)
 }

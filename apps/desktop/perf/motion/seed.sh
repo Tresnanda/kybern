@@ -33,4 +33,7 @@ sleep "${SETTLE:-14}"   # let the finished scenes complete before the waiting on
 new "SCENE_APPROVAL Rebuild the project" supervised
 new "SCENE_QUESTION Choose a cache" supervised
 new "SCENE_LIVE Find slow queries across the services"
+# An inline visual reply and a small image on the long-answer thread, for the zoom checks.
+EXPLAIN="$(k --json threads | python3 -c 'import json,sys;print(next(t["id"] for t in json.load(sys.stdin)["threads"] if t["title"].startswith("Explain")))')"
+k visuals publish --title "Retry backoff" "$EXPLAIN" "$HERE/visual-fixture.html" >/dev/null || echo "visual publish skipped"
 k threads

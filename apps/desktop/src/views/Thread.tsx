@@ -509,7 +509,8 @@ export function ThreadView({
                   {otherActiveTasks.length > 0 && <RuntimeActivityPanel tasks={otherActiveTasks} />}
                   <HeldMessagesPanel threadId={threadId} />
                   {queued.length > 0 && <QueuedPanel threadId={threadId} />}
-                  {requestCard ?? (heldCard && <ComposerPanelLeavingContext value>{heldCard}</ComposerPanelLeavingContext>)}
+                  {/* Same slot, element type and key for the live card and the held one: the leaving card keeps its DOM. */}
+                  <ComposerPanelLeavingContext value={!requestCard && !!heldCard}>{requestCard ?? heldCard}</ComposerPanelLeavingContext>
                 </ComposerPanelStack>
               }
             />}
