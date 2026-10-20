@@ -7,7 +7,7 @@
 // is instant); a row that arrives rises in (`Rise`, fresh rows only); a removed or sent queued row lifts out and closes up
 // (`Leave`); a subagent that settles cross-swaps its loader for a check or alert and dims to the finished ink (`Dim`, 150 ms,
 // paint-only); a changed count in the summary swaps in place (`SwapOnChange`). Reduce Motion: fades, or nothing.
-import { memo, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, memo, useContext, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { QueuedMessage, RuntimeTask, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { commandSummary, queuedPreview, trayDefaultOpen, traySummary, type TrayCounts } from '../../../../packages/kybern-client/src/composerTray.ts'
 import { stoppableSubagents, subagentCounts, subagentDetail, subagentSpan, subagentThreadPhase, subagentTypeLabel, type SubagentPhase } from '../../../../packages/kybern-client/src/subagents.ts'
@@ -83,32 +83,39 @@ function TrayHeader({ counts, subagents, tasks, open, onToggle }: { counts: Tray
   const working = counts.subagents.working > 0 || tasks.length > 0 || counts.helpers.working > 0
   const state = working ? 'working' : counts.subagents.failed > 0 ? 'failed' : counts.subagents.done + counts.subagents.stopped > 0 ? 'done' : 'queued'
   const label = segments.map(s => s.text).join(', ')
+  const toggle = () => onToggle(false)
   return (
-    <div
-      testId="composer-tray-toggle"
-      role="button"
-      tabIndex={0}
-      aria-expanded={open}
-      aria-label={`${label}. ${open ? 'Hide' : 'Show'} details`}
-      onClick={() => onToggle(false)}
-      onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onToggle(true) }}
-      style={{ display: 'flex', alignItems: 'center', gap: 8, height: 36, paddingLeft: 14, paddingRight: 8, cursor: 'pointer', minWidth: 0 }}
-    >
-      <StatusGlyph phase={state} />
-      {/* The whole line swaps as one (`TextSwap`): swapping a single segment would slide its neighbours under the outgoing copy. */}
-      <SwapOnChange active={label} style={{ justifyContent: 'flex-start', flexGrow: 1, flexShrink: 1, minWidth: 0, overflow: 'hidden' }}>
-        <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
-          {segments.map((s, i) => (
-            <div key={s.key} style={{ display: 'flex', alignItems: 'center', flexShrink: i === 0 ? 1 : 0, minWidth: i === 0 ? 0 : undefined }}>
-              {i > 0 && <Label color={ink(t, 0.3)} size={12} lineHeight={16} style={{ paddingLeft: 5, paddingRight: 5 }}>·</Label>}
-              <Label color={s.tone === 'failed' ? t.red : s.tone === 'lead' ? ink(t, 0.85) : ink(t, 0.55)} size={12} lineHeight={16} weight={500} truncate>{s.text}</Label>
-            </div>
-          ))}
-        </div>
-      </SwapOnChange>
+    // "Stop all" sits between the summary and the chevron but outside the toggle: GPUIX clicks bubble, and a stop must not
+    // also close the tray. The summary is the focusable toggle; the chevron is a second pointer target for the same toggle.
+    <div style={{ display: 'flex', alignItems: 'center', height: 36, minWidth: 0 }}>
+      <div
+        testId="composer-tray-toggle"
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        aria-label={`${label}. ${open ? 'Hide' : 'Show'} details`}
+        onClick={toggle}
+        onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onToggle(true) }}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, height: 36, paddingLeft: 14, paddingRight: 8, cursor: 'pointer', flexGrow: 1, flexShrink: 1, minWidth: 0 }}
+      >
+        <StatusGlyph phase={state} />
+        {/* The whole line swaps as one (`TextSwap`): swapping a single segment would slide its neighbours under the outgoing copy. */}
+        <SwapOnChange active={label} style={{ justifyContent: 'flex-start', flexGrow: 1, flexShrink: 1, minWidth: 0, overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
+            {segments.map((s, i) => (
+              <div key={s.key} style={{ display: 'flex', alignItems: 'center', flexShrink: i === 0 ? 1 : 0, minWidth: i === 0 ? 0 : undefined }}>
+                {i > 0 && <Label color={ink(t, 0.3)} size={12} lineHeight={16} style={{ paddingLeft: 5, paddingRight: 5 }}>·</Label>}
+                <Label color={s.tone === 'failed' ? t.red : s.tone === 'lead' ? ink(t, 0.85) : ink(t, 0.55)} size={12} lineHeight={16} weight={500} truncate>{s.text}</Label>
+              </div>
+            ))}
+          </div>
+        </SwapOnChange>
+      </div>
       {open && stoppable.length >= 2 && <HeaderButton testId="subagents-stop-all" onClick={() => { for (const child of stoppable) void controlSubagent(child, 'stop') }}>Stop all</HeaderButton>}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, flexShrink: 0 }}>
-        <Chevron open={open} source={T.chevronDown} turn={180} size={12} color={ink(t, 0.45)} />
+      <div testId="composer-tray-chevron" onClick={toggle} style={{ display: 'flex', alignItems: 'center', height: 36, paddingLeft: 8, paddingRight: 8, flexShrink: 0, cursor: 'pointer' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20 }}>
+          <Chevron open={open} source={T.chevronDown} turn={180} size={12} color={ink(t, 0.45)} />
+        </div>
       </div>
     </div>
   )
@@ -179,42 +186,57 @@ function useFreshIds(items: readonly { id: string }[]) {
   return (id: string) => !initial.current!.has(id)
 }
 
-/** The shared row frame: a 16px glyph column, the text, and a right column that trades its value for actions on hover. */
+/** A row's focus reporter. GPUIX focus events do not bubble, so the row's own `onFocus` never sees Tab landing on its
+ *  open target or actions; they report here instead (focus-within). */
+const RowFocus = createContext<((focused: boolean) => void) | null>(null)
+function useRowFocus() {
+  const report = useContext(RowFocus)
+  return report ? { onFocus: () => report(true), onBlur: () => report(false) } : {}
+}
+
+/** The shared row frame: a 16px glyph column, the text, and a right column that trades its value for actions on hover or
+ *  keyboard focus. */
 function Row({ glyph, children, trailing, actions, onOpen, testId, hoverable = true }: { glyph: ReactNode; children: ReactNode; trailing?: ReactNode; actions?: ReactNode; onOpen?: () => void; testId?: string; hoverable?: boolean }) {
   const t = useTheme()
   const [hover, setHover] = useState(false)
-  const reveal = !!actions && hover
+  // Focused children, counted: Tab from one action to the next may focus the new one before blurring the old.
+  const focusCount = useRef(0)
+  const [focused, setFocused] = useState(false)
+  const report = useMemo(() => (on: boolean) => { focusCount.current = Math.max(0, focusCount.current + (on ? 1 : -1)); setFocused(focusCount.current > 0) }, [])
+  const reveal = !!actions && (hover || focused)
   return (
-    <div
-      testId={testId}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      onFocus={() => setHover(true)}
-      onBlur={() => setHover(false)}
-      style={{ display: 'flex', alignItems: 'center', gap: 8, height: ROW, paddingLeft: 6, paddingRight: 4, borderRadius: 8, minWidth: 0, backgroundColor: hover && hoverable ? t.buttonSecondaryHover : 'transparent' }}
-    >
+    <RowFocus.Provider value={report}>
       <div
-        role={onOpen ? 'button' : undefined}
-        tabIndex={onOpen ? 0 : undefined}
-        onClick={onOpen}
-        onKeyDown={onOpen ? e => { if (e.key === 'enter' || e.key === 'space') onOpen() } : undefined}
-        style={{ display: 'flex', alignItems: 'center', gap: 8, flexGrow: 1, minWidth: 0, height: ROW, cursor: onOpen ? 'pointer' : 'default' }}
+        testId={testId}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, height: ROW, paddingLeft: 6, paddingRight: 4, borderRadius: 8, minWidth: 0, backgroundColor: hover && hoverable ? t.buttonSecondaryHover : 'transparent' }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, flexShrink: 0 }}>{glyph}</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, minWidth: 0, overflow: 'hidden' }}>{children}</div>
-      </div>
-      {(trailing || actions) && (
-        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', minWidth: 52, height: ROW, paddingLeft: 4, paddingRight: 2, flexShrink: 0 }}>
-          {/* The value and the actions trade places on hover (`t-reveal`: 150 ms in with a 4 px slide, 100 ms out). */}
-          <div paintTransform={actions ? revealTransform(!reveal, false) : undefined} style={{ display: 'flex', ...(PATCHED_NATIVE || !actions ? {} : { opacity: reveal ? 0 : 1 }), ...(actions ? { pointerEvents: 'none' } : {}) }}>{trailing}</div>
-          {actions && (
-            <div paintTransform={revealTransform(reveal)} style={{ position: 'absolute', right: 0, top: 3, display: 'flex', gap: 2, ...(PATCHED_NATIVE ? {} : { opacity: reveal ? 1 : 0 }), pointerEvents: reveal ? undefined : 'none' }}>
-              {actions}
-            </div>
-          )}
+        <div
+          role={onOpen ? 'button' : undefined}
+          tabIndex={onOpen ? 0 : undefined}
+          onFocus={onOpen ? () => report(true) : undefined}
+          onBlur={onOpen ? () => report(false) : undefined}
+          onClick={onOpen}
+          onKeyDown={onOpen ? e => { if (e.key === 'enter' || e.key === 'space') onOpen() } : undefined}
+          style={{ display: 'flex', alignItems: 'center', gap: 8, flexGrow: 1, minWidth: 0, height: ROW, cursor: onOpen ? 'pointer' : 'default' }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, flexShrink: 0 }}>{glyph}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, minWidth: 0, overflow: 'hidden' }}>{children}</div>
         </div>
-      )}
-    </div>
+        {(trailing || actions) && (
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', minWidth: 52, height: ROW, paddingLeft: 4, paddingRight: 2, flexShrink: 0 }}>
+            {/* The value and the actions trade places on hover or focus (`t-reveal`: 150 ms in with a 4 px slide, 100 ms out). */}
+            <div paintTransform={actions ? revealTransform(!reveal, false) : undefined} style={{ display: 'flex', ...(PATCHED_NATIVE || !actions ? {} : { opacity: reveal ? 0 : 1 }), ...(actions ? { pointerEvents: 'none' } : {}) }}>{trailing}</div>
+            {actions && (
+              <div paintTransform={revealTransform(reveal)} style={{ position: 'absolute', right: 0, top: 3, display: 'flex', gap: 2, ...(PATCHED_NATIVE ? {} : { opacity: reveal ? 1 : 0 }), pointerEvents: reveal ? undefined : 'none' }}>
+                {actions}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </RowFocus.Provider>
   )
 }
 
@@ -233,8 +255,9 @@ function Clock({ startedAt, endedAt }: { startedAt: number; endedAt: number | nu
 }
 function IconAction({ label, glyph, size = 12, onClick, testId }: { label: string; glyph: string; size?: number; onClick: () => void; testId: string }) {
   const t = useTheme()
+  const focus = useRowFocus()
   return (
-    <div testId={testId} role="button" aria-label={label} tabIndex={0} onClick={onClick} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onClick() }}
+    <div testId={testId} role="button" aria-label={label} tabIndex={0} {...focus} onClick={onClick} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onClick() }}
       style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
       <Icon source={glyph} size={size} color={ink(t, 0.48)} />
     </div>
