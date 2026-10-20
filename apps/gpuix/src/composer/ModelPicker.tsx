@@ -45,7 +45,9 @@ import { FooterChip } from './chips.tsx'
 import { useFooterFit } from './footerWidth.tsx'
 import { G } from './glyphs.ts'
 import { CheckMark, muted, PickerItem, PickerMenu, PopupLayer, popoverStyle } from './Menu.tsx'
-import { SwapOnChange } from './motion.tsx'
+import { DURATION, EASE, SPRING } from '../motion/kit.tsx'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { Dim, SwapOnChange } from './motion.tsx'
 import { patch, useComposer } from './store.ts'
 
 const SEARCH_RESULT_LIMIT = 150
@@ -832,16 +834,16 @@ function ModelFooter({
       {hasEffort ? (
         <EffortSlider onEscape={onClose} efforts={efforts} value={effortValue} disabled={busy} leading={fastButton} trailing={resetButton} onChange={onEffortChange} />
       ) : fast ? (
-        <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: 12, paddingRight: 12, paddingTop: 10, paddingBottom: 4, opacity: busy ? 0.6 : 1 }}>
+        <Dim dimmed={busy} style={{ paddingLeft: 12, paddingRight: 12, paddingTop: 10, paddingBottom: 4 }}>
           <CardHeader leading={fastButton} trailing={resetButton}>
             <Label color={fastOn ? effortAccent(dark) : muted(t, 0.6)} weight={500}>
               {fastOn ? 'Fast' : 'Standard'}
             </Label>
           </CardHeader>
-        </div>
+        </Dim>
       ) : null}
       {rows.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: 4, paddingRight: 4, paddingBottom: 4, paddingTop: hasEffort || fast ? 2 : 4, opacity: busy ? 0.6 : 1 }}>
+        <Dim dimmed={busy} style={{ paddingLeft: 4, paddingRight: 4, paddingBottom: 4, paddingTop: hasEffort || fast ? 2 : 4 }}>
           {rows.map((parameter) => (
             <TraitRow
               key={parameter.id}
@@ -851,7 +853,7 @@ function ModelFooter({
               onChange={(value) => void change(parameter.id, value)}
             />
           ))}
-        </div>
+        </Dim>
       )}
       {!hasEffort && !fast && <div style={{ height: 2 }} />}
     </>
@@ -935,10 +937,14 @@ function EffortSlider({
     setPending({ effort, from: value })
     if (!(await onChange(effort))) setPending(null)
   }
-  const transition = REDUCED_MOTION || !glide ? { duration: 0 } : { duration: drag === null ? 0.2 : 0.07, ease: EASE_OUT }
+  // Dragging tracks the pointer in 70 ms; letting go settles onto the notch with the desktop's spring (`--ease-spring`).
+  const transition = REDUCED_MOTION || !glide ? { duration: 0 } : drag === null ? SPRING : { duration: 0.07, ease: EASE_OUT }
+  // The held thumb grows to 1.06 over 200 ms and a soft glow rises under it; letting go eases back in 150 ms.
+  const held = drag !== null && PATCHED_NATIVE && !REDUCED_MOTION
+  const ease = [...EASE.out] as [number, number, number, number]
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: 12, paddingRight: 12, paddingTop: 10, paddingBottom: 10, opacity: disabled ? 0.6 : 1 }}>
+    <Dim dimmed={disabled} style={{ paddingLeft: 12, paddingRight: 12, paddingTop: 10, paddingBottom: 10 }}>
       <CardHeader leading={leading} trailing={trailing}>
         {/* `TextSwap` on the level name (`ModelPicker.tsx:789`). */}
         <SwapOnChange active={label}>
@@ -1016,19 +1022,30 @@ function EffortSlider({
           initial={false}
           animate={{ left: span * at }}
           transition={transition}
-          style={{
-            position: 'absolute',
-            top: 0,
-            width: THUMB,
-            height: THUMB,
-            borderRadius: THUMB / 2,
-            backgroundColor: '#ffffff',
-            boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 3, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.22)' },
-            pointerEvents: 'none',
-          }}
-        />
+          style={{ position: 'absolute', top: 0, width: THUMB, height: THUMB, pointerEvents: 'none' }}
+        >
+          <div
+            paintTransform={PATCHED_NATIVE && !REDUCED_MOTION ? { initial: false, animate: { scale: held ? 1.06 : 1 }, transition: { duration: held ? 0.2 : DURATION.quick, ease } } : undefined}
+            style={{ position: 'relative', width: THUMB, height: THUMB }}
+          >
+            <div
+              paintTransform={PATCHED_NATIVE && !REDUCED_MOTION ? { initial: false, animate: { opacity: held ? 1 : 0 }, transition: { duration: held ? 0.2 : DURATION.quick, ease } } : undefined}
+              style={{ position: 'absolute', left: 0, top: 0, width: THUMB, height: THUMB, borderRadius: THUMB / 2, boxShadow: { offsetX: 0, offsetY: 2, blurRadius: 8, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.28)' }, pointerEvents: 'none' }}
+            />
+            <div
+              style={{
+                width: THUMB,
+                height: THUMB,
+                borderRadius: THUMB / 2,
+                backgroundColor: '#ffffff',
+                boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 3, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.22)' },
+                pointerEvents: 'none',
+              }}
+            />
+          </div>
+        </motion.div>
       </div>
-    </div>
+    </Dim>
   )
 }
 
