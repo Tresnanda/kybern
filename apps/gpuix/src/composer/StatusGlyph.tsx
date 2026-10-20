@@ -20,6 +20,7 @@ import { loadAccountLimits, useAccountLimitEntries, useAccounts } from '../usage
 import { useComposer } from './store.ts'
 import { popoverStyle, PopupLayer } from './Menu.tsx'
 import type { Theme } from '../theme.ts'
+import { ringValue } from '../motion/success.ts'
 
 type Limits = NonNullable<ProviderUsage['limits']>
 
@@ -102,7 +103,8 @@ export function StatusGlyph({ provider, running }: { provider: ProviderInstance;
   const arc = tone === 'critical' ? t.v('--destructive') : tone === 'warning' ? t.warning : base
   const head = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">'
   const backdrop = `${head}<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" opacity=".2"/>${cache && cache.state !== 'cold' ? `<circle cx="12" cy="12" r="2.5" fill="currentColor" opacity="${cacheDotOpacity(cache)}"/>` : ''}</svg>`
-  const ring = context ? `${head}<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" stroke-dasharray="${(context.percent * 0.5655).toFixed(3)} 56.55" stroke-linecap="round" transform="rotate(-90 12 12)"/></svg>` : null
+  // Context used: eases from the old share to the new one after each turn (native ring, N2); it mounts at its value.
+  const ring = context ? ringValue({ size: 24, radius: 9, strokeWidth: 2.5, fraction: context.percent / 100 }) : null
   const trigger = (
     <div
       testId="composer-status"
@@ -121,7 +123,7 @@ export function StatusGlyph({ provider, running }: { provider: ProviderInstance;
       style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, flexShrink: 0, borderRadius: 14, cursor: 'pointer', backgroundColor: open ? t.hover : undefined, hover: { backgroundColor: t.hover } }}
     >
       <svg source={backdrop} style={{ position: 'absolute', left: 6, top: 6, width: 16, height: 16, color: base, pointerEvents: 'none' }} />
-      {ring && <svg source={ring} style={{ position: 'absolute', left: 6, top: 6, width: 16, height: 16, color: arc, pointerEvents: 'none' }} />}
+      {ring && <svg source={ring.source} {...(ring.paintAnimation ? { paintAnimation: ring.paintAnimation } : {})} style={{ position: 'absolute', left: 6, top: 6, width: 16, height: 16, color: arc, pointerEvents: 'none' }} />}
     </div>
   )
   return (

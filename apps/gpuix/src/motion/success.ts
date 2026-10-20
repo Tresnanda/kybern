@@ -23,7 +23,7 @@ export function successTransform(): PaintTransformProps | undefined {
   }
 }
 
-export type StrokeAnimation = { kind: 'stroke'; cycleMs: number; delayMs: number; dash: number; ease: [number, number, number, number] }
+export type StrokeAnimation = { kind: 'stroke'; cycleMs: number; delayMs: number; dash: number; ease: [number, number, number, number]; from?: number; to?: number; retarget?: boolean }
 
 /** `t-check-draw` on an `<svg>`'s paths: `stroke-dasharray: dash`, offset `dash` -> 0 over `--duration-fast` (smooth-out) after `delayMs`. */
 export function strokeDraw(dash: number, delayMs: number, timing: { cycleMs?: number; ease?: readonly [number, number, number, number] } = {}): StrokeAnimation | undefined {
@@ -66,4 +66,28 @@ export function ringArc({ size, radius, strokeWidth, fraction }: { size: number;
     : `M ${point(0)} A ${radius} ${radius} 0 ${f > 0.5 ? 1 : 0} 1 ${point(angle)}`
   const source = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" fill="none"><path d="${d}" stroke="#000" stroke-width="${strokeWidth}" stroke-linecap="round"/></svg>`
   return { source, length: f * 2 * Math.PI * radius }
+}
+
+/**
+ * A ring that shows `fraction` (0..1) of a circle and eases between values (`.rail-usage-arc`: `stroke-dashoffset` 400 ms
+ * `--ease-out`), natively: the `<svg>` draws the whole ring as one closed path from 12 o'clock clockwise, and the native stroke
+ * dashes it to `fraction` (`dasharray: C`, offset `C * (1 - fraction)`). A new `fraction` eases from the arc on screen (N2), with
+ * no re-key and no render per frame; `drawIn` strokes it in from empty when it mounts (a ring's first value), otherwise it mounts
+ * at its value (initial loads do not animate). Reduce Motion: value changes land at once. The stock addon gets the arc as its own
+ * path (`ringArc`), with no motion.
+ *
+ * ```tsx
+ * const ring = ringValue({ size: 24, radius: 10.25, strokeWidth: 2, fraction, drawIn: true })
+ * <svg source={ring.source} {...(ring.paintAnimation ? { paintAnimation: ring.paintAnimation } : {})} style={{ width: 24, height: 24, color }} />
+ * ```
+ */
+export function ringValue({ size, radius, strokeWidth, fraction, drawIn = false }: { size: number; radius: number; strokeWidth: number; fraction: number; drawIn?: boolean }): { source: string; paintAnimation?: StrokeAnimation } {
+  const f = Math.min(1, Math.max(0, fraction))
+  if (!PATCHED_NATIVE) return { source: ringArc({ size, radius, strokeWidth, fraction: f }).source }
+  const ring = ringArc({ size, radius, strokeWidth, fraction: 1 })
+  const length = Math.round(ring.length * 1000) / 1000, to = Math.round(length * (1 - f) * 1000) / 1000
+  return {
+    source: ring.source,
+    paintAnimation: { kind: 'stroke', cycleMs: REDUCED_MOTION ? 1 : DURATION.slow * 1000, delayMs: 0, dash: length, ease: [...EASE.out], from: drawIn && !REDUCED_MOTION ? length : to, to, retarget: true },
+  }
 }
