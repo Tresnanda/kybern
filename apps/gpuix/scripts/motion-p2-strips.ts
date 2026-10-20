@@ -11,6 +11,8 @@ const arg = (name: string, fallback: string) => (process.argv.includes(name) ? p
 const themes = arg('--theme', 'both') === 'both' ? ['dark', 'light'] : [arg('--theme', 'dark')]
 const reduceds = arg('--reduced', 'both') === 'both' ? ['0', '1'] : [arg('--reduced', '0')]
 const only = arg('--only', '').split(',').filter(Boolean)
+// --cost 1: no screenshots (each one renders an island itself); count island renders and React commits across each tween instead.
+const cost = arg('--cost', '0') === '1'
 const root = arg('--out', '/Users/mymac/projects/ade/previews/motion/gpuix-p2')
 const scratch = { KYBERN_DATA_DIR: '/Users/mymac/projects/ade-gpuix-scratch/motion-gpuix-p2', KYBERN_CLIENT_CONFIG_DIR: '/Users/mymac/projects/ade-gpuix-scratch/motion-gpuix-p2-client', KYBERN_URL: '', KYBERN_TOKEN: '' }
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
@@ -24,7 +26,8 @@ for (const theme of themes) for (const reduced of reduceds) {
   const label = `${theme}-${reduced === '1' ? 'reduced' : 'normal'}`, dir = path.join(root, label)
   mkdirSync(dir, { recursive: true })
   const f = await launchFixture(path.join(import.meta.dir, 'motion-p2-lab.tsx'), { GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: theme, KYBERN_REDUCED_MOTION: reduced, KYBERN_OPAQUE: '1', ...scratch })
-  const sets: { name: string; strip: string; frames: string[]; commits: number[] }[] = []
+  const costs: string[] = []
+  const sets: { name: string; strip: string; frames: string[]; commits: number[]; islands: number[] }[] = []
   try {
     const a = f.app; await a.getByTestId('app-ready').waitFor()
     await a.call('focus', { elementId: (await a.getByTestId('app-ready').element()).id })
@@ -37,11 +40,17 @@ for (const theme of themes) for (const reduced of reduceds) {
     const run = async (id: string, strip: string, trigger: () => Promise<void>, offsets: number[], settle = 800) => {
       if (only.length && !only.some(o => id.startsWith(o))) { await trigger(); await a.clock.fastForward(settle); return }
       await trigger()
-      const frames: string[] = [], seen: number[] = []
+      if (cost) {
+        const c0 = commits(), i0 = f.islandRenders()
+        await a.clock.fastForward(Math.max(...offsets)); await sleep(60)
+        costs.push(`${id}: ${f.islandRenders() - i0} island renders, ${commits() - c0} React commits over ${Math.max(...offsets)} ms`)
+        await a.clock.fastForward(settle); return
+      }
+      const frames: string[] = [], seen: number[] = [], isl: number[] = []
       let at = 0
-      for (const o of offsets) { if (o > at) await a.clock.fastForward(o - at); at = o; frames.push(await shot(`${id}-${String(o).padStart(3, '0')}`)); seen.push(commits()) }
+      for (const o of offsets) { if (o > at) await a.clock.fastForward(o - at); at = o; frames.push(await shot(`${id}-${String(o).padStart(3, '0')}`)); seen.push(commits()); isl.push(f.islandRenders()) }
       await a.clock.fastForward(settle)
-      sets.push({ name: id, strip, frames, commits: seen })
+      sets.push({ name: id, strip, frames, commits: seen, islands: isl })
     }
     const off = { x: 1000, y: 700 }
     // P2.1 / P2.2: send button
@@ -102,11 +111,12 @@ for (const theme of themes) for (const reduced of reduceds) {
     await run('live-leave', 'live', () => key('f'), [0, 40, 80, 120, 160, 250])
     await a.clock.resume()
   } finally { await f.close() }
+  if (cost) { writeFileSync(path.join(dir, 'COST.txt'), `Island renders and React commits across each tween, no screenshots, paused clock stepped once (${label}).\n${costs.join('\n')}\n`); console.log(`ok ${label}\n  ${costs.join('\n  ')}`); continue }
   const lines: string[] = []
   for (const s of sets) {
     const c = crops[s.strip]!, out = path.join(dir, `${s.name}--${s.strip}-strip.png`)
     execFileSync('swift', [path.join(import.meta.dir, 'render9-grid.swift'), out, String(c.x * 2), String(c.y * 2), String(c.w * 2), String(c.h * 2), String(Math.min(s.frames.length, s.strip === 'queued' || s.strip === 'attachments' || s.strip === 'live' || s.strip === 'subagent' ? 3 : 4)), ...s.frames.flatMap(file => ['top:0', file])])
-    lines.push(`${s.name} (${s.strip}): commits at frames ${s.commits.join('/')}`)
+    lines.push(`${s.name} (${s.strip}): React commits at frames ${s.commits.join('/')}${process.env.KYBERN_DEBUG_ISLANDS === '1' ? `; island renders ${s.islands.join('/')}` : ''}`)
   }
   writeFileSync(path.join(dir, 'README.txt'), `GPUIX motion P2 lab, ${label}.\n${lines.join('\n')}\n`)
   console.log(`ok ${label}\n  ${lines.join('\n  ')}`)
