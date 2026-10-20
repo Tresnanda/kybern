@@ -162,6 +162,9 @@ export const DelegationLaunchRow = memo(function DelegationLaunchRow({ block, le
   const override = launch?.thread?.delegation?.default_override
   // "Instead of the Sonnet 5.5 default: <reason>", when the Coordinator set its role's default aside.
   const overrideText = useMemo(() => (override ? defaultOverrideText(override, providers) : null), [override, providers])
+  // A badge or note that appears on a row already on screen enters; rows that mount with it do not replay it.
+  const [conflictsAtMount] = useState(() => (launch ? conflictCount(launch) : 0))
+  const [overrideAtMount] = useState(overrideText)
   if (!launch) return legacy
   const conflicts = conflictCount(launch)
   const span = clock(launch)
@@ -185,7 +188,7 @@ export const DelegationLaunchRow = memo(function DelegationLaunchRow({ block, le
         <span className="max-w-[55%] shrink-0 truncate text-foreground/88" style={CHAT_FONT}>{launch.title}</span>
         <span className="sa-secondary min-w-0 flex-1 truncate text-xs text-foreground/45" title={metaOf(launch, model)}>{metaOf(launch, model)}</span>
         {conflicts > 0 && (
-          <span className="inline-flex shrink-0 items-center gap-1 text-xs text-foreground/70">
+          <span className={cn("inline-flex shrink-0 items-center gap-1 text-xs text-foreground/70", conflictsAtMount === 0 && "t-pop")}>
             <TriangleAlertIcon className="size-3 text-warning" aria-hidden /> {conflictsLabel(conflicts)}
           </span>
         )}
@@ -197,7 +200,7 @@ export const DelegationLaunchRow = memo(function DelegationLaunchRow({ block, le
         {launch.threadId && <ChevronRightIcon className="size-3.5 shrink-0 text-foreground/40 transition-colors group-hover/dl:text-foreground" />}
       </button>
       {overrideText && (
-        <p data-default-override="" className="sa-secondary -mt-0.5 ps-[30px] pe-1.5 pb-0.5 text-xs leading-[1.45] text-pretty text-foreground/45">{overrideText}</p>
+        <p data-default-override="" data-blur="off" className={cn(overrideAtMount === null && "t-appear", "sa-secondary -mt-0.5 ps-[30px] pe-1.5 pb-0.5 text-xs leading-[1.45] text-pretty text-foreground/45")}>{overrideText}</p>
       )}
     </div>
   )
@@ -219,6 +222,7 @@ function MemberRow({
   const model = useLaunchModel(launch, parentKind)
   const span = clock(launch)
   const conflicts = conflictCount(launch)
+  const [conflictsAtMount] = useState(conflicts)
   const meta = metaOf(launch, model)
   return (
     <button
@@ -239,7 +243,7 @@ function MemberRow({
       <span className="min-w-0 max-w-[60%] truncate text-foreground/90" style={{ fontSize: 13 }} title={launch.title}>{launch.title}</span>
       <span className="sa-secondary min-w-0 flex-1 truncate text-xs text-foreground/45" title={meta}>{meta}</span>
       {conflicts > 0 && (
-        <span className="inline-flex shrink-0 items-center gap-1 text-xs text-foreground/70">
+        <span className={cn("inline-flex shrink-0 items-center gap-1 text-xs text-foreground/70", conflictsAtMount === 0 && "t-pop")}>
           <TriangleAlertIcon className="size-3 text-warning" aria-hidden /> {conflictsLabel(conflicts)}
         </span>
       )}

@@ -160,14 +160,14 @@ function StripRow({ thread }: { thread: Thread }) {
         <span
           data-subagent-strip-time=""
           className={cn(
-            "col-start-1 row-start-1 flex items-center justify-end ps-2 pe-1.5 whitespace-nowrap text-foreground/48 transition-opacity",
-            (canStop || canBackground) && "group-hover/sa-sr:pointer-events-none group-hover/sa-sr:opacity-0 group-focus-within/sa-sr:pointer-events-none group-focus-within/sa-sr:opacity-0",
+            "col-start-1 row-start-1 flex items-center justify-end ps-2 pe-1.5 whitespace-nowrap text-foreground/48 transition-[opacity,translate] duration-[var(--duration-quick)] ease-[var(--ease-out)] motion-reduce:transition-opacity",
+            (canStop || canBackground) && "group-hover/sa-sr:pointer-events-none group-hover/sa-sr:opacity-0 group-hover/sa-sr:-translate-x-1 group-focus-within/sa-sr:pointer-events-none group-focus-within/sa-sr:opacity-0 group-focus-within/sa-sr:-translate-x-1 motion-reduce:group-hover/sa-sr:translate-x-0 motion-reduce:group-focus-within/sa-sr:translate-x-0",
           )}
         >
           {isSubagentQueued(thread) ? null : <SubagentElapsed thread={thread} />}
         </span>
         {(canStop || canBackground) && (
-          <span className="pointer-events-none col-start-1 row-start-1 me-0.5 flex items-center justify-self-end gap-0.5 opacity-0 transition-opacity group-hover/sa-sr:pointer-events-auto group-hover/sa-sr:opacity-100 group-focus-within/sa-sr:pointer-events-auto group-focus-within/sa-sr:opacity-100">
+          <span className="pointer-events-none col-start-1 row-start-1 me-0.5 flex translate-x-1 items-center justify-self-end gap-0.5 opacity-0 transition-[opacity,translate] duration-[var(--duration-quick)] ease-[var(--ease-out)] group-hover/sa-sr:pointer-events-auto group-hover/sa-sr:translate-x-0 group-hover/sa-sr:opacity-100 group-focus-within/sa-sr:pointer-events-auto group-focus-within/sa-sr:translate-x-0 group-focus-within/sa-sr:opacity-100 motion-reduce:translate-x-0 motion-reduce:transition-opacity">
             {canBackground && (
               <button type="button" aria-label={`Run ${thread.title || "subagent"} in background`} title="Run in background" className={ROW_ACTION_CLASS} onClick={() => void runSubagentInBackground(thread)}>
                 <BackgroundTrayIcon />

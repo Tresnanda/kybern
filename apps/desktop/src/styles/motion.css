@@ -601,8 +601,9 @@
 /* ─── Streaming caret ───────────────────────────────────────────────────────
    A thin bar after the last block of live prose, blinking on a step curve so
    it reads as a caret and not a pulse. Removed the moment the text settles. */
-.chat-message-segment[data-live="true"] > .chat-markdown > :last-child::after,
-.chat-message-segment[data-live="true"] > div > .chat-markdown > :last-child::after {
+/* Only after a text block: a table or code block that ends the answer so far gets no bar. */
+.chat-message-segment[data-live="true"] > .chat-markdown > :last-child:is(p, li, h1, h2, h3, h4, h5, h6, blockquote)::after,
+.chat-message-segment[data-live="true"] > div > .chat-markdown > :last-child:is(p, li, h1, h2, h3, h4, h5, h6, blockquote)::after {
   content: "";
   display: inline-block;
   width: 2px;

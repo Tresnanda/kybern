@@ -301,9 +301,7 @@ html[data-project-reordering="true"] * {
   transition:
     opacity 280ms var(--ease-out),
     scale 280ms var(--ease-out),
-    translate 320ms var(--ease-out),
-    width 200ms var(--ease-out),
-    height 200ms var(--ease-out);
+    translate 320ms var(--ease-out);
 }
 @starting-style {
   .computer-live-view {
