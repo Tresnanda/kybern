@@ -10,6 +10,7 @@ import { FONT_MONO, FONT_UI, type Theme } from '../theme.ts'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { T } from './glyphs.ts'
 import { G } from '../composer/glyphs.ts'
+import { SwapOnChange } from '../motion/kit.tsx'
 import { pressTransform } from '../motion/press.ts'
 
 /** `getChatTranscriptTextStyle()`: 14px at `leading-relaxed` (1.625). */
@@ -46,10 +47,8 @@ export const destructive = (t: Theme, a = 1) => alpha(t.red, a)
 /** `text-foreground` at an opacity (`text-foreground/92`). */
 export const fg = (t: Theme, alpha = 1) => ink(t, alpha)
 
-/** DisclosureChevron: chevron-right that turns down when open (no rotation in GPUIX, so it swaps). */
-export function Chevron({ open, color, size = 14 }: { open: boolean; color: string; size?: number }) {
-  return <Icon source={open ? T.chevronDown : T.chevronRight} size={size} color={color} />
-}
+/** DisclosureChevron: one chevron that turns 90° with the content it controls (`motion/Chevron.tsx`, 220 ms `--ease-out`, paint-only). */
+export { Chevron } from '../motion/Chevron.tsx'
 
 /** The 16px icon slot every work row leads with (`flex size-4`). */
 export function RowIcon({ source, color, size = 14, box = 16 }: { source: string; color: string; size?: number; box?: number }) {
@@ -71,6 +70,8 @@ export function Button({
   testId,
   icon,
   iconAfter,
+  swap,
+  trailing,
 }: {
   children?: ReactNode
   variant?: Variant
@@ -79,6 +80,10 @@ export function Button({
   testId?: string
   icon?: string
   iconAfter?: string
+  /** A label that reports state ("Send" → "Sending…"): the old text leaves while the new one rises in (`TextSwap`). */
+  swap?: boolean
+  /** After the label (a rotating `Chevron`). */
+  trailing?: ReactNode
 }) {
   const t = useTheme()
   const color =
@@ -126,11 +131,16 @@ export function Button({
     >
       {icon && <Icon source={icon} size={16} color={color} style={{ opacity: 0.8 }} />}
       {children != null && (
-        <Label color={color} size={12} weight={500} lineHeight={16} style={{ whiteSpace: 'nowrap' }}>
-          {children}
-        </Label>
+        swap && typeof children === 'string'
+          ? <SwapOnChange active={children}>
+              <Label color={color} size={12} weight={500} lineHeight={16} style={{ whiteSpace: 'nowrap' }}>{children}</Label>
+            </SwapOnChange>
+          : <Label color={color} size={12} weight={500} lineHeight={16} style={{ whiteSpace: 'nowrap' }}>
+              {children}
+            </Label>
       )}
       {iconAfter && <Icon source={iconAfter} size={16} color={color} style={{ opacity: 0.8 }} />}
+      {trailing}
     </div>
   )
 }

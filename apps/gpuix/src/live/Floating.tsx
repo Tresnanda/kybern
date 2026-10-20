@@ -3,7 +3,9 @@ import { useGpuix, type PublicInstance, type EventPayload, type StyleDesc } from
 import { observeElementBounds, type LayoutRect } from '../native/layout.ts'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { getNav } from '../nav/store.ts'
-import { DURATION, EASE } from '../motion/kit.tsx'
+import { DURATION, EASE, SCALE } from '../motion/kit.tsx'
+import { exitsInstantly, nextPresenceGeneration } from '../motion/Presence.tsx'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { load, save } from '../shell/persist.ts'
 import { cornerPosition, nearestCorner } from '../../../../packages/kybern-client/src/previewMiniPlayer.ts'
 import { REDUCED_MOTION, useTheme } from '../ui.tsx'
@@ -11,7 +13,9 @@ import { useComposerOverlayHeight } from '../composer/height.ts'
 type Corner = 'top-end' | 'top-start' | 'bottom-end' | 'bottom-start'
 const corners: Corner[] = ['top-end', 'top-start', 'bottom-end', 'bottom-start']
 /** Shared native corner snap. The overlay exists only during the drag. */
-export function Floating({ storageKey, width, height, testId, children, insetEnd = 0, insetBottom: explicitInset = 0, overlayDrag = false, defaultCorner = 'top-end', onCornerChange, cardStyle, radius = 16 }: { cardStyle?: StyleDesc; radius?: number; storageKey: string; width: number; height: number; testId: string; children: ReactNode; insetEnd?: number; insetBottom?: number; overlayDrag?: boolean; defaultCorner?: Corner; onCornerChange?: (corner: Corner) => void }) {
+/** `kybern.css:301`: the card leaves by fading and settling to 98% over 160 ms (opacity only, 100 ms, under Reduce Motion). */
+const LEAVE = { duration: 0.16, ease: [...EASE.smoothOut] as [number, number, number, number] }
+export function Floating({ storageKey, width, height, testId, children, insetEnd = 0, insetBottom: explicitInset = 0, overlayDrag = false, defaultCorner = 'top-end', onCornerChange, cardStyle, radius = 16, leaving = false, onLeft }: { /** The owner is closing the card by pointer: it fades out in place and `onLeft` fires when it is gone (at once when nothing can animate). */ leaving?: boolean; onLeft?: () => void; cardStyle?: StyleDesc; radius?: number; storageKey: string; width: number; height: number; testId: string; children: ReactNode; insetEnd?: number; insetBottom?: number; overlayDrag?: boolean; defaultCorner?: Corner; onCornerChange?: (corner: Corner) => void }) {
   // Bottom corners sit above the composer and its request panels, as on the desktop.
   const insetBottom = Math.max(explicitInset, useComposerOverlayHeight())
   const t = useTheme()
@@ -22,6 +26,8 @@ export function Floating({ storageKey, width, height, testId, children, insetEnd
   const samples = useRef<{ x: number; y: number; time: number }[]>([])
   const generation = useRef(0)
   const entered = useRef(REDUCED_MOTION || getNav().keyboardNav)
+  const [leaveGeneration] = useState(nextPresenceGeneration)
+  useEffect(() => { if (leaving && exitsInstantly({ to: {}, duration: LEAVE.duration })) onLeft?.() }, [leaving])
   const [snap, setSnap] = useState<{ generation: number; x: number; y: number; vx: number; vy: number } | null>(null)
   const [drag, setDrag] = useState<{ x: number; y: number; left: number; top: number; dx: number; dy: number; parentX: number; parentY: number; parentWidth: number; parentHeight: number } | null>(null)
   const parent = useRef<LayoutRect | null>(null)
@@ -67,7 +73,10 @@ export function Floating({ storageKey, width, height, testId, children, insetEnd
       {...(!drag && snap && !REDUCED_MOTION ? { motion: { generation: snap.generation, isExit: false, initial: { translateX: snap.x, translateY: snap.y }, animate: { translateX: 0, translateY: 0 }, transition: { type: 'spring', duration: 0.4, bounce: 0, velocityX: snap.vx, velocityY: snap.vy } } } as object : !drag && !entered.current ? { motion: { generation: 0, isExit: false, initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.fast, ease: [...EASE.smoothOut] } } } as object : {})}
       onMotionComplete={() => { entered.current = true }}
       style={{ borderRadius: radius }}>
-    <div ref={card} testId={testId} onMouseUp={finish} style={{ display: 'flex', flexDirection: 'column', width, height, borderRadius: radius, backgroundColor: t.popover, borderWidth: 0.6, borderColor: t.border, overflow: 'hidden', pointerEvents: 'auto', boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: 'rgba(0,0,0,0.2)' }, ...cardStyle }}>
+    <div ref={card} testId={testId} onMouseUp={finish}
+      paintTransform={leaving && PATCHED_NATIVE ? { initial: { opacity: 1, scale: 1 }, animate: REDUCED_MOTION ? { opacity: 0 } : { opacity: 0, scale: SCALE.small }, transition: REDUCED_MOTION ? { ...LEAVE, duration: 0.1 } : LEAVE, generation: leaveGeneration } : undefined}
+      onMotionComplete={event => { if (leaving && event.motionGeneration === leaveGeneration) onLeft?.() }}
+      style={{ display: 'flex', flexDirection: 'column', width, height, borderRadius: radius, backgroundColor: t.popover, borderWidth: 0.6, borderColor: t.border, overflow: 'hidden', pointerEvents: leaving ? 'none' : 'auto', boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: 'rgba(0,0,0,0.2)' }, ...cardStyle }}>
       <div testId={`${testId}-drag`} aria-label="Move preview" onMouseUp={finish} onMouseMove={move} onMouseDown={e => {
         if (e.button !== 0 || e.x === undefined || e.y === undefined || !card.current || !container.current) return
         const b = renderer?.getElementBounds?.(card.current.id), p = parent.current ?? renderer?.getElementBounds?.(container.current.id)

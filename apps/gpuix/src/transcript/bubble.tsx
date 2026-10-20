@@ -21,7 +21,8 @@ import { ResponseImage } from './images.tsx'
 import { AttachmentImage } from '../composer/AttachmentImage.tsx'
 import { cachedMarkdownTheme, CODE, fg, META, muted, TEXT } from './kit.tsx'
 import { FONT_MONO, FONT_UI } from '../theme.ts'
-import { Rise } from '../motion/kit.tsx'
+import { revealTransform, Rise } from '../motion/kit.tsx'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { copyText, useRowState } from './store.ts'
 import { SwapOnChange, useFresh } from './motion.tsx'
 import { TokenText, tokenSegments } from './InlineTokens.tsx'
@@ -48,7 +49,7 @@ export function CopyAction({ text, testId }: { text: string; testId?: string }) 
       }
       style={{ display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: text ? 'pointer' : 'default', opacity: text ? 1 : 0.4 }}
     >
-      <SwapOnChange active={copied ? 'check' : 'copy'}>
+      <SwapOnChange kind="icon" active={copied ? 'check' : 'copy'}>
         <Icon
           source={copied ? T.check : T.copy}
           size={13.5}
@@ -151,7 +152,7 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
               <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, maxWidth: 240, marginBottom: 4 }}>
                 {files.map((p, i) =>
                   p.type === 'image' ? (
-                    <ResponseImage key={i} source={`data:${p.media_type};base64,${p.data}`} label={`Attached image ${i + 1}`} thumbnail />
+                    <ResponseImage key={i} source={`data:${p.media_type};base64,${p.data}`} label={`Attached image ${i + 1}`} thumbnail at={at} />
                   ) : p.media_type.startsWith('image/') ? (
                     <AttachmentImage key={p.asset_id} assetId={p.asset_id} name={p.name} />
                   ) : (
@@ -207,6 +208,8 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
                 hover while it travels onto Copy; hidden, it takes no pointer so it shows no hand. */}
             <div
               testId="user-footer"
+              // Copy and Save fade in over 150 ms and out over 100 ms (opacity only: they sit under the text, no slide).
+              paintTransform={revealTransform(hover, false)}
               style={{
                 position: 'absolute',
                 right: 2,
@@ -215,7 +218,7 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
                 alignItems: 'center',
                 gap: 8,
                 paddingTop: 4,
-                opacity: hover ? 1 : 0,
+                ...(PATCHED_NATIVE ? {} : { opacity: hover ? 1 : 0 }),
                 ...(hover ? {} : { pointerEvents: 'none' as const }),
               }}
             >

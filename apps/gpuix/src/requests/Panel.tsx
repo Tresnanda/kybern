@@ -1,24 +1,32 @@
-import { motion } from '@gpuix/react'
-import { useRef, useState, type ReactNode } from 'react'
-import { EASE_OUT, REDUCED_MOTION } from '../ui.tsx'
+import { useState, type ReactNode } from 'react'
+import { EASE } from '../motion/kit.tsx'
+import { Presence } from '../motion/Presence.tsx'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { REDUCED_MOTION } from '../ui.tsx'
 // Keyboard answers must not animate the next card. The timestamp is consumed by
 // its mount, not a timer or global event loop.
 let answeredAt = 0
 export function keyboardAnswer() { answeredAt = Date.now() }
+const instantNow = () => Date.now() - answeredAt < 1200
+
+/**
+ * A request card rising into the stack (`t-panel-enter`, kept at 180 ms: snappier than the desktop's 350 ms on purpose): 6 px low,
+ * faint and 2 px blurred → rest, painted natively (`paintTransform`, no layout per frame). A keyboard answer shows the next card at
+ * once; Reduce Motion fades. Decided on mount, so a keyboard answer a moment later does not cut a running entrance.
+ */
 export function PanelEnter({ children }: { children: ReactNode }) {
-  const instant = Date.now() - answeredAt < 1200
-  return <motion.div initial={instant ? false : { opacity: 0, top: REDUCED_MOTION ? 0 : 6 }} animate={{ opacity: 1, top: 0 }} transition={{ duration: instant ? 0 : .18, ease: EASE_OUT }} style={{ display: 'flex', flexDirection: 'column', width: '100%', position: 'relative' }}>{children}</motion.div>
+  const [transform] = useState(() => !PATCHED_NATIVE || instantNow() ? undefined : REDUCED_MOTION
+    ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: 0.18, ease: [...EASE.out] as [number, number, number, number] } }
+    : { initial: { opacity: 0, translateY: 6, blur: 2 }, animate: { opacity: 1, translateY: 0, blur: 0 }, transition: { duration: 0.18, ease: [...EASE.out] as [number, number, number, number] } })
+  return <div paintTransform={transform} style={{ display: 'flex', flexDirection: 'column', width: '100%', position: 'relative' }}>{children}</div>
 }
 
-/** Keep the last rendered panel for a short exit, then release its controls and
- * listeners. A keyboard answer removes it synchronously. No idle timer. */
+/** Keep the last rendered panel for a short exit (120 ms, fade and 3 px drop), then release its controls and
+ * listeners. A keyboard answer removes it synchronously. No idle timer, no layout per frame. */
 export function PanelPresence({ show, children }: { show: boolean; children: ReactNode }) {
-  const last = useRef<ReactNode>(null)
-  const [present, setPresent] = useState(show)
-  if (show) last.current = children
-  if (show && !present) setPresent(true)
-  const instant = Date.now() - answeredAt < 1200
-  if (!show && instant && present) { last.current = null; setPresent(false) }
-  if (!show && (!present || instant)) return null
-  return <motion.div initial={false} animate={{ opacity: show ? 1 : 0, top: show || REDUCED_MOTION ? 0 : 3 }} transition={{ duration: show ? .18 : .12, ease: EASE_OUT }} onMotionComplete={() => { if (!show) { last.current = null; setPresent(false) } }} style={{ display: 'flex', flexDirection: 'column', width: '100%', position: 'relative', pointerEvents: show ? undefined : 'none' }}>{show ? children : last.current}</motion.div>
+  return (
+    <Presence show={show} exit={{ to: { opacity: 0, translateY: 3 }, duration: instantNow() ? 0 : 0.12, ease: EASE.out }} style={{ width: '100%', position: 'relative' }}>
+      {children}
+    </Presence>
+  )
 }
