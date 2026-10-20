@@ -2,6 +2,7 @@ import { clipboardAttachments, type ClipboardImage } from './composer/clipboard.
 import { StatusGlyph } from './composer/StatusGlyph.tsx'
 import { FooterRow, useFooterFit } from './composer/footerWidth.tsx'
 import { TokenTextarea, type TokenTextareaHandle } from './composer/TokenTextarea.tsx'
+import type { TokenReference } from './composer/token-text.ts'
 import { type InputSelection } from './native/api.ts'
 export { useComposerOverlayHeight, useMeasureComposerOverlay } from './composer/height.ts'
 import { useMeasureComposerOverlay } from './composer/height.ts'
@@ -386,10 +387,10 @@ export function ComposerView(input: ComposerViewProps) {
     const next = tokenEditor.current.selection()
     setSelection(old => old.start === next.start && old.end === next.end && old.composing === next.composing && old.reversed === next.reversed ? old : next)
   }
-  const edit = (start: number, end: number, replacement: string) => {
+  const edit = (start: number, end: number, replacement: string, added?: readonly TokenReference[]) => {
     if (!editor.current || props.readOnly) return false
     try {
-      if (!tokenEditor.current?.edit(start, end, replacement)) return false
+      if (!tokenEditor.current?.edit(start, end, replacement, added)) return false
       readSelection()
       focusEditor()
       return true

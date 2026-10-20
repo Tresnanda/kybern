@@ -11,7 +11,10 @@ import { editTokenText, tokenDisplayOffset, tokenSourceOffset, tokenText, type T
 
 export interface TokenTextareaHandle {
   selection(): InputSelection
-  edit(start: number, end: number, text: string): boolean
+  /** `added`: the chips this edit introduces. The caller registers them in `references` only on its next render, so the
+   * native text is written with them already applied; otherwise it holds the raw token while the decorations (computed
+   * from the next render's references) no longer match it, and the chip shows only after the next keystroke. */
+  edit(start: number, end: number, text: string, added?: readonly TokenReference[]): boolean
 }
 interface Props extends TextareaProps {
   testId: string
@@ -42,24 +45,25 @@ export function TokenTextarea({ references, editorRef, nativeRef, onEditorError,
     const range = nativeCapabilities(renderer).getInputSelection(node.current.id), doc = live.current
     return { ...range, start: tokenSourceOffset(doc, range.start), end: tokenSourceOffset(doc, range.end, true) }
   }
-  const emit = (value: string, at: number, typed: boolean, record = true) => {
+  const emit = (value: string, at: number, typed: boolean, record = true, refs: readonly TokenReference[] = references) => {
     lastEmitted.current = value; caret.current = { start: at, end: at, reversed: false }
-    live.current = tokenText(value, references)
+    live.current = tokenText(value, refs)
     if (record) history.current.record({ doc: historyDoc(value), start: at, end: at }, typed)
     props.onChange?.({ value, elementId: node.current?.id ?? 0, eventType: 'change' })
   }
-  const install = (value: string, at: number, record: boolean, selection?: Pick<InputSelection, 'start' | 'end' | 'reversed'>) => {
+  const install = (value: string, at: number, record: boolean, selection?: Pick<InputSelection, 'start' | 'end' | 'reversed'>, added: readonly TokenReference[] = []) => {
     if (!node.current || props.readOnly || read().composing) return false
-    const previous = live.current, next = tokenText(value, references)
+    const refs = added.length ? [...references, ...added] : references
+    const previous = live.current, next = tokenText(value, refs)
     nativeReplacement.current = next.text
     nativeCapabilities(renderer).editInput(node.current.id, { start: 0, end: previous.text.length, text: next.text, expectedValue: previous.text })
-    emit(value, at, false, record)
+    emit(value, at, false, record, refs)
     if (selection) caret.current = selection
     return true
   }
-  useImperativeHandle(editorRef, () => ({ selection: read, edit: (start, end, text) => {
+  useImperativeHandle(editorRef, () => ({ selection: read, edit: (start, end, text, added) => {
     const value = live.current.source
-    return install(value.slice(0, start) + text + value.slice(end), start + text.length, true)
+    return install(value.slice(0, start) + text + value.slice(end), start + text.length, true, undefined, added)
   } }))
   useEffect(() => {
     if (props.value !== lastEmitted.current) {
