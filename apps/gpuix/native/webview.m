@@ -247,6 +247,40 @@ void kybern_web_command(const char *json) {
       if (layout) [host.web evaluateJavaScript:layout completionHandler:nil];
       host.placed = [cmd[@"visible"] boolValue] && width > 0 && height > 0; [host visibility]; return;
     }
+    if ([op isEqual:@"present"]) {
+      // N3: the document fades and scales with its host's `paintTransform` (an entrance, the mini player's exit). Core
+      // Animation runs the curve in WindowServer, so the app presents no frames for it. The clip is flipped: origin is
+      // fractions of its box from the top-left. `fromOpacity`/`fromScale` start an entrance; otherwise it eases from
+      // what is on screen.
+      CALayer *layer = host.clip.layer;
+      CGSize size = layer.bounds.size;
+      CGFloat ox = [cmd[@"originX"] doubleValue] * size.width, oy = [cmd[@"originY"] doubleValue] * size.height;
+      CATransform3D (^about)(double) = ^CATransform3D(double scale) {
+        return CATransform3DConcat(CATransform3DConcat(CATransform3DMakeTranslation(-ox, -oy, 0), CATransform3DMakeScale(scale, scale, 1)), CATransform3DMakeTranslation(ox, oy, 0));
+      };
+      CALayer *shown = layer.presentationLayer ?: layer;
+      double opacity = [cmd[@"opacity"] doubleValue], scale = [cmd[@"scale"] doubleValue], duration = [cmd[@"duration"] doubleValue];
+      NSNumber *fromOpacity = cmd[@"fromOpacity"], *fromScale = cmd[@"fromScale"];
+      NSArray *ease = [cmd[@"ease"] isKindOfClass:NSArray.class] && [cmd[@"ease"] count] == 4 ? cmd[@"ease"] : @[@0.23, @1, @0.32, @1];
+      [CATransaction begin]; [CATransaction setDisableActions:YES];
+      if (duration > 0) {
+        CAMediaTimingFunction *curve = [CAMediaTimingFunction functionWithControlPoints:[ease[0] floatValue] :[ease[1] floatValue] :[ease[2] floatValue] :[ease[3] floatValue]];
+        CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+        fade.fromValue = fromOpacity ?: @(shown.opacity); fade.toValue = @(opacity); fade.duration = duration; fade.timingFunction = curve;
+        CABasicAnimation *grow = [CABasicAnimation animationWithKeyPath:@"transform"];
+        grow.fromValue = [NSValue valueWithCATransform3D:fromScale ? about(fromScale.doubleValue) : shown.transform]; grow.toValue = [NSValue valueWithCATransform3D:about(scale)];
+        grow.duration = duration; grow.timingFunction = curve;
+        [layer addAnimation:fade forKey:@"kybern-present-opacity"]; [layer addAnimation:grow forKey:@"kybern-present-transform"];
+      } else {
+        [layer removeAnimationForKey:@"kybern-present-opacity"]; [layer removeAnimationForKey:@"kybern-present-transform"];
+      }
+      layer.opacity = opacity; layer.transform = about(scale);
+      [CATransaction commit]; return;
+    }
+    if ([op isEqual:@"probe"]) {
+      CALayer *shown = host.clip.layer.presentationLayer ?: host.clip.layer;
+      emit(@{@"id":identifier,@"type":@"probe",@"data":@{@"opacity":@(shown.opacity),@"scale":@(shown.transform.m11),@"animating":@([host.clip.layer animationForKey:@"kybern-present-opacity"] != nil || [host.clip.layer animationForKey:@"kybern-present-transform"] != nil)}}); return;
+    }
     if ([op isEqual:@"post"]) { [host.web evaluateJavaScript:cmd[@"script"] completionHandler:nil]; return; }
     if ([op isEqual:@"focus"]) [host.clip.window makeFirstResponder:host.web];
   });

@@ -19,7 +19,7 @@ const mode = `${light ? 'light' : 'dark'}${reduced ? '-reduced' : ''}${composito
 const out = path.join('/Users/mymac/projects/ade/previews/motion/fps/lab', mode)
 const scratch = '/Users/mymac/projects/ade-gpuix-scratch/motion-fps/lab-scratch'
 rmSync(out, { recursive: true, force: true }); mkdirSync(out, { recursive: true }); mkdirSync(scratch, { recursive: true })
-type Probe = { layers: { frame: string; color: number[]; radius: number; ink: { top: number; bottom: number; left: number; right: number; rows: string[] } | null }[]; samples: { t: number; opacity: number[]; angle: number[] }[] }
+type Probe = { layers: { frame: string; color: number[]; radius: number; ink: { top: number; bottom: number; left: number; right: number; rows: string[] } | null }[]; samples: { t: number; opacity: number[]; angle: number[]; lum: number[] }[] }
 const release = await lease()
 const f = await launchFixture(path.join(import.meta.dir, 'lab.tsx'), {
   KYBERN_DATA_DIR: scratch, KYBERN_URL: '', KYBERN_CLIENT_CONFIG_DIR: path.join(scratch, 'client'), GPUIX_BACKGROUND: '1', KYBERN_FRAME_TIMES: '1',
@@ -68,6 +68,16 @@ try {
     const lows = p.layers.map((_, i) => Math.min(...p.samples.map(s => s.opacity[i]!))), highs = p.layers.map((_, i) => Math.max(...p.samples.map(s => s.opacity[i]!)))
     results.opacity = { min: Math.min(...lows), max: Math.max(...highs) }
     assert.ok(Math.min(...lows) >= 0.2 && Math.max(...highs) <= 1.0001, 'opacity stays in the curves\' range')
+    // The shimmer band (N4): each "Thinking" glyph's colour moves towards the foreground once per 2 s cycle, the
+    // leftmost glyph first and the rightmost about a third of the cycle later (a sweep, not a pulse).
+    const banded = p.layers.map((l, i) => ({ x: Number(l.frame.match(/-?[\d.]+/g)![0]), lums: p.samples.map(s => s.lum[i]!) }))
+      .filter(b => Math.max(...b.lums) - Math.min(...b.lums) > 0.1).sort((x, y) => x.x - y.x)
+    // The band's peak is the sample furthest from the glyph's rest colour (it lightens in dark, darkens in light).
+    const peak = (b: { lums: number[] }) => { const rest = [...b.lums].sort((x, y) => x - y)[b.lums.length >> 1]!, off = b.lums.map(v => Math.abs(v - rest)); return p.samples[off.indexOf(Math.max(...off))]!.t }
+    const lag = banded.length ? (((peak(banded.at(-1)!) - peak(banded[0]!)) % 2000) + 2000) % 2000 : -1
+    results.band = { glyphs: banded.length, lagMs: Math.round(lag) }
+    assert.ok(banded.length >= 6, `the shimmer band crosses every glyph (${banded.length} banded layers)`)
+    assert.ok(lag > 60 && lag < 1000, `the band sweeps left to right (rightmost glyph peaks ${Math.round(lag)} ms after the leftmost)`)
     // Masks upright: the "T" of "Thinking" carries its bar at the top.
     const glyphs = p.layers.filter(l => l.ink && l.ink.rows.length > 16 && l.ink.rows.length < 30)
     const tee = glyphs.find(l => l.ink!.rows[1]!.replace(/\./g, '').length > l.ink!.rows[1]!.length * 0.6)

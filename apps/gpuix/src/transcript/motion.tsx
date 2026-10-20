@@ -20,10 +20,15 @@ export function Shimmer({ text, color, size = 14, lineHeight = ROW_LINE }: { tex
     ? <NativeShimmer text={text} color={color} size={size} lineHeight={lineHeight} />
     : <SampledShimmer text={text} color={color} size={size} lineHeight={lineHeight} />
 }
+/** `.t-shimmer`: the label stays in `color` while a soft band of the foreground colour sweeps across it, left to right, every
+ *  2 s (linear), glyph by glyph, natively (`highlight`; Core Animation once it settles). */
 function NativeShimmer({text,color,size,lineHeight}: {text:string;color:string;size:number;lineHeight:number}) {
+  const t = useTheme()
   const loop = useLoopRunning(!REDUCED_MOTION)
-  return <Label ref={loop.ref} color={color} size={size} lineHeight={lineHeight} truncate paintAnimation={loop.running ? {kind:'shimmer',cycleMs:1600} : undefined}>{text}</Label>
+  return <Label ref={loop.ref} color={color} size={size} lineHeight={lineHeight} truncate paintAnimation={loop.running ? {kind:'shimmer',cycleMs:SHIMMER_MS,highlight:t.text} : undefined}>{text}</Label>
 }
+/** `--shimmer-dur`. */
+const SHIMMER_MS = 2000
 
 function SampledShimmer({ text, color, size, lineHeight }: { text: string; color: string; size: number; lineHeight: number }) {
   const loop = useLoopVisibility(!REDUCED_MOTION)

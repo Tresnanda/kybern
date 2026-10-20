@@ -9,6 +9,7 @@ import { openPreview, previewState, releasePreviewEntry, setPreview, usePreview,
 import { recordRecent, recentsKeyForThread } from './recents.ts'
 import { currentAddress, reloadAddress } from './address.ts'
 import { DeviceRails } from './DeviceRails.tsx'
+import { webDocumentEnter } from '../motion/kit.tsx'
 
 type Slot = { kind: 'dock' | 'mini'; bounds: ElementBoundsEvent }
 const slots = new Map<string, Map<string, Slot>>(), placements = new Map<string, () => void>()
@@ -79,6 +80,7 @@ export function PreviewSurface({ threadId }: { threadId: string }) {
     let alive = true, generation = 0
     const stop = webHost.subscribe(event => {
       if (event.id !== id || !alive || (event.generation !== undefined && event.generation !== generation)) return
+      if (event.type === 'created') webDocumentEnter(id, webHost.present)
       if (event.type === 'created' || event.type === 'loaded') { ready.current = true; placements.get(threadId)?.(); webHost.theme(id, { appearance: t.variant, variables: { '--background': t.surface, '--foreground': t.text } }) }
       if (event.type === 'failed' || event.type === 'terminated') setPreview(threadId, { loading: false, load: { phase: 'error', message: event.message ?? 'The page stopped responding. Reload to try again.' } })
       if (event.type === 'navigation') setPreview(threadId, { loading: false, navigatedAway: entry.kind === 'server' && event.url !== (entry.frameUrl ?? entry.url) })

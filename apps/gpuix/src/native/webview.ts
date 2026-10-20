@@ -79,6 +79,17 @@ export const webHost = {
       layer, radius: logical.radius ?? 0, roundedClips: logical.roundedClips ?? [], layout: `window.kybernLayout?.(${[logical.width, logical.height, logical.scale, logical.left, logical.top].join(',')})` })
   },
   hide(id: string) { if (bridge) command({ op: 'hide', id }) },
+  /** Test seam: the document layer's presented opacity and scale, as a `probe` event. */
+  probe(id: string) { if (bridge) command({ op: 'probe', id }) },
+  /**
+   * Fade and scale the document with its host (N3): Core Animation runs the curve, so the app presents no frames for it.
+   * `from` starts an entrance; without it the document eases from what is on screen. `origin` is fractions of its box.
+   */
+  present(id: string, to: { opacity: number; scale?: number }, motion: { from?: { opacity?: number; scale?: number }; duration?: number; ease?: readonly number[]; origin?: [number, number] } = {}) {
+    if (!bridge) return
+    command({ op: 'present', id, opacity: to.opacity, scale: to.scale ?? 1, duration: motion.duration ?? 0, ease: motion.ease ? [...motion.ease] : undefined, originX: motion.origin?.[0] ?? 0.5, originY: motion.origin?.[1] ?? 0.5,
+      ...(motion.from?.opacity !== undefined ? { fromOpacity: motion.from.opacity } : {}), ...(motion.from?.scale !== undefined ? { fromScale: motion.from.scale } : {}) })
+  },
   post(id: string, script: string) { command({ op: 'post', id, script }) },
   theme(id: string, theme: unknown) { command({ op: 'post', id, script: `window.kybernTheme?.(${JSON.stringify(theme)})` }) },
   navigate(id: string, url: string) { command({ op: 'navigate', id, url }) },
