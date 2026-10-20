@@ -60,6 +60,8 @@ export function popoverStyle(t: Theme): StyleDesc {
 }
 
 /** Where the popup grows from when `anchor` names the corner of the popup that sits at `position` (default top-left). */
+const LAYOUT_POPUPS = process.env.KYBERN_POPUP_MOTION === 'layout'
+
 const ANCHOR_ORIGIN: Record<NonNullable<AnchoredProps['anchor']>, [number, number]> = {
   topLeft: [0, 0], topCenter: [0.5, 0], topRight: [1, 0], rightCenter: [1, 0.5],
   bottomRight: [1, 1], bottomCenter: [0.5, 1], bottomLeft: [0, 1], leftCenter: [0, 0.5],
@@ -148,8 +150,9 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
   // Decided on mount: a later change must not restart or drop the tween.
   // 'arrive' = paint-only materialize; 'layout' = the `fade` layers' <anchored motion>; 'none' = no motion (`still`, stock addon).
   // A zero-length native opacity motion can leave a layout-tweened popup at its initial opacity 0, so Reduce Motion never uses 'layout'.
+  // `KYBERN_POPUP_MOTION=layout` is the measurement control: every popup takes v0.10.1's drift-and-fade layout tween.
   const [mode] = useState<'arrive' | 'layout' | 'none'>(() =>
-    fade ? (stillProp || REDUCED_MOTION ? 'none' : 'layout') : stillProp || !PATCHED_NATIVE ? 'none' : 'arrive')
+    fade || LAYOUT_POPUPS ? (stillProp || REDUCED_MOTION ? 'none' : 'layout') : stillProp || !PATCHED_NATIVE ? 'none' : 'arrive')
   const [generation] = useState(nextPresenceGeneration)
   const { duration, ease, distance } = POPUP[kind]
   const d = REDUCED_MOTION ? 0 : distance

@@ -323,6 +323,9 @@ pub(crate) fn apply(child: AnyElement, id: u64, tree: &RetainedTree, now: Instan
         track.tagged(now).then(|| (track.value(now), track.source.origin.unwrap_or([0.5, 0.5]), track.source.press.is_some(), track.blur_seen))
     });
     let Some((value, origin, press, blur)) = scope else { return child };
+    if gpui::kybern_motion_trace_enabled() {
+        gpui::kybern_motion_trace(format_args!("ptx-apply {id}:{:.3}", value.opacity));
+    }
     Transformed { child, id, value, origin, press, blur }.into_any_element()
 }
 
@@ -476,6 +479,10 @@ pub(crate) fn tick(view: &mut GpuixView, window: &mut Window, cx: &mut gpui::Con
         (updates, active, settled, rerender)
     });
     let (found, missing): (Vec<_>, Vec<_>) = updates.into_iter().partition(|(id, _)| window.has_subtree_transform(*id));
+    if gpui::kybern_motion_trace_enabled() {
+        let list = |v: &[(u64, SubtreeTransformValue)]| v.iter().map(|(id, value)| format!(" {id}:{:.3}", value.opacity)).collect::<String>();
+        gpui::kybern_motion_trace(format_args!("ptx-tick found{} missing{}", list(&found), list(&missing)));
+    }
     if !found.is_empty() {
         window.transform_subtrees(&found);
     }
