@@ -81,7 +81,7 @@ export function SaveToNoteAction({ text, testId }: { text: string; testId?: stri
   )
 }
 
-function messageText(parts: ContentPart[]): string {
+export function messageText(parts: ContentPart[]): string {
   let text = ''
   for (const p of parts) {
     if (p.type === 'text') text += p.text

@@ -11,6 +11,7 @@ import { installThemeFade } from './motion/themeFade.tsx'
 import { useSyncWindowAppearance, useSystemVariant } from './shell/appearance.ts'
 import { FONT_UI, THEMES, themeFor, type Theme } from './theme.ts'
 import { FULL_TRANSLUCENCY, OPAQUE_WINDOW, fullTranslucency, useAccessibilityDisplay } from './platform/material.ts'
+import { REDUCED_MOTION } from './platform/reducedMotion.ts'
 import { Icon, type IconName } from './icons.tsx'
 import { PROVIDER_IMAGES, PROVIDER_VECTORS } from './providerMarks.ts'
 import { pressTransform } from './motion/press.ts'
@@ -23,14 +24,9 @@ function systemVariant(): 'dark' | 'light' {
   return r.stdout?.trim() === 'Dark' ? 'dark' : 'light'
 }
 
-function systemReducedMotion(): boolean {
-  if (process.env.KYBERN_REDUCED_MOTION) return process.env.KYBERN_REDUCED_MOTION === '1'
-  const r = spawnSync('defaults', ['read', 'com.apple.universalaccess', 'reduceMotion'], { encoding: 'utf8' })
-  return r.stdout?.trim() === '1'
-}
-
 export const VARIANT = systemVariant()
-export const REDUCED_MOTION = systemReducedMotion()
+/** Reduce Motion, followed live (`platform/reducedMotion.ts`). */
+export { REDUCED_MOTION }
 /** Strong ease-out for UI entering or moving (Emil Kowalski's `--ease-out`). */
 export const EASE_OUT: [number, number, number, number] = [...EASE.out]
 
@@ -77,7 +73,8 @@ export function Label({
   truncate?: boolean
   style?: StyleDesc
   ref?: import('react').Ref<import('@gpuix/react').PublicInstance>
-  paintAnimation?: { kind: 'shimmer' | 'pop'; cycleMs: number; delayMs?: number }
+  /** `shimmer` with `highlight`: a band of that colour sweeps across the text (`.t-shimmer`); without it, a brightness pulse. `hue`: a hue loop. */
+  paintAnimation?: { kind: 'shimmer' | 'pop' | 'hue'; cycleMs: number; delayMs?: number; highlight?: string }
 }) {
   return (
     <text ref={ref}

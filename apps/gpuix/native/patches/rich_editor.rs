@@ -1165,6 +1165,9 @@ pub(crate) struct RichEditorState {
     /// Checked state per checklist block as last painted, and running tick transitions.
     checks_seen: HashMap<u64, bool>,
     check_anims: HashMap<u64, (Instant, bool)>,
+    /// `.note-prose … input:active { scale: .92 }` (N6): the checklist box under a press, since when, and whether it is
+    /// still held (80 ms `--ease-out` each way).
+    check_press: Option<(usize, Instant, bool)>,
 }
 
 #[derive(Clone, Copy)]
@@ -1214,6 +1217,7 @@ impl RichEditorState {
             hover_line: None,
             checks_seen: HashMap::new(),
             check_anims: HashMap::new(),
+            check_press: None,
         }
     }
 
@@ -2343,6 +2347,7 @@ impl RichEditorState {
         let p = self.local(event.position);
         if let Some(index) = self.checkbox_at(p) {
             if !self.read_only {
+                if !self.theme.reduced_motion { self.check_press = Some((index, Instant::now(), true)); }
                 self.core.toggle_task(index);
                 self.after_edit(cx);
             }
@@ -2403,8 +2408,14 @@ impl RichEditorState {
         self.touched(cx);
     }
 
-    fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+    fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.selecting = None;
+        if let Some((index, since, true)) = self.check_press {
+            // Release from wherever the squash got to.
+            let held = (since.elapsed().as_secs_f32() / 0.08).min(1.0);
+            self.check_press = Some((index, Instant::now() - std::time::Duration::from_secs_f32(0.08 * (1.0 - held)), false));
+            cx.notify();
+        }
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -3058,10 +3069,23 @@ fn paint_doc(editor: &mut RichEditorState, bounds: Bounds<Pixels>, caret_on: boo
             Kind::Task(checked) => {
                 // `.note-prose ul[data-type=taskList] > li > label`: the fill eases over 150 ms
                 // (--ease-out), the tick scales from 0.6 (--ease-smooth-out) and fades in 80 ms.
-                let check = 1.067 * em;
-                let b = Bounds::new(origin + point(px(place.list_x), px(place.ty + (lh - check) / 2.0)), size(px(check), px(check)));
-                let r = 0.3 * em;
                 let now = Instant::now();
+                // A held box squashes to 0.92 about its centre (80 ms `--ease-out`) and springs back on release.
+                let press = match editor.check_press {
+                    Some((i, since, down)) if i == index => {
+                        let e = bezier(0.23, 1.0, 0.32, 1.0, (now.duration_since(since).as_secs_f32() / 0.08).min(1.0));
+                        if down { 1.0 - 0.08 * e } else { 0.92 + 0.08 * e }
+                    }
+                    _ => 1.0,
+                };
+                if matches!(editor.check_press, Some((i, since, false)) if i == index && now.duration_since(since).as_secs_f32() >= 0.08) {
+                    editor.check_press = None;
+                } else if press != 1.0 || matches!(editor.check_press, Some((i, _, _)) if i == index) {
+                    window.request_animation_frame();
+                }
+                let check = 1.067 * em * press;
+                let b = Bounds::new(origin + point(px(place.list_x + 1.067 * em * (1.0 - press) / 2.0), px(place.ty + (lh - check) / 2.0)), size(px(check), px(check)));
+                let r = 0.3 * em * press;
                 let anim = editor.check_anims.get(&block.id).copied().filter(|(start, _)| now.duration_since(*start).as_secs_f32() < 0.15);
                 let (fill_t, tick_scale, tick_alpha) = match anim {
                     Some((start, on)) => {

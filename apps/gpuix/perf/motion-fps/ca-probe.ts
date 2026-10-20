@@ -1,6 +1,6 @@
 /** In-process view of compositor loops (native/patches/compositor_loops_*): the Core Animation sublayers of every
  * window's Metal layer, their frames (points, bottom-left origin), fills, radii, the ink of masked (sprite) layers
- * rendered in place (rows top-first), and their presentation opacity sampled every ~4 ms for `durationMs`. Reads
+ * rendered in place (rows top-first), and their presentation opacity, angle and colour (r+g+b) sampled every ~4 ms for `durationMs`. Reads
  * only this process's own layers, so it needs no screen-recording permission. */
 export async function caProbe(durationMs: number) {
 
@@ -30,7 +30,7 @@ export async function caProbe(durationMs: number) {
    for(let y=0;y<H;y++)for(let x=0;x<W;x++){const a=buf[(y*W+x)*4+3]!;if(y<H/2)top+=a;else bottom+=a;if(x<W/2)left+=a;else right+=a}
    return {top,bottom,left,right,rows:Array.from({length:H},(_,y)=>Array.from({length:W},(_,x)=>buf[(y*W+x)*4+3]!>96?'#':buf[(y*W+x)*4+3]!>16?'+':'.').join(''))}
   }
-  const info=layers.map(l=>{const d=describe(l);return {...d,ink:ink(l,d.frame)}}),samples:{t:number;opacity:number[];angle:number[]}[]=[],end=performance.now()+durationMs
-  while(performance.now()<end){samples.push({t:performance.now(),opacity:layers.map(l=>{const p=o.msg(l as never,sel('presentationLayer'));return p?f32(p as never,sel('opacity')):-1}),angle:layers.map(l=>{const p=o.msg(l as never,sel('presentationLayer'));return p?f64(o.msgPtrArg(p as never,sel('valueForKeyPath:'),nsKey('transform.rotation.z') as never) as never,sel('doubleValue')):0})});await Bun.sleep(4)}
+  const info=layers.map(l=>{const d=describe(l);return {...d,ink:ink(l,d.frame)}}),samples:{t:number;opacity:number[];angle:number[];lum:number[]}[]=[],end=performance.now()+durationMs
+  while(performance.now()<end){samples.push({t:performance.now(),opacity:layers.map(l=>{const p=o.msg(l as never,sel('presentationLayer'));return p?f32(p as never,sel('opacity')):-1}),angle:layers.map(l=>{const p=o.msg(l as never,sel('presentationLayer'));return p?f64(o.msgPtrArg(p as never,sel('valueForKeyPath:'),nsKey('transform.rotation.z') as never) as never,sel('doubleValue')):0}),lum:layers.map(l=>{const p=o.msg(l as never,sel('presentationLayer'));const c=p&&o.msg(p as never,sel('backgroundColor'));if(!c)return -1;const k=cg.CGColorGetComponents(c as never);return read.f64(k as never,0)+read.f64(k as never,8)+read.f64(k as never,16)})});await Bun.sleep(4)}
   return {metal,layers:info,samples}
  }

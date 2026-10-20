@@ -27,10 +27,16 @@ import { AccountAvatar, AccountDot, AccountUsageRing } from '../usage/AccountMar
 import { askAccountLimits, makeDefaultAccount, refreshAccounts, setUsageAnchor, updateProviderSettings, useAccountFlash, useAccountLimitEntries, useAccounts, useAccountsFeed, useAccountsLegacy, useAccountsLoaded } from '../usage/accounts.ts'
 import { limitsForAccount } from '../../../desktop/src/lib/accountUi.ts'
 import { Checkbox } from '../kit/Checkbox.tsx'
+import { Skeleton } from '../kit/Skeleton.tsx'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { DURATION } from '../motion/tokens.ts'
 import { Button, PageBlock, selectOwnsEscape, useSettingsModal } from './controls.tsx'
 import { S } from './glyphs.ts'
 import { openSettingsTab } from './SettingsScreen.tsx'
 import { useSettings } from './store.ts'
+
+/** Skeleton rows fade in after 150 ms (the fade's own `delay`, no timer), so a fast answer never flashes them. */
+const SKELETON_DELAY = PATCHED_NATIVE ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { delay: 0.15, duration: DURATION.quick, ease: [0.23, 1, 0.32, 1] as [number, number, number, number] } } : undefined
 
 /** What to run in a terminal to sign the CLI account in again; Kybern picks the sign-in up on its own. */
 const CLI_SIGN_IN_COMMAND: Record<ProviderKind, string> = {
@@ -78,7 +84,7 @@ export function Accounts() {
   return <>
     {legacy && <PageBlock><Note>{`Update Kybern on ${host} to sign in from the browser.`}</Note></PageBlock>}
     {installed.map((provider) => <AgentSection key={provider.kind} provider={provider} accounts={accounts.filter((a) => a.provider.kind === provider.kind)} readOnly={legacy} onRemove={setRemoving} onAssign={setAssigning} />)}
-    {!(loaded && providersLoaded) && installed.length === 0 && <PageBlock><div testId="accounts-loading" role="status" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>{[0, 1].map((i) => <div key={i} style={{ height: 56, borderRadius: 12, backgroundColor: t.buttonSecondary }} />)}</div></PageBlock>}
+    {!(loaded && providersLoaded) && installed.length === 0 && <PageBlock><div testId="accounts-loading" role="status" paintTransform={SKELETON_DELAY} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>{[0, 1].map((i) => <Skeleton key={i} height={56} radius={12} />)}</div></PageBlock>}
     {missing.length > 0 && <PageBlock><div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', paddingBottom: 30 }}><Note>{`${listAgents(missing)} ${missing.length === 1 ? 'isn’t' : 'aren’t'} installed. Set them up in `}</Note><TextLink testId="accounts-agent-providers" onClick={() => openSettingsTab('agents')}>Agent providers</TextLink><Note>.</Note></div></PageBlock>}
     {removing && <RemoveDialog account={removing} onClose={() => setRemoving(null)} />}
     {assigning && <ProjectsDialog account={assigning} accounts={accounts} projects={projects} projectAccounts={settings?.providers[assigning.provider.kind]?.project_accounts} onClose={() => setAssigning(null)} />}

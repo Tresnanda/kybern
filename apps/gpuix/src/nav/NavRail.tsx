@@ -36,7 +36,7 @@ import { AccountDot } from '../usage/AccountMark.tsx'
 import { useAccountsFeed, useDefaultAccount } from '../usage/accounts.ts'
 import { pressTransform } from '../motion/press.ts'
 import { DURATION, EASE } from '../motion/kit.tsx'
-import { arcDraw, arcKey, ringArc } from '../motion/success.ts'
+import { ringValue } from '../motion/success.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { fadeTo, pressRow } from '../shell/motion.ts'
 
@@ -161,11 +161,12 @@ const CARD_INNER = 320 - 32
 
 const R = 10.25
 
-/** A 24px ring: the track, and an arc for what is left, starting at 12 o'clock (the arc is its own path, so `arcDraw` can stroke it in). */
+/** A 24px ring: the track, and an arc for what is left, starting at 12 o'clock (`ringValue`: drawn in on its first value, then
+ *  easing from value to value natively). */
 const RING_TRACK = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="${R}" stroke="#000" stroke-width="2"/></svg>`
-function ringSvg(left: number | null): { track: string; arc: { source: string; length: number } | null } {
+function ringSvg(left: number | null): { track: string; arc: ReturnType<typeof ringValue> | null } {
   if (left === null || left <= 0) return { track: RING_TRACK, arc: null }
-  return { track: RING_TRACK, arc: ringArc({ size: 24, radius: R, strokeWidth: 2, fraction: Math.min(100, left) / 100 }) }
+  return { track: RING_TRACK, arc: ringValue({ size: 24, radius: R, strokeWidth: 2, fraction: Math.min(100, left) / 100, drawIn: true }) }
 }
 
 function toneColor(t: Theme, tone: ReturnType<typeof limitTone>) {
@@ -227,9 +228,8 @@ function UsageRing({
   const left = used === null ? null : 100 - used
   const stale = used === null || limitsStale(entry, now)
   const svg = ringSvg(left)
-  // `.rail-usage-arc` (400 ms ease-out): the arc strokes itself in when it first has a value and again when it moves 5 points or
-  // more (`arcKey`); a smaller refresh just resizes it. Old → new tweening needs the native N2 item. Stale data dims (150 ms).
-  const draw = svg.arc ? arcDraw(svg.arc.length) : undefined
+  // `.rail-usage-arc` (400 ms ease-out): the arc strokes itself in when it first has a value, then eases from the old value to the
+  // new one (native, N2). Stale data dims (150 ms).
   const dim = fadeTo(stale ? 0.5 : 1)
   return (
     <div style={{ display: 'flex', position: 'relative' }}>
@@ -254,7 +254,7 @@ function UsageRing({
       >
         <div paintTransform={dim.paintTransform} style={{ position: 'relative', width: 24, height: 24, pointerEvents: 'none', ...dim.style }}>
           <svg source={svg.track} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color: ink(t, 0.12), pointerEvents: 'none' }} />
-          {svg.arc && <svg key={arcKey(left ?? 0)} source={svg.arc.source} {...(draw ? { paintAnimation: draw } : {})} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color: toneColor(t, limitTone(used)), pointerEvents: 'none' }} />}
+          {svg.arc && <svg source={svg.arc.source} {...(svg.arc.paintAnimation ? { paintAnimation: svg.arc.paintAnimation } : {})} style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, color: toneColor(t, limitTone(used)), pointerEvents: 'none' }} />}
           <div style={{ position: 'absolute', left: 0, top: 0, width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
             <ProviderMark kind={entry.provider} size={11} />
           </div>

@@ -11,7 +11,7 @@ mock.module('../native/visibility.ts', () => ({ isWindowVisible: () => visible, 
 
 const { Presence, EXIT } = await import('./Presence.tsx')
 const { BLUR, DURATION, EASE, SCALE, Swap, SwapOnChange, enterTransform, popupOrigin, popupTransform, revealTransform } = await import('./kit.tsx')
-const { arcDraw, arcKey } = await import('./success.ts')
+const { arcDraw, arcKey, ringValue } = await import('./success.ts')
 const { hoverPressTransform, pressRowStyle, shade, PRESS_SCALE } = await import('./press.ts')
 const { EASE_BOUNCE, useCountPop } = await import('../kit/Pop.tsx')
 const { THEMES } = await import('../theme.ts')
@@ -104,7 +104,8 @@ native('popup origin follows the trigger corner and the open values match menu.t
   expect(popupOrigin('top', 'start')).toEqual([0, 1])
   expect(popupOrigin('right', 'center')).toEqual([0, 0.5])
   expect(popupOrigin('left', 'center')).toEqual([1, 0.5])
-  expect(popupTransform([0, 0])!.initial).toEqual({ opacity: 0, scale: 0.97, blur: 2 })
+  // No blur on menus: a settling blur costs a full window render (`popupTransform`).
+  expect(popupTransform([0, 0])!.initial).toEqual({ opacity: 0, scale: 0.97 })
   expect(popupTransform([0, 0])!.transition!.duration).toBe(0.25)
   expect(popupTransform([0, 0], 'tooltip')!.initial).toEqual({ opacity: 0, scale: 0.98 })
   expect(popupTransform([0, 0], 'tooltip')!.transition!.duration).toBe(0.15)
@@ -121,6 +122,10 @@ native('reveal, hover scale and arc draw', () => {
   expect(hoverPressTransform(true)!.press!.scale).toBe(0.97)
   expect(hoverPressTransform(true, false)).toBeUndefined()
   expect(arcDraw(88)).toMatchObject({ kind: 'stroke', cycleMs: 400, delayMs: 0, dash: 88, ease: [...EASE.out] })
+  // N2: a full ring dashed to its value, easing between values natively; drawn in from empty only when asked.
+  const ring = ringValue({ size: 24, radius: 10, strokeWidth: 2, fraction: 0.25, drawIn: true })
+  expect(ring.paintAnimation).toMatchObject({ kind: 'stroke', cycleMs: 400, retarget: true, dash: 62.832, from: 62.832, to: 47.124 })
+  expect(ringValue({ size: 24, radius: 10, strokeWidth: 2, fraction: 0.25 }).paintAnimation).toMatchObject({ from: 47.124, to: 47.124 })
   expect(arcKey(61)).toBe(arcKey(62)); expect(arcKey(61)).not.toBe(arcKey(70))
 })
 

@@ -32,7 +32,6 @@ import { Icon } from '../icons.tsx'
 import { hoverTrigger, useHover } from '../kit/hover.tsx'
 import { kitOverlayOpen } from '../kit/AlertDialog.tsx'
 import { TOOLTIP_DELAY_MS, TOOLTIP_SKIP_MS } from '../kit/hoverController.ts'
-import { DISTANCE } from '../motion/kit.tsx'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { N } from './glyphs.ts'
 import { containsPoint, submenuCorridor, type Point } from './menuGeometry.ts'
@@ -101,6 +100,17 @@ interface MenuContextValue {
 }
 
 export const MenuContext = createContext<MenuContextValue | null>(null)
+/** The root menu is leaving (its exit plays): its submenus leave with it instead of staying on screen at full opacity. */
+const MenuLeaving = createContext(false)
+
+/**
+ * Whether the last input on a popup came from the keyboard (a key press) rather than the pointer (a press). A keyboard close (Escape, Enter on
+ * an item) unmounts at once; a pointer close plays the exit. Updated by the handlers of the popup's panel and trigger.
+ */
+function useInputKind() {
+  const key = useRef(false)
+  return { key, byKey: () => { key.current = true }, byPointer: () => { key.current = false } }
+}
 
 function useMenuTree(close: () => void): MenuTree {
   const { renderer } = useGpuix()
@@ -273,11 +283,21 @@ export function Menu({
   const { renderer } = useGpuix()
   const [ownOpen, setOwnOpen] = useState(false)
   const open = openProp ?? ownOpen
+  // The popup stays mounted through its exit (`leaving`) after a pointer close; a keyboard close unmounts it at once.
+  const input = useInputKind()
+  const [present, setPresent] = useState(open)
+  const instantClose = useRef(false)
+  if (open) {
+    if (!present) setPresent(true)
+    instantClose.current = false
+  } else if (present && instantClose.current) setPresent(false)
+  const leaving = !open && present
   const triggerRef = useRef<PublicInstance | null>(null)
   const pressedWhileOpen = useRef(false)
   const dismissedByOutside = useRef(false)
   const setOpen = useCallback(
     (next: boolean) => {
+      if (!next) instantClose.current = input.key.current
       if (openProp === undefined) setOwnOpen(next)
       onOpenChange?.(next)
       if (!next && triggerRef.current) renderer?.focusElement?.(triggerRef.current.id)
@@ -292,8 +312,9 @@ export function Menu({
   // bottom did not fit below, so it opens on the top side when there is room there.
   const popup = menu.panelRef
   const [flipped, setFlipped] = useState(false)
+  const shown = open || leaving
   useEffect(() => {
-    if (!open) { setFlipped(false); return }
+    if (!shown) { setFlipped(false); return }
     if (fit !== 'switch' || side !== 'bottom' || !renderer || !popup.current || !triggerRef.current) return
     let decided = false
     return observeElementBounds(renderer, { id: popup.current.id }, ({ rect }) => {
@@ -304,7 +325,7 @@ export function Menu({
       const inset = 2 * ((typeof panel?.padding === 'number' ? panel.padding : 4) + 1)
       if (rect.y < anchor.y + anchor.height && anchor.y - sideOffset - (rect.height + inset) >= 8) setFlipped(true)
     })
-  }, [open, fit, side, sideOffset, renderer])
+  }, [shown, fit, side, sideOffset, renderer])
   return (
     <div style={{ display: 'flex', position: 'relative', minWidth: 0, ...rootStyle }}>
       <div
@@ -314,6 +335,7 @@ export function Menu({
         testId={testId}
         tabIndex={0}
         onMouseDown={() => {
+          input.byPointer()
           pressedWhileOpen.current = open
         }}
         onClick={() => {
@@ -329,13 +351,14 @@ export function Menu({
           setOpen(!open)
         }}
         onKeyDown={(e) => {
+          input.byKey()
           if (e.key === 'enter' || e.key === 'space' || e.key === 'down') setOpen(true)
         }}
         style={{ display: 'flex', minWidth: 0, flexShrink: 1, flexGrow: 1 }}
       >
         {trigger(open)}
       </div>
-      {open && (
+      {(open || leaving) && (
         <PopupLayer
           ref={menu.panelRef}
           side={flipped ? 'top' : side}
@@ -344,23 +367,28 @@ export function Menu({
           fit={fit}
           tabIndex={0}
           autoFocus
+          leaving={leaving}
+          onLeft={() => setPresent(false)}
           testId={testId ? `${testId}-menu` : undefined}
           onMouseDownOutside={(e) => {
             // A press inside a submenu panel is outside this one's element but inside the tree.
             if (e.x !== undefined && e.y !== undefined && tree.contains({ x: e.x, y: e.y })) return
+            input.byPointer()
             dismissedByOutside.current = true
             queueMicrotask(() => {
               dismissedByOutside.current = false
             })
             setOpen(false)
           }}
-          onKeyDown={menu.route}
+          onKeyDown={(e) => { input.byKey(); menu.route(e) }}
           onMouseMove={tree.note}
           onMouseLeave={() => tree.left(0)}
-          onMouseDown={pointerNav}
+          onMouseDown={() => { input.byPointer(); pointerNav() }}
           style={panel ? { ...panelStyle(t, width, minWidth), ...panel } : panelStyle(t, width, minWidth)}
         >
-          <MenuContext.Provider value={menu.context}>{children}</MenuContext.Provider>
+          <MenuLeaving.Provider value={leaving}>
+            <MenuContext.Provider value={menu.context}>{children}</MenuContext.Provider>
+          </MenuLeaving.Provider>
         </PopupLayer>
       )}
     </div>
@@ -382,11 +410,18 @@ export function ContextMenu({
   testId?: string
 }) {
   const t = useTheme()
-  const tree = useMenuTree(onClose)
-  const menu = useMenuLevel(tree, 0, onClose)
+  // A pointer close (a pick, a press outside) plays the exit and then calls `onClose`; a keyboard close calls it at once.
+  const input = useInputKind()
+  const [leaving, setLeaving] = useState(false)
+  const close = useCallback(() => {
+    if (input.key.current) onClose()
+    else setLeaving(true)
+  }, [onClose, input.key])
+  const tree = useMenuTree(close)
+  const menu = useMenuLevel(tree, 0, close)
   // The layer carries the panel's radius, as `FloatingLayer` does, or it paints square corners.
   return (
-    // It opens down and right from the pointer, so it drifts in from above.
+    // It opens down and right from the pointer, so it grows from its top-left corner.
     <PopupLayer
       ref={menu.panelRef}
       position={at}
@@ -395,17 +430,22 @@ export function ContextMenu({
       testId={testId}
       tabIndex={0}
       autoFocus
+      leaving={leaving}
+      onLeft={onClose}
       onMouseDownOutside={(e) => {
         if (e.x !== undefined && e.y !== undefined && tree.contains({ x: e.x, y: e.y })) return
-        onClose()
+        input.byPointer()
+        close()
       }}
-      onKeyDown={menu.route}
+      onKeyDown={(e) => { input.byKey(); menu.route(e) }}
       onMouseMove={tree.note}
       onMouseLeave={() => tree.left(0)}
-      onMouseDown={pointerNav}
+      onMouseDown={() => { input.byPointer(); pointerNav() }}
       style={panelStyle(t, undefined, width)}
     >
-      <MenuContext.Provider value={menu.context}>{children}</MenuContext.Provider>
+      <MenuLeaving.Provider value={leaving}>
+        <MenuContext.Provider value={menu.context}>{children}</MenuContext.Provider>
+      </MenuLeaving.Provider>
     </PopupLayer>
   )
 }
@@ -526,6 +566,8 @@ export function MenuSub({
 }) {
   const t = useTheme()
   const parent = useContext(MenuContext)!
+  // The root is closing with an exit: this panel leaves with it (together, not left on screen at full opacity).
+  const parentLeaving = useContext(MenuLeaving)
   const { renderer } = useGpuix()
   const [open, setOpen] = useState(false)
   const [byKey, setByKey] = useState(false)
@@ -637,6 +679,7 @@ export function MenuSub({
           priority={parent.depth + 3}
           tabIndex={0}
           autoFocus={byKey}
+          leaving={parentLeaving}
           testId={testId ? `${testId}-menu` : undefined}
           onMouseMove={(e) => {
             // The pointer arrived: the corridor did its job, and this menu takes the keys.
@@ -648,9 +691,11 @@ export function MenuSub({
           onMouseDown={pointerNav}
           style={panelStyle(t, width)}
         >
-          <MenuContext.Provider value={menu.context}>
-            {maxHeight ? <div style={{ display: 'flex', flexDirection: 'column', maxHeight, overflow: 'scroll' }}>{children}</div> : children}
-          </MenuContext.Provider>
+          <MenuLeaving.Provider value={parentLeaving}>
+            <MenuContext.Provider value={menu.context}>
+              {maxHeight ? <div style={{ display: 'flex', flexDirection: 'column', maxHeight, overflow: 'scroll' }}>{children}</div> : children}
+            </MenuContext.Provider>
+          </MenuLeaving.Provider>
         </PopupLayer>
       )}
     </div>
@@ -740,8 +785,12 @@ export function Tip({
   // The controller keeps one tooltip visible app-wide and applies every leave (R4-1).
   const { ctl, state } = useHover({ delay: TOOLTIP_DELAY_MS, skip: TOOLTIP_SKIP_MS })
   const pressed = useRef(false)
-  if (disabled) return children
   const open = state.active !== null
+  // The tooltip stays mounted for its 80 ms exit after the pointer leaves; one that opened `instant` (a neighbour had just closed) also leaves at once.
+  const [present, setPresent] = useState(open)
+  if (open && !present) setPresent(true)
+  const leaving = !open && present
+  if (disabled) return children
   const vertical = side === 'left' || side === 'right'
   const extent = vertical ? (shortcut?.length ? TIP_KBD_HEIGHT : TIP_HEIGHT) : tipWidth(label, shortcut)
   const alignOffset = Math.round((size - extent) / 2)
@@ -750,12 +799,14 @@ export function Tip({
       {/* The control itself is the trigger: a wrapper would be occluded by the
           control's own hover fill and lose the pointer at once. */}
       {hoverTrigger(ctl, true, children, pressed)}
-      {open && (
+      {(open || leaving) && (
         // `TooltipContent`'s placement, with the surface animated.
         <PopupLayer
           testId="tooltip"
           kind="tooltip"
           still={state.instant}
+          leaving={leaving}
+          onLeft={() => setPresent(false)}
           side={side}
           sideOffset={sideOffset}
           alignOffset={alignOffset}
@@ -820,12 +871,25 @@ export function Kbd({ keys }: { keys: string[] }) {
 /**
  * A centred dialog (`components/kit/dialog.tsx`): `bg-black/60` over the whole
  * window and an opaque `rounded-3xl` popover card with the light border and
- * lift shadow. Escape and a click outside close. The backdrop and card fade in
- * over `--duration-fast` smooth-out, the card rising 4px where the desktop
- * scales it from 0.96 with a blur; it closes at once. `instant` (opened by a
- * shortcut) skips the motion. `palette` is the command dialog (`rounded-2xl`,
- * raised by `sm:pb-[15vh]`).
+ * lift shadow. Escape and a click outside close. The scrim fades in over
+ * `--duration-fast` smooth-out and the card grows from 0.96 with a 2 px blur
+ * (`dialog.tsx:27,55`), both paint-only; the exit is 150 ms (the card to 0.98).
+ * A pointer close (the X, a press outside) plays the exit and then calls
+ * `onClose`; Escape, and `instant` (opened by a shortcut) close at once, and
+ * `useDialogClose()` gives the dialog's own buttons the same pointer exit. A
+ * caller that unmounts the dialog itself (an action button's `setOpen(false)`)
+ * closes at once. `palette` is the command dialog (`rounded-2xl`, raised by
+ * `sm:pb-[15vh]`).
  */
+const DialogClose = createContext<((after?: () => void) => void) | null>(null)
+/**
+ * Close the enclosing `Dialog` the way its X button does: the exit plays, then `after` (default: the dialog's `onClose`) runs. A
+ * keyboard close should call the plain handler instead. `null` outside a `Dialog`.
+ */
+export function useDialogClose(): ((after?: () => void) => void) | null {
+  return useContext(DialogClose)
+}
+
 export function Dialog({
   onClose,
   width = 512,
@@ -869,11 +933,19 @@ export function Dialog({
   const palette = variant === 'palette'
   // Decided once: a later change must not restart the entrance.
   const [still] = useState(instant)
-  // Two layers: an anchored layer paints an opaque dark backing unless the surface
-  // carries its own fill, so the scrim is that fill (`backing`, black at `dim`; an
-  // opacity tween over the backing composited ~2x too dark on light pages) and the
-  // card sits on another layer,
-  // its left-centre point placed so the card is centred (palette: raised).
+  const [leaving, setLeaving] = useState(false)
+  const closeNow = useRef(onClose)
+  closeNow.current = onClose
+  const after = useRef<(() => void) | null>(null)
+  /** A pointer close: play the exit, then `after` or `onClose` (the card's `onLeft`). */
+  const closeWithExit = useCallback((then?: () => void) => {
+    after.current = then ?? null
+    if (still) (then ?? closeNow.current)()
+    else setLeaving(true)
+  }, [still])
+  // The scrim is the content's own fill (black at `dim`), not the anchored surface's `backing`: it fades with the transform at its
+  // true alpha, with no layout tween over the window. The card sits on another layer, its left-centre point placed so the card is
+  // centred (palette: raised).
   const cardWidth = Math.min(width, size.width - 32)
   const top = palette ? Math.max(16, size.height * 0.04) : 16
   const bottom = palette ? size.height * 0.15 : 16
@@ -882,17 +954,21 @@ export function Dialog({
       <PopupLayer
         still={still}
         material="none"
-        fade={{}}
-        backing={`rgba(0, 0, 0, ${dim})`}
+        appear="scrim"
+        materialize={{ origin: [0.5, 0.5] }}
+        leaving={leaving}
         position={{ x: 0, y: 0 }}
         priority={3}
         onMouseDown={pointerNav}
-        style={{ width: size.width, height: size.height }}
+        style={{ width: size.width, height: size.height, backgroundColor: `rgba(0, 0, 0, ${dim})` }}
       />
       <PopupLayer
         still={still}
         material={palette ? 'none' : 'popup'}
-        fade={{ rise: DISTANCE.micro }}
+        appear="dialog"
+        materialize={{ origin: [0.5, 0.5] }}
+        leaving={leaving}
+        onLeft={() => (after.current ?? closeNow.current)()}
         position={{ x: Math.round((size.width - cardWidth) / 2), y: pinTop !== undefined ? pinTop : Math.round((top + size.height - bottom) / 2) }}
         anchor={pinTop !== undefined ? 'topLeft' : 'leftCenter'}
         priority={4}
@@ -902,10 +978,10 @@ export function Dialog({
         onMouseDown={pointerNav}
         // A kit popup open inside the dialog (select, combobox, sheet) takes Escape and outside presses first.
         onMouseDownOutside={() => {
-          if (!kitOverlayOpen()) onClose()
+          if (!kitOverlayOpen()) closeWithExit()
         }}
         onKeyDown={(e) => {
-          if (e.key === 'escape' && !kitOverlayOpen()) onClose()
+          if (e.key === 'escape' && !kitOverlayOpen()) closeNow.current()
         }}
         style={{
           display: 'flex',
@@ -920,7 +996,7 @@ export function Dialog({
           overflow: 'hidden',
         }}
       >
-        {children}
+        <DialogClose.Provider value={closeWithExit}>{children}</DialogClose.Provider>
       </PopupLayer>
     </>
   )
@@ -929,6 +1005,8 @@ export function Dialog({
 /** `DialogHeader` + `DialogTitle` + `DialogDescription`, with the ghost close button. */
 export function DialogHeader({ title, description, onClose }: { title: string; description?: string; onClose: () => void }) {
   const t = useTheme()
+  // The X plays the dialog's exit when it can (a pointer press); `onClose` runs when the exit ends.
+  const exit = useDialogClose()
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 16, paddingRight: 48, paddingTop: 16, paddingBottom: 8, position: 'relative' }}>
       <Label color={t.text} size={18} weight={600} lineHeight={22}>
@@ -941,7 +1019,7 @@ export function DialogHeader({ title, description, onClose }: { title: string; d
       )}
       <div
         testId="dialog-close"
-        onClick={onClose}
+        onClick={() => (exit ? exit(onClose) : onClose())}
         style={{
           position: 'absolute',
           top: 8,

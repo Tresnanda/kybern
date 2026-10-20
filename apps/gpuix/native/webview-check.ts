@@ -36,6 +36,19 @@ try { for(const appearance of ['dark','light']) {
     await a.getByTestId('action-p').click();await a.getByTestId('action-h').click();await Bun.sleep(300)
     log=await inspect();assert.ok(log.some(e=>e.data?.kind==='host-state'&&e.data.visible===false),'Hidden page did not receive pause')
     await a.getByTestId('action-h').click();await Bun.sleep(300);log=await inspect();assert.equal(log.filter(e=>e.data?.kind==='lab').length,reports)
+    // N3: the document fades and scales in Core Animation (`present`): sampled presentation values rise to rest.
+    await a.call('keyDown',{elementId:root,key:'e'})
+    const samples:{opacity:number;scale:number;animating:boolean}[]=[]
+    const probes=async()=>(await inspect()).filter(e=>e.type==='probe')
+    for(const wait of [40,80,500]){
+      await Bun.sleep(wait);const before=(await probes()).length;await a.call('keyDown',{elementId:root,key:'g'})
+      let found:any[]=[];for(let n=0;n<40&&found.length<=before;n++){await Bun.sleep(25);found=await probes()}
+      assert.ok(found.length>before,'No probe event from the native document');samples.push(found.at(-1).data)
+    }
+    assert.ok(samples[0]!.opacity>0&&samples[0]!.opacity<1&&samples[0]!.scale>=0.96&&samples[0]!.scale<1&&samples[0]!.animating,`The document did not start its fade and scale: ${JSON.stringify(samples)}`)
+    assert.ok(samples[1]!.opacity>=samples[0]!.opacity&&samples[1]!.scale>=samples[0]!.scale,`The fade went backwards: ${JSON.stringify(samples)}`)
+    assert.ok(samples[2]!.opacity===1&&Math.abs(samples[2]!.scale-1)<1e-6,`The document did not come to rest: ${JSON.stringify(samples)}`)
+    console.log(`PASS ${appearance}: present ${samples.map(s=>`${s.opacity.toFixed(2)}@${s.scale.toFixed(3)}`).join(' -> ')}`)
     console.log(`PASS ${appearance}: native pointer/text/Command-L; external navigation blocked; stable document after 6 dock/mini moves and hide/show; visibility messages; menu fixture`)
   }catch(e){console.error(fixture.diagnostics());throw e}finally{
     await fixture.close()

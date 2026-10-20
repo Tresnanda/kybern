@@ -643,7 +643,7 @@ const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone, live, thi
       )}
       {showText && (
         <div ref={caret.ref} paintTransform={prose.rise} style={{ position: 'relative', display: 'flex', flexDirection: 'column', paddingLeft: 2, paddingRight: 2 }}>
-          <BoundedMarkdown text={text} tone={tone} stream={stream} />
+          <BoundedMarkdown text={text} tone={tone} stream={stream} at={block.at} />
           {prose.lines}
         </div>
       )}

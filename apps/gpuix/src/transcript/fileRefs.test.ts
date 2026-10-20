@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { chatLink } from '../../../../packages/kybern-client/src/chatLinks.ts'
 import { fileRefCandidate, fileRefCandidates, linkifyFileRefs } from '../../../../packages/kybern-client/src/fileRefs.ts'
 import { fromLine } from './markdown.tsx'
+import { evictUnused } from './fileRefs.ts'
 
 // The reply that showed the inconsistency (thread "Everlace launch status check").
 const reply = [
@@ -53,6 +54,15 @@ describe('inline code file references', () => {
     expect(chatLink('<https://test.everlace.cc/api/health>')).toEqual({ kind: 'external', url: 'https://test.everlace.cc/api/health' })
     const odd = linkifyFileRefs('`odd%name.ts`', () => 'odd%name.ts')
     expect(chatLink(/\]\((.*)\)$/.exec(odd)![1]!)).toEqual({ kind: 'file', path: 'odd%name.ts' })
+  })
+
+  // Review 2026-10-21: past 2,000 spans the cache was cleared whole, so links on screen turned back into code.
+  test('a full cache drops the least recently shown answers, never one a mounted row shows', () => {
+    const cache = new Map(Array.from({ length: 6 }, (_, i) => [`p${i}`, { file: `p${i}`, at: 0 }] as const))
+    evictUnused(cache, new Map([['p0', 1], ['p2', 2]]), 3)
+    expect([...cache.keys()]).toEqual(['p0', 'p2', 'p5'])
+    evictUnused(cache, new Map([['p0', 1], ['p2', 1], ['p5', 1]]), 1)
+    expect([...cache.keys()]).toEqual(['p0', 'p2', 'p5'])
   })
 
   test('a linked preview starts a few lines above its line', () => {

@@ -12,6 +12,7 @@ import { motion, type StyleDesc } from '@gpuix/react'
 import { useState, type ReactNode } from 'react'
 import { DURATION, EASE } from '../motion/kit.tsx'
 import { pressTransform } from '../motion/press.ts'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { FocusRing, useControllable, useFocusRing } from './Switch.tsx'
 
@@ -19,7 +20,10 @@ const OUT = [...EASE.out] as [number, number, number, number]
 
 /** One colour layer that fades in while `on` (150 ms `--ease-out`, the kit's `transition-colors`). */
 export function Fill({ on, color, radius, inset = 0 }: { on: boolean; color: string; radius: number; inset?: number }) {
-  return <motion.div initial={false} animate={{ opacity: on ? 1 : 0 }} transition={{ duration: DURATION.quick, ease: OUT }} style={{ position: 'absolute', left: inset, top: inset, right: inset, bottom: inset, borderRadius: radius, backgroundColor: color, pointerEvents: 'none' }} />
+  const style = { position: 'absolute', left: inset, top: inset, right: inset, bottom: inset, borderRadius: radius, backgroundColor: color, pointerEvents: 'none' } as const
+  // An opacity change on a fill: a paint-only fade (no layout or render per frame) where the addon has it.
+  if (PATCHED_NATIVE) return <div paintTransform={{ initial: false, animate: { opacity: on ? 1 : 0 }, transition: { duration: DURATION.quick, ease: OUT } }} style={style} />
+  return <motion.div initial={false} animate={{ opacity: on ? 1 : 0 }} transition={{ duration: DURATION.quick, ease: OUT }} style={style} />
 }
 
 export const TOGGLE_SIZE = {

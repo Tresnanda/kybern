@@ -322,3 +322,21 @@ async fn partial_checkout_receipt_saves_actual_branch_and_head_but_cannot_author
     let (context, _) = fixture.orchestrator.workspace_transition_message(&saved, &UserMessage::text("Inspect the checkout")).unwrap();
     assert!(serde_json::to_string(&context).unwrap().contains("PR identity was not verified"));
 }
+
+#[tokio::test]
+async fn worktree_removal_waits_for_a_running_after_snapshot() {
+    let (fixture, thread) = ordinary_worktree_fixture().await;
+    let path = PathBuf::from(&thread.cwd);
+    // The after snapshot of a finished turn is still reading the worktree.
+    let slow = fixture.orchestrator.checkpoint_lock(thread.id).lock_owned().await;
+    let removing = {
+        let orchestrator = fixture.orchestrator.clone();
+        let params = methods::WorktreeRemoveParams { thread_id: thread.id, force: false, delete_branch: false };
+        tokio::spawn(async move { orchestrator.worktree_remove(params).await })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!removing.is_finished() && path.exists(), "removal must not start under a running snapshot");
+    drop(slow);
+    let removed = tokio::time::timeout(Duration::from_secs(10), removing).await.unwrap().unwrap().unwrap();
+    assert!(!removed.exists && !path.exists());
+}

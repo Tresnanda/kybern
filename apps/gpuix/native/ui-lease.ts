@@ -24,11 +24,15 @@ const signalGroup = (signal: NodeJS.Signals) => {
   try { if (ownsGroup) process.kill(-active.pid, signal); else active.kill(signal) } catch (error) {
     const code = (error as NodeJS.ErrnoException).code
     if (code === 'ESRCH') return
-    // Darwin/Bun can report EPERM for an empty group after its leader exits.
-    // Suppress it only after verifying no group member remains to clean up.
+    // Darwin/Bun reports EPERM for a group after its leader exits (an empty group, or one whose remaining members are
+    // zombies or cannot be signalled). Signal each remaining member on its own; one that still refuses is not ours to stop.
     if (code === 'EPERM' && ownsGroup) {
-      const groups = spawnSync('ps', ['-axo', 'pgid='], { encoding: 'utf8' })
-      if (groups.status === 0 && !groups.stdout.split(/\s+/).some(group => Number(group) === active!.pid)) return
+      const groups = spawnSync('ps', ['-axo', 'pid=,pgid='], { encoding: 'utf8' })
+      if (groups.status !== 0) throw error
+      for (const [pid, group] of groups.stdout.trim().split('\n').map(line => line.trim().split(/\s+/).map(Number))) {
+        if (group === active.pid && pid !== process.pid) try { process.kill(pid!, signal) } catch {}
+      }
+      return
     }
     throw error
   }

@@ -26,6 +26,12 @@ export const SCALE = { large: 0.96, medium: 0.97, small: 0.98, tiny: 0.99, press
 /** `--blur-*` in px (`large` is `t-img`'s starting blur). */
 export const BLUR = { small: 2, medium: 3, large: 8 } as const
 
+/**
+ * `transition-colors` for hover and press-release fills (the desktop's 150 ms, kept under 100 ms because hover is a
+ * tens-per-day action): the native `hoverTransition` declared once at each window's root. A press itself lands at once.
+ */
+export const HOVER_FADE = { duration: 0.09, ease: [0.4, 0, 0.2, 1] as [number, number, number, number] } as const
+
 /** `DISCLOSURE_TRANSITION_MS`. */
 export const DISCLOSURE = 0.22
 

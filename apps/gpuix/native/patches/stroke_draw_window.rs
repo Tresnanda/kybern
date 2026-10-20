@@ -25,7 +25,14 @@ impl Window {
         let draw = match self.stroke_draws.get(&id) {
             Some(draw) if draw.reusable(spec, size) => draw.clone(),
             _ => {
-                let draw = std::sync::Arc::new(crate::scene::StrokeDraw::new(spec.clone(), size, stroke_draw_now()));
+                let now = stroke_draw_now();
+                let mut next = crate::scene::StrokeDraw::new(spec.clone(), size, now);
+                // A ring's new value eases from what it shows now, with no delay (`retarget`).
+                if let Some(old) = self.stroke_draws.get(&id).filter(|old| spec.retarget && old.size == size && old.spec.same(spec)) {
+                    next.from = old.offset_at(now).0;
+                    next.delay_ms = 0.0;
+                }
+                let draw = std::sync::Arc::new(next);
                 if let Some(old) = self.stroke_draws.insert(id, draw.clone()) {
                     self.release_stroke_tiles(&old);
                 }
@@ -99,7 +106,23 @@ impl Window {
         let (offset, ended) = draw.offset_at(now);
         let mut state = draw.state.lock().unwrap();
         state.last_seen = Some(now);
-        if ended {
+        // A draw that rests part-way (a ring's value) keeps showing its `to` tile; the plain glyph is the whole ring.
+        let rests = draw.spec.to.abs() > 1e-3;
+        if ended && rests && state.phase >= 1 {
+            let q = (draw.spec.to * 64.0).round() as i32;
+            if state.phase == 1 {
+                state.phase = 2;
+                let keep: Vec<_> = state.tiles.drain(..).collect();
+                for (at, key, tile) in keep {
+                    if at == q { state.tiles.push((at, key, tile)) } else { self.sprite_atlas.remove(&key) }
+                }
+            }
+            if let Some((_, _, tile)) = state.tiles.iter().find(|(at, _, _)| *at == q) {
+                return (Some(*tile), false);
+            }
+        } else if ended && rests {
+            state.phase = 1;
+        } else if ended {
             let whole = state.whole;
             match state.phase {
                 // One more presented frame on the whole glyph before the intermediate tiles go back to the atlas.

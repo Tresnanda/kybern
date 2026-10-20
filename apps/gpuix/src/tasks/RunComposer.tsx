@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { isLiveRun, latestRun } from '@/state/tasksModel'
 import type {
   GitBranchesResult,
@@ -14,7 +14,11 @@ import { Button, Segmented, Select } from '../settings/controls.tsx'
 import { getClient, useApp } from '../state.ts'
 import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
-import { Label, useTheme } from '../ui.tsx'
+import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { SwapOnChange } from '../motion/kit.tsx'
+import { Presence } from '../motion/Presence.tsx'
+import { DURATION, EASE } from '../motion/tokens.ts'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { setTasks, taskState, upsert, useTasks, updateTask, openTask } from './store.ts'
 
 interface SendPrefs {
@@ -138,6 +142,11 @@ export function RunComposer({ ids }: { ids: string[] }) {
     })
     setTasks({ composer: null })
   }
+  // `TaskRunDock` panels: switching between a new run and a follow-up fades the run options in over 180 ms and out over 100 ms.
+  const switched = useRef(false)
+  const wasFollowup = useRef(followup)
+  if (wasFollowup.current !== followup) { wasFollowup.current = followup; switched.current = true }
+  const panelIn = switched.current && PATCHED_NATIVE ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: REDUCED_MOTION ? DURATION.quick : 0.18, ease: [...EASE.out] as [number, number, number, number] } } : undefined
   return (
     <div
       testId="task-run-composer"
@@ -152,9 +161,13 @@ export function RunComposer({ ids }: { ids: string[] }) {
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Label color={t.text} size={13} style={{ flexGrow: 1 }}>
-          {followup ? `Follow up on ${single!.key}` : single ? `Send ${single.key} to an agent` : `Send ${picked.length} tasks to an agent`}
-        </Label>
+        <div style={{ display: 'flex', flexGrow: 1, minWidth: 0 }}>
+          <SwapOnChange active={followup ? 'followup' : single ? 'single' : 'batch'} style={{ justifyContent: 'flex-start' }}>
+            <Label color={t.text} size={13}>
+              {followup ? `Follow up on ${single!.key}` : single ? `Send ${single.key} to an agent` : `Send ${picked.length} tasks to an agent`}
+            </Label>
+          </SwapOnChange>
+        </div>
         {single && run && !live && (
           <Button onClick={() => setKind(kind === 'run' ? 'followup' : 'run')}>{kind === 'run' ? 'Follow up' : 'New run'}</Button>
         )}
@@ -169,7 +182,7 @@ export function RunComposer({ ids }: { ids: string[] }) {
         <Label color={t.textSecondary} size={12} truncate style={{ flexGrow: 1 }}>{`Next run includes: ${single.pending_followup.trim()}`}</Label>
         <Button onClick={() => void updateTask(single.id, { pending_followup: '' }).catch(() => {})}>Clear</Button>
       </div>}
-      {!followup && (
+      <Presence show={!followup} enter={panelIn} exit={{ to: { opacity: 0 }, duration: 0.1, ease: EASE.out }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
           {needsProject && (
             <Select
@@ -221,7 +234,7 @@ export function RunComposer({ ids }: { ids: string[] }) {
             />
           )}
         </div>
-      )}
+      </Presence>
       {!followup && notes.length > 0 && (
         <div style={{ display: 'flex', gap: 8 }}>
           <Label color={t.textSecondary} size={12}>{`${notes.length} linked ${notes.length === 1 ? 'note' : 'notes'} included`}</Label>

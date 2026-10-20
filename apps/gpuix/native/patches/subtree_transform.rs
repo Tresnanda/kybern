@@ -5,20 +5,21 @@
 //! running Taffy, waking islands or invalidating ancestors. Layout slots never move.
 //!
 //! ```json
-//! { "initial": false | {"scale": .97, "opacity": 0, "blur": 2, "translateY": 16},
+//! { "initial": false | {"scale": .97, "scaleX": 1, "scaleY": 1, "opacity": 0, "blur": 2, "translateY": 16},
 //!   "animate": {"scale": 1, "opacity": 1, "blur": 0, "translateY": 0},
 //!   "transition": {"duration": .35, "delay": 0, "ease": [.22, 1, .36, 1]},
 //!   "keyframes": [{"offset": .6, "rotate": 4, "scale": 1.06, "translateY": -1}],
 //!   "origin": [.5, .5],
 //!   "press": {"scale": .97, "down": {"duration": .08, "ease": [...]}, "up": {"duration": .15, "ease": [...]}},
-//!   "generation": 1 }
+//!   "generation": 1, "retain": true }
 //! ```
 //! Missing values are the identity (scale 1, opacity 1, others 0). `keyframes` are CSS-style
 //! intermediate stops between the start (`initial`, or the current value on a retarget) and
 //! `animate`; each segment uses `ease`, and a property absent from a stop interpolates across
 //! it. Changing `animate`, `keyframes` or `generation` retargets from the value on screen; a new `generation` with an
 //! `initial` value restarts from that value instead.
-//! `press` is the desktop's `:active` squash, driven natively by mouse down/up on the host.
+//! `press` is the desktop's `:active` squash, driven natively by mouse down/up on the host. `retain` keeps the
+//! scope tagged at rest (identity), so an exit or reveal that starts later is retained from its first frame.
 use crate::{renderer::GpuixView, retained_tree::RetainedTree};
 use gpui::{
     AnyElement, App, Bounds, DispatchPhase, Element, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
@@ -31,6 +32,9 @@ use web_time::Instant;
 #[serde(rename_all = "camelCase")]
 struct Partial {
     scale: Option<f32>,
+    scale_x: Option<f32>,
+    scale_y: Option<f32>,
+    shadow_opacity: Option<f32>,
     rotate: Option<f32>,
     translate_x: Option<f32>,
     translate_y: Option<f32>,
@@ -41,6 +45,9 @@ impl Partial {
     fn over(self, base: SubtreeTransformValue) -> SubtreeTransformValue {
         SubtreeTransformValue {
             scale: self.scale.unwrap_or(base.scale),
+            scale_x: self.scale_x.unwrap_or(base.scale_x),
+            scale_y: self.scale_y.unwrap_or(base.scale_y),
+            shadow_opacity: self.shadow_opacity.unwrap_or(base.shadow_opacity),
             rotate: self.rotate.unwrap_or(base.rotate),
             translate_x: self.translate_x.unwrap_or(base.translate_x),
             translate_y: self.translate_y.unwrap_or(base.translate_y),
@@ -49,11 +56,11 @@ impl Partial {
         }
     }
     fn get(&self, field: usize) -> Option<f32> {
-        [self.scale, self.rotate, self.translate_x, self.translate_y, self.opacity, self.blur][field]
+        [self.scale, self.rotate, self.translate_x, self.translate_y, self.opacity, self.blur, self.scale_x, self.scale_y, self.shadow_opacity][field]
     }
 }
 fn field(value: &SubtreeTransformValue, field: usize) -> f32 {
-    [value.scale, value.rotate, value.translate_x, value.translate_y, value.opacity, value.blur][field]
+    [value.scale, value.rotate, value.translate_x, value.translate_y, value.opacity, value.blur, value.scale_x, value.scale_y, value.shadow_opacity][field]
 }
 fn set_field(value: &mut SubtreeTransformValue, field: usize, to: f32) {
     match field {
@@ -62,7 +69,10 @@ fn set_field(value: &mut SubtreeTransformValue, field: usize, to: f32) {
         2 => value.translate_x = to,
         3 => value.translate_y = to,
         4 => value.opacity = to,
-        _ => value.blur = to,
+        5 => value.blur = to,
+        6 => value.scale_x = to,
+        7 => value.scale_y = to,
+        _ => value.shadow_opacity = to,
     }
 }
 
@@ -121,6 +131,10 @@ struct Source {
     press: Option<Press>,
     #[serde(default)]
     generation: Option<f64>,
+    /// Keep the scope's retained paint while it rests at identity, so the next change (an exit, a hover reveal
+    /// hiding) is a retained update from its first frame instead of a render.
+    #[serde(default)]
+    retain: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
 struct KeyStop {
@@ -132,8 +146,8 @@ struct KeyStop {
 fn parse(value: &serde_json::Value) -> Option<Source> {
     let source: Source = serde_json::from_value(value.clone()).ok()?;
     let finite = |p: &Partial| {
-        [p.scale, p.rotate, p.translate_x, p.translate_y, p.opacity, p.blur].iter().flatten().all(|v| v.is_finite())
-            && p.scale.is_none_or(|s| s > 0.0)
+        [p.scale, p.rotate, p.translate_x, p.translate_y, p.opacity, p.blur, p.scale_x, p.scale_y, p.shadow_opacity].iter().flatten().all(|v| v.is_finite())
+            && [p.scale, p.scale_x, p.scale_y].iter().flatten().all(|s| *s > 0.0)
     };
     let timing = |t: &Timing| t.duration.is_finite() && t.duration >= 0.0 && t.delay.is_finite() && t.delay >= 0.0 && t.ease.iter().all(|v| v.is_finite());
     let ok = finite(&source.animate)
@@ -179,6 +193,9 @@ struct Track {
     pressed: bool,
     settled: bool,
     blur_seen: bool,
+    /// A tick found no retained paint and asked for a render; until the scope is found again (it was hidden, never
+    /// painted), further ticks do not ask again.
+    fallback: bool,
 }
 impl Track {
     fn new(source: Source, now: Instant) -> Self {
@@ -197,6 +214,7 @@ impl Track {
             pressed: false,
             settled: false,
             blur_seen: false,
+            fallback: false,
         };
         track.settled = !track.active(now);
         track.blur_seen = track.has_blur();
@@ -258,7 +276,7 @@ impl Track {
     fn value(&self, now: Instant) -> SubtreeTransformValue {
         let p = self.progress(now);
         let mut out = self.to;
-        for f in 0..6 {
+        for f in 0..9 {
             // The stops that set this property, with the start and the target at the ends.
             let mut points = vec![(0.0, field(&self.from, f))];
             points.extend(self.stops.iter().filter_map(|k| k.value.get(f).map(|v| (k.offset, v))));
@@ -270,13 +288,16 @@ impl Track {
             set_field(&mut out, f, v0 + (v1 - v0) * e);
         }
         out.opacity = out.opacity.clamp(0.0, 1.0);
+        out.shadow_opacity = out.shadow_opacity.clamp(0.0, 1.0);
         out.blur = out.blur.max(0.0);
         out.scale = out.scale.max(0.0001);
+        out.scale_x = out.scale_x.max(0.0001);
+        out.scale_y = out.scale_y.max(0.0001);
         out
     }
     /// Paint the scope (and keep its base primitives) while it can change without a render.
     fn tagged(&self, now: Instant) -> bool {
-        self.source.press.is_some() || self.active(now) || !self.value(now).is_identity()
+        self.source.press.is_some() || self.source.retain || self.active(now) || !self.value(now).is_identity()
     }
 }
 
@@ -323,6 +344,9 @@ pub(crate) fn apply(child: AnyElement, id: u64, tree: &RetainedTree, now: Instan
         track.tagged(now).then(|| (track.value(now), track.source.origin.unwrap_or([0.5, 0.5]), track.source.press.is_some(), track.blur_seen))
     });
     let Some((value, origin, press, blur)) = scope else { return child };
+    if gpui::kybern_motion_trace_enabled() {
+        gpui::kybern_motion_trace(format_args!("ptx-apply {id}:{:.3}", value.opacity));
+    }
     Transformed { child, id, value, origin, press, blur }.into_any_element()
 }
 
@@ -476,6 +500,19 @@ pub(crate) fn tick(view: &mut GpuixView, window: &mut Window, cx: &mut gpui::Con
         (updates, active, settled, rerender)
     });
     let (found, missing): (Vec<_>, Vec<_>) = updates.into_iter().partition(|(id, _)| window.has_subtree_transform(*id));
+    // One fallback render per scope that has no retained paint; a scope that render did not paint (hidden) waits for the
+    // next ordinary render instead of rendering the window every frame of its tween.
+    let missing: Vec<_> = TRACKS.with(|tracks| {
+        let mut tracks = tracks.borrow_mut();
+        for (id, _) in &found {
+            if let Some(track) = tracks.get_mut(id) { track.fallback = false; }
+        }
+        missing.into_iter().filter(|(id, _)| tracks.get_mut(id).is_some_and(|track| !std::mem::replace(&mut track.fallback, true))).collect()
+    });
+    if gpui::kybern_motion_trace_enabled() {
+        let list = |v: &[(u64, SubtreeTransformValue)]| v.iter().map(|(id, value)| format!(" {id}:{:.3}", value.opacity)).collect::<String>();
+        gpui::kybern_motion_trace(format_args!("ptx-tick found{} missing{}", list(&found), list(&missing)));
+    }
     if !found.is_empty() {
         window.transform_subtrees(&found);
     }

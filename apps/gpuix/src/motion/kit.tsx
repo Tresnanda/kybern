@@ -12,17 +12,25 @@ import type { PaintTransformProps, PaintTransformValue } from '@gpuix/native/hos
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { REDUCED_MOTION } from '../ui.tsx'
-import { BLUR, DISCLOSURE, DISTANCE, DURATION, EASE, SCALE, SPRING, type Ease } from './tokens.ts'
+import { BLUR, DISCLOSURE, DISTANCE, DURATION, EASE, HOVER_FADE, SCALE, SPRING, type Ease } from './tokens.ts'
 
 // The desktop's tokens (`motion.css:13-74`) live in `tokens.ts` (a leaf, because `ui.tsx` -> `press.ts` -> this module ->
 // `ui.tsx` is an import cycle); they are re-exported here, so callers keep importing them from `motion/kit.tsx`.
-export { BLUR, DISCLOSURE, DISTANCE, DURATION, EASE, SCALE, SPRING, type Ease }
+export { BLUR, DISCLOSURE, DISTANCE, DURATION, EASE, HOVER_FADE, SCALE, SPRING, type Ease }
 
 const tween = (duration: number, ease: Ease, delay = 0) => ({ duration, ease: [...ease] as [number, number, number, number], delay })
 const bezier = (ease: Ease) => [...ease] as [number, number, number, number]
 
+/**
+ * Spread on a window's root: every `hover` / `active` background or border colour below it eases over `HOVER_FADE`
+ * (native `hoverTransition`, painted in place after the flip). A press lands at once; a rest colour changed by state (a
+ * selection moved by the keyboard) stays instant. `KYBERN_HOVER_FADE=0` (the measurement control) and the stock addon snap.
+ * Colour is not motion, so Reduce Motion keeps it, like the desktop's `transition-colors`.
+ */
+export const HOVER_FADE_ROOT: { hoverTransition?: typeof HOVER_FADE } = PATCHED_NATIVE && process.env.KYBERN_HOVER_FADE !== '0' ? { hoverTransition: HOVER_FADE } : {}
+
 /** What a `paintTransform` rests at: every field at its neutral value (a retarget back from any exit lands here). */
-export const IDENTITY: Required<PaintTransformValue> = { opacity: 1, scale: 1, rotate: 0, translateX: 0, translateY: 0, blur: 0 }
+export const IDENTITY: Required<PaintTransformValue> = { opacity: 1, scale: 1, scaleX: 1, scaleY: 1, shadowOpacity: 1, rotate: 0, translateX: 0, translateY: 0, blur: 0 }
 
 /** The neutral value for exactly the fields `from` sets, so a tween never touches a field it was not asked to. */
 function restOf(from: PaintTransformValue): PaintTransformValue {
@@ -94,6 +102,7 @@ export function Rise({
   kind = 'row',
   index = 0,
   play = true,
+  hold = false,
   style,
   testId,
   paint,
@@ -103,14 +112,17 @@ export function Rise({
   /** Position in a staggered group (`t-stagger` uses index × 70 ms). */
   index?: number
   play?: boolean
+  /** Wait at the entrance's first frame (an image still decoding: `<img onLoad>`); it plays when `hold` turns false. */
+  hold?: boolean
   style?: StyleDesc
   testId?: string
   /** The transform it carries when it does not play its own entrance (a tree row rising with its group). */
   paint?: PaintTransformProps
 }) {
   if (!play) return <div testId={testId} paintTransform={paint} style={{ display: 'flex', flexDirection: 'column', ...style }}>{children}</div>
+  const enter = enterTransform(kind, index)
   return (
-    <div paintTransform={enterTransform(kind, index)} style={{ display: 'flex', flexDirection: 'column', position: 'relative', ...style }}>
+    <div paintTransform={enter && hold && enter.initial ? { ...enter, animate: enter.initial } : enter} style={{ display: 'flex', flexDirection: 'column', position: 'relative', ...style }}>
       {testId ? <div testId={testId} style={{ display: 'flex', flexDirection: 'column' }}>{children}</div> : children}
     </div>
   )
@@ -142,15 +154,21 @@ export function popupOrigin(side: Side = 'bottom', align: Align = 'start'): [num
   }
 }
 
+/** `KYBERN_POPUP_BLUR=1` restores the desktop's 2 px blur on menu opens (the A/B control for `popupTransform`). */
+const POPUP_BLUR = process.env.KYBERN_POPUP_BLUR === '1'
+
 /**
- * The paint-only open of a popup (`menu.tsx:104`, `popover.tsx:64`): scale `--scale-medium` (0.97) and a 2 px blur → rest and
- * opacity 0 → 1, 250 ms `--ease-smooth-out`, about `origin`. `kind: 'tooltip'` (`tooltip.tsx`): scale 0.98 and opacity only,
- * 150 ms `--ease-out`. Reduce Motion fades 150 ms; `undefined` with the stock addon.
+ * The paint-only open of a popup (`menu.tsx:104`, `popover.tsx:64`): scale `--scale-medium` (0.97) → rest and opacity 0 → 1,
+ * 250 ms `--ease-smooth-out`, about `origin`. The desktop also clears a 2 px blur; here a tween that used blur ends with a
+ * full window render (native drops the backdrop pass), 21-30 ms on a long thread, which drops a frame on every menu open,
+ * so menus (opened 100+ times a day) scale and fade only; rare surfaces (the dialog's `appear`) keep the blur.
+ * `kind: 'tooltip'` (`tooltip.tsx`): scale 0.98 and opacity only, 150 ms `--ease-out`. Reduce Motion fades 150 ms;
+ * `undefined` with the stock addon.
  */
 export function popupTransform(origin: [number, number] = [0.5, 0.5], kind: keyof typeof POPUP = 'menu'): PaintTransformProps | undefined {
   if (!PATCHED_NATIVE) return undefined
   if (REDUCED_MOTION) return { ...REDUCED_FADE, origin }
-  const initial: PaintTransformValue = kind === 'tooltip' ? { opacity: 0, scale: SCALE.small } : { opacity: 0, scale: SCALE.medium, blur: BLUR.small }
+  const initial: PaintTransformValue = kind === 'tooltip' ? { opacity: 0, scale: SCALE.small } : { opacity: 0, scale: SCALE.medium, ...(POPUP_BLUR ? { blur: BLUR.small } : {}) }
   return { initial, animate: restOf(initial), transition: tween(POPUP[kind].duration, POPUP[kind].ease), origin }
 }
 
@@ -182,6 +200,8 @@ export function revealTransform(shown: boolean, slide = true): PaintTransformPro
     initial: false,
     animate: { opacity: shown ? 1 : 0, translateX: shown || !slide || REDUCED_MOTION ? 0 : DISTANCE.micro },
     transition: { duration: shown ? DURATION.quick : 0.1, ease: bezier(EASE.out) },
+    // Shown is the rest (identity): stay retained, so hiding is paint-only from its first frame.
+    retain: true,
   }
 }
 
@@ -380,4 +400,15 @@ export function Swap({ active, children, style, kind = 'text', still = false, in
  */
 export function SwapOnChange({ active, children, style, kind = 'text', innerStyle, leavingStyle }: { active: string; children: ReactNode; style?: StyleDesc; kind?: 'text' | 'icon'; innerStyle?: StyleDesc; leavingStyle?: StyleDesc }) {
   return <Swap active={active} style={style} kind={kind} innerStyle={innerStyle} leavingStyle={leavingStyle} still>{children}</Swap>
+}
+
+// ─── Embedded documents ───────────────────────────────────────────────────
+
+/**
+ * A native web document (preview, visual reply) arriving with the desktop's 150 ms fade (`kit.css` 3643, `.visual-reply`
+ * frame): its WKWebView layer fades in Core Animation, so the app presents no frames (`webHost.present`, N3). Call it right
+ * before the document is first shown. Opacity only, so Reduce Motion keeps it; the stock addon has no embedded documents.
+ */
+export function webDocumentEnter(id: string, present: (id: string, to: { opacity: number }, motion: { from: { opacity: number }; duration: number; ease: readonly number[] }) => void) {
+  present(id, { opacity: 1 }, { from: { opacity: 0 }, duration: DURATION.quick, ease: EASE.out })
 }

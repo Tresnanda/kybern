@@ -21,7 +21,8 @@ import { BLUR, DISTANCE, DURATION, EASE } from './motion/kit.tsx'
 import { Presence } from './motion/Presence.tsx'
 import { PATCHED_NATIVE } from './native/local-build.ts'
 import { useAppearance } from './settings/appearance.ts'
-import { CodeChunk, CodeHeader, markdownParts, partGap, Prose, textChunks } from './transcript/markdown.tsx'
+import { chunkGap, CodeChunk, CodeHeader, lineChunks, markdownParts, partGap, Prose, textChunks } from './transcript/markdown.tsx'
+import { ThreadImage } from './transcript/ThreadImage.tsx'
 import { MermaidBlock } from './transcript/MermaidBlock.tsx'
 import { MessageRail, type RailItem } from './transcript/rail.tsx'
 import { createTranscriptNavigation } from '../../desktop/src/lib/transcriptNavigation.ts'
@@ -38,6 +39,18 @@ export const COLUMN = 736
 /** The floating composer's height plus 64 (`bottomInset + 64`, `Transcript.tsx:479`). */
 const COMPOSER_INSET = 192
 const turnKey = (group: TurnGroup, index: number) => group.turnId || group.user?.id || `turn-${index}`
+/** An optimistic send (`composer/pending.ts`) renders as turn `pending:<message id>`; the daemon's turn for that message
+ * keeps the pending row's key, so the row stays mounted (no remount, jump or replayed entrance) when the real id arrives. */
+function keyTurns(aliases: Map<string, string>) {
+  return (group: TurnGroup, index: number) => {
+    const user = group.user?.id
+    if (group.turnId.startsWith('pending:') && user) {
+      aliases.set(user, group.turnId)
+      if (aliases.size > 32) aliases.delete(aliases.keys().next().value!)
+    }
+    return (user && aliases.get(user)) || turnKey(group, index)
+  }
+}
 
 type TurnNodes = Map<string, {row?: PublicInstance | null; user?: PublicInstance | null}>
 type CodeState = { expanded: boolean; wrap: boolean; source?: boolean }
@@ -129,10 +142,11 @@ export function Transcript() {
   // line fence never mounts 5k native rows, nor adds a nested scroller.
   type RenderRow = {key: string; turn: TurnGroup; node: React.ReactNode; estimate?: number}
   const rowCache = useMemo(() => new Map<string, {turn: TurnGroup; date: string | null; isLast: boolean; running: boolean; code: typeof codeState; rows: RenderRow[]}>(), [threadId])
+  const keyOf = useMemo(() => keyTurns(new Map()), [threadId])
   const rows = useMemo(() => {
     const keep = new Set<string>()
     const next = turns.flatMap((turn, i) => {
-      const key = turnKey(turn, i)
+      const key = keyOf(turn, i)
       const at = turnTimestamp(turn)
       const startsDay = !!at && ((!hasEarlier && i === 0) || (i > 0 && calendarDateKey(at) !== calendarDateKey(turnTimestamp(turns[i - 1]!))))
       const running = turn.running || (i === turns.length - 1 && threadRunning && !turn.end)
@@ -147,11 +161,14 @@ export function Transcript() {
       const parts = markdownParts(turn.answer?.text ?? '')
       for (const [partIndex, part] of parts.entries()) {
         const partKey = `${key}:answer:${part.key}`
-        const chunks = textChunks(part.text)
+        const chunks = part.kind === 'code' ? lineChunks(part.text) : textChunks(part.text)
         // Native Markdown owns spacing inside prose; separate virtual parts
         // share the desktop's collapsed margin at their boundary (`partGap`).
         if (partIndex > 0) result.push({ key: `${partKey}:before`, turn, estimate: partGap(parts[partIndex - 1]!, part), node: <div style={{ height: partGap(parts[partIndex - 1]!, part) }} /> })
-        if (part.kind === 'code' && part.language === 'mermaid') {
+        if (part.kind === 'image') {
+          // A Markdown image on its own line (`splitImages`): the image itself, or why it cannot show.
+          result.push({ key: partKey, turn, estimate: 234, node: <Row><ThreadImage threadId={threadId!} source={part.text} alt={part.alt ?? ''} at={turn.answer?.at} /></Row> })
+        } else if (part.kind === 'code' && part.language === 'mermaid') {
           // One row: the header (Preview/Source, expand, copy) and the diagram or its source.
           const state = codeState[partKey] ?? { expanded: false, wrap: false }
           result.push({ key: partKey, turn, node: <Row><MermaidBlock code={part.text} source={!!state.source} onSource={source => setCodeState(value => ({ ...value, [partKey]: { ...state, source } }))} /></Row> })
@@ -164,7 +181,11 @@ export function Transcript() {
             result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><CodeChunk text={chunk} language={part.language} wrap={state.wrap} first={chunkIndex === 0} last={!state.expanded || chunkIndex === chunks.length - 1} /></Row> })
           }
         } else {
-          for (const [chunkIndex, chunk] of chunks.entries()) result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><Prose text={chunk} /></Row> })
+          for (const [chunkIndex, chunk] of chunks.entries()) {
+            // Pieces are whole blocks (`textChunks`); between them goes the margin those blocks have in one document.
+            if (chunkIndex > 0) result.push({ key: `${partKey}:${chunkIndex}:before`, turn, estimate: chunkGap(chunks[chunkIndex - 1]!, chunk), node: <div style={{ height: chunkGap(chunks[chunkIndex - 1]!, chunk) }} /> })
+            result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><Prose text={chunk} /></Row> })
+          }
         }
       }
       result.push({ key: `${key}:footer`, turn, estimate: 35, node: <Row><TurnFooter group={turn} threadId={threadId!} isLast={i === turns.length - 1} /></Row> })

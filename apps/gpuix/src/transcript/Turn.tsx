@@ -18,7 +18,9 @@ import { isImageGenerationTool } from '../../../desktop/src/lib/toolActivity.ts'
 import { responseImages } from '../../../desktop/src/lib/responseImages.ts'
 import { isAgentLaunchBlock, isDelegationLaunchBlock, isOrchestrationBlock } from '../../../desktop/src/lib/workChunks.ts'
 import { buildWorkHierarchy, shouldRevealLiveText, type Block, type TurnGroup } from '../../../../packages/kybern-client/src/transcript.ts'
-import type { Diff, RuntimeTask, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
+import type { ContentPart, Diff, RuntimeTask, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
+import { removePending, usePendingSend } from '../composer/pending.ts'
+import { restoreToComposer, retryPending } from '../composer/store.ts'
 import { useApp } from '../state.ts'
 import { TranscriptTail } from './Window.tsx'
 import { isWindowVisible } from '../native/visibility.ts'
@@ -27,7 +29,7 @@ import { Icon } from '../icons.tsx'
 import { useLoopVisibility } from '../native/loop-visibility.ts'
 import { MatrixLoader, useLoaderSecond } from '../MatrixLoader.tsx'
 import { clockDuration, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { CopyAction, SaveToNoteAction, UserBubble } from './bubble.tsx'
+import { CopyAction, messageText, SaveToNoteAction, UserBubble } from './bubble.tsx'
 import { T } from './glyphs.ts'
 import { ResponseImage } from './images.tsx'
 import { alpha, Button, cachedMarkdownTheme, Chevron, fg, META, muted, Para, ROW_LINE, RowIcon, TEXT } from './kit.tsx'
@@ -93,9 +95,12 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
   const subagentThread = useApp(s => s.open.thread?.subagent ? s.open.thread : null)
   const subagent = !!subagentThread
   const firstUserId = useApp(s => s.open.blocks.find(b => b.kind === 'user')?.id)
+  // An optimistic send the daemon rejected (`composer/pending.ts`): its bubble stays, with Retry and Edit, and no turn runs.
+  const send = usePendingSend(threadId, group.user?.id)
+  const failed = send?.state === 'failed'
   // A long live turn can start before the loaded page, so its user message (and
   // with it `running`) is missing; the thread's status still says it is live.
-  const running = group.running || (threadRunning && isLast && !group.end)
+  const running = !failed && (group.running || (threadRunning && isLast && !group.end))
   const tasksByToolCall = useMemo(() => tasksOf(group.work), [group.work])
   const hierarchy = useMemo(() => buildWorkHierarchy(group.work), [group.work])
   // Launch rows open the child thread they started; look the children up only when there are launches.
@@ -152,6 +157,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
       {group.user && (
         <div ref={userRef} testId={`turn-user:${group.user.id}`} style={{ paddingBottom: running ? 20 : 16 }}>
           <UserBubble parts={group.user.message.parts} at={group.user.at} clampLines={subagent ? 6 : undefined} />
+          {failed && <SendFailed threadId={threadId} id={send.id} error={send.error} parts={group.user.message.parts} />}
         </div>
       )}
 
@@ -446,3 +452,23 @@ function EditedFileRow({ file, threadId, turnId, first, border }: { file: Diff['
 
 
 /** A known file-header height for the native diff, so it can be clipped exactly. */
+
+/** Under a rejected send: what went wrong, Retry (same message id, so a send the daemon did take is not doubled) and Edit
+ * (back into the composer). */
+function SendFailed({ threadId, id, error, parts }: { threadId: ThreadId; id: string; error?: string; parts: ContentPart[] }) {
+  const t = useTheme()
+  return (
+    <Rise kind="row" style={{ alignItems: 'flex-end', width: '100%' }}>
+      {/* Below the bubble's hover footer (Copy, Save to note), which reaches 28 px under it. */}
+      <div testId="send-failed" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, paddingTop: 30, maxWidth: '80%' }}>
+        <Label color={t.v('--destructive')} size={META.size} lineHeight={META.lineHeight} truncate style={{ flexShrink: 1 }}>
+          {`Not sent. ${error ?? 'The daemon did not answer.'}`}
+        </Label>
+        <Button variant="subtle" testId="send-retry" onClick={() => retryPending(threadId, id)}>Retry</Button>
+        <Button variant="ghost" testId="send-edit" onClick={() => {
+          if (restoreToComposer(`thread:${threadId}`, parts, messageText(parts))) removePending(threadId, id)
+        }}>Edit</Button>
+      </div>
+    </Rise>
+  )
+}

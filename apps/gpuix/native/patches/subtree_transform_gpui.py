@@ -15,8 +15,8 @@ edit('crates/gpui/src/element.rs', '                            window.record_su
 a = 'crates/gpui/src/window/a11y.rs'
 pending[a] += '\ninclude!("../subtree_transform_a11y.rs");\n'
 # Scene: transformed primitives keep their untransformed base beside them; replay carries it.
-edit(s, '    pub(crate) paint_operations: Vec<PaintOperation>,', '    pub(crate) paint_operations: Vec<PaintOperation>,\n    pub(crate) active_transform: Option<std::sync::Arc<crate::window::SubtreeTransformContext>>,\n    pub(crate) transform_bases: std::collections::HashMap<usize, (Primitive, std::sync::Arc<crate::window::SubtreeTransformContext>)>,\n    pending_transform_base: Option<(Primitive, std::sync::Arc<crate::window::SubtreeTransformContext>)>,')
-edit(s, '        self.paint_operations.clear();', '        self.paint_operations.clear();\n        self.transform_bases.clear();\n        self.active_transform = None;\n        self.pending_transform_base = None;')
+edit(s, '    pub(crate) paint_operations: Vec<PaintOperation>,', '    pub(crate) paint_operations: Vec<PaintOperation>,\n    pub(crate) active_transform: Option<std::sync::Arc<crate::window::SubtreeTransformContext>>,\n    pub(crate) transform_bases: std::collections::HashMap<usize, (Primitive, std::sync::Arc<crate::window::SubtreeTransformContext>)>,\n    pending_transform_base: Option<(Primitive, std::sync::Arc<crate::window::SubtreeTransformContext>)>,\n    /// Every scope painted into this scene, including ones that drew nothing (an empty glyph slot fading back in).\n    pub(crate) transform_scopes: std::collections::HashSet<u64>,')
+edit(s, '        self.paint_operations.clear();', '        self.paint_operations.clear();\n        self.transform_scopes.clear();\n        self.transform_bases.clear();\n        self.active_transform = None;\n        self.pending_transform_base = None;')
 edit(s, '        let mut primitive = primitive.into();\n', '''        let mut primitive = primitive.into();
         let transform_base = match (self.pending_transform_base.take(), self.active_transform.clone()) {
             // Painted (or a cached range replayed) inside an active scope: map the untransformed base.
@@ -30,6 +30,8 @@ edit(s, '        let mut primitive = primitive.into();\n', '''        let mut pr
             (pending, None) => pending,
         };
 ''')
+# A full replay (a retained update, a whole-scene cache hit) keeps the painted scopes; a partial one re-enters its own.
+edit(s, '    pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene) {\n', '    pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene) {\n        if range.start == 0 && range.end == prev_scene.paint_operations.len() { self.transform_scopes.extend(prev_scene.transform_scopes.iter().copied()); }\n')
 edit(s, 'if clipped_bounds.is_empty() && self.active_subtree_geometry.is_none() {', 'if clipped_bounds.is_empty() && self.active_subtree_geometry.is_none() && transform_base.is_none() {')
 edit(s, '''        if let Some(geometry) = &self.active_subtree_geometry { self.subtree_geometries.insert(self.paint_operations.len(),geometry.clone()); }
         self.paint_operations

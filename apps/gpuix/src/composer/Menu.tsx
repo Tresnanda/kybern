@@ -30,10 +30,11 @@ import {
 import { Icon } from '../icons.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
 import type { Theme } from '../theme.ts'
-import { DURATION, EASE, POPUP, popupOrigin, popupTransform } from '../motion/kit.tsx'
+import { BLUR, DURATION, EASE, POPUP, popupOrigin, popupTransform, SCALE } from '../motion/kit.tsx'
 import { EXIT, exitsInstantly, nextPresenceGeneration, presenceTransform } from '../motion/Presence.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { REDUCED_MOTION } from '../ui.tsx'
+import type { PaintTransformProps } from '@gpuix/native/host'
 import { G } from './glyphs.ts'
 import { WebLayer, useWebOcclusion } from '../native/web-occlusion.ts'
 
@@ -60,9 +61,24 @@ export function popoverStyle(t: Theme): StyleDesc {
 }
 
 /** Where the popup grows from when `anchor` names the corner of the popup that sits at `position` (default top-left). */
+const LAYOUT_POPUPS = process.env.KYBERN_POPUP_MOTION === 'layout'
+
 const ANCHOR_ORIGIN: Record<NonNullable<AnchoredProps['anchor']>, [number, number]> = {
   topLeft: [0, 0], topCenter: [0.5, 0], topRight: [1, 0], rightCenter: [1, 0.5],
   bottomRight: [1, 1], bottomCenter: [0.5, 1], bottomLeft: [0, 1], leftCenter: [0, 0.5],
+}
+
+/**
+ * The other two popup arrivals, for the dialog (`dialog.tsx:27,55`): `dialog` is the card (opacity 0, scale `--scale-large` 0.96 and a
+ * 2 px blur, 250 ms smooth-out, about its centre; the exit is `EXIT.dialog`), `scrim` the black backdrop (opacity only, 250 ms in,
+ * `EXIT.backdrop` out). Reduce Motion fades 150 ms. `undefined` with the stock addon.
+ */
+function appearTransform(appear: 'dialog' | 'scrim', origin: [number, number]): PaintTransformProps | undefined {
+  if (!PATCHED_NATIVE) return undefined
+  const ease: [number, number, number, number] = [...EASE.smoothOut]
+  if (REDUCED_MOTION) return { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease }, origin }
+  const initial = appear === 'dialog' ? { opacity: 0, scale: SCALE.large, blur: BLUR.small } : { opacity: 0 }
+  return { initial, animate: appear === 'dialog' ? { opacity: 1, scale: 1, blur: 0 } : { opacity: 1 }, transition: { duration: DURATION.fast, ease }, origin }
 }
 
 /**
@@ -116,6 +132,11 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
    */
   leaving?: boolean
   onLeft?: () => void
+  /**
+   * `'dialog'` / `'scrim'`: the arrival and exit of a modal's card and its backdrop (`appearTransform`) instead of the menu's
+   * 0.97 scale. Paint-only like every materializing popup; the scrim's fill goes in `style` (a `backing` would not fade).
+   */
+  appear?: 'dialog' | 'scrim'
 }>(function PopupLayer(
   {
     side = 'bottom',
@@ -135,6 +156,7 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
     materialize,
     leaving = false,
     onLeft,
+    appear,
     material = 'popup',
     backdrop: explicitBackdrop,
     style,
@@ -148,8 +170,9 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
   // Decided on mount: a later change must not restart or drop the tween.
   // 'arrive' = paint-only materialize; 'layout' = the `fade` layers' <anchored motion>; 'none' = no motion (`still`, stock addon).
   // A zero-length native opacity motion can leave a layout-tweened popup at its initial opacity 0, so Reduce Motion never uses 'layout'.
+  // `KYBERN_POPUP_MOTION=layout` is the measurement control: every popup takes v0.10.1's drift-and-fade layout tween.
   const [mode] = useState<'arrive' | 'layout' | 'none'>(() =>
-    fade ? (stillProp || REDUCED_MOTION ? 'none' : 'layout') : stillProp || !PATCHED_NATIVE ? 'none' : 'arrive')
+    fade || LAYOUT_POPUPS ? (stillProp || REDUCED_MOTION ? 'none' : 'layout') : stillProp || !PATCHED_NATIVE ? 'none' : 'arrive')
   const [generation] = useState(nextPresenceGeneration)
   const { duration, ease, distance } = POPUP[kind]
   const d = REDUCED_MOTION ? 0 : distance
@@ -170,11 +193,11 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
     : { side, align, gap: sideOffset, offset: side === 'left' || side === 'right' ? { x: 0, y: alignOffset } : { x: alignOffset, y: 0 } }
   // The enter/exit of a materializing popup. `leaving` retargets the same transform to the exit (a new generation without
   // `initial` retargets from the value on screen; completion events carry the generation).
-  const exit = kind === 'tooltip' ? EXIT.tooltip : EXIT.menu
+  const exit = appear === 'dialog' ? EXIT.dialog : appear === 'scrim' ? EXIT.backdrop : kind === 'tooltip' ? EXIT.tooltip : EXIT.menu
   const origin = materialize?.origin ?? (position ? ANCHOR_ORIGIN[anchor ?? 'topLeft'] : popupOrigin(side, align))
   const phase = useRef({ leaving: false, generation, mounted: generation })
   if (phase.current.leaving !== leaving) phase.current = { ...phase.current, leaving, generation: nextPresenceGeneration() }
-  const arrive = mode === 'arrive' ? popupTransform(origin, kind) : undefined
+  const arrive = mode === 'arrive' ? (appear ? appearTransform(appear, origin) : popupTransform(origin, kind)) : undefined
   const transform = arrive
     ? presenceTransform({ show: !leaving, enter: arrive, exit, generation: phase.current.generation, fresh: phase.current.generation === phase.current.mounted })
     : undefined
@@ -184,6 +207,10 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
   }, [leaving])
   // Materializing: the glass filter moves inside the transformed box (it scales and fades with the popup), and the
   // layer's own backing is transparent. An explicit `{ blur: 0 }` is how an anchored layer asks for that.
+  // A leaving popup is already closed: it answers no keys or outside presses (an Enter just after a pointer pick would run
+  // the picked item again during the 150 ms exit).
+  const { onKeyDown, onKeyUp, onMouseDownOutside, ...rest } = props as typeof props & { onKeyDown?: unknown; onKeyUp?: unknown; onMouseDownOutside?: unknown }
+  const input = leaving ? {} : { onKeyDown, onKeyUp, onMouseDownOutside }
   const glassBackdrop = material === 'none' || !glass ? undefined : explicitBackdrop ?? {...BACKDROP.glass, radius: radius ?? 16}
   const innerStyle = glass && material !== 'none' && (style as StyleDesc | undefined)?.backgroundColor ? {...style as StyleDesc,backgroundColor:backdropTint((style as StyleDesc).backgroundColor!)} : style
   return (
@@ -200,7 +227,8 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
     >
       <div testId={webLayer.id} style={{ display: 'flex' }}>
       <div
-        {...props}
+        {...rest}
+        {...(input as object)}
         ref={ref}
         {...(transform ? {
           paintTransform: transform,
