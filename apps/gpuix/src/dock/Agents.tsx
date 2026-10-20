@@ -20,6 +20,7 @@ import { getClient } from '../state.ts'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { clockDuration, ink, Label, modelLabel, ProviderMark, useTheme } from '../ui.tsx'
 import { Action, DockEmpty, ErrorLine, Section } from './parts.tsx'
+import { flatTree, TICK_GAP, TreeLines, type TreeShape } from '../tree/Tree.tsx'
 
 const choices = new Map<string, { tree: Record<string, boolean>; detail: Record<string, boolean> }>()
 function initialChoices(id: string) {
@@ -79,6 +80,7 @@ export function Agents({ thread }: { thread: Thread }) {
   }, [thread.id, thread.project_id, reload])
 
   const rows = useMemo(() => lineageRows(threads, thread.id, { expanded: tree }), [threads, thread.id, tree])
+  const connectors = useMemo(() => flatTree(rows.map((row) => row.depth)), [rows])
   const counts = useMemo(() => lineageCounts(threads, thread.id), [threads, thread.id])
   const stoppable = useMemo(() => stoppableDescendants(lineageRows(threads, thread.id, { expanded: Object.fromEntries(threads.map((th) => [th.id, true])) })), [threads, thread.id])
   const toggleTree = useCallback((id: string, open: boolean) => setTree((previous) => {
@@ -100,7 +102,7 @@ export function Agents({ thread }: { thread: Thread }) {
       </Section>
       <div {...FILL_ISLAND} style={{ display: 'flex', flexGrow: 1, minHeight: 0 }}>
         <virtual-list testId="dock-agents-list" style={{ width: '100%', height: '100%' }}>
-          {rows.map((row) => <AgentRow key={row.thread.id} row={row} detailOpen={!!detail[row.thread.id]} onToggleTree={toggleTree} onToggleDetail={toggleDetail} onRemove={setRemoving} />)}
+          {rows.map((row, i) => <AgentRow key={row.thread.id} row={row} last={connectors[i]!.last} rails={railBits(connectors[i]!.continues)} detailOpen={!!detail[row.thread.id]} onToggleTree={toggleTree} onToggleDetail={toggleDetail} onRemove={setRemoving} />)}
         </virtual-list>
       </div>
     </>}
@@ -114,8 +116,23 @@ export function Agents({ thread }: { thread: Thread }) {
   </>
 }
 
-const AgentRow = memo(function AgentRow({ row, detailOpen, onToggleTree, onToggleDetail, onRemove }: {
-  row: LineageRow<Thread>; detailOpen: boolean
+const railBits = (continues: boolean[]) => continues.reduce((bits, on, level) => (on ? bits | (1 << level) : bits), 0)
+/** Tree connectors (`../tree`): a level-L parent's stem runs under its 22px mark (x = 42 + 24·L), ticks stop 3px short of
+ *  the child's mark and a child with children of its own wears its chevron on the junction. */
+function agentTree(depth: number, last: boolean, rails: number, open: boolean, toggle: boolean): TreeShape {
+  const stem = (level: number) => 42 + level * 24
+  const outer: number[] = []
+  for (let level = 0; level < depth - 1; level++) if (rails & (1 << level)) outer.push(stem(level))
+  return {
+    anchor: 17,
+    rails: outer,
+    ...(depth > 0 ? { branch: { x: stem(depth - 1), joint: toggle ? 'toggle' : 'node', last, tickEnd: 31 + depth * 24 - TICK_GAP } } : {}),
+    ...(open ? { below: { x: stem(depth), from: 28 + TICK_GAP } } : {}),
+  }
+}
+
+const AgentRow = memo(function AgentRow({ row, last, rails, detailOpen, onToggleTree, onToggleDetail, onRemove }: {
+  row: LineageRow<Thread>; last: boolean; rails: number; detailOpen: boolean
   onToggleTree: (id: string, open: boolean) => void; onToggleDetail: (id: string) => void; onRemove: (thread: Thread) => void
 }) {
   const t = useTheme()
@@ -129,6 +146,7 @@ const AgentRow = memo(function AgentRow({ row, detailOpen, onToggleTree, onToggl
   const result = info?.result ?? thread.subagent?.result ?? ''
   const clamp = resultNeedsClamp(result)
   const level = Math.min(depth, 3)
+  const shape = useMemo(() => agentTree(level, last, rails, open && childCount > 0, childCount > 0), [level, last, rails, open, childCount])
   const ended = childEndedAt(thread)
   // Progress events refresh this elapsed time; no separate idle clock.
   const elapsed = clockDuration((ended ?? Date.parse(thread.updated_at)) - childStartedAt(thread))
@@ -140,13 +158,13 @@ const AgentRow = memo(function AgentRow({ row, detailOpen, onToggleTree, onToggl
       else await getClient()!.call('threads.interrupt', { thread_id: thread.id })
     } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
   }
-  return <div style={{ paddingLeft: 6, paddingRight: 6, paddingBottom: 1 }}>
-    <div style={{ display: 'flex', minHeight: 62, alignItems: 'flex-start', paddingTop: 6, paddingBottom: 6, paddingLeft: 3 + level * 14, paddingRight: 6, borderRadius: 10, hover: { backgroundColor: t.buttonSecondaryHover } }}>
-      <div style={{ width: 22, flexShrink: 0 }}>
+  return <div style={{ position: 'relative', paddingLeft: 6, paddingRight: 6, paddingBottom: 1 }}>
+    <div style={{ display: 'flex', minHeight: 62, alignItems: 'flex-start', paddingTop: 6, paddingBottom: 6, paddingLeft: 3 + level * 24, paddingRight: 6, borderRadius: 10, hover: { backgroundColor: t.buttonSecondaryHover } }}>
+      <div style={{ position: 'relative', left: level > 0 ? -2 : 0, width: 22, flexShrink: 0 }}>
         {childCount > 0 && <IconButton icon={open ? N.chevronDown : N.chevronRight} size={22} label={open ? 'Collapse agents' : 'Expand agents'} onClick={() => onToggleTree(thread.id, !open)} testId={`dock-agent-tree-${thread.id}`} />}
       </div>
       <div role="button" testId={`dock-agent-${thread.id}`} onClick={() => onToggleDetail(thread.id)} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, flexGrow: 1, minWidth: 0, cursor: 'pointer' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: 6, backgroundColor: t.buttonSecondary }}><ProviderMark kind={thread.provider.kind} size={12} /></div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, flexShrink: 0, borderRadius: 6, backgroundColor: t.buttonSecondary }}><ProviderMark kind={thread.provider.kind} size={12} /></div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flexGrow: 1, minWidth: 0 }}>
           <Label color={ink(t, 0.9)} size={13} lineHeight={20} truncate>{thread.title || 'Untitled'}</Label>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
@@ -159,7 +177,7 @@ const AgentRow = memo(function AgentRow({ row, detailOpen, onToggleTree, onToggl
         <Chevron open={detailOpen} color={muted(t, 0.6)} size={12} />
       </div>
     </div>
-    {detailOpen && <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 50 + level * 14, paddingRight: 10, paddingBottom: 10 }}>
+    {detailOpen && <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 50 + level * 24, paddingRight: 10, paddingBottom: 10 }}>
       {info?.error && <Label color={t.red} size={12}>{info.error}</Label>}
       {result ? <>
         <Label color={muted(t, 0.65)} size={11}>Result</Label>
@@ -182,6 +200,7 @@ const AgentRow = memo(function AgentRow({ row, detailOpen, onToggleTree, onToggl
         {canRemoveWorktree(info) && <Action onClick={() => onRemove(thread)}>Remove worktree</Action>}
       </div>
     </div>}
+    <TreeLines shape={shape} />
   </div>
 })
 
