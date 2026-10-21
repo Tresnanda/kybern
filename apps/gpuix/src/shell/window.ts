@@ -22,6 +22,7 @@ import { readSystemVariant, setSystemVariant } from './appearance.ts'
 import { setWindowWidth } from './layout.ts'
 import { load, save } from './persist.ts'
 import { refreshAccessibilityDisplay } from '../platform/material.ts'
+import { installIdleMemory } from '../platform/idleMemory.ts'
 
 const FRAME_KEY = 'kybern.window.frame'
 const POLL_MS = 900
@@ -213,4 +214,5 @@ export function startWindowShell(renderer: NativeRenderer) {
   readPlatformState()
   if (hasWindowStateEvents()) onWindowStateChange(readPlatformState)
   else setInterval(readPlatformState, POLL_MS)
+  installIdleMemory(renderer, isWindowFocused)
 }
