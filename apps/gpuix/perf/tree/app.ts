@@ -42,7 +42,7 @@ function install() {
   const add = (thread: Thread) => { children[thread.id] = thread; return thread }
   const parents = s.projects.flatMap(project => s.threads.filter(thread => thread.project_id === project.id && !thread.parent_thread_id).slice(0, 1))
   const tree = manifest ? s.threads.find(thread => thread.id === manifest.parent) : undefined
-  for (const parent of tree ? [tree, ...parents] : parents) {
+  for (const parent of tree ? [tree, ...parents.filter(p => p.id !== tree.id)] : parents) {
     const [a, b, c] = TITLES.map((title, i) => add(child(parent, title, i === 1)))
     if (parent === tree) { add(child(b!, 'Read Agents.tsx', false)); add(child(b!, 'Check the shared lineage rules for hidden subagents', true)) }
     void a; void c
