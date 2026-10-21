@@ -2,11 +2,11 @@
 #
 # Builds and publishes the `kybern` package: one archive per target that holds
 # both the daemon (`kybernd`) and the CLI (`kybern`), plus one installer.
-# The Tauri desktop app is not distributed through dist; it is built by
-# .github/workflows/desktop.yml (macOS via scripts/bundle-macos.sh, Linux and
-# Windows via `pnpm tauri build`), which dist runs as a post-announce job. That
-# workflow also publishes latest.json for the desktop updater and the
-# kybern-remote-install.sh helper for daemon-only machines.
+# The desktop apps (Tauri and Kybern GPUIX) are built by
+# .github/workflows/desktop.yml, which dist runs as a global-artifacts job: it
+# bundles the daemon and CLI that build-local-artifacts just built, and host
+# publishes its assets, latest.json for the desktop updater and the
+# kybern-remote-install.sh helper for daemon-only machines in the same release.
 
 [workspace]
 members = ["cargo:."]
@@ -20,7 +20,9 @@ ci = "github"
 # The local-artifacts phase makes host depend directly on the gate: plan-only
 # gates leave skipped builds, which dist permits the host job to bypass.
 local-artifacts-jobs = ["./release-ci"]
-github-custom-job-permissions = { "release-ci" = { actions = "read", contents = "read" } }
+# The desktop bundles need every target's archive, and host waits for them.
+global-artifacts-jobs = ["./desktop"]
+github-custom-job-permissions = { "release-ci" = { actions = "read", contents = "read" }, "desktop" = { contents = "read" } }
 # Default every package to "do not distribute"; crates/kybern opts back in with
 # `dist = true` in its own dist.toml.
 # (The `packages = [...]` allow-list is not honoured by dist 0.32 for Cargo workspaces.)
@@ -55,3 +57,8 @@ github-build-setup = "../dist-build-setup.yml"
 "actions/checkout" = "3d3c42e5aac5ba805825da76410c181273ba90b1"          # v7.0.1
 "actions/upload-artifact" = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"   # v7.0.1
 "actions/download-artifact" = "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" # v8.0.1
+
+# Cross-compile the Intel Mac build on Apple Silicon, like the desktop app has
+# always done: the Intel runner took about 29 minutes and set the release's pace.
+[dist.github-custom-runners]
+x86_64-apple-darwin = { runner = "macos-15", host = "aarch64-apple-darwin" }

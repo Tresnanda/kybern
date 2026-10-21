@@ -22,18 +22,33 @@ test('every required job must complete successfully', () => {
   assert.equal(verifyJobs(jobs.map((job, i) => i ? job : { ...job, conclusion: 'skipped' })), false)
 })
 
-test('generated release host blocks a failed or cancelled gate', async () => {
+async function releaseJobs() {
   const { readFileSync } = await import('node:fs')
   const workflow = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8')
   const host = workflow.split('\n  host:\n')[1].split('\n  announce:')[0]
-  assert.match(host, /needs:[\s\S]*- custom-release-ci/)
   const expression = host.match(/if: \$\{\{ (.*) \}\}/)[1]
-  const allowed = (gate) => {
+  // Whether host runs when `job` ends with `result` and every other job succeeds.
+  const allowed = (job, result) => {
     const js = expression.replaceAll('always()', 'true')
       .replaceAll("needs.plan.outputs.publishing", "'true'")
-      .replace(/needs\.([\w-]+)\.result/g, (_, job) => JSON.stringify(job === 'custom-release-ci' ? gate : 'success'))
+      .replace(/needs\.([\w-]+)\.result/g, (_, name) => JSON.stringify(name === job ? result : 'success'))
     return Function(`return (${js})`)()
   }
-  assert.equal(allowed('success'), true)
-  for (const result of ['failure', 'cancelled']) assert.equal(allowed(result), false)
+  return { workflow, host, allowed }
+}
+
+test('generated release host blocks a failed or cancelled gate', async () => {
+  const { host, allowed } = await releaseJobs()
+  assert.match(host, /needs:[\s\S]*- custom-release-ci/)
+  assert.equal(allowed('custom-release-ci', 'success'), true)
+  for (const result of ['failure', 'cancelled']) assert.equal(allowed('custom-release-ci', result), false)
+})
+
+test('desktop bundles wait for the gate and dist binaries, and host waits for them', async () => {
+  const { workflow, host, allowed } = await releaseJobs()
+  const desktop = workflow.split('\n  custom-desktop:\n')[1].split('\n  # Determines if we should publish')[0]
+  assert.match(desktop, /needs:[\s\S]*- build-local-artifacts[\s\S]*- custom-release-ci/)
+  assert.match(desktop, /uses: \.\/\.github\/workflows\/desktop\.yml/)
+  assert.match(host, /needs:[\s\S]*- custom-desktop/)
+  for (const result of ['failure', 'cancelled']) assert.equal(allowed('custom-desktop', result), false)
 })

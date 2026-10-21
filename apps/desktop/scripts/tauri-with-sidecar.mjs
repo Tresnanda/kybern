@@ -66,43 +66,58 @@ function stageSidecars(tauriCommand, tauriArgs, childEnv) {
     )
   }
 
-  const release =
-    tauriCommand === "dev"
-      ? tauriArgs.includes("--release")
-      : !tauriArgs.includes("--debug")
-  const profile = release ? "release" : "debug"
-  const cargoArgs = [
-    "build",
-    "--package",
-    "kybern",
-    ...sidecars.flatMap((name) => ["--bin", name]),
-  ]
-  if (release) {
-    cargoArgs.push("--release")
-  }
-  if (cliTarget) {
-    cargoArgs.push("--target", cliTarget)
-  }
-
-  console.log(
-    `Building ${sidecars.join(" and ")} sidecars (${profile}, ${targetTriple}) before Tauri ${tauriCommand}…`
-  )
-  run("cargo", cargoArgs, { env: childEnv })
-
-  const targetDir = childEnv.CARGO_TARGET_DIR
-  const usesTargetSubdirectory = Boolean(cliTarget || configuredTarget)
   const extension = targetTriple.includes("windows") ? ".exe" : ""
+  // Releases build the daemon and CLI once, in dist (release.yml), and point
+  // KYBERN_SIDECAR_DIR at those binaries instead of compiling them again.
+  const prebuiltDir = process.env.KYBERN_SIDECAR_DIR?.trim()
+  let sourceDir
+  if (prebuiltDir) {
+    sourceDir = resolve(workspaceDir, prebuiltDir)
+    console.log(
+      `Using prebuilt ${sidecars.join(" and ")} sidecars (${targetTriple}) from ${sourceDir} for Tauri ${tauriCommand}…`
+    )
+  } else {
+    const release =
+      tauriCommand === "dev"
+        ? tauriArgs.includes("--release")
+        : !tauriArgs.includes("--debug")
+    const profile = release ? "release" : "debug"
+    const cargoArgs = [
+      "build",
+      "--package",
+      "kybern",
+      ...sidecars.flatMap((name) => ["--bin", name]),
+    ]
+    if (release) {
+      cargoArgs.push("--release")
+    }
+    if (cliTarget) {
+      cargoArgs.push("--target", cliTarget)
+    }
+
+    console.log(
+      `Building ${sidecars.join(" and ")} sidecars (${profile}, ${targetTriple}) before Tauri ${tauriCommand}…`
+    )
+    run("cargo", cargoArgs, { env: childEnv })
+
+    const usesTargetSubdirectory = Boolean(cliTarget || configuredTarget)
+    sourceDir = join(
+      childEnv.CARGO_TARGET_DIR,
+      ...(usesTargetSubdirectory ? [targetTriple] : []),
+      profile
+    )
+  }
+
   const binariesDir = join(desktopDir, "src-tauri", "binaries")
   mkdirSync(binariesDir, { recursive: true })
   for (const name of sidecars) {
-    const source = join(
-      targetDir,
-      ...(usesTargetSubdirectory ? [targetTriple] : []),
-      profile,
-      `${name}${extension}`
-    )
+    const source = join(sourceDir, `${name}${extension}`)
     if (!existsSync(source)) {
-      throw new Error(`cargo did not produce ${name} at ${source}`)
+      throw new Error(
+        prebuiltDir
+          ? `KYBERN_SIDECAR_DIR has no ${name} at ${source}`
+          : `cargo did not produce ${name} at ${source}`
+      )
     }
     const destination = join(binariesDir, `${name}-${targetTriple}${extension}`)
     copyFileSync(source, destination)
