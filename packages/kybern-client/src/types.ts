@@ -728,6 +728,8 @@ export type TranscriptEntry =
       seq: EventSeq;
       approval: ApprovalRequest;
       decision?: ApprovalDecision | null;
+      /** Allowed by Full access without asking the user. */
+      auto?: boolean;
     }
   | {
       role: "turn_summary";
@@ -885,6 +887,8 @@ export type EventPayload =
       approval_id: ApprovalId;
       decision: ApprovalDecision;
     }
+  /** A harness permission request Kybern allowed because the thread is in Full access. */
+  | { kind: "approval_auto_allowed"; approval: ApprovalRequest }
   | {
       kind: "turn_completed";
       stop_reason: StopReason;
