@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.3
+
+<!-- kybern-release-title: Kybern GPUIX for Intel Macs -->
+<!-- kybern-release-summary: Kybern GPUIX now installs on Intel Macs too, and releases build faster. -->
+
+- Add **Kybern GPUIX** for Intel Macs. The installer picks the right build for your Mac, and the current desktop app now offers it on Intel Macs as well: `curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-gpuix-mac-install.sh | sh`.
+- Load Kybern GPUIX's notification and web view helpers on macOS 13 and 14; they previously required macOS 15.
+- Build the daemon and CLI once per release and reuse them in every desktop app, so releases publish about 15 minutes sooner.
+
 ## 0.10.2
 
 <!-- kybern-release-title: Kybern GPUIX comes alive -->
