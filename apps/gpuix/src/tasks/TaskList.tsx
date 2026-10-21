@@ -1,4 +1,4 @@
-import { memo, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { memo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { ISLAND } from '../MatrixLoader.tsx'
 import { useGpuixRequired, useWindowSize, type PublicInstance, type StyleDesc } from '@gpuix/react'
 import { useSidebarWidth } from '../shell/layout.ts'
@@ -17,7 +17,7 @@ import { ProjectDot } from '../notes/kit.tsx'
 import { N } from '../nav/glyphs.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { over } from '../theme.ts'
-import { Check, PriorityGlyph, StatusGlyph } from './Glyphs.tsx'
+import { Check, checkHandledClick, pressedCheck, PriorityGlyph, StatusGlyph } from './Glyphs.tsx'
 import { CountPop } from './CountPop.tsx'
 import { CheckSlot } from './CheckSlot.tsx'
 import { QuickAdd } from './QuickAdd.tsx'
@@ -164,6 +164,7 @@ export const TaskRow = memo(function TaskRow({
   const selected = useTasks((s) => s.selected.has(task.id))
   const focused = useTasks((s) => s.focused === task.id)
   const [hover, setHover] = useState(false)
+  const fromCheck = useRef(false) // this press began on the card's checkbox
   const [menuOpen, setMenuOpen] = useState(false)
   const detail = cardDetail(task)
   // tasks.css: selected+hover > selected > focused > hover, each a step brighter; selected+focused adds a 2px ring.
@@ -183,10 +184,18 @@ export const TaskRow = memo(function TaskRow({
           onFocus={() => setTasks({ focused: task.id })}
           onMouseEnter={() => setHover(true)}
           onMouseLeave={(e) => { setHover(false); if (!leftSource(e, renderer)) return; if (draggable) trackTaskDrag(e, true); endPendingDrag() }}
-          onMouseDown={(e) => beginTaskDrag(task.id, e, renderer, sequence, draggable)}
+          onMouseDown={(e) => {
+            fromCheck.current = pressedCheck()
+            if (!fromCheck.current) beginTaskDrag(task.id, e, renderer, sequence, draggable)
+          }}
           onMouseMove={draggable ? (e) => trackTaskDrag(e) : undefined}
           onMouseUp={endTaskDrag}
           onClick={(e) => {
+            if (fromCheck.current) {
+              fromCheck.current = false
+              if (!checkHandledClick()) pick(task.id, sequence, !!e.modifiers?.shift)
+              return
+            }
             if (taskDragConsumesClick()) return
             if (e.modifiers?.cmd || e.modifiers?.ctrl || e.modifiers?.shift) pick(task.id, sequence, !!e.modifiers?.shift)
             else openTask(task.id)
