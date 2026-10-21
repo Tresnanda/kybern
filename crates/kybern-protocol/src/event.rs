@@ -192,6 +192,11 @@ pub enum EventPayload {
         approval_id: ApprovalId,
         decision: ApprovalDecision,
     },
+    /// A harness permission request that Kybern allowed without asking,
+    /// because the thread is in Full access. Never raised for questions.
+    ApprovalAutoAllowed {
+        approval: ApprovalRequest,
+    },
     TurnCompleted {
         stop_reason: StopReason,
         usage: Usage,
@@ -277,6 +282,7 @@ impl EventPayload {
             Self::UserInputRequested { .. } => "user_input_requested",
             Self::ApprovalRequested { .. } => "approval_requested",
             Self::ApprovalResolved { .. } => "approval_resolved",
+            Self::ApprovalAutoAllowed { .. } => "approval_auto_allowed",
             Self::TurnCompleted { .. } => "turn_completed",
             Self::TurnFailed { .. } => "turn_failed",
             Self::ProviderCommandsUpdated { .. } => "provider_commands_updated",

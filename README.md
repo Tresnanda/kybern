@@ -444,6 +444,32 @@ historical usage to Kybern. History imports are limited to 64 MB. If a harness
 refuses continuation because another process owns the session, close that
 process and retry. Saved sessions remain native to their original harness.
 
+### Full access
+
+Full access never shows a permission card. Each harness starts in its own
+no-approval mode:
+
+| Harness | Full access launch |
+| --- | --- |
+| Claude Code | `--permission-mode bypassPermissions --allow-dangerously-skip-permissions` |
+| Codex | approval policy `never`, sandbox `danger-full-access` |
+| OpenCode | one `*: allow` permission rule |
+| Pi / Oh My Pi | yolo approvals |
+| Cursor SDK | sandbox and automatic review off |
+
+A harness can still ask in that mode. Claude Code, for example, keeps its
+built-in safety checks, such as `rm` on a possibly empty `$VAR` path. Kybern
+allows those requests itself and records each one in the transcript as
+"Allowed by Full access". Questions are never answered for you: AskUserQuestion,
+forms and MCP elicitations, Pi dialogs, plan approval (ExitPlanMode) and
+`kybern_request_secret` still wait for your reply.
+
+Switching an idle conversation to Full access resumes Claude Code and Oh My Pi
+with the new launch mode; Codex, Pi and Cursor switch in place. An OpenCode
+session keeps its launch rules, so Kybern allows whatever it still asks. During
+a running turn the switch applies when the turn ends. Until then, Kybern allows
+the command that is waiting and every later permission request.
+
 ### Cursor SDK
 
 New Cursor chats use exact-pinned `@cursor/sdk` 1.0.35 in an isolated Node helper.

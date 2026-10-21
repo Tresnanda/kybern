@@ -130,7 +130,8 @@ function surfaceLabel(surface: ToolSurface, input: JsonValue, complete: boolean,
   return complete ? `Used ${target}` : `Using ${target}`
 }
 
-export function approvalRowText(approval: ApprovalRequest, decision: ApprovalDecision | null, live = true): string {
+export function approvalRowText(approval: ApprovalRequest, decision: ApprovalDecision | null, live = true, auto = false): string {
+  if (auto) return `Allowed by Full access — ${approval.summary || approval.tool_name}`
   const secret = secretRequestInput(approval)
   if (secret) return secretPartsText(secretOutcomeLine(secret, decision, live))
   const coordinator = coordinatorCardLine(approval, decision, live)
@@ -369,7 +370,7 @@ export const WorkRow = memo(function WorkRow({
     case 'runtime_task':
       return <RuntimeTaskRow task={block.task} thread={block.task.kind === 'agent' ? launchThread(block, ctx) : undefined} />
     case 'approval': {
-      const text = approvalRowText(block.approval, block.decision, live)
+      const text = approvalRowText(block.approval, block.decision, live, block.auto)
       const denied = block.decision?.decision === 'deny'
       const color = denied ? destructive(t, 0.85) : block.decision ? fg(t, 0.8) : muted(t)
       const secret = secretRequestInput(block.approval)

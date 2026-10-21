@@ -3746,6 +3746,37 @@ impl Orchestrator {
                 let _ = self.apply_runtime_task_update(thread_id, live, update, RuntimeTaskUpdateKind::Complete).await?;
             }
             DriverEvent::PermissionRequest { request_id, tool_call_id, tool_name, input, summary, suggestions } => {
+                // Full access never asks for a permission. Harnesses can still
+                // request one under their bypass mode (Claude Code's built-in
+                // safety checks, for one), so allow it here and record that.
+                // Questions and forms keep asking.
+                let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?;
+                if !asks_user(&tool_name) && self.allows_without_asking(&thread)? {
+                    let anchor = match turn_id {
+                        Some(turn_id) => Some(turn_id),
+                        None => *live.last_turn_id.lock().await,
+                    };
+                    drop(turn_guard);
+                    if let Err(error) = live.session.respond_permission(&request_id, &ApprovalDecision::AllowOnce).await {
+                        tracing::warn!(%thread_id, %error, "could not allow a Full access permission request");
+                        return Ok(());
+                    }
+                    if let Some(turn_id) = anchor {
+                        let approval = ApprovalRequest {
+                            id: Uuid::now_v7(),
+                            thread_id,
+                            turn_id,
+                            tool_call_id,
+                            tool_name,
+                            input,
+                            summary,
+                            suggestions,
+                            created_at: Utc::now(),
+                        };
+                        self.emit(thread_id, Some(turn_id), EventPayload::ApprovalAutoAllowed { approval })?;
+                    }
+                    return Ok(());
+                }
                 let Some(turn_id) = turn_id else {
                     tracing::warn!("permission request outside a turn; denying");
                     drop(turn_guard);
@@ -4140,6 +4171,13 @@ fn json_bool(value: &serde_json::Value, keys: &[&str]) -> bool {
 fn json_false(value: &serde_json::Value, keys: &[&str]) -> bool {
     keys.iter().any(|key| value.get(*key).and_then(serde_json::Value::as_bool) == Some(false))
         || ["raw", "args", "input"].iter().any(|key| value.get(*key).is_some_and(|nested| json_false(nested, keys)))
+}
+
+/// Whether a harness request with this tool name asks the user something:
+/// a question, a form, or a plan to start implementing. Full access answers
+/// permissions, never these.
+fn asks_user(tool_name: &str) -> bool {
+    kybern_protocol::is_user_input_tool(tool_name) || tool_name == "ExitPlanMode"
 }
 
 fn json_text(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
@@ -7635,4 +7673,5 @@ for line in sys.stdin:
     include!("orchestrator/account_tests.rs");
     include!("orchestrator/worktree_tests.rs");
     include!("orchestrator/subagent_messaging_tests.rs");
+    include!("orchestrator/full_access_tests.rs");
 }

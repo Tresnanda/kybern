@@ -1271,7 +1271,8 @@ function surfaceLabel(surface: ToolSurface, input: JsonValue, complete: boolean,
 }
 
 /** One line for a pending or settled approval in the work log. */
-function approvalRowText(approval: ApprovalRequest, decision: { decision: string } | null): string {
+function approvalRowText(approval: ApprovalRequest, decision: { decision: string } | null, auto = false): string {
+  if (auto) return `Allowed by Full access — ${approval.summary || approval.tool_name}`
   const connector = connectorApproval(approval)
   if (connector) {
     const target = connector.app ? `${connector.connector} to use ${connector.app}` : connector.connector
@@ -1557,7 +1558,7 @@ const WorkRow = memo(function WorkRow({
         const cardKind = coordinatorCardKind(block.approval)
         const cardLine = cardKind ? coordinatorCardLine(block.approval, block.decision) : null
         if (cardKind && cardLine) return <CoordinatorCardLine kind={cardKind} parts={cardLine} decision={block.decision} style={CHAT_FONT} />
-        const text = approvalRowText(block.approval, block.decision)
+        const text = approvalRowText(block.approval, block.decision, block.auto)
         return (
           <div className="rounded-lg py-1">
             <div className="flex w-full min-w-0 items-center gap-2">
