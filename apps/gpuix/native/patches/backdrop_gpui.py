@@ -134,3 +134,5 @@ exec((here / "shimmer_band_gpui.py").read_text())
 exec((here / "hover_fade_gpui.py").read_text())
 exec((here / "motion_trace_gpui.py").read_text())
 exec((here / "image_load_gpui.py").read_text())
+
+exec((here / "idle_memory_gpui.py").read_text())

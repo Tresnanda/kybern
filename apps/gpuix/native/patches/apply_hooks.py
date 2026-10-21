@@ -586,3 +586,5 @@ exec((Path(__file__).parent / "hover_fade_hooks.py").read_text())
 exec((Path(__file__).parent / "shimmer_band_hooks.py").read_text())
 exec((Path(__file__).parent / "image_load_hooks.py").read_text())
 exec((Path(__file__).parent / "motion_trace_hooks.py").read_text())
+
+exec((Path(__file__).parent / "idle_memory_hooks.py").read_text())
