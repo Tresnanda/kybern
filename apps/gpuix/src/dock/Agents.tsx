@@ -18,9 +18,10 @@ import { getNav, setNav, useNav } from '../nav/store.ts'
 import { useDock } from './store.ts'
 import { Chevron } from '../sidebar/rows.tsx'
 import { Collapse, Rise, SwapOnChange } from '../motion/kit.tsx'
+import { Elapsed } from '../subagents/Elapsed.tsx'
 import { getClient } from '../state.ts'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
-import { clockDuration, ink, Label, modelLabel, ProviderMark, useTheme } from '../ui.tsx'
+import { ink, Label, modelLabel, ProviderMark, useTheme } from '../ui.tsx'
 import { Action, DockEmpty, ErrorLine, Section } from './parts.tsx'
 import { flatTree, TICK_GAP, TreeLines, type TreeShape } from '../tree/Tree.tsx'
 
@@ -162,9 +163,9 @@ const AgentRow = memo(function AgentRow({ row, fresh, last, rails, detailOpen, o
   const clamp = resultNeedsClamp(result)
   const level = Math.min(depth, 3)
   const shape = useMemo(() => agentTree(level, last, rails, open && childCount > 0, childCount > 0), [level, last, rails, open, childCount])
-  const ended = childEndedAt(thread)
-  // Progress events refresh this elapsed time; no separate idle clock.
-  const elapsed = clockDuration((ended ?? Date.parse(thread.updated_at)) - childStartedAt(thread))
+  // A working child ticks on the shared second clock (as the composer tray does); a settled one stops at its end.
+  const working = state.phase === 'working' || state.phase === 'waiting'
+  const ended = working ? null : childEndedAt(thread) ?? Date.parse(thread.updated_at)
   const role = info ? delegationRoleLabel(info.role) : thread.subagent?.agent_type || 'Helper thread'
   const stop = async () => {
     setBusy(true); setError(null)
@@ -193,7 +194,7 @@ const AgentRow = memo(function AgentRow({ row, fresh, last, rails, detailOpen, o
           </div>
           {info && <Label color={muted(t, 0.7)} size={10} truncate>{`${workspaceLabel(info)}${info.diffstat ? ` · ${diffstatLabel(info.diffstat)}` : ''}`}</Label>}
         </div>
-        <Label color={muted(t, 0.6)} size={11}>{elapsed}</Label>
+        <Elapsed startedAt={childStartedAt(thread)} endedAt={ended} color={muted(t, 0.6)} />
         <Chevron open={detailOpen} color={muted(t, 0.6)} size={12} />
       </div>
     </div>
