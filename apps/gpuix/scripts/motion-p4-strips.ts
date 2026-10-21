@@ -19,7 +19,7 @@ const reduceds = arg('--reduced', '0') === 'both' ? ['0', '1'] : [arg('--reduced
 const groups = process.argv.includes('--groups') ? new Set(process.argv[process.argv.indexOf('--groups') + 1]!.split(',')) : null
 const only = process.argv.includes('--only') ? new Set(arg('--only', '').split(',')) : null
 const root = arg('--out', '/Users/mymac/projects/ade/previews/motion/gpuix-p4')
-const SCRATCH = '/Users/mymac/projects/ade-gpuix-scratch/motion-gpuix-p4'
+const SCRATCH = process.env.VISUAL_SCRATCH ?? '/Users/mymac/projects/ade-gpuix-scratch/motion-gpuix-p4'
 const scratch = { KYBERN_DATA_DIR: `${SCRATCH}/data`, KYBERN_CLIENT_CONFIG_DIR: `${SCRATCH}/client`, KYBERN_GPUIX_CREDENTIALS_DIR: `${SCRATCH}/credentials`, KYBERN_ENVIRONMENT_NAME: 'Development environment' }
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 type Crop = { x: number; y: number; w: number; h: number }
