@@ -4,6 +4,9 @@
 // the same function where a real window would lose focus.
 import { writeFileSync } from 'node:fs'
 import path from 'node:path'
+// Debug lines go to stderr: stdout carries the automation protocol.
+const log = console.log
+console.log = (...args: unknown[]) => { if (typeof args[0] === 'string' && /^\[(visibility|compact|idle-memory)\]/.test(args[0])) console.error(...args); else log(...args) }
 await import('../memory/app.ts')
 const { each, getObjc, nsApp, sel } = await import('../../src/native/objc.ts')
 const renderer = () => ((globalThis as Record<string, unknown>).__gpuixRenderHost as { renderer: object }).renderer

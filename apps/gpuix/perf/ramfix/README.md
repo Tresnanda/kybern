@@ -32,6 +32,17 @@ Idle growth on a scratch window (Home, no running row, `idle-leak.ts`):
 Neither poll runs any more (the addon reports occlusion, key, move, screen, appearance and accessibility-display
 changes); an addon without the callback falls back to the polls, now inside pools.
 
+Visibility, pause and resume (`visibility-check.ts`: minimize and restore twice on the hidden test display, compaction
+on, loops in the scene with `KYBERN_COMPOSITOR_LOOPS=0` so they show as app frames):
+
+| | hidden after minimize | visible after restore | frames / 2 s visible, minimized, restored | background release |
+|---|---:|---:|---|---|
+| before (400 ms poll) | 636 / 610 ms | 611 / 536 ms | 120, 0, 120 | — |
+| after (AppKit events) | 654 / 637 ms | 542 / 540 ms | 120, 0, 120 | 60.1 s after launch |
+
+AppKit reports occlusion after the minimize/restore animation, so both settle at about 0.55–0.65 s; hidden-window
+compaction follows 400 ms later as before.
+
 ## Memory kept after use
 
 Workload (`retained.ts`, one scratch window on the hidden test display, `GPUIX_BACKGROUND=1`): Home → 3,000-turn
