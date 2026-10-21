@@ -43,9 +43,8 @@ not on upstream documentation.
   - `macos-15-intel` is GitHub's last x86_64 image, with a retirement date.
   - Hosted Intel runners are slower and scarcer.
   
-  When #115 lands its single daemon build, the `Build the daemon and CLI` step
-  should consume that build's `x86_64-apple-darwin` `kybernd`/`kybern` (see the
-  TODO in the workflow).
+  Neither lane compiles the daemon: each packages the `kybernd`/`kybern` from
+  dist's archive for its target (#115's single build), via `KYBERN_BIN_DIR`.
 - **Tauri prompt:** `gpuix_install.rs` now offers GPUIX on Intel Macs and picks
   the feed key by arch. An x86_64 Tauri running under Rosetta installs the arm64
   GPUIX.
