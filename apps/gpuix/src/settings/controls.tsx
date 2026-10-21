@@ -62,7 +62,7 @@ export function Segmented({ value, onChange, options, label, width = 110, disabl
   const [keyboard, setKeyboard] = useState(false)
   const index = Math.max(0, options.findIndex((o) => o.value === value))
   return <div aria-label={label} style={{ display: 'flex', position: 'relative', padding: 3, borderRadius: 8, backgroundColor: t.buttonSecondary, opacity: disabled ? 0.45 : 1 }}>
-    <SlidingPill x={index * width} width={width} equal instant={keyboard} color={t.surface} />
+    <SlidingPill x={index * width} width={width} instant={keyboard} color={t.surface} />
     {options.map((option) => <div key={option.value} tabIndex={disabled ? -1 : 0} aria-label={option.label} aria-pressed={value === option.value} onClick={() => { if (!disabled) { setKeyboard(false); onChange(option.value) } }} onKeyDown={(e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) { setKeyboard(true); onChange(option.value) } }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', width, height: 28, cursor: 'pointer' }}><Label color={value === option.value ? t.text : t.textSecondary} size={12}>{option.label}</Label></div>)}
   </div>
 }
