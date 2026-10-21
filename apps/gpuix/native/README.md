@@ -1810,3 +1810,28 @@ the restored window could not be captured yet; the capture now retries. `scripts
 automation screenshot, which re-renders without the per-present rotation (every frozen phase looked alike); it now reads
 the presented frame from WindowServer and expects a settled spinner in Core Animation (no app frames) unless
 `KYBERN_COMPOSITOR_LOOPS=0`.
+
+## Idle memory (ramfix, 2026-10-21)
+
+`idle_memory.rs`, `idle_memory_hooks.py` (native crate) and `idle_memory_gpui.py` (GPUI), each run last from its
+chain:
+
+- **Per-tick autorelease pool.** Bun's main thread has no pool of its own, so whatever AppKit, CoreText or Foundation
+  autoreleased outside `pump_events` (napi calls during React commits, `bun:ffi` reads from JS timers) stayed alive
+  for the life of the process: the installed 0.10.1 app held 172k window-list arrays and 877 pool pages after
+  13.75 h. `tick()` now pops the pool it opened on the previous tick and opens the next one, so JS and napi work
+  between ticks runs inside it; AppKit's own pools nest above. `KYBERN_TICK_POOL=0` restores the old behaviour;
+  `getMemoryStats().tickPool` counts cycles.
+- **Window-state callback.** `setWindowStateCallback(cb)` / `acknowledgeWindowState()`: one queued delivery per change
+  of occlusion (minimize, Spaces, covered), key status, position, screen, effective appearance, or the accessibility
+  display options (an `NSWorkspace` observer, registered once). JS re-reads the state it needs
+  (`src/native/windowState.ts`), so neither visibility nor the frame/appearance read polls any more.
+- **`releaseIdleMemory(options?)`.** Drops what the next frame can rebuild: the window-sized path target (resident
+  once any path was drawn; recreated when a scene next has paths), cached instance buffers (a grown pool restarts at
+  2 MiB), backdrop scratch and the passive region target, and asks the private small-allocation heap to collect at
+  the next frame boundary. `{ queue: true }` also replaces the command queue; it did not lower the driver's retained
+  memory, so `src/platform/idleMemory.ts` only passes it with `KYBERN_IDLE_QUEUE=1`. Glyph and image atlases stay.
+
+The JS side releases once the window has spent 60 s not key or hidden (`src/platform/idleMemory.ts`), adding a
+full `Bun.gc(true)`; `Bun.shrink()` is opt-in (`KYBERN_IDLE_SHRINK=1`) because it discards compiled JS and slowed the
+next opens. Measurements and the remaining driver-owned `IOAccelerator` memory: `../perf/ramfix/README.md`.
