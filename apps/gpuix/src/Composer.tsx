@@ -61,6 +61,7 @@ import { Leave, Pop, SwapOnChange, useLeavingList } from './composer/motion.tsx'
 import { Rise } from './motion/kit.tsx'
 import { Presence } from './motion/Presence.tsx'
 import { DropHighlight } from './motion/DropHighlight.tsx'
+import { useRequestPanelHeight } from './transcript/store.ts'
 import { AttachmentLightbox } from './composer/Lightbox.tsx'
 import { usePendingSends } from './composer/pending.ts'
 
@@ -366,6 +367,8 @@ export interface ComposerViewProps {
 
 export function ComposerView(input: ComposerViewProps) {
   const compact = usePaneCompact()
+  // A panel stacked on the card (the tray, a request): its shadow stops at the card's top edge (`CardShadow`).
+  const stacked = useRequestPanelHeight() > 0
   const pane = usePaneAccess()
   const props = { ...input, draftKey: `${pane.id}:${input.draftKey}`, readOnly: input.readOnly || pane.frozen }
   const measureOverlay = useMeasureComposerOverlay()
@@ -591,6 +594,8 @@ export function ComposerView(input: ComposerViewProps) {
   return (
     <div ref={measureOverlay} testId="composer-overlay" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: 736 }}>
       {props.above}
+      <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', width: '100%' }}>
+      <CardShadow radius={compact ? 14 : COMPOSER_RADIUS} stacked={stacked} />
       <div
         ref={(el) => {
           card.current = el
@@ -610,10 +615,6 @@ export function ComposerView(input: ComposerViewProps) {
           borderWidth: 1,
           borderColor: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.052)' : 'rgba(13, 13, 13, 0.076)',
           backgroundColor: t.variant === 'dark' ? t.composer : '#ffffff',
-          boxShadow:
-            t.variant === 'dark'
-              ? { offsetX: 0, offsetY: 6, blurRadius: 24, spreadRadius: -10, color: 'rgba(0, 0, 0, 0.30)' }
-              : { offsetX: 0, offsetY: 4, blurRadius: 18, spreadRadius: -6, color: 'rgba(13, 13, 13, 0.07)' },
         }}
       >
         {completion.menu((card.current && renderer.getElementBounds?.(card.current.id)?.width) || 736)}
@@ -786,6 +787,37 @@ export function ComposerView(input: ComposerViewProps) {
           </div>
         </FooterRow>
       </div>
+      </div>
+    </div>
+  )
+}
+
+/** Reach of the card's shadow past its edges (blur 24 → three sigma, plus the offset). */
+const SHADOW_REACH = 80
+/**
+ * The card's shadow, drawn by a sibling painted under it. While a panel sits on the card (the tray or a request), the part
+ * above the card's top edge is clipped: the shell does not shadow itself, and a loader in the panel's lowest row stays in
+ * Core Animation (a shadow painted over it kept the window presenting at display rate).
+ */
+function CardShadow({ radius, stacked }: { radius: number; stacked: boolean }) {
+  const t = useTheme()
+  const top = stacked ? 0 : -SHADOW_REACH
+  return (
+    <div style={{ position: 'absolute', left: -SHADOW_REACH, right: -SHADOW_REACH, bottom: -SHADOW_REACH, top, overflow: 'hidden', pointerEvents: 'none' }}>
+      <div
+        style={{
+          position: 'absolute',
+          left: SHADOW_REACH,
+          right: SHADOW_REACH,
+          bottom: SHADOW_REACH,
+          top: -top,
+          borderRadius: radius,
+          boxShadow:
+            t.variant === 'dark'
+              ? { offsetX: 0, offsetY: 6, blurRadius: 24, spreadRadius: -10, color: 'rgba(0, 0, 0, 0.30)' }
+              : { offsetX: 0, offsetY: 4, blurRadius: 18, spreadRadius: -6, color: 'rgba(13, 13, 13, 0.07)' },
+        }}
+      />
     </div>
   )
 }
