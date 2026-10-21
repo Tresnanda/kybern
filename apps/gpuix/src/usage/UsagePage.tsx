@@ -108,7 +108,7 @@ export function UsagePage() {
   // A period chosen from the keyboard also settles the daily bars at once (`keyedPeriod`); a pointer change slides them to the new heights.
   const keyedPeriod = useRef(false)
   const changePeriod = (p: Period) => { keyedPeriod.current = getNav().keyboardNav; if (keyedPeriod.current) statSalt.current++; setEntryPlayed(true); setPeriod(p); setActiveDay(null) }
-  const changeGroup = (g: UsageGroup, byKey = false) => { setEntryPlayed(true); setGroup(g); setPanePlay(!byKey && !getNav().keyboardNav) }
+  const changeGroup = (g: UsageGroup, byKey = false) => { keyedPeriod.current = byKey || getNav().keyboardNav; setEntryPlayed(true); setGroup(g); setPanePlay(!byKey && !getNav().keyboardNav) }
   const refreshAll = () => { refresh(n => n + 1); refreshAccounts(n => n + 1); askLimits(true) }
   const sections: { key: string; content: ReactNode }[] = [
     { key: 'toolbar', content: <div style={{ ...row, justifyContent: 'space-between', gap: 16 }}>
