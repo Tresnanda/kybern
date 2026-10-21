@@ -17,6 +17,11 @@
 # nothing, if an anchor moved) → cargo build → realign + re-sign → dlopen check
 # → capability checks. Output: build/gpuix-native.darwin-arm64.node, which
 # src/native/local-build.ts loads.
+#
+#   KYBERN_GPUIX_TARGET=x86_64-apple-darwin ./update.sh
+#                          cross-build the Intel addon, build/gpuix-native.darwin-x64.node.
+#                          Its load check and on-screen checks run under Rosetta
+#                          with an x64 Bun (tools/bun-x64.sh).
 set -eu
 cd "$(dirname "$0")"
 here=$(pwd)
@@ -24,8 +29,21 @@ app=$(cd .. && pwd)
 pinned=$(cat VERSION)
 version=${1:-$pinned}
 tag="@gpuix/native@$version"
+host=$(rustc +1.97.1 -vV | sed -n 's/^host: //p')
+target=${KYBERN_GPUIX_TARGET:-$host}
+case "$target" in
+  aarch64-apple-darwin) arch=darwin-arm64 ;;
+  x86_64-apple-darwin) arch=darwin-x64 ;;
+  *) echo "unsupported GPUIX target: $target" >&2; exit 1 ;;
+esac
+release=build/target/release
+cross=
+if [ "$target" != "$host" ]; then
+  release=build/target/$target/release
+  cross="--target $target"
+fi
 
-echo "== GPUIX $version (pinned $pinned)"
+echo "== GPUIX $version (pinned $pinned) for $target"
 if [ ! -d upstream/.git ]; then
   git clone --filter=blob:none --no-checkout https://github.com/remorses/gpuix.git upstream
 fi
@@ -45,7 +63,7 @@ echo "== build (several minutes after a version change)"
 (
   cd upstream/packages/native
   RUSTC_WRAPPER= HOST_CC=cc HOST_CXX=c++ CC=cc CXX=c++ \
-    CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$here/build/target" cargo +1.97.1 build --release --lib
+    CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$here/build/target" cargo +1.97.1 build --release --lib $cross
 )
 
 (
@@ -60,14 +78,18 @@ echo "== build (several minutes after a version change)"
 )
 
 echo "== package"
-out=build/gpuix-native.darwin-arm64.node
+out=build/gpuix-native.$arch.node
 # Replace the signed inode; another fixture may still have it mapped.
 rm -f "$out"
-cp build/target/release/libgpuix_native.dylib "$out"
+cp "$release/libgpuix_native.dylib" "$out"
 # Xcode 27's ld misaligns the LINKEDIT string pool of this dylib; dyld rejects it.
 python3 tools/align_strtab.py "$out"
 codesign -f -s - "$out" 2>/dev/null
-node -e "require('$here/$out')"
+if [ "$arch" = darwin-x64 ] && [ "$(uname -m)" = arm64 ]; then
+  tools/bun-x64.sh -e "require('$here/$out')"
+else
+  node -e "require('$here/$out')"
+fi
 echo "native module loads"
 python3 tools/check_arena.py
 bun build-webview.ts
@@ -100,7 +122,12 @@ echo "== checks"
 (
   cd "$app"
   pnpm typecheck
-  export NAPI_RS_NATIVE_LIBRARY_PATH="$here/build/gpuix-native.darwin-arm64.node"
+  export NAPI_RS_NATIVE_LIBRARY_PATH="$here/$out"
+  if [ "$arch" = darwin-x64 ] && [ "$(uname -m)" = arm64 ]; then
+    # Every `bun` the checks start, and the windows they spawn, run as x64 Bun under Rosetta.
+    tools/bun-x64.sh --version >/dev/null
+    export PATH="$here/build/bun-x64:$PATH" BUN_BE_BUN=1
+  fi
   # Captures need exclusive windows too. Split the suite into bounded leases;
   # the four lock-using checks still share exactly one inherited lease.
   for batch in geometry content input; do

@@ -1,7 +1,8 @@
 //! One-click install of Kybern GPUIX, the native macOS app that ships beside
 //! this one. The release feed (`latest.json`, the same endpoint the updater
 //! plugin reads) carries a `darwin-aarch64-gpuix` entry pointing at
-//! `kybern-gpuix_<version>_aarch64.app.tar.gz` with its minisign signature.
+//! `kybern-gpuix_<version>_aarch64.app.tar.gz` with its minisign signature, and
+//! a `darwin-x86_64-gpuix` entry for the Intel build.
 //!
 //! The archive is downloaded, verified against the updater public key in
 //! `tauri.conf.json`, unpacked into a staging folder beside its destination,
@@ -20,7 +21,6 @@ use tauri::{AppHandle, Emitter, Runtime};
 
 const BUNDLE_ID: &str = "dev.kybern.gpuix";
 const APP_NAME: &str = "Kybern GPUIX.app";
-const PLATFORM_KEY: &str = "darwin-aarch64-gpuix";
 const PROGRESS_EVENT: &str = "gpuix-install-progress";
 const MANUAL_COMMAND: &str = "curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-gpuix-mac-install.sh | sh";
 /// The archive is a few tens of MB; refuse anything absurd before it fills the disk.
@@ -46,7 +46,7 @@ struct Progress {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GpuixStatus {
-    /// This Mac can run GPUIX (macOS on Apple Silicon).
+    /// This Mac can run GPUIX (macOS on Apple Silicon or Intel).
     supported: bool,
     installed: bool,
 }
@@ -58,7 +58,17 @@ struct Entry {
 }
 
 fn supported() -> bool {
-    cfg!(all(target_os = "macos", target_arch = "aarch64"))
+    cfg!(all(target_os = "macos", any(target_arch = "aarch64", target_arch = "x86_64")))
+}
+
+/// The feed key of this Mac's GPUIX build. An Intel build of this app running
+/// under Rosetta is on Apple Silicon, so it installs the native arm64 GPUIX.
+fn platform_key() -> &'static str {
+    if cfg!(target_arch = "x86_64") && !translated() { "darwin-x86_64-gpuix" } else { "darwin-aarch64-gpuix" }
+}
+
+fn translated() -> bool {
+    Command::new("/usr/sbin/sysctl").args(["-n", "sysctl.proc_translated"]).output().is_ok_and(|output| output.stdout.trim_ascii() == b"1")
 }
 
 fn candidate_dirs() -> Vec<PathBuf> {
@@ -105,7 +115,7 @@ fn open_app(app: &Path) -> Result<(), String> {
 #[tauri::command]
 pub async fn install_gpuix<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     if !supported() {
-        return Err("Kybern GPUIX needs a Mac with Apple Silicon. This Mac can keep using the current app.".into());
+        return Err("Kybern GPUIX needs a Mac. This computer can keep using the current app.".into());
     }
     if INSTALLING.swap(true, Ordering::SeqCst) {
         return Err("Kybern GPUIX is already installing.".into());
@@ -155,12 +165,12 @@ fn is_writable(dir: &Path) -> bool {
     ok
 }
 
-fn parse_manifest(json: &str) -> Result<Entry, String> {
+fn parse_manifest(json: &str, key: &str) -> Result<Entry, String> {
     let value: serde_json::Value =
         serde_json::from_str(json).map_err(|_| "The release feed is not valid. Try again in a few minutes.".to_string())?;
     let entry = value
         .get("platforms")
-        .and_then(|platforms| platforms.get(PLATFORM_KEY))
+        .and_then(|platforms| platforms.get(key))
         .ok_or("This release does not include Kybern GPUIX yet. Try again in a few minutes.")?;
     let url = entry.get("url").and_then(|value| value.as_str()).filter(|url| !url.is_empty());
     let signature = entry.get("signature").and_then(|value| value.as_str()).filter(|signature| !signature.is_empty());
@@ -319,7 +329,7 @@ async fn run_install(
         .user_agent("kybern-desktop")
         .build()
         .map_err(|error| error.to_string())?;
-    let entry = parse_manifest(&fetch_manifest(&client, endpoints).await?)?;
+    let entry = parse_manifest(&fetch_manifest(&client, endpoints).await?, platform_key())?;
     let work = std::env::temp_dir().join(format!("kybern-gpuix-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&work).map_err(|error| format!("Could not create a temporary folder ({error})."))?;
     let result = async {
@@ -360,25 +370,34 @@ mod tests {
     #[test]
     fn manifest_picks_the_gpuix_entry() {
         let json = r#"{"version":"0.10.0","platforms":{"darwin-aarch64":{"url":"https://x/desktop.tar.gz","signature":"a"},
-            "darwin-aarch64-gpuix":{"url":"https://x/kybern-gpuix_0.10.0_aarch64.app.tar.gz","signature":"sig"}}}"#;
+            "darwin-aarch64-gpuix":{"url":"https://x/kybern-gpuix_0.10.0_aarch64.app.tar.gz","signature":"sig"},
+            "darwin-x86_64-gpuix":{"url":"https://x/kybern-gpuix_0.10.0_x86_64.app.tar.gz","signature":"intel"}}}"#;
         assert_eq!(
-            parse_manifest(json).unwrap(),
+            parse_manifest(json, "darwin-aarch64-gpuix").unwrap(),
             Entry { url: "https://x/kybern-gpuix_0.10.0_aarch64.app.tar.gz".into(), signature: "sig".into() }
+        );
+        assert_eq!(
+            parse_manifest(json, "darwin-x86_64-gpuix").unwrap(),
+            Entry { url: "https://x/kybern-gpuix_0.10.0_x86_64.app.tar.gz".into(), signature: "intel".into() }
         );
     }
 
     #[test]
     fn manifest_without_a_usable_gpuix_entry_is_refused() {
-        assert!(parse_manifest("not json").unwrap_err().contains("not valid"));
+        let key = "darwin-aarch64-gpuix";
+        assert!(parse_manifest("not json", key).unwrap_err().contains("not valid"));
         assert!(
-            parse_manifest(r#"{"platforms":{"darwin-aarch64":{"url":"https://x","signature":"a"}}}"#)
+            parse_manifest(r#"{"platforms":{"darwin-aarch64":{"url":"https://x","signature":"a"}}}"#, key)
                 .unwrap_err()
                 .contains("does not include")
         );
         let incomplete = r#"{"platforms":{"darwin-aarch64-gpuix":{"url":"https://x/a.tar.gz"}}}"#;
-        assert!(parse_manifest(incomplete).unwrap_err().contains("incomplete"));
+        assert!(parse_manifest(incomplete, key).unwrap_err().contains("incomplete"));
         let insecure = r#"{"platforms":{"darwin-aarch64-gpuix":{"url":"http://example.com/a.tar.gz","signature":"s"}}}"#;
-        assert!(parse_manifest(insecure).unwrap_err().contains("HTTPS"));
+        assert!(parse_manifest(insecure, key).unwrap_err().contains("HTTPS"));
+        // An Intel Mac never installs the Apple Silicon build.
+        let arm_only = r#"{"platforms":{"darwin-aarch64-gpuix":{"url":"https://x/a.tar.gz","signature":"s"}}}"#;
+        assert!(parse_manifest(arm_only, "darwin-x86_64-gpuix").unwrap_err().contains("does not include"));
     }
 
     #[test]
@@ -475,11 +494,10 @@ mod tests {
         base
     }
 
+    /// Both arch entries name the fixture, so the install path runs on either kind of Mac.
     fn manifest(base: &str, signature: &str) -> Vec<u8> {
-        format!(
-            r#"{{"version":"0.10.0","platforms":{{"darwin-aarch64-gpuix":{{"url":"{base}/gpuix.tar.gz","signature":"{signature}"}}}}}}"#
-        )
-        .into_bytes()
+        let entry = format!(r#"{{"url":"{base}/gpuix.tar.gz","signature":"{signature}"}}"#);
+        format!(r#"{{"version":"0.10.0","platforms":{{"darwin-aarch64-gpuix":{entry},"darwin-x86_64-gpuix":{entry}}}}}"#).into_bytes()
     }
 
     #[tokio::test]

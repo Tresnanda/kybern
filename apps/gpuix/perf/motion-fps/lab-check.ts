@@ -24,7 +24,7 @@ const release = await lease()
 const f = await launchFixture(path.join(import.meta.dir, 'lab.tsx'), {
   KYBERN_DATA_DIR: scratch, KYBERN_URL: '', KYBERN_CLIENT_CONFIG_DIR: path.join(scratch, 'client'), GPUIX_BACKGROUND: '1', KYBERN_FRAME_TIMES: '1',
   // The shell running this may carry the installed app's addon path; always load this checkout's build.
-  NAPI_RS_NATIVE_LIBRARY_PATH: path.resolve(import.meta.dir, '../../native/build/gpuix-native.darwin-arm64.node'), MOTION_LAB_OUT: out, KYBERN_APPEARANCE: light ? 'light' : 'dark', ...(reduced ? { KYBERN_REDUCED_MOTION: '1' } : {}),
+  NAPI_RS_NATIVE_LIBRARY_PATH: path.resolve(import.meta.dir, `../../native/build/gpuix-native.darwin-${process.arch}.node`), MOTION_LAB_OUT: out, KYBERN_APPEARANCE: light ? 'light' : 'dark', ...(reduced ? { KYBERN_REDUCED_MOTION: '1' } : {}),
 })
 const a = f.app, sleep = (ms: number) => Bun.sleep(ms)
 const frames = async (ms: number) => { const n = f.frameTimes().length; await sleep(ms); return f.frameTimes().length - n }

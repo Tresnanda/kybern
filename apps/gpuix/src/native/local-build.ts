@@ -5,11 +5,13 @@
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-const built = fileURLToPath(new URL('../../native/build/gpuix-native.darwin-arm64.node', import.meta.url))
+/** napi-rs's name for this Mac's addon: `darwin-arm64` on Apple Silicon, `darwin-x64` on Intel. */
+export const NATIVE_ARCH = `darwin-${process.arch}`
+const built = fileURLToPath(new URL(`../../native/build/gpuix-native.${NATIVE_ARCH}.node`, import.meta.url))
 
 export const PATCHED_NATIVE =
   process.platform === 'darwin' &&
-  process.arch === 'arm64' &&
+  (process.arch === 'arm64' || process.arch === 'x64') &&
   process.env.KYBERN_GPUIX_NATIVE !== 'npm' &&
   existsSync(process.env.NAPI_RS_NATIVE_LIBRARY_PATH ?? built)
 

@@ -1,33 +1,46 @@
 #!/usr/bin/env bash
 # Package Kybern GPUIX (apps/gpuix) as a macOS app and write the updater
-# tarball that latest.json points at: dist/kybern-gpuix_<version>_aarch64.app.tar.gz
-# plus its minisign .sig, signed with the same key as the Tauri desktop app.
+# tarball that latest.json points at: dist/kybern-gpuix_<version>_<arch>.app.tar.gz
+# (arch aarch64 or x86_64) plus its minisign .sig, signed with the same key as
+# the Tauri desktop app.
 #
 # Usage: scripts/bundle-gpuix.sh
-#   CARGO_TARGET_DIR            honoured if set; its release/ holds kybernd and kybern
+#   KYBERN_GPUIX_TARGET         aarch64-apple-darwin (default on Apple Silicon) or
+#                               x86_64-apple-darwin (Intel; cross-built from arm64)
+#   CARGO_TARGET_DIR            honoured if set; its release/ (or <target>/release/
+#                               when cross-building) holds kybernd and kybern
 #   TAURI_SIGNING_PRIVATE_KEY   required unless SKIP_SIGN=1 (the updater key)
 #
-# Requires: the patched native addon (apps/gpuix/native/update.sh), release
-# builds of kybern and kybernd, bun, and `pnpm install` in apps/desktop (mermaid
-# and the Tauri signer).
+# Requires: the patched native addon for that target (apps/gpuix/native/update.sh
+# with the same KYBERN_GPUIX_TARGET), release builds of kybern and kybernd for
+# it, bun, and `pnpm install` in apps/desktop (mermaid and the Tauri signer).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
-  echo "bundle-gpuix.sh must run on Apple Silicon macOS" >&2
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  echo "bundle-gpuix.sh must run on macOS" >&2
   exit 1
 fi
 
+HOST="$(rustc -vV | sed -n 's/^host: //p')"
+TARGET="${KYBERN_GPUIX_TARGET:-$HOST}"
+case "$TARGET" in
+  aarch64-apple-darwin) ARCH=aarch64 BUN_ARCH=arm64 ;;
+  x86_64-apple-darwin) ARCH=x86_64 BUN_ARCH=x64 ;;
+  *) echo "unsupported GPUIX target: $TARGET" >&2; exit 1 ;;
+esac
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
+BIN_DIR="$TARGET_DIR/release"
+[[ "$TARGET" == "$HOST" ]] || BIN_DIR="$TARGET_DIR/$TARGET/release"
 DIST="$ROOT/dist"
 VERSION="$(grep -m1 '^version' "$ROOT/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/')"
-TARBALL="$DIST/kybern-gpuix_${VERSION}_aarch64.app.tar.gz"
+TARBALL="$DIST/kybern-gpuix_${VERSION}_${ARCH}.app.tar.gz"
 
-echo "==> packaging Kybern GPUIX $VERSION"
+echo "==> packaging Kybern GPUIX $VERSION for $TARGET"
 rm -rf apps/gpuix/dist
-(cd apps/gpuix && KYBERN_BIN_DIR="$TARGET_DIR/release" bun scripts/package-app.ts)
+(cd apps/gpuix && KYBERN_BIN_DIR="$BIN_DIR" bun scripts/package-app.ts --arch "$BUN_ARCH")
 APP="$ROOT/apps/gpuix/dist/Kybern GPUIX.app"
 
 echo "==> $TARBALL"

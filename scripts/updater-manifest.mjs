@@ -6,9 +6,10 @@
 // Usage: node scripts/updater-manifest.mjs [--tag vX.Y.Z] [--repo owner/name]
 //        [--notes-file path/to/release-notes.md] [--dist dir]
 //
-// When dist/ also holds scripts/bundle-gpuix.sh's kybern-gpuix_<version>_aarch64
-// .app.tar.gz and its .sig, the manifest gets a `darwin-aarch64-gpuix` entry
-// for the separate Kybern GPUIX app (its updater reads only that key).
+// When dist/ also holds scripts/bundle-gpuix.sh's kybern-gpuix_<version>_<arch>
+// .app.tar.gz and its .sig (arch aarch64 or x86_64), the manifest gets a
+// `darwin-<arch>-gpuix` entry for the separate Kybern GPUIX app (its updater
+// reads only its own arch's key).
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -42,11 +43,13 @@ if (Object.keys(platforms).length === 0) {
   process.exit(1)
 }
 
-const gpuixAsset = `kybern-gpuix_${version}_aarch64.app.tar.gz`
-if (existsSync(join(dist, gpuixAsset)) && existsSync(join(dist, `${gpuixAsset}.sig`))) {
-  platforms["darwin-aarch64-gpuix"] = {
-    signature: readFileSync(join(dist, `${gpuixAsset}.sig`), "utf8").trim(),
-    url: `https://github.com/${repo}/releases/download/${tag}/${gpuixAsset}`,
+for (const arch of ["aarch64", "x86_64"]) {
+  const gpuixAsset = `kybern-gpuix_${version}_${arch}.app.tar.gz`
+  if (existsSync(join(dist, gpuixAsset)) && existsSync(join(dist, `${gpuixAsset}.sig`))) {
+    platforms[`darwin-${arch}-gpuix`] = {
+      signature: readFileSync(join(dist, `${gpuixAsset}.sig`), "utf8").trim(),
+      url: `https://github.com/${repo}/releases/download/${tag}/${gpuixAsset}`,
+    }
   }
 }
 
