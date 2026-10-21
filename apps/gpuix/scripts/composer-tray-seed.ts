@@ -57,6 +57,9 @@ if (!parent) {
     ['Measure tray frame cost while the answer streams', 'general-purpose', 'running', 74, null, 'Sampling 15 s of frames with the tray expanded'],
     ['Trace the skill token measurement bug', 'general-purpose', 'failed', 140, 99, 'Unable to reproduce: the scratch daemon has no skills installed.'],
   ]
+  // TRAY_WORKING=<n>: n working subagents in all (the extra ones join the measuring one).
+  const more: [string, string][] = [['Review the tray rows against the mockup', 'Explore'], ['Profile the sidebar tree connectors', 'general-purpose'], ['Check Reduce Motion on every tray state', 'Explore']]
+  for (const [i, [title, type]] of more.slice(0, Math.max(0, Number(process.env.TRAY_WORKING ?? 1) - 1)).entries()) children.splice(3 + i, 0, [title, type, 'running', 50 + i * 20, null, 'Reading the files'])
   for (const [title, type, status, started, ended, detail] of children) {
     const child = await client.call('threads.create', { project_id: project.id, provider: { kind: 'claude-code', instance: 'default' }, permission_mode: 'supervised', title })
     const info = { task_id: randomUUID(), native_task_id: randomUUID(), root_thread_id: parent.id, parent_turn_id: turn, status, started_at: ago(started), completed_at: ended === null ? null : ago(ended), agent_type: type, detail, ...(status === 'running' ? { progress: detail } : { result: detail }), stats: { token_count: 18240 }, capabilities: { stop: true, background: true } }
