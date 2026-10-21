@@ -53,7 +53,7 @@ import { getClient, useApp } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { useNativeWindowSize } from '../native/layout-hooks.ts'
 import { G } from './glyphs.ts'
-import { muted, PICKER_RADIUS, popoverStyle } from './Menu.tsx'
+import { muted, PICKER_RADIUS, popoverStyle, SectionLabel } from './Menu.tsx'
 
 export interface SlashCommand {
   name: string
@@ -604,13 +604,7 @@ function CompletionList({
                       : null
           return (
             <div key={item.id} style={{ display: 'flex', flexDirection: 'column' }}>
-              {grouped && section !== sectionOf(items[i - 1]) && (
-                <div style={{ display: 'flex', paddingLeft: 10, paddingRight: 10, paddingTop: i > 0 ? 10 : 4, paddingBottom: 4 }}>
-                  <Label color={muted(t, 0.6)} size={13} weight={500}>
-                    {section!}
-                  </Label>
-                </div>
-              )}
+              {grouped && section !== sectionOf(items[i - 1]) && <SectionLabel first={i === 0}>{section!}</SectionLabel>}
               <div
                 testId={`completion-${i}`}
                 aria-selected={active}

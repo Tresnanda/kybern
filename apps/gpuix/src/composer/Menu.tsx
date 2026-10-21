@@ -487,6 +487,24 @@ export function PickerLabel({ children }: { children: string }) {
   )
 }
 
+/**
+ * A section label between kinds of rows (the `@` picker's Threads, Notes, Attachments; the composer tray's sections): 13px
+ * medium, muted at 60%, aligned with the rows' icons (`inset`, the row's own left padding), with more room above a later
+ * section than above the first.
+ */
+export function SectionLabel({ children, first, inset = 10 }: { children: string; first: boolean; inset?: number }) {
+  const t = useTheme()
+  return (
+    <div style={{ display: 'flex', paddingLeft: inset, paddingRight: inset, paddingTop: first ? SECTION_LABEL.firstTop : SECTION_LABEL.top, paddingBottom: SECTION_LABEL.bottom }}>
+      <Label color={muted(t, 0.6)} size={13} weight={500}>
+        {children}
+      </Label>
+    </div>
+  )
+}
+/** `SectionLabel`'s box: its height is `firstTop` or `top`, plus `line` (GPUI's default line height, φ × 13px) and `bottom`. */
+export const SECTION_LABEL = { firstTop: 4, top: 10, bottom: 4, line: 13 * 1.618034 } as const
+
 /** `MenuSeparator`: 1px `bg-border`, `--picker-separator-my/mx`. */
 export function PickerSeparator() {
   const t = useTheme()
