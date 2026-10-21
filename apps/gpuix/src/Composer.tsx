@@ -2,6 +2,7 @@ import { clipboardAttachments, type ClipboardImage } from './composer/clipboard.
 import { StatusGlyph } from './composer/StatusGlyph.tsx'
 import { FooterRow, useFooterFit } from './composer/footerWidth.tsx'
 import { TokenTextarea, type TokenTextareaHandle } from './composer/TokenTextarea.tsx'
+import type { TokenReference } from './composer/token-text.ts'
 import { type InputSelection } from './native/api.ts'
 export { useComposerOverlayHeight, useMeasureComposerOverlay } from './composer/height.ts'
 import { useMeasureComposerOverlay } from './composer/height.ts'
@@ -16,7 +17,8 @@ import { load as loadEnvironmentPreference, save as saveEnvironmentPreference } 
 // The composer (`views/Composer.tsx`, `composerPickerStyles.ts`): a 19.2px-radius
 // card with the editor on top and a footer of 28px chips (+ menu, permission
 // mode, model and effort), then the 32px round send button, which becomes the
-// stop control while the thread runs. Queued follow-ups stack above the card.
+// stop control while the thread runs. Queued follow-ups live in the composer tray above
+// the card (`requests/ComposerTray.tsx`).
 //
 // `ThreadComposer` and `DraftComposer` wire it the way `views/Thread.tsx` and
 // `views/Draft.tsx` do; the pickers and data live in `src/composer/`.
@@ -42,7 +44,7 @@ import { MatrixLoader } from './MatrixLoader.tsx'
 import { Spinner } from './kit/Spinner.tsx'
 import { getClient, setThreadOpen, usePaneCompact, focusPane, getFocusedPaneId, usePaneAccess, getPane, selectPaneThread, setPane, set, useApp } from './state.ts'
 import { FONT_UI } from './theme.ts'
-import { ink, Label, useTheme } from './ui.tsx'
+import { ink, Label, REDUCED_MOTION, useTheme } from './ui.tsx'
 import { addWindowKeyHandler } from './nav/keys.ts'
 import { keyboardAnswer } from './requests/Panel.tsx'
 import { isUserInput, connectorApproval } from '../../../packages/kybern-client/src/userInput.ts'
@@ -55,14 +57,22 @@ import { useThreadCommands } from './composer/commands.ts'
 import { tokenIcon } from './composer/token-icons.ts'
 import { ModelPicker, ModelTriggerLabel } from './composer/ModelPicker.tsx'
 import { PermissionPicker } from './composer/PermissionPicker.tsx'
-import { Pop, SwapOnChange } from './composer/motion.tsx'
+import { Leave, Pop, SwapOnChange, useLeavingList } from './composer/motion.tsx'
 import { Rise } from './motion/kit.tsx'
+import { Presence } from './motion/Presence.tsx'
 import { DropHighlight } from './motion/DropHighlight.tsx'
-import { pressTransform } from './motion/press.ts'
+import { useRequestPanelHeight } from './transcript/store.ts'
+import { ImageViewer, type MorphSource } from './motion/ImageMorph.tsx'
+import { PATCHED_NATIVE } from './native/local-build.ts'
+import { usePendingSends } from './composer/pending.ts'
+
+import { hoverPressTransform } from './motion/press.ts'
 import {
   createThread,
   ensureLoaded,
   errorText,
+  onComposerRestore,
+  rememberSentDraft,
   getData,
   interruptThread,
   loadCatalog,
@@ -101,22 +111,20 @@ export function Composer({ thread, tray }: { thread: Thread | null; tray?: React
 function ThreadComposer({ thread }: { thread: Thread }) {
   const pane = usePaneAccess()
   const threadId = thread.id
-  const running = thread.status === 'running' || thread.status === 'awaiting-approval'
+  // A send the daemon has not answered yet already counts as the running turn: the next Enter queues behind it.
+  const starting = usePendingSends(threadId).some((p) => p.delivery === 'send' && p.state === 'sending')
+  const running = thread.status === 'running' || thread.status === 'awaiting-approval' || starting
   const target = useComposer((d) => (d.target?.threadId === threadId ? d.target.state : null))
   const providers = useComposer((d) => d.providers)
   const accounts = useComposer((d) => d.accounts)
   const catalog = useComposer((d) => d.catalog)
   const catalogLoading = useComposer((d) => d.catalogLoading)
-  const queued = useComposer((d) => d.queued[threadId])
   const approval = useApp((s) => (s.open.thread?.id === threadId ? s.open.pendingApprovals[0] : null))
   const projectName = useApp(s => s.projects.find(p => p.id === thread.coordinator_project_id)?.name)
 
   useEffect(() => {
     if (!pane.frozen) void loadTarget(threadId)
   }, [threadId, thread.status, thread.provider.instance, thread.model, pane.frozen])
-  useEffect(() => {
-    if (!pane.frozen) void loadQueue(threadId)
-  }, [threadId, running, pane.frozen])
 
   const provider = target?.target.provider ?? thread.provider
   const catalogKey = `${threadId}:${provider.kind}:${provider.instance}`
@@ -170,6 +178,7 @@ function ThreadComposer({ thread }: { thread: Thread }) {
               : undefined
       }
       running={running}
+      starting={starting && thread.status !== 'running' && thread.status !== 'awaiting-approval'}
       onStop={() => void interruptThread(threadId).catch(() => {})}
       onSend={(message, delivery) => sendToThread(threadId, message, delivery)}
       canSteer={handoffSelected || STEERABLE.includes(thread.provider.kind)}
@@ -186,7 +195,6 @@ function ThreadComposer({ thread }: { thread: Thread }) {
       onProviderChange={coordinator ? running ? undefined : (next, choice) => switchHarness(next, choice?.model, choice?.effort) : (next, choice) => chooseTarget(next, choice?.model, choice?.effort, !choice?.pinAccount)}
       catalogLoading={catalogLoading === catalogKey}
       onReloadModels={(force) => loadCatalog(threadId, provider, thread.project_id, force).then(() => {})}
-      above={queued?.length ? <QueuedPanel threadId={threadId} items={queued.map((q) => ({ id: q.id, message: q.message }))} /> : null}
     />
   )
 }
@@ -331,6 +339,9 @@ export interface ComposerViewProps {
   thread?: Thread
   placeholder?: string
   running?: boolean
+  /** `running` only because a send has not been answered yet: Enter still queues behind it, but the button shows that send
+   *  in flight, not Stop (there is no turn to stop yet). */
+  starting?: boolean
   onStop?: () => void
   onSend: (message: UserMessage, delivery: 'send' | 'queue' | 'steer') => Promise<void>
   canSteer?: boolean
@@ -356,6 +367,8 @@ export interface ComposerViewProps {
 
 export function ComposerView(input: ComposerViewProps) {
   const compact = usePaneCompact()
+  // A panel stacked on the card (the tray, a request): its shadow stops at the card's top edge (`CardShadow`).
+  const stacked = useRequestPanelHeight() > 0
   const pane = usePaneAccess()
   const props = { ...input, draftKey: `${pane.id}:${input.draftKey}`, readOnly: input.readOnly || pane.frozen }
   const measureOverlay = useMeasureComposerOverlay()
@@ -384,10 +397,10 @@ export function ComposerView(input: ComposerViewProps) {
     const next = tokenEditor.current.selection()
     setSelection(old => old.start === next.start && old.end === next.end && old.composing === next.composing && old.reversed === next.reversed ? old : next)
   }
-  const edit = (start: number, end: number, replacement: string) => {
+  const edit = (start: number, end: number, replacement: string, added?: readonly TokenReference[]) => {
     if (!editor.current || props.readOnly) return false
     try {
-      if (!tokenEditor.current?.edit(start, end, replacement)) return false
+      if (!tokenEditor.current?.edit(start, end, replacement, added)) return false
       readSelection()
       focusEditor()
       return true
@@ -481,21 +494,45 @@ export function ComposerView(input: ComposerViewProps) {
       setError('Choose a supported permission mode for the selected agent before sending.')
       return
     }
+    // The message leaves the composer on this frame; the send runs behind it. Thread sends show at once as a pending
+    // bubble and report a rejection there (`composer/pending.ts`); other callers get the draft back with the error.
+    const parts = buildParts(), draft = { text, attachments }
+    rememberSentDraft(parts, { text, attachments, references: completion.snapshot() })
     setSending(true)
     setError(null)
+    setText('')
+    setAttachments([])
+    drafts.delete(props.draftKey)
+    focusEditor()
     try {
-      await props.onSend({ parts: buildParts() }, running ? (delivery === 'steer' && props.canSteer ? 'steer' : 'queue') : 'send')
-      setText('')
-      setAttachments([])
+      await props.onSend({ parts }, running ? (delivery === 'steer' && props.canSteer ? 'steer' : 'queue') : 'send')
       completion.reset()
-      drafts.delete(props.draftKey)
-      focusEditor()
     } catch (e) {
+      // Only into an empty composer: what was typed meanwhile is never overwritten.
+      setText((current) => current || draft.text)
+      setAttachments((current) => (current.length ? current : draft.attachments))
       setError(`Unable to send: ${errorText(e)}`)
     } finally {
       setSending(false)
     }
   }
+  const attachmentsNow = useRef(attachments)
+  attachmentsNow.current = attachments
+  useEffect(() => onComposerRestore(props.draftKey, (draft) => {
+    // A label the draft's own attachments took meanwhile is renumbered, in the restored text too.
+    const taken = attachmentsNow.current.map((a) => a.label), renamed = new Map<string, string>()
+    const restored = draft.attachments.filter((a) => !attachmentsNow.current.some((b) => b.id === a.id)).map((a) => {
+      if (!taken.includes(a.label)) { taken.push(a.label); return a }
+      const label = nextAttachmentLabel(a.media_type, [...taken, ...draft.attachments.map((b) => b.label)])
+      taken.push(label); renamed.set(a.label, label)
+      return { ...a, label }
+    })
+    const text = renamed.size ? draft.text.replace(/@([A-Za-z]+\d+)\b/g, (token, label: string) => (renamed.has(label) ? `@${renamed.get(label)}` : token)) : draft.text
+    setText((current) => (current.trim() ? `${current}\n\n${text}` : text))
+    if (restored.length) setAttachments((list) => [...list, ...restored])
+    if (draft.references) completion.restore(draft.references)
+    focusEditor()
+  }), [props.draftKey])
 
   const addClipboardImage = async (image: ClipboardImage) => {
     setUploading((n) => n + 1)
@@ -557,6 +594,8 @@ export function ComposerView(input: ComposerViewProps) {
   return (
     <div ref={measureOverlay} testId="composer-overlay" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: 736 }}>
       {props.above}
+      <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', width: '100%' }}>
+      <CardShadow radius={compact ? 14 : COMPOSER_RADIUS} stacked={stacked} />
       <div
         ref={(el) => {
           card.current = el
@@ -576,23 +615,18 @@ export function ComposerView(input: ComposerViewProps) {
           borderWidth: 1,
           borderColor: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.052)' : 'rgba(13, 13, 13, 0.076)',
           backgroundColor: t.variant === 'dark' ? t.composer : '#ffffff',
-          boxShadow:
-            t.variant === 'dark'
-              ? { offsetX: 0, offsetY: 6, blurRadius: 24, spreadRadius: -10, color: 'rgba(0, 0, 0, 0.30)' }
-              : { offsetX: 0, offsetY: 4, blurRadius: 18, spreadRadius: -6, color: 'rgba(13, 13, 13, 0.07)' },
         }}
       >
         {completion.menu((card.current && renderer.getElementBounds?.(card.current.id)?.width) || 736)}
         {/* `dragOver && border-[color:var(--color-border-focus)]` with the card's `transition-colors duration-200`. */}
         <DropHighlight over={dragOver} radius={compact ? 14 : COMPOSER_RADIUS} color={t.v('--color-border-focus')} />
         <div style={{ display: 'flex', flexDirection: 'column', paddingTop: 14, paddingBottom: 8, paddingLeft: 16, paddingRight: 16 }}>
-          {(attachments.length > 0 || uploading > 0) && (
-            <Attachments
-              items={attachments}
-              uploading={uploading}
-              onRemove={(a) => setAttachments((list) => list.filter((item) => item.id !== a.id))}
-            />
-          )}
+          <Attachments
+            items={attachments}
+            uploading={uploading}
+            onRemove={(a) => setAttachments((list) => list.filter((item) => item.id !== a.id))}
+            onPreviewClose={focusEditor}
+          />
           <div style={{ position: 'relative', display: 'flex' }}>
             {/* GPUIX paints its own placeholder in a fixed grey; this one is the kit's muted × 40%. */}
             {!text && (
@@ -749,26 +783,61 @@ export function ComposerView(input: ComposerViewProps) {
                 onPromptMode={setPromptMode}
               />
             )}
-            {running ? (
-              <RoundButton testId="stop" onClick={props.onStop}>
-                <Icon source={G.stop} size={10} color={t.v('--color-background-elevated-primary-opaque')} />
-              </RoundButton>
-            ) : (
-              <Tip label={disabledReason ?? (steering ? 'Steer now ⌘↵' : 'Send ↵')}><RoundButton testId="send" disabled={!canSend} onClick={() => void submit()}>
-                {/* `IconSwap` arrow ↔ spinner while sending (`Composer.tsx:1441`); the spinner is the shared-clock loader. */}
-                <SwapOnChange active={sending ? 'sending' : 'send'}>
-                  {sending ? (
-                    <MatrixLoader rgb={rgbOf(t.v('--color-background-elevated-primary-opaque'))} alpha={1} gap={1.5} />
-                  ) : (
-                    <Icon name="send" size={20} color={t.v('--color-background-elevated-primary-opaque')} />
-                  )}
-                </SwapOnChange>
-              </RoundButton></Tip>
-            )}
+            <SendButton running={!!running && !props.starting} sending={sending || !!props.starting} canSend={canSend} steering={steering} disabledReason={disabledReason} onSubmit={() => void submit()} onStop={props.onStop} />
           </div>
         </FooterRow>
       </div>
+      </div>
     </div>
+  )
+}
+
+/** Reach of the card's shadow past its edges (blur 24 → three sigma, plus the offset). */
+const SHADOW_REACH = 80
+/**
+ * The card's shadow, drawn by a sibling painted under it. While a panel sits on the card (the tray or a request), the part
+ * above the card's top edge is clipped: the shell does not shadow itself, and a loader in the panel's lowest row stays in
+ * Core Animation (a shadow painted over it kept the window presenting at display rate).
+ */
+function CardShadow({ radius, stacked }: { radius: number; stacked: boolean }) {
+  const t = useTheme()
+  const top = stacked ? 0 : -SHADOW_REACH
+  return (
+    <div style={{ position: 'absolute', left: -SHADOW_REACH, right: -SHADOW_REACH, bottom: -SHADOW_REACH, top, overflow: 'hidden', pointerEvents: 'none' }}>
+      <div
+        style={{
+          position: 'absolute',
+          left: SHADOW_REACH,
+          right: SHADOW_REACH,
+          bottom: SHADOW_REACH,
+          top: -top,
+          borderRadius: radius,
+          boxShadow:
+            t.variant === 'dark'
+              ? { offsetX: 0, offsetY: 6, blurRadius: 24, spreadRadius: -10, color: 'rgba(0, 0, 0, 0.30)' }
+              : { offsetX: 0, offsetY: 4, blurRadius: 18, spreadRadius: -6, color: 'rgba(13, 13, 13, 0.07)' },
+        }}
+      />
+    </div>
+  )
+}
+
+/**
+ * One button for send, sending and stop, so the glyph can cross-swap (`IconSwap`: the arrow shrinks and blurs out while the
+ * spinner or the stop square grows in). A keyboard send still swaps because it reports state, not navigation, and never delays input.
+ */
+export function SendButton({ running, sending, canSend, steering, disabledReason, onSubmit, onStop }: { running: boolean; sending: boolean; canSend: boolean; steering: boolean; disabledReason?: string | null; onSubmit: () => void; onStop?: () => void }) {
+  const t = useTheme()
+  const ink = t.v('--color-background-elevated-primary-opaque')
+  return (
+    <Tip label={running ? 'Stop generation' : disabledReason ?? (steering ? 'Steer now ⌘↵' : 'Send ↵')}>
+      <RoundButton testId={running ? 'stop' : 'send'} disabled={running ? false : !canSend} onClick={running ? onStop : onSubmit}>
+        {/* `IconSwap` arrow ↔ spinner while sending, arrow ↔ stop square while the thread runs (`Composer.tsx:1441`); the spinner is the shared-clock loader. */}
+        <SwapOnChange kind="icon" active={running ? 'stop' : sending ? 'sending' : 'send'} style={{ width: 20, height: 20 }}>
+          {running ? <Icon source={G.stop} size={10} color={ink} /> : sending ? <MatrixLoader rgb={rgbOf(ink)} alpha={1} gap={1.5} /> : <Icon name="send" size={20} color={ink} />}
+        </SwapOnChange>
+      </RoundButton>
+    </Tip>
   )
 }
 
@@ -780,9 +849,22 @@ function rgbOf(color: string): [number, number, number] {
   return [r, g, b]
 }
 
-/** `COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME` on a `prominent` button: the ink circle, 30% when off. */
-function RoundButton({ children, disabled, onClick, testId }: { children: ReactNode; disabled?: boolean; onClick?: () => void; testId: string }) {
+/** `COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME` on a `prominent` button: the ink circle, 30% when off. It grows to 1.05 on hover (`hover:scale-105`, 150 ms) and squashes on press. */
+function RoundButton({ children, disabled, onClick, onMouseEnter, onMouseLeave, onMouseDown, onFocus, onBlur, onKeyDown, testId }: {
+  children: ReactNode
+  disabled?: boolean
+  onClick?: () => void
+  /** The tooltip trigger's handlers (`Tip` clones them onto its child). */
+  onMouseEnter?: () => void
+  onMouseLeave?: () => void
+  onMouseDown?: () => void
+  onFocus?: () => void
+  onBlur?: () => void
+  onKeyDown?: (event: { key?: string }) => void
+  testId: string
+}) {
   const t = useTheme()
+  const [hover, setHover] = useState(false)
   // `surfaceMode === "split" && "!size-7"`: 28px in a split pane.
   const size = usePaneCompact() ? 28 : 32
   return (
@@ -791,7 +873,13 @@ function RoundButton({ children, disabled, onClick, testId }: { children: ReactN
       role="button"
       aria-disabled={disabled}
       onClick={disabled ? undefined : onClick}
-      paintTransform={pressTransform(!disabled)}
+      onMouseEnter={() => { setHover(true); onMouseEnter?.() }}
+      onMouseLeave={() => { setHover(false); onMouseLeave?.() }}
+      onMouseDown={onMouseDown}
+      onFocus={onFocus}
+      onBlur={onBlur}
+      onKeyDown={onKeyDown}
+      paintTransform={hoverPressTransform(hover && !disabled, !disabled)}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -893,24 +981,61 @@ function RunningControls({
 }
 
 /** Image tiles and file cards above the editor (`Composer.tsx:1143-1171`). */
-function Attachments({ items, uploading, onRemove }: { items: Attachment[]; uploading: number; onRemove: (a: Attachment) => void }) {
+export function Attachments({ items, uploading, onRemove, onPreviewClose }: { items: Attachment[]; uploading: number; onRemove: (a: Attachment) => void; onPreviewClose?: () => void }) {
   const t = useTheme()
+  const renderer = useGpuixRequired()
+  // A clicked image tile morphs into the shared preview out of the tile's rect (`motion/ImageMorph.tsx`); the tile hides while its
+  // image is away.
+  const tiles = useRef(new Map<string, PublicInstance>())
+  const [expanded, setExpanded] = useState<{ id: string; from: MorphSource | null } | null>(null)
+  const tileSource = (id: string): MorphSource | null => {
+    const node = tiles.current.get(id)
+    const box = node ? renderer.getElementBounds?.(node.id) : null
+    // The image paints inside the tile's 1px border, cropped to fill it, with the inner radius.
+    return box ? { rect: { x: box.x + 1, y: box.y + 1, width: box.width - 2, height: box.height - 2 }, radius: 11, fit: 'cover' } : null
+  }
+  const open = expanded ? items.find(a => a.id === expanded.id) : undefined
+  // The previewed attachment left (a send cleared the tray, the draft switched): forget it, or its tile would stay hidden
+  // and the preview reopen from a stale rect if the same attachment comes back.
+  useEffect(() => { if (expanded && !open) setExpanded(null) }, [expanded, open])
+  // GPUIX delivers a click to the × and to the tile under it, so a click on a tile's × never opens the preview. Decided by
+  // where the click is, not by a flag from the press: a press on the × released elsewhere has no click to clear one, and
+  // the flag swallowed the next click on that tile.
+  const removes = useRef(new Map<string, PublicInstance>())
+  const onRemoveButton = (id: string, e: { x?: number; y?: number }) => {
+    const node = removes.current.get(id), box = node ? renderer.getElementBounds?.(node.id) : null
+    return !!box && e.x !== undefined && e.y !== undefined && e.x >= box.x && e.x < box.x + box.width && e.y >= box.y && e.y < box.y + box.height
+  }
+  const openPreview = (id: string, from: MorphSource | null) => setExpanded({ id, from })
+  const away = expanded?.from && PATCHED_NATIVE && !REDUCED_MOTION ? expanded.id : null
   const elevated = t.v('--color-background-elevated-secondary')
+  // Only the ✕ removal leaves with an exit; sending clears the tray at once.
+  const removed = useRef(new Set<string>())
+  const [entries, gone] = useLeavingList(items, (id) => removed.current.delete(id))
+  const remove = (a: Attachment) => { removed.current.add(a.id); onRemove(a) }
+  if (!entries.length && uploading <= 0) return null
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 6, marginLeft: -6, marginRight: -6, marginTop: -4, marginBottom: 8 }}>
-      {items.map((a) => (
-        // `t-pop` on each tile (`Composer.tsx:1147`); removal is instant there too.
-        <Pop key={a.id}>
+      {entries.map(({ item: a, leaving }) => (
+        // `t-pop` on each tile (`Composer.tsx:1147`); removing one shrinks and fades it out (the neighbours close up after).
+        <Presence key={a.id} show={!leaving} exit={{ to: { opacity: 0, scale: 0.85 }, duration: 0.15 }} onGone={() => gone(a.id)} style={{ flexShrink: 0 }}>
+        <Pop>
           {a.media_type.startsWith('image/') ? (
             <div
+              ref={(node) => { if (node) tiles.current.set(a.id, node); else tiles.current.delete(a.id) }}
               testId={`attachment-${a.label}`}
-              style={{ position: 'relative', width: 64, height: 64, flexShrink: 0, borderRadius: 12, borderWidth: 1, borderColor: t.borderLight, backgroundColor: elevated, overflow: 'hidden' }}
+              role="button"
+              tabIndex={0}
+              aria-label={`Preview ${a.name}`}
+              onClick={(e: { x?: number; y?: number }) => { if (!onRemoveButton(a.id, e)) openPreview(a.id, tileSource(a.id)) }}
+              onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') openPreview(a.id, null) }}
+              style={{ position: 'relative', width: 64, height: 64, flexShrink: 0, borderRadius: 12, borderWidth: 1, borderColor: t.borderLight, backgroundColor: elevated, overflow: 'hidden', cursor: 'pointer' }}
             >
-              <img src={a.path} objectFit="cover" style={{ width: 62, height: 62, borderRadius: 11 }} />
+              <img src={a.path} objectFit="cover" style={{ width: 62, height: 62, borderRadius: 11, pointerEvents: 'none', opacity: away === a.id ? 0 : 1 }} />
               <div style={{ position: 'absolute', left: 4, bottom: 4, paddingLeft: 4, paddingRight: 4, borderRadius: 6, backgroundColor: 'rgba(0, 0, 0, 0.55)' }}>
                 <Label color="#ffffff" size={10} lineHeight={16} weight={500}>{`@${a.label}`}</Label>
               </div>
-              <RemoveButton testId={`remove-attachment-${a.label}`} onClick={() => onRemove(a)} />
+              <RemoveButton testId={`remove-attachment-${a.label}`} nodeRef={(node) => { if (node) removes.current.set(a.id, node); else removes.current.delete(a.id) }} onClick={() => remove(a)} />
             </div>
           ) : (
             <div
@@ -946,10 +1071,11 @@ function Attachments({ items, uploading, onRemove }: { items: Attachment[]; uplo
                   </Label>
                 </div>
               </div>
-              <RemoveButton testId={`remove-attachment-${a.label}`} onClick={() => onRemove(a)} />
+              <RemoveButton testId={`remove-attachment-${a.label}`} onClick={() => remove(a)} />
             </div>
           )}
         </Pop>
+        </Presence>
       ))}
       {uploading > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 4, paddingRight: 4, height: 24 }}>
@@ -959,15 +1085,17 @@ function Attachments({ items, uploading, onRemove }: { items: Attachment[]; uplo
           </Label>
         </div>
       )}
+      {open && expanded && <ImageViewer key={open.id} testId="attachment-lightbox" src={open.path} label={open.name} from={expanded.from} source={() => tileSource(open.id)} onClose={() => { setExpanded(null); onPreviewClose?.() }} />}
     </div>
   )
 }
 
 /** A 20px ink disc with a 12px ×, top-right. */
-function RemoveButton({ onClick, testId }: { onClick: () => void; testId?: string }) {
+function RemoveButton({ onClick, nodeRef, testId }: { onClick: () => void; nodeRef?: (node: PublicInstance | null) => void; testId?: string }) {
   const t = useTheme()
   return (
     <div
+      ref={nodeRef}
       testId={testId}
       onClick={onClick}
       style={{
@@ -989,62 +1117,3 @@ function RemoveButton({ onClick, testId }: { onClick: () => void; testId?: strin
     </div>
   )
 }
-
-/** Queued follow-ups stacked above the card (`QueuedPanel` in `views/Thread.tsx`). */
-function QueuedPanel({ threadId, items }: { threadId: string; items: { id: string; message: UserMessage }[] }) {
-  const t = useTheme()
-  const dark = t.variant === 'dark'
-  const border = dark ? 'rgba(252, 252, 252, 0.036)' : 'rgba(13, 13, 13, 0.076)'
-  return (
-    <div
-      testId="queued-panel"
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        width: '93.33%',
-        marginBottom: -1,
-        borderTopLeftRadius: COMPOSER_RADIUS,
-        borderTopRightRadius: COMPOSER_RADIUS,
-        borderTopWidth: 1,
-        borderLeftWidth: 1,
-        borderRightWidth: 1,
-        borderColor: border,
-        backgroundColor: dark ? t.composer : 'rgba(255, 255, 255, 0.37)',
-        paddingBottom: 4,
-      }}
-    >
-      <div style={{ display: 'flex', paddingLeft: 12, paddingRight: 12, paddingTop: 8 }}>
-        <Label color={t.textSecondary} size={12}>{`Queued · ${items.length}`}</Label>
-      </div>
-      {/* `t-row-enter` on each row as it arrives (`QueuedRow` in `views/Thread.tsx`); rows and the panel leave instantly. */}
-      {items.map((item, i) => (
-        <Rise key={item.id} kind="row">
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              paddingLeft: 10,
-              paddingRight: 6,
-              paddingTop: 4,
-              paddingBottom: 4,
-              ...(i > 0 ? { borderTopWidth: 1, borderColor: border } : {}),
-            }}
-          >
-            <Icon source={G.clock} size={14} color={t.textSecondary} />
-            <Label color={ink(t, 0.85)} size={12} weight={500} truncate style={{ flexGrow: 1 }}>
-              {promptText(item.message) || 'Queued follow-up'}
-            </Label>
-            <div
-              onClick={() => void removeQueued(threadId, item.id).catch(() => {})}
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}
-            >
-              <Icon source={G.x} size={12} color={t.textTertiary} />
-            </div>
-          </div>
-        </Rise>
-      ))}
-    </div>
-  )
-}
-

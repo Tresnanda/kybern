@@ -66,8 +66,12 @@ try {
     const frames = f.frameTimes().filter((t) => t > mark)
     const dt = frames.slice(1).map((t, i) => t - frames[i]!).sort((x, y) => x - y)
     console.log(`frames in 3 s (${label}): ${frames.length}, interval p50 ${pct(dt, 0.5).toFixed(2)} ms, p95 ${pct(dt, 0.95).toFixed(2)} ms`)
+    // A settled spinner runs in Core Animation (compositor loops): the app presents nothing while it turns. The scene path
+    // (`KYBERN_COMPOSITOR_LOOPS=0`) presents at display rate.
+    const scene = process.env.KYBERN_COMPOSITOR_LOOPS === '0'
     if (reduced) assert(frames.length <= 3, `Reduce Motion must not keep presenting frames (${frames.length})`)
-    else assert(frames.length > 120, `a spinning glyph must present continuous frames (${frames.length})`)
+    else if (scene) assert(frames.length > 120, `a spinning glyph must present continuous frames (${frames.length})`)
+    else assert(frames.length <= 3, `a settled spinner runs in Core Animation and presents no app frames (${frames.length})`)
 
     // 1. Pixels. The native animation runs on the real clock, so each phase is a separate launch with the phase frozen
     // (`KYBERN_PAINT_PHASE_MS`, the native checks' own mechanism). The glyph has eight-fold symmetry: 125 ms is exactly
@@ -89,7 +93,11 @@ try {
         await g.app.getByTestId('pr-summary').waitFor({ timeoutMs: 15_000 })
         await sleep(1500)
         shots[phase] = `${dir}/${label}-${String(phase).padStart(4, '0')}.png`
-        await g.app.screenshot({ path: shots[phase] })
+        // The presented frame, from WindowServer: the automation screenshot re-renders the scene without the per-present
+        // rotation, so every frozen phase would look the same in it.
+        const id = /window (\d+) onscreen=true/.exec(Bun.spawnSync(['swift', path.join(import.meta.dir, '../perf/bench/window-onscreen.swift'), String(g.pid)]).stdout.toString())?.[1]
+        assert.ok(id, 'the frozen-phase window is not on screen')
+        assert.equal(Bun.spawnSync(['screencapture', '-x', '-o', '-l', id, shots[phase]]).exitCode, 0, 'window capture failed')
       } finally { await g.close() }
     }
     const diff = (x: number, y: number) => { const A = region(shots[x]!, first), B = region(shots[y]!, first); let s = 0; for (let i = 0; i < A.length; i++) s += Math.abs(A[i]! - B[i]!); return s }

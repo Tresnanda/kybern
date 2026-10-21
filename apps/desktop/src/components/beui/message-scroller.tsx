@@ -682,6 +682,7 @@ export function MessageScroller({
             navigationSide === "left"
               ? "left-5 [&_[data-slot=preview-rail-item]]:justify-start [&_[data-slot=preview-rail-tick]]:origin-left"
               : "right-1 [&_[data-slot=preview-rail-item]]:justify-end [&_[data-slot=preview-rail-tick]]:origin-right",
+            "transition-opacity duration-[var(--duration-quick)] ease-[var(--ease-out)] motion-reduce:transition-none",
             railOverflowing
               ? "pointer-events-auto opacity-100"
               : "pointer-events-none opacity-0",

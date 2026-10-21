@@ -7,9 +7,10 @@ import { useBackdropMaterial, backdropTint } from '../native/backdrop-material.t
 //
 // It sits on an `<anchored>` overlay (`PopupLayer`, GPUIX's `FloatingLayer` plus
 // motion), so it paints above the transcript. It opens like the desktop's
-// `menu.tsx` popup: a 250 ms smooth-out fade that drifts 4px from the trigger
-// side (`POPUP.menu` in `motion/kit.tsx`; the scale and blur have no GPUIX
-// equivalent), and closes instantly.
+// `menu.tsx` popup: a 250 ms smooth-out scale from 97% with a 2px blur that
+// clears, about the trigger's corner (`popupTransform` in `motion/kit.tsx`,
+// paint-only), and closes instantly unless the owner passes `leaving` (then it
+// scales to 99% and fades over 150 ms, and `onLeft` fires).
 // Keyboard: ↑/↓ move the highlight, Enter/Space pick, Escape closes and returns
 // focus to the trigger. Nothing is highlighted until the pointer or a key moves,
 // like Base UI menus opened with the pointer.
@@ -19,6 +20,7 @@ import {
   forwardRef,
   useCallback,
   useContext,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -28,10 +30,11 @@ import {
 import { Icon } from '../icons.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
 import type { Theme } from '../theme.ts'
-import { DURATION, EASE, POPUP } from '../motion/kit.tsx'
-import type { PaintTransformProps } from '@gpuix/native/host'
+import { BLUR, DURATION, EASE, POPUP, popupOrigin, popupTransform, SCALE } from '../motion/kit.tsx'
+import { EXIT, exitsInstantly, nextPresenceGeneration, presenceTransform } from '../motion/Presence.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { REDUCED_MOTION } from '../ui.tsx'
+import type { PaintTransformProps } from '@gpuix/native/host'
 import { G } from './glyphs.ts'
 import { WebLayer, useWebOcclusion } from '../native/web-occlusion.ts'
 
@@ -57,21 +60,42 @@ export function popoverStyle(t: Theme): StyleDesc {
   }
 }
 
-let popupGeneration = 1_000_000
+/** Where the popup grows from when `anchor` names the corner of the popup that sits at `position` (default top-left). */
+const LAYOUT_POPUPS = process.env.KYBERN_POPUP_MOTION === 'layout'
+
+const ANCHOR_ORIGIN: Record<NonNullable<AnchoredProps['anchor']>, [number, number]> = {
+  topLeft: [0, 0], topCenter: [0.5, 0], topRight: [1, 0], rightCenter: [1, 0.5],
+  bottomRight: [1, 1], bottomCenter: [0.5, 1], bottomLeft: [0, 1], leftCenter: [0, 0.5],
+}
+
+/**
+ * The other two popup arrivals, for the dialog (`dialog.tsx:27,55`): `dialog` is the card (opacity 0, scale `--scale-large` 0.96 and a
+ * 2 px blur, 250 ms smooth-out, about its centre; the exit is `EXIT.dialog`), `scrim` the black backdrop (opacity only, 250 ms in,
+ * `EXIT.backdrop` out). Reduce Motion fades 150 ms. `undefined` with the stock addon.
+ */
+function appearTransform(appear: 'dialog' | 'scrim', origin: [number, number]): PaintTransformProps | undefined {
+  if (!PATCHED_NATIVE) return undefined
+  const ease: [number, number, number, number] = [...EASE.smoothOut]
+  if (REDUCED_MOTION) return { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease }, origin }
+  const initial = appear === 'dialog' ? { opacity: 0, scale: SCALE.large, blur: BLUR.small } : { opacity: 0 }
+  return { initial, animate: appear === 'dialog' ? { opacity: 1, scale: 1, blur: 0 } : { opacity: 1 }, transition: { duration: DURATION.fast, ease }, origin }
+}
 
 /**
  * `FloatingLayer` (`@gpuix/react/floating`) with the desktop's popup open
- * (`data-starting-style` in `components/kit/menu.tsx` and `popover.tsx`). The
- * tween runs on the `<anchored>` surface itself: it paints its own dark
- * backing under the content, so fading only the content would leave that
- * backing showing for the first frames. `side` is where the popup sits
- * relative to its trigger; it drifts in from the trigger.
+ * (`data-starting-style` in `components/kit/menu.tsx` and `popover.tsx`). Every
+ * popup that is not `still` or a `fade` layer materializes: it scales up from
+ * 97% with a 2px blur and fades in over 250 ms (150 ms and 98% for `kind:
+ * 'tooltip'`) about the trigger's corner, painted natively (`paintTransform`,
+ * no layout or render per frame). `side` is where the popup sits relative to
+ * its trigger. `fade` layers (the dialog's scrim and card) keep the layout
+ * tween of an `<anchored motion>`.
  *
  * Also used by the thread panel, rail and title bar (`nav/overlay.tsx`), which
  * add: `kind` (tooltip timing), `position`/`anchor` (context menus at the
  * pointer, centred dialogs), `still` (opened by a shortcut or carried over:
- * no motion), and `fade` (a plain fade to an opacity, optionally rising, for
- * the dialog backdrop and card).
+ * no motion), `fade` (a plain fade to an opacity, optionally rising, for
+ * the dialog backdrop and card), and `leaving`/`onLeft` (an exit; see below).
  */
 export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
   side?: 'top' | 'bottom' | 'left' | 'right'
@@ -95,9 +119,24 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
    * popup scales up from 97% and fades in over 250 ms (`--ease-smooth-out`) about `origin` (fractions of its box,
    * the trigger's side). Paint-only (`paintTransform`), so no render or layout runs per frame. The anchored
    * layer's own motion is off and its opaque backing made transparent, so the whole popup arrives as one
-   * material. Reduce Motion fades in 150 ms with no scale; the stock addon just shows the popup.
+   * material. Reduce Motion fades in 150 ms with no scale; the stock addon just shows the popup. Every popup does this by
+   * default now, with `origin` derived from `side`/`align` (or `anchor` for a positioned layer); pass `materialize` only to
+   * choose the origin yourself.
    */
   materialize?: { origin: [number, number] }
+  /**
+   * The owner is closing this popup but keeps it mounted until `onLeft`: it scales to 99% and fades out over 150 ms (80 ms
+   * and 98% for a tooltip), non-interactive, retargeting back to rest if `leaving` turns false again. Reduce Motion fades 100 ms.
+   * Keyboard closes should unmount at once instead (do not set `leaving`). `onLeft` fires when the exit completes, or right
+   * away when the popup cannot animate (`still`, stock addon, hidden window).
+   */
+  leaving?: boolean
+  onLeft?: () => void
+  /**
+   * `'dialog'` / `'scrim'`: the arrival and exit of a modal's card and its backdrop (`appearTransform`) instead of the menu's
+   * 0.97 scale. Paint-only like every materializing popup; the scrim's fill goes in `style` (a `backing` would not fade).
+   */
+  appear?: 'dialog' | 'scrim'
 }>(function PopupLayer(
   {
     side = 'bottom',
@@ -115,6 +154,9 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
     fade,
     backing,
     materialize,
+    leaving = false,
+    onLeft,
+    appear,
     material = 'popup',
     backdrop: explicitBackdrop,
     style,
@@ -125,11 +167,13 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
 ) {
   const glass = useBackdropMaterial()
   const webLayer = useWebOcclusion(undefined, typeof style?.borderRadius === 'number' ? style.borderRadius : 0, backing?.startsWith('rgba(0, 0, 0, ') ? Number(backing.slice(14, -1)) : 0)
-  const [generation] = useState(() => ++popupGeneration)
   // Decided on mount: a later change must not restart or drop the tween.
-  // Reduce Motion skips the tween entirely: a zero-length native opacity motion
-  // can leave the popup at its initial opacity 0, so it would never show.
-  const [still] = useState(stillProp || REDUCED_MOTION || !!materialize)
+  // 'arrive' = paint-only materialize; 'layout' = the `fade` layers' <anchored motion>; 'none' = no motion (`still`, stock addon).
+  // A zero-length native opacity motion can leave a layout-tweened popup at its initial opacity 0, so Reduce Motion never uses 'layout'.
+  // `KYBERN_POPUP_MOTION=layout` is the measurement control: every popup takes v0.10.1's drift-and-fade layout tween.
+  const [mode] = useState<'arrive' | 'layout' | 'none'>(() =>
+    fade || LAYOUT_POPUPS ? (stillProp || REDUCED_MOTION ? 'none' : 'layout') : stillProp || !PATCHED_NATIVE ? 'none' : 'arrive')
+  const [generation] = useState(nextPresenceGeneration)
   const { duration, ease, distance } = POPUP[kind]
   const d = REDUCED_MOTION ? 0 : distance
   const opacity = fade?.opacity ?? 1
@@ -147,14 +191,32 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
   const placement = position
     ? { position, ...(anchor ? { anchor } : {}) }
     : { side, align, gap: sideOffset, offset: side === 'left' || side === 'right' ? { x: 0, y: alignOffset } : { x: alignOffset, y: 0 } }
+  // The enter/exit of a materializing popup. `leaving` retargets the same transform to the exit (a new generation without
+  // `initial` retargets from the value on screen; completion events carry the generation).
+  const exit = appear === 'dialog' ? EXIT.dialog : appear === 'scrim' ? EXIT.backdrop : kind === 'tooltip' ? EXIT.tooltip : EXIT.menu
+  const origin = materialize?.origin ?? (position ? ANCHOR_ORIGIN[anchor ?? 'topLeft'] : popupOrigin(side, align))
+  const phase = useRef({ leaving: false, generation, mounted: generation })
+  if (phase.current.leaving !== leaving) phase.current = { ...phase.current, leaving, generation: nextPresenceGeneration() }
+  const arrive = mode === 'arrive' ? (appear ? appearTransform(appear, origin) : popupTransform(origin, kind)) : undefined
+  const transform = arrive
+    ? presenceTransform({ show: !leaving, enter: arrive, exit, generation: phase.current.generation, fresh: phase.current.generation === phase.current.mounted })
+    : undefined
+  // Nothing will animate (or can: a hidden window has no native frames), so an owner waiting on `onLeft` must not wait.
+  useEffect(() => {
+    if (leaving && (!transform || exitsInstantly(exit))) onLeft?.()
+  }, [leaving])
   // Materializing: the glass filter moves inside the transformed box (it scales and fades with the popup), and the
   // layer's own backing is transparent. An explicit `{ blur: 0 }` is how an anchored layer asks for that.
-  const arrive = materialize && PATCHED_NATIVE ? materializeTransform(materialize.origin) : undefined
+  // A leaving popup is already closed: it answers no keys or outside presses (an Enter just after a pointer pick would run
+  // the picked item again during the 150 ms exit).
+  const { onKeyDown, onKeyUp, onMouseDownOutside, ...rest } = props as typeof props & { onKeyDown?: unknown; onKeyUp?: unknown; onMouseDownOutside?: unknown }
+  const input = leaving ? {} : { onKeyDown, onKeyUp, onMouseDownOutside }
   const glassBackdrop = material === 'none' || !glass ? undefined : explicitBackdrop ?? {...BACKDROP.glass, radius: radius ?? 16}
+  const innerStyle = glass && material !== 'none' && (style as StyleDesc | undefined)?.backgroundColor ? {...style as StyleDesc,backgroundColor:backdropTint((style as StyleDesc).backgroundColor!)} : style
   return (
     <anchored
-      backdrop={arrive ? { blur: 0 } : glassBackdrop}
-      {...((still ? {} : { motion }) as object)}
+      backdrop={transform ? { blur: 0 } : glassBackdrop}
+      {...((mode === 'layout' ? { motion } : {}) as object)}
       style={{ ...(radius !== undefined ? { borderRadius: radius } : {}), ...(fade?.opacity !== undefined ? { opacity } : {}), ...(backing ? { backgroundColor: backing } : {}) }}
       {...placement}
       fit={fit}
@@ -164,20 +226,23 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
       occlude={occlude}
     >
       <div testId={webLayer.id} style={{ display: 'flex' }}>
-      <div {...props} ref={ref} {...(arrive ? { paintTransform: arrive, ...(glassBackdrop ? { backdrop: glassBackdrop } : {}) } : {})} style={glass && material !== 'none' && (style as StyleDesc | undefined)?.backgroundColor ? {...style as StyleDesc,backgroundColor:backdropTint((style as StyleDesc).backgroundColor!)} : style}>
+      <div
+        {...rest}
+        {...(input as object)}
+        ref={ref}
+        {...(transform ? {
+          paintTransform: transform,
+          onMotionComplete: (event: { motionGeneration?: number }) => { if (leaving && event.motionGeneration === phase.current.generation) onLeft?.() },
+          ...(glassBackdrop ? { backdrop: glassBackdrop } : {}),
+        } : {})}
+        style={leaving ? { ...innerStyle, pointerEvents: 'none' } : innerStyle}
+      >
         <WebLayer.Provider value={webLayer.layer}>{children}</WebLayer.Provider>
       </div>
       </div>
     </anchored>
   )
 })
-
-/** The popup open of `popover.tsx`: scale 0.97 -> 1 and opacity 0 -> 1, 250 ms `--ease-smooth-out`; Reduce Motion fades only. */
-function materializeTransform(origin: [number, number]): PaintTransformProps {
-  return REDUCED_MOTION
-    ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease: [...EASE.smoothOut] }, origin }
-    : { initial: { scale: 0.97, opacity: 0 }, animate: { scale: 1, opacity: 1 }, transition: { duration: DURATION.fast, ease: [...EASE.smoothOut] }, origin }
-}
 
 /** `text-muted-foreground/N`: the muted ink at N% of its own alpha. */
 export function muted(t: Theme, fraction: number): string {
@@ -421,6 +486,24 @@ export function PickerLabel({ children }: { children: string }) {
     </div>
   )
 }
+
+/**
+ * A section label between kinds of rows (the `@` picker's Threads, Notes, Attachments; the composer tray's sections): 13px
+ * medium, muted at 60%, aligned with the rows' icons (`inset`, the row's own left padding), with more room above a later
+ * section than above the first.
+ */
+export function SectionLabel({ children, first, inset = 10 }: { children: string; first: boolean; inset?: number }) {
+  const t = useTheme()
+  return (
+    <div style={{ display: 'flex', paddingLeft: inset, paddingRight: inset, paddingTop: first ? SECTION_LABEL.firstTop : SECTION_LABEL.top, paddingBottom: SECTION_LABEL.bottom }}>
+      <Label color={muted(t, 0.6)} size={13} weight={500}>
+        {children}
+      </Label>
+    </div>
+  )
+}
+/** `SectionLabel`'s box: its height is `firstTop` or `top`, plus `line` (GPUI's default line height, φ × 13px) and `bottom`. */
+export const SECTION_LABEL = { firstTop: 4, top: 10, bottom: 4, line: 13 * 1.618034 } as const
 
 /** `MenuSeparator`: 1px `bg-border`, `--picker-separator-my/mx`. */
 export function PickerSeparator() {

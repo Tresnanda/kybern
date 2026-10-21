@@ -255,6 +255,10 @@ expression: schema_for!(TranscriptEntry)
             }
           ]
         },
+        "auto": {
+          "description": "Allowed by Full access without asking the user.",
+          "type": "boolean"
+        },
         "role": {
           "type": "string",
           "const": "approval"

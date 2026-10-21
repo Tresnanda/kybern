@@ -16,7 +16,7 @@ import {
 } from "../../../../../packages/kybern-client/src/subagents.ts"
 import { ProviderMark } from "@/components/kybern/bits"
 import { ElapsedText } from "@/components/kybern/ElapsedText"
-import { IconSwap, MatrixLoader } from "@/components/kybern/motion"
+import { IconSwap, MatrixLoader, TextSwap } from "@/components/kybern/motion"
 import { Button } from "@/components/kit/button"
 import { Menu, MenuGroup, MenuItem, MenuTrigger } from "@/components/kit/menu"
 import { ComposerPickerMenuPopup } from "@/components/kit/chat/ComposerPickerMenuPopup"
@@ -203,6 +203,8 @@ export function SubagentBar({ thread, embedded = false }: { thread: Thread; embe
 
   // One polite announcement per state change; no per-second chatter.
   const [announcement, setAnnouncement] = useState("")
+  // The working and settled button sets enter when the phase flips under the reader, not when the page opens.
+  const [initialWorking] = useState(working)
   const previous = useRef(phase)
   useEffect(() => {
     if (previous.current === phase) return
@@ -233,13 +235,16 @@ export function SubagentBar({ thread, embedded = false }: { thread: Thread; embe
                 phase === "failed" ? <CircleAlertIcon className="size-3.5 text-destructive" /> : phase === "stopped" ? <StopIcon className="size-2.5 text-muted-foreground/60" /> : <CheckIcon className="size-3.5 text-muted-foreground/70" />
               }
             />
-            {working && !queued && span ? (
-              <span>
-                Working <ElapsedText startedAt={span.startedAt} className="text-foreground/88" />
-              </span>
-            ) : (
-              <span>{state.label}</span>
-            )}
+            <TextSwap
+              text={working && !queued && span ? "\u0000working" : state.label}
+              render={(key) => key === "\u0000working" && span ? (
+                <span>
+                  Working <ElapsedText startedAt={span.startedAt} className="text-foreground/88" />
+                </span>
+              ) : (
+                <span>{key === "\u0000working" ? state.label : key}</span>
+              )}
+            />
           </span>
           <span aria-hidden className="h-4 w-px shrink-0 bg-[var(--color-border-heavy)]" />
           <span className="flex min-w-0 items-center gap-2.5 overflow-hidden text-xs">
@@ -258,7 +263,7 @@ export function SubagentBar({ thread, embedded = false }: { thread: Thread; embe
             onBlurCapture={(event) => { if (event.relatedTarget) focusWasInActions.current = false }}
           >
             {working ? (
-              <>
+              <div className={cn("flex items-center gap-0.5", working !== initialWorking && "t-appear")} data-blur="off">
                 <BarButton ref={openParent} ghost title="Open parent" onClick={() => openParentOf(thread)}>
                   <BackToParentIcon className="size-3.5" />
                   {label("Open parent")}
@@ -275,9 +280,9 @@ export function SubagentBar({ thread, embedded = false }: { thread: Thread; embe
                     <span>Stop</span>
                   </BarButton>
                 )}
-              </>
+              </div>
             ) : (
-              <>
+              <div className={cn("flex items-center gap-0.5", working !== initialWorking && "t-appear")} data-blur="off">
                 {phase === "failed" && failureText && (
                   <BarButton ghost title="Copy error" onClick={() => void copyText(failureText).then(() => toast("Copied the error"))}>
                     {label("Copy error")}
@@ -288,7 +293,7 @@ export function SubagentBar({ thread, embedded = false }: { thread: Thread; embe
                   {label("Open parent")}
                   <Kbd className="bg-transparent px-0 text-[11px] font-normal text-foreground/40 @max-[600px]:hidden">{mod}↑</Kbd>
                 </BarButton>
-              </>
+              </div>
             )}
           </div>
           <span role="status" className="sr-only">{announcement}</span>

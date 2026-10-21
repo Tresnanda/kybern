@@ -7,6 +7,7 @@ import type { StyleDesc } from '@gpuix/react'
 import { useState } from 'react'
 import { getAppTypographyScale } from '@/lib/kit/appTypography'
 import { Label, useTheme } from '../ui.tsx'
+import { popAnimation, useCountPop } from './Pop.tsx'
 import { withAlpha } from './Switch.tsx'
 
 const TYPE = getAppTypographyScale()
@@ -15,12 +16,17 @@ export const BADGE_SIZE = {
   default: { height: 18, padX: 3, radius: 6, text: TYPE.uiXsPx },
   lg: { height: 22, padX: 5, radius: 6, text: TYPE.uiSmPx },
 } as const
+/** A count the badge pops when it changes (`t-pop` + `key={count}`): digits with an optional sign or k/m suffix. */
+const COUNT = /^[+\-−]?\d[\d.,]*[kKmM]?$/
 export type BadgeVariant = 'default' | 'secondary' | 'outline' | 'destructive' | 'error' | 'info' | 'success' | 'warning'
 
 export function Badge({ children, variant = 'default', size = 'default', icon, onClick, testId, style }: { children?: string; variant?: BadgeVariant; size?: keyof typeof BADGE_SIZE; /** Leading glyph source (`N.*`). */ icon?: string; onClick?: () => void; testId?: string; style?: StyleDesc }) {
   const t = useTheme()
   const [hover, setHover] = useState(false)
   const g = BADGE_SIZE[size]
+  // Constant on the first render and while the text holds, so only a change after mount pops (not an initial or recycled row).
+  const pops = useCountPop(children ?? '')
+  const countPop = children != null && COUNT.test(children) && pops > 0
   const tint = (token: string) => withAlpha(t.v(token), t.variant === 'dark' ? 0.16 : 0.08)
   const look: Record<BadgeVariant, { bg: string; fg: string; hover?: string; border?: string }> = {
     default: { bg: t.v('--primary'), fg: t.v('--primary-foreground'), hover: withAlpha(t.v('--primary'), 0.9) },
@@ -50,7 +56,7 @@ export function Badge({ children, variant = 'default', size = 'default', icon, o
       }}
     >
       {icon && <svg source={icon} style={{ width: 12, height: 12, flexShrink: 0, color: l.fg, opacity: 0.8, pointerEvents: 'none' }} />}
-      {children != null && <Label color={l.fg} size={g.text} lineHeight={g.text * 1.5} weight={500} style={{ whiteSpace: 'nowrap', pointerEvents: 'none' }}>{children}</Label>}
+      {children != null && <Label key={countPop ? pops : 'text'} paintAnimation={countPop ? popAnimation() : undefined} color={l.fg} size={g.text} lineHeight={g.text * 1.5} weight={500} style={{ whiteSpace: 'nowrap', pointerEvents: 'none' }}>{children}</Label>}
     </div>
   )
 }

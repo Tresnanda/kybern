@@ -60,7 +60,7 @@ export type Block =
       complete: boolean
     }
   | { kind: "runtime_task"; id: string; turnId: TurnId; at: string; seq: number; task: RuntimeTask }
-  | { kind: "approval"; id: string; turnId: TurnId; at: string; seq: number; approval: ApprovalRequest; decision: ApprovalDecision | null }
+  | { kind: "approval"; id: string; turnId: TurnId; at: string; seq: number; approval: ApprovalRequest; decision: ApprovalDecision | null; auto?: boolean }
   | { kind: "notice"; id: string; turnId: TurnId; at: string; seq: number; level: NoticeLevel; text: string }
   | {
       kind: "turn_end"
@@ -170,7 +170,7 @@ function entryToBlock(e: TranscriptEntry): Block | null {
     case "visual": return { kind: "visual", id: e.visual.id, turnId: e.turn_id, at: e.at, seq: e.seq, visual: e.visual }
     case "image": return e.origin.kind === "root" ? { kind: "image", id: e.id, turnId: e.turn_id, at: e.at, seq: e.seq, source: e.source } : null
     case "approval":
-      return { kind: "approval", id: `approval:${e.approval.id}`, turnId: e.turn_id, at: e.approval.created_at, seq: e.seq ?? 0, approval: e.approval, decision: e.decision ?? null }
+      return { kind: "approval", id: `approval:${e.approval.id}`, turnId: e.turn_id, at: e.approval.created_at, seq: e.seq ?? 0, approval: e.approval, decision: e.decision ?? null, ...(e.auto ? { auto: true } : {}) }
     case "user":
       return { kind: "user", id: e.id, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, message: e.message }
     case "assistant": {
@@ -426,6 +426,9 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
     case "approval_requested":
       if (!pending.some((a) => a.id === ev.approval.id)) pending = [...pending, ev.approval]
       blocks = [...blocks, { kind: "approval", id: `approval:${ev.approval.id}`, turnId, at, seq: ev.seq, approval: ev.approval, decision: null }]
+      break
+    case "approval_auto_allowed":
+      blocks = [...blocks, { kind: "approval", id: `approval:${ev.approval.id}`, turnId, at, seq: ev.seq, approval: ev.approval, decision: { decision: "allow_once" }, auto: true }]
       break
     case "approval_resolved": {
       pending = pending.filter((a) => a.id !== ev.approval_id)

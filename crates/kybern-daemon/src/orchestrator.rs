@@ -422,6 +422,10 @@ type RetainedSessions = HashMap<(ThreadId, String), (ProviderInstance, Arc<LiveS
 struct Inner {
     commands: std::sync::Mutex<()>,
     session_admission: Mutex<HashMap<ThreadId, Arc<Mutex<()>>>>,
+    /// One checkpoint at a time per thread, so a turn's "after" snapshot,
+    /// taken once the turn has ended, lands before the next turn's "before"
+    /// and before a revert.
+    checkpoint_locks: std::sync::Mutex<HashMap<ThreadId, Arc<Mutex<()>>>>,
     workspace_ops: Mutex<()>,
     question_answers: Mutex<()>,
     lead_commands: Mutex<()>,
@@ -727,6 +731,7 @@ impl Orchestrator {
             inner: Arc::new(Inner {
                 commands: std::sync::Mutex::new(()),
                 session_admission: Mutex::new(HashMap::new()),
+                checkpoint_locks: std::sync::Mutex::new(HashMap::new()),
                 workspace_ops: Mutex::new(()),
                 question_answers: Mutex::new(()),
                 lead_commands: Mutex::new(()),
@@ -1535,41 +1540,58 @@ impl Orchestrator {
         queued: bool,
         retryable: bool,
     ) -> Result<(TurnId, MessageId, bool)> {
-        let _workspace = self.inner.workspace_ops.lock().await;
-        let admission_gate = self.session_admission(thread_id).await;
-        let _admission = admission_gate.lock().await;
-        let current = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
-        let target = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
-        self.restore_worktree_if_cleaned(&target).await?;
-        if target.subagent.is_some() {
-            return Err(anyhow!(subagents::READ_ONLY_ERROR));
-        }
-        let selected_target = if queued {
-            self.inner
-                .store
-                .meta_get(&format!("queue_target:{message_id}"))?
-                .map(|s| serde_json::from_str(&s))
-                .transpose()?
-                .unwrap_or(self.thread_target(thread_id)?.target)
-        } else {
-            self.inner
-                .store
-                .meta_get(&format!("quota_target:{message_id}"))?
-                .or(self.inner.store.meta_get(&format!("steer_target:{message_id}"))?)
-                .map(|saved| serde_json::from_str(&saved))
-                .transpose()?
-                .unwrap_or(self.thread_target(thread_id)?.target)
+        // The daemon-wide workspace lock serializes worktree and checkout operations across threads. A send needs it only
+        // when it may restore or work inside a managed worktree, or apply a permission change; otherwise another thread's
+        // worktree removal or PR checkout would hold this message back for its whole git run. The thread's own admission
+        // gate still orders the send against operations on this thread. Lock order stays workspace, then admission.
+        let mut _workspace = None;
+        let (_admission, current, selected_target, selected_mode) = loop {
+            let admission = self.session_admission(thread_id).await.lock_owned().await;
+            let current = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+            if current.subagent.is_some() {
+                return Err(anyhow!(subagents::READ_ONLY_ERROR));
+            }
+            let selected_target = if queued {
+                self.inner
+                    .store
+                    .meta_get(&format!("queue_target:{message_id}"))?
+                    .map(|s| serde_json::from_str(&s))
+                    .transpose()?
+                    .unwrap_or(self.thread_target(thread_id)?.target)
+            } else {
+                self.inner
+                    .store
+                    .meta_get(&format!("quota_target:{message_id}"))?
+                    .or(self.inner.store.meta_get(&format!("steer_target:{message_id}"))?)
+                    .map(|saved| serde_json::from_str(&saved))
+                    .transpose()?
+                    .unwrap_or(self.thread_target(thread_id)?.target)
+            };
+            let selected_mode = if queued {
+                self.inner
+                    .store
+                    .meta_get(&format!("queue_permission:{message_id}"))?
+                    .map(|saved| serde_json::from_str(&saved))
+                    .transpose()?
+            } else {
+                self.inner
+                    .store
+                    .meta_get(&format!("steer_permission:{message_id}"))?
+                    .map(|saved| serde_json::from_str(&saved))
+                    .transpose()?
+                    .or(self.pending_permission_for(&current, &selected_target.provider)?)
+            };
+            let changes_permission = selected_target.provider == current.provider
+                && !matches!(current.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)
+                && selected_mode.is_some_and(|mode| mode != current.permission_mode);
+            if _workspace.is_none() && (changes_permission || self.send_needs_workspace(&current)) {
+                drop(admission);
+                _workspace = Some(self.inner.workspace_ops.lock().await);
+                continue;
+            }
+            break (admission, current, selected_target, selected_mode);
         };
-        let selected_mode = if queued {
-            self.inner.store.meta_get(&format!("queue_permission:{message_id}"))?.map(|saved| serde_json::from_str(&saved)).transpose()?
-        } else {
-            self.inner
-                .store
-                .meta_get(&format!("steer_permission:{message_id}"))?
-                .map(|saved| serde_json::from_str(&saved))
-                .transpose()?
-                .or(self.pending_permission_for(&current, &selected_target.provider)?)
-        };
+        self.restore_worktree_if_cleaned(&current).await?;
         if selected_target.provider == current.provider
             && !matches!(current.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval)
             && let Some(mode) = selected_mode
@@ -1671,6 +1693,13 @@ impl Orchestrator {
             }
         });
         Ok((turn_id, message_id, true))
+    }
+
+    /// Whether a send must hold the daemon-wide workspace lock: its worktree folder is missing (restored under the lock), or
+    /// it runs inside a managed worktree that another thread's removal or checkout could change underneath it.
+    fn send_needs_workspace(&self, thread: &Thread) -> bool {
+        thread.worktree.as_ref().is_some_and(|worktree| !std::path::Path::new(&worktree.path).exists())
+            || std::path::Path::new(&thread.cwd).starts_with(&self.inner.paths.worktrees)
     }
 
     pub fn enqueue(&self, message: methods::QueuedMessage) -> Result<()> {
@@ -2484,8 +2513,35 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Per-thread lock around snapshots and everything that rewrites the thread's files under them (revert, PR checkout,
+    /// worktree and delegated worktree removal). Lock order: `workspace_ops`, then the thread's admission gate, then this lock. Nothing that holds
+    /// it waits on admission or `workspace_ops`: the "before" snapshot runs in the spawned turn start after admission is
+    /// released, and the "after" snapshot in its own task. The turn-end path waits on it while holding no other lock.
+    fn checkpoint_lock(&self, thread_id: ThreadId) -> Arc<Mutex<()>> {
+        self.inner.checkpoint_locks.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).entry(thread_id).or_default().clone()
+    }
+
     /// Snapshot the working tree for a turn. Silently skipped for non-git projects.
     async fn checkpoint(&self, thread: &Thread, turn_id: TurnId, which: &str) {
+        let _checkpoint = self.checkpoint_lock(thread.id).lock_owned().await;
+        self.checkpoint_locked(thread, turn_id, which).await;
+    }
+
+    /// Take a turn's "after" snapshot without holding up its end: hashing a
+    /// large tree can take minutes, and clients show the turn as working
+    /// until `TurnCompleted`. The lock is taken here, before the turn ends,
+    /// so the next turn's "before" snapshot and a revert wait for this one.
+    async fn checkpoint_after_turn(&self, thread: &Thread, turn_id: TurnId) {
+        let checkpoint = self.checkpoint_lock(thread.id).lock_owned().await;
+        let this = self.clone();
+        let thread = thread.clone();
+        tokio::spawn(async move {
+            this.checkpoint_locked(&thread, turn_id, "after").await;
+            drop(checkpoint);
+        });
+    }
+
+    async fn checkpoint_locked(&self, thread: &Thread, turn_id: TurnId, which: &str) {
         let repo = Repo::new(&thread.cwd);
         if !Repo::is_repo(std::path::Path::new(&thread.cwd)).await {
             return;
@@ -2693,18 +2749,23 @@ impl Orchestrator {
     /// Reset the working tree to the snapshot taken before `turn_id`.
     pub async fn revert(&self, thread_id: ThreadId, turn_id: TurnId) -> Result<(String, bool)> {
         self.ensure_not_subagent(thread_id)?;
-        let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
-        if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
-            return Err(anyhow!("thread is busy; interrupt it first"));
-        }
-        if self.inner.store.runtime_tasks_for_thread(thread_id)?.iter().any(|task| task.status.is_active()) {
-            return Err(anyhow!("background work is active; stop it before rewinding"));
-        }
+        self.ensure_revertible(thread_id)?;
+        // A finished turn's "after" snapshot may still be running, for minutes on a large tree. Wait for it without the
+        // admission gate, so sends are not held back meanwhile; whatever started in that time is caught below.
+        drop(self.checkpoint_lock(thread_id).lock_owned().await);
+        let admission = self.session_admission(thread_id).await;
+        let _admission = admission.lock().await;
+        let checkpoint = self.checkpoint_lock(thread_id).lock_owned().await;
+        // Under both locks nothing can start a turn or a snapshot, so check again what the wait may have changed.
+        let thread = self.ensure_revertible(thread_id).map_err(|error| {
+            anyhow!("The thread started new work while the rewind waited for its last checkpoint ({error}). Rewind again when it finishes.")
+        })?;
         let all = self.inner.store.checkpoints_for_thread(thread_id)?;
         let idx = all.iter().position(|c| c.turn_id == turn_id).ok_or_else(|| anyhow!("no checkpoint for that turn"))?;
         let c = all[idx].clone();
         let repo = Repo::new(&thread.cwd);
         repo.restore(&c.before).await?;
+        drop(checkpoint);
         self.emit(thread_id, Some(turn_id), EventPayload::WorkspaceReverted { to_turn_id: turn_id, commit: c.before.clone() })?;
 
         if let Some(live) = self.inner.sessions.lock().await.remove(&thread_id) {
@@ -2715,10 +2776,11 @@ impl Orchestrator {
 
         // Conversation rewind: the next session forks the provider conversation, keeping
         // turns before `turn_id`. If this is the first turn, start over with a fresh session.
-        let driver_supports_fork = self.inner.drivers.get(thread.provider.kind).is_some_and(|d| d.supports_fork());
+        // Update the current record: a background title or binding change may have written it since.
+        let mut t = self.inner.store.thread_get(thread_id)?.unwrap_or(thread);
+        let driver_supports_fork = self.inner.drivers.get(t.provider.kind).is_some_and(|d| d.supports_fork());
         let anchors = |c: &Checkpoint| TurnAnchors { turn_id: c.provider_turn_id.clone(), previous_end: c.provider_turn_end.clone() };
-        let mut t = thread.clone();
-        let conversation_rewound = if idx == 0 || thread.provider_session_id.is_none() {
+        let conversation_rewound = if idx == 0 || t.provider_session_id.is_none() {
             t.provider_session_id = None;
             true
         } else if driver_supports_fork && (c.provider_turn_id.is_some() || all[idx - 1].provider_turn_end.is_some()) {
@@ -2733,6 +2795,18 @@ impl Orchestrator {
         t.status = ThreadStatus::Idle;
         self.update_thread(t)?;
         Ok((c.before, conversation_rewound))
+    }
+
+    /// The thread, if nothing is running in it that a rewind would pull the files from under.
+    fn ensure_revertible(&self, thread_id: ThreadId) -> Result<Thread> {
+        let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
+            return Err(anyhow!("thread is busy; interrupt it first"));
+        }
+        if self.inner.store.runtime_tasks_for_thread(thread_id)?.iter().any(|task| task.status.is_active()) {
+            return Err(anyhow!("background work is active; stop it before rewinding"));
+        }
+        Ok(thread)
     }
 
     /// `@Computer`: warm the driver, and in a chat whose process started before
@@ -3154,7 +3228,7 @@ impl Orchestrator {
             return Ok(());
         }
         if let Some(thread) = self.inner.store.thread_get(thread_id)? {
-            self.checkpoint(&thread, turn_id, "after").await;
+            self.checkpoint_after_turn(&thread, turn_id).await;
         }
         Ok(())
     }
@@ -3672,6 +3746,37 @@ impl Orchestrator {
                 let _ = self.apply_runtime_task_update(thread_id, live, update, RuntimeTaskUpdateKind::Complete).await?;
             }
             DriverEvent::PermissionRequest { request_id, tool_call_id, tool_name, input, summary, suggestions } => {
+                // Full access never asks for a permission. Harnesses can still
+                // request one under their bypass mode (Claude Code's built-in
+                // safety checks, for one), so allow it here and record that.
+                // Questions and forms keep asking.
+                let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?;
+                if !asks_user(&tool_name) && self.allows_without_asking(&thread)? {
+                    let anchor = match turn_id {
+                        Some(turn_id) => Some(turn_id),
+                        None => *live.last_turn_id.lock().await,
+                    };
+                    drop(turn_guard);
+                    if let Err(error) = live.session.respond_permission(&request_id, &ApprovalDecision::AllowOnce).await {
+                        tracing::warn!(%thread_id, %error, "could not allow a Full access permission request");
+                        return Ok(());
+                    }
+                    if let Some(turn_id) = anchor {
+                        let approval = ApprovalRequest {
+                            id: Uuid::now_v7(),
+                            thread_id,
+                            turn_id,
+                            tool_call_id,
+                            tool_name,
+                            input,
+                            summary,
+                            suggestions,
+                            created_at: Utc::now(),
+                        };
+                        self.emit(thread_id, Some(turn_id), EventPayload::ApprovalAutoAllowed { approval })?;
+                    }
+                    return Ok(());
+                }
                 let Some(turn_id) = turn_id else {
                     tracing::warn!("permission request outside a turn; denying");
                     drop(turn_guard);
@@ -3818,7 +3923,7 @@ impl Orchestrator {
                 if has_active_tasks {
                     live.deferred_checkpoints.lock().await.insert(turn_id);
                 } else {
-                    self.checkpoint(&t, turn_id, "after").await;
+                    self.checkpoint_after_turn(&t, turn_id).await;
                 }
                 self.emit(
                     thread_id,
@@ -3851,7 +3956,7 @@ impl Orchestrator {
                 if has_active_tasks {
                     live.deferred_checkpoints.lock().await.insert(turn_id);
                 } else {
-                    self.checkpoint(&t, turn_id, "after").await;
+                    self.checkpoint_after_turn(&t, turn_id).await;
                 }
                 self.emit(thread_id, Some(turn_id), EventPayload::TurnFailed { error: error.clone() })?;
                 // A failed turn may have hit a plan limit.
@@ -4066,6 +4171,13 @@ fn json_bool(value: &serde_json::Value, keys: &[&str]) -> bool {
 fn json_false(value: &serde_json::Value, keys: &[&str]) -> bool {
     keys.iter().any(|key| value.get(*key).and_then(serde_json::Value::as_bool) == Some(false))
         || ["raw", "args", "input"].iter().any(|key| value.get(*key).is_some_and(|nested| json_false(nested, keys)))
+}
+
+/// Whether a harness request with this tool name asks the user something:
+/// a question, a form, or a plan to start implementing. Full access answers
+/// permissions, never these.
+fn asks_user(tool_name: &str) -> bool {
+    kybern_protocol::is_user_input_tool(tool_name) || tool_name == "ExitPlanMode"
 }
 
 fn json_text(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
@@ -5892,6 +6004,104 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_turn_ends_before_its_after_checkpoint_and_the_next_snapshot_waits_for_it() {
+        let fixture = Fixture::new();
+        let git =
+            |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(&fixture.root).args(args).status().unwrap().success());
+        git(&["init", "-q"]);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        fixture.orchestrator.send(thread.id, UserMessage::text("edit a file")).await.unwrap();
+        live.turn_ready.notified().await;
+        let turn_id = live.turn.lock().await.as_ref().unwrap().id;
+        // The before snapshot is taken once the turn is ready.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while fixture.store.checkpoint_get(turn_id).unwrap().is_none() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        std::fs::write(fixture.root.join("edited.txt"), "agent output\n").unwrap();
+
+        // Hold the thread's checkpoint lock, as a slow snapshot of a large tree would.
+        let slow = fixture.orchestrator.checkpoint_lock(thread.id).lock_owned().await;
+        let ending = {
+            let (orchestrator, live) = (fixture.orchestrator.clone(), live.clone());
+            tokio::spawn(async move { orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await })
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        // The turn has not ended while an earlier snapshot runs; the after
+        // snapshot is queued behind it, never skipped.
+        assert!(!ending.is_finished());
+        drop(slow);
+        tokio::time::timeout(Duration::from_secs(2), ending).await.unwrap().unwrap().unwrap();
+        let ended = fixture.store.events_for_thread(thread.id).unwrap();
+        let completed = ended.iter().find(|event| matches!(event.payload, EventPayload::TurnCompleted { .. })).expect("turn ended").seq;
+        assert_eq!(fixture.store.thread_get(thread.id).unwrap().unwrap().status, ThreadStatus::Idle);
+
+        // A revert waits for the after snapshot, which lands after the turn ended.
+        fixture.orchestrator.revert(thread.id, turn_id).await.unwrap();
+        let events = fixture.store.events_for_thread(thread.id).unwrap();
+        let after = events
+            .iter()
+            .find(|event| matches!(&event.payload, EventPayload::CheckpointUpdated { checkpoint } if checkpoint.after.is_some()))
+            .expect("the after checkpoint is recorded");
+        assert!(after.seq > completed, "the checkpoint follows the turn's end");
+        let checkpoint = fixture.store.checkpoint_get(turn_id).unwrap().unwrap();
+        let shown = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&fixture.root)
+            .args(["show", &format!("{}:edited.txt", checkpoint.after.unwrap())])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&shown.stdout), "agent output\n");
+        assert!(!fixture.root.join("edited.txt").exists(), "the revert restored the snapshot taken before the turn");
+    }
+
+    #[tokio::test]
+    async fn review_revert_waiting_on_after_snapshot_races_a_new_send() {
+        let fixture = Fixture::new();
+        let git =
+            |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(&fixture.root).args(args).status().unwrap().success());
+        git(&["init", "-q"]);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        let thread = fixture.thread(ThreadStatus::Idle);
+        let (live, _) = fixture.park(&thread, Instant::now()).await;
+        fixture.orchestrator.send(thread.id, UserMessage::text("edit a file")).await.unwrap();
+        live.turn_ready.notified().await;
+        let turn_id = live.turn.lock().await.as_ref().unwrap().id;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while fixture.store.checkpoint_get(turn_id).unwrap().is_none() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
+        // The after snapshot of a large tree is still running.
+        let slow = fixture.orchestrator.checkpoint_lock(thread.id).lock_owned().await;
+        let reverting = {
+            let orchestrator = fixture.orchestrator.clone();
+            tokio::spawn(async move { orchestrator.revert(thread.id, turn_id).await })
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Thread is Idle, so a new message (user, queue or another thread) starts a turn.
+        let next = fixture.orchestrator.send(thread.id, UserMessage::text("next")).await;
+        eprintln!("send during revert wait: {:?}", next.as_ref().map(|r| r.0));
+        let status_before = fixture.store.thread_get(thread.id).unwrap().unwrap().status;
+        drop(slow);
+        let reverted = tokio::time::timeout(Duration::from_secs(5), reverting).await.unwrap().unwrap();
+        eprintln!("revert result: {:?}", reverted.as_ref().map(|r| r.1));
+        let status_after = fixture.store.thread_get(thread.id).unwrap().unwrap().status;
+        eprintln!("status while next turn runs: before revert finished {status_before:?}, after {status_after:?}");
+        assert!(next.is_err() || reverted.is_err(), "a revert must not proceed under a turn that started while it waited");
+        // The send was not held back by the wait, and the failed revert left the new turn's record alone.
+        assert!(next.is_ok() && status_after == ThreadStatus::Running, "{status_after:?}");
+    }
+
+    #[tokio::test]
     async fn interrupt_without_ack_survives_rpc_cancellation() {
         let fixture = Fixture::new();
         let thread = fixture.thread(ThreadStatus::Idle);
@@ -7463,4 +7673,5 @@ for line in sys.stdin:
     include!("orchestrator/account_tests.rs");
     include!("orchestrator/worktree_tests.rs");
     include!("orchestrator/subagent_messaging_tests.rs");
+    include!("orchestrator/full_access_tests.rs");
 }

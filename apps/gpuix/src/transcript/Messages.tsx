@@ -1,3 +1,4 @@
+import { useTreeSlot } from '../tree/Tree.tsx'
 import { memo, useMemo, useState, type ReactNode } from 'react'
 import type { AgentResultItem, ThreadMessagePart } from '../../../../packages/kybern-client/src/types.ts'
 import { delegationState, messageSenderName, plainLine, purposeLabel, resultNeedsClamp, resultPreview } from '../../../../packages/kybern-client/src/delegations.ts'
@@ -14,6 +15,7 @@ import { T } from './glyphs.ts'
 import { Button, Chevron, Para, fg, muted } from './kit.tsx'
 import { PanelPresence, PanelEnter, keyboardAnswer } from '../requests/Panel.tsx'
 import { clear } from '../notes/kit.tsx'
+import { SwapOnChange } from '../motion/kit.tsx'
 import { over } from '../theme.ts'
 import { BoundedMarkdown, TextDetail } from './markdown.tsx'
 import { useRowState, type ToolBlock } from './store.ts'
@@ -95,7 +97,7 @@ function ResultRow({ item }: { item: AgentResultItem }) {
   const [expanded, setExpanded] = useRowState(`result:${item.task_id}`, false)
   return <div style={{ display: 'flex', flexDirection: 'column', paddingTop: 8, paddingBottom: 8, borderTopWidth: 1, borderColor: t.border }}>
     <div testId={`result-toggle-${item.task_id}`} role="button" tabIndex={0} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') { keyboardAnswer(); setExpanded(!expanded) } }} onClick={() => setExpanded(!expanded)} style={{ display: 'flex', gap: 8, alignItems: 'center', minHeight: 28, cursor: 'pointer' }}>
-      <ProviderMark kind={item.provider} size={14} /><Label color={t.text} size={13} truncate style={{ flexGrow: 1 }}>{item.title}</Label><Label color={item.status === 'failed' ? t.red : muted(t)} size={12}>{phase.word}</Label><Chevron open={expanded} color={muted(t)} />
+      <ProviderMark kind={item.provider} size={14} /><Label color={t.text} size={13} truncate style={{ flexGrow: 1 }}>{item.title}</Label><SwapOnChange active={phase.word} style={{ flexShrink: 0 }}><Label color={item.status === 'failed' ? t.red : muted(t)} size={12}>{phase.word}</Label></SwapOnChange><Chevron open={expanded} color={muted(t)} />
     </div>
     <Para color={muted(t)} size={11}>{[item.role, item.model, item.workspace === 'worktree' ? 'Worktree' : 'Shared workspace', item.conflicts?.length ? `${item.conflicts.length} ${item.conflicts.length === 1 ? 'conflict' : 'conflicts'}` : ''].filter(Boolean).join(' · ')}</Para>
     {!expanded && <Para color={muted(t)} size={12} style={{ lineClamp: 2 }}>{resultPreview(item)}</Para>}
@@ -121,8 +123,12 @@ export function SentToRow({ block, threadId }: { block: ToolBlock; threadId: str
   const live = liveSend(result, record, reply, block.complete, block.isError)
   const [expanded, setExpanded] = useRowState(`sent:${block.id}`, false)
   const title = target?.title || child?.title || 'another thread'
-  return <div testId="sent-to-row" style={{ display: 'flex', flexDirection: 'column', paddingTop: 4, paddingBottom: 4 }}>
-    <div testId={`sent-toggle-${block.id}`} role="button" tabIndex={0} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') { keyboardAnswer(); setExpanded(!expanded) } }} onClick={() => setExpanded(!expanded)} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 28, cursor: 'pointer' }}><Icon source={purposeIcon(input.purpose)} size={14} color={muted(t)} /><Label color={muted(t)} truncate style={{ flexGrow: 1 }}>{`${block.complete ? 'Sent to' : 'Sending to'} ${title} · ${purposeLabel(input.purpose)}`}</Label><Label color={block.isError || live.state === 'failed' ? t.red : muted(t)} size={12}>{live.word}</Label><Chevron open={expanded} color={muted(t)} /></div>
+  // The recipient's harness mark (as the sidebar and launch rows show it); the purpose stays in the label. Until the
+  // thread is known the purpose glyph holds the same 14px slot, then swaps to the mark without moving the row.
+  const harness = target?.provider.kind ?? child?.provider.kind
+  const tree = useTreeSlot()
+  return <div testId="sent-to-row" paintTransform={tree.rise} style={{ position: 'relative', display: 'flex', flexDirection: 'column', paddingTop: 4, paddingBottom: 4 }}>
+    <div testId={`sent-toggle-${block.id}`} role="button" tabIndex={0} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') { keyboardAnswer(); setExpanded(!expanded) } }} onClick={() => setExpanded(!expanded)} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 28, cursor: 'pointer' }}><SwapOnChange kind="icon" active={harness ?? 'unknown'} style={{ width: 14, height: 14, flexShrink: 0 }}>{harness ? <ProviderMark kind={harness} size={14} /> : <Icon source={purposeIcon(input.purpose)} size={14} color={muted(t)} />}</SwapOnChange><Label color={muted(t)} truncate style={{ flexGrow: 1 }}>{`${block.complete ? 'Sent to' : 'Sending to'} ${title} · ${purposeLabel(input.purpose)}`}</Label><SwapOnChange active={live.word} style={{ flexShrink: 0 }}><Label color={block.isError || live.state === 'failed' ? t.red : muted(t)} size={12}>{live.word}</Label></SwapOnChange><Chevron open={expanded} color={muted(t)} /></div>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginLeft: 22 }}>
       <Para color={muted(t)} size={12} style={{ lineClamp: 1 }}>{`“${plainLine(input.body, 160)}”`}</Para>
       {live.reply && <Para color={muted(t)} size={12} style={{ lineClamp: 1 }}>{`Reply: “${plainLine(live.reply.body, 160)}”`}</Para>}
@@ -131,5 +137,6 @@ export function SentToRow({ block, threadId }: { block: ToolBlock; threadId: str
       <PanelPresence show={expanded}><PanelEnter><div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 8 }}><DetailSection label="Message"><ClampedMarkdown id={`sent:${block.id}`} text={input.body} fade={t.v('--app-opaque-content-surface')} /></DetailSection>{live.reply && <DetailSection label="Reply"><ClampedMarkdown id={`sent-reply:${block.id}`} text={live.reply.body} fade={t.v('--app-opaque-content-surface')} /></DetailSection>}{result?.waitTimedOut && !live.reply && <Para color={muted(t)} size={12}>No reply yet. It will arrive here when the thread answers.</Para>}</div></PanelEnter></PanelPresence>
       {(expanded || live.held) && input.threadId && <div style={{ display: 'flex' }}><Button variant="subtle" onClick={() => openThread(input.threadId)}>Open</Button></div>}
     </div>
+    {tree.lines}
   </div>
 }

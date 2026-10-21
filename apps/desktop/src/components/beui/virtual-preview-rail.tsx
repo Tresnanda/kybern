@@ -1,4 +1,6 @@
+import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { useCallback, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react"
+import { EASE_OUT } from "@/lib/beui/ease"
 import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual"
 import type { PreviewRailItem } from "./preview-rail"
 import { cn } from "@/lib/utils"
@@ -18,6 +20,7 @@ export function VirtualPreviewRail({ items, label, activeId, itemSize, onSelect,
   previewClassName?: string
 }) {
   const nav = useRef<HTMLElement>(null)
+  const reduce = useReducedMotion()
   const focusFrame = useRef(0)
   useLayoutEffect(() => () => cancelAnimationFrame(focusFrame.current), [])
   const [hovered, setHovered] = useState<string | null>(null)
@@ -115,8 +118,16 @@ export function VirtualPreviewRail({ items, label, activeId, itemSize, onSelect,
         })}
       </div>
     </nav>
-    {showPreview && displayedIndex >= 0 && <div className={cn("pointer-events-none absolute z-50", previewContainerClassName)} style={{ top: previewTop }}>
-      <div className={previewClassName}>{renderPreview(items[displayedIndex]!)}</div>
-    </div>}
+    <AnimatePresence>
+      {showPreview && displayedIndex >= 0 && <div key="preview" className={cn("pointer-events-none absolute z-50", previewContainerClassName)} style={{ top: previewTop }}>
+        <motion.div
+          className={previewClassName}
+          initial={reduce ? { opacity: 0 } : { opacity: 0, y: 4, filter: "blur(6px)" }}
+          animate={reduce ? { opacity: 1 } : { opacity: 1, y: 0, filter: "blur(0px)" }}
+          exit={reduce ? { opacity: 0 } : { opacity: 0, y: -2, filter: "blur(4px)", transition: { duration: 0.12, ease: EASE_OUT } }}
+          transition={{ duration: reduce ? 0 : 0.18, ease: EASE_OUT }}
+        >{renderPreview(items[displayedIndex]!)}</motion.div>
+      </div>}
+    </AnimatePresence>
   </>
 }

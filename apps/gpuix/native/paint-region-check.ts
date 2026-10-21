@@ -29,7 +29,11 @@ for(const theme of process.env.KYBERN_CHECK_THEMES?.split(',')??['dark','light']
    const settle=async()=>{const deadline=Date.now()+3000;let previous=f.counts().frames;for(;;){await Bun.sleep(40);const now=f.counts().frames;if(reduced==='1'||now>previous)return;assert.ok(Date.now()<deadline,'display stopped');previous=now}}
    const capture=async(name:string,width=560)=>{
     await settle();const file=`${out}/${theme}-${reduced}-${enabled}-${name}.png`,deadline=Date.now()+5000
-    for(;;){await exec('screencapture',['-x','-o','-l',windowId,file]);const p=pixels(file),original=files.length?pixels(files[0]!):null;if(!original||p.w===original.w*width/560){if(name!=='initial')break;const b=await a.getByTestId('region-image').bounds(),scale=p.w/width,rgb=p.at((b.x+200)*scale,p.h-240*scale+(b.y+20)*scale);if(rgb[0]!>rgb[2]!+20)break;}assert.ok(Date.now()<deadline,'WindowServer/image did not reach requested state');await Bun.sleep(40)}
+    for(;;){
+     // A window just restored from the Dock (or not yet composited) cannot be captured yet; Reduce Motion's settle()
+     // does not wait for frames, so retry until WindowServer has it on screen again.
+     try{await exec('screencapture',['-x','-o','-l',windowId,file])}catch(error){assert.ok(Date.now()<deadline,`window capture kept failing: ${error}`);await Bun.sleep(60);continue}
+     const p=pixels(file),original=files.length?pixels(files[0]!):null;if(!original||p.w===original.w*width/560){if(name!=='initial')break;const b=await a.getByTestId('region-image').bounds(),scale=p.w/width,rgb=p.at((b.x+200)*scale,p.h-240*scale+(b.y+20)*scale);if(rgb[0]!>rgb[2]!+20)break;}assert.ok(Date.now()<deadline,'WindowServer/image did not reach requested state');await Bun.sleep(40)}
     files.push(file)
    }
    await capture('initial');await key('c');await capture('recolored');await key('g');await capture('geometry')

@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "reac
 import { useTheme } from "@/components/theme-context"
 import { copyText } from "@/lib/hooks"
 import { CheckIcon, CopyIcon, TextWrapIcon } from "@/lib/kit/icons"
+import { useCopiedFlag } from "./bits"
 import { IconSwap } from "./motion"
 import { canHighlightCode, streamingHighlightInterval } from "@/lib/workload"
 import { highlightToHtml } from "@/lib/highlight"
@@ -103,10 +104,10 @@ function HighlightedCode({ code, name, dark, live }: { code: string; name: strin
   )
 }
 
-export const CodeBlock = memo(function CodeBlock({ code, lang, live = false, stateKey = "code", preview, actions, header }: { code: string; lang?: string; live?: boolean; stateKey?: string; preview?: ReactNode; actions?: ReactNode; header?: ReactNode }) {
+export const CodeBlock = memo(function CodeBlock({ code, lang, live = false, stateKey = "code", preview, actions, header, bodyKey, bodyEnter = false }: { code: string; lang?: string; live?: boolean; stateKey?: string; preview?: ReactNode; actions?: ReactNode; header?: ReactNode; bodyKey?: string; bodyEnter?: boolean }) {
   const dark = useIsDark()
   const [wrap, setWrap] = useTranscriptRowState(stateKey, false)
-  const [copied, setCopied] = useState(false)
+  const [copied, flashCopied] = useCopiedFlag()
   const name = lang ? (ALIASES[lang.toLowerCase()] ?? lang.toLowerCase()) : null
   const highlightable = canHighlightCode(name, code)
   // Keep the highlighted subtree stable for streaming appends and theme
@@ -135,8 +136,7 @@ export const CodeBlock = memo(function CodeBlock({ code, lang, live = false, sta
             aria-label={copied ? "Copied" : "Copy code"}
             onClick={() => {
               void copyText(code)
-              setCopied(true)
-              setTimeout(() => setCopied(false), 1400)
+              flashCopied()
             }}
             className="chat-markdown-codeblock__action inline-flex size-6 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
           >
@@ -145,7 +145,14 @@ export const CodeBlock = memo(function CodeBlock({ code, lang, live = false, sta
         </span>
       </div>
       <div className="chat-markdown-codeblock__body [&_pre]:!bg-transparent">
-        {preview ?? <HighlightedCode key={highlightKey} code={code} name={name} dark={dark} live={live} />}
+        {bodyKey ? (
+          // A body that swaps between views (diagram preview and source) enters as a keyed pane.
+          <div key={bodyKey} className={bodyEnter ? "t-appear" : undefined} data-blur="off">
+            {preview ?? <HighlightedCode key={highlightKey} code={code} name={name} dark={dark} live={live} />}
+          </div>
+        ) : (
+          preview ?? <HighlightedCode key={highlightKey} code={code} name={name} dark={dark} live={live} />
+        )}
       </div>
     </div>
   )

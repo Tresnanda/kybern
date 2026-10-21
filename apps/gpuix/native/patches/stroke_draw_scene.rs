@@ -14,19 +14,30 @@ pub struct StrokeDrawSpec {
     pub duration_ms: f64,
     /// cubic-bezier control points.
     pub ease: [f64; 4],
+    /// Dash offsets the draw runs between (`dash` -> 0 by default: a draw-in). With `dasharray: dash` on a closed path of
+    /// length `dash`, offset `dash * (1 - v)` shows the fraction `v` from the path start (a ring's arc).
+    pub from: f32,
+    pub to: f32,
+    /// A new `to` on the same glyph eases from the offset on screen instead of restarting (N2: ring values).
+    pub retarget: bool,
 }
 impl StrokeDrawSpec {
-    fn same(&self, other: &Self) -> bool {
+    pub(crate) fn same(&self, other: &Self) -> bool {
         std::sync::Arc::ptr_eq(&self.bytes, &other.bytes) || *self.bytes == *other.bytes
     }
     fn same_timing(&self, other: &Self) -> bool {
         self.dash == other.dash && self.delay_ms == other.delay_ms && self.duration_ms == other.duration_ms && self.ease == other.ease
+            && self.from == other.from && self.to == other.to
     }
 }
 
 /// One drawing glyph: shared by every scene that holds its sprite, so its clock and tiles survive re-renders.
 pub(crate) struct StrokeDraw {
+    /// As declared (what a later paint compares against).
     pub(crate) spec: StrokeDrawSpec,
+    /// Where this run starts (the declared `from`, or the offset on screen when it retargeted) and its delay.
+    pub(crate) from: f32,
+    pub(crate) delay_ms: f64,
     pub(crate) started: std::time::Instant,
     pub(crate) serial: u64,
     pub(crate) size: crate::Size<crate::DevicePixels>,
@@ -48,6 +59,8 @@ impl StrokeDraw {
     pub(crate) fn new(spec: StrokeDrawSpec, size: crate::Size<crate::DevicePixels>, started: std::time::Instant) -> Self {
         static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         Self {
+            from: spec.from,
+            delay_ms: spec.delay_ms,
             spec,
             started,
             serial: SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -58,10 +71,11 @@ impl StrokeDraw {
     pub(crate) fn reusable(&self, spec: &StrokeDrawSpec, size: crate::Size<crate::DevicePixels>) -> bool {
         self.size == size && self.spec.same(spec) && self.spec.same_timing(spec)
     }
-    /// Dash offset at `now` (`dash` before the delay, 0 at the end) and whether the curve has ended.
+    /// Dash offset at `now` (`from` before the delay, `to` at the end) and whether the curve has ended.
     pub(crate) fn offset_at(&self, now: std::time::Instant) -> (f32, bool) {
-        let elapsed = now.saturating_duration_since(self.started).as_secs_f64() * 1000.0 - self.spec.delay_ms;
-        let x = (elapsed / self.spec.duration_ms).clamp(0.0, 1.0);
+        let elapsed = now.saturating_duration_since(self.started).as_secs_f64() * 1000.0 - self.delay_ms;
+        // A 1 ms draw is how Reduce Motion asks for the end at once, even on a paused clock.
+        let x = if self.spec.duration_ms <= 1.0 { 1.0 } else { (elapsed / self.spec.duration_ms).clamp(0.0, 1.0) };
         let [x1, y1, x2, y2] = self.spec.ease;
         let at = |t: f64, a: f64, b: f64| 3.0 * a * t * (1.0 - t).powi(2) + 3.0 * b * t * t * (1.0 - t) + t * t * t;
         let (mut lo, mut hi) = (0.0f64, 1.0f64);
@@ -70,13 +84,13 @@ impl StrokeDraw {
             if at(mid, x1, x2) < x { lo = mid } else { hi = mid }
         }
         let e = if x <= 0.0 { 0.0 } else if x >= 1.0 { 1.0 } else { at((lo + hi) * 0.5, y1, y2) };
-        (self.spec.dash * (1.0 - e as f32), elapsed >= self.spec.duration_ms)
+        (self.from + (self.spec.to - self.from) * e as f32, x >= 1.0 && elapsed >= 0.0)
     }
     /// The SVG source with every path dashed at `offset`.
     pub(crate) fn dashed(&self, offset: f32) -> Vec<u8> {
         let text = String::from_utf8_lossy(&self.spec.bytes);
-        let attrs = format!("<path stroke-dasharray=\"{}\" stroke-dashoffset=\"{:.4}\" ", self.spec.dash, offset);
-        text.replace("<path ", &attrs).into_bytes()
+        let attrs = format!(" stroke-dasharray=\"{}\" stroke-dashoffset=\"{:.4}\" ", self.spec.dash, offset);
+        text.replace("<path ", &format!("<path{attrs}")).replace("<circle ", &format!("<circle{attrs}")).into_bytes()
     }
     pub(crate) fn key(&self, q: i32) -> crate::AtlasKey {
         crate::AtlasKey::Svg(crate::RenderSvgParams {

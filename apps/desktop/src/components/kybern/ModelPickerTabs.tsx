@@ -6,17 +6,18 @@
 // Layer: Composer UI
 // Exports: ModelPickerTabs, FollowDefaultsLine
 
-import { useRef } from "react"
+import { useCallback, useRef } from "react"
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/kit/tooltip"
 import { AccountDot, AccountMarkStack } from "@/components/kybern/accounts/AccountMark"
 import { Spinner } from "@/components/kybern/bits"
+import { useSlidingPill } from "@/lib/kit/slidingPill"
 import { nextTabIndex, type FollowLine, type PickerTab } from "@/lib/accountUi"
 import { RefreshCwIcon, StarFilledIcon, StarIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 
 const TAB_CLASS_NAME =
-  "press-row relative inline-flex h-7 min-w-7 shrink-0 items-center justify-center gap-1.5 rounded-[0.4rem] px-1.5 outline-none transition-[background-color,opacity] duration-150 focus-visible:ring-1 focus-visible:ring-ring"
+  "press-row relative z-[1] inline-flex h-7 min-w-7 shrink-0 items-center justify-center gap-1.5 rounded-[0.4rem] px-1.5 outline-none transition-[background-color,opacity] duration-150 focus-visible:ring-1 focus-visible:ring-ring"
 const ICON_BUTTON_CLASS_NAME =
   "press-row inline-flex size-7 shrink-0 items-center justify-center rounded-[0.4rem] text-muted-foreground/60 outline-none transition-colors duration-150 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:hover:bg-transparent"
 
@@ -39,6 +40,12 @@ export function ModelPickerTabs({
 }) {
   const list = useRef<HTMLDivElement>(null)
   const selectedIndex = Math.max(0, tabs.findIndex((tab) => tab.selected))
+  // One pill slides behind the selected tab instead of each tab painting its own fill.
+  const [pillRef, pillStyle, pillReady] = useSlidingPill<HTMLDivElement>(`${tabs[selectedIndex]?.key ?? ""}:${tabs.map((tab) => tab.key).join(",")}`)
+  const setList = useCallback((node: HTMLDivElement | null) => {
+    list.current = node
+    pillRef(node)
+  }, [pillRef])
   const move = (event: React.KeyboardEvent, index: number) => {
     let target = -1
     if (event.key === "ArrowRight") target = nextTabIndex(tabs, index, 1)
@@ -51,7 +58,8 @@ export function ModelPickerTabs({
   }
   return (
     <div className="flex items-center gap-0.5 px-1.5 pt-1.5">
-      <div ref={list} role="tablist" aria-label="Agents and accounts" className="scroll-fade-x flex min-w-0 items-center gap-0.5 overflow-x-auto pb-1 [scrollbar-width:none]">
+      <div ref={setList} role="tablist" aria-label="Agents and accounts" className="t-tabs scroll-fade-x flex min-w-0 items-center gap-0.5 overflow-x-auto pb-1 [scrollbar-width:none]">
+        <span aria-hidden className="t-tabs-pill z-0 rounded-[0.4rem] bg-[var(--color-background-button-secondary)]" style={pillStyle} data-ready={pillReady} />
         {tabs.map((tab, index) => {
           const tabIndex = index === selectedIndex ? 0 : -1
           if (tab.type === "starred") {
@@ -65,9 +73,10 @@ export function ModelPickerTabs({
                       aria-selected={tab.selected}
                       aria-label={tab.label}
                       tabIndex={tabIndex}
+                      data-tab-active={tab.selected}
                       onClick={onStarred}
                       onKeyDown={(event) => move(event, index)}
-                      className={cn(TAB_CLASS_NAME, tab.selected ? "bg-[var(--color-background-button-secondary)] text-[var(--color-accent-yellow)]" : "text-muted-foreground opacity-45 hover:bg-[var(--color-background-button-secondary-hover)] hover:opacity-100")}
+                      className={cn(TAB_CLASS_NAME, tab.selected ? "text-[var(--color-accent-yellow)]" : "text-muted-foreground opacity-45 hover:bg-[var(--color-background-button-secondary-hover)] hover:opacity-100")}
                     />
                   }
                 >
@@ -88,13 +97,14 @@ export function ModelPickerTabs({
                     aria-label={tab.ariaLabel}
                     aria-disabled={tab.disabled || tab.notSetUp || undefined}
                     tabIndex={tabIndex}
+                    data-tab-active={tab.selected}
                     disabled={busy && !tab.selected}
                     onClick={() => { if (!tab.disabled) onAccount(tab) }}
                     onKeyDown={(event) => move(event, index)}
                     className={cn(
                       TAB_CLASS_NAME,
                       tab.selected
-                        ? "bg-[var(--color-background-button-secondary)]"
+                        ? ""
                         : tab.needsSignIn
                           ? "opacity-30 hover:bg-[var(--color-background-button-secondary-hover)] hover:opacity-60"
                           : tab.notSetUp

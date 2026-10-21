@@ -1,4 +1,4 @@
-import { useLoopVisibility } from '../native/loop-visibility.ts'
+import { useLoopRunning } from '../native/loop-visibility.ts'
 import { useTranscriptRowLease } from './Window.tsx'
 import { memo, useEffect, useRef, useState } from 'react'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
@@ -13,7 +13,7 @@ import { Icon } from '../icons.tsx'
 import { T } from './glyphs.ts'
 import { PopupLayer } from '../composer/Menu.tsx'
 import { Tip } from '../nav/overlay.tsx'
-import { useLoaderTime, easeInOut } from '../MatrixLoader.tsx'
+import { useLoaderTime, easeInOut, NATIVE_PAINT_ANIMATIONS } from '../MatrixLoader.tsx'
 import { webHost } from '../native/webview.ts'
 import { observeElementBounds, type ElementBoundsEvent } from '../native/layout.ts'
 import { useNativeWindowSize } from '../native/layout-hooks.ts'
@@ -22,6 +22,8 @@ import { Dialog } from '../nav/overlay.tsx'
 import { visualTheme } from '../preview/theme.ts'
 import { launchBrowser } from '../preview/browser.ts'
 import { useNav } from '../nav/store.ts'
+import { EXIT, Presence } from '../motion/Presence.tsx'
+import { webDocumentEnter } from '../motion/kit.tsx'
 
 const heights = new Map<string, number>()
 const placements = new Map<string, () => void>()
@@ -55,6 +57,8 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
   const [loaded, setLoaded] = useState(false), [skeleton, setSkeleton] = useState(false)
   // The pointer is over the figure (reported by its wrapper) or the control; the control hides a beat after both leave.
   const [overFigure, setOverFigure] = useState(false), [overControl, setOverControl] = useState(false), [showControl, setShowControl] = useState(false)
+  // The control stays mounted through its exit (`PopupLayer leaving`); it arrives with the popup's own fade and scale.
+  const [controlMounted, setControlMounted] = useState(false)
   useEffect(() => {
     if (overFigure || overControl) { setShowControl(true); return }
     const id = setTimeout(() => setShowControl(false), 120)
@@ -69,7 +73,8 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
     let alive = true, ticket: string | undefined, generation = 0
     let documentReady = false, watchdog: ReturnType<typeof setTimeout> | undefined, fallback: ReturnType<typeof setTimeout> | undefined
     const loading = setTimeout(() => { if (alive && !documentReady) setSkeleton(true) }, 200)
-    const reveal = () => { documentReady = true; clearTimeout(watchdog); clearTimeout(fallback); clearTimeout(loading); if (alive) { setLoaded(true); setSkeleton(false); setError('') } }
+    // The document fades in (native, N3) as the skeleton fades out; the fade is queued before the slot shows it.
+    const reveal = () => { documentReady = true; clearTimeout(watchdog); clearTimeout(fallback); clearTimeout(loading); if (alive) { webDocumentEnter(id, webHost.present); setLoaded(true); setSkeleton(false); setError('') } }
     setError(''); setLoaded(false); setSkeleton(false); ready.current = false
     const stop = webHost.subscribe(event => {
       if (event.id !== id || !alive || (event.generation !== undefined && event.generation !== generation)) return
@@ -104,6 +109,7 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
   const [expandedHeight, expandedWidth] = [Math.max(100, size.height - 32 - 44 - 2), Math.max(320, size.width - 32)]
   const frame = <VisualSlot id={id} height={expanded ? expandedHeight : height} active={active && loaded && !error} onHover={setOverFigure} />
   const control = showControl && loaded && !error && !expanded
+  if (control && !controlMounted) setControlMounted(true)
   return <div testId="visual-card" data-status={error ? 'error' : loaded ? 'ready' : 'loading'} style={{ display: 'flex', flexDirection: 'column', marginTop: 8, marginBottom: 8, position: 'relative' }}>
     {expanded ? <>
       <div style={{ height, width: '100%' }} />
@@ -120,8 +126,8 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
     </> : <div style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
       {frame}
       {/* The glass control sits 8px inside the top-right corner (`.visual-reply__open`). It is an anchored layer so it paints above the native document. */}
-      {control && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 0 }}>
-        <PopupLayer kind="tooltip" side="bottom" align="end" sideOffset={8} alignOffset={-8} material="none" occlude style={{ borderRadius: 14 }}>
+      {controlMounted && !expanded && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 0 }}>
+        <PopupLayer leaving={!control} onLeft={() => setControlMounted(false)} kind="tooltip" side="bottom" align="end" sideOffset={8} alignOffset={-8} material="none" occlude style={{ borderRadius: 14 }}>
           <Tip label="Expand preview" side="bottom" size={28}>
             <div
               testId="visual-expand"
@@ -145,7 +151,8 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
         </PopupLayer>
       </div>}
     </div>}
-    {skeleton && !loaded && !error && <Skeleton height={height} />}
+    {/* The skeleton fades out when the document is ready, while the document itself fades in (`webDocumentEnter`). */}
+    <Presence show={skeleton && !loaded && !error} exit={EXIT.backdrop} style={{ position: 'absolute', top: 0, left: 0, right: 0, height }}><Skeleton height={height} /></Presence>
     {error && <div testId="visual-error" style={{ position: 'absolute', top: 0, left: 0, right: 0, height, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, paddingTop: Math.min(height * 0.35, 160), paddingLeft: 16, paddingRight: 16, borderRadius: 10, borderWidth: 1, borderColor: t.border, backgroundColor: ink(t, 0.04) }}>
       <Label color={t.text} weight={500} style={{ textAlign: 'center' }}>{`Couldn’t load “${visual.title}”`}</Label>
       {error && <Label color={t.textSecondary} size={13} style={{ textAlign: 'center', lineClamp: 2 }}>{error}</Label>}
@@ -154,12 +161,19 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
   </div>
 })
 
-/** `.visual-reply__skeleton`: a 4% wash over the reserved box, breathing between full and 55% opacity every 1.6s. */
+/** `.visual-reply__skeleton`: a 4% wash over the reserved box, breathing between full and 55% opacity every 1.6s
+ * (ease-in-out each way). Paint-only: each 800 ms half is one native `paintTransform` opacity tween, and its
+ * completion retargets the other way, so frames run at display rate with one React commit per half cycle. */
 export function Skeleton({ height }: { height: number }) {
   const t = useTheme()
-  const loop = useLoopVisibility(!REDUCED_MOTION)
-  const time = useLoaderTime(loop.visible)
+  const loop = useLoopRunning(!REDUCED_MOTION)
+  const native = NATIVE_PAINT_ANIMATIONS && loop.running
+  const time = useLoaderTime(loop.visible && !NATIVE_PAINT_ANIMATIONS)
+  const [dim, setDim] = useState(true)
   const phase = (time % 1600) / 1600
-  const opacity = REDUCED_MOTION ? 1 : 1 - 0.45 * easeInOut(phase < 0.5 ? phase * 2 : 2 - phase * 2)
-  return <div ref={loop.ref} testId="visual-skeleton" role="status" aria-label="Loading visual" style={{ position: 'absolute', top: 0, left: 0, right: 0, height, borderRadius: 10, backgroundColor: ink(t, 0.04), opacity, pointerEvents: 'none' }} />
+  const opacity = REDUCED_MOTION || NATIVE_PAINT_ANIMATIONS ? 1 : 1 - 0.45 * easeInOut(phase < 0.5 ? phase * 2 : 2 - phase * 2)
+  return <div ref={loop.ref} testId="visual-skeleton" role="status" aria-label="Loading visual"
+    {...(native ? { paintTransform: { initial: { opacity: 1 }, animate: { opacity: dim ? 0.55 : 1 }, transition: { duration: 0.8, ease: [0.42, 0, 0.58, 1] } } } : {})}
+    onMotionComplete={native ? () => setDim(value => !value) : undefined}
+    style={{ position: 'absolute', top: 0, left: 0, right: 0, height, borderRadius: 10, backgroundColor: ink(t, 0.04), opacity, pointerEvents: 'none' }} />
 }

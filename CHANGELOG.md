@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.10.2
+
+<!-- kybern-release-title: Kybern GPUIX comes alive -->
+<!-- kybern-release-summary: Smooth 60 fps motion across Kybern GPUIX, a tidier composer tray, images that morph into their preview, Full access that never asks, and faster, steadier sends and checkpoints. -->
+
+- Animate Kybern GPUIX throughout: sidebar, transcript, composer, menus, dock and pages now move smoothly. Loading indicators run on Core Animation at display rate instead of about 5 fps, so an agent that is working costs about as much as an idle window, and hover colours fade instead of snapping.
+- Merge the cards stacked above the composer into one tray with sections for subagents, background tasks, helpers and queued messages, with status icons and live times. Queued rows show what you queued instead of "Queued follow-up".
+- Draw tree lines between parents and children in the sidebar, the "Worked for" groups, the composer tray and the dock's Agents tab.
+- Morph images into their preview and back when you open them, whether they're in a reply, your own message or the composer.
+- Show your message the moment you press Enter. A send that fails stays in the chat with **Retry** and **Edit**, and a follow-up never overtakes the message before it.
+- Never ask for permission in **Full access**. Harness safety prompts are allowed and noted in the chat; questions, plans and secret requests still wait for you.
+- Render long replies in full, with tables, code blocks and images intact. Images in hidden folders such as `.screenshots` now show, and so do images elsewhere on your Mac when the reply names their exact path.
+- Turn inline code that names a file in the workspace into a link, underline a multi-word link as one, and show the agent's logo on "Sent to" rows.
+- Fix a crash when picking a skill from the `$` menu, and a picked skill, note, task or thread that showed as plain text until you typed again.
+- End a turn as soon as the agent's reply is done instead of waiting for the checkpoint. Checkpoints reuse their previous snapshot and skip untracked files of 100 MB or more, so they take a fraction of a second on large repos. Sends no longer wait behind other threads' worktree work.
+- Fix a slow memory leak in Kybern GPUIX and release memory while the window is in the background.
+
 ## 0.10.1
 
 <!-- kybern-release-title: Kybern GPUIX fixes from daily use -->

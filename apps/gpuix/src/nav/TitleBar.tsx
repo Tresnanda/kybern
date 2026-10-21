@@ -16,13 +16,13 @@ import { ISLAND } from '../MatrixLoader.tsx'
 import { toggleDock, useDock } from '../dock/store.ts'
 import { motion } from '@gpuix/react'
 import { useState, type ReactNode } from 'react'
-import { DISTANCE, DURATION, EASE, Swap } from '../motion/kit.tsx'
+import { Swap, SwapOnChange } from '../motion/kit.tsx'
 import { isChildThread } from '../../../../packages/kybern-client/src/subagents.ts'
 import { subagentPhase, subagentTypeLabel } from '../../../../packages/kybern-client/src/subagents.ts'
 import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { getClient, getState, set, useApp, usePaneAccess, focusPane } from '../state.ts'
-import { EASE_OUT, ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { archiveThread, errorText, updateThread } from './actions.ts'
 import { N } from './glyphs.ts'
 import { goBack, goForward, newThread, openThread, useNavigationAvailability } from './history.ts'
@@ -30,13 +30,13 @@ import { Menu, MenuItem, MenuSeparator, muted, Tip } from './overlay.tsx'
 import { getNav, setNav, useNav } from './store.ts'
 import { providerLabel } from '../sidebar/model.ts'
 import { useSidebarDragging, useSidebarWidth } from '../shell/layout.ts'
+import { drawerSlide, fadeTo } from '../shell/motion.ts'
 
 export const TITLEBAR = 46
 export const RAIL = 52
 export const SIDEBAR = 256
 export const LEADING_X = 82
 
-const SLIDE = { duration: 0.22, ease: EASE_OUT }
 
 /** Notes and Usage have no thread panel. Pull requests allow a temporary peek;
  *  Tasks use their own sidebar. The saved Home preference is unchanged. */
@@ -75,6 +75,8 @@ function ChromeIcon({
 }) {
   const t = useTheme()
   const [hover, setHover] = useState(false)
+  // Back and forward dim while there is nowhere to go; the opacity eases so a step does not flicker them (`transition-opacity duration-150`).
+  const dim = fadeTo(disabled ? 0.4 : 1)
   const button = (
     <div
       testId={testId}
@@ -83,6 +85,7 @@ function ChromeIcon({
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       onClick={disabled ? undefined : onClick}
+      paintTransform={dim.paintTransform}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -91,7 +94,7 @@ function ChromeIcon({
         height: 28,
         borderRadius: 8,
         flexShrink: 0,
-        opacity: disabled ? 0.4 : 1,
+        ...dim.style,
         cursor: disabled ? 'default' : 'pointer',
         pointerEvents: decorative ? 'none' : 'auto',
         ...(pressed ? { backgroundColor: t.buttonSecondaryHover } : {}),
@@ -156,7 +159,7 @@ export function TitleBar({ panelOpen }: { panelOpen: boolean }) {
         windowDrag
         initial={false}
         animate={{ left: panelless ? LEADING_X : titleStart }}
-        transition={REDUCED_MOTION || instant || resizing ? { duration: 0 } : SLIDE}
+        transition={REDUCED_MOTION || instant || resizing ? { duration: 0 } : drawerSlide(panelOpen)}
         style={{ position: 'absolute', top: 0, right: 8, height: TITLEBAR, display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 20, paddingRight: 12 }}
       >
         {!settingsOpen && page === 'home' && (splitRoot.kind === 'split' ? <><div style={{ flexGrow: 1 }} /><PanelToggles /></> : <ThreadHeader />)}
@@ -204,23 +207,21 @@ function NavSwap({ panelOpen, instant, children }: { panelOpen: boolean; instant
 }
 
 /**
- * `TextSwap` on the header title: a rename (or the agent's first title) fades
- * the new text up 4px over 250 ms smooth-out. Opening another thread does not:
- * the desktop remounts the header per thread.
+ * `TextSwap` on the header title: a rename (or the agent's first title) rises in from 4px below with a 2px blur while the old title
+ * leaves up and out (250 / 150 ms). Opening another thread does not swap: the desktop remounts the header per thread, so a new
+ * `threadId` starts a fresh swap whose first title paints plainly (⌘[ / ⌘] included).
  */
 function TitleSwap({ threadId, title, children }: { threadId: string; title: string; children: ReactNode }) {
-  const [shown, setShown] = useState({ threadId, title, play: false })
-  if (shown.threadId !== threadId || shown.title !== title) setShown({ threadId, title, play: shown.threadId === threadId && !REDUCED_MOTION })
   return (
-    <motion.div
-      key={`${threadId}:${title}`}
-      initial={shown.play ? { opacity: 0, top: DISTANCE.micro } : false}
-      animate={{ opacity: 1, top: 0 }}
-      transition={{ duration: DURATION.fast, ease: [...EASE.smoothOut] }}
-      style={{ display: 'flex', position: 'relative', minWidth: 0, flexShrink: 1 }}
+    <SwapOnChange
+      key={threadId}
+      active={title}
+      style={{ minWidth: 0, flexShrink: 1, justifyContent: 'flex-start' }}
+      innerStyle={{ minWidth: 0, flexShrink: 1, justifyContent: 'flex-start' }}
+      leavingStyle={{ right: 0 }}
     >
       {children}
-    </motion.div>
+    </SwapOnChange>
   )
 }
 

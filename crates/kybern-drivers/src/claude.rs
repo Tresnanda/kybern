@@ -2460,6 +2460,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn full_access_launches_new_resumed_and_forked_sessions_with_bypass() {
+        use crate::{AgentDriver, SessionConfig};
+        use kybern_protocol::PermissionMode;
+        use std::os::unix::fs::PermissionsExt;
+        for (mode, resume, fork) in [
+            (PermissionMode::FullAccess, None, false),
+            (PermissionMode::FullAccess, Some("native-session"), false),
+            (PermissionMode::FullAccess, Some("native-session"), true),
+            (PermissionMode::Supervised, Some("native-session"), false),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let binary = root.path().join("claude-fixture");
+            std::fs::write(&binary, "#!/usr/bin/env python3\nimport json,pathlib,sys\ntmp=pathlib.Path('argv.tmp')\ntmp.write_text(json.dumps(sys.argv[1:]))\ntmp.rename('argv.json')\nfor line in sys.stdin: pass\n").unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let spawned = super::ClaudeDriver::default()
+                .spawn(SessionConfig {
+                    cwd: root.path().into(),
+                    model: None,
+                    effort: None,
+                    permission_mode: mode,
+                    native_tool_bridge: None,
+                    resume_session_id: resume.map(str::to_string),
+                    fork,
+                    rewind: None,
+                    binary: Some(binary),
+                    env: Default::default(),
+                })
+                .await
+                .unwrap();
+            let argv_path = root.path().join("argv.json");
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                while !argv_path.exists() {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let args: Vec<String> = serde_json::from_slice(&std::fs::read(argv_path).unwrap()).unwrap();
+            spawned.session.close().await.unwrap();
+            let bypass = mode == PermissionMode::FullAccess;
+            let permission = args.iter().position(|arg| arg == "--permission-mode").map(|index| args[index + 1].as_str());
+            assert_eq!(permission, Some(if bypass { "bypassPermissions" } else { "default" }), "{mode:?} resume={resume:?} fork={fork}");
+            assert_eq!(args.iter().any(|arg| arg == "--allow-dangerously-skip-permissions"), bypass, "{mode:?} resume={resume:?}");
+            assert_eq!(args.iter().any(|arg| arg == "--resume=native-session"), resume.is_some());
+        }
+    }
+
+    /// Claude Code still asks under bypassPermissions when one of its own
+    /// safety checks fires (here, `rm` on a possibly-empty variable path). The
+    /// request reaches the daemon like any other, which allows it in Full access.
+    #[tokio::test]
+    async fn bypass_safety_checks_surface_as_ordinary_permission_requests() {
+        use super::*;
+        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let (events, mut rx) = mpsc::channel(8);
+        let session = ClaudeSession {
+            child: child.clone(),
+            events,
+            pending_control: Mutex::new(HashMap::new()),
+            pending_permissions: Mutex::new(HashMap::new()),
+            state: Mutex::new(TurnState::default()),
+            child_inbox: Mutex::new(ChildInbox::default()),
+            session_id: Mutex::new("test".into()),
+            catalog: None,
+            _native_mcp_config: None,
+        };
+        let command = "for d in a; do rm -f $P/$d/*-[0-9].png; done";
+        session
+            .handle_control_request(&json!({"request_id":"safety-1","request":{
+                "subtype":"can_use_tool","tool_name":"Bash","input":{"command":command,"description":"Delete raw frames"},
+                "description":"Delete raw frames","permission_suggestions":[],
+                "decision_reason":"Dangerous rm operation on possibly-empty variable path","decision_reason_type":"safetyCheck",
+                "classifier_approvable":false,"tool_use_id":"toolu_1","suppress_always_allow_rule":true}}))
+            .await;
+        let Some(DriverEvent::PermissionRequest { request_id, tool_name, tool_call_id, .. }) = rx.recv().await else {
+            panic!("expected a permission request")
+        };
+        assert_eq!((request_id.as_str(), tool_name.as_str(), tool_call_id.as_deref()), ("safety-1", "Bash", Some("toolu_1")));
+        // Keep the handle alive until the echo is read: dropping it ends the session and closes `cat`.
+        let handle = SessionHandle(Arc::new(session), crate::ndjson::SessionLifetime::new(child.clone()));
+        handle.respond_permission("safety-1", &ApprovalDecision::AllowOnce).await.unwrap();
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(5), child.lines.lock().await.recv()).await.unwrap().unwrap();
+        drop(handle);
+        assert_eq!(frame.pointer("/response/response/behavior").and_then(Value::as_str), Some("allow"));
+        assert_eq!(frame.pointer("/response/response/updatedInput/command").and_then(Value::as_str), Some(command));
+        child.close().await;
+    }
+
+    #[tokio::test]
     async fn sessions_enable_artifacts_unless_the_session_env_disables_them() {
         use crate::{AgentDriver, SessionConfig};
         use std::os::unix::fs::PermissionsExt;

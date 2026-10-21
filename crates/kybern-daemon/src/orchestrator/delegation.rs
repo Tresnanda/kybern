@@ -1624,6 +1624,8 @@ impl Orchestrator {
         state: &WorktreeDisposition,
         force: bool,
     ) -> Result<()> {
+        // The child's last "after" snapshot may still be reading the worktree.
+        let _checkpoint = self.checkpoint_lock(child.id).lock_owned().await;
         let source = self.worktree_source_repo(child, info);
         if !state.missing {
             source.worktree_remove(Path::new(&state.dir), force).await?;

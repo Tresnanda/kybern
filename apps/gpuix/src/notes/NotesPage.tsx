@@ -1,4 +1,4 @@
-import { motion, useGpuix, useWindowSize, type PublicInstance } from '@gpuix/react'
+import { useGpuix, useWindowSize, type PublicInstance } from '@gpuix/react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { ageLabel, filterChoices, filterNotes, gallerySections, noteMatchesQuery, noteTitle, type NotesFilter } from '@/state/notesModel'
 import type { NoteSummary } from '../../../../packages/kybern-client/src/types.ts'
@@ -9,10 +9,11 @@ import { Menu, MenuItem } from '../nav/overlay.tsx'
 import { getNav, setNav, useNav } from '../nav/store.ts'
 import { Button } from '../settings/controls.tsx'
 import { useApp } from '../state.ts'
-import { EASE_OUT, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { Label, useTheme } from '../ui.tsx'
 import { NoteEditor } from './NoteEditor.tsx'
 import { notesSearchRef } from './Header.tsx'
 import { NoteThumb } from './NoteThumb.tsx'
+import { cardIn, cardLeave, useFreshNotes, useLeavingNotes } from './motion.ts'
 import { NOTES_META, NOTES_UI, ProjectDot, Ring, notesTokens, useNotesTokens } from './kit.tsx'
 import { deleteNote, display, getNotes, openNote, refreshNotes, searchNotes, setNotes, useNotes } from './store.ts'
 
@@ -47,7 +48,8 @@ export function NotesGallery() {
   const listFocus = useRef<PublicInstance>(null)
   const seen = useRef(new Set<string>())
   const keyboard = useNav((s) => s.keyboardNav)
-  const [enter] = useState(() => !galleryEntered && !getNav().keyboardNav)
+  // Cards enter on the first gallery open of the session and when a pointer picks another filter; never for typing, keyboard or sorting.
+  const [enterGen, setEnterGen] = useState(() => (!galleryEntered && !getNav().keyboardNav ? 1 : 0))
   useEffect(() => { galleryEntered = true }, [])
   const pageWidth = size.width - 60
   const gutter = pageWidth < 720 ? 24 : 40
@@ -58,7 +60,10 @@ export function NotesGallery() {
     const timer = setTimeout(() => { void searchNotes(query.trim()).then((r) => { if (live) setHits({ query, ids: new Set(r.map((n) => n.id)) }) }).catch(() => {}) }, 250)
     return () => { live = false; clearTimeout(timer) }
   }, [query])
-  const visible = useMemo(() => filterNotes(all, filter).filter((n) => !query || noteMatchesQuery(n, query) || (hits?.query === query && hits.ids.has(n.id))), [all, filter, query, hits])
+  const matches = useMemo(() => filterNotes(all, filter).filter((n) => !query || noteMatchesQuery(n, query) || (hits?.query === query && hits.ids.has(n.id))), [all, filter, query, hits])
+  // A note deleted from its menu keeps its card for the exit (`useLeavingNotes`); a keyboard delete removes it at once.
+  const { list: visible, leaving, gone } = useLeavingNotes(matches)
+  const fresh = useFreshNotes(matches, `${loaded}|${JSON.stringify(filter)}|${query}|${prefs.layout}|${prefs.group}|${prefs.sort}|${cols}`)
   const sections = useMemo(() => gallerySections(visible, { ...prefs, projects: projectMap, projectOrder: [], flat: !!query || filter.kind === 'deleted' }), [visible, prefs, projectMap, query, filter.kind])
   const rows = useMemo(() => {
     const out: Row[] = [{ key: 'filters', kind: 'filters' }]
@@ -73,7 +78,10 @@ export function NotesGallery() {
   }, [sections, prefs.layout, cols, filter.kind, query, visible])
   const order = rows.flatMap((r) => r.notes ?? [])
   const choices = filterChoices(all, projectMap, [])
-  const pickFilter = (next: NotesFilter) => { setNotes({ filter: next }); setActive(null) }
+  const pickFilter = (next: NotesFilter, byKey = false) => {
+    setNotes({ filter: next }); setActive(null)
+    if (!byKey && !getNav().keyboardNav) { seen.current = new Set(); setEnterGen((n) => n + 1) }
+  }
   const focus = (id: string) => {
     setActive(id)
     const index = rows.findIndex((row) => row.notes?.some((n) => n.id === id))
@@ -98,19 +106,19 @@ export function NotesGallery() {
 
   const chip = (value: NotesFilter['kind'], label: string, dot?: string | null) => {
     const selected = filter.kind === value && (value !== 'project')
-    return <Chip key={`${value}:${label}`} testId={`notes-filter-${value}`} label={label} selected={selected} dot={dot} onClick={() => pickFilter({ kind: value } as NotesFilter)} />
+    return <Chip key={`${value}:${label}`} testId={`notes-filter-${value}`} label={label} selected={selected} dot={dot} onClick={(byKey) => pickFilter({ kind: value } as NotesFilter, byKey)} />
   }
   const filters = <div style={{ display: 'flex', alignItems: 'center', gap: 4, height: 28, marginTop: 20 }}>
     {chip('all', 'All')}
     {chip('global', 'Global')}
-    {projects.filter((p) => choices.projects.some((c) => c.id === p.id)).map((p) => <Chip key={p.id} label={p.name} selected={filter.kind === 'project' && filter.projectId === p.id} dot={p.id} onClick={() => pickFilter({ kind: 'project', projectId: p.id })} />)}
+    {projects.filter((p) => choices.projects.some((c) => c.id === p.id)).map((p) => <Chip key={p.id} label={p.name} selected={filter.kind === 'project' && filter.projectId === p.id} dot={p.id} onClick={(byKey) => pickFilter({ kind: 'project', projectId: p.id }, byKey)} />)}
     {choices.threads > 0 && chip('threads', 'Threads')}
     <Menu testId="notes-projects" sideOffset={6} trigger={() => <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: k.hover } }}><Icon source={N.plus} size={14} color={k.fg3} /></div>}>
       {projects.map((p) => <MenuItem key={p.id} id={p.id} label={p.name} onSelect={() => pickFilter({ kind: 'project', projectId: p.id })} />)}
     </Menu>
-    {filter.kind === 'deleted' && <Chip label="Recently deleted" selected onClick={() => pickFilter({ kind: 'deleted' })} />}
+    {filter.kind === 'deleted' && <Chip label="Recently deleted" selected onClick={(byKey) => pickFilter({ kind: 'deleted' }, byKey)} />}
     <div style={{ flexGrow: 1 }} />
-    {choices.deleted > 0 && filter.kind !== 'deleted' && <Chip testId="notes-filter-deleted" label="Recently deleted" quiet onClick={() => pickFilter({ kind: 'deleted' })} />}
+    {choices.deleted > 0 && filter.kind !== 'deleted' && <Chip testId="notes-filter-deleted" label="Recently deleted" quiet onClick={(byKey) => pickFilter({ kind: 'deleted' }, byKey)} />}
   </div>
   return <div testId="page-notes" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
     {error && <div style={{ display: 'flex', gap: 10, padding: 24 }}><Label color={t.red}>{error}</Label><Button onClick={() => void refreshNotes()}>Try again</Button></div>}
@@ -119,7 +127,7 @@ export function NotesGallery() {
         {row.kind === 'filters' ? filters
           : row.kind === 'notice' ? <div style={{ paddingTop: 16, paddingBottom: 12 }}><Label color={k.fg3} size={NOTES_META} lineHeight={18}>{row.label!}</Label></div>
           : row.kind === 'header' ? <div style={{ paddingTop: row.first || row.list ? 24 : 4, paddingBottom: 10 }}><Label color={k.fg} size={NOTES_UI} lineHeight={18} weight={600}>{row.label!}</Label></div>
-          : <div style={{ display: 'flex', gap: row.list ? 0 : 20, paddingBottom: row.list ? 0 : 24 }}>{row.notes!.map((note, column) => <NoteCard key={note.id} note={note} big={!!row.big} list={!!row.list} scope={note.scope === 'global' ? 'Global' : projectMap[note.project_id ?? '']?.name ?? 'Chats'} projectId={note.scope === 'global' ? null : note.project_id ?? null} active={active === note.id && keyboard} enter={enter && !keyboard && index < 5 && !seen.current.has(note.id)} index={index + column} onSeen={() => seen.current.add(note.id)} onFocus={() => setActive(note.id)} />)}{Array.from({ length: row.per! - row.notes!.length }, (_, i) => <div key={i} style={{ flexGrow: 1, flexBasis: 0 }} />)}</div>}
+          : <div style={{ display: 'flex', gap: row.list ? 0 : 20, paddingBottom: row.list ? 0 : 24 }}>{row.notes!.map((note, column) => <NoteCard key={note.id} note={note} big={!!row.big} list={!!row.list} scope={note.scope === 'global' ? 'Global' : projectMap[note.project_id ?? '']?.name ?? 'Chats'} projectId={note.scope === 'global' ? null : note.project_id ?? null} active={active === note.id && keyboard} enter={!keyboard && ((enterGen > 0 && index < 5 && !seen.current.has(note.id)) || fresh.has(note.id))} enterGen={enterGen} leaving={leaving.get(note.id)} onGone={gone} index={index + column} onSeen={() => seen.current.add(note.id)} onFocus={() => setActive(note.id)} />)}{Array.from({ length: row.per! - row.notes!.length }, (_, i) => <div key={i} style={{ flexGrow: 1, flexBasis: 0 }} />)}</div>}
       </div>)}
       {loaded && !visible.length && <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 320, paddingTop: 48, paddingBottom: 48 }}>
         <Label color={k.fg} size={17} lineHeight={23} weight={600}>{query ? `No notes match “${query.trim()}”` : emptyTitle(filter, projectMap)}</Label>
@@ -150,9 +158,9 @@ function emptyDetail(filter: NotesFilter): string {
 }
 
 /** `.notes-chip`: 28px, radius 8, 11px side padding; the selected one is a fill, not an underline. */
-function Chip({ label, selected, dot, quiet, icon, onClick, testId }: { label: string; selected?: boolean; dot?: string | null; quiet?: boolean; icon?: string; onClick: () => void; testId?: string }) {
+function Chip({ label, selected, dot, quiet, icon, onClick, testId }: { label: string; selected?: boolean; dot?: string | null; quiet?: boolean; icon?: string; onClick: (byKey: boolean) => void; testId?: string }) {
   const k = useNotesTokens()
-  return <div testId={testId} tabIndex={0} onClick={onClick} onKeyDown={(e) => { if (e.key === 'enter') onClick() }} style={{ display: 'flex', alignItems: 'center', gap: 7, height: 28, flexShrink: 0, paddingLeft: 11, paddingRight: 11, borderRadius: 8, cursor: 'pointer', backgroundColor: selected ? k.sel : undefined, hover: { backgroundColor: selected ? k.sel : k.hover } }}>
+  return <div testId={testId} tabIndex={0} onClick={() => onClick(false)} onKeyDown={(e) => { if (e.key === 'enter') onClick(true) }} style={{ display: 'flex', alignItems: 'center', gap: 7, height: 28, flexShrink: 0, paddingLeft: 11, paddingRight: 11, borderRadius: 8, cursor: 'pointer', backgroundColor: selected ? k.sel : undefined, hover: { backgroundColor: selected ? k.sel : k.hover } }}>
     {dot !== undefined && dot !== null && <ProjectDot projectId={dot} />}
     {icon && <Icon source={icon} size={13} color={k.fg3} />}
     <Label color={selected ? k.fg : quiet ? k.fg3 : k.fg2} size={NOTES_UI} lineHeight={21} weight={selected ? 500 : undefined}>{label}</Label>
@@ -170,19 +178,26 @@ function Hints({ list }: { list: boolean }) {
   </div>
 }
 
-const NoteCard = memo(function NoteCard({ note, big, list, scope, projectId, active, enter, index, onSeen, onFocus }: { note: NoteSummary; big: boolean; list: boolean; scope: string; projectId: string | null; active: boolean; enter: boolean; index: number; onSeen: () => void; onFocus: () => void }) {
+const NoteCard = memo(function NoteCard({ note, big, list, scope, projectId, active, enter, enterGen, leaving, onGone, index, onSeen, onFocus }: { note: NoteSummary; big: boolean; list: boolean; scope: string; projectId: string | null; active: boolean; enter: boolean; /** Bumped by a pointer-picked filter: a card that stays mounted across it enters again with the cards that mount. */ enterGen: number; /** The generation of this card's exit (a pointer delete kept it mounted). */ leaving?: number; onGone: (id: string) => void; index: number; onSeen: () => void; onFocus: () => void }) {
   const t = useTheme()
   const k = notesTokens(t)
-  const [play] = useState(enter)
+  // The entrance generation this card played (`-1`: none). A card mounts playing when it is fresh; one that stayed mounted replays
+  // when a pointer-picked filter bumps `enterGen`, so the whole first screen rises together instead of only the cards that were new.
+  const [played, setPlayed] = useState(enter ? enterGen : -1)
+  if (enter && played !== enterGen) setPlayed(enterGen)
+  const play = played !== -1
+  // The lift answers pointer motion: a card that scrolls under a resting pointer does not lift (the wheel's own frames and a paint tween
+  // each present, which costs vsyncs), the first mouse move over it does.
   const [hover, setHover] = useState(false)
   // `.note-card:active .note-thumb`: a primary press anywhere on the card settles the thumb to scale(0.985) (replacing the lift).
   const [pressed, setPressed] = useState(false)
   useEffect(() => { onSeen() }, [])
   const { done, total } = note.checklist
   const age = ageLabel(note.updated_at)
-  const motionProps = { initial: play ? { opacity: 0, top: REDUCED_MOTION ? 0 : 6 } : (false as const), animate: { opacity: 1, top: 0 }, transition: { duration: play ? 0.17 : 0, delay: play ? Math.min(index, 3) * 0.025 : 0, ease: EASE_OUT } }
+  // The card enters once (fresh gallery open or a pointer-picked filter) and leaves when a pointer delete keeps it mounted.
+  const wrap = { paintTransform: leaving !== undefined ? cardLeave(leaving) : play ? withGeneration(cardIn(index), played) : undefined, onMotionComplete: leaving !== undefined ? (e: { motionGeneration?: number }) => { if (e.motionGeneration === leaving) onGone(note.id) } : undefined }
   if (list) {
-    return <motion.div {...motionProps} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, position: 'relative' }}>
+    return <div {...wrap} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, position: 'relative', ...(leaving !== undefined ? { pointerEvents: 'none' } : {}) }}>
       <div testId={`note-card-${note.id}`} tabIndex={0} onFocus={onFocus} onClick={() => openNote(note.id)} onKeyDown={(e) => { if (e.key === 'enter') openNote(note.id) }} style={{ display: 'flex', alignItems: 'center', gap: 16, height: 40, marginLeft: -12, marginRight: -12, paddingLeft: 12, paddingRight: 12, borderRadius: 8, cursor: 'pointer', backgroundColor: active ? k.sel : undefined, hover: { backgroundColor: k.hover } }}>
         <div style={{ display: 'flex', minWidth: 80, maxWidth: '42%', flexShrink: 0 }}><Label color={k.fg} size={NOTES_UI} lineHeight={21} truncate>{noteTitle(note)}</Label></div>
         <div style={{ display: 'flex', flexGrow: 1, minWidth: 0 }}><Label color={k.fg3} size={NOTES_UI} lineHeight={21} truncate>{note.preview.trim()}</Label></div>
@@ -192,10 +207,10 @@ const NoteCard = memo(function NoteCard({ note, big, list, scope, projectId, act
           <div style={{ display: 'flex', justifyContent: 'flex-end', width: 92, flexShrink: 0 }}><Label color={k.fg3} size={NOTES_META}>{age}</Label></div>
         </>}
       </div>
-    </motion.div>
+    </div>
   }
-  return <motion.div {...motionProps} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, flexBasis: 0, minWidth: 0, position: 'relative' }}>
-    <div testId={`note-card-${note.id}`} tabIndex={0} onFocus={onFocus} onMouseEnter={() => setHover(true)} onMouseLeave={() => { setHover(false); setPressed(false) }} onMouseDown={(e) => { if ((e.button ?? 0) === 0) setPressed(true) }} onMouseUp={() => setPressed(false)} onClick={() => openNote(note.id)} onKeyDown={(e) => { if (e.key === 'enter') openNote(note.id) }} style={{ display: 'flex', flexDirection: 'column', borderRadius: 12, cursor: 'pointer', marginLeft: 0 }}>
+  return <div {...wrap} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, flexBasis: 0, minWidth: 0, position: 'relative', ...(leaving !== undefined ? { pointerEvents: 'none' } : {}) }}>
+    <div testId={`note-card-${note.id}`} tabIndex={0} onFocus={onFocus} onMouseMove={() => { if (!hover) setHover(true) }} onMouseLeave={() => { setHover(false); setPressed(false) }} onMouseDown={(e) => { if ((e.button ?? 0) === 0) setPressed(true) }} onMouseUp={() => setPressed(false)} onClick={() => openNote(note.id)} onKeyDown={(e) => { if (e.key === 'enter') openNote(note.id) }} style={{ display: 'flex', flexDirection: 'column', borderRadius: 12, cursor: 'pointer', marginLeft: 0 }}>
       <NoteThumb note={note} big={big} active={active} lift={hover && !pressed} pressed={pressed} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0, paddingTop: 10, paddingLeft: 2, paddingRight: 2, pointerEvents: 'none' }}>
         <Label color={k.fg} size={NOTES_UI} lineHeight={18} weight={600} truncate>{noteTitle(note)}</Label>
@@ -207,7 +222,10 @@ const NoteCard = memo(function NoteCard({ note, big, list, scope, projectId, act
         </div>
       </div>
     </div>
-  </motion.div>
+  </div>
 })
+
+/** A paint motion that restarts from its `initial` whenever `generation` changes (undefined stays undefined). */
+const withGeneration = <T extends object>(motion: T | undefined, generation: number) => (motion ? { ...motion, generation } : undefined)
 
 export function Empty({ title, detail }: { title: string; detail?: string }) { const t = useTheme(); return <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexGrow: 1, gap: 10 }}><Icon source={N.note} size={28} color={t.iconTertiary} /><Label color={t.text} size={17}>{title}</Label>{detail && <Label color={t.textSecondary}>{detail}</Label>}</div> }

@@ -15,6 +15,31 @@ import { cn } from "@/lib/utils"
 type ImageError = { message: string; retryable: boolean }
 type ImageAction = "copy" | "download"
 
+// The lightbox image grows out of its thumbnail and returns to it (shared-element zoom).
+const LIGHTBOX_OPEN_MS = 300
+const LIGHTBOX_CLOSE_MS = 200
+const LIGHTBOX_OPEN_EASE = "cubic-bezier(0.32, 0.72, 0, 1)"
+const LIGHTBOX_CLOSE_EASE = "cubic-bezier(0.4, 0, 1, 1)"
+const reducedMotion = () => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches
+
+/** Where an object-contain image actually paints inside its element box. */
+function paintedRect(image: HTMLImageElement): DOMRect {
+  const box = image.getBoundingClientRect()
+  if (!image.naturalWidth || !image.naturalHeight) return box
+  const fit = Math.min(box.width / image.naturalWidth, box.height / image.naturalHeight)
+  const width = image.naturalWidth * fit
+  const height = image.naturalHeight * fit
+  return new DOMRect(box.left + (box.width - width) / 2, box.top + (box.height - height) / 2, width, height)
+}
+
+/** Transform that puts a centred element painted at `to` onto `from` (uniform scale, centres aligned). */
+function zoomTransform(from: DOMRect, to: DOMRect): string {
+  const scale = to.width > 0 ? from.width / to.width : 1
+  const dx = from.left + from.width / 2 - (to.left + to.width / 2)
+  const dy = from.top + from.height / 2 - (to.top + to.height / 2)
+  return `translate(${dx}px, ${dy}px) scale(${scale})`
+}
+
 function imageMime(value: string): string | null {
   const direct = value.match(/^image\/(png|jpeg|gif|webp|avif)(?:[;,]|$)/i)?.[0]
   if (direct) return direct.split(/[;,]/, 1)[0]!.toLowerCase()
@@ -91,7 +116,10 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
   const [retry, setRetry] = useState(0)
   const [url, setUrl] = useState(thumbnail && direct && !thumbnailUsesSource(direct) ? "" : direct)
   const [error, setError] = useState(initialError)
-  const [loaded, setLoaded] = useState(false)
+  // Loaded is a property of one URL: a new URL starts hidden again.
+  const [loadedUrl, setLoadedUrl] = useState("")
+  const loaded = loadedUrl === url
+  const [loadedOriginalUrl, setLoadedOriginalUrl] = useState("")
   const [open, setOpen] = useState(false)
   const [original, setOriginal] = useState(direct)
   const [originalError, setOriginalError] = useState(initialError)
@@ -99,6 +127,10 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
   const [imageAction, setImageAction] = useState<ImageAction | null>(null)
   const [copied, setCopied] = useState(false)
   const copiedTimer = useRef<number | null>(null)
+  const zoomFrame = useRef<HTMLDivElement>(null)
+  const thumbnailRect = useRef<DOMRect | null>(null)
+  const openZoomPending = useRef(false)
+  const zoomAnimation = useRef<Animation | null>(null)
 
   useEffect(() => () => {
     if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current)
@@ -169,16 +201,49 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
 
   const changeOpen = (next: boolean) => {
     if (next) {
+      const thumbnailImage = preview.current?.querySelector("img")
+      thumbnailRect.current = !reducedMotion() && thumbnailImage ? thumbnailImage.getBoundingClientRect() : null
+      openZoomPending.current = !!thumbnailRect.current
       setOriginal(direct)
       setOriginalError(initialError)
       setImageAction(null)
       setCopied(false)
     }
+    else {
+      // Back to the thumbnail when it is still on screen; Escape mid-open reverses from where the image is.
+      const frame = zoomFrame.current
+      const image = frame?.querySelector("img")
+      const thumbnailImage = preview.current?.querySelector("img")
+      openZoomPending.current = false
+      if (frame && image && thumbnailImage && !reducedMotion()) {
+        const target = thumbnailImage.getBoundingClientRect()
+        const onScreen = target.bottom > 0 && target.right > 0 && target.top < window.innerHeight && target.left < window.innerWidth
+        if (onScreen) {
+          const current = zoomAnimation.current ? getComputedStyle(frame).transform : "none"
+          zoomAnimation.current?.cancel()
+          zoomAnimation.current = frame.animate(
+            [{ transform: current }, { transform: zoomTransform(target, paintedRect(image)) }],
+            { duration: LIGHTBOX_CLOSE_MS, easing: LIGHTBOX_CLOSE_EASE, fill: "forwards" },
+          )
+        }
+      }
+    }
     setOpen(next)
+  }
+  const playOpenZoom = (image: HTMLImageElement) => {
+    const frame = zoomFrame.current
+    const from = thumbnailRect.current
+    if (!openZoomPending.current || !frame || !from) return
+    openZoomPending.current = false
+    zoomAnimation.current?.cancel()
+    zoomAnimation.current = frame.animate(
+      [{ transform: zoomTransform(from, paintedRect(image)) }, { transform: "none" }],
+      { duration: LIGHTBOX_OPEN_MS, easing: LIGHTBOX_OPEN_EASE },
+    )
   }
   const retryPreview = () => {
     setError(null)
-    setLoaded(false)
+    setLoadedUrl("")
     setUrl(thumbnail && direct && !thumbnailUsesSource(direct) ? "" : direct)
     setRetry((n) => n + 1)
   }
@@ -245,10 +310,10 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
       : thumbnail && (error || !url) ? <button type="button" aria-label={`Preview ${label}`} data-image-original={direct || source} className="response-image-preview response-image-thumbnail rounded-xl p-1 text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => changeOpen(true)}>Preview image</button>
       : error || !url ? <span className="response-image-preview">{status(error, retryPreview, true)}</span>
       : <button type="button" aria-label={`Preview ${label}`} data-image-original={direct || source} className={cn("response-image-preview cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring", thumbnail ? "response-image-thumbnail rounded-xl" : compact ? "rounded-lg" : "rounded-xl")} onClick={() => changeOpen(true)}>
-        <img key={retry} src={url} alt={label} loading="lazy" decoding="async" referrerPolicy="no-referrer" onLoad={() => setLoaded(true)} onError={() => setError(displayError())} data-loaded={loaded} className={cn("t-img max-w-full object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10", compact ? "rounded-lg" : "rounded-xl")} />
+        <img key={retry} src={url} alt={label} loading="lazy" decoding="async" referrerPolicy="no-referrer" onLoad={() => setLoadedUrl(url)} onError={() => setError(displayError())} data-loaded={loaded} className={cn("t-img max-w-full object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10", compact ? "rounded-lg" : "rounded-xl")} />
       </button>}
     <Dialog open={open} onOpenChange={changeOpen}>
-      <DialogPopup showCloseButton={false} finalFocus={() => preview.current?.querySelector<HTMLElement>("button, a") ?? null} className="max-w-[min(90vw,1200px)] p-4">
+      <DialogPopup showCloseButton={false} finalFocus={() => preview.current?.querySelector<HTMLElement>("button, a") ?? null} className="max-w-[min(90vw,1200px)] p-4 data-starting-style:scale-100 data-starting-style:blur-none data-ending-style:scale-100 data-ending-style:duration-200">
         <div className="flex min-w-0 items-center justify-between gap-3">
           <DialogTitle className="min-w-0 flex-1 truncate text-sm">{label}</DialogTitle>
           <div className="flex shrink-0 items-center gap-1">
@@ -282,7 +347,7 @@ function ImageContent({ source, label, threadId, compact, thumbnail, linkLabel }
           </div>
         </div>
         <DialogDescription className="sr-only">Image preview. Press Escape to close.</DialogDescription>
-        {originalError || !original ? status(originalError, retryOriginal) : <img key={originalRetry} src={original} alt={label} referrerPolicy="no-referrer" onError={() => setOriginalError(displayError())} className="mt-3 max-h-[75dvh] w-full rounded-lg object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10" />}
+        {originalError || !original ? status(originalError, retryOriginal) : <div ref={zoomFrame} className="mt-3"><img key={originalRetry} src={original} alt={label} referrerPolicy="no-referrer" onLoad={(event) => { setLoadedOriginalUrl(original); playOpenZoom(event.currentTarget) }} onError={() => setOriginalError(displayError())} data-loaded={loadedOriginalUrl === original} className="t-img max-h-[75dvh] w-full rounded-lg object-contain outline -outline-offset-1 outline-black/10 dark:outline-white/10" /></div>}
       </DialogPopup>
     </Dialog>
   </span>

@@ -26,8 +26,8 @@ import { FileDiffBody } from "@/components/kybern/DiffView"
 import { CHAT_COLUMN_GUTTER } from "./chatLayout"
 import { Markdown } from "@/components/kybern/Markdown"
 import { parseUnifiedDiff, type FileDiff } from "@/lib/diff"
-import { Spinner } from "@/components/kybern/bits"
-import { IconSwap, MatrixLoader, StreamWords, TextSwap } from "@/components/kybern/motion"
+import { Spinner, useCopiedFlag } from "@/components/kybern/bits"
+import { IconSwap, MatrixLoader, StreamWords, TextSwap, useLoopVisibility, usePresence } from "@/components/kybern/motion"
 import type { InlineTokenValue } from "@/lib/inlineTokens"
 import { partToken } from "@/lib/composerTokens"
 import { createComposerThreadReference, type ComposerThreadReference } from "../../../../packages/kybern-client/src/threadReferences"
@@ -106,8 +106,9 @@ const META = getChatMessageFooterTextStyle()
 const EMPTY_RUNTIME_TASKS: RuntimeTask[] = []
 // No horizontal inset: message edges sit exactly on the composer's edges.
 const ROW = "mx-auto w-full min-w-0 max-w-[var(--app-chat-max-width,46rem)]"
+// Fine pointers get a 2px rise with the fade; touch and reduced motion fade only.
 const HOVER_REVEAL =
-  "opacity-0 transition-opacity pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto"
+  "opacity-0 motion-safe:pointer-fine:translate-y-0.5 transition-[opacity,translate] duration-[var(--duration-quick)] ease-[var(--ease-out)] pointer-events-none motion-safe:pointer-fine:group-hover:translate-y-0 group-hover:opacity-100 group-hover:pointer-events-auto motion-safe:pointer-fine:group-focus-within:translate-y-0 group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto"
 
 const turnKey = (group: TurnGroup, index: number) => group.turnId || group.user?.id || `turn-${index}`
 const estimateTurnSize = (group: TurnGroup) => 120 + Math.max(80, (group.answer?.text.length ?? 0) / 75 * 20)
@@ -389,6 +390,7 @@ export function Transcript({
   }, [groups, navigationItems])
   const earlier = useEarlierHistory(threadId, scrollElement, state?.nextBeforeSeq ?? null, !!state?.loadingEarlier, !!state?.loaded && connected && !agentActivityDetail)
   const [following, setFollowing] = useState(true)
+  const scrollButton = usePresence(!following)
   const restored = useRef(false)
   if (!state?.loaded) restored.current = false
   const pendingAnchor = !restored.current && state?.loaded ? peekTranscriptAnchor(threadId) : undefined
@@ -441,7 +443,7 @@ export function Transcript({
         className="flex min-h-0 min-w-0 flex-1 items-center justify-center text-foreground [contain:layout_style_paint]"
         data-hidden-window-placeholder={windowHoldsTranscript() ? undefined : ""}
       >
-        <div className="opacity-0 [animation:chat-mount-loader-in_200ms_ease-out_150ms_forwards] motion-reduce:animate-none motion-reduce:opacity-100">
+        <div className="t-delayed-in" style={{ "--delay": "150ms" } as CSSProperties}>
           <MatrixLoader variant="twinkle" dot={3} gap={3} className="text-muted-foreground" label="Loading thread" />
         </div>
       </div>
@@ -535,25 +537,26 @@ export function Transcript({
         </MessageScroller>
         {/* Maskless bottom fade for opaque content surfaces (see kit.css). */}
         <div aria-hidden className="chat-scroll-fade" />
-        <div
-          className={cn(
-            "pointer-events-none absolute inset-x-0 z-30 flex justify-center py-1 transition-[opacity,transform,filter] duration-[var(--duration-fast)] ease-[var(--ease-smooth-out)] motion-reduce:transition-none",
-            !following ? "translate-y-0 scale-100 opacity-100 blur-none" : "-translate-y-1 scale-95 opacity-0 blur-[2px]",
-          )}
-          style={{ bottom: bottomInset + 24 }}
-        >
-          <button
-            type="button"
-            aria-label="Scroll to bottom"
-            onClick={() => scrollToBottom()}
-            className={cn(
-              "flex size-8 items-center justify-center rounded-full border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground)] backdrop-blur-md transition-colors hover:cursor-pointer hover:bg-[var(--color-background-elevated-secondary)]",
-              !following ? "pointer-events-auto" : "pointer-events-none",
-            )}
+        {scrollButton.mounted && (
+          <div
+            className="t-appear pointer-events-none absolute inset-x-0 z-30 flex justify-center py-1"
+            data-blur="off"
+            data-leaving={scrollButton.leaving || undefined}
+            style={{ bottom: bottomInset + 24 }}
           >
-            <ArrowDownIcon className="size-3.5" />
-          </button>
-        </div>
+            <button
+              type="button"
+              aria-label="Scroll to bottom"
+              onClick={() => scrollToBottom()}
+              className={cn(
+                "flex size-8 items-center justify-center rounded-full border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground)] backdrop-blur-md transition-colors hover:cursor-pointer hover:bg-[var(--color-background-elevated-secondary)]",
+                !following ? "pointer-events-auto" : "pointer-events-none",
+              )}
+            >
+              <ArrowDownIcon className="size-3.5" />
+            </button>
+          </div>
+        )}
       </div>
       {agentActivityDetail && (
         <AgentActivityDetailView key={selectedActivity?.kind === "tool" ? selectedActivity.toolCallId : selectedActivity?.taskId} detail={agentActivityDetail} bottomInset={bottomInset} onBack={closeAgentActivity} onOpenAgentActivity={openAgentActivity} />
@@ -740,10 +743,24 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity, 
         (block.kind === "approval" && !block.decision),
     )
   const settled = !group.running
+  // A turn this mounted instance watched go live → settled gets its new chrome
+  // (header label, hairline, footer, error lines) animated once. Turns mounted
+  // already settled (history, remounted rows) render settled with no entrance.
+  const [phase, setPhase] = useState<"live" | "settled" | "history">(group.running ? "live" : "history")
+  if (group.running && phase !== "live") setPhase("live")
+  else if (!group.running && phase === "live") setPhase("settled")
+  useEffect(() => {
+    if (phase !== "settled") return
+    const id = window.setTimeout(() => setPhase("history"), 3000)
+    return () => window.clearTimeout(id)
+  }, [phase])
+  const settleFresh = phase === "settled"
+  const [revertedAtMount] = useState(group.reverted)
   const open = group.running || !!expanded
+  const thinkingRef = useLoopVisibility<HTMLSpanElement>()
   const thinkingRow = !hasLiveWork && (
     <div className="chat-paint-host t-row-enter mt-1.5 font-system-ui text-muted-foreground" style={CHAT_FONT} data-timeline-row-kind="working">
-      <span className="t-shimmer" data-text="Thinking">Thinking</span>
+      <span ref={thinkingRef} className="t-shimmer" data-text="Thinking">Thinking</span>
     </div>
   )
 
@@ -798,7 +815,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity, 
                     <span data-work-entry-icon className={cn("flex size-4 shrink-0 items-center justify-center", TONE)}>
                       <HammerIcon className="size-3.5" />
                     </span>
-                    <span className={cn("min-w-0 flex-1 truncate leading-6", TONE)} style={CHAT_FONT}>
+                    <span className={cn("min-w-0 flex-1 truncate leading-6", TONE, settleFresh && "t-appear")} data-blur="off" style={CHAT_FONT}>
                       {group.end ? `Worked for ${clockDuration(group.end.durationMs)}` : "Worked"}
                     </span>
                     <DisclosureChevron open={open} className="text-muted-foreground/65 group-hover/tool-row:text-foreground" />
@@ -818,7 +835,7 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity, 
                   </CollapsiblePanel>
                 </Collapsible>
               )}
-              <div className="chat-paint-host mt-1 h-px w-full bg-border" />
+              <div className={cn("chat-paint-host mt-1 h-px w-full bg-border", settleFresh && "chat-bar-grow")} />
             </div>
           )}
 
@@ -851,13 +868,13 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity, 
             )}
 
             {group.end?.error && (
-              <p className="chat-paint-host mt-2 flex items-start gap-2 text-destructive" style={TEXT}>
+              <p className={cn("chat-paint-host mt-2 flex items-start gap-2 text-destructive", settleFresh && "t-row-enter")} style={TEXT}>
                 <CircleAlertIcon className="mt-1 size-3.5 shrink-0" />
                 <span className="selectable">{group.end.error}</span>
               </p>
             )}
             {group.end?.stopReason === "interrupted" && (
-              <p className="chat-paint-host text-muted-foreground" style={TEXT}>
+              <p className={cn("chat-paint-host text-muted-foreground", settleFresh && "t-row-enter")} style={TEXT}>
                 Stopped.
               </p>
             )}
@@ -868,16 +885,16 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity, 
               </div>
             )}
 
-            {diff && diff.files.length > 0 && <EditedFilesCard diff={diff} threadId={threadId} turnId={group.turnId} canUndo={isLast && settled} />}
+            {diff && diff.files.length > 0 && <EditedFilesCard diff={diff} threadId={threadId} turnId={group.turnId} canUndo={isLast && settled} fresh={settleFresh} />}
 
             {group.reverted && (
-              <p className="chat-paint-host mt-2 flex items-center gap-1.5 text-muted-foreground" style={TEXT}>
+              <p className={cn("chat-paint-host mt-2 flex items-center gap-1.5 text-muted-foreground", !revertedAtMount && "t-row-enter")} style={TEXT}>
                 <Undo2Icon className="size-3" /> Reverted to before this turn
               </p>
             )}
 
             {settled && (group.answer || group.end) && (
-              <div className="chat-paint-host mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground [&>button:first-child]:-ml-[0.4375em]" style={META}>
+              <div className={cn("chat-paint-host mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground [&>button:first-child]:-ml-[0.4375em]", settleFresh && "t-appear")} data-blur="off" style={META}>
                 <CopyAction text={group.answer?.text ?? ""} />
                 <SaveToNoteAction text={group.answer?.text ?? ""} />
                 {group.end?.at && <time dateTime={group.end.at} title={new Date(group.end.at).toLocaleString()} className="tabular-nums">{clockTime(group.end.at)}</time>}
@@ -956,7 +973,7 @@ function WorkingHeader({ since }: { since: string }) {
 }
 
 function CopyAction({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
+  const [copied, flashCopied] = useCopiedFlag()
   return (
     <MessageActionButton
       label="Copy message"
@@ -964,8 +981,7 @@ function CopyAction({ text }: { text: string }) {
       disabled={!text}
       onClick={() => {
         void copyText(text)
-        setCopied(true)
-        setTimeout(() => setCopied(false), 1400)
+        flashCopied()
       }}
     >
       <IconSwap active={copied ? "b" : "a"} a={<CopyIcon className="size-[1.125em]" />} b={<CheckIcon className="size-[1.125em] text-success" />} />
@@ -1255,7 +1271,8 @@ function surfaceLabel(surface: ToolSurface, input: JsonValue, complete: boolean,
 }
 
 /** One line for a pending or settled approval in the work log. */
-function approvalRowText(approval: ApprovalRequest, decision: { decision: string } | null): string {
+function approvalRowText(approval: ApprovalRequest, decision: { decision: string } | null, auto = false): string {
+  if (auto) return `Allowed by Full access — ${approval.summary || approval.tool_name}`
   const connector = connectorApproval(approval)
   if (connector) {
     const target = connector.app ? `${connector.connector} to use ${connector.app}` : connector.connector
@@ -1541,37 +1558,43 @@ const WorkRow = memo(function WorkRow({
         const cardKind = coordinatorCardKind(block.approval)
         const cardLine = cardKind ? coordinatorCardLine(block.approval, block.decision) : null
         if (cardKind && cardLine) return <CoordinatorCardLine kind={cardKind} parts={cardLine} decision={block.decision} style={CHAT_FONT} />
-        const text = approvalRowText(block.approval, block.decision)
+        const text = approvalRowText(block.approval, block.decision, block.auto)
         return (
           <div className="rounded-lg py-1">
             <div className="flex w-full min-w-0 items-center gap-2">
-              <span className={cn("flex size-5 shrink-0 items-center justify-center", block.decision?.decision === "deny" ? "text-destructive/85" : block.decision ? "text-foreground/75" : "text-muted-foreground")}>
+              <span className={cn("flex size-5 shrink-0 items-center justify-center transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]", block.decision?.decision === "deny" ? "text-destructive/85" : block.decision ? "text-foreground/75" : "text-muted-foreground")}>
                 {approvalRowIcon(block.approval, block.decision)}
               </span>
-              <p className={cn("min-w-0 truncate leading-6", block.decision?.decision === "deny" ? "text-destructive/85" : block.decision ? "text-foreground/80" : "text-muted-foreground")} style={CHAT_FONT} title={text}>
-                {text}
+              <p className={cn("min-w-0 truncate leading-6 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]", block.decision?.decision === "deny" ? "text-destructive/85" : block.decision ? "text-foreground/80" : "text-muted-foreground")} style={CHAT_FONT} title={text}>
+                <TextSwap text={text} />
               </p>
             </div>
           </div>
         )
       }
     case "notice":
-      return (
-        <div className="rounded-lg py-1">
-          <div className="flex w-full items-center gap-2">
-            <span className={cn("flex size-5 shrink-0 items-center justify-center", block.level === "error" ? "text-destructive" : "text-muted-foreground")}>
-              <CircleAlertIcon className="size-4" />
-            </span>
-            <p className={cn("min-w-0 leading-6", block.level === "error" ? "text-destructive" : "text-muted-foreground")} style={CHAT_FONT}>
-              {block.text}
-            </p>
-          </div>
-        </div>
-      )
+      return <NoticeRow block={block} />
     default:
       return null
   }
 })
+
+function NoticeRow({ block }: { block: Extract<Block, { kind: "notice" }> }) {
+  // Decided once on mount: only a notice that just arrived plays the entrance.
+  const [fresh] = useState(() => Date.now() - new Date(block.at).getTime() < 3000)
+  return (
+    <div className={cn("rounded-lg py-1", fresh && "t-row-enter")}>
+      <div className="flex w-full items-center gap-2">
+        <span className={cn("flex size-5 shrink-0 items-center justify-center", block.level === "error" ? "text-destructive" : "text-muted-foreground")}>
+          <CircleAlertIcon className="size-4" />
+        </span>
+        <p className={cn("min-w-0 leading-6", block.level === "error" ? "text-destructive" : "text-muted-foreground")} style={CHAT_FONT}>
+          {block.text}
+        </p>
+      </div>
+    </div>
+  )
+}
 
 /**
  * Inside a settled turn the item cards sit under the answer, so rows skip their own,
@@ -1652,7 +1675,7 @@ function ToolRow({
         </span>
         <div className="min-w-0 flex-1 overflow-hidden">
           <p className={cn("truncate leading-6", tone, (!block.complete || active) && "shimmer")} style={CHAT_FONT}>
-            <span data-work-entry-display-text>{label}</span>
+            <TextSwap text={label} render={(value) => <span data-work-entry-display-text>{value}</span>} />
           </p>
         </div>
         {surface?.app && !label.endsWith(surface.app) && (
@@ -1790,7 +1813,7 @@ const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone = "muted",
 
 const MAX_VISIBLE_CHANGED_FILES = 5
 
-function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; threadId: ThreadId; turnId: string; canUndo: boolean }) {
+function EditedFilesCard({ diff, threadId, turnId, canUndo, fresh }: { diff: Diff; threadId: ThreadId; turnId: string; canUndo: boolean; fresh: boolean }) {
   const [expanded, setExpanded] = useState(true)
   const [showAllFor, setShowAllFor] = useState<string | null>(null)
   const [reverting, setReverting] = useState(false)
@@ -1820,7 +1843,7 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
   }
 
   return (
-    <div className="chat-paint-host mt-2 mb-1 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_55%,transparent)]">
+    <div data-blur="off" className={cn("chat-paint-host mt-2 mb-1 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_55%,transparent)]", fresh && "t-appear")}>
       <div
         className={cn(
           "flex items-center justify-between gap-3 bg-[color:color-mix(in_srgb,var(--app-chat-code-surface)_40%,transparent)] px-3 py-1.5",

@@ -7,6 +7,8 @@
 import { orderProjects, threadMatchesFilter } from '@/state/sidebarOrganize'
 import { nestedThreadRows } from '../../../../packages/kybern-client/src/threadRows.ts'
 import { isChildThread, visibleSubagentThreads } from '../../../../packages/kybern-client/src/subagents.ts'
+import { isChildWorking } from '../../../../packages/kybern-client/src/delegations.ts'
+import { flatTree } from '../tree/geometry.ts'
 import {
   FREE_CHAT_PROJECT_ID,
   isFreeChatProject,
@@ -46,8 +48,11 @@ export type Row =
       childCount: number
       childrenOpen: boolean
       nested: boolean
+      /** Tree connectors (`flatTree`): the last of its siblings, and a bit per outer level whose stem runs on past it. */
+      last?: boolean
+      rails?: number
     }
-  | { kind: 'child'; key: string; thread: Thread; depth: number; childCount: number; childrenOpen: boolean }
+  | { kind: 'child'; key: string; thread: Thread; depth: number; childCount: number; childrenOpen: boolean; last?: boolean; rails?: number }
   | { kind: 'more'; key: string; projectId: string; count: number; showAll: boolean }
   | { kind: 'no-threads'; key: string }
   | { kind: 'recents'; key: string; open: boolean }
@@ -73,6 +78,17 @@ export function attentionItems(threads: readonly Thread[], nav: Pick<NavState, '
     if (kind) items.push({ thread, kind })
   }
   return items.sort((a, b) => RANK[a.kind] - RANK[b.kind] || b.thread.updated_at.localeCompare(a.thread.updated_at))
+}
+
+/** Rows that finished and left (or were dismissed). A child that works again (a delegated child re-woken by a message)
+ *  comes back: a dismissal ends that child's last run, not the child. */
+export function dismissedChildren(nav: Pick<NavState, 'dismissed' | 'children'>): Set<string> {
+  const ids = new Set<string>()
+  for (const id of Object.keys(nav.dismissed)) {
+    const child = nav.children[id]
+    if (!child || !isChildWorking(child)) ids.add(id)
+  }
+  return ids
 }
 
 export function isFiltering(filter: SidebarFilter) {
@@ -203,7 +219,7 @@ export function buildRows(input: SidebarInput): Row[] {
 
       const shownChildren = visibleSubagentThreads(childrenByProject.get(project.id) ?? [], {
         selectedId: input.selectedId,
-        dismissed: new Set(Object.keys(nav.dismissed)),
+        dismissed: dismissedChildren(nav),
         now: input.now,
       })
       const withChildren = new Set(shownChildren.map((t) => t.parent_thread_id))
@@ -263,5 +279,16 @@ export function buildRows(input: SidebarInput): Row[] {
       for (const thread of [...free].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, MAX_PROJECT_THREADS))
         rows.push({ kind: 'thread', key: thread.id, thread, depth: 0, childCount: 0, childrenOpen: false, nested: false })
   }
+  return withTree(rows)
+}
+
+/** Connector facts for nested rows; every other row (headers, "Show more", Recents) closes the open levels. */
+function withTree(rows: Row[]): Row[] {
+  const tree = flatTree(rows.map((row) => (row.kind === 'child' || (row.kind === 'thread' && row.nested) ? row.depth : 0)))
+  rows.forEach((row, i) => {
+    if (row.kind !== 'child' && !(row.kind === 'thread' && row.nested)) return
+    row.last = tree[i]!.last
+    row.rails = tree[i]!.continues.reduce((bits, on, level) => (on ? bits | (1 << level) : bits), 0)
+  })
   return rows
 }

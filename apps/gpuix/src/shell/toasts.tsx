@@ -285,13 +285,14 @@ interface Layer {
  * the layer simply appears.
  */
 function useFade(leaving: boolean): PaintTransformProps | undefined {
-  const initial = useRef(leaving ? SHOWN : HIDDEN).current
+  const initial = useRef(leaving ? SHOWN() : HIDDEN()).current
   if (!PATCHED_NATIVE) return undefined
-  return { initial, animate: leaving ? GONE : SHOWN, transition: { duration: leaving ? (REDUCED_MOTION ? FADE : EXIT) : REDUCED_MOTION ? FADE : ENTER, ease: [...(leaving ? EASE.out : EASE.smoothOut)] as [number, number, number, number] } }
+  return { initial, animate: leaving ? GONE() : SHOWN(), transition: { duration: leaving ? (REDUCED_MOTION ? FADE : EXIT) : REDUCED_MOTION ? FADE : ENTER, ease: [...(leaving ? EASE.out : EASE.smoothOut)] as [number, number, number, number] } }
 }
-const SHOWN = REDUCED_MOTION ? { opacity: 1 } : { opacity: 1, blur: 0, scale: 1 }
-const HIDDEN = REDUCED_MOTION ? { opacity: 0 } : { opacity: 0, blur: 4, scale: 0.97 }
-const GONE = REDUCED_MOTION ? { opacity: 0 } : { opacity: 0, blur: 3, scale: 0.985 }
+// Functions, so Reduce Motion is read when a toast moves (it follows System Settings live).
+const SHOWN = () => REDUCED_MOTION ? { opacity: 1 } : { opacity: 1, blur: 0, scale: 1 }
+const HIDDEN = () => REDUCED_MOTION ? { opacity: 0 } : { opacity: 0, blur: 4, scale: 0.97 }
+const GONE = () => REDUCED_MOTION ? { opacity: 0 } : { opacity: 0, blur: 3, scale: 0.985 }
 
 /** An older toast peeking above the front one in the collapsed stack. */
 function GhostLayer({ layer, leaving = false }: { layer: Layer; leaving?: boolean }) {

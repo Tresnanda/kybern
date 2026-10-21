@@ -9,6 +9,8 @@ import { relativeTime } from '@/lib/format'
 import type { ProviderKind, SavedSession } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
+import { Rise } from '../motion/kit.tsx'
+import { iconEnter } from '../shell/motion.ts'
 import { getClient, useApp } from '../state.ts'
 import { Label, ProviderMark, useTheme } from '../ui.tsx'
 import { providerLabel } from '../sidebar/model.ts'
@@ -97,6 +99,21 @@ function SessionPicker({ projectId: initialProject }: { projectId: string | null
   const active = Math.min(highlight, Math.max(0, visible.length - 1))
   const selected = visible[active] ?? null
   const loading = kinds.some((k) => !pages[k] || pages[k]!.loading)
+  // Rows that arrive after the list first showed (a refresh, "Load more") rise in; the first page, a new search and big batches render plainly.
+  const known = useRef(new Set<string>())
+  const fresh = useRef(new Map<string, 'row' | 'pane'>())
+  const started = useRef(false)
+  if (Object.keys(pages).length === 0) {
+    known.current.clear()
+    fresh.current.clear()
+    started.current = false
+  }
+  const arrived = visible.filter((s) => !known.current.has(sessionKey(s)))
+  for (const s of arrived) {
+    known.current.add(sessionKey(s))
+    if (started.current && arrived.length <= 12) fresh.current.set(sessionKey(s), arrived.length <= 3 ? 'row' : 'pane')
+  }
+  if (!loading && Object.keys(pages).length > 0) started.current = true
   const errors = kinds.flatMap((k) => (pages[k]?.error ? [{ kind: k, error: pages[k]!.error! }] : []))
   const more = kinds.filter((k) => pages[k]?.next_cursor && !pages[k]?.loading)
 
@@ -178,6 +195,7 @@ function SessionPicker({ projectId: initialProject }: { projectId: string | null
         <div style={{ flexGrow: 1 }} />
         <div
           role="button"
+          testId="sessions-refresh"
           aria-label="Refresh sessions"
           onClick={() => {
             if (loading || opening) return
@@ -215,9 +233,11 @@ function SessionPicker({ projectId: initialProject }: { projectId: string | null
         />
       </div>
       <div testId="sessions-list" style={{ display: 'flex', flexDirection: 'column', maxHeight: 368, overflowY: 'scroll', paddingLeft: 12, paddingRight: 12, paddingTop: 4, paddingBottom: 4 }}>
-        {visible.map((session, at) => (
+        {visible.map((session, at) => {
+          const enter = fresh.current.get(sessionKey(session))
+          const row = (
           <div
-            key={sessionKey(session)}
+            key={enter ? undefined : sessionKey(session)}
             ref={(el) => {
               if (el) rowRefs.current.set(at, el)
               else rowRefs.current.delete(at)
@@ -268,7 +288,9 @@ function SessionPicker({ projectId: initialProject }: { projectId: string | null
               )}
             </div>
           </div>
-        ))}
+          )
+          return enter ? <Rise key={sessionKey(session)} kind={enter}>{row}</Rise> : row
+        })}
         {(loading || visible.length === 0) && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, minHeight: visible.length ? 0 : 144, paddingTop: 8, paddingBottom: 8 }}>
             {loading ? (
@@ -363,7 +385,11 @@ function SessionPicker({ projectId: initialProject }: { projectId: string | null
               cursor: !selected || opening ? 'default' : 'pointer',
             }}
           >
-            {opening && <MatrixLoader />}
+            {opening && (
+              <div paintTransform={iconEnter()} style={{ display: 'flex' }}>
+                <MatrixLoader />
+              </div>
+            )}
             <Label color={t.buttonPrimaryText} weight={500}>
               {opening ? 'Opening…' : selected?.thread_id ? 'Open thread' : 'Resume session'}
             </Label>

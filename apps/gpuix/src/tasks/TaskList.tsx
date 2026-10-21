@@ -18,6 +18,8 @@ import { N } from '../nav/glyphs.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { over } from '../theme.ts'
 import { Check, PriorityGlyph, StatusGlyph } from './Glyphs.tsx'
+import { CountPop } from './CountPop.tsx'
+import { CheckSlot } from './CheckSlot.tsx'
 import { QuickAdd } from './QuickAdd.tsx'
 import { MoreMenu } from './TaskMenus.tsx'
 import { openTask, pick, prefs, quickAdd, setTasks, taskState, useTasks } from './store.ts'
@@ -33,6 +35,11 @@ function AddButton({ testId, onClick, shown }: { testId: string; onClick: () => 
   )
 }
 
+/** What the group and column counts are counted over: a count that changes with it shows at once instead of popping (`CountPop`). */
+function useCountContext() {
+  return useTasks((s) => `${s.prefs.filter}|${s.prefs.view}|${s.prefs.grouping}|${s.prefs.showDone}|${s.prefs.showCanceled}|${s.query}`)
+}
+
 export function TaskList({
   groups,
   sequence,
@@ -45,6 +52,7 @@ export function TaskList({
   const t = useTheme()
   const p = useTasks((s) => s.prefs)
   const quick = useTasks((s) => s.quick)
+  const countContext = useCountContext()
   const [hoverGroup, setHoverGroup] = useState<string | null>(null)
   const shown: TaskGroup[] =
     quick && !groups.some((g) => g.key === quick.groupKey)
@@ -100,9 +108,7 @@ export function TaskList({
                 size={13}
                 style={{ pointerEvents: 'none', userSelect: 'none' }}
               >{`${group.label}${collapsed ? ' ›' : ''}`}</Label>
-              <Label color={t.textTertiary} size={13} style={{ pointerEvents: 'none', userSelect: 'none' }}>
-                {String(group.tasks.length)}
-              </Label>
+              <CountPop value={group.tasks.length} context={countContext} color={t.textTertiary} size={13} style={{ pointerEvents: 'none', userSelect: 'none' }} />
             </div>
             {(!group.status || group.status === 'inbox' || group.status === 'todo') && (
               <AddButton
@@ -187,7 +193,7 @@ export const TaskRow = memo(function TaskRow({
           }}
           style={{ ...cardSurface(t, raised, focused), opacity: dragOpacity }}
         >
-          <CardLines task={task} detail={detail} trailing={hover || selected ? <Check testId={`task-select-${task.id}`} checked={selected} onClick={() => pick(task.id, sequence)} /> : undefined} />
+          <CardLines task={task} detail={detail} checkShown={hover || selected} check={<Check testId={`task-select-${task.id}`} checked={selected} onClick={() => pick(task.id, sequence)} />} />
         </div>
       </div>
       </ShiftRow>
@@ -239,13 +245,12 @@ export const TaskRow = memo(function TaskRow({
           </Label>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', flexGrow: 1, minWidth: 0 }}>
-          {hover || selected ? (
-            <Check testId={`task-select-${task.id}`} checked={selected} onClick={() => pick(task.id, sequence)} />
-          ) : (
-            <div onClick={() => pick(task.id, sequence)} style={{ display: 'flex', width: 26, height: 30, alignItems: 'center' }}>
-              <StatusGlyph status={task.status} />
-            </div>
-          )}
+          {/* The status glyph and the checkbox share one 26x30 slot and cross-fade over 80 ms on hover and selection. */}
+          <CheckSlot
+            show={hover || selected}
+            base={<div onClick={() => pick(task.id, sequence)} style={{ display: 'flex', width: 26, height: 30, alignItems: 'center' }}><StatusGlyph status={task.status} /></div>}
+            over={<Check testId={`task-select-${task.id}`} checked={selected} onClick={() => pick(task.id, sequence)} />}
+          />
           <div
             testId={`task-drag-${task.id}`}
             onMouseDown={(e) => beginTaskDrag(task.id, e, renderer, sequence, draggable)}
@@ -319,15 +324,15 @@ function cardSurface(t: ReturnType<typeof useTheme>, raised: boolean, focused: b
   const fill = dark ? (raised ? over(ink(t, 0.055), t.surface) : base) : base
   return { position: 'relative', display: 'flex', flexDirection: 'column', flexShrink: 0, paddingTop: 11, paddingBottom: 12, paddingLeft: 12, paddingRight: 12, borderRadius: 10, backgroundColor: fill, userSelect: 'none', boxShadow: dark ? { offsetX: 0, offsetY: raised ? 6 : 1, blurRadius: raised ? 18 : 2, spreadRadius: raised ? -6 : 0, color: raised ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.25)' } : { offsetX: 0, offsetY: raised ? 4 : 1, blurRadius: raised ? 14 : 2, spreadRadius: raised ? -4 : 0, color: raised ? 'rgba(0, 0, 0, 0.12)' : 'rgba(0, 0, 0, 0.05)' }, borderWidth: dark ? 0 : 0.5, borderColor: 'rgba(0, 0, 0, 0.09)', ...(focused ? { borderWidth: 1.5, borderColor: ink(t, 0.14) } : {}) }
 }
-/** The card's key row, title and run line; `trailing` replaces the priority glyph (the hover checkbox). */
-function CardLines({ task, detail, trailing }: { task: TaskItem; detail: string; trailing?: ReactNode }) {
+/** The card's key row, title and run line; `check` cross-fades with the priority glyph (the hover checkbox). */
+function CardLines({ task, detail, check, checkShown = false }: { task: TaskItem; detail: string; check?: ReactNode; checkShown?: boolean }) {
   const t = useTheme()
   return <>
     <div style={{ display: 'flex', alignItems: 'center', gap: 7, height: 16, flexShrink: 0 }}>
       <ProjectDot projectId={task.scope === 'project' ? task.project_id ?? null : null} />
       <Label color={t.textTertiary} size={12} lineHeight={16} style={{ pointerEvents: 'none', userSelect: 'none' }}>{task.key}</Label>
       <div style={{ flexGrow: 1 }} />
-      {trailing ?? (task.priority !== 0 && <PriorityGlyph priority={task.priority} />)}
+      {check ? <CheckSlot show={checkShown} width={26} height={16} align="end" base={task.priority !== 0 ? <PriorityGlyph priority={task.priority} /> : undefined} over={check} /> : task.priority !== 0 && <PriorityGlyph priority={task.priority} />}
     </div>
     <div testId={`task-drag-${task.id}`} style={{ display: 'flex', flexDirection: 'column', marginTop: 6, flexShrink: 0, width: '100%', pointerEvents: 'none' }}>
       <Label color={isOpenStatus(task.status) ? t.text : t.textSecondary} size={13} lineHeight={18} style={{ width: '100%', pointerEvents: 'none', userSelect: 'none' }}>{task.title || 'Untitled'}</Label>
@@ -375,6 +380,7 @@ export function TaskBoard({
   const size = useWindowSize({ intervalMs: 300 })
   const sidebar = useSidebarWidth()
   const quick = useTasks((s) => s.quick)
+  const countContext = useCountContext()
   const [hoverColumn, setHoverColumn] = useState<string | null>(null)
   // `.tk-col`: equal columns of at least 196px between 16px gutters, 12px apart.
   const available = size.width - 52 - sidebar - 8 - 32
@@ -407,9 +413,7 @@ export function TaskBoard({
             <Label color={t.text} size={13} lineHeight={19.5} weight={500}>
               {STATUS_LABEL[column.status]}
             </Label>
-            <Label color={t.textTertiary} size={13} lineHeight={19.5}>
-              {String(column.tasks.length)}
-            </Label>
+            <CountPop value={column.tasks.length} context={countContext} color={t.textTertiary} size={13} lineHeight={19.5} />
             <div style={{ flexGrow: 1 }} />
             {(column.status === 'inbox' || column.status === 'todo') && (
               <div testId={`task-board-add-${column.status}`} onClick={() => quickAdd(column.status as 'inbox' | 'todo')} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 7, marginRight: -4, opacity: hoverColumn === column.status ? 1 : 0, cursor: 'pointer', hover: { backgroundColor: ink(t, 0.05) } }}>

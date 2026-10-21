@@ -18,6 +18,9 @@ export const MermaidBlock = memo(function MermaidBlock({ code, live, stateKey }:
   const dark = useIsDark()
   const [source, setSource] = useTranscriptRowState(`${stateKey}:source`, false)
   const [expanded, setExpanded] = useState(false)
+  // The diagram resolves in when its image decodes; Preview ↔ Source swaps animate once the reader has toggled.
+  const [loadedUrl, setLoadedUrl] = useState("")
+  const [toggled, setToggled] = useState(false)
   const expandButton = useRef<HTMLButtonElement>(null)
   const [result, setResult] = useState<{ code: string; dark: boolean; url: string | null } | null>(null)
   useEffect(() => {
@@ -34,9 +37,10 @@ export const MermaidBlock = memo(function MermaidBlock({ code, live, stateKey }:
   const current = !live && result?.code === code && result.dark === dark ? result : null
   return <div className="chat-mermaid" data-mermaid-state={live ? "streaming" : current ? current.url ? "ready" : "source" : "loading"}>
     <CodeBlock code={code} lang="mermaid" stateKey={stateKey}
-      header={current?.url ? <DiagramView source={source} change={setSource} /> : <span className="chat-diagram-label">{!live && !current ? "Rendering diagram…" : "Mermaid source"}</span>}
+      header={current?.url ? <DiagramView source={source} change={(next) => { setToggled(true); setSource(next) }} /> : <span className="chat-diagram-label">{!live && !current ? "Rendering diagram…" : "Mermaid source"}</span>}
       actions={current?.url && <button ref={expandButton} type="button" className="chat-diagram-expand chat-markdown-codeblock__action" onClick={() => setExpanded(true)} aria-label="Expand diagram" title="Expand diagram"><PanelExpandIcon className="size-3.5" /></button>}
-      preview={current?.url && !source ? <div className="chat-diagram-canvas" tabIndex={0} role="region" aria-label="Mermaid diagram"><img src={current.url} alt="Mermaid diagram" /></div> : undefined}
+      preview={current?.url && !source ? <div className="chat-diagram-canvas" tabIndex={0} role="region" aria-label="Mermaid diagram"><img src={current.url} alt="Mermaid diagram" className="t-img" data-loaded={loadedUrl === current.url} onLoad={() => setLoadedUrl(current.url!)} /></div> : undefined}
+      bodyKey={current?.url ? (source ? "source" : "preview") : "plain"} bodyEnter={toggled}
     />
     {current && !current.url && <p className="chat-diagram-note" role="status">Preview unavailable. You can still copy the source.</p>}
     <Dialog open={expanded && !!current?.url} onOpenChange={setExpanded}>

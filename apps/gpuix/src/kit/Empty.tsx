@@ -1,7 +1,7 @@
 // The desktop's `Empty` family (`components/kit/empty.tsx`): a centred empty state. `Empty` is the flex-1 column
 // (gap 24, padding 48 at the app's window widths); `EmptyHeader` (max 384 px) runs `.t-stagger`: each child rises
-// 12 px into place and fades in over 500 ms smooth-out (`--i` is unset, so all children move together; the
-// desktop's 3 px blur has no GPUIX equivalent). `EmptyMedia variant="icon"` is a 36 px card (radius 8, `--card`,
+// 12 px into place and fades in over 500 ms smooth-out from a 3 px blur, each child 70 ms after the one above (`--i` =
+// its index; `Rise kind="stagger"`, paint-only). `EmptyMedia variant="icon"` is a 36 px card (radius 8, `--card`,
 // hairline, faint shadow) with two cards fanned out behind it (±10°, 84%, shifted 2 px; drawn as one SVG each,
 // since GPUIX cannot rotate a div). `EmptyTitle` is 20/28 semibold, `EmptyDescription` 14/20 muted (4 px under a
 // title), `EmptyContent` a 384 px column with 16 px gaps. Reduce Motion: no entrance (`.t-stagger > * { animation: none }`).
@@ -19,7 +19,7 @@ export function EmptyHeader({ children, play = true, style }: { children: ReactN
   const items = Children.toArray(children)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', maxWidth: 384, ...style }}>
-      {items.map((child, i) => <Rise key={i} kind="stagger" index={0} play={play && !REDUCED_MOTION} style={{ alignItems: 'center' }}>{child}</Rise>)}
+      {items.map((child, i) => <Rise key={i} kind="stagger" index={i} play={play && !REDUCED_MOTION} style={{ alignItems: 'center' }}>{child}</Rise>)}
     </div>
   )
 }

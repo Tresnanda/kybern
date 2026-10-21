@@ -10,6 +10,7 @@ import { Button } from '../settings/controls.tsx'
 import { useApp } from '../state.ts'
 import { toast } from '../shell/toasts.tsx'
 import { Label, useTheme } from '../ui.tsx'
+import { markNoteLeaving } from './motion.ts'
 import { deleteNote, gallery, recordNote, refreshNotes, restoreNote, rpc, moveNote } from './store.ts'
 
 export async function copyMarkdown(title: string, body: string) {
@@ -37,7 +38,7 @@ export function NoteMenu({ note, readText, part, trigger }: { note: NoteSummary;
           if (await saveTextFile(renderer, fileName, noteMarkdown(current.title, current.body))) toast(`Exported to ${fileName}`)
         } catch (e) { toast.error('Unable to export the note', { description: e instanceof Error ? e.message : String(e) }) }
       })()} />}
-      {part === 'share' ? null : note.deleted_at ? <><MenuItem id="restore" label="Restore" onSelect={() => void restoreNote(note.id)} /><MenuItem id="purge" label="Delete forever…" destructive onSelect={() => setPurging(true)} /></> : <MenuItem id="delete" testId="note-delete" label="Delete" destructive onSelect={() => void deleteNote(note.id)} />}
+      {part === 'share' ? null : note.deleted_at ? <><MenuItem id="restore" label="Restore" onSelect={() => void restoreNote(note.id)} /><MenuItem id="purge" label="Delete forever…" destructive onSelect={() => setPurging(true)} /></> : <MenuItem id="delete" testId="note-delete" label="Delete" destructive onSelect={() => { markNoteLeaving(note); void deleteNote(note.id) }} />}
     </Menu>
     {moving && <Dialog onClose={() => setMoving(false)} width={360}><div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 20 }}><Label color={t.text} size={17}>Move note</Label><Button onClick={() => move()}>Global</Button><virtual-list style={{ height: Math.min(280, projects.length * 36) }}>{projects.map((p) => <div key={p.id} style={{ paddingBottom: 8 }}><Button onClick={() => move(p.id)}>{p.name}</Button></div>)}</virtual-list></div></Dialog>}
     {purging && <Dialog onClose={() => setPurging(false)} width={400}><div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 20 }}><Label color={t.text} size={17}>Delete this note forever?</Label><Label color={t.textSecondary}>This cannot be undone.</Label><Button onClick={() => setPurging(false)}>Cancel</Button><Button testId="note-purge-confirm" onClick={() => run(async () => { await rpc(note.id).call('notes.purge', { id: note.id }); await refreshNotes(); gallery(); setPurging(false) })}>Delete forever</Button></div></Dialog>}

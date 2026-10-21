@@ -5,13 +5,15 @@ import { onEnvironmentChange } from '../shell/environment.ts'
 // box, so the size comes from the image header (PNG, JPEG, GIF, WebP) read once
 // per source.
 import { closeSync, openSync, readSync } from 'node:fs'
-import { useMemo, useRef, useState } from 'react'
-import { motion, useGpuixRequired, type PublicInstance } from '@gpuix/react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { motion, useGpuixRequired } from '@gpuix/react'
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
-import { ImageActions } from '../platform/ImageActions.tsx'
+import { ImageViewer, useImageViewer } from '../motion/ImageMorph.tsx'
 import { imageSource } from '../../../desktop/src/lib/responseImages.ts'
 import { EASE_OUT, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { Rise } from '../motion/kit.tsx'
 import { alpha, muted, Para } from './kit.tsx'
+import { useFresh } from './motion.tsx'
 
 const sizes = new Map<string, { width: number; height: number } | null>()
 
@@ -85,12 +87,21 @@ function srcFor(source: string): string | null {
   return target.kind === 'local' ? target.value : target.value
 }
 
-export function ResponseImage({ source, label = 'Agent image', compact = false, thumbnail = false }: { source: string; label?: string; compact?: boolean; thumbnail?: boolean }) {
+/**
+ * `at` is when the image arrived: one that just did resolves from a blur (`t-img`, 400 ms); history and recycled rows paint plainly.
+ * A click morphs the image into the shared preview (`motion/ImageMorph.tsx`); Enter or Space opens it at once.
+ */
+export function ResponseImage({ source, label = 'Agent image', compact = false, thumbnail = false, at }: { source: string; label?: string; compact?: boolean; thumbnail?: boolean; at?: string }) {
   const t = useTheme()
+  const fresh = useFresh(at)
+  // `t-img` starts when the bitmap has decoded (`<img onLoad>`), not on mount, so the blur resolves over the picture
+  // itself; a decode that never reports does not hide it for long.
+  const [decoded, setDecoded] = useState(!fresh)
+  useEffect(() => { if (decoded) return; const id = setTimeout(() => setDecoded(true), 1500); return () => clearTimeout(id) }, [decoded])
   const renderer = useGpuixRequired()
   const restoreFocus = useTranscriptFocusRestoration()
-  const trigger = useRef<PublicInstance | null>(null)
-  const [open, setOpen] = useState(false)
+  // The thumbnail paints the image cropped (`cover`); the reply image shows all of it.
+  const viewer = useImageViewer({ radius: compact ? 8 : 12, fit: thumbnail ? 'cover' : 'contain' })
   const size = useMemo(() => imageSize(source), [source])
   const src = srcFor(source)
   const outline = alpha(t.variant === 'dark' ? '#ffffff' : '#000000', 0.1)
@@ -104,42 +115,40 @@ export function ResponseImage({ source, label = 'Agent image', compact = false, 
   const height = thumbnail ? 64 : size ? Math.round((width * size.height) / size.width) : 210
   return (
     <>
+    <Rise kind="image" play={fresh} hold={!decoded} style={{ flexShrink: 0 }}>
     <div
-      ref={(node) => { trigger.current = node }}
+      ref={(node) => { viewer.node.current = node }}
       testId="response-image"
       tabIndex={0}
       role="button"
       aria-label={`Preview ${label}`}
-      onClick={() => setOpen(true)}
-      onKeyDown={event => { if (event.key === 'enter' || event.key === 'space') setOpen(true) }}
-      style={{ display: 'flex', width, height, cursor: 'pointer', marginTop: compact || thumbnail ? 0 : 12, marginBottom: compact || thumbnail ? 0 : 12, flexShrink: 0 }}
+      onClick={() => viewer.show(true)}
+      onKeyDown={event => { if (event.key === 'enter' || event.key === 'space') viewer.show(false) }}
+      style={{ display: 'flex', width, height, cursor: 'pointer', marginTop: compact || thumbnail ? 0 : 12, marginBottom: compact || thumbnail ? 0 : 12, flexShrink: 0, opacity: viewer.away ? 0 : 1 }}
     >
-      <img src={src} alt={label} objectFit={thumbnail ? "cover" : "contain"}
+      <img src={src} alt={label} objectFit={thumbnail ? "cover" : "contain"} onLoad={decoded ? undefined : () => setDecoded(true)}
         style={{ width, height, borderRadius: compact ? 8 : 12, borderWidth: 1, borderColor: outline, pointerEvents: 'none' }} />
     </div>
-    {open && <ImageLightbox src={src} label={label} size={size} finalFocus={() => {
-      if (trigger.current) {
-        if (restoreFocus) restoreFocus(trigger.current.id)
-        else renderer.focusElement?.(trigger.current.id)
+    </Rise>
+    {viewer.open && <ImageViewer testId="image-lightbox" src={src} label={label} from={viewer.open.from} source={viewer.source} finalFocus={() => {
+      const trigger = viewer.node.current
+      if (trigger) {
+        if (restoreFocus) restoreFocus(trigger.id)
+        else renderer.focusElement?.(trigger.id)
       }
-    }} onClose={() => setOpen(false)} />}
+    }} onClose={viewer.hide} />}
     </>
   )
 }
 
-/** Native motion has no transform scale; keep the fade and a 4px entrance
- * offset. No JS animation loop; Reduce Motion is opacity only. */
-function ImageLightbox({ src, label, size, onClose, finalFocus }: { src: string; label: string; size: { width: number; height: number } | null; onClose: () => void; finalFocus: () => void }) {
+/** An image that cannot be shown, in a dialog with its caption and what to do (a clicked image link that failed to load). The
+ * fade and a 4px entrance offset; Reduce Motion is opacity only. */
+export function ImageLightbox({ label, onClose, finalFocus, body }: { label: string; onClose: () => void; finalFocus: () => void; body: ReactNode }) {
   const renderer = useGpuixRequired()
   const window = renderer.getWindowSize?.() ?? { width: 900, height: 600 }
   useTranscriptRowLease(true)
-  const maxWidth = Math.min(1000, window.width - 80)
-  const maxHeight = window.height - 140
-  const ratio = size ? Math.min(maxWidth / size.width, maxHeight / size.height, 1) : 1
-  const width = size ? Math.round(size.width * ratio) : maxWidth
-  const height = size ? Math.round(size.height * ratio) : maxHeight
   const [closing, setClosing] = useState(false)
-  return <Dialog width={width + 32} onClose={() => setClosing(true)} finalFocus={finalFocus} testId="image-lightbox" instant>
+  return <Dialog width={Math.min(1000, window.width - 80) + 32} onClose={() => setClosing(true)} finalFocus={finalFocus} testId="image-lightbox" instant>
     <motion.div
       initial={{ opacity: 0, top: REDUCED_MOTION ? 0 : 4 }}
       animate={{ opacity: closing ? 0 : 1, top: closing && !REDUCED_MOTION ? 4 : 0 }}
@@ -148,8 +157,7 @@ function ImageLightbox({ src, label, size, onClose, finalFocus }: { src: string;
       style={{ display: 'flex', flexDirection: 'column', position: 'relative' }}
     >
       <DialogHeader title={label} onClose={() => setClosing(true)} />
-      <ImageActions source={src} label={label} />
-      <div style={{ padding: 16, paddingTop: 0 }}><img src={src} alt={label} objectFit="contain" style={{ width, height, borderRadius: 8 }} /></div>
+      {body}
     </motion.div>
   </Dialog>
 }

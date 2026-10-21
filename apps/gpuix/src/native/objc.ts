@@ -15,6 +15,8 @@ function load() {
     class_getName: { args: [FFIType.ptr], returns: FFIType.cstring },
     class_getMethodImplementation: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.ptr },
     class_replaceMethod: { args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr], returns: FFIType.ptr },
+    objc_autoreleasePoolPush: { args: [], returns: FFIType.ptr },
+    objc_autoreleasePoolPop: { args: [FFIType.ptr], returns: FFIType.void },
   })
   // `objc_msgSend` has no fixed signature; bind it once per shape used here.
   const send = (args: FFIType[], returns: FFIType) =>
@@ -39,6 +41,20 @@ const selectors = new Map<string, Pointer>()
 export function getObjc(): Objc {
   objc ??= load()
   return objc
+}
+/**
+ * Run `fn` inside an autorelease pool. Bun's main thread has none of its own,
+ * so whatever AppKit autoreleases for a call made from JS (the array behind
+ * `windows`, the buffer behind `UTF8String`) would otherwise live as long as
+ * the process. `fn` must not return an object pointer: the pool releases it.
+ */
+export function withPool<T>(o: Objc, fn: () => T): T {
+  const pool = o.rt.objc_autoreleasePoolPush() as Pointer
+  try {
+    return fn()
+  } finally {
+    o.rt.objc_autoreleasePoolPop(pool)
+  }
 }
 export function sel(o: Objc, name: string): Pointer {
   let s = selectors.get(name)

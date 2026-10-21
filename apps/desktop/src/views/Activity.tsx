@@ -1,3 +1,4 @@
+import { IconSwap } from "@/components/kybern/motion"
 import { memo, useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 
@@ -113,13 +114,13 @@ const RuntimeTaskRow = memo(function RuntimeTaskRow({ task, now }: { task: Runti
           <div className="mt-1.5 flex items-center gap-1">
             {task.capabilities.background && (
               <Button size="chip" variant="ghost" disabled={action !== null} onClick={() => void run("background")}>
-                {action === "background" ? <Spinner size={12} /> : <BackgroundTrayIcon className="size-3" />}
+                <IconSwap tempo="quick" className="size-3" active={action === "background" ? "a" : "b"} a={<Spinner size={12} />} b={<BackgroundTrayIcon className="size-3" />} />
                 Move to background
               </Button>
             )}
             {task.capabilities.stop && (
               <Button size="chip" variant="ghost" disabled={action !== null || task.status === "stopping"} onClick={() => void run("stop")}>
-                {action === "stop" || task.status === "stopping" ? <Spinner size={12} /> : <StopIcon className="size-3" />}
+                <IconSwap tempo="quick" className="size-3" active={action === "stop" || task.status === "stopping" ? "a" : "b"} a={<Spinner size={12} />} b={<StopIcon className="size-3" />} />
                 Stop
               </Button>
             )}
@@ -131,9 +132,13 @@ const RuntimeTaskRow = memo(function RuntimeTaskRow({ task, now }: { task: Runti
 })
 
 function TaskGlyph({ task }: { task: RuntimeTask }) {
+  const spinning = task.status !== "failed" && isRuntimeTaskActive(task) && (task.status === "running" || task.status === "pending" || task.status === "stopping")
+  return <IconSwap tempo="quick" className="size-3.5" active={spinning ? "a" : "b"} a={<ThreadRunningSpinner className="size-3.5" />} b={<SettledTaskGlyph task={task} />} />
+}
+
+function SettledTaskGlyph({ task }: { task: RuntimeTask }) {
   if (task.status === "failed") return <CircleAlertIcon className="size-3.5 text-destructive" />
   if (!isRuntimeTaskActive(task)) return <CircleCheckIcon className="size-3.5 opacity-60" />
-  if (task.status === "running" || task.status === "pending" || task.status === "stopping") return <ThreadRunningSpinner className="size-3.5" />
   if (task.kind === "process") return <ComputerTerminalIcon className="size-3.5" />
   if (task.kind === "monitor") return <ClockIcon className="size-3.5" />
   return <RobotIcon className="size-3.5" />

@@ -53,7 +53,7 @@ export function CoordinatorCard({ approval, count }: { approval: ApprovalRequest
     <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', marginTop: 12 }}>
       {(brief || git?.op === 'merge_pr') && <Para color={muted(t, .65)} size={11} style={{ flexGrow: 1 }}>{brief ? COPY.briefFootnote : COPY.mergeWarning}</Para>}
       <Button variant="ghost" testId="coordinator-decline" disabled={busy} onClick={() => void respond({ decision: 'deny' })}>{COPY.decline}</Button>
-      <Button testId="coordinator-accept" disabled={busy || (!!brief && !text.trim()) || (!!settings && !accepted.size)} onClick={() => void accept()}>{busy ? COPY.saving : brief ? COPY.briefSave : settings ? `Apply ${accepted.size} ${accepted.size === 1 ? 'change' : 'changes'}` : copy?.action}</Button>
+      <Button swap testId="coordinator-accept" disabled={busy || (!!brief && !text.trim()) || (!!settings && !accepted.size)} onClick={() => void accept()}>{busy ? COPY.saving : brief ? COPY.briefSave : settings ? `Apply ${accepted.size} ${accepted.size === 1 ? 'change' : 'changes'}` : copy?.action}</Button>
     </div>
   </PanelBody>
 }

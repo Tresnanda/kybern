@@ -17,7 +17,7 @@ import { prFileUrl } from '@/views/pullRequests/prDiff'
 import type { PrPageKind, PrReviewEntry } from '../../../../packages/kybern-client/src/types.ts'
 import { Label, ink, useTheme } from '../ui.tsx'
 import { Button, Segments, column, row } from '../usage/controls.tsx'
-import { openUrl, Problem } from './PrStates.tsx'
+import { openUrl, PrLoading, Problem } from './PrStates.tsx'
 import { usePage, type Review } from './useReview.ts'
 
 export function Changes({ projectId, number, review, compact = false }: { projectId: string; number: number; review: Review; compact?: boolean }) {
@@ -53,7 +53,7 @@ export function Changes({ projectId, number, review, compact = false }: { projec
           </div>)}</virtual-list>
         </div>
         <div style={{ ...column, flexGrow: 1, minWidth: 0, minHeight: 0, borderWidth: file ? 1 : 0, borderColor: t.border, borderRadius: 8, overflow: 'hidden' }}>
-          {!file ? <Label color={t.textSecondary} size={13}>{data ? 'No changed files on this page.' : 'Loading changes…'}</Label> : <>
+          {!file ? (data ? <Label color={t.textSecondary} size={13}>No changed files on this page.</Label> : <div style={{ padding: 16 }}><PrLoading label="Loading changes…" rows={7} /></div>) : <>
             <div style={{ ...row, gap: 0, height: 37, flexShrink: 0, borderBottomWidth: 1, borderColor: t.border, backgroundColor: t.v('--background') }}><div style={{ flexGrow: 1, minWidth: 0 }}><NativeDiffHeader file={file} /></div><IconButton icon={glyph(LinkSquare02Icon)} size={24} glyph={14} label="Open file on GitHub" onClick={() => { if (review.detail) void prFileUrl(review.detail.pull_request.url, file.path).then(openUrl) }} /></div>
             {file.patch ? <diff key={file.path} {...PR_SCROLL_LAYOUT} testId="pr-native-diff" patch={patch} scroll theme={diffTheme} maxLines={visibleLines} onShowMore={() => setVisibleLines(n => n + 600)} onLineClick={e => {
               if (stale) { setLineError('This draft belongs to a different commit. Resolve the previous draft before choosing a new inline anchor.'); return }
@@ -79,7 +79,7 @@ export function Timeline({ projectId, number, review, onSend }: { projectId: str
   const { data, error } = usePage(projectId, number, kind, page, review.revision, review.detail?.head_sha)
   return <div testId="pr-timeline" style={{ ...column, flexGrow: 1, minHeight: 0 }}><div style={{ ...row, paddingLeft: 24, paddingRight: 24, paddingTop: 12, paddingBottom: 0 }}><Segments value={kind} options={SOURCES} onChange={v => { setKind(v); setPage(1) }} testId="pr-source" width={[90,74,126]} plain /></div>
     {error ? <div style={{ padding: 24 }}><Problem error={error} refresh={review.refresh} /></div> : <virtual-list {...PR_SCROLL_LAYOUT} testId="pr-timeline-entries" estimatedItemHeight={140} style={{ flexGrow: 1, minHeight: 0 }}>
-      {!data ? <div key="loading" style={{ padding: 24 }}><Label color={t.textSecondary}>Loading…</Label></div> : data.entries.length === 0 ? <div key="empty" style={{ padding: 24 }}><Label color={t.textSecondary}>{`No ${SOURCES.find(s => s[0] === kind)?.[1].toLowerCase() ?? 'comments'} on this page.`}</Label></div> : data.entries.map(entry => <Entry key={`${kind}:${entry.id}`} entry={entry} checked={review.draft.selected.includes(`${kind}:${entry.id}`)} onToggle={() => review.saveDraft(toggleReviewFinding(review.draft, `${kind}:${entry.id}`, entry))} />)}
+      {!data ? <div key="loading" style={{ padding: 24 }}><PrLoading label="Loading…" rows={5} /></div> : data.entries.length === 0 ? <div key="empty" style={{ padding: 24 }}><Label color={t.textSecondary}>{`No ${SOURCES.find(s => s[0] === kind)?.[1].toLowerCase() ?? 'comments'} on this page.`}</Label></div> : data.entries.map(entry => <Entry key={`${kind}:${entry.id}`} entry={entry} checked={review.draft.selected.includes(`${kind}:${entry.id}`)} onToggle={() => review.saveDraft(toggleReviewFinding(review.draft, `${kind}:${entry.id}`, entry))} />)}
       <div key="pagination" style={{ ...row, justifyContent: 'space-between', padding: 24 }}><Label color={t.textSecondary} size={13}>{`Page ${page}`}</Label><Pager page={page} more={!!data?.has_more} loading={!data} setPage={setPage} /></div>
     </virtual-list>}
     {review.draft.selected.length > 0 && <div style={{ ...row, justifyContent: 'center', paddingBottom: 12 }}><Label color={t.text} size={13}>{`${review.draft.selected.length} selected`}</Label><Button onClick={() => review.updateDraft({ selected: [], findings: {} })}>Clear</Button><Button onClick={onSend}>Send to agent</Button></div>}

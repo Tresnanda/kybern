@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
+import { IconSwap, TextSwap } from "@/components/kybern/motion"
 import { toast } from "sonner"
 import { Composer } from "../Composer"
 import { SubagentBar } from "./SubagentPage"
@@ -78,14 +79,14 @@ export function NativeSubagentComposer({ thread, providers, surfaceMode, isFocus
         {loadError && <p role="alert" className="mt-1 text-destructive">Unable to load delivery status: {loadError}</p>}
         {visible.length > 0 && <ul aria-label="Subagent message delivery" className="mt-2 flex max-h-40 flex-col gap-2 overflow-y-auto">
           {visible.map((message) => <li key={message.id} className="flex min-w-0 flex-wrap items-start gap-2" data-subagent-message-status={message.status}>
-            {message.parent_queued || message.status === "pending" ? <ClockIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" /> : message.status === "delivered" ? <CheckIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" /> : <CircleAlertIcon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-destructive" />}
+            <IconSwap tempo="quick" className="mt-0.5 size-3.5 shrink-0" active={message.parent_queued || message.status === "pending" ? "a" : "b"} a={<ClockIcon aria-hidden className="size-3.5" />} b={message.status === "delivered" ? <CheckIcon aria-hidden className="size-3.5" /> : <CircleAlertIcon aria-hidden className="size-3.5 text-destructive" />} />
             <div className="min-w-0 flex-1 basis-40 break-words">
               <p role="status" className={cn(message.status === "failed" && !message.parent_queued && "text-destructive")}>
                 {message.parent_queued ? "Queued for parent" : message.status === "pending" ? "Waiting for next tool call" : message.status === "delivered" ? "Delivered to subagent" : message.error ?? "Not delivered — subagent finished"}
               </p>
               <p className="line-clamp-2" title={messagePreview(message)}>{messagePreview(message)}</p>
             </div>
-            {message.status === "failed" && !message.parent_queued && <Button variant="ghost" size="sm" className="h-7 shrink-0 px-2 text-xs" disabled={forwarding === message.id} onClick={() => void forward(message)}>{forwarding === message.id ? "Sending…" : "Send to parent"}</Button>}
+            {message.status === "failed" && !message.parent_queued && <Button variant="ghost" size="sm" className="h-7 shrink-0 px-2 text-xs" disabled={forwarding === message.id} onClick={() => void forward(message)}><TextSwap text={forwarding === message.id ? "Sending…" : "Send to parent"} /></Button>}
           </li>)}
         </ul>}
       </ComposerStackedPanel>

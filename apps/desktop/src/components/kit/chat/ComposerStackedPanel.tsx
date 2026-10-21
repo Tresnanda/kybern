@@ -13,6 +13,9 @@ export { COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME } from "@/components/kit/chat
 
 const ComposerPanelStackContext = createContext(false);
 
+/** True while a resolved request card is held on screen for its exit; panels mark themselves `data-leaving`. */
+export const ComposerPanelLeavingContext = createContext(false);
+
 /** One outline and glass layer for attached panels, regardless of their order.
  *  Close the bottom edge when a blocking question replaces the input. */
 export function ComposerPanelStack({ children, closed = false }: { children: ReactNode; closed?: boolean }) {
@@ -50,11 +53,12 @@ export function ComposerStackedPanel({
   ...rest
 }: ComposerStackedPanelProps) {
   const inStack = useContext(ComposerPanelStackContext);
+  const leaving = useContext(ComposerPanelLeavingContext);
   const attachedToPrevious = attachedToPreviousProp ?? false;
   const passthroughSideMargins = passthroughSideMarginsProp ?? false;
   const borderless = borderlessProp ?? false;
   if (inStack) {
-    return <div ref={ref} className={cn("composer-panel-section", className)} {...rest}>{children}</div>;
+    return <div ref={ref} className={cn("composer-panel-section", className)} data-leaving={leaving || undefined} {...rest}>{children}</div>;
   }
   return (
     <ComposerStackedHeaderFrame

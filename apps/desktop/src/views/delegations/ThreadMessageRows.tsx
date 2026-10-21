@@ -17,7 +17,7 @@ import { liveSend, type LiveSend } from "../../../../../packages/kybern-client/s
 import { parseSendInput, parseSendResult } from "../../../../../packages/kybern-client/src/orchestrationTools.ts"
 import type { Block } from "../../../../../packages/kybern-client/src/transcript.ts"
 import { Logo, ProviderMark } from "@/components/kybern/bits"
-import { TextSwap } from "@/components/kybern/motion"
+import { IconSwap, TextSwap } from "@/components/kybern/motion"
 import { DisclosureChevron } from "@/components/kit/DisclosureChevron"
 import { DisclosureRegion } from "@/components/kit/DisclosureRegion"
 import { Button } from "@/components/kit/button"
@@ -312,13 +312,13 @@ export const SentToRow = memo(function SentToRow({ block, legacy }: { block: Too
           <PurposeIcon purpose={input.purpose} />
         </span>
         <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden leading-6 text-muted-foreground transition-colors group-hover/st:text-foreground" style={CHAT_FONT}>
-          <span className="shrink-0">{block.complete ? "Sent to" : "Sending to"}</span>
+          <TextSwap text={block.complete ? "Sent to" : "Sending to"} className="shrink-0" />
           {target && <ProviderMark kind={target.provider.kind} size={12} className="size-3 shrink-0" />}
           <span className="min-w-0 truncate" title={title}>{title}</span>
           <span className="shrink-0 text-foreground/40">· {purposeLabel(input.purpose)}</span>
         </span>
         <span className={cn("inline-flex shrink-0 items-center gap-1 text-xs", failed ? "text-destructive" : held ? "text-amber-700 dark:text-amber-300/90" : "text-foreground/55")}>
-          {sendGlyph(live, block.complete, block.isError)}
+          <IconSwap tempo="quick" className="size-3" active={block.complete || block.isError ? "b" : "a"} a={<ClockIcon className="size-3" aria-hidden />} b={sendGlyph(live, true, block.isError)} />
           <TextSwap text={word} />
         </span>
         <DisclosureChevron open={open} className="size-3 text-muted-foreground/65 group-hover/st:text-foreground" />

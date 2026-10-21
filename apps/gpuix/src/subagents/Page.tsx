@@ -4,6 +4,7 @@ import { Icon } from '../icons.tsx'
 import { T } from '../transcript/glyphs.ts'
 import { Elapsed } from './Elapsed.tsx'
 import { motion } from '@gpuix/react'
+import { SwapOnChange, EASE } from '../motion/kit.tsx'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { formatTokenCount, isSubagentQueued, subagentBarState, subagentSpan, subagentThreadPhase, subagentTokenCount } from '../../../../packages/kybern-client/src/subagents.ts'
@@ -14,6 +15,7 @@ import { getThreadOpen, subscribe, useApp, usePaneAccess, PaneProvider, type App
 import { Button, Para, muted } from '../transcript/kit.tsx'
 import { copyText } from '../transcript/store.ts'
 import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 
 /** Keyboard history is instant. Pointer navigation follows the parent/child
  * hierarchy with a short native left/opacity tween; no JS animation loop. */
@@ -70,15 +72,23 @@ export function SubagentBar({ thread, embedded = false }: { thread: Thread; embe
   const elapsed = span?.endedAt != null ? span.endedAt - span.startedAt : null
   const state = subagentBarState(thread, elapsed)
   const tokens = formatTokenCount(subagentTokenCount(thread))
+  // Actions that appear because the child changed state fade in; a bar first rendered in that state shows them at once.
+  const [firstPhase] = useState(phase)
+  const settled = phase !== firstPhase
   return <div testId="subagent-bar" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, width: '100%', minHeight: 48, padding: 8, paddingLeft: 16, borderRadius: embedded ? 0 : 19.2, borderWidth: embedded ? 0 : 1, borderColor: t.border, backgroundColor: embedded ? undefined : t.surface }}>
-    {phase === 'working' ? <MatrixLoader /> : <Icon source={phase === 'failed' ? T.alert : T.check} size={14} color={muted(t)} />}
-    <Label color={phase === 'failed' ? t.red : t.text} size={13}>{isSubagentQueued(thread) ? 'Starting' : state.label}</Label>
+    {/* Loader → check / alert and "Working" → "Done" cross-swap when the child settles (`IconSwap` / `TextSwap`). */}
+    <SwapOnChange kind="icon" active={phase} style={{ width: 14, height: 14, flexShrink: 0 }}>
+      {phase === 'working' ? <MatrixLoader /> : <Icon source={phase === 'failed' ? T.alert : T.check} size={14} color={muted(t)} />}
+    </SwapOnChange>
+    <SwapOnChange active={isSubagentQueued(thread) ? 'Starting' : state.label} style={{ flexShrink: 0 }}>
+      <Label color={phase === 'failed' ? t.red : t.text} size={13}>{isSubagentQueued(thread) ? 'Starting' : state.label}</Label>
+    </SwapOnChange>
     {phase === 'working' && span && !isSubagentQueued(thread) && <Elapsed startedAt={span.startedAt} endedAt={null} />}
     <div style={{ height: 16, width: 1, backgroundColor: t.border }} />
     <ProviderMark kind={thread.provider.kind} size={12} />
     <Label color={muted(t)} size={12} truncate>{[thread.model, thread.effort, tokens].filter(Boolean).join(' · ')}</Label>
     <div style={{ flexGrow: 1 }} />
-    {phase === 'failed' && (info.result || info.detail) && <Button variant="ghost" onClick={() => copyText(info.result || info.detail || '')}>Copy error</Button>}
+    {phase === 'failed' && (info.result || info.detail) && <BarAction play={settled}><Button variant="ghost" onClick={() => copyText(info.result || info.detail || '')}>Copy error</Button></BarAction>}
     {thread.parent_thread_id && <Button variant="ghost" testId="subagent-open-parent" onClick={() => openThread(thread.parent_thread_id!)}>Open parent</Button>}
     {phase === 'working' && info.capabilities?.background && !info.backgrounded && <Button variant="ghost" testId="subagent-run-background" onClick={() => void controlSubagent(thread, 'background')}>Run in background</Button>}
     {phase === 'working' && info.capabilities?.stop !== false && <Button variant="chrome-outline" testId="subagent-stop" onClick={() => void controlSubagent(thread, 'stop')}>Stop</Button>}
@@ -94,4 +104,16 @@ export function SubagentDivider({ thread, end = false }: { thread: Thread; end?:
   if (end && phase === 'working') return null
   const label = end ? phase === 'done' ? `Result returned to ${name}` : phase === 'failed' ? `Failure reported to ${name}` : 'Stopped' : `Subagent of ${name}`
   return <div testId={end ? 'subagent-end' : 'subagent-divider'} style={{ display: 'flex', alignItems: 'center', gap: 12, paddingTop: end ? 22 : 8, paddingBottom: end ? 8 : 18 }}><div style={{ height: 1, flexGrow: 1, backgroundColor: t.border }} /><div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>{!end && <ProviderMark kind={thread.provider.kind} size={11} />}<div onClick={thread.parent_thread_id ? () => openThread(thread.parent_thread_id!) : undefined} style={{ cursor: thread.parent_thread_id ? 'pointer' : 'default', maxWidth: '75%' }}><Para color={phase === 'failed' && end ? t.red : muted(t)} size={11}>{`${label}${!end && thread.subagent?.started_at ? ` · ${clockTime(thread.subagent.started_at)}` : ''}`}</Para></div></div><div style={{ height: 1, flexGrow: 1, backgroundColor: t.border }} /></div>
+}
+
+/** `sa-bar-action`: a bar action that appears because the child changed state fades in from a 2 px blur over 150 ms (`--ease-out`). */
+function BarAction({ play, children }: { play: boolean; children: ReactNode }) {
+  return (
+    <div
+      paintTransform={play && PATCHED_NATIVE ? REDUCED_MOTION ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: 0.15, ease: [...EASE.out] } } : { initial: { opacity: 0, blur: 2 }, animate: { opacity: 1, blur: 0 }, transition: { duration: 0.15, ease: [...EASE.out] } } : undefined}
+      style={{ display: 'flex' }}
+    >
+      {children}
+    </div>
+  )
 }

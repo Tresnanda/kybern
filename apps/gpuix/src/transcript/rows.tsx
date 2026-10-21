@@ -38,6 +38,7 @@ import { ResponseImage } from './images.tsx'
 import { MidTurnMessage } from './bubble.tsx'
 import { cachedMarkdownTheme, Chevron, CODE, destructive, fg, muted, Para, ROW_LINE, RowIcon, TEXT } from './kit.tsx'
 import { Collapse, Rise } from '../motion/kit.tsx'
+import { markTreeOpen, NoTreeSlot, TICK_GAP, TreeBox, TreeGroup, TreeItem, TreeLines, useTreeSlot, type Joint, type TreeShape } from '../tree/Tree.tsx'
 import { useLoopVisibility } from '../native/loop-visibility.ts'
 import { Shimmer, SwapOnChange, useFresh, useSmoothText, useStreamEffects } from './motion.tsx'
 import { hydrateToolOutput, useRowState, usePacedAssistant, type ToolBlock } from './store.ts'
@@ -129,7 +130,8 @@ function surfaceLabel(surface: ToolSurface, input: JsonValue, complete: boolean,
   return complete ? `Used ${target}` : `Using ${target}`
 }
 
-export function approvalRowText(approval: ApprovalRequest, decision: ApprovalDecision | null, live = true): string {
+export function approvalRowText(approval: ApprovalRequest, decision: ApprovalDecision | null, live = true, auto = false): string {
+  if (auto) return `Allowed by Full access — ${approval.summary || approval.tool_name}`
   const secret = secretRequestInput(approval)
   if (secret) return secretPartsText(secretOutcomeLine(secret, decision, live))
   const coordinator = coordinatorCardLine(approval, decision, live)
@@ -176,27 +178,67 @@ export const WorkRows = memo(function WorkRows({
     () => (compact ? chunkWork(blocks, ctx.tasksByToolCall) : blocks.map((block) => ({ kind: 'single', block }))),
     [blocks, ctx.tasksByToolCall, compact],
   )
+  // Inside a disclosure (`TreeGroup`) every row hangs from the parent's stem; outside one `TreeItem` adds nothing.
+  const places = useMemo(() => {
+    const list = chunks.map(treePlace)
+    let lastNode = list.length - 1
+    while (lastNode >= 0 && list[lastNode]!.joint === 'pass') lastNode--
+    return list.map((place, i) => ({ ...place, last: i >= lastNode }))
+  }, [chunks])
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      {chunks.map((chunk) =>
-        chunk.kind === 'single' ? (
-          <WorkRow
-            key={chunk.block.id}
-            block={chunk.block}
-            ctx={ctx}
-            tone={tone}
-            live={chunk.block.kind === 'assistant' && chunk.block.id === liveTextId}
-            thinking={chunk.block.kind === 'assistant' && chunk.block.id === liveThinkingId}
-          />
-        ) : chunk.kind === 'tools' ? (
-          <ToolGroupRow key={chunkKey(chunk)} blocks={chunk.blocks} ctx={ctx} />
-        ) : (
-          <LaunchGroupRow key={chunkKey(chunk)} kind={chunk.kind} blocks={chunk.blocks} ctx={ctx} />
-        ),
-      )}
+      {chunks.map((chunk, i) => (
+        <TreeItem key={chunk.kind === 'single' ? chunk.block.id : chunkKey(chunk)} index={i} count={chunks.length} {...places[i]!}>
+          {chunk.kind === 'single' ? (
+            <WorkRow
+              block={chunk.block}
+              ctx={ctx}
+              tone={tone}
+              live={chunk.block.kind === 'assistant' && chunk.block.id === liveTextId}
+              thinking={chunk.block.kind === 'assistant' && chunk.block.id === liveThinkingId}
+            />
+          ) : chunk.kind === 'tools' ? (
+            <ToolGroupRow blocks={chunk.blocks} ctx={ctx} />
+          ) : (
+            <LaunchGroupRow kind={chunk.kind} blocks={chunk.blocks} ctx={ctx} />
+          )}
+        </TreeItem>
+      ))}
     </div>
   )
 })
+
+/** Where a work row meets its group's stem: the y of its icon's centre and the x its tick stops at (3px short of the
+ *  icon). Prose, images and mid-turn messages are not steps, so the stem runs past them (`pass`); a reasoning block
+ *  is a step through its "Thought" row. */
+function treePlace(chunk: WorkChunk): { joint: Joint; anchor: number; tickEnd?: number } {
+  if (chunk.kind === 'tools') return { joint: 'node', anchor: 16 }
+  // `LaunchGroupRow`: 6px padding, then a 36px header around its 24px badge (its 4px margins sit outside the box).
+  if (chunk.kind !== 'single') return { joint: 'node', anchor: 24, tickEnd: -TICK_GAP }
+  const block = chunk.block
+  switch (block.kind) {
+    case 'assistant':
+      return block.thinking.trim() ? { joint: 'node', anchor: 16, tickEnd: 2 - TICK_GAP } : { joint: 'pass', anchor: 16 }
+    case 'image':
+    case 'user':
+      return { joint: 'pass', anchor: 16 }
+    case 'notice':
+      return { joint: 'node', anchor: 14, tickEnd: 2 - TICK_GAP }
+    case 'approval':
+      return { joint: 'node', anchor: 16, tickEnd: 2 - TICK_GAP }
+    case 'tool':
+      // `SentToRow`: a 14px icon at the left edge of a 28px line under 4px of padding.
+      if (orchestrationTool(block.call.name) === 'thread_send' && parseSendInput(block.call.input).threadId) return { joint: 'node', anchor: 18, tickEnd: -TICK_GAP }
+      return { joint: 'node', anchor: 16 }
+    default:
+      return { joint: 'node', anchor: 16 }
+  }
+}
+
+/** The stem leaving below a 16px row icon when its group is open (`RowLine`, the "Worked for" header): 3px under the glyph. */
+export const HEADER_STEM: TreeShape = { anchor: 12, below: { x: 8, from: 19 + TICK_GAP, to: ROW_LINE } }
+/** A group's children sit 22px in; their stem is the parent icon's centre line and ticks stop 3px short of their own icons. */
+export const GROUP_TREE = { x: 8 - 22, tickEnd: 1 - TICK_GAP } as const
 
 /** Muted label that brightens on hover, like `TONE`. */
 /** The generic approval's `IconSwap`: the matrix loader, then `<CheckIcon className="t-success" />` once answered. The check
@@ -204,7 +246,7 @@ export const WorkRows = memo(function WorkRows({
 function ApprovalStatus({ decided, color }: { decided: boolean; color: string }) {
   const [answeredAtMount] = useState(decided)
   return (
-    <SwapOnChange active={decided ? 'done' : 'waiting'} style={{ flexShrink: 0 }}>
+    <SwapOnChange kind="icon" active={decided ? 'done' : 'waiting'} style={{ flexShrink: 0 }}>
       <div style={{ display: 'flex', width: 20, height: 20, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
         {decided ? <SuccessCheck size={16} color={color} play={!answeredAtMount} /> : <MatrixLoader />}
       </div>
@@ -233,6 +275,7 @@ function RowLine({
   trailing,
   onClick,
   testId,
+  stem = false,
 }: {
   icon: React.ReactNode
   iconColor?: string
@@ -243,14 +286,17 @@ function RowLine({
   trailing?: React.ReactNode
   onClick?: () => void
   testId?: string
+  /** Its children are open below: the tree's stem starts under the icon. */
+  stem?: boolean
 }) {
   const t = useTheme()
   return (
     <div
       testId={testId}
       onClick={onClick}
-      style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, cursor: onClick ? 'pointer' : 'default' }}
+      style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, cursor: onClick ? 'pointer' : 'default' }}
     >
+      {stem && <TreeLines shape={HEADER_STEM} />}
       {typeof icon === 'string' ? <RowIcon source={icon} color={iconColor ?? muted(t)} /> : icon}
       <div style={{ display: 'flex', flexGrow: 1, flexShrink: 1, minWidth: 0 }}>
         <ToneLabel color={labelColor} shimmer={shimmer}>{label}</ToneLabel>
@@ -269,24 +315,32 @@ function RowLine({
 const ToolGroupRow = memo(function ToolGroupRow({ blocks, ctx }: { blocks: ToolBlock[]; ctx: RowContext }) {
   const [open, setOpen] = useRowState(`group:${blocks[0]!.id}`, false)
   const summary = useMemo(() => summarizeToolCalls(blocks.map((b) => ({ call: b.call, complete: b.complete, isError: b.isError }))), [blocks])
+  const tree = useTreeSlot()
   if (!summary)
     return (
-      <>
-        {blocks.map((block) => (
-          <ToolRow key={block.id} block={block} ctx={ctx} />
-        ))}
-      </>
-    )
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', paddingTop: 4, paddingBottom: 4 }}>
-      <RowLine testId="tool-group" icon={workIcon(summary.visual, false)} label={summary.label} chevron={open ? 'open' : 'closed'} onClick={() => setOpen(!open)} />
-      <Collapse open={open}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingTop: 2, marginLeft: 22 }}>
+      <TreeBox>
+        <NoTreeSlot>
           {blocks.map((block) => (
             <ToolRow key={block.id} block={block} ctx={ctx} />
           ))}
+        </NoTreeSlot>
+      </TreeBox>
+    )
+  return (
+    <div paintTransform={tree.rise} style={{ position: 'relative', display: 'flex', flexDirection: 'column', paddingTop: 4, paddingBottom: 4 }}>
+      <RowLine testId="tool-group" icon={workIcon(summary.visual, false)} label={summary.label} chevron={open ? 'open' : 'closed'} stem={open} onClick={() => { if (!open) markTreeOpen(); setOpen(!open) }} />
+      <Collapse open={open}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingTop: 2, marginLeft: 22 }}>
+          <TreeGroup {...GROUP_TREE} inset={2} gap={2} open={open}>
+            {blocks.map((block, i) => (
+              <TreeItem key={block.id} joint="node" last={i === blocks.length - 1} index={i} count={blocks.length} anchor={16}>
+                <ToolRow block={block} ctx={ctx} />
+              </TreeItem>
+            ))}
+          </TreeGroup>
         </div>
       </Collapse>
+      {tree.lines}
     </div>
   )
 })
@@ -305,17 +359,18 @@ export const WorkRow = memo(function WorkRow({
   thinking?: boolean
 }) {
   const t = useTheme()
+  const tree = useTreeSlot()
   switch (block.kind) {
     case 'tool':
       return <ToolRow block={block} ctx={ctx} />
     case 'image':
-      return <ResponseImage source={block.source} />
+      return <TreeBox><ResponseImage source={block.source} at={block.at} /></TreeBox>
     case 'assistant':
       return <AssistantWorkRow block={block} tone={tone} live={live} thinkingLive={thinking} />
     case 'runtime_task':
       return <RuntimeTaskRow task={block.task} thread={block.task.kind === 'agent' ? launchThread(block, ctx) : undefined} />
     case 'approval': {
-      const text = approvalRowText(block.approval, block.decision, live)
+      const text = approvalRowText(block.approval, block.decision, live, block.auto)
       const denied = block.decision?.decision === 'deny'
       const color = denied ? destructive(t, 0.85) : block.decision ? fg(t, 0.8) : muted(t)
       const secret = secretRequestInput(block.approval)
@@ -325,22 +380,24 @@ export const WorkRow = memo(function WorkRow({
         <RowIcon box={20} size={16} source={!block.decision ? T.question : denied ? T.alert : T.checkSquare} color={denied ? destructive(t, 0.85) : block.decision ? fg(t, 0.75) : muted(t)} />
       ) : null
       return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 4, paddingBottom: 4, minWidth: 0 }}>
+        <div paintTransform={tree.rise} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 8, paddingTop: 4, paddingBottom: 4, minWidth: 0 }}>
           {/* `IconSwap` loader → check once the request is answered. */}
           {icon ?? <ApprovalStatus decided={!!block.decision} color={fg(t, 0.75)} />}
           <Label color={color} lineHeight={ROW_LINE} truncate>
             {text}
           </Label>
+          {tree.lines}
         </div>
       )
     }
     case 'notice':
       return (
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, paddingTop: 4, paddingBottom: 4, minWidth: 0 }}>
+        <div paintTransform={tree.rise} style={{ position: 'relative', display: 'flex', alignItems: 'flex-start', gap: 8, paddingTop: 4, paddingBottom: 4, minWidth: 0 }}>
           <RowIcon box={20} size={16} source={T.alert} color={block.level === 'error' ? t.red : muted(t)} />
           <Para color={block.level === 'error' ? t.red : muted(t)} lineHeight={ROW_LINE} selectable style={{ flexGrow: 1 }}>
             {block.text}
           </Para>
+          {tree.lines}
         </div>
       )
     case 'user':
@@ -389,10 +446,11 @@ const ToolRow = memo(function ToolRow({ block, ctx }: { block: ToolBlock; ctx: R
   const nested = view.activity.kind === 'delegate' ? 'Subagent activity' : 'Nested activity'
   // Decided once on mount: only a row that just arrived plays `t-row-enter`.
   const fresh = useFresh(block.at)
-  if (isAgentLaunchBlock(block, task) || isDelegationLaunchBlock(block)) return <LaunchMember block={block} thread={child} task={task} delegated={isDelegationLaunchBlock(block)} />
+  const tree = useTreeSlot()
+  if (isAgentLaunchBlock(block, task) || isDelegationLaunchBlock(block)) return <TreeBox><LaunchMember block={block} thread={child} task={task} delegated={isDelegationLaunchBlock(block)} /></TreeBox>
   if (orchestrationTool(block.call.name) === 'thread_send' && parseSendInput(block.call.input).threadId) return <SentToRow block={block} threadId={ctx.threadId} />
   return (
-    <Rise kind="row" play={fresh} style={{ paddingTop: 4, paddingBottom: 4, minWidth: 0 }}>
+    <Rise kind="row" play={fresh} paint={tree.rise} style={{ position: 'relative', paddingTop: 4, paddingBottom: 4, minWidth: 0 }}>
       <RowLine
         testId={`tool-row-${block.call.id}`}
         icon={workIcon(view.visual, block.isError)}
@@ -408,7 +466,8 @@ const ToolRow = memo(function ToolRow({ block, ctx }: { block: ToolBlock; ctx: R
           ) : undefined
         }
         chevron={opensActivity ? 'forward' : canExpand ? (open ? 'open' : 'closed') : undefined}
-        onClick={child ? () => openThread(child.id) : canExpand ? () => setOpen(!open) : undefined}
+        stem={open && canExpand && children.length > 0}
+        onClick={child ? () => openThread(child.id) : canExpand ? () => { if (!open) markTreeOpen(); setOpen(!open) } : undefined}
       />
       {view.item?.write && agentItemWriteResult(view.itemResult) && (!ctx.inlineItemIds || ctx.inlineItemIds.has(block.call.id)) && <AgentItemCard result={agentItemWriteResult(view.itemResult)!} />}
       {canExpand && (
@@ -419,7 +478,10 @@ const ToolRow = memo(function ToolRow({ block, ctx }: { block: ToolBlock; ctx: R
               <Label color={muted(t, 0.45)} size={11} lineHeight={20} style={{ paddingBottom: 2 }}>
                 {nested}
               </Label>
-              <WorkRows blocks={children} ctx={ctx} />
+              {/* The stem passes the label: the first child's slice reaches up over the panel's padding and the label. */}
+              <TreeGroup {...GROUP_TREE} inset={6 + 22} gap={2} open={open}>
+                <WorkRows blocks={children} ctx={ctx} />
+              </TreeGroup>
             </div>
           )}
           {view.hasOutput && (
@@ -435,6 +497,7 @@ const ToolRow = memo(function ToolRow({ block, ctx }: { block: ToolBlock; ctx: R
         </div>
         </Collapse>
       )}
+      {tree.lines}
     </Rise>
   )
 })
@@ -545,14 +608,18 @@ const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone, live, thi
   const text = useSmoothText(block.text, live && !block.complete && process.env.KYBERN_SMOOTH_STREAM !== '0', block.complete)
   const caret = useLoopVisibility(live && !block.complete && showText)
   const stream = useStreamEffects(text, live && !block.complete && showText, caret.visible)
+  // A "Thought" line is the step (its tick); prose after it, or prose alone, lets the stem run past.
+  const head = useTreeSlot()
+  const rest = useTreeSlot('rest')
   if (!hasThinking && !showText) return null
+  const prose = hasThinking ? rest : head
   return (
     <>
       {hasThinking && (
-        <div style={{ display: 'flex', flexDirection: 'column', paddingTop: 4, paddingBottom: 4 }}>
+        <div paintTransform={head.rise} style={{ position: 'relative', display: 'flex', flexDirection: 'column', paddingTop: 4, paddingBottom: 4 }}>
           <div testId={`thought-${block.id}`} onClick={() => setOpen(!open)} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
             {/* `IconSwap` spinner → brain and `TextSwap` "Thinking" → "Thought". */}
-            <SwapOnChange active={thinkingLive ? 'live' : 'done'} style={{ flexShrink: 0 }}>
+            <SwapOnChange kind="icon" active={thinkingLive ? 'live' : 'done'} style={{ flexShrink: 0 }}>
               {thinkingLive ? (
                 <div style={{ display: 'flex', width: 20, height: 20, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                   <MatrixLoader />
@@ -572,11 +639,13 @@ const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone, live, thi
               <text style={{ color: muted(t), fontSize: TEXT.size, lineHeight: TEXT.lineHeight, fontFamily: FONT_UI, userSelect: 'text' }}>{block.thinking}</text>
             </div>
           </Collapse>
+          {head.lines}
         </div>
       )}
       {showText && (
-        <div ref={caret.ref} style={{ display: 'flex', flexDirection: 'column', paddingLeft: 2, paddingRight: 2 }}>
-          <BoundedMarkdown text={text} tone={tone} stream={stream} />
+        <div ref={caret.ref} paintTransform={prose.rise} style={{ position: 'relative', display: 'flex', flexDirection: 'column', paddingLeft: 2, paddingRight: 2 }}>
+          <BoundedMarkdown text={text} tone={tone} stream={stream} at={block.at} />
+          {prose.lines}
         </div>
       )}
     </>
@@ -592,8 +661,9 @@ export function RuntimeTaskRow({ task, thread }: { task: RuntimeTask; thread?: T
   const status = active
     ? task.status === 'waiting' ? 'Monitoring' : task.status === 'stopping' ? 'Stopping' : 'Active'
     : task.status === 'failed' ? 'Failed' : task.status === 'stopped' || task.status === 'interrupted' ? 'Stopped' : 'Completed'
+  const tree = useTreeSlot()
   return (
-    <div style={{ paddingTop: 4, paddingBottom: 4 }}>
+    <div paintTransform={tree.rise} style={{ position: 'relative', paddingTop: 4, paddingBottom: 4 }}>
       <RowLine
         icon={task.kind === 'process' ? T.terminal : T.robot}
         label={task.kind === 'agent' ? `${active ? 'Delegating' : 'Delegated'} ${task.title}` : `Started ${noun} · ${task.title}`}
@@ -605,9 +675,13 @@ export function RuntimeTaskRow({ task, thread }: { task: RuntimeTask; thread?: T
         chevron={task.kind === 'agent' ? 'forward' : undefined}
         onClick={thread ? () => openThread(thread.id) : undefined}
       />
+      {tree.lines}
     </div>
   )
 }
+
+/** The stem under a launch group's 24px badge (centre 12, 24 from the top of its 48px header). */
+const LAUNCH_STEM: TreeShape = { anchor: 24, below: { x: 12, from: 36 + TICK_GAP } }
 
 /** "N subagents" / "N delegated agents": counts by phase, members on expand.
  *  A member with a known child thread takes its title and phase and opens it. */
@@ -635,9 +709,11 @@ const LaunchGroupRow = memo(function LaunchGroupRow({ kind, blocks, ctx }: { kin
   const [chosen, setChosen] = useRowState<boolean | null>(`launch:${blocks[0]!.id}`, null)
   const expanded = chosen ?? defaultOpen
   const title = kind === 'subagents' ? subagentGroupTitle(members.length) : launchGroupTitle(members.length)
+  const tree = useTreeSlot()
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', marginTop: 4, marginBottom: 4 }}>
-      <div testId={`launch-group-${blocks[0]!.id}`} onClick={() => setChosen(!expanded)} style={{ display: 'flex', alignItems: 'center', gap: 10, paddingTop: 6, paddingBottom: 6, paddingRight: 6, cursor: 'pointer' }}>
+    <div paintTransform={tree.rise} style={{ position: 'relative', display: 'flex', flexDirection: 'column', marginTop: 4, marginBottom: 4 }}>
+      <div testId={`launch-group-${blocks[0]!.id}`} onClick={() => { if (!expanded) markTreeOpen(); setChosen(!expanded) }} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 10, paddingTop: 6, paddingBottom: 6, paddingRight: 6, cursor: 'pointer' }}>
+        {expanded && <TreeLines shape={LAUNCH_STEM} />}
         <div style={{ display: 'flex', width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: t.buttonSecondary, flexShrink: 0 }}>
           {kind === 'subagents' && members[0]?.thread ? <ProviderMark kind={members[0].thread.provider.kind} size={13} /> : <Icon source={T.robot} size={13} color={muted(t)} />}
         </div>
@@ -657,9 +733,17 @@ const LaunchGroupRow = memo(function LaunchGroupRow({ kind, blocks, ctx }: { kin
       </div>
       <PanelPresence show={expanded}><PanelEnter>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 1, marginLeft: 28, paddingBottom: 4 }}>
-          {members.map(member => <LaunchMember grouped key={member.key} block={member.block} thread={member.thread} task={member.task} delegated={kind === 'delegations'} />)}
+          {/* Hung from the 24px badge's centre; each member's status glyph sits 6px into its row. */}
+          <TreeGroup x={12 - 28} tickEnd={6 - TICK_GAP} gap={1} open={expanded}>
+            {members.map((member, i) => (
+              <TreeItem key={member.key} joint="node" last={i === members.length - 1} index={i} count={members.length} anchor={16}>
+                <TreeBox><LaunchMember grouped block={member.block} thread={member.thread} task={member.task} delegated={kind === 'delegations'} /></TreeBox>
+              </TreeItem>
+            ))}
+          </TreeGroup>
         </div>
       </PanelEnter></PanelPresence>
+      {tree.lines}
     </div>
   )
 })

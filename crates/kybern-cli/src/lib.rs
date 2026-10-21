@@ -456,6 +456,12 @@ enum Cmd {
     Cat { project: String, path: String },
     /// Read a linked file relative to a conversation workspace.
     ThreadCat { thread: String, path: String },
+    /// Show which file references name a file in a conversation workspace.
+    ThreadResolve {
+        thread: String,
+        #[arg(required = true)]
+        paths: Vec<String>,
+    },
     /// Commit everything in a thread's working directory.
     Commit {
         thread: String,
@@ -1950,6 +1956,13 @@ pub async fn run() -> Result<()> {
                 if r.truncated {
                     eprintln!("\n[file truncated]");
                 }
+            }
+        }
+        Cmd::ThreadResolve { thread, paths } => {
+            let r =
+                client.call::<ThreadFilesResolve>(ThreadFilesResolveParams { thread_id: thread.parse()?, paths: paths.clone() }).await?;
+            for (path, resolved) in paths.iter().zip(r.paths) {
+                println!("{path}\t{}", resolved.as_deref().unwrap_or("(no file)"));
             }
         }
         Cmd::Cat { project, path } => {

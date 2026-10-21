@@ -1,6 +1,6 @@
 // Small shared pieces: provider mark, logo, copy button, spinner.
 
-import { useEffect, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 
 import { ProviderIcon } from "@/components/kit/ProviderIcon"
 import { IconSwap } from "@/components/kybern/motion"
@@ -36,8 +36,27 @@ export function Logo({ size = 40, className }: { size?: number; className?: stri
   )
 }
 
+/** `[copied, flash]`: `flash()` raises the flag for `ms`; the timer is replaced on repeat and cleared on unmount. */
+// eslint-disable-next-line react-refresh/only-export-components
+export function useCopiedFlag(ms = 1400): [boolean, () => void] {
+  const [copied, setCopied] = useState(false)
+  const timer = useRef<number | null>(null)
+  useEffect(() => () => {
+    if (timer.current !== null) window.clearTimeout(timer.current)
+  }, [])
+  const flash = useCallback(() => {
+    if (timer.current !== null) window.clearTimeout(timer.current)
+    setCopied(true)
+    timer.current = window.setTimeout(() => {
+      timer.current = null
+      setCopied(false)
+    }, ms)
+  }, [ms])
+  return [copied, flash]
+}
+
 export function CopyButton({ text, className, label = "Copy" }: { text: string; className?: string; label?: string }) {
-  const [done, setDone] = useState(false)
+  const [done, flashDone] = useCopiedFlag()
   return (
     <button
       type="button"
@@ -48,8 +67,7 @@ export function CopyButton({ text, className, label = "Copy" }: { text: string; 
       )}
       onClick={() => {
         void copyText(text)
-        setDone(true)
-        setTimeout(() => setDone(false), 1400)
+        flashDone()
       }}
     >
       <IconSwap active={done ? "b" : "a"} a={<CopyIcon className="size-3.5" />} b={<CheckIcon className="size-3.5 text-success" />} />

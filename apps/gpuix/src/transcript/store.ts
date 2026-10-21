@@ -2,6 +2,7 @@ import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
 import { DeferredReads } from '../shell/deferredReads.ts'
 import { startupMark } from '../perf/startup.ts'
 import { createStreamTopology } from './streamBlocks.ts'
+import { pendingFor, removePending, settledPending, subscribePending, withPending } from '../composer/pending.ts'
 // Transcript-side state and actions, mirroring `apps/desktop/src/state/rpc.ts`
 // for the parts the transcript owns: approvals, saved tool output, turn diffs,
 // earlier history pages, and per-row disclosure state that must survive a row
@@ -33,13 +34,18 @@ function rpc() {
 // ---- row state (`useTranscriptRowState`) ----
 
 const rowState = new Map<string, unknown>()
+/** Perf harnesses only (`perf/tree`): the starting value of a row nobody has toggled yet; undefined keeps the row's own. */
+let rowDefault: ((key: string) => unknown) | null = null
+export function setRowStateDefault(value: ((key: string) => unknown) | null) {
+  rowDefault = value
+}
 
 /** Disclosure state keyed by row identity: a row scrolled out of the virtual
  *  list and back keeps whether it was open. */
 export function useRowState<T>(key: string, initial: T): [T, (value: T) => void] {
   key = `${usePaneId()}:${key}`
   const scope = useContext(TranscriptRowStateScope)
-  const [value, setValue] = useState<T>(() => (scope?.has(key) ? scope.get(key) as T : rowState.has(key) ? rowState.get(key) as T : initial))
+  const [value, setValue] = useState<T>(() => (scope?.has(key) ? scope.get(key) as T : rowState.has(key) ? rowState.get(key) as T : (rowDefault?.(key) as T | undefined) ?? initial))
   return [
     value,
     (next: T) => {
@@ -313,14 +319,21 @@ export function usePacedBlocks(): Block[] {
   useEffect(() => {
     const topology = createStreamTopology()
     let shown = pane.get().open.blocks
+    let shownPending = pendingFor(pane.get().selectedId)
     let last = 0
     let timer: ReturnType<typeof setTimeout> | undefined
     const flush = () => {
+      clearTimeout(timer)
       timer = undefined
       last = Date.now()
       shown = pane.get().open.blocks
-      const blocks = process.env.KYBERN_STREAM_ISOLATE === '0' ? shown : topology(shown)
       const threadId = pane.get().selectedId
+      // Optimistic sends (`composer/pending.ts`) join as user blocks until the daemon's own block with their id arrives.
+      shownPending = pendingFor(threadId)
+      const settled = settledPending(shown, shownPending)
+      if (settled.length && threadId) queueMicrotask(() => { for (const id of settled) removePending(threadId, id) })
+      const merged = withPending(shown, shownPending)
+      const blocks = process.env.KYBERN_STREAM_ISOLATE === '0' ? merged : topology(merged)
       setFrame(previous => previous.threadId === threadId && previous.blocks === blocks ? previous : { threadId, blocks })
     }
     const stop = pane.frozen ? () => {} : subscribe(() => {
@@ -329,14 +342,17 @@ export function usePacedBlocks(): Block[] {
       if (wait <= 0) flush()
       else timer = setTimeout(flush, wait)
     })
+    // A send shows on the frame of its Enter: never paced.
+    const stopPending = pane.frozen ? () => {} : subscribePending(() => { if (pendingFor(pane.get().selectedId) !== shownPending) flush() })
     flush()
     return () => {
       stop()
+      stopPending()
       clearTimeout(timer)
     }
   }, [pane])
   // Never paint a previous thread’s paced frame under the next thread’s id.
-  return frame.threadId === threadId ? frame.blocks : pane.get().open.blocks
+  return frame.threadId === threadId ? frame.blocks : withPending(pane.get().open.blocks, pendingFor(threadId))
 }
 
 /** A live row owns its changing text; the transcript above it subscribes only

@@ -19,7 +19,9 @@ import { EnvironmentSwitcher } from './sidebar/EnvironmentSwitcher.tsx'
 import { attentionItems, buildRows, type AttentionKind, type Row } from './sidebar/model.ts'
 import { BlockRow, inProjectBlock, setReorderContext } from './sidebar/reorder.tsx'
 import { DisclosureGroup, diffRows, liveGroups, markDisclosure, withGroups, rowHeight, type Group } from './sidebar/motion.tsx'
-import { Rise } from './motion/kit.tsx'
+import { Rise, SwapOnChange } from './motion/kit.tsx'
+import { ARRIVAL_LEAD, TreeMotion, TreeRise, type TreeMotionState } from './tree/Tree.tsx'
+import { pressRow } from './shell/motion.ts'
 import {
   accent,
   accentActive,
@@ -41,6 +43,10 @@ import { getState, useApp } from './state.ts'
 import { isFreeChatProject } from '../../../packages/kybern-client/src/types.ts'
 import { ink, Label, useTheme } from './ui.tsx'
 import type { Theme } from './theme.ts'
+
+/** `useState(() => !isLaunching())` (`views/Sidebar.tsx`): the list's first appearance at launch is plain; a surface mounted later, by the rail or ⌘B, enters. */
+const LAUNCH_MS = 3000
+const surfaceEnters = () => performance.now() > LAUNCH_MS && !getNav().keyboardNav && !getNav().panelInstant
 
 export function Sidebar() {
   const projects = useApp((s) => s.projects)
@@ -107,11 +113,14 @@ export function Sidebar() {
   const [boxNode, setBoxNode] = useState<PublicInstance | null>(null)
   setReorderContext(rows, listNode, boxNode)
   const ctx = { selectedId: onHome ? selectedId : null, activity, unread, composerDrafts, toggleChildren, toggleMore }
+  // `sidebar-surface-enter`: the actions and the list rise 4px into place when the panel appears (not at launch, not from the keyboard).
+  const [enter] = useState(surfaceEnters)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
       <BrandRow />
       <EnvironmentSwitcher />
+      <Rise kind="surface" play={enter} style={{ flexGrow: 1, minHeight: 0 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingLeft: 6, paddingRight: 6, paddingTop: 4, paddingBottom: 6 }}>
         <PrimaryAction
           icon={N.newThread}
@@ -129,17 +138,25 @@ export function Sidebar() {
         ...withGroups(rows, groups).map((item): SidebarWindowEntry => item.kind === 'group' ? {
           key: `group:${item.group.id}`, height: item.group.height, pinned: true,
           render: () => <DisclosureGroup mode={item.group.mode} height={item.group.height} onDone={() => finish(item.group.id)}>
-            {item.rows.map((row) => blockRow(row, ctx))}
+            {/* The block drifts and fades; inside it each row's connectors draw and the rows fade in turn (`../tree`). */}
+            {item.rows.map((row, i) => (
+              <TreeMotion.Provider key={row.key} value={groupMotion(item.group, i, item.rows.length)}>
+                <TreeRise>{blockRow(row, ctx)}</TreeRise>
+              </TreeMotion.Provider>
+            ))}
           </DisclosureGroup>,
         } : {
           key: item.row.key, height: rowHeight(item.row),
           // Completion owns a hold/leave lifecycle even outside the mount window.
           pinned: item.row.kind === 'child' && ctx.selectedId !== item.row.thread.id && rowPhase(item.row.thread) !== 'working',
-          render: (firstMount) => risen.has(item.row.key) ? <Rise kind="row" play={firstMount}>{blockRow(item.row, ctx)}</Rise> : blockRow(item.row, ctx),
+          render: (firstMount) => risen.has(item.row.key)
+            ? <Rise kind="row" play={firstMount}><TreeMotion.Provider value={firstMount ? ARRIVE : null}>{blockRow(item.row, ctx)}</TreeMotion.Provider></Rise>
+            : blockRow(item.row, ctx),
         }),
         { key: '__end', height: 6, render: () => <div style={{ height: 6 }} /> },
       ]} />
       </div>
+      </Rise>
     </div>
   )
 }
@@ -150,6 +167,16 @@ export function openSessions() {
   const thread = state.selectedId ? state.threads.find((t) => t.id === state.selectedId) : undefined
   const projectId = state.selectedId ? (thread && !isFreeChatProject(thread.project_id) ? thread.project_id : null) : (state.draft.projectId ?? null)
   setNav({ sessions: { projectId } })
+}
+
+/** A child that just started: its connectors draw once the old last child's elbow has turned into a tee. */
+const ARRIVE: TreeMotionState = { mode: 'enter', index: 0, count: 1, lead: ARRIVAL_LEAD, rise: 0 }
+const groupMotions = new WeakMap<Group, TreeMotionState[]>()
+/** One stable motion per row of an animating disclosure group (the rows fade only; the block already drifts). */
+function groupMotion(group: Group, index: number, count: number): TreeMotionState {
+  let list = groupMotions.get(group)
+  if (!list) groupMotions.set(group, (list = []))
+  return (list[index] ??= { mode: group.mode === 'open' ? 'enter' : 'leave', index, count, rise: 0 })
 }
 
 /** Project rows slide as a block while a project is dragged (`sidebar/reorder.tsx`). */
@@ -199,6 +226,8 @@ function renderRow(
           childCount={row.childCount}
           childrenOpen={row.childrenOpen}
           nested={row.nested}
+          last={row.last}
+          rails={row.rails}
           selected={ctx.selectedId === row.thread.id}
           activity={ctx.activity[row.thread.id]}
           unread={!!ctx.unread[row.thread.id]}
@@ -214,6 +243,8 @@ function renderRow(
           depth={row.depth}
           childCount={row.childCount}
           childrenOpen={row.childrenOpen}
+          last={row.last}
+          rails={row.rails}
           selected={ctx.selectedId === row.thread.id}
           onToggleChildren={ctx.toggleChildren}
         />
@@ -300,7 +331,12 @@ function AppMenu() {
       <MenuSeparator />
       <MenuItem
         id="reload"
-        {...(check.state === 'checking' ? { iconNode: <SpinIcon source={N.loader} size={16} color={ink(t, 0.8)} /> } : { icon: check.state === 'idle' ? N.refresh : N.circleCheck })}
+        iconNode={
+          // `IconSwap`: refresh ↔ spinner ↔ check cross-swap in the menu's icon slot.
+          <SwapOnChange kind="icon" active={check.state} style={{ width: 16, height: 16 }}>
+            {check.state === 'checking' ? <SpinIcon source={N.loader} size={16} color={ink(t, 0.8)} /> : <Icon source={check.state === 'idle' ? N.refresh : N.circleCheck} size={16} color={ink(t, 0.8)} />}
+          </SwapOnChange>
+        }
         label="Reload agents"
         keepOpen
         detail={check.state === 'checking' ? 'Checking…' : check.state === 'done' ? (check.ready === 1 ? '1 ready' : `${check.ready} ready`) : undefined}
@@ -406,6 +442,7 @@ function PrimaryAction({
         borderRadius: 8,
         cursor: 'pointer',
         ...(active ? { backgroundColor: accentActive(t) } : hover ? { backgroundColor: accent(t) } : {}),
+        ...pressRow(t, active ? accentActive(t) : accent(t)),
       }}
     >
       <div style={{ display: 'flex', width: 16, height: 16, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>

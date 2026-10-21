@@ -11,27 +11,33 @@ import { AgentItemCard } from '../coordinator/AgentItem.tsx'
 // folded under "Worked for"), then the answer with its error/stopped lines,
 // the "Edited N files" card and the footer.
 import { SubagentDivider } from '../subagents/Page.tsx'
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { calendarDateKey, calendarDateLabel, elapsedSince, plural } from '../../../desktop/src/lib/format.ts'
 import { clockTime } from './clock.ts'
 import { isImageGenerationTool } from '../../../desktop/src/lib/toolActivity.ts'
 import { responseImages } from '../../../desktop/src/lib/responseImages.ts'
 import { isAgentLaunchBlock, isDelegationLaunchBlock, isOrchestrationBlock } from '../../../desktop/src/lib/workChunks.ts'
 import { buildWorkHierarchy, shouldRevealLiveText, type Block, type TurnGroup } from '../../../../packages/kybern-client/src/transcript.ts'
-import type { Diff, RuntimeTask, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
+import type { ContentPart, Diff, RuntimeTask, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
+import { removePending, usePendingSend } from '../composer/pending.ts'
+import { restoreToComposer, retryPending } from '../composer/store.ts'
 import { useApp } from '../state.ts'
+import { TranscriptTail } from './Window.tsx'
+import { isWindowVisible } from '../native/visibility.ts'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { Icon } from '../icons.tsx'
 import { useLoopVisibility } from '../native/loop-visibility.ts'
 import { MatrixLoader, useLoaderSecond } from '../MatrixLoader.tsx'
 import { clockDuration, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { CopyAction, SaveToNoteAction, UserBubble } from './bubble.tsx'
+import { CopyAction, messageText, SaveToNoteAction, UserBubble } from './bubble.tsx'
 import { T } from './glyphs.ts'
 import { ResponseImage } from './images.tsx'
 import { alpha, Button, cachedMarkdownTheme, Chevron, fg, META, muted, Para, ROW_LINE, RowIcon, TEXT } from './kit.tsx'
 import { over } from '../theme.ts'
 import { Collapse, Rise } from '../motion/kit.tsx'
 import { Shimmer } from './motion.tsx'
-import { WorkRows, type RowContext } from './rows.tsx'
+import { GROUP_TREE, HEADER_STEM, WorkRows, type RowContext } from './rows.tsx'
+import { markTreeOpen, TreeGroup, TreeLines } from '../tree/Tree.tsx'
 import { filePatch, hydrateToolOutput, loadFilePatch, reportError, revertTo, useChildThreads, useRowState, useTurnDiff, type ToolBlock } from './store.ts'
 
 const isTaskActive = (task: RuntimeTask) => task.status === 'pending' || task.status === 'running' || task.status === 'waiting' || task.status === 'stopping'
@@ -89,9 +95,12 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
   const subagentThread = useApp(s => s.open.thread?.subagent ? s.open.thread : null)
   const subagent = !!subagentThread
   const firstUserId = useApp(s => s.open.blocks.find(b => b.kind === 'user')?.id)
+  // An optimistic send the daemon rejected (`composer/pending.ts`): its bubble stays, with Retry and Edit, and no turn runs.
+  const send = usePendingSend(threadId, group.user?.id)
+  const failed = send?.state === 'failed'
   // A long live turn can start before the loaded page, so its user message (and
   // with it `running`) is missing; the thread's status still says it is live.
-  const running = group.running || (threadRunning && isLast && !group.end)
+  const running = !failed && (group.running || (threadRunning && isLast && !group.end))
   const tasksByToolCall = useMemo(() => tasksOf(group.work), [group.work])
   const hierarchy = useMemo(() => buildWorkHierarchy(group.work), [group.work])
   // Launch rows open the child thread they started; look the children up only when there are launches.
@@ -117,6 +126,23 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
     return { agentBlocks, disclosureBlocks }
   }, [hierarchy, tasksByToolCall])
   const [expanded, setExpanded] = useRowState(`work:${group.turnId}`, false)
+  // The fold: when this turn settles while it is on screen at the tail, the "Worked for" disclosure first shows its work, then closes
+  // with the same 220 ms height tween as a click (the rows fold away instead of vanishing). A turn first rendered settled, one the reader
+  // has scrolled away from, a hidden window and Reduce Motion skip it; the anchor logic in `Transcript.tsx` is untouched.
+  const tail = useContext(TranscriptTail)
+  const wasRunning = useRef(running)
+  const [folding, setFolding] = useState(false)
+  if (running) wasRunning.current = true
+  else if (wasRunning.current) {
+    wasRunning.current = false
+    if (PATCHED_NATIVE && !REDUCED_MOTION && tail.current && isWindowVisible()) setFolding(true)
+  }
+  useEffect(() => {
+    if (!folding) return
+    // One beat for the expanded rows to paint, so the close has a height to measure.
+    const timer = setTimeout(() => { setFolding(false); setExpanded(false) }, 64)
+    return () => clearTimeout(timer)
+  }, [folding])
   const hasLiveWork = group.work.some(
     (b) =>
       (b.kind === 'tool' && !b.complete) ||
@@ -131,6 +157,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
       {group.user && (
         <div ref={userRef} testId={`turn-user:${group.user.id}`} style={{ paddingBottom: running ? 20 : 16 }}>
           <UserBubble parts={group.user.message.parts} at={group.user.at} clampLines={subagent ? 6 : undefined} />
+          {failed && <SendFailed threadId={threadId} id={send.id} error={send.error} parts={group.user.message.parts} />}
         </div>
       )}
 
@@ -157,16 +184,19 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
           {settled.agentBlocks.length > 0 && <WorkRows compact blocks={settled.agentBlocks} ctx={ctx} />}
           {settled.disclosureBlocks.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', paddingTop: 4, paddingBottom: 4 }}>
-              <div testId={`worked-${group.turnId}`} onClick={() => setExpanded(!expanded)} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <div testId={`worked-${group.turnId}`} onClick={() => { if (!expanded) markTreeOpen(); setExpanded(!expanded) }} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                {(expanded || folding) && <TreeLines shape={HEADER_STEM} />}
                 <RowIcon source={T.hammer} color={muted(t)} />
                 <Label color={muted(t)} lineHeight={ROW_LINE} truncate style={{ flexGrow: 1, hover: { color: t.text } }}>
                   {group.end ? `Worked for ${clockDuration(group.end.durationMs)}` : 'Worked'}
                 </Label>
-                <Chevron open={expanded} color={muted(t, 0.65)} />
+                <Chevron open={expanded || folding} color={muted(t, 0.65)} />
               </div>
-              <Collapse open={expanded} testId={`worked-panel-${group.turnId}`}>
+              <Collapse open={expanded || folding} testId={`worked-panel-${group.turnId}`}>
                 <div style={{ paddingTop: 2, marginLeft: 22 }}>
-                  <WorkRows compact blocks={settled.disclosureBlocks} ctx={ctx} />
+                  <TreeGroup {...GROUP_TREE} inset={2} gap={2} open={expanded || folding}>
+                    <WorkRows compact blocks={settled.disclosureBlocks} ctx={ctx} />
+                  </TreeGroup>
                 </div>
               </Collapse>
             </div>
@@ -183,7 +213,7 @@ export const AnswerImages = memo(function AnswerImages({ group, threadId }: { gr
   const t = useTheme()
   const imageTools = useMemo(() => group.work.filter((b): b is ToolBlock => b.kind === 'tool' && b.origin.kind === 'root' && isImageGenerationTool(b.call)), [group.work])
   const images = useMemo(() => {
-    const all = [...group.images.map((image) => ({ source: image.source, label: 'Agent image' })), ...imageTools.flatMap((b) => responseImages(b.output))]
+    const all = [...group.images.map((image) => ({ source: image.source, label: 'Agent image', at: image.at })), ...imageTools.flatMap((b) => responseImages(b.output).map((image) => ({ ...image, at: b.at })))]
     return [...new Map(all.map((image) => [image.source, image])).values()]
   }, [group.images, imageTools])
   // Generated images are answer content even while the fold is closed
@@ -195,7 +225,7 @@ export const AnswerImages = memo(function AnswerImages({ group, threadId }: { gr
           {images.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               {images.map((image) => (
-                <ResponseImage key={image.source} source={image.source} label={image.label} />
+                <ResponseImage key={image.source} source={image.source} label={image.label} at={image.at} />
               ))}
             </div>
           )}
@@ -422,3 +452,23 @@ function EditedFileRow({ file, threadId, turnId, first, border }: { file: Diff['
 
 
 /** A known file-header height for the native diff, so it can be clipped exactly. */
+
+/** Under a rejected send: what went wrong, Retry (same message id, so a send the daemon did take is not doubled) and Edit
+ * (back into the composer). */
+function SendFailed({ threadId, id, error, parts }: { threadId: ThreadId; id: string; error?: string; parts: ContentPart[] }) {
+  const t = useTheme()
+  return (
+    <Rise kind="row" style={{ alignItems: 'flex-end', width: '100%' }}>
+      {/* Below the bubble's hover footer (Copy, Save to note), which reaches 28 px under it. */}
+      <div testId="send-failed" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, paddingTop: 30, maxWidth: '80%' }}>
+        <Label color={t.v('--destructive')} size={META.size} lineHeight={META.lineHeight} truncate style={{ flexShrink: 1 }}>
+          {`Not sent. ${error ?? 'The daemon did not answer.'}`}
+        </Label>
+        <Button variant="subtle" testId="send-retry" onClick={() => retryPending(threadId, id)}>Retry</Button>
+        <Button variant="ghost" testId="send-edit" onClick={() => {
+          if (restoreToComposer(`thread:${threadId}`, parts, messageText(parts))) removePending(threadId, id)
+        }}>Edit</Button>
+      </div>
+    </Rise>
+  )
+}

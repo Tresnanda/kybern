@@ -6,12 +6,15 @@ import { nativeCapabilities, type InputSelection } from '../native/api.ts'
 import { useTheme } from '../ui.tsx'
 import { FONT_MONO } from '../theme.ts'
 import { tinted } from '../transcript/kit.tsx'
-import { RichHistory } from '../notes/rich-text.ts'
-import { editTokenText, tokenDisplayOffset, tokenSourceOffset, tokenText, type TokenReference } from './token-text.ts'
+import { RichHistory, textEdit } from '../notes/rich-text.ts'
+import { editTokenText, tokenDisplayOffset, tokenSourceOffset, tokenText, type TokenReference, type TokenText } from './token-text.ts'
 
 export interface TokenTextareaHandle {
   selection(): InputSelection
-  edit(start: number, end: number, text: string): boolean
+  /** `added`: the chips this edit introduces. The caller registers them in `references` only on its next render, so the
+   * native text is written with them already applied; otherwise it holds the raw token while the decorations (computed
+   * from the next render's references) no longer match it, and the chip shows only after the next keystroke. */
+  edit(start: number, end: number, text: string, added?: readonly TokenReference[]): boolean
 }
 interface Props extends TextareaProps {
   testId: string
@@ -42,24 +45,39 @@ export function TokenTextarea({ references, editorRef, nativeRef, onEditorError,
     const range = nativeCapabilities(renderer).getInputSelection(node.current.id), doc = live.current
     return { ...range, start: tokenSourceOffset(doc, range.start), end: tokenSourceOffset(doc, range.end, true) }
   }
-  const emit = (value: string, at: number, typed: boolean, record = true) => {
+  const emit = (value: string, at: number, typed: boolean, record = true, refs: readonly TokenReference[] = references) => {
     lastEmitted.current = value; caret.current = { start: at, end: at, reversed: false }
-    live.current = tokenText(value, references)
+    live.current = tokenText(value, refs)
     if (record) history.current.record({ doc: historyDoc(value), start: at, end: at }, typed)
     props.onChange?.({ value, elementId: node.current?.id ?? 0, eventType: 'change' })
   }
-  const install = (value: string, at: number, record: boolean, selection?: Pick<InputSelection, 'start' | 'end' | 'reversed'>) => {
+  /** The native range for a source selection in `doc`, or null when `doc` cannot address it (a caret inside a surrogate
+   * pair or past the end): the native input rejects those, so they are skipped instead of thrown. */
+  const nativeRange = (doc: TokenText, selection: Pick<InputSelection, 'start' | 'end'>) => {
+    const start = tokenDisplayOffset(doc, selection.start), end = tokenDisplayOffset(doc, selection.end, true)
+    const inside = (at: number) => at > 0 && at < doc.text.length && /[\uDC00-\uDFFF]/.test(doc.text[at]!) && /[\uD800-\uDBFF]/.test(doc.text[at - 1]!)
+    return start <= end && end <= doc.text.length && !inside(start) && !inside(end) ? { start, end } : null
+  }
+  const install = (value: string, at: number, record: boolean, selection?: Pick<InputSelection, 'start' | 'end' | 'reversed'>, added: readonly TokenReference[] = []) => {
     if (!node.current || props.readOnly || read().composing) return false
-    const previous = live.current, next = tokenText(value, references)
+    const refs = added.length ? [...references, ...added] : references
+    const previous = live.current, next = tokenText(value, refs), id = node.current.id
+    // Only the changed range is replaced, so the native caret already ends after the inserted text (a picked chip).
+    const change = textEdit(previous.text, next.text)
     nativeReplacement.current = next.text
-    nativeCapabilities(renderer).editInput(node.current.id, { start: 0, end: previous.text.length, text: next.text, expectedValue: previous.text })
-    emit(value, at, false, record)
-    if (selection) caret.current = selection
+    nativeCapabilities(renderer).editInput(id, { ...change, expectedValue: previous.text })
+    const wanted = selection ?? { start: at, end: at, reversed: false }
+    emit(value, at, false, record, refs)
+    caret.current = wanted
+    // `editInput` is synchronous, so the native buffer is `next.text` right now: place the caret against it here rather
+    // than from a timer that can run before or after the host's own value write.
+    const range = nativeRange(next, wanted)
+    if (range) nativeCapabilities(renderer).setInputSelection(id, range.start, range.end, wanted.reversed)
     return true
   }
-  useImperativeHandle(editorRef, () => ({ selection: read, edit: (start, end, text) => {
+  useImperativeHandle(editorRef, () => ({ selection: read, edit: (start, end, text, added) => {
     const value = live.current.source
-    return install(value.slice(0, start) + text + value.slice(end), start + text.length, true)
+    return install(value.slice(0, start) + text + value.slice(end), start + text.length, true, undefined, added)
   } }))
   useEffect(() => {
     if (props.value !== lastEmitted.current) {
@@ -67,14 +85,18 @@ export function TokenTextarea({ references, editorRef, nativeRef, onEditorError,
       history.current.record({ doc: historyDoc(props.value), start: props.value.length, end: props.value.length }, false)
     }
     if (caret.current != null && node.current) {
-      const start = tokenDisplayOffset(projection, caret.current.start)
-      const end = tokenDisplayOffset(projection, caret.current.end, true)
-      const id = node.current.id, reversed = caret.current.reversed
-      const expected = props.value
-      // React host value updates are batched after effects. Restore the range
-      // after that commit rather than having the host overwrite it again.
+      const wanted = caret.current, id = node.current.id, expected = props.value
+      // The host's value write for this commit can move the native caret again; put it back once that has landed. The
+      // range is computed when the timer runs, against the text the editor holds then, and only applied if it moved.
       const restore = setTimeout(() => {
-        if (node.current?.id === id && live.current.source === expected && !read().composing) nativeCapabilities(renderer).setInputSelection(id, start, end, reversed)
+        if (node.current?.id !== id || live.current.source !== expected) return
+        const now = read()
+        if (now.composing || (now.start === wanted.start && now.end === wanted.end)) return
+        const range = nativeRange(live.current, wanted)
+        if (!range) return
+        // A native buffer that still differs from `live` (typing not yet delivered) rejects the range; that keystroke's
+        // own change places the caret, so a rejection here must never become an uncaught error.
+        try { nativeCapabilities(renderer).setInputSelection(id, range.start, range.end, wanted.reversed) } catch {}
       }, 0)
       caret.current = null
       return () => clearTimeout(restore)

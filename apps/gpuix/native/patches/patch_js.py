@@ -88,6 +88,7 @@ edit('dist/automation/protocol.js', '    scrollWheel: {', '    fileDrop: {\n    
 edit('dist/automation/protocol.d.ts', '    readonly scrollWheel: {', '    readonly fileDrop: {\n        readonly params: z.ZodObject<{ x: z.ZodNumber; y: z.ZodNumber; paths: z.ZodArray<z.ZodString> }, z.core.$strip>;\n        readonly result: z.ZodObject<{ ok: z.ZodLiteral<true> }, z.core.$strip>;\n    };\n    readonly scrollWheel: {')
 exec((Path(__file__).parent / "scroll_js.py").read_text())
 exec((Path(__file__).parent / "render9_js.py").read_text())
+exec((Path(__file__).parent / "motion_native_js.py").read_text())
 
 for name, text in pending.items():
     (root / name).write_text(text)

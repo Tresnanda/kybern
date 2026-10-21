@@ -14,6 +14,7 @@
 import type { PaintTransformProps } from '@gpuix/native/host'
 import { useRef } from 'react'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { EASE } from '../motion/tokens.ts'
 import { REDUCED_MOTION } from '../ui.tsx'
 
 /** `--duration-fast`. */
@@ -26,7 +27,7 @@ export function popAnimation(delayMs = 0): PopAnimation | undefined {
 }
 
 /** `--ease-bounce`. */
-export const EASE_BOUNCE: [number, number, number, number] = [0.34, 1.36, 0.64, 1]
+export const EASE_BOUNCE: [number, number, number, number] = [...EASE.bounce]
 
 /** The `paintTransform` prop that pops a whole box when it mounts (undefined when it cannot play). */
 export function popTransform(delayMs = 0): PaintTransformProps | undefined {
@@ -43,4 +44,21 @@ export function usePopOnChange(active: boolean): boolean {
   const first = useRef(active)
   if (!active) first.current = false
   return active && !first.current
+}
+
+/**
+ * A React `key` for a count, badge or number that bumps when its value changes (`t-pop` + `key={count}`): constant on the first
+ * render and while `value` stays the same, a new key each time `value` changes after that. Rows recycled by a virtual list start
+ * from their own first value, so scrolling in does not pop. Put it on the element that pops:
+ * `<Label key={useCountPop(n)} paintAnimation={popAnimation()}>{n}</Label>`; `popAnimation()` only plays on a mount, and a changed
+ * key is a new mount. Reduce Motion and the stock addon: `popAnimation()` is `undefined`, so the key change is invisible.
+ */
+export function useCountPop(value: string | number): number {
+  const seen = useRef(value)
+  const pops = useRef(0)
+  if (seen.current !== value) {
+    seen.current = value
+    pops.current++
+  }
+  return pops.current
 }

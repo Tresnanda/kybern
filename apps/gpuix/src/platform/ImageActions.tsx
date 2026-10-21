@@ -65,7 +65,7 @@ export function ImageActions({ source, label }: { source: string; label: string 
   }
   return <div style={{ position: 'absolute', top: 10, right: 44, display: 'flex', gap: 4 }}>
     <ActionButton label={copied ? 'Image copied' : 'Copy image'} testId="image-copy" disabled={busy !== null} onClick={() => void run('copy')}>
-      <SwapOnChange active={copied ? 'check' : 'copy'}><Icon source={copied ? N.check : ICONS.copy} size={14} color={copied ? t.green : muted(t, 1)} /></SwapOnChange>
+      <SwapOnChange kind="icon" active={copied ? 'check' : 'copy'}><Icon source={copied ? N.check : ICONS.copy} size={14} color={copied ? t.green : muted(t, 1)} /></SwapOnChange>
     </ActionButton>
     <ActionButton label="Download image" testId="image-download" disabled={busy !== null} onClick={() => void run('download')}>
       <Icon source={DOWNLOAD} size={14} color={muted(t, 1)} />

@@ -782,6 +782,23 @@ expression: schema_for!(ThreadEvent)
       ]
     },
     {
+      "description": "A harness permission request that Kybern allowed without asking,\nbecause the thread is in Full access. Never raised for questions.",
+      "type": "object",
+      "properties": {
+        "approval": {
+          "$ref": "#/$defs/ApprovalRequest"
+        },
+        "kind": {
+          "type": "string",
+          "const": "approval_auto_allowed"
+        }
+      },
+      "required": [
+        "kind",
+        "approval"
+      ]
+    },
+    {
       "type": "object",
       "properties": {
         "stop_reason": {
