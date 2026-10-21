@@ -4,7 +4,9 @@
 # plus its minisign .sig, signed with the same key as the Tauri desktop app.
 #
 # Usage: scripts/bundle-gpuix.sh
-#   CARGO_TARGET_DIR            honoured if set; its release/ holds kybernd and kybern
+#   KYBERN_BIN_DIR              the folder holding kybernd and kybern (releases
+#                               pass dist's binaries); defaults to $CARGO_TARGET_DIR/release
+#   CARGO_TARGET_DIR            honoured if set
 #   TAURI_SIGNING_PRIVATE_KEY   required unless SKIP_SIGN=1 (the updater key)
 #
 # Requires: the patched native addon (apps/gpuix/native/update.sh), release
@@ -21,13 +23,14 @@ if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
 fi
 
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
+BIN_DIR="$(cd "${KYBERN_BIN_DIR:-$TARGET_DIR/release}" && pwd)"
 DIST="$ROOT/dist"
 VERSION="$(grep -m1 '^version' "$ROOT/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/')"
 TARBALL="$DIST/kybern-gpuix_${VERSION}_aarch64.app.tar.gz"
 
 echo "==> packaging Kybern GPUIX $VERSION"
 rm -rf apps/gpuix/dist
-(cd apps/gpuix && KYBERN_BIN_DIR="$TARGET_DIR/release" bun scripts/package-app.ts)
+(cd apps/gpuix && KYBERN_BIN_DIR="$BIN_DIR" bun scripts/package-app.ts)
 APP="$ROOT/apps/gpuix/dist/Kybern GPUIX.app"
 
 echo "==> $TARBALL"
