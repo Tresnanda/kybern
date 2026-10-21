@@ -54,6 +54,15 @@ native('a count pops when it changes, not on its first render or when it stays t
   expect(h.pops()).toBe(1)
 })
 
+native('a count that changes with its context (a filter, a search) shows at once; a later change in that context pops', () => {
+  const h = harness()
+  h.render(<CountPop value={3} context="todo" color="#fff" />)
+  h.render(<CountPop value={5} context="project:a" color="#fff" />)
+  expect(h.pops()).toBe(0)
+  h.render(<CountPop value={6} context="project:a" color="#fff" />)
+  expect(h.pops()).toBe(1)
+})
+
 native('the checkbox layer mounts with the hover and leaves after its exit; the base glyph stays', () => {
   const h = harness()
   const slot = (show: boolean) => <CheckSlot show={show} base={<div testId="glyph" />} over={<div testId="check" />} />

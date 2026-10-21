@@ -1,4 +1,4 @@
-import { motion, type StyleDesc } from '@gpuix/react'
+import type { StyleDesc } from '@gpuix/react'
 import { useState, type ReactNode } from 'react'
 import { setNav } from '../nav/store.ts'
 import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
@@ -18,17 +18,16 @@ export function Button({ children, onClick, testId, disabled, primary, style, la
 
 /**
  * The sliding selection of a segmented control or tab strip (`t-tabs`: 250 ms `--ease-smooth-out`), `x` px from the strip's inner left
- * edge. Equal-width segments move the pill by paint (`paintTransform` translation: no layout or render per frame, like the rail's
- * pill); segments of different widths change `left` and `width`, so that case is the short layout tween. A keyboard move, Reduce
- * Motion and the stock addon change at once.
+ * edge. The pill moves by paint (`paintTransform`: no layout or render per frame, like the rail's pill). Segments of different widths
+ * keep one box as wide as the narrowest segment (`base`) and stretch it with `scaleX` about its left edge, so they stay paint-only too
+ * (stretching only ever widens, which keeps the corners round). A keyboard move, Reduce Motion and the stock addon change at once.
  */
-export function SlidingPill({ x, width, equal, instant, top = 3, height = 28, radius = 5, color }: { x: number; width: number; equal: boolean; instant: boolean; top?: number; height?: number; radius?: number; color: string }) {
+export function SlidingPill({ x, width, base = width, instant, top = 3, height = 28, radius = 5, color }: { x: number; width: number; base?: number; instant: boolean; top?: number; height?: number; radius?: number; color: string }) {
   const duration = REDUCED_MOTION || instant ? 0 : DURATION.fast
   const ease = [...EASE.smoothOut] as [number, number, number, number]
   const box = { position: 'absolute', top, height, borderRadius: radius, backgroundColor: color, pointerEvents: 'none' } as const
-  if (equal && PATCHED_NATIVE) return <div paintTransform={{ initial: false, animate: { translateX: x }, transition: { duration, ease }, retain: true }} style={{ ...box, left: 3, width }} />
-  if (equal) return <div style={{ ...box, left: 3 + x, width }} />
-  return <motion.div initial={false} animate={{ left: 3 + x, width }} transition={{ duration, ease }} style={box} />
+  if (!PATCHED_NATIVE) return <div style={{ ...box, left: 3 + x, width }} />
+  return <div paintTransform={{ initial: false, animate: { translateX: x, scaleX: width / base }, origin: [0, 0.5], transition: { duration, ease }, retain: true }} style={{ ...box, left: 3, width: base }} />
 }
 
 /** Fixed-width segments let the native pill move without a measurement loop. `onChange` also says whether the keyboard chose the segment, so callers can skip entrance motion for it. */
@@ -39,7 +38,7 @@ export function Segments<T extends string>({ value, options, onChange, testId, w
   const widths = options.map((_, i) => typeof width === 'number' ? width : width[i] ?? 72)
   const left = widths.slice(0, Math.max(0,index)).reduce((a,b)=>a+b,0)
   return <div role="tablist" aria-label={testId} style={{ ...row, gap: 0, alignSelf: 'flex-start', position: 'relative', padding: 3, height: 34, borderRadius: 8, backgroundColor: plain ? 'transparent' : t.buttonSecondary }}>
-    <SlidingPill x={left} width={widths[Math.max(0,index)]!} equal={widths.every(w => w === widths[0])} instant={instant} color={plain ? t.buttonSecondary : t.surface} />
+    <SlidingPill x={left} width={widths[Math.max(0,index)]!} base={Math.min(...widths)} instant={instant} color={plain ? t.buttonSecondary : t.surface} />
     {options.map(([key, label], i) => <div key={key} testId={`${testId}-${key}`} role="tab" aria-selected={key === value} tabIndex={0} paintTransform={pressTransform(true)} onClick={() => { setInstant(false); onChange(key, false) }} onKeyDown={e => {
       const next = e.key === 'right' ? (i + 1) % options.length : e.key === 'left' ? (i + options.length - 1) % options.length : e.key === 'enter' || e.key === 'space' ? i : -1
       if (next >= 0) { setInstant(true); onChange(options[next]![0], true) }

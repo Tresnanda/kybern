@@ -127,7 +127,7 @@ export function NotesGallery() {
         {row.kind === 'filters' ? filters
           : row.kind === 'notice' ? <div style={{ paddingTop: 16, paddingBottom: 12 }}><Label color={k.fg3} size={NOTES_META} lineHeight={18}>{row.label!}</Label></div>
           : row.kind === 'header' ? <div style={{ paddingTop: row.first || row.list ? 24 : 4, paddingBottom: 10 }}><Label color={k.fg} size={NOTES_UI} lineHeight={18} weight={600}>{row.label!}</Label></div>
-          : <div style={{ display: 'flex', gap: row.list ? 0 : 20, paddingBottom: row.list ? 0 : 24 }}>{row.notes!.map((note, column) => <NoteCard key={note.id} note={note} big={!!row.big} list={!!row.list} scope={note.scope === 'global' ? 'Global' : projectMap[note.project_id ?? '']?.name ?? 'Chats'} projectId={note.scope === 'global' ? null : note.project_id ?? null} active={active === note.id && keyboard} enter={!keyboard && ((enterGen > 0 && index < 5 && !seen.current.has(note.id)) || fresh.has(note.id))} leaving={leaving.get(note.id)} onGone={gone} index={index + column} onSeen={() => seen.current.add(note.id)} onFocus={() => setActive(note.id)} />)}{Array.from({ length: row.per! - row.notes!.length }, (_, i) => <div key={i} style={{ flexGrow: 1, flexBasis: 0 }} />)}</div>}
+          : <div style={{ display: 'flex', gap: row.list ? 0 : 20, paddingBottom: row.list ? 0 : 24 }}>{row.notes!.map((note, column) => <NoteCard key={note.id} note={note} big={!!row.big} list={!!row.list} scope={note.scope === 'global' ? 'Global' : projectMap[note.project_id ?? '']?.name ?? 'Chats'} projectId={note.scope === 'global' ? null : note.project_id ?? null} active={active === note.id && keyboard} enter={!keyboard && ((enterGen > 0 && index < 5 && !seen.current.has(note.id)) || fresh.has(note.id))} enterGen={enterGen} leaving={leaving.get(note.id)} onGone={gone} index={index + column} onSeen={() => seen.current.add(note.id)} onFocus={() => setActive(note.id)} />)}{Array.from({ length: row.per! - row.notes!.length }, (_, i) => <div key={i} style={{ flexGrow: 1, flexBasis: 0 }} />)}</div>}
       </div>)}
       {loaded && !visible.length && <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 320, paddingTop: 48, paddingBottom: 48 }}>
         <Label color={k.fg} size={17} lineHeight={23} weight={600}>{query ? `No notes match “${query.trim()}”` : emptyTitle(filter, projectMap)}</Label>
@@ -178,10 +178,14 @@ function Hints({ list }: { list: boolean }) {
   </div>
 }
 
-const NoteCard = memo(function NoteCard({ note, big, list, scope, projectId, active, enter, leaving, onGone, index, onSeen, onFocus }: { note: NoteSummary; big: boolean; list: boolean; scope: string; projectId: string | null; active: boolean; enter: boolean; /** The generation of this card's exit (a pointer delete kept it mounted). */ leaving?: number; onGone: (id: string) => void; index: number; onSeen: () => void; onFocus: () => void }) {
+const NoteCard = memo(function NoteCard({ note, big, list, scope, projectId, active, enter, enterGen, leaving, onGone, index, onSeen, onFocus }: { note: NoteSummary; big: boolean; list: boolean; scope: string; projectId: string | null; active: boolean; enter: boolean; /** Bumped by a pointer-picked filter: a card that stays mounted across it enters again with the cards that mount. */ enterGen: number; /** The generation of this card's exit (a pointer delete kept it mounted). */ leaving?: number; onGone: (id: string) => void; index: number; onSeen: () => void; onFocus: () => void }) {
   const t = useTheme()
   const k = notesTokens(t)
-  const [play] = useState(enter)
+  // The entrance generation this card played (`-1`: none). A card mounts playing when it is fresh; one that stayed mounted replays
+  // when a pointer-picked filter bumps `enterGen`, so the whole first screen rises together instead of only the cards that were new.
+  const [played, setPlayed] = useState(enter ? enterGen : -1)
+  if (enter && played !== enterGen) setPlayed(enterGen)
+  const play = played !== -1
   // The lift answers pointer motion: a card that scrolls under a resting pointer does not lift (the wheel's own frames and a paint tween
   // each present, which costs vsyncs), the first mouse move over it does.
   const [hover, setHover] = useState(false)
@@ -191,7 +195,7 @@ const NoteCard = memo(function NoteCard({ note, big, list, scope, projectId, act
   const { done, total } = note.checklist
   const age = ageLabel(note.updated_at)
   // The card enters once (fresh gallery open or a pointer-picked filter) and leaves when a pointer delete keeps it mounted.
-  const wrap = { paintTransform: leaving !== undefined ? cardLeave(leaving) : play ? cardIn(index) : undefined, onMotionComplete: leaving !== undefined ? (e: { motionGeneration?: number }) => { if (e.motionGeneration === leaving) onGone(note.id) } : undefined }
+  const wrap = { paintTransform: leaving !== undefined ? cardLeave(leaving) : play ? withGeneration(cardIn(index), played) : undefined, onMotionComplete: leaving !== undefined ? (e: { motionGeneration?: number }) => { if (e.motionGeneration === leaving) onGone(note.id) } : undefined }
   if (list) {
     return <div {...wrap} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, position: 'relative', ...(leaving !== undefined ? { pointerEvents: 'none' } : {}) }}>
       <div testId={`note-card-${note.id}`} tabIndex={0} onFocus={onFocus} onClick={() => openNote(note.id)} onKeyDown={(e) => { if (e.key === 'enter') openNote(note.id) }} style={{ display: 'flex', alignItems: 'center', gap: 16, height: 40, marginLeft: -12, marginRight: -12, paddingLeft: 12, paddingRight: 12, borderRadius: 8, cursor: 'pointer', backgroundColor: active ? k.sel : undefined, hover: { backgroundColor: k.hover } }}>
@@ -220,5 +224,8 @@ const NoteCard = memo(function NoteCard({ note, big, list, scope, projectId, act
     </div>
   </div>
 })
+
+/** A paint motion that restarts from its `initial` whenever `generation` changes (undefined stays undefined). */
+const withGeneration = <T extends object>(motion: T | undefined, generation: number) => (motion ? { ...motion, generation } : undefined)
 
 export function Empty({ title, detail }: { title: string; detail?: string }) { const t = useTheme(); return <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexGrow: 1, gap: 10 }}><Icon source={N.note} size={28} color={t.iconTertiary} /><Label color={t.text} size={17}>{title}</Label>{detail && <Label color={t.textSecondary}>{detail}</Label>}</div> }

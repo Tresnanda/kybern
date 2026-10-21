@@ -19,7 +19,7 @@ const reduceds = arg('--reduced', '0') === 'both' ? ['0', '1'] : [arg('--reduced
 const groups = process.argv.includes('--groups') ? new Set(process.argv[process.argv.indexOf('--groups') + 1]!.split(',')) : null
 const only = process.argv.includes('--only') ? new Set(arg('--only', '').split(',')) : null
 const root = arg('--out', '/Users/mymac/projects/ade/previews/motion/gpuix-p4')
-const SCRATCH = '/Users/mymac/projects/ade-gpuix-scratch/motion-gpuix-p4'
+const SCRATCH = process.env.VISUAL_SCRATCH ?? '/Users/mymac/projects/ade-gpuix-scratch/motion-gpuix-p4'
 const scratch = { KYBERN_DATA_DIR: `${SCRATCH}/data`, KYBERN_CLIENT_CONFIG_DIR: `${SCRATCH}/client`, KYBERN_GPUIX_CREDENTIALS_DIR: `${SCRATCH}/credentials`, KYBERN_ENVIRONMENT_NAME: 'Development environment' }
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 type Crop = { x: number; y: number; w: number; h: number }
@@ -208,7 +208,10 @@ async function scenes(c: Ctx) {
   await step('Tasks', async () => {
     await run('tasks-page', { x: 52, y: 46, w: 1228, h: 420 }, () => click('rail-tasks'), [0, 40, 80, 160, 250], { cols: 3 })
     await rest()
-    const first = taskId('Fix sidebar collapse jitter on resize'), second = taskId('Ship notes image blocks')
+    // The first two rows on screen (a long seeded list, or an earlier run's status changes, can push the fixture's own tasks out of view).
+    const onScreen: string[] = []
+    for (const n of await a.getByType('div').all()) if (n.testId?.startsWith('task-row-') && n.bounds && n.bounds.y > 80 && n.bounds.y < 560) onScreen.push(n.testId.slice(9))
+    const first = onScreen[0] ?? taskId('Fix sidebar collapse jitter on resize'), second = onScreen[1] ?? taskId('Ship notes image blocks')
     const row = await waitFor(`task-row-${first}`)
     await run('task-glyph-check', { x: 308, y: row.y - 24, w: 360, h: 48 }, async () => { await a.mouse.move(row) }, [0, 20, 40, 60, 80, 120], { cols: 3, undo: rest })
     await rest()
@@ -239,10 +242,12 @@ async function scenes(c: Ctx) {
     await run('tasks-projects-collapse', { x: 52, y: 200, w: 256, h: 360 }, () => click('task-projects-toggle'), [0, 15, 30, 50, 80, 120, 180, 300], { cols: 4, settle: 0, undo: () => click('task-projects-toggle') })
     await click('task-projects-toggle'); await settleAll(300)
     // task page opened by a click rises in; Enter shows it at once; the back arrow has no motion
-    await run('task-page-open', { x: 308, y: 46, w: 972, h: 500 }, () => click(`task-drag-${second}`), [0, 40, 80, 120, 160, 250], { cols: 3, settle: 500 })
+    let open = second
+    for (const n of await a.getByType('div').all()) if (n.testId?.startsWith('task-drag-') && n.bounds && n.bounds.y > 120 && n.bounds.y < 560) { open = n.testId.slice(10); break }
+    await run('task-page-open', { x: 308, y: 46, w: 972, h: 500 }, () => click(`task-drag-${open}`), [0, 40, 80, 120, 160, 250], { cols: 3, settle: 500 })
     await rest()
     await click('task-back'); await settleAll(400)
-    await run('kbd-task-page-open', { x: 308, y: 46, w: 972, h: 500 }, async () => { await focus(`task-row-${second}`); await a.getByTestId(`task-row-${second}`).press('enter') }, [0, 100], { cols: 2, settle: 500 })
+    await run('kbd-task-page-open', { x: 308, y: 46, w: 972, h: 500 }, async () => { await focus(`task-row-${open}`); await a.getByTestId(`task-row-${open}`).press('enter') }, [0, 100], { cols: 2, settle: 500 })
     await press('escape'); await settleAll(400)
   })
   // ─── Pull requests ─────────────────────────────────────────────────────
