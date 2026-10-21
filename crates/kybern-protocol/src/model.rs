@@ -1295,22 +1295,28 @@ pub struct SettingsProposalInput {
     pub changes: Vec<SettingChange>,
 }
 
+/// Whether an approval with this `tool_name` asks the user a question or for
+/// input, rather than for permission to run a tool.
+pub fn is_user_input_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "AskUserQuestion"
+            | SECRET_REQUEST_TOOL
+            | COORDINATOR_BRIEF_TOOL
+            | COORDINATOR_SETTINGS_TOOL
+            | "request_user_input"
+            | "opencode_question"
+            | "mcp_elicitation"
+            | "ui_select"
+            | "ui_confirm"
+            | "ui_input"
+            | "ui_editor"
+    )
+}
+
 impl ApprovalRequest {
     pub fn is_user_input(&self) -> bool {
-        matches!(
-            self.tool_name.as_str(),
-            "AskUserQuestion"
-                | SECRET_REQUEST_TOOL
-                | COORDINATOR_BRIEF_TOOL
-                | COORDINATOR_SETTINGS_TOOL
-                | "request_user_input"
-                | "opencode_question"
-                | "mcp_elicitation"
-                | "ui_select"
-                | "ui_confirm"
-                | "ui_input"
-                | "ui_editor"
-        )
+        is_user_input_tool(&self.tool_name)
     }
 
     pub fn validate_decision(&self, decision: &ApprovalDecision) -> Result<(), String> {
@@ -1650,6 +1656,9 @@ pub enum TranscriptEntry {
         approval: ApprovalRequest,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         decision: Option<ApprovalDecision>,
+        /// Allowed by Full access without asking the user.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        auto: bool,
     },
     TurnSummary {
         turn_id: TurnId,

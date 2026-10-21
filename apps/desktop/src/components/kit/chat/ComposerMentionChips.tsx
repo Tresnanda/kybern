@@ -1,7 +1,7 @@
 // Filter chips across the top of the composer's @ picker: All, Threads, Notes,
 // Tasks, Files, Plugins. One sliding pill marks the selection (the shared
-// `.t-tabs` motion, still under reduced motion). The chips never take focus:
-// the editor keeps the caret, and ←/→ in the editor switch chips until a term is typed.
+// `.t-tabs` motion; under reduced motion the pill jumps without sliding). The chips never
+// take focus: the editor keeps the caret, and ←/→ in the editor switch chips until a term is typed.
 
 import { useSlidingPill } from "@/lib/kit/slidingPill"
 import { cn } from "@/lib/utils"

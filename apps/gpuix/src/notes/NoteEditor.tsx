@@ -22,6 +22,8 @@ import { EASE_OUT, REDUCED_MOTION, Label, useTheme } from '../ui.tsx'
 import { display, gallery, getNotes, restoreNote, rpc, useNotes } from './store.ts'
 import { noteSession } from './session.ts'
 import { Toolbar } from './Toolbar.tsx'
+import { noteBannerIn, noteDocIn } from './motion.ts'
+import { SwapOnChange } from '../motion/kit.tsx'
 import { RichEditor, type EditorState, type MakeTaskLine, type RichEditorHandle } from '../editor/RichEditor.tsx'
 import type { ImageHome } from '../editor/images.ts'
 import { plainText as docText, type DocBlock } from '../editor/markdown.ts'
@@ -79,6 +81,10 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
     if (!compact && e.key === 'escape' && !editing) { gallery(); return true }
   }), [session, editing, compact])
   const finish = () => { renderer?.blur?.(); void session.flush() }
+  // The document rises in when a pointer opened it (gallery click, New note); Enter and ⌘N show it at once. Banners that
+  // appear later play their own entrance, those present when the note opened are part of the page's.
+  const [docIn] = useState(() => (compact || getNav().keyboardNav ? undefined : noteDocIn()))
+  const [openedAt] = useState(() => Date.now())
   // "Make task" from a checklist line (desktop `noteTaskActions.ts`): save the note so the
   // daemon finds the line, then make the task; the daemon ends the line with its link.
   const making = useRef(new Set<string>())
@@ -154,6 +160,10 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
   }
   const note = summary ?? snap.note
   const deleted = !!(summary ? summary.deleted_at : snap.note?.deleted_at)
+  // The label swaps once per save, when "Saving…" settles into "Edited …"; "Unsaved changes" -> "Saving…" and the minute-by-minute age update in place.
+  const [saveEra, setSaveEra] = useState(0)
+  const [lastStatus, setLastStatus] = useState(snap.status)
+  if (lastStatus !== snap.status) { setLastStatus(snap.status); if (snap.status === 'saved') setSaveEra((n) => n + 1) }
   const status = snap.status === 'saved' ? (note ? editedAgo(note.updated_at) : 'Saved') : snap.status === 'dirty' ? 'Unsaved changes' : snap.status === 'saving' ? 'Saving…' : snap.status === 'conflict' ? 'Choose a version' : 'Couldn’t save · Retry'
   const body = (variant: 'page' | 'compact') => <RichEditor
     ref={editor}
@@ -182,18 +192,18 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
     {snap.conflict ? <div style={{ display: 'flex', gap: 6 }}><Button onClick={() => session.useTheirs()}>Use theirs</Button><Button onClick={() => session.keepMine()}>Keep mine</Button></div> : <div onClick={() => void session.flush()}><Label color={snap.status === 'error' ? t.red : t.textSecondary} size={11}>{status}</Label></div>}
   </div>
   return <div testId="note-editor" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
-    {snap.phase === 'error' && <Banner title="Couldn’t open this note" detail={snap.error ?? ''}><Button onClick={() => void session.reload()}>Try again</Button></Banner>}
-    {snap.phase === 'missing' && <Banner title="This note no longer exists" detail="Return to Notes to open another document."><Button onClick={gallery}>Open Notes</Button></Banner>}
-    {snap.conflict && <Banner title="This note changed on another device" detail="Keep your version to replace theirs, or use theirs and discard your changes."><Button testId="note-use-theirs" onClick={() => session.useTheirs()}>Use theirs</Button><Button testId="note-keep-mine" onClick={() => session.keepMine()}>Keep mine</Button></Banner>}
-    {deleted && <Banner title="This note is in Recently deleted" detail="Restore it to edit it again."><Button testId="note-restore" onClick={() => void restoreNote(id)}>Restore</Button></Banner>}
+    {snap.phase === 'error' && <Banner opened={openedAt} title="Couldn’t open this note" detail={snap.error ?? ''}><Button onClick={() => void session.reload()}>Try again</Button></Banner>}
+    {snap.phase === 'missing' && <Banner opened={openedAt} title="This note no longer exists" detail="Return to Notes to open another document."><Button onClick={gallery}>Open Notes</Button></Banner>}
+    {snap.conflict && <Banner opened={openedAt} title="This note changed on another device" detail="Keep your version to replace theirs, or use theirs and discard your changes."><Button testId="note-use-theirs" onClick={() => session.useTheirs()}>Use theirs</Button><Button testId="note-keep-mine" onClick={() => session.keepMine()}>Keep mine</Button></Banner>}
+    {deleted && <Banner opened={openedAt} title="This note is in Recently deleted" detail="Restore it to edit it again."><Button testId="note-restore" onClick={() => void restoreNote(id)}>Restore</Button></Banner>}
     {snap.phase === 'ready' && <>
       <div ref={viewport} testId="note-viewport" style={{ display: 'flex', flexGrow: 1, minHeight: 0, position: 'relative' }}>
         <div ref={scroller} testId="note-body-list" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexGrow: 1, minHeight: 0, overflow: 'scroll' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', width: docWidth, paddingTop: 84, flexShrink: 0 }}>
+          <div paintTransform={docIn} style={{ display: 'flex', flexDirection: 'column', width: docWidth, paddingTop: 84, flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, minHeight: 19.5, marginBottom: 20 }}>
               <ProjectDot projectId={note?.scope === 'global' ? null : note?.project_id ?? null} /><Label color={k.fg2} size={NOTES_META} lineHeight={19.5}>{note?.scope === 'global' ? 'Global' : projects.find((p) => p.id === note?.project_id)?.name ?? 'Chats'}</Label>
               <Label color={k.fg4} size={NOTES_META} lineHeight={19.5}>·</Label>
-              <div testId="note-save-status" onClick={() => { if (snap.status === 'error') void session.flush() }}><Label color={snap.status === 'error' ? t.red : k.fg3} size={NOTES_META} lineHeight={19.5}>{status}</Label></div>
+              <div testId="note-save-status" onClick={() => { if (snap.status === 'error') void session.flush() }}><SwapOnChange active={`save:${saveEra}`} style={{ justifyContent: 'flex-start' }}><Label color={snap.status === 'error' ? t.red : k.fg3} size={NOTES_META} lineHeight={19.5}>{status}</Label></SwapOnChange></div>
             </div>
             <input ref={title} testId="note-title" autoFocus={!snap.title && !snap.body && !deleted} aria-label="Title" value={snap.title} placeholder="Untitled" readOnly={deleted || note?.scope === 'thread'} interceptKeys={['down']}
               onChange={(e) => session.edit({ title: (e.value ?? '').replace(/\s*\n\s*/g, ' ').slice(0, 300) })} onBlur={() => void session.flush()}
@@ -228,4 +238,4 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
     </>}
   </div>
 }
-function Banner({ title, detail, children }: { title: string; detail: string; children: React.ReactNode }) { const t = useTheme(); return <div testId="note-banner" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 14, backgroundColor: t.buttonSecondary }}><div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexGrow: 1 }}><Label color={t.text} size={13} weight={500}>{title}</Label><Label color={t.textSecondary} size={12}>{detail}</Label></div>{children}</div> }
+function Banner({ title, detail, children, opened }: { title: string; detail: string; children: React.ReactNode; opened: number }) { const t = useTheme(); const [enter] = useState(() => (Date.now() - opened > 400 ? noteBannerIn() : undefined)); return <div testId="note-banner" paintTransform={enter} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 14, backgroundColor: t.buttonSecondary }}><div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexGrow: 1 }}><Label color={t.text} size={13} weight={500}>{title}</Label><Label color={t.textSecondary} size={12}>{detail}</Label></div>{children}</div> }

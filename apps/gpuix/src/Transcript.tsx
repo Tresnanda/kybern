@@ -1,6 +1,6 @@
 import { SparseRetention, sparseIndices, useSparseList } from './kit/sparseList.tsx'
 import { TRANSCRIPT_SCROLL_LAYOUT } from './transcript/scroll-layout.ts'
-import { TranscriptFocusRestoration, TranscriptSlot, useTranscriptWindow } from './transcript/Window.tsx'
+import { TranscriptFocusRestoration, TranscriptSlot, TranscriptTail, useTranscriptWindow } from './transcript/Window.tsx'
 import { TranscriptRowStateScope } from './transcript/rowStateScope.ts'
 import { SubagentDivider } from './subagents/Page.tsx'
 import { observeElementBounds, type LayoutRect } from './native/layout.ts'
@@ -17,8 +17,12 @@ import { Icon } from './icons.tsx'
 import { MatrixLoader } from './MatrixLoader.tsx'
 import { subscribe, useApp, usePaneAccess, usePaneCompact } from './state.ts'
 import { Label, REDUCED_MOTION, useTheme } from './ui.tsx'
-import { DISTANCE, DURATION, EASE } from './motion/kit.tsx'
-import { CodeChunk, CodeHeader, markdownParts, partGap, Prose, textChunks } from './transcript/markdown.tsx'
+import { BLUR, DISTANCE, DURATION, EASE } from './motion/kit.tsx'
+import { Presence } from './motion/Presence.tsx'
+import { PATCHED_NATIVE } from './native/local-build.ts'
+import { useAppearance } from './settings/appearance.ts'
+import { chunkGap, CodeChunk, CodeHeader, lineChunks, markdownParts, partGap, Prose, textChunks } from './transcript/markdown.tsx'
+import { ThreadImage } from './transcript/ThreadImage.tsx'
 import { MermaidBlock } from './transcript/MermaidBlock.tsx'
 import { MessageRail, type RailItem } from './transcript/rail.tsx'
 import { createTranscriptNavigation } from '../../desktop/src/lib/transcriptNavigation.ts'
@@ -26,6 +30,7 @@ import { T } from './transcript/glyphs.ts'
 import { alpha, muted, Para } from './transcript/kit.tsx'
 import { over } from './theme.ts'
 import { AnswerImages, DateSeparator, Turn, TurnFooter, turnTimestamp } from './transcript/Turn.tsx'
+import { useComposerOverlayHeight } from './composer/height.ts'
 import { loadEarlier, useActionError, useEarlierError, usePacedBlocks, useRequestPanelHeight } from './transcript/store.ts'
 
 export { markdownTheme } from './transcript/kit.tsx'
@@ -35,6 +40,18 @@ export const COLUMN = 736
 /** The floating composer's height plus 64 (`bottomInset + 64`, `Transcript.tsx:479`). */
 const COMPOSER_INSET = 192
 const turnKey = (group: TurnGroup, index: number) => group.turnId || group.user?.id || `turn-${index}`
+/** An optimistic send (`composer/pending.ts`) renders as turn `pending:<message id>`; the daemon's turn for that message
+ * keeps the pending row's key, so the row stays mounted (no remount, jump or replayed entrance) when the real id arrives. */
+function keyTurns(aliases: Map<string, string>) {
+  return (group: TurnGroup, index: number) => {
+    const user = group.user?.id
+    if (group.turnId.startsWith('pending:') && user) {
+      aliases.set(user, group.turnId)
+      if (aliases.size > 32) aliases.delete(aliases.keys().next().value!)
+    }
+    return (user && aliases.get(user)) || turnKey(group, index)
+  }
+}
 
 type TurnNodes = Map<string, {row?: PublicInstance | null; user?: PublicInstance | null}>
 type CodeState = { expanded: boolean; wrap: boolean; source?: boolean }
@@ -80,6 +97,8 @@ export function Transcript() {
   const bottomRef = useCallback((node: PublicInstance | null) => setBottomNode(node), [])
   const surfaceRef = useCallback((node: PublicInstance | null) => setSurfaceNode(node), [])
   const [atTail, setAtTail] = useState(true)
+  const tailRef = useRef(true)
+  tailRef.current = atTail
   const [overflow, setOverflow] = useState(false)
   const [paneHeight, setPaneHeight] = useState(0)
   const [paneWidth, setPaneWidth] = useState(0)
@@ -124,10 +143,11 @@ export function Transcript() {
   // line fence never mounts 5k native rows, nor adds a nested scroller.
   type RenderRow = {key: string; turn: TurnGroup; node: React.ReactNode; estimate?: number}
   const rowCache = useMemo(() => new Map<string, {turn: TurnGroup; date: string | null; isLast: boolean; running: boolean; code: typeof codeState; rows: RenderRow[]}>(), [threadId])
+  const keyOf = useMemo(() => keyTurns(new Map()), [threadId])
   const rows = useMemo(() => {
     const keep = new Set<string>()
     const next = turns.flatMap((turn, i) => {
-      const key = turnKey(turn, i)
+      const key = keyOf(turn, i)
       const at = turnTimestamp(turn)
       const startsDay = !!at && ((!hasEarlier && i === 0) || (i > 0 && calendarDateKey(at) !== calendarDateKey(turnTimestamp(turns[i - 1]!))))
       const running = turn.running || (i === turns.length - 1 && threadRunning && !turn.end)
@@ -142,11 +162,14 @@ export function Transcript() {
       const parts = markdownParts(turn.answer?.text ?? '')
       for (const [partIndex, part] of parts.entries()) {
         const partKey = `${key}:answer:${part.key}`
-        const chunks = textChunks(part.text)
+        const chunks = part.kind === 'code' ? lineChunks(part.text) : textChunks(part.text)
         // Native Markdown owns spacing inside prose; separate virtual parts
         // share the desktop's collapsed margin at their boundary (`partGap`).
         if (partIndex > 0) result.push({ key: `${partKey}:before`, turn, estimate: partGap(parts[partIndex - 1]!, part), node: <div style={{ height: partGap(parts[partIndex - 1]!, part) }} /> })
-        if (part.kind === 'code' && part.language === 'mermaid') {
+        if (part.kind === 'image') {
+          // A Markdown image on its own line (`splitImages`): the image itself, or why it cannot show.
+          result.push({ key: partKey, turn, estimate: 234, node: <Row><ThreadImage threadId={threadId!} source={part.text} alt={part.alt ?? ''} at={turn.answer?.at} /></Row> })
+        } else if (part.kind === 'code' && part.language === 'mermaid') {
           // One row: the header (Preview/Source, expand, copy) and the diagram or its source.
           const state = codeState[partKey] ?? { expanded: false, wrap: false }
           result.push({ key: partKey, turn, node: <Row><MermaidBlock code={part.text} source={!!state.source} onSource={source => setCodeState(value => ({ ...value, [partKey]: { ...state, source } }))} /></Row> })
@@ -159,7 +182,11 @@ export function Transcript() {
             result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><CodeChunk text={chunk} language={part.language} wrap={state.wrap} first={chunkIndex === 0} last={!state.expanded || chunkIndex === chunks.length - 1} /></Row> })
           }
         } else {
-          for (const [chunkIndex, chunk] of chunks.entries()) result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><Prose text={chunk} /></Row> })
+          for (const [chunkIndex, chunk] of chunks.entries()) {
+            // Pieces are whole blocks (`textChunks`); between them goes the margin those blocks have in one document.
+            if (chunkIndex > 0) result.push({ key: `${partKey}:${chunkIndex}:before`, turn, estimate: chunkGap(chunks[chunkIndex - 1]!, chunk), node: <div style={{ height: chunkGap(chunks[chunkIndex - 1]!, chunk) }} /> })
+            result.push({ key: `${partKey}:${chunkIndex}`, turn, node: <Row><Prose text={chunk} /></Row> })
+          }
         }
       }
       result.push({ key: `${key}:footer`, turn, estimate: 35, node: <Row><TurnFooter group={turn} threadId={threadId!} isLast={i === turns.length - 1} /></Row> })
@@ -349,7 +376,7 @@ export function Transcript() {
   }
 
   return (
-    <TranscriptFocusRestoration.Provider value={restoreFocus}><TranscriptRowStateScope.Provider value={rowStateScope}><SparseRetention.Provider value={nativeWindow.context}><div ref={surfaceRef} testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+    <TranscriptTail.Provider value={tailRef}><TranscriptFocusRestoration.Provider value={restoreFocus}><TranscriptRowStateScope.Provider value={rowStateScope}><SparseRetention.Provider value={nativeWindow.context}><div ref={surfaceRef} testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
       <virtual-list
         {...TRANSCRIPT_SCROLL_LAYOUT}
         {...(sparse ? { estimatedItemHeight: 160, itemCount: count, windowStart: windowIndices?.[0] ?? 0, windowIndices, ...nativeWindow.props } : { estimatedItemHeight: 160 })}
@@ -424,8 +451,9 @@ export function Transcript() {
           </div>
         </div>
       )}
+      <BottomFade visible={!atTail} fallback={COMPOSER_INSET - 64 + panelHeight} />
       <ScrollToBottom visible={!atTail} bottom={COMPOSER_INSET - 64 + 24 + panelHeight} onClick={scrollToBottom} />
-    </div></SparseRetention.Provider></TranscriptRowStateScope.Provider></TranscriptFocusRestoration.Provider>
+    </div></SparseRetention.Provider></TranscriptRowStateScope.Provider></TranscriptFocusRestoration.Provider></TranscriptTail.Provider>
   )
 }
 
@@ -463,23 +491,18 @@ const TurnItem = memo(function TurnItem({ turn, threadId, isLast, threadRunning,
 /** 32px round button with an arrow (`size-8 rounded-full border bg-elevated-primary-opaque`).
  *  The desktop moves it between `translate-y-0 opacity-100` and `-translate-y-1
  *  scale-95 opacity-0 blur-[2px]` over `--duration-fast` / `--ease-smooth-out`,
- *  both ways. GPUIX keeps the fade and the 4px drift (hidden sits 4px higher)
- *  and drops scale and blur; Reduce Motion keeps only the fade. */
+ *  both ways. Here the same values run on the paint-only `Presence`: it appears
+ *  mid-scroll, so nothing may re-lay out the window per frame. The exit is
+ *  faster (150 ms). Reduce Motion fades only. */
 export function ScrollToBottom({ visible, bottom, onClick }: { visible: boolean; bottom: number; onClick: () => void }) {
   const t = useTheme()
-  const [mounted, setMounted] = useState(visible)
-  if (visible && !mounted) setMounted(true)
-  if (!mounted) return null
-  const hidden = bottom + (REDUCED_MOTION ? 0 : DISTANCE.micro)
+  const hidden = { opacity: 0, translateY: -DISTANCE.micro, scale: 0.95, blur: BLUR.small }
   return (
-    <motion.div
-      initial={{ opacity: 0, bottom: hidden }}
-      animate={{ opacity: visible ? 1 : 0, bottom: visible ? bottom : hidden }}
-      transition={{ duration: REDUCED_MOTION ? DURATION.quick : DURATION.fast, ease: [...EASE.smoothOut] as [number, number, number, number] }}
-      onMotionComplete={() => {
-        if (!visible) setMounted(false)
-      }}
-      style={{ position: 'absolute', left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}
+    <Presence
+      show={visible}
+      enter={{ initial: REDUCED_MOTION ? { opacity: 0 } : hidden, animate: { opacity: 1, translateY: 0, scale: 1, blur: 0 }, transition: { duration: REDUCED_MOTION ? DURATION.quick : DURATION.fast, ease: [...EASE.smoothOut] as [number, number, number, number] }, origin: [0.5, 1] }}
+      exit={{ to: hidden, duration: 0.15 }}
+      style={{ position: 'absolute', left: 0, right: 0, bottom, alignItems: 'center', pointerEvents: 'none' }}
     >
       <div
         testId="scroll-to-bottom"
@@ -504,6 +527,29 @@ export function ScrollToBottom({ visible, bottom, onClick }: { visible: boolean;
       >
         <Icon source={T.arrowDown} size={14} color={t.text} />
       </div>
-    </motion.div>
+    </Presence>
+  )
+}
+
+/**
+ * `.chat-scroll-fade` (kit.css:3333): a 32 px wash from the surface up into the transcript, just above the composer, that says
+ * "there is more below" while the view is away from the tail. It fades in and out over 150 ms (`--ease-out`, paint-only; no
+ * movement) instead of tracking the scroll offset, and, like the desktop, it is not drawn on a translucent window. The first
+ * render is at rest: opening a thread already scrolled away shows it at once.
+ */
+export function BottomFade({ visible, fallback }: { visible: boolean; /** Before the composer stack is measured. */ fallback: number }) {
+  const t = useTheme()
+  const { translucent } = useAppearance()
+  // The wash ends on the composer stack's measured top edge (tray and requests included). A fixed estimate left a strip of
+  // unfaded text between its opaque end and a shorter card, cut by a hard line. Subscribed here, so the card growing a line
+  // re-renders only the wash.
+  const bottom = useComposerOverlayHeight() || fallback
+  if (translucent) return null
+  return (
+    <div
+      testId="transcript-bottom-fade"
+      paintTransform={PATCHED_NATIVE ? { initial: false, animate: { opacity: visible ? 1 : 0 }, transition: { duration: DURATION.quick, ease: [...EASE.out] as [number, number, number, number] } } : undefined}
+      style={{ position: 'absolute', left: 0, right: 0, bottom, height: 32, pointerEvents: 'none', ...(PATCHED_NATIVE ? {} : { opacity: visible ? 1 : 0 }), background: { type: 'linear-gradient', angle: 180, stops: [{ color: alpha(t.surface, 0), position: 0 }, { color: t.surface, position: 1 }] } }}
+    />
   )
 }

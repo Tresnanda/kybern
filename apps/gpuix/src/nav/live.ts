@@ -18,6 +18,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { isChildThread } from '../../../../packages/kybern-client/src/subagents.ts'
+import { isChildWorking } from '../../../../packages/kybern-client/src/delegations.ts'
 import {
   USAGE_LIMITS_CHANGED_NOTIFICATION,
   type Thread,
@@ -64,6 +65,14 @@ function upsertThread(thread: Thread) {
       // Progress only: keep the newest object without waking the panel.
       children[thread.id] = thread
       return
+    }
+    // A child that left after finishing and now works again (a delegated child re-woken by a message) is listed again,
+    // and holds its check again when it next settles.
+    const dismissed = getNav().dismissed
+    if (dismissed[thread.id] && isChildWorking(thread)) {
+      const kept = { ...dismissed }
+      delete kept[thread.id]
+      return setNav({ children: { ...children, [thread.id]: thread }, dismissed: kept })
     }
     return setNav({ children: { ...children, [thread.id]: thread } })
   }

@@ -40,7 +40,7 @@ export function SecretRequestPanel({ approval, input, count }: { approval: Appro
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
       <Para color={muted(t, .65)} size={11} style={{ flexGrow: 1 }}>{COPY.footnote}</Para>
       <Button variant="ghost" testId="secret-decline" disabled={busy} onClick={() => void respond(false)}>{COPY.decline}</Button>
-      <Button testId="secret-save" disabled={busy || !hasValue} onClick={() => void respond(true)}>{busy ? COPY.saving : COPY.save}</Button>
+      <Button swap testId="secret-save" disabled={busy || !hasValue} onClick={() => void respond(true)}>{busy ? COPY.saving : COPY.save}</Button>
     </div>
   </PanelBody>
 }

@@ -3,6 +3,8 @@
 // the chip tracks the pointer itself and hands the colour to its contents.
 import { useState, type ReactNode } from 'react'
 import { Icon } from '../icons.tsx'
+import { SCALE } from '../motion/kit.tsx'
+import { pressTransform } from '../motion/press.ts'
 import { Label, useTheme } from '../ui.tsx'
 
 /**
@@ -91,6 +93,8 @@ export function TrayChip({
       testId={testId}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      // The home tray's chips squash to 0.96 while held (`Draft.tsx:198`, 80 ms down / 150 ms back); rows and picker triggers never scale.
+      paintTransform={pressTransform(true, SCALE.large)}
       style={{
         display: 'flex',
         alignItems: 'center',

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { TextSwap } from "@/components/kybern/motion"
 import {
   artifactView,
   publishArtifactPrompt,
@@ -298,11 +299,7 @@ export function ArtifactCard({
             disabled={busy}
             onClick={() => void publish()}
           >
-            {busy
-              ? "Sending…"
-              : artifact.url
-                ? "Ask to update publication"
-                : "Check publishing options"}
+            <TextSwap text={busy ? "Sending…" : artifact.url ? "Ask to update publication" : "Check publishing options"} />
           </Button>
         )}
       </div>

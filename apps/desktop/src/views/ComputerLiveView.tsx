@@ -19,7 +19,7 @@ const POLL_MS = 700
 const LINGER_MS = 12_000
 /** A frame older than the running turn belongs to earlier work. */
 const STALE_MS = 5_000
-const EXIT_MS = 150
+const EXIT_MS = 160
 
 type Corner = "top-end" | "top-start" | "bottom-end" | "bottom-start"
 const CORNERS: readonly Corner[] = ["top-end", "top-start", "bottom-end", "bottom-start"]
@@ -135,6 +135,25 @@ export function ComputerLiveView({ threadId, running, insetEnd = 0, insetBottom 
   const [corner, setCorner] = useState<Corner>(savedCorner)
   const drag = useRef<{ id: number; x: number; y: number; samples: { x: number; y: number; t: number }[] } | null>(null)
   const settleFrom = useRef<DOMRect | null>(null)
+
+  // A size change (larger/smaller, or a window of another shape) snaps, then the card scales from its
+  // old size into the new one from its corner: transform only, no width/height transition.
+  const lastSize = useRef<{ w: number; h: number } | null>(null)
+  const frameWidth = frame?.value.width
+  const frameHeight = frame?.value.height
+  useLayoutEffect(() => {
+    const element = card.current
+    if (!element) {
+      lastSize.current = null
+      return
+    }
+    const w = element.offsetWidth
+    const h = element.offsetHeight
+    const last = lastSize.current
+    lastSize.current = { w, h }
+    if (!last || (last.w === w && last.h === h) || w === 0 || h === 0 || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
+    element.animate([{ transform: `scale(${last.w / w}, ${last.h / h})` }, { transform: "none" }], { duration: 200, easing: "cubic-bezier(0.22, 1, 0.36, 1)" })
+  }, [expanded, frameWidth, frameHeight])
 
   // After a corner change, start the move from where the card was released.
   useLayoutEffect(() => {

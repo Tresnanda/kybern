@@ -119,6 +119,8 @@ impl Orchestrator {
         let _workspace = self.inner.workspace_ops.lock().await;
         let admission = self.session_admission(p.thread_id).await;
         let _session = admission.lock().await;
+        // A finished turn's "after" snapshot may still be reading the worktree.
+        let _checkpoint = self.checkpoint_lock(p.thread_id).lock_owned().await;
         self.worktree_remove_locked(p).await
     }
 
@@ -285,6 +287,7 @@ impl Orchestrator {
             .ok_or_else(|| anyhow!("Choose a linked conversation with its own worktree before checking out this pull request."))?;
         let admission = self.session_admission(id).await;
         let _session = admission.lock().await;
+        let _checkpoint = self.checkpoint_lock(id).lock_owned().await;
         let thread = self.inner.store.thread_get(id)?.ok_or_else(|| anyhow!("thread not found"))?;
         ensure!(
             thread.project_id == p.project_id && thread.status != ThreadStatus::Archived,

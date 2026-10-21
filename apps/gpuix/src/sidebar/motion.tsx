@@ -7,9 +7,13 @@
 // region the way the desktop's grid shell does. Instead the rows a toggle adds or
 // removes travel together as one list item for the 220 ms of the tween
 // (`DisclosureGroup`), then flatten back into ordinary virtual rows.
-import { motion, useGpuix, type PublicInstance } from '@gpuix/react'
+import { motion, useGpuix, type MotionTransition, type PublicInstance, type StyleDesc } from '@gpuix/react'
+import type { PaintTransformProps } from '@gpuix/native/host'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { DISCLOSURE, DISTANCE, DURATION, EASE } from '../motion/kit.tsx'
+import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { PaintTranslate } from '../drag/PaintTranslate.tsx'
+import { DISCLOSURE, DISTANCE, DURATION, EASE, SwapOnChange } from '../motion/kit.tsx'
+import { EXIT, Presence } from '../motion/Presence.tsx'
 import { Label, REDUCED_MOTION } from '../ui.tsx'
 import type { Row } from './model.ts'
 
@@ -64,59 +68,61 @@ export function DisclosureGroup({ mode, height, onDone, children }: { mode: 'ope
   )
 }
 
+/** `t-reveal` in: opacity 0 → 1 and a 4px slide in from the right over 150 ms ease-out (opacity only under Reduce Motion). */
+function revealEnter(slide: boolean): PaintTransformProps | undefined {
+  if (!PATCHED_NATIVE) return undefined
+  const ease = [...EASE.out] as [number, number, number, number]
+  if (REDUCED_MOTION || !slide) return { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease } }
+  return { initial: { opacity: 0, translateX: DISTANCE.micro }, animate: { opacity: 1, translateX: 0 }, transition: { duration: DURATION.quick, ease } }
+}
+
 /**
- * `.t-reveal`: hover-revealed row actions fade in and slide 4px from the right
- * over `--duration-quick` ease-out. They hide at once when the pointer leaves:
- * GPUIX cannot keep the leaving copy stacked over the returning glyph.
+ * `.t-reveal`: hover-revealed row actions fade in and slide 4px from the right over `--duration-quick` ease-out, and fade out over
+ * 100 ms when the pointer leaves (`Presence` keeps them mounted, non-interactive, for the exit while the resting glyph fades back
+ * in over them). `show` is the row's hover; the controls stay mounted for the row's life, so a row's hover never remounts them.
+ * `still` mounts them already shown without the entrance (an active filter pins its toolbar on screen). Paint-only: no layout or
+ * render per frame.
  */
-export function Reveal({ children, slide = true }: { children: ReactNode; slide?: boolean }) {
+export function Reveal({ show, children, slide = true, still = false }: { show: boolean; children: ReactNode; slide?: boolean; still?: boolean }) {
   return (
-    <motion.div
-      initial={{ opacity: 0, left: slide && !REDUCED_MOTION ? DISTANCE.micro : 0 }}
-      animate={{ opacity: 1, left: 0 }}
-      transition={tween(DURATION.quick, EASE.out)}
-      style={{ display: 'flex', alignItems: 'center', position: 'relative' }}
-    >
+    <Presence show={show} enter={still ? undefined : revealEnter(slide)} exit={EXIT.reveal} style={{ flexDirection: 'row', alignItems: 'center', position: 'relative' }}>
       {children}
-    </motion.div>
+    </Presence>
   )
 }
 
 /**
- * The resting glyph coming back after a hover (`HOVER_HIDE_THREAD`'s
- * `transition-opacity`, 150 ms). `play={false}` on the row's first paint.
+ * The resting glyph coming back after a hover (`HOVER_HIDE_THREAD`'s `transition-opacity`, 150 ms). `play={false}` on the row's
+ * first paint. Paint-only.
  */
-export function FadeBack({ children, play, style, testId }: { children: ReactNode; play: boolean; style?: object; testId?: string }) {
-  if (!play) return <div testId={testId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', ...style }}>{children}</div>
+export function FadeBack({ children, play, style, testId }: { children: ReactNode; play: boolean; style?: StyleDesc; testId?: string }) {
+  const base = { display: 'flex', alignItems: 'center', justifyContent: 'center', ...style } as const
+  if (!play || !PATCHED_NATIVE) return <div testId={testId} style={base}>{children}</div>
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={tween(DURATION.quick, EASE.out)}
-      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', ...style }}
+    <div
+      testId={testId}
+      paintTransform={{ initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease: [...EASE.out] } }}
+      style={base}
     >
       {children}
-    </motion.div>
+    </div>
   )
 }
 
 /**
- * `TextSwap` on a row title: a new title (a rename, the agent's first title)
- * fades up 4px over 250 ms smooth-out. The first paint shows it plainly.
+ * `TextSwap` on a row title: a new title (a rename, the agent's first title) rises in from 4px below with a 2px blur over 250 ms
+ * smooth-out while the old one leaves up and out over 150 ms. The first paint shows it plainly.
  */
 export function TitleSwap({ text, children }: { text: string; children: ReactNode }) {
-  const [shown, setShown] = useState({ text, play: false })
-  if (shown.text !== text) setShown({ text, play: true })
   return (
-    <motion.div
-      key={text}
-      initial={shown.play ? { opacity: 0, top: REDUCED_MOTION ? 0 : DISTANCE.micro } : false}
-      animate={{ opacity: 1, top: 0 }}
-      transition={tween(DURATION.fast, EASE.smoothOut)}
-      style={{ display: 'flex', position: 'relative', flexGrow: 1, minWidth: 0, pointerEvents: 'none', userSelect: 'none' }}
+    <SwapOnChange
+      active={text}
+      style={{ flexGrow: 1, minWidth: 0, justifyContent: 'flex-start', alignItems: 'center', pointerEvents: 'none', userSelect: 'none' }}
+      innerStyle={{ flexGrow: 1, minWidth: 0, justifyContent: 'flex-start' }}
+      leavingStyle={{ right: 0 }}
     >
       {children}
-    </motion.div>
+    </SwapOnChange>
   )
 }
 
@@ -182,25 +188,37 @@ export function MarqueeLabel({ hover, text, color, lineHeight = 20 }: { hover: b
   const duration = Math.max(MARQUEE_MIN_MS, Math.round((overflow / MARQUEE_SPEED) * 1000)) / 1000
   return (
     <div ref={box} style={{ display: 'flex', flexGrow: 1, minWidth: 0, height: lineHeight, overflow: 'hidden', pointerEvents: 'none', userSelect: 'none' }}>
-      <motion.div
-        initial={false}
-        animate={{ left: panning ? -overflow : 0 }}
+      <Pan
+        to={panning ? -overflow : 0}
         transition={panning ? (REDUCED_MOTION ? { duration: 0 } : { duration, ease: [0, 0, 1, 1], delay: (MARQUEE_DELAY_MS - MARQUEE_MEASURE_MS) / 1000 }) : { duration: REDUCED_MOTION ? 0 : MARQUEE_BACK, ease: [...EASE.out] as [number, number, number, number] }}
-        style={{ display: 'flex', position: 'relative', flexShrink: 0 }}
       >
         <div ref={inner} style={{ display: 'flex', flexShrink: 0 }}>
           <Label color={color} lineHeight={lineHeight} style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
             {text}
           </Label>
         </div>
-      </motion.div>
+      </Pan>
     </div>
   )
 }
 
-/** `transition-[padding] duration-150 ease-out`: room for the revealed actions opens smoothly. */
+/**
+ * The marquee's pan: a paint-only translation of the retained label (`paintTranslate`), so a seconds-long pan re-renders
+ * nothing per frame; the stock addon keeps the `left` layout tween.
+ */
+function Pan({ to, transition, children }: { to: number; transition: MotionTransition; children: ReactNode }) {
+  const style = { display: 'flex', position: 'relative', flexShrink: 0 } as const
+  if (!PATCHED_NATIVE) return <motion.div initial={false} animate={{ left: to }} transition={transition} style={style}>{children}</motion.div>
+  return <PaintTranslate animate={{ translateX: to }} transition={transition} style={style}>{children}</PaintTranslate>
+}
+
+/**
+ * The room the revealed actions need at a row's trailing edge (the desktop's `transition-[padding] duration-150`). It changes at
+ * once: a width tween re-laid out and re-rendered the whole sidebar list on every frame of every hover (~10 renders, 7-13 ms
+ * each), and the actions' own fade (`Reveal`) covers the title's new edge.
+ */
 export function PadTween({ width, cancelGap = 0 }: { width: number; /** The parent's flex gap, cancelled so 0 adds nothing. */ cancelGap?: number }) {
-  return <motion.div initial={false} animate={{ width }} transition={tween(DURATION.quick, EASE.out)} style={{ flexShrink: 0, height: 1, marginLeft: -cancelGap }} />
+  return <div style={{ flexShrink: 0, width, height: 1, marginLeft: -cancelGap }} />
 }
 
 /**

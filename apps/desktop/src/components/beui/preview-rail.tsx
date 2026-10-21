@@ -118,6 +118,12 @@ export function PreviewRail({
   const displayedId = hoveredId ?? pinnedId ?? focusedId ?? "";
   const highlightedId = displayedId || (highlightActive ? selectedId : "");
   const displayedIndex = items.findIndex((item) => item.id === highlightedId);
+  // Ticks for messages that arrive after the rail has items grow in; the first set, earlier
+  // history prepended above it, and a different thread's set render in place.
+  const [firstIds, setFirstIds] = useState<ReadonlySet<string> | null>(null);
+  let lastKnownIndex = -1;
+  if (firstIds) for (let i = items.length - 1; i >= 0; i--) if (firstIds.has(items[i]!.id)) { lastKnownIndex = i; break; }
+  if (items.length > 0 && (firstIds === null || lastKnownIndex < 0)) setFirstIds(new Set(items.map((item) => item.id)));
   const rowTemplate = items.length
     ? `repeat(${items.length}, ${itemSize}px)`
     : undefined;
@@ -200,7 +206,12 @@ export function PreviewRail({
               <motion.span
                 data-slot="preview-rail-tick"
                 aria-hidden="true"
-                animate={isHorizontal ? { scaleY: scale } : { scaleX: scale }}
+                initial={
+                  !reduce && lastKnownIndex >= 0 && index > lastKnownIndex && index - lastKnownIndex <= 3 && !firstIds?.has(item.id)
+                    ? isHorizontal ? { scaleY: 0.4, opacity: 0 } : { scaleX: 0.4, opacity: 0 }
+                    : false
+                }
+                animate={isHorizontal ? { scaleY: scale, opacity: 1 } : { scaleX: scale, opacity: 1 }}
                 transition={reduce ? { duration: 0 } : SPRING_LAYOUT}
                 className={cn(
                   "block bg-current",

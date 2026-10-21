@@ -23,9 +23,12 @@ const timer = setInterval(() => {
     return
   }
   n++
-  const text = Array.from({ length: n }, (_, i) => `Word ${i}: smooth output preserves **formatting** and Unicode 🌿. `).join('')
+  // `STREAM_PARAGRAPHS=1`: a long reply of paragraphs, a table and a code block (many `textChunks` pieces).
+  const text = process.env.STREAM_PARAGRAPHS === '1'
+    ? Array.from({ length: n }, (_, i) => i % 40 === 20 ? `| Piece | Lines |\n|---|---|\n| ${i} | two |\n\n` : i % 40 === 30 ? `\`\`\`ts\nconst piece = ${i}\n\`\`\`\n\n` : `Streaming paragraph ${i}: preserve **formatted output** and Unicode 🌿.\n\n`).join('')
+    : Array.from({ length: n }, (_, i) => `Word ${i}: smooth output preserves **formatting** and Unicode 🌿. `).join('')
   set({ open: { ...getState().open, blocks: [user, { ...answer, text }] } })
-}, 300)
+}, Number(process.env.STREAM_INTERVAL ?? 300))
 function Fixture() { const t = useTheme(); return <div testId="stream-ready" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: t.surface }}><Transcript /></div> }
 render(<ThemeProvider><Fixture /></ThemeProvider>, { title: 'Streaming parity', width: 1280, height: 820, focus: false })
 process.stdin.on('end', () => { clearInterval(timer); process.exit(0) })

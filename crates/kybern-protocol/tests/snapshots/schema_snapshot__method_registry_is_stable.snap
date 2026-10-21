@@ -130,6 +130,7 @@ expression: names
 - files.list
 - files.read
 - threads.files.read
+- threads.files.resolve
 - skills.list
 - integrations.list
 - threads.visuals.publish

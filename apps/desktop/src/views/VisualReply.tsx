@@ -8,7 +8,17 @@ import { openExternal } from "@/lib/tauri"
 import type { HtmlVisual, ThreadId } from "@/protocol"
 import { activeRuntime, errorText } from "@/state/rpc"
 import { currentTheme } from "./visualFrameSupport"
+import { lastInputWasPointer } from "@/lib/navMotion"
 import { visualFrameHeight, visualHeight, visualLink, visualThemeFragment, VISUAL_COLUMN_WIDTH } from "../../../../packages/kybern-client/src/visuals"
+
+const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches
+
+/** Transform (origin 0 0) that maps the box `to` onto the box `from`. */
+function zoomBetween(from: DOMRect, to: DOMRect): string {
+  const sx = to.width > 0 ? from.width / to.width : 1
+  const sy = to.height > 0 ? from.height / to.height : 1
+  return `translate(${from.left - to.left}px, ${from.top - to.top}px) scale(${sx}, ${sy})`
+}
 
 // Last settled height per visual and mode, so a remount (virtual rows, thread revisit) reserves
 // the exact box. In memory only; bounded.
@@ -172,9 +182,10 @@ export const VisualFrame = memo(function VisualFrame({ threadId, visual, mode = 
     ? recalledHeight(cacheKey, width) ?? visualFrameHeight({ ...visual, height: Math.max(visual.height, 80) }, width)
     : visualFrameHeight(visual, width, recalledHeight(cacheKey, width)))
   const ready = status === "ready"
-  const collapse = () => {
-    const dialog = boxRef.current as HTMLDialogElement | null
-    if (!dialog || !expandedRef.current) return
+  const closing = useRef(false)
+  const finishCollapse = (dialog: HTMLDialogElement) => {
+    closing.current = false
+    dialog.removeAttribute("data-closing")
     expandedRef.current = false
     dialog.close()
     // Return the same element/document to its inline presentation. No portal,
@@ -183,18 +194,39 @@ export const VisualFrame = memo(function VisualFrame({ threadId, visual, mode = 
     setExpanded(false)
     requestAnimationFrame(() => expandButton.current?.focus({ preventScroll: true }))
   }
+  // Pointer expand/collapse zooms the same element between the card and the expanded frame
+  // (transform only; the iframe never moves in the DOM). Keyboard and Escape stay instant.
+  const collapse = (instant = false) => {
+    const dialog = boxRef.current as HTMLDialogElement | null
+    if (!dialog || !expandedRef.current || closing.current) return
+    const card = hostRef.current?.getBoundingClientRect()
+    if (instant || !card || !lastInputWasPointer() || reducedMotion()) return finishCollapse(dialog)
+    closing.current = true
+    dialog.setAttribute("data-closing", "")
+    const animation = dialog.animate(
+      [{ transform: "none", transformOrigin: "0 0" }, { transform: zoomBetween(card, dialog.getBoundingClientRect()), transformOrigin: "0 0" }],
+      { duration: 200, easing: "cubic-bezier(0.4, 0, 1, 1)", fill: "forwards" },
+    )
+    animation.onfinish = animation.oncancel = () => { animation.cancel(); finishCollapse(dialog) }
+  }
   const open = () => {
     const dialog = boxRef.current as HTMLDialogElement | null
     if (!dialog) return
+    const from = dialog.getBoundingClientRect()
+    const animate = lastInputWasPointer() && !reducedMotion()
     dialog.close()
     dialog.showModal()
     expandedRef.current = true
     setExpanded(true)
+    if (animate) dialog.animate(
+      [{ transform: zoomBetween(from, dialog.getBoundingClientRect()), transformOrigin: "0 0" }, { transform: "none", transformOrigin: "0 0" }],
+      { duration: 300, easing: "cubic-bezier(0.32, 0.72, 0, 1)" },
+    )
   }
   const content = <>
     {expanded && <div className="visual-reply__expanded-header">
       <span className="min-w-0 flex-1 truncate font-medium" title={visual.title}>{visual.title}</span>
-      <Button variant="ghost" size="icon-sm" aria-label="Close expanded preview" onClick={collapse} autoFocus><XIcon className="size-3.5" /></Button>
+      <Button variant="ghost" size="icon-sm" aria-label="Close expanded preview" onClick={() => collapse()} autoFocus><XIcon className="size-3.5" /></Button>
     </div>}
     {url && <iframe ref={frameRef} title={visual.title} src={url} sandbox="allow-scripts" referrerPolicy="no-referrer" onLoad={() => { post.current(); armWatchdog() }} className="visual-reply__frame" data-ready={ready} data-visual-frame={visual.id} style={ready ? { opacity: 1 } : { opacity: 0, colorScheme: "light" }} />}
     {skeleton && !ready && status !== "error" && <div className="visual-reply__skeleton" role="status" aria-label={`Loading ${visual.title}`} />}
@@ -215,7 +247,7 @@ export const VisualFrame = memo(function VisualFrame({ threadId, visual, mode = 
       {content}
     </div>
   </div>
-  return <div ref={hostRef} className="visual-reply-host chat-paint-host" style={{ height: reserved }}><dialog open ref={boxRef as React.Ref<HTMLDialogElement>} role={expanded ? "dialog" : "figure"} aria-modal={expanded || undefined} onCancel={(event) => { event.preventDefault(); collapse() }} aria-label={visual.title} tabIndex={-1} className="visual-reply outline-none" data-visual-reply={visual.id} data-status={status} style={{ height: reserved }}>
+  return <div ref={hostRef} className="visual-reply-host chat-paint-host" style={{ height: reserved }}><dialog open ref={boxRef as React.Ref<HTMLDialogElement>} role={expanded ? "dialog" : "figure"} aria-modal={expanded || undefined} onCancel={(event) => { event.preventDefault(); collapse(true) }} aria-label={visual.title} tabIndex={-1} className="visual-reply outline-none" data-visual-reply={visual.id} data-status={status} style={{ height: reserved }}>
     {content}
   </dialog></div>
 })

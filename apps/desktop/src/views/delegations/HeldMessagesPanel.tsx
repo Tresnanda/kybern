@@ -34,6 +34,8 @@ const HeldRow = memo(function HeldRow({ message, divided }: { message: ThreadMes
   const [entered, setEntered] = useState(false)
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState<"deliver" | "dismiss" | null>(null)
+  // The row pops out as soon as the reader decides; a failed call brings it back.
+  const [leaving, setLeaving] = useState(false)
   const connected = useStore((state) => state.connection.state === "open")
   const sender = useStore((state) => (message.from_thread_id ? state.threads[message.from_thread_id]?.title : undefined))
   const name = messageSenderName({ from_thread_id: message.from_thread_id, from_title: sender ?? "" })
@@ -42,15 +44,19 @@ const HeldRow = memo(function HeldRow({ message, divided }: { message: ThreadMes
   const kindWord = purposeLabel(message.purpose).toLowerCase()
   const act = async (kind: "deliver" | "dismiss") => {
     setBusy(kind)
+    setLeaving(true)
     const done = kind === "deliver" ? await deliverHeldMessage(message) : await dismissHeldMessage(message)
     // On success the row leaves with the store update; on failure it stays, usable again.
-    if (!done) setBusy(null)
+    if (!done) {
+      setBusy(null)
+      setLeaving(false)
+    }
   }
   return (
     <ComposerStackedPanelRow
       data-testid="held-message-row"
       onAnimationEnd={(event) => { if (event.target === event.currentTarget) setEntered(true) }}
-      className={cn("items-start", !entered && "t-row-enter", divided && COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME)}
+      className={cn("items-start", !entered && "t-row-enter", leaving && "t-pop-out", divided && COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME)}
     >
       <ComposerStackedPanelRowMain className="items-start">
         <HandRaisedIcon className={cn(COMPOSER_STACKED_PANEL_ICON_CLASS_NAME, "mt-[3px] text-amber-600 dark:text-amber-300/90")} aria-hidden />

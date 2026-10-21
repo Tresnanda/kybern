@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react"
 import { Button } from "@/components/kit/button"
 import { ComposerStackedPanel } from "@/components/kit/chat/ComposerStackedPanel"
 import { TextSwap } from "@/components/kybern/motion"
@@ -24,6 +24,9 @@ export function QuestionSteps({ questions, renderQuestion, busy, error, hint, co
   onDecline?: () => void
 }) {
   const [step, setStep] = useState(0)
+  // Direction of the last step change; the first step enters with the panel, not on its own.
+  const [move, setMove] = useState<{ from: number; dir: 1 | -1; changed: boolean }>({ from: 0, dir: 1, changed: false })
+  if (move.from !== step) setMove({ from: step, dir: step > move.from ? 1 : -1, changed: true })
   const heading = useRef<HTMLHeadingElement>(null)
   const previousStep = useRef(step)
   const reviewing = step === questions.length
@@ -42,10 +45,10 @@ export function QuestionSteps({ questions, renderQuestion, busy, error, hint, co
       else setStep(step + 1)
     }}>
       <div className="question-panel-header">
-        <h2 ref={heading} tabIndex={-1} className="question-step-heading"><CircleQuestionIcon className="size-4" />{reviewing ? "Review answers" : "Your input"}</h2>
-        <span className="question-panel-count" aria-live="polite">{reviewing ? `${questions.length} answered` : `Question ${step + 1} of ${questions.length}`}{count > 1 ? ` · ${count} requests` : ""}</span>
+        <h2 ref={heading} tabIndex={-1} className="question-step-heading"><CircleQuestionIcon className="size-4" /><TextSwap text={reviewing ? "Review answers" : "Your input"} /></h2>
+        <span className="question-panel-count" aria-live="polite"><TextSwap text={`${reviewing ? `${questions.length} answered` : `Question ${step + 1} of ${questions.length}`}${count > 1 ? ` · ${count} requests` : ""}`} /></span>
       </div>
-      <fieldset disabled={busy} className="question-panel-body" key={step}>
+      <fieldset disabled={busy} className={move.changed ? "question-panel-body question-step-enter" : "question-panel-body"} style={{ "--dir": move.dir } as CSSProperties} key={step}>
         {reviewing ? <ol className="question-review-list">{questions.map((question, index) => <li key={question.id} className="question-review-item">
           <div className="min-w-0">
             <p className="question-review-title">{question.title}</p>

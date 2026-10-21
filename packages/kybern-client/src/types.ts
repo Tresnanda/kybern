@@ -728,6 +728,8 @@ export type TranscriptEntry =
       seq: EventSeq;
       approval: ApprovalRequest;
       decision?: ApprovalDecision | null;
+      /** Allowed by Full access without asking the user. */
+      auto?: boolean;
     }
   | {
       role: "turn_summary";
@@ -885,6 +887,8 @@ export type EventPayload =
       approval_id: ApprovalId;
       decision: ApprovalDecision;
     }
+  /** A harness permission request Kybern allowed because the thread is in Full access. */
+  | { kind: "approval_auto_allowed"; approval: ApprovalRequest }
   | {
       kind: "turn_completed";
       stop_reason: StopReason;
@@ -2108,6 +2112,17 @@ export interface ThreadFileReadParams {
   max_bytes?: number;
 }
 
+export interface ThreadFilesResolveParams {
+  thread_id: ThreadId;
+  /** Paths as written, without a `:line` or `#L` suffix. At most 200. */
+  paths: string[];
+}
+
+export interface ThreadFilesResolveResult {
+  /** Per requested path: the file relative to the thread cwd, or null. */
+  paths: (string | null)[];
+}
+
 export interface FilesReadResult {
   content: string;
   truncated: boolean;
@@ -2247,6 +2262,7 @@ export interface Methods {
   "files.list": [FilesListParams, FilesListResult];
   "files.read": [FilesReadParams, FilesReadResult];
   "threads.files.read": [ThreadFileReadParams, FilesReadResult];
+  "threads.files.resolve": [ThreadFilesResolveParams, ThreadFilesResolveResult];
   "skills.list": [SkillsListParams, SkillsListResult];
   "threads.visuals.publish": [{ thread_id: ThreadId; html: string; title: string; height: number }, { visual: HtmlVisual }];
   "threads.visuals.preview": [{ thread_id: ThreadId; html: string; width?: number; appearance?: "dark" | "light" }, { width: number; content_height: number; captured_height: number; console_messages: {level: string; text: string}[]; missing_images: string[]; screenshot: string }];

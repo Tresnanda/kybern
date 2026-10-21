@@ -1,15 +1,14 @@
-import { useLoopVisibility } from '../native/loop-visibility.ts'
+import { useLoopRunning, useLoopVisibility } from '../native/loop-visibility.ts'
 import { useTranscriptEntranceLease, useTranscriptFirstMount } from './Window.tsx'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 import { revealBoundary } from './reveal.ts'
 // The existing port's live-state brightness pulse follows native display time.
 // Simple native glyph tint avoids React and layout work on every pulse frame.
 // Reduce Motion holds the plain muted label.
-import { useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useReducer, useRef, useState } from 'react'
 import { smoothAdvance, type SmoothState } from '../../../desktop/src/lib/smoothStream.ts'
 import type { StyleDesc } from '@gpuix/react'
-import { useLoaderTime, easeInOut, NATIVE_PAINT_ANIMATIONS } from '../MatrixLoader.tsx'
-import { Swap } from '../motion/kit.tsx'
+import { useLoaderTime, easeInOut, NATIVE_PAINT_ANIMATIONS, NATIVE_TEXT_PAINT } from '../MatrixLoader.tsx'
 import { REDUCED_MOTION, Label } from '../ui.tsx'
 import { alpha, ROW_LINE } from './kit.tsx'
 import { PACE_MS } from './store.ts'
@@ -17,14 +16,19 @@ import type { MarkdownStream } from '../native/markdown.ts'
 import { useTheme } from '../ui.tsx'
 
 export function Shimmer({ text, color, size = 14, lineHeight = ROW_LINE }: { text: string; color: string; size?: number; lineHeight?: number }) {
-  return NATIVE_PAINT_ANIMATIONS && process.env.KYBERN_NATIVE_TEXT_PAINT === '1'
+  return NATIVE_TEXT_PAINT
     ? <NativeShimmer text={text} color={color} size={size} lineHeight={lineHeight} />
     : <SampledShimmer text={text} color={color} size={size} lineHeight={lineHeight} />
 }
+/** `.t-shimmer`: the label stays in `color` while a soft band of the foreground colour sweeps across it, left to right, every
+ *  2 s (linear), glyph by glyph, natively (`highlight`; Core Animation once it settles). */
 function NativeShimmer({text,color,size,lineHeight}: {text:string;color:string;size:number;lineHeight:number}) {
-  const loop = useLoopVisibility(!REDUCED_MOTION)
-  return <Label ref={loop.ref} color={color} size={size} lineHeight={lineHeight} truncate paintAnimation={loop.visible ? {kind:'shimmer',cycleMs:1600} : undefined}>{text}</Label>
+  const t = useTheme()
+  const loop = useLoopRunning(!REDUCED_MOTION)
+  return <Label ref={loop.ref} color={color} size={size} lineHeight={lineHeight} truncate paintAnimation={loop.running ? {kind:'shimmer',cycleMs:SHIMMER_MS,highlight:t.text} : undefined}>{text}</Label>
 }
+/** `--shimmer-dur`. */
+const SHIMMER_MS = 2000
 
 function SampledShimmer({ text, color, size, lineHeight }: { text: string; color: string; size: number; lineHeight: number }) {
   const loop = useLoopVisibility(!REDUCED_MOTION)
@@ -57,19 +61,10 @@ export function useFresh(at: string | undefined): boolean {
   return fresh
 }
 
-/**
- * `IconSwap` / `TextSwap` for a state that flips after mount (spinner → brain,
- * "Thinking" → "Thought", copy → check). The first paint renders plainly
- * (desktop: "The first paint renders without motion"); only a change plays the
- * kit's `Swap`, one 250 ms burst.
- */
-export function SwapOnChange({ active, children, style }: { active: string; children: ReactNode; style?: StyleDesc }) {
-  const [first] = useState(active)
-  const [changed, setChanged] = useState(false)
-  if (!changed && active !== first) setChanged(true)
-  if (!changed) return <div style={{ display: 'flex', position: 'relative', alignItems: 'center', justifyContent: 'center', ...style }}>{children}</div>
-  return <Swap active={active} style={style}>{children}</Swap>
-}
+// `IconSwap` / `TextSwap` for a state that flips after mount (spinner → brain, "Thinking" → "Thought", copy → check). The first
+// paint renders plainly (desktop: "The first paint renders without motion"); every change after it cross-swaps and keeps the
+// outgoing state for its exit. Pass `kind="icon"` for glyphs.
+export { SwapOnChange } from '../motion/kit.tsx'
 
 // ---- paced streaming reveal ----
 

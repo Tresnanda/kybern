@@ -12,6 +12,7 @@ import { useEnvironment } from './shell/environment.ts'
 import { EnvironmentOverlay } from './environment/Panel.tsx'
 import { FILL_ISLAND, ISLAND } from './MatrixLoader.tsx'
 import { motion } from '@gpuix/react'
+import type { PaintTransformProps } from '@gpuix/native/host'
 import { useEffect, useState, type ReactNode } from 'react'
 import { NotesPage } from './notes/NotesPage.tsx'
 import { SettingsScreen } from './settings/SettingsScreen.tsx'
@@ -40,11 +41,14 @@ import { NavRail } from './nav/NavRail.tsx'
 import { Palette } from './nav/Palette.tsx'
 import { SessionsDialog } from './nav/Sessions.tsx'
 import { getNav, pointerNav, useNav, type Page } from './nav/store.ts'
-import { Rise } from './motion/kit.tsx'
+import { EASE, HOVER_FADE_ROOT, Rise } from './motion/kit.tsx'
+import { drawerSlide } from './shell/motion.ts'
+import { EXIT, Presence } from './motion/Presence.tsx'
+import { PATCHED_NATIVE } from './native/local-build.ts'
 import { TitleBar, usePanelOpen } from './nav/TitleBar.tsx'
 import { Sidebar } from './Sidebar.tsx'
 import { startAgentToasts } from './shell/agentToasts.ts'
-import { ConnectionBanner, useWelcome, Welcome } from './shell/Connection.tsx'
+import { ConnectionBanner, useWelcome, Welcome, type WelcomeKind } from './shell/Connection.tsx'
 import { ErrorBoundary } from './shell/ErrorBoundary.tsx'
 import { useSidebarDragging, useSidebarWidth } from './shell/layout.ts'
 import { SidebarDragLayer, SidebarResizeHandle } from './shell/ResizeHandle.tsx'
@@ -57,7 +61,7 @@ import { installWindowSurface, useTranscriptReleased } from './platform/surface.
 import { useApp, usePaneCompact } from './state.ts'
 import { COLUMN, GUTTER, Transcript } from './Transcript.tsx'
 import { ThreadRequests, useBlockingRequest } from './transcript/Requests.tsx'
-import { EASE_OUT, Label, REDUCED_MOTION, useTheme } from './ui.tsx'
+import { Label, REDUCED_MOTION, useTheme } from './ui.tsx'
 import { over } from './theme.ts'
 import { OPAQUE_WINDOW } from './platform/material.ts'
 import { TITLEBAR } from './nav/TitleBar.tsx'
@@ -69,9 +73,7 @@ import { TITLEBAR } from './nav/TitleBar.tsx'
 const INSET = 8
 const CARD_RADIUS = 12
 
-// Sliding pieces move on the strong ease-out: quick to respond, soft to land.
-// Reduce Motion, and toggles from the keyboard, change without movement.
-const SLIDE = { duration: 0.22, ease: EASE_OUT }
+// The thread panel slides as a drawer (`drawerSlide`); Reduce Motion, and toggles from the keyboard, change without movement.
 
 export function App() {
   const env = useEnvironment()
@@ -120,6 +122,7 @@ function Workspace() {
   return (
     <div
       testId="app-ready"
+      {...HOVER_FADE_ROOT}
       // kybern.css:26–35: chrome inherits select-none; document bodies opt in.
       // Any press makes later navigation pointer-driven again (`keyboardNav`).
       onMouseDown={pointerNav}
@@ -136,7 +139,7 @@ function Workspace() {
           <motion.div
             initial={false}
             animate={{ width: panelOpen ? sidebarWidth : 0 }}
-            transition={still || resizing || !sliding ? { duration: 0 } : SLIDE}
+            transition={still || resizing || !sliding ? { duration: 0 } : drawerSlide(panelOpen)}
             onMotionComplete={() => {
               setPanelMounted(panelOpen)
               setSliding(false)
@@ -186,12 +189,8 @@ function Workspace() {
             }}
           >
             <div style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0, position: 'relative' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, minHeight: 0 }}>
-            <PageEnter page={settingsOpen ? 'settings' : page}>
-              <ErrorBoundary label="this page" key={settingsOpen ? 'settings' : page}>
-                {settingsOpen ? <SettingsScreen /> : welcome ? <Welcome kind={welcome} /> : <PageView page={page} />}
-              </ErrorBoundary>
-            </PageEnter>
+            <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, minHeight: 0, position: 'relative' }}>
+            <PageArea page={page} settingsOpen={settingsOpen} welcome={welcome} />
             <ConnectionBanner />
             </div>
             {/* Settings covers the workspace, dock included, as on the desktop. */}
@@ -224,12 +223,54 @@ function Workspace() {
   )
 }
 
+/** Settings is a layer over the workspace (`App.tsx:325-333`): it enters 8px from the right (spring, 300 ms) and leaves 6px to the right in 120 ms. */
+const SETTINGS_ENTER = (): PaintTransformProps | undefined => {
+  if (!PATCHED_NATIVE) return undefined
+  if (REDUCED_MOTION) return { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: 0.15, ease: [...EASE.out] } }
+  // `paintTransform` has no spring: a critically damped one (`bounce: 0`) settles like smooth-out, which is what this uses.
+  return { initial: { opacity: 0, translateX: 8 }, animate: { opacity: 1, translateX: 0 }, transition: { duration: 0.3, ease: [...EASE.smoothOut] } }
+}
+const SETTINGS_EXIT = { to: { opacity: 0, translateX: 6 }, duration: 0.12 } as const
+
+/**
+ * The page on screen. A switch from the rail or a menu rises in like `t-section-enter` (6px, 250 ms smooth-out); the first page,
+ * and switches from a shortcut, appear at once. Settings is a layer over it: opened or closed by the pointer it slides in and
+ * out (the workspace page rises in as it leaves); by ⌘, or Escape it appears and goes at once.
+ */
+function PageArea({ page, settingsOpen, welcome }: { page: Page; settingsOpen: boolean; welcome: WelcomeKind | null }) {
+  // The latest settings toggle: was it the keyboard, and did settings just close (the workspace page then enters)?
+  const [toggle, setToggle] = useState({ open: settingsOpen, keyboard: false, closed: false })
+  if (toggle.open !== settingsOpen) setToggle({ open: settingsOpen, keyboard: getNav().keyboardNav, closed: !settingsOpen })
+  return (
+    <>
+      {!settingsOpen && (
+        <PageEnter page={page} entry={toggle.closed && !toggle.keyboard}>
+          <ErrorBoundary label="this page" key={page}>
+            {welcome ? <Welcome kind={welcome} /> : <PageView page={page} />}
+          </ErrorBoundary>
+        </PageEnter>
+      )}
+      <Presence
+        show={settingsOpen}
+        enter={toggle.keyboard ? undefined : SETTINGS_ENTER()}
+        exit={toggle.keyboard ? { ...SETTINGS_EXIT, duration: 0 } : SETTINGS_EXIT}
+        style={settingsOpen ? { flexGrow: 1, minHeight: 0 } : { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
+      >
+        <ErrorBoundary label="this page" key="settings">
+          <SettingsScreen />
+        </ErrorBoundary>
+      </Presence>
+    </>
+  )
+}
+
 /**
  * A page switch from the rail or a menu rises in like `t-section-enter` (6px,
  * 250 ms smooth-out). The first page, and switches from a shortcut, appear at once.
+ * `entry`: the page was just uncovered by closing settings with the pointer.
  */
-function PageEnter({ page, children }: { page: string; children: ReactNode }) {
-  const [shown, setShown] = useState({ page, play: false })
+function PageEnter({ page, entry = false, children }: { page: string; entry?: boolean; children: ReactNode }) {
+  const [shown, setShown] = useState({ page, play: entry })
   if (shown.page !== page) setShown({ page, play: !getNav().keyboardNav })
   return (
     <Rise key={shown.page} kind="section" play={shown.play && shown.page === page} style={{ flexGrow: 1, minHeight: 0 }}>

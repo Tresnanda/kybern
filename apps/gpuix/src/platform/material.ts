@@ -12,9 +12,13 @@
 //   kybern.css:631-660). AppKit already renders the native material opaque
 //   under Reduce transparency, like the desktop's NSVisualEffectView.
 //
+// - Reduce motion (`platform/reducedMotion.ts`) switches every motion to its
+//   fade or instant path.
+//
 // The options are read from NSWorkspace on the window shell's existing poll
 // (`shell/window.ts`), so a change in System Settings applies while the app
-// runs. `KYBERN_REDUCED_TRANSPARENCY` / `KYBERN_INCREASED_CONTRAST` pin them;
+// runs. `KYBERN_REDUCED_TRANSPARENCY` / `KYBERN_INCREASED_CONTRAST` /
+// `KYBERN_REDUCED_MOTION` pin them;
 // `KYBERN_A11Y_FILE` (JSON) lets checks change them without touching the
 // user's system settings.
 import type { Pointer } from 'bun:ffi'
@@ -22,8 +26,9 @@ import { readFileSync } from 'node:fs'
 import { useSyncExternalStore } from 'react'
 import { cls, getObjc, sel } from '../native/objc.ts'
 import { useAppearance } from '../settings/appearance.ts'
+import { setReducedMotion } from './reducedMotion.ts'
 
-export interface AccessibilityDisplay { reduceTransparency: boolean; increaseContrast: boolean }
+export interface AccessibilityDisplay { reduceTransparency: boolean; increaseContrast: boolean; reduceMotion: boolean }
 
 const pinned = (name: string) => process.env[name] ? process.env[name] === '1' : null
 
@@ -33,29 +38,32 @@ function readNative(): AccessibilityDisplay | null {
     const o = getObjc()
     const workspace = o.msg(cls(o, 'NSWorkspace'), sel(o, 'sharedWorkspace')) as Pointer
     const flag = (name: string) => (Number(o.msgU64(workspace, sel(o, name))) & 0xff) !== 0
-    return { reduceTransparency: flag('accessibilityDisplayShouldReduceTransparency'), increaseContrast: flag('accessibilityDisplayShouldIncreaseContrast') }
+    return { reduceTransparency: flag('accessibilityDisplayShouldReduceTransparency'), increaseContrast: flag('accessibilityDisplayShouldIncreaseContrast'), reduceMotion: flag('accessibilityDisplayShouldReduceMotion') }
   } catch { return null }
 }
 
 /** The current options; pinned values and the test file win over the system. */
 export function readAccessibilityDisplay(): AccessibilityDisplay {
-  let source = readNative() ?? { reduceTransparency: false, increaseContrast: false }
+  let source = readNative() ?? { reduceTransparency: false, increaseContrast: false, reduceMotion: false }
   const file = process.env.KYBERN_A11Y_FILE
   if (file) try { source = { ...source, ...JSON.parse(readFileSync(file, 'utf8')) } } catch { /* Missing file: keep the system values. */ }
   return {
     reduceTransparency: pinned('KYBERN_REDUCED_TRANSPARENCY') ?? !!source.reduceTransparency,
     increaseContrast: pinned('KYBERN_INCREASED_CONTRAST') ?? !!source.increaseContrast,
+    reduceMotion: pinned('KYBERN_REDUCED_MOTION') ?? !!source.reduceMotion,
   }
 }
 
 let display = readAccessibilityDisplay()
+setReducedMotion(display.reduceMotion)
 const listeners = new Set<() => void>()
 export const getAccessibilityDisplay = () => display
 /** Called by the window shell's poll; listeners hear only real changes. */
 export function refreshAccessibilityDisplay() {
   const next = readAccessibilityDisplay()
-  if (next.reduceTransparency === display.reduceTransparency && next.increaseContrast === display.increaseContrast) return
+  if (next.reduceTransparency === display.reduceTransparency && next.increaseContrast === display.increaseContrast && next.reduceMotion === display.reduceMotion) return
   display = next
+  setReducedMotion(next.reduceMotion)
   if (process.env.KYBERN_DEBUG_A11Y) console.log('[a11y]', JSON.stringify(next))
   for (const l of listeners) l()
 }

@@ -1139,8 +1139,8 @@ async fn response_images_require_auth_and_stay_on_the_owning_host() {
     assert_eq!(response.bytes().await.unwrap().as_ref(), png);
     let response = http.get(&url).bearer_auth(&host.state.bootstrap_token).query(&[("path", "not-an-image.png")]).send().await.unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE);
-    std::fs::write(other.root.join("outside.png"), png).unwrap();
-    let outside = other.root.join("outside.png");
+    let outside = outside_folder().join("outside.png");
+    std::fs::write(&outside, png).unwrap();
     assert_eq!(
         http.get(&url)
             .bearer_auth(&host.state.bootstrap_token)
@@ -1149,16 +1149,94 @@ async fn response_images_require_auth_and_stay_on_the_owning_host() {
             .await
             .unwrap()
             .status(),
-        reqwest::StatusCode::FORBIDDEN
+        reqwest::StatusCode::NOT_FOUND
     );
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(outside, host.root.join("linked.png")).unwrap();
         assert_eq!(
             http.get(&url).bearer_auth(&host.state.bootstrap_token).query(&[("path", "linked.png")]).send().await.unwrap().status(),
-            reqwest::StatusCode::FORBIDDEN
+            reqwest::StatusCode::NOT_FOUND
         );
     }
+}
+
+/// A folder outside every test daemon's data folder (those hold a daemon token, so their images stay closed).
+fn outside_folder() -> std::path::PathBuf {
+    let folder = std::env::temp_dir().join(format!("kybern-outside-test-{}", Uuid::now_v7()));
+    std::fs::create_dir_all(&folder).unwrap();
+    folder
+}
+
+#[tokio::test]
+async fn response_images_from_hidden_folders_and_named_outside_files_render_while_other_files_stay_closed() {
+    let host = Host::start().await;
+    let other = Host::start().await;
+    let thread = host.thread();
+    let http = reqwest::Client::new();
+    let url = format!("{}/threads/{}/image", host.url, thread.id);
+    let get = |path: String| {
+        let request = http.get(&url).bearer_auth(&host.state.bootstrap_token).query(&[("path", path)]);
+        async move { request.send().await.unwrap().status() }
+    };
+    let png = b"\x89PNG\r\n\x1a\nfixture";
+    // Agents and tools such as Playwright write screenshots into dot-folders of the workspace.
+    std::fs::create_dir_all(host.root.join(".screenshots/times")).unwrap();
+    std::fs::write(host.root.join(".screenshots/times/trip-1280.png"), png).unwrap();
+    std::fs::write(host.root.join(".screenshots/times/Buchungsformular 7 h spät.png"), png).unwrap();
+    assert_eq!(get(".screenshots/times/trip-1280.png".into()).await, reqwest::StatusCode::OK);
+    assert_eq!(get("./.screenshots/times/trip-1280.png".into()).await, reqwest::StatusCode::OK);
+    assert_eq!(get(".screenshots/times/Buchungsformular%207%20h%20sp%C3%A4t.png".into()).await, reqwest::StatusCode::OK);
+    assert_eq!(get(host.root.join(".screenshots/times/trip-1280.png").to_string_lossy().into()).await, reqwest::StatusCode::OK);
+    assert_eq!(get(".screenshots/missing.png".into()).await, reqwest::StatusCode::NOT_FOUND);
+    // Never Git internals, never a file that is not an image by name and by content.
+    std::fs::create_dir_all(host.root.join(".git")).unwrap();
+    std::fs::write(host.root.join(".git/shot.png"), png).unwrap();
+    assert_eq!(get(".git/shot.png".into()).await, reqwest::StatusCode::FORBIDDEN);
+    std::fs::write(host.root.join(".env"), b"SECRET=1").unwrap();
+    assert_eq!(get(".env".into()).await, reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    std::fs::write(host.root.join(".screenshots/env.png"), b"SECRET=1").unwrap();
+    assert_eq!(get(".screenshots/env.png".into()).await, reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    // Outside the folder: only a file this conversation itself names.
+    let elsewhere = outside_folder();
+    let outside = elsewhere.join("outside shot.png");
+    std::fs::write(&outside, png).unwrap();
+    let reference = outside.to_string_lossy().to_string();
+    assert_eq!(get(reference.clone()).await, reqwest::StatusCode::NOT_FOUND);
+    host.state
+        .store
+        .event_append(
+            thread.id,
+            None,
+            EventPayload::AssistantMessageCompleted {
+                message_id: Uuid::now_v7(),
+                origin: EventOrigin::Root,
+                text: format!("Here it is:\n\n![Booking form, desktop]({reference})"),
+                thinking: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(get(reference).await, reqwest::StatusCode::OK);
+    // Naming one outside file opens no other, and another daemon's data folder stays closed even when named.
+    std::fs::write(elsewhere.join("unnamed.png"), png).unwrap();
+    assert_eq!(get(elsewhere.join("unnamed.png").to_string_lossy().into()).await, reqwest::StatusCode::NOT_FOUND);
+    let data = other.root.join("data.png");
+    std::fs::write(&data, png).unwrap();
+    let data = data.to_string_lossy().to_string();
+    host.state
+        .store
+        .event_append(
+            thread.id,
+            None,
+            EventPayload::AssistantMessageCompleted {
+                message_id: Uuid::now_v7(),
+                origin: EventOrigin::Root,
+                text: format!("![data]({data})"),
+                thinking: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(get(data).await, reqwest::StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -1367,8 +1445,7 @@ async fn previews_share_auth_and_path_checks_and_originals_remain_exact() {
         let original = http.get(&url).bearer_auth(&host.state.bootstrap_token).query(&[("path", name)]).send().await.unwrap();
         assert_eq!(original.bytes().await.unwrap().as_ref(), bytes.get_ref());
     }
-    let other = Host::start().await;
-    let outside = other.root.join("outside.png");
+    let outside = outside_folder().join("outside.png");
     std::fs::write(&outside, b"image").unwrap();
     let forbidden = http
         .get(&url)
@@ -1377,7 +1454,7 @@ async fn previews_share_auth_and_path_checks_and_originals_remain_exact() {
         .send()
         .await
         .unwrap();
-    assert_eq!(forbidden.status(), reqwest::StatusCode::FORBIDDEN);
+    assert_eq!(forbidden.status(), reqwest::StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -1978,4 +2055,73 @@ async fn project_coordinator_overrides_are_set_kept_and_cleared_over_rpc() {
     let mut settings = client.call::<SettingsGet>(Empty {}).await.unwrap();
     settings.orchestration.role_defaults.insert(DelegationRole::General, RoleDefault { model: Some("m".into()), ..Default::default() });
     assert!(client.call::<SettingsUpdate>(SettingsUpdateParams { settings }).await.is_err());
+}
+
+#[tokio::test]
+async fn review_adversarial_image_route() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    let http = reqwest::Client::new();
+    let url = format!("{}/threads/{}/image", host.url, thread.id);
+    let get = |path: String| {
+        let request = http.get(&url).bearer_auth(&host.state.bootstrap_token).query(&[("path", path)]);
+        async move { request.send().await.unwrap().status() }
+    };
+    let png = b"\x89PNG\r\n\x1a\nfixture";
+    std::fs::create_dir_all(host.root.join(".git")).unwrap();
+    std::fs::write(host.root.join(".git/shot.png"), png).unwrap();
+    // Git internals stay closed whatever the case or encoding, and through a symlink.
+    for path in [".GIT/shot.png", ".Git/shot.png", "%2Egit/shot.png"] {
+        let status = get(path.into()).await;
+        eprintln!("{path} -> {status}");
+        assert!(matches!(status, reqwest::StatusCode::FORBIDDEN | reqwest::StatusCode::NOT_FOUND), "{path} -> {status}");
+    }
+    std::os::unix::fs::symlink(host.root.join(".git/shot.png"), host.root.join("link.png")).unwrap();
+    assert_eq!(get("link.png".into()).await, reqwest::StatusCode::FORBIDDEN);
+    // No existence oracle outside the workspace: nothing is named, so every answer is the same 404.
+    let home = std::env::var("HOME").unwrap();
+    for path in
+        ["/etc/hosts".to_string(), "/no/such/file".into(), format!("{home}/.zshrc"), format!("{home}/.nonexistent-xyz"), "../x.png".into()]
+    {
+        assert_eq!(get(path.clone()).await, reqwest::StatusCode::NOT_FOUND, "{path}");
+    }
+    let elsewhere = outside_folder();
+    let say = |text: String, thinking: Option<String>| {
+        host.state
+            .store
+            .event_append(
+                thread.id,
+                None,
+                EventPayload::AssistantMessageCompleted { message_id: Uuid::now_v7(), origin: EventOrigin::Root, text, thinking },
+            )
+            .unwrap();
+    };
+    let at = |name: &str| elsewhere.join(name).to_string_lossy().to_string();
+    // Substring mention: a message names `a.png.bak`; `a.png` was never named.
+    std::fs::write(elsewhere.join("a.png"), png).unwrap();
+    say(format!("I backed it up to {}.bak", at("a.png")), None);
+    assert_eq!(get(at("a.png")).await, reqwest::StatusCode::NOT_FOUND);
+    // Only in the hidden reasoning.
+    std::fs::write(elsewhere.join("thought.png"), png).unwrap();
+    say("done".into(), Some(format!("I looked at {}", at("thought.png"))));
+    assert_eq!(get(at("thought.png")).await, reqwest::StatusCode::NOT_FOUND);
+    // Named in a sentence, in a code span, as a file:// link: each opens exactly that file.
+    for name in ["plain.png", "code span.png", "linked.png"] {
+        std::fs::write(elsewhere.join(name), png).unwrap();
+    }
+    say(format!("Saved {}.", at("plain.png")), None);
+    say(format!("See `{}` and [it](file://{})", at("code span.png"), at("linked.png").replace(' ', "%20")), None);
+    assert_eq!(get(at("plain.png")).await, reqwest::StatusCode::OK);
+    assert_eq!(get(at("code span.png")).await, reqwest::StatusCode::OK);
+    assert_eq!(get(at("linked.png")).await, reqwest::StatusCode::OK);
+    // A cached answer still sees a newer message.
+    std::fs::write(elsewhere.join("later.png"), png).unwrap();
+    assert_eq!(get(at("later.png")).await, reqwest::StatusCode::NOT_FOUND);
+    say(format!("![later]({})", at("later.png")), None);
+    assert_eq!(get(at("later.png")).await, reqwest::StatusCode::OK);
+    // A named file that is not an image answers the same 404 as a missing one.
+    std::fs::write(elsewhere.join("notes.txt"), b"text").unwrap();
+    say(format!("{} {}", at("notes.txt"), at("missing.png")), None);
+    assert_eq!(get(at("notes.txt")).await, reqwest::StatusCode::NOT_FOUND);
+    assert_eq!(get(at("missing.png")).await, reqwest::StatusCode::NOT_FOUND);
 }

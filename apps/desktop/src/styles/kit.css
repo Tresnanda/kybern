@@ -349,8 +349,21 @@
 }
 
 .chat-message-send-enter {
-  animation: chat-message-send-enter 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  will-change: opacity, transform, filter;
+  /* backwards fill, no will-change: nothing keeps a layer alive after the entrance. */
+  animation: chat-message-send-enter 260ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+/* The hairline that separates a settled turn's work from its answer grows from the
+   left when the turn has just settled. */
+.chat-bar-grow {
+  transform-origin: left;
+  animation: chat-bar-grow var(--duration-fast) var(--ease-smooth-out) backwards;
+}
+@keyframes chat-bar-grow {
+  from { transform: scaleX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-bar-grow { animation: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2810,12 +2823,27 @@ diffs-container {
 }
 .composer-panel-section.t-panel-enter {
   animation-name: composer-panel-enter;
+  animation-duration: var(--duration-fast);
+  animation-fill-mode: backwards;
   will-change: auto;
 }
+/* Rise only, no blur: the panel sits inside the composer glass. */
 @keyframes composer-panel-enter {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from { opacity: 0; transform: translateY(var(--distance-small)); }
 }
+/* Resolved request leaves quickly (usePresence keeps it mounted for the exit). The
+   stack height then snaps; only the card itself fades down. */
+.composer-panel-section[data-leaving] {
+  opacity: 0;
+  transform: translateY(var(--distance-micro));
+  pointer-events: none;
+  transition: opacity var(--duration-quick) var(--ease-exit), transform var(--duration-quick) var(--ease-exit);
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-panel-section.t-panel-enter { animation-name: composer-panel-fade; animation-duration: var(--duration-quick); }
+  .composer-panel-section[data-leaving] { transform: none; transition-duration: var(--duration-quick); }
+}
+@keyframes composer-panel-fade { from { opacity: 0; } }
 
 /* Composer glass — the same material as the floating menus/pickers
    (`APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME`) and the sidebar.
@@ -3270,6 +3298,27 @@ diffs-container {
   animation: ultrathink-rainbow 10s linear infinite;
 }
 
+/* The rainbow loops pause on a host that observeLoopVisibility marked (offscreen, clipped,
+   hidden window) and stop for reduced motion; the static spectrum stays. */
+.ultrathink-frame[data-loop-paused],
+.ultrathink-chroma[data-loop-paused],
+.ultrathink-pill[data-loop-paused],
+.ultrathink-word[data-loop-paused],
+[data-loop-paused] .ultrathink-frame,
+[data-loop-paused] .ultrathink-chroma,
+[data-loop-paused] .ultrathink-pill,
+[data-loop-paused] .ultrathink-word {
+  animation-play-state: paused;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ultrathink-frame,
+  .ultrathink-chroma,
+  .ultrathink-pill,
+  .ultrathink-word {
+    animation: none;
+  }
+}
+
 /* Preserve the soft line breaks typed in the composer inside prose and lists. */
 .chat-markdown--user p,
 .chat-markdown--user li {
@@ -3491,7 +3540,18 @@ html[data-full-translucency] .chat-scroll-fade {
   contain: none;
 }
 .visual-reply:modal .visual-reply__open { display: none; }
-.visual-reply:modal::backdrop { background: rgb(0 0 0 / 0.6); }
+.visual-reply:modal::backdrop {
+  background: rgb(0 0 0 / 0.6);
+  animation: visual-backdrop-in var(--duration-fast) var(--ease-out) backwards;
+}
+.visual-reply:modal[data-closing]::backdrop {
+  animation: visual-backdrop-out 200ms var(--ease-exit) forwards;
+}
+@keyframes visual-backdrop-in { from { opacity: 0; } }
+@keyframes visual-backdrop-out { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .visual-reply:modal::backdrop { animation-duration: var(--duration-quick); }
+}
 .visual-reply__expanded-header {
   display: flex;
   align-items: center;

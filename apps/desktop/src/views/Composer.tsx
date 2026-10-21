@@ -51,7 +51,7 @@ import { PROVIDER_LABEL, basename, formatEffort, isMac, mod } from "@/lib/format
 import { ChevronDownIcon, ClockIcon, ComposerSendArrowIcon, MessageCircleIcon, NoteIcon, PaperclipIcon, PencilIcon, PlusIcon, PluginIcon, DeviceLaptopIcon,
   HandRaisedIcon, ShieldCheckIcon, ShieldIcon, SkillCubeIcon, TerminalIcon, XIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
-import { IconSwap } from "@/components/kybern/motion"
+import { IconSwap, TextSwap, usePresence } from "@/components/kybern/motion"
 import { ComposerEditor, type ComposerEditorHandle, type EditorSegment } from "@/components/kit/chat/ComposerEditor"
 import { isFreeChatProject, type ContentPart, type NoteId, type NoteSummary, type PermissionMode, type ProjectId, type ProviderInstance, type ProviderKind, type ProviderStatus, type SkillInfo, type TaskItem, type TaskItemId, type Thread, type UserMessage } from "@/protocol"
 import { refreshComposerCatalog } from "@/state/accountRequests"
@@ -336,6 +336,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const [caret, setCaret] = useState(0)
   const [attachments, setAttachments] = useState<Attachment[]>(() => labelAttachments(savedDraft?.attachments ?? []))
   const [uploading, setUploading] = useState(0)
+  const uploadRow = usePresence(uploading > 0)
+  // Queue/steer chips enter and leave as a turn starts and ends, but not when a thread that is
+  // already running is opened (that would replay the entrance on every thread switch).
+  const queueGroup = usePresence(!!running)
+  const [sawIdle, setSawIdle] = useState(!running)
+  if (!running && !sawIdle) setSawIdle(true)
+  // Removed chips pop out for 150 ms before they leave the list.
+  const [leavingAttachments, setLeavingAttachments] = useState<ReadonlySet<string>>(() => new Set())
   const [sending, setSending] = useState(false)
   const [promptMode, setPromptMode] = useState<"queue" | "steer">("queue")
   const steering = running && !!onSteer && promptMode === "steer"
@@ -739,25 +747,41 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         catalog = await listSkills(projectId, provider.kind, accountInstance).catch(() => [])
         setSkillCatalog({ key: skillCatalogKey, skills: [...catalog] })
       }
-      await (running && delivery === "steer" && onSteer ? onSteer : onSend)({ parts: buildParts(catalog) })
-      if (props.draftKey) ownerStore.getState().set((state) => {
-        const composerDrafts = { ...state.composerDrafts }
-        delete composerDrafts[props.draftKey!]
-        return { composerDrafts }
-      })
+      const parts = buildParts(catalog)
+      // The words leave the editor the moment the send is accepted, so they are never on screen
+      // in the editor and in the new bubble at once. A failed or cancelled send puts them back.
+      const sent = { text, attachments, mentioned: new Set(mentioned.current), skills: new Map(selectedSkills.current), threadReferences: selectedThreadReferences.current, mentionReferences: selectedMentionReferences.current }
       setText("")
-      for (const attachment of attachments) {
-        if (attachment.preview) {
-          URL.revokeObjectURL(attachment.preview)
-          previewUrls.current.delete(attachment.preview)
-        }
-      }
       setAttachments([])
       mentioned.current.clear()
       selectedSkills.current.clear()
       selectedThreadReferences.current = []
       selectedMentionReferences.current = []
       syncTokenSources()
+      try {
+        await (running && delivery === "steer" && onSteer ? onSteer : onSend)({ parts })
+      } catch (error) {
+        // Text typed while the send was in flight stays; the sent draft returns only into an empty editor.
+        setText((current) => current || sent.text)
+        setAttachments((current) => (current.length ? current : sent.attachments))
+        mentioned.current = sent.mentioned
+        selectedSkills.current = sent.skills
+        selectedThreadReferences.current = sent.threadReferences
+        selectedMentionReferences.current = sent.mentionReferences
+        syncTokenSources()
+        throw error
+      }
+      if (props.draftKey) ownerStore.getState().set((state) => {
+        const composerDrafts = { ...state.composerDrafts }
+        delete composerDrafts[props.draftKey!]
+        return { composerDrafts }
+      })
+      for (const attachment of sent.attachments) {
+        if (attachment.preview) {
+          URL.revokeObjectURL(attachment.preview)
+          previewUrls.current.delete(attachment.preview)
+        }
+      }
       editor.current?.focus()
     } catch (e) {
       if (!(e instanceof SendCancelled)) toast.error("Unable to send", { description: errorText(e) })
@@ -826,12 +850,23 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     }
   }, [ownerStore])
 
-  const removeAttachment = (attachment: Attachment) => {
+  const removeAttachmentNow = (attachment: Attachment) => {
     if (attachment.preview) {
       URL.revokeObjectURL(attachment.preview)
       previewUrls.current.delete(attachment.preview)
     }
     setAttachments((list) => list.filter((item) => item.id !== attachment.id))
+    setLeavingAttachments((ids) => {
+      if (!ids.has(attachment.id)) return ids
+      const next = new Set(ids)
+      next.delete(attachment.id)
+      return next
+    })
+  }
+  const removeAttachment = (attachment: Attachment) => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return removeAttachmentNow(attachment)
+    setLeavingAttachments((ids) => new Set(ids).add(attachment.id))
+    window.setTimeout(() => removeAttachmentNow(attachment), 150)
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -1140,17 +1175,17 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               </div>
             )}
 
-            {(attachments.length > 0 || uploading > 0) && (
+            {(attachments.length > 0 || uploadRow.mounted) && (
               <div className="-mx-1.5 -mt-1 mb-2 flex flex-wrap items-start gap-1.5">
                 {attachments.map((a) =>
                   a.media_type.startsWith("image/") ? (
-                    <div key={a.id} className="t-pop group relative size-16 shrink-0 overflow-hidden rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
+                    <div key={a.id} className={cn(leavingAttachments.has(a.id) ? "t-pop-out" : "t-pop", "group relative size-16 shrink-0 overflow-hidden rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]")}>
                         <ComposerImageAttachment id={a.id} name={a.name} preview={a.preview} />
                       <span aria-hidden className="pointer-events-none absolute bottom-1 left-1 rounded-md bg-black/55 px-1 font-system-ui text-[10px] leading-4 font-medium text-white">@{a.label}</span>
                       <RemoveButton name={a.name} onClick={() => removeAttachment(a)} />
                     </div>
                   ) : (
-                    <span key={a.id} className="t-pop group relative inline-flex h-14 w-60 max-w-full items-center gap-2.5 rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] py-2 pr-8 pl-2 shadow-sm">
+                    <span key={a.id} className={cn(leavingAttachments.has(a.id) ? "t-pop-out" : "t-pop", "group relative inline-flex h-14 w-60 max-w-full items-center gap-2.5 rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] py-2 pr-8 pl-2 shadow-sm")}>
                       <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-[var(--color-background-elevated-secondary)] text-muted-foreground">
                         <FileEntryIcon pathValue={a.name} kind="file" mimeType={a.media_type} className="size-4" />
                       </span>
@@ -1162,8 +1197,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                     </span>
                   ),
                 )}
-                {uploading > 0 && (
-                  <div className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
+                {uploadRow.mounted && (
+                  <div className="t-appear flex items-center gap-1.5 px-1 text-xs text-muted-foreground" data-blur="off" data-leaving={uploadRow.leaving || undefined}>
                     <Spinner size={14} /> Uploading…
                   </div>
                 )}
@@ -1361,8 +1396,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                   />
                 )}
 
-                {running && (
-                  <div className="flex shrink-0 items-center gap-0.5">
+                {queueGroup.mounted && (
+                  <div className={cn("flex shrink-0 items-center gap-0.5", sawIdle && "t-appear")} data-blur="off" data-leaving={queueGroup.leaving || undefined}>
                     <Button
                       variant="subtle"
                       size="chip"
@@ -1380,7 +1415,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                         <ClockIcon className={cn("hidden size-3.5 shrink-0", "@max-[360px]:inline-flex")} aria-hidden />
                       )}
                       <span className={cn("@max-[360px]:sr-only")}>
-                        {sending ? "Sending…" : steering ? "Steer now" : "Queue"}
+                        <TextSwap text={sending ? "Sending…" : steering ? "Steer now" : "Queue"} />
                       </span>
                     </Button>
                     {onSteer && <Menu>
@@ -1400,67 +1435,59 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                     </Menu>}
                   </div>
                 )}
-                {running ? (
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <Button
-                          type="button"
-                          variant="prominent"
-                          size="icon-xs"
-                          className={cn(COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME, surfaceMode === "split" && "!size-7 sm:!size-7")}
-                          aria-label="Stop generation"
-                          title="Stop the current response. On Mac, press Ctrl+C to interrupt."
-                          onClick={onStop}
-                          disabled={!onStop}
-                        />
+                {/* One button for send and stop: the glyphs swap in one slot, the tooltip text swaps with them. */}
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="prominent"
+                        size="icon-xs"
+                        className={cn(COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME, surfaceMode === "split" && "!size-7 sm:!size-7", !running && sendLabel && "tk-send-pill")}
+                        aria-label={running ? "Stop generation" : sending ? "Sending" : sendLabel ?? "Send message"}
+                        title={running ? "Stop the current response. On Mac, press Ctrl+C to interrupt." : undefined}
+                        disabled={running ? !onStop : !canSend}
+                        onClick={running ? onStop : () => void submit()}
+                      />
+                    }
+                  >
+                    {!running && sendLabel ? (
+                      <span className="whitespace-nowrap">{sendLabel}</span>
+                    ) : (
+                      <IconSwap
+                        className="size-full"
+                        tempo="quick"
+                        active={running ? "b" : "a"}
+                        a={
+                          <IconSwap
+                            className="size-full"
+                            tempo="quick"
+                            active={sending ? "b" : "a"}
+                            a={<ComposerSendArrowIcon className={COMPOSER_FOOTER_SEND_GLYPH_CLASS_NAME} />}
+                            b={<Spinner size={12} />}
+                          />
+                        }
+                        b={<span className="block size-2.5 rounded-[2px] bg-current" />}
+                      />
+                    )}
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">
+                    <TextSwap
+                      text={running ? "stop" : disabled && disabledReason ? `reason:${disabledReason}` : "send"}
+                      render={(key) =>
+                        key === "stop" ? (
+                          "Stop generation"
+                        ) : key === "send" ? (
+                          <span className="inline-flex items-center gap-2">
+                            Send <Kbd className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)]">↵</Kbd>
+                          </span>
+                        ) : (
+                          key.slice("reason:".length)
+                        )
                       }
-                    >
-                      <span className="block size-2.5 rounded-[2px] bg-current" />
-                    </TooltipTrigger>
-                    <TooltipPopup side="top">Stop generation</TooltipPopup>
-                  </Tooltip>
-                ) : (
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <Button
-                          type="button"
-                          variant="prominent"
-                          size="icon-xs"
-                          className={cn(COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME, surfaceMode === "split" && "!size-7 sm:!size-7", sendLabel && "tk-send-pill")}
-                          aria-label={sending ? "Sending" : sendLabel ?? "Send message"}
-                          disabled={!canSend}
-                          onClick={() => void submit()}
-                        />
-                      }
-                    >
-                      {sendLabel ? (
-                        <span className="whitespace-nowrap">{sendLabel}</span>
-                      ) : (
-                        <IconSwap
-                          className="size-full"
-                          active={sending ? "b" : "a"}
-                          a={<ComposerSendArrowIcon className={COMPOSER_FOOTER_SEND_GLYPH_CLASS_NAME} />}
-                          b={
-                            <svg width={12} height={12} viewBox="0 0 14 14" className="animate-spin" aria-hidden>
-                              <circle cx={7} cy={7} r={5.5} stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeDasharray="20 12" fill="none" />
-                            </svg>
-                          }
-                        />
-                      )}
-                    </TooltipTrigger>
-                    <TooltipPopup side="top">
-                      {disabled && disabledReason ? (
-                        disabledReason
-                      ) : (
-                        <span className="inline-flex items-center gap-2">
-                          Send <Kbd className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)]">↵</Kbd>
-                        </span>
-                      )}
-                    </TooltipPopup>
-                  </Tooltip>
-                )}
+                    />
+                  </TooltipPopup>
+                </Tooltip>
               </div>
             </div>
           )}

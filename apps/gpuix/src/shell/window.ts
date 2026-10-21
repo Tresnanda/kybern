@@ -8,17 +8,21 @@
 // - macOS Light/Dark is read from `NSApp.effectiveAppearance` and reported to
 //   `appearance.ts`, which re-themes the app live.
 //
-// One 900 ms timer reads position and appearance; it never reads window size.
+// Position, appearance and accessibility display are re-read when AppKit
+// reports a window-state change (`native/windowState.ts`); an addon without
+// that callback polls them every 900 ms. Window size is never polled.
 // Every failure falls back to GPUI's default (the window just keeps its size).
 import { dlopen, FFIType, type Pointer } from 'bun:ffi'
 import { readFileSync } from 'node:fs'
 import type { NativeRenderer } from '@gpuix/react'
-import { cls, cstr, each, getObjc, nsApp, sel, type Objc } from '../native/objc.ts'
+import { cls, cstr, each, getObjc, nsApp, sel, withPool, type Objc } from '../native/objc.ts'
 import { onWindowResize } from '../native/layout.ts'
+import { hasWindowStateEvents, installWindowState, onWindowStateChange } from '../native/windowState.ts'
 import { readSystemVariant, setSystemVariant } from './appearance.ts'
 import { setWindowWidth } from './layout.ts'
 import { load, save } from './persist.ts'
 import { refreshAccessibilityDisplay } from '../platform/material.ts'
+import { installIdleMemory } from '../platform/idleMemory.ts'
 
 const FRAME_KEY = 'kybern.window.frame'
 const POLL_MS = 900
@@ -167,15 +171,17 @@ export function isWindowFocused(): boolean {
   if (!mac) return true
   try {
     const o = getObjc()
-    const window = appWindow(o)
-    return window ? (Number(o.msgU64(window, sel(o, 'isKeyWindow'))) & 0xff) !== 0 : true
+    return withPool(o, () => {
+      const window = appWindow(o)
+      return window ? (Number(o.msgU64(window, sel(o, 'isKeyWindow'))) & 0xff) !== 0 : true
+    })
   } catch {
     return true
   }
 }
 
 let started = false
-/** Size is event-driven; position/appearance retain their existing AppKit read. */
+/** Size, position, appearance and accessibility display are event-driven. */
 export function startWindowShell(renderer: NativeRenderer) {
   if (started) return
   started = true
@@ -184,17 +190,19 @@ export function startWindowShell(renderer: NativeRenderer) {
     if (!mac) return
     try {
       const o = getObjc()
-      const window = appWindow(o)
-      if (!window) return
-      const frame = readFrame(o, window)
-      if (frameReady && !automated && frame && frame !== lastFrame) {
-        lastFrame = frame
-        save(FRAME_KEY, frame)
-      }
-      const variant = readSystemVariant()
-      if (variant) setSystemVariant(variant)
-      // Reduce transparency / Increase contrast, changed in System Settings while running.
-      refreshAccessibilityDisplay()
+      withPool(o, () => {
+        const window = appWindow(o)
+        if (!window) return
+        const frame = readFrame(o, window)
+        if (frameReady && !automated && frame && frame !== lastFrame) {
+          lastFrame = frame
+          save(FRAME_KEY, frame)
+        }
+        const variant = readSystemVariant()
+        if (variant) setSystemVariant(variant)
+        // Reduce transparency / Increase contrast, changed in System Settings while running.
+        refreshAccessibilityDisplay()
+      })
     } catch { /* Retry the platform-only read on the next tick. */ }
   }
   onWindowResize(renderer, ({ width, height }) => {
@@ -202,6 +210,9 @@ export function startWindowShell(renderer: NativeRenderer) {
     setWindowWidth(width)
     readPlatformState()
   })
+  installWindowState(renderer)
   readPlatformState()
-  setInterval(readPlatformState, POLL_MS)
+  if (hasWindowStateEvents()) onWindowStateChange(readPlatformState)
+  else setInterval(readPlatformState, POLL_MS)
+  installIdleMemory(renderer, isWindowFocused)
 }

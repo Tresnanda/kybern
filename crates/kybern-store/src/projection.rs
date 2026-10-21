@@ -605,7 +605,17 @@ fn apply_transcript_event(
             }
             EventPayload::ApprovalRequested { approval } | EventPayload::UserInputRequested { approval } => {
                 let Some(turn_id) = turn_id else { continue };
-                out.push(TranscriptEntry::Approval { turn_id, seq: ev.seq, approval: approval.clone(), decision: None });
+                out.push(TranscriptEntry::Approval { turn_id, seq: ev.seq, approval: approval.clone(), decision: None, auto: false });
+            }
+            EventPayload::ApprovalAutoAllowed { approval } => {
+                let Some(turn_id) = turn_id else { continue };
+                out.push(TranscriptEntry::Approval {
+                    turn_id,
+                    seq: ev.seq,
+                    approval: approval.clone(),
+                    decision: Some(ApprovalDecision::AllowOnce),
+                    auto: true,
+                });
             }
             EventPayload::ApprovalResolved { approval_id, decision } => {
                 if let Some(TranscriptEntry::Approval { decision: d, .. }) =

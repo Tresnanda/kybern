@@ -5,7 +5,9 @@
 //! whole working tree (tracked and untracked, ignored files excluded) written
 //! with a temporary index and referenced from `refs/kybern/<thread>/<turn>/<before|after>`.
 //! Diffs are between two such commits, so untracked files show up and the
-//! user's real index is never touched.
+//! user's real index is never touched. Untracked files and directories of
+//! `SNAPSHOT_SKIP_BYTES` or more are left out (named in the commit message)
+//! and kept when a snapshot is restored.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -18,6 +20,23 @@ pub const AUTHOR_EMAIL: &str = "checkpoint@kybern.local";
 /// Keep a single diff response bounded so JSON parsing and rendering cannot
 /// monopolize a desktop client's main thread. Metadata is never truncated.
 pub const MAX_PATCH_BYTES: usize = 1024 * 1024;
+const MB: u64 = 1024 * 1024;
+/// Untracked files and directories this large are left out of snapshots:
+/// hashing them on every turn held turns open for minutes and copied them
+/// into the object store.
+pub const SNAPSHOT_SKIP_BYTES: u64 = 100 * MB;
+/// The last snapshot's index, kept in the git dir as the next one's stat cache.
+const SNAPSHOT_INDEX: &str = "kybern-snapshot-index";
+/// Commit-message line naming a path a snapshot left out.
+const SKIPPED_TRAILER: &str = "Kybern-Skipped: ";
+
+/// An untracked path too large to snapshot.
+#[derive(Debug, Clone)]
+struct SkippedPath {
+    path: String,
+    /// Size counted up to the limit.
+    bytes: u64,
+}
 
 /// One local branch from `for-each-ref`.
 #[derive(Debug, Clone)]
@@ -219,58 +238,133 @@ impl Repo {
     }
 
     /// Snapshot the working tree into a dangling commit and return its hash.
+    ///
+    /// The temporary index is seeded from the last snapshot's index (kept in
+    /// the git dir, one per folder of the repository), so untracked files
+    /// that did not change are not hashed again; the user's index seeds the
+    /// first one. A snapshot only re-reads the working tree under its own
+    /// folder, so in a subfolder the entries outside it are copied from the
+    /// user's index, as a fresh seed would have them. Untracked files and
+    /// directories of `SNAPSHOT_SKIP_BYTES` or more are left out and named in
+    /// the commit message, and `restore` keeps them.
     pub async fn snapshot(&self, message: &str) -> Result<String> {
-        let (git_dir, working_index, head) = tokio::join!(self.git_dir(), self.index_path(), self.head());
+        let (git_dir, location) = tokio::join!(self.git_dir(), self.git(&["rev-parse", "--show-toplevel", "--show-prefix"]));
         let git_dir = git_dir?;
+        let location = location?;
+        let mut lines = location.lines();
+        let toplevel = PathBuf::from(lines.next().unwrap_or_default());
+        let prefix = lines.next().unwrap_or_default().to_string();
+        let kept = git_dir.join(snapshot_index_name(&prefix));
+        if tokio::fs::try_exists(&kept).await.unwrap_or(false) {
+            match self.snapshot_seeded(message, &git_dir, &kept, true, &toplevel, &prefix).await {
+                Ok(commit) => return Ok(commit),
+                Err(error) => {
+                    // A kept index must never fail every later checkpoint.
+                    tracing::warn!(workdir = %self.workdir.display(), %error, "snapshot from the kept index failed, retrying from the user's index");
+                    let _ = tokio::fs::remove_file(&kept).await;
+                }
+            }
+        }
+        self.snapshot_seeded(message, &git_dir, &kept, false, &toplevel, &prefix).await
+    }
+
+    async fn snapshot_seeded(
+        &self,
+        message: &str,
+        git_dir: &Path,
+        persistent: &Path,
+        reuse: bool,
+        toplevel: &Path,
+        prefix: &str,
+    ) -> Result<String> {
+        let (working_index, head) = tokio::join!(self.index_path(), self.head());
         let index = git_dir.join(format!("kybern-index-{}", uuid::Uuid::new_v4().simple()));
         let index_str = index.to_string_lossy().to_string();
         let env = [("GIT_INDEX_FILE", index_str.as_str())];
         let result = async {
-            let working_index_metadata = match working_index {
-                Ok(working_index) => match tokio::fs::metadata(&working_index).await {
+            let mut from_snapshot_index = false;
+            let mut seed_metadata = None;
+            let kept = reuse.then(|| persistent.to_path_buf());
+            for (seed, is_snapshot_index) in [(kept, true), (working_index.ok(), false)] {
+                let Some(seed) = seed else { continue };
+                match tokio::fs::metadata(&seed).await {
                     Ok(metadata) => {
-                        // Seed from the real index so `git add` can reuse its
-                        // stat cache instead of re-hashing the whole worktree.
-                        tokio::fs::copy(&working_index, &index)
-                            .await
-                            .with_context(|| format!("copy git index {}", working_index.display()))?;
-                        Some(metadata)
+                        // Reuse the seed's stat cache instead of re-hashing the
+                        // whole worktree.
+                        tokio::fs::copy(&seed, &index).await.with_context(|| format!("copy git index {}", seed.display()))?;
+                        seed_metadata = Some(metadata);
+                        from_snapshot_index = is_snapshot_index;
+                        break;
                     }
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                    Err(error) => return Err(error).with_context(|| format!("stat git index {}", working_index.display())),
-                },
-                Err(_) => None,
-            };
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error).with_context(|| format!("stat git index {}", seed.display())),
+                }
+            }
 
-            if working_index_metadata.is_none()
+            if seed_metadata.is_none()
                 && let Some(head) = head.as_deref()
             {
                 self.git_env(&["read-tree", head], &env).await?;
             }
-            if let Some(metadata) = working_index_metadata {
+            if let Some(metadata) = seed_metadata {
                 // Verify racily-clean entries without throwing away the copied
                 // stat cache. A non-zero status only means paths need updating.
                 self.git_env_allow_nonzero(&["update-index", "--really-refresh"], &env).await?;
                 restore_file_times(&index, &metadata)?;
             }
-            self.git_env(&["add", "-A", "--", "."], &env).await?;
+            if from_snapshot_index {
+                if !prefix.is_empty() {
+                    let top = Repo { workdir: toplevel.to_path_buf(), env: self.env.clone() };
+                    top.copy_user_entries_outside(prefix, &env).await?;
+                }
+                self.match_tracked_ignored_files(&env).await?;
+            }
+            let skipped = self.large_untracked().await?;
+            let excludes = skipped.iter().map(|entry| format!(":(exclude,literal){}", entry.path)).collect::<Vec<_>>();
+            if !skipped.is_empty() {
+                // An earlier snapshot may still hold a path that has grown too large.
+                let literal = skipped.iter().map(|entry| format!(":(literal){}", entry.path)).collect::<Vec<_>>();
+                let mut rm = vec!["rm", "--cached", "-r", "-f", "-q", "--ignore-unmatch", "--"];
+                rm.extend(literal.iter().map(String::as_str));
+                self.git_env(&rm, &env).await?;
+            }
+            let mut add = vec!["add", "-A", "--", "."];
+            add.extend(excludes.iter().map(String::as_str));
+            self.git_env(&add, &env).await?;
             let tree = self.git_env(&["write-tree"], &env).await?;
-            let mut args = vec!["commit-tree".to_string(), tree, "-m".into(), message.to_string()];
+            let mut message = message.to_string();
+            if !skipped.is_empty() {
+                message.push('\n');
+                for entry in &skipped {
+                    message.push_str(&format!("\n{SKIPPED_TRAILER}{} ({} MB or more, not snapshotted)", entry.path, entry.bytes / MB));
+                }
+                tracing::info!(
+                    workdir = %self.workdir.display(),
+                    skipped = ?skipped.iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>(),
+                    "left large untracked paths out of the snapshot"
+                );
+            }
+            let mut args = vec!["commit-tree".to_string(), tree, "-m".into(), message];
             if let Some(head) = head {
                 args.push("-p".into());
                 args.push(head);
             }
             let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
-            self.git_env(
-                &args_ref,
-                &[
-                    ("GIT_AUTHOR_NAME", AUTHOR_NAME),
-                    ("GIT_AUTHOR_EMAIL", AUTHOR_EMAIL),
-                    ("GIT_COMMITTER_NAME", AUTHOR_NAME),
-                    ("GIT_COMMITTER_EMAIL", AUTHOR_EMAIL),
-                ],
-            )
-            .await
+            let commit = self
+                .git_env(
+                    &args_ref,
+                    &[
+                        ("GIT_AUTHOR_NAME", AUTHOR_NAME),
+                        ("GIT_AUTHOR_EMAIL", AUTHOR_EMAIL),
+                        ("GIT_COMMITTER_NAME", AUTHOR_NAME),
+                        ("GIT_COMMITTER_EMAIL", AUTHOR_EMAIL),
+                    ],
+                )
+                .await?;
+            // Keep this index as the next snapshot's stat cache. Concurrent
+            // snapshots each rename a complete index, so the last one wins.
+            tokio::fs::rename(&index, persistent).await.with_context(|| format!("keep snapshot index {}", persistent.display()))?;
+            Ok(commit)
         }
         .await;
         let _ = tokio::fs::remove_file(&index).await;
@@ -278,6 +372,124 @@ impl Repo {
         lock.push(".lock");
         let _ = tokio::fs::remove_file(PathBuf::from(lock)).await;
         result
+    }
+
+    /// Make the snapshot index track the same ignored files as the user's
+    /// index: an earlier snapshot may hold a file that is ignored now, and
+    /// the user may have force-added an ignored file since.
+    async fn match_tracked_ignored_files(&self, env: &[(&str, &str)]) -> Result<()> {
+        let list = ["ls-files", "-z", "-c", "-i", "--exclude-standard"];
+        let (snapshot, user) = tokio::join!(self.git_env(&list, env), self.git(&list));
+        let snapshot = snapshot?;
+        let user = user?;
+        let snapshot = snapshot.split('\0').filter(|path| !path.is_empty()).collect::<std::collections::HashSet<_>>();
+        let user = user.split('\0').filter(|path| !path.is_empty()).collect::<std::collections::HashSet<_>>();
+        let stale = snapshot.difference(&user).map(|path| format!(":(literal){path}")).collect::<Vec<_>>();
+        if !stale.is_empty() {
+            let mut rm = vec!["rm", "--cached", "-f", "-q", "--ignore-unmatch", "--"];
+            rm.extend(stale.iter().map(String::as_str));
+            self.git_env(&rm, env).await?;
+        }
+        // A tracked file deleted from disk cannot be force-added; leaving it
+        // out records the deletion, as `add -A` does for every other file.
+        let forced = user
+            .difference(&snapshot)
+            .filter(|path| self.workdir.join(path).symlink_metadata().is_ok())
+            .map(|path| format!(":(literal){path}"))
+            .collect::<Vec<_>>();
+        if !forced.is_empty() {
+            let mut add = vec!["add", "-f", "--"];
+            add.extend(forced.iter().map(String::as_str));
+            self.git_env(&add, env).await?;
+        }
+        Ok(())
+    }
+
+    /// Replace the snapshot index's entries outside `prefix` (a folder of
+    /// the repository, ending in `/`) with the user's index's: a snapshot
+    /// re-reads only its own folder, so a kept index would otherwise freeze
+    /// everything else. Runs at the top level, where index paths are full.
+    async fn copy_user_entries_outside(&self, prefix: &str, env: &[(&str, &str)]) -> Result<()> {
+        let list = ["ls-files", "-s", "-z", "--full-name"];
+        let (snapshot, user) = tokio::join!(self.git_env(&list, env), self.git(&list));
+        let (snapshot, user) = (snapshot?, user?);
+        // `<mode> <object> <stage>\t<path>` records, grouped by path.
+        let outside = |listing: &str| {
+            let mut entries = std::collections::BTreeMap::<String, Vec<String>>::new();
+            for record in listing.split('\0').filter(|record| !record.is_empty()) {
+                if let Some((_, path)) = record.split_once('\t')
+                    && !path.starts_with(prefix)
+                {
+                    entries.entry(path.to_string()).or_default().push(record.to_string());
+                }
+            }
+            entries
+        };
+        let (snapshot, user) = (outside(&snapshot), outside(&user));
+        let mut input = String::new();
+        for (path, records) in &snapshot {
+            if user.get(path) != Some(records) {
+                // Mode 0 removes every stage of the path.
+                let object = records[0].split(' ').nth(1).unwrap_or_default();
+                input.push_str(&format!("0 {object}\t{path}\0"));
+            }
+        }
+        for (path, records) in &user {
+            if snapshot.get(path) != Some(records) {
+                for record in records {
+                    input.push_str(record);
+                    input.push('\0');
+                }
+            }
+        }
+        if input.is_empty() {
+            return Ok(());
+        }
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(&self.workdir).args(["update-index", "-z", "--index-info"]);
+        cmd.envs(self.env.iter().map(|(k, v)| (k, v)));
+        cmd.envs(env.iter().copied());
+        cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
+        let mut child = cmd.spawn().context("run git")?;
+        let mut stdin = child.stdin.take().context("git stdin")?;
+        tokio::io::AsyncWriteExt::write_all(&mut stdin, input.as_bytes()).await.context("write git index info")?;
+        drop(stdin);
+        let out = child.wait_with_output().await.context("run git")?;
+        if !out.status.success() {
+            return Err(anyhow!("git update-index --index-info failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+        }
+        Ok(())
+    }
+
+    /// Untracked files and wholly untracked directories (as `git status`
+    /// collapses them) of `SNAPSHOT_SKIP_BYTES` or more. Sizing stops at the
+    /// limit, so a huge directory costs about as much as a small one.
+    async fn large_untracked(&self) -> Result<Vec<SkippedPath>> {
+        let out = self.git(&["ls-files", "-z", "-o", "--directory", "--exclude-standard"]).await?;
+        let workdir = self.workdir.clone();
+        let entries = out.split('\0').filter(|path| !path.is_empty()).map(str::to_string).collect::<Vec<_>>();
+        tokio::task::spawn_blocking(move || {
+            entries
+                .into_iter()
+                .filter_map(|entry| {
+                    let path = entry.trim_end_matches('/').to_string();
+                    let bytes = size_up_to(&workdir.join(&path), SNAPSHOT_SKIP_BYTES);
+                    (bytes >= SNAPSHOT_SKIP_BYTES).then_some(SkippedPath { path, bytes })
+                })
+                .collect()
+        })
+        .await
+        .context("size untracked files")
+    }
+
+    /// Paths a snapshot left out (see `snapshot`), from its commit message.
+    pub async fn snapshot_skipped(&self, commit: &str) -> Result<Vec<String>> {
+        let message = self.git(&["log", "-1", "--format=%B", commit]).await?;
+        Ok(message
+            .lines()
+            .filter_map(|line| line.strip_prefix(SKIPPED_TRAILER))
+            .map(|rest| rest.rsplit_once(" (").map_or(rest, |(path, _)| path).to_string())
+            .collect())
     }
 
     pub async fn update_ref(&self, name: &str, commit: &str) -> Result<()> {
@@ -291,9 +503,17 @@ impl Repo {
 
     /// Reset the working tree and index to exactly the snapshot. Untracked,
     /// non-ignored files that are not in the snapshot are removed.
+    /// Paths the snapshot left out for their size, and untracked paths that
+    /// are that large now, are kept.
     pub async fn restore(&self, commit: &str) -> Result<()> {
+        let (skipped, large) = tokio::join!(self.snapshot_skipped(commit), self.large_untracked());
+        let mut keep = skipped?;
+        keep.extend(large?.into_iter().map(|entry| entry.path));
         self.git(&["read-tree", "--reset", "-u", commit]).await?;
-        self.git(&["clean", "-fd", "--", "."]).await?;
+        let excludes = keep.iter().map(|path| format!(":(exclude,literal){path}")).collect::<Vec<_>>();
+        let mut clean = vec!["clean", "-fd", "--", "."];
+        clean.extend(excludes.iter().map(String::as_str));
+        self.git(&clean).await?;
         Ok(())
     }
 
@@ -673,6 +893,17 @@ impl Repo {
     }
 }
 
+/// The kept snapshot index of the repository folder `prefix` (empty at the
+/// top level). Each folder keeps its own: they cover different paths.
+fn snapshot_index_name(prefix: &str) -> String {
+    if prefix.is_empty() {
+        return SNAPSHOT_INDEX.to_string();
+    }
+    // FNV-1a: stable across builds, unlike the standard hasher.
+    let hash = prefix.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3));
+    format!("{SNAPSHOT_INDEX}-{hash:016x}")
+}
+
 fn restore_file_times(path: &Path, metadata: &std::fs::Metadata) -> Result<()> {
     let modified = metadata.modified().context("read git index modified time")?;
     let accessed = metadata.accessed().unwrap_or(modified);
@@ -683,6 +914,32 @@ fn restore_file_times(path: &Path, metadata: &std::fs::Metadata) -> Result<()> {
         .with_context(|| format!("open temporary git index {}", path.display()))?
         .set_times(times)
         .with_context(|| format!("restore temporary git index times {}", path.display()))
+}
+
+/// Bytes in a file or directory tree (symlinks not followed), counted until
+/// `limit` is reached.
+fn size_up_to(path: &Path, limit: u64) -> u64 {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else { return 0 };
+    if !metadata.is_dir() {
+        return metadata.len();
+    }
+    let mut total = 0;
+    let mut pending = vec![path.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let Ok(metadata) = entry.metadata() else { continue };
+            if metadata.is_dir() {
+                pending.push(entry.path());
+            } else {
+                total += metadata.len();
+                if total >= limit {
+                    return total;
+                }
+            }
+        }
+    }
+    total
 }
 
 fn truncate_utf8(value: &mut String, max_bytes: usize) -> bool {
@@ -785,6 +1042,152 @@ mod tests {
         assert_eq!(diff.patch.len(), MAX_PATCH_BYTES);
         assert!(diff.patch_truncated);
         assert_eq!(diff.files[0].additions, 30_000);
+    }
+
+    fn sparse_file(path: &Path, bytes: u64) {
+        std::fs::File::create(path).unwrap().set_len(bytes).unwrap();
+    }
+
+    #[tokio::test]
+    async fn snapshot_index_is_kept_and_follows_ignore_changes() {
+        let (dir, repo) = init_repo().await;
+        std::fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        repo.git(&["add", "."]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "init"]).await.unwrap();
+        std::fs::write(dir.path().join("notes.scratch"), "untracked\n").unwrap();
+        let first = repo.snapshot("first").await.unwrap();
+        assert!(repo.git_dir().await.unwrap().join(SNAPSHOT_INDEX).exists());
+        assert_eq!(repo.git(&["show", &format!("{first}:notes.scratch")]).await.unwrap(), "untracked");
+
+        // Unchanged files give the same tree from the kept index.
+        let again = repo.snapshot("again").await.unwrap();
+        let tree = |commit: &str| format!("{commit}^{{tree}}");
+        assert_eq!(repo.git(&["rev-parse", &tree(&first)]).await.unwrap(), repo.git(&["rev-parse", &tree(&again)]).await.unwrap());
+
+        // A file ignored since the last snapshot leaves it, and a force-added
+        // ignored file joins it.
+        std::fs::write(dir.path().join(".git/info/exclude"), "*.scratch\n").unwrap();
+        std::fs::write(dir.path().join("kept.scratch"), "forced\n").unwrap();
+        repo.git(&["add", "-f", "kept.scratch"]).await.unwrap();
+        let later = repo.snapshot("later").await.unwrap();
+        let files = repo.git(&["ls-tree", "-r", "--name-only", &later]).await.unwrap();
+        assert_eq!(files.lines().collect::<Vec<_>>(), ["a.txt", "kept.scratch"], "{files}");
+    }
+
+    #[tokio::test]
+    async fn subfolder_snapshots_keep_their_own_index_and_take_outside_entries_from_the_user_index() {
+        let (dir, root) = init_repo().await;
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("outside.txt"), "v1\n").unwrap();
+        std::fs::write(dir.path().join("gone.txt"), "x\n").unwrap();
+        std::fs::write(dir.path().join("sub/in.txt"), "a\n").unwrap();
+        root.git(&["add", "."]).await.unwrap();
+        root.git(&["commit", "-q", "-m", "init"]).await.unwrap();
+        let sub = Repo::new(dir.path().join("sub"));
+        let git_dir = root.git_dir().await.unwrap();
+
+        std::fs::write(dir.path().join("sub/new.txt"), "untracked\n").unwrap();
+        sub.snapshot("first").await.unwrap();
+        let kept = git_dir.join(snapshot_index_name("sub/"));
+        assert!(kept.exists() && !git_dir.join(SNAPSHOT_INDEX).exists(), "a subfolder keeps its own index");
+
+        // The user stages a change, adds a file and removes one outside the
+        // folder; unstaged edits outside it stay out, as with a fresh seed.
+        std::fs::write(dir.path().join("outside.txt"), "v2\n").unwrap();
+        std::fs::write(dir.path().join("added.txt"), "new\n").unwrap();
+        root.git(&["add", "outside.txt", "added.txt"]).await.unwrap();
+        root.git(&["rm", "-q", "gone.txt"]).await.unwrap();
+        std::fs::write(dir.path().join("outside.txt"), "v3 unstaged\n").unwrap();
+        std::fs::write(dir.path().join("sub/in.txt"), "b\n").unwrap();
+        let second = sub.snapshot("second").await.unwrap();
+        let at = |path: &str| format!("{second}:{path}");
+        assert_eq!(root.git(&["show", &at("outside.txt")]).await.unwrap(), "v2");
+        assert_eq!(root.git(&["show", &at("added.txt")]).await.unwrap(), "new");
+        assert_eq!(root.git(&["show", &at("sub/in.txt")]).await.unwrap(), "b");
+        assert_eq!(root.git(&["show", &at("sub/new.txt")]).await.unwrap(), "untracked");
+        assert!(root.git(&["show", &at("gone.txt")]).await.is_err());
+
+        // A root snapshot sees the working tree everywhere.
+        let full = root.snapshot("root").await.unwrap();
+        assert_eq!(root.git(&["show", &format!("{full}:outside.txt")]).await.unwrap(), "v3 unstaged");
+        assert!(git_dir.join(SNAPSHOT_INDEX).exists());
+    }
+
+    #[tokio::test]
+    async fn a_broken_kept_index_falls_back_to_a_fresh_seed() {
+        let (dir, repo) = init_repo().await;
+        std::fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        repo.git(&["add", "."]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "init"]).await.unwrap();
+        repo.snapshot("first").await.unwrap();
+        let kept = repo.git_dir().await.unwrap().join(SNAPSHOT_INDEX);
+        std::fs::write(&kept, "not an index").unwrap();
+        let second = repo.snapshot("second").await.unwrap();
+        assert_eq!(repo.git(&["show", &format!("{second}:a.txt")]).await.unwrap(), "one");
+        // The next snapshot reuses the index the fallback kept.
+        assert_ne!(std::fs::read(&kept).unwrap(), b"not an index");
+        repo.snapshot("third").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn large_untracked_paths_are_left_out_named_and_kept_on_restore() {
+        let (dir, repo) = init_repo().await;
+        std::fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        repo.git(&["add", "."]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "init"]).await.unwrap();
+        let big = dir.path().join("previews");
+        std::fs::create_dir_all(big.join("run")).unwrap();
+        sparse_file(&big.join("run/one.mov"), SNAPSHOT_SKIP_BYTES / 2);
+        sparse_file(&big.join("two.mov"), SNAPSHOT_SKIP_BYTES / 2);
+        std::fs::write(dir.path().join("grows.bin"), "small").unwrap();
+        let before = repo.snapshot("before").await.unwrap();
+        let files = repo.git(&["ls-tree", "-r", "--name-only", &before]).await.unwrap();
+        assert_eq!(files.lines().collect::<Vec<_>>(), ["a.txt", "grows.bin"], "{files}");
+        assert_eq!(repo.snapshot_skipped(&before).await.unwrap(), ["previews"]);
+
+        // A file that grows past the limit leaves the next snapshot.
+        sparse_file(&dir.path().join("grows.bin"), SNAPSHOT_SKIP_BYTES);
+        std::fs::write(dir.path().join("a.txt"), "two\n").unwrap();
+        let after = repo.snapshot("after").await.unwrap();
+        let mut skipped = repo.snapshot_skipped(&after).await.unwrap();
+        skipped.sort();
+        assert_eq!(skipped, ["grows.bin", "previews"]);
+        let message = repo.git(&["log", "-1", "--format=%B", &after]).await.unwrap();
+        assert!(message.contains("Kybern-Skipped: previews (100 MB or more, not snapshotted)"), "{message}");
+
+        // Restoring keeps what was left out, and large untracked files made
+        // since, instead of cleaning them away; snapshotted files come back.
+        sparse_file(&dir.path().join("fresh.mov"), SNAPSHOT_SKIP_BYTES);
+        std::fs::write(dir.path().join("fresh.txt"), "small").unwrap();
+        repo.restore(&before).await.unwrap();
+        assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).unwrap(), "one\n");
+        assert_eq!(std::fs::read_to_string(dir.path().join("grows.bin")).unwrap(), "small");
+        assert!(big.join("run/one.mov").exists() && big.join("two.mov").exists());
+        assert!(dir.path().join("fresh.mov").exists());
+        assert!(!dir.path().join("fresh.txt").exists());
+    }
+
+    /// Times snapshots of a real repository: `KYBERN_SNAPSHOT_BENCH=<repo>
+    /// cargo test -p kybern-git snapshot_bench -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn snapshot_bench() {
+        let Ok(path) = std::env::var("KYBERN_SNAPSHOT_BENCH") else { return };
+        let repo = Repo::new(&path);
+        let objects = |label: &str| {
+            let out = std::process::Command::new("du").args(["-sk", ".git/objects"]).current_dir(&path).output().unwrap();
+            eprintln!("{label}: .git/objects {}", String::from_utf8_lossy(&out.stdout).trim());
+        };
+        objects("start");
+        for run in ["first", "unchanged", "one edit"] {
+            if run == "one edit" {
+                std::fs::write(std::path::Path::new(&path).join("bench-edit.txt"), uuid::Uuid::new_v4().to_string()).unwrap();
+            }
+            let started = std::time::Instant::now();
+            let commit = repo.snapshot("bench").await.unwrap();
+            eprintln!("{run}: {} ms ({commit})", started.elapsed().as_millis());
+        }
+        objects("end");
     }
 
     #[tokio::test]
@@ -1039,5 +1442,70 @@ mod tests {
         std::fs::write(dir.path().join("a.txt"), "other\n").unwrap();
         repo.commit("other", None).await.unwrap();
         assert!(repo.push_upstream("origin", "main").await.is_err());
+    }
+}
+
+#[cfg(test)]
+mod review_adversarial {
+    use super::*;
+
+    async fn git(dir: &Path, args: &[&str]) -> String {
+        let out = tokio::process::Command::new("git").current_dir(dir).args(args).output().await.unwrap();
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// A thread whose cwd is a subfolder of the repository: the kept snapshot
+    /// index never refreshes entries outside the subfolder.
+    #[tokio::test]
+    async fn subfolder_cwd_snapshot_keeps_stale_outside_entries_and_restore_writes_them_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q"]).await;
+        git(root, &["config", "user.email", "t@t"]).await;
+        git(root, &["config", "user.name", "t"]).await;
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("outside.txt"), "v1\n").unwrap();
+        std::fs::write(root.join("sub/in.txt"), "a\n").unwrap();
+        git(root, &["add", "."]).await;
+        git(root, &["commit", "-q", "-m", "init"]).await;
+
+        let repo = Repo::new(root.join("sub").to_string_lossy().as_ref());
+        let _first = repo.snapshot("first").await.unwrap();
+        // The user commits a change outside the thread's folder.
+        std::fs::write(root.join("outside.txt"), "v2\n").unwrap();
+        git(root, &["commit", "-q", "-am", "outside v2"]).await;
+        let second = repo.snapshot("second").await.unwrap();
+        let shown = git(root, &["show", &format!("{second}:outside.txt")]).await;
+        eprintln!("second snapshot outside.txt = {shown:?} (working tree and HEAD are v2)");
+        std::fs::write(root.join("sub/in.txt"), "b\n").unwrap();
+        repo.restore(&second).await.unwrap();
+        let after = std::fs::read_to_string(root.join("outside.txt")).unwrap();
+        eprintln!("outside.txt after restoring the second snapshot = {after:?}");
+        assert_eq!((shown.as_str(), after.as_str()), ("v2", "v2\n"), "restore must not write back stale content outside the folder");
+    }
+
+    /// A tracked file that matches .gitignore is deleted from disk (deletion not staged).
+    #[tokio::test]
+    async fn deleting_a_tracked_ignored_file_breaks_later_snapshots() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q"]).await;
+        git(root, &["config", "user.email", "t@t"]).await;
+        git(root, &["config", "user.name", "t"]).await;
+        std::fs::write(root.join(".gitignore"), "*.local\n").unwrap();
+        std::fs::write(root.join("config.local"), "x\n").unwrap();
+        std::fs::write(root.join("a.txt"), "a\n").unwrap();
+        git(root, &["add", ".gitignore", "a.txt"]).await;
+        git(root, &["add", "-f", "config.local"]).await;
+        git(root, &["commit", "-q", "-m", "init"]).await;
+        let repo = Repo::new(root.to_string_lossy().as_ref());
+        repo.snapshot("first").await.unwrap();
+        std::fs::remove_file(root.join("config.local")).unwrap();
+        let second = repo.snapshot("second").await;
+        eprintln!("second: {second:?}");
+        let third = repo.snapshot("third").await;
+        eprintln!("third: {third:?}");
+        assert!(second.is_ok() && third.is_ok());
     }
 }

@@ -4,6 +4,8 @@ import { observeElementBounds } from '../native/layout.ts'
 import { SparseRetention } from '../kit/sparseList.tsx'
 import { transcriptWindowRange, transcriptWindowRangeBy } from './windowRange.ts'
 
+/** Whether the reader is at the tail, as a ref the transcript keeps current (reading it never re-renders a row). */
+export const TranscriptTail = createContext<{ current: boolean }>({ current: false })
 const FirstBodyMount = createContext(true)
 export const useTranscriptFirstMount = () => useContext(FirstBodyMount)
 const RowLease = createContext<(() => () => void) | null>(null)

@@ -11,8 +11,8 @@ import { useNav } from '../nav/store.ts'
 import { loadProviders } from '../nav/live.ts'
 import { Label, ink, useTheme } from '../ui.tsx'
 import { FONT_MONO } from '../theme.ts'
-import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
+import { Chevron } from '../motion/Chevron.tsx'
 import { Button, NumberField, PageBlock, Row, Section, Select, TextField } from './controls.tsx'
 import { Switch } from '../kit/Switch.tsx'
 import { latestSettings, updateSettings, useSettings } from './store.ts'
@@ -136,7 +136,7 @@ function OmpProfiles() {
     else { if (value) next.env.OMP_PROFILE = value; else delete next.env.OMP_PROFILE }
     void updateSettings({ providers: { ...settings.providers, omp: next } })
   }
-  return <Section title="OMP profiles"><Row title="Default profile" description="For new chats."><ProfileField key={`default:${omp.env.OMP_PROFILE}`} value={omp.env.OMP_PROFILE} inherit="Use environment" onSave={(value) => save(value)} /></Row>{projects.length > 0 && <><div testId="omp-project-overrides" tabIndex={0} onClick={()=>setExpanded(!expanded)} onKeyDown={e=>{if(e.key==='enter'||e.key==='space')setExpanded(!expanded)}} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:18}}><Label color={t.text} size={14}>Project overrides</Label><Icon source={expanded?N.arrowUp:N.chevronDown} size={14} color={t.textSecondary}/></div>{expanded&&<Row title="Project" description="Also applies to this project’s worktrees."><div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}><Select label="Choose project" value={project} onChange={setProject} options={projects.map((p) => ({ value: p.path, label: p.name }))} /><ProfileField key={`${project}:${omp.project_profiles?.[project]}`} value={omp.project_profiles?.[project]} inherit="Use default above" onSave={(value) => save(value, project)} /></div></Row>}</>}<Row title="" description="Existing chats keep their profile."/></Section>
+  return <Section title="OMP profiles"><Row title="Default profile" description="For new chats."><ProfileField key={`default:${omp.env.OMP_PROFILE}`} value={omp.env.OMP_PROFILE} inherit="Use environment" onSave={(value) => save(value)} /></Row>{projects.length > 0 && <><div testId="omp-project-overrides" tabIndex={0} onClick={()=>setExpanded(!expanded)} onKeyDown={e=>{if(e.key==='enter'||e.key==='space')setExpanded(!expanded)}} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:18}}><Label color={t.text} size={14}>Project overrides</Label><Chevron open={expanded} source={N.chevronDown} turn={180} duration={0.25} size={14} color={t.textSecondary} /></div>{expanded&&<Row title="Project" description="Also applies to this project’s worktrees."><div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}><Select label="Choose project" value={project} onChange={setProject} options={projects.map((p) => ({ value: p.path, label: p.name }))} /><ProfileField key={`${project}:${omp.project_profiles?.[project]}`} value={omp.project_profiles?.[project]} inherit="Use default above" onSave={(value) => save(value, project)} /></div></Row>}</>}<Row title="" description="Existing chats keep their profile."/></Section>
 }
 
 export { About } from './About.tsx'

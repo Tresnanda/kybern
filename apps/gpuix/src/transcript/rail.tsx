@@ -29,7 +29,7 @@ const COLUMN_WIDTH = 28
 const TICK = 16
 const CARD = { left: 60, width: 256, height: 80 }
 /** `SPRING_LAYOUT` (stiffness 360, damping 32, mass 0.6) fitted to the desktop's frames: settles in 0.54 s, no overshoot. */
-const RAIL_SPRING = REDUCED_MOTION ? { duration: 0 } : { type: 'spring' as const, duration: 0.54, bounce: 0 }
+const RAIL_SPRING = () => REDUCED_MOTION ? { duration: 0 } : { type: 'spring' as const, duration: 0.54, bounce: 0 }
 
 const scale = (distance: number) => (distance === 0 ? 1 : distance === 1 ? 0.68 : distance === 2 ? 0.44 : 0.25)
 
@@ -76,7 +76,7 @@ export const MessageRail = memo(function MessageRail({ items, active, height, bo
           <motion.div
             initial={{ width: TICK * scale(highlightedRow < 0 ? 9 : Math.abs(index - highlightedRow)) }}
             animate={{ width: TICK * scale(highlightedRow < 0 ? 9 : Math.abs(index - highlightedRow)) }}
-            transition={RAIL_SPRING}
+            transition={RAIL_SPRING()}
             style={{ height: 1, backgroundColor: lit ? t.text : t.v('--muted-foreground'), pointerEvents: 'none' }}
           />
         </div>
@@ -87,7 +87,7 @@ export const MessageRail = memo(function MessageRail({ items, active, height, bo
       testId="message-preview"
       initial={{ top: cardTop }}
       animate={{ top: cardTop }}
-      transition={RAIL_SPRING}
+      transition={RAIL_SPRING()}
       style={{ position: 'absolute', left: CARD.left, width: CARD.width, height: CARD.height, display: 'flex', flexDirection: 'column', gap: 4, padding: 12, borderRadius: 18, borderWidth: 1, borderColor: t.v('--border'), backgroundColor: t.v('--card'), overflow: 'hidden', pointerEvents: 'none', boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 3, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.1)' } }}
     >
       <Para color={t.v('--card-foreground')} size={12} lineHeight={16} weight={500} style={{ lineClamp: 1 }}>{hoveredItem.label}</Para>

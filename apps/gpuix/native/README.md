@@ -608,10 +608,11 @@ The pinned GPUI already implements `Window::request_animation_frame()` through
 `on_next_frame`/`schedule_frame`, with `gpui_macos/src/display_link.rs` supplying
 CVDisplayLink pacing and idle suspension. Native motion uses this path. The shared
 The shared source now supports display-rate JS sampling and native matrix/task
-loops without React commits. Full-app loop integration is still explicitly
-opt-in with `KYBERN_NATIVE_PAINT_ANIMATIONS=1`; the historical coarse clock remains
-outside that experiment because its smooth JS replacement regressed running CPU.
-That coarse behavior remains an unresolved pacing defect. Elapsed labels have a
+loops without React commits. Since motion/fps (2026-10-20) native loops are the
+default with the patched addon (`KYBERN_NATIVE_PAINT_ANIMATIONS=0` /
+`KYBERN_NATIVE_TEXT_PAINT=0` select the old 5 Hz React clock and React-sampled
+live labels for comparisons), and settled loops run in Core Animation
+("Compositor loops" below). Elapsed labels have a
 separate visibility-aware seconds clock. Round-seven measurements and remaining
 acceptance gaps are in `../perf/pacing-round7-2026-10-17.md`.
 
@@ -1166,9 +1167,10 @@ inactive full-rate motion are enabled by default; `KYBERN_VSYNC_WAKE=0` and
 `KYBERN_FULL_RATE=0` select the historical paths for comparisons.
 `KYBERN_REGION_PAINT=1` opts into retained damage rendering; the target is allocated
 only during eligible passive loops and released when they park. Path/filter
-scenes use full rendering. `KYBERN_NATIVE_TEXT_PAINT=1` opts into passive glyph
-tint. Both remain opt-in because repeated full-app GPU controls did not reliably
-meet the running-thread gate. `frame-check.ts` captures actual window pixels plus bounded
+scenes use full rendering; it remains opt-in. Passive glyph tint
+(`KYBERN_NATIVE_TEXT_PAINT`) is on by default since motion/fps; settled loops
+then run in Core Animation ("Compositor loops"), which removed the GPU cost
+that kept both opt-in. `frame-check.ts` captures actual window pixels plus bounded
 submission cadence, callback backpressure, unsubscribe, minimize and unmount.
 
 The original experiment is retained at `gpuix/native` `f9e5e2a7`. Round seven
@@ -1411,8 +1413,11 @@ The lease owns a separate process group for its command. Interruption stops that
 group before releasing the UI, and normal exit removes any orphaned descendants.
 Inherited leases stay in the owning group. `bun native/ui-lease-check.ts` verifies
 that interrupting a command also stops its grandchild.
-Every lease, inherited or not, first waits while any `/tmp/kybern-gpuix-quiet.*`
-file exists, so native checks never enter another lane's final measurement window.
+Every lease, inherited or not, first waits while any other lane's
+`/tmp/kybern-gpuix-quiet.*` file exists, so native checks never enter another
+lane's final measurement window. The caller's own `/tmp/kybern-gpuix-quiet.<lane>`
+is skipped: a lane that already marked its measurement window quiet takes the
+lease under the same lane name instead of waiting on itself.
 
 ### Motion reconciliation during deferred rows
 
@@ -1627,3 +1632,233 @@ root like the sidebar; separate cached controls exercise paint replay. `perf/hov
 full-app audit, AppKit double-click bridge, native rebuild wrapper and benchmark
 coordination. Results and limits belong in its report, not in timing claims
 inferred from screenshots.
+
+## Compositor loops (motion/fps, 2026-10-20)
+
+Native paint loops (`paintAnimation` matrix / breathe / shimmer / rotate) used to present the whole window
+at display rate: a scene replay, a full 2560×1640 GPU pass and a present 60 times a second (~3.5 ms GPU per
+frame in the bench fixture). `compositor_loops_gpui.py` + `compositor_loops_renderer.rs` hand a loop to Core
+Animation instead, the way WebKit runs CSS keyframes:
+
+- **Eligible leaves:** every primitive of the tagged leaf is a solid borderless fill (`matrix`, `breathe`) or a
+  monochrome sprite (`breathe`, `shimmer`, `rotate`: SVG glyphs and text glyphs; subpixel text stays in the
+  scene); its bounds lie fully inside its content mask and every rounded clip (conservative containment as in
+  `gpu_clip_bounds.rs`); any enclosing `paintTransform` scope is at rest (opacity 1, no blur; a moving one
+  changes the bounds); nothing painted after it reaches its bounds (backdrop and shadow halos included; the
+  leaf's own glyphs may touch). Pops, stroke draws and fades never qualify.
+- **Hand-off:** `Window::present` promotes a leaf once all its parts have the same bounds on two consecutive
+  presents; the scene repaints it transparent (`repaint_tagged_inner`), `animate_tagged` and
+  `has_native_paint_animation` skip it, so with nothing else animating the window stops requesting frames.
+  The renderer keeps one `CALayer` per part as a sublayer of the Metal layer: the fill colour with its
+  corner radius, or the colour masked by the sprite's coverage tile copied once from the shared-storage glyph
+  atlas (the shader's `color.a *= coverage`). A repeating `CAKeyframeAnimation` on `opacity` carries the
+  native curve (CA's `easeInEaseOut` is CSS `ease-in-out`), the shimmer's 1 → 1.6 gain is sampled into 33
+  keyframes relative to its clamped peak, and `transform.rotation.z` turns clockwise once per cycle. Its
+  `beginTime` is the leaf's `started` instant plus delay, so the phase continues exactly.
+- **Hand-back:** a new scene recomputes candidates per `paint_generation`. A leaf that moved, became
+  clipped, got covered (a popup, tooltip or drag ghost), changed colour or unmounted leaves the set; any
+  change to the set commits in one `CATransaction` with that Metal frame (`presentsWithTransaction` for that
+  frame only), so a leaf is never drawn twice or not at all. Scrolling therefore paints loops in the scene
+  and returns them to CA one frame after the list settles.
+- **Off switches:** `KYBERN_COMPOSITOR_LOOPS=0`, a paused automation clock (strips), `KYBERN_PAINT_PHASE_MS`
+  and `KYBERN_SCOPED_BUFFERS=0` keep scene painting. Screenshots (`captureScreenshot`) refresh the scene, so
+  they paint the leaf themselves; OS window captures show the CA layers. `KYBERN_DEBUG_COMPOSITOR=1` logs
+  candidates, rejections and layer counts.
+
+Hidden and minimized windows: React already removes loop props there (`useLoopRunning`), and WindowServer
+does not composite them. Check: `bun perf/motion-fps/lab-check.ts [--light] [--reduced]` (in `check-update.sh`;
+also run with `KYBERN_COMPOSITOR_LOOPS=0` for the scene path). It asserts zero app frames once settled, one
+layer per part, the curves and clockwise turn rates from live `presentationLayer` samples, upright glyph masks
+(rendered in place with `renderInContext`), hand-back under a covering box, layout shifts and clean unmount.
+Measurements: `../perf/motion-fps-2026-10-20.md`.
+
+## One hover per link in inline flow (chatfix)
+
+A paragraph with inline code is laid out by `markdown_inline.rs` as one text
+fragment per word, and each fragment hit-tested and underlined only its own
+slice of a hovered link, so a multi-word link underlined word by word.
+`link_hover_hooks.py` (one `exec` line in `apply_hooks.py`) moves hover to the
+flow: prepaint finds the hovered link once from the token geometry (binary
+search to the pointer's line; a partly linked word is shaped once), every
+fragment underlines its slice (`SelectableText::hover_range`, bridged into the
+next fragment so there is no hairline gap), and one mouse-move listener per
+flow refreshes only when the hovered link changes. Clicks stay per fragment.
+Single-run paragraphs keep upstream behaviour. No timers; idle stays at 0
+frames.
+
+Check: `link-hover-check.ts` (first, middle and last word of a link wrapped onto
+two lines, an inline-code link, the single-run control, both themes). This
+session's environment may export `NAPI_RS_NATIVE_LIBRARY_PATH` for the
+installed app's addon; `local-build.ts` then keeps it, so set the variable to
+`native/build/gpuix-native.darwin-arm64.node` explicitly when checking a build.
+
+## Motion native lane (gpuix-native, 2026-10-21)
+
+### Motion latency trace
+
+`KYBERN_MOTION_TRACE=1` (`motion_trace_gpui.py`, `motion_trace_hooks.py`, two lines in `subtree_transform.rs`) writes
+`[mtrace] <ms> <event>` records on one clock: pointer and key input as GPUI dispatches it, each React batch, each render
+(with the opacity of every layout-tween `motion` element), each retained `paintTransform` tick (scopes found and
+missing), and each present (every retained scope's presented opacity). Off by default: one cached env check per event
+and per present. `../perf/motion-native/latency.ts <label> model-picker reveal-exit` turns it into input → first paint,
+input → first visible step, the mount frame's render and draw cost, renders per motion and fallback ticks.
+`KYBERN_POPUP_MOTION=layout` (JS) is the control: every popup takes v0.10.1's drift-and-fade layout tween.
+
+### Paint-only motion from its first frame (N0)
+
+A `paintTransform` that mounts with an `initial` value is timed from the React batch that mounted it (`invalidate`
+→ `sync`), so the frame in which its element first paints already shows a step; nothing waits for a retained tick.
+Measured, the model picker (3,000-turn bench thread) shows its first visible step on its mount frame with no fallback
+render; the layout tween paints its mount frame at opacity 0 and shows its first step one frame later. What remains is
+the mount frame itself: the popup's island renders and lays out (9–39 ms of window draw there, layout 2–14 ms).
+
+#### Motion latency
+
+Measured with `../perf/motion-native/latency.ts` (Apple M1, hidden 1440×900@2x 60 Hz display, `KYBERN_FULL_RATE` default,
+3,000-turn bench thread, dark, quiet window; addon `5ab4475d`; ms from the pointer event to the present):
+
+| Action | Mechanism | First visible step p50 / p95 | Renders per action | CPU % / GPU ms per run |
+| --- | --- | --- | --- | --- |
+| Open the model picker (2 × 20) | layout tween (`KYBERN_POPUP_MOTION=layout`) | 63.3 / 77.0, 61.3 / 71.6 | 17 | 26.0 / 1,719, 25.4 / 1,701 |
+| | paint-only (`paintTransform`) | 45.2 / 52.6, 44.9 / 61.0 | 3 | 22.1 / 1,863, 22.1 / 1,872 |
+| Sidebar row hover-out (16) | before the N0 fixes (`3ece727b`) | 19.4 / 30.9 | 10 (144 fallback ticks) | 15.3 / 1,304 |
+| | after | 22.5 / 29.7 | 2 (0) | 13.9 / 1,198 |
+
+The paint-only popup is first visible on its mount frame (first paint = first visible step); the layout tween one
+frame later. Its mount frame costs the same in both (30–32 ms of window draw, 10–11 ms layout): the next lever is that
+frame, not the motion. GPU is ~8% higher on the paint path because the desktop's 2 px materialize blur runs for 250 ms.
+Idle after every action: 0 presents. Pointer hover sweep down the sidebar (24 rows, two repeats, addon `75c1ec2a`):
+hover fades on 31.3 / 32.4% CPU, 3,258 / 3,292 ms GPU; `KYBERN_HOVER_FADE=0` 31.7 / 28.4%, 3,413 / 3,218 ms; 40 presents
+and 2.1 renders per row in both (the fades ride on frames the row's reveal already presents).
+
+Two cases did lose frames, and are fixed:
+
+- **An empty scope never counted as painted.** `has_subtree_transform` looked for primitives painted inside the scope,
+  so a scope that draws nothing (the sidebar row's `FadeBack` around an idle row's empty status glyph) was "missing" on
+  every tick and rendered the island every frame of its fade (12 renders per hover-out). The scene now records every
+  scope it paints (`Scene::transform_scopes`, kept across full replays), and a scope that is still missing after one
+  fallback render (hidden, never painted) waits for the next ordinary render instead of rendering every frame
+  (`Track::fallback`).
+- **A scope at rest was untagged,** so the first frame of its next change (an exit, a reveal hiding) was a render.
+  `paintTransform.retain` keeps it tagged at identity; `presenceTransform` and `revealTransform` set it.
+
+### Hover and press colour fades (N1)
+
+`hoverTransition` (a host custom prop, inherited from the nearest ancestor that declares it; `false` opts out) gives
+an element whose `hover` / `active` style changes a background or border colour a `ColorTransition`
+(`hover_fade.rs`, `hover_fade_hooks.py`). GPUI (`hover_fade_gpui.py`, `hover_fade_window.rs`, `hover_fade_scene.rs`):
+
+- `Interactivity::paint` keeps a `ColorFadeState` in the element's interactive state. A hover flip (or a press
+  release) eases from the colour on screen to the new target; a press lands at once; a change of the element's own rest
+  colours (state, keyboard selection, theme) is instant. The first step shows on the frame the flip renders (the fade
+  starts one display frame back). Colours mix in premultiplied sRGB, like CSS.
+- The element's background quad (kind 0) and, after its children, border quads (kind 1) carry a `ColorFadeTag` in the
+  scene, kept through replay like the other tags. While a fade runs, a transparent end is painted at ε alpha so the quad
+  exists. `Scene::animate_color_fades` re-tints them before every present, in the operation log, any `paintTransform`
+  base and the sorted GPU buffer, and asks for frames until it has written the final colour once. No render, layout or
+  prepaint runs between the flip and the end.
+- The app declares `HOVER_FADE` (90 ms, `cubic-bezier(.4, 0, .2, 1)`) on its root (`HOVER_FADE_ROOT`);
+  `KYBERN_HOVER_FADE=0` is the same-addon control. Colour fades are not motion, so Reduce Motion keeps them.
+- Check: `bun native/hover-fade-check.ts` (dark, light, reduced, control: monotonic steps on the paused clock, a fill
+  inside a retained `paintTransform`, opt-out, state change and press instant, release eased, one or two renders per
+  hover, no frames after it).
+
+### Rings that ease between values (N2)
+
+`paintAnimation: { kind: 'stroke', dash, from, to, retarget }`: the draw runs between two dash offsets (`dash → 0` by
+default). On a closed path of length `dash` with `dasharray: dash`, offset `dash · (1 − v)` shows the fraction `v` from
+the path start. With `retarget`, a new `to` on the same glyph starts a run from the offset on screen (no delay), and a
+glyph whose `to` is not zero rests on its `to` tile instead of the plain glyph. A 1 ms draw ends at once even on a
+paused clock (Reduce Motion). `<circle>` paths are dashed too. JS: `ringValue` (`src/motion/success.ts`), used by the
+rail usage rings, the composer's context ring and the account rings. Check: `bun native/ring-check.ts`.
+
+### Embedded web documents fade and scale (N3)
+
+`webview.m` op `present` animates the document clip layer's `opacity` and `transform` (scale about an origin) with a
+`CABasicAnimation` from the presented value (or `fromOpacity`/`fromScale`) on the given cubic-bezier: WindowServer runs
+it, the app presents nothing. `probe` reports the presented values (test seam). JS: `webHost.present`,
+`webDocumentEnter` (150 ms entrance), used by the preview surface and visual replies. Check: `webview-check.ts`.
+
+### True shimmer band and hue loop (N4)
+
+`shimmer_band_gpui.py`, `shimmer_band_hooks.py`, `compositor_loops_renderer.rs`. `paintAnimation: { kind: 'shimmer',
+cycleMs, highlight }` on a `Label`: every glyph sprite takes `mix(base, highlight, w)` for its own centre `u` across the
+label, with `w = max(0, 1 − |u − (3t − 1)| / 0.4)` (the desktop's 400% gradient band at `background-position 100% → 0%`,
+linear). In Core Animation each glyph layer animates `backgroundColor` through 49 keyframes sampled at its own `u`.
+Without `highlight` the shimmer keeps its brightness pulse. `kind: 'hue'` rotates a leaf's hue once per cycle
+(saturate 1.2), scene only. Check: `perf/motion-fps/lab-check.ts` asserts the band's left-to-right sweep from presented
+layer colours.
+
+### One-axis scale and shadow opacity (N5, N8)
+
+`paintTransform` values gain `scaleX` / `scaleY` (multipliers of `scale` about the origin; axis-aligned primitives take
+the map's column lengths, corners the smaller one, borders their own axis) and `shadowOpacity` (multiplies only
+drop shadows). The switch's held thumb uses `scaleX: 1.1` (`kit/Switch.tsx`).
+
+### Checklist press (N6)
+
+`rich_editor.rs`: a pressed checklist box squashes to 0.92 about its centre (80 ms `--ease-out`) and returns on
+release, skipped under Reduce Motion. Check: `src/editor/check.ts`.
+
+### `<img onLoad>`
+
+`image_load_gpui.py` (`ImageSource::kybern_loaded`), `image_load_hooks.py`: `load` fires once per source after the frame
+its bitmap first landed in (`value`: `loaded` / `failed`). `Rise hold` waits on it, so a fresh agent image resolves from
+its blur over the picture itself.
+
+### Older cadence checks
+
+`paint-region-check.ts` failed after minimize/resume only under Reduce Motion: its `settle()` returns at once there, and
+the restored window could not be captured yet; the capture now retries. `scripts/kit9-spinner-check.ts` read GPUIX's
+automation screenshot, which re-renders without the per-present rotation (every frozen phase looked alike); it now reads
+the presented frame from WindowServer and expects a settled spinner in Core Animation (no app frames) unless
+`KYBERN_COMPOSITOR_LOOPS=0`.
+
+## Polish round 1 (lane polish1, 2026-10-21)
+
+### Translated text keeps its off-clip glyphs (`translate_text_gpui.py`)
+
+`paint_line` skips every glyph whose box misses the content mask. A retained translation (`paintTranslate`) moves only
+what was painted, so the sidebar title marquee (`sidebar/motion.tsx` `MarqueeLabel`) slid the glyphs that fit the row's
+clip out of view and never showed the tail: the title emptied mid-pan (the automation screenshot re-renders every frame
+and hid it). Inside a translation scope (`Window::subtree_tags` non-empty) glyphs are now culled against the mask widened
+sideways by 2048 px (`KYBERN_TRANSLATED_TEXT_REACH`); the mask still clips them in the shader. Text outside translation
+scopes is unchanged. Check: `bun native/ui-lease.ts marquee bun scripts/marquee-check.ts` (real-time `screencapture -l` of
+`scripts/marquee-lab.tsx`: ink across the row at the start, mid-pan and after the pan, the tail in its right half; fails
+on `75c1ec2a`).
+
+### `paintTransform` clip (`paintClip`)
+
+`clipTop` / `clipRight` / `clipBottom` / `clipLeft` (px of the host's layout box, before the transform) and `clipRadius`
+(px on screen, at any scale) round-clip a scope's subtree; they interpolate with the other values, so a clip can move,
+resize and change its radius on retained frames. The clip is the host box inset, mapped through every scope up to and
+including its own, and joins the context's mask chain (hit testing follows). No `clipRadius`, or a negative one, is no
+clip: give it at both ends of a tween. `getMotionCapabilities().paintClip` advertises it. The shared image morph
+(`src/motion/ImageMorph.tsx`) uses it to grow a cropped thumbnail into the preview with the thumbnail's radius.
+Files: `subtree_transform.rs` (values, evaluator, host bounds), `subtree_transform_window.rs` (mask), `paint_clip_hooks.py`
+(capability).
+
+## Idle memory (ramfix, 2026-10-21)
+
+`idle_memory.rs`, `idle_memory_hooks.py` (native crate) and `idle_memory_gpui.py` (GPUI), each run last from its
+chain:
+
+- **Per-tick autorelease pool.** Bun's main thread has no pool of its own, so whatever AppKit, CoreText or Foundation
+  autoreleased outside `pump_events` (napi calls during React commits, `bun:ffi` reads from JS timers) stayed alive
+  for the life of the process: the installed 0.10.1 app held 172k window-list arrays and 877 pool pages after
+  13.75 h. `tick()` now pops the pool it opened on the previous tick and opens the next one, so JS and napi work
+  between ticks runs inside it; AppKit's own pools nest above. `KYBERN_TICK_POOL=0` restores the old behaviour;
+  `getMemoryStats().tickPool` counts cycles.
+- **Window-state callback.** `setWindowStateCallback(cb)` / `acknowledgeWindowState()`: one queued delivery per change
+  of occlusion (minimize, Spaces, covered), key status, position, screen, effective appearance, or the accessibility
+  display options (an `NSWorkspace` observer, registered once). JS re-reads the state it needs
+  (`src/native/windowState.ts`), so neither visibility nor the frame/appearance read polls any more.
+- **`releaseIdleMemory(options?)`.** Drops what the next frame can rebuild: the window-sized path target (resident
+  once any path was drawn; recreated when a scene next has paths), cached instance buffers (a grown pool restarts at
+  2 MiB), backdrop scratch and the passive region target, and asks the private small-allocation heap to collect at
+  the next frame boundary. `{ queue: true }` also replaces the command queue; it did not lower the driver's retained
+  memory, so `src/platform/idleMemory.ts` only passes it with `KYBERN_IDLE_QUEUE=1`. Glyph and image atlases stay.
+
+The JS side releases once the window has spent 60 s not key or hidden (`src/platform/idleMemory.ts`), adding a
+full `Bun.gc(true)`; `Bun.shrink()` is opt-in (`KYBERN_IDLE_SHRINK=1`) because it discards compiled JS and slowed the
+next opens. Measurements and the remaining driver-owned `IOAccelerator` memory: `../perf/ramfix/README.md`.

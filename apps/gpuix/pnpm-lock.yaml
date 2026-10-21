@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  '@gpuix/native@0.10.0': 008649373bbf20012b7e9efa8d8abad9b89f6f2c015ac196063bf40479aa8e02
+  '@gpuix/native@0.10.0': 9c04ea9d5194db2a34daffb054da4fd4dca2b5a07750b4120ba9cb3af4a79d09
   '@gpuix/react@0.10.0': a4c86e595309769db72640c6d5e8649da3e1dd181b8d7eb3568e208a254a70ba
 
 importers:
@@ -14,7 +14,7 @@ importers:
     dependencies:
       '@gpuix/native':
         specifier: 0.10.0
-        version: 0.10.0(patch_hash=008649373bbf20012b7e9efa8d8abad9b89f6f2c015ac196063bf40479aa8e02)
+        version: 0.10.0(patch_hash=9c04ea9d5194db2a34daffb054da4fd4dca2b5a07750b4120ba9cb3af4a79d09)
       '@gpuix/react':
         specifier: 0.10.0
         version: 0.10.0(patch_hash=a4c86e595309769db72640c6d5e8649da3e1dd181b8d7eb3568e208a254a70ba)(react@19.2.8)
@@ -291,7 +291,7 @@ snapshots:
   '@gpuix/native-win32-x64-msvc@0.10.0':
     optional: true
 
-  '@gpuix/native@0.10.0(patch_hash=008649373bbf20012b7e9efa8d8abad9b89f6f2c015ac196063bf40479aa8e02)':
+  '@gpuix/native@0.10.0(patch_hash=9c04ea9d5194db2a34daffb054da4fd4dca2b5a07750b4120ba9cb3af4a79d09)':
     dependencies:
       eventsource-parser: 4.1.2
       zod: 4.6.7
@@ -302,7 +302,7 @@ snapshots:
 
   '@gpuix/react@0.10.0(patch_hash=a4c86e595309769db72640c6d5e8649da3e1dd181b8d7eb3568e208a254a70ba)(react@19.2.8)':
     dependencies:
-      '@gpuix/native': 0.10.0(patch_hash=008649373bbf20012b7e9efa8d8abad9b89f6f2c015ac196063bf40479aa8e02)
+      '@gpuix/native': 0.10.0(patch_hash=9c04ea9d5194db2a34daffb054da4fd4dca2b5a07750b4120ba9cb3af4a79d09)
       react: 19.2.8
       react-reconciler: 0.31.0(react@19.2.8)
 

@@ -6,6 +6,7 @@ import { getClient, refreshLists, useApp } from '../state.ts'
 import { errorText } from '../nav/actions.ts'
 import { FONT_MONO } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
+import { popAnimation } from '../kit/Pop.tsx'
 
 export function WorktreeCleanup({ threadId, close }: { threadId: string; close: () => void }) {
   const t = useTheme()
@@ -50,5 +51,5 @@ export function WorktreeCleanup({ threadId, close }: { threadId: string; close: 
 
 function WorktreeCheck({checked,onChange,label,disabled,testId}:{checked:boolean;onChange:(v:boolean)=>void;label:string;disabled?:boolean;testId?:string}) {
  const t=useTheme()
- return <div testId={testId} role="checkbox" aria-label={label} aria-checked={checked} tabIndex={disabled?-1:0} onClick={()=>{if(!disabled)onChange(!checked)}} onKeyDown={e=>{if(!disabled&&(e.key==='space'||e.key==='enter'))onChange(!checked)}} style={{width:14,height:14,marginTop:4,flexShrink:0,borderRadius:4,borderWidth:1,borderColor:t.border,backgroundColor:checked?t.text:'transparent',opacity:disabled?0.45:1}}>{checked&&<Label color={t.surface} size={11}>✓</Label>}</div>
+ return <div testId={testId} role="checkbox" aria-label={label} aria-checked={checked} tabIndex={disabled?-1:0} onClick={()=>{if(!disabled)onChange(!checked)}} onKeyDown={e=>{if(!disabled&&(e.key==='space'||e.key==='enter'))onChange(!checked)}} style={{width:14,height:14,marginTop:4,flexShrink:0,borderRadius:4,borderWidth:1,borderColor:t.border,backgroundColor:checked?t.text:'transparent',opacity:disabled?0.45:1}}>{checked&&<Label color={t.surface} size={11} paintAnimation={popAnimation()}>✓</Label>}</div>
 }

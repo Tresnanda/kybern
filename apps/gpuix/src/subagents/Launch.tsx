@@ -14,6 +14,7 @@ import { T } from '../transcript/glyphs.ts'
 import { Para, muted } from '../transcript/kit.tsx'
 import { SubagentHover } from './Hover.tsx'
 import { Elapsed } from './Elapsed.tsx'
+import { SwapOnChange } from '../motion/kit.tsx'
 const providers: readonly string[] = ['claude-code', 'codex', 'cursor', 'opencode', 'pi', 'omp']
 export function LaunchMember({ block, thread, task, delegated = false, grouped = false }: { block: Block; thread?: Thread; task?: RuntimeTask; delegated?: boolean; grouped?: boolean }) {
   const t = useTheme(), catalog = useNav(s => s.providers)
@@ -31,7 +32,7 @@ export function LaunchMember({ block, thread, task, delegated = false, grouped =
   const override = info?.default_override ? defaultOverrideText(info.default_override, catalog) : null
   if (!delegated) {
     const row = <div testId={`launch-member-${block.id}`} role="button" aria-label={`${id ? 'Open ' : ''}${title}, ${state.word}`} tabIndex={0} onClick={id ? () => openThread(id) : undefined} onKeyDown={event => { if (id && (event.key === 'enter' || event.key === 'space')) openThread(id) }} style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, height: grouped ? 32 : 40, paddingLeft: 6, paddingRight: 6, borderRadius: 8, minWidth: 0, cursor: id ? 'pointer' : 'default', hover: { backgroundColor: t.buttonSecondaryHover } }}>
-      {grouped ? state.phase === 'working' ? <MatrixLoader /> : <Icon source={state.phase === 'failed' ? T.alert : T.check} size={14} color={muted(t)} /> : <ProviderMark kind={provider} size={12} />}
+      {grouped ? <SwapOnChange kind="icon" active={state.phase} style={{ width: 14, height: 14, flexShrink: 0 }}>{state.phase === 'working' ? <MatrixLoader /> : <Icon source={state.phase === 'failed' ? T.alert : T.check} size={14} color={muted(t)} />}</SwapOnChange> : <ProviderMark kind={provider} size={12} />}
       <Label color={t.text} size={13} truncate style={{ maxWidth: '55%', flexShrink: 0 }}>{title}</Label>
       <Label color={muted(t)} size={12} truncate style={{ flexGrow: 1, minWidth: 0 }}>{grouped ? [subagentTypeLabel(thread?.subagent?.agent_type), thread?.subagent?.detail].filter(Boolean).join(' · ') : meta}</Label>
       {start?.startedAt && <Elapsed startedAt={start.startedAt} endedAt={start.endedAt} />}
@@ -45,7 +46,7 @@ export function LaunchMember({ block, thread, task, delegated = false, grouped =
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={13} truncate>{title}</Label>{meta && <Label color={muted(t)} size={11} truncate>{meta}</Label>}</div>
     {!!info?.conflicts?.length && <Label color={t.red} size={11}>{conflictsLabel(info.conflicts.length)}</Label>}
     {start?.startedAt && <Elapsed startedAt={start.startedAt} endedAt={start.endedAt} />}
-    <Label color={state.phase === 'failed' ? t.red : muted(t)} size={12}>{state.word}</Label>{id && <Icon source={T.chevronRight} size={14} color={muted(t)} />}
+    <SwapOnChange active={state.word} style={{ flexShrink: 0 }}><Label color={state.phase === 'failed' ? t.red : muted(t)} size={12}>{state.word}</Label></SwapOnChange>{id && <Icon source={T.chevronRight} size={14} color={muted(t)} />}
   </div>
   return <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>{thread?.subagent ? <SubagentHover thread={thread}>{row}</SubagentHover> : row}{override && <Para color={muted(t)} size={11} style={{ paddingLeft: 38, paddingBottom: 6 }}>{override}</Para>}</div>
 }
