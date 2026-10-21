@@ -7,6 +7,9 @@
 //! ```json
 //! { "initial": false | {"scale": .97, "scaleX": 1, "scaleY": 1, "opacity": 0, "blur": 2, "translateY": 16},
 //!   "animate": {"scale": 1, "opacity": 1, "blur": 0, "translateY": 0},
+//!   // optional rounded clip: the host box inset by clipTop/Right/Bottom/Left (px, before the transform), corners
+//!   // of clipRadius px on screen at any scale; give it in both ends (no clipRadius, or a negative one: no clip)
+//!   // e.g. {"clipLeft": 120, "clipRight": 120, "clipRadius": 12}
 //!   "transition": {"duration": .35, "delay": 0, "ease": [.22, 1, .36, 1]},
 //!   "keyframes": [{"offset": .6, "rotate": 4, "scale": 1.06, "translateY": -1}],
 //!   "origin": [.5, .5],
@@ -40,6 +43,11 @@ struct Partial {
     translate_y: Option<f32>,
     opacity: Option<f32>,
     blur: Option<f32>,
+    clip_top: Option<f32>,
+    clip_right: Option<f32>,
+    clip_bottom: Option<f32>,
+    clip_left: Option<f32>,
+    clip_radius: Option<f32>,
 }
 impl Partial {
     fn over(self, base: SubtreeTransformValue) -> SubtreeTransformValue {
@@ -53,14 +61,56 @@ impl Partial {
             translate_y: self.translate_y.unwrap_or(base.translate_y),
             opacity: self.opacity.unwrap_or(base.opacity),
             blur: self.blur.unwrap_or(base.blur),
+            clip: [
+                self.clip_top.unwrap_or(base.clip[0]),
+                self.clip_right.unwrap_or(base.clip[1]),
+                self.clip_bottom.unwrap_or(base.clip[2]),
+                self.clip_left.unwrap_or(base.clip[3]),
+            ],
+            clip_radius: self.clip_radius.unwrap_or(base.clip_radius),
         }
     }
     fn get(&self, field: usize) -> Option<f32> {
-        [self.scale, self.rotate, self.translate_x, self.translate_y, self.opacity, self.blur, self.scale_x, self.scale_y, self.shadow_opacity][field]
+        self.fields()[field]
+    }
+    fn fields(&self) -> [Option<f32>; FIELDS] {
+        [
+            self.scale,
+            self.rotate,
+            self.translate_x,
+            self.translate_y,
+            self.opacity,
+            self.blur,
+            self.scale_x,
+            self.scale_y,
+            self.shadow_opacity,
+            self.clip_top,
+            self.clip_right,
+            self.clip_bottom,
+            self.clip_left,
+            self.clip_radius,
+        ]
     }
 }
+const FIELDS: usize = 14;
 fn field(value: &SubtreeTransformValue, field: usize) -> f32 {
-    [value.scale, value.rotate, value.translate_x, value.translate_y, value.opacity, value.blur, value.scale_x, value.scale_y, value.shadow_opacity][field]
+    let [top, right, bottom, left] = value.clip;
+    [
+        value.scale,
+        value.rotate,
+        value.translate_x,
+        value.translate_y,
+        value.opacity,
+        value.blur,
+        value.scale_x,
+        value.scale_y,
+        value.shadow_opacity,
+        top,
+        right,
+        bottom,
+        left,
+        value.clip_radius,
+    ][field]
 }
 fn set_field(value: &mut SubtreeTransformValue, field: usize, to: f32) {
     match field {
@@ -72,7 +122,9 @@ fn set_field(value: &mut SubtreeTransformValue, field: usize, to: f32) {
         5 => value.blur = to,
         6 => value.scale_x = to,
         7 => value.scale_y = to,
-        _ => value.shadow_opacity = to,
+        8 => value.shadow_opacity = to,
+        9..=12 => value.clip[field - 9] = to,
+        _ => value.clip_radius = to,
     }
 }
 
@@ -146,7 +198,7 @@ struct KeyStop {
 fn parse(value: &serde_json::Value) -> Option<Source> {
     let source: Source = serde_json::from_value(value.clone()).ok()?;
     let finite = |p: &Partial| {
-        [p.scale, p.rotate, p.translate_x, p.translate_y, p.opacity, p.blur, p.scale_x, p.scale_y, p.shadow_opacity].iter().flatten().all(|v| v.is_finite())
+        p.fields().iter().flatten().all(|v| v.is_finite())
             && [p.scale, p.scale_x, p.scale_y].iter().flatten().all(|s| *s > 0.0)
     };
     let timing = |t: &Timing| t.duration.is_finite() && t.duration >= 0.0 && t.delay.is_finite() && t.delay >= 0.0 && t.ease.iter().all(|v| v.is_finite());
@@ -276,7 +328,7 @@ impl Track {
     fn value(&self, now: Instant) -> SubtreeTransformValue {
         let p = self.progress(now);
         let mut out = self.to;
-        for f in 0..9 {
+        for f in 0..FIELDS {
             // The stops that set this property, with the start and the target at the ends.
             let mut points = vec![(0.0, field(&self.from, f))];
             points.extend(self.stops.iter().filter_map(|k| k.value.get(f).map(|v| (k.offset, v))));
@@ -391,7 +443,7 @@ impl Element for Transformed {
         c: &mut App,
     ) -> Option<Hitbox> {
         let origin = self.origin(bounds);
-        w.with_subtree_transform(self.id, origin, self.value, |w| {
+        w.with_subtree_transform(self.id, origin, bounds, self.value, |w| {
             // Under the children, so it never takes their presses; occluding overlays block it.
             let hitbox = self.press.then(|| w.insert_hitbox(bounds, HitboxBehavior::Normal));
             self.child.prepaint(w, c);
@@ -410,7 +462,7 @@ impl Element for Transformed {
     ) {
         let origin = self.origin(bounds);
         let blur = self.blur;
-        w.with_subtree_transform(self.id, origin, self.value, |w| {
+        w.with_subtree_transform(self.id, origin, bounds, self.value, |w| {
             self.child.paint(w, c);
             // `filter: blur()` over what the subtree painted: a unit-blur backdrop pass marked with
             // fade_top -1, whose radius follows the scope's blur value on every retained frame.

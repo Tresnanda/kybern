@@ -11,7 +11,7 @@ try{
  for(const theme of ['dark','light']) for(const reduced of ['0','1']) {
   const f=await launchFixture(path.join(import.meta.dir,'explorer-motion-lab.tsx'),{GPUIX_BACKGROUND:'1',KYBERN_APPEARANCE:theme,KYBERN_REDUCED_MOTION:reduced,KYBERN_FRAME_TIMES:'1',KYBERN_FULL_RATE:'1'})
   try{
-   const a=f.app;await a.getByTestId('ready').waitFor();assert.deepEqual(JSON.parse(await a.getByTestId('capabilities').textContent()),{rotate:true,physicalSprings:true})
+   const a=f.app;await a.getByTestId('ready').waitFor();assert.deepEqual((({rotate,physicalSprings})=>({rotate,physicalSprings}))(JSON.parse(await a.getByTestId('capabilities').textContent())),{rotate:true,physicalSprings:true})
    await a.clock.pause();const prefix=`${theme}-${reduced==='1'?'reduced':'normal'}`
    const start=path.join(output,`${prefix}-0.png`);await a.screenshot({path:start})
    await a.getByTestId('toggle').click();await a.getByTestId('physical').click()

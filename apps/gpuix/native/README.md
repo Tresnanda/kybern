@@ -1810,3 +1810,27 @@ the restored window could not be captured yet; the capture now retries. `scripts
 automation screenshot, which re-renders without the per-present rotation (every frozen phase looked alike); it now reads
 the presented frame from WindowServer and expects a settled spinner in Core Animation (no app frames) unless
 `KYBERN_COMPOSITOR_LOOPS=0`.
+
+## Polish round 1 (lane polish1, 2026-10-21)
+
+### Translated text keeps its off-clip glyphs (`translate_text_gpui.py`)
+
+`paint_line` skips every glyph whose box misses the content mask. A retained translation (`paintTranslate`) moves only
+what was painted, so the sidebar title marquee (`sidebar/motion.tsx` `MarqueeLabel`) slid the glyphs that fit the row's
+clip out of view and never showed the tail: the title emptied mid-pan (the automation screenshot re-renders every frame
+and hid it). Inside a translation scope (`Window::subtree_tags` non-empty) glyphs are now culled against the mask widened
+sideways by 2048 px (`KYBERN_TRANSLATED_TEXT_REACH`); the mask still clips them in the shader. Text outside translation
+scopes is unchanged. Check: `bun native/ui-lease.ts marquee bun scripts/marquee-check.ts` (real-time `screencapture -l` of
+`scripts/marquee-lab.tsx`: ink across the row at the start, mid-pan and after the pan, the tail in its right half; fails
+on `75c1ec2a`).
+
+### `paintTransform` clip (`paintClip`)
+
+`clipTop` / `clipRight` / `clipBottom` / `clipLeft` (px of the host's layout box, before the transform) and `clipRadius`
+(px on screen, at any scale) round-clip a scope's subtree; they interpolate with the other values, so a clip can move,
+resize and change its radius on retained frames. The clip is the host box inset, mapped through every scope up to and
+including its own, and joins the context's mask chain (hit testing follows). No `clipRadius`, or a negative one, is no
+clip: give it at both ends of a tween. `getMotionCapabilities().paintClip` advertises it. The shared image morph
+(`src/motion/ImageMorph.tsx`) uses it to grow a cropped thumbnail into the preview with the thumbnail's radius.
+Files: `subtree_transform.rs` (values, evaluator, host bounds), `subtree_transform_window.rs` (mask), `paint_clip_hooks.py`
+(capability).
