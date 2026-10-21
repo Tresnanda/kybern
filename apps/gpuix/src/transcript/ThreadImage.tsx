@@ -16,7 +16,8 @@ import { Rise } from '../motion/kit.tsx'
 import { Icon } from '../icons.tsx'
 import { T } from './glyphs.ts'
 import { Button, muted } from './kit.tsx'
-import { ImageLightbox, imageSize, ResponseImage } from './images.tsx'
+import { ImageLightbox, ResponseImage } from './images.tsx'
+import { ImageViewer } from '../motion/ImageMorph.tsx'
 
 /** Retried once after this, for an image the agent wrote moments before its reply arrived. */
 const RETRY_MS = 1500
@@ -137,10 +138,10 @@ function ImageCard({ label, reason, loading = false, onRetry, onReveal }: { labe
 export function ThreadImagePreview({ threadId, source, onClose }: { threadId: string; source: string; onClose: () => void }) {
   const image = useThreadImage(threadId, source)
   const label = decodeURIComponent(reference(source).split('/').pop() ?? 'Image')
-  if (image.image) return <ImageLightbox src={image.image.source} label={label} size={imageSize(image.image.source)} onClose={onClose} finalFocus={() => {}} />
+  if (image.image) return <ImageViewer testId="image-lightbox" src={image.image.source} label={label} from={null} source={() => null} onClose={onClose} />
   return image.failure ? <ImageLightboxCard label={label} reason={image.failure.reason} onClose={onClose} onRetry={image.retry} /> : null
 }
 
 function ImageLightboxCard({ label, reason, onClose, onRetry }: { label: string; reason: string; onClose: () => void; onRetry: () => void }) {
-  return <ImageLightbox src="" label={label} size={null} onClose={onClose} finalFocus={() => {}} body={<ImageCard label={label} reason={reason} onRetry={onRetry} />} />
+  return <ImageLightbox label={label} onClose={onClose} finalFocus={() => {}} body={<ImageCard label={label} reason={reason} onRetry={onRetry} />} />
 }
