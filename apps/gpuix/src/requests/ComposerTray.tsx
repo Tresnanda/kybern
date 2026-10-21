@@ -3,10 +3,16 @@
 // separate subagent strip, runtime activity strip, helper panel and queued card, so they no longer stack card on card.
 // Wording, order and the default open state are shared rules (`packages/kybern-client/src/composerTray.ts`).
 //
+// Inside, each kind of row has its own section under a label (`SectionLabel`, the `@` picker's): Subagents, Background tasks,
+// Helpers, Queued. The subagents hang from a tree stem under their label (`../tree/`), in the glyph column the header's and
+// the other sections' icons share.
+//
 // Motion (all on the P0 helpers): the body opens and closes with `Collapse` and the chevron turns with it (a keyboard toggle
-// is instant); a row that arrives rises in (`Rise`, fresh rows only); a removed or sent queued row lifts out and closes up
-// (`Leave`); a subagent that settles cross-swaps its loader for a check or alert and dims to the finished ink (`Dim`, 150 ms,
-// paint-only); a changed count in the summary swaps in place (`SwapOnChange`). Reduce Motion: fades, or nothing.
+// is instant); opening it by pointer draws the subagents' connectors in (`markTreeOpen`), closing draws them out; a row that
+// arrives rises in (`Rise`, fresh rows only) and a section that appears rises in with its first row; a removed or sent queued
+// row lifts out and closes up (`Leave`), and its label leaves with the last one; a subagent that settles cross-swaps its
+// loader for a check or alert and dims to the finished ink (`Dim`, 150 ms, paint-only); a changed count in the summary swaps
+// in place (`SwapOnChange`). Reduce Motion: fades, or nothing.
 import { createContext, memo, useContext, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { QueuedMessage, RuntimeTask, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { commandSummary, queuedPreview, trayDefaultOpen, traySummary, type TrayCounts } from '../../../../packages/kybern-client/src/composerTray.ts'
@@ -15,6 +21,7 @@ import { Icon } from '../icons.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
 import { G } from '../composer/glyphs.ts'
 import { Dim, Leave, useLeavingList } from '../composer/motion.tsx'
+import { SECTION_LABEL, SectionLabel } from '../composer/Menu.tsx'
 import { removeQueued } from '../composer/store.ts'
 import { Chevron } from '../motion/Chevron.tsx'
 import { Collapse, Rise, SwapOnChange, revealTransform } from '../motion/kit.tsx'
@@ -25,14 +32,23 @@ import { SubagentHover } from '../subagents/Hover.tsx'
 import { FONT_MONO } from '../theme.ts'
 import { T } from '../transcript/glyphs.ts'
 import { reportError } from '../transcript/store.ts'
+import { markTreeOpen, TICK_GAP, TreeGroup, TreeItem, TreeLines, useTreeSlot, type TreeShape } from '../tree/Tree.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { controlSubagent, showDock } from './Activity.tsx'
 
-/** Row height; the body scrolls past `MAX_ROWS` (a half row peeks under the edge). */
+/** Row height. The body scrolls once its rows and the labels after the first pass `MAX_ROWS` rows of height; a half row peeks
+ *  under the edge. */
 const ROW = 28
 const MAX_ROWS = 7
-/** Space between the groups (subagents, tasks, helpers, queue): space, not lines, separates them. */
-const GROUP_GAP = 6
+/** The body's side padding and a row's own left padding: icons start 14px in, their column's centre is at 22. */
+const BODY_PAD = 8
+const ROW_PAD = 6
+/** Subagent rows sit this far in, hanging from a stem in the icon column (the transcript's groups step in 22px too). */
+const INDENT = 22
+const STEM = BODY_PAD + ROW_PAD + 8
+/** `TreeGroup` in a subagent row's coordinates (its left edge is BODY_PAD + INDENT in): the stem, and ticks stopping short of the icon. */
+const SUBAGENT_TREE = { x: STEM - BODY_PAD - INDENT, tickEnd: ROW_PAD - TICK_GAP }
+const labelHeight = (first: boolean) => (first ? SECTION_LABEL.firstTop : SECTION_LABEL.top) + SECTION_LABEL.line + SECTION_LABEL.bottom
 /** The reader's open/closed choice per thread, for this session. */
 const chosen = new Map<string, boolean>()
 
@@ -65,9 +81,12 @@ export function ComposerTray({ data, divided = false }: { data: TrayData; divide
   const [open, setOpen] = useState(() => chosen.get(threadId) ?? defaultOpen)
   // A keyboard toggle shows its end state at once; a pointer toggle animates.
   const [keyboard, setKeyboard] = useState(false)
-  const toggle = (viaKeyboard: boolean) => { chosen.set(threadId, !open); setKeyboard(viaKeyboard); setOpen(!open) }
-  const scroll = rows > MAX_ROWS
-  const body = <TrayBody data={data} scroll={scroll} />
+  const toggle = (viaKeyboard: boolean) => {
+    // A pointer open draws the subagents' connectors in with their rows; a keyboard toggle shows the end state.
+    if (!open && !viaKeyboard) markTreeOpen()
+    chosen.set(threadId, !open); setKeyboard(viaKeyboard); setOpen(!open)
+  }
+  const body = <TrayBody data={data} open={open} />
   return (
     <div testId="composer-tray" style={{ display: 'flex', flexDirection: 'column', minWidth: 0, ...(divided ? { borderBottomWidth: 1, borderColor: t.borderLight } : {}) }}>
       <TrayHeader counts={counts} subagents={subagents} tasks={tasks} open={open} onToggle={toggle} />
@@ -136,7 +155,7 @@ function StatusGlyph({ phase }: { phase: SubagentPhase | 'queued' }) {
   const t = useTheme()
   return (
     <SwapOnChange kind="icon" active={phase} style={{ width: 16, height: 16, flexShrink: 0 }}>
-      {phase === 'working' ? <MatrixLoader />
+      {phase === 'working' ? <MatrixLoader whole />
         : phase === 'failed' ? <Icon source={T.alert} size={14} color={t.red} />
         : phase === 'stopped' ? <Icon source={G.stop} size={9} color={ink(t, 0.45)} />
         : phase === 'queued' ? <Icon source={G.clock} size={14} color={ink(t, 0.5)} />
@@ -145,45 +164,109 @@ function StatusGlyph({ phase }: { phase: SubagentPhase | 'queued' }) {
   )
 }
 
-function TrayBody({ data, scroll }: { data: TrayData; scroll: boolean }) {
+type SectionKey = 'subagents' | 'tasks' | 'helpers' | 'queued'
+const SECTION_NAME: Record<SectionKey, string> = { subagents: 'Subagents', tasks: 'Background tasks', helpers: 'Helpers', queued: 'Queued' }
+interface TrayItem { key: string; node: ReactNode }
+interface Section { key: SectionKey; rows: TrayItem[]; /** Every row is leaving: the label leaves with the last one. */ leaving: boolean }
+
+function TrayBody({ data, open }: { data: TrayData; open: boolean }) {
   const { threadId, subagents, tasks, helpers, queued } = data
   // Queued rows keep their last frame to leave (removed by hand, or sent when the turn ends); the others just go.
   const [entries, gone] = useLeavingList(queued)
   const freshSubagents = useFreshIds(subagents)
   const freshTasks = useFreshIds(tasks)
-  const groups: ReactNode[][] = [
-    subagents.map(child => <Rise key={child.id} kind="row" play={freshSubagents(child.id)}><SubagentRow thread={child} /></Rise>),
-    tasks.map(task => <Rise key={task.id} kind="row" play={freshTasks(task.id)}><TaskRow task={task} threadId={threadId} /></Rise>),
-    helpers.map(child => <HelperRow key={child.id} thread={child} />),
-    entries.map(({ item, leaving, fresh }) => leaving
+  const all: Section[] = [
+    { key: 'subagents', leaving: false, rows: subagents.map((child, i) => ({ key: child.id, node: (
+      <Rise key={child.id} kind="row" play={freshSubagents(child.id)}>
+        <TreeItem joint="node" last={i === subagents.length - 1} index={i} count={subagents.length} anchor={ROW / 2}>
+          <SubagentRow thread={child} />
+        </TreeItem>
+      </Rise>
+    ) })) },
+    { key: 'tasks', leaving: false, rows: tasks.map(task => ({ key: task.id, node: <Rise key={task.id} kind="row" play={freshTasks(task.id)}><TaskRow task={task} threadId={threadId} /></Rise> })) },
+    { key: 'helpers', leaving: false, rows: helpers.map(child => ({ key: child.id, node: <HelperRow key={child.id} thread={child} /> })) },
+    { key: 'queued', leaving: entries.length > 0 && entries.every(entry => entry.leaving), rows: entries.map(({ item, leaving, fresh }) => ({ key: item.id, node: leaving
       ? <Leave key={item.id} height={ROW} onDone={() => gone(item.id)}><QueuedRow item={item} threadId={threadId} /></Leave>
-      : <Rise key={item.id} kind="row" play={fresh}><QueuedRow item={item} threadId={threadId} /></Rise>),
-  ].filter(group => group.length > 0)
-  if (scroll) {
-    // Past seven rows: one virtual list (no nested scrollers), group gaps as row padding, no enter/leave motion.
-    const flat = groups.flatMap((group, g) => group.map((row, i) => ({ row, gap: g > 0 && i === 0 })))
-    // Seven and a half rows plus the gaps above them: the half row under the edge says the list goes on.
-    const height = (MAX_ROWS + 0.5) * ROW + Math.min(groups.length - 1, MAX_ROWS) * GROUP_GAP
+      : <Rise key={item.id} kind="row" play={fresh}><QueuedRow item={item} threadId={threadId} /></Rise> })) },
+  ]
+  const sections = all.filter(section => section.rows.length > 0)
+  const freshSections = useFreshIds(sections.map(section => ({ id: section.key })))
+  const label = (section: Section, first: boolean) => {
+    const node = <TrayLabel section={section.key} first={first} />
+    // A section that appears rises in with its first row; one whose last row leaves closes up with it.
+    return section.leaving ? <Leave key={`label-${section.key}`} height={labelHeight(first)} onDone={() => {}}>{node}</Leave>
+      : <Rise key={`label-${section.key}`} kind="row" play={freshSections(section.key)}>{node}</Rise>
+  }
+  const budget = MAX_ROWS * ROW + labelHeight(true)
+  // Measured without the rows already leaving: the body leaves its scrolling list as the leave starts, so the leave closes up
+  // smoothly instead of the list snapping shorter once it ends.
+  const leavingRows = entries.filter(entry => entry.leaving).length
+  const content = sections.filter(section => !section.leaving).reduce((h, section, i) => h + labelHeight(i === 0) + (section.rows.length - (section.key === 'queued' ? leavingRows : 0)) * ROW, 0)
+  if (content > budget) {
+    // Past the budget: one virtual list of labels and rows (no nested scrollers), no enter/leave motion.
+    const items = sections.flatMap((section, i) => [
+      { key: `label-${section.key}`, node: label(section, i === 0), indent: 0, height: labelHeight(i === 0) },
+      ...section.rows.map(row => ({ ...row, indent: section.key === 'subagents' ? INDENT : 0, height: ROW })),
+    ])
     return (
       <div style={{ display: 'flex', flexDirection: 'column', paddingBottom: 6 }}>
-        <virtual-list testId="composer-tray-list" style={{ width: '100%', height }}>
-          {flat.map(({ row, gap }) => <div key={(row as { key: string }).key} style={{ display: 'flex', flexDirection: 'column', paddingLeft: 8, paddingRight: 8, paddingTop: gap ? GROUP_GAP : 0 }}>{row}</div>)}
-        </virtual-list>
+        <TreeGroup {...SUBAGENT_TREE} open={open}>
+          <virtual-list testId="composer-tray-list" style={{ width: '100%', height: peekHeight(items, budget + ROW / 2) }}>
+            {items.map(item => <div key={item.key} style={{ display: 'flex', flexDirection: 'column', paddingLeft: BODY_PAD + item.indent, paddingRight: BODY_PAD }}>{item.node}</div>)}
+          </virtual-list>
+        </TreeGroup>
       </div>
     )
   }
   return (
-    <div testId="composer-tray-body" style={{ display: 'flex', flexDirection: 'column', gap: GROUP_GAP, paddingLeft: 8, paddingRight: 8, paddingBottom: 6 }}>
-      {groups.map((group, i) => <div key={i} style={{ display: 'flex', flexDirection: 'column' }}>{group}</div>)}
+    <div testId="composer-tray-body" style={{ display: 'flex', flexDirection: 'column', paddingLeft: BODY_PAD, paddingRight: BODY_PAD, paddingBottom: 6 }}>
+      {sections.map((section, i) => (
+        <div key={section.key} testId={`composer-tray-section-${section.key}`} style={{ display: 'flex', flexDirection: 'column' }}>
+          {label(section, i === 0)}
+          {section.key === 'subagents'
+            ? <div style={{ display: 'flex', flexDirection: 'column', marginLeft: INDENT }}><TreeGroup {...SUBAGENT_TREE} open={open}>{section.rows.map(row => row.node)}</TreeGroup></div>
+            : section.rows.map(row => row.node)}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** The list's height: it ends halfway down the row nearest `target`, so the half row under the edge says the list goes on. */
+export function peekHeight(items: readonly { key: string; height: number }[], target: number) {
+  let top = 0, best = target, distance = Infinity
+  for (const item of items) {
+    const middle = top + item.height / 2
+    if (!item.key.startsWith('label-') && Math.abs(middle - target) < distance) { distance = Math.abs(middle - target); best = middle }
+    top += item.height
+  }
+  return best
+}
+
+/** A section's label; the subagents' stem starts under it, in the icon column, and runs on into the first row. */
+function TrayLabel({ section, first }: { section: SectionKey; first: boolean }) {
+  const shape = useMemo<TreeShape | null>(() => {
+    if (section !== 'subagents') return null
+    const top = first ? SECTION_LABEL.firstTop : SECTION_LABEL.top
+    return { anchor: top + SECTION_LABEL.line / 2, below: { x: STEM - BODY_PAD, from: top + SECTION_LABEL.line } }
+  }, [section, first])
+  return (
+    <div testId={`composer-tray-label-${section}`} style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
+      <SectionLabel first={first} inset={ROW_PAD}>{SECTION_NAME[section]}</SectionLabel>
+      {shape && <TreeLines shape={shape} />}
     </div>
   )
 }
 
 /** Ids present at the first render are not fresh: only rows that arrive later rise in (initial loads do not animate). */
+const FRESH_MS = 400
 function useFreshIds(items: readonly { id: string }[]) {
-  const initial = useRef<Set<string> | null>(null)
-  initial.current ??= new Set(items.map(item => item.id))
-  return (id: string) => !initial.current!.has(id)
+  const seen = useRef<Map<string, number> | null>(null)
+  seen.current ??= new Map(items.map(item => [item.id, -Infinity]))
+  const now = performance.now()
+  for (const item of items) if (!seen.current.has(item.id)) seen.current.set(item.id, now)
+  // Only while it is arriving: a row remounted later (the body switching to or from its scrolling list) paints at rest.
+  return (id: string) => now - (seen.current!.get(id) ?? now) < FRESH_MS
 }
 
 /** A row's focus reporter. GPUIX focus events do not bubble, so the row's own `onFocus` never sees Tab landing on its
@@ -276,8 +359,11 @@ const SubagentRow = memo(function SubagentRow({ thread }: { thread: Thread }) {
     {canBackground && <IconAction testId={`subagent-background-${thread.id}`} label={`Run ${thread.title || 'subagent'} in background`} glyph={G.background} size={13} onClick={() => void controlSubagent(thread, 'background')} />}
     {canStop && <IconAction testId={`subagent-stop-${thread.id}`} label={`Stop ${thread.title || 'subagent'}`} glyph={G.stop} size={9} onClick={() => void controlSubagent(thread, 'stop')} />}
   </> : undefined
+  const tree = useTreeSlot()
   return (
-    // Finished and stopped rows settle to the quieter ink (150 ms fade, paint-only); working and failed rows stay at full.
+    // The root carries the row's tree slice (stem, tick or elbow), drawn after the row and outside its dimming.
+    <div paintTransform={tree.rise} style={{ position: 'relative', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+    {/* Finished and stopped rows settle to the quieter ink (150 ms fade, paint-only); working and failed rows stay at full. */}
     <Dim dimmed={phase === 'done' || phase === 'stopped'} level={0.7}>
       <SubagentHover thread={thread}>
         <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}>
@@ -288,6 +374,8 @@ const SubagentRow = memo(function SubagentRow({ thread }: { thread: Thread }) {
         </div>
       </SubagentHover>
     </Dim>
+    {tree.lines}
+    </div>
   )
 })
 
@@ -311,7 +399,7 @@ const HelperRow = memo(function HelperRow({ thread }: { thread: Thread }) {
   const amber = t.variant === 'dark' ? '#fcd34d' : '#d97706'
   return (
     <Row testId={`helper-${thread.id}`} onOpen={() => openThread(thread.id)}
-      glyph={thread.status === 'running' ? <MatrixLoader /> : approval ? <Icon source={G.hand} size={14} color={amber} /> : thread.status === 'failed' ? <Icon source={T.alert} size={14} color={t.red} /> : <Icon source={T.check} size={14} color={ink(t, 0.45)} />}>
+      glyph={thread.status === 'running' ? <MatrixLoader whole /> : approval ? <Icon source={G.hand} size={14} color={amber} /> : thread.status === 'failed' ? <Icon source={T.alert} size={14} color={t.red} /> : <Icon source={T.check} size={14} color={ink(t, 0.45)} />}>
       <Title>{thread.title || 'Untitled'}</Title>
       <Meta color={approval ? amber : thread.status === 'failed' ? t.red : undefined}>{thread.status === 'running' ? 'Helper' : approval ? 'Needs approval' : thread.status === 'failed' ? 'Failed' : 'Helper · idle'}</Meta>
     </Row>
