@@ -69,8 +69,8 @@ Applications and opens it with no prompt:
 curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-mac-install.sh | sh
 ```
 
-Apple Silicon Macs can also install **Kybern GPUIX**, the native GPUI client,
-as a separate app next to the Tauri one (it updates itself from the same feed):
+Macs (Apple Silicon or Intel) can also install **Kybern GPUIX**, the native GPUI
+client, as a separate app next to the Tauri one (it updates itself from the same feed):
 
 ```sh
 curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-gpuix-mac-install.sh | sh
@@ -360,7 +360,7 @@ cache that release builds restore. Publishing is a separate action.
 
 | Release unit | Version and delivery |
 | --- | --- |
-| Daemon, CLI, and desktop | Share the Rust workspace/Tauri version. `scripts/release.sh X.Y.Z` updates these versions and pushes `vX.Y.Z`. The release workflow builds `kybernd` and `kybern` once per target; the desktop bundles, which include the daemon and CLI, reuse those binaries, and the whole GitHub Release is published at once. The `gpuix` job of `desktop.yml` also builds Kybern GPUIX (`apps/gpuix`, Apple Silicon only) and attaches `kybern-gpuix_<version>_aarch64.app.tar.gz` plus its signature; `latest.json` carries it as `darwin-aarch64-gpuix`. |
+| Daemon, CLI, and desktop | Share the Rust workspace/Tauri version. `scripts/release.sh X.Y.Z` updates these versions and pushes `vX.Y.Z`. The release workflow builds `kybernd` and `kybern` once per target; the desktop bundles, which include the daemon and CLI, reuse those binaries, and the whole GitHub Release is published at once. The `gpuix` job of `desktop.yml` also builds Kybern GPUIX (`apps/gpuix`) for Apple Silicon and Intel Macs from the same dist binaries and attaches `kybern-gpuix_<version>_<aarch64|x86_64>.app.tar.gz` plus their signatures; `latest.json` carries them as `darwin-aarch64-gpuix` and `darwin-x86_64-gpuix`. |
 | Android and iOS mobile app | Use `expo.version` in `apps/mobile/app.json`, independent of the desktop release number. EAS builds use the selected commit and profile. Android `versionCode` and iOS `buildNumber` identify individual binaries; EAS manages these remotely. Preview and production builds increment them automatically. |
 | Wire protocol | `PROTOCOL_VERSION` is a compatibility contract, not an app release number. Bump it for breaking wire changes and update both clients and the daemon together. Additive features may still require a newer daemon even when the protocol number is unchanged. |
 

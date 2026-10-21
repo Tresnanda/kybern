@@ -52,3 +52,14 @@ test('desktop bundles wait for the gate and dist binaries, and host waits for th
   assert.match(host, /needs:[\s\S]*- custom-desktop/)
   for (const result of ['failure', 'cancelled']) assert.equal(allowed('custom-desktop', result), false)
 })
+
+test('GPUIX bundles both macOS targets from dist binaries without compiling the daemon', async () => {
+  const { readFileSync } = await import('node:fs')
+  const workflow = readFileSync(new URL('../.github/workflows/desktop.yml', import.meta.url), 'utf8')
+  const gpuix = workflow.split('\n  gpuix:\n')[1].split('\n  manifest:')[0]
+  assert.match(gpuix, /target: \[aarch64-apple-darwin, x86_64-apple-darwin\]/)
+  assert.match(gpuix, /dist-binaries\.mjs --target "\$KYBERN_GPUIX_TARGET"/)
+  assert.match(gpuix, /--pattern "kybern-\$KYBERN_GPUIX_TARGET\.\*"/)
+  assert.doesNotMatch(gpuix, /cargo build/)
+  assert.match(gpuix, /name: desktop-gpuix-\$\{\{ matrix\.target \}\}/)
+})

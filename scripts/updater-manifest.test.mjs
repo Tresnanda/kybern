@@ -34,3 +34,11 @@ test('a GPUIX tarball and signature add the darwin-aarch64-gpuix entry', () => {
 test('a GPUIX tarball without its signature is not advertised', () => {
   assert.equal(manifest({ [`kybern-gpuix_${version}_aarch64.app.tar.gz`]: 'x' }).platforms['darwin-aarch64-gpuix'], undefined)
 })
+
+test('an Intel GPUIX tarball adds the darwin-x86_64-gpuix entry beside Apple Silicon', () => {
+  const arm = `kybern-gpuix_${version}_aarch64.app.tar.gz`
+  const intel = `kybern-gpuix_${version}_x86_64.app.tar.gz`
+  const latest = manifest({ [arm]: 'x', [`${arm}.sig`]: 'arm-sig', [intel]: 'x', [`${intel}.sig`]: 'intel-sig\n' })
+  assert.deepEqual(Object.keys(latest.platforms), ['darwin-aarch64', 'darwin-aarch64-gpuix', 'darwin-x86_64-gpuix'])
+  assert.deepEqual(latest.platforms['darwin-x86_64-gpuix'], { signature: 'intel-sig', url: `https://github.com/o/r/releases/download/v${version}/${intel}` })
+})

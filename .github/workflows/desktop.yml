@@ -268,12 +268,19 @@ jobs:
           if-no-files-found: error
 
   gpuix:
-    # Kybern GPUIX (apps/gpuix) ships as its own Apple Silicon app next to the
-    # Tauri desktop app. The patched native addon is built from source with the
-    # on-screen native checks skipped (runners have no usable display).
+    # Kybern GPUIX (apps/gpuix) ships as its own app next to the Tauri desktop
+    # app, for Apple Silicon and Intel Macs. Each target packages dist's
+    # kybernd and kybern for that target and builds its own patched native
+    # addon, with the on-screen native checks skipped (runners have no usable
+    # display). Intel's addon is cross-built on the arm64 runner, like the
+    # Tauri x86_64 bundle; its load check runs under Rosetta.
     needs: binaries
     if: ${{ !cancelled() && (needs.binaries.result == 'success' || needs.binaries.result == 'skipped') && (github.event_name != 'push' || github.ref_type == 'tag') }}
-    name: bundle (gpuix)
+    name: bundle (gpuix ${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
     runs-on: macos-15
     timeout-minutes: 120
     env:
@@ -281,6 +288,7 @@ jobs:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       KYBERN_NATIVE_CHECKS: "0"
+      KYBERN_GPUIX_TARGET: ${{ matrix.target }}
       # scripts/bundle-gpuix.sh packages these instead of target/release.
       KYBERN_BIN_DIR: dist-binaries/bin
     steps:
@@ -288,12 +296,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: stable
-          targets: aarch64-apple-darwin
+          targets: ${{ matrix.target }}
       - name: Install the GPUIX Rust toolchain
-        run: rustup toolchain install 1.97.1 --profile minimal
+        run: rustup toolchain install 1.97.1 --profile minimal --target "$KYBERN_GPUIX_TARGET"
+      - name: Install Rosetta for the Intel addon's load check
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: arch -x86_64 /usr/bin/true 2>/dev/null || softwareupdate --install-rosetta --agree-to-license
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: gpuix
+          key: ${{ matrix.target == 'aarch64-apple-darwin' && 'gpuix' || format('gpuix-{0}', matrix.target) }}
           workspaces: |
             . -> target
             apps/gpuix/native/build/target
@@ -330,9 +341,9 @@ jobs:
           merge-multiple: true
       - name: Download dist's archives from a release
         if: steps.release.outputs.binaries-tag != ''
-        run: gh release download "${{ steps.release.outputs.binaries-tag }}" --pattern 'kybern-aarch64-apple-darwin.*' --dir dist-binaries/archives
+        run: gh release download "${{ steps.release.outputs.binaries-tag }}" --pattern "kybern-$KYBERN_GPUIX_TARGET.*" --dir dist-binaries/archives
       - name: Extract the daemon and CLI
-        run: node scripts/dist-binaries.mjs --target aarch64-apple-darwin --from dist-binaries/archives --out "$KYBERN_BIN_DIR"
+        run: node scripts/dist-binaries.mjs --target "$KYBERN_GPUIX_TARGET" --from dist-binaries/archives --out "$KYBERN_BIN_DIR"
       - name: Install dependencies
         run: |
           (cd apps/desktop && pnpm install --frozen-lockfile)
@@ -344,7 +355,7 @@ jobs:
         run: scripts/bundle-gpuix.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: desktop-gpuix
+          name: desktop-gpuix-${{ matrix.target }}
           compression-level: 0
           path: dist/kybern-gpuix_*
           if-no-files-found: error

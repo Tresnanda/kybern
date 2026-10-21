@@ -29,7 +29,7 @@ export interface GpuixLaunchFacts {
   version: string | null
   /** Inside the Tauri shell (never in a browser tab or in GPUIX itself). */
   inShell: boolean
-  /** macOS on Apple Silicon. */
+  /** macOS on Apple Silicon or Intel. */
   supported: boolean
   installed: boolean
   record: GpuixPromptRecord

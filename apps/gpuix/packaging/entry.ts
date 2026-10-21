@@ -1,7 +1,7 @@
 import path from 'node:path'
 const resources = path.resolve(path.dirname(process.execPath), '../Resources')
 process.env.KYBERN_GPUIX_RESOURCES = resources
-process.env.NAPI_RS_NATIVE_LIBRARY_PATH = path.join(resources, 'gpuix-native.darwin-arm64.node')
+process.env.NAPI_RS_NATIVE_LIBRARY_PATH = path.join(resources, `gpuix-native.darwin-${process.arch}.node`)
 process.env.KYBERN_GPUIX_NATIVE = 'local'
 process.env.KYBERND ??= path.resolve(resources, '../MacOS/kybernd')
 process.env.KYBERN_BUNDLED_CLI ??= path.resolve(resources, '../MacOS/kybern')

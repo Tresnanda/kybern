@@ -1,8 +1,16 @@
 # macOS app packaging
 
 Build from `apps/gpuix` with `bun scripts/package-app.ts` (or `pnpm package:app`).
-Requires macOS arm64, Bun (verified 1.4.0), the installed pinned dependencies,
-Xcode command-line tools, and the existing patched addon in `native/build`.
+It packages for this Mac's arch; `--arch x64` builds the Intel app on Apple Silicon
+(Bun cross-compiles its runtime; `KYBERN_BIN_DIR` must hold x86_64 `kybernd` and
+`kybern`, e.g. `target/x86_64-apple-darwin/release`). Requires macOS, Bun
+(verified 1.4.0), the installed pinned dependencies, Xcode command-line tools,
+and the existing patched addon for that arch in `native/build`.
+Local test builds of another arch take `--test`: the bundle becomes `Kybern GPUIX (x86_64 test).app`
+with id `dev.kybern.gpuix.test`, so LaunchServices and notifications never confuse it with the
+installed app (macOS 27 posts a Rosetta-retirement notice naming whatever x86_64 bundle launches).
+`bun packaging/rosetta-check.ts <out>` smoke-checks that test bundle under Rosetta; it needs
+macOS 27 or earlier, since macOS 28 drops Rosetta for apps. Releases never pass `--test`.
 No packages are installed, no native addon is rebuilt, and only ad-hoc signing
 is used. No signing identity/key lookup, installation, PATH change or Login Item.
 

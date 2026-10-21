@@ -75,7 +75,7 @@ representation and clamping, not CSS elliptical corner radii.
 The expanded `ContentMask` changes native primitive record sizes. These rebuild
 hooks target Metal; WGPU's packed WGSL/WebGL records need a separate port before
 reusing this patched GPUI checkout with that backend. The app loader selects the
-local addon only on macOS arm64; other platforms retain their npm addon.
+local addon only on macOS (arm64 or x64); other platforms retain their npm addon.
 
 Implementation: `rounded_clip.rs`, `rounded_clip_gpui.py` (reconstructed by
 `backdrop_gpui.py`), the backdrop shader/renderer, bounds snapshots and the embedded
@@ -238,6 +238,16 @@ usual checks and commit `VERSION`, `patches/` and the lockfile.
 Prerequisites: Rust 1.97.1 (from upstream's `rust-toolchain.toml`) and Xcode's
 Metal Toolchain (`xcodebuild -downloadComponent MetalToolchain`). The first
 build takes a few minutes and about 2 GB in `build/`.
+
+Intel Macs: `KYBERN_GPUIX_TARGET=x86_64-apple-darwin ./update.sh` cross-builds
+`build/gpuix-native.darwin-x64.node` on Apple Silicon (`rustup target add
+x86_64-apple-darwin --toolchain 1.97.1` first). Its load check and on-screen
+checks run under Rosetta with the x64 Bun from `tools/bun-x64.sh`, which the
+script puts first on `PATH`. The webview companion is universal (arm64 + x86_64,
+macOS 13.0), so both arches share `build/kybern-webview.dylib`. Rosetta runs need
+macOS 27 or earlier (macOS 28 drops it for apps); package local Intel apps with
+`--test` (`packaging/README.md`). What Rosetta does
+not prove, and the Windows/Linux plan: `../PORTING-PLATFORMS.md`.
 
 ## Window drag regions
 

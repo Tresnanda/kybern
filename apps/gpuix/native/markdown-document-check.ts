@@ -9,7 +9,7 @@ const out='/Users/mymac/projects/ade/previews/gpuix/perf/markdown'
 mkdirSync(out,{recursive:true})
 for(const mode of (process.env.MD_API_ONLY==='1'?[]:['dark','light'])) {
  for(const document of ['0','1']) {
-  const f=await launchFixture(path.join(import.meta.dir,'markdown-document-lab.tsx'),{KYBERN_APPEARANCE:mode,GPUIX_BACKGROUND:'1',MD_DOCUMENT:document,...(document==='0'?{NAPI_RS_NATIVE_LIBRARY_PATH:path.join(import.meta.dir,existsSync(path.join(import.meta.dir,'build/markdown-before.node'))?'build/markdown-before.node':'build/gpuix-native.darwin-arm64.node')}:{} )})
+  const f=await launchFixture(path.join(import.meta.dir,'markdown-document-lab.tsx'),{KYBERN_APPEARANCE:mode,GPUIX_BACKGROUND:'1',MD_DOCUMENT:document,...(document==='0'?{NAPI_RS_NATIVE_LIBRARY_PATH:path.join(import.meta.dir,existsSync(path.join(import.meta.dir,'build/markdown-before.node'))?'build/markdown-before.node':`build/gpuix-native.darwin-${process.arch}.node`)}:{} )})
   try {
    await f.app.getByTestId('ready').waitFor();await waitForPainted(f.app,'Markdown parity')
    await f.app.screenshot({path:`${out}/document-${mode}-${document}.png`})
@@ -96,7 +96,7 @@ if(process.env.MD_API_ONLY!=='1') for(const [name,source] of Object.entries({
  const file=path.join(import.meta.dir,'build',`markdown-${name}.md`);writeFileSync(file,source)
  for(const mode of ['dark','light']) {
   for(const document of ['0','1']) {
-   const f=await launchFixture(path.join(import.meta.dir,'markdown-document-lab.tsx'),{KYBERN_APPEARANCE:mode,GPUIX_BACKGROUND:'1',MD_DOCUMENT:document,MD_DOC_SOURCE:file,MD_WRAP:name==='wrappedcode'?'1':'0',...(document==='0'?{NAPI_RS_NATIVE_LIBRARY_PATH:path.join(import.meta.dir,existsSync(path.join(import.meta.dir,'build/markdown-before.node'))?'build/markdown-before.node':'build/gpuix-native.darwin-arm64.node')}:{})})
+   const f=await launchFixture(path.join(import.meta.dir,'markdown-document-lab.tsx'),{KYBERN_APPEARANCE:mode,GPUIX_BACKGROUND:'1',MD_DOCUMENT:document,MD_DOC_SOURCE:file,MD_WRAP:name==='wrappedcode'?'1':'0',...(document==='0'?{NAPI_RS_NATIVE_LIBRARY_PATH:path.join(import.meta.dir,existsSync(path.join(import.meta.dir,'build/markdown-before.node'))?'build/markdown-before.node':`build/gpuix-native.darwin-${process.arch}.node`)}:{})})
    try {
     await f.app.getByTestId('ready').waitFor();await waitForPainted(f.app,name==='wrappedcode'?'item0':name==='convo9a'?'Here is a tour':name==='convo9b'?'Paragraph before':name==='convo9c'?'A table follows':name==='table'?'Name':name==='code'?'item0':name==='list'?'Item':name==='inline'?'inline':(name==='quote'||name==='wrappedquote')?'Quote':name==='semantics'?'Semantics':name==='bidi'?'עברית':name==='cjk'?'漢字':'phrase',60_000)
     for(const position of ['top','middle']) {
@@ -117,7 +117,7 @@ if(process.env.MD_API_ONLY!=='1') for(const [name,source] of Object.entries({
 }
 
 if(process.env.MD_API_ONLY!=='1') for(const document of ['1']) {
- const f=await launchFixture(path.join(import.meta.dir,'markdown-document-selection-lab.tsx'),{GPUIX_BACKGROUND:'1',MD_DOCUMENT:document,...(document==='0'?{NAPI_RS_NATIVE_LIBRARY_PATH:path.join(import.meta.dir,existsSync(path.join(import.meta.dir,'build/markdown-before.node'))?'build/markdown-before.node':'build/gpuix-native.darwin-arm64.node')}:{})})
+ const f=await launchFixture(path.join(import.meta.dir,'markdown-document-selection-lab.tsx'),{GPUIX_BACKGROUND:'1',MD_DOCUMENT:document,...(document==='0'?{NAPI_RS_NATIVE_LIBRARY_PATH:path.join(import.meta.dir,existsSync(path.join(import.meta.dir,'build/markdown-before.node'))?'build/markdown-before.node':`build/gpuix-native.darwin-${process.arch}.node`)}:{})})
  try {
   const a=f.app
   await a.getByTestId('selection-ready').waitFor();await waitForPainted(a,'Start',60_000)

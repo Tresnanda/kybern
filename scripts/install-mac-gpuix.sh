@@ -7,9 +7,10 @@
 #   ... | sh -s -- --no-open            install without launching the app
 #   KYBERN_APP_DIR=~/Applications ...  install somewhere other than /Applications
 #
-# Kybern GPUIX is an Apple Silicon app, ad-hoc signed and not notarized. This
-# script fetches the same signed archive the in-app updater uses, so nothing is
-# quarantined and the app opens directly. Later updates arrive through the app.
+# Kybern GPUIX ships for Apple Silicon (aarch64) and Intel (x86_64) Macs, ad-hoc
+# signed and not notarized. This script picks this Mac's build and fetches the
+# same signed archive the in-app updater uses, so nothing is quarantined and the
+# app opens directly. Later updates arrive through the app.
 set -eu
 
 REPO="${KYBERN_REPO:-Tresnanda/kybern}"
@@ -29,19 +30,25 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$(uname -s)" = "Darwin" ] || { echo "this installer is for macOS" >&2; exit 1; }
-[ "$(uname -m)" = "arm64" ] || { echo "Kybern GPUIX needs an Apple Silicon Mac" >&2; exit 1; }
+# A shell running under Rosetta reports x86_64 on an Apple Silicon Mac; install the native build there.
+case "$(uname -m)" in
+  arm64) ARCH=aarch64 ;;
+  x86_64)
+    if [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)" = "1" ]; then ARCH=aarch64; else ARCH=x86_64; fi ;;
+  *) echo "Kybern GPUIX needs an Apple Silicon or Intel Mac" >&2; exit 1 ;;
+esac
 command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 1; }
 
 if [ "$VERSION" = "latest" ]; then
   # Newest release that already carries the GPUIX archive. A release that is
   # still being published is skipped instead of failing the install.
   URL="$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=10" \
-    | grep -o '"browser_download_url": *"[^"]*/kybern-gpuix_[^"/]*_aarch64\.app\.tar\.gz"' \
+    | grep -o "\"browser_download_url\": *\"[^\"]*/kybern-gpuix_[^\"/]*_${ARCH}\\.app\\.tar\\.gz\"" \
     | head -n 1 | sed 's/.*"\(https[^"]*\)"/\1/')"
-  [ -n "$URL" ] || { echo "no published Kybern GPUIX build found for $REPO" >&2; exit 1; }
+  [ -n "$URL" ] || { echo "no published Kybern GPUIX build for this Mac ($ARCH) found for $REPO" >&2; exit 1; }
 else
   VERSION="${VERSION#v}"
-  URL="https://github.com/$REPO/releases/download/v$VERSION/kybern-gpuix_${VERSION}_aarch64.app.tar.gz"
+  URL="https://github.com/$REPO/releases/download/v$VERSION/kybern-gpuix_${VERSION}_${ARCH}.app.tar.gz"
 fi
 
 if [ ! -w "$DEST" ]; then
