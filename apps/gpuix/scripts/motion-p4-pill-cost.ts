@@ -61,6 +61,8 @@ try {
   await toggle('pr-tabs (unequal widths, layout tween)', ['pr-tab-changes', 'pr-tab-summary'])
   await toggle('pr-tabs summary<->timeline', ['pr-tab-timeline', 'pr-tab-summary'])
   await toggle('pr-filter (unequal widths)', ['pr-filter-merged', 'pr-filter-open'])
+  await click('rail-tasks'); await sleep(2500)
+  await toggle('tasks projects fold (height tween)', ['task-projects-toggle'])
   await click('rail-usage'); await sleep(2500)
   await toggle('usage-group (unequal widths)', ['usage-group-model', 'usage-group-provider'])
   await click('rail-settings'); await sleep(1500)
