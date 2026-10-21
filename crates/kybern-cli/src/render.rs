@@ -219,8 +219,9 @@ pub fn transcript(r: &ThreadsGetResult) {
                     println!("    (error)");
                 }
             }
-            TranscriptEntry::Approval { approval, decision, .. } => {
+            TranscriptEntry::Approval { approval, decision, auto, .. } => {
                 let d = match decision {
+                    _ if *auto => "allowed by Full access",
                     Some(ApprovalDecision::Submit { .. }) => "answered",
                     Some(ApprovalDecision::AllowOnce) => "allowed",
                     Some(ApprovalDecision::AllowAlways) => "always allowed",
