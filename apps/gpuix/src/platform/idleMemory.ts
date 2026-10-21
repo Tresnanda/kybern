@@ -3,16 +3,17 @@
 // the native renderer drops what its next frame can rebuild (`releaseIdleMemory`:
 // the window-sized path target, cached instance buffers, backdrop scratch, the
 // private small-allocation heap) and the JS heap is collected and shrunk so its
-// allocator returns the freed pages. Coming back costs at most one path-target
-// allocation on the next frame that draws paths; glyph and image atlases,
-// caches and mounted content are untouched, so reopening is not slower.
+// allocator returns the freed pages. A quick switch to another app keeps
+// everything warm. Glyph and image atlases, caches and mounted content stay;
+// the cost of coming back is recompiling the JS that `Bun.shrink` discarded
+// (about 15 ms on the first long-thread open, `perf/ramfix/README.md`).
 // Once per background period: becoming key and visible again re-arms it.
 // Driven by window-state events (`native/windowState.ts`); no timer runs while
 // the window stays in the foreground.
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 import { hasWindowStateEvents, onWindowStateChange } from '../native/windowState.ts'
 
-export const BACKGROUND_RELEASE_MS = 5000
+export const BACKGROUND_RELEASE_MS = 60_000
 
 type Releasable = { releaseIdleMemory?: (options?: { queue?: boolean }) => { gpuBytes?: number } | null }
 /** Also replace the Metal command queue. Measured no effect on the driver's
@@ -28,7 +29,7 @@ export function releaseIdleMemory(renderer: object) {
     gpuBytes = (renderer as Releasable).releaseIdleMemory?.({ queue: RECREATE_QUEUE })?.gpuBytes ?? 0
   } catch { /* An addon without the release keeps its memory. */ }
   Bun.gc(true)
-  ;(Bun as { shrink?: () => void }).shrink?.()
+  if (process.env.KYBERN_IDLE_SHRINK !== '0') (Bun as { shrink?: () => void }).shrink?.()
   const ms = performance.now() - started
   log(`released gpu=${gpuBytes} in ${ms.toFixed(1)} ms`)
   return { gpuBytes, ms }
