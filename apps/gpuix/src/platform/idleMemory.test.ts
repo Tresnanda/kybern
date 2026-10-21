@@ -28,7 +28,7 @@ test('window-state events: none without the callback; one install, acknowledged 
   expect(order.at(-1)).toBe('ack')
 })
 
-test('release asks the renderer, then collects; an old addon is tolerated', () => {
+test('release asks the renderer; an old addon is tolerated', () => {
   let calls = 0
   expect(releaseIdleMemory({ releaseIdleMemory: () => { calls++; return { gpuBytes: 7 } } }).gpuBytes).toBe(7)
   expect(calls).toBe(1)

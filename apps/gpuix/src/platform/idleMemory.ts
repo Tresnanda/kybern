@@ -2,11 +2,13 @@
 // key (another app is in front) or has been hidden for BACKGROUND_RELEASE_MS,
 // the native renderer drops what its next frame can rebuild (`releaseIdleMemory`:
 // the window-sized path target, cached instance buffers, backdrop scratch, the
-// private small-allocation heap) and the JS heap is collected. A quick switch to
-// another app keeps everything warm. Glyph and image atlases, caches, mounted
-// content and compiled JS stay, so reopening is not slower. `Bun.shrink` would
-// return the freed JS pages sooner but discards compiled code, which slowed the
-// next long-thread and code-file opens (`perf/ramfix/README.md`); it is opt-in.
+// private small-allocation heap). A quick switch to another app keeps
+// everything warm. Glyph and image atlases, caches, mounted content and the JS
+// heap stay, so reopening is not slower. A full GC (`KYBERN_IDLE_GC=1`) or
+// `Bun.shrink` (`KYBERN_IDLE_SHRINK=1`) returns JS pages sooner but discards
+// compiled code, which slowed the next long-thread and code-file opens; JSC
+// returns a comparable amount by itself within two idle minutes
+// (`perf/ramfix/README.md`).
 // Once per background period: becoming key and visible again re-arms it.
 // Driven by window-state events (`native/windowState.ts`); no timer runs while
 // the window stays in the foreground.
@@ -28,8 +30,9 @@ export function releaseIdleMemory(renderer: object) {
   try {
     gpuBytes = (renderer as Releasable).releaseIdleMemory?.({ queue: RECREATE_QUEUE })?.gpuBytes ?? 0
   } catch { /* An addon without the release keeps its memory. */ }
-  Bun.gc(true)
-  if (process.env.KYBERN_IDLE_SHRINK === '1') (Bun as { shrink?: () => void }).shrink?.()
+  const shrink = process.env.KYBERN_IDLE_SHRINK === '1'
+  if (shrink || process.env.KYBERN_IDLE_GC === '1') Bun.gc(true)
+  if (shrink) (Bun as { shrink?: () => void }).shrink?.()
   const ms = performance.now() - started
   log(`released gpu=${gpuBytes} in ${ms.toFixed(1)} ms`)
   return { gpuBytes, ms }
