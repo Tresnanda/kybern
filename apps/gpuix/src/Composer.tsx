@@ -995,6 +995,9 @@ export function Attachments({ items, uploading, onRemove, onPreviewClose }: { it
     return box ? { rect: { x: box.x + 1, y: box.y + 1, width: box.width - 2, height: box.height - 2 }, radius: 11, fit: 'cover' } : null
   }
   const open = expanded ? items.find(a => a.id === expanded.id) : undefined
+  // The previewed attachment left (a send cleared the tray, the draft switched): forget it, or its tile would stay hidden
+  // and the preview reopen from a stale rect if the same attachment comes back.
+  useEffect(() => { if (expanded && !open) setExpanded(null) }, [expanded, open])
   // GPUIX delivers a click to the × and to the tile under it, so a click on a tile's × never opens the preview. Decided by
   // where the click is, not by a flag from the press: a press on the × released elsewhere has no click to clear one, and
   // the flag swallowed the next click on that tile.
