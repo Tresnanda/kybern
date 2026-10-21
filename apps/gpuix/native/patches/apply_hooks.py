@@ -574,6 +574,7 @@ exec((Path(__file__).parent / "large_alloc_hooks.py").read_text())
 exec((Path(__file__).parent / "code_memory_hooks.py").read_text())
 exec((Path(__file__).parent / "code_small_hooks.py").read_text())
 exec((Path(__file__).parent / "link_hover_hooks.py").read_text())
+exec((Path(__file__).parent / "paint_clip_hooks.py").read_text())
 
 for path, text in pending.items():
     (src / path).write_text(text)

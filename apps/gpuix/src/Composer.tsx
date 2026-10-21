@@ -44,7 +44,7 @@ import { MatrixLoader } from './MatrixLoader.tsx'
 import { Spinner } from './kit/Spinner.tsx'
 import { getClient, setThreadOpen, usePaneCompact, focusPane, getFocusedPaneId, usePaneAccess, getPane, selectPaneThread, setPane, set, useApp } from './state.ts'
 import { FONT_UI } from './theme.ts'
-import { ink, Label, useTheme } from './ui.tsx'
+import { ink, Label, REDUCED_MOTION, useTheme } from './ui.tsx'
 import { addWindowKeyHandler } from './nav/keys.ts'
 import { keyboardAnswer } from './requests/Panel.tsx'
 import { isUserInput, connectorApproval } from '../../../packages/kybern-client/src/userInput.ts'
@@ -62,10 +62,10 @@ import { Rise } from './motion/kit.tsx'
 import { Presence } from './motion/Presence.tsx'
 import { DropHighlight } from './motion/DropHighlight.tsx'
 import { useRequestPanelHeight } from './transcript/store.ts'
-import { AttachmentLightbox } from './composer/Lightbox.tsx'
+import { ImageViewer, type MorphSource } from './motion/ImageMorph.tsx'
+import { PATCHED_NATIVE } from './native/local-build.ts'
 import { usePendingSends } from './composer/pending.ts'
 
-type TileRect = { x: number; y: number; width: number; height: number }
 import { hoverPressTransform } from './motion/press.ts'
 import {
   createThread,
@@ -984,14 +984,15 @@ function RunningControls({
 export function Attachments({ items, uploading, onRemove, onPreviewClose }: { items: Attachment[]; uploading: number; onRemove: (a: Attachment) => void; onPreviewClose?: () => void }) {
   const t = useTheme()
   const renderer = useGpuixRequired()
-  // A clicked image tile expands into the lightbox, zooming out of the tile's rect (`composer/Lightbox.tsx`).
+  // A clicked image tile morphs into the shared preview out of the tile's rect (`motion/ImageMorph.tsx`); the tile hides while its
+  // image is away.
   const tiles = useRef(new Map<string, PublicInstance>())
-  const [expanded, setExpanded] = useState<{ id: string; from: TileRect | null } | null>(null)
-  const tileRect = (id: string): TileRect | null => {
+  const [expanded, setExpanded] = useState<{ id: string; from: MorphSource | null } | null>(null)
+  const tileSource = (id: string): MorphSource | null => {
     const node = tiles.current.get(id)
     const box = node ? renderer.getElementBounds?.(node.id) : null
-    // The image paints inside the tile's 1px border.
-    return box ? { x: box.x + 1, y: box.y + 1, width: box.width - 2, height: box.height - 2 } : null
+    // The image paints inside the tile's 1px border, cropped to fill it, with the inner radius.
+    return box ? { rect: { x: box.x + 1, y: box.y + 1, width: box.width - 2, height: box.height - 2 }, radius: 11, fit: 'cover' } : null
   }
   const open = expanded ? items.find(a => a.id === expanded.id) : undefined
   // GPUIX delivers a click to the × and to the tile under it, so a click on a tile's × never opens the preview. Decided by
@@ -1002,7 +1003,8 @@ export function Attachments({ items, uploading, onRemove, onPreviewClose }: { it
     const node = removes.current.get(id), box = node ? renderer.getElementBounds?.(node.id) : null
     return !!box && e.x !== undefined && e.y !== undefined && e.x >= box.x && e.x < box.x + box.width && e.y >= box.y && e.y < box.y + box.height
   }
-  const openPreview = (id: string, from: TileRect | null) => setExpanded({ id, from })
+  const openPreview = (id: string, from: MorphSource | null) => setExpanded({ id, from })
+  const away = expanded?.from && PATCHED_NATIVE && !REDUCED_MOTION ? expanded.id : null
   const elevated = t.v('--color-background-elevated-secondary')
   // Only the ✕ removal leaves with an exit; sending clears the tray at once.
   const removed = useRef(new Set<string>())
@@ -1022,11 +1024,11 @@ export function Attachments({ items, uploading, onRemove, onPreviewClose }: { it
               role="button"
               tabIndex={0}
               aria-label={`Preview ${a.name}`}
-              onClick={(e: { x?: number; y?: number }) => { if (!onRemoveButton(a.id, e)) openPreview(a.id, tileRect(a.id)) }}
+              onClick={(e: { x?: number; y?: number }) => { if (!onRemoveButton(a.id, e)) openPreview(a.id, tileSource(a.id)) }}
               onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') openPreview(a.id, null) }}
               style={{ position: 'relative', width: 64, height: 64, flexShrink: 0, borderRadius: 12, borderWidth: 1, borderColor: t.borderLight, backgroundColor: elevated, overflow: 'hidden', cursor: 'pointer' }}
             >
-              <img src={a.path} objectFit="cover" style={{ width: 62, height: 62, borderRadius: 11, pointerEvents: 'none' }} />
+              <img src={a.path} objectFit="cover" style={{ width: 62, height: 62, borderRadius: 11, pointerEvents: 'none', opacity: away === a.id ? 0 : 1 }} />
               <div style={{ position: 'absolute', left: 4, bottom: 4, paddingLeft: 4, paddingRight: 4, borderRadius: 6, backgroundColor: 'rgba(0, 0, 0, 0.55)' }}>
                 <Label color="#ffffff" size={10} lineHeight={16} weight={500}>{`@${a.label}`}</Label>
               </div>
@@ -1080,7 +1082,7 @@ export function Attachments({ items, uploading, onRemove, onPreviewClose }: { it
           </Label>
         </div>
       )}
-      {open && expanded && <AttachmentLightbox key={open.id} source={open.path} label={open.name} from={expanded.from} tile={() => tileRect(open.id)} onClose={() => { setExpanded(null); onPreviewClose?.() }} />}
+      {open && expanded && <ImageViewer key={open.id} testId="attachment-lightbox" src={open.path} label={open.name} from={expanded.from} source={() => tileSource(open.id)} onClose={() => { setExpanded(null); onPreviewClose?.() }} />}
     </div>
   )
 }

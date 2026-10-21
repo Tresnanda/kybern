@@ -12,6 +12,8 @@ export const EASE = {
   out: [0.23, 1, 0.32, 1],
   inOut: [0.77, 0, 0.175, 1],
   drawer: [0.32, 0.72, 0, 1],
+  /** A critically damped spring (response .4 s, damping 1) over `slow`: the shared-element image morph (`ImageMorph.tsx`). */
+  morph: [0.2, 0.15, 0.25, 1],
   bounce: [0.34, 1.36, 0.64, 1],
   bounceStrong: [0.34, 3.85, 0.64, 1],
   linear: [0, 0, 1, 1],

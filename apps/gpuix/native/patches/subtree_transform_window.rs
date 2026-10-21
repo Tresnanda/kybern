@@ -24,10 +24,27 @@ pub struct SubtreeTransformValue {
     pub translate_y: f32,
     pub opacity: f32,
     pub blur: f32,
+    /// A rounded clip over the subtree (an image morphing out of a cropped thumbnail): the host's layout box inset
+    /// by `clip` (top, right, bottom, left; logical pixels, before the transform), mapped through the scope, with
+    /// corners of `clip_radius` logical pixels on screen whatever the scale. Negative `clip_radius`: no clip.
+    pub clip: [f32; 4],
+    pub clip_radius: f32,
 }
 impl Default for SubtreeTransformValue {
     fn default() -> Self {
-        Self { scale: 1.0, scale_x: 1.0, scale_y: 1.0, shadow_opacity: 1.0, rotate: 0.0, translate_x: 0.0, translate_y: 0.0, opacity: 1.0, blur: 0.0 }
+        Self {
+            scale: 1.0,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            shadow_opacity: 1.0,
+            rotate: 0.0,
+            translate_x: 0.0,
+            translate_y: 0.0,
+            opacity: 1.0,
+            blur: 0.0,
+            clip: [0.0; 4],
+            clip_radius: -1.0,
+        }
     }
 }
 impl SubtreeTransformValue {
@@ -108,6 +125,8 @@ impl Affine {
 #[derive(Clone, Debug)]
 pub struct SubtreeTransformContext {
     scopes: Vec<(u64, Point<Pixels>, SubtreeTransformValue)>,
+    /// Each scope's host layout box (its `clip` is inset from it).
+    boxes: Vec<Bounds<Pixels>>,
     outer: ContentMask<Pixels>,
     masks: Vec<(Bounds<Pixels>, Option<crate::RoundedClip>, usize)>,
     matrix: Affine,
@@ -120,6 +139,7 @@ pub struct SubtreeTransformContext {
 impl SubtreeTransformContext {
     fn build(
         scopes: Vec<(u64, Point<Pixels>, SubtreeTransformValue)>,
+        boxes: Vec<Bounds<Pixels>>,
         outer: ContentMask<Pixels>,
         masks: Vec<(Bounds<Pixels>, Option<crate::RoundedClip>, usize)>,
         scale_factor: f32,
@@ -134,6 +154,25 @@ impl SubtreeTransformContext {
         // The mask at the outermost scope stays put; masks established inside follow the
         // scopes that were active when they were pushed.
         let mut mask = outer.clone();
+        // A scope's own clip, in its host box mapped through every scope up to and including it; its corners are
+        // given on screen, so a thumbnail's radius holds while the image scales up.
+        for (depth, ((_, _, value), host)) in scopes.iter().zip(&boxes).enumerate() {
+            if value.clip_radius < 0.0 {
+                continue;
+            }
+            let [top, right, bottom, left] = value.clip;
+            let (w, h) = ((host.size.width.as_f32() - left - right).max(0.0), (host.size.height.as_f32() - top - bottom).max(0.0));
+            let (rx, ry, rw, rh) = compose(depth + 1).rect(host.origin.x.as_f32() + left, host.origin.y.as_f32() + top, w, h);
+            let visual = Bounds::new(point(px(rx), px(ry)), size(px(rw), px(rh)));
+            let r = value.clip_radius.min(rw.min(rh) / 2.0);
+            if r > 0.0 {
+                let (id, generation) = pool.intern(visual, Corners::all(px(r)), mask.clone());
+                pool.sync_node(scene, id, scale_factor);
+                mask.rounded_clip = id;
+                mask.clip_generation = generation;
+            }
+            mask.bounds = mask.bounds.intersect(&visual);
+        }
         for (bounds, rounded, depth) in &masks {
             let m = compose(*depth);
             let (x, y, w, h) = m.envelope(bounds.origin.x.as_f32(), bounds.origin.y.as_f32(), bounds.size.width.as_f32(), bounds.size.height.as_f32());
@@ -154,7 +193,7 @@ impl SubtreeTransformContext {
             }
             mask.bounds = mask.bounds.intersect(&visual);
         }
-        Self { scopes, outer, masks, matrix, opacity, shadow_opacity, blur, scale_factor, visual_mask: mask }
+        Self { scopes, boxes, outer, masks, matrix, opacity, shadow_opacity, blur, scale_factor, visual_mask: mask }
     }
     /// A replacement when any of `values` changes one of this context's scopes.
     fn updated(
@@ -167,7 +206,7 @@ impl SubtreeTransformContext {
             return None;
         }
         let scopes = self.scopes.iter().map(|(id, origin, old)| (*id, *origin, values.get(id).copied().unwrap_or(*old))).collect();
-        Some(Self::build(scopes, self.outer.clone(), self.masks.clone(), self.scale_factor, pool, scene))
+        Some(Self::build(scopes, self.boxes.clone(), self.outer.clone(), self.masks.clone(), self.scale_factor, pool, scene))
     }
     fn contains(&self, id: u64) -> bool {
         self.scopes.iter().any(|(scope, _, _)| *scope == id)
@@ -180,7 +219,7 @@ impl SubtreeTransformContext {
 
 #[derive(Default)]
 struct SubtreeTransformState {
-    scopes: Vec<(u64, Point<Pixels>, SubtreeTransformValue, ContentMask<Pixels>)>,
+    scopes: Vec<(u64, Point<Pixels>, SubtreeTransformValue, ContentMask<Pixels>, Bounds<Pixels>)>,
     masks: Vec<Option<(Bounds<Pixels>, Option<crate::RoundedClip>, usize)>>,
     context: Option<std::sync::Arc<SubtreeTransformContext>>,
     a11y: std::collections::HashMap<accesskit::NodeId, (Bounds<Pixels>, std::sync::Arc<SubtreeTransformContext>)>,
@@ -189,11 +228,19 @@ struct SubtreeTransformState {
 impl Window {
     /// Paint `f` inside a transform scope about `origin` (logical window coordinates of the
     /// untransformed subtree). Layout is untouched. `id` addresses the scope in
-    /// `transform_subtrees`. Use it in both prepaint (hitboxes) and paint.
-    pub fn with_subtree_transform<R>(&mut self, id: u64, origin: Point<Pixels>, value: SubtreeTransformValue, f: impl FnOnce(&mut Self) -> R) -> R {
+    /// `transform_subtrees`; `bounds` is the host's layout box (`value.clip` insets it). Use it in both
+    /// prepaint (hitboxes) and paint.
+    pub fn with_subtree_transform<R>(
+        &mut self,
+        id: u64,
+        origin: Point<Pixels>,
+        bounds: Bounds<Pixels>,
+        value: SubtreeTransformValue,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
         let outer = self.content_mask();
         self.next_frame.scene.transform_scopes.insert(id);
-        self.subtree_transform.scopes.push((id, origin, value, outer));
+        self.subtree_transform.scopes.push((id, origin, value, outer, bounds));
         self.sync_subtree_transform();
         let result = f(self);
         self.subtree_transform.scopes.pop();
@@ -204,11 +251,13 @@ impl Window {
         let scale_factor = self.scale_factor();
         let state = &self.subtree_transform;
         let context = (!state.scopes.is_empty()).then(|| {
-            let scopes = state.scopes.iter().map(|(id, origin, value, _)| (*id, *origin, *value)).collect();
+            let scopes = state.scopes.iter().map(|(id, origin, value, _, _)| (*id, *origin, *value)).collect();
+            let boxes = state.scopes.iter().map(|(_, _, _, _, bounds)| *bounds).collect();
             let masks = state.masks.iter().flatten().filter(|(_, _, depth)| *depth > 0).cloned().collect();
             let outer = state.scopes[0].3.clone();
             std::sync::Arc::new(SubtreeTransformContext::build(
                 scopes,
+                boxes,
                 outer,
                 masks,
                 scale_factor,
