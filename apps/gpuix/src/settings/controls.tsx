@@ -91,21 +91,30 @@ export function NumberField({ value, onCommit, label, unit = '', min = 0, max = 
 }
 
 /**
- * The settings sections that rise in when a pointer switches tab (`settings-section-in`: 250 ms from 6 px). `SettingsScreen` provides it
- * for the tab it just opened; only the first section of the tab (with the heading) plays it, so a page never blurs more than two blocks.
+ * The settings blocks that rise in when a pointer switches tab (`settings-section-in`: 250 ms from 6 px, the whole section list like the
+ * desktop). `SettingsScreen` provides it for the tab it just opened. The heading and the first block (a `Section` or a custom block such
+ * as Appearance's theme picker) clear a 2 px blur; later blocks rise without one, so a tab never runs more than two blur passes.
  */
 export const SectionEnter = createContext<{ play: boolean; next: () => number } | null>(null)
 
+function blockEnter(index: number): PaintTransformProps | undefined {
+  const rise = enterTransform('section')
+  if (!rise || index === 0 || typeof rise.initial !== 'object' || !rise.animate) return rise
+  const { blur: _initial, ...initial } = rise.initial
+  const { blur: _animate, ...animate } = rise.animate
+  return { ...rise, initial, animate }
+}
+
 export function PageBlock({ children, enter }: { children: ReactNode; enter?: PaintTransformProps }) {
-  return <div paintTransform={enter} style={{ display: 'flex', justifyContent: 'center', width: '100%', paddingLeft: 40, paddingRight: 40 }}><div style={{ display: 'flex', flexDirection: 'column', width: '100%', maxWidth: 680 }}>{children}</div></div>
+  const entry = useContext(SectionEnter)
+  const [index] = useState(() => (entry?.play ? entry.next() : -1))
+  return <div paintTransform={enter ?? (index >= 0 ? blockEnter(index) : undefined)} style={{ display: 'flex', justifyContent: 'center', width: '100%', paddingLeft: 40, paddingRight: 40 }}><div style={{ display: 'flex', flexDirection: 'column', width: '100%', maxWidth: 680 }}>{children}</div></div>
 }
 
 export function Section({ title, children }: { title: string; children: ReactNode }) {
   const t = useTheme()
   const rows = Children.toArray(children)
-  const entry = useContext(SectionEnter)
-  const [first] = useState(() => !!entry?.play && entry.next() === 0)
-  return <PageBlock enter={first ? enterTransform('section') : undefined}><div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 30 }}><Label color={t.text} size={14} lineHeight={19.6} weight={600} style={{ paddingLeft: 2 }}>{title}</Label><div style={{ display: 'flex', flexDirection: 'column', borderWidth: 1, borderColor: t.v('--app-settings-card-border'), borderRadius: 12, backgroundColor: t.v('--app-settings-card-surface'), overflow: 'hidden' }}>{rows.map((row, i) => <div key={i} style={{ borderTopWidth: i ? 1 : 0, borderColor: t.v('--app-settings-card-border') }}>{row}</div>)}</div></div></PageBlock>
+  return <PageBlock><div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 30 }}><Label color={t.text} size={14} lineHeight={19.6} weight={600} style={{ paddingLeft: 2 }}>{title}</Label><div style={{ display: 'flex', flexDirection: 'column', borderWidth: 1, borderColor: t.v('--app-settings-card-border'), borderRadius: 12, backgroundColor: t.v('--app-settings-card-surface'), overflow: 'hidden' }}>{rows.map((row, i) => <div key={i} style={{ borderTopWidth: i ? 1 : 0, borderColor: t.v('--app-settings-card-border') }}>{row}</div>)}</div></div></PageBlock>
 }
 
 export function Row({ title, description, status, children }: { title: string; description?: ReactNode; status?: string; children?: ReactNode }) {
