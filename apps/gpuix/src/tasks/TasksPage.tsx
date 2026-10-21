@@ -27,6 +27,7 @@ import { TaskMenus } from './TaskMenus.tsx'
 import { RunComposer } from './RunComposer.tsx'
 import {
   deleteTasks,
+  dockEscapedJustNow,
   isTaskTyping,
   taskTyping,
   openTask,
@@ -139,6 +140,7 @@ export function TasksPage() {
           return true
         }
         if (key === 'escape') {
+          if (dockEscapedJustNow()) return true
           instant()
           if (s.openId) openTask(null)
           else if (s.selected.size) setTasks({ selected: new Set() })
@@ -233,7 +235,8 @@ export function TasksPage() {
           {s.prefs.showHints && <Hints selecting={selected.length > 0} />}
         </>
       )}
-      <RunDock show={!!s.composer}>{s.composer ? <RunComposer key={s.composer.join(',')} ids={s.composer} /> : null}</RunDock>
+      {/* An open task hosts its own dock (`TaskDock`); the list and board show the batch composer here. */}
+      <RunDock show={!!s.composer && !(task && s.composer.length === 1 && s.composer[0] === task.id)}>{s.composer ? <RunComposer key={s.composer.join(',')} ids={s.composer} /> : null}</RunDock>
     </div>
   )
 }

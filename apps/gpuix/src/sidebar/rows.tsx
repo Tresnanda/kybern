@@ -57,6 +57,8 @@ function useWasRevealed(reveal: boolean) {
 export const INSET = { paddingLeft: 6, paddingRight: 6 } as const
 /** `pr-[4.75rem]`: room for the revealed actions. */
 const ACTIONS_PAD = 76
+/** The project row's trailing room: the 20px New thread button at 6px from the edge, 4px clear of the title. */
+const PROJECT_PAD = 24
 
 export const accent = (t: Theme) => t.v('--sidebar-accent')
 export const accentActive = (t: Theme) => t.v('--sidebar-accent-active')
@@ -269,11 +271,10 @@ export function useAddProject() {
   }
 }
 
-// ---- section label ("Projects", with filter and add on hover) ----
+// ---- section label ("Projects", with filter and add) ----
 
 export const SectionLabel = memo(function SectionLabel() {
   const t = useTheme()
-  const { hover, bind } = useHover()
   const filter = useNav((s) => s.filter)
   const threads = useNav(() => getState().threads)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -282,10 +283,9 @@ export const SectionLabel = memo(function SectionLabel() {
   const filtering = isFiltering(filter)
   const summaryPop = usePopOnChange(filtering)
   const agents = threadAgents(threads, filter)
-  const shown = hover || filtering || menuOpen
   return (
     <div style={{ paddingTop: 10, paddingBottom: 4, ...INSET }}>
-      <div {...bind} style={{ position: 'relative', display: 'flex', alignItems: 'center', height: 28, paddingLeft: 8, paddingRight: 76, gap: 6 }}>
+      <div style={{ position: 'relative', display: 'flex', alignItems: 'center', height: 28, paddingLeft: 8, paddingRight: 76, gap: 6 }}>
         <Label color={muted(t, 0.58)}>Projects</Label>
         {filtering && (
           <>
@@ -295,9 +295,8 @@ export const SectionLabel = memo(function SectionLabel() {
             </Label>
           </>
         )}
-        {/* Mounted for the label's life: the controls leave with a fade when the pointer does (`Reveal`). */}
+        {/* Creation affordances stay on screen (muted, brighter under the pointer): Filter and Add project are not hover reveals. */}
         <div style={{ position: 'absolute', top: 4, right: 6, display: 'flex', alignItems: 'center' }}>
-            <Reveal show={shown} still={filtering}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <Menu
               open={menuOpen}
@@ -336,7 +335,6 @@ export const SectionLabel = memo(function SectionLabel() {
             </Menu>
             <IconButton icon={N.plus} label="Add project" tooltip="Add project" onClick={() => void onAddProject()} testId="add-project" />
             </div>
-            </Reveal>
         </div>
       </div>
     </div>
@@ -444,10 +442,11 @@ export const ProjectHeader = memo(function ProjectHeader({
               {project.name}
             </Label>
             {hasDraft && <DraftMarker />}
-            <PadTween width={hover ? ACTIONS_PAD - 8 : 0} cancelGap={8} />
+            {/* Room for the always-visible New thread button. */}
+            <PadTween width={PROJECT_PAD} cancelGap={8} />
           </div>
           {!open && status && !hover && (
-            <div style={{ display: 'flex', minWidth: 26, justifyContent: 'flex-end', alignItems: 'center', flexShrink: 0 }}>
+            <div style={{ display: 'flex', minWidth: 26, justifyContent: 'flex-end', alignItems: 'center', flexShrink: 0, marginRight: PROJECT_PAD - 2 }}>
               <StatusGlyph status={status} activity={activity} />
             </div>
           )}
@@ -465,9 +464,8 @@ export const ProjectHeader = memo(function ProjectHeader({
           </Reveal>
         </div>
         <div style={{ position: 'absolute', top: 4, right: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Reveal show={hover}>
-            <IconButton icon={N.newThread} label="New thread" tooltip="New thread" onClick={() => newThread(project.id)} testId={`project-new-${project.id}`} />
-          </Reveal>
+          {/* A creation affordance: always on screen, muted until the pointer is on it. */}
+          <IconButton icon={N.newThread} label="New thread" tooltip="New thread" onClick={() => newThread(project.id)} testId={`project-new-${project.id}`} />
         </div>
       </div>
       {menu.at && (

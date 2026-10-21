@@ -19,7 +19,8 @@ import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { Check } from './Glyphs.tsx'
 import { MoreMenu, ProjectMenu, TaskMenus } from './TaskMenus.tsx'
 import { useTaskAutosave } from './autosave.ts'
-import { openTask, taskTyping, setTasks, updateTask } from './store.ts'
+import { TaskDock } from './TaskDock.tsx'
+import { openTask, taskState, taskTyping, setTasks, updateTask } from './store.ts'
 
 
 export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: string[] }) {
@@ -82,10 +83,15 @@ export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: strin
   const gutter = Math.max(24, (main - 620) / 2)
   const padding = { paddingLeft: gutter, paddingRight: gutter, paddingBottom: 0 }
   const k = notesTokens(t)
+  // The floating dock's height: the list ends that far above its own end, so the last row scrolls clear (`--tk-dock-h`).
+  const [dockHeight, setDockHeight] = useState(88)
+  // Whether the open composer holds no draft: a click on the page then tucks it away.
+  const composerEmpty = useRef(true)
   useEffect(() => { setDetailSequence(sequence) }, [sequence.join(',')])
   return (
     <>
       <div style={{ display: 'flex', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+        <div onMouseDown={() => { if (taskState().composer && composerEmpty.current) setTasks({ composer: null }) }} style={{ display: 'flex', flexGrow: 1, minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
         <virtual-list testId="task-detail" style={{ flexGrow: 1, minWidth: 0, minHeight: 0 }}>
           <div key="content" style={{ ...padding, paddingTop: 48, display: 'flex', flexDirection: 'column', gap: 14 }}>
             <TitleField value={edit.title} saved={task.title} onChange={edit.editTitle} onCommit={() => void edit.flush()} onEnter={() => setEditing(true)} />
@@ -152,18 +158,13 @@ export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: strin
               </div>
             </div>
           ))}
-          <div key="dock-room" style={{ height: 140 }} />
+          <div key="dock-room" style={{ height: dockHeight + 24 }} />
         </virtual-list>
+        </div>
         {sidePanel > 0 && <div style={{ display: 'flex', flexDirection: 'column', width: sidePanel, flexShrink: 0, padding: 20, borderLeftWidth: 1, borderColor: k.hair }}>
           {[['Status', <TaskMenus key="s" ids={[task.id]} property="status" value />], ['Priority', <TaskMenus key="p" ids={[task.id]} property="priority" value />], ['Project', <ProjectMenu key="j" task={task} value />]].map(([label, node]) => <div key={label as string} style={{ display: 'flex', alignItems: 'center', minHeight: 34 }}><div style={{ width: 76, flexShrink: 0 }}><Label color={k.fg3} size={12} lineHeight={18}>{label as string}</Label></div>{node}</div>)}
         </div>}
-        <div style={{ position: 'absolute', left: 16, right: sidePanel + 16, bottom: 16, display: 'flex', justifyContent: 'center' }}>
-          <div testId="task-send-open" onClick={() => setTasks({ composer: [task.id] })} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', maxWidth: 652, height: 44, paddingLeft: 12, paddingRight: 12, borderRadius: 12, backgroundColor: ink(t, t.variant === 'dark' ? 0.05 : 0.04), cursor: 'pointer', hover: { backgroundColor: ink(t, 0.07) } }}>
-            <ProviderMark kind="claude-code" size={14} />
-            <Label color={k.fg3} size={13} lineHeight={19.5} style={{ flexGrow: 1 }}>{`Tell an agent what to do with ${task.key}…`}</Label>
-            <Label color={k.fg4} size={12}>⌘↵</Label>
-          </div>
-        </div>
+        <TaskDock task={task} right={sidePanel} onHeight={setDockHeight} emptyRef={composerEmpty} />
       </div>
     </>
   )

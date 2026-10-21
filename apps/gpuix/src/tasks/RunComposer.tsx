@@ -10,16 +10,16 @@ import type {
 import { ComposerView } from '../Composer.tsx'
 import { ensureLoaded, loadProviders, useComposer } from '../composer/store.ts'
 import { openThread } from '../nav/history.ts'
-import { Button, Segmented, Select } from '../settings/controls.tsx'
+import { Segmented } from '../settings/controls.tsx'
 import { getClient, useApp } from '../state.ts'
 import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
-import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { SwapOnChange } from '../motion/kit.tsx'
-import { Presence } from '../motion/Presence.tsx'
+import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { BranchTrayChip, parentPath, ProjectPickChip, TrayFrame, WorkspaceTrayChip } from '../composer/Tray.tsx'
+import { ContextChip, runState, TrayButton, TrayHide } from './DockParts.tsx'
 import { DURATION, EASE } from '../motion/tokens.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
-import { setTasks, taskState, upsert, useTasks, updateTask, openTask } from './store.ts'
+import { setTasks, taskState, upsert, useTasks, updateTask } from './store.ts'
 
 interface SendPrefs {
   provider?: ProviderInstance
@@ -32,7 +32,7 @@ interface SendPrefs {
 const SEND_KEY = 'kybern.tasks.send:local'
 
 /** Uses the shared composer, so attachments, completions, model/account and permission pickers stay identical. */
-export function RunComposer({ ids }: { ids: string[] }) {
+export function RunComposer({ ids, onEmptyChange }: { ids: string[]; onEmptyChange?: (empty: boolean) => void }) {
   const t = useTheme()
   const tasks = useTasks((s) => s.tasks)
   const picked = ids.flatMap((id) => (tasks[id] ? [tasks[id]!] : []))
@@ -142,112 +142,90 @@ export function RunComposer({ ids }: { ids: string[] }) {
     })
     setTasks({ composer: null })
   }
-  // `TaskRunDock` panels: switching between a new run and a follow-up fades the run options in over 180 ms and out over 100 ms.
+  // `TaskRunDock` panels: switching between a new run and a follow-up fades the tray's contents in over 180 ms and out over 100 ms.
   const switched = useRef(false)
   const wasFollowup = useRef(followup)
   if (wasFollowup.current !== followup) { wasFollowup.current = followup; switched.current = true }
   const panelIn = switched.current && PATCHED_NATIVE ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: REDUCED_MOTION ? DURATION.quick : 0.18, ease: [...EASE.out] as [number, number, number, number] } } : undefined
+  const hide = <TrayHide testId="task-composer-close" onClick={() => setTasks({ composer: null })} />
+  const pendingText = !followup ? single?.pending_followup?.trim() : ''
+  const lineStyle = { display: 'flex', alignItems: 'center', gap: 6, width: '93.33%', minHeight: 24, paddingBottom: 6 } as const
   return (
-    <div
-      testId="task-run-composer"
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        padding: 16,
-        gap: 10,
-        borderTopWidth: 1,
-        borderColor: t.borderLight,
-        flexShrink: 0,
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <div style={{ display: 'flex', flexGrow: 1, minWidth: 0 }}>
-          <SwapOnChange active={followup ? 'followup' : single ? 'single' : 'batch'} style={{ justifyContent: 'flex-start' }}>
-            <Label color={t.text} size={13}>
-              {followup ? `Follow up on ${single!.key}` : single ? `Send ${single.key} to an agent` : `Send ${picked.length} tasks to an agent`}
-            </Label>
-          </SwapOnChange>
-        </div>
-        {single && run && !live && (
-          <Button onClick={() => setKind(kind === 'run' ? 'followup' : 'run')}>{kind === 'run' ? 'Follow up' : 'New run'}</Button>
-        )}
-        <Button testId="task-composer-close" onClick={() => setTasks({ composer: null })}>
-          Hide
-        </Button>
-      </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {picked.map((task) => <Button key={task.id} testId={`task-run-reference-${task.id}`} onClick={() => openTask(task.id)}>{`${task.key} · ${task.title}`}</Button>)}
-      </div>
-      {!followup && single?.pending_followup?.trim() && <div testId="task-pending-followup" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Label color={t.textSecondary} size={12} truncate style={{ flexGrow: 1 }}>{`Next run includes: ${single.pending_followup.trim()}`}</Label>
-        <Button onClick={() => void updateTask(single.id, { pending_followup: '' }).catch(() => {})}>Clear</Button>
-      </div>}
-      <Presence show={!followup} enter={panelIn} exit={{ to: { opacity: 0 }, duration: 0.1, ease: EASE.out }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-          {needsProject && (
-            <Select
-              testId="task-run-project"
-              label="Run in"
-              value={projectId}
-              onChange={(id) => {
-                setProjectId(id)
-                setChoices(load<Record<string, SendPrefs>>(SEND_KEY, {})[id] ?? {})
-              }}
-              options={projects.map((p) => ({ value: p.id, label: p.name }))}
-            />
-          )}
-          {project?.is_git && (
-            <>
-              <Select
-                testId="task-run-workspace"
-                label="Workspace"
-                value={worktree ? 'worktree' : 'checkout'}
-                onChange={(value) => setChoices({ ...choices, useWorktree: value === 'worktree' })}
-                options={[
-                  { value: 'worktree', label: 'New worktree' },
-                  { value: 'checkout', label: 'Local checkout' },
-                ]}
-              />
-              {worktree && (
-                <Select
-                  label="Base branch"
-                  value={choices.baseBranch ?? ''}
-                  onChange={(value) => setChoices({ ...choices, baseBranch: value || null })}
-                  options={[
-                    { value: '', label: branches?.current ?? 'Current branch' },
-                    ...(branches?.branches ?? []).map((branch) => ({ value: branch.name, label: branch.name })),
-                  ]}
-                />
-              )}
-            </>
-          )}
-          {!single && (
-            <Segmented
-              label="Run tasks"
-              value={batchMode}
-              onChange={(value) => setBatchMode(value as TaskBatchMode)}
-              options={[
-                { value: 'separate', label: 'Separate runs' },
-                { value: 'combined', label: 'One run' },
-              ]}
-              width={100}
-            />
-          )}
-        </div>
-      </Presence>
-      {!followup && notes.length > 0 && (
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Label color={t.textSecondary} size={12}>{`${notes.length} linked ${notes.length === 1 ? 'note' : 'notes'} included`}</Label>
-          <Button onClick={() => setNotes([])}>Remove notes</Button>
-        </div>
-      )}
-      {incompatible && !followup && (
-        <Label color={t.red} size={12}>
-          Choose separate runs for tasks in different projects.
-        </Label>
-      )}
+    <div testId="task-run-composer" style={{ display: 'flex', flexDirection: 'column', width: '100%', maxWidth: 660, flexShrink: 0 }}>
       <ComposerView
         key={followup ? 'followup' : 'run'}
+        onEmptyChange={onEmptyChange}
+        above={
+          <>
+            <div style={{ display: 'flex', flexDirection: 'column', width: '93.33%' }}>
+              {pendingText && (
+                <div testId="task-pending-followup" style={lineStyle}>
+                  <Label color={t.textTertiary} size={12} truncate style={{ flexGrow: 1 }}>{`Next run includes: ${pendingText}`}</Label>
+                  <TrayButton label="Clear" onClick={() => void updateTask(single!.id, { pending_followup: '' }).catch(() => {})} />
+                </div>
+              )}
+              {!followup && notes.length > 0 && (
+                <div style={lineStyle}>
+                  <Label color={t.textTertiary} size={12} style={{ flexGrow: 1 }}>{`${notes.length} linked ${notes.length === 1 ? 'note' : 'notes'} included`}</Label>
+                  <TrayButton label="Remove notes" onClick={() => setNotes([])} />
+                </div>
+              )}
+              {!followup && !single && (
+                <div style={lineStyle}>
+                  <Segmented
+                    label="Run tasks"
+                    value={batchMode}
+                    onChange={(value) => setBatchMode(value as TaskBatchMode)}
+                    options={[
+                      { value: 'separate', label: 'Separate runs' },
+                      { value: 'combined', label: 'One run' },
+                    ]}
+                    width={100}
+                  />
+                </div>
+              )}
+              {incompatible && !followup && (
+                <div style={lineStyle}>
+                  <Label color={t.red} size={12}>Choose separate runs for tasks in different projects.</Label>
+                </div>
+              )}
+            </div>
+            <TrayFrame testId="task-dock-tray">
+              <div key={followup ? 'followup' : 'run'} paintTransform={panelIn} style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, minWidth: 0 }}>
+                {single ? <ContextChip task={single} /> : <Label color={t.textSecondary} size={13} lineHeight={18} style={{ paddingLeft: 8, paddingRight: 8, flexShrink: 0 }}>{`${picked.length} tasks`}</Label>}
+                {followup && run && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 8, paddingRight: 8, flexShrink: 1, minWidth: 0 }}>
+                    <ProviderMark kind={run.provider.kind} size={13} />
+                    <Label color={t.textSecondary} size={13} lineHeight={18} truncate>{`Run ${run.number} · ${runState(run, single!)}`}</Label>
+                  </div>
+                )}
+                {!followup && needsProject && <ProjectPickChip projectId={projectId || null} projects={projects} onPick={(id) => { setProjectId(id); setChoices(load<Record<string, SendPrefs>>(SEND_KEY, {})[id] ?? {}) }} />}
+                {!followup && project?.is_git && (
+                  <WorkspaceTrayChip useWorktree={worktree} isGit checkoutHint={parentPath(project.path)} onChange={(useWorktree) => setChoices({ ...choices, useWorktree })} />
+                )}
+                {!followup && project?.is_git && worktree && (
+                  <BranchTrayChip
+                    branches={branches}
+                    baseBranch={choices.baseBranch}
+                    useWorktree
+                    onOpen={() => {}}
+                    onBranch={(baseBranch) => setChoices({ ...choices, baseBranch })}
+                    onWorktree={(useWorktree) => setChoices({ ...choices, useWorktree })}
+                  />
+                )}
+                <div style={{ flexGrow: 1 }} />
+                {single && run && !live && (
+                  <TrayButton
+                    label={kind === 'run' ? 'Follow up' : 'New run'}
+                    tip={kind === 'run' ? 'Follow up on the last run instead' : 'Start a new run instead of following up'}
+                    onClick={() => setKind(kind === 'run' ? 'followup' : 'run')}
+                  />
+                )}
+                {hide}
+              </div>
+            </TrayFrame>
+          </>
+        }
         draftKey={single ? `${followup ? 'task-followup' : 'task'}:${single.id}` : `task-batch:${ids.join(',')}`}
         projectId={projectId || undefined}
         currentThreadId={followup ? run?.thread_id : undefined}

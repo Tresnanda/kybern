@@ -363,6 +363,8 @@ export interface ComposerViewProps {
   catalogLoading: boolean
   onReloadModels: (force: boolean) => Promise<void>
   above?: ReactNode
+  /** The draft (text and attachments) became empty or non-empty; the task dock collapses an empty one when the page is clicked. */
+  onEmptyChange?: (empty: boolean) => void
 }
 
 const MIN_ROWS = 2
@@ -430,6 +432,7 @@ export function ComposerView(input: ComposerViewProps) {
   }, [connected])
 
   const empty = text.trim().length === 0 && attachments.length === 0
+  useEffect(() => { props.onEmptyChange?.(empty) }, [empty])
   const permissionUnsupported = provider?.kind !== 'cursor' && !!providers.find(p => p.kind === provider?.kind && !p.supported_permission_modes.includes(mode))
   const disabledReason = !connected ? 'Reconnect to send a message.' : props.readOnly ? 'This conversation is read-only.' : props.sendDisabled ? props.sendDisabledReason ?? 'Sending is unavailable.' : permissionUnsupported ? 'Choose a permission mode supported by this agent.' : sending ? 'Sending…' : uploading > 0 ? 'Wait for attachments to finish uploading.' : empty ? 'Write a message or attach a file.' : null
   const canSend = !disabledReason
