@@ -15,8 +15,9 @@ import { hasWindowStateEvents, onWindowStateChange } from '../native/windowState
 export const BACKGROUND_RELEASE_MS = 5000
 
 type Releasable = { releaseIdleMemory?: (options?: { queue?: boolean }) => { gpuBytes?: number } | null }
-/** Also replace the Metal command queue, whose driver-side pools keep their high-water size. */
-const RECREATE_QUEUE = process.env.KYBERN_IDLE_QUEUE !== '0'
+/** Also replace the Metal command queue. Measured no effect on the driver's
+ *  retained memory (perf/ramfix/README.md), so only an experiment opts in. */
+const RECREATE_QUEUE = process.env.KYBERN_IDLE_QUEUE === '1'
 const log = (message: string) => { if (process.env.KYBERN_DEBUG_IDLE_MEMORY) console.log(`[idle-memory] ${message}`) }
 
 /** Release now; returns the native GPU bytes released and the time it took. */
