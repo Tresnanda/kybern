@@ -1,7 +1,7 @@
 // Composer tray + attachment lightbox frame strips (V-strip, V-rm, V-kbd) and their cost (V-cost: island renders and React
 // commits while each tween runs, `--cost 1`, no screenshots). scripts/composer-tray-lab.tsx under a paused automation clock,
 // stepped to each offset, one window screenshot per frame, cropped into one strip per transition.
-//   bun native/ui-lease.ts composer-tray bun scripts/composer-tray-strips.ts [--theme dark|light|both] [--reduced 0|1|both] [--cost 1]
+//   bun native/ui-lease.ts composer-tray bun scripts/composer-tray-strips.ts [--theme dark|light|both] [--reduced 0|1|both] [--cost 1] [--tray-only]
 import '../src/native/local-build.ts'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -15,7 +15,7 @@ const root = arg('--out', '/Users/mymac/projects/ade/previews/composer-tray/stri
 const scratch = { KYBERN_DATA_DIR: '/Users/mymac/projects/ade-gpuix-scratch/composer-tray/lab', KYBERN_CLIENT_CONFIG_DIR: '/Users/mymac/projects/ade-gpuix-scratch/composer-tray/lab-client', KYBERN_URL: '', KYBERN_TOKEN: '', NAPI_RS_NATIVE_LIBRARY_PATH: path.resolve(import.meta.dir, '../native/build/gpuix-native.darwin-arm64.node') }
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 type Crop = { x: number; y: number; w: number; h: number }
-const crops: Record<string, Crop> = { tray: { x: 40, y: 150, w: 736, h: 300 }, tiles: { x: 40, y: 500, w: 400, h: 120 }, lightbox: { x: 0, y: 0, w: 1180, h: 760 } }
+const crops: Record<string, Crop> = { tray: { x: 40, y: 60, w: 736, h: 390 }, tiles: { x: 40, y: 500, w: 400, h: 120 }, lightbox: { x: 0, y: 0, w: 1180, h: 760 } }
 for (const theme of themes) for (const reduced of reduceds) {
   const label = `${theme}-${reduced === '1' ? 'reduced' : 'normal'}`, dir = path.join(root, label)
   mkdirSync(dir, { recursive: true })
@@ -62,6 +62,10 @@ for (const theme of themes) for (const reduced of reduceds) {
     // A follow-up is queued, then sent: the row rises in, then lifts out and closes up.
     await run('queued-add', 'tray', () => key('y'), [0, 40, 80, 125, 190, 250, 400])
     await run('queued-sent', 'tray', () => key('q'), [0, 40, 80, 120, 160, 200, 300])
+    // The last queued row is sent: the Queued section's label leaves with it; the first one queued brings the section back.
+    await run('queued-last-sent', 'tray', () => key('q'), [0, 40, 80, 120, 160, 200, 300])
+    await run('queued-first', 'tray', () => key('y'), [0, 40, 80, 125, 190, 250, 400])
+    if (!process.argv.includes('--tray-only')) {
     // The attachment lightbox: pointer open zooms out of the tile; pointer close returns into it; Escape is instant.
     await run('lightbox-open', 'lightbox', () => click('attachment-image1'), [0, 40, 80, 120, 160, 220, 300, 400])
     await run('lightbox-close', 'lightbox', async () => { await click('attachment-lightbox-close'); await a.mouse.move(off) }, [0, 40, 80, 120, 160, 200, 300])
@@ -71,6 +75,7 @@ for (const theme of themes) for (const reduced of reduceds) {
     await run('lightbox-scrim-close', 'lightbox', async () => { await a.mouse.move({ x: 20, y: 20 }); await a.mouse.down({ x: 20, y: 20 }); await a.mouse.up({ x: 20, y: 20 }) }, [0, 50, 100, 150, 200, 300])
     // The tile's × removes without opening.
     await run('tile-remove', 'tiles', () => click('remove-attachment-image2'), [0, 300])
+    }
     await a.clock.resume()
   } finally { await f.close() }
   if (cost) { writeFileSync(path.join(dir, 'COST.txt'), `Island renders and React commits across each tween, no screenshots, paused clock stepped once (${label}).\n${costs.join('\n')}\n`); console.log(`ok ${label}\n  ${costs.join('\n  ')}`); continue }

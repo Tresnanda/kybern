@@ -130,6 +130,7 @@ export function MatrixLoader({
   gap = 2,
   rounded,
   rgb,
+  whole = false,
 }: {
   variant?: MatrixVariant
   cycle?: number
@@ -140,9 +141,12 @@ export function MatrixLoader({
   rounded?: boolean
   /** Dots in this colour instead of the theme ink (a loader on an ink-filled button). */
   rgb?: readonly [number, number, number]
+  /** Run only while wholly inside its clip: a scroll edge cutting it holds the rest frame. A clipped loop cannot run in Core
+   *  Animation, so in a list that rests with a half row under its edge (the composer tray) it would present at display rate. */
+  whole?: boolean
 }) {
   const t = useTheme()
-  const loop = useLoopRunning(!REDUCED_MOTION)
+  const loop = useLoopRunning(!REDUCED_MOTION, whole)
   const time = useLoaderSnapshot(() => now, loop.visible && !NATIVE_PAINT_ANIMATIONS)
   const isRounded = rounded ?? (variant === 'orbit' || variant === 'pulse')
   const d = delays(variant, cycle)
