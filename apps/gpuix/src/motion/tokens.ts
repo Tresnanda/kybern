@@ -11,13 +11,15 @@ export const EASE = {
   smoothOut: [0.22, 1, 0.36, 1],
   out: [0.23, 1, 0.32, 1],
   inOut: [0.77, 0, 0.175, 1],
+  /** The iOS zoom / drawer curve: fast out of the gate, a long settle. The image morph's curve (`ZOOM`). */
   drawer: [0.32, 0.72, 0, 1],
-  /** A critically damped spring (response .4 s, damping 1) over `slow`: the shared-element image morph (`ImageMorph.tsx`). */
-  morph: [0.2, 0.15, 0.25, 1],
   bounce: [0.34, 1.36, 0.64, 1],
   bounceStrong: [0.34, 3.85, 0.64, 1],
   linear: [0, 0, 1, 1],
 } as const satisfies Record<string, readonly [number, number, number, number]>
+
+/** The image preview (`ImageMorph.tsx`, the unavailable-image dialog): open, the quicker way back, one curve. Under 300 ms. */
+export const ZOOM = { open: 0.26, close: 0.2, ease: EASE.drawer } as const
 
 /** `--distance-*` in px. */
 export const DISTANCE = { micro: 4, small: 6, base: 8, medium: 12 } as const

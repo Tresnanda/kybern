@@ -59,9 +59,9 @@ import { ModelPicker, ModelTriggerLabel } from './composer/ModelPicker.tsx'
 import { PermissionPicker } from './composer/PermissionPicker.tsx'
 import { Leave, Pop, SwapOnChange, useLeavingList } from './composer/motion.tsx'
 import { Rise } from './motion/kit.tsx'
+import { useNativeWindowSize } from './native/layout-hooks.ts'
 import { Presence } from './motion/Presence.tsx'
 import { DropHighlight } from './motion/DropHighlight.tsx'
-import { useRequestPanelHeight } from './transcript/store.ts'
 import { ImageViewer, type MorphSource } from './motion/ImageMorph.tsx'
 import { PATCHED_NATIVE } from './native/local-build.ts'
 import { usePendingSends } from './composer/pending.ts'
@@ -365,10 +365,15 @@ export interface ComposerViewProps {
   above?: ReactNode
 }
 
+const MIN_ROWS = 2
+const LINE_HEIGHT = 19.6
+/** Share of the window height the text field may take (`max-h-[40vh]`). */
+const MAX_FIELD_SHARE = 0.4
+
 export function ComposerView(input: ComposerViewProps) {
   const compact = usePaneCompact()
-  // A panel stacked on the card (the tray, a request): its shadow stops at the card's top edge (`CardShadow`).
-  const stacked = useRequestPanelHeight() > 0
+  // The field stops growing at 40% of the window and scrolls inside beyond that, so a long draft never covers the thread.
+  const maxRows = Math.max(MIN_ROWS, Math.floor((useNativeWindowSize().height * MAX_FIELD_SHARE) / LINE_HEIGHT))
   const pane = usePaneAccess()
   const props = { ...input, draftKey: `${pane.id}:${input.draftKey}`, readOnly: input.readOnly || pane.frozen }
   const measureOverlay = useMeasureComposerOverlay()
@@ -594,8 +599,6 @@ export function ComposerView(input: ComposerViewProps) {
   return (
     <div ref={measureOverlay} testId="composer-overlay" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: 736 }}>
       {props.above}
-      <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', width: '100%' }}>
-      <CardShadow radius={compact ? 14 : COMPOSER_RADIUS} stacked={stacked} />
       <div
         ref={(el) => {
           card.current = el
@@ -649,8 +652,8 @@ export function ComposerView(input: ComposerViewProps) {
               onFocus={() => { if (!pane.frozen) focusPane(pane.id) }}
               value={text}
               readOnly={props.readOnly}
-              minRows={2}
-              maxRows={10}
+              minRows={MIN_ROWS}
+              maxRows={maxRows}
               onClick={readSelection}
               onChange={(e) => {
                 readSelection()
@@ -697,7 +700,7 @@ export function ComposerView(input: ComposerViewProps) {
               }}
               onSubmit={() => { void submit() }}
               theme={{ caret: t.text }}
-              style={{ width: '100%', fontSize: 14, lineHeight: 19.6, color: t.text, fontFamily: FONT_UI, opacity: connected ? 1 : 0.6 }}
+              style={{ width: '100%', fontSize: 14, lineHeight: LINE_HEIGHT, color: t.text, fontFamily: FONT_UI, opacity: connected ? 1 : 0.6 }}
             />
           </div>
           {feedback && !error && <div testId="composer-feedback"><Label color={muted(t, 0.6)} size={12}>{feedback}</Label></div>}
@@ -787,37 +790,6 @@ export function ComposerView(input: ComposerViewProps) {
           </div>
         </FooterRow>
       </div>
-      </div>
-    </div>
-  )
-}
-
-/** Reach of the card's shadow past its edges (blur 24 → three sigma, plus the offset). */
-const SHADOW_REACH = 80
-/**
- * The card's shadow, drawn by a sibling painted under it. While a panel sits on the card (the tray or a request), the part
- * above the card's top edge is clipped: the shell does not shadow itself, and a loader in the panel's lowest row stays in
- * Core Animation (a shadow painted over it kept the window presenting at display rate).
- */
-function CardShadow({ radius, stacked }: { radius: number; stacked: boolean }) {
-  const t = useTheme()
-  const top = stacked ? 0 : -SHADOW_REACH
-  return (
-    <div style={{ position: 'absolute', left: -SHADOW_REACH, right: -SHADOW_REACH, bottom: -SHADOW_REACH, top, overflow: 'hidden', pointerEvents: 'none' }}>
-      <div
-        style={{
-          position: 'absolute',
-          left: SHADOW_REACH,
-          right: SHADOW_REACH,
-          bottom: SHADOW_REACH,
-          top: -top,
-          borderRadius: radius,
-          boxShadow:
-            t.variant === 'dark'
-              ? { offsetX: 0, offsetY: 6, blurRadius: 24, spreadRadius: -10, color: 'rgba(0, 0, 0, 0.30)' }
-              : { offsetX: 0, offsetY: 4, blurRadius: 18, spreadRadius: -6, color: 'rgba(13, 13, 13, 0.07)' },
-        }}
-      />
     </div>
   )
 }

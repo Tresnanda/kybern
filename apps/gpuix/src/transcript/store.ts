@@ -287,23 +287,6 @@ export function loadEarlier(paneId = getFocusedPaneId()): Promise<void> {
   return pendingLoad
 }
 
-// ---- layout shared with the composer overlay ----
-
-/** Height of the request panel stacked on the composer, so the transcript's
- *  bottom inset grows with it like the desktop's `bottomInset`. */
-export const requestPanelHeight = createCell(0)
-const paneRequestHeights = new Map<string, ReturnType<typeof createCell<number>>>()
-function requestHeightFor(id: string) {
-  let cell = paneRequestHeights.get(id)
-  if (!cell) { cell = createCell(0); paneRequestHeights.set(id, cell) }
-  return cell
-}
-export function setRequestPanelHeight(id: string, height: number) { requestHeightFor(id).set(height) }
-export function useRequestPanelHeight() {
-  const cell = requestHeightFor(usePaneId())
-  return useSyncExternalStore(cell.subscribe, cell.get)
-}
-
 // ---- paced live updates ----
 
 /** Streaming deltas arrive tens of times a second and every commit makes GPUI
@@ -428,4 +411,4 @@ export function useChildThreads(parentId: ThreadId, enabled: boolean): Thread[] 
   }, [cached, live, parentId])
 }
 
-onEnvironmentChange(() => { resetRowState(); diffs.clear(); diffLoads.clear(); hydrating.clear(); childThreads.clear(); childLoads.clear(); earlierLoads.clear(); earlierErrors.clear(); clearTimeout(actionErrorTimer); actionError.set(null); earlierError.set(null); requestPanelHeight.set(0); paneRequestHeights.clear() })
+onEnvironmentChange(() => { resetRowState(); diffs.clear(); diffLoads.clear(); hydrating.clear(); childThreads.clear(); childLoads.clear(); earlierLoads.clear(); earlierErrors.clear(); clearTimeout(actionErrorTimer); actionError.set(null); earlierError.set(null); })

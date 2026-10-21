@@ -11,7 +11,7 @@ import { Dialog, DialogHeader } from '../nav/overlay.tsx'
 import { ImageViewer, useImageViewer } from '../motion/ImageMorph.tsx'
 import { imageSource } from '../../../desktop/src/lib/responseImages.ts'
 import { EASE_OUT, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { Rise } from '../motion/kit.tsx'
+import { DURATION, Rise, ZOOM } from '../motion/kit.tsx'
 import { alpha, muted, Para } from './kit.tsx'
 import { useFresh } from './motion.tsx'
 
@@ -152,7 +152,7 @@ export function ImageLightbox({ label, onClose, finalFocus, body }: { label: str
     <motion.div
       initial={{ opacity: 0, top: REDUCED_MOTION ? 0 : 4 }}
       animate={{ opacity: closing ? 0 : 1, top: closing && !REDUCED_MOTION ? 4 : 0 }}
-      transition={{ duration: closing ? 0.15 : 0.2, ease: EASE_OUT }}
+      transition={{ duration: REDUCED_MOTION ? DURATION.quick : closing ? ZOOM.close : ZOOM.open, ease: REDUCED_MOTION ? EASE_OUT : [...ZOOM.ease] as [number, number, number, number] }}
       onMotionComplete={() => { if (closing) onClose() }}
       style={{ display: 'flex', flexDirection: 'column', position: 'relative' }}
     >

@@ -5,8 +5,7 @@ import { useAppearance } from '../settings/appearance.ts'
 // `QuestionSteps`) and non-blocking async questions (`AsyncQuestionPanel`).
 // Copy, choices and the RPCs (`approvals.respond`, `threads.answer`,
 // `threads.interrupt`) are the desktop's.
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { toolLine } from '../../../desktop/src/lib/toolActivity.ts'
 import { basename } from '../../../desktop/src/lib/format.ts'
 import { splitChecklistPreview } from '../../../desktop/src/lib/agentItemTools.ts'
@@ -40,7 +39,7 @@ import { Label, useTheme } from '../ui.tsx'
 import { cachedMarkdownTheme as markdownTheme } from './kit.tsx'
 import { T } from './glyphs.ts'
 import { alpha, Button, CountBadge, fg, muted, Para } from './kit.tsx'
-import { answerQuestions, errorText, interrupt, reportError, setRequestPanelHeight, respondApproval } from './store.ts'
+import { answerQuestions, errorText, interrupt, reportError, respondApproval } from './store.ts'
 
 const EMPTY: never[] = []
 /** `--composer-radius` (1.2rem). */
@@ -102,24 +101,9 @@ function RequestStack({ threadId }: { threadId: string }) {
 export function StackedPanel({ children, closed }: { children: ReactNode; closed: boolean }) {
   const t = useTheme()
   const { translucent } = useAppearance()
-  const renderer = useGpuixRequired()
-  const ref = useRef<PublicInstance>(null)
-  const pane = usePaneAccess()
-  // GPUIX reports bounds after paint: measure on the next frames, and clear on unmount.
-  useEffect(() => {
-    const measure = () => {
-      const id = ref.current?.id
-      const bounds = id != null ? renderer.getElementBounds?.(id) : null
-      if (bounds && !pane.frozen) setRequestPanelHeight(pane.id, Math.round(bounds.height))
-    }
-    const timers = [setTimeout(measure, 32), setTimeout(measure, 160)]
-    return () => timers.forEach(clearTimeout)
-  })
-  useEffect(() => () => { if (!pane.frozen) setRequestPanelHeight(pane.id, 0) }, [pane])
   const border = t.variant === 'dark' ? 'rgba(252, 252, 252, 0.052)' : 'rgba(13, 13, 13, 0.076)'
   return (
     <div
-      ref={ref}
       testId="thread-request"
       style={{
         display: 'flex',

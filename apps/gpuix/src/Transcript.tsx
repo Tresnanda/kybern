@@ -31,14 +31,16 @@ import { alpha, muted, Para } from './transcript/kit.tsx'
 import { over } from './theme.ts'
 import { AnswerImages, DateSeparator, Turn, TurnFooter, turnTimestamp } from './transcript/Turn.tsx'
 import { useComposerOverlayHeight } from './composer/height.ts'
-import { loadEarlier, useActionError, useEarlierError, usePacedBlocks, useRequestPanelHeight } from './transcript/store.ts'
+import { loadEarlier, useActionError, useEarlierError, usePacedBlocks } from './transcript/store.ts'
 
 export { markdownTheme } from './transcript/kit.tsx'
 
 export const GUTTER = 56
 export const COLUMN = 736
-/** The floating composer's height plus 64 (`bottomInset + 64`, `Transcript.tsx:479`). */
-const COMPOSER_INSET = 192
+/** Space kept between the last response and whatever floats over the bottom (`bottomInset + 64`, `Transcript.tsx:479`). */
+const OVERLAY_GAP = 64
+/** The overlay's height before its first measurement (a one-line composer in its gutter), and in hosts without one. */
+const OVERLAY_FALLBACK = 128
 const turnKey = (group: TurnGroup, index: number) => group.turnId || group.user?.id || `turn-${index}`
 /** An optimistic send (`composer/pending.ts`) renders as turn `pending:<message id>`; the daemon's turn for that message
  * keeps the pending row's key, so the row stays mounted (no remount, jump or replayed entrance) when the real id arrives. */
@@ -71,7 +73,8 @@ export function Transcript() {
   const threadRunning = useApp((s) => s.open.thread?.status === 'running' || s.open.thread?.status === 'awaiting-approval')
   const earlierError = useEarlierError()
   const actionError = useActionError()
-  const panelHeight = useRequestPanelHeight()
+  // Whatever floats at the bottom (composer, the panels stacked on it, or a blocking question alone) as the app lays it out.
+  const overlay = useComposerOverlayHeight() || OVERLAY_FALLBACK
   const groupTurns = useMemo(() => createTurnGrouper(), [threadId])
   const turns = useMemo(() => groupTurns(blocks), [blocks, groupTurns])
   const rowStateScope = useMemo(() => new Map<string, unknown>(), [threadId])
@@ -215,7 +218,7 @@ export function Transcript() {
   const logicalKeys = useMemo(() => ['__top', ...rowKeys, '__bottom'], [rowKeys])
   // The mounted footer measures panel-height changes directly; keep that motion
   // from resending every historical estimate through the native bridge.
-  const logicalEstimates = useMemo(() => [hasEarlier ? 48 : 16, ...estimates, COMPOSER_INSET], [estimates, hasEarlier])
+  const logicalEstimates = useMemo(() => [hasEarlier ? 48 : 16, ...estimates, OVERLAY_FALLBACK + OVERLAY_GAP], [estimates, hasEarlier])
   const nativeWindow = useSparseList(logicalKeys, logicalEstimates, `${threadId}:${paneWidth}:${t.variant}`)
   const pinnedCandidates = useMemo(() => rows.flatMap((row,index) => {
     const live = row.turn.running || (threadRunning && row.turn === turns.at(-1))
@@ -428,10 +431,10 @@ export function Transcript() {
             if(cacheSlots) slotCache.set(row.key, {mounted, height, node:row.node, element})
             return element
           }),
-          <div key="__bottom" ref={bottomRef} testId={`transcript-bottom:${pane.id}`} style={{ height: COMPOSER_INSET + panelHeight }} />,
+          <div key="__bottom" ref={bottomRef} testId={`transcript-bottom:${pane.id}`} style={{ height: overlay + OVERLAY_GAP }} />,
         ]}
       </virtual-list>
-      {overflow && <MessageRail items={railItems} active={activeId} height={paneHeight} bottomInset={COMPOSER_INSET - 64 + panelHeight} onJump={(id) => {
+      {overflow && <MessageRail items={railItems} active={activeId} height={paneHeight} bottomInset={overlay} onJump={(id) => {
         const index = rows.findIndex(row => row.turn.user?.id === id)
         if (index < 0 || !list.current) return
         setAtTail(false)
@@ -451,8 +454,8 @@ export function Transcript() {
           </div>
         </div>
       )}
-      <BottomFade visible={!atTail} fallback={COMPOSER_INSET - 64 + panelHeight} />
-      <ScrollToBottom visible={!atTail} bottom={COMPOSER_INSET - 64 + 24 + panelHeight} onClick={scrollToBottom} />
+      <BottomFade visible={!atTail} bottom={overlay} />
+      <ScrollToBottom visible={!atTail} bottom={overlay + 24} onClick={scrollToBottom} />
     </div></SparseRetention.Provider></TranscriptRowStateScope.Provider></TranscriptFocusRestoration.Provider></TranscriptTail.Provider>
   )
 }
@@ -537,13 +540,9 @@ export function ScrollToBottom({ visible, bottom, onClick }: { visible: boolean;
  * movement) instead of tracking the scroll offset, and, like the desktop, it is not drawn on a translucent window. The first
  * render is at rest: opening a thread already scrolled away shows it at once.
  */
-export function BottomFade({ visible, fallback }: { visible: boolean; /** Before the composer stack is measured. */ fallback: number }) {
+export function BottomFade({ visible, bottom }: { visible: boolean; /** The measured overlay height: the wash ends on its top edge (tray and requests included). */ bottom: number }) {
   const t = useTheme()
   const { translucent } = useAppearance()
-  // The wash ends on the composer stack's measured top edge (tray and requests included). A fixed estimate left a strip of
-  // unfaded text between its opaque end and a shorter card, cut by a hard line. Subscribed here, so the card growing a line
-  // re-renders only the wash.
-  const bottom = useComposerOverlayHeight() || fallback
   if (translucent) return null
   return (
     <div
