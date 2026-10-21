@@ -52,6 +52,14 @@ impl Orchestrator {
         Ok(binding.filter(|binding| binding.environment_fingerprint == expected).and_then(|binding| binding.session_id))
     }
 
+    /// Whether harness permission requests on this thread are allowed without
+    /// asking: it is in Full access, or the user chose Full access for this
+    /// harness and the change waits for the running turn to finish.
+    pub(super) fn allows_without_asking(&self, thread: &Thread) -> Result<bool> {
+        Ok(thread.permission_mode == PermissionMode::FullAccess
+            || self.pending_permission_for(thread, &thread.provider)? == Some(PermissionMode::FullAccess))
+    }
+
     pub(super) fn pending_permission_for(&self, thread: &Thread, provider: &ProviderInstance) -> Result<Option<PermissionMode>> {
         let owner = self
             .inner
@@ -499,6 +507,7 @@ impl Orchestrator {
             })
             .await?;
         }
+        let mode_requested = params.permission_mode;
         if let Some(mode) = params.permission_mode.take() {
             let _workspace = self.inner.workspace_ops.lock().await;
             let gate = self.session_admission(thread.id).await;
@@ -518,7 +527,26 @@ impl Orchestrator {
                 self.apply_permission_admitted(thread.id, mode).await?;
             }
         }
+        if mode_requested == Some(PermissionMode::FullAccess) {
+            self.allow_waiting_permissions(thread.id).await;
+        }
         self.update_thread_fields(params)
+    }
+
+    /// Allows the permission requests a thread is waiting on once the user
+    /// chooses Full access. Questions keep waiting for an answer.
+    async fn allow_waiting_permissions(&self, thread_id: ThreadId) {
+        let Some(live) = self.inner.sessions.lock().await.get(&thread_id).cloned() else { return };
+        let waiting: Vec<ApprovalId> = live.pending.lock().await.keys().copied().collect();
+        for approval_id in waiting {
+            let Ok(Some((approval, false))) = self.inner.store.approval_get(approval_id) else { continue };
+            if asks_user(&approval.tool_name) {
+                continue;
+            }
+            if let Err(error) = self.respond_approval(approval_id, ApprovalDecision::AllowOnce).await {
+                tracing::warn!(%thread_id, %approval_id, %error, "could not allow a waiting permission request in Full access");
+            }
+        }
     }
 
     async fn apply_permission(&self, thread_id: ThreadId, mode: PermissionMode) -> Result<Thread> {
@@ -537,19 +565,30 @@ impl Orchestrator {
         validate_permission(&thread, mode)?;
         let live = self.inner.sessions.lock().await.get(&thread_id).cloned();
         if let Some(live) = live {
+            let mut desired = thread.clone();
+            desired.permission_mode = mode;
             // Claude bypassPermissions is a process launch flag. Restart/resume instead of persisting a rejected mode.
             if thread.provider.kind == ProviderKind::ClaudeCode
                 && (mode == PermissionMode::FullAccess || thread.permission_mode == PermissionMode::FullAccess)
             {
-                let mut desired = thread.clone();
-                desired.permission_mode = mode;
-                live.mark_released();
-                self.revoke_native_session(&live);
-                live.session.close().await?;
-                self.inner.sessions.lock().await.remove(&thread_id);
-                self.spawn_session(&desired, None).await?;
+                self.respawn_with_permission(&live, &desired).await?;
             } else {
-                live.session.set_permission_mode(mode).await?;
+                match live.session.set_permission_mode(mode).await {
+                    Ok(()) => {}
+                    // These harnesses fix approvals at launch. Oh My Pi resumes
+                    // in its yolo mode. An OpenCode session keeps its launch
+                    // rules even when resumed, and has no sandbox to widen, so
+                    // Kybern allows whatever it still asks (see
+                    // `allows_without_asking`). Stricter modes keep the error.
+                    Err(kybern_drivers::DriverError::Unsupported(_))
+                        if mode == PermissionMode::FullAccess && thread.provider.kind == ProviderKind::Omp =>
+                    {
+                        self.respawn_with_permission(&live, &desired).await?
+                    }
+                    Err(kybern_drivers::DriverError::Unsupported(_))
+                        if mode == PermissionMode::FullAccess && thread.provider.kind == ProviderKind::Opencode => {}
+                    Err(error) => return Err(error.into()),
+                }
             }
         }
         thread.permission_mode = mode;
@@ -557,6 +596,17 @@ impl Orchestrator {
             self.inner.store.meta_set(&format!("pending_permission:{}", thread_id), "")?;
         }
         self.update_thread(thread)
+    }
+
+    /// Closes a live session and resumes its native session with `desired`'s
+    /// permission mode, so a launch-time mode takes effect mid-conversation.
+    async fn respawn_with_permission(&self, live: &Arc<LiveSession>, desired: &Thread) -> Result<()> {
+        live.mark_released();
+        self.revoke_native_session(live);
+        live.session.close().await?;
+        self.inner.sessions.lock().await.remove(&desired.id);
+        self.spawn_session(desired, None).await?;
+        Ok(())
     }
 
     pub fn apply_pending_permission(&self, thread_id: ThreadId, stop_now: bool) -> futures::future::BoxFuture<'_, Result<Thread>> {
