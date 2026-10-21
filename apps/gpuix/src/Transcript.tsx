@@ -30,6 +30,7 @@ import { T } from './transcript/glyphs.ts'
 import { alpha, muted, Para } from './transcript/kit.tsx'
 import { over } from './theme.ts'
 import { AnswerImages, DateSeparator, Turn, TurnFooter, turnTimestamp } from './transcript/Turn.tsx'
+import { useComposerOverlayHeight } from './composer/height.ts'
 import { loadEarlier, useActionError, useEarlierError, usePacedBlocks, useRequestPanelHeight } from './transcript/store.ts'
 
 export { markdownTheme } from './transcript/kit.tsx'
@@ -450,7 +451,7 @@ export function Transcript() {
           </div>
         </div>
       )}
-      <BottomFade visible={!atTail} bottom={COMPOSER_INSET - 64 + panelHeight} />
+      <BottomFade visible={!atTail} fallback={COMPOSER_INSET - 64 + panelHeight} />
       <ScrollToBottom visible={!atTail} bottom={COMPOSER_INSET - 64 + 24 + panelHeight} onClick={scrollToBottom} />
     </div></SparseRetention.Provider></TranscriptRowStateScope.Provider></TranscriptFocusRestoration.Provider></TranscriptTail.Provider>
   )
@@ -536,9 +537,13 @@ export function ScrollToBottom({ visible, bottom, onClick }: { visible: boolean;
  * movement) instead of tracking the scroll offset, and, like the desktop, it is not drawn on a translucent window. The first
  * render is at rest: opening a thread already scrolled away shows it at once.
  */
-export function BottomFade({ visible, bottom }: { visible: boolean; bottom: number }) {
+export function BottomFade({ visible, fallback }: { visible: boolean; /** Before the composer stack is measured. */ fallback: number }) {
   const t = useTheme()
   const { translucent } = useAppearance()
+  // The wash ends on the composer stack's measured top edge (tray and requests included). A fixed estimate left a strip of
+  // unfaded text between its opaque end and a shorter card, cut by a hard line. Subscribed here, so the card growing a line
+  // re-renders only the wash.
+  const bottom = useComposerOverlayHeight() || fallback
   if (translucent) return null
   return (
     <div
