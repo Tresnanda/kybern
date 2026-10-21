@@ -1423,8 +1423,11 @@ The lease owns a separate process group for its command. Interruption stops that
 group before releasing the UI, and normal exit removes any orphaned descendants.
 Inherited leases stay in the owning group. `bun native/ui-lease-check.ts` verifies
 that interrupting a command also stops its grandchild.
-Every lease, inherited or not, first waits while any `/tmp/kybern-gpuix-quiet.*`
-file exists, so native checks never enter another lane's final measurement window.
+Every lease, inherited or not, first waits while any other lane's
+`/tmp/kybern-gpuix-quiet.*` file exists, so native checks never enter another
+lane's final measurement window. The caller's own `/tmp/kybern-gpuix-quiet.<lane>`
+is skipped: a lane that already marked its measurement window quiet takes the
+lease under the same lane name instead of waiting on itself.
 
 ### Motion reconciliation during deferred rows
 

@@ -6,6 +6,8 @@
 #   SKIP_BUILD=1                reuse the last self-contained `pnpm tauri build`
 #   CARGO_TARGET_DIR            honoured if set
 #   KYBERN_BUILD_TARGET         optional aarch64-apple-darwin or x86_64-apple-darwin
+#   KYBERN_SIDECAR_DIR          optional prebuilt kybernd and kybern to bundle
+#                               instead of building them (releases pass dist's)
 #   APPLE_SIGNING_IDENTITY      optional Apple certificate; Tauri signs inside-out
 #   APPLE_CERTIFICATE           optional base64 p12 for CI (plus its password)
 #   TAURI_SIGNING_PRIVATE_KEY   when set, also writes the signed updater

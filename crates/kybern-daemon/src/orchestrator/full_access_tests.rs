@@ -173,6 +173,42 @@ async fn switching_to_full_access_mid_turn_allows_waiting_and_later_permissions(
 }
 
 #[tokio::test]
+async fn a_stricter_mode_applied_after_a_stale_full_access_choice_asks_again() {
+    let fixture = Fixture::new();
+    let (thread, live, responses) = full_access_turn(&fixture, ProviderKind::Codex, PermissionMode::Supervised).await;
+    fixture.orchestrator.update_session_fields(set_mode(&thread, PermissionMode::FullAccess)).await.unwrap();
+    assert_eq!(fixture.orchestrator.thread_target(thread.id).unwrap().pending_permission_mode, Some(PermissionMode::FullAccess));
+    // The turn ends without applying the waiting choice (as a failed turn
+    // does); the user then applies Supervised explicitly.
+    let mut idle = fixture.store.thread_get(thread.id).unwrap().unwrap();
+    idle.status = ThreadStatus::Idle;
+    fixture.store.thread_upsert(&idle).unwrap();
+    fixture.orchestrator.update_session_fields(set_mode(&thread, PermissionMode::Supervised)).await.unwrap();
+    assert_eq!(fixture.orchestrator.thread_target(thread.id).unwrap().pending_permission_mode, None);
+
+    fixture.orchestrator.handle_driver_event(thread.id, &live, permission_request("p1", "shell")).await.unwrap();
+    assert!(responses.lock().await.is_empty(), "Supervised asks again");
+    assert_eq!(live.pending.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn full_access_for_another_harness_leaves_waiting_requests_alone() {
+    let fixture = Fixture::new();
+    let (thread, live, responses) = full_access_turn(&fixture, ProviderKind::ClaudeCode, PermissionMode::Supervised).await;
+    fixture.orchestrator.handle_driver_event(thread.id, &live, permission_request("before", "Bash")).await.unwrap();
+    let mut target = fixture.orchestrator.thread_target(thread.id).unwrap().target;
+    target.provider = ProviderInstance::default_for(ProviderKind::Codex);
+    fixture
+        .orchestrator
+        .set_thread_target(methods::ThreadTargetParams { thread_id: thread.id, target, inherit_account: true })
+        .await
+        .unwrap();
+    fixture.orchestrator.update_session_fields(set_mode(&thread, PermissionMode::FullAccess)).await.unwrap();
+    assert!(responses.lock().await.is_empty(), "Claude stays in Supervised");
+    assert_eq!(live.pending.lock().await.len(), 1);
+}
+
+#[tokio::test]
 async fn switching_an_idle_session_to_full_access_resumes_it_with_bypass() {
     for provider in [ProviderKind::ClaudeCode, ProviderKind::Omp] {
         let (fixture, configs) = recording_fixture(provider);

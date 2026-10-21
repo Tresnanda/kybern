@@ -23,7 +23,7 @@ const addon = path.join(root, `native/build/gpuix-native.darwin-${arch}.node`)
 if (!existsSync(addon)) throw Error(`Build the patched native addon for ${arch} first (native/README.md)`)
 const archsOf = (file: string) => execFileSync('lipo', ['-archs', file], { encoding: 'utf8' }).trim().split(/\s+/)
 execFileSync('bun', [path.join(root, 'native/build-webview.ts')], { stdio: 'inherit' })
-// Local packaging takes the debug daemon and CLI; releases point KYBERN_BIN_DIR at `target/release`.
+// Local packaging takes the debug daemon and CLI; releases point KYBERN_BIN_DIR at dist's release binaries.
 const binDir = process.env.KYBERN_BIN_DIR ? path.resolve(process.env.KYBERN_BIN_DIR) : path.resolve(root, '../../target/debug')
 const binaries = ['kybern', 'kybernd'].map(name => ({ name, source: path.join(binDir, name) }))
 for (const { source } of binaries) {

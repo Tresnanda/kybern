@@ -7,8 +7,11 @@
 # Usage: scripts/bundle-gpuix.sh
 #   KYBERN_GPUIX_TARGET         aarch64-apple-darwin (default on Apple Silicon) or
 #                               x86_64-apple-darwin (Intel; cross-built from arm64)
-#   CARGO_TARGET_DIR            honoured if set; its release/ (or <target>/release/
-#                               when cross-building) holds kybernd and kybern
+#   KYBERN_BIN_DIR              the folder holding that target's kybernd and kybern
+#                               (releases pass dist's binaries); defaults to
+#                               $CARGO_TARGET_DIR/release, or $CARGO_TARGET_DIR/<target>/release
+#                               when cross-building
+#   CARGO_TARGET_DIR            honoured if set
 #   TAURI_SIGNING_PRIVATE_KEY   required unless SKIP_SIGN=1 (the updater key)
 #
 # Requires: the patched native addon for that target (apps/gpuix/native/update.sh
@@ -32,8 +35,9 @@ case "$TARGET" in
   *) echo "unsupported GPUIX target: $TARGET" >&2; exit 1 ;;
 esac
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
-BIN_DIR="$TARGET_DIR/release"
-[[ "$TARGET" == "$HOST" ]] || BIN_DIR="$TARGET_DIR/$TARGET/release"
+DEFAULT_BIN_DIR="$TARGET_DIR/release"
+[[ "$TARGET" == "$HOST" ]] || DEFAULT_BIN_DIR="$TARGET_DIR/$TARGET/release"
+BIN_DIR="$(cd "${KYBERN_BIN_DIR:-$DEFAULT_BIN_DIR}" && pwd)"
 DIST="$ROOT/dist"
 VERSION="$(grep -m1 '^version' "$ROOT/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/')"
 TARBALL="$DIST/kybern-gpuix_${VERSION}_${ARCH}.app.tar.gz"

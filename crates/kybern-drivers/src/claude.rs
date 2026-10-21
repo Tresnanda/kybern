@@ -2538,11 +2538,11 @@ mod tests {
             panic!("expected a permission request")
         };
         assert_eq!((request_id.as_str(), tool_name.as_str(), tool_call_id.as_deref()), ("safety-1", "Bash", Some("toolu_1")));
-        SessionHandle(Arc::new(session), crate::ndjson::SessionLifetime::new(child.clone()))
-            .respond_permission("safety-1", &ApprovalDecision::AllowOnce)
-            .await
-            .unwrap();
-        let frame = tokio::time::timeout(std::time::Duration::from_secs(1), child.lines.lock().await.recv()).await.unwrap().unwrap();
+        // Keep the handle alive until the echo is read: dropping it ends the session and closes `cat`.
+        let handle = SessionHandle(Arc::new(session), crate::ndjson::SessionLifetime::new(child.clone()));
+        handle.respond_permission("safety-1", &ApprovalDecision::AllowOnce).await.unwrap();
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(5), child.lines.lock().await.recv()).await.unwrap().unwrap();
+        drop(handle);
         assert_eq!(frame.pointer("/response/response/behavior").and_then(Value::as_str), Some("allow"));
         assert_eq!(frame.pointer("/response/response/updatedInput/command").and_then(Value::as_str), Some(command));
         child.close().await;

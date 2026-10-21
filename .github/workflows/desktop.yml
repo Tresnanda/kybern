@@ -1,14 +1,25 @@
-# Builds the desktop app for every platform and attaches the installers, the
-# signed updater artifacts and latest.json to the GitHub Release.
+# Builds the desktop apps for every platform (the Tauri app and Kybern GPUIX),
+# their signed updater artifacts and latest.json.
 #
-# Runs on the same tag push as release.yml (dist), in parallel with the daemon
-# builds rather than after them. Upload steps wait for dist to create the
-# GitHub Release, which happens near the end of its run, so the two pipelines
-# overlap almost completely. The release is turned into a draft the moment it
-# appears and published again only after latest.json is attached, so "latest"
-# never points at a release the desktop updater cannot read. `workflow_dispatch` runs the same build as a dry
-# run: nothing is uploaded to a release, the bundles are only kept as workflow
-# artifacts.
+# Releases: release.yml (dist) calls this workflow as a global-artifacts job
+# once its build-local-artifacts jobs have built kybernd and kybern for every
+# target and the exact-commit CI gate has passed. The apps bundle those same
+# binaries instead of compiling the daemon and CLI again; the Linux app ships
+# the static x86_64-unknown-linux-musl build, which runs on any x86_64 Linux.
+# The last job uploads every desktop asset and latest.json as the
+# `artifacts-desktop` workflow artifact, and dist's host job publishes them in
+# the same GitHub Release as its own archives, so the release and latest.json
+# appear together.
+#
+# `workflow_dispatch` is a dry run of the same path: the binaries job builds
+# the daemon and CLI archives with dist (or, with `binaries_from`, takes them
+# from an existing release), and nothing is published; the assets stay
+# workflow artifacts.
+#
+# Pushes to main keep the Tauri shell's dependency cache warm for releases
+# (a tag can restore main's caches, never another tag's). A bundle job
+# compiles only when its cache key (manifests, Cargo.lock, toolchain) has no
+# exact entry yet.
 #
 # Secrets: TAURI_SIGNING_PRIVATE_KEY (required, the updater key generated with
 # `pnpm tauri signer generate`) and TAURI_SIGNING_PRIVATE_KEY_PASSWORD (empty
@@ -19,9 +30,14 @@
 name: Desktop
 
 on:
+  workflow_call:
+    inputs:
+      # dist's plan (the release's dist-manifest.json); its GitHub release
+      # body becomes the notes in latest.json.
+      plan:
+        required: true
+        type: string
   push:
-    # Default-branch caches are readable by future tags; caches saved on one
-    # release tag cannot be restored by the next release tag.
     branches: [main]
     paths:
       - 'Cargo.toml'
@@ -34,65 +50,124 @@ on:
       - 'apps/gpuix/**'
       - 'scripts/**'
       - '.github/workflows/desktop.yml'
-    tags:
-      - "v[0-9]+.[0-9]+.[0-9]+*"
   workflow_dispatch:
+    inputs:
+      binaries_from:
+        description: Take kybernd and kybern from this release tag (such as v0.10.1) instead of building them with dist
+        required: false
+        type: string
+        default: ''
 
 concurrency:
   group: desktop-${{ github.ref }}
   cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 permissions:
-  contents: write
-  actions: read
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
 
 jobs:
-  release-ci:
-    uses: ./.github/workflows/release-ci.yml
+  binaries:
+    # Dry runs only: build the archives the way release.yml's
+    # build-local-artifacts does, on the runners dist-workspace.toml gives them.
+    if: github.event_name == 'workflow_dispatch' && inputs.binaries_from == ''
+    name: binaries (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-apple-darwin
+            os: macos-15
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-22.04
+          - target: x86_64-pc-windows-msvc
+            os: windows-2022
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install musl-tools
+      - name: Install dist
+        if: runner.os != 'Windows'
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
+      - name: Install dist
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: irm https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.ps1 | iex
+      - name: Build the daemon and CLI archive
+        shell: bash
+        run: dist build --artifacts=local --target=${{ matrix.target }} --output-format=json > dist-manifest.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # The name release.yml gives the same archive.
+          name: artifacts-build-local-${{ matrix.target }}
+          path: target/distrib/kybern-${{ matrix.target }}.*
+          if-no-files-found: error
 
   bundle:
-    needs: release-ci
-    if: ${{ !cancelled() && (needs.release-ci.result == 'success' || github.ref_type != 'tag') }}
+    needs: binaries
+    if: ${{ !cancelled() && (needs.binaries.result == 'success' || needs.binaries.result == 'skipped') }}
     name: bundle (${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: aarch64-apple-darwin
+            dist-target: aarch64-apple-darwin
             os: macos-15
           - target: x86_64-apple-darwin
+            dist-target: x86_64-apple-darwin
             os: macos-15
           - target: x86_64-unknown-linux-gnu
+            dist-target: x86_64-unknown-linux-musl
             os: ubuntu-22.04
           - target: x86_64-pc-windows-msvc
+            dist-target: x86_64-pc-windows-msvc
             os: windows-2022
     runs-on: ${{ matrix.os }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      # apps/desktop/scripts/tauri-with-sidecar.mjs stages these instead of building them.
+      KYBERN_SIDECAR_DIR: dist-binaries/bin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
+      - id: warm
+        name: Look up the warm cache
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: desktop-${{ matrix.target }}
+          lookup-only: true
+          save-if: false
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.warm.outputs.cache-hit != 'true'
         with:
           key: desktop-${{ matrix.target }}
           # Avoid spending minutes saving tag-local caches nobody can reuse.
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-node@v4
+        if: steps.warm.outputs.cache-hit != 'true'
         with:
           node-version: 22
       - run: corepack enable
+        if: steps.warm.outputs.cache-hit != 'true'
         shell: bash
       - name: Linux desktop and credential-store dependencies
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && steps.warm.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential curl wget file patchelf libssl-dev libgtk-3-dev \
@@ -107,18 +182,47 @@ jobs:
           fi
       - id: release
         name: Resolve the release tag
+        if: steps.warm.outputs.cache-hit != 'true'
         shell: bash
+        env:
+          BINARIES_FROM: ${{ github.event_name == 'workflow_dispatch' && inputs.binaries_from || '' }}
         run: |
           tag=""
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then tag="${GITHUB_REF_NAME}"; fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "release tag: ${tag:-<none, dry run>}"
+          # Releases and dry runs take the archives this run built. A warm
+          # build only needs some sidecar of the right target: the latest release's.
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = branch ]; then
+            echo "binaries=release" >> "$GITHUB_OUTPUT"
+          elif [ -n "$BINARIES_FROM" ]; then
+            echo "binaries=release" >> "$GITHUB_OUTPUT"
+            echo "binaries-tag=$BINARIES_FROM" >> "$GITHUB_OUTPUT"
+          else
+            echo "binaries=run" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Download dist's archives from this run
+        if: steps.release.outputs.binaries == 'run'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: artifacts-build-local-*
+          path: dist-binaries/archives
+          merge-multiple: true
+      - name: Download dist's archives from a release
+        if: steps.release.outputs.binaries == 'release'
+        shell: bash
+        run: gh release download ${{ steps.release.outputs.binaries-tag }} --pattern 'kybern-${{ matrix.dist-target }}.*' --dir dist-binaries/archives
+      - name: Extract the daemon and CLI
+        if: steps.warm.outputs.cache-hit != 'true'
+        shell: bash
+        run: node scripts/dist-binaries.mjs --target ${{ matrix.dist-target }} --from dist-binaries/archives --out "$KYBERN_SIDECAR_DIR"
       - name: Install desktop dependencies
+        if: steps.warm.outputs.cache-hit != 'true'
         working-directory: apps/desktop
         shell: bash
         run: pnpm install --frozen-lockfile
       - name: Warm release builds on main
-        if: github.event_name == 'push' && github.ref_type == 'branch'
+        if: github.event_name == 'push' && github.ref_type == 'branch' && steps.warm.outputs.cache-hit != 'true'
         working-directory: apps/desktop
         shell: bash
         run: |
@@ -153,37 +257,6 @@ jobs:
         if: github.event_name != 'push' || github.ref_type == 'tag'
         shell: bash
         run: node scripts/desktop-artifacts.mjs --target "${{ matrix.target }}" --tag "${{ steps.release.outputs.tag }}"
-      - name: Wait for dist to create the release
-        if: steps.release.outputs.tag != ''
-        shell: bash
-        run: |
-          # dist creates the release as a draft, uploads to it, then publishes
-          # it. Editing it before that finishes detaches it from its tag, so
-          # wait for the whole release.yml run on this commit, not the release.
-          for _ in $(seq 1 80); do
-            dist=$(gh run list --workflow release.yml --commit "$GITHUB_SHA" --event push --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')
-            case "$dist" in
-              "completed success")
-                if gh release view "${{ steps.release.outputs.tag }}" >/dev/null 2>&1; then
-                  # Hide it from "latest" until latest.json and the desktop assets are
-                  # attached, so installed apps never see a half-published release.
-                  gh release edit "${{ steps.release.outputs.tag }}" --draft=true >/dev/null 2>&1 || true
-                  exit 0
-                fi
-                ;;
-              "completed "*)
-                echo "::error::release.yml finished without success ($dist); not uploading to ${{ steps.release.outputs.tag }}" >&2
-                exit 1
-                ;;
-            esac
-            sleep 15
-          done
-          echo "::error::release ${{ steps.release.outputs.tag }} was not finished by release.yml within 20 minutes" >&2
-          exit 1
-      - name: Upload to the GitHub Release
-        if: steps.release.outputs.tag != ''
-        shell: bash
-        run: gh release upload "${{ steps.release.outputs.tag }}" dist/kybern-* --clobber
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: github.event_name != 'push' || github.ref_type == 'tag'
         with:
@@ -196,12 +269,13 @@ jobs:
 
   gpuix:
     # Kybern GPUIX (apps/gpuix) ships as its own app next to the Tauri desktop
-    # app, for Apple Silicon and Intel Macs. The patched native addon is built
-    # from source with the on-screen native checks skipped (runners have no
-    # usable display). Intel is cross-built on the arm64 runner, like the Tauri
-    # x86_64 bundle; its addon load check runs under Rosetta.
-    needs: release-ci
-    if: ${{ !cancelled() && (needs.release-ci.result == 'success' || github.ref_type != 'tag') && (github.event_name != 'push' || github.ref_type == 'tag') }}
+    # app, for Apple Silicon and Intel Macs. Each target packages dist's
+    # kybernd and kybern for that target and builds its own patched native
+    # addon, with the on-screen native checks skipped (runners have no usable
+    # display). Intel's addon is cross-built on the arm64 runner, like the
+    # Tauri x86_64 bundle; its load check runs under Rosetta.
+    needs: binaries
+    if: ${{ !cancelled() && (needs.binaries.result == 'success' || needs.binaries.result == 'skipped') && (github.event_name != 'push' || github.ref_type == 'tag') }}
     name: bundle (gpuix ${{ matrix.target }})
     strategy:
       fail-fast: false
@@ -215,6 +289,8 @@ jobs:
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       KYBERN_NATIVE_CHECKS: "0"
       KYBERN_GPUIX_TARGET: ${{ matrix.target }}
+      # scripts/bundle-gpuix.sh packages these instead of target/release.
+      KYBERN_BIN_DIR: dist-binaries/bin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
@@ -248,11 +324,26 @@ jobs:
           fi
       - id: release
         name: Resolve the release tag
+        env:
+          BINARIES_FROM: ${{ github.event_name == 'workflow_dispatch' && inputs.binaries_from || '' }}
         run: |
           tag=""
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then tag="${GITHUB_REF_NAME}"; fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "release tag: ${tag:-<none, dry run>}"
+          echo "binaries-tag=$BINARIES_FROM" >> "$GITHUB_OUTPUT"
+      - name: Download dist's archives from this run
+        if: steps.release.outputs.binaries-tag == ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: artifacts-build-local-*
+          path: dist-binaries/archives
+          merge-multiple: true
+      - name: Download dist's archives from a release
+        if: steps.release.outputs.binaries-tag != ''
+        run: gh release download "${{ steps.release.outputs.binaries-tag }}" --pattern "kybern-$KYBERN_GPUIX_TARGET.*" --dir dist-binaries/archives
+      - name: Extract the daemon and CLI
+        run: node scripts/dist-binaries.mjs --target "$KYBERN_GPUIX_TARGET" --from dist-binaries/archives --out "$KYBERN_BIN_DIR"
       - name: Install dependencies
         run: |
           (cd apps/desktop && pnpm install --frozen-lockfile)
@@ -260,41 +351,8 @@ jobs:
       - name: Build the patched GPUIX native addon
         working-directory: apps/gpuix/native
         run: ./update.sh
-      - name: Build the daemon and CLI
-        # TODO(#115): take kybernd/kybern from the single daemon build for this target instead.
-        run: |
-          if [ "$KYBERN_GPUIX_TARGET" = aarch64-apple-darwin ]; then
-            cargo build --release -p kybern
-          else
-            cargo build --release -p kybern --target "$KYBERN_GPUIX_TARGET"
-          fi
       - name: Package, tar and sign Kybern GPUIX
         run: scripts/bundle-gpuix.sh
-      - name: Wait for dist to create the release
-        if: steps.release.outputs.tag != ''
-        run: |
-          # See the bundle job: wait for the whole release.yml run on this commit.
-          for _ in $(seq 1 80); do
-            dist=$(gh run list --workflow release.yml --commit "$GITHUB_SHA" --event push --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')
-            case "$dist" in
-              "completed success")
-                if gh release view "${{ steps.release.outputs.tag }}" >/dev/null 2>&1; then
-                  gh release edit "${{ steps.release.outputs.tag }}" --draft=true >/dev/null 2>&1 || true
-                  exit 0
-                fi
-                ;;
-              "completed "*)
-                echo "::error::release.yml finished without success ($dist); not uploading to ${{ steps.release.outputs.tag }}" >&2
-                exit 1
-                ;;
-            esac
-            sleep 15
-          done
-          echo "::error::release ${{ steps.release.outputs.tag }} was not finished by release.yml within 20 minutes" >&2
-          exit 1
-      - name: Upload to the GitHub Release
-        if: steps.release.outputs.tag != ''
-        run: gh release upload "${{ steps.release.outputs.tag }}" dist/kybern-gpuix_* --clobber
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: desktop-gpuix-${{ matrix.target }}
@@ -304,12 +362,10 @@ jobs:
 
   manifest:
     name: updater manifest
-    needs: [bundle, gpuix, release-ci]
-    # Publish only when exact-commit CI and every platform bundle succeeded.
-    if: ${{ always() && (needs.release-ci.result == 'success' || github.ref_type != 'tag') && needs.bundle.result == 'success' && needs.gpuix.result == 'success' && (github.event_name != 'push' || github.ref_type == 'tag') }}
+    needs: [bundle, gpuix]
+    # Publish only when every platform bundle succeeded.
+    if: ${{ !cancelled() && needs.bundle.result == 'success' && needs.gpuix.result == 'success' }}
     runs-on: ubuntu-24.04
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@v4
@@ -327,43 +383,16 @@ jobs:
           tag=""
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then tag="${GITHUB_REF_NAME}"; fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-      - name: Wait for dist to create the release
-        if: steps.release.outputs.tag != ''
+      - name: Read the release notes from dist's plan
         shell: bash
+        env:
+          PLAN: ${{ inputs.plan }}
         run: |
-          # dist creates the release as a draft, uploads to it, then publishes
-          # it. Editing it before that finishes detaches it from its tag, so
-          # wait for the whole release.yml run on this commit, not the release.
-          for _ in $(seq 1 80); do
-            dist=$(gh run list --workflow release.yml --commit "$GITHUB_SHA" --event push --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')
-            case "$dist" in
-              "completed success")
-                if gh release view "${{ steps.release.outputs.tag }}" >/dev/null 2>&1; then
-                  # Hide it from "latest" until latest.json and the desktop assets are
-                  # attached, so installed apps never see a half-published release.
-                  gh release edit "${{ steps.release.outputs.tag }}" --draft=true >/dev/null 2>&1 || true
-                  exit 0
-                fi
-                ;;
-              "completed "*)
-                echo "::error::release.yml finished without success ($dist); not uploading to ${{ steps.release.outputs.tag }}" >&2
-                exit 1
-                ;;
-            esac
-            sleep 15
-          done
-          echo "::error::release ${{ steps.release.outputs.tag }} was not finished by release.yml within 20 minutes" >&2
-          exit 1
-      - name: Read GitHub release notes
-        shell: bash
-        run: |
+          # host creates the release with this body; dry runs have no plan, and
+          # latest.json then links to the release instead.
           : > dist/release-notes.md
-          if [ -n "${{ steps.release.outputs.tag }}" ]; then
-            if ! gh release view "${{ steps.release.outputs.tag }}" --json body --jq '.body // ""' > "$RUNNER_TEMP/release-notes.md"; then
-              echo "::warning::Unable to read the GitHub release body; latest.json will link to the release instead"
-            elif [ -s "$RUNNER_TEMP/release-notes.md" ]; then
-              cp "$RUNNER_TEMP/release-notes.md" dist/release-notes.md
-            fi
+          if [ -n "$PLAN" ]; then
+            jq -r '.announcement_github_body // ""' <<< "$PLAN" > dist/release-notes.md
           fi
       - name: Write latest.json and the remote installer
         run: |
@@ -372,16 +401,15 @@ jobs:
           cp scripts/install-mac.sh dist/kybern-mac-install.sh
           cp scripts/install-mac-gpuix.sh dist/kybern-gpuix-mac-install.sh
           cat dist/latest.json
-      - name: Upload to the GitHub Release and publish it
-        if: steps.release.outputs.tag != ''
+      - name: Collect the release assets
         run: |
-          gh release upload "${{ steps.release.outputs.tag }}" dist/latest.json dist/kybern-remote-install.sh dist/kybern-mac-install.sh dist/kybern-gpuix-mac-install.sh --clobber
-          gh release edit "${{ steps.release.outputs.tag }}" --draft=false --latest
+          mkdir release
+          cp dist/kybern-* dist/latest.json release/
+          ls -l release
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: desktop-manifest
-          path: |
-            dist/latest.json
-            dist/kybern-remote-install.sh
-            dist/kybern-mac-install.sh
-            dist/kybern-gpuix-mac-install.sh
+          # dist's host job attaches every artifacts-* file to the GitHub Release.
+          name: artifacts-desktop
+          compression-level: 0
+          path: release/*
+          if-no-files-found: error

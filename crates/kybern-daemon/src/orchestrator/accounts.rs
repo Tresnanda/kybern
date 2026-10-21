@@ -525,6 +525,15 @@ impl Orchestrator {
                 ])?;
             } else {
                 self.apply_permission_admitted(thread.id, mode).await?;
+                // The user's explicit choice replaces any earlier one still
+                // waiting for this harness: a stale pending Full access must not
+                // keep allowing requests (`allows_without_asking`) under a stricter mode.
+                if self.pending_permission_for(&current, &selected)?.is_some() {
+                    self.inner.store.meta_set_many(&[
+                        (&format!("pending_permission:{}", thread.id), ""),
+                        (&format!("pending_permission_target:{}", thread.id), ""),
+                    ])?;
+                }
             }
         }
         if mode_requested == Some(PermissionMode::FullAccess) {
@@ -536,6 +545,11 @@ impl Orchestrator {
     /// Allows the permission requests a thread is waiting on once the user
     /// chooses Full access. Questions keep waiting for an answer.
     async fn allow_waiting_permissions(&self, thread_id: ThreadId) {
+        // Full access chosen for another harness leaves this one's mode alone.
+        let allowed = self.inner.store.thread_get(thread_id).ok().flatten().map(|thread| self.allows_without_asking(&thread));
+        if !matches!(allowed, Some(Ok(true))) {
+            return;
+        }
         let Some(live) = self.inner.sessions.lock().await.get(&thread_id).cloned() else { return };
         let waiting: Vec<ApprovalId> = live.pending.lock().await.keys().copied().collect();
         for approval_id in waiting {

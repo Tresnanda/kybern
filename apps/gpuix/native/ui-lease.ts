@@ -78,8 +78,10 @@ const quit = () => {
 process.on('SIGINT', quit)
 process.on('SIGTERM', quit)
 
-// Native labs must not overlap another lane's final measurement window.
-const quiet = () => readdirSync('/tmp').some(name => name.startsWith('kybern-gpuix-quiet.'))
+// Native labs must not overlap another lane's final measurement window. A lane's own quiet file never blocks it, so a
+// measurement that holds `/tmp/kybern-gpuix-quiet.<lane>` can take a lease under the same lane name.
+const own = `kybern-gpuix-quiet.${lane}`
+const quiet = () => readdirSync('/tmp').some(name => name.startsWith('kybern-gpuix-quiet.') && name !== own)
 while (quiet()) await Bun.sleep(1000)
 
 // Already inside a lease of this checkout (a caller holds it): just run.
