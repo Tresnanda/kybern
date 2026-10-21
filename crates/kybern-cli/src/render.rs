@@ -45,10 +45,15 @@ pub fn providers(list: &[ProviderStatus]) {
     }
 }
 
-pub fn projects(list: &[Project]) {
+pub fn projects(list: &[Project], spaces: &[Space]) {
     for p in list {
         let prefix = p.task_prefix.as_deref().map(|prefix| format!("  [{prefix}]")).unwrap_or_default();
-        println!("{}  {:<20} {}{}{}", p.id, p.name, p.path, if p.is_git { "" } else { "  (not git)" }, prefix);
+        let space = p
+            .space_id
+            .and_then(|id| spaces.iter().find(|space| space.id == id))
+            .map(|space| format!("  {}", space.name))
+            .unwrap_or_default();
+        println!("{}  {:<20} {}{}{}{}", p.id, p.name, p.path, if p.is_git { "" } else { "  (not git)" }, prefix, space);
     }
 }
 

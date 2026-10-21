@@ -209,6 +209,30 @@ export interface Project {
   brief_in_all_threads: boolean;
   /** This project's overrides of the Coordinator settings; absent fields use the global value. See `effectiveCoordinatorSettings`. */
   coordinator?: CoordinatorOverrides | null;
+  /** The space this project belongs to. Absent only for free chat and on daemons without spaces. */
+  space_id?: SpaceId | null;
+  created_at: DateTime;
+  updated_at: DateTime;
+}
+
+export type SpaceId = Uuid;
+export type SpaceColor = "blue" | "green" | "purple" | "pink" | "teal" | "amber" | "red" | "graphite";
+export type SpaceLogo =
+  | { kind: "initials" }
+  /** A slug from the client's curated set; clients that do not know it draw initials. */
+  | { kind: "icon"; icon: string }
+  /** A square 128×128 PNG the daemon derived from an upload (`GET /assets/{id}`). */
+  | { kind: "image"; asset_id: AssetId };
+
+/** A group of projects (work, personal…). Every project except free chat is in exactly one. */
+export interface Space {
+  id: SpaceId;
+  /** 1–32 characters, trimmed; unique ignoring case. */
+  name: string;
+  color: SpaceColor;
+  logo: SpaceLogo;
+  /** 0-based order in the rail. */
+  position: number;
   created_at: DateTime;
   updated_at: DateTime;
 }
@@ -994,6 +1018,8 @@ export interface ProjectsChangedNotification {
 export interface ProjectsAddParams {
   path: string;
   name?: string;
+  /** The space for a new project; the first space when absent. An existing path is returned unchanged. */
+  space_id?: SpaceId;
 }
 
 export interface ProjectsUpdateParams {
@@ -1011,10 +1037,47 @@ export interface ProjectsUpdateParams {
    * falls back to the global setting). Send the whole object each time.
    */
   coordinator?: CoordinatorOverrides | null;
+  /** Moves the project to this space. */
+  space_id?: SpaceId;
 }
 
 export interface ProjectsRemoveParams {
   project_id: ProjectId;
+}
+
+export interface SpacesListResult {
+  spaces: Space[];
+}
+export interface SpacesCreateParams {
+  name: string;
+  color?: SpaceColor;
+  logo?: SpaceLogo;
+}
+export interface SpacesUpdateParams {
+  space_id: SpaceId;
+  name?: string;
+  color?: SpaceColor;
+  logo?: SpaceLogo;
+}
+export interface SpacesDeleteParams {
+  space_id: SpaceId;
+}
+export interface SpacesDeleteResult {
+  /** The space the deleted space's projects moved to. */
+  moved_to: SpaceId;
+  moved_projects: number;
+}
+export interface SpacesReorderParams {
+  /** Every space id exactly once, in the new order. */
+  space_ids: SpaceId[];
+}
+
+export const SPACES_CHANGED_NOTIFICATION = "spaces.changed";
+
+/** Sent after a space is created, updated, deleted or reordered, by any client. */
+export interface SpacesChangedNotification {
+  /** Every space after the change, in order. */
+  spaces: Space[];
 }
 
 export interface ThreadsListParams {
@@ -2290,6 +2353,11 @@ export interface Methods {
   "projects.add": [ProjectsAddParams, Project];
   "projects.update": [ProjectsUpdateParams, Project];
   "projects.remove": [ProjectsRemoveParams, Empty];
+  "spaces.list": [Empty, SpacesListResult];
+  "spaces.create": [SpacesCreateParams, Space];
+  "spaces.update": [SpacesUpdateParams, Space];
+  "spaces.delete": [SpacesDeleteParams, SpacesDeleteResult];
+  "spaces.reorder": [SpacesReorderParams, SpacesListResult];
   "threads.list": [ThreadsListParams, ThreadsListResult];
   "threads.search": [ThreadsSearchParams, ThreadsSearchResult];
   "threads.read": [{ thread_id: ThreadId; before_seq?: EventSeq | null; through_seq?: EventSeq | null; limit?: number; message_seq?: EventSeq | null; text_offset?: number | null }, ThreadsReadResult];

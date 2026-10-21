@@ -410,6 +410,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let mut settings = ctx.principal.has(Scope::OrchestrationRead).then(|| state.settings.subscribe());
     let mut account_logins = ctx.principal.has(Scope::OrchestrationRead).then(|| state.account_logins.subscribe());
     let mut projects = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_projects());
+    let mut spaces = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_spaces());
     let mut preview_requests = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_preview_requests());
     if !state.store.token_is_active(ctx.principal.token_id).unwrap_or(false) {
         return;
@@ -497,6 +498,19 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                     // Each notification carries the whole list; the next one catches up.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(_) => projects = None,
+                }
+            }
+            changed = async {
+                match spaces.as_mut() {
+                    Some(spaces) => spaces.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match changed {
+                    Ok(changed) => { let _ = ctx.out.notify(kybern_protocol::methods::SPACES_CHANGED_NOTIFICATION, changed).await; }
+                    // Each notification carries the whole list; the next one catches up.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => spaces = None,
                 }
             }
             request = async {

@@ -1,4 +1,8 @@
 import { useSidebarRowLease } from './Window.tsx'
+import { KitButton } from '../kit/AlertDialog.tsx'
+import { MoveToSpaceMenu } from '../spaces/MoveToSpace.tsx'
+import { inCurrentSpace } from '../spaces/current.ts'
+import { SPACE_COPY } from '../../../../packages/kybern-client/src/spaces.ts'
 import { canOpenInSplit, collectThreadPanes, openThreadInSplit, useFocusedPane, useSplitRoot } from '../split/store.ts'
 import { beginThreadDrag, trackThreadDrag, consumeThreadDrag, finishSplitDrag } from '../split/Workspace.tsx'
 import { showDialog } from '../dialogs/store.ts'
@@ -273,7 +277,7 @@ export function useAddProject() {
 
 // ---- section label ("Projects", with filter and add) ----
 
-export const SectionLabel = memo(function SectionLabel() {
+export const SectionLabel = memo(function SectionLabel({ text = 'Projects' }: { text?: string }) {
   const t = useTheme()
   const filter = useNav((s) => s.filter)
   const threads = useNav(() => getState().threads)
@@ -286,7 +290,7 @@ export const SectionLabel = memo(function SectionLabel() {
   return (
     <div style={{ paddingTop: 10, paddingBottom: 4, ...INSET }}>
       <div style={{ position: 'relative', display: 'flex', alignItems: 'center', height: 28, paddingLeft: 8, paddingRight: 76, gap: 6 }}>
-        <Label color={muted(t, 0.58)}>Projects</Label>
+        <Label color={muted(t, 0.58)} truncate>{text}</Label>
         {filtering && (
           <>
             <Label color={muted(t, 0.58)}>·</Label>
@@ -390,7 +394,8 @@ export const ProjectHeader = memo(function ProjectHeader({
   const wasHovered = useWasRevealed(hover)
   const move = (offset: -1 | 1) => {
     const visible = getState()
-      .projects.map((p) => p.id)
+      .projects.filter((p) => inCurrentSpace(p.id))
+      .map((p) => p.id)
       .filter((id) => id !== FREE_CHAT_PROJECT_ID)
     const order = [...getNav().projectOrder.filter((id) => visible.includes(id)), ...visible.filter((id) => !getNav().projectOrder.includes(id)).sort((a, b) => nameOf(a).localeCompare(nameOf(b)))]
     const from = order.indexOf(project.id)
@@ -479,6 +484,7 @@ export const ProjectHeader = memo(function ProjectHeader({
               <MenuItem id="down" icon={N.arrowDown} label="Move down" disabled={!canMoveDown} onSelect={() => move(1)} />
             </>
           )}
+          <MoveToSpaceMenu project={project} />
           <MenuSeparator />
           <MenuItem
             id="remove"
@@ -878,6 +884,21 @@ export const MoreRow = memo(function MoreRow({ projectId, count, showAll, onTogg
           {showAll ? 'Show less' : `Show ${count} more`}
         </Label>
       </div>
+    </div>
+  )
+})
+
+/** A space without projects (`spaces.md` §7.9): a compact `Empty`, left-aligned in the panel inset. */
+export const EmptySpaceRow = memo(function EmptySpaceRow({ onlySpace }: { onlySpace: boolean }) {
+  const t = useTheme()
+  const onAddProject = useAddProject()
+  return (
+    <div testId="empty-space" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 10, paddingLeft: 16, paddingRight: 16, paddingTop: 8, paddingBottom: 8, minWidth: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+        <Label color={t.text} size={13} lineHeight={19.5} weight={500}>{SPACE_COPY.emptyTitle}</Label>
+        {!onlySpace && <Label color={t.textSecondary} size={12} lineHeight={18} style={{ minWidth: 0, flexShrink: 1 }}>{SPACE_COPY.emptyDescription}</Label>}
+      </div>
+      <KitButton variant="outline" size="sm" testId="empty-space-add" onClick={() => void onAddProject()}>{SPACE_COPY.emptyAction}</KitButton>
     </div>
   )
 })

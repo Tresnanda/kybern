@@ -9,6 +9,7 @@ import { N } from '../nav/glyphs.ts'
 import { NOTES_META, ProjectDot, notesTokens } from './kit.tsx'
 import { Button, Select, TextField } from '../settings/controls.tsx'
 import { getClient, getState, useApp } from '../state.ts'
+import { useSpaceProjects } from '../spaces/current.ts'
 import { RichEditor, type RichEditorHandle } from '../editor/RichEditor.tsx'
 import type { ImageHome } from '../editor/images.ts'
 import { load, save } from '../shell/persist.ts'
@@ -32,7 +33,8 @@ export function NotesOverlays() {
 const QUICK_KEY = 'kybern.notes.quick'
 function QuickNote() {
   const t = useTheme()
-  const projects = useApp((s) => s.projects)
+  const everyProject = useApp((s) => s.projects)
+  const projects = useSpaceProjects()
   const [draft, setDraft] = useState(() => {
     const value = load<{ title: string; body: string; home: ReturnType<typeof currentNoteHome> } | null>(QUICK_KEY, null)
     const home = value?.home ?? currentNoteHome()
@@ -55,7 +57,7 @@ function QuickNote() {
   const body = useRef<RichEditorHandle>(null)
   const [initialBody] = useState(draft.body)
   const quickImages = useMemo<ImageHome>(() => ({ endpoint: () => getClient()?.endpoint ?? null }), [])
-  const scope = projects.find((p) => p.id === draft.project)?.name ?? 'Global'
+  const scope = everyProject.find((p) => p.id === draft.project)?.name ?? 'Global'
   const discard = () => { save(QUICK_KEY, undefined); setNotes({ quick: false }) }
   // `.quick-note` (notes.css): 576px card, 16/20/14 padding, scope row, 18.3px title, 16.15/25.85 body, 28px foot.
   return <Dialog testId="quick-note" instant={getNav().keyboardNav} width={576} pinTop={169} radius={18} dim={0.6} onClose={() => void finish()}>

@@ -9,6 +9,8 @@ import { Menu, MenuItem } from '../nav/overlay.tsx'
 import { getNav, setNav, useNav } from '../nav/store.ts'
 import { Button } from '../settings/controls.tsx'
 import { useApp } from '../state.ts'
+import { inSpace } from '../../../../packages/kybern-client/src/spaces.ts'
+import { useCurrentSpaceId, useSpaceProjects } from '../spaces/current.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { NoteEditor } from './NoteEditor.tsx'
 import { notesSearchRef } from './Header.tsx'
@@ -34,14 +36,18 @@ export function NotesGallery() {
   const k = useNotesTokens()
   const { renderer } = useGpuix()
   const size = useWindowSize({ intervalMs: 300 })
-  const all = useNotes((s) => s.notes)
+  const allNotes = useNotes((s) => s.notes)
   const loaded = useNotes((s) => s.loaded)
   const error = useNotes((s) => s.error)
   const filter = useNotes((s) => s.filter)
   const prefs = useNotes((s) => s.display)
   const query = useNotes((s) => s.query)
-  const projects = useApp((s) => s.projects)
-  const projectMap = useMemo(() => Object.fromEntries(projects.map((p) => [p.id, p])), [projects])
+  const everyProject = useApp((s) => s.projects)
+  const projects = useSpaceProjects()
+  const spaceId = useCurrentSpaceId()
+  // The name map stays complete; notes of other spaces' projects are hidden, global notes stay.
+  const projectMap = useMemo(() => Object.fromEntries(everyProject.map((p) => [p.id, p])), [everyProject])
+  const all = useMemo(() => allNotes.filter((note) => inSpace(note.project_id, everyProject, spaceId)), [allNotes, everyProject, spaceId])
   const [hits, setHits] = useState<{ query: string; ids: Set<string> } | null>(null)
   const [active, setActive] = useState<string | null>(null)
   const list = useRef<PublicInstance>(null)

@@ -195,10 +195,14 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         ProjectsAdd::NAME => {
             let p: ProjectsAddParams = parse(params)?;
-            ok(state.orchestrator.add_project(p.path, p.name).map_err(bad)?)
+            ok(state.orchestrator.add_project(p.path, p.name, p.space_id).map_err(bad)?)
         }
         ProjectsUpdate::NAME => {
             let p: ProjectsUpdateParams = parse(params)?;
+            if let Some(space_id) = p.space_id {
+                // Before the other fields, so a failed move leaves the project as it was.
+                state.orchestrator.move_project(p.project_id, space_id)?;
+            }
             let mut project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
             if let Some(n) = p.name {
                 project.name = n;
@@ -223,6 +227,23 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             state.store.project_update(&project).map_err(internal)?;
             state.orchestrator.publish_projects();
             ok(state.store.project_get(p.project_id).map_err(internal)?.unwrap_or(project))
+        }
+        SpacesList::NAME => ok(SpacesListResult { spaces: state.orchestrator.list_spaces()? }),
+        SpacesCreate::NAME => {
+            let p: SpacesCreateParams = parse(params)?;
+            ok(state.orchestrator.create_space(p.name, p.color, p.logo).await?)
+        }
+        SpacesUpdate::NAME => {
+            let p: SpacesUpdateParams = parse(params)?;
+            ok(state.orchestrator.update_space(p.space_id, p.name, p.color, p.logo).await?)
+        }
+        SpacesDelete::NAME => {
+            let p: SpacesDeleteParams = parse(params)?;
+            ok(state.orchestrator.delete_space(p.space_id)?)
+        }
+        SpacesReorder::NAME => {
+            let p: SpacesReorderParams = parse(params)?;
+            ok(SpacesListResult { spaces: state.orchestrator.reorder_spaces(&p.space_ids)? })
         }
         ProjectsRemove::NAME => {
             let p: ProjectsRemoveParams = parse(params)?;

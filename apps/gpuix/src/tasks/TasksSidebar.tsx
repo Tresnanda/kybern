@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
 import { arrangeTaskProjects, countTasks, filterLabel, type TaskFilter } from '@/state/tasksModel'
 import { useApp } from '../state.ts'
+import { inSpace } from '../../../../packages/kybern-client/src/spaces.ts'
+import { useCurrentSpaceId, useSpaceProjects } from '../spaces/current.ts'
 import { useAddProject } from '../sidebar/rows.tsx'
 import { useNav } from '../nav/store.ts'
 import { Icon } from '../icons.tsx'
@@ -23,11 +25,13 @@ export function TasksSidebar() {
   const tasks = useTasks((s) => s.tasks)
   const p = useTasks((s) => s.prefs)
   const query = useTasks((s) => s.query)
-  const projects = useApp((s) => s.projects)
+  const projects = useSpaceProjects()
+  const everyProject = useApp((s) => s.projects)
+  const spaceId = useCurrentSpaceId()
   const order = useNav((s) => s.projectOrder)
   const [hover, setHover] = useState(false)
   const [menu, setMenu] = useState<{ id: string; at: { x: number; y: number } } | null>(null)
-  const counts = useMemo(() => countTasks(Object.values(tasks), Date.now()), [tasks])
+  const counts = useMemo(() => countTasks(Object.values(tasks).filter((task) => inSpace(task.project_id, everyProject, spaceId)), Date.now()), [tasks, everyProject, spaceId])
   const sorted = useMemo(
     () =>
       [...projects]

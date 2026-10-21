@@ -32,6 +32,7 @@ mod messaging;
 mod notes;
 mod omp_recovery;
 mod secret_request;
+mod spaces;
 mod subagent_messaging;
 mod subagents;
 mod tasks;
@@ -454,6 +455,9 @@ struct Inner {
     tasks_changed: tokio::sync::broadcast::Sender<methods::TaskItemsChangedNotification>,
     /// The project list after each change, forwarded as `projects.changed`.
     projects_changed: tokio::sync::broadcast::Sender<methods::ProjectsChangedNotification>,
+    spaces_changed: tokio::sync::broadcast::Sender<methods::SpacesChangedNotification>,
+    /// Serialises space writes so name checks and inserts cannot interleave.
+    space_writes: std::sync::Mutex<()>,
     /// Agent requests to show a page, forwarded as `previews.open_requested`.
     preview_requests: tokio::sync::broadcast::Sender<methods::PreviewOpenRequestedNotification>,
     /// Preview tickets, revoked when a thread is archived.
@@ -754,6 +758,8 @@ impl Orchestrator {
                 notes_changed: tokio::sync::broadcast::channel(1024).0,
                 tasks_changed: tokio::sync::broadcast::channel(1024).0,
                 projects_changed: tokio::sync::broadcast::channel(64).0,
+                spaces_changed: tokio::sync::broadcast::channel(64).0,
+                space_writes: std::sync::Mutex::new(()),
                 preview_requests: tokio::sync::broadcast::channel(64).0,
                 previews: Arc::default(),
                 usage,
@@ -1175,13 +1181,18 @@ impl Orchestrator {
         self.inner.store.projects_list()
     }
 
-    pub fn add_project(&self, path: String, name: Option<String>) -> Result<Project> {
+    pub fn add_project(&self, path: String, name: Option<String>, space_id: Option<SpaceId>) -> Result<Project> {
         let p = PathBuf::from(&path);
         let p = p.canonicalize().with_context(|| format!("project path {path} does not exist"))?;
         if !p.is_dir() {
             return Err(anyhow!("{} is not a directory", p.display()));
         }
         let path = p.to_string_lossy().to_string();
+        if let Some(space_id) = space_id
+            && self.inner.store.space_get(space_id)?.is_none()
+        {
+            return Err(anyhow!("not found: space"));
+        }
         if let Some(mut existing) = self.inner.store.project_by_path(&path)? {
             // Self-heal a stale cached flag: the folder may have gained (or lost) a
             // repo since it was first registered. Re-probe and persist any change so
@@ -1205,6 +1216,7 @@ impl Orchestrator {
             task_prefix: None,
             brief_in_all_threads: false,
             coordinator: None,
+            space_id,
             created_at: now,
             updated_at: now,
         };
@@ -1281,7 +1293,7 @@ impl Orchestrator {
                 session.cwd
             ));
         }
-        let project = self.add_project(session.cwd.clone(), None)?;
+        let project = self.add_project(session.cwd.clone(), None, None)?;
         let now = Utc::now();
         let thread = Thread {
             id: Uuid::now_v7(),
@@ -1429,6 +1441,7 @@ impl Orchestrator {
             task_prefix: None,
             brief_in_all_threads: false,
             coordinator: None,
+            space_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -4383,7 +4396,7 @@ mod tests {
             if index % 3 == 0 {
                 assert!(tokio::process::Command::new("git").arg("init").arg("--quiet").arg(&directory).status().await.unwrap().success());
             }
-            let mut project = fixture.orchestrator.add_project(directory.to_string_lossy().into_owned(), None).unwrap();
+            let mut project = fixture.orchestrator.add_project(directory.to_string_lossy().into_owned(), None, None).unwrap();
             if index % 3 == 0 {
                 repositories.push(project.id);
             }
@@ -4418,7 +4431,7 @@ mod tests {
         let path = workspace.to_string_lossy().into_owned();
 
         // Registered before `git init`: the cached flag is false.
-        let first = orchestrator.add_project(path.clone(), None).unwrap();
+        let first = orchestrator.add_project(path.clone(), None, None).unwrap();
         assert!(!first.is_git, "fixture folder has no .git yet");
 
         // The user runs `git init` afterwards.
@@ -4426,7 +4439,7 @@ mod tests {
 
         // Re-adding the same path re-probes, flips the flag, and persists it, so
         // edit/integration spawns are no longer permanently blocked (issue #26).
-        let healed = orchestrator.add_project(path.clone(), None).unwrap();
+        let healed = orchestrator.add_project(path.clone(), None, None).unwrap();
         assert_eq!(healed.id, first.id, "same project record, not a duplicate");
         assert!(healed.is_git, "cached is_git self-heals to true");
         let stored = store.project_get(first.id).unwrap().unwrap();
@@ -4547,6 +4560,7 @@ mod tests {
             task_prefix: None,
             brief_in_all_threads: false,
             coordinator: None,
+            space_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -4922,6 +4936,7 @@ mod tests {
                 task_prefix: None,
                 brief_in_all_threads: false,
                 coordinator: None,
+                space_id: None,
                 created_at: now,
                 updated_at: now,
             };

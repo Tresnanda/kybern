@@ -219,6 +219,7 @@ mod tests {
             task_prefix: None,
             brief_in_all_threads: false,
             coordinator: None,
+            space_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -274,6 +275,7 @@ mod tests {
             task_prefix: None,
             brief_in_all_threads: false,
             coordinator: None,
+            space_id: None,
             created_at: now,
             updated_at: now,
         };

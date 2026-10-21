@@ -76,6 +76,10 @@ export interface NavState {
   /** Composer drafts by desktop key: `thread:<id>`, `project:<id>:…`, `free:main`. */
   composerDrafts: Record<string, true>
   version: string | null
+  /** The active space (`spaces/current.ts`); null until one is chosen or the daemon has none. */
+  spaceId: string | null
+  /** The last view of each space, restored when switching back. */
+  spaceViews: Record<string, NavEntry>
 }
 
 export const DEFAULT_FILTER: SidebarFilter = { threads: 'all', agent: null }
@@ -104,6 +108,8 @@ const initialNav: NavState = {
   projectOrder: [],
   composerDrafts: {},
   version: null,
+  spaceId: null,
+  spaceViews: {},
 }
 let nav = initialNav
 const listeners = new Set<() => void>()

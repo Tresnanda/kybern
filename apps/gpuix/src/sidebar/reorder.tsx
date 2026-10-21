@@ -16,7 +16,10 @@ import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { getNav, setNav } from '../nav/store.ts'
-import { getState } from '../state.ts'
+import { getState, subscribe as subscribeState } from '../state.ts'
+import { currentSpaceId } from '../spaces/current.ts'
+import { getSpaceScroller, hitSpaceTarget, measureSpaceTargets, publishSpaceDrag, spaceTargetCount, spaceTargetRect } from '../spaces/drop.ts'
+import { getSpaces, moveProjectToSpace } from '../spaces/store.ts'
 import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { DragGhost, DropSlot, type Rect, type Settle } from '../drag/Ghost.tsx'
 import { leftCapture } from '../drag/leave.ts'
@@ -24,6 +27,7 @@ import { edgeSpeed, startFrameLoop } from '../drag/edge.ts'
 import { recordDragPointer, usePacing } from '../drag/pacing.ts'
 import { createShiftStore } from '../drag/shift.tsx'
 import { SPRING } from '../drag/spring.ts'
+import { EASE } from '../motion/tokens.ts'
 import { createVelocityTracker } from '../drag/velocity.ts'
 import { bindNativeCarry, createCarryStore } from '../drag/carry.ts'
 import { PaintTranslate } from '../drag/PaintTranslate.tsx'
@@ -54,8 +58,10 @@ type Drag = {
   listTop: number
   listHeight: number
   heights: number[]
-  settle: Settle | null
+  settle: (Settle & { space?: boolean; from?: string | null }) | null
   slot: Rect | null
+  /** The space tile the pointer is over (a drop moves the project there), or null. */
+  space: string | null
   /** The held project's rows, drawn in the ghost: the whole block travels, as on the desktop. */
   members: Row[]
 }
@@ -157,7 +163,8 @@ function activate(start: Pending, x: number, y: number) {
   if (!list || !frame) return
   const { blocks, heights } = layoutBlocks(context.rows)
   const from = blocks.findIndex((b) => b.id === start.id)
-  if (from < 0 || blocks.length < 2) return
+  // A project alone in its space can still be dragged onto another space's tile.
+  if (from < 0 || (blocks.length < 2 && spaceTargetCount() === 0)) return
   const anchor = start.renderer.getListScrollTop?.(list.id)
   scrollPx = heights.slice(0, anchor?.[0] ?? 0).reduce((a, b) => a + b, 0) + (anchor?.[1] ?? 0)
   renderer = start.renderer
@@ -184,8 +191,11 @@ function activate(start: Pending, x: number, y: number) {
     heights,
     settle: null,
     slot: source,
+    space: null,
     members,
   })
+  measureSpaceTargets(start.renderer)
+  publishSpaceDrag({ active: spaceTargetCount() > 0, target: null })
   retarget(x, y)
 }
 
@@ -205,6 +215,18 @@ export function newTops(blocks: Block[], from: number, to: number) {
 function retarget(x: number, y: number) {
   const drag = current
   if (!drag || drag.settle) return
+  // Over another space's tile the list settles back to its real order and nothing reorders.
+  const hit = hitSpaceTarget(x, y)
+  const space = hit && hit !== currentSpaceId() ? hit : null
+  publishSpaceDrag({ active: spaceTargetCount() > 0, target: space })
+  if (space) {
+    projectShift.clear()
+    projectCarry.set(x, y)
+    const next = { ...drag, x, y, to: drag.from, space, slot: null }
+    if (drag.space === space && !drag.slot) current = next
+    else publish(next)
+    return
+  }
   const top = y - drag.grab.y - drag.listTop + scrollPx
   const mids = drag.blocks.filter((_, i) => i !== drag.from).map((b) => b.top + HEADER / 2)
   const to = dropIndex(mids, top + HEADER / 2)
@@ -218,11 +240,11 @@ function retarget(x: number, y: number) {
   projectShift.set(shifts)
   const dragged = drag.blocks[drag.from]!
   const slotY = drag.listTop + tops.get(drag.from)! - scrollPx
-  const next = { ...drag, x, y, to, slot: { x: drag.source.x, y: slotY, width: drag.source.width, height: dragged.height } }
+  const next = { ...drag, x, y, to, space: null, slot: { x: drag.source.x, y: slotY, width: drag.source.width, height: dragged.height } }
   projectCarry.set(x, y)
   // Carry coordinates have their own native subscription. React only observes
   // a changed gap, lifecycle or edge-scroll anchor.
-  if (to === drag.to && slotY === drag.slot?.y) current = next
+  if (to === drag.to && slotY === drag.slot?.y && drag.space === null) current = next
   else publish(next)
 }
 
@@ -241,6 +263,19 @@ function release(drop: boolean) {
   if (!drag || drag.settle) return
   suppressed = { id: drag.id, until: performance.now() + 500 }
   const v = velocity.velocity()
+  publishSpaceDrag({ active: false, target: null })
+  if (drop && drag.space) {
+    const project = getState().projects.find((p) => p.id === drag.id)
+    const target = getSpaces().spaces.find((space) => space.id === drag.space)
+    const tile = spaceTargetRect(drag.space)
+    if (project && target && tile) {
+      void moveProjectToSpace(project, target)
+      projectShift.clear()
+      // The ghost lands in the tile and fades; the rows stay hidden until the project has left this space.
+      publish({ ...drag, slot: null, settle: { to: { x: tile.x + 10, y: tile.y + 4 }, vx: 0, vy: 0, home: false, space: true, from: project.space_id ?? null } })
+      return
+    }
+  }
   if (drop && drag.to !== drag.from) {
     const visible = drag.blocks.map((b) => b.id)
     const projects = getState().projects.filter((p) => !isFreeChatProject(p.id))
@@ -261,7 +296,16 @@ function escape() {
 function finish() {
   landed = false
   setHidden([])
+  publishSpaceDrag({ active: false, target: null })
   publish(null)
+}
+
+/** After a drop onto a tile: finish once the project no longer lists in the space it left (it reappears if the move fails). */
+function finishWhenMoved(id: string, from: string | null) {
+  const left = () => getState().projects.find((p) => p.id === id)?.space_id !== from
+  if (left()) return finish()
+  const stop = subscribeState(() => { if (left()) { stop(); finish() } })
+  setTimeout(() => { stop(); if (current?.settle?.space) finish() }, 4000)
 }
 export const cancelProjectDrag = () => {
   pending = null
@@ -269,9 +313,27 @@ export const cancelProjectDrag = () => {
   finish()
 }
 
+/** Hovering the rail's top or bottom 24 px scrolls its tile list, like the sidebar's edges. */
+function scrollRail(drag: Drag, dt: number) {
+  const rail = getSpaceScroller()
+  const bounds = rail && renderer?.getElementBounds?.(rail.id)
+  if (!rail || !bounds || drag.x < bounds.x || drag.x > bounds.x + bounds.width) return false
+  const speed = edgeSpeed(drag.y, bounds.y, bounds.y + bounds.height, 24)
+  if (!speed) return false
+  const offset = renderer!.getScrollOffset?.(rail.id)
+  if (!offset) return false
+  const next = Math.min(0, offset[1]! - speed * dt)
+  if (next === offset[1]) return true
+  renderer!.scrollTo?.(rail.id, 0, next)
+  measureSpaceTargets(renderer)
+  retarget(drag.x, drag.y)
+  return true
+}
+
 function scrollStep(dt: number) {
   const drag = current
   if (!drag || drag.settle || !renderer || !isWindowVisible()) return
+  if (scrollRail(drag, dt)) return
   const speed = edgeSpeed(drag.y, drag.listTop, drag.listTop + drag.listHeight)
   if (!speed) return
   const total = drag.heights.reduce((a, b) => a + b, 0) + END
@@ -320,7 +382,7 @@ export function ProjectDragLayer() {
       style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: drag.settle ? 'none' : 'auto', cursor: 'grabbing' }}
     >
       <DropSlot testId="project-drop-indicator" rect={drag.settle ? null : drag.slot} tone="ok" />
-      <ProjectCarryGhost drag={drag} onSettled={() => { if (!landed) { landed = true; finish() } }} pacing={pacing}>
+      <ProjectCarryGhost drag={drag} onSettled={() => { if (landed) return; landed = true; if (drag.settle?.space) finishWhenMoved(drag.id, drag.settle.from ?? null); else finish() }} pacing={pacing}>
         <div style={{ pointerEvents: 'none', display: 'flex', flexDirection: 'column', height: '100%', justifyContent: 'flex-start' }}>
           {drag.members.map((row) => <GhostRow key={row.key} row={row} />)}
         </div>
@@ -338,8 +400,10 @@ function ProjectCarryGhost({ drag, onSettled, pacing, children }: { drag: Drag; 
     paintTranslate={{ initial: false, animate: { translateX: 0, translateY: 0 }, transition: { duration: 0 } }}
     style={{ position: 'absolute', left: drag.source.x, top: drag.source.y, width: drag.source.width, height: drag.source.height, pointerEvents: 'none' }}>
     <DragGhost rect={{ x: 0, y: 0, width: drag.source.width, height: drag.source.height }} grab={drag.grab} x={drag.grab.x} y={drag.grab.y}
-      settle={drag.settle ? { ...drag.settle, to: { x: drag.settle.to.x - left, y: drag.settle.to.y - top } } : null} onSettled={onSettled} radius={8}>
-      {children}
+      settle={drag.settle ? { ...drag.settle, to: { x: drag.settle.to.x - left, y: drag.settle.to.y - top } } : null} onSettled={onSettled} radius={8}
+      landing={drag.settle?.space ? { duration: 0.18, ease: [...EASE.out] as [number, number, number, number] } : undefined}>
+      {/* Dropped onto a tile, the ghost fades as it lands (180 ms). */}
+      <motion.div initial={false} animate={{ opacity: drag.settle?.space ? 0 : 1 }} transition={{ duration: REDUCED_MOTION ? 0 : 0.18, ease: [...EASE.out] as [number, number, number, number] }} style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>{children}</motion.div>
     </DragGhost>
   </div>
 }

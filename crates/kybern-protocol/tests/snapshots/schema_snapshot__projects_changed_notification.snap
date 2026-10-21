@@ -67,6 +67,14 @@ expression: schema_for!(ProjectsChangedNotification)
             }
           ]
         },
+        "space_id": {
+          "description": "The space this project belongs to. Absent only for free chat and on daemons without spaces.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
         "created_at": {
           "type": "string",
           "format": "date-time"

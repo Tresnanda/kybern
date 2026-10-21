@@ -8,6 +8,7 @@ import { Label, useTheme } from '../ui.tsx'
 import type { GitBranchesResult, Project, ProjectId } from '../../../../packages/kybern-client/src/types.ts'
 import type { ReactNode } from 'react'
 import { useApp } from '../state.ts'
+import { useSpaceProjects } from '../spaces/current.ts'
 import { TrayChip } from './chips.tsx'
 import { G } from './glyphs.ts'
 import { CheckMark, muted, PickerItem, PickerLabel, PickerMenu, PickerSeparator } from './Menu.tsx'
@@ -22,8 +23,9 @@ export function parentPath(p: string): string {
 }
 
 export function LandingTray({ projectId, useWorktree }: { projectId: ProjectId | null; useWorktree: boolean }) {
-  const projects = useApp((s) => s.projects)
-  const project = projectId ? projects.find((p) => p.id === projectId) : undefined
+  const everyProject = useApp((s) => s.projects)
+  const projects = useSpaceProjects()
+  const project = projectId ? everyProject.find((p) => p.id === projectId) : undefined
   const list = [...projects].sort((a, b) => a.name.localeCompare(b.name))
   const isGit = project?.is_git ?? false
   useEffect(() => {

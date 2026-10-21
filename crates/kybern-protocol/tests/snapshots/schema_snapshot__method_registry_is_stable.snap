@@ -35,6 +35,11 @@ expression: names
 - projects.add
 - projects.update
 - projects.remove
+- spaces.list
+- spaces.create
+- spaces.update
+- spaces.delete
+- spaces.reorder
 - threads.list
 - threads.search
 - threads.read

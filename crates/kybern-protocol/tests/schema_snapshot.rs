@@ -233,3 +233,13 @@ fn task_items_wire_shape_is_stable() {
 fn projects_changed_notification_is_stable() {
     insta::assert_json_snapshot!("projects_changed_notification", schema_for!(ProjectsChangedNotification));
 }
+
+#[test]
+fn space_schema_is_stable() {
+    insta::assert_json_snapshot!("space", schema_for!(Space));
+}
+
+#[test]
+fn spaces_changed_notification_is_stable() {
+    insta::assert_json_snapshot!("spaces_changed_notification", schema_for!(SpacesChangedNotification));
+}

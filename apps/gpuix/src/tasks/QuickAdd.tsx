@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { observeElementBounds } from '../native/layout.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { useApp } from '../state.ts'
+import { useSpaceProjects } from '../spaces/current.ts'
 import { toast } from '../shell/toasts.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { Menu, MenuItem } from '../nav/overlay.tsx'
@@ -13,7 +14,7 @@ import { StatusGlyph } from './Glyphs.tsx'
 
 export function QuickAdd({ request, card = false }: { request: NonNullable<ReturnType<typeof taskState>['quick']>; card?: boolean }) {
   const t = useTheme()
-  const projects = useApp((s) => s.projects)
+  const projects = useSpaceProjects()
   const [title, setTitle] = useState('')
   const [project, setProject] = useState(request.projectId ?? '')
   const [busy, setBusy] = useState(false)

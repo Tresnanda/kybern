@@ -36,6 +36,8 @@ import { Icon } from './icons.tsx'
 import { N } from './nav/glyphs.ts'
 import { HandoffDialog } from './nav/Handoff.tsx'
 import { startNavHistory } from './nav/history.ts'
+import { startSpaces } from './spaces/current.ts'
+import { startSpaceKeys } from './spaces/keys.ts'
 import { startLive } from './nav/live.ts'
 import { NavRail } from './nav/NavRail.tsx'
 import { Palette } from './nav/Palette.tsx'
@@ -110,7 +112,9 @@ function Workspace() {
   useEffect(() => {
     startSplitView()
     startNavHistory()
+    startSpaces()
     startPreview()
+    return startSpaceKeys()
   }, [])
   const connectionStatus = useApp(s => s.status)
   useEffect(() => {

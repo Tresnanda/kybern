@@ -6,6 +6,7 @@
 mod notes;
 mod projection;
 mod schema;
+mod spaces;
 mod subagent_messages;
 mod tasks;
 mod thread_history;
@@ -15,6 +16,7 @@ pub use notes::{
     NOTE_BODY_MAX_BYTES, NOTE_RETENTION_DAYS, NOTE_TITLE_MAX_CHARS, NoteError, NoteTarget, checklist as note_checklist,
     preview as note_preview,
 };
+pub use spaces::SpaceError;
 pub use tasks::{
     GLOBAL_TASK_PREFIX, NewTask, TASK_BODY_MAX_BYTES, TASK_RETENTION_DAYS, TASK_TITLE_MAX_CHARS, TaskError, TaskPatch, TaskRunPatch,
     TaskRunUpdate, TaskStatusChange, derive_task_prefix, task_link_lines, task_link_source_line, task_set_line_checked,
@@ -426,8 +428,10 @@ impl Store {
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
             tx.execute(
-                "INSERT INTO projects(id, name, path, is_git, worktrees_default, created_at, updated_at, brief_in_all_threads, coordinator)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                "INSERT INTO projects(id, name, path, is_git, worktrees_default, created_at, updated_at, brief_in_all_threads, coordinator, space_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
+                         CASE WHEN ?1 = ?11 THEN NULL
+                              ELSE COALESCE(?10, (SELECT id FROM spaces ORDER BY position, created_at LIMIT 1)) END)",
                 params![
                     p.id.to_string(),
                     p.name,
@@ -437,7 +441,9 @@ impl Store {
                     p.created_at.to_rfc3339(),
                     p.updated_at.to_rfc3339(),
                     p.brief_in_all_threads,
-                    coordinator_json(p)?
+                    coordinator_json(p)?,
+                    p.space_id.map(|id| id.to_string()),
+                    FREE_CHAT_PROJECT_ID.to_string()
                 ],
             )?;
             // Every project gets a task prefix; an explicit one is kept when it is valid and free.
@@ -492,7 +498,7 @@ impl Store {
     pub fn project_get(&self, id: ProjectId) -> Result<Option<Project>> {
         self.with(|c| {
             Ok(c.query_row(
-                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads, coordinator FROM projects WHERE id = ?1",
+                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads, coordinator, space_id FROM projects WHERE id = ?1",
                 [id.to_string()],
                 row_to_project,
             )
@@ -503,7 +509,7 @@ impl Store {
     pub fn project_by_path(&self, path: &str) -> Result<Option<Project>> {
         self.with(|c| {
             Ok(c.query_row(
-                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads, coordinator FROM projects WHERE path = ?1",
+                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads, coordinator, space_id FROM projects WHERE path = ?1",
                 [path],
                 row_to_project,
             )
@@ -514,7 +520,7 @@ impl Store {
     pub fn projects_list(&self) -> Result<Vec<Project>> {
         self.with(|c| {
             let mut st = c.prepare(
-                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads, coordinator
+                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads, coordinator, space_id
                  FROM projects WHERE id != ?1 ORDER BY name",
             )?;
             let rows = st.query_map([FREE_CHAT_PROJECT_ID.to_string()], row_to_project)?;
@@ -1888,6 +1894,7 @@ fn row_to_project(r: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
             .map(|json| serde_json::from_str(&json))
             .transpose()
             .map_err(|error| rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(error)))?,
+        space_id: r.get::<_, Option<String>>(10)?.map(parse_uuid).transpose()?,
         created_at: parse_time(r.get::<_, String>(5)?)?,
         updated_at: parse_time(r.get::<_, String>(6)?)?,
     })
@@ -2269,6 +2276,7 @@ mod tests {
             task_prefix: None,
             brief_in_all_threads: false,
             coordinator: None,
+            space_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -2327,6 +2335,7 @@ mod tests {
             task_prefix: None,
             brief_in_all_threads: false,
             coordinator: None,
+            space_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -2399,6 +2408,7 @@ mod tests {
             task_prefix: None,
             brief_in_all_threads: false,
             coordinator: None,
+            space_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -2435,6 +2445,7 @@ mod tests {
             task_prefix: None,
             brief_in_all_threads: false,
             coordinator: None,
+            space_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -2530,6 +2541,7 @@ mod tests {
             task_prefix: None,
             brief_in_all_threads: false,
             coordinator: None,
+            space_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -3127,6 +3139,7 @@ mod orchestration_tests {
             task_prefix: None,
             brief_in_all_threads: false,
             coordinator: None,
+            space_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -3603,6 +3616,7 @@ mod coordinator_upgrade_tests {
             task_prefix: None,
             brief_in_all_threads: false,
             coordinator: None,
+            space_id: None,
             created_at: now,
             updated_at: now,
         };

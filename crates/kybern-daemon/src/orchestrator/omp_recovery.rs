@@ -261,7 +261,7 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let (tx, _) = crate::bounded_broadcast::channel(32, 8 * 1024 * 1024);
         let orchestrator = Orchestrator::new(store.clone(), DriverRegistry::default(), tx, paths, settings);
-        let project = orchestrator.add_project(root.display().to_string(), None).unwrap();
+        let project = orchestrator.add_project(root.display().to_string(), None, None).unwrap();
         let now = Utc::now();
         let mut events = fixture();
         events.pop();

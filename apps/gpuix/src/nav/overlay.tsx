@@ -770,11 +770,14 @@ export function Tip({
   size = 28,
   children,
   disabled,
+  open: forcedOpen,
 }: {
   label: string
   shortcut?: string[]
   side?: 'top' | 'bottom' | 'left' | 'right'
   sideOffset?: number
+  /** Show it regardless of hover (a drag target naming where the drop goes). */
+  open?: boolean
   size?: number
   /** One host element (a `div`) that takes the trigger's handlers. */
   children: ReactElement
@@ -785,7 +788,7 @@ export function Tip({
   // The controller keeps one tooltip visible app-wide and applies every leave (R4-1).
   const { ctl, state } = useHover({ delay: TOOLTIP_DELAY_MS, skip: TOOLTIP_SKIP_MS })
   const pressed = useRef(false)
-  const open = state.active !== null
+  const open = forcedOpen === true || state.active !== null
   // The tooltip stays mounted for its 80 ms exit after the pointer leaves; one that opened `instant` (a neighbour had just closed) also leaves at once.
   const [present, setPresent] = useState(open)
   if (open && !present) setPresent(true)
@@ -804,7 +807,7 @@ export function Tip({
         <PopupLayer
           testId="tooltip"
           kind="tooltip"
-          still={state.instant}
+          still={state.instant || forcedOpen === true}
           leaving={leaving}
           onLeft={() => setPresent(false)}
           side={side}

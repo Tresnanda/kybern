@@ -43,6 +43,8 @@ import { Icon } from './icons.tsx'
 import { MatrixLoader } from './MatrixLoader.tsx'
 import { Spinner } from './kit/Spinner.tsx'
 import { getClient, setThreadOpen, usePaneCompact, focusPane, getFocusedPaneId, usePaneAccess, getPane, selectPaneThread, setPane, set, useApp } from './state.ts'
+import { inSpace } from '../../../packages/kybern-client/src/spaces.ts'
+import { useCurrentSpaceId } from './spaces/current.ts'
 import { FONT_UI } from './theme.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from './ui.tsx'
 import { addWindowKeyHandler } from './nav/keys.ts'
@@ -208,7 +210,11 @@ export function useDraftTarget() {
   const providers = useComposer((d) => d.providers)
   const projects = useApp((s) => s.projects)
   // The most recently active thread's project, or the first project.
-  const recentProject = useApp((s) => s.threads.find((th) => s.projects.some((p) => p.id === th.project_id))?.project_id ?? s.projects[0]?.id)
+  const spaceId = useCurrentSpaceId()
+  const recentProject = useApp((s) => {
+    const here = s.projects.filter((p) => !isFreeChatProject(p.id) && inSpace(p.id, s.projects, spaceId))
+    return s.threads.find((th) => here.some((p) => p.id === th.project_id))?.project_id ?? here[0]?.id
+  })
   const entry = useApp(s => s.draft)
   const projectId = entry.projectId ? entry.projectId : draft.projectId === undefined ? recentProject ?? null : draft.projectId
   const project = projectId ? projects.find((p) => p.id === projectId) : undefined

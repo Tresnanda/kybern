@@ -11,6 +11,7 @@ import { mapWithConcurrency } from '@/lib/workload'
 import { classifyPrError } from '@/state/prReviewModel'
 import type { Project, PullRequest } from '../../../../packages/kybern-client/src/types.ts'
 import { getClient, useApp } from '../state.ts'
+import { useSpaceProjects } from '../spaces/current.ts'
 import { Menu, MenuItem } from '../nav/overlay.tsx'
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { useNav } from '../nav/store.ts'
@@ -29,7 +30,7 @@ let lastSelection: { project: Project; number: number } | null = null
 export function PullRequestsPage() {
   const t = useTheme()
   const { renderer } = useGpuix()
-  const projects = useApp(s => s.projects)
+  const projects = useSpaceProjects()
   const connected = useApp(s => s.status === 'open')
   const peek = useNav(s => s.pullsPeek)
   const [filter, setFilter] = useState<Filter>('open')

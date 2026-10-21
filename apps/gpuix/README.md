@@ -34,6 +34,14 @@ Environment: `KYBERN_DATA_DIR` (default `~/.kybern`) or `KYBERN_URL` +
 `KYBERN_OPAQUE=1` for an opaque window; `KYBERN_GPUIX_THREAD=<id or title>`
 opens a thread at launch.
 
+## Spaces
+
+Projects belong to spaces (daemon `spaces.*`); the rail shows one tile per space once there are two,
+and the thread panel, Home, Tasks, Notes, Pull requests and the palette follow the active space.
+⌃1–⌃8 pick spaces 1–8 and ⌃9 the last one (not while a terminal has focus). If you enabled macOS
+Mission Control's "Switch to Desktop N" shortcuts, the system takes ⌃digits before the app does: turn
+them off or use the tiles. Verify with `KYBERN_DATA_DIR=<…gpuix-scratch…/data> bun src/spaces/verify.ts`.
+
 ## What works
 
 Rail, thread panel (projects, threads, live status), home screen with the
