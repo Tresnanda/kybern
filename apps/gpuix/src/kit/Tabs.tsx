@@ -3,7 +3,8 @@
 // A tab is 28 (sm 24) high: 8 (sm 7) padding, a 14 glyph or provider mark, 6 gap, a 13/500 (sm 12/500) label, then a 16
 // square ✕ (glyph 11, radius 5) that shows on the active and the hovered tab and keeps its room otherwise. The active tab of
 // a focused strip has no fill: a 2 px accent underline, (width − 16) wide, sits on the strip's bottom edge. In an unfocused
-// strip (another split group has focus) the active tab drops to a 5% ink fill and secondary text. Hover is the 5% fill in an
+// strip (another split group has focus) it is dimmed: the underline turns to ink and the label to secondary text, so the
+// focused group is the one accent line on screen. A lone tab is marked only with `markSingle` (a group of a split). Hover is the 5% fill in an
 // 8 radius box. Labels truncate between 96 and 200; the tooltip names the whole thing. A preview tab's label is italic.
 //
 // Overflow scrolls sideways with a 16 px fade at the cut edges and a » menu of every tab. Motion: a new tab fades into
@@ -55,8 +56,10 @@ export interface TabsProps {
   items: TabsItem[]
   active: string | null
   size?: 'md' | 'sm'
-  /** False when another split group has focus: the active tab is dimmed instead of underlined. */
+  /** False when another split group has focus: the active tab's underline and label are dimmed. */
   focused?: boolean
+  /** Underline the active tab even when it is the only one (each group of a split marks its active tab). */
+  markSingle?: boolean
   onSelect: (key: string) => void
   onClose?: (key: string) => void
   onDoubleClick?: (key: string) => void
@@ -96,7 +99,7 @@ export function tabTokens(t: Theme) {
   return {
     accent: dark ? 'rgba(51, 134, 214, 1)' : 'rgba(1, 105, 204, 1)',
     hover: ink(t, 0.05),
-    dim: ink(t, 0.05),
+    dimLine: ink(t, dark ? 0.26 : 0.22),
     closeHover: ink(t, 0.1),
     divider: ink(t, dark ? 0.1 : 0.12),
   }
@@ -305,7 +308,6 @@ const TabView = memo(function TabView({ item, index, size, active, focused, prop
       style={{
         display: 'flex', alignItems: 'center', height: geometry.height, minWidth: item.pinned ? undefined : minWidth, maxWidth: item.pinned ? 320 : MAX, flexShrink: 0,
         paddingRight: closable ? geometry.pad - 3 : 0, borderRadius: 8, position: 'relative', ...(item.disabled ? { opacity: 0.55 } : {}),
-        ...(dim ? { backgroundColor: tok.dim } : {}),
         hover: { backgroundColor: tok.hover },
       }}
     >
@@ -323,7 +325,7 @@ const TabView = memo(function TabView({ item, index, size, active, focused, prop
           {showClose ? <Icon source={X} size={11} color={hover ? t.text : t.textTertiary} /> : item.dirty ? <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: t.textSecondary }} /> : null}
         </div>
       )}
-      {active && !dim && props.items.length > 1 && <div testId={`${item.testId ?? `tab-${item.key}`}-underline`} style={{ position: 'absolute', left: 8, right: 8, bottom: -underlineGap, height: 2, borderRadius: 2, backgroundColor: tok.accent, pointerEvents: 'none' }} />}
+      {active && (props.items.length > 1 || props.markSingle) && <div testId={`${item.testId ?? `tab-${item.key}`}-underline`} style={{ position: 'absolute', left: 8, right: 8, bottom: -underlineGap, height: 2, borderRadius: 2, backgroundColor: dim ? tok.dimLine : tok.accent, pointerEvents: 'none' }} />}
     </div>
   )
   // The full name in a tooltip when the label can be cut (documents; the pinned chat names itself in the header).

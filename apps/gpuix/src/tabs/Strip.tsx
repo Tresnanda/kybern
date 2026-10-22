@@ -93,6 +93,7 @@ export const GroupStrip = memo(function GroupStrip({ leafId, size = 'md', onRena
       active={group.active}
       size={size}
       focused={focused}
+      markSingle={root.kind !== 'leaf'}
       underlineGap={size === 'md' ? 9 : 4}
       dividerAfter={CHAT}
       dropIndex={drop}
