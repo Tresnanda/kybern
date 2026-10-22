@@ -4,6 +4,8 @@
 // the branch to start from. Menus open upward, 8px from the chip.
 import { useEffect } from 'react'
 import { Icon } from '../icons.tsx'
+import { GlassEdge } from '../kit/GlassEdge.tsx'
+import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
 import { Label, useTheme } from '../ui.tsx'
 import type { GitBranchesResult, Project, ProjectId } from '../../../../packages/kybern-client/src/types.ts'
 import type { ReactNode } from 'react'
@@ -44,15 +46,20 @@ export function LandingTray({ projectId, useWorktree }: { projectId: ProjectId |
   )
 }
 
-/** `LandingTray`'s strip: the card's backing colour, rounded on top, 93.33% wide, holding chips. The task dock's tray is the same strip. */
+/** `LandingTray`'s strip: the card's backing colour, rounded on top, 93.33% wide, holding chips. The task dock's tray is the same strip.
+ *  Whole-window glass makes it the composer's stacked frost (`StackedPanel`): the same tint over a scene blur, a hairline rim and a
+ *  top highlight, open at the bottom where the card continues it; never an opaque slab beside the translucent card. */
 export function TrayFrame({ children, testId = 'landing-tray' }: { children: ReactNode; testId?: string }) {
   const t = useTheme()
+  const g = useGlass()
   // `--composer-backing-surface` (`kybern.css:12`, the light mix in `theme.logic`).
   const backing = t.variant === 'dark' ? '#222222' : t.v('--composer-backing-surface')
   return (
     <div
       testId={testId}
+      backdrop={frostBackdrop(g, 'composer', COMPOSER_RADIUS)}
       style={{
+        position: 'relative',
         display: 'flex',
         alignItems: 'center',
         gap: 6,
@@ -65,9 +72,11 @@ export function TrayFrame({ children, testId = 'landing-tray' }: { children: Rea
         paddingBottom: 4,
         borderTopLeftRadius: COMPOSER_RADIUS,
         borderTopRightRadius: COMPOSER_RADIUS,
-        backgroundColor: backing,
+        ...(g.on ? { borderWidth: 1, borderBottomWidth: 0, borderColor: g.frostRim, marginBottom: -1 } : {}),
+        backgroundColor: frostFill(g, 'composer', backing, 'frostStacked'),
       }}
     >
+      <GlassEdge radius={COMPOSER_RADIUS} color={g.frostHighlight} />
       {children}
     </div>
   )

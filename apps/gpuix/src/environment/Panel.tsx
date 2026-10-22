@@ -9,6 +9,7 @@ import { Icon, glyph } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { Menu, MenuItem, MenuLabel, MenuSeparator, muted } from '../nav/overlay.tsx'
 import { surfaceShadow } from '../composer/Menu.tsx'
+import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
 import { getClient, onOpenEvent, useApp } from '../state.ts'
 import { openTab } from '../tabs/open.ts'
 import { chooseTab, setDock, type DockTab } from '../dock/store.ts'
@@ -40,6 +41,7 @@ export function EnvironmentTrigger({ threadId }: { threadId: string }) {
 /** Keep deferred layers out of the title bar's cached island, which cannot replay their hit bounds. */
 export function EnvironmentOverlay() {
   const t = useTheme()
+  const g = useGlass()
   const panel = useEnvironmentPanel()
   const dock = useEnvironmentDock()
   const selected = useApp((s) => s.selectedId)
@@ -54,7 +56,8 @@ export function EnvironmentOverlay() {
     onMotionComplete={() => { if (leaving) finishEnvironmentClose(panel.generation) }}
     style={{ position: 'absolute', left: dock.x + dock.width - 300, top: dock.y + 12, pointerEvents: leaving ? 'none' : 'auto' }}>
     <div testId="environment-panel" tabIndex={0} autoFocus onKeyDown={(e) => { if (e.key === 'escape') closeEnvironmentPanel() }}
-      style={{ display: 'flex', flexDirection: 'column', width: 288, maxHeight: Math.max(120, dock.height - 24), overflow: 'scroll', padding: 6, gap: 2, borderRadius: 16, borderWidth: 1, borderColor: t.borderLight, backgroundColor: t.popover, boxShadow: surfaceShadow(t), pointerEvents: leaving ? 'none' : 'auto' }}>
+      backdrop={frostBackdrop(g, 'menus', 16)}
+      style={{ display: 'flex', flexDirection: 'column', width: 288, maxHeight: Math.max(120, dock.height - 24), overflow: 'scroll', padding: 6, gap: 2, borderRadius: 16, borderWidth: 1, borderColor: g.on ? g.frostRim : t.borderLight, backgroundColor: frostFill(g, 'menus', t.popover, 'frostMenu'), ...(g.on ? {} : { boxShadow: surfaceShadow(t) }), pointerEvents: leaving ? 'none' : 'auto' }}>
       <EnvironmentPanel key={threadId} threadId={threadId} />
     </div>
   </motion.div>

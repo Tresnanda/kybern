@@ -47,7 +47,7 @@ import { useCurrentSpaceId } from './spaces/current.ts'
 import { FONT_UI } from './theme.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from './ui.tsx'
 import { GlassEdge } from './kit/GlassEdge.tsx'
-import { frostBackdrop, frostFill, useGlass } from './platform/glass.ts'
+import { frostBackdrop, frostFill, raisedFill, useGlass } from './platform/glass.ts'
 import { addWindowKeyHandler } from './nav/keys.ts'
 import { keyboardAnswer } from './requests/Panel.tsx'
 import { isUserInput, connectorApproval } from '../../../packages/kybern-client/src/userInput.ts'
@@ -959,6 +959,7 @@ function RunningControls({
 /** Image tiles and file cards above the editor (`Composer.tsx:1143-1171`). */
 export function Attachments({ items, uploading, onRemove, onPreviewClose }: { items: Attachment[]; uploading: number; onRemove: (a: Attachment) => void; onPreviewClose?: () => void }) {
   const t = useTheme()
+  const g = useGlass()
   const renderer = useGpuixRequired()
   // A clicked image tile morphs into the shared preview out of the tile's rect (`motion/ImageMorph.tsx`); the tile hides while its
   // image is away.
@@ -1030,7 +1031,7 @@ export function Attachments({ items, uploading, onRemove, onPreviewClose }: { it
                 borderRadius: 12,
                 borderWidth: 1,
                 borderColor: t.borderLight,
-                backgroundColor: t.variant === 'dark' ? t.composer : '#ffffff',
+                backgroundColor: raisedFill(g, t.variant === 'dark' ? t.composer : '#ffffff'),
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, flexShrink: 0, borderRadius: 8, backgroundColor: elevated }}>

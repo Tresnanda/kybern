@@ -31,6 +31,7 @@ import { ContextMenu, Menu, MenuItem, MenuLabel, MenuSeparator, muted, Tip } fro
 import { DEFAULT_FILTER, getNav, setNav, useNav } from '../nav/store.ts'
 import { getClient, getState, toggleProject as toggleProjectState } from '../state.ts'
 import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
+import { raisedFill, useGlass } from '../platform/glass.ts'
 import type { Theme } from '../theme.ts'
 import { beginProjectDrag, consumeProjectDrag, endProjectPending, trackProjectDrag } from './reorder.tsx'
 import { leftSource } from '../drag/leave.ts'
@@ -466,6 +467,7 @@ export const ThreadRow = memo(function ThreadRow({
   onToggleChildren: (id: string, open: boolean) => void
 }) {
   const t = useTheme()
+  const g = useGlass()
   const { hover, bind } = useHover()
   const menu = useContextMenu()
   const [renaming, setRenaming] = useState(false)
@@ -531,7 +533,7 @@ export const ThreadRow = memo(function ThreadRow({
                   }
                 }}
                 testId={`rename-${thread.id}`}
-                style={{ flexGrow: 1, minWidth: 0, height: 20, paddingLeft: 4, paddingRight: 4, borderRadius: 4, borderWidth: 1, borderColor: t.v('--ring'), backgroundColor: t.surface, color: t.text, fontSize: 14 }}
+                style={{ flexGrow: 1, minWidth: 0, height: 20, paddingLeft: 4, paddingRight: 4, borderRadius: 4, borderWidth: 1, borderColor: t.v('--ring'), backgroundColor: raisedFill(g, t.surface), color: t.text, fontSize: 14 }}
               />
             ) : (
               <TitleSwap text={thread.coordinator_project_id ? 'Open coordinator' : thread.title || 'Untitled'}>

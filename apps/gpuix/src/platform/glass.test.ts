@@ -101,3 +101,20 @@ describe('frost classes (KYBERN_GLASS_FROST)', () => {
     expect([...parseFrostClasses(' ALL ')].sort()).toEqual([...FROST_CLASSES].sort())
   })
 })
+
+describe('content wells and floating cards (ADE-56)', () => {
+  const alphaOf = (css: string) => Number(css.match(/[\d.]+/g)![3] ?? 1)
+  for (const variant of ['dark', 'light'] as const) {
+    test(`${variant}: the code well is a translucent tint on whole-window glass and the desktop's fill elsewhere`, () => {
+      const glass = themeFor(variant, 'window', false, false).codeSurface
+      expect(alphaOf(glass)).toBeLessThan(0.5)
+      for (const scope of ['none', 'sidebar'] as const) expect(themeFor(variant, scope, false, false).codeSurface).toBe(THEMES[variant].codeSurface)
+    })
+    test(`${variant}: a floating card frosts like a menu on whole-window glass, and is the opaque popover in Sidebar only and Solid`, () => {
+      // The frost tint when the class blurs (patched addon), the dense float when it cannot (CI has no addon).
+      expect([window(variant).frostMenu, window(variant).denseFloat]).toContain(frostFill(window(variant), 'menus', '#123456', 'frostMenu'))
+      expect(frostFill(sidebar(variant), 'menus', '#123456', 'frostMenu')).toBe('#123456')
+      expect(frostFill(solid(variant), 'menus', '#123456', 'frostMenu')).toBe('#123456')
+    })
+  }
+})

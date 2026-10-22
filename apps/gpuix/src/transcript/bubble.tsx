@@ -19,6 +19,7 @@ import { useTheme } from '../ui.tsx'
 import { Label } from '../ui.tsx'
 import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
+import { raisedFill, useGlass } from '../platform/glass.ts'
 import { T } from './glyphs.ts'
 import { ResponseImage } from './images.tsx'
 import { AttachmentImage } from '../composer/AttachmentImage.tsx'
@@ -82,6 +83,7 @@ const FOOTER_HEIGHT = 28
 
 export const UserBubble = memo(function UserBubble({ parts, at, pending = false, clampLines }: { parts: ContentPart[]; at: string; pending?: boolean; clampLines?: number }) {
   const t = useTheme()
+  const g = useGlass()
   const [hover, setHover] = useState(false)
   const renderer = useGpuixRequired()
   const body = useRef<PublicInstance | null>(null)
@@ -142,7 +144,7 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
                   ) : (
                     <div
                       key={i}
-                      style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, maxWidth: 256, paddingLeft: 8, paddingRight: 8, borderRadius: 14, borderWidth: 1, borderColor: t.border, backgroundColor: t.composer }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, maxWidth: 256, paddingLeft: 8, paddingRight: 8, borderRadius: 14, borderWidth: 1, borderColor: t.border, backgroundColor: raisedFill(g, t.composer) }}
                     >
                       <Icon source={T.file} size={14} color={t.text} />
                       <Label color={t.text} size={13} weight={500} truncate>
@@ -165,7 +167,8 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
                   borderRadius: 12.8,
                   borderWidth: 1,
                   borderColor: 'rgba(0, 0, 0, 0)',
-                  backgroundColor: t.variant === 'dark' ? t.composer : 'rgba(255, 255, 255, 0.743)',
+                  // Whole-window glass: the raised tint over the coat, not the composer's near-opaque fill.
+                  backgroundColor: raisedFill(g, t.variant === 'dark' ? t.composer : 'rgba(255, 255, 255, 0.743)'),
                 }}
               >
                 {/* Plain text, not <markdown>: native markdown has no intrinsic width, and the

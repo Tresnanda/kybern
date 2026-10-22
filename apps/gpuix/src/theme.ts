@@ -144,7 +144,8 @@ function build(variant: ThemeVariant, scope: WindowScope = 'none', contrast = fa
     inputGroupFill: variant === 'dark' ? resolve('color-mix(in srgb, var(--input) 32%, transparent)', raw) : v('--background'),
     composer: v('--composer-surface'),
     composerFocusBorder: v('--app-composer-focus-border'),
-    codeSurface: v('--app-chat-code-surface'),
+    // A content well (code block, tool output): on whole-window glass a translucent tint that darkens (lightens) what is under it, never an opaque slab.
+    codeSurface: scope === 'window' ? (variant === 'dark' ? 'rgba(0, 0, 0, 0.22)' : 'rgba(13, 13, 13, 0.05)') : v('--app-chat-code-surface'),
     popover,
     link: v('--color-text-accent'),
     accentBlue: v('--color-accent-blue'),

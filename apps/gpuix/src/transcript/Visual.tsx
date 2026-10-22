@@ -25,6 +25,7 @@ import { Dialog } from '../nav/overlay.tsx'
 import { visualTheme } from '../preview/theme.ts'
 import { launchBrowser } from '../preview/browser.ts'
 import { useNav } from '../nav/store.ts'
+import { raisedFill, useGlass } from '../platform/glass.ts'
 import { EXIT, Presence } from '../motion/Presence.tsx'
 import { webDocumentEnter } from '../motion/kit.tsx'
 
@@ -137,7 +138,7 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
       <div style={{ height, width: '100%' }} />
       <Dialog instant width={expandedWidth} radius={14} onClose={() => setExpanded(false)} testId="visual-expanded">
         {/* The desktop's native <dialog> opens and closes without motion (`instant`). `.visual-reply__expanded-header`: 44px, 16px / 8px inset, the title and a ghost close button. */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 44, paddingLeft: 16, paddingRight: 8, backgroundColor: t.surface }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 44, paddingLeft: 16, paddingRight: 8, backgroundColor: raisedFill(g, t.surface) }}>
           <Label color={t.text} weight={500} truncate style={{ flexGrow: 1 }}>{visual.title || 'Interactive visual'}</Label>
           <IconButton testId="dialog-close" label="Close expanded preview" icon={T.close} onClick={() => setExpanded(false)} />
         </div>

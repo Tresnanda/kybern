@@ -11,6 +11,7 @@ import { clampSplitRatioForWidth, shouldStackHorizontalSplit } from '../../../de
 import { PaneProvider, focusPane, getPane, selectPaneThread, useApp } from '../state.ts'
 import { observeElementBounds, type LayoutRect } from '../native/layout.ts'
 import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { useGlass } from '../platform/glass.ts'
 import { Para, alpha } from '../transcript/kit.tsx'
 import { Button } from '../kit/Button.tsx'
 import { addWindowKeyHandler } from '../nav/keys.ts'
@@ -261,7 +262,7 @@ export function SplitDragLayer() {
   const [anchor, setAnchor] = useState<PublicInstance | null>(null)
   const [originY, setOriginY] = useState(0)
   useEffect(() => anchor ? observeElementBounds(renderer, anchor.id, e => setOriginY(e.rect?.y ?? 0)) : undefined, [anchor, renderer])
-  const current = useDrag(), t = useTheme()
+  const current = useDrag(), t = useTheme(), g = useGlass()
   const pacing = usePacing('split')
   useEffect(() => addWindowKeyHandler(e => { if (e.key === 'escape' && (drag || pending)) { drag?.kind === 'thread' ? settleHome() : cancel(); return true } }), [])
   const target = current?.kind === 'thread' ? current.target : undefined
@@ -276,7 +277,7 @@ export function SplitDragLayer() {
       ? <DragGhost rect={{ x: ROW_LEFT, y: current.ghost.homeY - originY, width: current.ghost.width, height: current.ghost.height }} grab={{ x: current.ghost.offX, y: current.ghost.offY }} x={current.x} y={current.y - originY} settle={current.settle ?? null} onSettled={() => { if (drag?.kind === 'thread' && drag.settle) publish(null) }} pacing={pacing as never} radius={10}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 10, paddingRight: 10, height: '100%' }}><ProviderMark kind={current.ghost.kind} size={14} /><Label color={t.text} size={14} truncate>{current.ghost.title}</Label></div>
         </DragGhost>
-      : <div ref={pacing} style={{ position: 'absolute', display: 'flex', alignItems: 'center', gap: 8, left: current.x + 12, top: current.y - originY + 12, width: 240, height: 29, paddingLeft: 10, paddingRight: 10, borderRadius: 10, backgroundColor: t.surface, borderWidth: 1, borderColor: t.border, boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.2)' }, pointerEvents: 'none' }}><Label color={t.text} size={12}>Move conversation</Label></div>}
+      : <div ref={pacing} style={{ position: 'absolute', display: 'flex', alignItems: 'center', gap: 8, left: current.x + 12, top: current.y - originY + 12, width: 240, height: 29, paddingLeft: 10, paddingRight: 10, borderRadius: 10, backgroundColor: g.on ? g.denseFloat : t.surface, borderWidth: 1, borderColor: t.border, boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.2)' }, pointerEvents: 'none' }}><Label color={t.text} size={12}>Move conversation</Label></div>}
   </div>}
   </>
 }
