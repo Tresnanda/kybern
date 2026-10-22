@@ -8,4 +8,5 @@ import { sections as controls } from './controls.tsx'
 import { sections as feedback } from './feedback.tsx'
 import { sections as overlays } from './overlays.tsx'
 import { sections as pickers } from './pickers.tsx'
-export const gallery: Record<string, ComponentType> = { ...hello, ...menus, ...controls, ...feedback, ...overlays, ...pickers }
+import { sections as controlsBoard } from './controlsBoard.tsx'
+export const gallery: Record<string, ComponentType> = { ...hello, ...menus, ...controls, ...feedback, ...overlays, ...pickers, ...controlsBoard }

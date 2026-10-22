@@ -39,7 +39,8 @@ export interface PickerChipProps {
   quiet?: boolean
   size?: 'sm' | 'md'
   disabled?: boolean
-  /** Maximum width; the label truncates. */
+  /** Let the chip shrink and its label truncate (a footer row that must fit); `maxWidth` caps it. */
+  truncate?: boolean
   maxWidth?: number
   onClick?: () => void
   label?: string
@@ -47,7 +48,7 @@ export interface PickerChipProps {
   style?: StyleDesc
 }
 
-export function PickerChip({ children, icon, mark, dot, lead, secondary, chevron = true, open = false, selected = false, neutral = false, quiet = false, size = 'md', disabled = false, maxWidth, onClick, label, testId, style }: PickerChipProps) {
+export function PickerChip({ children, icon, mark, dot, lead, secondary, chevron = true, open = false, selected = false, neutral = false, quiet = false, size = 'md', disabled = false, truncate = false, maxWidth, onClick, label, testId, style }: PickerChipProps) {
   const t = useTheme()
   const c = useControls()
   const g = CONTROL[size]
@@ -60,7 +61,7 @@ export function PickerChip({ children, icon, mark, dot, lead, secondary, chevron
   const glyphColor = disabled ? c.disabled.fg : selected && !neutral && !quiet ? c.chip.selFg : lit ? t.text : t.iconSecondary
   const showChevron = chevron && (!quiet || lit || open)
   const hasLead = !!(icon || mark || dot || lead)
-  const text = typeof children === 'string' ? <Label color={fg} size={g.font} lineHeight={g.line} weight={500} truncate>{children}</Label> : children
+  const text = typeof children === 'string' ? <Label color={fg} size={g.font} lineHeight={g.line} weight={500} truncate={truncate || !!maxWidth}>{children}</Label> : children
   return (
     <div
       testId={testId}
@@ -76,8 +77,8 @@ export function PickerChip({ children, icon, mark, dot, lead, secondary, chevron
       onMouseLeave={() => setHover(false)}
       paintTransform={pressTransform(!disabled && !!onClick, SCALE.large)}
       style={{
-        display: 'flex', alignItems: 'center', gap: size === 'sm' ? 5 : 6, height: g.height, minWidth: 0, flexShrink: 1, ...(maxWidth ? { maxWidth } : {}),
-        paddingLeft: hasLead ? 8 : 10, paddingRight: chevron ? 8 : 10, borderRadius: RADIUS.pill, backgroundColor: rest, cursor: disabled ? 'default' : 'pointer',
+        display: 'flex', alignItems: 'center', gap: size === 'sm' ? 5 : 6, height: g.height, ...(truncate ? { minWidth: 0, flexShrink: 1 } : { flexShrink: 0 }), ...(maxWidth ? { maxWidth, minWidth: 0 } : {}),
+        paddingLeft: hasLead ? 8 : 10, paddingRight: chevron ? 7 : 10, borderRadius: RADIUS.pill, backgroundColor: rest, cursor: disabled ? 'default' : 'pointer',
         ...(disabled ? {} : { hover: { backgroundColor: hoverBg }, active: { backgroundColor: selected ? selectedBg : c.chip.open }, focusVisible: { outlineWidth: 2, outlineColor: c.focus, outlineOffset: 0 } }),
         ...style,
       }}
@@ -87,9 +88,9 @@ export function PickerChip({ children, icon, mark, dot, lead, secondary, chevron
       {dot && <div style={{ width: 7, height: 7, borderRadius: 3.5, backgroundColor: dot, flexShrink: 0, pointerEvents: 'none' }} />}
       {lead}
       {text}
-      {secondary && <Label color={disabled ? c.disabled.fg : t.textTertiary} size={g.font} lineHeight={g.line} weight={500} truncate>{secondary}</Label>}
+      {secondary && <Label color={disabled ? c.disabled.fg : t.textTertiary} size={g.font} lineHeight={g.line} weight={500} truncate={truncate || !!maxWidth}>{secondary}</Label>}
       {chevron && (
-        <div style={{ display: 'flex', width: 11, height: 11, flexShrink: 0, marginLeft: -2, opacity: showChevron ? 1 : 0, pointerEvents: 'none' }}>
+        <div style={{ display: 'flex', width: 11, height: 11, flexShrink: 0, opacity: showChevron ? 1 : 0, pointerEvents: 'none' }}>
           <Chevron open={open} source={N.chevronDown} turn={180} duration={0.25} size={11} color={lit || open ? t.iconSecondary : t.textTertiary} />
         </div>
       )}

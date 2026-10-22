@@ -32,7 +32,7 @@ export function FieldShell({ size = 'md', focused = false, invalid = false, disa
   const c = useControls()
   const edge = (color: string, spread: number) => ({ offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: spread, color, inset: true })
   const shadow = invalid
-    ? [edge(c.field.invalid, 1), { offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 3, color: c.field.invalidRing }]
+    ? [edge(c.field.invalid, 1)]
     : focused ? [edge(c.accent, 1.5)] : disabled ? [edge(c.ink(0.06), 1)] : undefined
   return (
     <div
@@ -44,6 +44,8 @@ export function FieldShell({ size = 'md', focused = false, invalid = false, disa
         ...(bare ? {} : { paddingLeft: size === 'lg' ? 12 : 10, paddingRight: size === 'lg' ? 12 : 10, borderRadius: RADIUS.field,
           backgroundColor: disabled ? 'rgba(0, 0, 0, 0)' : focused ? c.field.focusWash : c.field.bg,
           ...(shadow ? { boxShadow: shadow } : {}),
+          // The 3 px red halo is an outline: a shadow behind the translucent fill would tint it.
+          ...(invalid ? { outlineWidth: 3, outlineColor: c.field.invalidRing, outlineOffset: 0 } : {}),
           ...(disabled || focused || invalid ? {} : { hover: { boxShadow: [edge(c.field.hover, 1)] } }) }),
         ...style,
       }}
