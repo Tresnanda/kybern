@@ -12,8 +12,9 @@
 // through `onChange`; a run of keys (a held arrow) commits once, 250 ms after the last, or when focus leaves.
 import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { useEffect, useRef, useState } from 'react'
-import { ink, Label, useTheme } from '../ui.tsx'
-import { FocusRing, useFocusRing } from './Switch.tsx'
+import { Label, useTheme } from '../ui.tsx'
+import { useFocusRing } from './Switch.tsx'
+import { useControls } from './controls.ts'
 
 const TRACK = 160
 const THUMB = 16
@@ -34,16 +35,16 @@ export function Slider({ value, min, max, onChange, onCommit, valueLabel, muted 
   testId?: string
 }) {
   const t = useTheme()
+  const c = useControls()
   const { renderer } = useGpuix()
   const track = useRef<PublicInstance | null>(null)
   const focus = useFocusRing()
-  const dark = t.variant === 'dark'
   // A press and its release can arrive in one tick, before the drag state re-renders.
   const dragging = useRef<number | null>(null)
   const [drag, setDrag] = useState<number | null>(null)
   const shown = drag ?? value
   const ratio = (shown - min) / (max - min)
-  const fill = muted ? t.textTertiary : t.switchOn
+  const fill = muted ? t.textTertiary : c.slider.fill
   // Key steps not yet committed: a held arrow repeats ~30 times a second, and each commit saves and rebuilds the theme.
   const keyed = useRef<number | null>(null)
   const keyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -110,15 +111,14 @@ export function Slider({ value, min, max, onChange, onCommit, valueLabel, muted 
           clearTimeout(keyTimer.current)
           keyTimer.current = setTimeout(flushKeys, 250)
         }}
-        style={{ position: 'relative', width: TRACK, height: 28, flexShrink: 0, cursor: disabled ? 'default' : 'pointer' }}
+        style={{ position: 'relative', width: TRACK, height: 28, flexShrink: 0, borderRadius: 8, cursor: disabled ? 'default' : 'pointer', ...(disabled ? {} : { focusVisible: { outlineWidth: 2, outlineColor: c.focus, outlineOffset: 0 } }) }}
       >
         {/* The parts paint fills, which would take the press from the track. */}
-        <div style={{ position: 'absolute', left: 0, top: 12, width: TRACK, height: 4, borderRadius: 2, backgroundColor: ink(t, dark ? 0.12 : 0.1), pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', left: 0, top: 12, width: TRACK, height: 4, borderRadius: 2, backgroundColor: c.slider.track, pointerEvents: 'none' }} />
         <div style={{ position: 'absolute', left: 0, top: 12, width: THUMB / 2 + ratio * (TRACK - THUMB), height: 4, borderRadius: 2, backgroundColor: fill, pointerEvents: 'none' }} />
-        <div style={{ position: 'absolute', left: ratio * (TRACK - THUMB), top: 6, width: THUMB, height: THUMB, borderRadius: THUMB / 2, backgroundColor: '#ffffff', borderWidth: 0.5, borderColor: 'rgba(0, 0, 0, 0.18)', boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 3, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.28)' }, pointerEvents: 'none' }} />
-        <FocusRing visible={focus.visible} radius={8} width={2} offset={1} color={t.v('--ring')} />
+        <div style={{ position: 'absolute', left: ratio * (TRACK - THUMB), top: 6, width: THUMB, height: THUMB, borderRadius: THUMB / 2, backgroundColor: '#ffffff', boxShadow: [{ offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 0.5, color: 'rgba(0, 0, 0, 0.25)' }, { offsetX: 0, offsetY: 1, blurRadius: 3, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.3)' }], pointerEvents: 'none' }} />
       </div>
-      <div style={{ display: 'flex', width: 40, justifyContent: 'flex-end', flexShrink: 0 }}><Label color={muted ? t.textTertiary : t.textSecondary} size={13} lineHeight={18}>{valueLabel}</Label></div>
+      <div style={{ display: 'flex', width: 40, justifyContent: 'flex-end', flexShrink: 0 }}><Label color={t.textTertiary} size={13} lineHeight={18} style={{ fontVariantNumeric: 'tabular-nums' } as never}>{valueLabel}</Label></div>
     </div>
   )
 }

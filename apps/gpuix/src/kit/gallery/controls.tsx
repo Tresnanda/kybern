@@ -52,9 +52,9 @@ function Controls() {
       <At x={260} y={220}><Toggle size="lg" variant="outline" defaultPressed>Large</Toggle></At>
 
       <Caption x={40} y={272}>Segmented</Caption>
-      <At x={40} y={296}><Segmented testId="seg-a" aria-label="Range" textSize={16} options={RANGE} value={range} onChange={setRange} /></At>
-      <At x={260} y={296}><Segmented testId="seg-b" aria-label="Mode" textSize={16} options={MODES} value={mode} onChange={setMode} /></At>
-      <At x={520} y={296}><Segmented aria-label="Busy" busy textSize={16} options={RANGE} value="day" onChange={() => {}} /></At>
+      <At x={40} y={296}><Segmented testId="seg-a" aria-label="Range" options={RANGE} value={range} onChange={setRange} /></At>
+      <At x={260} y={296}><Segmented testId="seg-b" aria-label="Mode" options={MODES} value={mode} onChange={setMode} /></At>
+      <At x={520} y={296}><Segmented aria-label="Busy" busy options={RANGE} value="day" onChange={() => {}} /></At>
 
       <Caption x={40} y={348}>Time picker</Caption>
       <At x={40} y={372}><TimePicker testId="time" width={168} value={time} onChange={setTime} /></At>

@@ -1,0 +1,99 @@
+// One input language (ADE-55): `FieldShell` is the box, `TextField` the single-line input. `SearchField`, `NumberField` and
+// `TextArea` build on the shell. 28 high (`lg` 32 in dialogs), radius 9, an ink fill with no edge; hover adds a 1 px ink edge,
+// focus a 1.5 px accent edge over a faint accent wash, invalid a 1 px red edge and a 3 px red halo, disabled drops the fill for
+// a 1 px ink edge (the spec's 45° hatch needs a repeating pattern the renderer does not have, so it is the edge alone).
+// Placeholder text is `text3` (the native input fixes it); the caret is the accent.
+import type { InputProps, StyleDesc } from '@gpuix/react'
+import { useState, type ReactNode } from 'react'
+import { FONT_MONO, FONT_UI } from '../theme.ts'
+import { useTheme } from '../ui.tsx'
+import { HEIGHT, RADIUS, useControls } from './controls.ts'
+
+export type FieldSize = 'md' | 'lg'
+
+export interface FieldShellProps {
+  size?: FieldSize
+  focused?: boolean
+  invalid?: boolean
+  disabled?: boolean
+  /** No box at all (the palette's input): the content only. */
+  bare?: boolean
+  /** Taller multi-line box (`TextArea`). */
+  multiline?: boolean
+  width?: number | `${number}%`
+  leading?: ReactNode
+  trailing?: ReactNode
+  children: ReactNode
+  testId?: string
+  style?: StyleDesc
+}
+
+export function FieldShell({ size = 'md', focused = false, invalid = false, disabled = false, bare = false, multiline = false, width, leading, trailing, children, testId, style }: FieldShellProps) {
+  const c = useControls()
+  const edge = (color: string, spread: number) => ({ offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: spread, color, inset: true })
+  const shadow = invalid
+    ? [edge(c.field.invalid, 1), { offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 3, color: c.field.invalidRing }]
+    : focused ? [edge(c.accent, 1.5)] : disabled ? [edge(c.ink(0.06), 1)] : undefined
+  return (
+    <div
+      testId={testId}
+      style={{
+        display: 'flex', alignItems: multiline ? 'flex-start' : 'center', gap: 6, minWidth: 0, flexShrink: 1,
+        ...(width ? { width } : {}),
+        ...(multiline ? { minHeight: 76, paddingTop: 9, paddingBottom: 9 } : { height: size === 'lg' ? HEIGHT.lg : HEIGHT.md }),
+        ...(bare ? {} : { paddingLeft: size === 'lg' ? 12 : 10, paddingRight: size === 'lg' ? 12 : 10, borderRadius: RADIUS.field,
+          backgroundColor: disabled ? 'rgba(0, 0, 0, 0)' : focused ? c.field.focusWash : c.field.bg,
+          ...(shadow ? { boxShadow: shadow } : {}),
+          ...(disabled || focused || invalid ? {} : { hover: { boxShadow: [edge(c.field.hover, 1)] } }) }),
+        ...style,
+      }}
+    >
+      {leading}
+      {children}
+      {trailing}
+    </div>
+  )
+}
+
+export interface TextFieldProps extends Omit<InputProps, 'value' | 'onChange' | 'style' | 'readOnly'> {
+  /** Accessible name. */
+  label: string
+  value: string
+  onChange: (value: string) => void
+  size?: FieldSize
+  width?: number | `${number}%`
+  invalid?: boolean
+  disabled?: boolean
+  bare?: boolean
+  mono?: boolean
+  leading?: ReactNode
+  trailing?: ReactNode
+  /** The input's own style (font size) or the shell's (`shell`). */
+  style?: StyleDesc
+  shell?: StyleDesc
+  testId?: string
+  onSubmit?: () => void
+  onBlur?: () => void
+}
+
+export function TextField({ label, value, onChange, size = 'md', width, invalid = false, disabled = false, bare = false, mono = false, leading, trailing, style, shell, testId, onBlur, onFocus, ...props }: TextFieldProps) {
+  const t = useTheme()
+  const [focused, setFocused] = useState(false)
+  return (
+    <FieldShell size={size} focused={focused} invalid={invalid} disabled={disabled} bare={bare} width={width} leading={leading} trailing={trailing} style={shell}>
+      <input
+        {...props}
+        testId={testId}
+        tabIndex={disabled ? -1 : 0}
+        aria-label={label}
+        aria-invalid={invalid || undefined}
+        value={value}
+        readOnly={disabled}
+        onChange={(e) => onChange(e.value ?? '')}
+        onFocus={(e) => { setFocused(true); onFocus?.(e) }}
+        onBlur={() => { setFocused(false); onBlur?.() }}
+        style={{ flexGrow: 1, flexShrink: 1, minWidth: 0, height: '100%', borderWidth: 0, fontFamily: mono ? FONT_MONO : FONT_UI, fontSize: size === 'lg' ? 14 : 13, color: disabled ? t.textTertiary : t.text, backgroundColor: 'rgba(0, 0, 0, 0)', ...style }}
+      />
+    </FieldShell>
+  )
+}

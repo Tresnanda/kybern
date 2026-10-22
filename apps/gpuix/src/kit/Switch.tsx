@@ -11,6 +11,7 @@ import { useRef, useState } from 'react'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { over } from '../theme.ts'
 import { useTheme } from '../ui.tsx'
+import { useControls } from './controls.ts'
 
 /** CSS `ease-out` (the keyword, not the `--ease-out` token). */
 const CSS_EASE_OUT: [number, number, number, number] = [0, 0, 0.58, 1]
@@ -98,6 +99,7 @@ export interface SwitchProps {
 
 export function Switch({ checked: checkedProp, defaultChecked = false, onCheckedChange, disabled = false, 'aria-label': label, testId, style }: SwitchProps) {
   const t = useTheme()
+  const c = useControls()
   const [checked, setChecked] = useControllable(checkedProp, defaultChecked, onCheckedChange)
   const [pressed, setPressed] = useState(false)
   const focus = useFocusRing()
@@ -106,10 +108,10 @@ export function Switch({ checked: checkedProp, defaultChecked = false, onChecked
   const toggle = () => { if (!disabled) setChecked(!checked) }
   // Disabled: colours flattened onto the page instead of a per-element opacity (see `dim`).
   const page = t.v('--background')
-  const d = (c: string, under?: string) => (disabled ? dim(c, page, under, undefined, t.scope === 'window') : c)
-  const track = checked ? t.switchOn : t.switchOff
-  const thumb = <div style={{ flexGrow: 1, height: 16, borderRadius: 8, backgroundColor: d('#ffffff'), boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 3 / 2, spreadRadius: 0, color: `rgba(0, 0, 0, ${disabled ? 0.064 : 0.1})` }, pointerEvents: 'none' }} />
-  const layer: StyleDesc = { position: 'absolute', left: 0, top: 0, width: 32, height: 20, borderRadius: 10, borderWidth: 1, pointerEvents: 'none' }
+  const d = (color: string, under?: string) => (disabled ? dim(color, page, under, 0.4, t.scope === 'window') : color)
+  const track = checked ? c.switch.on : c.switch.off
+  const thumb = <div style={{ flexGrow: 1, height: 16, borderRadius: 8, backgroundColor: d('#ffffff'), boxShadow: [{ offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 0.5, color: 'rgba(0, 0, 0, 0.12)' }, { offsetX: 0, offsetY: 1, blurRadius: 1, spreadRadius: 0, color: `rgba(0, 0, 0, ${disabled ? 0.1 : 0.25})` }], pointerEvents: 'none' }} />
+  const layer: StyleDesc = { position: 'absolute', left: 0, top: 0, width: 32, height: 20, borderRadius: 10, pointerEvents: 'none' }
   return (
     <div
       testId={testId}
@@ -124,12 +126,12 @@ export function Switch({ checked: checkedProp, defaultChecked = false, onChecked
       onBlur={focus.handlers.onBlur}
       onClick={toggle}
       onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') { focus.keyed(); toggle() } }}
-      style={{ position: 'relative', width: 32, height: 20, flexShrink: 0, cursor: disabled ? 'not-allowed' : 'pointer', ...style }}
+      style={{ position: 'relative', width: 32, height: 20, flexShrink: 0, borderRadius: 10, cursor: disabled ? 'not-allowed' : 'pointer', ...(disabled ? {} : { focusVisible: { outlineWidth: 2, outlineColor: c.focus, outlineOffset: 0 } }), ...style }}
     >
-      <div style={{ ...layer, borderColor: d(t.switchOffBorder, t.switchOff), backgroundColor: d(t.switchOff) }} />
+      <div style={{ ...layer, backgroundColor: d(c.switch.off) }} />
       {PATCHED_NATIVE
-        ? <div paintTransform={{ initial: false, animate: { opacity: checked ? 1 : 0 }, transition: { duration: 0.2, ease: TW_EASE } }} style={{ ...layer, borderColor: d(t.switchOn), backgroundColor: d(t.switchOn) }} />
-        : <motion.div initial={false} animate={{ opacity: checked ? 1 : 0 }} transition={{ duration: 0.2, ease: TW_EASE }} style={{ ...layer, borderColor: d(t.switchOn), backgroundColor: d(t.switchOn) }} />}
+        ? <div paintTransform={{ initial: false, animate: { opacity: checked ? 1 : 0 }, transition: { duration: 0.2, ease: TW_EASE } }} style={{ ...layer, backgroundColor: d(c.switch.on) }} />
+        : <motion.div initial={false} animate={{ opacity: checked ? 1 : 0 }} transition={{ duration: 0.2, ease: TW_EASE }} style={{ ...layer, backgroundColor: d(c.switch.on) }} />}
       {/* Travel and stretch run on their own curves, so they sit on two nested layers: the travel is a paint-only translation of
           the whole thumb, the held stretch the desktop's `scale-x-110` itself (N5), both with no layout per frame. */}
       {PATCHED_NATIVE
@@ -137,7 +139,7 @@ export function Switch({ checked: checkedProp, defaultChecked = false, onChecked
           <div
             paintTransform={{ initial: false, animate: { scaleX: pressed && !disabled ? 1.1 : 1 }, transition: { duration: 0.1, delay: 0.1, ease: [...CSS_EASE] }, origin: [checked ? 1 : 0, 0.5] }}
             // `ring-1 ring-black/5` around the 16px thumb, then the thumb with `shadow-sm`.
-            style={{ position: 'absolute', top: 0, left: 0, width: 18, height: 18, borderRadius: 9, backgroundColor: disabled ? d('rgba(0, 0, 0, 0.05)', track) : 'rgba(0, 0, 0, 0.05)', pointerEvents: 'none', display: 'flex', paddingLeft: 1, paddingRight: 1, paddingTop: 1, paddingBottom: 1 }}
+            style={{ position: 'absolute', top: 0, left: 0, width: 18, height: 18, borderRadius: 9, pointerEvents: 'none', display: 'flex', paddingLeft: 1, paddingRight: 1, paddingTop: 1, paddingBottom: 1 }}
           >
             {thumb}
           </div>
@@ -147,12 +149,11 @@ export function Switch({ checked: checkedProp, defaultChecked = false, onChecked
             initial={false}
             animate={{ left: checked ? -grow : 0, width: 18 + grow }}
             transition={{ duration: 0.1, delay: 0.1, ease: CSS_EASE }}
-            style={{ position: 'absolute', top: 0, height: 18, borderRadius: 9, backgroundColor: disabled ? d('rgba(0, 0, 0, 0.05)', track) : 'rgba(0, 0, 0, 0.05)', pointerEvents: 'none', display: 'flex', paddingLeft: 1, paddingRight: 1, paddingTop: 1, paddingBottom: 1 }}
+            style={{ position: 'absolute', top: 0, height: 18, borderRadius: 9, pointerEvents: 'none', display: 'flex', paddingLeft: 1, paddingRight: 1, paddingTop: 1, paddingBottom: 1 }}
           >
             {thumb}
           </motion.div>
         </motion.div>}
-      <FocusRing visible={focus.visible} radius={10} color={withAlpha(t.v('--color-border-focus'), 0.6)} offsetColor={t.v('--background')} />
     </div>
   )
 }

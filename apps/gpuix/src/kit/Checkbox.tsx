@@ -1,8 +1,8 @@
-// The desktop's `Checkbox` (`components/kit/checkbox.tsx`, Base UI): a 16px box (radius 4, `--color-border-light`
-// border; `--input`/32 fill in dark, `--background` otherwise). Checking it fills the box with `--primary` (opacity
-// 0 → 1 and scale 0.8 → 1, 150 ms smooth-out), then the check strokes itself in: `.t-check-path` dasharray 24,
-// dashoffset 24 → 0 over 250 ms smooth-out after an 80 ms delay (`styles/motion.css`). Unchecking is instant.
-// `indeterminate` shows a foreground dash on the unfilled box.
+// The one checkbox (ADE-55, Direction C): a 16 px box, radius 5. Off is a 1.5 px ink ring on no fill (hover: the ring darkens);
+// on is the accent with a white tick. Checking fills the box (opacity 0 → 1 and scale 0.8 → 1, 150 ms smooth-out), then the
+// check strokes itself in (`.t-check-path`: dasharray 24, dashoffset 24 → 0 over 250 ms smooth-out after an 80 ms delay).
+// Unchecking is instant. `indeterminate` is the accent box with a white dash. Replaces the Tasks `Check`, the criteria box, the
+// worktree and close-guard boxes and the coordinator card glyphs. Keyboard focus draws the 2 px accent ring natively.
 //
 // The draw is native and paint-only (`strokeDraw`, `motion/success.ts`; `native/patches/stroke_draw.rs`): the check's sprite
 // shows the SVG rasterized at each presented frame's dash offset, with no render or layout per frame. With the stock
@@ -14,7 +14,8 @@ import { DURATION, EASE } from '../motion/kit.tsx'
 import { strokeDraw } from '../motion/success.ts'
 import { over } from '../theme.ts'
 import { REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { dim, FocusRing, useControllable, useFocusRing, withAlpha } from './Switch.tsx'
+import { dim, useControllable, useFocusRing, withAlpha } from './Switch.tsx'
+import { RADIUS, useControls } from './controls.ts'
 
 const svg = (body: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-linecap="round" stroke-linejoin="round" stroke-width="3">${body}</svg>`
 const CHECK = svg('<path d="M5.252 12.7 10.2 18.63 18.748 5.37"/>')
@@ -36,24 +37,21 @@ export interface CheckboxProps {
 
 export function Checkbox({ checked: checkedProp, defaultChecked = false, onCheckedChange, indeterminate = false, disabled = false, invalid = false, 'aria-label': label, testId, style }: CheckboxProps) {
   const t = useTheme()
+  const c = useControls()
   const [checked, setChecked] = useControllable(checkedProp, defaultChecked, onCheckedChange)
   const focus = useFocusRing()
   // Only a change made while mounted animates; a box that starts checked shows its check at rest.
   const [animate, setAnimate] = useState(false)
   const toggle = () => { if (disabled) return; setAnimate(!REDUCED_MOTION); setChecked(indeterminate ? true : !checked) }
-  const filled = checked && !indeterminate
   const shown = checked || indeterminate
-  const dark = t.variant === 'dark'
+  const filled = shown
   const destructive = t.v('--destructive')
-  const fill = filled || !dark ? t.v('--background') : withAlpha(t.v('--input'), 0.32)
-  const border = invalid ? withAlpha(destructive, focus.visible ? 0.64 : 0.36) : t.v('--color-border-light')
-  const ring = invalid ? withAlpha(destructive, dark ? 0.24 : 0.48) : t.v('--ring')
+  const edge = invalid ? withAlpha(destructive, focus.visible ? 0.9 : 0.7) : c.check.edge
   // Disabled: colours flattened onto the page instead of a per-element opacity (see `dim` in Switch.tsx).
   const page = t.v('--background')
   const glass = t.scope === 'window'
-  const boxFill = glass ? fill : over(fill, page)
-  const d = (c: string, under?: string) => (disabled ? dim(c, page, under, undefined, glass) : c)
-  const primary = d(t.v('--primary'))
+  const d = (color: string, under?: string) => (disabled ? dim(color, page, under, 0.4, glass) : color)
+  const primary = d(c.check.on)
   const play = animate && !REDUCED_MOTION
   // `.t-check-path`: dasharray 24, drawn over `--duration-fast` after `--duration-micro`.
   const draw = play ? strokeDraw(24, DURATION.micro * 1000) : undefined
@@ -72,26 +70,25 @@ export function Checkbox({ checked: checkedProp, defaultChecked = false, onCheck
       onBlur={focus.handlers.onBlur}
       onClick={toggle}
       onKeyDown={(e) => { if (e.key === 'space') { focus.keyed(); toggle() } }}
-      style={{ position: 'relative', width: 16, height: 16, flexShrink: 0, borderRadius: 4, borderWidth: 1, borderColor: d(border, boxFill), backgroundColor: disabled ? d(boxFill) : fill, cursor: disabled ? 'default' : 'pointer', ...style }}
+      style={{ position: 'relative', width: 16, height: 16, flexShrink: 0, borderRadius: RADIUS.check, borderWidth: 1.5, borderColor: filled ? 'rgba(0, 0, 0, 0)' : d(edge), cursor: disabled ? 'default' : 'pointer', ...(disabled ? {} : { hover: filled ? {} : { borderColor: invalid ? edge : c.check.hoverEdge }, focusVisible: { outlineWidth: 2, outlineColor: c.focus, outlineOffset: 0 } }), ...style }}
     >
       {shown && (
         // `-inset-px`: the indicator covers the border box; it grows from 80% about its centre.
         <motion.div
           key={`${filled}`}
-          initial={play ? { opacity: 0, left: 0.6, top: 0.6, width: 12.8, height: 12.8, borderRadius: 3.2 } : false}
-          animate={{ opacity: 1, left: -1, top: -1, width: 16, height: 16, borderRadius: 4 }}
+          initial={play ? { opacity: 0, left: 0.1, top: 0.1, width: 12.8, height: 12.8, borderRadius: 4 } : false}
+          animate={{ opacity: 1, left: -1.5, top: -1.5, width: 16, height: 16, borderRadius: RADIUS.check }}
           transition={tween}
-          style={{ ...box, backgroundColor: filled ? primary : 'transparent' }}
+          style={{ ...box, backgroundColor: primary }}
         />
       )}
       {shown && (
-        <motion.div key={`g${filled}`} initial={play ? { opacity: 0 } : false} animate={{ opacity: 1 }} transition={tween} style={{ ...box, left: 1, top: 1, width: 12, height: 12 }}>
+        <motion.div key={`g${filled}`} initial={play ? { opacity: 0 } : false} animate={{ opacity: 1 }} transition={tween} style={{ ...box, left: 0.5, top: 0.5, width: 12, height: 12 }}>
           {indeterminate
-            ? <svg source={DASH} style={{ ...box, left: 0, top: 0, width: 12, height: 12, color: d(t.v('--foreground'), boxFill) }} />
-            : <svg source={CHECK} {...(draw ? { paintAnimation: draw } : {})} style={{ ...box, left: 0, top: 0, width: 12, height: 12, color: d(t.v('--primary-foreground')) }} />}
+            ? <svg source={DASH} style={{ ...box, left: 0, top: 0, width: 12, height: 12, color: d(c.check.tick, primary) }} />
+            : <svg source={CHECK} {...(draw ? { paintAnimation: draw } : {})} style={{ ...box, left: 0, top: 0, width: 12, height: 12, color: d(c.check.tick, primary) }} />}
         </motion.div>
       )}
-      <FocusRing visible={focus.visible} radius={4} color={ring} offsetColor={t.v('--background')} />
     </div>
   )
 }

@@ -26,7 +26,8 @@ import { SpaceLogo } from '../spaces/SpaceLogo.tsx'
 import { Label, ProviderMark, useTheme } from '../ui.tsx'
 import { N } from './glyphs.ts'
 import { canMoveNavHistory, goBack, goForward, goPage, isNavEntryValid, newThread, openThread } from './history.ts'
-import { Dialog, Kbd, muted } from './overlay.tsx'
+import { Dialog, muted } from './overlay.tsx'
+import { Kbd } from '../kit/Kbd.tsx'
 import { getNav, setNav, useNav } from './store.ts'
 
 interface Item {

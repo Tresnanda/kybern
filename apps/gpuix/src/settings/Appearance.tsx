@@ -116,7 +116,7 @@ function VariantSection({ variant, active, save }: { variant: ThemeVariant; acti
 
   return <Section title={`${Name} theme`} accessory={accessory}>
     <Row title="Window" description="Translucent lets your desktop show through Kybern." status={status}>
-      <Segmented testId={`settings-window-${variant}`} aria-label={`${Name} theme window material`} textSize={13} segmentPadX={10} options={WINDOW_OPTIONS} value={m.material} onChange={(material) => { setDisclose(true); patch({ material: material as typeof m.material }) }} />
+      <Segmented testId={`settings-window-${variant}`} aria-label={`${Name} theme window material`} options={WINDOW_OPTIONS} value={m.material} onChange={(material) => { setDisclose(true); patch({ material: material as typeof m.material }) }} />
     </Row>
     {translucent && <div key="sidebar" paintTransform={rise}><Row title="Sidebar only" description="Keep the conversation solid. Only the sidebar and window frame are translucent.">
       <Switch aria-label={`${Name} theme translucent sidebar only`} testId={`settings-sidebar-only-${variant}`} checked={sidebarOnly} onCheckedChange={(next) => patch({ sidebarOnly: next })} />

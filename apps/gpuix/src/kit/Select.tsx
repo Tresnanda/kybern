@@ -34,6 +34,7 @@ import { useSettingsModal } from '../settings/controls.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { raisedFill, raisedRim, useGlass } from '../platform/glass.ts'
 import { useEscapeLayer } from './AlertDialog.tsx'
+import { SelectTrigger } from './SelectTrigger.tsx'
 
 export type SelectOption = { value: string; label: string; disabled?: boolean }
 export type SelectEntry = SelectOption | { group: string } | { separator: true }
@@ -42,11 +43,12 @@ const isOption = (e: SelectEntry): e is SelectOption => 'value' in e
 /** The desktop item indicator: its own 24² check path at stroke 2, drawn at 12px. */
 export const SELECT_CHECK = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M5.252 12.7 10.2 18.63 18.748 5.37" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
 
+/** The control heights (`kit/controls.ts`): the trigger is `SelectTrigger`, the secondary button's fill. */
 const TRIGGER = {
-  lg: { height: 36, px: 11, gap: 8, radius: 8, font: 14, line: 21 },
-  default: { height: 32, px: 11, gap: 8, radius: 8, font: 14, line: 21 },
-  sm: { height: 28, px: 9, gap: 6, radius: 8, font: 14, line: 21 },
-  xs: { height: 24, px: 7, gap: 4, radius: 6, font: 12, line: 18 },
+  lg: { height: 32, size: 'lg' },
+  default: { height: 32, size: 'lg' },
+  sm: { height: 28, size: 'md' },
+  xs: { height: 24, size: 'sm' },
 } as const
 
 const SURFACE = {
@@ -203,60 +205,38 @@ export function Select({
   }, [open, active, renderer])
 
   const triggerText = selected?.label ?? placeholder ?? ''
-  const triggerColor = !selected ? muted(t, 1) : variant === 'ghost' ? t.textSecondary : t.text
-  const [hover, setHover] = useState(false)
 
   return (
     <div ref={(el) => { rootRef.current = el }} style={{ display: 'flex', position: 'relative', minWidth: 0, ...(width ? { width } : variant === 'default' ? { flexGrow: 1, minWidth: 144 } : {}) }}>
-      <div
-        ref={(el) => { triggerRef.current = el }}
+      <SelectTrigger
+        triggerRef={(el) => { triggerRef.current = el }}
         testId={testId ? `${testId}-trigger` : undefined}
-        role="combobox"
-        aria-label={label ?? triggerText}
-        aria-expanded={open}
-        tabIndex={disabled ? -1 : 0}
-        onMouseEnter={() => setHover(true)}
-        onMouseLeave={() => setHover(false)}
-        onMouseDown={() => { key.current = false; pressedWhileOpen.current = open }}
-        onClick={() => {
-          if (disabled) return
-          if (dismissedByOutside.current) { dismissedByOutside.current = false; return }
-          if (pressedWhileOpen.current) { pressedWhileOpen.current = false; setOpen(false); return }
-          setOpen(!open)
+        label={label ?? triggerText}
+        size={m.size}
+        open={open}
+        disabled={disabled}
+        placeholder={!selected}
+        width="100%"
+        input={{
+          role: 'combobox', tabIndex: disabled ? -1 : 0,
+          onMouseDown: () => { key.current = false; pressedWhileOpen.current = open },
+          onClick: () => {
+            if (disabled) return
+            if (dismissedByOutside.current) { dismissedByOutside.current = false; return }
+            if (pressedWhileOpen.current) { pressedWhileOpen.current = false; setOpen(false); return }
+            setOpen(!open)
+          },
+          onKeyDown: (e: { key: string }) => {
+            key.current = true
+            if (disabled || open) return
+            if (e.key === 'enter' || e.key === 'space' || e.key === 'down' || e.key === 'up') return setOpen(true)
+            const c = printable(e as never)
+            const hit = c ? typeahead(c, value) : undefined
+            if (hit) commit(hit.value)
+          },
         }}
-        onKeyDown={(e) => {
-          key.current = true
-          if (disabled || open) return
-          if (e.key === 'enter' || e.key === 'space' || e.key === 'down' || e.key === 'up') return setOpen(true)
-          const c = printable(e)
-          const hit = c ? typeahead(c, value) : undefined
-          if (hit) commit(hit.value)
-        }}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: m.gap,
-          height: m.height,
-          width: '100%',
-          minWidth: 0,
-          paddingLeft: m.px,
-          paddingRight: m.px,
-          borderRadius: m.radius,
-          borderWidth: 1,
-          borderColor: variant === 'ghost' ? 'rgba(0, 0, 0, 0)' : raisedRim(g, t.border),
-          ...(variant === 'ghost'
-            ? hover || open ? { backgroundColor: t.v('--color-background-elevated-secondary') } : {}
-            : { backgroundColor: raisedFill(g, t.v('--color-background-control-opaque')) }),
-          opacity: disabled ? 0.64 : 1,
-          cursor: disabled ? 'default' : 'pointer',
-        }}
-      >
-        <Label color={variant === 'ghost' && (hover || open) && selected ? t.text : triggerColor} size={m.font} lineHeight={m.line} truncate style={{ flexGrow: 1, pointerEvents: 'none' }}>
-          {triggerText}
-        </Label>
-        <Icon source={N.chevronDown} size={12} color={variant === 'ghost' && (hover || open) ? t.text : triggerColor === t.textSecondary ? t.textSecondary : t.text} style={{ opacity: 0.5, pointerEvents: 'none' }} />
-      </div>
+        style={variant === 'ghost' ? { backgroundColor: 'rgba(0, 0, 0, 0)' } : undefined}
+      >{triggerText}</SelectTrigger>
       {(open || leaving) && (
         <PopupLayer
           {...(aligned && at

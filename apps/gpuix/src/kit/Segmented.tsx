@@ -1,23 +1,28 @@
-// The desktop's `SegmentedControl` (`components/kit/segmented-control.tsx`): a radiogroup on the recessed
-// `.sidebar-segmented-picker` track (kit.css:2886-2902: 1px ink 8%/7% hairline, `--background` / elevated-secondary
-// fill, inset shadow, radius 8, 2px padding, 2px gaps) with one raised `.sidebar-segmented-thumb` (kit.css:2911-2933)
-// that slides between 24px segments (`.t-tabs-pill`: left/width 250 ms smooth-out; the first placement lands without
-// motion). Arrow keys move the choice and the focus (roving tab index), skipping `unavailable` options, which stay
-// visible, explain themselves in a tooltip and ignore input. While `busy` the control keeps focus but ignores input.
-// Reduce Motion: the pill jumps (`.t-tabs-pill { transition: none }`).
+// The one segmented control (ADE-55, Direction C): a radiogroup on a recessed ink track (28 high, `sm` 24; 2 px inset, radius 11)
+// with one raised thumb that slides between segments (radius 9 = track − inset, concentric). The thumb is an accent tint and
+// the selected label takes the tinted accent; the others are secondary and light on hover. Labels are 13/500 (`sm` 12) with
+// 12 px segment padding; an icon-only option takes 7. `count` trails a label in `text3`. Arrow keys move the choice and the
+// focus (roving tab index), skipping `unavailable` options, which stay visible, explain themselves in a tooltip and ignore
+// input. While `busy` the control keeps focus but ignores input. Replaces the Settings, Usage, PR-list and Tasks segmented
+// controls. Slide: `.t-tabs-pill` (250 ms smooth-out; the first placement lands without motion; Reduce Motion jumps).
 import { motion, useGpuixRequired, type PublicInstance, type StyleDesc } from '@gpuix/react'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { Tip } from '../nav/overlay.tsx'
-import { over } from '../theme.ts'
 import { DURATION, EASE } from '../motion/kit.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
-import { useGlass } from '../platform/glass.ts'
-import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { FocusRing, useFocusRing, withAlpha } from './Switch.tsx'
+import { Icon } from '../icons.tsx'
+import { glyphSource } from './Button.tsx'
+import { CONTROL, HEIGHT, RADIUS, useControls } from './controls.ts'
+import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { useFocusRing } from './Switch.tsx'
 
 export interface SegmentedOption {
   value: string
   label: string
+  /** An icon-only segment: a glyph (kit name or SVG source); `label` is then the accessible name. */
+  icon?: string
+  /** A count after the label, in `text3`. */
+  count?: number | string
   /** Why this option cannot be chosen right now (tooltip); arrow keys skip it. */
   unavailable?: string | null
 }
@@ -28,10 +33,9 @@ export interface SegmentedProps {
   onChange: (value: string) => void
   busy?: boolean
   'aria-label'?: string
-  /** Segment text size: the desktop inherits it (`SEGMENT_TEXT` is `--app-font-size-ui`, 14 px by default). */
-  textSize?: number
-  /** Segment height (24; the PR list uses 28) and horizontal padding (8; the PR list uses 10). */
-  segmentHeight?: number
+  /** `md` is 28 high (13 px labels), `sm` 24 (12 px). */
+  size?: 'sm' | 'md'
+  /** Overrides of the size's segment padding (12 / 9). */
   segmentPadX?: number
   /** Stretch to the parent's width with equal segments (`FULL_WIDTH_SEGMENTS`). */
   fill?: boolean
@@ -41,18 +45,19 @@ export interface SegmentedProps {
 
 type Box = { x: number; w: number }
 
-export function Segmented({ options, value, onChange, busy = false, 'aria-label': label, textSize = 14, segmentHeight = 24, segmentPadX = 8, fill = false, testId, style }: SegmentedProps) {
+export function Segmented({ options, value, onChange, busy = false, 'aria-label': label, size = 'md', segmentPadX, fill = false, testId, style }: SegmentedProps) {
   const t = useTheme()
-  const g = useGlass()
+  const c = useControls()
+  const textSize = CONTROL[size].font
+  const segmentHeight = (size === 'sm' ? HEIGHT.sm : HEIGHT.md) - 4
+  const padX = segmentPadX ?? (size === 'sm' ? 9 : 12)
   const renderer = useGpuixRequired()
   const track = useRef<PublicInstance>(null)
   const buttons = useRef(new Map<string, PublicInstance>())
   const [boxes, setBoxes] = useState<Record<string, Box> | null>(null)
   const [hover, setHover] = useState<string | null>(null)
-  const [focused, setFocused] = useState<string | null>(null)
-  const focus = useFocusRing()
-  const dark = t.variant === 'dark'
-  const layoutKey = options.map((o) => `${o.value}:${o.label}`).join(',') + `|${textSize}|${segmentPadX}|${fill}`
+    const focus = useFocusRing()
+  const layoutKey = options.map((o) => `${o.value}:${o.label}:${o.count ?? ''}`).join(',') + `|${textSize}|${padX}|${fill}`
 
   // Measure each segment after layout (offsets from the track's padding box), retrying until GPUI has laid it out.
   useLayoutEffect(() => {
@@ -65,7 +70,7 @@ export function Segmented({ options, value, onChange, busy = false, 'aria-label'
         const b = buttons.current.get(o.value)
         const r = b ? renderer.getElementBounds?.(b.id) : null
         if (!root || !r || r.width === 0) { if (++tries < 20) timer = setTimeout(measure, 16); return }
-        next[o.value] = { x: r.x - root.x - 1, w: r.width }
+        next[o.value] = { x: r.x - root.x, w: r.width }
       }
       setBoxes(next)
     }
@@ -97,13 +102,6 @@ export function Segmented({ options, value, onChange, busy = false, 'aria-label'
     }
   }
 
-  // Whole-window glass (`platform/glass.ts`): the track is a recess tint and the thumb is an opaque plate, so it reads on any desktop.
-  const thumbFill = dark ? t.v('--composer-surface') : over(t.v('--composer-surface'), over(t.v('--color-background-elevated-secondary'), t.v('--background')))
-  const thumb = g.on
-    ? dark
-      ? { backgroundColor: over('rgba(255, 255, 255, 0.08)', t.popover), borderColor: 'rgba(255, 255, 255, 0.1)', shadow: 'rgba(0, 0, 0, 0.35)', blur: 1, rim: 'rgba(255, 255, 255, 0.1)' }
-      : { background: { type: 'linear-gradient' as const, angle: 180, stops: [{ color: '#ffffff', position: 0 }, { color: '#f6f6f6', position: 1 }] as [{ color: string; position: number }, { color: string; position: number }] }, borderColor: 'rgba(0, 0, 0, 0.11)', shadow: 'rgba(0, 0, 0, 0.14)', blur: 1.5, rim: 'rgba(255, 255, 255, 1)' }
-    : { backgroundColor: thumbFill, borderColor: ink(t, dark ? 0.07 : 0.05), shadow: `rgba(0, 0, 0, ${dark ? 0.16 : 0.04})`, blur: 1.5 / 2, rim: `rgba(255, 255, 255, ${dark ? 0.04 : 0.5})` }
   return (
     <div
       ref={track}
@@ -118,48 +116,27 @@ export function Segmented({ options, value, onChange, busy = false, 'aria-label'
         step(dir)
       }}
       style={{
-        position: 'relative', display: 'flex', alignItems: 'center', alignSelf: fill ? 'stretch' : 'flex-start', gap: 2, padding: 2, minWidth: 0, flexShrink: fill ? 1 : 0,
-        borderWidth: 1, borderColor: g.on ? g.recessRim : ink(t, dark ? 0.08 : 0.07), borderRadius: 8, overflow: 'hidden',
-        backgroundColor: g.on ? g.recess : dark ? t.v('--background') : t.v('--color-background-elevated-secondary'),
+        position: 'relative', display: 'flex', alignItems: 'center', alignSelf: fill ? 'stretch' : 'flex-start', gap: 0, padding: 2, minWidth: 0, flexShrink: fill ? 1 : 0,
+        height: segmentHeight + 4, borderRadius: size === 'sm' ? RADIUS.md : RADIUS.segTrack, overflow: 'hidden', backgroundColor: c.segmented.track,
         ...style,
       }}
     >
-      {/* `box-shadow: inset 0 1px 2px rgba(0,0,0,.25 | .06)`: a soft shade under the top edge. */}
-      <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 3, pointerEvents: 'none', background: { type: 'linear-gradient', angle: 180, stops: [{ color: g.on ? g.recessShade : `rgba(0, 0, 0, ${dark ? 0.2 : 0.05})`, position: 0 }, { color: 'rgba(0, 0, 0, 0)', position: 1 }] } }} />
       {pill && (() => {
-        const { shadow, blur, rim: rimColor, ...paint } = thumb
-        const style = {
-          position: 'absolute', top: 1, height: segmentHeight, borderRadius: 6, borderWidth: 1, pointerEvents: 'none',
-          ...paint,
-          boxShadow: { offsetX: 0, offsetY: 1, blurRadius: blur, spreadRadius: 0, color: shadow },
-        } as const
-        // `inset 0 1px 0 rgba(255,255,255,.04 | .5)`: the raised rim's top highlight.
-        const rim = <div style={{ position: 'absolute', left: 1, right: 1, top: 0, height: 1, backgroundColor: rimColor, pointerEvents: 'none' }} />
+        const style = { position: 'absolute', top: 2, height: segmentHeight, borderRadius: size === 'sm' ? RADIUS.sm : RADIUS.segThumb, backgroundColor: c.segmented.thumb, pointerEvents: 'none' } as const
         const ease = [...EASE.smoothOut] as [number, number, number, number]
         // Equal-width segments (`fill`, or labels that happen to match): the pill only moves, so it slides as a paint-only translation
         // from the first segment's slot (no layout or render per frame). Different widths also change the pill's width, which needs the
         // layout tween.
         const first = boxes?.[options[0]!.value]
         if (first && PATCHED_NATIVE && options.every((o) => Math.abs((boxes?.[o.value]?.w ?? -1) - pill.w) < 0.5)) {
-          return (
-            <div
-              paintTransform={{ initial: false, animate: { translateX: pill.x - first.x }, transition: { duration: slide ? DURATION.fast : 0, ease } }}
-              style={{ ...style, left: first.x, width: pill.w }}
-            >
-              {rim}
-            </div>
-          )
+          return <div paintTransform={{ initial: false, animate: { translateX: pill.x - first.x }, transition: { duration: slide ? DURATION.fast : 0, ease } }} style={{ ...style, left: first.x, width: pill.w }} />
         }
-        return (
-          <motion.div initial={false} animate={{ left: pill.x, width: pill.w }} transition={{ duration: slide ? DURATION.fast : 0, ease }} style={style}>
-            {rim}
-          </motion.div>
-        )
+        return <motion.div initial={false} animate={{ left: pill.x, width: pill.w }} transition={{ duration: slide ? DURATION.fast : 0, ease }} style={style} />
       })()}
       {options.map((option) => {
         const selected = option.value === value
         const blocked = !!option.unavailable
-        const color = selected || (hover === option.value && !blocked && !busy) ? t.text : blocked ? withAlpha(t.v('--muted-foreground'), 0.4) : t.v('--muted-foreground')
+        const color = selected ? c.segmented.selFg : hover === option.value && !blocked && !busy ? t.text : blocked ? t.textTertiary : t.textSecondary
         const button = (
           <div
             key={option.value}
@@ -173,18 +150,20 @@ export function Segmented({ options, value, onChange, busy = false, 'aria-label'
             onMouseEnter={() => setHover(option.value)}
             onMouseLeave={() => setHover((h) => (h === option.value ? null : h))}
             onMouseDown={focus.handlers.onMouseDown}
-            onFocus={() => { focus.handlers.onFocus(); setFocused(option.value) }}
-            onBlur={() => { focus.handlers.onBlur(); setFocused((f) => (f === option.value ? null : f)) }}
+            onFocus={focus.handlers.onFocus}
+            onBlur={focus.handlers.onBlur}
             onClick={() => choose(option.value)}
             onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') choose(option.value) }}
             style={{
-              position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', height: segmentHeight, minWidth: 36, paddingLeft: segmentPadX, paddingRight: segmentPadX, borderRadius: 6,
+              position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, height: segmentHeight, minWidth: option.icon ? segmentHeight + 8 : 0, paddingLeft: option.icon ? 7 : padX, paddingRight: option.icon ? 7 : padX, borderRadius: size === 'sm' ? RADIUS.sm : RADIUS.segThumb,
               cursor: busy || blocked ? 'default' : 'pointer', ...(fill ? { flexGrow: 1, flexBasis: 0, minWidth: 0 } : { flexShrink: 0 }),
+              ...(busy || blocked ? {} : { focusVisible: { outlineWidth: 2, outlineColor: c.focus, outlineOffset: 0 } }),
             }}
           >
-            <Label color={color} size={textSize} truncate={fill} style={{ pointerEvents: 'none' }}>{option.label}</Label>
-            {/* `focus-visible:ring-1 ring-ring` (no offset). */}
-            <FocusRing visible={focus.visible && focused === option.value} radius={6} width={1} offset={0} color={t.v('--ring')} />
+            {option.icon
+              ? <Icon source={glyphSource(option.icon)} size={14} color={color} style={{ pointerEvents: 'none' }} />
+              : <Label color={color} size={textSize} lineHeight={textSize + 4} weight={500} truncate={fill} style={{ pointerEvents: 'none' }}>{option.label}</Label>}
+            {option.count != null && <Label color={t.textTertiary} size={textSize} lineHeight={textSize + 4} weight={500} style={{ pointerEvents: 'none' }}>{String(option.count)}</Label>}
           </div>
         )
         return blocked ? <Tip key={option.value} label={option.unavailable!} side="top" sideOffset={6} size={segmentHeight}>{button}</Tip> : button
