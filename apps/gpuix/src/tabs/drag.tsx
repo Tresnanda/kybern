@@ -55,7 +55,9 @@ let renderer: object | null = null
 /** Moves while a tab is held, from the capture layer, the pressed tab or the window root (App). */
 export function moveTabsDrag(e: EventPayload) {
   if (!drag || !renderer || e.x == null || e.y == null) return
-  if (e.eventType === 'mouseMove' && e.pressedButton != null && e.pressedButton !== 0) { finish(true); return }
+  // A move with the left button no longer held: the release happened outside the window (or another button took over). Cancel,
+  // as the split drag does, so the capture layer never outlives the press and the next click cannot drop the tab.
+  if (e.eventType === 'mouseMove' && e.pressedButton !== 0) { finish(false); return }
   const next = targetAt(renderer, e.x, e.y)
   publish({ ...drag, x: e.x, y: e.y, target: next.target, refused: next.refused })
 }
