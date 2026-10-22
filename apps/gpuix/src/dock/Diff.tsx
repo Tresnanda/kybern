@@ -10,7 +10,8 @@ import { getClient, onOpenEvent, useApp } from '../state.ts'
 import { desktopDiffTheme } from '../native/diff.ts'
 import { NativeDiffHeader } from '../native/DiffView.tsx'
 import { Label, useTheme } from '../ui.tsx'
-import { Action, ErrorLine } from './parts.tsx'
+import { Button } from '../kit/Button.tsx'
+import { ErrorLine } from './parts.tsx'
 import { openTab } from '../tabs/open.ts'
 import { diffFileIcons } from '../native/diff-file-icons.ts'
 import { getFileIconName } from '../../../desktop/src/lib/kit/fileIcons.ts'
@@ -101,7 +102,7 @@ export function DiffPane({ thread, onStats, mode = 'list', path }: { thread: Thr
         <Label color={t.text} size={14} lineHeight={21} style={{ flexGrow: 1 }}>{`${files.length} ${files.length === 1 ? 'file' : 'files'} changed`}</Label>
         <Label color={t.green} size={11}>{`+${files.reduce((n, f) => n + f.additions, 0)}`}</Label>
         <Label color={t.red} size={11}>{`−${files.reduce((n, f) => n + f.deletions, 0)}`}</Label>
-        {mode === 'list' && <Action testId="dock-diff-open-all" onClick={() => openTab(thread.id, { kind: 'diff' })}>Open all</Action>}
+        {mode === 'list' && <Button size="sm" variant="ghost" testId="dock-diff-open-all" onClick={() => openTab(thread.id, { kind: 'diff' })}>Open all</Button>}
       </div>
       <virtual-list testId={mode === 'list' ? 'dock-diff-list' : 'diff-tab-list'} style={{ flexGrow: 1, minHeight: 0, width: '100%' }}>
         {files.map((file) => mode === 'list'

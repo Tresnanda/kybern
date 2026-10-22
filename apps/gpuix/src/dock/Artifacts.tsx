@@ -107,8 +107,8 @@ export function ArtifactTab({ threadId, path, url: hosted }: { threadId: string;
   useEffect(() => host ? observeElementBounds(renderer, host.id, e => { if (e.rect) setHeight(h => Math.abs(h - e.rect!.height) < 0.5 ? h : e.rect!.height) }) : undefined, [renderer, host])
   return <div testId="artifact-tab" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, gap: 12, padding: 16 }}>
     <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-      <KitButton size="chip" variant="subtle" testId="artifact-source" onClick={() => setSource(!source)}>{source ? 'Preview' : 'Source'}</KitButton>
-      {hosted && <KitButton size="chip" variant="ghost" onClick={() => openUrl(hosted)}>Open in Claude</KitButton>}
+      <Button size="sm" testId="artifact-source" onClick={() => setSource(!source)}>{source ? 'Preview' : 'Source'}</Button>
+      {hosted && <Button size="sm" variant="ghost" onClick={() => openUrl(hosted)}>Open in Claude</Button>}
     </div>
     <div ref={setHost} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
       {error ? <Label color={t.red} size={14}>{error}</Label>

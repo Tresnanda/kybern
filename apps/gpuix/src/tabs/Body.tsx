@@ -10,7 +10,7 @@ import { getGroup, updateGroup, useGroup } from '../split/store.ts'
 import { observeElementBounds } from '../native/layout.ts'
 import { ErrorBoundary } from '../shell/ErrorBoundary.tsx'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../kit/Empty.tsx'
-import { KitButton } from '../kit/AlertDialog.tsx'
+import { Button } from '../kit/Button.tsx'
 import { DOCK_ICONS } from '../dock/icons.ts'
 import { N } from '../nav/glyphs.ts'
 import { openThread } from '../nav/history.ts'
@@ -133,7 +133,7 @@ function TerminalTab({ leafId, threadId, tab }: { leafId: string; threadId: stri
         <EmptyTitle>This terminal has ended</EmptyTitle>
         <EmptyDescription>Its shell is no longer running. Start a new one in this tab.</EmptyDescription>
       </EmptyHeader>
-      <EmptyContent><KitButton size="sm" variant="outline" testId="terminal-tab-restart" onClick={() => void restart()}>Start a new terminal</KitButton></EmptyContent>
+      <EmptyContent><Button size="sm" testId="terminal-tab-restart" onClick={() => void restart()}>Start a new terminal</Button></EmptyContent>
     </Empty>
   )
   return <div testId="terminal-tab" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
@@ -203,7 +203,7 @@ function ChildBar({ childId }: { childId: string }) {
     <Label color={t.textSecondary} size={12} truncate style={{ flexShrink: 1 }}>{child?.subagent ? 'Subagent · read-only' : 'Delegated agent'}</Label>
     {phase && <Label color={phase === 'failed' ? t.red : t.textTertiary} size={12}>{phase === 'working' ? 'Working' : phase === 'done' ? 'Done' : phase === 'failed' ? 'Failed' : 'Stopped'}</Label>}
     <div style={{ flexGrow: 1 }} />
-    <KitButton size="sm" variant="ghost" testId="child-tab-open" onClick={() => openThread(childId)}>Open thread</KitButton>
+    <Button size="sm" variant="ghost" testId="child-tab-open" onClick={() => openThread(childId)}>Open thread</Button>
   </div>
 }
 

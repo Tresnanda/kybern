@@ -214,7 +214,7 @@ export function VisualTab({ threadId, visualId }: { threadId: string; visualId: 
     {error && <div testId="visual-error" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 24 }}>
       <Label color={t.text} weight={500} style={{ textAlign: 'center' }}>Couldn’t load this visual</Label>
       <Label color={t.textSecondary} size={13} style={{ textAlign: 'center', lineClamp: 2 }}>{error}</Label>
-      <Button testId="visual-retry" variant="subtle" onClick={retry}><Icon source={T.rotateCcw} size={14} color={t.text} />Retry</Button>
+      <Button testId="visual-retry" icon={T.rotateCcw} onClick={retry}>Retry</Button>
     </div>}
   </div>
 }
