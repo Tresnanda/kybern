@@ -1,6 +1,8 @@
 // What a group shows (ADE-54): the chat (the leaf's conversation page) or the active document tab. Only the active tab of each
 // group is mounted: switching unmounts the old body and GPUIX releases it. Terminals keep their daemon session (the next mount
 // replays it); the browser keeps its one native web view per thread (`preview/Surface.tsx` places it in whichever slot shows).
+import { toast } from '../shell/toasts.tsx'
+import { errorText } from '../nav/actions.ts'
 import { useEffect, useState, type ReactNode } from 'react'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import type { TerminalInfo, Thread } from '../../../../packages/kybern-client/src/types.ts'
@@ -133,7 +135,7 @@ function TerminalTab({ leafId, threadId, tab }: { leafId: string; threadId: stri
         <EmptyTitle>This terminal has ended</EmptyTitle>
         <EmptyDescription>Its shell is no longer running. Start a new one in this tab.</EmptyDescription>
       </EmptyHeader>
-      <EmptyContent><Button size="sm" testId="terminal-tab-restart" onClick={() => void restart()}>Start a new terminal</Button></EmptyContent>
+      <EmptyContent><Button size="sm" testId="terminal-tab-restart" onClick={() => void restart().catch((error) => toast.error('Unable to start a terminal', { description: errorText(error) }))}>Start a new terminal</Button></EmptyContent>
     </Empty>
   )
   return <div testId="terminal-tab" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0, overflow: 'hidden' }}>

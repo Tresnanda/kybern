@@ -1,6 +1,8 @@
 // One group's tab strip: the chat (provider mark + thread title, pinned first) and the documents opened beside it. In the
 // thread header (46 px, `md`) or, for the lower groups of a split, a 32 px row (`sm`). The + menu opens what has no list of its
 // own in the dock: a terminal (or an agent CLI), the browser preview, Review, and all changes.
+import { toast } from '../shell/toasts.tsx'
+import { errorText } from '../nav/actions.ts'
 import { memo, useMemo, useState, type ReactNode } from 'react'
 import { fadeTo } from '../shell/motion.ts'
 import { BrowserIcon, FlowchartIcon, Image01Icon } from '@hugeicons/core-free-icons'
@@ -121,7 +123,7 @@ function AddMenu({ leafId, threadId, size }: { leafId: string; threadId: string;
     try {
       const info = await getClient()!.call('terminals.create', { thread_id: threadId, cols: 100, rows: 24, ...(command ? { command } : {}) })
       openTab(threadId, { kind: 'terminal', id: info.id, title: cli ? providers.find((p) => p.kind === cli)?.display_name : undefined, ...(cli ? { cli } : {}) }, { leaf: leafId })
-    } catch (error) { console.error('[tabs] Unable to open a terminal:', error) }
+    } catch (error) { toast.error('Unable to open a terminal', { description: errorText(error) }) }
   }
   const clis = providers.filter((p) => p.available && p.binary_path)
   if (thread?.subagent) return null
