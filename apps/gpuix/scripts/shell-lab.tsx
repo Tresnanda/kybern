@@ -7,7 +7,7 @@ import { set } from '../src/state.ts'
 import { ConnectionBanner, Welcome } from '../src/shell/Connection.tsx'
 import { ErrorBoundary } from '../src/shell/ErrorBoundary.tsx'
 import { toast, Toaster } from '../src/shell/toasts.tsx'
-import { Label, ThemeProvider, useTheme } from '../src/ui.tsx'
+import { Label, ThemeProvider, useMaterial, useTheme } from '../src/ui.tsx'
 
 function Btn({ id, label, onClick }: { id: string; label: string; onClick: () => void }) {
   const t = useTheme()
@@ -25,10 +25,11 @@ function Bomb({ armed }: { armed: boolean }) {
 
 function Lab() {
   const t = useTheme()
+  const fills = useMaterial()
   const [armed, setArmed] = useState(false)
   const [welcome, setWelcome] = useState<'connecting' | 'unavailable' | 'empty' | null>(null)
   return (
-    <div testId="app-ready" style={{ display: 'flex', width: '100%', height: '100%', backgroundColor: t.frame, padding: 24, gap: 24 }}>
+    <div testId="app-ready" style={{ display: 'flex', width: '100%', height: '100%', backgroundColor: fills.frame, padding: 24, gap: 24 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: 220 }}>
         <Btn id="t-default" label="toast" onClick={() => toast('Thread is no longer available')} />
         <Btn id="t-success" label="toast success" onClick={() => toast.success('Saved to “Notes”', { action: { label: 'Open', onClick: () => {} } })} />

@@ -9,7 +9,7 @@ import { useGpuix } from '@gpuix/react'
 import { useAppearance } from './settings/appearance.ts'
 import { installThemeFade } from './motion/themeFade.tsx'
 import { useSyncWindowAppearance, useSystemVariant } from './shell/appearance.ts'
-import { FONT_UI, THEMES, themeFor, type Theme } from './theme.ts'
+import { FONT_UI, THEMES, materialFor, themeFor, type Material, type Theme } from './theme.ts'
 import { useAccessibilityDisplay } from './platform/material.ts'
 import { resolveScope } from './platform/translucency.ts'
 import { useWindowMaterial } from './shell/windowMaterial.ts'
@@ -33,6 +33,8 @@ export { REDUCED_MOTION }
 export const EASE_OUT: [number, number, number, number] = [...EASE.out]
 
 const ThemeContext = createContext<Theme>(THEMES[VARIANT])
+// The surfaces that follow the glass opacity live apart from the theme: an Opacity step changes this value and re-renders its readers only.
+const MaterialContext = createContext<Material>(materialFor(VARIANT, 'none', 100))
 export const ThemeProvider = ({ children }: { children: ReactNode }) => {
   const prefs = useAppearance()
   // "System" follows macOS live (`shell/appearance.ts`); KYBERN_APPEARANCE pins a variant.
@@ -45,11 +47,14 @@ export const ThemeProvider = ({ children }: { children: ReactNode }) => {
   const scope = resolveScope(material, a11y)
   useSyncWindowAppearance(variant)
   useWindowMaterial(variant, material, scope)
-  const theme = themeFor(variant, scope, material.opacity, a11y.increaseContrast, a11y.reduceTransparency)
+  const theme = themeFor(variant, scope, a11y.increaseContrast, a11y.reduceTransparency)
+  const glass = materialFor(variant, scope, material.opacity)
   installThemeFade(useGpuix()?.renderer)
-  return <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>
+  return <ThemeContext.Provider value={theme}><MaterialContext.Provider value={glass}>{children}</MaterialContext.Provider></ThemeContext.Provider>
 }
 export const useTheme = () => useContext(ThemeContext)
+/** The frame, panel, menu and settings-list fills, which follow the glass opacity; read the rest from `useTheme`. */
+export const useMaterial = () => useContext(MaterialContext)
 
 /** The ink colour at an opacity, like Tailwind's `text-foreground/58`. */
 export function ink(t: Theme, alpha: number): string {

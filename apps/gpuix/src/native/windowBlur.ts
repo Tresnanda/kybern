@@ -49,6 +49,19 @@ export function setCgsLoaderForTest(next: (() => Cgs | null) | undefined) {
 
 export const clampRadius = (radius: number) => Math.max(0, Math.min(NATIVE_BLUR_MAX, Math.round(radius)))
 
+// The windows already made transparent by a blur above zero. The window flags below only change when a window enters the
+// transparent mode, so a blur slider drag then calls CGS alone. Radius 0 or a refusal forgets them: the window may go back
+// to another backing, and the next blur must set them again.
+const flagged = new Set<number>()
+/** True when `window` still needs its transparent-mode flags for a blur of `radius`; remembers it. */
+export function claimTransparentFlags(window: number, radius: number): boolean {
+  if (radius <= 0) return false
+  if (flagged.has(window)) return false
+  flagged.add(window)
+  return true
+}
+export const forgetTransparentFlags = () => flagged.clear()
+
 const debug = (message: string) => { if (process.env.KYBERN_DEBUG_MATERIAL) console.log(`[material] ${message}`) }
 
 /** Whether this process can call the private blur at all. False is final: retrying cannot change it. */
@@ -61,8 +74,9 @@ export function blurCallAvailable(): boolean {
  * no GPUI window yet (worth retrying), `unavailable` when the call is missing or a shown window's call was refused.
  * A radius above zero also makes the window non-opaque with a nearly clear background: the blur only shows
  * through such a window, and a fully clear one (alpha 0) with a native shadow draws a gap between border and
- * content, so a sliver of alpha stays (`setWindowBackground('transparent')` writes 0.0001). Radius 0 only
- * clears the blur and leaves the window as GPUI's backing set it.
+ * content, so a sliver of alpha stays (`setWindowBackground('transparent')` writes 0.0001). That, and the shadow
+ * refresh, happen once when a window enters the mode; later radii only call CGS. Radius 0 only clears the blur
+ * and leaves the window as GPUI's backing set it.
  */
 export function setWindowBlurRadius(radius: number): 'ok' | 'not-ready' | 'unavailable' {
   if (!blurCallAvailable()) return 'unavailable'
@@ -79,23 +93,25 @@ export function setWindowBlurRadius(radius: number): 'ok' | 'not-ready' | 'unava
         const name = className(o, window)
         if (!name.includes('GPUI')) return
         found = true
-        if (value > 0) {
+        const windowNumber = Number(o.msgU64(window, sel(o, 'windowNumber')))
+        const entering = claimTransparentFlags(windowNumber, value)
+        if (entering) {
           o.msgSetBool(window, sel(o, 'setOpaque:'), false)
           const clear = o.msg(cls(o, 'NSColor')!, sel(o, 'clearColor')) as Pointer
           o.msgSetPtr(window, sel(o, 'setBackgroundColor:'), o.msgF64Ptr(clear, sel(o, 'colorWithAlphaComponent:'), 0.01) as Pointer)
         }
-        const number = Number(o.msgU64(window, sel(o, 'windowNumber')))
         // A window not yet on screen has no window-server number; its refusal says nothing about the call.
-        if (number > 0) shown = true
-        const code = api.set(api.main(), number, value)
+        if (windowNumber > 0) shown = true
+        const code = api.set(api.main(), windowNumber, value)
         debug(`CGSSetWindowBackgroundBlurRadius(${value}) -> ${code}`)
         ok = code === 0 && ok
-        if (value > 0) {
+        if (entering) {
           o.msgSetBool(window, sel(o, 'setHasShadow:'), true)
           o.msg(window, sel(o, 'invalidateShadow'))
         }
       })
     })
+    if (value === 0 || !ok) forgetTransparentFlags()
     if (found && ok) return 'ok'
     return found && shown ? 'unavailable' : 'not-ready'
   } catch (error) {

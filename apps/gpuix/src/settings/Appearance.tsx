@@ -82,7 +82,7 @@ function VariantSection({ variant, active, save }: { variant: ThemeVariant; acti
     {m.material === 'translucent' && <div key="sidebar" paintTransform={rise}><Row title="Sidebar only" description="Keep the conversation solid. Only the sidebar and window frame are translucent.">
       <Switch aria-label={`${Name} theme translucent sidebar only`} testId={`settings-sidebar-only-${variant}`} checked={m.sidebarOnly} onCheckedChange={(sidebarOnly) => patch({ sidebarOnly })} />
     </Row></div>}
-    {m.material === 'translucent' && <div key="opacity" paintTransform={rise}><Row title="Opacity" description="How much of the window’s color covers your desktop.">
+    {m.material === 'translucent' && <div key="opacity" paintTransform={rise}><Row title="Opacity" description="How much of the window’s color covers your desktop. Very low values stop where text stays readable.">
       <Slider testId={`settings-opacity-${variant}`} aria-label={`${Name} theme opacity`} ariaValueText={`${opacityValue} percent`} value={opacityValue} min={OPACITY_MIN} max={100} valueLabel={`${opacityValue}%`} onChange={opacity.onChange} onCommit={opacity.onCommit} />
     </Row></div>}
     {m.material === 'translucent' && <div key="blur" paintTransform={rise}><Row title="Blur" description="How much your desktop is blurred. Auto uses the macOS material.">

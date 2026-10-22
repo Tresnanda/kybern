@@ -7,7 +7,7 @@ import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { S } from './glyphs.ts'
 import { getNav, setNav } from '../nav/store.ts'
-import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { ink, Label, REDUCED_MOTION, useMaterial, useTheme } from '../ui.tsx'
 import { enterTransform } from '../motion/kit.tsx'
 import { DURATION, EASE } from '../motion/tokens.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
@@ -43,6 +43,7 @@ const GROUPS = [{ label: 'Personal', ids: ['general', 'appearance', 'notificatio
 export function SettingsScreen() {
   const environment = useEnvironment()
   const t = useTheme()
+  const fills = useMaterial()
   const { renderer } = useGpuix()
   const [previousFocus] = useState(() => renderer?.getFocusedElementId?.())
   const [tab, setTab] = useState<Tab>(lastTab)
@@ -81,7 +82,7 @@ export function SettingsScreen() {
   }
   const content = tab === 'general' ? <General /> : tab === 'appearance' ? <Appearance /> : tab === 'agents' ? <Agents /> : tab === 'about' ? <About /> : tab === 'notifications' ? <Notifications /> : tab === 'background' ? <Background /> : tab === 'accounts' ? <Accounts /> : tab === 'integrations' ? <Integrations /> : <Computer />
   return <div testId="page-settings" onKeyDown={(e) => { if (e.key === 'tab' && !settingsOverlayOwnsEscape()) { if (e.modifiers?.shift) renderer?.focusPrevious?.(); else renderer?.focusNext?.() } if (e.key === 'escape' && !settingsOverlayOwnsEscape()) { if (query) setQuery(''); else close(true) } }} style={{ display: 'flex', flexGrow: 1, minHeight: 0 }}>
-    <div style={{ display: 'flex', flexDirection: 'column', width: 256, flexShrink: 0, paddingLeft: 6, paddingRight: 6, paddingTop: 8, paddingBottom: 12, backgroundColor: t.sidebar, borderTopLeftRadius: 12, borderBottomLeftRadius: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', width: 256, flexShrink: 0, paddingLeft: 6, paddingRight: 6, paddingTop: 8, paddingBottom: 12, backgroundColor: fills.sidebar, borderTopLeftRadius: 12, borderBottomLeftRadius: 12 }}>
       <div testId="settings-back" tabIndex={0} autoFocus onClick={() => close()} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') close(true) }} style={{ display: 'flex', alignItems: 'center', height: 28, gap: 8, paddingLeft: 8, borderRadius: 8, hover: { backgroundColor: t.hover } }}><Icon source={N.arrowLeft} size={16} color={t.iconSecondary} /><Label color={t.text} size={14} lineHeight={21}>Back to workspace</Label></div>
       <div style={{ display: 'flex', position: 'relative', paddingTop: 8, paddingBottom: 8 }}><div style={{ position: 'absolute', left: 12, top: 16, pointerEvents: 'none' }}><Icon source={N.search} size={14} color={t.textSecondary} /></div><TextField testId="settings-search" tabIndex={0} onFocus={() => setSearchFocused(true)} onBlur={() => setSearchFocused(false)} label="Search settings" placeholder="Search settings…" style={{ position: 'relative', left: -0.5, top: -0.5, height: 31, borderRadius: 10, paddingLeft: 38, fontSize: 14, backgroundColor: t.inputGroupFill, borderColor: searchFocused ? ink(t, .3) : t.v('--input') }} value={query} onChange={setQuery} width="100%" onSubmit={() => { if (matches[0]) select(matches[0][0], true) }} onKeyDown={(e) => { if (e.key === 'escape' && !settingsOverlayOwnsEscape()) { if (query) setQuery(''); else close(true) } }} /></div>
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>

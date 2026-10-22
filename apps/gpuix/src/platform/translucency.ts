@@ -13,6 +13,11 @@ import type { AccessibilityDisplay } from './material.ts'
 
 /** Capture mode (`KYBERN_OPAQUE=1`): an opaque window with no native material. */
 export const OPAQUE_WINDOW = process.env.KYBERN_OPAQUE === '1'
+/**
+ * Temporary A/B switch for the perf bench (`perf/translucency-zeron-research.md` R2): no full-window root fill under the
+ * opaque content card, and one fill on the thread panel instead of the coat over the frame. Same pixels, less overdraw.
+ */
+export const SINGLE_FILL = process.env.KYBERN_TRANSLUCENCY_SINGLE_FILL === '1'
 
 export type ThemeVariant = 'dark' | 'light'
 export type WindowMaterial = 'solid' | 'translucent'
@@ -83,6 +88,56 @@ const RAISED: Record<ThemeVariant, { floor: number; ratio: number }> = { dark: {
 
 const mix = (color: string, percent: number) => `color-mix(in srgb, ${color} ${percent}%, transparent)`
 
+type Rgba = [number, number, number, number]
+/** Hex and `rgb()`/`rgba()` only; the desktop's text and surface variables are written in these. */
+function parseRgba(value: string | undefined): Rgba | null {
+  const v = value?.trim()
+  if (!v) return null
+  if (v.startsWith('#')) {
+    const h = v.slice(1)
+    const full = h.length <= 4 ? [...h].map((c) => c + c).join('') : h
+    const n = (i: number) => parseInt(full.slice(i, i + 2), 16)
+    const out: Rgba = [n(0), n(2), n(4), full.length === 8 ? n(6) / 255 : 1]
+    return out.some(Number.isNaN) ? null : out
+  }
+  const m = v.match(/^rgba?\(([^)]+)\)$/)
+  if (!m) return null
+  const parts = m[1]!.split(/[\s,/]+/).filter(Boolean).map(Number)
+  return parts.length >= 3 && parts.every(Number.isFinite) ? [parts[0]!, parts[1]!, parts[2]!, parts[3] ?? 1] : null
+}
+const luminance = ([r, g, b]: Rgba) => {
+  const lin = (c: number) => { const x = c / 255; return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4 }
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+}
+const contrast = (a: Rgba, b: Rgba) => { const x = luminance(a), y = luminance(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05) }
+const blend = (top: Rgba, alpha: number, base: Rgba): Rgba => [0, 1, 2].map((i) => top[i]! * alpha + base[i]! * (1 - alpha)).concat(1) as Rgba
+
+/** The coat's fill before opacity: the surface at 80% over black in dark, the surface itself in light (`materialFormulas`). */
+const DARK_COAT_MIX = 0.8
+const ADVERSE: Record<ThemeVariant, Rgba> = { dark: [255, 255, 255, 1], light: [0, 0, 0, 1] }
+
+/**
+ * Readability floor for the coat (Zeron's `contrast_checked_tint_alpha`, `crates/ui/src/theme.rs`): the least opacity, in
+ * 5% steps, at which text reaches 4.5:1 and secondary text 3:1 over the worst desktop for the variant, white behind a dark
+ * coat and black behind a light one. The Opacity slider keeps its range but is held at this floor, so its low end is flat
+ * rather than unreadable (`effectiveOpacity`). 0 when the colours cannot be read, 100 when no lower step passes. With the
+ * default themes it is 65% dark and 55% light, below the 90% default, so only the slider's low end changes.
+ */
+export function coatFloor(variant: ThemeVariant, O: Record<string, string>): number {
+  const surface = parseRgba(O['--color-background-surface'])
+  const text = parseRgba(O['--color-text-foreground'])
+  const muted = parseRgba(O['--color-text-foreground-secondary'])
+  if (!surface || !text || !muted) return 0
+  const coat: Rgba = variant === 'dark' ? [surface[0] * DARK_COAT_MIX, surface[1] * DARK_COAT_MIX, surface[2] * DARK_COAT_MIX, 1] : surface
+  for (let percent = 0; percent <= 100; percent += 5) {
+    const backdrop = blend(coat, percent / 100, ADVERSE[variant])
+    if (contrast(blend(text, text[3], backdrop), backdrop) >= 4.5 && contrast(blend(muted, muted[3], backdrop), backdrop) >= 3) return percent
+  }
+  return 100
+}
+/** The opacity the window paints: the slider's value, held at the readability floor. */
+export const effectiveOpacity = (variant: ThemeVariant, O: Record<string, string>, opacity: number) => Math.max(opacity, coatFloor(variant, O))
+
 /** The tokens one scope paints; `resolve` in `theme.ts` turns these into rgba(). */
 export function materialFormulas(variant: ThemeVariant, O: Record<string, string>, opacity: number) {
   const S = O['--color-background-surface']!
@@ -100,13 +155,33 @@ export function materialFormulas(variant: ThemeVariant, O: Record<string, string
 }
 
 /**
+ * The variables whose value follows the opacity. Everything else in a scope's map is the same at every opacity, which is
+ * why `theme.ts` keeps them out of `Theme` and serves them from `materialFor`: an Opacity step then re-renders only the
+ * views that read these (`useMaterial`).
+ */
+export const OPACITY_VARS = ['--app-frame-surface', '--app-sidebar-surface', '--app-glass-raised-surface', '--app-settings-card-surface'] as const
+
+/**
+ * The lowest alpha, 0…1, any visible region of the window paints for a scope; at or above `OPAQUE_COVERAGE` nothing shows
+ * through, and `backingFor` gives the window an opaque backing. Whole window: the coat. Sidebar only: the frame shell
+ * (title bar, rail, gutters); the thread panel's coat over it and the content card are denser.
+ */
+export function materialCoverage(variant: ThemeVariant, O: Record<string, string>, scope: WindowScope, opacity: number): number {
+  if (scope === 'none') return 1
+  const effective = effectiveOpacity(variant, O, opacity)
+  return (scope === 'window' ? effective : materialFormulas(variant, O, effective).shellPercent) / 100
+}
+/** Coverage from which the desktop is invisible: the window is opaque and the blur is skipped. */
+export const OPAQUE_COVERAGE = 0.99
+
+/**
  * The override map for a scope, applied over the opaque variables. `--color-background-surface` is never
  * overridden: about 35 call sites use it as a control fill. Route content uses `--app-content-surface`.
  */
 export function materialVars(variant: ThemeVariant, O: Record<string, string>, scope: WindowScope, opacity: number): Record<string, string> {
   const content = O['--color-background-surface']!
   if (scope === 'none') return { '--app-content-surface': content }
-  const f = materialFormulas(variant, O, opacity)
+  const f = materialFormulas(variant, O, effectiveOpacity(variant, O, opacity))
   if (scope === 'window') {
     return {
       '--app-frame-surface': f.coat,

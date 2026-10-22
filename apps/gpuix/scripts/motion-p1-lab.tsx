@@ -4,7 +4,7 @@
 import '../src/native/local-build.ts'
 import { render } from '@gpuix/react'
 import { Profiler, useState } from 'react'
-import { ThemeProvider, useTheme, Label, ProviderMark } from '../src/ui.tsx'
+import { ThemeProvider, useMaterial, useTheme, Label, ProviderMark } from '../src/ui.tsx'
 import { N } from '../src/nav/glyphs.ts'
 import { Icon } from '../src/icons.tsx'
 import { StatusGlyph, IconButton, accent, resting } from '../src/sidebar/rows.tsx'
@@ -22,6 +22,7 @@ const at = (x: number, y: number, w: number, h: number) => ({ position: 'absolut
 
 function Lab() {
   const t = useTheme()
+  const fills = useMaterial()
   const [step, setStep] = useState(0), [title, setTitle] = useState(0), [hover, setHover] = useState(false), [target, setTarget] = useState(0)
   const s = STEPS[step % STEPS.length]!
   const action = (k: string) => {
@@ -32,7 +33,7 @@ function Lab() {
   }
   const text = TITLES[title % 2]!
   return (
-    <div testId="app-ready" onKeyDown={e => action(e.key ?? '')} style={{ position: 'relative', width: '100%', height: '100%', backgroundColor: t.sidebar }}>
+    <div testId="app-ready" onKeyDown={e => action(e.key ?? '')} style={{ position: 'relative', width: '100%', height: '100%', backgroundColor: fills.sidebar }}>
       {/* The glyph alone, 15x15 */}
       <div testId="glyph" style={{ ...at(24, 24, 40, 40), alignItems: 'center', justifyContent: 'center' }}>
         <StatusGlyph status={s.status} unread={s.unread} pinned={s.pinned} />

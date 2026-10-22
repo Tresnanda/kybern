@@ -1,7 +1,7 @@
 import '../native/local-build.ts'
 import { render } from '@gpuix/react'
 import { App } from '../App.tsx'
-import { ThemeProvider, useTheme, Label } from '../ui.tsx'
+import { ThemeProvider, useMaterial, useTheme, Label } from '../ui.tsx'
 import { Button } from '../transcript/kit.tsx'
 import { connect, set, setPane, getFocusedPaneId, getPaneState, selectPaneThread, useApp } from '../state.ts'
 import { setNav } from '../nav/store.ts'
@@ -43,9 +43,9 @@ async function choose(id: string, keyboard = false) {
 set({ status: 'open', listsLoaded: true, threads: [parent, other], projects: [{ id: 'project', name: 'Split workspace', path: '/tmp', is_git: false, brief_in_all_threads: false, created_at: at, updated_at: at }], selectedId: parent.id, open: open(parent.id) })
 setNav({ children: { child }, page: 'home' })
 function Fixture() {
-  const t = useTheme(), root = useSplitRoot()
+  const t = useTheme(), fills = useMaterial(), root = useSplitRoot()
   const focused = useApp(s => s.selectedId)
-  return <div testId="split-fixture" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: t.frame }}>
+  return <div testId="split-fixture" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: fills.frame }}>
     <div style={{ display: 'flex', height: 30, flexShrink: 0, alignItems: 'center', gap: 8 }}>
       <Button testId="fixture-reset" onClick={() => { maximizePane('main'); void choose('parent') }}>Reset panes</Button><Button testId="fixture-parent" onClick={() => choose('parent')}>Parent</Button><Button testId="fixture-child" onClick={() => choose('child')}>Child</Button><Button testId="fixture-other" onClick={() => choose('other')}>Other</Button><Button testId="fixture-keyboard" onClick={() => choose('parent', true)}>Keyboard parent</Button>
       <text testId="fixture-panes" style={{ color: t.text, fontSize: 8 }}>{JSON.stringify(collectThreadPanes(root).map(p => ({ id: p.id, selected: getPaneState(p.id).selectedId })))}</text>

@@ -5,7 +5,7 @@ import { PickerMenu, PickerItem, CheckMark } from '../composer/Menu.tsx'
 import { Icon } from '../icons.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
 import { N } from '../nav/glyphs.ts'
-import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
+import { ink, Label, ProviderMark, useMaterial, useTheme } from '../ui.tsx'
 import { FONT_UI } from '../theme.ts'
 import { pressTransform } from '../motion/press.ts'
 import { Chevron } from '../motion/Chevron.tsx'
@@ -113,8 +113,9 @@ export function PageBlock({ children, enter }: { children: ReactNode; enter?: Pa
 
 export function Section({ title, accessory, children }: { title: string; /** Right-aligned on the title line (a status and a button). */ accessory?: ReactNode; children: ReactNode }) {
   const t = useTheme()
+  const fills = useMaterial()
   const rows = Children.toArray(children)
-  return <PageBlock><div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 30 }}><div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: 24 }}><Label color={t.text} size={14} lineHeight={19.6} weight={600} style={{ paddingLeft: 2 }}>{title}</Label>{accessory && <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>{accessory}</div>}</div><div style={{ display: 'flex', flexDirection: 'column', borderWidth: 1, borderColor: t.glass.settingsCardBorder, borderRadius: 12, backgroundColor: t.glass.settingsCard, ...(t.scope === 'none' ? { overflow: 'hidden' as const } : {}) }}>{rows.map((row, i) => <div key={i} style={{ borderTopWidth: i ? 1 : 0, borderColor: t.glass.settingsCardBorder }}>{row}</div>)}</div></div></PageBlock>
+  return <PageBlock><div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 30 }}><div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: 24 }}><Label color={t.text} size={14} lineHeight={19.6} weight={600} style={{ paddingLeft: 2 }}>{title}</Label>{accessory && <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>{accessory}</div>}</div><div style={{ display: 'flex', flexDirection: 'column', borderWidth: 1, borderColor: t.glass.settingsCardBorder, borderRadius: 12, backgroundColor: fills.settingsCard, ...(t.scope === 'none' ? { overflow: 'hidden' as const } : {}) }}>{rows.map((row, i) => <div key={i} style={{ borderTopWidth: i ? 1 : 0, borderColor: t.glass.settingsCardBorder }}>{row}</div>)}</div></div></PageBlock>
 }
 
 export function Row({ title, description, status, children }: { title: string; description?: ReactNode; status?: string; children?: ReactNode }) {

@@ -17,7 +17,7 @@ import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { useApp } from '../state.ts'
 import { over } from '../theme.ts'
 import type { Theme } from '../theme.ts'
-import { ink, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { ink, REDUCED_MOTION, useMaterial, useTheme } from '../ui.tsx'
 import { useCurrentSpaceId, switchSpace } from './current.ts'
 import { registerSpaceScroller, registerSpaceTarget, useSpaceDrag } from './drop.ts'
 import { SpaceEditor } from './SpaceEditor.tsx'
@@ -141,6 +141,7 @@ const SpaceRow = memo(function SpaceRow({ space, index, count, active, dot, rowR
   rowRef?: (node: PublicInstance | null) => void
 }) {
   const t = useTheme()
+  const fills = useMaterial()
   const [hover, setHover] = useState(false)
   const editing = useSpaceUi((s) => s.editor?.mode === 'edit' && s.editor.anchor === space.id)
   const dragActive = useSpaceDrag((s) => s.active)
@@ -174,7 +175,7 @@ const SpaceRow = memo(function SpaceRow({ space, index, count, active, dot, rowR
         {ring && (
           <div style={{ position: 'absolute', left: 8, top: 2, width: 36, height: 36, borderRadius: 11, borderWidth: target ? 2 : 1, borderColor: target ? t.link : ink(t, 0.18), pointerEvents: 'none' }} />
         )}
-        {dot && <div testId={`rail-space-dot-${space.id}`} style={{ position: 'absolute', right: 7, top: 1, width: 7, height: 7, borderRadius: 3.5, backgroundColor: dot === 'done' ? t.text : t.taskReview, borderWidth: 2, borderColor: over(t.frame, t.variant === 'light' ? '#ffffff' : '#000000'), pointerEvents: 'none' }} />}
+        {dot && <div testId={`rail-space-dot-${space.id}`} style={{ position: 'absolute', right: 7, top: 1, width: 7, height: 7, borderRadius: 3.5, backgroundColor: dot === 'done' ? t.text : t.taskReview, borderWidth: 2, borderColor: over(fills.frame, t.variant === 'light' ? '#ffffff' : '#000000'), pointerEvents: 'none' }} />}
       </div>
     </Tip>
     {editing && <SpaceEditor mode="edit" space={space} />}

@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { launch } from '@gpuix/react/automation'
 import { pixels } from '../../native/png.ts'
-import { THEMES } from '../theme.ts'
+import { THEMES, materialFor } from '../theme.ts'
 import { DEFAULT_VARIANT_MATERIAL } from './translucency.ts'
 import { assertScratchDataDir, until, windowId } from './verify.lib.ts'
 
@@ -100,7 +100,8 @@ const check = (name: string, ok: boolean, detail: string) => { results.push(`${o
 
 const T = THEMES[variant]
 const solidRgba = (css: string): Px => [...rgbOf(css), 255]
-const opaque = { frame: solidRgba(T.frame), panel: solidRgba(T.sidebar), content: solidRgba(T.content) }
+const opaqueFills = materialFor(variant, 'none', 100)
+const opaque = { frame: solidRgba(opaqueFills.frame), panel: solidRgba(opaqueFills.sidebar), content: solidRgba(T.content) }
 let solid: ReturnType<typeof points>
 let whole: ReturnType<typeof points>
 

@@ -27,7 +27,7 @@ import {
   type ReactNode,
 } from 'react'
 import { Icon } from '../icons.tsx'
-import { ink, Label, useTheme } from '../ui.tsx'
+import { ink, Label, useMaterial, useTheme } from '../ui.tsx'
 import type { Theme } from '../theme.ts'
 import { BLUR, DURATION, EASE, POPUP, popupOrigin, popupTransform, SCALE } from '../motion/kit.tsx'
 import { EXIT, exitsInstantly, nextPresenceGeneration, presenceTransform } from '../motion/Presence.tsx'
@@ -165,6 +165,7 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
   ref,
 ) {
   const t = useTheme()
+  const fills = useMaterial()
   // Glass scopes (`platform/translucency.ts`): whole window → raised fill over a cutout-style scene blur; Sidebar only → dense fill,
   // no blur (the layer is transparent over opaque content); Solid and the accessibility overrides → today's opaque popover.
   const glass = t.scope !== 'none' && material !== 'none' && !appear
@@ -215,7 +216,7 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
   const { onKeyDown, onKeyUp, onMouseDownOutside, ...rest } = props as typeof props & { onKeyDown?: unknown; onKeyUp?: unknown; onMouseDownOutside?: unknown }
   const input = leaving ? {} : { onKeyDown, onKeyUp, onMouseDownOutside }
   const glassBackdrop = blurred ? explicitBackdrop ?? {...BACKDROP.cutout, radius: radius ?? 16} : undefined
-  const innerStyle = glass && (style as StyleDesc | undefined)?.backgroundColor ? {...style as StyleDesc, backgroundColor: kind === 'tooltip' ? t.glass.dense : t.glass.menu} : style
+  const innerStyle = glass && (style as StyleDesc | undefined)?.backgroundColor ? {...style as StyleDesc, backgroundColor: kind === 'tooltip' ? t.glass.dense : fills.menu} : style
   return (
     <anchored
       backdrop={transform ? { blur: 0 } : glassBackdrop ?? (glass ? { blur: 0 } : undefined)}

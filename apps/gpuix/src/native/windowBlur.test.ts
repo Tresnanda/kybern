@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { blurCallAvailable, clampRadius, setCgsLoaderForTest, setWindowBlurRadius } from './windowBlur.ts'
+import { blurCallAvailable, claimTransparentFlags, clampRadius, forgetTransparentFlags, setCgsLoaderForTest, setWindowBlurRadius } from './windowBlur.ts'
 
-afterEach(() => { setCgsLoaderForTest(undefined); delete process.env.KYBERN_WINDOW_BLUR_FAIL })
+afterEach(() => { forgetTransparentFlags(); setCgsLoaderForTest(undefined); delete process.env.KYBERN_WINDOW_BLUR_FAIL })
 
 describe('windowBlur', () => {
   test('clampRadius', () => {
@@ -32,5 +32,17 @@ describe('windowBlur', () => {
     setCgsLoaderForTest(() => ({ main: () => 1, set: () => { calls++; return 0 } }))
     expect(setWindowBlurRadius(64)).toBe(process.platform === 'darwin' ? 'not-ready' : 'unavailable')
     expect(calls).toBe(0)
+  })
+  test('the window flags are set once on entering the transparent mode, not on every radius', () => {
+    expect(claimTransparentFlags(7, 64)).toBe(true)
+    for (const radius of [60, 40, 12, 1]) expect(claimTransparentFlags(7, radius)).toBe(false)
+    // Another window enters on its own.
+    expect(claimTransparentFlags(8, 64)).toBe(true)
+  })
+  test('radius 0 sets no flags, and leaving the mode makes the next blur enter again', () => {
+    expect(claimTransparentFlags(7, 0)).toBe(false)
+    expect(claimTransparentFlags(7, 30)).toBe(true)
+    forgetTransparentFlags()
+    expect(claimTransparentFlags(7, 30)).toBe(true)
   })
 })

@@ -8,7 +8,7 @@ import {
   buildThemeCssVariables,
   type ThemeVariant,
 } from '../../desktop/src/lib/kit/theme/theme.logic.ts'
-import { materialVars, type WindowScope } from './platform/translucency.ts'
+import { OPACITY_VARS, SINGLE_FILL, materialCoverage, materialVars, type WindowScope } from './platform/translucency.ts'
 
 type Vars = Record<string, string>
 
@@ -74,19 +74,31 @@ export function over(top: string, base: string): string {
   return rgba([ch(0), ch(1), ch(2), 1])
 }
 
-function build(variant: ThemeVariant, scope: WindowScope = 'none', opacity = 90, contrast = false, reduceTransparency = false) {
-  const pack = {
-    codeThemeId: DEFAULT_THEME_STATE.codeThemeIds[variant],
-    theme: DEFAULT_THEME_STATE.chromeThemes[variant],
-  }
-  // The opaque variables (`isMac: false`); the scope's material is applied over them below.
-  const base = buildThemeCssVariables(pack, variant, { electron: true, isMac: false, systemUiFont: true }).variables as Vars
-  const opaque: Vars = { ...base, '--app-opaque-content-surface': base['--color-background-surface']! }
-  const raw: Vars = { ...opaque, ...materialVars(variant, opaque, scope, opacity) }
+/** The desktop's opaque variables for a variant (`isMac: false`); the scope's material is applied over them. */
+const opaqueCache: Partial<Record<ThemeVariant, Vars>> = {}
+function opaqueVars(variant: ThemeVariant): Vars {
+  return opaqueCache[variant] ??= (() => {
+    const pack = {
+      codeThemeId: DEFAULT_THEME_STATE.codeThemeIds[variant],
+      theme: DEFAULT_THEME_STATE.chromeThemes[variant],
+    }
+    const base = buildThemeCssVariables(pack, variant, { electron: true, isMac: false, systemUiFont: true }).variables as Vars
+    return { ...base, '--app-opaque-content-surface': base['--color-background-surface']! }
+  })()
+}
+
+/**
+ * Everything in a theme is the same at every glass opacity: the variables that follow it (`OPACITY_VARS`) are left out of
+ * `raw` and served by `materialFor`. An Opacity step therefore does not make a new `Theme`, and the views that read the
+ * theme do not render again.
+ */
+function build(variant: ThemeVariant, scope: WindowScope = 'none', contrast = false, reduceTransparency = false) {
+  const opaque = opaqueVars(variant)
+  const raw: Vars = { ...opaque, ...materialVars(variant, opaque, scope, 100) }
+  for (const name of OPACITY_VARS) delete raw[name]
   const v = (name: string) => resolve(raw[name] ?? 'transparent', raw)
   const popover = v('--app-opaque-popover')
   const dense = scope === 'none' ? popover : v('--app-glass-dense-surface')
-  const raised = scope === 'window' ? v('--app-glass-raised-surface') : ''
   return {
     variant,
     /** Which surfaces are glass: none (Solid, Reduce transparency, Increase contrast), the sidebar only, or the whole window. */
@@ -98,24 +110,15 @@ function build(variant: ThemeVariant, scope: WindowScope = 'none', opacity = 90,
     taskUrgent: variant === 'dark' ? 'oklch(0.7 0.15 42)' : 'oklch(0.62 0.17 40)',
     raw,
     v,
-    frame: v('--app-frame-surface'),
-    sidebar: v('--app-sidebar-surface'),
     /** A control or card fill. Never glass; page and pane backgrounds use `content`. */
     surface: v('--color-background-surface'),
-    /** `--app-content-surface`: route content (workspace card, dock body, subagent page, terminal), clear on whole-window glass. */
+    /** `--app-content-surface`: route content (workspace card, dock body, subagent page, terminal), clear on whole-window glass. Opaque otherwise, at every opacity. */
     content: v('--app-content-surface'),
     glass: {
-      /** The app root fill: whole window → coat, Sidebar only → shell, none → the opaque frame. */
-      window: v('--app-frame-surface'),
-      /** Whole window → raised tint; '' elsewhere (unused). */
-      raised,
-      /** Menus, pickers, selects, comboboxes: whole window → raised, Sidebar only → dense, none → popover. */
-      menu: scope === 'window' ? raised : dense,
       /** Tooltips, hover cards, toasts. */
       dense,
       /** The composer: whole window → dense (no transcript edge mask on GPUIX), else its own fill. */
       composer: scope === 'window' ? dense : variant === 'dark' ? v('--composer-surface') : '#ffffff',
-      settingsCard: v('--app-settings-card-surface'),
       settingsCardBorder: v('--app-settings-card-border'),
     },
     surfaceUnder: v('--color-background-surface-under'),
@@ -167,27 +170,76 @@ export type Theme = ReturnType<typeof build>
 export const THEMES: Record<ThemeVariant, Theme> = { dark: build('dark'), light: build('light') }
 
 const derived = new Map<string, Theme>()
-const MAX_DERIVED = 16
 /**
- * The theme for a window scope and glass opacity, with the accessibility display options applied. Built once per
- * combination in a bounded map (an opacity drag visits many), oldest evicted first. Scope none ignores the opacity.
+ * The theme for a window scope, with the accessibility display options applied. Built once per combination; the glass
+ * opacity is not part of it (`materialFor`), so the map stays at a handful of entries.
  */
-export function themeFor(variant: ThemeVariant, scope: WindowScope, opacity: number, contrast: boolean, reduceTransparency: boolean): Theme {
+export function themeFor(variant: ThemeVariant, scope: WindowScope, contrast: boolean, reduceTransparency: boolean): Theme {
   if (scope === 'none' && !contrast && !reduceTransparency) return THEMES[variant]
-  const key = `${variant}:${scope}:${scope === 'none' ? '' : opacity}:${contrast}:${reduceTransparency}`
+  const key = `${variant}:${scope}:${contrast}:${reduceTransparency}`
   let theme = derived.get(key)
   if (!theme) {
-    theme = build(variant, scope, opacity, contrast, reduceTransparency)
-    derived.set(key, theme)
-    if (derived.size > MAX_DERIVED) derived.delete(derived.keys().next().value!)
-  } else {
-    // Refresh recency so the theme in use is the last to go.
-    derived.delete(key)
+    theme = build(variant, scope, contrast, reduceTransparency)
     derived.set(key, theme)
   }
   return theme
 }
 export const derivedThemeCount = () => derived.size
+
+/**
+ * The surfaces that follow the glass opacity, read with `useMaterial()` (`ui.tsx`). Each is a resolved rgba() string.
+ */
+export interface Material {
+  /** The app root fill and the rail, title bar and gutters: whole window → coat, Sidebar only → shell, none → the opaque frame. */
+  frame: string
+  /** The thread panel's coat: Sidebar only → over the shell, whole window → clear, none → the opaque panel. Also the settings list. */
+  sidebar: string
+  /** What the thread panel paints in the app shell: `sidebar`, or with `SINGLE_FILL` that coat already stacked on the shell. */
+  panel: string
+  /** Menus, pickers, selects, comboboxes: whole window → raised tint, Sidebar only → dense, none → popover. */
+  menu: string
+  /** A settings list's fill: whole window → raised tint, else the desktop's opaque card surface. */
+  settingsCard: string
+}
+
+/** Stack a translucent colour on another: the one fill that paints the same pixels as the pair. */
+export function stack(top: string, under: string): string {
+  const t = parseColor(top)
+  const u = parseColor(under)
+  if (!t || !u) return top
+  const alpha = t[3] + u[3] * (1 - t[3])
+  if (alpha === 0) return 'rgba(0, 0, 0, 0)'
+  const ch = (i: number) => (t[i] * t[3] + u[i] * u[3] * (1 - t[3])) / alpha
+  return rgba([ch(0), ch(1), ch(2), alpha])
+}
+
+const materials = new Map<string, Material>()
+const MAX_MATERIALS = 32
+/** The material for a scope and glass opacity, memoized so the same inputs give the same object (and no render). Scope none ignores the opacity. */
+export function materialFor(variant: ThemeVariant, scope: WindowScope, opacity: number): Material {
+  const key = `${variant}:${scope}:${scope === 'none' ? '' : opacity}`
+  let material = materials.get(key)
+  if (material) return material
+  const opaque = opaqueVars(variant)
+  const raw: Vars = { ...opaque, ...materialVars(variant, opaque, scope, opacity) }
+  const v = (name: string) => resolve(raw[name] ?? 'transparent', raw)
+  const frame = v('--app-frame-surface')
+  const sidebar = v('--app-sidebar-surface')
+  material = {
+    frame,
+    sidebar,
+    panel: SINGLE_FILL && scope === 'sidebar' ? stack(sidebar, frame) : sidebar,
+    menu: scope === 'window' ? v('--app-glass-raised-surface') : scope === 'none' ? v('--app-opaque-popover') : v('--app-glass-dense-surface'),
+    settingsCard: v('--app-settings-card-surface'),
+  }
+  materials.set(key, material)
+  if (materials.size > MAX_MATERIALS) materials.delete(materials.keys().next().value!)
+  return material
+}
+export const materialCount = () => materials.size
+
+/** The lowest alpha any visible region paints for a scope and opacity (`platform/translucency.ts`); the window backing follows it. */
+export const windowCoverage = (variant: ThemeVariant, scope: WindowScope, opacity: number) => materialCoverage(variant, opaqueVars(variant), scope, opacity)
 
 export const FONT_UI = '.SystemUIFont'
 export const FONT_MONO = 'Menlo'

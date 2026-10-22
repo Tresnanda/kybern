@@ -63,11 +63,32 @@ import { installWindowSurface, useTranscriptReleased } from './platform/surface.
 import { useApp, usePaneCompact } from './state.ts'
 import { COLUMN, GUTTER, Transcript } from './Transcript.tsx'
 import { ThreadRequests, useBlockingRequest } from './transcript/Requests.tsx'
-import { Label, REDUCED_MOTION, useTheme } from './ui.tsx'
-import { TITLEBAR } from './nav/TitleBar.tsx'
+import { Label, REDUCED_MOTION, useMaterial, useTheme } from './ui.tsx'
+import { RAIL, TITLEBAR } from './nav/TitleBar.tsx'
+import { SINGLE_FILL } from './platform/translucency.ts'
 
 const INSET = 8
 const CARD_RADIUS = 12
+
+/**
+ * `KYBERN_TRANSLUCENCY_SINGLE_FILL=1` (perf A/B, `platform/translucency.ts`): in Sidebar only and Solid the frame colour is
+ * painted only where the frame shows: the title bar, the rail, the right and bottom gutters, and the four corner squares the
+ * card's rounded corners leave open. Nothing is painted under the workspace card, so each pixel gets one fill. The strips
+ * partition the window outside the card, so a translucent frame is never blended twice.
+ */
+function FrameFill({ color }: { color: string }) {
+  const at = (style: object) => <div style={{ position: 'absolute', pointerEvents: 'none', backgroundColor: color, ...style }} />
+  return <>
+    {at({ left: 0, right: 0, top: 0, height: TITLEBAR })}
+    {at({ left: 0, top: TITLEBAR, bottom: 0, width: RAIL })}
+    {at({ right: 0, top: TITLEBAR, bottom: 0, width: INSET })}
+    {at({ left: RAIL, right: INSET, bottom: 0, height: INSET })}
+    {at({ left: RAIL, top: TITLEBAR, width: CARD_RADIUS, height: CARD_RADIUS })}
+    {at({ right: INSET, top: TITLEBAR, width: CARD_RADIUS, height: CARD_RADIUS })}
+    {at({ left: RAIL, bottom: INSET, width: CARD_RADIUS, height: CARD_RADIUS })}
+    {at({ right: INSET, bottom: INSET, width: CARD_RADIUS, height: CARD_RADIUS })}
+  </>
+}
 
 // The thread panel slides as a drawer (`drawerSlide`); Reduce Motion, and toggles from the keyboard, change without movement.
 
@@ -81,6 +102,8 @@ function Workspace() {
   const taskDragging = !!useHeldTask()
   useTasksFeed()
   const t = useTheme()
+  const fills = useMaterial()
+  const singleFill = SINGLE_FILL && t.scope !== 'window'
   const page = useNav((s) => s.page)
   const settingsOpen = useNav((s) => s.settingsOpen)
   const instant = useNav((s) => s.panelInstant || s.keyboardNav)
@@ -126,8 +149,9 @@ function Workspace() {
       onMouseDown={pointerNav}
       onMouseMove={taskDragging || splitDragging ? (event) => { if (taskDragging) trackTaskDrag(event); if (splitDragging) trackThreadDrag(event) } : undefined}
       onMouseUp={splitDragging ? finishSplitDrag : undefined}
-      style={{ userSelect: 'none', display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: t.glass.window, position: 'relative' }}
+      style={{ userSelect: 'none', display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: singleFill ? undefined : fills.frame, position: 'relative' }}
     >
+      {singleFill && <FrameFill color={fills.frame} />}
       <TitleBar panelOpen={panelOpen} />
       <div style={{ display: 'flex', position: 'absolute', left: 0, right: 0, bottom: 0, top: TITLEBAR, paddingRight: INSET, paddingBottom: INSET }}>
         <NavRail />
@@ -153,7 +177,7 @@ function Workspace() {
                 width: sidebarWidth,
                 height: '100%',
                 flexShrink: 0,
-                backgroundColor: t.sidebar,
+                backgroundColor: fills.panel,
                 borderTopLeftRadius: CARD_RADIUS,
                 borderBottomLeftRadius: CARD_RADIUS,
                 borderTopWidth: 0.6,

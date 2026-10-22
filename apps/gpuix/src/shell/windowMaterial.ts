@@ -7,7 +7,7 @@
 //   Copyright (c) 2026 Emanuele Di Pietro
 // Full notice: THIRD_PARTY_NOTICES.md at the repository root.
 //
-// - Solid, Reduce transparency, Increase contrast and `KYBERN_OPAQUE` → 'opaque', blur radius 0.
+// - Solid, Reduce transparency, Increase contrast, `KYBERN_OPAQUE` and glass that fully covers the desktop → 'opaque', blur radius 0.
 // - Blur Auto → 'blurred': GPUI's `NSVisualEffectView`, tuned to the desktop's vibrancy (`native/material.ts`).
 // - Blur 1–64 → 'transparent' plus `CGSSetWindowBackgroundBlurRadius` (`native/windowBlur.ts`). If the private
 //   call is refused the window falls back to the vibrancy material and the Settings button reads
@@ -15,13 +15,19 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import { useGpuix } from '@gpuix/react'
 import { applyDesktopMaterial } from '../native/material.ts'
-import { blurCallAvailable, setWindowBlurRadius } from '../native/windowBlur.ts'
-import type { ThemeVariant, VariantMaterial, WindowScope } from '../platform/translucency.ts'
+import { blurCallAvailable, forgetTransparentFlags, setWindowBlurRadius } from '../native/windowBlur.ts'
+import { OPAQUE_COVERAGE, type ThemeVariant, type VariantMaterial, type WindowScope } from '../platform/translucency.ts'
+import { windowCoverage } from '../theme.ts'
 import { syncWindowAppearance } from './appearance.ts'
 
 export type Backing = { mode: 'opaque' | 'blurred' | 'transparent'; radius: number }
-export function backingFor(m: Pick<VariantMaterial, 'blur'>, scope: WindowScope): Backing {
-  if (scope === 'none') return { mode: 'opaque', radius: 0 }
+/**
+ * Opaque when nothing can show through: Solid and the accessibility overrides, and any scope whose lightest region covers
+ * the desktop (`windowCoverage` ≥ `OPAQUE_COVERAGE`: light Sidebar only at the default 90, or opacity 100). Blurring the
+ * desktop behind an opaque window only costs WindowServer; the colours are unchanged.
+ */
+export function backingFor(m: Pick<VariantMaterial, 'blur' | 'opacity'>, scope: WindowScope, variant: ThemeVariant): Backing {
+  if (scope === 'none' || windowCoverage(variant, scope, m.opacity) >= OPAQUE_COVERAGE) return { mode: 'opaque', radius: 0 }
   return m.blur === null ? { mode: 'blurred', radius: 0 } : { mode: 'transparent', radius: m.blur }
 }
 
@@ -52,7 +58,7 @@ function setBackground(renderer: Renderer | null | undefined, mode: Backing['mod
     if (!warned) { warned = true; console.log('[material] runtime backing needs the patched addon') }
     return
   }
-  try { target.setWindowBackground(mode); nativeMode = mode; if (process.env.KYBERN_DEBUG_MATERIAL) console.log(`[material] window background ${mode}`) } catch (error) { console.error('[material] window background:', error) }
+  try { target.setWindowBackground(mode); nativeMode = mode; forgetTransparentFlags(); if (process.env.KYBERN_DEBUG_MATERIAL) console.log(`[material] window background ${mode}`) } catch (error) { console.error('[material] window background:', error) }
 }
 
 let timer: ReturnType<typeof setTimeout> | undefined
@@ -119,10 +125,10 @@ export function installWindowMaterial(backing: Backing, variant: ThemeVariant) {
 }
 
 /** Keep the native window in step with the theme: called from `ThemeProvider`. */
-export function useWindowMaterial(variant: ThemeVariant, m: Pick<VariantMaterial, 'blur'>, scope: WindowScope) {
+export function useWindowMaterial(variant: ThemeVariant, m: Pick<VariantMaterial, 'blur' | 'opacity'>, scope: WindowScope) {
   const renderer = useGpuix()?.renderer as Renderer | undefined
   knownRenderer = renderer
-  const backing = backingFor(m, scope)
+  const backing = backingFor(m, scope, variant)
   const key = `${backing.mode}:${backing.radius}:${variant}`
   useEffect(() => {
     if (key === lastKey) return

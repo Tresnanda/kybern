@@ -68,7 +68,7 @@ startupMark('workspace-module-ready')
 // The launch backing, from the saved material of the variant the window opens in (`shell/windowMaterial.ts`).
 const launchVariant: ThemeVariant = process.env.KYBERN_APPEARANCE === 'light' || process.env.KYBERN_APPEARANCE === 'dark' || appearance().theme === 'system' ? VARIANT : (appearance().theme as ThemeVariant)
 const launchMaterial = appearance().window[launchVariant]
-const launchBacking = backingFor(launchMaterial, resolveScope(launchMaterial, getAccessibilityDisplay()))
+const launchBacking = backingFor(launchMaterial, resolveScope(launchMaterial, getAccessibilityDisplay()), launchVariant)
 
 startupMark('render-start')
 // Before `render`, so a throw from a timer or promise degrades to a toast instead of GPUIX's full-window error screen.
