@@ -145,6 +145,21 @@ once in `App.tsx` and follows the pointer during a drag (GPUIX only delivers mou
 Used by the Explorer tree (176-520) and the PR list (288-512); the thread sidebar, dock and split dividers keep their own handles
 (`shell/ResizeHandle.tsx`, `dock/`, `split/`), all driven by `scripts/kit9-resize-check.ts`.
 
+## Tabs (`Tabs.tsx`)
+
+The one tab strip (ADE-55 §2.7, Direction C): the in-thread strip (`tabs/Strip.tsx`), the dock, the terminal pane, the PR
+detail and the model picker. `<Tabs items active onSelect onClose? onDoubleClick? size="md"|"sm" focused underlineGap
+dividerAfter overflow minWidth gap dropIndex trailing wrapTab registerTab stripRef onTabMouseDown/Move/Up animate testId />`.
+Items: `key`, `label`, `icon` | `mark` | `iconNode`, `preview` (italic, drawn as a Markdown emphasis because GPUIX text has
+no `fontStyle`), `pinned` (no ✕), `dirty` (6 px dot until hover), `detail`/`extra` (counts, diff stats), `disabled`,
+`iconOnly`, `tooltip`, `testId`, `closeTestId`. Geometry: 28 (sm 24) high, padding 8 (sm 7), glyph 14, gap 6, label 13/500
+(sm 12/500), width 96–200 (pinned up to 320), ✕ 16 with radius 5 on the active and hovered tab. The active tab of a
+focused strip has no fill and a 2 × (width − 16) accent underline `underlineGap` below it (the strip's bottom edge); in
+an unfocused split group it drops to a 5% ink fill and secondary text. Overflow scrolls sideways with a 16 px `edgeFade`
+and a » menu; the active tab is kept in view (instantly: no per-frame JS). A tab that appears after mount fades in from
+0.97 (150 ms, paint-only; the neighbours step aside because GPUIX tweens no `maxWidth`), a closed one shrinks from its
+measured width to 0 (120 ms); Reduce Motion: opacity, 90 ms. Switching is instant.
+
 ## Attention pop (`Pop.tsx`)
 
 `<Label paintAnimation={popAnimation()}>`: the desktop's `.t-pop` (scale 0.85 → 1, opacity 0.4 → 1, 250 ms `--ease-bounce`) on a
