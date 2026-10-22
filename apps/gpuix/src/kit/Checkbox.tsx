@@ -3,13 +3,14 @@
 // check strokes itself in (`.t-check-path`: dasharray 24, dashoffset 24 → 0 over 250 ms smooth-out after an 80 ms delay).
 // Unchecking is instant. `indeterminate` is the accent box with a white dash. Replaces the Tasks `Check`, the criteria box, the
 // worktree and close-guard boxes and the coordinator card glyphs. Keyboard focus draws the 2 px accent ring natively.
+// `tone="neutral"` is the quiet Tasks and Notes box (spec §3.3): checked fills with the ink and a page-coloured tick.
 //
 // The draw is native and paint-only (`strokeDraw`, `motion/success.ts`; `native/patches/stroke_draw.rs`): the check's sprite
 // shows the SVG rasterized at each presented frame's dash offset, with no render or layout per frame. With the stock
 // addon the check appears whole.
 // Reduce Motion: no fill transition and no draw (`motion-reduce:transition-none`, `.t-check-path { animation: none }`).
 import { motion, type StyleDesc } from '@gpuix/react'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { DURATION, EASE } from '../motion/kit.tsx'
 import { strokeDraw } from '../motion/success.ts'
 
@@ -24,7 +25,10 @@ const DASH = svg('<path d="M5.252 12h13.496"/>')
 export interface CheckboxProps {
   checked?: boolean
   defaultChecked?: boolean
-  onCheckedChange?: (checked: boolean) => void
+  /** `shift`: Shift was held on the click or the Space press (Tasks extends its selection as a range). */
+  onCheckedChange?: (checked: boolean, detail: { shift: boolean }) => void
+  /** `neutral`: the ink fill of Tasks and Notes instead of the accent. */
+  tone?: 'accent' | 'neutral'
   /** Shows a dash instead of the check, on the unfilled box (Base UI `indeterminate`). */
   indeterminate?: boolean
   disabled?: boolean
@@ -35,14 +39,15 @@ export interface CheckboxProps {
   style?: StyleDesc
 }
 
-export function Checkbox({ checked: checkedProp, defaultChecked = false, onCheckedChange, indeterminate = false, disabled = false, invalid = false, 'aria-label': label, testId, style }: CheckboxProps) {
+export function Checkbox({ checked: checkedProp, defaultChecked = false, onCheckedChange, indeterminate = false, disabled = false, invalid = false, tone = 'accent', 'aria-label': label, testId, style }: CheckboxProps) {
   const t = useTheme()
   const c = useControls()
-  const [checked, setChecked] = useControllable(checkedProp, defaultChecked, onCheckedChange)
+  const shift = useRef(false)
+  const [checked, setChecked] = useControllable(checkedProp, defaultChecked, (next: boolean) => onCheckedChange?.(next, { shift: shift.current }))
   const focus = useFocusRing()
   // Only a change made while mounted animates; a box that starts checked shows its check at rest.
   const [animate, setAnimate] = useState(false)
-  const toggle = () => { if (disabled) return; setAnimate(!REDUCED_MOTION); setChecked(indeterminate ? true : !checked) }
+  const toggle = (withShift: boolean) => { if (disabled) return; shift.current = withShift; setAnimate(!REDUCED_MOTION); setChecked(indeterminate ? true : !checked) }
   const shown = checked || indeterminate
   const filled = shown
   const destructive = t.v('--destructive')
@@ -51,7 +56,9 @@ export function Checkbox({ checked: checkedProp, defaultChecked = false, onCheck
   const page = t.v('--background')
   const glass = t.scope === 'window'
   const d = (color: string, under?: string) => (disabled ? dim(color, page, under, 0.4, glass) : color)
-  const primary = d(c.check.on)
+  const neutral = tone === 'neutral'
+  const primary = d(neutral ? c.neutral.checkOn : c.check.on)
+  const tick = neutral ? c.neutral.checkTick : c.check.tick
   const play = animate && !REDUCED_MOTION
   // `.t-check-path`: dasharray 24, drawn over `--duration-fast` after `--duration-micro`.
   const draw = play ? strokeDraw(24, DURATION.micro * 1000) : undefined
@@ -68,8 +75,8 @@ export function Checkbox({ checked: checkedProp, defaultChecked = false, onCheck
       onMouseDown={focus.handlers.onMouseDown}
       onFocus={focus.handlers.onFocus}
       onBlur={focus.handlers.onBlur}
-      onClick={toggle}
-      onKeyDown={(e) => { if (e.key === 'space') { focus.keyed(); toggle() } }}
+      onClick={(e) => toggle(!!e.modifiers?.shift)}
+      onKeyDown={(e) => { if (e.key === 'space') { focus.keyed(); toggle(!!e.modifiers?.shift) } }}
       style={{ position: 'relative', width: 16, height: 16, flexShrink: 0, borderRadius: RADIUS.check, borderWidth: 1.5, borderColor: filled ? 'rgba(0, 0, 0, 0)' : d(edge), cursor: disabled ? 'default' : 'pointer', ...(disabled ? {} : { hover: filled ? {} : { borderColor: invalid ? edge : c.check.hoverEdge }, focusVisible: { outlineWidth: 2, outlineColor: c.focus, outlineOffset: 0 } }), ...style }}
     >
       {shown && (
@@ -85,8 +92,8 @@ export function Checkbox({ checked: checkedProp, defaultChecked = false, onCheck
       {shown && (
         <motion.div key={`g${filled}`} initial={play ? { opacity: 0 } : false} animate={{ opacity: 1 }} transition={tween} style={{ ...box, left: 0.5, top: 0.5, width: 12, height: 12 }}>
           {indeterminate
-            ? <svg source={DASH} style={{ ...box, left: 0, top: 0, width: 12, height: 12, color: d(c.check.tick, primary) }} />
-            : <svg source={CHECK} {...(draw ? { paintAnimation: draw } : {})} style={{ ...box, left: 0, top: 0, width: 12, height: 12, color: d(c.check.tick, primary) }} />}
+            ? <svg source={DASH} style={{ ...box, left: 0, top: 0, width: 12, height: 12, color: d(tick, primary) }} />
+            : <svg source={CHECK} {...(draw ? { paintAnimation: draw } : {})} style={{ ...box, left: 0, top: 0, width: 12, height: 12, color: d(tick, primary) }} />}
         </motion.div>
       )}
     </div>

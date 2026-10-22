@@ -95,7 +95,7 @@ export function CriterionRow({ index, text, checked, focusToken, onToggle, onTex
   useEffect(() => { if (focusNow && ref.current) renderer?.focusElement?.(ref.current.id) }, [focusNow, focusToken])
   return (
     <div testId={`task-criterion-row-${index}`} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, minHeight: 32, paddingTop: 4, paddingBottom: 4 }}>
-      <Checkbox testId={`task-criterion-${index}`} aria-label={text || 'Criterion'} checked={checked} onCheckedChange={onToggle} style={{ marginTop: 4 }} />
+      <Checkbox testId={`task-criterion-${index}`} tone="neutral" aria-label={text || 'Criterion'} checked={checked} onCheckedChange={onToggle} style={{ marginTop: 4 }} />
       <textarea
         ref={ref}
         testId={`task-criterion-text-${index}`}

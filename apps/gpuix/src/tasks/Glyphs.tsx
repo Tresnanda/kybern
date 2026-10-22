@@ -91,16 +91,15 @@ export function checkHandledClick() {
   checkClickAt = -Infinity
   return hit
 }
-let checkShift = false
 /**
- * The selection checkbox (the kit `Checkbox`) in a 26 x 30 hit area. `onClick` gets whether Shift was held: it extends the selection as a
- * range (`pickTask`). The box and its padding both select; whichever gets the click first handles it, the other sees `checkClickAt` and
- * leaves it. Shift is read from the press (the box's own toggle carries no modifiers).
+ * The selection checkbox (the kit `Checkbox`, neutral tone) in a 26 x 30 hit area. `onClick` gets whether Shift was held (a click or
+ * Shift+Space on the box): it extends the selection as a range (`pickTask`). The box and its padding both select; whichever gets the
+ * click first handles it, the other sees `checkClickAt` and leaves it.
  */
 export function SelectBox({ checked, onClick, testId }: { checked: boolean; onClick: (shift: boolean) => void; testId?: string }) {
   return (
     <div
-      onMouseDown={(e) => { checkDownAt = performance.now(); checkShift = !!e.modifiers?.shift }}
+      onMouseDown={() => { checkDownAt = performance.now() }}
       onClick={(e) => {
         if (performance.now() - checkClickAt < 50) return
         checkClickAt = performance.now()
@@ -110,13 +109,12 @@ export function SelectBox({ checked, onClick, testId }: { checked: boolean; onCl
     >
       <Checkbox
         testId={testId}
+        tone="neutral"
         aria-label="Select task"
         checked={checked}
-        onCheckedChange={() => {
+        onCheckedChange={(_, { shift }) => {
           if (performance.now() - checkClickAt < 50) return
           checkClickAt = performance.now()
-          const shift = checkShift
-          checkShift = false
           onClick(shift)
         }}
       />

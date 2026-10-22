@@ -51,6 +51,8 @@ export interface Controls {
   token: { bg: string }
   segmented: { track: string; thumb: string; selFg: string }
   check: { edge: string; hoverEdge: string; on: string; tick: string }
+  /** The quiet checkbox and segmented control of Tasks and Notes (spec §3.3, Linear style): an ink fill, never tinted. */
+  neutral: { checkOn: string; checkTick: string; thumb: string; selFg: string }
   radio: { dot: string }
   iconButton: { activeBg: string; activeFg: string }
   send: { bg: string; fg: string }
@@ -88,6 +90,11 @@ export function controlsFor(t: Theme): Controls {
     token: { bg: ink(light ? 0.06 : 0.08) },
     segmented: { track: ink(light ? 0.05 : 0.06), thumb: acc(light ? 0.12 : 0.26), selFg: accentFg },
     check: { edge: ink(0.26), hoverEdge: t.textSecondary, on: light ? '#0169cc' : '#3386d6', tick: '#ffffff' },
+    neutral: {
+      checkOn: light ? '#0d0d0d' : '#fcfcfc', checkTick: light ? '#ffffff' : '#181818',
+      // Light: a raised white thumb (translucent on glass, spec §4.4); dark: one ink step over the track.
+      thumb: light ? (t.scope === 'window' ? 'rgba(255, 255, 255, 0.72)' : '#ffffff') : ink(0.12), selFg: t.text,
+    },
     radio: { dot: light ? '#ffffff' : '#2a2a2a' },
     iconButton: { activeBg: acc(light ? 0.11 : 0.24), activeFg: accentFg },
     send: { bg: acc(light ? 0.14 : 0.3), fg: light ? '#0160bd' : '#a6d0f7' },

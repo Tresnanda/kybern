@@ -67,7 +67,7 @@ export function TasksBar() {
     <div style={{ display: 'flex', flexGrow: 1, alignItems: 'center', gap: 8, paddingRight: 8 }}>
       <Label color={t.text} size={13} lineHeight={19.5} weight={500} truncate>{query.trim() ? 'Search' : filterLabel(filter, (id) => projects.find((p) => p.id === id)?.name)}</Label>
       <div style={{ flexGrow: 1 }} />
-      <Segmented testId="task-view" aria-label="View" value={view} onChange={(value) => prefs({ view: value as 'list' | 'board' })} options={[{ value: 'list', label: 'List', icon: LIST }, { value: 'board', label: 'Board', icon: BOARD }]} />
+      <Segmented testId="task-view" tone="neutral" aria-label="View" value={view} onChange={(value) => prefs({ view: value as 'list' | 'board' })} options={[{ value: 'list', label: 'List', icon: LIST }, { value: 'board', label: 'Board', icon: BOARD }]} />
       <DisplayMenu trigger={() => <Button icon={CUSTOMIZE} chevron label="Display">Display</Button>} />
     </div>
   )

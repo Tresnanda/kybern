@@ -4,7 +4,8 @@
 // 12 px segment padding; an icon-only option takes 7. `count` trails a label in `text3`. Arrow keys move the choice and the
 // focus (roving tab index), skipping `unavailable` options, which stay visible, explain themselves in a tooltip and ignore
 // input. While `busy` the control keeps focus but ignores input. Replaces the Settings, Usage, PR-list and Tasks segmented
-// controls. Slide: `.t-tabs-pill` (250 ms smooth-out; the first placement lands without motion; Reduce Motion jumps).
+// controls. `tone="neutral"` is the quiet Tasks style (spec §3.3): an ink thumb and the plain text colour. An icon-only segment
+// shows its label in a tooltip. Slide: `.t-tabs-pill` (250 ms smooth-out; the first placement lands without motion; Reduce Motion jumps).
 import { motion, useGpuixRequired, type PublicInstance, type StyleDesc } from '@gpuix/react'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { Tip } from '../nav/overlay.tsx'
@@ -39,15 +40,20 @@ export interface SegmentedProps {
   segmentPadX?: number
   /** Stretch to the parent's width with equal segments (`FULL_WIDTH_SEGMENTS`). */
   fill?: boolean
+  /** `neutral`: an ink thumb instead of the accent tint (Tasks and Notes). */
+  tone?: 'accent' | 'neutral'
   testId?: string
   style?: StyleDesc
 }
 
 type Box = { x: number; w: number }
 
-export function Segmented({ options, value, onChange, busy = false, 'aria-label': label, size = 'md', segmentPadX, fill = false, testId, style }: SegmentedProps) {
+export function Segmented({ options, value, onChange, busy = false, 'aria-label': label, size = 'md', segmentPadX, fill = false, tone = 'accent', testId, style }: SegmentedProps) {
   const t = useTheme()
   const c = useControls()
+  const neutral = tone === 'neutral'
+  const thumb = neutral ? c.neutral.thumb : c.segmented.thumb
+  const selFg = neutral ? c.neutral.selFg : c.segmented.selFg
   const textSize = CONTROL[size].font
   const segmentHeight = (size === 'sm' ? HEIGHT.sm : HEIGHT.md) - 4
   const padX = segmentPadX ?? (size === 'sm' ? 9 : 12)
@@ -56,7 +62,7 @@ export function Segmented({ options, value, onChange, busy = false, 'aria-label'
   const buttons = useRef(new Map<string, PublicInstance>())
   const [boxes, setBoxes] = useState<Record<string, Box> | null>(null)
   const [hover, setHover] = useState<string | null>(null)
-    const focus = useFocusRing()
+  const focus = useFocusRing()
   const layoutKey = options.map((o) => `${o.value}:${o.label}:${o.count ?? ''}`).join(',') + `|${textSize}|${padX}|${fill}`
 
   // Measure each segment after layout (offsets from the track's padding box), retrying until GPUI has laid it out.
@@ -122,7 +128,8 @@ export function Segmented({ options, value, onChange, busy = false, 'aria-label'
       }}
     >
       {pill && (() => {
-        const style = { position: 'absolute', top: 2, height: segmentHeight, borderRadius: size === 'sm' ? RADIUS.sm : RADIUS.segThumb, backgroundColor: c.segmented.thumb, pointerEvents: 'none' } as const
+        const style = { position: 'absolute', top: 2, height: segmentHeight, borderRadius: size === 'sm' ? RADIUS.sm : RADIUS.segThumb, backgroundColor: thumb, pointerEvents: 'none',
+          ...(neutral ? { boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 2, spreadRadius: 0, color: t.variant === 'light' ? 'rgba(0, 0, 0, 0.08)' : 'rgba(0, 0, 0, 0.25)' } } : {}) } as const
         const ease = [...EASE.smoothOut] as [number, number, number, number]
         // Equal-width segments (`fill`, or labels that happen to match): the pill only moves, so it slides as a paint-only translation
         // from the first segment's slot (no layout or render per frame). Different widths also change the pill's width, which needs the
@@ -136,7 +143,7 @@ export function Segmented({ options, value, onChange, busy = false, 'aria-label'
       {options.map((option) => {
         const selected = option.value === value
         const blocked = !!option.unavailable
-        const color = selected ? c.segmented.selFg : hover === option.value && !blocked && !busy ? t.text : blocked ? t.textTertiary : t.textSecondary
+        const color = selected ? selFg : hover === option.value && !blocked && !busy ? t.text : blocked ? t.textTertiary : t.textSecondary
         const button = (
           <div
             key={option.value}
@@ -166,7 +173,8 @@ export function Segmented({ options, value, onChange, busy = false, 'aria-label'
             {option.count != null && <Label color={t.textTertiary} size={textSize} lineHeight={textSize + 4} weight={500} style={{ pointerEvents: 'none' }}>{String(option.count)}</Label>}
           </div>
         )
-        return blocked ? <Tip key={option.value} label={option.unavailable!} side="top" sideOffset={6} size={segmentHeight}>{button}</Tip> : button
+        if (blocked) return <Tip key={option.value} label={option.unavailable!} side="top" sideOffset={6} size={segmentHeight}>{button}</Tip>
+        return option.icon ? <Tip key={option.value} label={option.label} side="bottom" sideOffset={6} size={segmentHeight}>{button}</Tip> : button
       })}
     </div>
   )

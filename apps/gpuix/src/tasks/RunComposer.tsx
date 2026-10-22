@@ -174,6 +174,7 @@ export function RunComposer({ ids, onEmptyChange }: { ids: string[]; onEmptyChan
                 <div style={lineStyle}>
                   <Segmented
                     size="sm"
+                    tone="neutral"
                     aria-label="Run tasks"
                     value={batchMode}
                     onChange={(value) => setBatchMode(value as TaskBatchMode)}

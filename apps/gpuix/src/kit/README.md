@@ -44,9 +44,9 @@ the alternative is `secondary danger` on the leading edge, Cancel + primary trai
 | `SplitButton` | `variant` primary/secondary, `size`, `onClick`, `menu` (the `MenuItem`s), `menuAlign` | the PR Merge pair, Notes compose + chevron |
 | `PickerChip` | `icon`/`mark`/`dot`/`lead`, `secondary`, `chevron`, `open`, `selected`, `neutral`, `quiet`, `muted`, `size` sm/md, `truncate`, `maxWidth` | `FooterChip`, `TrayChip`, Notes `Chip`, the Tasks scope chip, the model trigger, "Queue ⌄", the dock empty-state chips |
 | `TokenChip` | `onRemove`, `lead` | the Computer-use app chips, `Combobox` chips |
-| `Checkbox` | as before (`indeterminate`, `invalid`) | the Tasks `Check`, the criteria box, `WorktreeCheck`, the close-guard box, coordinator glyph checkboxes |
+| `Checkbox` | as before (`indeterminate`, `invalid`), `tone` accent/neutral; `onCheckedChange(checked, { shift })` | the Tasks `Check`, the criteria box, `WorktreeCheck`, the close-guard box, coordinator glyph checkboxes |
 | `Radio`, `RadioRow` | `checked`, `title`, `description`, `onSelect` | the question-card and PR-review radios |
-| `Segmented` | `size` sm/md, options with `icon` and `count`, `fill` | `settings/controls` Segmented, `usage/controls` Segments (non-tab uses), the Tasks view toggle |
+| `Segmented` | `size` sm/md, options with `icon` (label shown as a tooltip) and `count`, `fill`, `tone` accent/neutral | `settings/controls` Segmented, `usage/controls` Segments (non-tab uses), the Tasks view toggle |
 | `TextField`, `SearchField`, `NumberField`, `TextArea`, `FieldShell` | `size` md/lg, `invalid`, `disabled`, `bare`, `leading`, `trailing`, `width` | `settings/controls` TextField/NumberField, the palette, settings, PR list and Notes searches, `AnswerField`, the PR review and environment textareas, `EnvInput` |
 | `SelectTrigger` | the display name as children, `mark`, `size`, `open`, `placeholder` | the `settings/controls` Select trigger, `kit/Select`'s trigger, the usage period button |
 | `Kbd` | `keys` | `nav/overlay` Kbd (18 high, one chip per key, a 1 px ink edge) |
@@ -54,7 +54,8 @@ the alternative is `secondary danger` on the leading edge, Cancel + primary trai
 `Slider` (Settings only; the model-picker effort slider is unchanged) draws the 4 px track, the accent fill and the 16 px thumb; `Switch`
 keeps its 32 × 20 geometry with no off-track border, the new thumb shadow and a native focus ring. The nav rail is unchanged by design.
 Tasks and Notes keep their quiet look: `PickerChip quiet` (transparent at rest, a neutral ink fill and the chevron on hover) for the
-property pickers and `neutral` for selected filters, so their selection stays ink; accent stays on the commit action, focus and
+property pickers and `neutral` for selected filters, and `Checkbox`/`Segmented` take `tone="neutral"` (ink fill, spec §3.3), so their
+selection stays ink; accent stays on the commit action, focus and
 selection elsewhere.
 
 Known gaps: a disabled `TextField` shows the ink edge only (the spec's 45° hatch needs a repeating pattern the renderer lacks).
