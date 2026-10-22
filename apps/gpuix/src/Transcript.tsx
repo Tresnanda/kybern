@@ -40,6 +40,8 @@ export const COLUMN = 736
 const OVERLAY_GAP = 64
 /** The overlay's height before its first measurement (a one-line composer in its gutter), and in hosts without one. */
 const OVERLAY_FALLBACK = 128
+/** Older pages loaded in a row while the reader stays at the top (`loadFromTop`). */
+const TOP_CHAIN = 8
 const turnKey = (group: TurnGroup, index: number) => group.turnId || group.user?.id || `turn-${index}`
 /** An optimistic send (`composer/pending.ts`) renders as turn `pending:<message id>`; the daemon's turn for that message
  * keeps the pending row's key, so the row stays mounted (no remount, jump or replayed entrance) when the real id arrives. */
@@ -133,10 +135,15 @@ export function Transcript() {
   // Reaching the top asks for one page. A page from inside a long turn adds
   // nothing to the screen, so it does not use up that intent while the reader
   // is still at the top; a page that shows a turn or prompt ends the chain.
-  const loadFromTop = useCallback(function next() {
+  // A page that does show something can still leave the reader at the top: a delegating turn arrives collapsed, a line
+  // or two tall, and the reader cannot scroll any higher to re-enter the top. So after it lays out, a reader still at
+  // the top gets the next page too, up to `TOP_CHAIN` pages per visit to the top.
+  const loadFromTop = useCallback(function next(chain = 0) {
     const id = pane.get().selectedId
     void loadEarlier(pane.id).then(nothing => {
-      if (nothing && nearTop.current && !pane.frozen && pane.get().selectedId === id) next()
+      const still = () => nearTop.current && !pane.frozen && pane.get().selectedId === id
+      if (nothing) { if (still()) next(chain) }
+      else if (chain + 1 < TOP_CHAIN) setTimeout(() => { if (still() && pane.get().open.nextBeforeSeq != null) next(chain + 1) }, 120)
     })
   }, [pane])
 
@@ -145,6 +152,13 @@ export function Transcript() {
     setAtTail(threadId ? scrollAnchors.get(`${pane.id}:${threadId}`)?.tail ?? true : true)
     nearTop.current = false
   }, [threadId])
+  // Scrolling up while already at the top reports no new visible range, so after a chain of pages ends with the reader
+  // still there, that wheel is the intent for the next page.
+  const wheelAtTop = useCallback((event: { deltaY?: number }) => {
+    if ((event.deltaY ?? 0) <= 0 || !nearTop.current || pane.frozen || earlierError) return
+    const open = pane.get().open
+    if (open.nextBeforeSeq != null && !open.loadingEarlier) loadFromTop()
+  }, [pane, earlierError, loadFromTop])
   // Consume one top-entry intent per page. Prepending or a retry must not
   // recursively download every older page without another reading gesture.
 
@@ -385,7 +399,7 @@ export function Transcript() {
   }
 
   return (
-    <TranscriptTail.Provider value={tailRef}><TranscriptFocusRestoration.Provider value={restoreFocus}><TranscriptRowStateScope.Provider value={rowStateScope}><SparseRetention.Provider value={nativeWindow.context}><div ref={surfaceRef} testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+    <TranscriptTail.Provider value={tailRef}><TranscriptFocusRestoration.Provider value={restoreFocus}><TranscriptRowStateScope.Provider value={rowStateScope}><SparseRetention.Provider value={nativeWindow.context}><div ref={surfaceRef} testId="transcript-surface" onScroll={wheelAtTop} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
       <virtual-list
         {...TRANSCRIPT_SCROLL_LAYOUT}
         {...(sparse ? { estimatedItemHeight: 160, itemCount: count, windowStart: windowIndices?.[0] ?? 0, windowIndices, ...nativeWindow.props } : { estimatedItemHeight: 160 })}
