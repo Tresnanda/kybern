@@ -14,9 +14,9 @@ edit(r, "                    div().flex().flex_row().gap(px(number(theme.markdow
 edit(r, "                                .ml(px(1.0))\n                                .w(px(number(theme.markdown.list_marker_size, 5.0)))",
         "                                .ml(px(1.0))\n                                .mr(px((number(theme.markdown.list_bullet_gap, number(theme.markdown.list_marker_gap, 8.0)) - number(theme.markdown.list_marker_gap, 8.0)).max(0.0)))\n                                .w(px(number(theme.markdown.list_marker_size, 5.0)))")
 # `dragOver`: a style applied while a Finder file drag hovers the element.
-edit("style.rs", "    pub active: Option<Box<StyleDesc>>,\n}", "    pub active: Option<Box<StyleDesc>>,\n    pub drag_over: Option<Box<StyleDesc>>,\n}")
-edit("renderer.rs", "    if let Some(active_style) = style.active.as_deref() {\n        el = el.active(|refinement| apply_styles(refinement, active_style));\n    }\n    el\n}",
-     "    if let Some(active_style) = style.active.as_deref() {\n        el = el.active(|refinement| apply_styles(refinement, active_style));\n    }\n    if let Some(drag_style) = style.drag_over.as_deref() {\n        let drag_style = drag_style.clone();\n        el = el.drag_over::<gpui::ExternalPaths>(move |refinement, _, _, _| apply_styles(refinement, &drag_style));\n    }\n    el\n}")
+edit("style.rs", "    pub active: Option<Box<StyleDesc>>,\n    /// While focused after keyboard input", "    pub active: Option<Box<StyleDesc>>,\n    pub drag_over: Option<Box<StyleDesc>>,\n    /// While focused after keyboard input")
+edit("renderer.rs", "    if let Some(active_style) = style.active.as_deref() {\n        el = el.active(|refinement| apply_styles(refinement, active_style));\n    }\n    // `focusVisible` needs",
+     "    if let Some(active_style) = style.active.as_deref() {\n        el = el.active(|refinement| apply_styles(refinement, active_style));\n    }\n    if let Some(drag_style) = style.drag_over.as_deref() {\n        let drag_style = drag_style.clone();\n        el = el.drag_over::<gpui::ExternalPaths>(move |refinement, _, _, _| apply_styles(refinement, &drag_style));\n    }\n    // `focusVisible` needs")
 
 # Automation: a Finder drag that enters and hovers without dropping, so `dragOver`
 # styles can be checked. `phase`: "enter" (Entered + Pending), "move" (Pending), "exit" (Ended).

@@ -34,7 +34,8 @@ test('links into ~/.local/bin when it is on PATH, and uninstalls only that link'
   expect(existsSync(path.join(homeBin, 'kybern'))).toBe(false)
 })
 
-test('uses the system bin (administrator prompt) when ~/.local/bin is not on PATH', async () => {
+// The administrator-prompt route is macOS's; Linux CI reports no need for it.
+test.skipIf(process.platform !== 'darwin')('uses the system bin (administrator prompt) when ~/.local/bin is not on PATH', async () => {
   const system = path.join(root, 'locked-bin')
   mkdirSync(system); chmodSync(system, 0o555)
   const e = env(['/usr/bin'], system)

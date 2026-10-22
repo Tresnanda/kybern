@@ -108,3 +108,16 @@ index f9fdf3ff14da834fcbf0a1536ad345b9dd701aa9..543781d3c871467cf2751c055eeb5c5a
  };
  // There is no `VirtualList` React wrapper. Windowing on the React side is the
  // app's job: pass `itemCount`, `estimatedItemHeight` and `windowStart` to the
+diff --git a/dist/reconciler/reconciler.js b/dist/reconciler/reconciler.js
+index 7f3b5ffc651a36bd6438fc68bc8921dceaab5aeb..f981de397adc84f6ae936b4faa21417a0d32025f 100644
+--- a/dist/reconciler/reconciler.js
++++ b/dist/reconciler/reconciler.js
+@@ -58,7 +58,7 @@ export function createRoot(renderer, rootEventHandlers = {}) {
+     };
+     attachRoot(renderer, gpuixContainer);
+     // Sent on every root, so a remount without the option restores the default.
+-    batchedRenderer.setKeyboardFocusDim(rootEventHandlers.keyboardFocusDim !== false);
++    batchedRenderer.setKeyboardFocusDim(rootEventHandlers.keyboardFocusDim === true);
+     const { windowKeyEventId, windowSelectionEventId } = gpuixContainer;
+     try {
+         renderer.setWindowKeyEvents?.(

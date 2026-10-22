@@ -33,9 +33,9 @@ impl VirtualListEntry {
         focusable: &HashSet<u64>,
         cx: &mut gpui::Context<GpuixView>,
     ) {
-        let version = element.custom_props.get("sparseVersion").and_then(serde_json::Value::as_u64);
-        let layout = element.custom_props.get("sparseLayout").and_then(serde_json::Value::as_u64);
-        let props = &element.custom_props;
+        let version = element.custom_props().get("sparseVersion").and_then(serde_json::Value::as_u64);
+        let layout = element.custom_props().get("sparseLayout").and_then(serde_json::Value::as_u64);
+        let props = element.custom_props();
         if self.sparse.active
             && self.sparse.version == version
             && self.sparse.layout == layout

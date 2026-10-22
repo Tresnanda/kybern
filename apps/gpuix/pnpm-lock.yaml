@@ -5,19 +5,19 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  '@gpuix/native@0.10.0': 9c04ea9d5194db2a34daffb054da4fd4dca2b5a07750b4120ba9cb3af4a79d09
-  '@gpuix/react@0.10.0': a4c86e595309769db72640c6d5e8649da3e1dd181b8d7eb3568e208a254a70ba
+  '@gpuix/native@0.11.0': d46e6b97e9859721aae06bffdecc02e8b8dae5f62db570e6aa0f21c826270526
+  '@gpuix/react@0.11.0': 6d456664bdc7f85dd44ae1894fd236169b94570ab29345435174273b167e6773
 
 importers:
 
   .:
     dependencies:
       '@gpuix/native':
-        specifier: 0.10.0
-        version: 0.10.0(patch_hash=9c04ea9d5194db2a34daffb054da4fd4dca2b5a07750b4120ba9cb3af4a79d09)
+        specifier: 0.11.0
+        version: 0.11.0(patch_hash=d46e6b97e9859721aae06bffdecc02e8b8dae5f62db570e6aa0f21c826270526)
       '@gpuix/react':
-        specifier: 0.10.0
-        version: 0.10.0(patch_hash=a4c86e595309769db72640c6d5e8649da3e1dd181b8d7eb3568e208a254a70ba)(react@19.2.8)
+        specifier: 0.11.0
+        version: 0.11.0(patch_hash=6d456664bdc7f85dd44ae1894fd236169b94570ab29345435174273b167e6773)(react@19.2.8)
       '@hugeicons/core-free-icons':
         specifier: 4.3.3
         version: 4.3.3
@@ -43,29 +43,34 @@ importers:
 
 packages:
 
-  '@gpuix/native-darwin-arm64@0.10.0':
-    resolution: {integrity: sha512-Uu1aiZsKBPuk9llFkoaFU95k1t+drG3txv97SgZZZ2x4LKqvy5c0bmklhCG1r7Ypm62qY/NKY0Sl553r/G34Tg==}
+  '@gpuix/native-darwin-arm64@0.11.0':
+    resolution: {integrity: sha512-sOS94t4f3BeB4gcwUQrGbqCnxh9MNbDda9b2g2rcu1ilxT6VxPLx56ziRIz3omhrRgQ1P4rJNJ/OMywtYG9Wow==}
     cpu: [arm64]
     os: [darwin]
 
-  '@gpuix/native-linux-x64-gnu@0.10.0':
-    resolution: {integrity: sha512-HNLL+jp+FA5qvdHq52MDGnj6LmsbkVXojwalGgNYA+iJlffFGfzHkCRmoM21Z+TNKa5cvuRTPgnfP6FGr8KxIw==}
+  '@gpuix/native-linux-x64-gnu@0.11.0':
+    resolution: {integrity: sha512-WlDFnxKaKkw9NBhz2UAn7jXvhCvd/A6hYkxrJbtMLks5TRrjwxPpX2P0JQfppZvcQn13r2sivyQVdB1YX0hHTA==}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@gpuix/native-win32-x64-msvc@0.10.0':
-    resolution: {integrity: sha512-4NQ81KBzcItiSJGupmvvSpuELCF139fqjQSSscHKbYCD+mcAyhOxADr3I2BNHXWhQr42jUgXhV2n/n0udN1KMQ==}
+  '@gpuix/native-win32-arm64-msvc@0.11.0':
+    resolution: {integrity: sha512-IxlKViURZP/j9JYgnmZFnhjdkqmodkIxCY/yAZ8xF9N3wO2n+2Uoadc+XZ/gz8hgJT/9pT9NQOFP7Ai2q4cxYw==}
+    cpu: [arm64]
+    os: [win32]
+
+  '@gpuix/native-win32-x64-msvc@0.11.0':
+    resolution: {integrity: sha512-VXtDp1o39m0aFk6JADrH1pLaZWBQIC7hpbYsRAWE8Pe4Dgn3a0LEFDHvI0RNehg3GLPXPLoj9Jld0UO3KrGpNQ==}
     cpu: [x64]
     os: [win32]
 
-  '@gpuix/native@0.10.0':
-    resolution: {integrity: sha512-hBvQ0vT1ybOoRDQu6JASgRfdcWFbHTRQ0Fr3oiTxdclvzdR8v9fBUQVYfVtgZnnL4pl1LS02eNrQx8//E6/Xjw==}
+  '@gpuix/native@0.11.0':
+    resolution: {integrity: sha512-xnPBArvvkg6aD7/soznkzio3qrKP6yHzhTJ0uOZoRYnp4OgdO8kkSKidAryvCbyF39/C0/+3P+7FzgsGTOXsXg==}
 
-  '@gpuix/react@0.10.0':
-    resolution: {integrity: sha512-RB//IrYBghiso0K0h8V+K9huwzONtEhwdpXoCs/rZjqN1F4RGxjhaeChtAwTt/JnjTSM1rcLi5cicM1xy8kr+g==}
+  '@gpuix/react@0.11.0':
+    resolution: {integrity: sha512-jFbpCT2B1wSUajbItZGPr0bLhx5DDvljQL9l19tOg5ZoJlizZfv5lCnzQoi6ApQOM6//8zl5sQxVnG60CAYLuQ==}
     peerDependencies:
-      react: ^18.0.0 || ^19.0.0
+      react: ^19.2.0
 
   '@hugeicons/core-free-icons@4.3.3':
     resolution: {integrity: sha512-rpCPwJXhIjEKhMYb2AbNU6nS1HD2vXjeT65LL8SOaEHoN0cI57UTgnroU8q/TlocQQfnxeGz9C3KiyIausfzxg==}
@@ -238,18 +243,18 @@ packages:
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
 
-  react-reconciler@0.31.0:
-    resolution: {integrity: sha512-7Ob7Z+URmesIsIVRjnLoDGwBEG/tVitidU0nMsqX/eeJaLY89RISO/10ERe0MqmzuKUUB1rmY+h1itMbUHg9BQ==}
+  react-reconciler@0.33.0:
+    resolution: {integrity: sha512-KetWRytFv1epdpJc3J4G75I4WrplZE5jOL7Yq0p34+OVOKF4Se7WrdIdVC45XsSSmUTlht2FM/fM1FZb1mfQeA==}
     engines: {node: '>=0.10.0'}
     peerDependencies:
-      react: ^19.0.0
+      react: ^19.2.0
 
   react@19.2.8:
     resolution: {integrity: sha512-PWaYA1L/q9u2u7xYQi+Y3L3Yfnie7XyLeaJICV1MGD6LprsBxcAqGjYyr0eY3p+QdsA+x/Irkt4Qif8D63+Sbw==}
     engines: {node: '>=0.10.0'}
 
-  scheduler@0.25.0:
-    resolution: {integrity: sha512-xFVuu11jh+xcO7JOAGJNOXld8/TcEHK/4CituBUeUb5hqxJLj9YuemAEuvm9gQ/+pgXYfbQuqAkiYu+u7YEsNA==}
+  scheduler@0.27.0:
+    resolution: {integrity: sha512-eNv+WrVbKu1f3vbYJT/xtiF5syA5HPIMtf9IgY/nKg0sWqzAUEvqY/xm7OcZc/qafLx/iO9FgOmeSAp4v5ti/Q==}
 
   typescript@6.0.3:
     resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
@@ -282,29 +287,33 @@ packages:
 
 snapshots:
 
-  '@gpuix/native-darwin-arm64@0.10.0':
+  '@gpuix/native-darwin-arm64@0.11.0':
     optional: true
 
-  '@gpuix/native-linux-x64-gnu@0.10.0':
+  '@gpuix/native-linux-x64-gnu@0.11.0':
     optional: true
 
-  '@gpuix/native-win32-x64-msvc@0.10.0':
+  '@gpuix/native-win32-arm64-msvc@0.11.0':
     optional: true
 
-  '@gpuix/native@0.10.0(patch_hash=9c04ea9d5194db2a34daffb054da4fd4dca2b5a07750b4120ba9cb3af4a79d09)':
+  '@gpuix/native-win32-x64-msvc@0.11.0':
+    optional: true
+
+  '@gpuix/native@0.11.0(patch_hash=d46e6b97e9859721aae06bffdecc02e8b8dae5f62db570e6aa0f21c826270526)':
     dependencies:
       eventsource-parser: 4.1.2
       zod: 4.6.7
     optionalDependencies:
-      '@gpuix/native-darwin-arm64': 0.10.0
-      '@gpuix/native-linux-x64-gnu': 0.10.0
-      '@gpuix/native-win32-x64-msvc': 0.10.0
+      '@gpuix/native-darwin-arm64': 0.11.0
+      '@gpuix/native-linux-x64-gnu': 0.11.0
+      '@gpuix/native-win32-arm64-msvc': 0.11.0
+      '@gpuix/native-win32-x64-msvc': 0.11.0
 
-  '@gpuix/react@0.10.0(patch_hash=a4c86e595309769db72640c6d5e8649da3e1dd181b8d7eb3568e208a254a70ba)(react@19.2.8)':
+  '@gpuix/react@0.11.0(patch_hash=6d456664bdc7f85dd44ae1894fd236169b94570ab29345435174273b167e6773)(react@19.2.8)':
     dependencies:
-      '@gpuix/native': 0.10.0(patch_hash=9c04ea9d5194db2a34daffb054da4fd4dca2b5a07750b4120ba9cb3af4a79d09)
+      '@gpuix/native': 0.11.0(patch_hash=d46e6b97e9859721aae06bffdecc02e8b8dae5f62db570e6aa0f21c826270526)
       react: 19.2.8
-      react-reconciler: 0.31.0(react@19.2.8)
+      react-reconciler: 0.33.0(react@19.2.8)
 
   '@hugeicons/core-free-icons@4.3.3': {}
 
@@ -608,14 +617,14 @@ snapshots:
 
   ms@2.1.3: {}
 
-  react-reconciler@0.31.0(react@19.2.8):
+  react-reconciler@0.33.0(react@19.2.8):
     dependencies:
       react: 19.2.8
-      scheduler: 0.25.0
+      scheduler: 0.27.0
 
   react@19.2.8: {}
 
-  scheduler@0.25.0: {}
+  scheduler@0.27.0: {}
 
   typescript@6.0.3: {}
 

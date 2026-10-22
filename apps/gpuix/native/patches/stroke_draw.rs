@@ -10,7 +10,7 @@ use crate::retained_tree::RetainedElement;
 
 pub(crate) fn spec(element: &RetainedElement) -> Option<gpui::StrokeDrawSpec> {
     if element.element_type != "svg" { return None; }
-    let value = element.custom_props.get("paintAnimation")?;
+    let value = element.custom_props().get("paintAnimation")?;
     if value.get("kind")?.as_str()? != "stroke" { return None; }
     let number = |key: &str| value.get(key).and_then(serde_json::Value::as_f64).filter(|v| v.is_finite());
     let duration_ms = number("cycleMs").filter(|v| *v > 0.0)?;
@@ -24,7 +24,7 @@ pub(crate) fn spec(element: &RetainedElement) -> Option<gpui::StrokeDrawSpec> {
         }
         _ => [0.22, 1.0, 0.36, 1.0],
     };
-    let source = element.custom_props.get("source")?.as_str()?;
+    let source = element.custom_props().get("source")?.as_str()?;
     if source.trim().is_empty() { return None; }
     let from = number("from").map_or(dash, |v| v as f32);
     let to = number("to").map_or(0.0, |v| v as f32);
@@ -72,14 +72,14 @@ mod tests {
     #[test]
     fn parses_only_stroke_on_svg_with_source() {
         let mut node = RetainedElement::new(1, "svg".into(), 1);
-        node.custom_props.insert("source".into(), serde_json::json!("<svg><path d=\"M0 0L1 1\"/></svg>"));
-        node.custom_props.insert("paintAnimation".into(), serde_json::json!({"kind":"stroke","cycleMs":250,"delayMs":150,"dash":32}));
+        node.custom_props_mut().insert("source".into(), serde_json::json!("<svg><path d=\"M0 0L1 1\"/></svg>"));
+        node.custom_props_mut().insert("paintAnimation".into(), serde_json::json!({"kind":"stroke","cycleMs":250,"delayMs":150,"dash":32}));
         let spec = spec(&node).unwrap();
         assert_eq!((spec.dash, spec.delay_ms, spec.duration_ms, spec.ease), (32.0, 150.0, 250.0, [0.22, 1.0, 0.36, 1.0]));
         assert_eq!((spec.from, spec.to, spec.retarget), (32.0, 0.0, false));
-        node.custom_props.insert("paintAnimation".into(), serde_json::json!({"kind":"pop","cycleMs":250}));
+        node.custom_props_mut().insert("paintAnimation".into(), serde_json::json!({"kind":"pop","cycleMs":250}));
         assert!(spec_is_none(&node));
-        node.custom_props.insert("paintAnimation".into(), serde_json::json!({"kind":"stroke","cycleMs":250}));
+        node.custom_props_mut().insert("paintAnimation".into(), serde_json::json!({"kind":"stroke","cycleMs":250}));
         assert!(spec_is_none(&node));
     }
     fn spec_is_none(node: &RetainedElement) -> bool { spec(node).is_none() }

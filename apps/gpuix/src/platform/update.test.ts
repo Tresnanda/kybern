@@ -33,7 +33,8 @@ test('reads only the GPUIX platform entry and ignores older versions', async () 
   expect(ours).toEqual({ version: '0.9.2', notes: 'n', entry: { url: 'https://example/gpuix.tar.gz', signature: 'g' } })
 })
 
-test('swaps the bundle in place and refuses another app’s archive', async () => {
+// The swap reads the new bundle's identifier with macOS's PlistBuddy, so this runs on macOS only.
+test.skipIf(process.platform !== 'darwin')('swaps the bundle in place and refuses another app’s archive', async () => {
   root = mkdtempSync(path.join(tmpdir(), 'kybern-update-'))
   const installed = fakeBundle(path.join(root, 'Applications'), '0.9.1')
   const next = fakeBundle(path.join(root, 'next'), '0.9.2')

@@ -52,6 +52,8 @@ input)
   bun native/explorer-motion-check.ts
   bun native/scroll8-check.ts
   bun native/scroll8-input-check.ts
+  # Tab is a window default in 0.11: one move per press, a consumed Tab stays, the preview traps it.
+  bun native/focus-check.ts
   ;;
 *) echo "unknown native check batch: $1" >&2; exit 2 ;;
 esac

@@ -97,14 +97,14 @@ impl Islands {
 
 fn fills_parent(element: &RetainedElement) -> bool {
     element
-        .custom_props
+        .custom_props()
         .get(CACHE_PROP)
         .is_some_and(|value| value.as_str() == Some("fill"))
 }
 
 pub(crate) fn is_island(element: &RetainedElement) -> bool {
     element
-        .custom_props
+        .custom_props()
         .get(CACHE_PROP)
         .is_some_and(|value| value.as_bool().unwrap_or(!value.is_null()))
 }
@@ -388,6 +388,7 @@ impl GpuixView {
         let callback = self.event_callback.clone();
         let now = self.clock.now();
         let mut highlight_events = Vec::new();
+        let keyboard_focus = self.keyboard_focus_path(&tree, window, cx);
         let mut ctx = BuildCtx {
             tree: &tree,
             event_callback: &callback,
@@ -400,7 +401,9 @@ impl GpuixView {
             selection: self.selection.clone(),
             inherited,
             highlights: &mut self.highlights,
+            paint_reports: &self.paint_reports,
             highlight_events: &mut highlight_events,
+            keyboard_focus,
             island_root: Some(node_id),
             in_virtual_row: false,
             islands: &mut self.islands,

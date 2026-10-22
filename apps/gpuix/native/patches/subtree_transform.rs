@@ -371,9 +371,9 @@ pub(crate) fn forget(id: u64) {
 pub(crate) fn sync(tree: &RetainedTree, now: Instant) {
     TRACKS.with(|tracks| {
         let mut tracks = tracks.borrow_mut();
-        tracks.retain(|id, _| tree.elements.get(id).is_some_and(|e| e.custom_props.contains_key("paintTransform")));
+        tracks.retain(|id, _| tree.elements.get(id).is_some_and(|e| e.custom_props().contains_key("paintTransform")));
         for (id, element) in &tree.elements {
-            let Some(source) = element.custom_props.get("paintTransform").and_then(parse) else { continue };
+            let Some(source) = element.custom_props().get("paintTransform").and_then(parse) else { continue };
             match tracks.get_mut(id) {
                 Some(track) => track.sync(source, now),
                 None => {
@@ -384,7 +384,7 @@ pub(crate) fn sync(tree: &RetainedTree, now: Instant) {
     });
 }
 pub(crate) fn apply(child: AnyElement, id: u64, tree: &RetainedTree, now: Instant) -> AnyElement {
-    let Some(source) = tree.elements.get(&id).and_then(|e| e.custom_props.get("paintTransform")) else { return child };
+    let Some(source) = tree.elements.get(&id).and_then(|e| e.custom_props().get("paintTransform")) else { return child };
     let scope = TRACKS.with(|tracks| {
         let mut tracks = tracks.borrow_mut();
         // A newly mounted virtual row can introduce its scope during prepaint.
@@ -581,7 +581,7 @@ pub(crate) fn tick(view: &mut GpuixView, window: &mut Window, cx: &mut gpui::Con
     }
     for (id, generation) in settled {
         let Some(generation) = generation else { continue };
-        if !view.tree.lock().unwrap().elements.get(&id).is_some_and(|e| e.events.contains("motionComplete")) {
+        if !view.tree.lock().unwrap().elements.get(&id).is_some_and(|e| e.events().contains("motionComplete")) {
             continue;
         }
         if let Some(callback) = &view.event_callback {

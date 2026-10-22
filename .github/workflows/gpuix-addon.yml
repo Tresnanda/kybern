@@ -1,0 +1,61 @@
+# Keeps the cache of the patched GPUIX native addon (the cargo build inside
+# apps/gpuix/native/update.sh) warm for releases. A tag can restore caches
+# saved by main but never another tag's, and GitHub deletes a cache nobody has
+# restored for seven days, hence the weekly run.
+#
+# The cache lives in .github/actions/gpuix-addon; desktop.yml's gpuix job uses
+# the same action to restore it.
+name: GPUIX addon cache
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/gpuix/native/VERSION'
+      - 'apps/gpuix/native/update.sh'
+      - 'apps/gpuix/native/patches/**'
+      - 'apps/gpuix/native/markdown-document-test.py'
+      - '.github/actions/gpuix-addon/**'
+      - '.github/workflows/gpuix-addon.yml'
+  # A pull request that edits the action or this workflow runs it to check it;
+  # it saves nothing a tag could restore.
+  pull_request:
+    paths:
+      - '.github/actions/gpuix-addon/**'
+      - '.github/workflows/gpuix-addon.yml'
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: gpuix-addon-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  addon:
+    name: addon (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - name: Install the GPUIX Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal --target "${{ matrix.target }}"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+          no-cache: true
+      - uses: ./.github/actions/gpuix-addon
+        with:
+          target: ${{ matrix.target }}
+          save: ${{ github.event_name != 'pull_request' }}

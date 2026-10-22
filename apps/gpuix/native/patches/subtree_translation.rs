@@ -28,9 +28,9 @@ pub(crate) fn sync(tree: &RetainedTree, now: web_time::Instant) {
     TIME.with(|time| time.set(Some(now)));
     STATES.with(|states| {
         let mut states = states.borrow_mut();
-        states.retain(|id, _| tree.elements.get(id).is_some_and(|e| e.custom_props.contains_key("paintTranslate")));
+        states.retain(|id, _| tree.elements.get(id).is_some_and(|e| e.custom_props().contains_key("paintTranslate")));
         for (id, element) in &tree.elements {
-            let Some(source) = element.custom_props.get("paintTranslate") else {
+            let Some(source) = element.custom_props().get("paintTranslate") else {
                 continue;
             };
             match states.entry(*id) {
@@ -72,12 +72,12 @@ pub(crate) fn values() -> HashMap<u64, Point<Pixels>> {
     })
 }
 pub(crate) fn apply(child: AnyElement, id: u64, tree: &RetainedTree, now: web_time::Instant) -> AnyElement {
-    if !tree.elements.get(&id).is_some_and(|e| e.custom_props.contains_key("paintTranslate")) {
+    if !tree.elements.get(&id).is_some_and(|e| e.custom_props().contains_key("paintTranslate")) {
         return child;
     }
     // A root build synchronizes once; a newly mounted virtual row can introduce
     // its scope later in prepaint, so synchronize that one source as well.
-    let source = &tree.elements[&id].custom_props["paintTranslate"];
+    let source = &tree.elements[&id].custom_props()["paintTranslate"];
     STATES.with(|states| {
         let mut states = states.borrow_mut();
         if !states.contains_key(&id) {
@@ -191,7 +191,7 @@ pub(crate) fn tick(view: &mut GpuixView, window: &mut Window, cx: &mut gpui::Con
         view.custom_registry.translate_subtrees(&deltas, cx);
         crate::layout_observer::notify(&view.layout_observers, &view.tree, window.viewport_size(), window.scale_factor());
         for (id, generation) in settled {
-            if !view.tree.lock().unwrap().elements.get(&id).is_some_and(|e| e.events.contains("motionComplete")) {
+            if !view.tree.lock().unwrap().elements.get(&id).is_some_and(|e| e.events().contains("motionComplete")) {
                 continue;
             }
             if let Some(callback) = &view.event_callback {

@@ -1,0 +1,180 @@
+# Weekly canary for staying current with GPUIX (@gpuix/native on npm).
+#
+# Our patches (apps/gpuix/native/patches) are anchored edits of upstream source,
+# so a new release shows up as an anchor that moved or a native method that now
+# exists twice. This finds out while the release is new instead of on the day
+# someone needs it:
+#
+#   check    ubuntu, about two minutes, no cargo. Skips when npm's latest is
+#            native/VERSION. Otherwise `tools/gpuix_canary.py` runs the hook
+#            drivers with --check (every missing anchor at once), the JS patches,
+#            and the napi-name clash scan, and writes a markdown report.
+#   build    macOS, only when the hooks match: `KYBERN_NATIVE_CHECKS=0
+#            update.sh <latest>` (fetch, patch, cargo build, JS patch, pnpm
+#            bump) and then the app's typecheck and unit tests against the new
+#            types. This is the part a static check cannot see (type errors, a
+#            clash in a name the scan does not know).
+#   report   one issue labelled `gpuix-canary`: opened or updated while a release
+#            waits to be adopted or fails, closed when VERSION catches up.
+#
+# It never pushes. Adopting a release is `update.sh <version>` on a branch.
+name: GPUIX canary
+
+on:
+  schedule:
+    - cron: '23 5 * * 1'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '@gpuix/native version to test (default: the latest on npm)'
+        required: false
+        type: string
+      build:
+        description: Build the addon on macOS when the hooks match (about 15 minutes)
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: gpuix-canary
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check (anchors and names)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      status: ${{ steps.canary.outputs.status }}
+      latest: ${{ steps.canary.outputs.latest }}
+      pinned: ${{ steps.canary.outputs.pinned }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: canary
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -o pipefail
+          args=(--report "$RUNNER_TEMP/canary.md")
+          [ -n "$VERSION" ] && args+=(--version "$VERSION")
+          # Exit 1 means "would break" (status=broken) or a crash (no status).
+          python3 -I apps/gpuix/native/tools/gpuix_canary.py "${args[@]}"
+        continue-on-error: true
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/canary.md" ]; then
+            cat "$RUNNER_TEMP/canary.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The canary did not produce a report; see the log." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gpuix-canary-report
+          path: ${{ runner.temp }}/canary.md
+          if-no-files-found: ignore
+
+  build:
+    name: build (update.sh ${{ needs.check.outputs.latest }})
+    needs: check
+    if: needs.check.outputs.status == 'compatible' && (github.event_name == 'schedule' || inputs.build)
+    runs-on: macos-15
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin
+      - name: Install the GPUIX Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal --target aarch64-apple-darwin
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+          no-cache: true
+      - uses: ./.github/actions/setup-pnpm-apps
+        with:
+          gpuix: 'true'
+      - name: Build the patched addon at the new release
+        working-directory: apps/gpuix/native
+        env:
+          LATEST: ${{ needs.check.outputs.latest }}
+          # No display on a runner: build, align, sign and load-check only.
+          KYBERN_NATIVE_CHECKS: '0'
+        run: ./update.sh "$LATEST"
+      - name: Typecheck the app against the new types
+        working-directory: apps/gpuix
+        run: pnpm typecheck
+      - name: Unit tests
+        working-directory: apps/gpuix
+        run: bun test
+
+  report:
+    name: issue
+    needs: [check, build]
+    # A "current" result still runs this job: it closes a stale issue.
+    if: always() && needs.check.result != 'cancelled'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: gpuix-canary-report
+          path: report
+      - name: Open, update or close the canary issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          STATUS: ${{ needs.check.outputs.status }}
+          BUILD: ${{ needs.build.result }}
+          LATEST: ${{ needs.check.outputs.latest }}
+          PINNED: ${{ needs.check.outputs.pinned }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -eu
+          label=gpuix-canary
+          gh label create "$label" --color 5319e7 --description "GPUIX release the patches do not take yet, or one ready to adopt" 2>/dev/null || true
+          existing=$(gh issue list --label "$label" --state open --json number --jq '.[0].number // empty')
+
+          if [ "${STATUS:-}" = current ]; then
+            if [ -n "$existing" ]; then
+              gh issue close "$existing" --comment "native/VERSION is $PINNED, the latest @gpuix/native. Closing."
+            fi
+            exit 0
+          fi
+
+          body="report/canary.md"
+          [ -f "$body" ] || printf 'The canary produced no report.\n' > "$body"
+          if [ -z "${STATUS:-}" ]; then
+            title="GPUIX canary: the check itself failed"
+            note="The canary tool crashed before it could compare anything; the run log has the traceback."
+          elif [ "$STATUS" = broken ]; then
+            title="GPUIX $LATEST: the patches no longer apply"
+            note="Port these anchors in \`apps/gpuix/native/patches\`, rerun \`tools/gpuix_canary.py\`, then \`update.sh $LATEST\`."
+          elif [ "$BUILD" = failure ]; then
+            title="GPUIX $LATEST: the anchors match but the build fails"
+            note="\`update.sh $LATEST\`, \`pnpm typecheck\` or \`bun test\` failed on the runner; the build job log names the error."
+          else
+            title="GPUIX $LATEST is ready to adopt"
+            note="The patches apply and, when the build ran, \`update.sh\`, typecheck and unit tests passed on the runner. Run \`apps/gpuix/native/update.sh $LATEST\` locally for the on-screen checks."
+          fi
+          printf '\n%s\n\nWorkflow run: %s\n' "$note" "$RUN_URL" >> "$body"
+
+          if [ -z "$existing" ]; then
+            gh issue create --label "$label" --title "$title" --body-file "$body"
+          else
+            old=$(gh issue view "$existing" --json title --jq .title)
+            gh issue edit "$existing" --title "$title" --body-file "$body"
+            [ "$old" = "$title" ] || gh issue comment "$existing" --body "Status changed: $title. $RUN_URL"
+          fi

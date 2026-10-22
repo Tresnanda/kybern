@@ -71,17 +71,5 @@ edit(w, '        self.platform_window.draw(&self.rendered_frame.scene);', """   
             });
         }""")
 
-# Wake the embedding JS host when CoreVideo has queued a real display tick.
-# Its ordinary input pump remains; animation no longer waits for its 8ms timer.
-m = 'crates/gpui_macos/src/gpui_macos.rs'
-edit(m, 'pub use platform::MacPlatform;', """pub use platform::MacPlatform;
-static EMBEDDED_FRAME_WAKER: std::sync::RwLock<Option<std::sync::Arc<dyn Fn() + Send + Sync>>> = std::sync::RwLock::new(None);
-/// Install a nonblocking wake notification for an embedded host's event loop.
-pub fn set_embedded_frame_waker(waker: Option<std::sync::Arc<dyn Fn() + Send + Sync>>) {
-    *EMBEDDED_FRAME_WAKER.write().unwrap_or_else(std::sync::PoisonError::into_inner) = waker;
-}
-pub(crate) fn wake_embedded_frame_host() {
-    let waker = EMBEDDED_FRAME_WAKER.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-    if let Some(waker) = waker { waker(); }
-}""")
-edit('crates/gpui_macos/src/display_link.rs', '    0\n}\n\nfn subscribe(', '    drop(registry);\n    crate::wake_embedded_frame_host();\n    0\n}\n\nfn subscribe(')
+# (The wake of the embedding JS host from the display link is upstream's since
+# 0.11: `set_frame_wake_hook` / `GpuixRenderer.setFrameWakeCallback`.)

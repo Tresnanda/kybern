@@ -4,17 +4,172 @@ Issue #113: retire the Tauri app (`apps/desktop`) once Kybern GPUIX runs
 everywhere Tauri ships. This document says what is macOS-only today, how each
 piece moves to Windows and Linux (or degrades gracefully), the work packages
 that can run in parallel, what needs real hardware, and the ship order.
-It is based on the code at `feat/gpuix-intel` (GPUIX 0.10.0, Kybern 0.10.2),
-not on upstream documentation.
+The inventory was written against `feat/gpuix-intel` (GPUIX 0.10.0, Kybern
+0.10.2); the ADE-52 spike below re-checked it on GPUIX 0.11.0 by building and
+running the patched addon on Linux and Windows.
 
 | Platform | Tauri | GPUIX |
 | --- | --- | --- |
 | macOS Apple Silicon | `.dmg`, `.app.tar.gz` | `kybern-gpuix_<v>_aarch64.app.tar.gz` |
-| macOS Intel | `.dmg`, `.app.tar.gz` | `kybern-gpuix_<v>_x86_64.app.tar.gz` (this branch) |
-| Windows x64 | NSIS `-setup.exe` (unsigned) | none |
-| Linux x64 | `.AppImage`, `.deb` | none |
+| macOS Intel | `.dmg`, `.app.tar.gz` | `kybern-gpuix_<v>_x86_64.app.tar.gz` |
+| Windows x64 | NSIS `-setup.exe` (unsigned) | addon builds and draws in CI (ADE-52); no package |
+| Linux x64 | `.AppImage`, `.deb` | addon builds and draws in CI (ADE-52); no package |
 
-## Intel Mac (done on this branch)
+## ADE-52 spike: the patched addon on Linux and Windows (2026-10-22)
+
+The patched addon (GPUIX 0.11.0 plus every Kybern patch) builds for
+`x86_64-unknown-linux-gnu` and `x86_64-pc-windows-msvc` on GitHub-hosted
+runners, and the real app draws on both: sidebar, a seeded thread with
+Markdown, a table and a highlighted code block, and the composer. Rounded
+clipping is ported to WGSL and HLSL. Scope was compile + draw, with
+fallbacks; nothing below is product-ready.
+
+How it is run: `.github/workflows/gpuix-platforms.yml` (manual) builds
+`kybernd` and the addon (`native/update.sh` with `KYBERN_NATIVE_CHECKS=0`), then
+`scripts/platform-smoke.ts`: a scratch daemon, one thread seeded the way
+`perf/bench/seed.ts` does it (RPC for records, SQL for synthetic provider
+events, no agent), and PNGs of the app and `native/clip-lab.tsx` with rounded
+clipping on and off (`KYBERN_ROUNDED_CLIP=0` squares every clip chain: the
+rectangular look the app had before this port). Neither runner has a GPU:
+
+- **Linux** (`ubuntu-24.04`): Xvfb, X11 client, wgpu on Mesa **lavapipe**
+  (llvmpipe Vulkan). Captured with ImageMagick `import` (wgpu has no readback
+  in GPUIX yet).
+- **Windows** (`windows-2022`): Win32 window, Direct3D 11 on **WARP**
+  (Microsoft Basic Render Driver). Captured with the addon's
+  `captureScreenshot` (GPUI renders the window's scene to an image through the
+  same renderer).
+
+`workflow_dispatch` only runs a workflow that exists on `main`. Until this
+branch merges, the spike ran it from throwaway `spike/ade-52-platforms*`
+branches whose single extra commit adds a push trigger for those branches;
+the committed workflow stays manual-only.
+
+Local loop (macOS host): an arm64 Ubuntu 24.04 container (OrbStack) runs the
+same `cargo check` / release build of the Linux addon in about 15 s / 75 s
+incrementally and the same smoke test under Xvfb + lavapipe; `naga` validates
+the three WGSL variants. That loop found every Linux issue before CI did.
+
+### Acceptance criteria
+
+| # | Criterion | Result | Evidence |
+| --- | --- | --- | --- |
+| 1 | Addon builds for both targets in CI | met | Both OSes green: [39742674735](https://github.com/Tresnanda/kybern/actions/runs/39742674735) (LTO off) and [39742680467](https://github.com/Tresnanda/kybern/actions/runs/39742680467) (release profile, fat LTO). First Linux build: [39735839297](https://github.com/Tresnanda/kybern/actions/runs/39735839297) |
+| 2 | App launches and renders sidebar, Markdown/code transcript, composer | met on both (Linux CI x86_64 and local arm64; Windows CI) | `ade52-linux-app.png`, `ade52-windows-app.png` |
+| 3 | Rounded clipping correct in WGSL and HLSL, before/after | met on both | `ade52-linux-clip-before.png` / `-after.png`, `ade52-windows-clip-before.png` / `-after.png`; macOS `clip-check` and `rounded-check` still pass |
+| 4 | Every macOS-only patch with works / fallback / blocked | met | [the table below](#macos-only-patches-off-macos) |
+| 5 | Bun main thread vs GPUI UI thread, decided with evidence | met: UI thread | [Event loop decision](#event-loop-decision) |
+| 6 | Re-estimated plan and ordered work packages | met | [Work packages](#work-packages) |
+
+Screenshots are workflow artifacts (`gpuix-<os>-screens`) and copies under
+`.kybern-artifacts/ade-grill/` in the main checkout; they are not committed.
+
+### What it took
+
+| Breaker (estimate before the spike) | What it actually needed |
+| --- | --- |
+| `Primitive::Backdrop` arms in wgpu and D3D renderers (0.5 d) | Two match arms that draw nothing (`platforms_gpui.py`); the material's tint quad still paints, which is the agreed fallback |
+| ~40 hooks on the macOS-only `update_window` (2 d spike + 4–8 d) | **One generic bridge, no hook rewritten** (`platforms_hooks.py`): off macOS `update_window` / `update_window_without_view` box the closure into `UiCommand::Run`, run it on the `gpuix-ui` thread against the same window and wait for the result. Every existing closure was already `Send + 'static` except one `move` keyword. 12 napi methods that were stubbed "macOS-only" only because of `update_window` now share the macOS body; the save panel opens on the UI thread |
+| `ContentMask` 16 → 24 bytes in WGSL/HLSL (1 d per backend) plus rounded alpha (2–3 d per backend) | Struct mirrored, the Metal chain walk ported to both languages, a clip-chain storage buffer (wgpu, group 1 binding 1) and structured buffer (D3D, `t2`, `ps_4_1`-compatible); about 1 d for both. Without it Linux drew **nothing** (every primitive read a garbage clip rect) |
+| `update.sh` Mach-O only (1.5 d) | Per-target library name and output (`linux-x64-gnu`, `linux-arm64-gnu`, `win32-x64-msvc`), realign/codesign/Cocoa companion only on macOS, `.exe` test binaries, `PYTHON`/`PYTHONUTF8` for Git Bash; 0.5 d |
+| (not in the inventory) | Compositor loops defaulted on everywhere: GPUI core lifted loop leaves out of the scene for Core Animation layers that only Metal creates, so spinners and shimmers would vanish off macOS. Now macOS-only (scene loops elsewhere). Upstream `getPaintedText` / `getPaintedHighlights` read the JS thread's empty thread-locals off macOS; they ask the UI thread now. `ElementBounds` lost `Copy` in a Kybern patch, which broke upstream's Linux-only `elements_at` |
+
+All of it lives in two new drivers, `patches/platforms_gpui.py` (GPUI side,
+run last by `backdrop_gpui.py`) and `patches/platforms_hooks.py` (native crate,
+run last by `apply_hooks.py`). They only edit Linux/Windows sources or add
+`cfg`-gated code, so the macOS addon is unchanged apart from the gate removal
+on the 12 shared methods; `KYBERN_NATIVE_CHECKS=0 ./update.sh`, the app's
+typecheck and 442 unit tests, `clip-check` and `rounded-check` pass on macOS.
+
+Addon build times on the hosted runners (cold cargo cache): Linux 4.5–6.5 min,
+Windows 7.7–8.2 min, with or without fat LTO. macOS release with LTO: 6.5 min
+locally. The Windows window came up at the WARP desktop's 1024×768, so its
+captures are smaller.
+
+## Event loop decision
+
+**Decision: keep upstream's model off macOS (GPUI on its own UI thread), with
+one generic bridge for Kybern's hooks. Do not pump GPUI on Bun's main thread on
+Linux or Windows.**
+
+Evidence:
+
+1. **The cost that motivated option 2 is gone.** The old plan assumed each of
+   the ~40 hooks would need a hand-written `UiCommand` variant and every future
+   hook two versions. The bridge (`run_on_ui_thread`, ~60 lines) makes
+   `update_window` portable with the same signature plus `Send + 'static`.
+   The whole patch queue type-checked off macOS with it; one closure needed a
+   `move`. Future hooks are written once; only a non-`Send` capture fails to
+   compile, which is the right error.
+2. **It runs.** The full app (all hooks, the Markdown document worker, the
+   editor, cached islands, layout observers) runs on the UI-thread model on
+   Linux, locally and in CI.
+3. **Cost per call is upstream's own.** 2,000 synchronous window updates from
+   JS (`native/bridge-bench.tsx`, Linux arm64 container, lavapipe): a Kybern hook through
+   the bridge p50 38.5 µs, p90 44.5 µs; upstream's own synchronous
+   `getWindowSize` over its channel p50 38.5 µs, p90 43.8 µs; a call that does
+   not touch the window 0.3 µs. macOS (same thread) is 1.4 µs. p99 of the hook
+   reached 0.8 ms when the UI thread was mid-frame on the software rasterizer.
+   That is cheap for per-gesture calls, but hooks called many times per frame
+   should not wait: make the fire-and-forget ones (`()` results) send without
+   waiting (WP1 below), and measure calls per frame in the bench.
+4. **Option 2 has real costs that option 1 does not.** Main-thread pumping
+   needs an embedded mode in `gpui_linux` (X11 and Wayland calloop dispatch
+   from a Bun-polled fd) and `gpui_windows` (a `PeekMessage` pump, with
+   Windows' modal size/move loop blocking JS for the whole drag), plus flipping
+   roughly a hundred `cfg(target_os = "macos")` pairs in `renderer.rs` from the
+   threaded branch to the embedded one. Estimated 6–9 days and a patch that
+   fights upstream on every update. Not attempted: point 1 removed its reason.
+
+Known hazard of the threaded model: a hook that reads a thread-local registry
+*outside* its `update_window` closure sees the JS thread's empty copy. An audit
+of every napi method found only upstream's `getPaintedText` and
+`getPaintedHighlights` (fixed) and the macOS-only `idle_memory` tick pool and
+window-state callback (no-ops off macOS). New hooks must keep paint-time
+state reads inside the closure.
+
+## macOS-only patches off macOS
+
+Status: **works** (same behaviour; *verified* means seen on screen or exercised
+by the smoke run), **fallback** (degrades as named), **blocked** (needs the
+work package named before shipping). "UI-thread bridge" means the hook needed
+nothing but `platforms_hooks.py`.
+
+| Patch / feature | Where | Linux | Windows | Notes |
+| --- | --- | --- | --- | --- |
+| Rounded overflow clip (paint + hit test) | `rounded_clip*`, `shaders.metal` | works, verified | works, verified | Ported (`platforms_gpui.py`); hit-test part is in GPUI core |
+| Backdrop blur / saturation | `backdrop_*`, `backdrop.metal` | fallback | fallback | Batch skipped; the translucent material fill shows (clip lab "backdrop" tile). Real blur: WP6 |
+| Compositor loops (CA layers) | `compositor_loops_*`, `compositor_covers_gpui.py` | fallback | fallback | Scene loops at the normal frame rate (macOS-only gate added) |
+| Partial-region presentation | `paint_region_*`, `paint_region.metal` | fallback | fallback | Full redraw (it is opt-in even on macOS) |
+| Drawable timing, GPU clip simplification, GPU telemetry | `frame_drawable_gpui.py`, `gpu_clip*`, `gpu_telemetry_gpui.py` | fallback | fallback | Counters report 0; nothing visual |
+| Memory counters, image eviction stats | `memory_counters_gpui.py`, `image_memory*` | fallback | fallback | `getMemoryStats` works through the bridge; Metal gauges and atlas bytes are 0 |
+| Idle GPU release, window-state observer, autorelease tick pool | `idle_memory*` | fallback | fallback | No idle release; JS keeps its polling path |
+| Large-allocation mapper, small-allocation heap | `large_alloc.rs`, `code_small*`, `code_alloc.rs` | fallback | fallback | System allocator; their stats read 0 |
+| Shimmer band / hue, pop, rotate, stroke draw, hover/stream fades, subtree transforms | `shimmer_band_gpui.py`, `pop_gpui.py`, `rotate_gpui.py`, `stroke_draw*`, `hover_fade*`, `stream_fade*`, `subtree_*` | works | works | Evaluated in GPUI core's scene, not in Metal; compiled and running, not individually checked on screen |
+| Frame wake | upstream `set_frame_wake_hook` (0.11) | fallback | fallback | No display-link wake; JS frame loop on its timer (`frameMs`) |
+| Variable `wght` axis | `font_weight*` (CoreText) | fallback | fallback | Nearest installed weight; WP4 |
+| Per-run text scale (`kszl`) | `text_scale_gpui.py` (CoreText) | fallback | fallback | `font_scale()` default 1: rich-editor inline code at full size; WP4 |
+| Fonts | `theme.ts` `.SystemUIFont`, Menlo | fallback | fallback | GPUI maps `.SystemUIFont` per platform; Menlo falls back (DejaVu in CI). Bundled Cal Sans / JetBrains Mono load (wordmark visible) |
+| Key interception, close guard, input selection/transactions, text selection, rich-editor commands and images, window background | `apply_hooks.py`, `editor9_hooks.py`, `image_memory_hooks.py`, `window_platform_hooks.py` | works (UI-thread bridge) | works (UI-thread bridge) | Were "macOS-only" stubs; the close guard is used at startup |
+| Rich-editor key interceptor | `rich_editor.rs:677` | fallback | fallback | Gated `macos`; editor shortcuts that rely on it do not fire. WP3 |
+| Title-bar double-click action | `window_platform_hooks.py` | blocked | blocked | Reads the macOS "double-click to zoom" default; JS should zoom/maximize itself. WP3 |
+| Save panel | `apply_hooks.py` `prompt_for_new_path` | works (UI thread) | works (UI thread) | Not opened in CI |
+| Clipboard image | `clipboard_hooks.py` | works (bridge) | works (bridge) | Not exercised |
+| Window drag regions | `window_drag.rs` | works? | works? | `WindowControlArea::Drag` is cross-platform; unverified (no pointer in CI) |
+| Traffic lights / window controls | `TitleBar.tsx`, `window_platform*` | blocked | blocked | With a transparent title bar Linux X11 shows no close/min/max at all (see screenshot). WP3 |
+| Window material (NSVisualEffectView) | `native/material.ts` | fallback | fallback | Opaque window |
+| Secure input (Carbon) | `secure_input.rs` | fallback | fallback | No-op |
+| Automation test display | `automation_display.rs` | fallback | fallback | Centered on the primary display |
+| Scroll phase injection | `scroll_hooks.py` | blocked | blocked | Test-only; one line to unify like the others |
+| Web view (previews, Visual, Artifacts, Mermaid) | `webview.m`, `src/native/webview.ts` | blocked | blocked | `dlopen` of the `.dylib` throws on use. Fallback to wire: previews in the browser, Mermaid as static text. WP5 |
+| Notifications | `packaging/notifications.m` | fallback | fallback | Already skipped outside a macOS `.app` |
+| objc FFI shell (frame restore, appearance, visibility, locale) | `shell/*.ts`, `native/*.ts` | fallback | fallback | Guarded: no restore, no system theme |
+| `pbcopy`, `open`, `osascript`, `~/Library`, Keychain | `src/**` | blocked | blocked | WP2 |
+| ⌘ shortcuts | 26 files | blocked | blocked | `cmd` maps to Super/Windows off macOS. WP3 |
+| Pointer-release watch | `preview/resize.tsx:16` | blocked | blocked | Unguarded objc call throws on use. WP2 |
+| Copy "This Mac" | environment chip | blocked | blocked | Says "This Mac" on Linux (screenshot). WP2 |
+
+## Intel Mac (shipped in v0.10.3)
 
 - **Addon:** one per arch, not universal. `KYBERN_GPUIX_TARGET=x86_64-apple-darwin
   native/update.sh` cross-builds `native/build/gpuix-native.darwin-x64.node` on an
@@ -83,7 +238,7 @@ Pinned zed (`native/upstream/zed`) splits platforms into crates:
 | --- | --- | --- | --- |
 | Platform crate | `gpui_macos` | `gpui_linux` (Wayland + X11) | `gpui_windows` |
 | Renderer | `gpui_apple` Metal, `shaders.metal` | `gpui_wgpu` (wgpu, Vulkan/GL), `shaders.wgsl`; cosmic-text | Direct3D 11 + DirectComposition, `shaders.hlsl`; DirectWrite |
-| gpuix event loop | AppKit embedded in Bun's main thread (`renderer.rs` `update_window*`, macOS-gated) | separate UI thread fed by `UiCommand` over a channel | same as Linux |
+| gpuix event loop | AppKit embedded in Bun's main thread (`renderer.rs` `update_window*`) | separate `gpuix-ui` thread fed by `UiCommand` over a channel; Kybern's hooks reach it through `UiCommand::Run` (`platforms_hooks.py`) | same as Linux |
 | Stock npm addon | darwin-arm64 | linux-x64-gnu | win32-x64-msvc |
 
 GPUI already ships cross-platform services that Kybern reaches for through
@@ -102,35 +257,19 @@ AppKit or shell-outs today:
 Effort is in focused agent-days, including the checks described, but not
 review. "Fallback" is what ships if the full port is not done yet.
 
-### A. The patched addon does not compile off macOS (blocking)
+### A. The patched addon did not compile off macOS (done in ADE-52)
 
-| Item | Where | Fix | Effort |
-| --- | --- | --- | --- |
-| New `PrimitiveBatch::Backdrop` / `Primitive::Backdrop` variants hit exhaustive matches | `backdrop_gpui.py`; unpatched `gpui_wgpu/src/wgpu_renderer.rs:1461`, `gpui_windows/src/directx_renderer.rs:369` | Add arms (no-op first, real filter in C) | 0.5 |
-| ~40 new napi methods call the macOS-only `update_window` / `update_window_without_view` (82 call sites after patching vs 40 upstream) | `apply_hooks.py:370-478`, `clipboard_hooks.py`, `window_platform_hooks.py:26`, `frame_hooks.py`, `convo9_hooks.py`, `markdown_document_hooks.py`, `code_small_hooks.py`, `idle_memory_hooks.py`, `flick_bounds_hooks.py` | See the event-loop decision below | 2 (spike) + 4–8 |
-| `ContentMask` grows 16 → 24 bytes (`rounded_clip`, `clip_generation`); Metal headers are cbindgen-generated, but WGSL/HLSL still declare `content_mask: Bounds` | `rounded_clip_gpui.py`; `shaders.wgsl:1153`, `shaders.hlsl:505` | Mirror the struct in both shader languages (rounded alpha can come later) | 1 per backend |
-| `update.sh` is Mach-O/BSD only | `align_strtab.py`, `codesign`, `sed -i ''`, `.dylib` → `.node` rename, clang `-framework` | Branch per OS, or a Bun `update.ts`; output `gpuix-native.{linux-x64-gnu,win32-x64-msvc}.node` | 1.5 |
-
-**Event-loop decision (spike first).** There are two ways to make those ~40
-hooks portable:
-
-1. **Keep upstream's off-macOS model.** Port each hook to `send_ui_command`.
-   Every closure becomes `Send`, and napi `ThreadsafeFunction`s and `Rc` state
-   must stay on the JS side. This is mechanical but touches every hook, and
-   each future hook needs two versions.
-2. **Pump GPUI on Bun's main thread on all platforms,** as on macOS:
-   - Linux: dispatch calloop from a Bun-polled fd.
-   - Windows: a `PeekMessage` pump on a Bun timer or message hook.
-   
-   Then `update_window` needs no macOS gate, and the hooks are written once.
-
-The spike measures input latency, idle wakeups, and resize/modal-loop
-behaviour (Windows' modal size loop blocks pumping) for option 2. Option 1 is
-the fallback. Recommendation: spike option 2 for 2 days; take option 1 only if
-the Windows modal loop or Wayland frame callbacks cannot be served from Bun's
-thread.
+| Item | Fix | Where |
+| --- | --- | --- |
+| `PrimitiveBatch::Backdrop` / `Primitive::Backdrop` hit exhaustive matches in the wgpu and D3D renderers | Arms that draw nothing (fallback: the tint quad shows) | `platforms_gpui.py` |
+| ~40 napi methods call the macOS-only `update_window` / `update_window_without_view` | Generic UI-thread bridge, no hook rewritten; 12 "macOS-only" stubs now share the macOS body | `platforms_hooks.py`, [decision](#event-loop-decision) |
+| `ContentMask` 16 → 24 bytes, WGSL/HLSL declared `Bounds` (Linux drew nothing) | Struct mirrored; rounded chain walk ported to WGSL and HLSL | `platforms_gpui.py` |
+| `update.sh` was Mach-O/BSD only | Per-target names and steps; Git Bash on Windows | `native/update.sh` |
 
 ### B. GPU features written only for Metal
+
+Rounded clip: done on both backends (ADE-52). The other rows are post-beta
+parity (WP9); their fallbacks are what the spike runs today.
 
 | Feature | Patches | Windows (HLSL) | Linux (WGSL) | Fallback | Effort per backend |
 | --- | --- | --- | --- | --- | --- |
@@ -237,25 +376,47 @@ GPUI APIs. Effort: 6–9 days total.
 
 ## Work packages
 
-They can run in parallel after WP0, with file ownership. One agent per package;
-packages marked (W) or (L) can split by OS.
+Re-estimated on 2026-10-22 from the spike. Effort is focused agent-days
+including checks, not review. The previous plan ("9–12 agent-weeks, 5–7
+calendar weeks with four lanes") summed its own table to roughly 70–95 days;
+about 20 of those (the old WP0 and the rounded-clip half of WP1) are now done
+in about 2 days, and the compile risk that sized the rest is gone. What is
+left is ordinary platform work, mostly in TypeScript, plus packaging.
 
-| WP | Scope | Owns | Depends on | Days |
-| --- | --- | --- | --- | --- |
-| WP0 | Event-loop spike, then compile breakers (A): renderer arms, `ContentMask` in shaders, `update_window` path, an `update.sh` that builds on Linux/Windows | `native/patches/apply_hooks.py`, `native/patches/*_hooks.py`, `native/update.sh` | — | 6–10 |
-| WP1 (W/L) | Rounded clip, then backdrop, shimmer, frame waker (B) | `native/patches/{rounded_clip,backdrop,shimmer_band,frame}*` + new `*.hlsl.py` / `*.wgsl.py` hooks | WP0 | 7–9 each |
-| WP2 | Text (C) | `native/patches/{font_weight,text_scale}*`, `src/theme.ts` fonts | WP0 | 4–6 |
-| WP3 | Window and input (D) | `native/patches/{window_drag,close_guard,window_platform}*`, `src/nav/TitleBar.tsx`, `src/shell/{window,appearance}.ts`, `src/native/{material,visibility,windowState}.ts`, key helper + call sites | WP0 | 8–10 |
-| WP4 | JS platform services (F) | `src/platform/os.ts` (new), `src/platform/{cli,files,prefs,material}.ts`, `src/environments/credentials.ts`, the shell-out call sites | none (JS-only; mock the addon calls) | 6–9 |
-| WP5W | WebView2 host (E) | `native/webview-win/**`, `src/native/webview.ts` loader | WP0, WP3 | 8–12 |
-| WP5L | WebKitGTK helper process + Mermaid; browser previews (E) | `native/webview-gtk/**`, `src/transcript/mermaid.ts`, `src/preview/browser.ts` | WP4 | 3 |
-| WP6 | Notifications over GPUI (E) | `native/patches/notifications*`, `src/native/notifications.ts`, `packaging/notifications.m` (macOS keeps it) | WP0 | 2–3 |
-| WP7 (W/L) | Packaging, updater, CI (G) | `scripts/package-app.ts`, `scripts/bundle-gpuix*`, `scripts/updater-manifest.mjs`, `src/platform/update.ts`, `.github/workflows/desktop.yml` gpuix job | WP0 | 7–9 each |
-| WP8 | Cross-platform check harness (G) | `native/*-check.ts` capture/input helpers, `scripts/visual-pair.ts` | WP0 | 5–8 |
+Ordered by when to start; the "Lane" column is a suggested split for parallel
+agents (one OS-specific lane can split W/L).
 
-Totals: about 9–12 agent-weeks of work, or 5–7 calendar weeks with four lanes.
-Windows is the larger half because of the WebView2 composition host and the
-installer and AUMID work.
+| WP | Scope | Owns | Depends on | Days | Lane |
+| --- | --- | --- | --- | --- | --- |
+| WP0 | Forks + CI. Move to `Tresnanda/gpuix` and `Tresnanda/zed` with the patch queue as commits (planned separately). Then: `desktop.yml` lanes that build and cache the Linux/Windows addons (generalize `.github/actions/gpuix-addon` by target), run the app's unit tests there, and keep `gpuix-platforms.yml` as the on-screen check | `native/update.sh`, `.github/actions/gpuix-addon`, `.github/workflows/*gpuix*` | — | 2–3 (+ fork move) | A |
+| WP1 | Native platform core: confirm Windows on screen at DPI 100/150 %; Wayland (a real GNOME/KDE session: headless Weston has no `wl_seat` and upstream `gpui_linux` unwraps it, `wayland/client.rs:832`); bridge cost: `()`-returning hooks send without waiting, count bridged calls per frame in `perf/bench`; unify scroll-phase injection; a frame-wake hook on Linux/Windows instead of the timer (Wayland frame callback / DXGI `WaitForVBlank`) | `native/patches/platforms_*`, `perf/bench` | WP0 | 3–5 | A |
+| WP2 | JS platform services (section F): `src/platform/os.ts` over GPUI clipboard, `open_url`/`reveal_path`, path prompts, credentials (Credential Manager / Secret Service, file store fallback), config/cache dirs, PATH and `.exe`, CLI install, "This computer" copy, the `preview/resize.tsx` guard | `src/platform/**`, `src/environments/credentials.ts`, shell-out call sites | — (JS only; mock the addon) | 5–7 | B |
+| WP3 | Window and input (section D): caption buttons and drag/snap on Windows (`WindowControlArea`), CSD buttons on Linux, title-bar double-click in JS, one `isPrimary(mods)` key helper with a conflict review (terminal Ctrl+C, editors), the rich-editor key interceptor off macOS, close guard and DPI checks | `src/nav/TitleBar.tsx`, key helper + call sites, `native/patches/{window_*,rich_editor}*` | WP1 | 6–8 | C |
+| WP4 | Previews and Mermaid without the embedded web view: open previews in the default browser through the existing relay, Mermaid as static text (or SVG from a headless helper on Linux later) | `src/native/webview.ts` loader, `src/preview/browser.ts`, `src/transcript/mermaid.ts` | WP2 | 2–3 | B |
+| WP5 | Notifications over GPUI (`show_system_notification`); Windows needs the AUMID from WP7's installer | `native/patches/notifications*`, `src/native/notifications.ts` | WP1 | 2–3 | C |
+| WP6 (L/W) | Packaging and updater (section G): `bun build --compile` per target, AppImage + `.deb` (L), NSIS per-user installer with the AUMID shortcut (W), updater keys and in-place update, manifest entries | `scripts/package-app.ts`, `scripts/bundle-gpuix*`, `scripts/updater-manifest.mjs`, `src/platform/update.ts` | WP0 | L 5–6, W 6–8 | D |
+| WP7 | Cross-platform check harness: run a first set of the native checks (`clip-check`, `rounded-check`, `markdown-document-check`, `focus-check`) through automation captures under Xvfb/lavapipe and WARP; `platform-smoke.ts` is the seed | `native/*-check.ts` capture helpers, `scripts/platform-smoke.ts` | WP1 | 4–6 | A |
+| — | **Linux beta** = WP0–WP5 + WP6(L) + WP7 | | | ≈ 30–41 | 3–4 lanes: ≈ 2.5–3 calendar weeks |
+| — | **Windows beta** adds WP6(W) and Windows-only fixes from WP1/WP3 | | | ≈ +6–10 | ≈ +1–1.5 weeks |
+| WP8 | Text parity (section C): variable `wght` and `kszl` on DirectWrite and cosmic-text, system font choice | `native/patches/{font_weight,text_scale}*`, `src/theme.ts` | WP0 | 4–6 | after beta |
+| WP9 | GPU parity: backdrop blur in WGSL and HLSL (scratch copy + two-pass blur), Mica on Windows 11 | `native/patches/platforms_gpui.py` (or fork commits) | WP0 | 6–8 | after beta |
+| WP10 | Embedded web view: WebView2 composition host (W, 8–12); WebKitGTK/WPE (L, phase 2, 10–15, risky) | `native/webview-*/**` | WP3, WP4 | 18–27 | after beta |
+
+Totals: about 36–51 agent-days to both betas, 28–41 more for full parity
+(text, blur, embedded web view). With three or four lanes the Linux beta is
+about 2.5–3 calendar weeks out and Windows 1–1.5 weeks after it.
+
+Where the forks help (WP0 onwards):
+
+- `platforms_gpui.py` edits shaders with anchored replacements and a regex that
+  wraps every fragment `return`; as commits on `Tresnanda/zed` they become
+  plain diffs to `shaders.wgsl`/`shaders.hlsl`, reviewable and rebased by git.
+- The UI-thread bridge and the off-macOS fixes to upstream code
+  (`elements_at`, painted-text readers) are upstreamable to GPUIX as commits.
+- CI can key the addon cache on the fork SHAs instead of hashing the patch
+  queue, and each platform lane can build from the same commit.
+- Shader changes for Metal, WGSL and HLSL land in one commit, so a missing
+  backend shows in review instead of as a blank Linux window.
 
 ## What needs real hardware or CI
 
@@ -276,23 +437,22 @@ installer and AUMID work.
   - AppImage without FUSE
 - **Intel Mac:** see above (real Intel GPU, dual-GPU switching, macOS 13–15).
 
-CI proves build, load, unit tests and offscreen render checks. It cannot prove
-GPU drivers, compositors, DPI, installers or energy.
+CI proves build, load, unit tests and software-rendered on-screen checks
+(lavapipe, WARP). It cannot prove GPU drivers, compositors, DPI, installers or
+energy: the spike's screenshots say nothing about real GPUs.
 
 ## Ship order
 
-1. **Intel Mac** (this branch, v0.10.2). Same patches, cross-built, checked
-   under Rosetta. One real Intel smoke test before or right after release.
-2. **WP0** (spike + compile). CI builds Linux and Windows addons and runs unit
-   tests; internal artifacts only.
-3. **Linux x64 beta.** Requires WP1(L) rounded clip, WP2, WP3, WP4, WP5L, WP6,
-   WP7(L). WGSL is one backend and AppImage is simple, and previews degrade to
-   the browser. It is offered next to Tauri, which stays the default.
-4. **Windows x64 beta.** Requires WP1(W), WP5W, WP7(W) on top of the shared
-   packages.
-5. **Parity hardening on both** with WP8 (visual pairs, perf), then backdrop
-   blur and region present.
-6. **Tauri deprecation release** (below), once 3 and 4 have each had a release
+1. **Intel Mac**: shipped in v0.10.3.
+2. **ADE-52 spike** (done): the patched addon builds for Linux and Windows and
+   draws in CI (`gpuix-platforms.yml`); rounded clipping on both backends.
+3. **WP0**: forks, cached addon lanes in `desktop.yml`; internal artifacts only.
+4. **Linux x64 beta**: WP1–WP5, WP6(L), WP7. AppImage is simple and previews
+   degrade to the browser. Offered next to Tauri, which stays the default.
+5. **Windows x64 beta**: WP6(W) and the Windows halves of WP1/WP3.
+6. **Parity**: WP8 text, WP9 backdrop blur and Mica, WP10 embedded web view;
+   visual pairs and perf through WP7's harness.
+7. **Tauri deprecation release** (below), once 4 and 5 have each had a release
    with no blocking regressions.
 
 ## Tauri deprecation end state

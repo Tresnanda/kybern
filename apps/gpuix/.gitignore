@@ -1,3 +1,5 @@
 node_modules/
 screenshots/
 dist/
+smoke/
+smoke-out/

@@ -1,13 +1,7 @@
 edit("lib.rs", "mod cache_island;", "mod cache_island;\nmod frame_clock;")
 edit("renderer.rs", "    layout_observers: crate::layout_observer::Shared,", "    layout_observers: crate::layout_observer::Shared,\n    frame_clock: crate::frame_clock::Shared,")
 edit("renderer.rs", "            layout_observers: Default::default(),", "            layout_observers: Default::default(),\n            frame_clock: Default::default(),")
-edit("renderer.rs", "    pub fn zoom_window(&self) -> Result<()> {", '''    pub fn set_frame_wake_callback(&self, callback: Option<ThreadsafeFunction<serde_json::Value>>) {
-        crate::frame_clock::set_waker(callback);
-    }
-    #[napi]
-    pub fn acknowledge_frame_wake(&self) { crate::frame_clock::acknowledge_wake(); }
-    #[napi]
-    pub fn subscribe_animation_frames(&self, callback: ThreadsafeFunction<serde_json::Value>) -> Result<u32> {
+edit("renderer.rs", "    pub fn zoom_window(&self) -> Result<()> {", '''    pub fn subscribe_animation_frames(&self, callback: ThreadsafeFunction<serde_json::Value>) -> Result<u32> {
         update_window(move |view, window, _| crate::frame_clock::add(view.frame_clock.clone(), callback, window))?
     }
     #[napi]

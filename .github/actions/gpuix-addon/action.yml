@@ -1,0 +1,61 @@
+name: Build the patched GPUIX native addon
+description: >-
+  Runs apps/gpuix/native/update.sh for one macOS target, reusing the cargo
+  output (the slow part, about seven minutes) from a cache keyed on every input
+  of the fetch, patch and build steps, plus the Markdown parity test a cache
+  hit skips (the build that saved the entry ran it on the same inputs). The realign, re-sign, load check,
+  capability checks and webview companion run on every call, cache hit or not.
+  The caller installs Rust 1.97.1 for the target, Bun and Python.
+
+inputs:
+  target:
+    description: aarch64-apple-darwin or x86_64-apple-darwin
+    required: true
+  save:
+    description: >-
+      Save the cache after a successful build. Only main and dispatched dry
+      runs should: a cache saved under a tag can never be restored.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rosetta for the Intel addon's load check
+      if: inputs.target == 'x86_64-apple-darwin'
+      shell: bash
+      run: arch -x86_64 /usr/bin/true 2>/dev/null || softwareupdate --install-rosetta --agree-to-license
+    - id: key
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        host=$(rustc +1.97.1 -vV | sed -n 's/^host: //p')
+        if [ "$TARGET" = "$host" ]; then release=build/target/release; else release=build/target/$TARGET/release; fi
+        echo "dylib=apps/gpuix/native/$release/libgpuix_native.dylib" >> "$GITHUB_OUTPUT"
+        # The linker and SDK shape the dylib as much as the sources do.
+        tools=$({ rustc +1.97.1 -vV; xcodebuild -version; sw_vers -productVersion; } | shasum -a 256 | cut -c1-16)
+        echo "tools=$tools" >> "$GITHUB_OUTPUT"
+    - id: cache
+      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      with:
+        path: |
+          ${{ steps.key.outputs.dylib }}
+          apps/gpuix/native/upstream/zed/crates/gpui/src/arena.rs
+        key: gpuix-addon-${{ inputs.target }}-${{ steps.key.outputs.tools }}-${{ hashFiles('apps/gpuix/native/VERSION', 'apps/gpuix/native/update.sh', 'apps/gpuix/native/patches/**', 'apps/gpuix/native/markdown-document-test.py') }}
+    - name: Build the patched GPUIX native addon
+      working-directory: apps/gpuix/native
+      shell: bash
+      env:
+        KYBERN_GPUIX_TARGET: ${{ inputs.target }}
+        KYBERN_NATIVE_CHECKS: '0'
+        KYBERN_GPUIX_PREBUILT: ${{ steps.cache.outputs.cache-hit == 'true' && '1' || '0' }}
+      run: ./update.sh
+    - name: Save the cargo output
+      if: inputs.save == 'true' && steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      with:
+        path: |
+          ${{ steps.key.outputs.dylib }}
+          apps/gpuix/native/upstream/zed/crates/gpui/src/arena.rs
+        key: gpuix-addon-${{ inputs.target }}-${{ steps.key.outputs.tools }}-${{ hashFiles('apps/gpuix/native/VERSION', 'apps/gpuix/native/update.sh', 'apps/gpuix/native/patches/**', 'apps/gpuix/native/markdown-document-test.py') }}

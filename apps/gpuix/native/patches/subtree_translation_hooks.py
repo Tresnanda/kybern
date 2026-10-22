@@ -8,8 +8,8 @@ edit('renderer.rs','if !matches!(&batch_op, BatchOp::SetStyle { .. }) { tree.ful
 edit('retained_tree.rs','    pub(crate) paint_updates: HashSet<u64>,','    pub(crate) paint_updates: HashSet<u64>,\n    pub(crate) subtree_translation_updates: HashSet<u64>,')
 edit('retained_tree.rs','            paint_updates: HashSet::new(),','            paint_updates: HashSet::new(),\n            subtree_translation_updates: HashSet::new(),')
 edit('retained_tree.rs','        if let Some(element) = self.elements.remove(&id) {\n            self.motion_ids.remove(&id);','        if let Some(element) = self.elements.remove(&id) {\n            self.motion_ids.remove(&id);\n            self.subtree_translation_updates.remove(&id);\n            crate::subtree_translation::forget(id);')
-edit('retained_tree.rs','        let is_motion = key == "motion";','        let is_motion = key == "motion";\n        let is_translation = key == "paintTranslate" && crate::subtree_translation::valid(&value);\n        let had_translation = self.elements.get(&id).is_some_and(|e|e.custom_props.contains_key("paintTranslate"));')
-edit('retained_tree.rs','        self.mark_render_changed(id);\n        let is_declaration','''        if is_translation && had_translation && self.elements.get(&id).is_some_and(|e|e.custom_props.contains_key("paintTranslate")) {self.subtree_translation_updates.insert(id);}
+edit('retained_tree.rs','        let is_motion = key == "motion";','        let is_motion = key == "motion";\n        let is_translation = key == "paintTranslate" && crate::subtree_translation::valid(&value);\n        let had_translation = self.elements.get(&id).is_some_and(|e|e.custom_props().contains_key("paintTranslate"));')
+edit('retained_tree.rs','        self.mark_render_changed(id);\n        let is_declaration','''        if is_translation && had_translation && self.elements.get(&id).is_some_and(|e|e.custom_props().contains_key("paintTranslate")) {self.subtree_translation_updates.insert(id); self.dirty = true;}
         else {
             // Installing a scope on an already-cached subtree needs one fresh
             // paint so every descendant records its new scope and raw masks.
@@ -36,7 +36,7 @@ edit('automation.rs','fn record_clipped_bounds(id: u64, bounds: Bounds<Pixels>, 
 edit('automation.rs','            BOUNDS.with(|cell| cell.borrow_mut().clear());','''            SUBTREE_BOUNDS.with(|map|BOUNDS.with(|bounds|map.borrow_mut().retain(|id,_|bounds.borrow().contains_key(id))));
             BOUNDS.with(|cell| cell.borrow_mut().clear());''')
 pending['automation.rs'] += '\ninclude!("subtree_bounds.rs");\n'
-edit('automation.rs','crate::text::record_start_region(bounds, selectable);','crate::text::record_start_region(bounds, selectable,window.subtree_geometry());')
+edit('automation.rs','crate::text::record_start_region(bounds, selectable);','crate::text::record_start_region(bounds, selectable,window.subtree_geometry());',2)
 edit('text/paint.rs','    selectable: bool,\n}','    selectable: bool,\n    geometry: Option<gpui::SubtreeGeometry>,\n}')
 edit('text/paint.rs','pub fn record_start_region(bounds: Bounds<gpui::Pixels>, selectable: bool) {','pub fn record_start_region(bounds: Bounds<gpui::Pixels>, selectable: bool,geometry:Option<gpui::SubtreeGeometry>) {')
 edit('text/paint.rs','StartRegion { bounds, selectable }','StartRegion { bounds, selectable,geometry }')

@@ -11,13 +11,13 @@ fn enabled() -> bool {
 // filters, motion, borders and shadows. No geometry or input state is patched.
 pub(crate) fn kind(element: &RetainedElement, style: &StyleDesc) -> Option<u8> {
     use crate::style::DimensionValue::Pixels;
-    if !enabled() || !element.children.is_empty() || !element.events.is_empty()
+    if !enabled() || !element.children.is_empty() || !element.events().is_empty()
         || element.content.is_some() || style.hover.is_some() || style.active.is_some()
         || style.box_shadow.is_some() || style.border_width.is_some()
         || style.border_top_width.is_some() || style.border_bottom_width.is_some()
         || style.border_left_width.is_some() || style.border_right_width.is_some()
-        || element.custom_props.contains_key("motion") || element.custom_props.contains_key("backdrop")
-        || element.custom_props.contains_key("edgeFade")
+        || element.custom_props().contains_key("motion") || element.custom_props().contains_key("backdrop")
+        || element.custom_props().contains_key("edgeFade")
         || !matches!(style.width, Some(Pixels(v)) if v.is_finite() && v > 0.0)
         || !matches!(style.height, Some(Pixels(v)) if v.is_finite() && v > 0.0)
     { return None; }
@@ -49,7 +49,7 @@ pub(crate) fn color(element: &RetainedElement, style: &StyleDesc) -> Option<gpui
 
 pub(crate) fn apply(child: AnyElement, element: &RetainedElement, style: Option<&StyleDesc>) -> AnyElement {
     let Some(kind) = style.and_then(|style| kind(element, style)) else { return child; };
-    let animation = element.custom_props.get("paintAnimation").and_then(|value| {
+    let animation = element.custom_props().get("paintAnimation").and_then(|value| {
         let mode = value.get("kind")?.as_str()?;
         if mode != "matrix" && mode != "breathe" { return None; }
         let cycle_ms = value.get("cycleMs")?.as_f64()?;
@@ -115,9 +115,9 @@ mod tests {
         assert!(paint_only(&node, &next));
         next.width = Some(DimensionValue::Pixels(15.0)); assert!(!paint_only(&node, &next));
         next = old.clone(); next.opacity = Some(0.2); assert!(!paint_only(&node, &next));
-        node.events.insert("click".into()); assert_eq!(kind(&node, &old), None);
-        node.events.clear(); node.children.push(2); assert_eq!(kind(&node, &old), None);
-        node.children.clear(); node.custom_props.insert("backdrop".into(), serde_json::json!({"blur":4})); assert_eq!(kind(&node, &old), None);
+        node.events_mut().insert("click".into()); assert_eq!(kind(&node, &old), None);
+        node.events_mut().clear(); node.children.push(2); assert_eq!(kind(&node, &old), None);
+        node.children.clear(); node.custom_props_mut().insert("backdrop".into(), serde_json::json!({"blur":4})); assert_eq!(kind(&node, &old), None);
     }
     #[test]
     fn paint_is_deferred_but_mixed_geometry_and_fallback_invalidate_ancestors() {
