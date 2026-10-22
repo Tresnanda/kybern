@@ -115,6 +115,8 @@ export const partGap = (before: MarkdownPart, after: MarkdownPart) => Math.max(e
 
 /** Bound lines and characters, including a pathological single long line. It splits anywhere, so it is for code and
  *  plain text; Markdown prose goes through `textChunks`. */
+const MARKDOWN_FILE = /\.(md|mdx|markdown)$/i
+
 export function lineChunks(text: string): string[] {
   const chunks: string[] = []
   let start = 0, lines = 0
@@ -263,7 +265,7 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
     const chips = refs ? chipifyKybernRefs(text, id => notes.find(n => n.id === id), id => tasks[id]) : text
     return chips.includes('`') ? linkifyFileRefs(chips, fileOf) : chips
   }, [text, refs, notes, tasks, fileOf])
-  const [preview, setPreview] = useState<{ title: string; text: string; code: boolean; line?: number; whole?: boolean } | null>(null)
+  const [preview, setPreview] = useState<{ title: string; text: string; code: boolean; line?: number; whole?: boolean; markdown?: boolean; raw?: boolean } | null>(null)
   useTranscriptRowLease(preview !== null)
   const [image, setImage] = useState<string | null>(null)
   const open = async (href: string) => {
@@ -278,7 +280,7 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
         const threadId = pane.get().selectedId
         if (!threadId) return
         const file = await client.call('threads.files.read', { thread_id: threadId, path: link.path })
-        setPreview({ title: link.line ? `${link.path}:${link.line}` : link.path, text: file.content, code: true, line: link.line })
+        setPreview({ title: link.line ? `${link.path}:${link.line}` : link.path, text: file.content, code: true, line: link.line, markdown: MARKDOWN_FILE.test(link.path) })
       } else if (link.kind === 'kybern') {
         // A chip opens the note or task page, as on the desktop.
         if (link.target === 'note') openNote(link.id)
@@ -286,18 +288,21 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
       }
     } catch (e) { reportError('Unable to open link', e) }
   }
-  const shown = preview && fromLine(preview.text, preview.whole ? undefined : preview.line)
+  // A Markdown file opens rendered, whole (`ChatFileLink.tsx`); "Show source" goes back to the numbered code view.
+  const rendered = !!preview?.markdown && !preview.raw
+  const shown = preview && fromLine(preview.text, preview.whole || rendered ? undefined : preview.line)
   return <>
     <markdown source={source} theme={cachedMarkdownTheme(t)} onLinkClick={e => { if (e.value) void open(e.value) }} style={{ color: t.text, userSelect: 'text' }} />
     {image && threadId && <ThreadImagePreview threadId={threadId} source={image} onClose={() => setImage(null)} />}
     {preview && shown && <Dialog width={720} onClose={() => setPreview(null)} testId="chat-link-preview">
       <DialogHeader title={preview.title} onClose={() => setPreview(null)} />
-      {shown.start > 1 && <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 16, paddingRight: 16 }}>
-        <Label color={muted(t)} style={{ flexGrow: 1 }}>{`From line ${shown.start}`}</Label>
-        <Button testId="chat-link-whole-file" variant="ghost" onClick={() => setPreview({ ...preview, whole: true })}>Show whole file</Button>
+      {(shown.start > 1 || preview.markdown) && <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 16, paddingRight: 16 }}>
+        <Label color={muted(t)} style={{ flexGrow: 1 }}>{shown.start > 1 ? `From line ${shown.start}` : ''}</Label>
+        {shown.start > 1 && <Button testId="chat-link-whole-file" variant="ghost" onClick={() => setPreview({ ...preview, whole: true })}>Show whole file</Button>}
+        {preview.markdown && <Button testId="chat-link-markdown-source" variant="ghost" onClick={() => setPreview({ ...preview, raw: !preview.raw })}>{preview.raw ? 'Show preview' : 'Show source'}</Button>}
       </div>}
       <virtual-list style={{ height: 480 }} estimatedItemHeight={300} overdraw={240}>
-        {(preview.code ? lineChunks(shown.text) : textChunks(shown.text)).map((chunk, i) => <div key={i} style={{ padding: 16 }}>{preview.code ? <CodeChunk text={chunk} wrap={true} /> : <markdown source={chunk} theme={cachedMarkdownTheme(t)} style={{ color: t.text, userSelect: 'text' }} />}</div>)}
+        {(preview.code && !rendered ? lineChunks(shown.text) : textChunks(shown.text)).map((chunk, i) => <div key={i} style={{ padding: 16 }}>{preview.code && !rendered ? <CodeChunk text={chunk} wrap={true} /> : <markdown source={chunk} theme={cachedMarkdownTheme(t)} style={{ color: t.text, userSelect: 'text' }} />}</div>)}
       </virtual-list>
     </Dialog>}
   </>
