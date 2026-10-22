@@ -29,6 +29,7 @@ import {
 } from '../../../../packages/kybern-client/src/types.ts'
 import { getClient, getState, onThreadActivity, set, subscribe } from '../state.ts'
 import { DEFAULT_FILTER, getNav, setNav, subscribeNav, type NavState } from './store.ts'
+import { followSpaces, loadSpaces } from '../spaces/store.ts'
 
 const LIMITS_POLL_MS = 60_000
 const ACTIVITY_DEBOUNCE_MS = 600
@@ -219,6 +220,8 @@ interface Prefs {
   sidebarOpen?: boolean
   unread?: NavState['unread']
   attentionDismissals?: NavState['attentionDismissals']
+  spaceId?: string
+  spaceViews?: NavState['spaceViews']
 }
 
 function readPrefs(): Prefs {
@@ -241,6 +244,8 @@ function persistPrefs() {
     sidebarOpen: getState().sidebarOpen,
     unread: getNav().unread,
     attentionDismissals: getNav().attentionDismissals,
+    ...(getNav().spaceId ? { spaceId: getNav().spaceId! } : {}),
+    spaceViews: getNav().spaceViews,
   }
   const text = JSON.stringify(prefs)
   if (text === lastPrefs) return
@@ -283,16 +288,18 @@ export function startLive() {
   const prefs = readPrefs()
   lastPrefs = JSON.stringify(prefs)
   set({ collapsed: prefs.collapsed ?? {}, ...(prefs.sidebarOpen === undefined ? {} : { sidebarOpen: prefs.sidebarOpen }) })
-  setNav({ projectOrder: prefs.projectOrder ?? [], filter: prefs.filter ?? DEFAULT_FILTER, unread: prefs.unread ?? {}, attentionDismissals: prefs.attentionDismissals ?? {} })
+  setNav({ projectOrder: prefs.projectOrder ?? [], filter: prefs.filter ?? DEFAULT_FILTER, unread: prefs.unread ?? {}, attentionDismissals: prefs.attentionDismissals ?? {}, spaceId: prefs.spaceId ?? null, spaceViews: prefs.spaceViews ?? {} })
   stops.push(subscribe(persistPrefs), subscribeNav(persistPrefs))
 
   const events = client.subscribeEvents({ include_tool_output: false }, (event) => { if (getClient() === client) onEvent(event) })
   stops.push(() => events.unsubscribe())
+  stops.push(followSpaces())
   stops.push(client.onNotification(USAGE_LIMITS_CHANGED_NOTIFICATION, (params) => applyLimits(params as UsageLimitsResult)))
   stops.push(onThreadActivity(activity => { if (getClient() === client) applyActivity(activity) }))
   const onOpen = () => {
     void loadProviders().catch(() => { if (getClient() === client) setNav({ providersLoaded: true }) })
     askLimits()
+    void loadSpaces()
     void client.call('daemon.info', {}).then((info) => { if (getClient() === client) setNav({ version: info.version ?? null }) }, () => {})
   }
   stops.push(client.onStatus((status) => {

@@ -89,7 +89,7 @@ export function Dock({ sidebarOpen }: { sidebarOpen: boolean }) {
     return () => clearTimeout(timer)
   }, [open, mounted, still, threadId])
   if (!mounted && !open) return null
-  return <DockShell key={threadId ?? 'home'} threadId={threadId} open={open} mounted={mounted} setMounted={setMounted} sidebarOpen={sidebarOpen} still={still} background={t.surface} />
+  return <DockShell key={threadId ?? 'home'} threadId={threadId} open={open} mounted={mounted} setMounted={setMounted} sidebarOpen={sidebarOpen} still={still} background={t.content} />
 }
 
 function DockShell({ threadId, open, mounted, setMounted, sidebarOpen, still, background }: {
@@ -110,7 +110,7 @@ function DockShell({ threadId, open, mounted, setMounted, sidebarOpen, still, ba
   return <motion.div {...{ testId: 'right-dock' }} initial={still ? false : { width: 0 }} animate={{ width: open ? geometry.width : 0 }} transition={still ? { duration: 0 } : dockSlide()}
     onMotionComplete={() => setMounted(open)}
     style={{ display: 'flex', flexDirection: 'column', flexShrink: 0, height: '100%', minHeight: 0, overflow: 'hidden', position: geometry.overlay ? 'absolute' : 'relative', ...(geometry.overlay ? { top: 0, right: 0, bottom: 0, boxShadow: { offsetX: -8, offsetY: 0, blurRadius: 24, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.16)' } } : {}), borderTopRightRadius: 12, borderBottomRightRadius: 12 }}>
-    <div testId={geometry.overlay ? 'dock-overlay' : 'dock-inline'} paintTransform={fade} style={{ display: 'flex', flexDirection: 'column', width: geometry.width, height: '100%', flexShrink: 0, minHeight: 0, borderLeftWidth: 0.6, borderColor: t.borderLight, backgroundColor: background, borderTopRightRadius: 12, borderBottomRightRadius: 12 }}>
+    <div testId={geometry.overlay ? 'dock-overlay' : 'dock-inline'} paintTransform={fade} style={{ display: 'flex', flexDirection: 'column', width: geometry.width, height: '100%', flexShrink: 0, minHeight: 0, borderLeftWidth: 0.6, borderColor: t.borderLight, backgroundColor: geometry.overlay ? t.surface : background, borderTopRightRadius: 12, borderBottomRightRadius: 12 }}>
       {mounted && <DockContent key={threadId ?? 'home'} threadId={threadId} thread={thread ?? null} width={geometry.width} />}
     </div>
     <div testId="dock-resize" role="separator" aria-label="Resize right sidebar" tabIndex={0}
@@ -245,7 +245,7 @@ function TabStrip({ threadId, width, coordinator, activeTasks, stats }: { thread
     const timer = setTimeout(() => { if (scroll.current) renderer?.scrollTo?.(scroll.current.id, -Math.max(0, left + selectedWidth - (width - 78)), 0) }, 16)
     return () => clearTimeout(timer)
   }, [left, selectedWidth, width, renderer])
-  return <div {...ISLAND} testId="dock-tabs" style={{ display: 'flex', width: '100%', height: 46, alignItems: 'center', gap: 4, paddingLeft: 6, paddingRight: 6, flexShrink: 0, backgroundColor: t.surface, borderTopRightRadius: 12, borderBottomWidth: 1, borderColor: t.surfaceDivider }}>
+  return <div {...ISLAND} testId="dock-tabs" style={{ display: 'flex', width: '100%', height: 46, alignItems: 'center', gap: 4, paddingLeft: 6, paddingRight: 6, flexShrink: 0, backgroundColor: t.content, borderTopRightRadius: 12, borderBottomWidth: 1, borderColor: t.surfaceDivider }}>
     <div ref={scroll} style={{ display: 'flex', alignItems: 'center', flexGrow: 1, minWidth: 0, height: 32, overflowX: 'scroll', overflowY: 'hidden' }}>
       <div ref={rowRef} style={{ display: 'flex', alignItems: 'center', position: 'relative', gap: 4, height: 28, flexShrink: 0 }}>
         {tab && <motion.div initial={false} animate={{ left, width: selectedWidth }} transition={REDUCED_MOTION || keyboard || dock.instant ? { duration: 0 } : SLIDE}

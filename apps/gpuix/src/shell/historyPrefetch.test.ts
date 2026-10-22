@@ -48,7 +48,7 @@ test('unloaded and terminal cursors do not issue speculative requests', () => {
   }
 })
 
-test('speculation retains at most one MiB of UTF-8 page data', async () => {
+test('speculation retains at most HISTORY_PREFETCH_BYTES of UTF-8 page data', async () => {
   const cache = new HistoryPrefetch()
   const large = { ...page, notes: { text: '界'.repeat(Math.ceil(HISTORY_PREFETCH_BYTES / 3)), revision: 1 } }
   cache.prime(base, async () => large)

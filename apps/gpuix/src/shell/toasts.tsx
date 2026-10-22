@@ -38,6 +38,8 @@ import { onWindowVisibility, isWindowVisible } from '../native/visibility.ts'
 import { EASE } from '../motion/kit.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { GlassEdge } from '../kit/GlassEdge.tsx'
+import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
 
 export type ToastKind = 'default' | 'success' | 'info' | 'warning' | 'error'
 
@@ -297,12 +299,13 @@ const GONE = () => REDUCED_MOTION ? { opacity: 0 } : { opacity: 0, blur: 3, scal
 /** An older toast peeking above the front one in the collapsed stack. */
 function GhostLayer({ layer, leaving = false }: { layer: Layer; leaving?: boolean }) {
   const t = useTheme()
+  const g = useGlass()
   const fade = useFade(leaving)
   const { step, height, x, y } = layer
   const width = WIDTH * (1 - 0.05 * step)
   return (
     <anchored position={{ x: x - (WIDTH - width) / 2, y: y - PEEK * step }} anchor="bottomRight" fit="snap" snapMargin={8} deferred priority={6 - step} occlude backdrop={BACKING} style={{ borderRadius: 10 }}>
-      <div onMouseEnter={hoverStack(true)} paintTransform={fade} style={{ width, height, borderRadius: 10, borderWidth: 1, borderColor: t.border, backgroundColor: t.popover }} />
+      <div onMouseEnter={hoverStack(true)} paintTransform={fade} style={{ width, height, borderRadius: 10, borderWidth: 1, borderColor: g.on ? g.frostRim : t.border, backgroundColor: g.on ? g.denseFloat : t.glass.dense }} />
     </anchored>
   )
 }
@@ -375,6 +378,7 @@ const DURATION_GLIDE = 0.25
 
 function ToastCard({ item }: { item: Item }) {
   const t = useTheme()
+  const g = useGlass()
   const [hover, setHover] = useState(false)
   const icon = ICONS[item.kind]
   return (
@@ -382,6 +386,8 @@ function ToastCard({ item }: { item: Item }) {
       testId={`toast-${item.kind}`}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      // Only the front toast frosts (class `pills`); the ghosts under it are tint-only. No shadow under a translucent fill.
+      backdrop={frostBackdrop(g, 'pills', 10)}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -391,11 +397,12 @@ function ToastCard({ item }: { item: Item }) {
         position: 'relative',
         borderRadius: 10,
         borderWidth: 1,
-        borderColor: t.border,
-        backgroundColor: t.popover,
-        boxShadow: { offsetX: 0, offsetY: 4, blurRadius: 12, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.1)' },
+        borderColor: g.on ? g.pillRim : t.border,
+        backgroundColor: frostFill(g, 'pills', t.glass.dense),
+        ...(g.on ? {} : { boxShadow: { offsetX: 0, offsetY: 4, blurRadius: 12, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.1)' } }),
       }}
     >
+      <GlassEdge radius={10} color={g.frostHighlight} />
       {icon && <Icon source={icon} size={16} color={t.text} />}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexGrow: 1, flexShrink: 1, minWidth: 0 }}>
         <Label color={t.text} size={13} weight={500} lineHeight={20}>
@@ -452,8 +459,8 @@ function ToastCard({ item }: { item: Item }) {
             justifyContent: 'center',
             borderRadius: 10,
             borderWidth: 1,
-            borderColor: t.border,
-            backgroundColor: t.popover,
+            borderColor: g.on ? g.pillRim : t.border,
+            backgroundColor: g.on ? g.denseFloat : t.popover,
             cursor: 'pointer',
           }}
         >

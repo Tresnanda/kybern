@@ -129,9 +129,9 @@ pub fn should_omit_tool_output(output: &Value) -> bool {
     json_payload_exceeds(output, LARGE_TOOL_OUTPUT_BYTES)
 }
 
-/// Temporary lookup state for a replay. It is dropped with the fold; cached
-/// projections keep only transcript rows. Structural recovery rebuilds it.
-#[derive(Default)]
+/// Lookup state for a replay. It lives with the fold, so a cached fold can be
+/// cloned and extended with newer events. Structural recovery rebuilds it.
+#[derive(Default, Clone)]
 struct TranscriptLookup {
     omit_tool_outputs: bool,
     users: std::collections::HashSet<MessageId>,
@@ -164,7 +164,7 @@ impl TranscriptLookup {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct TranscriptFold {
     lookup: TranscriptLookup,
     out: Vec<TranscriptEntry>,
@@ -172,6 +172,32 @@ pub struct TranscriptFold {
     last_turn_id: Option<TurnId>,
     unscoped_assistant_message: Option<(TurnId, MessageId)>,
     roots: std::collections::HashSet<(ThreadId, String)>,
+    streams: ToolStreams,
+}
+
+/// Which tool invocations have a persisted output stream, kept by the fold so a
+/// page needs no query to ask. A delta or completion belongs to the newest
+/// start of its call ID, so a reused ID never lends its stream to an earlier
+/// invocation. Deltas can also arrive just after the completion.
+#[derive(Default, Clone)]
+struct ToolStreams {
+    /// The newest start of each call ID, and which of `DELTA` and `DONE` it has seen.
+    latest: std::collections::HashMap<String, (EventSeq, u8)>,
+    /// Starts that have both: only those can hydrate a stream.
+    recoverable: std::collections::HashSet<EventSeq>,
+}
+impl ToolStreams {
+    const DELTA: u8 = 1;
+    const DONE: u8 = 2;
+
+    fn saw(&mut self, id: &str, flag: u8) {
+        if let Some((seq, seen)) = self.latest.get_mut(id) {
+            *seen |= flag;
+            if *seen == Self::DELTA | Self::DONE {
+                self.recoverable.insert(*seq);
+            }
+        }
+    }
 }
 
 impl TranscriptFold {
@@ -197,10 +223,38 @@ impl TranscriptFold {
         } else {
             self.lookup.extend(&self.out, start);
         }
+        match &ev.payload {
+            EventPayload::ToolCallStarted { call, .. } => {
+                self.streams.latest.insert(call.id.clone(), (ev.seq, 0));
+            }
+            EventPayload::ToolCallOutputDelta { tool_call_id, .. } => self.streams.saw(tool_call_id, ToolStreams::DELTA),
+            EventPayload::ToolCallCompleted { tool_call_id, .. } => self.streams.saw(tool_call_id, ToolStreams::DONE),
+            _ => {}
+        }
+    }
+
+    /// Mark completed tool rows whose exact invocation has persisted output
+    /// deltas and a persisted completion. The projection does not concatenate
+    /// those deltas; clients fetch them through the sequence-bounded tool-output
+    /// RPC. A turn failure can mark an unfinished row complete with a synthetic
+    /// null output, which has no durable result to hydrate, so a row without
+    /// a persisted completion is never marked. The answer comes from the fold,
+    /// so it costs nothing per page and needs no index over the event log.
+    pub fn mark_tool_streams_omitted(&self, entries: &mut [TranscriptEntry]) {
+        for entry in entries {
+            if let TranscriptEntry::ToolCall { seq, complete: true, stream_omitted, .. } = entry {
+                *stream_omitted = self.streams.recoverable.contains(seq);
+            }
+        }
     }
 
     pub fn finish(self) -> Vec<TranscriptEntry> {
         self.out
+    }
+
+    /// The rows folded so far.
+    pub fn rows(&self) -> &[TranscriptEntry] {
+        &self.out
     }
 }
 
@@ -685,7 +739,7 @@ fn apply_transcript_event(
             | EventPayload::WorktreeCleaned { .. }
             | EventPayload::WorktreeRestored { .. }
             | EventPayload::ThreadArchived
-            | EventPayload::ToolCallOutputDelta { .. }
+            | EventPayload::ToolCallOutputDelta { .. } // `TranscriptFold::apply` keeps their identity, not their text
             | EventPayload::CheckpointUpdated { .. } => {}
         }
     }

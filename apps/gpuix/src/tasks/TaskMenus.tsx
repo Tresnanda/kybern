@@ -6,6 +6,7 @@ import { ProjectDot } from '../notes/kit.tsx'
 import { PriorityGlyph, StatusGlyph } from './Glyphs.tsx'
 import { Icon } from '../icons.tsx'
 import { useApp } from '../state.ts'
+import { useSpaceProjects } from '../spaces/current.ts'
 import { deleteTasks, setTasks, taskState, updateMany, updateTask, useTasks } from './store.ts'
 import { pressTransform } from '../motion/press.ts'
 
@@ -78,7 +79,7 @@ export function TaskMenus({ ids, property, label, value, bar }: { ids: string[];
 }
 export function ProjectMenu({ task, value }: { task: TaskItem; value?: boolean }) {
   const t = useTheme()
-  const projects = useApp((s) => s.projects)
+  const projects = useSpaceProjects()
   return (
     <Menu
       testId="task-project"

@@ -15,6 +15,8 @@ import { SLASH_ICON } from '../editor/icons.ts'
 import type { EditorState } from '../editor/RichEditor.tsx'
 import { TURN_INTO_ITEMS } from '../editor/slash.ts'
 import { NOTES_UI, notesTokens } from './kit.tsx'
+import { GlassEdge } from '../kit/GlassEdge.tsx'
+import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
 
 const icons = { bold: glyph(TextBoldIcon), italic: glyph(TextItalicIcon), checklist: glyph(CheckListIcon), bullet: glyph(LeftToRightListBulletIcon), code: glyph(SourceCodeSquareIcon), quote: glyph(QuoteDownIcon), outline: glyph(TextAlignLeftIcon), link: glyph(Link01Icon), image: glyph(Image01Icon) }
 
@@ -26,6 +28,7 @@ export function Toolbar({ state, command, outlineOn, toggleOutline, image }: {
   image?: () => void
 }) {
   const t = useTheme()
+  const g = useGlass()
   const k = notesTokens(t)
   const [linking, setLinking] = useState(false)
   const dark = t.variant === 'dark'
@@ -36,7 +39,8 @@ export function Toolbar({ state, command, outlineOn, toggleOutline, image }: {
   const separator = <div style={{ width: 1, height: 16, marginLeft: 4, marginRight: 4, backgroundColor: k.hair }} />
   const button = (label: string, icon: string, active: boolean | undefined, onClick: () => void, shortcut?: string, testId?: string) =>
     <FormatButton testId={testId ?? `note-format-${label.toLowerCase().replaceAll(' ', '-')}`} label={label} icon={icon} shortcut={shortcut} active={active} onClick={onClick} iconSize={15} />
-  return <div testId="note-toolbar" role="toolbar" aria-label="Format" style={{ display: 'flex', alignItems: 'center', gap: 2, height: 38, paddingLeft: 5, paddingRight: 5, borderRadius: 12, borderWidth: 0.5, borderColor: dark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.12)', backgroundColor: dark ? over(ink(t, 0.1176), t.surface) : t.surface, boxShadow: dark ? { offsetX: 0, offsetY: 12, blurRadius: 32, spreadRadius: -8, color: 'rgba(0, 0, 0, 0.6)' } : { offsetX: 0, offsetY: 10, blurRadius: 30, spreadRadius: -10, color: 'rgba(0, 0, 0, 0.2)' } }}>
+  return <div testId="note-toolbar" role="toolbar" aria-label="Format" backdrop={frostBackdrop(g, 'pills', 12)} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 2, height: 38, paddingLeft: 5, paddingRight: 5, borderRadius: 12, borderWidth: g.on ? 1 : 0.5, borderColor: g.on ? g.pillRim : dark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.12)', backgroundColor: frostFill(g, 'pills', dark ? over(ink(t, 0.1176), t.surface) : t.surface), ...(g.on ? {} : { boxShadow: dark ? { offsetX: 0, offsetY: 12, blurRadius: 32, spreadRadius: -8, color: 'rgba(0, 0, 0, 0.6)' } : { offsetX: 0, offsetY: 10, blurRadius: 30, spreadRadius: -10, color: 'rgba(0, 0, 0, 0.2)' } }) }}>
+    <GlassEdge radius={12} color={g.frostHighlight} />
     {linking ? <LinkField initial={state?.link?.href ?? ''} command={command} onDone={() => setLinking(false)} /> : <>
       <Menu testId="note-block-style" sideOffset={8} minWidth={176} trigger={() => <div aria-label={`Block style. Now ${blockTitle}`} style={{ display: 'flex', alignItems: 'center', gap: 4, height: 28, paddingLeft: 8, paddingRight: 6, borderRadius: 7, cursor: 'pointer', hover: { backgroundColor: k.hover } }}><Label color={k.fg1} size={NOTES_UI} lineHeight={21} truncate style={{ maxWidth: 96 }}>{blockTitle}</Label><Icon source={N.chevronDown} size={11} color={ink(t, 0.5)} /></div>}>
         {TURN_INTO_ITEMS.map(item => <MenuItem key={item.id} id={item.id} testId={`note-turn-${item.id}`} icon={SLASH_ICON[item.icon]} label={item.title} checked={item.id === block} onSelect={() => { if (item.id !== block) run({ cmd: 'turnInto', block: item.id }) }} />)}

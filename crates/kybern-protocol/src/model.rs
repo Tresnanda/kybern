@@ -278,8 +278,85 @@ pub struct Project {
     /// see [`OrchestrationSettings::effective_for`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coordinator: Option<CoordinatorOverrides>,
+    /// The space this project belongs to. Absent only for free chat and on daemons without spaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_id: Option<SpaceId>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+pub type SpaceId = Uuid;
+
+/// A group of projects (work, personal…). Every project except free chat is in exactly one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Space {
+    pub id: SpaceId,
+    /// 1–32 characters, trimmed; unique ignoring case.
+    pub name: String,
+    /// The swatch behind initials and icons, and the fill while an image loads.
+    pub color: SpaceColor,
+    pub logo: SpaceLogo,
+    /// 0-based order in the rail.
+    pub position: u32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SpaceColor {
+    Blue,
+    Green,
+    Purple,
+    Pink,
+    Teal,
+    Amber,
+    Red,
+    Graphite,
+}
+
+impl SpaceColor {
+    /// Every swatch, in the order the first free one is picked for a new space.
+    pub const ALL: [SpaceColor; 8] = [
+        SpaceColor::Blue,
+        SpaceColor::Green,
+        SpaceColor::Purple,
+        SpaceColor::Pink,
+        SpaceColor::Teal,
+        SpaceColor::Amber,
+        SpaceColor::Red,
+        SpaceColor::Graphite,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SpaceColor::Blue => "blue",
+            SpaceColor::Green => "green",
+            SpaceColor::Purple => "purple",
+            SpaceColor::Pink => "pink",
+            SpaceColor::Teal => "teal",
+            SpaceColor::Amber => "amber",
+            SpaceColor::Red => "red",
+            SpaceColor::Graphite => "graphite",
+        }
+    }
+
+    /// Parses the stored string; an unknown colour (a newer daemon's database) reads as blue.
+    pub fn from_stored(value: &str) -> SpaceColor {
+        SpaceColor::ALL.into_iter().find(|c| c.as_str() == value).unwrap_or(SpaceColor::Blue)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SpaceLogo {
+    /// The name's initials on the colour.
+    Initials,
+    /// A glyph from the client's curated set, on the colour. `icon` is a slug
+    /// (`^[a-z0-9][a-z0-9-]{0,31}$`); clients that do not know it draw initials.
+    Icon { icon: String },
+    /// A square 128×128 PNG the daemon derived from an upload (`GET /assets/{id}`).
+    Image { asset_id: AssetId },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

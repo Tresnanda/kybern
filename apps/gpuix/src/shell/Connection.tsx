@@ -22,6 +22,8 @@ import { useLoopRunning, useLoopVisibility } from '../native/loop-visibility.ts'
 import { ISLAND, NATIVE_PAINT_ANIMATIONS, useLoaderStep } from '../MatrixLoader.tsx'
 import { connect, getClient, getState, resetClient, selectThread, set, useApp } from '../state.ts'
 import { ink, Label, LOGO_SVG, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { GlassEdge } from '../kit/GlassEdge.tsx'
+import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
 
 
 
@@ -76,6 +78,7 @@ const BANNER_EXIT = { to: { opacity: 0, translateY: -4 }, duration: 0.12, ease: 
 export function ConnectionBanner() {
   const { name: NAME } = useEnvironment()
   const t = useTheme()
+  const g = useGlass()
   const status = useApp((s) => s.status)
   const detail = useApp((s) => s.statusDetail)
   const show = status === 'reconnecting' || status === 'failed'
@@ -101,11 +104,13 @@ export function ConnectionBanner() {
           position: 'relative',
           borderRadius: 10,
           borderWidth: 1,
-          borderColor: t.border,
-          backgroundColor: t.popover,
-          boxShadow: { offsetX: 0, offsetY: 20, blurRadius: 25, spreadRadius: -5, color: 'rgba(0, 0, 0, 0.1)' },
+          borderColor: g.on ? g.frostRim : t.border,
+          backgroundColor: frostFill(g, 'menus', t.popover, 'frostMenu'),
+          ...(g.on ? {} : { boxShadow: { offsetX: 0, offsetY: 20, blurRadius: 25, spreadRadius: -5, color: 'rgba(0, 0, 0, 0.1)' } }),
         }}
+        backdrop={frostBackdrop(g, 'menus', 10)}
       >
+        <GlassEdge radius={10} color={g.frostHighlight} />
         {failed ? (
           <>
             <div style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, backgroundColor: t.red }} />

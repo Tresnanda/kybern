@@ -56,6 +56,8 @@ fn main() {
     add::<TaskItem>(&mut types, "TaskItem");
     add::<TaskItemsChangedNotification>(&mut types, "TaskItemsChangedNotification");
     add::<ProjectsChangedNotification>(&mut types, "ProjectsChangedNotification");
+    add::<Space>(&mut types, "Space");
+    add::<SpacesChangedNotification>(&mut types, "SpacesChangedNotification");
 
     let mut methods = Vec::new();
     method::<DaemonInfoMethod>(&mut methods);
@@ -92,6 +94,11 @@ fn main() {
     method::<ProjectsAdd>(&mut methods);
     method::<ProjectsUpdate>(&mut methods);
     method::<ProjectsRemove>(&mut methods);
+    method::<SpacesList>(&mut methods);
+    method::<SpacesCreate>(&mut methods);
+    method::<SpacesUpdate>(&mut methods);
+    method::<SpacesDelete>(&mut methods);
+    method::<SpacesReorder>(&mut methods);
     method::<ThreadsList>(&mut methods);
     method::<ThreadsSearch>(&mut methods);
     method::<ThreadsRead>(&mut methods);

@@ -17,6 +17,7 @@ pub(crate) fn kind(element: &RetainedElement, style: &StyleDesc) -> Option<u8> {
         || style.border_top_width.is_some() || style.border_bottom_width.is_some()
         || style.border_left_width.is_some() || style.border_right_width.is_some()
         || element.custom_props.contains_key("motion") || element.custom_props.contains_key("backdrop")
+        || element.custom_props.contains_key("edgeFade")
         || !matches!(style.width, Some(Pixels(v)) if v.is_finite() && v > 0.0)
         || !matches!(style.height, Some(Pixels(v)) if v.is_finite() && v > 0.0)
     { return None; }

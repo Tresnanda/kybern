@@ -46,7 +46,8 @@ impl SubtreeGeometry {
         let mut shapes = Vec::new();
         for raw in &self.masks {
             clip = clip.intersect(&raw.bounds);
-            if let Some(s) = raw.rounded {
+            // Edge fades (kind 1) do not clip.
+            if let Some(s) = raw.rounded.filter(|s| s.kind == ROUNDED_CLIP) {
                 shapes.push([s.bounds[0], s.bounds[1], s.bounds[2], s.bounds[3], s.radii[0], s.radii[1], s.radii[2], s.radii[3]]);
             }
         }
@@ -57,12 +58,8 @@ impl SubtreeGeometry {
         for raw in &self.masks {
             if let Some(shape) = raw.rounded {
                 let b = shape.bounds;
-                let r = shape.radii;
-                let (id, generation) = pool.intern(
-                    Bounds::new(point(px(b[0]), px(b[1])), size(px(b[2]), px(b[3]))),
-                    Corners { top_left: px(r[0]), top_right: px(r[1]), bottom_right: px(r[2]), bottom_left: px(r[3]) },
-                    mask,
-                );
+                let (id, generation) =
+                    pool.intern_node(Bounds::new(point(px(b[0]), px(b[1])), size(px(b[2]), px(b[3]))), shape.radii, mask, shape.kind);
                 pool.sync_node(scene, id, scale);
                 mask.rounded_clip = id;
                 mask.clip_generation = generation;

@@ -235,3 +235,8 @@ export const taskTyping = (value: boolean) => {
   typing = value
 }
 export const isTaskTyping = () => typing
+
+/** The dock took an Esc (it hid the composer). The page's own Esc, which closes the task, must not also act on that key press. */
+let dockEscapeAt = -Infinity
+export const markDockEscape = () => { dockEscapeAt = performance.now() }
+export const dockEscapedJustNow = () => performance.now() - dockEscapeAt < 150

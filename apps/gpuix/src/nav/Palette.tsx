@@ -18,6 +18,11 @@ import { newNote, openNote, openQuickNote, useNotes } from '../notes/store.ts'
 import { Icon } from '../icons.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
 import { getState, useApp } from '../state.ts'
+import { SPACE_COPY, inSpace } from '../../../../packages/kybern-client/src/spaces.ts'
+import { switchSpace, useCurrentSpaceId } from '../spaces/current.ts'
+import { openSpaceEditor } from '../spaces/ui.ts'
+import { useSpaces } from '../spaces/store.ts'
+import { SpaceLogo } from '../spaces/SpaceLogo.tsx'
 import { Label, ProviderMark, useTheme } from '../ui.tsx'
 import { N } from './glyphs.ts'
 import { canMoveNavHistory, goBack, goForward, goPage, isNavEntryValid, newThread, openThread } from './history.ts'
@@ -94,6 +99,9 @@ function PaletteDialog() {
   const settingsOpen = useNav((s) => s.settingsOpen)
   const page = useNav((s) => s.page)
   const taskMap = useTasks((s) => s.tasks)
+  const spaceId = useCurrentSpaceId()
+  const spaces = useSpaces((s) => s.spaces)
+  const spacesOn = useSpaces((s) => s.supported === true)
   const selectedId = useApp((s) => s.selectedId)
   const [query, setQuery] = useState('')
   const [highlight, setHighlight] = useState(0)
@@ -103,6 +111,19 @@ function PaletteDialog() {
   const groups = useMemo(() => {
     const kbd = (keys: string[]) => <Kbd keys={keys} />
     const projectName = (id: string) => (isFreeChatProject(id) ? 'Free chat' : (projects.find((p) => p.id === id)?.name ?? ''))
+    // Every other space, then "New space…" (§7.11): ⌃1–⌃8 and ⌃9 for the last, as on the rail.
+    const spaceCommands = (): Item[] => [
+      ...spaces.flatMap((space, index): Item[] => space.id === spaceId ? [] : [{
+        id: `space:${space.id}`,
+        label: SPACE_COPY.switchTo(space.name),
+        keywords: `switch space ${space.name}`,
+        group: 'Suggested',
+        icon: <SpaceLogo space={space} size={16} />,
+        meta: spaces.length >= 2 && (index < 8 || (index === spaces.length - 1 && spaces.length > 8)) ? kbd(['⌃', index === spaces.length - 1 && spaces.length > 8 ? '9' : String(index + 1)]) : undefined,
+        run: () => { switchSpace(space.id, 'pointer') },
+      }]),
+      { id: 'space-new', label: SPACE_COPY.paletteNew, keywords: 'new space create group projects', group: 'Suggested', icon: <Icon source={N.plus} size={15} color={muted(t, 1)} />, run: () => openSpaceEditor({ anchor: 'plus', mode: 'create', still: true }) },
+    ]
     const actions: Item[] = [
       {
         id: 'resume',
@@ -138,6 +159,7 @@ function PaletteDialog() {
       ...(!settingsOpen && canMoveNavHistory(history, 1, isNavEntryValid)
         ? [{ id: 'go-forward', label: 'Go forward', keywords: 'forward next history navigate', group: 'Suggested' as const, icon: <Icon source={N.arrowRight} size={15} color={muted(t, 1)} />, meta: kbd(['⌘', ']']), run: () => void goForward() }]
         : []),
+      ...(spacesOn ? spaceCommands() : []),
       {
         id: 'settings',
         label: 'Settings',
@@ -149,6 +171,7 @@ function PaletteDialog() {
       },
     ]
     const threadItems: Item[] = [...threads]
+      .filter((thread) => inSpace(thread.project_id, projects, spaceId))
       .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
       .slice(0, 40)
       .map((thread) => ({
@@ -177,6 +200,7 @@ function PaletteDialog() {
       { id: 'task-new', label: 'New task', keywords: 'new task create todo add', group: 'Tasks', icon: <Icon source={N.plus} size={15} color={muted(t, 1)} />, run: () => { goPage('tasks'); quickAdd() } },
       { id: 'task-open', label: 'Open Tasks', keywords: 'tasks open list board todo', group: 'Tasks', icon: <Icon source={N.tasks} size={15} color={muted(t, 1)} />, run: () => goPage('tasks') },
       ...Object.values(taskMap)
+        .filter((task) => inSpace(task.project_id, projects, spaceId))
         .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
         .slice(0, 50)
         .map((task): Item => ({
@@ -201,7 +225,7 @@ function PaletteDialog() {
       },
     ]
     const projectItems: Item[] = projects
-      .filter((p) => !isFreeChatProject(p.id))
+      .filter((p) => !isFreeChatProject(p.id) && inSpace(p.id, projects, spaceId))
       .map((p) => ({
         id: `project:${p.id}`,
         label: p.name,
@@ -221,14 +245,14 @@ function PaletteDialog() {
       { id: 'note-new', label: 'New note', keywords: 'new note create write notes', group: 'Notes', icon: <Icon source={N.plus} size={15} color={muted(t, 1)} />, meta: page === 'notes' ? kbd(['⌘', 'N']) : undefined, run: () => void newNote() },
       { id: 'note-capture', label: 'Capture note…', keywords: 'quick note capture jot write notes', group: 'Notes', icon: <Icon source={N.pencil} size={15} color={muted(t, 1)} />, meta: kbd(['⌘', '⇧', 'N']), run: openQuickNote },
       { id: 'note-open', label: 'Open Notes', keywords: 'notes open list pages', group: 'Notes', icon: <Icon source={N.note} size={15} color={muted(t, 1)} />, run: () => goPage('notes') },
-      ...notes.filter((n) => !n.deleted_at).sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 50).map((note): Item => ({ id: `note:${note.id}`, label: note.title || 'Untitled', keywords: `${note.title} ${note.preview}`, group: 'Notes', icon: <Icon source={N.note} size={15} color={muted(t, 1)} />, run: () => openNote(note.id) })),
+      ...notes.filter((n) => !n.deleted_at && inSpace(n.project_id, projects, spaceId)).sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 50).map((note): Item => ({ id: `note:${note.id}`, label: note.title || 'Untitled', keywords: `${note.title} ${note.preview}`, group: 'Notes', icon: <Icon source={N.note} size={15} color={muted(t, 1)} />, run: () => openNote(note.id) })),
     ]
     const all = [...actions, ...threadItems, ...noteItems, ...taskItems, ...projectItems, ...themeItems]
     const q = query.trim().toLowerCase()
     const matched = q ? all.filter((item) => `${item.label} ${item.keywords}`.toLowerCase().includes(q)) : all
     const order: Item['group'][] = ['Suggested', 'Threads', 'Notes', 'Tasks', 'Projects', 'Themes']
     return order.map((group) => ({ group, items: matched.filter((item) => item.group === group) })).filter((g) => g.items.length > 0)
-  }, [notes, threads, projects, taskMap, selectedId, history, settingsOpen, page, query, t])
+  }, [notes, threads, projects, taskMap, spaceId, spaces, spacesOn, selectedId, history, settingsOpen, page, query, t])
 
   const flat = groups.flatMap((g) => g.items)
   const active = Math.min(highlight, Math.max(0, flat.length - 1))

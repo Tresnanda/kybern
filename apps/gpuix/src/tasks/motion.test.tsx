@@ -9,7 +9,6 @@ let visible = true
 mock.module('../native/visibility.ts', () => ({ isWindowVisible: () => visible, onWindowVisibility: () => () => {} }))
 
 const { CountPop } = await import('./CountPop.tsx')
-const { CheckSlot } = await import('./CheckSlot.tsx')
 const entry = createRequire(import.meta.url).resolve('@gpuix/react')
 const { createRoot, flushSync } = await import(pathToFileURL(path.join(path.dirname(entry), 'reconciler/reconciler.js')).href)
 
@@ -61,16 +60,4 @@ native('a count that changes with its context (a filter, a search) shows at once
   expect(h.pops()).toBe(0)
   h.render(<CountPop value={6} context="project:a" color="#fff" />)
   expect(h.pops()).toBe(1)
-})
-
-native('the checkbox layer mounts with the hover and leaves after its exit; the base glyph stays', () => {
-  const h = harness()
-  const slot = (show: boolean) => <CheckSlot show={show} base={<div testId="glyph" />} over={<div testId="check" />} />
-  h.render(slot(false))
-  expect(h.ids()).toEqual(['glyph'])
-  h.render(slot(true))
-  expect(h.ids()).toEqual(['glyph', 'check'])
-  h.render(slot(false))
-  // The leaving layer is kept for its 80 ms fade (a window that is hidden would unmount it at once).
-  expect(h.ids()).toEqual(['glyph', 'check'])
 })

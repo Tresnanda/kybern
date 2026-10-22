@@ -27,9 +27,10 @@ export interface DiffStyle {
 declare module '@gpuix/native/host' { interface GpuixTheme { diff?: DiffStyle } }
 /** DiffView.tsx uses plain unified text; no word or syntax highlighting.
  * Callers must omit wordDiff. Native row virtualization remains enabled by scroll. */
-export function desktopDiffTheme(t: Theme, fileHeaders = true, size = 13): GpuixTheme {
-  const bg=t.v('--background')
-  const mix=(color:string,amount:number)=>over(alpha(color,amount),bg)
+export function desktopDiffTheme(t: Theme, fileHeaders = true, size = 13, options: { glass?: boolean } = {}): GpuixTheme {
+  // Whole-window glass has no opaque colour to mix the rows into: the body is clear and the add/delete rows are translucent tints.
+  const bg=options.glass?'rgba(0, 0, 0, 0)':t.v('--background')
+  const mix=(color:string,amount:number)=>options.glass?alpha(color,amount):over(alpha(color,amount),bg)
   return {
     appearance:t.variant,bg,text:t.text,textMuted:t.textSecondary,textFaint:t.textTertiary,
     fontSans:FONT_UI,fontMono:FONT_MONO,border:t.borderLight,

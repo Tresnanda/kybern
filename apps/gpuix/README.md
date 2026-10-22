@@ -31,8 +31,28 @@ bun scripts/interact.ts dir   # collapse/rail motion frames + typing check
 
 Environment: `KYBERN_DATA_DIR` (default `~/.kybern`) or `KYBERN_URL` +
 `KYBERN_TOKEN`; `KYBERN_APPEARANCE=dark|light`; `KYBERN_REDUCED_MOTION=1`;
-`KYBERN_OPAQUE=1` for an opaque window; `KYBERN_GPUIX_THREAD=<id or title>`
+`KYBERN_OPAQUE=1` for an opaque window (scope none, native `opaque` from launch); `KYBERN_GPUIX_THREAD=<id or title>`
 opens a thread at launch.
+
+Window material pins (tests, bench, screenshots; they override both theme variants and are never saved):
+`KYBERN_WINDOW_MATERIAL=solid|window|sidebar` (`window` = translucent, whole window; `sidebar` = translucent, Sidebar only),
+`KYBERN_WINDOW_OPACITY=15…100` (the sidebar and frame coat; also the content coat of `window` unless pinned below),
+`KYBERN_WINDOW_CONTENT_OPACITY=15…100` (the conversation's coat; 100 is Sidebar only), `KYBERN_WINDOW_SURFACE_OPACITY=30…100`
+(composer, menu and card tints), `KYBERN_GLASS_FROST=none|all|composer,pills,menus` (which classes blur behind their tint; unset = `FROST_DEFAULT`),
+`KYBERN_BACKDROP_HALFRES=0` (full-resolution blur for A/B), `KYBERN_WINDOW_BLUR=1…64|auto`, and `KYBERN_WINDOW_BLUR_FAIL=1` (the adjustable blur
+reports failure, for the "Unavailable, use Auto" capture). Settings › Appearance › Window sets the same per theme.
+A window whose lightest region covers the desktop (opacity 99+ in the whole window; light Sidebar only at any opacity) is opaque,
+with no desktop blur; the Opacity slider is held at a readability floor (65% dark, 55% light).
+`KYBERN_TRANSLUCENCY_SINGLE_FILL=1` is a temporary perf A/B switch: no frame fill under the content card in Sidebar only and Solid,
+and one fill on the thread panel (same pixels, less overdraw). Default off.
+
+## Spaces
+
+Projects belong to spaces (daemon `spaces.*`); the rail shows one tile per space once there are two,
+and the thread panel, Home, Tasks, Notes, Pull requests and the palette follow the active space.
+⌃1–⌃8 pick spaces 1–8 and ⌃9 the last one (not while a terminal has focus). If you enabled macOS
+Mission Control's "Switch to Desktop N" shortcuts, the system takes ⌃digits before the app does: turn
+them off or use the tiles. Verify with `KYBERN_DATA_DIR=<…gpuix-scratch…/data> bun src/spaces/verify.ts`.
 
 ## What works
 

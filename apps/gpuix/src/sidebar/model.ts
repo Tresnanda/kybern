@@ -8,6 +8,7 @@ import { orderProjects, threadMatchesFilter } from '@/state/sidebarOrganize'
 import { nestedThreadRows } from '../../../../packages/kybern-client/src/threadRows.ts'
 import { isChildThread, visibleSubagentThreads } from '../../../../packages/kybern-client/src/subagents.ts'
 import { isChildWorking } from '../../../../packages/kybern-client/src/delegations.ts'
+import { inSpace } from '../../../../packages/kybern-client/src/spaces.ts'
 import { flatTree } from '../tree/geometry.ts'
 import {
   FREE_CHAT_PROJECT_ID,
@@ -24,7 +25,8 @@ export const MAX_PROJECT_THREADS = 8
 export type AttentionKind = 'blocked' | 'failed' | 'done'
 
 export type Row =
-  | { kind: 'label'; key: string }
+  /** `text`: the active space's name when there are two or more; absent says "Projects". */
+  | { kind: 'label'; key: string; text?: string }
   | { kind: 'message'; key: string; text: string; clearFilter?: boolean }
   | {
       kind: 'project'
@@ -55,6 +57,8 @@ export type Row =
   | { kind: 'child'; key: string; thread: Thread; depth: number; childCount: number; childrenOpen: boolean; last?: boolean; rails?: number }
   | { kind: 'more'; key: string; projectId: string; count: number; showAll: boolean }
   | { kind: 'no-threads'; key: string }
+  /** A space without projects: drag one onto it, or add a folder. `onlySpace` drops the drag hint. */
+  | { kind: 'empty-space'; key: string; onlySpace: boolean }
   | { kind: 'recents'; key: string; open: boolean }
 
 /** Desktop `threadAttentionKind` over this app's unread marks and dismissals. */
@@ -133,6 +137,8 @@ export interface SidebarInput {
     'children' | 'activity' | 'unread' | 'dismissed' | 'filter' | 'attentionFilter' | 'projectOrder' | 'composerDrafts' | 'attentionDismissals'
   >
   now: number
+  /** The active space; null when the daemon has no spaces. `name` is set only with two or more spaces. */
+  space?: { id: string | null; name: string | null; count: number }
 }
 
 /** Agents to filter by: the ones that have threads, plus the chosen one. */
@@ -178,14 +184,16 @@ export function buildRows(input: SidebarInput): Row[] {
     childrenByProject.set(child.project_id, list)
   }
 
-  const ordered = orderProjects(input.projects.filter((p) => !isFreeChatProject(p.id)), nav.projectOrder)
+  const spaceId = input.space?.id ?? null
+  const ordered = orderProjects(input.projects.filter((p) => !isFreeChatProject(p.id) && inSpace(p.id, input.projects, spaceId)), nav.projectOrder)
   const visibleProjects = shown
     ? ordered.filter((p) => (byProject.get(p.id) ?? []).some((t) => shown!.has(t.id)) || input.threads.some((t) => shown!.has(t.id) && t.coordinator_project_id === p.id))
     : ordered
 
-  rows.push({ kind: 'label', key: '__projects' })
+  rows.push({ kind: 'label', key: '__projects', ...(input.space?.name ? { text: input.space.name } : {}) })
   if (ordered.length === 0) {
-    rows.push({ kind: 'message', key: '__none', text: 'No projects yet. Add a folder to see its threads here.' })
+    if (spaceId !== null) rows.push({ kind: 'empty-space', key: '__empty-space', onlySpace: (input.space?.count ?? 0) < 2 })
+    else rows.push({ kind: 'message', key: '__none', text: 'No projects yet. Add a folder to see its threads here.' })
   } else if (shown && shown.size === 0 && nav.attentionFilter && !filtering) {
     rows.push({ kind: 'message', key: '__caught-up', text: "You're all caught up. No threads need attention." })
   } else if (filtering && visibleProjects.length === 0) {

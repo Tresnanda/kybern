@@ -1,16 +1,16 @@
 // Window material and the accessibility display options, as on the desktop:
 //
-// - The window always has the native under-window vibrancy (desktop #39: the
-//   frame and sidebar are translucent in every mode). `KYBERN_OPAQUE=1` is the
-//   capture mode that paints an opaque window instead.
-// - "Use translucent surfaces" turns on full translucency: the content
-//   surfaces become glass over that material (kybern.css:580-616). It switches
-//   live, through the theme, with no relaunch.
-// - Reduce transparency and Increase contrast (System Settings › Accessibility
-//   › Display) turn full translucency and scene backdrops off and, for
-//   contrast, give the workspace card a real border (kit.css:146-150,
-//   kybern.css:631-660). AppKit already renders the native material opaque
-//   under Reduce transparency, like the desktop's NSVisualEffectView.
+// - The window material has three scopes (`platform/translucency.ts`), chosen per theme variant in
+//   Settings › Appearance › Window:
+//     none     Solid, or an accessibility override: opaque surfaces, an opaque native window;
+//     sidebar  "Sidebar only": the frame and the thread panel are glass, the conversation is opaque;
+//     window   Translucent: one coat over the whole window, route content clear.
+//   `ThemeProvider` resolves the scope (`ui.tsx`); `theme.scope` / `theme.glass` carry it to components, and
+//   `shell/windowMaterial.ts` moves the native window (opaque, vibrancy or an adjustable desktop blur).
+//   `KYBERN_OPAQUE=1` is the capture mode: scope none from launch.
+// - Reduce transparency and Increase contrast (System Settings › Accessibility › Display) force scope none
+//   and turn scene backdrops off and, for contrast, give the workspace card a real border (kit.css:146-150,
+//   kybern.css:631-660). They win over every slider.
 //
 // - Reduce motion (`platform/reducedMotion.ts`) switches every motion to its
 //   fade or instant path.
@@ -25,8 +25,8 @@ import type { Pointer } from 'bun:ffi'
 import { readFileSync } from 'node:fs'
 import { useSyncExternalStore } from 'react'
 import { cls, getObjc, sel } from '../native/objc.ts'
-import { useAppearance } from '../settings/appearance.ts'
 import { setReducedMotion } from './reducedMotion.ts'
+import { OPAQUE_WINDOW } from './translucency.ts'
 
 export interface AccessibilityDisplay { reduceTransparency: boolean; increaseContrast: boolean; reduceMotion: boolean }
 
@@ -72,46 +72,7 @@ const subscribe = (l: () => void) => { listeners.add(l); return () => { listener
 export const onAccessibilityDisplay = subscribe
 export const useAccessibilityDisplay = () => useSyncExternalStore(subscribe, getAccessibilityDisplay)
 
-/** Capture mode: an opaque window with no native material. */
-export const OPAQUE_WINDOW = process.env.KYBERN_OPAQUE === '1'
+/** Capture mode: an opaque window with no native material (`translucency.ts`). */
+export { OPAQUE_WINDOW }
 /** Scene backdrops (blurred popovers, drop labels) are allowed right now. */
 export const backdropAllowed = () => !OPAQUE_WINDOW && !display.reduceTransparency && !display.increaseContrast
-/** Full translucency for given preferences: the switch is on and nothing in Accessibility overrides it. */
-export const fullTranslucency = (translucent: boolean, a11y = display) => translucent && !OPAQUE_WINDOW && !a11y.reduceTransparency && !a11y.increaseContrast
-export function useFullTranslucency(): boolean {
-  const translucent = useAppearance().translucent
-  return fullTranslucency(translucent, useAccessibilityDisplay())
-}
-
-/**
- * Full translucency, verbatim from kybern.css:580-616 (`html[data-full-translucency]
- * [data-window-material="translucent"]`). Applied over the theme's own
- * variables; every `--app-opaque-*` source is already in them.
- */
-export const FULL_TRANSLUCENCY: Record<string, string> = {
-  '--app-glass-panel-opacity': '58%',
-  '--app-glass-popup-opacity': '78%',
-  '--app-glass-control-opacity': '40%',
-  '--app-glass-surface': 'color-mix(in srgb, var(--app-opaque-content-surface) 72%, transparent)',
-  '--app-glass-popup-surface': 'color-mix(in srgb, var(--app-opaque-popover) 78%, transparent)',
-  '--color-background-surface': 'var(--app-glass-surface)',
-  '--app-settings-surface': 'var(--app-glass-surface)',
-  '--background': 'color-mix(in srgb, var(--app-opaque-background) 40%, transparent)',
-  '--card': 'color-mix(in srgb, var(--app-opaque-card) 58%, transparent)',
-  '--popover': 'var(--app-glass-popup-surface)',
-  '--input': 'color-mix(in srgb, var(--app-opaque-input) 40%, transparent)',
-  '--muted': 'color-mix(in srgb, var(--app-opaque-muted) 40%, transparent)',
-  '--secondary': 'color-mix(in srgb, var(--app-opaque-secondary) 40%, transparent)',
-  '--color-background-panel': 'color-mix(in srgb, var(--app-opaque-color-background-panel) 58%, transparent)',
-  '--color-background-control': 'color-mix(in srgb, var(--app-opaque-color-background-control) 40%, transparent)',
-  '--color-background-control-opaque': 'color-mix(in srgb, var(--app-opaque-color-background-control-opaque) 40%, transparent)',
-  '--color-background-elevated-primary': 'color-mix(in srgb, var(--app-opaque-color-background-elevated-primary) 78%, transparent)',
-  '--color-background-elevated-primary-opaque': 'color-mix(in srgb, var(--app-opaque-color-background-elevated-primary-opaque) 78%, transparent)',
-  '--color-background-elevated-secondary': 'color-mix(in srgb, var(--app-opaque-color-background-elevated-secondary) 40%, transparent)',
-  '--app-chat-code-surface': 'var(--color-background-control-opaque)',
-  '--app-user-message-background': 'var(--color-background-control-opaque)',
-  '--app-composer-picker-surface': 'var(--app-glass-popup-surface)',
-  '--app-composer-command-surface': 'color-mix(in srgb, var(--app-opaque-popover) 94%, transparent)',
-  '--composer-surface': 'var(--color-background-control-opaque)',
-  '--composer-glass-surface': 'var(--app-opaque-popover)',
-}

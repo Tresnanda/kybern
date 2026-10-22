@@ -3,8 +3,11 @@ import { useEffect, useRef, useState } from 'react'
 import { observeElementBounds } from '../native/layout.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { useApp } from '../state.ts'
+import { useSpaceProjects } from '../spaces/current.ts'
 import { toast } from '../shell/toasts.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
+import { GlassEdge } from '../kit/GlassEdge.tsx'
+import { raisedFill, useGlass } from '../platform/glass.ts'
 import { Menu, MenuItem } from '../nav/overlay.tsx'
 import { ProjectDot, notesTokens } from '../notes/kit.tsx'
 import { over } from '../theme.ts'
@@ -13,7 +16,8 @@ import { StatusGlyph } from './Glyphs.tsx'
 
 export function QuickAdd({ request, card = false }: { request: NonNullable<ReturnType<typeof taskState>['quick']>; card?: boolean }) {
   const t = useTheme()
-  const projects = useApp((s) => s.projects)
+  const g = useGlass()
+  const projects = useSpaceProjects()
   const [title, setTitle] = useState('')
   const [project, setProject] = useState(request.projectId ?? '')
   const [busy, setBusy] = useState(false)
@@ -96,10 +100,10 @@ export function QuickAdd({ request, card = false }: { request: NonNullable<Retur
     </Menu>
   )
   if (!card) {
-    // `.tk-quick`: a 40px row on the row grid (28 priority + 58 key), the status glyph, the title and the project; no buttons, Return adds.
+    // `.tk-quick`: a 40px row on the row grid (22 checkbox slot + 28 priority + 58 key), the status glyph, the title and the project; no buttons, Return adds.
     return (
-      <div onMouseDownOutside={settle} style={{ display: 'flex', alignItems: 'center', height: 40, paddingLeft: 20, paddingRight: 12, backgroundColor: ink(t, t.variant === 'dark' ? 0.035 : 0.03) }}>
-        <div style={{ width: 86, flexShrink: 0 }} />
+      <div onMouseDownOutside={settle} style={{ display: 'flex', alignItems: 'center', height: 40, paddingLeft: 8, paddingRight: 12, backgroundColor: ink(t, t.variant === 'dark' ? 0.035 : 0.03) }}>
+        <div style={{ width: 22 + 86, flexShrink: 0 }} />
         <div style={{ display: 'flex', alignItems: 'center', width: 26, flexShrink: 0 }}><StatusGlyph status={request.status} /></div>
         <input
           ref={setField}
@@ -122,7 +126,8 @@ export function QuickAdd({ request, card = false }: { request: NonNullable<Retur
   const dark = t.variant === 'dark'
   return (
     <div style={{ paddingBottom: 8 }}>
-      <div onMouseDownOutside={settle} testId="task-quick-card" style={{ display: 'flex', flexDirection: 'column', paddingTop: 10, paddingBottom: 10, paddingLeft: 12, paddingRight: 12, borderRadius: 10, backgroundColor: dark ? over(ink(t, 0.03), t.surface) : t.surface, boxShadow: dark ? { offsetX: 0, offsetY: 1, blurRadius: 2, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.25)' } : { offsetX: 0, offsetY: 1, blurRadius: 2, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.05)' }, borderWidth: dark ? 0 : 0.5, borderColor: 'rgba(0, 0, 0, 0.09)' }}>
+      <div onMouseDownOutside={settle} testId="task-quick-card" style={{ position: 'relative', display: 'flex', flexDirection: 'column', paddingTop: 10, paddingBottom: 10, paddingLeft: 12, paddingRight: 12, borderRadius: 10, backgroundColor: raisedFill(g, dark ? over(ink(t, 0.03), t.surface) : t.surface), ...(g.on ? { borderWidth: 1, borderColor: g.rim } : { boxShadow: dark ? { offsetX: 0, offsetY: 1, blurRadius: 2, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.25)' } : { offsetX: 0, offsetY: 1, blurRadius: 2, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.05)' }, borderWidth: dark ? 0 : 0.5, borderColor: 'rgba(0, 0, 0, 0.09)' }) }}>
+        <GlassEdge radius={10} color={g.highlight} />
         <textarea
           ref={setField}
           testId="task-quick-title"

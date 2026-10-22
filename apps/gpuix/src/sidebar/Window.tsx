@@ -5,6 +5,7 @@ import { startupMark } from '../perf/startup.ts'
 import { SparseRetention, sparseIndices, useSparseList } from '../kit/sparseList.tsx'
 import { pixelWindowRange } from './windowRange.ts'
 import { useHeldProjectRow } from './reorder.tsx'
+import { onSpaceSwitched } from '../spaces/current.ts'
 
 const RowLease = createContext<(() => () => void) | null>(null)
 /** Open overlays, inline editors and leaving rows retain their owner. */
@@ -54,6 +55,8 @@ export function SidebarWindow({ entries, list, box, setList }: {
     return observeElementBounds(renderer, box.id, ({ rect }) => { if (rect) setViewport(rect.height) })
   }, [renderer, box])
   useEffect(() => { sync() }, [sync, list, entries.length])
+  // A space switch starts its list from the top.
+  useEffect(() => onSpaceSwitched(() => { const node = live.current.list; if (node) renderer.scrollToItem?.(node.id, 0) }), [renderer])
   useEffect(() => {
     if (!list) return
     // A jump can paint only slots, so keep one observation on the list itself.

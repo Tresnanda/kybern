@@ -31,7 +31,7 @@ impl Host {
             .unwrap()
     }
     fn thread(&self) -> Thread {
-        let project = self.state.orchestrator.add_project(self.root.to_string_lossy().into_owned(), Some("Fixture".into())).unwrap();
+        let project = self.state.orchestrator.add_project(self.root.to_string_lossy().into_owned(), Some("Fixture".into()), None).unwrap();
         let now = chrono::Utc::now();
         let thread = Thread {
             id: Uuid::now_v7(),
@@ -140,7 +140,7 @@ async fn ordinary_worktree_cleanup_rpc_retains_thread_and_source_association() {
             .unwrap();
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     }
-    let project = host.state.orchestrator.add_project(repo.to_string_lossy().into_owned(), Some("Worktree fixture".into())).unwrap();
+    let project = host.state.orchestrator.add_project(repo.to_string_lossy().into_owned(), Some("Worktree fixture".into()), None).unwrap();
     let client = host.client().await;
     let thread = client
         .call::<ThreadsCreate>(ThreadsCreateParams {
@@ -202,7 +202,7 @@ async fn git_status_refreshes_a_project_registered_before_git_init() {
 #[tokio::test]
 async fn projects_list_refreshes_git_without_an_existing_thread() {
     let host = Host::start().await;
-    let project = host.state.orchestrator.add_project(host.root.to_string_lossy().into_owned(), None).unwrap();
+    let project = host.state.orchestrator.add_project(host.root.to_string_lossy().into_owned(), None, None).unwrap();
     assert!(!project.is_git);
     let client = host.client().await;
     let initialized =
@@ -219,7 +219,7 @@ async fn projects_list_refreshes_git_without_an_existing_thread() {
 #[tokio::test]
 async fn connected_project_git_refresh_detects_init_and_removal_without_a_git_request() {
     let host = Host::start().await;
-    let project = host.state.orchestrator.add_project(host.root.to_string_lossy().into_owned(), None).unwrap();
+    let project = host.state.orchestrator.add_project(host.root.to_string_lossy().into_owned(), None, None).unwrap();
     let client = host.client().await;
     let initialized =
         tokio::process::Command::new("git").args(["init", "-q", "-b", "main"]).current_dir(&project.path).output().await.unwrap();
@@ -770,13 +770,16 @@ async fn project_changes_reach_every_client() {
     std::fs::create_dir_all(&folder).unwrap();
 
     let added = desktop
-        .call::<ProjectsAdd>(ProjectsAddParams { path: folder.to_string_lossy().into_owned(), name: Some("Shop".into()) })
+        .call::<ProjectsAdd>(ProjectsAddParams { path: folder.to_string_lossy().into_owned(), name: Some("Shop".into()), space_id: None })
         .await
         .unwrap();
     let announced = next_projects_changed(&phone).await;
     assert!(announced.projects.iter().any(|project| project.id == added.id && project.name == "Shop"), "the new project is announced");
     // Adding the same folder again changes nothing, so nothing is announced for it.
-    desktop.call::<ProjectsAdd>(ProjectsAddParams { path: folder.to_string_lossy().into_owned(), name: None }).await.unwrap();
+    desktop
+        .call::<ProjectsAdd>(ProjectsAddParams { path: folder.to_string_lossy().into_owned(), name: None, space_id: None })
+        .await
+        .unwrap();
 
     desktop
         .call::<ProjectsUpdate>(ProjectsUpdateParams {
@@ -786,6 +789,7 @@ async fn project_changes_reach_every_client() {
             task_prefix: None,
             brief_in_all_threads: None,
             coordinator: None,
+            space_id: None,
         })
         .await
         .unwrap();
@@ -975,11 +979,19 @@ async fn project_task_prefixes_are_assigned_edited_and_validated_over_rpc() {
     std::fs::create_dir_all(&one).unwrap();
     std::fs::create_dir_all(&two).unwrap();
     let a = client
-        .call::<ProjectsAdd>(ProjectsAddParams { path: one.to_string_lossy().into_owned(), name: Some("kybern-mobile".into()) })
+        .call::<ProjectsAdd>(ProjectsAddParams {
+            path: one.to_string_lossy().into_owned(),
+            name: Some("kybern-mobile".into()),
+            space_id: None,
+        })
         .await
         .unwrap();
     let b = client
-        .call::<ProjectsAdd>(ProjectsAddParams { path: two.to_string_lossy().into_owned(), name: Some("kybern-mobile".into()) })
+        .call::<ProjectsAdd>(ProjectsAddParams {
+            path: two.to_string_lossy().into_owned(),
+            name: Some("kybern-mobile".into()),
+            space_id: None,
+        })
         .await
         .unwrap();
     assert_eq!((a.task_prefix.as_deref(), b.task_prefix.as_deref()), (Some("KYM"), Some("KYMA")));
@@ -991,6 +1003,7 @@ async fn project_task_prefixes_are_assigned_edited_and_validated_over_rpc() {
         task_prefix: Some(prefix.into()),
         brief_in_all_threads: None,
         coordinator: None,
+        space_id: None,
     };
     let renamed = client.call::<ProjectsUpdate>(update(a.id, "mob")).await.unwrap();
     assert_eq!(renamed.task_prefix.as_deref(), Some("MOB"));
@@ -1010,6 +1023,7 @@ async fn project_task_prefixes_are_assigned_edited_and_validated_over_rpc() {
             task_prefix: None,
             brief_in_all_threads: None,
             coordinator: None,
+            space_id: None,
         })
         .await
         .unwrap();
@@ -1624,6 +1638,93 @@ async fn cached_history_pages_match_full_history_and_keep_their_sequence_barrier
     assert!(matches!(current.transcript.last(), Some(TranscriptEntry::Notice { text, .. }) if text == "New live entry"));
 }
 
+/// Shaped like a delegating thread: a prompt, then hundreds of subagent tool
+/// rows in the same turn. Row pages of 120 ended inside the turn and added
+/// nothing a reader could see; whole-turn pages bring each prompt with its work.
+#[tokio::test]
+async fn whole_turn_history_pages_add_whole_turns_and_leave_thread_state_out() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    let notice = |turn: Uuid, text: String| {
+        host.state
+            .store
+            .event_append(thread.id, Some(turn), EventPayload::ProviderNotice { data: None, level: NoticeLevel::Info, text })
+            .unwrap();
+    };
+    let turns: Vec<Uuid> = (0..3).map(|_| Uuid::now_v7()).collect();
+    for (index, turn) in turns.iter().enumerate() {
+        let rows = if index == 1 { 900 } else { 5 };
+        for row in 0..rows {
+            notice(*turn, format!("turn {index} row {row}"));
+        }
+    }
+    host.state
+        .store
+        .event_append(
+            thread.id,
+            Some(turns[2]),
+            EventPayload::ProviderCommandsUpdated {
+                commands: vec![ProviderCommand { name: "review".into(), description: "Review the change".into() }],
+            },
+        )
+        .unwrap();
+    let client = host.client().await;
+    let params =
+        ThreadsGetParams { thread_id: thread.id, transcript_limit: Some(3), include_tool_output: Some(false), ..Default::default() };
+    let recent = client.call::<ThreadsGet>(params.clone()).await.unwrap();
+    assert_eq!(recent.transcript.len(), 3);
+    assert_eq!(recent.provider_commands.len(), 1);
+    let barrier = recent.thread.last_seq;
+    let full =
+        client.call::<ThreadsGet>(ThreadsGetParams { transcript_limit: None, through_seq: Some(barrier), ..params.clone() }).await.unwrap();
+
+    let page_turns = |page: &[TranscriptEntry]| {
+        let mut ids: Vec<Uuid> = page
+            .iter()
+            .map(|entry| match entry {
+                TranscriptEntry::Notice { turn_id, .. } => *turn_id,
+                other => panic!("unexpected row {other:?}"),
+            })
+            .collect();
+        ids.dedup();
+        ids
+    };
+    let mut collected = recent.transcript;
+    let mut cursor = recent.next_before_seq;
+    let mut pages = Vec::new();
+    while let Some(before_seq) = cursor {
+        let older = client
+            .call::<ThreadsGet>(ThreadsGetParams {
+                before_seq: Some(before_seq),
+                through_seq: Some(barrier),
+                whole_turns: Some(true),
+                transcript_only: Some(true),
+                ..params.clone()
+            })
+            .await
+            .unwrap();
+        assert_eq!(older.thread.last_seq, barrier);
+        assert!(older.provider_commands.is_empty() && older.runtime_tasks.is_empty() && older.pending_approvals.is_empty());
+        pages.push(page_turns(&older.transcript));
+        cursor = older.next_before_seq;
+        let mut entries = older.transcript;
+        entries.append(&mut collected);
+        collected = entries;
+    }
+    // The first older page finishes the newest turn and reaches into the
+    // 900-row turn, so it brings that whole turn too; then the oldest turn.
+    assert_eq!(pages, [vec![turns[1], turns[2]], vec![turns[0]]]);
+    assert_eq!(serde_json::to_value(collected).unwrap(), serde_json::to_value(full.transcript).unwrap());
+
+    // Without the new fields an older page keeps the legacy shape.
+    let legacy = client
+        .call::<ThreadsGet>(ThreadsGetParams { before_seq: recent.next_before_seq, through_seq: Some(barrier), ..params })
+        .await
+        .unwrap();
+    assert_eq!(legacy.transcript.len(), 3);
+    assert_eq!(legacy.provider_commands.len(), 1);
+}
+
 /// Local wire workload; not a physical-device, WAN, CPU or energy benchmark.
 #[tokio::test]
 #[ignore]
@@ -1992,6 +2093,7 @@ async fn the_coordinator_and_project_brief_work_over_rpc() {
         task_prefix: None,
         brief_in_all_threads: on,
         coordinator: None,
+        space_id: None,
     };
     assert!(!client.call::<ProjectsUpdate>(update(None)).await.unwrap().brief_in_all_threads);
     assert!(client.call::<ProjectsUpdate>(update(Some(true))).await.unwrap().brief_in_all_threads);
@@ -2124,4 +2226,242 @@ async fn review_adversarial_image_route() {
     say(format!("{} {}", at("notes.txt"), at("missing.png")), None);
     assert_eq!(get(at("notes.txt")).await, reqwest::StatusCode::NOT_FOUND);
     assert_eq!(get(at("missing.png")).await, reqwest::StatusCode::NOT_FOUND);
+}
+
+// ---- spaces ----
+
+async fn next_spaces_changed(client: &Client) -> SpacesChangedNotification {
+    let mut notifications = client.notifications.lock().await;
+    loop {
+        let notification =
+            tokio::time::timeout(Duration::from_secs(3), futures::StreamExt::next(&mut *notifications)).await.unwrap().unwrap();
+        if notification.method == SPACES_CHANGED_NOTIFICATION {
+            return serde_json::from_value(notification.params).unwrap();
+        }
+    }
+}
+
+fn add_params(path: &std::path::Path, space_id: Option<SpaceId>) -> ProjectsAddParams {
+    ProjectsAddParams { path: path.to_string_lossy().into_owned(), name: None, space_id }
+}
+
+fn space_create(name: &str) -> SpacesCreateParams {
+    SpacesCreateParams { name: name.into(), color: None, logo: None }
+}
+
+fn space_update(space_id: SpaceId) -> SpacesUpdateParams {
+    SpacesUpdateParams { space_id, name: None, color: None, logo: None }
+}
+
+async fn rpc_error<M: Method>(client: &Client, params: M::Params) -> String {
+    client.call_raw(M::NAME, serde_json::to_value(params).unwrap()).await.unwrap_err().to_string()
+}
+
+impl Host {
+    /// Store raw bytes as an uploaded asset, as `POST /assets` would.
+    fn asset(&self, name: &str, media_type: &str, bytes: &[u8]) -> AssetId {
+        let id = Uuid::now_v7();
+        std::fs::create_dir_all(&self.state.paths.assets).unwrap();
+        std::fs::write(self.state.paths.assets.join(id.to_string()), bytes).unwrap();
+        let info =
+            AssetInfo { id, name: name.into(), media_type: media_type.into(), size: bytes.len() as u64, created_at: chrono::Utc::now() };
+        self.state.store.asset_insert(&info).unwrap();
+        id
+    }
+}
+
+fn encoded(format: image::ImageFormat, width: u32, height: u32) -> Vec<u8> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(width, height, image::Rgb([200, 30, 30])))
+        .write_to(&mut out, format)
+        .unwrap();
+    out.into_inner()
+}
+
+#[tokio::test]
+async fn spaces_are_created_updated_and_announced() {
+    let host = Host::start().await;
+    let desktop = host.client().await;
+    let phone = host.client().await;
+
+    let initial = desktop.call::<SpacesList>(Empty {}).await.unwrap().spaces;
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].name, "Personal");
+
+    let work = desktop.call::<SpacesCreate>(space_create("  Work  ")).await.unwrap();
+    assert_eq!((work.name.as_str(), work.position, work.logo.clone()), ("Work", 1, SpaceLogo::Initials));
+    assert_eq!(work.color, SpaceColor::Blue, "the first swatch no space uses");
+    let announced = next_spaces_changed(&phone).await;
+    assert_eq!(announced.spaces.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Personal", "Work"]);
+
+    let updated = desktop
+        .call::<SpacesUpdate>(SpacesUpdateParams {
+            name: Some("Office".into()),
+            color: Some(SpaceColor::Amber),
+            logo: Some(SpaceLogo::Icon { icon: "briefcase".into() }),
+            ..space_update(work.id)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        (updated.name.as_str(), updated.color, updated.logo),
+        ("Office", SpaceColor::Amber, SpaceLogo::Icon { icon: "briefcase".into() })
+    );
+    assert_eq!(next_spaces_changed(&phone).await.spaces[1].name, "Office");
+
+    let duplicate = rpc_error::<SpacesCreate>(&desktop, space_create("PERSONAL")).await;
+    assert!(duplicate.contains("You already have a space named PERSONAL."), "{duplicate}");
+    let empty = rpc_error::<SpacesCreate>(&desktop, space_create("   ")).await;
+    assert!(empty.contains("Give the space a name."), "{empty}");
+    let long = rpc_error::<SpacesCreate>(&desktop, space_create(&"x".repeat(33))).await;
+    assert!(long.contains("Space names can be up to 32 characters."), "{long}");
+    let bad_icon = rpc_error::<SpacesUpdate>(
+        &desktop,
+        SpacesUpdateParams { logo: Some(SpaceLogo::Icon { icon: "Not Valid".into() }), ..space_update(work.id) },
+    )
+    .await;
+    assert!(bad_icon.contains("Icons are named with lowercase letters, numbers and dashes."), "{bad_icon}");
+    let unknown = rpc_error::<SpacesUpdate>(&desktop, space_update(Uuid::now_v7())).await;
+    assert!(unknown.contains("not found: space"), "{unknown}");
+    // Renaming a space to its own name in another case is allowed.
+    desktop.call::<SpacesUpdate>(SpacesUpdateParams { name: Some("OFFICE".into()), ..space_update(work.id) }).await.unwrap();
+
+    let reordered = desktop.call::<SpacesReorder>(SpacesReorderParams { space_ids: vec![work.id, initial[0].id] }).await.unwrap();
+    assert_eq!(reordered.spaces.iter().map(|s| s.id).collect::<Vec<_>>(), [work.id, initial[0].id]);
+    let partial = rpc_error::<SpacesReorder>(&desktop, SpacesReorderParams { space_ids: vec![work.id] }).await;
+    assert!(partial.contains("List every space exactly once to reorder them."), "{partial}");
+}
+
+#[tokio::test]
+async fn projects_are_added_to_and_moved_between_spaces() {
+    let host = Host::start().await;
+    let client = host.client().await;
+    let personal = client.call::<SpacesList>(Empty {}).await.unwrap().spaces[0].id;
+    let work = client.call::<SpacesCreate>(space_create("Work")).await.unwrap();
+    let folder = |name: &str| {
+        let path = host.root.join(name);
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    };
+
+    let default = client.call::<ProjectsAdd>(add_params(&folder("a"), None)).await.unwrap();
+    assert_eq!(default.space_id, Some(personal), "no space lands in the first one");
+    let placed = client.call::<ProjectsAdd>(add_params(&folder("b"), Some(work.id))).await.unwrap();
+    assert_eq!(placed.space_id, Some(work.id));
+    let unknown = rpc_error::<ProjectsAdd>(&client, add_params(&folder("c"), Some(Uuid::now_v7()))).await;
+    assert!(unknown.contains("not found: space"), "{unknown}");
+    let again = client.call::<ProjectsAdd>(add_params(&folder("b"), Some(personal))).await.unwrap();
+    assert_eq!(again.space_id, Some(work.id), "an existing path is not moved");
+
+    let _ = next_projects_changed(&client).await;
+    let moved = client
+        .call::<ProjectsUpdate>(ProjectsUpdateParams {
+            project_id: default.id,
+            name: None,
+            worktrees_default: None,
+            task_prefix: None,
+            brief_in_all_threads: None,
+            coordinator: None,
+            space_id: Some(work.id),
+        })
+        .await
+        .unwrap();
+    assert_eq!(moved.space_id, Some(work.id));
+    let mut announced = next_projects_changed(&client).await;
+    while announced.projects.iter().find(|p| p.id == default.id).and_then(|p| p.space_id) != Some(work.id) {
+        announced = next_projects_changed(&client).await;
+    }
+
+    let free_chat = rpc_error::<ProjectsUpdate>(
+        &client,
+        ProjectsUpdateParams {
+            project_id: FREE_CHAT_PROJECT_ID,
+            name: None,
+            worktrees_default: None,
+            task_prefix: None,
+            brief_in_all_threads: None,
+            coordinator: None,
+            space_id: Some(work.id),
+        },
+    )
+    .await;
+    assert!(free_chat.contains("Free chat isn't in a space."), "{free_chat}");
+}
+
+#[tokio::test]
+async fn deleting_a_space_moves_its_projects_and_announces_both_lists() {
+    let host = Host::start().await;
+    let client = host.client().await;
+    let personal = client.call::<SpacesList>(Empty {}).await.unwrap().spaces[0].id;
+    let work = client.call::<SpacesCreate>(space_create("Work")).await.unwrap();
+    let folder = host.root.join("w");
+    std::fs::create_dir_all(&folder).unwrap();
+    let project = client.call::<ProjectsAdd>(add_params(&folder, Some(work.id))).await.unwrap();
+
+    let result = client.call::<SpacesDelete>(SpacesDeleteParams { space_id: work.id }).await.unwrap();
+    assert_eq!((result.moved_to, result.moved_projects), (personal, 1));
+    // Both lists arrive in the same tick, in either order.
+    let (mut spaces, mut projects) = (None, None);
+    {
+        let mut notifications = client.notifications.lock().await;
+        while spaces.is_none() || projects.is_none() {
+            let notification =
+                tokio::time::timeout(Duration::from_secs(3), futures::StreamExt::next(&mut *notifications)).await.unwrap().unwrap();
+            if notification.method == SPACES_CHANGED_NOTIFICATION {
+                let changed: SpacesChangedNotification = serde_json::from_value(notification.params).unwrap();
+                spaces = Some(changed).filter(|c| c.spaces.len() == 1);
+            } else if notification.method == PROJECTS_CHANGED_NOTIFICATION {
+                let changed: ProjectsChangedNotification = serde_json::from_value(notification.params).unwrap();
+                projects = Some(changed).filter(|c| c.projects.iter().any(|p| p.id == project.id && p.space_id == Some(personal)));
+            }
+        }
+    }
+    assert_eq!(spaces.unwrap().spaces[0].id, personal);
+    let last = rpc_error::<SpacesDelete>(&client, SpacesDeleteParams { space_id: personal }).await;
+    assert!(last.contains("You can't delete your only space."), "{last}");
+}
+
+#[tokio::test]
+async fn space_logos_are_derived_into_square_assets_and_validated() {
+    let host = Host::start().await;
+    let client = host.client().await;
+    let space = client.call::<SpacesCreate>(space_create("Pictures")).await.unwrap();
+    let asset_count = || std::fs::read_dir(&host.state.paths.assets).map(|d| d.count()).unwrap_or(0);
+
+    let upload = host.asset("logo.png", "image/png", &encoded(image::ImageFormat::Png, 300, 200));
+    let saved = client
+        .call::<SpacesUpdate>(SpacesUpdateParams { logo: Some(SpaceLogo::Image { asset_id: upload }), ..space_update(space.id) })
+        .await
+        .unwrap();
+    let SpaceLogo::Image { asset_id: derived } = saved.logo.clone() else { panic!("expected an image logo, got {:?}", saved.logo) };
+    assert_ne!(derived, upload, "the logo is a new asset");
+    let info = host.state.store.asset_get(derived).unwrap().unwrap();
+    assert_eq!((info.name.as_str(), info.media_type.as_str()), ("space-logo.png", "image/png"));
+    let bytes = std::fs::read(host.state.paths.assets.join(derived.to_string())).unwrap();
+    let decoded = image::load_from_memory(&bytes).unwrap();
+    assert_eq!((decoded.width(), decoded.height()), (128, 128));
+
+    // Saving the stored logo again, or the same edit, derives nothing new.
+    let before = asset_count();
+    let again = client
+        .call::<SpacesUpdate>(SpacesUpdateParams { logo: Some(SpaceLogo::Image { asset_id: derived }), ..space_update(space.id) })
+        .await
+        .unwrap();
+    assert_eq!(again.logo, saved.logo);
+    assert_eq!(asset_count(), before);
+
+    let message = "Space logos must be PNG, JPEG or WebP images up to 2 MB.";
+    let gif = host.asset("logo.gif", "image/gif", &encoded(image::ImageFormat::Gif, 40, 40));
+    let big = host.asset("big.png", "image/png", &vec![0u8; 3 * 1024 * 1024]);
+    let text = host.asset("note.txt", "text/plain", b"not an image");
+    for rejected in [gif, big, text, Uuid::now_v7()] {
+        let error = rpc_error::<SpacesUpdate>(
+            &client,
+            SpacesUpdateParams { logo: Some(SpaceLogo::Image { asset_id: rejected }), ..space_update(space.id) },
+        )
+        .await;
+        assert!(error.contains(message), "{error}");
+    }
+    let unchanged = client.call::<SpacesList>(Empty {}).await.unwrap().spaces.into_iter().find(|s| s.id == space.id).unwrap();
+    assert_eq!(unchanged.logo, saved.logo, "a rejected logo keeps the previous one");
 }

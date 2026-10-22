@@ -6,6 +6,7 @@
 mod notes;
 mod projection;
 mod schema;
+mod spaces;
 mod subagent_messages;
 mod tasks;
 mod thread_history;
@@ -15,12 +16,13 @@ pub use notes::{
     NOTE_BODY_MAX_BYTES, NOTE_RETENTION_DAYS, NOTE_TITLE_MAX_CHARS, NoteError, NoteTarget, checklist as note_checklist,
     preview as note_preview,
 };
+pub use spaces::SpaceError;
 pub use tasks::{
     GLOBAL_TASK_PREFIX, NewTask, TASK_BODY_MAX_BYTES, TASK_RETENTION_DAYS, TASK_TITLE_MAX_CHARS, TaskError, TaskPatch, TaskRunPatch,
     TaskRunUpdate, TaskStatusChange, derive_task_prefix, task_link_lines, task_link_source_line, task_set_line_checked,
 };
 pub use thread_history::{ThreadHistoryMessage, ThreadHistoryReadPage, ThreadHistorySearchPage};
-pub use transcript_page::{transcript_page, transcript_page_ref};
+pub use transcript_page::{WHOLE_TURN_EXTRA_ENTRIES, transcript_page, transcript_page_ref, transcript_page_ref_with};
 
 pub use projection::{
     LARGE_TOOL_OUTPUT_BYTES, TranscriptFold, json_payload_bytes, project_pending_questions, project_provider_usage, project_runtime_tasks,
@@ -426,8 +428,10 @@ impl Store {
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
             tx.execute(
-                "INSERT INTO projects(id, name, path, is_git, worktrees_default, created_at, updated_at, brief_in_all_threads, coordinator)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                "INSERT INTO projects(id, name, path, is_git, worktrees_default, created_at, updated_at, brief_in_all_threads, coordinator, space_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
+                         CASE WHEN ?1 = ?11 THEN NULL
+                              ELSE COALESCE(?10, (SELECT id FROM spaces ORDER BY position, created_at LIMIT 1)) END)",
                 params![
                     p.id.to_string(),
                     p.name,
@@ -437,7 +441,9 @@ impl Store {
                     p.created_at.to_rfc3339(),
                     p.updated_at.to_rfc3339(),
                     p.brief_in_all_threads,
-                    coordinator_json(p)?
+                    coordinator_json(p)?,
+                    p.space_id.map(|id| id.to_string()),
+                    FREE_CHAT_PROJECT_ID.to_string()
                 ],
             )?;
             // Every project gets a task prefix; an explicit one is kept when it is valid and free.
@@ -492,7 +498,7 @@ impl Store {
     pub fn project_get(&self, id: ProjectId) -> Result<Option<Project>> {
         self.with(|c| {
             Ok(c.query_row(
-                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads, coordinator FROM projects WHERE id = ?1",
+                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads, coordinator, space_id FROM projects WHERE id = ?1",
                 [id.to_string()],
                 row_to_project,
             )
@@ -503,7 +509,7 @@ impl Store {
     pub fn project_by_path(&self, path: &str) -> Result<Option<Project>> {
         self.with(|c| {
             Ok(c.query_row(
-                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads, coordinator FROM projects WHERE path = ?1",
+                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads, coordinator, space_id FROM projects WHERE path = ?1",
                 [path],
                 row_to_project,
             )
@@ -514,7 +520,7 @@ impl Store {
     pub fn projects_list(&self) -> Result<Vec<Project>> {
         self.with(|c| {
             let mut st = c.prepare(
-                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads, coordinator
+                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads, coordinator, space_id
                  FROM projects WHERE id != ?1 ORDER BY name",
             )?;
             let rows = st.query_map([FREE_CHAT_PROJECT_ID.to_string()], row_to_project)?;
@@ -1320,20 +1326,41 @@ impl Store {
     /// Fold bounded batches outside the connection lock. A saved long thread
     /// must not block the sidebar's sparse activity reads for its entire replay.
     pub fn project_transcript_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<Vec<TranscriptEntry>> {
+        Ok(self.project_transcript_fold_through(thread_id, through_seq)?.finish())
+    }
+
+    /// The same fold, kept whole to mark tool streams on a page.
+    pub fn project_transcript_fold_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<TranscriptFold> {
+        let mut fold = TranscriptFold::omitting_tool_outputs();
+        self.extend_transcript_fold(thread_id, &mut fold, 0, through_seq)?;
+        Ok(fold)
+    }
+
+    /// Continue a fold that already holds every event through `after` with the
+    /// events in `(after, through_seq]`. Events only append with increasing
+    /// `seq`, so the result equals a fold from the beginning; a live thread's
+    /// moving snapshot then costs its new events, not its whole history.
+    pub fn extend_transcript_fold(
+        &self,
+        thread_id: ThreadId,
+        fold: &mut TranscriptFold,
+        after: EventSeq,
+        through_seq: EventSeq,
+    ) -> Result<()> {
         const BATCH: usize = 128;
         const BATCH_BYTES: usize = 256 * 1024;
-        let mut fold = TranscriptFold::omitting_tool_outputs();
-        let mut after = 0;
+        let mut after = after;
         loop {
             let (events, bytes) = self.with(|c| {
                 // Exclude only known no-op events. Unknown/new kinds still
-                // enter the fold. Keep this aligned with its no-op arm.
+                // enter the fold. Keep this aligned with its no-op arm. Output
+                // deltas stay in: the fold records which invocations streamed.
                 let mut statement = c.prepare_cached(
                     "SELECT seq, thread_id, turn_id, at, kind, payload FROM events
                      WHERE thread_id = ?1 AND seq > ?2 AND seq <= ?3 AND kind NOT IN (
                        'async_questions_requested', 'provider_commands_updated', 'provider_usage_updated',
                        'thread_created', 'thread_updated', 'message_queued', 'message_queue_updated',
-                       'thread_notes_updated', 'message_removed', 'thread_archived', 'tool_call_output_delta', 'checkpoint_updated',
+                       'thread_notes_updated', 'message_removed', 'thread_archived', 'checkpoint_updated',
                        'thread_message_held', 'thread_message_resolved', 'thread_message_updated'
                      ) ORDER BY seq LIMIT ?4",
                 )?;
@@ -1357,86 +1384,9 @@ impl Store {
                 fold.apply(&event);
             }
             if done {
-                return Ok(fold.finish());
+                return Ok(());
             }
         }
-    }
-
-    /// Mark completed tool rows whose exact invocation has persisted output
-    /// deltas. The projection intentionally does not concatenate those deltas;
-    /// clients can request them later through the sequence-bounded tool-output
-    /// RPC. The query uses the tool-start sequence and reused-ID barrier so a
-    /// later invocation cannot make an earlier row appear stream-hydratable.
-    pub fn mark_tool_streams_omitted_through(
-        &self,
-        thread_id: ThreadId,
-        entries: &mut [TranscriptEntry],
-        through_seq: EventSeq,
-    ) -> Result<()> {
-        let requested: std::collections::HashSet<(EventSeq, String)> = entries
-            .iter()
-            .filter_map(|entry| match entry {
-                TranscriptEntry::ToolCall { seq, call, complete: true, .. } => Some((*seq, call.id.clone())),
-                _ => None,
-            })
-            .collect();
-        let requested_ids: std::collections::HashSet<String> = requested.iter().map(|(_, call_id)| call_id.clone()).collect();
-        self.with(|c| {
-            // Scan the two small JSON identity fields once, instead of issuing
-            // one correlated query per transcript row. The active start map
-            // naturally handles provider call-ID reuse as the sequence grows.
-            let mut statement = c.prepare(
-                "SELECT seq, kind,
-                        CASE WHEN kind = 'tool_call_started'
-                             THEN json_extract(payload, '$.call.id')
-                             ELSE json_extract(payload, '$.tool_call_id') END
-                 FROM events
-                 WHERE thread_id = ?1 AND seq <= ?2
-                   AND kind IN ('tool_call_started', 'tool_call_output_delta')
-                 ORDER BY seq",
-            )?;
-            let mut rows = statement.query(params![thread_id.to_string(), through_seq])?;
-            let mut active = std::collections::HashMap::<String, EventSeq>::new();
-            let mut streamed = std::collections::HashSet::<(EventSeq, String)>::new();
-            while let Some(row) = rows.next()? {
-                let seq: EventSeq = row.get(0)?;
-                let kind: String = row.get(1)?;
-                let Some(call_id) = row.get::<_, Option<String>>(2)? else { continue };
-                if kind == "tool_call_started" {
-                    if requested_ids.contains(&call_id) {
-                        active.insert(call_id, seq);
-                    }
-                } else if let Some(start) = active.get(&call_id) {
-                    let key = (*start, call_id);
-                    if requested.contains(&key) {
-                        streamed.insert(key);
-                    }
-                }
-            }
-            // Check completion existence through the expression index instead
-            // of scanning and JSON-parsing every completion payload. A settled
-            // result can be tens of megabytes, while this query only reads the
-            // indexed call ID and row sequence.
-            let mut completion = c.prepare_cached(TOOL_COMPLETION_EXISTS_AT_START_SQL)?;
-            let mut recoverable = std::collections::HashSet::<(EventSeq, String)>::new();
-            for (start, call_id) in streamed {
-                let exists: Option<i64> =
-                    completion.query_row(params![thread_id.to_string(), call_id, start, through_seq], |row| row.get(0)).optional()?;
-                if exists.is_some() {
-                    recoverable.insert((start, call_id));
-                }
-            }
-            for entry in entries {
-                let TranscriptEntry::ToolCall { seq, call, complete: true, stream_omitted, .. } = entry else { continue };
-                let key = (*seq, call.id.clone());
-                // A turn failure can mark an unfinished row complete with a
-                // synthetic null output. It has no durable result to hydrate,
-                // so only advertise a stream when the invocation also has a
-                // persisted completion event.
-                *stream_omitted = recoverable.contains(&key);
-            }
-            Ok(())
-        })
     }
 
     /// Fetch the completion belonging to this exact start, at the requested
@@ -1888,6 +1838,7 @@ fn row_to_project(r: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
             .map(|json| serde_json::from_str(&json))
             .transpose()
             .map_err(|error| rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(error)))?,
+        space_id: r.get::<_, Option<String>>(10)?.map(parse_uuid).transpose()?,
         created_at: parse_time(r.get::<_, String>(5)?)?,
         updated_at: parse_time(r.get::<_, String>(6)?)?,
     })
@@ -1936,21 +1887,6 @@ fn row_to_checkpoint(r: &rusqlite::Row<'_>) -> rusqlite::Result<Checkpoint> {
         provider_turn_end: r.get(6)?,
     })
 }
-
-// Completion lookup uses the existing tool_completion_lookup index. The
-// intervening-start check ranges over the thread's sequence index, and prevents
-// crossing a reused call ID without adding a migration or a second read model.
-const TOOL_COMPLETION_EXISTS_AT_START_SQL: &str = "
-    SELECT 1 FROM events c
-    WHERE c.thread_id = ?1 AND c.kind = 'tool_call_completed'
-      AND json_extract(c.payload, '$.tool_call_id') = ?2
-      AND c.seq > ?3 AND c.seq <= ?4
-      AND EXISTS (SELECT 1 FROM events s WHERE s.seq = ?3 AND s.thread_id = ?1
-                  AND s.kind = 'tool_call_started' AND json_extract(s.payload, '$.call.id') = ?2)
-      AND NOT EXISTS (SELECT 1 FROM events n WHERE n.thread_id = ?1
-                      AND n.seq > ?3 AND n.seq <= c.seq AND n.kind = 'tool_call_started'
-                      AND json_extract(n.payload, '$.call.id') = ?2)
-    LIMIT 1";
 
 const TOOL_OUTPUT_AT_START_SQL: &str = "
     SELECT c.seq, c.payload FROM events c
@@ -2095,6 +2031,14 @@ fn row_to_compact_event_inner(r: &rusqlite::Row<'_>, preserve_omission: bool) ->
     let turn: Option<String> = r.get(2)?;
     let payload = if kind == "tool_call_completed" {
         compact_or_decode_tool_completion(payload, preserve_omission).map_err(other)?
+    } else if kind == "tool_call_output_delta" && !preserve_omission {
+        // The projection keeps which invocation streamed, not what it printed.
+        #[derive(serde::Deserialize)]
+        struct Identity {
+            tool_call_id: String,
+        }
+        let Identity { tool_call_id } = serde_json::from_str(payload).map_err(other)?;
+        EventPayload::ToolCallOutputDelta { tool_call_id, delta: String::new() }
     } else {
         serde_json::from_str(payload).map_err(other)?
     };
@@ -2269,6 +2213,7 @@ mod tests {
             task_prefix: None,
             brief_in_all_threads: false,
             coordinator: None,
+            space_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -2327,6 +2272,7 @@ mod tests {
             task_prefix: None,
             brief_in_all_threads: false,
             coordinator: None,
+            space_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -2399,6 +2345,7 @@ mod tests {
             task_prefix: None,
             brief_in_all_threads: false,
             coordinator: None,
+            space_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -2435,6 +2382,7 @@ mod tests {
             task_prefix: None,
             brief_in_all_threads: false,
             coordinator: None,
+            space_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -2530,6 +2478,7 @@ mod tests {
             task_prefix: None,
             brief_in_all_threads: false,
             coordinator: None,
+            space_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -2642,7 +2591,7 @@ mod tests {
             Some(TranscriptEntry::ToolCall { output: None, output_omitted: true, .. })
         ));
         let mut stream_marked = transcript.clone();
-        store.mark_tool_streams_omitted_through(thread.id, &mut stream_marked, i64::MAX).unwrap();
+        store.project_transcript_fold_through(thread.id, i64::MAX).unwrap().mark_tool_streams_omitted(&mut stream_marked);
         assert!(matches!(
             stream_marked.iter().find(|entry| matches!(entry, TranscriptEntry::ToolCall { .. })),
             Some(TranscriptEntry::ToolCall { stream_omitted: true, .. })
@@ -2654,6 +2603,159 @@ mod tests {
             page.iter().find(|entry| matches!(entry, TranscriptEntry::ToolCall { .. })),
             Some(TranscriptEntry::ToolCall { output: Some(value), output_omitted: false, .. }) if *value == output
         ));
+    }
+}
+
+#[cfg(test)]
+mod older_page_stream_tests {
+    use super::*;
+
+    fn store_with(events: &[(i64, EventPayload)]) -> (Store, ThreadId) {
+        let store = Store::open_in_memory().unwrap();
+        let thread = ThreadId::new_v4();
+        store
+            .with(|c| {
+                c.execute_batch("PRAGMA foreign_keys = OFF")?;
+                for (seq, payload) in events {
+                    c.execute(
+                        "INSERT INTO events(seq,thread_id,turn_id,at,kind,payload) VALUES (?1,?2,?3,'2026-10-22T00:00:00Z',?4,?5)",
+                        params![seq, thread.to_string(), TurnId::nil().to_string(), payload.kind(), serde_json::to_string(payload)?],
+                    )?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        (store, thread)
+    }
+    fn start(id: &str) -> EventPayload {
+        EventPayload::ToolCallStarted {
+            call: ToolCall { id: id.into(), name: "bash".into(), input: serde_json::Value::Null, parent_id: None },
+            origin: EventOrigin::Root,
+        }
+    }
+    fn delta(id: &str) -> EventPayload {
+        EventPayload::ToolCallOutputDelta { tool_call_id: id.into(), delta: "out\n".into() }
+    }
+    fn done(id: &str) -> EventPayload {
+        EventPayload::ToolCallCompleted {
+            tool_call_id: id.into(),
+            output: serde_json::json!("ok"),
+            output_omitted: false,
+            stream_recoverable: false,
+            is_error: false,
+        }
+    }
+    fn marks(store: &Store, thread: ThreadId, through: EventSeq) -> Vec<(EventSeq, String, bool)> {
+        let fold = store.project_transcript_fold_through(thread, through).unwrap();
+        let mut rows = fold.rows().to_vec();
+        fold.mark_tool_streams_omitted(&mut rows);
+        rows.into_iter()
+            .filter_map(|row| match row {
+                TranscriptEntry::ToolCall { seq, call, stream_omitted, .. } => Some((seq, call.id, stream_omitted)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn page_stream_marks_follow_the_exact_invocation_and_snapshot() {
+        let (store, thread) = store_with(&[
+            (1, EventPayload::TurnStarted { message_id: MessageId::nil(), message: UserMessage::text("run") }),
+            (2, start("a")),
+            (3, delta("a")),
+            (4, done("a")),
+            // A provider reuses the call ID; this invocation streamed nothing.
+            (5, start("a")),
+            (6, done("a")),
+            // A stream flushed just after its completion still belongs to it.
+            (7, start("b")),
+            (8, done("b")),
+            (9, delta("b")),
+            (10, start("c")),
+            (11, delta("c")),
+            (12, done("c")),
+        ]);
+        assert_eq!(
+            marks(&store, thread, 12),
+            [(2, "a".into(), true), (5, "a".into(), false), (7, "b".into(), true), (10, "c".into(), true)]
+        );
+        // The snapshot barrier hides the late flush and the newer invocation.
+        assert_eq!(marks(&store, thread, 8), [(2, "a".into(), true), (5, "a".into(), false), (7, "b".into(), false)]);
+    }
+
+    #[test]
+    fn page_stream_marks_do_not_depend_on_the_page_window() {
+        // Tools whose output spans pages, turns and a running snapshot: the
+        // marks come from the fold, so where a page starts or ends changes nothing.
+        let (store, thread) = store_with(&[
+            (1, EventPayload::TurnStarted { message_id: MessageId::nil(), message: UserMessage::text("one") }),
+            (2, start("bg")),
+            (3, start("quiet")),
+            (4, done("quiet")),
+            (
+                5,
+                EventPayload::TurnCompleted {
+                    stop_reason: StopReason::Completed,
+                    usage: Usage::default(),
+                    cost_usd: None,
+                    duration_ms: 1,
+                    terminal_message_id: None,
+                },
+            ),
+            (6, EventPayload::TurnStarted { message_id: MessageId::new_v4(), message: UserMessage::text("two") }),
+            // A background tool started in turn one streams and completes in turn two.
+            (7, delta("bg")),
+            (8, start("run")),
+            (9, delta("run")),
+            (10, done("bg")),
+            // `run` streams but is still running at this head.
+        ]);
+        let all = [(2, "bg".to_string(), true), (3, "quiet".into(), false), (8, "run".into(), false)];
+        assert_eq!(marks(&store, thread, 10), all);
+        // Before its completion, `bg` is not yet recoverable; after, it is, wherever the page starts.
+        assert_eq!(marks(&store, thread, 9)[0], (2, "bg".into(), false));
+        let fold = store.project_transcript_fold_through(thread, 10).unwrap();
+        for lo in 0..fold.rows().len() {
+            for hi in lo..fold.rows().len() {
+                let mut page = fold.rows()[lo..=hi].to_vec();
+                fold.mark_tool_streams_omitted(&mut page);
+                for row in page {
+                    if let TranscriptEntry::ToolCall { seq, stream_omitted, .. } = row {
+                        let expected = all.iter().find(|(s, ..)| *s == seq).unwrap().2;
+                        assert_eq!(stream_omitted, expected, "row {seq} on page {lo}..={hi}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn page_stream_marks_extend_with_the_fold() {
+        // A cached fold extended with newer events equals a fold from scratch.
+        let (store, thread) = store_with(&[
+            (1, EventPayload::TurnStarted { message_id: MessageId::nil(), message: UserMessage::text("run") }),
+            (2, start("a")),
+            (3, delta("a")),
+            (4, start("b")),
+            (5, done("a")),
+            (6, delta("b")),
+            (7, done("b")),
+        ]);
+        for split in 1..7 {
+            let mut fold = TranscriptFold::omitting_tool_outputs();
+            store.extend_transcript_fold(thread, &mut fold, 0, split).unwrap();
+            store.extend_transcript_fold(thread, &mut fold, split, 7).unwrap();
+            let mut rows = fold.rows().to_vec();
+            fold.mark_tool_streams_omitted(&mut rows);
+            let marked: Vec<_> = rows
+                .iter()
+                .filter_map(|row| match row {
+                    TranscriptEntry::ToolCall { call, stream_omitted, .. } => Some((call.id.as_str(), *stream_omitted)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(marked, [("a", true), ("b", true)], "split at {split}");
+        }
     }
 }
 
@@ -2752,36 +2854,13 @@ mod tool_output_allocation_tests {
         // output when its turn fails. Without a durable completion event there
         // is no threads.tool_output result that can hydrate the stream, so the
         // snapshot must leave the persisted stream unmarked.
-        let mut snapshot = store.project_transcript_through(thread, 4).unwrap();
-        store.mark_tool_streams_omitted_through(thread, &mut snapshot, 4).unwrap();
+        let fold = store.project_transcript_fold_through(thread, 4).unwrap();
+        let mut snapshot = fold.rows().to_vec();
+        fold.mark_tool_streams_omitted(&mut snapshot);
         assert!(matches!(
             snapshot.iter().find(|entry| matches!(entry, TranscriptEntry::ToolCall { .. })),
             Some(TranscriptEntry::ToolCall { complete: true, output: Some(serde_json::Value::Null), stream_omitted: false, .. })
         ));
-    }
-
-    #[test]
-    fn completion_guard_uses_the_tool_id_expression_index() {
-        let store = fixture();
-        let plan = store
-            .with(|c| {
-                let mut statement = c.prepare(&format!("EXPLAIN QUERY PLAN {TOOL_COMPLETION_EXISTS_AT_START_SQL}"))?;
-                Ok(statement
-                    .query_map(params![ThreadId::nil().to_string(), "call", 1i64, 2i64], |row| row.get::<_, String>(3))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?)
-            })
-            .unwrap();
-        assert!(plan.iter().any(|detail| detail.contains("tool_completion_lookup")), "query plan: {plan:?}");
-    }
-
-    #[test]
-    fn large_canonical_result_without_stream_does_not_need_completion_scan() {
-        let store = fixture();
-        let thread = ThreadId::nil();
-        complete(&store, thread, "canonical-only", serde_json::json!("x".repeat(2 * 1024 * 1024)), false);
-        let mut rows = vec![entry("canonical-only", true, false)];
-        store.mark_tool_streams_omitted_through(thread, &mut rows, i64::MAX).unwrap();
-        assert!(matches!(rows[0], TranscriptEntry::ToolCall { stream_omitted: false, .. }));
     }
 
     #[test]
@@ -3105,7 +3184,14 @@ mod transcript_scan_allocation_tests {
         for end in 0..=events.len() {
             let expected = project_transcript(&events[..end]);
             let actual = store.project_transcript_through(thread, end as i64).unwrap();
-            assert_eq!(serde_json::to_value(actual).unwrap(), serde_json::to_value(expected).unwrap(), "snapshot={end}");
+            assert_eq!(serde_json::to_value(actual).unwrap(), serde_json::to_value(&expected).unwrap(), "snapshot={end}");
+            // A cached fold extended to a newer head equals a fold from the start.
+            for split in 0..=end {
+                let mut fold = TranscriptFold::omitting_tool_outputs();
+                store.extend_transcript_fold(thread, &mut fold, 0, split as i64).unwrap();
+                store.extend_transcript_fold(thread, &mut fold, split as i64, end as i64).unwrap();
+                assert_eq!(serde_json::to_value(fold.rows()).unwrap(), serde_json::to_value(&expected).unwrap(), "split={split} end={end}");
+            }
         }
         assert!(store.project_transcript_through(ThreadId::new_v4(), i64::MAX).unwrap().is_empty());
         assert_eq!(store.events_for_thread_through(thread, i64::MAX).unwrap().len(), events.len(), "full replay remains untouched");
@@ -3127,6 +3213,7 @@ mod orchestration_tests {
             task_prefix: None,
             brief_in_all_threads: false,
             coordinator: None,
+            space_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -3603,6 +3690,7 @@ mod coordinator_upgrade_tests {
             task_prefix: None,
             brief_in_all_threads: false,
             coordinator: None,
+            space_id: None,
             created_at: now,
             updated_at: now,
         };

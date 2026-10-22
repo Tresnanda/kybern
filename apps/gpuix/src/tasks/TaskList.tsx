@@ -1,4 +1,4 @@
-import { memo, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { memo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { ISLAND } from '../MatrixLoader.tsx'
 import { useGpuixRequired, useWindowSize, type PublicInstance, type StyleDesc } from '@gpuix/react'
 import { useSidebarWidth } from '../shell/layout.ts'
@@ -16,23 +16,32 @@ import { Icon } from '../icons.tsx'
 import { ProjectDot } from '../notes/kit.tsx'
 import { N } from '../nav/glyphs.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { raisedFill, useGlass } from '../platform/glass.ts'
+import type { GlassTokens } from '../theme.ts'
 import { over } from '../theme.ts'
-import { Check, PriorityGlyph, StatusGlyph } from './Glyphs.tsx'
+import { Check, checkHandledClick, pressedCheck, PriorityGlyph, StatusGlyph } from './Glyphs.tsx'
 import { CountPop } from './CountPop.tsx'
-import { CheckSlot } from './CheckSlot.tsx'
 import { QuickAdd } from './QuickAdd.tsx'
 import { MoreMenu } from './TaskMenus.tsx'
 import { openTask, pick, prefs, quickAdd, setTasks, taskState, useTasks } from './store.ts'
 
-/** `.tk-btn add`: a 28px plus at the row's end, shown while the group header is hovered. */
-function AddButton({ testId, onClick, shown }: { testId: string; onClick: () => void; shown: boolean }) {
+/** `.tk-btn add`: a 28px plus at the row's end. A creation affordance, so it is always on screen: muted, full ink under the pointer. */
+function AddButton({ testId, onClick, inset = 0 }: { testId: string; onClick: () => void; inset?: number }) {
   const t = useTheme()
   const [hover, setHover] = useState(false)
   return (
-    <div testId={testId} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onClick={onClick} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 7, cursor: 'pointer', opacity: shown || hover ? 1 : 0, hover: { backgroundColor: ink(t, 0.05) } }}>
+    <div testId={testId} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onClick={onClick} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 7, marginRight: -inset, cursor: 'pointer', hover: { backgroundColor: ink(t, 0.05) } }}>
       <Icon source={N.plus} size={14} color={ink(t, hover ? 1 : 0.6)} />
     </div>
   )
+}
+
+/**
+ * The selection checkbox, always on screen. At rest it is dimmed; the row's hover, focus or selection brings it to full strength.
+ * (The checkbox itself is `Glyphs.tsx`'s `Check`: a muted outline until picked.)
+ */
+function SelectCheck({ lit, children }: { lit: boolean; children: ReactNode }) {
+  return <div style={{ display: 'flex', alignItems: 'center', opacity: lit ? 1 : 0.8 }}>{children}</div>
 }
 
 /** What the group and column counts are counted over: a count that changes with it shows at once instead of popping (`CountPop`). */
@@ -53,7 +62,6 @@ export function TaskList({
   const p = useTasks((s) => s.prefs)
   const quick = useTasks((s) => s.quick)
   const countContext = useCountContext()
-  const [hoverGroup, setHoverGroup] = useState<string | null>(null)
   const shown: TaskGroup[] =
     quick && !groups.some((g) => g.key === quick.groupKey)
       ? [
@@ -79,8 +87,6 @@ export function TaskList({
                   false,
                 )
             }}
-            onMouseEnter={() => setHoverGroup(group.key)}
-            onMouseLeave={() => setHoverGroup((key) => (key === group.key ? null : key))}
             style={{ display: 'flex', flexDirection: 'column', height: index ? 50 : 40 }}
           >
           {/* The header moves with the rows when a drag between groups reflows the list; its region box stays put. */}
@@ -89,7 +95,8 @@ export function TaskList({
             style={{
               display: 'flex',
               alignItems: 'center',
-              paddingLeft: 20,
+              // On the rows' grid past their checkbox slot (8 + 22): the glyph over the priority column, the label over the keys.
+              paddingLeft: 30,
               paddingRight: 20,
               paddingTop: index ? 14 : 4,
               height: index ? 50 : 40,
@@ -112,7 +119,6 @@ export function TaskList({
             </div>
             {(!group.status || group.status === 'inbox' || group.status === 'todo') && (
               <AddButton
-                shown={hoverGroup === group.key}
                 testId={`task-add-${group.key}`}
                 onClick={() =>
                   quickAdd(group.status === 'todo' ? 'todo' : 'inbox', { projectId: group.projectId, priority: group.priority })
@@ -158,12 +164,14 @@ export const TaskRow = memo(function TaskRow({
   card?: boolean
 }) {
   const t = useTheme()
+  const g = useGlass()
   const renderer = useGpuixRequired()
   const dragOpacity = useTaskDragOpacity(task.id)
   const draggable = useTasks((s) => s.prefs.view === 'board' || s.prefs.grouping === 'status')
   const selected = useTasks((s) => s.selected.has(task.id))
   const focused = useTasks((s) => s.focused === task.id)
   const [hover, setHover] = useState(false)
+  const fromCheck = useRef(false) // this press began on the card's checkbox
   const [menuOpen, setMenuOpen] = useState(false)
   const detail = cardDetail(task)
   // tasks.css: selected+hover > selected > focused > hover, each a step brighter; selected+focused adds a 2px ring.
@@ -183,17 +191,25 @@ export const TaskRow = memo(function TaskRow({
           onFocus={() => setTasks({ focused: task.id })}
           onMouseEnter={() => setHover(true)}
           onMouseLeave={(e) => { setHover(false); if (!leftSource(e, renderer)) return; if (draggable) trackTaskDrag(e, true); endPendingDrag() }}
-          onMouseDown={(e) => beginTaskDrag(task.id, e, renderer, sequence, draggable)}
+          onMouseDown={(e) => {
+            fromCheck.current = pressedCheck()
+            if (!fromCheck.current) beginTaskDrag(task.id, e, renderer, sequence, draggable)
+          }}
           onMouseMove={draggable ? (e) => trackTaskDrag(e) : undefined}
           onMouseUp={endTaskDrag}
           onClick={(e) => {
+            if (fromCheck.current) {
+              fromCheck.current = false
+              if (!checkHandledClick()) pick(task.id, sequence, !!e.modifiers?.shift)
+              return
+            }
             if (taskDragConsumesClick()) return
             if (e.modifiers?.cmd || e.modifiers?.ctrl || e.modifiers?.shift) pick(task.id, sequence, !!e.modifiers?.shift)
             else openTask(task.id)
           }}
-          style={{ ...cardSurface(t, raised, focused), opacity: dragOpacity }}
+          style={{ ...cardSurface(t, g, raised, focused), opacity: dragOpacity }}
         >
-          <CardLines task={task} detail={detail} checkShown={hover || selected} check={<Check testId={`task-select-${task.id}`} checked={selected} onClick={() => pick(task.id, sequence)} />} />
+          <CardLines task={task} detail={detail} checkShown={hover || selected} check={<Check testId={`task-select-${task.id}`} checked={selected} onClick={(shift) => pick(task.id, sequence, shift)} />} />
         </div>
       </div>
       </ShiftRow>
@@ -219,7 +235,7 @@ export const TaskRow = memo(function TaskRow({
           minHeight: card ? 114 : 40,
           width: '100%',
           height: 40,
-          paddingLeft: card ? 12 : 20,
+          paddingLeft: card ? 12 : 8,
           paddingRight: card ? 12 : 20,
           paddingTop: card ? 8 : 0,
           paddingBottom: card ? 8 : 0,
@@ -231,6 +247,8 @@ export const TaskRow = memo(function TaskRow({
         }}
       >
         {selected && focused && <div style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, borderWidth: 2, borderColor: ink(t, 0.14), borderRadius: card ? 8 : 0, pointerEvents: 'none' }} />}
+        {/* The checkbox is always on screen, in its own 22px slot at the row's start. */}
+        <div style={{ width: 22, flexShrink: 0 }}><SelectCheck lit={hover || focused || selected}><Check testId={`task-select-${task.id}`} checked={selected} onClick={(shift) => pick(task.id, sequence, shift)} /></SelectCheck></div>
         <div onClick={() => openTask(task.id)} style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
           <div style={{ width: 28, pointerEvents: 'none', userSelect: 'none' }}>
             <PriorityGlyph priority={task.priority} />
@@ -245,12 +263,7 @@ export const TaskRow = memo(function TaskRow({
           </Label>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', flexGrow: 1, minWidth: 0 }}>
-          {/* The status glyph and the checkbox share one 26x30 slot and cross-fade over 80 ms on hover and selection. */}
-          <CheckSlot
-            show={hover || selected}
-            base={<div onClick={() => pick(task.id, sequence)} style={{ display: 'flex', width: 26, height: 30, alignItems: 'center' }}><StatusGlyph status={task.status} /></div>}
-            over={<Check testId={`task-select-${task.id}`} checked={selected} onClick={() => pick(task.id, sequence)} />}
-          />
+          <div onClick={(e) => pick(task.id, sequence, !!e.modifiers?.shift)} style={{ display: 'flex', width: 26, height: 30, alignItems: 'center' }}><StatusGlyph status={task.status} /></div>
           <div
             testId={`task-drag-${task.id}`}
             onMouseDown={(e) => beginTaskDrag(task.id, e, renderer, sequence, draggable)}
@@ -318,13 +331,15 @@ function cardDetail(task: TaskItem) {
   return run && (task.status === 'running' || task.status === 'needs_review') ? run.activity || runOutcome(run, Date.now()) : ''
 }
 /** `.tk-card` at rest, raised (hover, focus, selection) and focused. */
-function cardSurface(t: ReturnType<typeof useTheme>, raised: boolean, focused: boolean): StyleDesc {
+function cardSurface(t: ReturnType<typeof useTheme>, g: GlassTokens, raised: boolean, focused: boolean): StyleDesc {
   const dark = t.variant === 'dark'
   const base = dark ? over(ink(t, 0.03), t.surface) : t.surface
-  const fill = dark ? (raised ? over(ink(t, 0.055), t.surface) : base) : base
+  const fill = raisedFill(g, dark ? (raised ? over(ink(t, 0.055), t.surface) : base) : base, raised)
+  // Whole-window glass: a raised card with a hairline rim and no shadow (a shadow under a translucent fill would darken it).
+  if (g.on) return { position: 'relative', display: 'flex', flexDirection: 'column', flexShrink: 0, paddingTop: 10, paddingBottom: 11, paddingLeft: 11, paddingRight: 11, borderRadius: 10, backgroundColor: fill, userSelect: 'none', borderWidth: 1, borderColor: g.rim, ...(focused ? { borderWidth: 1.5, borderColor: ink(t, 0.14) } : {}) }
   return { position: 'relative', display: 'flex', flexDirection: 'column', flexShrink: 0, paddingTop: 11, paddingBottom: 12, paddingLeft: 12, paddingRight: 12, borderRadius: 10, backgroundColor: fill, userSelect: 'none', boxShadow: dark ? { offsetX: 0, offsetY: raised ? 6 : 1, blurRadius: raised ? 18 : 2, spreadRadius: raised ? -6 : 0, color: raised ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.25)' } : { offsetX: 0, offsetY: raised ? 4 : 1, blurRadius: raised ? 14 : 2, spreadRadius: raised ? -4 : 0, color: raised ? 'rgba(0, 0, 0, 0.12)' : 'rgba(0, 0, 0, 0.05)' }, borderWidth: dark ? 0 : 0.5, borderColor: 'rgba(0, 0, 0, 0.09)', ...(focused ? { borderWidth: 1.5, borderColor: ink(t, 0.14) } : {}) }
 }
-/** The card's key row, title and run line; `check` cross-fades with the priority glyph (the hover checkbox). */
+/** The card's key row, title and run line; `check` is the selection checkbox, always shown after the priority glyph. */
 function CardLines({ task, detail, check, checkShown = false }: { task: TaskItem; detail: string; check?: ReactNode; checkShown?: boolean }) {
   const t = useTheme()
   return <>
@@ -332,7 +347,8 @@ function CardLines({ task, detail, check, checkShown = false }: { task: TaskItem
       <ProjectDot projectId={task.scope === 'project' ? task.project_id ?? null : null} />
       <Label color={t.textTertiary} size={12} lineHeight={16} style={{ pointerEvents: 'none', userSelect: 'none' }}>{task.key}</Label>
       <div style={{ flexGrow: 1 }} />
-      {check ? <CheckSlot show={checkShown} width={26} height={16} align="end" base={task.priority !== 0 ? <PriorityGlyph priority={task.priority} /> : undefined} over={check} /> : task.priority !== 0 && <PriorityGlyph priority={task.priority} />}
+      {task.priority !== 0 && <PriorityGlyph priority={task.priority} />}
+      {check && <div style={{ display: 'flex', width: 26, height: 16, alignItems: 'center', justifyContent: 'flex-end', flexShrink: 0 }}><SelectCheck lit={checkShown}>{check}</SelectCheck></div>}
     </div>
     <div testId={`task-drag-${task.id}`} style={{ display: 'flex', flexDirection: 'column', marginTop: 6, flexShrink: 0, width: '100%', pointerEvents: 'none' }}>
       <Label color={isOpenStatus(task.status) ? t.text : t.textSecondary} size={13} lineHeight={18} style={{ width: '100%', pointerEvents: 'none', userSelect: 'none' }}>{task.title || 'Untitled'}</Label>
@@ -346,6 +362,7 @@ function CardLines({ task, detail, check, checkShown = false }: { task: TaskItem
  * there. It appears in place and slides between slots of this column like a sorted card. */
 function TaskDropPlaceholder({ status }: { status: TaskStatus }) {
   const t = useTheme()
+  const g = useGlass()
   const renderer = useGpuixRequired()
   const held = useSyncExternalStore(taskPlaceholder.subscribe, taskPlaceholder.get)
   const [node, setNode] = useState<PublicInstance | null>(null)
@@ -358,7 +375,7 @@ function TaskDropPlaceholder({ status }: { status: TaskStatus }) {
         <PaintTranslate key={shown.entry} initial={{ translateX: 0, translateY: shown.slot.y - origin.y }} animate={{ translateX: 0, translateY: shown.slot.y - origin.y }}
           transition={REDUCED_MOTION ? { duration: 0 } : TASK_SORT_MOTION}
           style={{ position: 'absolute', left: shown.slot.x - origin.x, top: 0, width: shown.slot.width, height: shown.slot.height, pointerEvents: 'none' }}>
-          <div testId="task-drop-placeholder" style={{ ...cardSurface(t, false, false), width: '100%', height: '100%', opacity: 0.35, pointerEvents: 'none' }}>
+          <div testId="task-drop-placeholder" style={{ ...cardSurface(t, g, false, false), width: '100%', height: '100%', opacity: 0.35, pointerEvents: 'none' }}>
             <CardLines task={task} detail={cardDetail(task)} />
           </div>
         </PaintTranslate>
@@ -381,7 +398,6 @@ export function TaskBoard({
   const sidebar = useSidebarWidth()
   const quick = useTasks((s) => s.quick)
   const countContext = useCountContext()
-  const [hoverColumn, setHoverColumn] = useState<string | null>(null)
   // `.tk-col`: equal columns of at least 196px between 16px gutters, 12px apart.
   const available = size.width - 52 - sidebar - 8 - 32
   const columnWidth = Math.max(196, (available - 12 * (columns.length - 1)) / columns.length)
@@ -395,8 +411,6 @@ export function TaskBoard({
         <div
           key={column.status}
           testId={`task-column-${column.status}`}
-          onMouseEnter={() => setHoverColumn(column.status)}
-          onMouseLeave={() => setHoverColumn((s) => (s === column.status ? null : s))}
           ref={(node) =>
             regionRef(
               `board:${column.status}`,
@@ -416,9 +430,7 @@ export function TaskBoard({
             <CountPop value={column.tasks.length} context={countContext} color={t.textTertiary} size={13} lineHeight={19.5} />
             <div style={{ flexGrow: 1 }} />
             {(column.status === 'inbox' || column.status === 'todo') && (
-              <div testId={`task-board-add-${column.status}`} onClick={() => quickAdd(column.status as 'inbox' | 'todo')} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 7, marginRight: -4, opacity: hoverColumn === column.status ? 1 : 0, cursor: 'pointer', hover: { backgroundColor: ink(t, 0.05) } }}>
-                <Icon source={N.plus} size={14} color={ink(t, 0.6)} />
-              </div>
+              <AddButton testId={`task-board-add-${column.status}`} onClick={() => quickAdd(column.status as 'inbox' | 'todo')} inset={4} />
             )}
           </div>
           <div style={{ height: 4, flexShrink: 0 }} />

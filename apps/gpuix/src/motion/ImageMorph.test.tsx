@@ -82,8 +82,11 @@ test('a pointer open morphs from the thumbnail and a pointer close returns into 
   const outer = h.props('viewer-image').paintTransform, inner = [...h.custom.values()].find(p => p.paintTransform?.animate?.clipRadius !== undefined)!.paintTransform
   expect(outer).toMatchObject({ initial: start.outer, animate: LANDED.outer, transition: MORPH_OPEN })
   expect(inner).toMatchObject({ initial: start.inner, animate: LANDED.inner, transition: MORPH_OPEN })
-  // The toolbar arrives as the image lands.
-  expect(h.props('viewer-bar').paintTransform.transition.delay).toBeCloseTo(MORPH_OPEN.duration * 0.7)
+  // The scrim and the toolbar share the image's timing; the timing is the iOS zoom curve at 260 ms open, 200 ms back.
+  expect(h.props('viewer-bar').paintTransform.transition).toEqual(MORPH_OPEN)
+  expect(h.props('viewer-scrim').paintTransform.transition).toEqual(MORPH_OPEN)
+  expect(MORPH_OPEN).toEqual({ duration: 0.26, ease: [0.32, 0.72, 0, 1] })
+  expect(MORPH_CLOSE).toEqual({ duration: 0.2, ease: [0.32, 0.72, 0, 1] })
   // The thumbnail moved while the preview was open; the close lands on its new rect, retargeting from the value on screen.
   now = { ...from, rect: { ...from.rect, y: 500 } }
   h.fire('viewer-scrim', { eventType: 'click' })
@@ -91,6 +94,8 @@ test('a pointer open morphs from the thumbnail and a pointer close returns into 
   const closing = h.props('viewer-image').paintTransform
   expect(closing).toMatchObject({ initial: false, animate: back.outer, transition: MORPH_CLOSE })
   expect(closed).toEqual([])
+  expect(h.props('viewer-bar').paintTransform.transition).toEqual(MORPH_CLOSE)
+  expect(h.props('viewer-scrim').paintTransform.transition).toEqual(MORPH_CLOSE)
   h.fire('viewer-image', { eventType: 'motionComplete', motionGeneration: closing.generation })
   expect(closed).toEqual(['closed'])
   h.root.unmount()

@@ -13,6 +13,8 @@ import {
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { getNav, setNav } from '../nav/store.ts'
 import { Menu, MenuItem, MenuSeparator } from '../nav/overlay.tsx'
+import { useCurrentSpaceId, useSpaceProjects } from '../spaces/current.ts'
+import { inSpace } from '../../../../packages/kybern-client/src/spaces.ts'
 import { useApp } from '../state.ts'
 import { Button, Segmented, selectOwnsEscape } from '../settings/controls.tsx'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
@@ -27,6 +29,7 @@ import { TaskMenus } from './TaskMenus.tsx'
 import { RunComposer } from './RunComposer.tsx'
 import {
   deleteTasks,
+  dockEscapedJustNow,
   isTaskTyping,
   taskTyping,
   openTask,
@@ -42,8 +45,11 @@ import {
 export function TasksPage() {
   const t = useTheme()
   const s = useTasks((s) => s)
-  const projects = useApp((s) => s.projects)
-  const all = useMemo(() => Object.values(s.tasks), [s.tasks])
+  const everyProject = useApp((s) => s.projects)
+  const projects = useSpaceProjects()
+  const spaceId = useCurrentSpaceId()
+  // Tasks of other spaces' projects stay out; global tasks show everywhere.
+  const all = useMemo(() => Object.values(s.tasks).filter((task) => inSpace(task.project_id, everyProject, spaceId)), [s.tasks, everyProject, spaceId])
   const visible = useMemo(
     () =>
       searchTasks(
@@ -139,6 +145,7 @@ export function TasksPage() {
           return true
         }
         if (key === 'escape') {
+          if (dockEscapedJustNow()) return true
           instant()
           if (s.openId) openTask(null)
           else if (s.selected.size) setTasks({ selected: new Set() })
@@ -233,7 +240,8 @@ export function TasksPage() {
           {s.prefs.showHints && <Hints selecting={selected.length > 0} />}
         </>
       )}
-      <RunDock show={!!s.composer}>{s.composer ? <RunComposer key={s.composer.join(',')} ids={s.composer} /> : null}</RunDock>
+      {/* An open task hosts its own dock (`TaskDock`); the list and board show the batch composer here. */}
+      <RunDock show={!!s.composer && !(task && s.composer.length === 1 && s.composer[0] === task.id)}>{s.composer ? <RunComposer key={s.composer.join(',')} ids={s.composer} /> : null}</RunDock>
     </div>
   )
 }

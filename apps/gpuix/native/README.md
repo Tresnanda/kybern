@@ -1532,6 +1532,63 @@ pair selects the legacy or weighted entry point; only that pair is instantiated.
 upload. This prevents the control and optimized path from sharing a shader with
 both loops. Nonfinite/invalid kernels select the legacy entry point on CPU.
 
+## Translucency round 2: scratch pool, half-resolution blur, edge fades (N1–N3)
+
+Spec: `docs/specs/gpuix-translucency-r2.md` §4.1, §7. macOS/Metal only.
+
+**N1 scratch pool** (`backdrop_renderer.rs`). One blur scratch texture per
+renderer, sized in 64 px buckets and grown as the union of requests. Each
+presented frame calls `BackdropResources::begin_frame`: a frame without a
+backdrop marks the scratch `MTLPurgeableState::Volatile` (it leaves the process
+footprint at once and is reused if a backdrop returns; a purged one is
+re-created), and 30 presented frames without a backdrop release it. When the
+largest request over the last 120 frames is under half its area (and it has
+lived 120 frames) it is re-created at the bucketed size of that window. The old
+behaviour dropped it on the first backdrop-free frame and never shrank it.
+
+**N2 half resolution** (`backdrop_kernel.rs` `BackdropKernel::half`,
+`backdrop_kernel_gpui.py`). Device sigma > 8 with the weighted kernel enabled:
+the horizontal pass writes a half-size scratch (each texel a linear sample at the
+centre of a 2×2 target block, tap offsets doubled), the vertical pass reads it
+bilinearly in half-size units and writes full resolution with the same rounded
+clip, fade, saturation and opacity. Kernels are dense Gaussians at sigma/2 out
+to 3 sigma, cut at 48 texels (≤ 2.4 sigma cut, sigma/2 ≤ 20): the vertical pass
+folds pairs into ≤ 49 linear reads; the horizontal pass uses unfolded integer
+taps while they fit (sigma/2 ≤ 8) because a linear read between two half texels
+of the full-size target is not their mix, and folds above that. Wider blurs keep
+the 49 sparse positions on the half grid. `KYBERN_BACKDROP_HALFRES=0` restores
+full resolution; `KYBERN_BACKDROP_KERNEL=0` (legacy control) never halves;
+sigma ≤ 8 (stream-word fades) is unchanged. Deviation from the spec: the gate
+compares with an exact CPU Gaussian, not with the full-resolution path, whose 49
+taps sit 4 device px apart at blur 16 and alias on text (4.1/255 mean, 13 max
+from the exact blur; half resolution 0.5 mean, 3 max).
+
+**N3 `edgeFade`** (`edge_fade.rs`, `rounded_clip.rs`, `rounded_clip_gpui.py`,
+`backdrop.metal`). `edgeFade={{top, right, bottom, left, insetTop, insetBottom}}`
+(logical px) on any element multiplies the alpha of everything the element and
+its subtree paint by r², r = clamp(distance to the edge / ramp, 0, 1), minimum
+over the faded edges; an inset moves that edge inward and cuts beyond it. It is a
+link in the rounded clip chain (`RoundedClip::kind` 1, ramps in `radii`, 40-byte
+node): `rounded_clip_alpha` and the backdrop walk multiply the ramp, so nested
+fades multiply; no pass, target or per-primitive change. Its content-mask
+rectangle is unbounded, so it never clips and survives retained translation
+(`subtree_geometry.rs`, `subtree_transform_window.rs` re-intern it with its kind,
+transforms scale the ramps). Hit testing, native-surface shapes and automation
+shapes skip it. GPU clip pruning and compositor loops treat a fade as satisfied
+only where it is exactly 1 (`edge_fade_interior`). The prop is forwarded by
+`src/native/local-build.ts` (adds `edgeFade` to `UNIVERSAL_PROPS` when the addon
+reports it; the pinned JS patch predates it) and reported by the addon export
+`kybernCapabilities() → {edgeFade: true}` (`EDGE_FADE`). Idea after ZUI's
+`EdgeFade` (a Zed fork, Apache-2.0/GPL); re-implemented here, no code copied.
+
+Checks (`NAPI_RS_NATIVE_LIBRARY_PATH` must name this build when the shell sets it):
+
+```
+bun perf/backdrop/halfres-check.ts   # N2 vs exact Gaussian; sigma ≤ 8 identical
+bun perf/backdrop/scratch-check.ts   # N1 footprint within 2 MiB after 1 s, release, shrink
+bun native/edge-fade-check.ts        # N3 alpha ramps, nesting, insets, scroll, retained translation
+```
+
 ## Code-close allocation release (hands-on round 5)
 
 `code_alloc.rs`, included by the appended `code_memory_hooks.py`, extends the

@@ -3,6 +3,8 @@ import { chooseTab, setDock } from '../dock/store.ts'
 import { getFileIconName } from '../../../desktop/src/lib/kit/fileIcons.ts'
 import { diffFileIcons } from '../native/diff-file-icons.ts'
 import { desktopDiffTheme } from '../native/diff.ts'
+import { GlassEdge } from '../kit/GlassEdge.tsx'
+import { raisedRim, useGlass } from '../platform/glass.ts'
 import { VisualCard } from './Visual.tsx'
 import { agentItemTool, agentItemWriteResult, parseAgentItemResult, placeItemCards } from '../../../desktop/src/lib/agentItemTools.ts'
 import { AgentItemCard } from '../coordinator/AgentItem.tsx'
@@ -291,6 +293,7 @@ function DiffStat({ additions, deletions }: { additions: number; deletions: numb
  *  their patch in a native `<diff>`. */
 function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; threadId: ThreadId; turnId: string; canUndo: boolean }) {
   const t = useTheme()
+  const g = useGlass()
   const [expanded, setExpanded] = useRowState(`files:${turnId}`, true)
   const [showAll, setShowAll] = useRowState(`files-all:${turnId}`, false)
   const [reverting, setReverting] = useState(false)
@@ -311,7 +314,8 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
     }
   }
   return (
-    <div testId="edited-files" style={{ display: 'flex', flexDirection: 'column', marginTop: 8, marginBottom: 4, borderRadius: radius, overflow: 'hidden', borderWidth: 1, borderColor: border }}>
+    <div testId="edited-files" style={{ position: 'relative', display: 'flex', flexDirection: 'column', marginTop: 8, marginBottom: 4, borderRadius: radius, overflow: 'hidden', borderWidth: 1, borderColor: raisedRim(g, border), backgroundColor: g.on ? g.raised : undefined }}>
+      <GlassEdge radius={radius} color={g.highlight} />
       <div
         style={{
           display: 'flex',
@@ -322,12 +326,12 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
           paddingRight: 12,
           paddingTop: 6,
           paddingBottom: 6,
-          backgroundColor: over(alpha(t.codeSurface, 0.4), t.surface),
+          backgroundColor: g.on ? g.band : over(alpha(t.codeSurface, 0.4), t.surface),
           borderTopLeftRadius: radius - 1,
           borderTopRightRadius: radius - 1,
           borderBottomLeftRadius: expanded ? 0 : radius - 1,
           borderBottomRightRadius: expanded ? 0 : radius - 1,
-          ...(expanded ? { borderBottomWidth: 1, borderColor: border } : {}),
+          ...(expanded ? { borderBottomWidth: 1, borderColor: raisedRim(g, border) } : {}),
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
@@ -380,6 +384,7 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
 
 function EditedFileRow({ file, threadId, turnId, first, border }: { file: Diff['files'][number]; threadId: ThreadId; turnId: string; first?: boolean; border: string }) {
   const t = useTheme()
+  const g = useGlass()
   const [open, setOpen] = useRowState(`file:${turnId}:${file.path}`, false)
   // The patch is cached outside the row: the virtual list and the card's
   // disclosure both remount rows, and an open row must not come back empty.
@@ -426,7 +431,7 @@ function EditedFileRow({ file, threadId, turnId, first, border }: { file: Diff['
         <div testId={`edited-review-${file.path}`} role="button" aria-label={`Open ${file.path} in the diff panel`} onClick={() => { chooseTab(threadId, 'changes'); setDock(threadId, { open: true }) }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 6, flexShrink: 0, hover: { backgroundColor: t.buttonSecondaryHover } }}><Icon source={T.panelRight} size={14} color={muted(t, 0.6)} /></div>
       </div>
       <Collapse open={open && ready}>
-        <div style={{ display: 'flex', flexDirection: 'column', borderTopWidth: 1, borderColor: border, backgroundColor: t.v('--background') }}>
+        <div style={{ display: 'flex', flexDirection: 'column', borderTopWidth: 1, borderColor: raisedRim(g, border), backgroundColor: g.on ? 'rgba(0, 0, 0, 0)' : t.v('--background') }}>
           {file.binary ? (
             <Para color={muted(t, 0.75)} size={11} style={{ paddingLeft: 12, paddingTop: 8, paddingBottom: 8 }}>Binary file</Para>
           ) : state === 'loading' ? (
@@ -438,7 +443,7 @@ function EditedFileRow({ file, threadId, turnId, first, border }: { file: Diff['
           ) : patch ? (
             <>
               <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
-                <diff patch={patch.text} scroll={file.additions + file.deletions > 200} theme={desktopDiffTheme(t, false)} style={{ userSelect: 'text', minWidth: 0, ...(file.additions + file.deletions > 200 ? { height: 360 } : {}) }} />
+                <diff patch={patch.text} scroll={file.additions + file.deletions > 200} theme={desktopDiffTheme(t, false, 13, { glass: g.on })} style={{ userSelect: 'text', minWidth: 0, ...(file.additions + file.deletions > 200 ? { height: 360 } : {}) }} />
               </div>
               {patch.truncated && <Para color={muted(t, 0.75)} size={11} style={{ paddingLeft: 12, paddingTop: 6, paddingBottom: 8 }}>The patch was truncated.</Para>}
             </>

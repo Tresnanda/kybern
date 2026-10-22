@@ -1,3 +1,4 @@
+// Folded-kernel exactness at full resolution; the N2 half-resolution path has its own check (halfres-check.ts).
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import {mkdirSync,writeFileSync} from 'node:fs'
@@ -11,7 +12,7 @@ try{
   const files:Record<string,string[]>={}
   for(const kernel of ['0','1']){
    requireScreen()
-   const f=await launchFixture(path.resolve(import.meta.dir,'kernel-lab.tsx'),{KYBERN_DATA_DIR:'/Users/mymac/projects/ade-gpuix-scratch/perf-backdrop-kernel',KYBERN_CLIENT_CONFIG_DIR:'/Users/mymac/projects/ade-gpuix-scratch/perf-backdrop-kernel/client',KYBERN_URL:'',KYBERN_TOKEN:'',GPUIX_BACKGROUND:'1',KYBERN_FULL_RATE:'1',KYBERN_APPEARANCE:theme,KYBERN_BACKDROP_KERNEL:kernel,KYBERN_OPAQUE:mode==='opaque'?'1':'0',KYBERN_REDUCED_TRANSPARENCY:mode==='reduced-transparency'?'1':'0',KYBERN_INCREASED_CONTRAST:mode==='increased-contrast'?'1':'0'})
+   const f=await launchFixture(path.resolve(import.meta.dir,'kernel-lab.tsx'),{KYBERN_DATA_DIR:'/Users/mymac/projects/ade-gpuix-scratch/perf-backdrop-kernel',KYBERN_CLIENT_CONFIG_DIR:'/Users/mymac/projects/ade-gpuix-scratch/perf-backdrop-kernel/client',KYBERN_URL:'',KYBERN_TOKEN:'',GPUIX_BACKGROUND:'1',KYBERN_FULL_RATE:'1',KYBERN_APPEARANCE:theme,KYBERN_BACKDROP_KERNEL:kernel,KYBERN_BACKDROP_HALFRES:'0',KYBERN_OPAQUE:mode==='opaque'?'1':'0',KYBERN_REDUCED_TRANSPARENCY:mode==='reduced-transparency'?'1':'0',KYBERN_INCREASED_CONTRAST:mode==='increased-contrast'?'1':'0'})
    files[kernel]=[]
    try{
     await f.app.getByTestId('app-ready').waitFor();await Bun.sleep(400)

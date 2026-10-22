@@ -6,6 +6,7 @@ import type { ProviderInstance, SavedSession, Thread, ThreadId } from '../../../
 import { getClient, getState, refreshLists, selectDraft, selectThread, set } from '../state.ts'
 import { markArchived } from './live.ts'
 import { getNav, setNav } from './store.ts'
+import { addProjectToCurrentSpace } from '../spaces/add.ts'
 
 function rpc() {
   const client = getClient()
@@ -106,10 +107,7 @@ export async function resumeSession(session: SavedSession, projectId: string | n
 
 /** Add a project folder (`addProject`) and open its draft. */
 export async function addProject(folder: string) {
-  const project = await rpc().call('projects.add', { path: folder })
-  await refreshLists()
-  setNav({ page: 'home' })
-  selectDraft(project.id)
+  await addProjectToCurrentSpace(folder)
 }
 
 export async function removeProject(projectId: string) {

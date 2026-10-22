@@ -11,6 +11,10 @@ geometry)
   bun native/capability-check.ts
   bun native/decoration-check.ts
   bun native/rounded-check.ts
+  # Edge fades (patches/edge_fade.rs, N3): alpha ramps, nesting, insets, scroll and retained translation.
+  bun native/edge-fade-check.ts
+  # Half-resolution wide backdrops (N2) against an exact Gaussian.
+  bun perf/backdrop/halfres-check.ts
   bun native/subtree-translation-check.ts
   KYBERN_REGION_PAINT=1 bun native/subtree-translation-check.ts
   bun native/subtree-transform-check.ts

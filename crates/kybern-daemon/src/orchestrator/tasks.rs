@@ -1270,7 +1270,7 @@ mod tests {
             let store = Store::open_in_memory().unwrap();
             let (events_tx, _) = crate::bounded_broadcast::channel(64, 8 * 1024 * 1024);
             let orchestrator = Orchestrator::new(store.clone(), DriverRegistry::default(), events_tx, paths, settings);
-            let project = orchestrator.add_project(workspace.to_string_lossy().into_owned(), Some("ade".into())).unwrap();
+            let project = orchestrator.add_project(workspace.to_string_lossy().into_owned(), Some("ade".into()), None).unwrap();
             let changes = orchestrator.subscribe_tasks();
             Self { root, store, orchestrator, project, changes }
         }
@@ -2444,7 +2444,7 @@ mod tests {
         let fixture = Fixture::new();
         let other_dir = fixture.root.join("other");
         std::fs::create_dir_all(&other_dir).unwrap();
-        let other = fixture.orchestrator.add_project(other_dir.to_string_lossy().into_owned(), Some("other".into())).unwrap();
+        let other = fixture.orchestrator.add_project(other_dir.to_string_lossy().into_owned(), Some("other".into()), None).unwrap();
         let a = fixture.task("Mine");
         let b = fixture
             .orchestrator

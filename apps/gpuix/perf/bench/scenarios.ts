@@ -62,6 +62,8 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
   return rows
  }
  const startup=name.startsWith('startup-'),pr=name.startsWith('pr-'),proxy=pr?actionFixture({long:true}):null
+ // `streaming-away` scrolls the view 800 px up from the tail (scroll pill and fades on); `streaming-menu` holds the model picker open (frosted menu over the stream).
+ const streams=name==='streaming'||name==='streaming-away'||name==='streaming-menu'
  const results:Result[]=[]
  let launch:Launch|undefined
  const unregister=onExit(async()=>{await launch?.close();proxy?.close()})
@@ -108,7 +110,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
   telemetry=new Telemetry()
   requireScreen()
   const at=performance.now()
-  launch=await launchFixture(process.env.KYBERN_BENCH_APP_ENTRY??path.join(import.meta.dir,'app.ts'),{...fixture.env,...proxy?.env,KYBERN_BENCH_WHEEL_LIBRARY:path.join(fixture.data,'bench-wheel.dylib'),KYBERN_CLIENT_CONFIG_DIR:client,KYBERN_GPUIX_CREDENTIALS_DIR:path.join(client,'credentials'),KYBERN_GPUIX_THREAD:'',KYBERN_GPUIX_ENVIRONMENT:'local',KYBERN_PACING_BASELINE:'0',KYBERN_PACING_RUNNING_ENTRY:'0',GPUIX_BACKGROUND:'1',KYBERN_APPEARANCE:'dark',KYBERN_REDUCED_MOTION:'0',KYBERN_FULL_RATE:process.env.KYBERN_FULL_RATE??'1',KYBERN_FRAME_TIMES:'1',KYBERN_FRAME_COSTS:'1',KYBERN_PACING_IGNORE_PHYSICAL_MOUSE:'1',KYBERN_PACING_PARENT_LEASE:path.resolve(root,'../..')},{stderr:telemetry.stderr})
+  launch=await launchFixture(process.env.KYBERN_BENCH_APP_ENTRY??path.join(import.meta.dir,'app.ts'),{...fixture.env,...proxy?.env,KYBERN_BENCH_WHEEL_LIBRARY:path.join(fixture.data,'bench-wheel.dylib'),KYBERN_CLIENT_CONFIG_DIR:client,KYBERN_GPUIX_CREDENTIALS_DIR:path.join(client,'credentials'),KYBERN_GPUIX_THREAD:'',KYBERN_GPUIX_ENVIRONMENT:'local',KYBERN_PACING_BASELINE:'0',KYBERN_PACING_RUNNING_ENTRY:'0',GPUIX_BACKGROUND:'1',KYBERN_APPEARANCE:process.env.KYBERN_APPEARANCE==='light'?'light':'dark',...Object.fromEntries(['KYBERN_WINDOW_MATERIAL','KYBERN_WINDOW_OPACITY','KYBERN_WINDOW_BLUR'].flatMap(k=>process.env[k]?[[k,process.env[k]!]]:[])),KYBERN_REDUCED_MOTION:'0',KYBERN_FULL_RATE:process.env.KYBERN_FULL_RATE??'1',KYBERN_FRAME_TIMES:'1',KYBERN_FRAME_COSTS:'1',KYBERN_PACING_IGNORE_PHYSICAL_MOUSE:'1',KYBERN_PACING_PARENT_LEASE:path.resolve(root,'../..')},{stderr:telemetry.stderr})
   await bounds(launch.app,'app-ready')
   const placement=startup?checkWindowOnscreenAsync(launch.pid).then(()=>null,error=>({error})):null
   if(!startup)await waitForWindowOnscreen(launch.pid)
@@ -152,8 +154,8 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
    const b=await bounds(app,name==='pr-changes'?'pr-native-diff':'page-pulls');point={x:name==='pr-changes'?b.x+b.width/2:b.x+352+(b.width-352)/2,y:b.y+b.height/2};return
   }
   if(name==='idle-home'||name==='sidebar-scroll'){await control('home');if(name==='sidebar-scroll')point={x:180,y:430};return}
-  await control('open',{thread:name==='streaming'?(process.env.KYBERN_BENCH_STREAM_HISTORY==='1'?fixture.manifest.long1000:fixture.manifest.running):fixture.manifest.long3000})
-  if((name==='streaming'&&process.env.KYBERN_BENCH_STREAM_HISTORY==='1')||(name==='thread-fling'&&process.env.KYBERN_BENCH_HISTORY_TURNS))await control('load-history')
+  await control('open',{thread:streams?(process.env.KYBERN_BENCH_STREAM_HISTORY==='1'?fixture.manifest.long1000:fixture.manifest.running):fixture.manifest.long3000})
+  if((streams&&process.env.KYBERN_BENCH_STREAM_HISTORY==='1')||(name==='thread-fling'&&process.env.KYBERN_BENCH_HISTORY_TURNS))await control('load-history')
   await bounds(app,'transcript-surface');await painted(app,/BENCH_RESULT|Bench prompt/)
   if(['explorer-scroll','markdown-scroll','code-scroll'].includes(name)){
    await control('explorer',{...(name==='markdown-scroll'?{file:fixture.manifest.markdown}:name==='code-scroll'?{file:fixture.manifest.code}:{})})
@@ -165,7 +167,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
  await setup()
  if(!pr)await until(async()=>(await control('state')).uiReady,'Provider, settings, target and model catalog not ready',60000)
  if(name.startsWith('idle-'))await control('idle')
- const streamWithWheel=name==='streaming'&&process.env.KYBERN_BENCH_STREAM_SCROLL==='1'
+ const streamWithWheel=streams&&process.env.KYBERN_BENCH_STREAM_SCROLL==='1'
  const scrolling=name.endsWith('scroll')||name==='thread-fling'||pr||streamWithWheel
  if(point&&scrolling){
   const request=async(action:string,args:Record<string,unknown>={})=>{const res=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action,...args})});return await res.json() as {accepted:number;now:number;offset:number[]|null}}
@@ -179,7 +181,24 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
   inputPreflight={target,point,prior,probe,changed};
   const mapStart=performance.now(),clock=await request('state');clockMappingRttMs=performance.now()-mapStart;clockOffset=mapStart+clockMappingRttMs/2-clock.now
  }
- if(name==='streaming'){await control('stream',{durationMs:options.warmup*1000+runs*(options.seconds+5)*1000+3000});await painted(app,/Streaming paragraph/)}
+ if(streams){await control('stream',{durationMs:options.warmup*1000+runs*(options.seconds+5)*1000+3000});await painted(app,/Streaming paragraph/)}
+ if(name==='streaming-away'&&point){
+  // Scroll the transcript 800 px up from its tail with real wheel events, so the "scroll to bottom" pill is on screen for every window.
+  const offsetY=async()=>{const res=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action:'scroll-state',target:'transcript'})});return ((await res.json()) as {offset:number[]|null}).offset?.[1]??null}
+  // The live thread starts short; let the stream grow it past a screen before scrolling away from the tail.
+  await delay(6000)
+  const start=await offsetY()
+  if(start==null)throw Error('streaming-away: no transcript scroll offset')
+  let tail=start
+  for(let step=0;step<80;step++){
+   await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action:'wheel-probe',...point,delta:180})});await delay(60)
+   const now=await offsetY();if(now==null)continue
+   tail=Math.max(tail,now);if(tail-now>=800)break
+  }
+  const settled=await offsetY()
+  await bounds(app,'scroll-to-bottom').catch(error=>{throw Error(`${error}; transcript offset ${start} -> ${settled}`)})
+ }
+ if(name==='streaming-menu'){await click(app,'model-picker');await bounds(app,'model-picker-panel')}
  if(name.startsWith('idle-')){await app.call('blur',{});await app.mouse.move({x:900,y:4})}else if(point)await app.mouse.move(point)
  if(scrolling)await inputDrive(point!,options.warmup*1000,name==='thread-fling');else await delay(options.warmup*1000)
  if(name.startsWith('idle-')){await app.call('blur',{});await delay(500)}
@@ -201,7 +220,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
    if(name==='older-history'){await control('home');await control('open',{thread:fixture.manifest.long3000});await bounds(app,'transcript-surface')}
    // The steady state warms once, then three consecutive independent 15 s
    // endpoint samples. Cold/open timings remain separate from resource windows.
-   const streamBefore=name==='streaming'?(await control('state')).streamDeltas:null
+   const streamBefore=streams?(await control('state')).streamDeltas:null
    r.evidence.windowBefore=requireWindowOnscreen(launch!.pid).windows
    buildWatch=watchRun()
    if(bridge){await bridge;bridge=undefined;if(bridgeError)throw bridgeError}
@@ -227,7 +246,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
     r.evidence.olderTurnPainted=true
     r.timings.olderHistoryVisibleMs=performance.now()-timed;r.evidence.firstSeqAfter=after.firstSeq;r.evidence.olderBlocks=after.blocks-before.blocks
    }
-   const sampler=Bun.spawn(['bun',path.join(root,'perf/sample.ts'),String(options.seconds),`GPUIX=${launch!.pid}`],{stdout:'pipe',stderr:'pipe'})
+   const windowServer=process.env.KYBERN_BENCH_WINDOWSERVER==='1'?Bun.spawnSync(['pgrep','-x','WindowServer']).stdout.toString().trim().split('\n')[0]:'',sampler=Bun.spawn(['bun',path.join(root,'perf/sample.ts'),String(options.seconds),`GPUIX=${launch!.pid}`,...(windowServer?[`WindowServer=${windowServer}`]:[])],{stdout:'pipe',stderr:'pipe'})
    children.push(sampler)
    const unsampler=onExit(async()=>{sampler.kill();await sampler.exited})
    unregisterChildren.push(unsampler)
@@ -255,7 +274,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
    r.resources=parseResources(sampleText);if(useAppkit)r.latency.kind='in-process scheduled AppKit NSEvent to next scene-submission stderr receipt; clocks mapped from control RTT; not a physical presentation fence';r.frames=m.frames;r.work=m.work;r.latency.proxyMs=m.proxy;r.latency.samples=m.latencySamples
    r.timings.resourceWindowMs=stop-resourceStart
    r.evidence={...r.evidence,nativeDispatchToCpuPaint:m.nativeInput,averageProcessCpuMsPerSubmission:r.frames.count?r.resources.cpuPercent!*r.resources.sampleSeconds!*10/r.frames.count:null,averageProcessGpuMsPerSubmission:r.frames.count?r.resources.gpuMs!/r.frames.count:null,inputPreflight,loadedHistoryTurns:name==='thread-fling'&&process.env.KYBERN_BENCH_HISTORY_TURNS?Number(process.env.KYBERN_BENCH_HISTORY_TURNS):null,profiled:!!options.profile,continuityBridgeMs:useAppkit&&scrolling?5000:0,warmupSeconds:options.warmup,resourceWindowSeconds:options.seconds,resourceText:sampleText,input:input?.input??'none',packetAckP95:input?input.acks.sort((a,b)=>a-b)[Math.floor(input.acks.length*.95)]:null,maxOutstanding:input?.maxOutstanding??0,drainMs:input?.drainMs??0,sceneTransitionFrames:telemetry.submissions.length-mark.frames,onePersistedRunningThread:!name.startsWith('idle-')&&process.env.KYBERN_BENCH_NO_RUNNING!=='1',appkitAccepted:useAppkit,forcedRpc:process.env.KYBERN_BENCH_RPC_ONLY==='1',clockMappingRttMs,offeredPackets:input?.sent.length??0,inputProductionMs:input?.productionMs??null,...(input&&'zeroDistancePackets' in input?{zeroDistancePackets:input.zeroDistancePackets,requestedDistance:input.requestedDistance,effectiveDistance:input.effectiveDistance,handledPackets:input.handledPackets,handlerDistance:input.handlerDistance}:{}),offeredPacketsPerNominalSecond:input?input.sent.length/options.seconds:null,offeredPacketsPerSecond:input&&input.productionMs>0?input.sent.length/(input.productionMs/1000):null}
-   if(scrolling||name==='streaming')requireActiveSample(r.frames.count,r.resources.gpuMs,options.seconds)
+   if(scrolling||streams)requireActiveSample(r.frames.count,r.resources.gpuMs,options.seconds)
    if(streamBefore!=null){const streamed=await control('state');const streamAfter=streamed.streamDeltas;r.evidence.offeredDeltas=streamAfter-streamBefore;r.evidence.offeredDeltasPerSecond=(streamAfter-streamBefore)/(r.timings.resourceWindowMs!/1000);r.evidence.streamWithWheel=streamWithWheel;r.evidence.loadedBlocks=streamed.blocks;r.evidence.fullHistory=process.env.KYBERN_BENCH_STREAM_HISTORY==='1'}
    if(process.env.KYBERN_BENCH_COUNTERS==='1'){const response=await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action:'counters'})});r.evidence.counters=await response.json()}
    writeFileSync(path.join(evidence,`${name}-${run}-resources.txt`),sampleText)

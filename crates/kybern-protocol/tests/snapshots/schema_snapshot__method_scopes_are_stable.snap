@@ -68,6 +68,16 @@ expression: scopes
   - "orchestration:operate"
 - - projects.remove
   - "orchestration:operate"
+- - spaces.list
+  - "orchestration:read"
+- - spaces.create
+  - "orchestration:operate"
+- - spaces.update
+  - "orchestration:operate"
+- - spaces.delete
+  - "orchestration:operate"
+- - spaces.reorder
+  - "orchestration:operate"
 - - threads.list
   - "orchestration:read"
 - - threads.search

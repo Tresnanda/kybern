@@ -9,7 +9,7 @@ import { observeElementBounds, type LayoutRect } from './native/layout.ts'
 // day starts, a virtual list that follows the tail, earlier pages loaded when
 // the top comes into view (reading position kept), and the 32px "Scroll to
 // bottom" button while away from the tail. Rows live in `transcript/`.
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import { motion, useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { createTurnGrouper, type TurnGroup } from '../../../packages/kybern-client/src/transcript.ts'
 import { calendarDateKey } from '../../desktop/src/lib/format.ts'
@@ -20,7 +20,6 @@ import { Label, REDUCED_MOTION, useTheme } from './ui.tsx'
 import { BLUR, DISTANCE, DURATION, EASE } from './motion/kit.tsx'
 import { Presence } from './motion/Presence.tsx'
 import { PATCHED_NATIVE } from './native/local-build.ts'
-import { useAppearance } from './settings/appearance.ts'
 import { chunkGap, CodeChunk, CodeHeader, lineChunks, markdownParts, partGap, Prose, textChunks } from './transcript/markdown.tsx'
 import { ThreadImage } from './transcript/ThreadImage.tsx'
 import { MermaidBlock } from './transcript/MermaidBlock.tsx'
@@ -31,14 +30,21 @@ import { alpha, muted, Para } from './transcript/kit.tsx'
 import { over } from './theme.ts'
 import { AnswerImages, DateSeparator, Turn, TurnFooter, turnTimestamp } from './transcript/Turn.tsx'
 import { useComposerOverlayHeight } from './composer/height.ts'
-import { loadEarlier, useActionError, useEarlierError, usePacedBlocks, useRequestPanelHeight } from './transcript/store.ts'
+import { GlassEdge } from './kit/GlassEdge.tsx'
+import { frostBackdrop, frostFill, frostHoverFill, useGlass } from './platform/glass.ts'
+import { EDGE_FADE } from './native/local-build.ts'
+import { loadEarlier, useActionError, useEarlierError, usePacedBlocks } from './transcript/store.ts'
 
 export { markdownTheme } from './transcript/kit.tsx'
 
 export const GUTTER = 56
 export const COLUMN = 736
-/** The floating composer's height plus 64 (`bottomInset + 64`, `Transcript.tsx:479`). */
-const COMPOSER_INSET = 192
+/** Space kept between the last response and whatever floats over the bottom (`bottomInset + 64`, `Transcript.tsx:479`). */
+const OVERLAY_GAP = 64
+/** The overlay's height before its first measurement (a one-line composer in its gutter), and in hosts without one. */
+const OVERLAY_FALLBACK = 128
+/** Older pages loaded in a row while the reader stays at the top (`loadFromTop`). */
+const TOP_CHAIN = 8
 const turnKey = (group: TurnGroup, index: number) => group.turnId || group.user?.id || `turn-${index}`
 /** An optimistic send (`composer/pending.ts`) renders as turn `pending:<message id>`; the daemon's turn for that message
  * keeps the pending row's key, so the row stays mounted (no remount, jump or replayed entrance) when the real id arrives. */
@@ -61,6 +67,7 @@ const scrollAnchors = new Map<string, SavedAnchor>()
 export function Transcript() {
   const pane = usePaneAccess()
   const t = useTheme()
+  const faded = useGlass().on && EDGE_FADE
   const renderer = useGpuixRequired()
   const threadId = useApp((s) => s.selectedId)
   const thread = useApp(s => s.open.thread)
@@ -71,7 +78,6 @@ export function Transcript() {
   const threadRunning = useApp((s) => s.open.thread?.status === 'running' || s.open.thread?.status === 'awaiting-approval')
   const earlierError = useEarlierError()
   const actionError = useActionError()
-  const panelHeight = useRequestPanelHeight()
   const groupTurns = useMemo(() => createTurnGrouper(), [threadId])
   const turns = useMemo(() => groupTurns(blocks), [blocks, groupTurns])
   const rowStateScope = useMemo(() => new Map<string, unknown>(), [threadId])
@@ -130,12 +136,33 @@ export function Transcript() {
   const [codeState, setCodeState] = useState<Record<string, CodeState>>({})
   const [activeId, setActiveId] = useState<string | null>(null)
   const nearTop = useRef(false)
+  // Reaching the top asks for one page. A page from inside a long turn adds
+  // nothing to the screen, so it does not use up that intent while the reader
+  // is still at the top; a page that shows a turn or prompt ends the chain.
+  // A page that does show something can still leave the reader at the top: a delegating turn arrives collapsed, a line
+  // or two tall, and the reader cannot scroll any higher to re-enter the top. So after it lays out, a reader still at
+  // the top gets the next page too, up to `TOP_CHAIN` pages per visit to the top.
+  const loadFromTop = useCallback(function next(chain = 0) {
+    const id = pane.get().selectedId
+    void loadEarlier(pane.id).then(nothing => {
+      const still = () => nearTop.current && !pane.frozen && pane.get().selectedId === id
+      if (nothing) { if (still()) next(chain) }
+      else if (chain + 1 < TOP_CHAIN) setTimeout(() => { if (still() && pane.get().open.nextBeforeSeq != null) next(chain + 1) }, 120)
+    })
+  }, [pane])
 
   useEffect(() => {
     setCodeState(threadId ? scrollAnchors.get(`${pane.id}:${threadId}`)?.code ?? {} : {})
     setAtTail(threadId ? scrollAnchors.get(`${pane.id}:${threadId}`)?.tail ?? true : true)
     nearTop.current = false
   }, [threadId])
+  // Scrolling up while already at the top reports no new visible range, so after a chain of pages ends with the reader
+  // still there, that wheel is the intent for the next page.
+  const wheelAtTop = useCallback((event: { deltaY?: number }) => {
+    if ((event.deltaY ?? 0) <= 0 || !nearTop.current || pane.frozen || earlierError) return
+    const open = pane.get().open
+    if (open.nextBeforeSeq != null && !open.loadingEarlier) loadFromTop()
+  }, [pane, earlierError, loadFromTop])
   // Consume one top-entry intent per page. Prepending or a retry must not
   // recursively download every older page without another reading gesture.
 
@@ -215,7 +242,7 @@ export function Transcript() {
   const logicalKeys = useMemo(() => ['__top', ...rowKeys, '__bottom'], [rowKeys])
   // The mounted footer measures panel-height changes directly; keep that motion
   // from resending every historical estimate through the native bridge.
-  const logicalEstimates = useMemo(() => [hasEarlier ? 48 : 16, ...estimates, COMPOSER_INSET], [estimates, hasEarlier])
+  const logicalEstimates = useMemo(() => [hasEarlier ? 48 : 16, ...estimates, OVERLAY_FALLBACK + OVERLAY_GAP], [estimates, hasEarlier])
   const nativeWindow = useSparseList(logicalKeys, logicalEstimates, `${threadId}:${paneWidth}:${t.variant}`)
   const pinnedCandidates = useMemo(() => rows.flatMap((row,index) => {
     const live = row.turn.running || (threadRunning && row.turn === turns.at(-1))
@@ -376,7 +403,8 @@ export function Transcript() {
   }
 
   return (
-    <TranscriptTail.Provider value={tailRef}><TranscriptFocusRestoration.Provider value={restoreFocus}><TranscriptRowStateScope.Provider value={rowStateScope}><SparseRetention.Provider value={nativeWindow.context}><div ref={surfaceRef} testId="transcript-surface" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+    <TranscriptTail.Provider value={tailRef}><TranscriptFocusRestoration.Provider value={restoreFocus}><TranscriptRowStateScope.Provider value={rowStateScope}><SparseRetention.Provider value={nativeWindow.context}><div ref={surfaceRef} testId="transcript-surface" onScroll={wheelAtTop} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+      <OverlayFadeFrame faded={faded} visible={!atTail}>
       <virtual-list
         {...TRANSCRIPT_SCROLL_LAYOUT}
         {...(sparse ? { estimatedItemHeight: 160, itemCount: count, windowStart: windowIndices?.[0] ?? 0, windowIndices, ...nativeWindow.props } : { estimatedItemHeight: 160 })}
@@ -395,7 +423,7 @@ export function Transcript() {
           if (tail !== atTail) setAtTail(tail)
           // Prefetch while the first turns are on screen (`useEarlierHistory`).
           const top = start <= lead + 1
-          if (!pane.frozen && top && !nearTop.current && !earlierError && pane.get().open.nextBeforeSeq != null && !pane.get().open.loadingEarlier) void loadEarlier(pane.id)
+          if (!pane.frozen && top && !nearTop.current && !earlierError && pane.get().open.nextBeforeSeq != null && !pane.get().open.loadingEarlier) loadFromTop()
           nearTop.current = top
         }}
       >
@@ -428,10 +456,11 @@ export function Transcript() {
             if(cacheSlots) slotCache.set(row.key, {mounted, height, node:row.node, element})
             return element
           }),
-          <div key="__bottom" ref={bottomRef} testId={`transcript-bottom:${pane.id}`} style={{ height: COMPOSER_INSET + panelHeight }} />,
+          <BottomSpace key="__bottom" nodeRef={bottomRef} testId={`transcript-bottom:${pane.id}`} />,
         ]}
       </virtual-list>
-      {overflow && <MessageRail items={railItems} active={activeId} height={paneHeight} bottomInset={COMPOSER_INSET - 64 + panelHeight} onJump={(id) => {
+      </OverlayFadeFrame>
+      {overflow && <OverlayRail items={railItems} active={activeId} height={paneHeight} onJump={(id) => {
         const index = rows.findIndex(row => row.turn.user?.id === id)
         if (index < 0 || !list.current) return
         setAtTail(false)
@@ -451,10 +480,40 @@ export function Transcript() {
           </div>
         </div>
       )}
-      <BottomFade visible={!atTail} fallback={COMPOSER_INSET - 64 + panelHeight} />
-      <ScrollToBottom visible={!atTail} bottom={COMPOSER_INSET - 64 + 24 + panelHeight} onClick={scrollToBottom} />
+      <OverlayFade visible={!atTail} />
+      <OverlayScrollButton visible={!atTail} onClick={scrollToBottom} />
     </div></SparseRetention.Provider></TranscriptRowStateScope.Provider></TranscriptFocusRestoration.Provider></TranscriptTail.Provider>
   )
+}
+
+// The overlay's height changes whenever the composer grows a line. Only these small pieces subscribe to it, so typing
+// re-renders them and not the whole transcript.
+/** Whatever floats at the bottom (composer, the panels stacked on it, or a blocking question alone) as the app lays it out. */
+const useOverlay = () => useComposerOverlayHeight() || OVERLAY_FALLBACK
+function BottomSpace({ nodeRef, testId }: { nodeRef: (node: PublicInstance | null) => void; testId: string }) {
+  return <div ref={nodeRef} testId={testId} style={{ height: useOverlay() + OVERLAY_GAP }} />
+}
+function OverlayRail(props: Omit<ComponentProps<typeof MessageRail>, 'bottomInset'>) {
+  return <MessageRail {...props} bottomInset={useOverlay()} />
+}
+/**
+ * Whole-window glass has no surface for the bottom wash to fade into, so while the view is away from the tail the scroller itself
+ * fades out above the composer (`edgeFade`: an alpha ramp over the last 32 px above the overlay; what lies under the overlay is
+ * clear). The frame is only mounted with the patched addon on glass, and re-renders alone when the overlay grows a line.
+ */
+function OverlayFadeFrame({ faded, visible, children }: { faded: boolean; visible: boolean; children: React.ReactNode }) {
+  if (!faded) return <>{children}</>
+  return <FadeFrame visible={visible}>{children}</FadeFrame>
+}
+function FadeFrame({ visible, children }: { visible: boolean; children: React.ReactNode }) {
+  const overlay = useOverlay()
+  return <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }} edgeFade={visible ? { bottom: 32, insetBottom: overlay } : undefined}>{children}</div>
+}
+function OverlayFade({ visible }: { visible: boolean }) {
+  return <BottomFade visible={visible} bottom={useOverlay()} />
+}
+function OverlayScrollButton({ visible, onClick }: { visible: boolean; onClick: () => void }) {
+  return <ScrollToBottom visible={visible} bottom={useOverlay() + 24} onClick={onClick} />
 }
 
 /** The centred chat column (`ROW`: 736px, no inset of its own). */
@@ -496,6 +555,7 @@ const TurnItem = memo(function TurnItem({ turn, threadId, isLast, threadRunning,
  *  faster (150 ms). Reduce Motion fades only. */
 export function ScrollToBottom({ visible, bottom, onClick }: { visible: boolean; bottom: number; onClick: () => void }) {
   const t = useTheme()
+  const g = useGlass()
   const hidden = { opacity: 0, translateY: -DISTANCE.micro, scale: 0.95, blur: BLUR.small }
   return (
     <Presence
@@ -509,7 +569,10 @@ export function ScrollToBottom({ visible, bottom, onClick }: { visible: boolean;
         role="button"
         aria-label="Scroll to bottom"
         onClick={visible ? onClick : undefined}
+        // Whole-window glass (`platform/glass.ts`): a frost pill with a hairline rim and no shadow; else the opaque elevated pill.
+        backdrop={frostBackdrop(g, 'pills', 16)}
         style={{
+          position: 'relative',
           display: 'flex',
           width: 32,
           height: 32,
@@ -517,14 +580,15 @@ export function ScrollToBottom({ visible, bottom, onClick }: { visible: boolean;
           alignItems: 'center',
           justifyContent: 'center',
           borderWidth: 1,
-          borderColor: t.border,
-          backgroundColor: t.v('--color-background-elevated-primary-opaque'),
+          borderColor: g.on ? g.pillRim : t.border,
+          backgroundColor: frostFill(g, 'pills', t.v('--color-background-elevated-primary-opaque')),
           cursor: 'pointer',
           pointerEvents: visible ? 'auto' : 'none',
-          boxShadow: { offsetX: 0, offsetY: 2, blurRadius: 8, spreadRadius: -2, color: alpha('#000000', t.variant === 'dark' ? 0.4 : 0.12) },
-          hover: { backgroundColor: over(t.v('--color-background-elevated-secondary'), t.surface) },
+          ...(g.on ? {} : { boxShadow: { offsetX: 0, offsetY: 2, blurRadius: 8, spreadRadius: -2, color: alpha('#000000', t.variant === 'dark' ? 0.4 : 0.12) } }),
+          hover: { backgroundColor: frostHoverFill(g, 'pills', over(t.v('--color-background-elevated-secondary'), t.surface)) },
         }}
       >
+        <GlassEdge radius={16} color={g.frostHighlight} />
         <Icon source={T.arrowDown} size={14} color={t.text} />
       </div>
     </Presence>
@@ -537,14 +601,9 @@ export function ScrollToBottom({ visible, bottom, onClick }: { visible: boolean;
  * movement) instead of tracking the scroll offset, and, like the desktop, it is not drawn on a translucent window. The first
  * render is at rest: opening a thread already scrolled away shows it at once.
  */
-export function BottomFade({ visible, fallback }: { visible: boolean; /** Before the composer stack is measured. */ fallback: number }) {
+export function BottomFade({ visible, bottom }: { visible: boolean; /** The measured overlay height: the wash ends on its top edge (tray and requests included). */ bottom: number }) {
   const t = useTheme()
-  const { translucent } = useAppearance()
-  // The wash ends on the composer stack's measured top edge (tray and requests included). A fixed estimate left a strip of
-  // unfaded text between its opaque end and a shorter card, cut by a hard line. Subscribed here, so the card growing a line
-  // re-renders only the wash.
-  const bottom = useComposerOverlayHeight() || fallback
-  if (translucent) return null
+  if (t.scope === 'window') return null
   return (
     <div
       testId="transcript-bottom-fade"

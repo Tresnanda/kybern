@@ -156,7 +156,7 @@ thread.
 | Feature | Where | Windows | Linux | Fallback | Effort |
 | --- | --- | --- | --- | --- | --- |
 | Traffic lights, title-bar drag and double-click | `window_drag.rs`, `nav/TitleBar.tsx`, `window_platform_hooks.py` | Custom caption buttons with `WindowControlArea` (Min/Max/Close) plus snap layouts | CSD on Wayland (`start_window_move` exists), server decorations on X11 | Native title bar | 2 + 2 |
-| Window material (NSVisualEffectView) | `native/material.ts`, `platform/material.ts` | Mica (Windows 11), opaque on 10 | Opaque | Opaque | 1 |
+| Window material (NSVisualEffectView, adjustable blur) | `native/material.ts`, `native/windowBlur.ts`, `shell/windowMaterial.ts`, `platform/translucency.ts`, `platform/material.ts` | Mica (Windows 11), opaque on 10; no equivalent of the adjustable blur: Solid/Auto only | Opaque; no equivalent of the adjustable blur: Solid/Auto only | Opaque | 1 |
 | Close guard, key intercept | `close_guard.rs`, `apply_hooks.py` | `WM_CLOSE` / GPUI `on_should_close` | GPUI `on_should_close` | — | 1 each |
 | Secure input | `secure_input.rs` (Carbon) | No equivalent; no-op | No-op | Already no-op | 0 |
 | Automation test display | `automation_display.rs` (CoreGraphics) | Offscreen / second desktop | Xvfb or a headless Wayland compositor | — | 1 |

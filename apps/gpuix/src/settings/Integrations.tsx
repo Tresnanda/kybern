@@ -12,6 +12,8 @@ import { chooseTab, setDock } from '../dock/store.ts'
 import { Segments } from '../usage/controls.tsx'
 import { getClient, useApp } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
+import { GlassEdge } from '../kit/GlassEdge.tsx'
+import { settingsCardStyle, useGlass } from '../platform/glass.ts'
 import { Button, PageBlock, Select, TextField } from './controls.tsx'
 import { openExternal } from './external.ts'
 import { S } from './glyphs.ts'
@@ -21,6 +23,7 @@ const CONNECTORS_URL = 'https://claude.ai/settings/connectors'
 
 export function Integrations() {
   const t = useTheme()
+  const g = useGlass()
   const projects = useApp((s) => s.projects)
   const connected = useApp((s) => s.status === 'open')
   const thread = useApp((s) => s.threads.find((th) => th.id === s.selectedId))
@@ -112,7 +115,7 @@ export function Integrations() {
         <Label color={t.textSecondary} size={13} lineHeight={20.8} style={{ maxWidth: 380 }}>{emptyBody}</Label>
         {query ? <Button variant="outline" onClick={() => setQuery('')}>Clear search</Button> : canSignIn ? <Button variant="outline" onClick={openConnectors}>Add a Claude connector</Button> : null}
       </div>
-      : <div testId="integrations-list" style={{ display: 'flex', flexDirection: 'column', borderWidth: 1, borderColor: t.v('--app-settings-card-border'), borderRadius: 12, backgroundColor: t.v('--app-settings-card-surface'), overflow: 'hidden' }}>
+      : <div testId="integrations-list" style={{ display: 'flex', flexDirection: 'column', ...settingsCardStyle(t, g), overflow: 'hidden' }}><GlassEdge radius={12} color={g.highlight} />
         {matches.slice(0, count).map((item, index) => {
           const canSignInHere = item.can_login && !onThisProject
           return <div key={`${item.kind}:${item.id}:${item.scope}`} testId={`integration-${item.id}`} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, paddingLeft: 18, paddingRight: 18, paddingTop: 16, paddingBottom: 16, borderTopWidth: index ? 1 : 0, borderColor: t.v('--app-settings-card-border') }}>
@@ -141,8 +144,9 @@ export function Integrations() {
 /** Three placeholder rows while the catalog loads (`animate-pulse` rows). */
 function Skeleton() {
   const t = useTheme()
+  const g = useGlass()
   const tint = t.buttonSecondary
-  return <div aria-busy="true" style={{ display: 'flex', flexDirection: 'column', borderWidth: 1, borderColor: t.v('--app-settings-card-border'), borderRadius: 12, backgroundColor: t.v('--app-settings-card-surface'), overflow: 'hidden' }}>
+  return <div aria-busy="true" style={{ display: 'flex', flexDirection: 'column', ...settingsCardStyle(t, g), overflow: 'hidden' }}><GlassEdge radius={12} color={g.highlight} />
     {[0, 1, 2].map((row) => <div key={row} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, paddingLeft: 18, paddingRight: 18, paddingTop: 16, paddingBottom: 16, borderTopWidth: row ? 1 : 0, borderColor: t.v('--app-settings-card-border') }}>
       <div style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: tint, flexShrink: 0 }} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 2, flexGrow: 1 }}><div style={{ width: 160, height: 14, borderRadius: 4, backgroundColor: tint }} /><div style={{ width: 352, maxWidth: '100%', height: 12, borderRadius: 4, backgroundColor: tint }} /></div>

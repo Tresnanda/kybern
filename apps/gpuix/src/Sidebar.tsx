@@ -27,6 +27,7 @@ import {
   accentActive,
   ChildRow,
   CreateCoordinatorRow,
+  EmptySpaceRow,
   IconButton,
   MessageRow,
   MoreRow,
@@ -40,6 +41,9 @@ import {
   useAddProject,
 } from './sidebar/rows.tsx'
 import { getState, useApp } from './state.ts'
+import { useCurrentSpace, useCurrentSpaceId } from './spaces/current.ts'
+import { inSpace } from '../../../packages/kybern-client/src/spaces.ts'
+import { useSpaces } from './spaces/store.ts'
 import { isFreeChatProject } from '../../../packages/kybern-client/src/types.ts'
 import { ink, Label, useTheme } from './ui.tsx'
 import type { Theme } from './theme.ts'
@@ -64,6 +68,8 @@ export function Sidebar() {
   const attentionDismissals = useNav((s) => s.attentionDismissals)
   const projectOrder = useNav((s) => s.projectOrder)
   const composerDrafts = useNav((s) => s.composerDrafts)
+  const space = useCurrentSpace()
+  const spaceCount = useSpaces((s) => s.spaces.length)
   const [showAll, setShowAll] = useState<Record<string, boolean>>({})
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
 
@@ -80,8 +86,9 @@ export function Sidebar() {
         expanded,
         nav: { children, activity, unread, dismissed, filter, attentionFilter, projectOrder, composerDrafts, attentionDismissals },
         now: Date.now(),
+        space: { id: space?.id ?? null, name: space && spaceCount >= 2 ? space.name : null, count: spaceCount },
       }),
-    [projects, threads, selectedId, draft, onHome, collapsed, showAll, expanded, children, activity, unread, dismissed, filter, attentionFilter, projectOrder, composerDrafts, attentionDismissals],
+    [space, spaceCount, projects, threads, selectedId, draft, onHome, collapsed, showAll, expanded, children, activity, unread, dismissed, filter, attentionFilter, projectOrder, composerDrafts, attentionDismissals],
   )
   const toggleChildren = useCallback((id: string, open: boolean) => {
     markDisclosure()
@@ -197,7 +204,7 @@ function renderRow(
 ) {
   switch (row.kind) {
     case 'label':
-      return <SectionLabel key={row.key} />
+      return <SectionLabel key={row.key} text={row.text} />
     case 'message':
       return <MessageRow key={row.key} text={row.text} clearFilter={row.clearFilter} />
     case 'project':
@@ -253,6 +260,8 @@ function renderRow(
       return <MoreRow key={row.key} projectId={row.projectId} count={row.count} showAll={row.showAll} onToggle={ctx.toggleMore} />
     case 'no-threads':
       return <NoThreadsRow key={row.key} />
+    case 'empty-space':
+      return <EmptySpaceRow key={row.key} onlySpace={row.onlySpace} />
     case 'recents':
       return <RecentsHeader key={row.key} open={row.open} />
   }
@@ -359,7 +368,11 @@ const KIND_DOT: Record<AttentionKind, (t: Theme) => string> = {
 /** The bell filters the panel to threads that need attention; right-click to dismiss. */
 function NotificationBell() {
   const t = useTheme()
-  const threads = useApp((s) => s.threads)
+  const allThreads = useApp((s) => s.threads)
+  const everyProject = useApp((s) => s.projects)
+  const spaceId = useCurrentSpaceId()
+  // The bell covers the active space; the rail's dots cover the others.
+  const threads = useMemo(() => allThreads.filter((thread) => inSpace(thread.project_id, everyProject, spaceId)), [allThreads, everyProject, spaceId])
   const unread = useNav((s) => s.unread)
   const attentionDismissals = useNav((s) => s.attentionDismissals)
   const active = useNav((s) => s.attentionFilter)

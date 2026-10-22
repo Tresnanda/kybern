@@ -1,5 +1,5 @@
-import { BACKDROP } from '../native/backdrop.ts'
-import { useBackdropMaterial, backdropTint } from '../native/backdrop-material.ts'
+import { GlassEdge } from '../kit/GlassEdge.tsx'
+import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
 // The composer's picker menus (`ComposerPickerMenuPopup` + `components/kit/menu.tsx`,
 // "normal" picker size in `kit.css:2960`): a 0.65rem-radius opaque popover with a
 // 1px border and the composer's soft shadow, 4px body padding, 26px option rows
@@ -165,7 +165,15 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
   },
   ref,
 ) {
-  const glass = useBackdropMaterial()
+  const t = useTheme()
+  const g = useGlass()
+  // Glass scopes (`platform/translucency.ts`, `platform/glass.ts`): whole window → the frost-menu tint over a scene blur (`denseFloat`
+  // without the blur when the gate dropped the class); Sidebar only → dense fill, no blur (the layer is transparent over opaque
+  // content); Solid and the accessibility overrides → today's opaque popover.
+  const glass = t.scope !== 'none' && material !== 'none' && !appear
+  const radiusPx = typeof (style as StyleDesc | undefined)?.borderRadius === 'number' ? (style as StyleDesc).borderRadius as number : 16
+  const menuBackdrop = kind === 'tooltip' ? undefined : frostBackdrop(g, 'menus', radiusPx)
+  const blurred = glass && !!menuBackdrop
   const webLayer = useWebOcclusion(undefined, typeof style?.borderRadius === 'number' ? style.borderRadius : 0, backing?.startsWith('rgba(0, 0, 0, ') ? Number(backing.slice(14, -1)) : 0)
   // Decided on mount: a later change must not restart or drop the tween.
   // 'arrive' = paint-only materialize; 'layout' = the `fade` layers' <anchored motion>; 'none' = no motion (`still`, stock addon).
@@ -211,11 +219,19 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
   // the picked item again during the 150 ms exit).
   const { onKeyDown, onKeyUp, onMouseDownOutside, ...rest } = props as typeof props & { onKeyDown?: unknown; onKeyUp?: unknown; onMouseDownOutside?: unknown }
   const input = leaving ? {} : { onKeyDown, onKeyUp, onMouseDownOutside }
-  const glassBackdrop = material === 'none' || !glass ? undefined : explicitBackdrop ?? {...BACKDROP.glass, radius: radius ?? 16}
-  const innerStyle = glass && material !== 'none' && (style as StyleDesc | undefined)?.backgroundColor ? {...style as StyleDesc,backgroundColor:backdropTint((style as StyleDesc).backgroundColor!)} : style
+  const glassBackdrop = blurred ? explicitBackdrop ?? menuBackdrop : undefined
+  // Whole-window glass layers a hairline rim and a top highlight over the tint; a tooltip is dense and plain.
+  const layered = glass && g.on && kind !== 'tooltip'
+  const innerStyle = glass && (style as StyleDesc | undefined)?.backgroundColor
+    ? {
+        ...style as StyleDesc,
+        backgroundColor: kind === 'tooltip' ? t.glass.dense : frostFill(g, 'menus', t.glass.dense, 'frostMenu'),
+        ...(layered ? { position: 'relative' as const, borderColor: g.frostRim, boxShadow: undefined } : {}),
+      }
+    : style
   return (
     <anchored
-      backdrop={transform ? { blur: 0 } : glassBackdrop}
+      backdrop={transform ? { blur: 0 } : glassBackdrop ?? (glass ? { blur: 0 } : undefined)}
       {...((mode === 'layout' ? { motion } : {}) as object)}
       style={{ ...(radius !== undefined ? { borderRadius: radius } : {}), ...(fade?.opacity !== undefined ? { opacity } : {}), ...(backing ? { backgroundColor: backing } : {}) }}
       {...placement}
@@ -237,6 +253,7 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
         } : {})}
         style={leaving ? { ...innerStyle, pointerEvents: 'none' } : innerStyle}
       >
+        {layered && <GlassEdge radius={radiusPx} color={g.frostHighlight} />}
         <WebLayer.Provider value={webLayer.layer}>{children}</WebLayer.Provider>
       </div>
       </div>

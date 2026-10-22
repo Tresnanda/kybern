@@ -12,6 +12,8 @@ import {
   ArrowTurnBackwardIcon,
   ArrowUp01Icon,
   Cancel01Icon,
+  Delete02Icon,
+  ImageUploadIcon,
   CheckListIcon,
   CheckmarkCircle02Icon,
   ChevronDownIcon,
@@ -80,6 +82,10 @@ export const N = {
   arrowDown: glyph(ArrowDown01Icon),
   /** `ArchiveIcon` = Archive02. */
   archive: glyph(Archive02Icon),
+  /** `Trash2Icon` = Delete02 (Delete space). */
+  trash: glyph(Delete02Icon),
+  /** The space editor's image well. */
+  imageUpload: glyph(ImageUploadIcon),
   pin: glyph(PinIcon),
   pinFilled: filled(PinIcon),
   /** `WorktreeIcon` = GitFork. */

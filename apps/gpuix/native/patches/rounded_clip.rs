@@ -1,11 +1,26 @@
 // Included in gpui::window. A mask keeps a small, Copy handle; immutable clip
 // chains live once per window and are copied once into the submitted scene.
 // No render target, stencil pass, depth limit or per-primitive clip array.
+// A chain link is a rounded clip or an edge fade (N3), see `RoundedClip::kind`.
+const ROUNDED_CLIP: u32 = 0;
+const EDGE_FADE: u32 = 1;
+/// Whether every pixel of `rect` (device px, [x, y, w, h]) lies where the edge
+/// fade with `bounds` and `bands` (top, right, bottom, left) is fully opaque,
+/// with a pixel of margin: GPU clip pruning and compositor loops may then skip it.
+pub fn edge_fade_interior(rect: [f32; 4], bounds: [f32; 4], bands: [f32; 4]) -> bool {
+    if rect.iter().chain(bounds.iter()).chain(bands.iter()).any(|v| !v.is_finite()) {
+        return false;
+    }
+    let [x, y, w, h] = rect;
+    let [left, top, width, height] = bounds;
+    let reach = |band: f32| if band > 0. { band + 1. } else { f32::NEG_INFINITY };
+    y >= top + reach(bands[0]) && x + w <= left + width - reach(bands[1]) && y + h <= top + height - reach(bands[2]) && x >= left + reach(bands[3])
+}
 #[derive(Default)]
 struct RoundedClipPool {
     nodes: Vec<crate::RoundedClip>,
     generations: Vec<u32>,
-    keys: std::collections::HashMap<[u32; 10], u32>,
+    keys: std::collections::HashMap<[u32; 11], u32>,
     free: Vec<u32>,
     shapes: Vec<Option<std::sync::Arc<Vec<[f32; 8]>>>>,
 }
@@ -30,6 +45,12 @@ impl RoundedClipPool {
         scene.rounded_clip_scale = scale;
     }
     fn intern(&mut self, bounds: Bounds<Pixels>, radii: Corners<Pixels>, parent: ContentMask<Pixels>) -> (u32, u32) {
+        let radii = [radii.top_left.as_f32(), radii.top_right.as_f32(), radii.bottom_right.as_f32(), radii.bottom_left.as_f32()];
+        self.intern_node(bounds, radii, parent, ROUNDED_CLIP)
+    }
+    /// `kind` is ROUNDED_CLIP (`radii` clockwise from top-left) or EDGE_FADE
+    /// (`radii` are the top, right, bottom and left ramp lengths).
+    fn intern_node(&mut self, bounds: Bounds<Pixels>, radii: [f32; 4], parent: ContentMask<Pixels>, kind: u32) -> (u32, u32) {
         if self.nodes.is_empty() {
             self.nodes.push(Default::default());
             self.generations.push(0);
@@ -40,17 +61,18 @@ impl RoundedClipPool {
             bounds.origin.y.as_f32(),
             bounds.size.width.as_f32(),
             bounds.size.height.as_f32(),
-            radii.top_left.as_f32(),
-            radii.top_right.as_f32(),
-            radii.bottom_right.as_f32(),
-            radii.bottom_left.as_f32(),
+            radii[0],
+            radii[1],
+            radii[2],
+            radii[3],
         ];
-        let mut key = [0; 10];
+        let mut key = [0; 11];
         for (to, value) in key.iter_mut().zip(values) {
             *to = value.to_bits();
         }
         key[8] = parent.rounded_clip;
         key[9] = parent.clip_generation;
+        key[10] = kind;
         if let Some(&id) = self.keys.get(&key) {
             return (id, self.generations[id as usize]);
         }
@@ -65,10 +87,16 @@ impl RoundedClipPool {
             bounds: values[..4].try_into().unwrap(),
             radii: values[4..].try_into().unwrap(),
             parent: parent.rounded_clip,
+            kind,
         };
-        let mut shapes = self.shapes[parent.rounded_clip as usize].as_deref().cloned().unwrap_or_default();
-        shapes.push(values);
-        self.shapes[id as usize] = Some(std::sync::Arc::new(shapes));
+        // Native surfaces and automation read the rounded shapes only; a fade does not clip.
+        self.shapes[id as usize] = if kind == EDGE_FADE {
+            self.shapes[parent.rounded_clip as usize].clone()
+        } else {
+            let mut shapes = self.shapes[parent.rounded_clip as usize].as_deref().cloned().unwrap_or_default();
+            shapes.push(values);
+            Some(std::sync::Arc::new(shapes))
+        };
         self.keys.insert(key, id);
         (id, self.generations[id as usize])
     }
@@ -134,6 +162,24 @@ impl Window {
         let scale = self.scale_factor();
         self.rounded_clip_pool.sync_node(&mut self.next_frame.scene, id, scale);
         self.with_content_mask(Some(ContentMask { bounds, rounded_clip: id, clip_generation: generation }), f)
+    }
+    /// Multiply the alpha of everything `f` paints by a ramp toward the edges of
+    /// `bounds` (N3 `edgeFade`): `r = clamp(distance / band, 0, 1)` per edge whose
+    /// band is positive, the minimum over those edges, squared. Beyond an active
+    /// edge everything is transparent; other edges neither fade nor clip. Nested
+    /// fades multiply. Hit testing ignores fades. Idea after ZUI's `EdgeFade`
+    /// (a Zed fork, Apache-2.0/GPL); re-implemented as a clip-chain node, no code shared.
+    pub fn with_edge_fade<R>(&mut self, bounds: Bounds<Pixels>, bands: [f32; 4], f: impl FnOnce(&mut Self) -> R) -> R {
+        if !bands.iter().any(|band| *band > 0.) || !bands.iter().all(|band| band.is_finite()) {
+            return f(self);
+        }
+        let (id, generation) = self.rounded_clip_pool.intern_node(bounds, bands.map(|band| band.max(0.)), self.content_mask(), EDGE_FADE);
+        let scale = self.scale_factor();
+        self.rounded_clip_pool.sync_node(&mut self.next_frame.scene, id, scale);
+        // The rectangle intersects to the inherited one, so it never clips; retained
+        // translation moves it with the scope and it still covers everything.
+        let unbounded = Bounds::new(point(px(-1.0e7), px(-1.0e7)), size(px(2.0e7), px(2.0e7)));
+        self.with_content_mask(Some(ContentMask { bounds: unbounded, rounded_clip: id, clip_generation: generation }), f)
     }
     pub(crate) fn rounded_overflow_mask(&mut self, style: &crate::Style, bounds: Bounds<Pixels>) -> Option<ContentMask<Pixels>> {
         let mut mask = style.overflow_mask(bounds, self.rem_size())?;

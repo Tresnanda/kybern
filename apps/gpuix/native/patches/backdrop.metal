@@ -2,8 +2,17 @@
 using namespace metal;
 // Coordinates are device pixels. Two separable Gaussian passes, 49 samples
 // each. Crop includes the 3-sigma halo. No read/write feedback texture.
-struct Params { float4 crop; float4 bounds; float4 clip; float4 values; float4 viewport; uint rounded_clip; };
-struct RoundedClipNode { float bounds[4]; float radii[4]; uint parent; };
+struct Params { float4 crop; float4 bounds; float4 clip; float4 values; float4 viewport; uint rounded_clip; float scale; };
+struct RoundedClipNode { float bounds[4]; float radii[4]; uint parent; uint kind; };
+// Edge fade link (N3), as in shaders.metal: ramps top, right, bottom, left.
+float backdrop_edge_fade(float2 p, RoundedClipNode n) {
+    float2 lo=float2(n.bounds[0],n.bounds[1]),size=float2(n.bounds[2],n.bounds[3]);
+    float4 band=float4(n.radii[0],n.radii[1],n.radii[2],n.radii[3]);
+    float4 d=float4(p.y-lo.y,lo.x+size.x-p.x,lo.y+size.y-p.y,p.x-lo.x);
+    float4 r=select(float4(1.),saturate(d/max(band,float4(1e-4))),band>0.);
+    float m=min(min(r.x,r.y),min(r.z,r.w));
+    return m*m;
+}
 struct Varying { float4 position [[position]]; float2 pixel; };
 vertex Varying backdrop_vertex(uint i [[vertex_id]], constant Params &p [[buffer(0)]]) {
     float2 uv=float2((i==1||i==3)?1:0, i>=2?1:0);
@@ -37,7 +46,9 @@ fragment float4 backdrop_fragment(Varying in [[stage_in]], texture2d<float> sour
         c.a=clamp(0.5-distance,0.0,1.0)*p.viewport.z;
         uint id=p.rounded_clip;
         while(id!=0){
-            RoundedClipNode n=clips[id]; float2 lo=float2(n.bounds[0],n.bounds[1]),size=float2(n.bounds[2],n.bounds[3]);
+            RoundedClipNode n=clips[id];
+            if(n.kind!=0){c.a*=backdrop_edge_fade(in.pixel,n);id=n.parent;continue;}
+            float2 lo=float2(n.bounds[0],n.bounds[1]),size=float2(n.bounds[2],n.bounds[3]);
             bool right=in.pixel.x>=lo.x+size.x/2.,bottom=in.pixel.y>=lo.y+size.y/2.;
             float r=n.radii[bottom?(right?2:3):(right?1:0)];
             float2 center=lo+float2(right?size.x-r:r,bottom?size.y-r:r);

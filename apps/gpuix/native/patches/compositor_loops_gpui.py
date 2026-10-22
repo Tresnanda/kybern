@@ -111,7 +111,10 @@ impl Scene {
                 let mut clip = mask.rounded_clip;
                 while clip != 0 {
                     let Some(node) = self.rounded_clips.get(clip as usize) else { return Err("rounded clip") };
-                    if !compositor_rect_inside(reach, node.bounds, node.radii) { return Err("rounded clip"); }
+                    // A leaf in a sublayer cannot be faded (N3); one where the fade is exactly 1 can move.
+                    if node.kind != 0 {
+                        if !crate::edge_fade_interior([reach.origin.x.0, reach.origin.y.0, reach.size.width.0, reach.size.height.0], node.bounds, node.radii) { return Err("edge fade"); }
+                    } else if !compositor_rect_inside(reach, node.bounds, node.radii) { return Err("rounded clip"); }
                     clip = node.parent;
                 }
                 Ok(CompositorLoop { id, part: 0, bounds: b, radius, color: color.opacity(inherited), tile, cycle_ms: a.cycle_ms, delay_ms: a.delay_ms,

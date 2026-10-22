@@ -39,6 +39,7 @@ import { DURATION, EASE } from '../motion/kit.tsx'
 import { ringValue } from '../motion/success.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { fadeTo, pressRow } from '../shell/motion.ts'
+import { RailSpaces, useRailSpacesVisible } from '../spaces/RailSpaces.tsx'
 
 const RAIL = 52
 const RAIL_ITEMS: { page: Page; icon: string; label: string }[] = [
@@ -66,6 +67,7 @@ export function NavRail() {
   // ⌘1…⌘5 and the other shortcuts jump; a click slides (`keyboardNav` is cleared by any press).
   const keyboard = useNav((s) => s.keyboardNav)
   const jump = REDUCED_MOTION || keyboard
+  const spacesShown = useRailSpacesVisible()
   return (
     // A cached island sized by its row (`cache="fill"`, native/README.md).
     // Empty rail space drags the window; the button groups do not (desktop `NavRail`).
@@ -81,7 +83,7 @@ export function NavRail() {
           <RailButton key={item.page} icon={item.icon} label={item.label} active={item.page === destination} onClick={() => goPage(item.page)} testId={`rail-${item.page}`} />
         ))}
       </div>
-      <div style={{ flexGrow: 1 }} />
+      {spacesShown ? <RailSpaces /> : <div style={{ flexGrow: 1 }} />}
       <div windowDrag={false} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
         <RailUsage />
         <RailUpdateButton />

@@ -9,7 +9,7 @@ import { useEffect } from 'react'
 import { cls, cstr, getObjc, nsApp, sel } from '../src/native/objc.ts'
 import { useSyncWindowAppearance, useSystemVariant } from '../src/shell/appearance.ts'
 import { startWindowShell } from '../src/shell/window.ts'
-import { THEMES } from '../src/theme.ts'
+import { THEMES, materialFor } from '../src/theme.ts'
 import { Label, ThemeProvider, VARIANT } from '../src/ui.tsx'
 
 function flip(name: 'NSAppearanceNameAqua' | 'NSAppearanceNameDarkAqua') {
@@ -22,6 +22,7 @@ function Lab() {
   const renderer = useGpuixRequired()
   const system = useSystemVariant(VARIANT)
   const t = THEMES[system]
+const fills = materialFor(system, 'none', 100)
   useSyncWindowAppearance(system)
   useEffect(() => {
     startWindowShell(renderer)
@@ -29,7 +30,7 @@ function Lab() {
     return () => clearTimeout(a)
   }, [])
   return (
-    <div testId="app-ready" style={{ display: 'flex', width: '100%', height: '100%', backgroundColor: t.frame, alignItems: 'center', justifyContent: 'center' }}>
+    <div testId="app-ready" style={{ display: 'flex', width: '100%', height: '100%', backgroundColor: fills.frame, alignItems: 'center', justifyContent: 'center' }}>
       <div testId="variant"><Label color={t.text} size={24}>{`system: ${system}`}</Label></div>
     </div>
   )

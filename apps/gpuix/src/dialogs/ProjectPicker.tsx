@@ -3,12 +3,12 @@ import type { ProjectsBrowseResult } from '../../../../packages/kybern-client/sr
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
 import { Button, TextField } from '../settings/controls.tsx'
 import { activeEnvironment } from '../shell/environment.ts'
-import { getClient, refreshLists, selectDraft } from '../state.ts'
+import { getClient } from '../state.ts'
+import { addProjectToCurrentSpace } from '../spaces/add.ts'
 import { errorText } from '../nav/actions.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
-import { setNav } from '../nav/store.ts'
 
 export function ProjectPicker({ close }: { close: () => void }) {
   const t = useTheme()
@@ -29,9 +29,10 @@ export function ProjectPicker({ close }: { close: () => void }) {
   const add = async () => {
     setBusy(true); setError('')
     try {
-      const project = await client.call('projects.add', { path: path.trim() })
+      // Into the active space; a folder that is a project elsewhere stays there, with a toast that offers to move it.
+      await addProjectToCurrentSpace(path.trim())
       if (getClient() !== client) return
-      await refreshLists(); setNav({ page: 'home' }); selectDraft(project.id); close()
+      close()
     } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
   }
   return <Dialog onClose={close} width={512} testId="project-picker"><DialogHeader title="Add project" description={`Choose a folder on ${activeEnvironment().name}.`} onClose={close} />

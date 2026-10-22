@@ -73,7 +73,7 @@ function Lab() {
       <div testId="dim" style={{ ...at(560, 170, 260, 56), flexDirection: 'column', borderRadius: 12, backgroundColor: card }}><Dim dimmed={busy} style={{ padding: 12, gap: 4 }}><Label color={t.text} size={13}>Model options</Label><Label color={t.textSecondary} size={12}>Reasoning · Fast mode</Label></Dim></div>
       <div testId="scroll" style={{ ...at(16, 230, 300, 170), flexDirection: 'column', gap: 8, padding: 12, overflow: 'hidden', borderRadius: 12, borderWidth: 1, borderColor: t.border }}>
         {[0, 1, 2, 3, 4].map(i => <div key={i} style={{ height: 10, width: 200 - i * 20, borderRadius: 5, backgroundColor: ink(t, 0.18) }} />)}
-        <BottomFade visible={scroll} fallback={0} />
+        <BottomFade visible={scroll} bottom={0} />
         <ScrollToBottom visible={scroll} bottom={36} onClick={() => setScroll(false)} />
       </div>
       <div testId="image" style={{ ...at(340, 230, 320, 180), alignItems: 'flex-start' }}>{imageN > 0 && <ResponseImage key={imageN} source={IMAGE} at={new Date().toISOString()} />}</div>

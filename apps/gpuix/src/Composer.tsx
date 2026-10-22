@@ -43,8 +43,11 @@ import { Icon } from './icons.tsx'
 import { MatrixLoader } from './MatrixLoader.tsx'
 import { Spinner } from './kit/Spinner.tsx'
 import { getClient, setThreadOpen, usePaneCompact, focusPane, getFocusedPaneId, usePaneAccess, getPane, selectPaneThread, setPane, set, useApp } from './state.ts'
+import { useCurrentSpaceId } from './spaces/current.ts'
 import { FONT_UI } from './theme.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from './ui.tsx'
+import { GlassEdge } from './kit/GlassEdge.tsx'
+import { frostBackdrop, frostFill, useGlass } from './platform/glass.ts'
 import { addWindowKeyHandler } from './nav/keys.ts'
 import { keyboardAnswer } from './requests/Panel.tsx'
 import { isUserInput, connectorApproval } from '../../../packages/kybern-client/src/userInput.ts'
@@ -59,9 +62,9 @@ import { ModelPicker, ModelTriggerLabel } from './composer/ModelPicker.tsx'
 import { PermissionPicker } from './composer/PermissionPicker.tsx'
 import { Leave, Pop, SwapOnChange, useLeavingList } from './composer/motion.tsx'
 import { Rise } from './motion/kit.tsx'
+import { useNativeWindowSize } from './native/layout-hooks.ts'
 import { Presence } from './motion/Presence.tsx'
 import { DropHighlight } from './motion/DropHighlight.tsx'
-import { useRequestPanelHeight } from './transcript/store.ts'
 import { ImageViewer, type MorphSource } from './motion/ImageMorph.tsx'
 import { PATCHED_NATIVE } from './native/local-build.ts'
 import { usePendingSends } from './composer/pending.ts'
@@ -208,7 +211,13 @@ export function useDraftTarget() {
   const providers = useComposer((d) => d.providers)
   const projects = useApp((s) => s.projects)
   // The most recently active thread's project, or the first project.
-  const recentProject = useApp((s) => s.threads.find((th) => s.projects.some((p) => p.id === th.project_id))?.project_id ?? s.projects[0]?.id)
+  const spaceId = useCurrentSpaceId()
+  const recentProject = useApp((s) => {
+    // Runs on every store update (streaming included): one pass over each list.
+    const here = s.projects.filter((p) => !isFreeChatProject(p.id) && (spaceId === null || p.space_id === spaceId))
+    const ids = new Set(here.map((p) => p.id))
+    return s.threads.find((th) => ids.has(th.project_id))?.project_id ?? here[0]?.id
+  })
   const entry = useApp(s => s.draft)
   const projectId = entry.projectId ? entry.projectId : draft.projectId === undefined ? recentProject ?? null : draft.projectId
   const project = projectId ? projects.find((p) => p.id === projectId) : undefined
@@ -363,16 +372,24 @@ export interface ComposerViewProps {
   catalogLoading: boolean
   onReloadModels: (force: boolean) => Promise<void>
   above?: ReactNode
+  /** The draft (text and attachments) became empty or non-empty; the task dock collapses an empty one when the page is clicked. */
+  onEmptyChange?: (empty: boolean) => void
 }
+
+const MIN_ROWS = 2
+const LINE_HEIGHT = 19.6
+/** Share of the window height the text field may take (`max-h-[40vh]`). */
+const MAX_FIELD_SHARE = 0.4
 
 export function ComposerView(input: ComposerViewProps) {
   const compact = usePaneCompact()
-  // A panel stacked on the card (the tray, a request): its shadow stops at the card's top edge (`CardShadow`).
-  const stacked = useRequestPanelHeight() > 0
+  // The field stops growing at 40% of the window and scrolls inside beyond that, so a long draft never covers the thread.
+  const maxRows = Math.max(MIN_ROWS, Math.floor((useNativeWindowSize().height * MAX_FIELD_SHARE) / LINE_HEIGHT))
   const pane = usePaneAccess()
   const props = { ...input, draftKey: `${pane.id}:${input.draftKey}`, readOnly: input.readOnly || pane.frozen }
   const measureOverlay = useMeasureComposerOverlay()
   const t = useTheme()
+  const g = useGlass()
   const renderer = useGpuixRequired()
   const { running, provider, providers, model, effort, mode } = props
   const connected = useApp((s) => s.status === 'open')
@@ -425,6 +442,7 @@ export function ComposerView(input: ComposerViewProps) {
   }, [connected])
 
   const empty = text.trim().length === 0 && attachments.length === 0
+  useEffect(() => { props.onEmptyChange?.(empty) }, [empty])
   const permissionUnsupported = provider?.kind !== 'cursor' && !!providers.find(p => p.kind === provider?.kind && !p.supported_permission_modes.includes(mode))
   const disabledReason = !connected ? 'Reconnect to send a message.' : props.readOnly ? 'This conversation is read-only.' : props.sendDisabled ? props.sendDisabledReason ?? 'Sending is unavailable.' : permissionUnsupported ? 'Choose a permission mode supported by this agent.' : sending ? 'Sending…' : uploading > 0 ? 'Wait for attachments to finish uploading.' : empty ? 'Write a message or attach a file.' : null
   const canSend = !disabledReason
@@ -594,8 +612,6 @@ export function ComposerView(input: ComposerViewProps) {
   return (
     <div ref={measureOverlay} testId="composer-overlay" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: 736 }}>
       {props.above}
-      <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', width: '100%' }}>
-      <CardShadow radius={compact ? 14 : COMPOSER_RADIUS} stacked={stacked} />
       <div
         ref={(el) => {
           card.current = el
@@ -607,16 +623,20 @@ export function ComposerView(input: ComposerViewProps) {
           if (props.readOnly || !e.paths?.length) return
           void addFiles(e.paths)
         }}
+        // Whole-window glass (`platform/glass.ts`): the frost tint over a scene blur, a hairline rim and a top highlight, no shadow.
+        backdrop={frostBackdrop(g, 'composer', compact ? 14 : COMPOSER_RADIUS)}
         style={{
+          position: 'relative',
           display: 'flex',
           flexDirection: 'column',
           width: '100%',
           borderRadius: compact ? 14 : COMPOSER_RADIUS,
           borderWidth: 1,
-          borderColor: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.052)' : 'rgba(13, 13, 13, 0.076)',
-          backgroundColor: t.variant === 'dark' ? t.composer : '#ffffff',
+          borderColor: g.on ? g.frostRim : t.variant === 'dark' ? 'rgba(252, 252, 252, 0.052)' : 'rgba(13, 13, 13, 0.076)',
+          backgroundColor: frostFill(g, 'composer', t.glass.composer),
         }}
       >
+        <GlassEdge radius={compact ? 14 : COMPOSER_RADIUS} color={g.frostHighlight} />
         {completion.menu((card.current && renderer.getElementBounds?.(card.current.id)?.width) || 736)}
         {/* `dragOver && border-[color:var(--color-border-focus)]` with the card's `transition-colors duration-200`. */}
         <DropHighlight over={dragOver} radius={compact ? 14 : COMPOSER_RADIUS} color={t.v('--color-border-focus')} />
@@ -649,8 +669,8 @@ export function ComposerView(input: ComposerViewProps) {
               onFocus={() => { if (!pane.frozen) focusPane(pane.id) }}
               value={text}
               readOnly={props.readOnly}
-              minRows={2}
-              maxRows={10}
+              minRows={MIN_ROWS}
+              maxRows={maxRows}
               onClick={readSelection}
               onChange={(e) => {
                 readSelection()
@@ -697,7 +717,7 @@ export function ComposerView(input: ComposerViewProps) {
               }}
               onSubmit={() => { void submit() }}
               theme={{ caret: t.text }}
-              style={{ width: '100%', fontSize: 14, lineHeight: 19.6, color: t.text, fontFamily: FONT_UI, opacity: connected ? 1 : 0.6 }}
+              style={{ width: '100%', fontSize: 14, lineHeight: LINE_HEIGHT, color: t.text, fontFamily: FONT_UI, opacity: connected ? 1 : 0.6 }}
             />
           </div>
           {feedback && !error && <div testId="composer-feedback"><Label color={muted(t, 0.6)} size={12}>{feedback}</Label></div>}
@@ -787,37 +807,6 @@ export function ComposerView(input: ComposerViewProps) {
           </div>
         </FooterRow>
       </div>
-      </div>
-    </div>
-  )
-}
-
-/** Reach of the card's shadow past its edges (blur 24 → three sigma, plus the offset). */
-const SHADOW_REACH = 80
-/**
- * The card's shadow, drawn by a sibling painted under it. While a panel sits on the card (the tray or a request), the part
- * above the card's top edge is clipped: the shell does not shadow itself, and a loader in the panel's lowest row stays in
- * Core Animation (a shadow painted over it kept the window presenting at display rate).
- */
-function CardShadow({ radius, stacked }: { radius: number; stacked: boolean }) {
-  const t = useTheme()
-  const top = stacked ? 0 : -SHADOW_REACH
-  return (
-    <div style={{ position: 'absolute', left: -SHADOW_REACH, right: -SHADOW_REACH, bottom: -SHADOW_REACH, top, overflow: 'hidden', pointerEvents: 'none' }}>
-      <div
-        style={{
-          position: 'absolute',
-          left: SHADOW_REACH,
-          right: SHADOW_REACH,
-          bottom: SHADOW_REACH,
-          top: -top,
-          borderRadius: radius,
-          boxShadow:
-            t.variant === 'dark'
-              ? { offsetX: 0, offsetY: 6, blurRadius: 24, spreadRadius: -10, color: 'rgba(0, 0, 0, 0.30)' }
-              : { offsetX: 0, offsetY: 4, blurRadius: 18, spreadRadius: -6, color: 'rgba(13, 13, 13, 0.07)' },
-        }}
-      />
     </div>
   )
 }

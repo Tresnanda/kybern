@@ -74,6 +74,8 @@ echo "== build (several minutes after a version change)"
   native/build/physical-spring-tests
   rustc --test native/patches/rich_doc.rs -o native/build/rich-doc-tests
   native/build/rich-doc-tests
+  rustc --edition 2021 --test native/patches/backdrop_kernel.rs -o native/build/backdrop-kernel-tests
+  native/build/backdrop-kernel-tests
   python3 native/markdown-document-test.py
 )
 

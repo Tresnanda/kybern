@@ -3,11 +3,11 @@
 // attachment tiles (`Composer.tsx` `Attachments`). Desktop `ResponseImage.tsx`'s lightbox, made a true shared-element morph:
 //
 // - Open (pointer): the image itself travels from the thumbnail's rect, crop and corner radius to the preview's, one
-//   continuous position / size / radius change on a critically damped curve (`EASE.morph`, 400 ms). The thumbnail hides
+//   continuous position / size / radius change on the iOS zoom curve (`ZOOM`, 260 ms; 200 ms back). The thumbnail hides
 //   while its image is away. The scrim fades in under it; the toolbar (name, Copy, Download, Close) fades in as it lands.
 // - Close (pointer): the reverse, into the thumbnail's rect as it is now. A thumbnail that has left the screen gets a shrink
 //   and fade towards where it was. A close during the open retargets from the value on screen.
-// - Keyboard (Enter/Space open, Escape close): instant. Reduce Motion: a cross-fade, the thumbnail stays.
+// - Keyboard (Enter/Space open, Escape close): instant. Reduce Motion: a 150 ms cross-fade, no movement, the thumbnail stays.
 //
 // Paint-only: the image is one retained subtree under a `paintTransform` (translate + scale) whose inner scope clips it to
 // the moving crop with a screen-space radius (`clipTop/Right/Bottom/Left` + `clipRadius`, the addon's `paintClip`). No React
@@ -18,7 +18,7 @@ import type { PaintTransformProps, PaintTransformValue } from '@gpuix/native/hos
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { kitOverlayOpen } from '../kit/AlertDialog.tsx'
-import { DISTANCE, DURATION, EASE } from './kit.tsx'
+import { DISTANCE, DURATION, EASE, ZOOM } from './kit.tsx'
 import { nextPresenceGeneration } from './Presence.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { isWindowVisible } from '../native/visibility.ts'
@@ -37,9 +37,9 @@ export type MorphValue = PaintTransformValue & { clipTop?: number; clipRight?: n
 
 const bezier = (e: readonly number[]) => [...e] as [number, number, number, number]
 type Timing = { duration: number; ease: [number, number, number, number] }
-/** Open and close: one curve (a critically damped spring); the way back is a little quicker, as exits are. */
-export const MORPH_OPEN: Timing = { duration: DURATION.slow, ease: bezier(EASE.morph) }
-export const MORPH_CLOSE: Timing = { duration: DURATION.medium, ease: bezier(EASE.morph) }
+/** Open and close: one curve; the way back is a little quicker, as exits are. */
+export const MORPH_OPEN: Timing = { duration: ZOOM.open, ease: bezier(ZOOM.ease) }
+export const MORPH_CLOSE: Timing = { duration: ZOOM.close, ease: bezier(ZOOM.ease) }
 /** The toolbar card above the image and the gap under it. */
 const BAR = 48
 const GAP = 8
@@ -166,7 +166,7 @@ export function ImageViewer({ src, label, from, source, onClose, finalFocus, tes
     if (!morph) return setClosing({ generation, to: { outer: { opacity: 0 }, inner: LANDED.inner }, timing: { duration: DURATION.quick, ease: bezier(EASE.out) } })
     const now = source()
     if (onScreen(now?.rect, window)) return setClosing({ generation, to: morphFrom(now!, rect, clip), timing: MORPH_CLOSE })
-    setClosing({ generation, to: fallbackTo(now ?? from!, window, rect, clip), timing: { duration: DURATION.fast, ease: bezier(EASE.morph) } })
+    setClosing({ generation, to: fallbackTo(now ?? from!, window, rect, clip), timing: MORPH_CLOSE })
   }
   // A hidden window has no native frames, so a pending exit would never complete.
   useEffect(() => { if (closing && !isWindowVisible()) finish() })
@@ -174,19 +174,19 @@ export function ImageViewer({ src, label, from, source, onClose, finalFocus, tes
   const outer: PaintTransformProps | undefined = closing
     ? { initial: false, animate: closing.to.outer, transition: closing.timing, generation: closing.generation }
     : start ? { initial: start.outer, animate: LANDED.outer, transition: MORPH_OPEN, retain: true }
-    : fadeIn ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.fast, ease: bezier(EASE.smoothOut) }, retain: true }
+    : fadeIn ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease: bezier(EASE.smoothOut) }, retain: true }
     : undefined
   const inner: PaintTransformProps | undefined = !clip || !PATCHED_NATIVE ? undefined : closing
     ? { initial: false, animate: closing.to.inner, transition: closing.timing, generation: closing.generation }
     : { initial: start?.inner ?? false, animate: LANDED.inner, transition: MORPH_OPEN }
-  // The scrim fades with the image; the toolbar arrives as the image lands and leaves first.
+  // The scrim and the toolbar follow the image's timing, both ways. Under Reduce Motion everything is one 150 ms fade.
   const scrim: PaintTransformProps | undefined = !PATCHED_NATIVE || (!from && !closing) ? undefined : closing
-    ? { initial: false, animate: { opacity: 0 }, transition: { duration: closing.timing.duration, ease: bezier(EASE.out) } }
-    : { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: morph ? MORPH_OPEN.duration : DURATION.fast, ease: bezier(EASE.smoothOut) } }
+    ? { initial: false, animate: { opacity: 0 }, transition: closing.timing }
+    : { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: morph ? MORPH_OPEN : { duration: DURATION.quick, ease: bezier(EASE.smoothOut) } }
   const nudge = REDUCED_MOTION ? 0 : -DISTANCE.micro
   const chrome: PaintTransformProps | undefined = !PATCHED_NATIVE || (!from && !closing) ? undefined : closing
-    ? { initial: false, animate: { opacity: 0, translateY: nudge }, transition: { duration: 0.12, ease: bezier(EASE.out) } }
-    : { initial: { opacity: 0, translateY: nudge }, animate: { opacity: 1, translateY: 0 }, transition: { duration: 0.2, delay: morph ? MORPH_OPEN.duration * 0.7 : 0, ease: bezier(EASE.smoothOut) } }
+    ? { initial: false, animate: { opacity: 0, translateY: nudge }, transition: closing.timing }
+    : { initial: { opacity: 0, translateY: nudge }, animate: { opacity: 1, translateY: 0 }, transition: morph ? MORPH_OPEN : { duration: DURATION.quick, ease: bezier(EASE.smoothOut) } }
   const outline = t.variant === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'
   return (
     // An anchored layer paints an opaque backing unless it asks for none (`backdrop: { blur: 0 }`); the scrim is our own

@@ -7,7 +7,7 @@ import { exportFileName, noteMarkdown } from '@/state/notesModel'
 import type { NoteSummary } from '../../../../packages/kybern-client/src/types.ts'
 import { Menu, MenuItem, Dialog } from '../nav/overlay.tsx'
 import { Button } from '../settings/controls.tsx'
-import { useApp } from '../state.ts'
+import { useSpaceProjects } from '../spaces/current.ts'
 import { toast } from '../shell/toasts.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { markNoteLeaving } from './motion.ts'
@@ -18,7 +18,7 @@ export async function copyMarkdown(title: string, body: string) {
 }
 export function NoteMenu({ note, readText, part, trigger }: { note: NoteSummary; readText?: () => { title: string; body: string }; part?: 'share' | 'more'; trigger?: () => React.ReactNode }) {
   const t = useTheme()
-  const projects = useApp((s) => s.projects)
+  const projects = useSpaceProjects()
   const { renderer } = useGpuix()
   const [moving, setMoving] = useState(false)
   const [purging, setPurging] = useState(false)

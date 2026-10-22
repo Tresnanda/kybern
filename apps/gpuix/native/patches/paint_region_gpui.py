@@ -54,7 +54,7 @@ edit(m, '        if self.presents_with_transaction {', '''        self.paint_reg
         if self.presents_with_transaction {''')
 edit(m, '                log::error!("failed to render: {error:#}");', '                self.paint_region_scissor = None;\n                log::error!("failed to render: {error:#}");')
 edit(m, '            Some(metal::MTLClearColor::new(0., 0., 0., alpha)),', '''            if self.paint_region_scissor.is_some() { None } else { Some(metal::MTLClearColor::new(0., 0., 0., alpha)) },''')
-edit(m, '        if scene.backdrops.is_empty()', '        self.clear_paint_region(command_encoder,alpha as f32);\n        if scene.backdrops.is_empty()')
+edit(m, '        if let Some(r)=&mut self.backdrop_resources { r.begin_frame(', '        self.clear_paint_region(command_encoder,alpha as f32);\n        if let Some(r)=&mut self.backdrop_resources { r.begin_frame(')
 pending[m] += '\ninclude!("paint_region_renderer.rs");\n'
 for name in ['paint_region_renderer.rs','paint_region_present.rs','paint_region_cull.rs','paint_region_atlas.rs','paint_region.metal']:
     dest=root/'crates/gpui_apple/src'/name

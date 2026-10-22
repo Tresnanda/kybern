@@ -12,6 +12,7 @@ import { useState } from 'react'
 import { Composer, useDraftTarget } from './Composer.tsx'
 import { Icon } from './icons.tsx'
 import { selectDraft, useApp } from './state.ts'
+import { useSpaceProjects } from './spaces/current.ts'
 import { COLUMN, GUTTER } from './Transcript.tsx'
 import { ink, Label, LOGO_SVG, useTheme } from './ui.tsx'
 import { G } from './composer/glyphs.ts'
@@ -37,7 +38,7 @@ function shouldEnter(): boolean {
 export function Draft() {
   const t = useTheme()
   const coordinator = useApp(s => s.draft.purpose === 'coordinator')
-  const projects = useApp((s) => s.projects)
+  const projects = useSpaceProjects()
   const { projectId, project, useWorktree } = useDraftTarget()
   const list = [...projects].sort((a, b) => a.name.localeCompare(b.name))
   const heading = ink(t, 0.95)

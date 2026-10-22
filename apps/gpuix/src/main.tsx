@@ -12,8 +12,9 @@ import { connect } from './state.ts'
 import { startSplitView } from './split/store.ts'
 import { ThemeProvider, VARIANT } from './ui.tsx'
 import { startPerfProbe } from './perf/probe.ts'
-import { installDesktopMaterial } from './native/material.ts'
-import { OPAQUE_WINDOW } from './platform/material.ts'
+import { getAccessibilityDisplay } from './platform/material.ts'
+import { resolveScope, type ThemeVariant } from './platform/translucency.ts'
+import { backingFor, installWindowMaterial } from './shell/windowMaterial.ts'
 import { startAppUpdateChecks } from './platform/update.ts'
 import { installFrameSource } from './native/frame.ts'
 import { hasSavedFrame, installWindowFrame, startWindowShell } from './shell/window.ts'
@@ -64,6 +65,11 @@ startAppUpdateChecks()
 const { App } = await import('./App.tsx')
 startupMark('workspace-module-ready')
 
+// The launch backing, from the saved material of the variant the window opens in (`shell/windowMaterial.ts`).
+const launchVariant: ThemeVariant = process.env.KYBERN_APPEARANCE === 'light' || process.env.KYBERN_APPEARANCE === 'dark' || appearance().theme === 'system' ? VARIANT : (appearance().theme as ThemeVariant)
+const launchMaterial = appearance().window[launchVariant]
+const launchBacking = backingFor(launchMaterial, resolveScope(launchMaterial, getAccessibilityDisplay()), launchVariant)
+
 startupMark('render-start')
 // Before `render`, so a throw from a timer or promise degrades to a toast instead of GPUIX's full-window error screen.
 installRuntimeSafetyNet()
@@ -80,10 +86,9 @@ render(
     width: Number(process.env.KYBERN_WINDOW_SIZE?.split('x')[0]) || 1280,
     height: Number(process.env.KYBERN_WINDOW_SIZE?.split('x')[1]) || 820,
     titlebarTransparent: true,
-    // The desktop's macOS window is always translucent (under-window vibrancy,
-    // desktop #39) with the frame painted at 88% over it; "Use translucent
-    // surfaces" only makes the content glass (`platform/material.ts`).
-    windowBackground: OPAQUE_WINDOW ? 'opaque' : 'blurred',
+    // Opaque for Solid, an accessibility override or `KYBERN_OPAQUE`; else the native vibrancy (Blur Auto) or a
+    // transparent window with the adjustable desktop blur behind it (`shell/windowMaterial.ts`).
+    windowBackground: launchBacking.mode,
     trafficLightX: 16,
     trafficLightY: 16,
     ...(process.env.KYBERN_PERF_PROBE === '1' ? { debugFrameOverlay: 'minimal' as const } : {}),
@@ -102,8 +107,8 @@ startupMark('render-returned')
 // Put the window back where it was (size and position are saved as it moves).
 installWindowFrame()
 
-// GPUI's blur is colourless; give it the desktop's vibrancy material.
-if (!OPAQUE_WINDOW) installDesktopMaterial(process.env.KYBERN_APPEARANCE || appearance().theme === 'system' ? VARIANT : appearance().theme as 'light' | 'dark')
+// GPUI's blur is colourless; give it the desktop's vibrancy material, or set the adjustable desktop blur.
+installWindowMaterial(launchBacking, launchVariant)
 
 // Automation drives the app over a stdin pipe (`@gpuix/react/automation`). If the
 // driving script dies without `close()`, the pipe ends: quit instead of

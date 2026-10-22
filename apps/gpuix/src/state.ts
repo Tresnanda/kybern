@@ -1,7 +1,7 @@
 import { environmentEndpoint, onEnvironmentChange, registerEnvironmentConnection } from './shell/environment.ts'
 import { startupMark } from './perf/startup.ts'
 import { HistoryPrefetch } from './shell/historyPrefetch.ts'
-import { EARLIER_HISTORY_ENTRIES } from '../../../packages/kybern-client/src/historyPaging.ts'
+import { EARLIER_HISTORY_PAGE } from '../../../packages/kybern-client/src/historyPaging.ts'
 import { onFrame } from './native/frame.ts'
 import { isWindowVisible, onWindowVisibility } from './native/visibility.ts'
 import { eventFrame } from './transcript/eventFrame.ts'
@@ -156,7 +156,7 @@ export function primeThreadHistory(id: ThreadId) {
     if (owner !== client || sessions.get(id) !== session) return
     session.history.prime(session.open, (cursor, through) => owner.call('threads.get', {
       thread_id: id, include_tool_output: false, defer_tool_stream: true,
-      transcript_limit: EARLIER_HISTORY_ENTRIES, before_seq: cursor, through_seq: through,
+      ...EARLIER_HISTORY_PAGE, before_seq: cursor, through_seq: through,
     }))
   }, 250)
 }

@@ -12,6 +12,8 @@ import { MatrixLoader } from '../MatrixLoader.tsx'
 import { Rise } from '../motion/kit.tsx'
 import { iconEnter } from '../shell/motion.ts'
 import { getClient, useApp } from '../state.ts'
+import { inSpace } from '../../../../packages/kybern-client/src/spaces.ts'
+import { useCurrentSpaceId } from '../spaces/current.ts'
 import { Label, ProviderMark, useTheme } from '../ui.tsx'
 import { providerLabel } from '../sidebar/model.ts'
 import { errorText, resumeSession } from './actions.ts'
@@ -42,6 +44,7 @@ function SessionPicker({ projectId: initialProject }: { projectId: string | null
   const { renderer } = useGpuix()
   const providers = useNav((s) => s.providers)
   const projects = useApp((s) => s.projects)
+  const spaceId = useCurrentSpaceId()
   const project = projects.find((p) => p.id === initialProject) ?? null
   const available = providers.filter((p) => p.available).map((p) => p.kind)
   const [query, setQuery] = useState('')
@@ -91,8 +94,10 @@ function SessionPicker({ projectId: initialProject }: { projectId: string | null
     () =>
       kinds
         .flatMap((k) => pages[k]?.sessions ?? [])
+        // A session in a project of another space stays out of the list (sessions without a project stay).
+        .filter((session) => { const owner = projects.find((p) => p.path === session.cwd); return !owner || inSpace(owner.id, projects, spaceId) })
         .sort((a, b) => b.updated_at.localeCompare(a.updated_at) || sessionKey(a).localeCompare(sessionKey(b))),
-    [pages, kinds],
+    [pages, kinds, projects, spaceId],
   )
   // Bound the rows even after paging; searching stays server-side over every session.
   const visible = all.slice(pageIndex * PAGE, (pageIndex + 1) * PAGE)

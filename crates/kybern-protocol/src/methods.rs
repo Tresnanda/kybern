@@ -434,6 +434,10 @@ pub struct ProjectsAddParams {
     pub path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The space for a new project; the first space when absent. An existing
+    /// path is returned unchanged (it is not moved).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_id: Option<SpaceId>,
 }
 method!(ProjectsAdd, "projects.add", Some(Scope::OrchestrationOperate), ProjectsAddParams, Project);
 
@@ -460,6 +464,9 @@ pub struct ProjectsUpdateParams {
     /// object each time.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present_or_null")]
     pub coordinator: Option<Option<CoordinatorOverrides>>,
+    /// Moves the project to this space.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_id: Option<SpaceId>,
 }
 method!(ProjectsUpdate, "projects.update", Some(Scope::OrchestrationOperate), ProjectsUpdateParams, Project);
 
@@ -477,6 +484,65 @@ pub const PROJECTS_CHANGED_NOTIFICATION: &str = "projects.changed";
 pub struct ProjectsChangedNotification {
     /// Every project after the change, in `projects.list` order.
     pub projects: Vec<Project>,
+}
+
+// ---- spaces ----
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SpacesListResult {
+    pub spaces: Vec<Space>,
+}
+method!(SpacesList, "spaces.list", Some(Scope::OrchestrationRead), Empty, SpacesListResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SpacesCreateParams {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<SpaceColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo: Option<SpaceLogo>,
+}
+method!(SpacesCreate, "spaces.create", Some(Scope::OrchestrationOperate), SpacesCreateParams, Space);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SpacesUpdateParams {
+    pub space_id: SpaceId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<SpaceColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo: Option<SpaceLogo>,
+}
+method!(SpacesUpdate, "spaces.update", Some(Scope::OrchestrationOperate), SpacesUpdateParams, Space);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SpacesDeleteParams {
+    pub space_id: SpaceId,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SpacesDeleteResult {
+    /// The space the deleted space's projects moved to.
+    pub moved_to: SpaceId,
+    pub moved_projects: u32,
+}
+method!(SpacesDelete, "spaces.delete", Some(Scope::OrchestrationOperate), SpacesDeleteParams, SpacesDeleteResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SpacesReorderParams {
+    /// Every space id exactly once, in the new order.
+    pub space_ids: Vec<SpaceId>,
+}
+method!(SpacesReorder, "spaces.reorder", Some(Scope::OrchestrationOperate), SpacesReorderParams, SpacesListResult);
+
+pub const SPACES_CHANGED_NOTIFICATION: &str = "spaces.changed";
+
+/// Params of the `spaces.changed` notification, sent after a space is created,
+/// updated, deleted or reordered, by any client.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct SpacesChangedNotification {
+    /// Every space after the change, in order.
+    pub spaces: Vec<Space>,
 }
 
 // ---- threads ----
@@ -613,6 +679,17 @@ pub struct ThreadsGetParams {
     /// `threads.tool_output`. Omit to preserve legacy snapshots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub defer_tool_stream: Option<bool>,
+    /// When true, a paged request also returns the earlier rows of its oldest
+    /// turn, so every page starts at a turn boundary (a bounded number of extra
+    /// rows). Clients that show one row per turn otherwise get pages that add
+    /// nothing visible inside long tool-heavy turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whole_turns: Option<bool>,
+    /// With `before_seq`: return only the transcript page. Thread-wide state the
+    /// client holds from its first page (runtime tasks, provider commands and
+    /// usage, pending questions and approvals, notes) comes back empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_only: Option<bool>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsGetResult {
@@ -2911,6 +2988,11 @@ registry!(
     ProjectsAdd,
     ProjectsUpdate,
     ProjectsRemove,
+    SpacesList,
+    SpacesCreate,
+    SpacesUpdate,
+    SpacesDelete,
+    SpacesReorder,
     ThreadsList,
     ThreadsSearch,
     ThreadsRead,

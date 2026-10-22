@@ -35,7 +35,8 @@ and behave like the desktop, and it must not make idle or animation cost worse
   each row as padding. Rows are its direct children with stable keys.
 - No nested vertical scrollers. Long lists use `<virtual-list>`.
 - Menus, popovers and tooltips must be `<anchored>`, `SelectContent` or
-  `ComboboxContent` with an opaque fill, or they paint under the transcript.
+  `ComboboxContent`, or they paint under the transcript. Their fill is opaque (`t.popover`) on Solid and `t.glass.menu` / `t.glass.dense` on glass
+  (`theme.ts`); never a hand-made translucent fill. `PopupLayer` picks the fill and the backdrop from `t.scope`.
 - The `<textarea>` placeholder colour is fixed; `Composer.tsx` draws its own.
 - An `<input>` consumes Enter as its own submit action: handle Enter with `onSubmit`,
   never `onKeyDown` (arrows and Escape do reach `onKeyDown`), unless you use the
@@ -86,6 +87,15 @@ They need a definite width and height, no margins/insets of their own, and no
 selectable text. Good candidates: sidebar rows (100% × 28), the title bar, the
 rail, loaders, chips. An island that changes re-renders alone; the rest of the
 window replays its last frame.
+
+## Materials (window translucency)
+
+On whole-window glass, never composite onto `t.surface` or paint an opaque fill on a content-area surface; use
+`platform/glass.ts` (`raisedFill`, `wash`, `frostFill`, `frostBackdrop`; the tints come from `useGlass()`). Never put an
+outer shadow under a fill with alpha < 0.85: GPUI paints a drop shadow beneath the whole box, so behind a translucent fill it
+darkens the interior. Depth comes from the rim, the `GlassEdge` top highlight and, for frost, the blur. A fade on glass is
+`edgeFade` (an alpha ramp), never a gradient to an opaque colour. Solid and Sidebar only must stay byte-identical: the
+helpers return the call site's own fill outside `scope === 'window'`.
 
 ## Motion and feel
 

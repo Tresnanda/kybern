@@ -1,4 +1,4 @@
-import { EARLIER_HISTORY_ENTRIES } from "../../../../packages/kybern-client/src/historyPaging"
+import { EARLIER_HISTORY_PAGE } from "../../../../packages/kybern-client/src/historyPaging"
 import { writeProviderCache } from "./providerCache"
 import { createToolOutputCache } from "./toolOutputCache"
 import { retainedSize } from "@/lib/retainedSize"
@@ -583,7 +583,7 @@ export function createEnvironmentRuntime(useStore: EnvironmentStore) {
     historyLoads.set(id, record)
     useStore.getState().updateTranscript(id, (state) => ({ ...state, loadingEarlier: true }))
     record.promise = transcriptGet(id, {
-      transcript_limit: EARLIER_HISTORY_ENTRIES, before_seq: base.nextBeforeSeq, through_seq: base.lastSeq,
+      ...EARLIER_HISTORY_PAGE, before_seq: base.nextBeforeSeq, through_seq: base.lastSeq,
     }).then((page) => {
       if (!isCurrentHydration(generation) || historyLoads.get(id) !== record) return
       const replay = record.buffer.after(base.lastSeq)

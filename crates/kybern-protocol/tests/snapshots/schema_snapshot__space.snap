@@ -1,0 +1,117 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(Space)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Space",
+  "description": "A group of projects (work, personal…). Every project except free chat is in exactly one.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "name": {
+      "description": "1–32 characters, trimmed; unique ignoring case.",
+      "type": "string"
+    },
+    "color": {
+      "description": "The swatch behind initials and icons, and the fill while an image loads.",
+      "$ref": "#/$defs/SpaceColor"
+    },
+    "logo": {
+      "$ref": "#/$defs/SpaceLogo"
+    },
+    "position": {
+      "description": "0-based order in the rail.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "id",
+    "name",
+    "color",
+    "logo",
+    "position",
+    "created_at",
+    "updated_at"
+  ],
+  "$defs": {
+    "SpaceColor": {
+      "type": "string",
+      "enum": [
+        "blue",
+        "green",
+        "purple",
+        "pink",
+        "teal",
+        "amber",
+        "red",
+        "graphite"
+      ]
+    },
+    "SpaceLogo": {
+      "oneOf": [
+        {
+          "description": "The name's initials on the colour.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "initials"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "A glyph from the client's curated set, on the colour. `icon` is a slug\n(`^[a-z0-9][a-z0-9-]{0,31}$`); clients that do not know it draw initials.",
+          "type": "object",
+          "properties": {
+            "icon": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "icon"
+            }
+          },
+          "required": [
+            "kind",
+            "icon"
+          ]
+        },
+        {
+          "description": "A square 128×128 PNG the daemon derived from an upload (`GET /assets/{id}`).",
+          "type": "object",
+          "properties": {
+            "asset_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "kind": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "required": [
+            "kind",
+            "asset_id"
+          ]
+        }
+      ]
+    }
+  }
+}

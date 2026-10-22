@@ -186,7 +186,7 @@ export function startNavHistory() {
   record()
 }
 
-function applyEntry(entry: NavEntry) {
+export function applyEntry(entry: NavEntry) {
   if (entry.kind === 'thread') {
     setNav({ page: 'home' })
     if (getState().selectedId !== entry.id) void selectThread(entry.id)

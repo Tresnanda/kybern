@@ -12,11 +12,11 @@ import type { PaintTransformProps, PaintTransformValue } from '@gpuix/native/hos
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { REDUCED_MOTION } from '../ui.tsx'
-import { BLUR, DISCLOSURE, DISTANCE, DURATION, EASE, HOVER_FADE, SCALE, SPRING, type Ease } from './tokens.ts'
+import { BLUR, DISCLOSURE, DISTANCE, DURATION, EASE, HOVER_FADE, SCALE, SPRING, ZOOM, type Ease } from './tokens.ts'
 
 // The desktop's tokens (`motion.css:13-74`) live in `tokens.ts` (a leaf, because `ui.tsx` -> `press.ts` -> this module ->
 // `ui.tsx` is an import cycle); they are re-exported here, so callers keep importing them from `motion/kit.tsx`.
-export { BLUR, DISCLOSURE, DISTANCE, DURATION, EASE, HOVER_FADE, SCALE, SPRING, type Ease }
+export { BLUR, DISCLOSURE, DISTANCE, DURATION, EASE, HOVER_FADE, SCALE, SPRING, ZOOM, type Ease }
 
 const tween = (duration: number, ease: Ease, delay = 0) => ({ duration, ease: [...ease] as [number, number, number, number], delay })
 const bezier = (ease: Ease) => [...ease] as [number, number, number, number]

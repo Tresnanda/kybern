@@ -2,19 +2,22 @@ import '../src/native/local-build.ts'
 import '../src/native/backdrop.ts'
 import { render } from '@gpuix/react'
 import { useState } from 'react'
-import { THEMES } from '../src/theme.ts'
+import { THEMES, materialFor } from '../src/theme.ts'
 import { markdownTheme } from '../src/transcript/kit.tsx'
 import { CodeChunk, CodeHeader } from '../src/transcript/markdown.tsx'
-const t = THEMES[process.env.KYBERN_APPEARANCE === 'light' ? 'light' : 'dark']
+const variant = process.env.KYBERN_APPEARANCE === 'light' ? 'light' : 'dark'
+const t = THEMES[variant]
+// The opaque window frame (the material moved out of the theme object).
+const frame = materialFor(variant, 'none', 100).frame
 const code = 'cd ~/projects/ade-gpuix/apps/gpuix\npnpm dev'
 const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="110"><path fill="#e84c42" d="M0 0H160V110H0Z"/></svg>'
 const image = 'data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64')
 function Lab() {
   const [tick,setTick] = useState(0), [hit,setHit] = useState('none'), [wrap,setWrap] = useState(false),[paint,setPaint]=useState(false)
   const kinds = ['quad','svg','image','text','backdrop','cached','virtual','nested']
-  return <div testId="ready" style={{width:'100%',height:'100%',backgroundColor:t.frame,padding:24,display:'flex',flexDirection:'column',gap:16}}>
+  return <div testId="ready" style={{width:'100%',height:'100%',backgroundColor:frame,padding:24,display:'flex',flexDirection:'column',gap:16}}>
     <div style={{display:'flex',gap:12}}>
-      <div testId="frame-reference" style={{width:10,height:10,backgroundColor:t.frame}}/>
+      <div testId="frame-reference" style={{width:10,height:10,backgroundColor:frame}}/>
       <div testId="replay" onClick={()=>setTick(tick+1)} style={{width:120,height:28,backgroundColor:t.surface}}><text style={{color:t.text}}>{`Replay ${tick}`}</text></div>
       <div testId="paint" onClick={()=>setPaint(!paint)} style={{width:80,height:28,backgroundColor:t.surface}}><text style={{color:t.text}}>Paint leaf</text></div>
       <text testId="hit" style={{color:t.text}}>{hit}</text>
@@ -23,7 +26,7 @@ function Lab() {
       {row.map(kind=><div key={kind} style={{display:'flex',flexDirection:'column',gap:4}}>
         <text style={{color:t.text}}>{kind}</text>
         <div style={{position:'relative',width:160,height:110}}>
-          <div onClick={()=>setHit('behind')} style={{position:'absolute',left:0,top:0,width:160,height:110,backgroundColor:t.frame}}/>
+          <div onClick={()=>setHit('behind')} style={{position:'absolute',left:0,top:0,width:160,height:110,backgroundColor:frame}}/>
           <div testId={kind} onClick={()=>setHit(kind)} style={{position:'absolute',left:0,top:0,width:160,height:110,borderRadius:30,overflow:'hidden'}}>
             {kind==='quad'&&<div style={{width:160,height:110,backgroundColor:paint?'#3a87e9':'#e84c42'}}/>}
             {kind==='svg'&&<svg source={svg} style={{width:160,height:110,color:'#e84c42'}}/>}

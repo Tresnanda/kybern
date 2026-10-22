@@ -509,6 +509,33 @@ const MIGRATIONS: &[&str] = &[
     // bindings: they suppress providers that reported their root as a child.
     "CREATE INDEX events_runtime_tasks ON events(thread_id, seq)
       WHERE kind IN ('runtime_task_started', 'runtime_task_updated', 'runtime_task_completed', 'provider_session_bound');",
+    // v27: spaces. Every project except free chat belongs to one; the migration
+    // puts existing projects in "Personal".
+    "
+    BEGIN;
+    CREATE TABLE spaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        color TEXT NOT NULL,
+        -- JSON of `SpaceLogo`.
+        logo TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    INSERT INTO spaces(id, name, color, logo, position, created_at, updated_at)
+    SELECT lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' ||
+           substr(lower(hex(randomblob(2))), 2) || '-' ||
+           substr('89ab', 1 + (abs(random()) % 4), 1) || substr(lower(hex(randomblob(2))), 2) || '-' ||
+           lower(hex(randomblob(6))),
+           'Personal', 'green', '{\"kind\":\"initials\"}', 0,
+           strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), strftime('%Y-%m-%dT%H:%M:%SZ', 'now');
+    ALTER TABLE projects ADD COLUMN space_id TEXT REFERENCES spaces(id);
+    UPDATE projects SET space_id = (SELECT id FROM spaces LIMIT 1)
+      WHERE id != '00000000-0000-0000-0000-000000000001';
+    CREATE INDEX projects_space ON projects(space_id);
+    COMMIT;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

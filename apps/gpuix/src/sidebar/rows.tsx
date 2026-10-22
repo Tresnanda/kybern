@@ -1,4 +1,8 @@
 import { useSidebarRowLease } from './Window.tsx'
+import { KitButton } from '../kit/AlertDialog.tsx'
+import { MoveToSpaceMenu } from '../spaces/MoveToSpace.tsx'
+import { inCurrentSpace } from '../spaces/current.ts'
+import { SPACE_COPY } from '../../../../packages/kybern-client/src/spaces.ts'
 import { canOpenInSplit, collectThreadPanes, openThreadInSplit, useFocusedPane, useSplitRoot } from '../split/store.ts'
 import { beginThreadDrag, trackThreadDrag, consumeThreadDrag, finishSplitDrag } from '../split/Workspace.tsx'
 import { showDialog } from '../dialogs/store.ts'
@@ -57,6 +61,8 @@ function useWasRevealed(reveal: boolean) {
 export const INSET = { paddingLeft: 6, paddingRight: 6 } as const
 /** `pr-[4.75rem]`: room for the revealed actions. */
 const ACTIONS_PAD = 76
+/** The project row's trailing room: the 20px New thread button at 6px from the edge, 4px clear of the title. */
+const PROJECT_PAD = 24
 
 export const accent = (t: Theme) => t.v('--sidebar-accent')
 export const accentActive = (t: Theme) => t.v('--sidebar-accent-active')
@@ -269,11 +275,10 @@ export function useAddProject() {
   }
 }
 
-// ---- section label ("Projects", with filter and add on hover) ----
+// ---- section label ("Projects", with filter and add) ----
 
-export const SectionLabel = memo(function SectionLabel() {
+export const SectionLabel = memo(function SectionLabel({ text = 'Projects' }: { text?: string }) {
   const t = useTheme()
-  const { hover, bind } = useHover()
   const filter = useNav((s) => s.filter)
   const threads = useNav(() => getState().threads)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -282,11 +287,10 @@ export const SectionLabel = memo(function SectionLabel() {
   const filtering = isFiltering(filter)
   const summaryPop = usePopOnChange(filtering)
   const agents = threadAgents(threads, filter)
-  const shown = hover || filtering || menuOpen
   return (
     <div style={{ paddingTop: 10, paddingBottom: 4, ...INSET }}>
-      <div {...bind} style={{ position: 'relative', display: 'flex', alignItems: 'center', height: 28, paddingLeft: 8, paddingRight: 76, gap: 6 }}>
-        <Label color={muted(t, 0.58)}>Projects</Label>
+      <div style={{ position: 'relative', display: 'flex', alignItems: 'center', height: 28, paddingLeft: 8, paddingRight: 76, gap: 6 }}>
+        <Label color={muted(t, 0.58)} truncate>{text}</Label>
         {filtering && (
           <>
             <Label color={muted(t, 0.58)}>·</Label>
@@ -295,9 +299,8 @@ export const SectionLabel = memo(function SectionLabel() {
             </Label>
           </>
         )}
-        {/* Mounted for the label's life: the controls leave with a fade when the pointer does (`Reveal`). */}
+        {/* Creation affordances stay on screen (muted, brighter under the pointer): Filter and Add project are not hover reveals. */}
         <div style={{ position: 'absolute', top: 4, right: 6, display: 'flex', alignItems: 'center' }}>
-            <Reveal show={shown} still={filtering}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <Menu
               open={menuOpen}
@@ -336,7 +339,6 @@ export const SectionLabel = memo(function SectionLabel() {
             </Menu>
             <IconButton icon={N.plus} label="Add project" tooltip="Add project" onClick={() => void onAddProject()} testId="add-project" />
             </div>
-            </Reveal>
         </div>
       </div>
     </div>
@@ -392,7 +394,8 @@ export const ProjectHeader = memo(function ProjectHeader({
   const wasHovered = useWasRevealed(hover)
   const move = (offset: -1 | 1) => {
     const visible = getState()
-      .projects.map((p) => p.id)
+      .projects.filter((p) => inCurrentSpace(p.id))
+      .map((p) => p.id)
       .filter((id) => id !== FREE_CHAT_PROJECT_ID)
     const order = [...getNav().projectOrder.filter((id) => visible.includes(id)), ...visible.filter((id) => !getNav().projectOrder.includes(id)).sort((a, b) => nameOf(a).localeCompare(nameOf(b)))]
     const from = order.indexOf(project.id)
@@ -444,10 +447,11 @@ export const ProjectHeader = memo(function ProjectHeader({
               {project.name}
             </Label>
             {hasDraft && <DraftMarker />}
-            <PadTween width={hover ? ACTIONS_PAD - 8 : 0} cancelGap={8} />
+            {/* Room for the always-visible New thread button. */}
+            <PadTween width={PROJECT_PAD} cancelGap={8} />
           </div>
           {!open && status && !hover && (
-            <div style={{ display: 'flex', minWidth: 26, justifyContent: 'flex-end', alignItems: 'center', flexShrink: 0 }}>
+            <div style={{ display: 'flex', minWidth: 26, justifyContent: 'flex-end', alignItems: 'center', flexShrink: 0, marginRight: PROJECT_PAD - 2 }}>
               <StatusGlyph status={status} activity={activity} />
             </div>
           )}
@@ -465,9 +469,8 @@ export const ProjectHeader = memo(function ProjectHeader({
           </Reveal>
         </div>
         <div style={{ position: 'absolute', top: 4, right: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Reveal show={hover}>
-            <IconButton icon={N.newThread} label="New thread" tooltip="New thread" onClick={() => newThread(project.id)} testId={`project-new-${project.id}`} />
-          </Reveal>
+          {/* A creation affordance: always on screen, muted until the pointer is on it. */}
+          <IconButton icon={N.newThread} label="New thread" tooltip="New thread" onClick={() => newThread(project.id)} testId={`project-new-${project.id}`} />
         </div>
       </div>
       {menu.at && (
@@ -481,6 +484,7 @@ export const ProjectHeader = memo(function ProjectHeader({
               <MenuItem id="down" icon={N.arrowDown} label="Move down" disabled={!canMoveDown} onSelect={() => move(1)} />
             </>
           )}
+          <MoveToSpaceMenu project={project} />
           <MenuSeparator />
           <MenuItem
             id="remove"
@@ -880,6 +884,21 @@ export const MoreRow = memo(function MoreRow({ projectId, count, showAll, onTogg
           {showAll ? 'Show less' : `Show ${count} more`}
         </Label>
       </div>
+    </div>
+  )
+})
+
+/** A space without projects (`spaces.md` §7.9): a compact `Empty`, left-aligned in the panel inset. */
+export const EmptySpaceRow = memo(function EmptySpaceRow({ onlySpace }: { onlySpace: boolean }) {
+  const t = useTheme()
+  const onAddProject = useAddProject()
+  return (
+    <div testId="empty-space" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 10, paddingLeft: 16, paddingRight: 16, paddingTop: 8, paddingBottom: 8, minWidth: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+        <Label color={t.text} size={13} lineHeight={19.5} weight={500}>{SPACE_COPY.emptyTitle}</Label>
+        {!onlySpace && <Label color={t.textSecondary} size={12} lineHeight={18} style={{ minWidth: 0, flexShrink: 1 }}>{SPACE_COPY.emptyDescription}</Label>}
+      </div>
+      <KitButton variant="outline" size="sm" testId="empty-space-add" onClick={() => void onAddProject()}>{SPACE_COPY.emptyAction}</KitButton>
     </div>
   )
 })

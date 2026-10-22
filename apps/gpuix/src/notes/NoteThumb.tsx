@@ -6,6 +6,9 @@ import type { NoteSummary } from '../../../../packages/kybern-client/src/types.t
 import { FONT_MONO } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { clear, notesTokens } from './kit.tsx'
+import { GlassEdge } from '../kit/GlassEdge.tsx'
+import { EDGE_FADE } from '../native/local-build.ts'
+import { raisedFill, useGlass } from '../platform/glass.ts'
 import { thumbLift } from './motion.ts'
 import { useNoteThumb } from './thumbs.ts'
 
@@ -56,6 +59,7 @@ function gap(prev: MiniBlock | undefined, block: MiniBlock, fs: number): number 
 
 export const NoteThumb = memo(function NoteThumb({ note, big, active, lift, pressed = false }: { note: NoteSummary; big: boolean; active: boolean; lift: boolean; pressed?: boolean }) {
   const t = useTheme()
+  const g = useGlass()
   const k = notesTokens(t)
   const loaded = useNoteThumb(note)
   // The paint scope is mounted while the card is hot and until the return tween ends (see `thumbLift`).
@@ -72,10 +76,15 @@ export const NoteThumb = memo(function NoteThumb({ note, big, active, lift, pres
   const body: ReactNode = doc.blocks.map((block, i) => <div key={i} style={{ marginTop: gap(doc.blocks[i - 1], block, fs) }}><Block block={block} fs={fs} k={k} /></div>)
   return (
     <div testId={`note-thumb-${note.id}`} style={{ position: 'relative', borderRadius: 12 }}>
-    <div paintTransform={scoped ? thumbLift(lift, pressed) : undefined} onMotionComplete={scoped ? () => { if (!hot) setScoped(false) } : undefined} style={{ position: 'relative', height: big ? 184 : 156, borderRadius: 12, backgroundColor: k.card, overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: short || empty ? 'center' : 'flex-start', boxShadow: k.cardShadow, borderWidth: t.variant === 'dark' ? 0 : 0.5, borderColor: k.ring, ...(active ? { borderWidth: 2, borderColor: t.composerFocusBorder } : {}), pointerEvents: 'none' }}>
+    <div paintTransform={scoped ? thumbLift(lift, pressed) : undefined} onMotionComplete={scoped ? () => { if (!hot) setScoped(false) } : undefined} style={{ position: 'relative', height: big ? 184 : 156, borderRadius: 12, backgroundColor: raisedFill(g, k.card), overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: short || empty ? 'center' : 'flex-start', ...(g.on ? { borderWidth: 1, borderColor: g.rim } : { boxShadow: k.cardShadow, borderWidth: t.variant === 'dark' ? 0 : 0.5, borderColor: k.ring }), ...(active ? { borderWidth: 2, borderColor: t.composerFocusBorder } : {}), pointerEvents: 'none' }}>
       {empty ? <div style={{ display: 'flex', justifyContent: 'center' }}><Label color={k.fg4} size={13}>No text yet</Label></div>
-        : <div style={{ display: 'flex', flexDirection: 'column', paddingTop: pad.v, paddingBottom: pad.v, paddingLeft: pad.h, paddingRight: pad.h, ...(big ? { maxWidth: fs * 56 + pad.h * 2 } : {}) }}>{body}</div>}
-      {!short && !empty && <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 40, borderBottomLeftRadius: 12, borderBottomRightRadius: 12, background: { type: 'linear-gradient', angle: 180, stops: [{ color: clear(k.card), position: 0 }, { color: k.card, position: 1 }] } }} />}
+        : g.on && EDGE_FADE && !short
+          // Whole-window glass: the body fades out by alpha over the card's last 40 px (a frame the size of the card carries the ramp).
+          ? <div edgeFade={{ bottom: 40 }} style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}><div style={{ display: 'flex', flexDirection: 'column', paddingTop: pad.v, paddingBottom: pad.v, paddingLeft: pad.h, paddingRight: pad.h, ...(big ? { maxWidth: fs * 56 + pad.h * 2 } : {}) }}>{body}</div></div>
+          : <div style={{ display: 'flex', flexDirection: 'column', paddingTop: pad.v, paddingBottom: pad.v, paddingLeft: pad.h, paddingRight: pad.h, ...(big ? { maxWidth: fs * 56 + pad.h * 2 } : {}) }}>{body}</div>}
+      <GlassEdge radius={12} color={g.highlight} />
+      {/* Whole-window glass has no opaque card to fade into: `edgeFade` (above), else the text clips at the card edge (the radius clips it). */}
+      {!g.on && !short && !empty && <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 40, borderBottomLeftRadius: 12, borderBottomRightRadius: 12, background: { type: 'linear-gradient', angle: 180, stops: [{ color: clear(k.card), position: 0 }, { color: k.card, position: 1 }] } }} />}
     </div>
     </div>
   )

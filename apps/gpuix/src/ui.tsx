@@ -9,8 +9,10 @@ import { useGpuix } from '@gpuix/react'
 import { useAppearance } from './settings/appearance.ts'
 import { installThemeFade } from './motion/themeFade.tsx'
 import { useSyncWindowAppearance, useSystemVariant } from './shell/appearance.ts'
-import { FONT_UI, THEMES, themeFor, type Theme } from './theme.ts'
-import { FULL_TRANSLUCENCY, OPAQUE_WINDOW, fullTranslucency, useAccessibilityDisplay } from './platform/material.ts'
+import { FONT_UI, THEMES, materialFor, themeFor, type Material, type Theme } from './theme.ts'
+import { useAccessibilityDisplay } from './platform/material.ts'
+import { resolveScope } from './platform/translucency.ts'
+import { useWindowMaterial } from './shell/windowMaterial.ts'
 import { REDUCED_MOTION } from './platform/reducedMotion.ts'
 import { Icon, type IconName } from './icons.tsx'
 import { PROVIDER_IMAGES, PROVIDER_VECTORS } from './providerMarks.ts'
@@ -31,20 +33,28 @@ export { REDUCED_MOTION }
 export const EASE_OUT: [number, number, number, number] = [...EASE.out]
 
 const ThemeContext = createContext<Theme>(THEMES[VARIANT])
+// The surfaces that follow the glass opacities live apart from the theme: a slider step changes this value and re-renders its readers only.
+const MaterialContext = createContext<Material>(materialFor(VARIANT, 'none', 100))
 export const ThemeProvider = ({ children }: { children: ReactNode }) => {
   const prefs = useAppearance()
   // "System" follows macOS live (`shell/appearance.ts`); KYBERN_APPEARANCE pins a variant.
   const system = useSystemVariant(VARIANT)
   const forced = process.env.KYBERN_APPEARANCE === 'light' || process.env.KYBERN_APPEARANCE === 'dark'
   const variant = forced ? VARIANT : prefs.theme === 'system' ? system : prefs.theme
-  // The native material is always on (desktop #39); the switch only makes content glass.
-  useSyncWindowAppearance(variant, !OPAQUE_WINDOW)
+  // The window material is per theme variant (`platform/translucency.ts`); Reduce transparency and Increase contrast win.
   const a11y = useAccessibilityDisplay()
-  const theme = themeFor(variant, fullTranslucency(prefs.translucent, a11y) ? FULL_TRANSLUCENCY : null, a11y.increaseContrast, a11y.reduceTransparency)
+  const material = prefs.window[variant]
+  const scope = resolveScope(material, a11y)
+  useSyncWindowAppearance(variant)
+  useWindowMaterial(variant, material, scope)
+  const theme = themeFor(variant, scope, a11y.increaseContrast, a11y.reduceTransparency)
+  const glass = materialFor(variant, scope, material.sidebarOpacity, material.contentOpacity, material.surfaceOpacity)
   installThemeFade(useGpuix()?.renderer)
-  return <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>
+  return <ThemeContext.Provider value={theme}><MaterialContext.Provider value={glass}>{children}</MaterialContext.Provider></ThemeContext.Provider>
 }
 export const useTheme = () => useContext(ThemeContext)
+/** The frame, panel and content fills and the glass tints (`GlassTokens`), which follow the glass opacities; read the rest from `useTheme`. */
+export const useMaterial = () => useContext(MaterialContext)
 
 /** The ink colour at an opacity, like Tailwind's `text-foreground/58`. */
 export function ink(t: Theme, alpha: number): string {

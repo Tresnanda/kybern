@@ -1,5 +1,4 @@
-import {backdropAllowed, fullTranslucency, onAccessibilityDisplay, useAccessibilityDisplay} from '../platform/material.ts'
-import {useAppearance} from '../settings/appearance.ts'
+import {backdropAllowed, onAccessibilityDisplay} from '../platform/material.ts'
 
 // Scene backdrops follow Reduce transparency and Increase contrast live
 // (`platform/material.ts`). `BACKDROP_ALLOWED` is a live binding, updated
@@ -7,10 +6,6 @@ import {useAppearance} from '../settings/appearance.ts'
 // re-renders every themed view, which then reads the new value.
 export let BACKDROP_ALLOWED = backdropAllowed()
 onAccessibilityDisplay(() => { BACKDROP_ALLOWED = backdropAllowed() })
-/** Glass popovers: full translucency is on and allowed. */
-export function useBackdropMaterial(): boolean {
-  return fullTranslucency(useAppearance().translucent, useAccessibilityDisplay())
-}
 /** Theme colors are resolved rgb()/rgba()/hex before reaching native styles. */
 export function backdropTint(color: string, alpha = 0.78): string {
   if (color.startsWith('#')) {

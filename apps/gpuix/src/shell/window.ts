@@ -214,5 +214,7 @@ export function startWindowShell(renderer: NativeRenderer) {
   readPlatformState()
   if (hasWindowStateEvents()) onWindowStateChange(readPlatformState)
   else setInterval(readPlatformState, POLL_MS)
+  // Checks drive the options through a file (`KYBERN_A11Y_FILE`), which raises no AppKit event.
+  if (process.env.KYBERN_A11Y_FILE) setInterval(refreshAccessibilityDisplay, 250)
   installIdleMemory(renderer, isWindowFocused)
 }

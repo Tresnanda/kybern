@@ -50,8 +50,9 @@ export function Checkbox({ checked: checkedProp, defaultChecked = false, onCheck
   const ring = invalid ? withAlpha(destructive, dark ? 0.24 : 0.48) : t.v('--ring')
   // Disabled: colours flattened onto the page instead of a per-element opacity (see `dim` in Switch.tsx).
   const page = t.v('--background')
-  const boxFill = over(fill, page)
-  const d = (c: string, under?: string) => (disabled ? dim(c, page, under) : c)
+  const glass = t.scope === 'window'
+  const boxFill = glass ? fill : over(fill, page)
+  const d = (c: string, under?: string) => (disabled ? dim(c, page, under, undefined, glass) : c)
   const primary = d(t.v('--primary'))
   const play = animate && !REDUCED_MOTION
   // `.t-check-path`: dasharray 24, drawn over `--duration-fast` after `--duration-micro`.

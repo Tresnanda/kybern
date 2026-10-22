@@ -1,6 +1,7 @@
 mod accounts;
 mod coordinator;
 mod render;
+mod spaces;
 
 use std::path::PathBuf;
 
@@ -210,6 +211,11 @@ enum Cmd {
     Projects {
         #[command(subcommand)]
         cmd: ProjectsCmd,
+    },
+    /// Group projects into spaces.
+    Spaces {
+        #[command(subcommand)]
+        cmd: spaces::SpacesCmd,
     },
     /// List threads.
     Threads {
@@ -757,6 +763,9 @@ enum ProjectsCmd {
         /// Return the stored project index without refreshing Git status.
         #[arg(long)]
         cached: bool,
+        /// Only the projects in this space (an id or name).
+        #[arg(long)]
+        space: Option<String>,
     },
     /// Browse directories on the connected environment.
     Browse {
@@ -766,6 +775,16 @@ enum ProjectsCmd {
         path: PathBuf,
         #[arg(long)]
         name: Option<String>,
+        /// The space for the new project (an id or name). Defaults to the first space.
+        #[arg(long)]
+        space: Option<String>,
+    },
+    /// Move a project to another space.
+    Move {
+        /// A project id, name or path.
+        project: String,
+        /// A space id or name.
+        space: String,
     },
     Remove {
         id: String,
@@ -1313,25 +1332,54 @@ pub async fn run() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Cmd::Projects { cmd } => match cmd {
-            ProjectsCmd::List { cached } => {
-                let r = client.call::<ProjectsList>(ProjectsListParams { refresh_git: cached.then_some(false) }).await?;
-                if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::projects(&r.projects) }
+            ProjectsCmd::List { cached, space } => {
+                let mut r = client.call::<ProjectsList>(ProjectsListParams { refresh_git: cached.then_some(false) }).await?;
+                // An older daemon has no spaces: the column is simply absent.
+                let spaces = spaces::list(&client).await.unwrap_or_default();
+                if let Some(key) = space {
+                    let space_id = spaces::resolve_space(&spaces, &key)?;
+                    r.projects.retain(|project| project.space_id == Some(space_id));
+                }
+                if json { println!("{}", serde_json::to_string_pretty(&r)?) } else { render::projects(&r.projects, &spaces) }
             }
             ProjectsCmd::Browse { path } => {
                 let result = client.call::<ProjectsBrowse>(ProjectsBrowseParams { path }).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
-            ProjectsCmd::Add { path, name } => {
+            ProjectsCmd::Add { path, name, space } => {
+                let space_id = match space {
+                    Some(key) => Some(spaces::resolve_space(&spaces::list(&client).await?, &key)?),
+                    None => None,
+                };
                 let p = client
-                    .call::<ProjectsAdd>(ProjectsAddParams { path: host_path(&client, &path.to_string_lossy()).await?, name })
+                    .call::<ProjectsAdd>(ProjectsAddParams { path: host_path(&client, &path.to_string_lossy()).await?, name, space_id })
                     .await?;
                 if json { println!("{}", serde_json::to_string_pretty(&p)?) } else { println!("{}  {}  {}", p.id, p.name, p.path) }
+            }
+            ProjectsCmd::Move { project, space } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let all = spaces::list(&client).await?;
+                let space_id = spaces::resolve_space(&all, &space)?;
+                let space_name = all.iter().find(|s| s.id == space_id).map_or_else(|| space_id.to_string(), |s| s.name.clone());
+                let p = client
+                    .call::<ProjectsUpdate>(ProjectsUpdateParams {
+                        project_id,
+                        name: None,
+                        worktrees_default: None,
+                        task_prefix: None,
+                        brief_in_all_threads: None,
+                        coordinator: None,
+                        space_id: Some(space_id),
+                    })
+                    .await?;
+                if json { println!("{}", serde_json::to_string_pretty(&p)?) } else { println!("{}  moved to {space_name}", p.name) }
             }
             ProjectsCmd::Remove { id } => {
                 client.call::<ProjectsRemove>(ProjectsRemoveParams { project_id: id.parse()? }).await?;
                 println!("removed");
             }
         },
+        Cmd::Spaces { cmd } => spaces::run(&client, cmd, json).await?,
         Cmd::Threads { project, archived } => {
             let project_id = match project {
                 Some(p) => Some(resolve_project(&client, &p, false).await?),
@@ -2441,7 +2489,7 @@ async fn resolve_project(client: &Client, key: &str, add_if_missing: bool) -> Re
         return Ok(project.id);
     }
     if add_if_missing {
-        let p = client.call::<ProjectsAdd>(ProjectsAddParams { path, name: None }).await?;
+        let p = client.call::<ProjectsAdd>(ProjectsAddParams { path, name: None, space_id: None }).await?;
         eprintln!("added project {} ({})", p.name, p.id);
         return Ok(p.id);
     }

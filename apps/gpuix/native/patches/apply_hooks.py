@@ -524,6 +524,11 @@ exec((Path(__file__).parent / "diff_hooks.py").read_text())
 edit("lib.rs", "mod cache_island;", "mod cache_island;\nmod backdrop;")
 edit("renderer.rs", "    ctx.inherited = parent_inherited;", "    let built = if element.element_type == \"anchored\" { built } else { crate::backdrop::apply(built, element.custom_props.get(\"backdrop\"), style.and_then(|s|s.opacity).unwrap_or(1.0) as f32) };\n    ctx.inherited = parent_inherited;")
 
+# edgeFade (N3, edge_fade.rs): a fade link in the rounded clip chain around the element's paint and
+# backdrop, inside its own retained translation/transform scopes (the fade moves with the element).
+edit("lib.rs", "mod backdrop;", "mod backdrop;\nmod edge_fade;")
+edit("renderer.rs", "    ctx.inherited = parent_inherited;", "    let built = crate::edge_fade::apply(built, element.custom_props.get(\"edgeFade\"));\n    ctx.inherited = parent_inherited;")
+
 edit("custom_elements/anchored.rs", "        if !has_fill {", "        if !has_fill && !ctx.props.contains_key(\"backdrop\") {")
 edit("custom_elements/anchored.rs", "        let anchored = anchored.child(content);", "        let anchored = anchored.child(crate::backdrop::apply(content.into_any_element(), ctx.props.get(\"backdrop\"), ctx.style.and_then(|s|s.opacity).unwrap_or(1.0) as f32));")
 

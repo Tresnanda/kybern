@@ -15,6 +15,7 @@ import { Action, ErrorLine } from '../dock/parts.tsx'
 import { DURATION, EASE, revealTransform } from '../motion/kit.tsx'
 import { fadeTo } from '../shell/motion.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { noteTerminalFocus } from './focus.ts'
 import { VT, cellWidth, type Line, type Pen } from './vt.ts'
 import { glyphRects, isCustomGlyph } from './glyphs.ts'
 import { allRange, lineRange, selectedText, selectionByIndex, selectionColumns, wordRange, type TerminalSelection } from './selection.ts'
@@ -236,6 +237,8 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
   const selecting = useRef(false)
   const wheelDelta = useRef(0), arrowDelta = useRef(0)
   const [focused, setFocused] = useState(false)
+  // A terminal that unmounts while focused would otherwise hold the count up.
+  useEffect(() => () => { if (model.focused) { model.focused = false; noteTerminalFocus(false) } }, [model])
   const [blinkOn, setBlinkOn] = useState(true)
   const titleRef = useRef(onTitle); titleRef.current = onTitle
   const exitRef = useRef(onExit); exitRef.current = onExit
@@ -369,8 +372,8 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
       <Label color={t.textSecondary} size={10}>{match < 0 ? 'No match' : `Line ${match + 1}`}</Label><Action onClick={() => find(search, true)}>↑</Action><Action onClick={() => find(search)}>↓</Action><Action onClick={() => setSearch(null)}>Close</Action>
     </div>}
     <div ref={host} testId="terminal-screen" tabIndex={0} role="textbox" aria-label="Terminal"
-      onFocus={() => { model.focused = true; model.cursorInitialized = true; setFocused(true); if (model.focusReporting) send('\x1b[I') }}
-      onBlur={() => { model.focused = false; setFocused(false); if (model.focusReporting) send('\x1b[O') }}
+      onFocus={() => { if (!model.focused) noteTerminalFocus(true); model.focused = true; model.cursorInitialized = true; setFocused(true); if (model.focusReporting) send('\x1b[I') }}
+      onBlur={() => { if (model.focused) noteTerminalFocus(false); model.focused = false; setFocused(false); if (model.focusReporting) send('\x1b[O') }}
       onAuxClick={e => { if ((!model.mouseTracking || e.modifiers?.shift) && (e.isRightClick || e.button === 2)) setMenuAt({ x: e.x ?? 0, y: e.y ?? 0 }) }}
       onMouseUp={() => { selecting.current = false }} onMouseDownOutside={() => { selecting.current = false }}
       onClick={() => { if (host.current) renderer?.focusElement?.(host.current.id); fit() }}
@@ -382,7 +385,7 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
         const text = terminalKey(e, model.applicationCursor)
         if (text !== null) { follow.current = true; setSelection(null); setRestart(n => n + 1); send(text) }
       }}
-      style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, paddingLeft: PAD_X, paddingRight: PAD_X, paddingTop: PAD_TOP, paddingBottom: PAD_BOTTOM, backgroundColor: t.surface }}>
+      style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, paddingLeft: PAD_X, paddingRight: PAD_X, paddingTop: PAD_TOP, paddingBottom: PAD_BOTTOM, backgroundColor: t.content }}>
       {model.mouseTracking ? <div testId="terminal-mouse-screen" style={{ display: 'flex', flexDirection: 'column', height: model.rows * ROW, flexShrink: 1, minHeight: 0, overflow: 'hidden' }}>{lines.map(renderLine)}</div> : <virtual-list ref={list} testId="terminal-lines" itemCount={lines.length} windowStart={start} estimatedItemHeight={ROW} overdraw={ROW * 4} onVisibleRange={e => { const a = e.startIndex ?? 0, b = e.endIndex ?? a + 40; setRange(old => old.start === Math.max(0, a - 4) && old.end === Math.min(lines.length, b + 4) ? old : { start: Math.max(0, a - 4), end: Math.min(lines.length, b + 4) }); follow.current = b >= lines.length - 1 }} style={{ height: model.rows * ROW, flexShrink: 1, minHeight: 0, width: '100%' }}>
         {lines.slice(start, end).map((line, i) => renderLine(line, start + i))}
       </virtual-list>}

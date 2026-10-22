@@ -75,7 +75,23 @@ export function PriorityGlyph({ priority }: { priority: TaskPriority }) {
     />
   )
 }
-export function Check({ checked, onClick, testId }: { checked: boolean; onClick: () => void; testId?: string }) {
+// A board card wraps its checkbox, and the card's press handler starts a task drag, so the checkbox's own click can be lost
+// and the card would open the task instead. The card asks `pressedCheck` from its mouse-down (the same dispatch, a few ms
+// later) and then picks the task itself unless `checkHandledClick` says the checkbox already did.
+let checkDownAt = -Infinity
+let checkClickAt = -Infinity
+export function pressedCheck() {
+  const hit = performance.now() - checkDownAt < 50
+  checkDownAt = -Infinity
+  return hit
+}
+export function checkHandledClick() {
+  const hit = performance.now() - checkClickAt < 100
+  checkClickAt = -Infinity
+  return hit
+}
+/** `onClick` gets whether Shift was held: it extends the selection as a range (`pickTask`). */
+export function Check({ checked, onClick, testId }: { checked: boolean; onClick: (shift: boolean) => void; testId?: string }) {
   const t = useTheme()
   const keyboard = useNav((s) => s.keyboardNav)
   return (
@@ -85,9 +101,13 @@ export function Check({ checked, onClick, testId }: { checked: boolean; onClick:
       role="checkbox"
       aria-checked={checked}
       aria-label="Select task"
-      onClick={onClick}
+      onMouseDown={() => { checkDownAt = performance.now() }}
+      onClick={(e) => {
+        checkClickAt = performance.now()
+        onClick(!!e.modifiers?.shift)
+      }}
       onKeyDown={(e) => {
-        if (e.key === 'space') onClick()
+        if (e.key === 'space') onClick(!!e.modifiers?.shift)
       }}
       style={{ width: 26, height: 30, display: 'flex', alignItems: 'center', cursor: 'pointer' }}
     >

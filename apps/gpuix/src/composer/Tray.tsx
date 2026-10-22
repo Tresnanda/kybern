@@ -5,8 +5,10 @@
 import { useEffect } from 'react'
 import { Icon } from '../icons.tsx'
 import { Label, useTheme } from '../ui.tsx'
-import type { Project, ProjectId } from '../../../../packages/kybern-client/src/types.ts'
+import type { GitBranchesResult, Project, ProjectId } from '../../../../packages/kybern-client/src/types.ts'
+import type { ReactNode } from 'react'
 import { useApp } from '../state.ts'
+import { useSpaceProjects } from '../spaces/current.ts'
 import { TrayChip } from './chips.tsx'
 import { G } from './glyphs.ts'
 import { CheckMark, muted, PickerItem, PickerLabel, PickerMenu, PickerSeparator } from './Menu.tsx'
@@ -15,25 +17,41 @@ import { loadBranches, patchDraft, useComposer } from './store.ts'
 export const COMPOSER_RADIUS = 19.2
 
 /** `parentPath` in `views/Draft.tsx`: `…/projects` for the checkout hint. */
-function parentPath(p: string): string {
+export function parentPath(p: string): string {
   const i = p.lastIndexOf('/')
   return i <= 0 ? p : '…/' + p.slice(p.slice(0, i).lastIndexOf('/') + 1, i)
 }
 
 export function LandingTray({ projectId, useWorktree }: { projectId: ProjectId | null; useWorktree: boolean }) {
-  const t = useTheme()
-  const projects = useApp((s) => s.projects)
-  const project = projectId ? projects.find((p) => p.id === projectId) : undefined
+  const everyProject = useApp((s) => s.projects)
+  const projects = useSpaceProjects()
+  const project = projectId ? everyProject.find((p) => p.id === projectId) : undefined
   const list = [...projects].sort((a, b) => a.name.localeCompare(b.name))
   const isGit = project?.is_git ?? false
   useEffect(() => {
     if (projectId && isGit) void loadBranches(projectId)
   }, [projectId, isGit])
+  return (
+    <TrayFrame>
+      {project ? (
+        <ProjectChip projectId={project.id} projects={list} />
+      ) : (
+        <FreeChatChip projects={list} />
+      )}
+      {project && <WorkspaceChip useWorktree={useWorktree} isGit={isGit} checkoutHint={parentPath(project.path)} />}
+      {project && isGit && <BranchChip projectId={project.id} useWorktree={useWorktree} />}
+    </TrayFrame>
+  )
+}
+
+/** `LandingTray`'s strip: the card's backing colour, rounded on top, 93.33% wide, holding chips. The task dock's tray is the same strip. */
+export function TrayFrame({ children, testId = 'landing-tray' }: { children: ReactNode; testId?: string }) {
+  const t = useTheme()
   // `--composer-backing-surface` (`kybern.css:12`, the light mix in `theme.logic`).
   const backing = t.variant === 'dark' ? '#222222' : t.v('--composer-backing-surface')
   return (
     <div
-      testId="landing-tray"
+      testId={testId}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -50,13 +68,7 @@ export function LandingTray({ projectId, useWorktree }: { projectId: ProjectId |
         backgroundColor: backing,
       }}
     >
-      {project ? (
-        <ProjectChip projectId={project.id} projects={list} />
-      ) : (
-        <FreeChatChip projects={list} />
-      )}
-      {project && <WorkspaceChip useWorktree={useWorktree} isGit={isGit} checkoutHint={parentPath(project.path)} />}
-      {project && isGit && <BranchChip projectId={project.id} useWorktree={useWorktree} />}
+      {children}
     </div>
   )
 }
@@ -130,8 +142,12 @@ function FreeChatChip({ projects }: { projects: Project[] }) {
   )
 }
 
-/** `WorkspaceTrayChip`: Checkout or a new worktree. */
 function WorkspaceChip({ useWorktree, isGit, checkoutHint }: { useWorktree: boolean; isGit: boolean; checkoutHint: string }) {
+  return <WorkspaceTrayChip useWorktree={useWorktree} isGit={isGit} checkoutHint={checkoutHint} onChange={(worktree) => patchDraft({ worktree })} />
+}
+
+/** `WorkspaceTrayChip`: Checkout or a new worktree. */
+export function WorkspaceTrayChip({ useWorktree, isGit, checkoutHint, onChange }: { useWorktree: boolean; isGit: boolean; checkoutHint: string; onChange: (useWorktree: boolean) => void }) {
   const t = useTheme()
   return (
     <PickerMenu
@@ -145,7 +161,7 @@ function WorkspaceChip({ useWorktree, isGit, checkoutHint }: { useWorktree: bool
       )}
     >
       <PickerLabel>Run in</PickerLabel>
-      <PickerItem id="local" onSelect={() => patchDraft({ worktree: false })}>
+      <PickerItem id="local" onSelect={() => onChange(false)}>
         <Icon source={G.laptop} size={14} color={t.text} />
         <Label color={t.text} truncate style={{ flexGrow: 1 }}>
           Checkout
@@ -155,7 +171,7 @@ function WorkspaceChip({ useWorktree, isGit, checkoutHint }: { useWorktree: bool
         </Label>
         <CheckMark color={t.text} visible={!useWorktree} />
       </PickerItem>
-      <PickerItem id="worktree" disabled={!isGit} onSelect={() => patchDraft({ worktree: true })}>
+      <PickerItem id="worktree" disabled={!isGit} onSelect={() => onChange(true)}>
         <Icon source={G.worktree} size={14} color={t.text} />
         <Label color={t.text} truncate style={{ flexGrow: 1 }}>
           New worktree
@@ -171,11 +187,39 @@ function WorkspaceChip({ useWorktree, isGit, checkoutHint }: { useWorktree: bool
   )
 }
 
-/** `BranchTrayChip`: the branch to start from, and a worktree toggle. */
 function BranchChip({ projectId, useWorktree }: { projectId: ProjectId; useWorktree: boolean }) {
-  const t = useTheme()
   const branches = useComposer((d) => (d.branches?.projectId === projectId ? d.branches.result : null))
   const baseBranch = useComposer((d) => d.draft.baseBranch)
+  return (
+    <BranchTrayChip
+      branches={branches}
+      baseBranch={baseBranch}
+      useWorktree={useWorktree}
+      onOpen={() => void loadBranches(projectId)}
+      onBranch={(name) => patchDraft({ baseBranch: name })}
+      onWorktree={(worktree) => patchDraft({ worktree })}
+    />
+  )
+}
+
+/** `BranchTrayChip`: the branch to start from, and a worktree toggle. `branches` is null while they load. */
+export function BranchTrayChip({
+  branches,
+  baseBranch,
+  useWorktree,
+  onOpen,
+  onBranch,
+  onWorktree,
+}: {
+  branches: GitBranchesResult | null
+  baseBranch: string | null | undefined
+  useWorktree: boolean
+  onOpen: () => void
+  /** The chosen branch, or null for the current one. */
+  onBranch: (name: string | null) => void
+  onWorktree: (useWorktree: boolean) => void
+}) {
+  const t = useTheme()
   const shown = baseBranch ?? branches?.current ?? 'Current branch'
   return (
     <PickerMenu
@@ -184,7 +228,7 @@ function BranchChip({ projectId, useWorktree }: { projectId: ProjectId; useWorkt
       align="start"
       sideOffset={8}
       width={288}
-      onOpenChange={(open) => open && void loadBranches(projectId)}
+      onOpenChange={(open) => open && onOpen()}
       trigger={(open) => <TrayChip icon={G.branch} label={shown} strong={!!baseBranch} pressed={open} />}
     >
       <PickerLabel>{useWorktree ? 'Fork the worktree from' : 'Branch'}</PickerLabel>
@@ -198,7 +242,7 @@ function BranchChip({ projectId, useWorktree }: { projectId: ProjectId; useWorkt
         </PickerItem>
       ) : (
         branches.branches.map((b) => (
-          <PickerItem key={b.name} id={`branch:${b.name}`} onSelect={() => patchDraft({ baseBranch: b.name === branches.current ? null : b.name })}>
+          <PickerItem key={b.name} id={`branch:${b.name}`} onSelect={() => onBranch(b.name === branches.current ? null : b.name)}>
             <Icon source={G.branch} size={14} color={t.text} />
             <Label color={t.text} truncate style={{ flexGrow: 1 }}>
               {b.name}
@@ -213,13 +257,40 @@ function BranchChip({ projectId, useWorktree }: { projectId: ProjectId; useWorkt
         ))
       )}
       <PickerSeparator />
-      <PickerItem id="__worktree" keepOpen onSelect={() => patchDraft({ worktree: !useWorktree })} style={{ paddingLeft: 10, paddingRight: 10 }}>
+      <PickerItem id="__worktree" keepOpen onSelect={() => onWorktree(!useWorktree)} style={{ paddingLeft: 10, paddingRight: 10 }}>
         <Icon source={G.worktree} size={14} color={t.text} />
         <Label color={t.text} truncate style={{ flexGrow: 1 }}>
           Create a worktree from this branch
         </Label>
         <CheckMark color={t.text} visible={useWorktree} />
       </PickerItem>
+    </PickerMenu>
+  )
+}
+
+/** `ProjectTrayChip` for a task that belongs to no project: choose the one the run starts in. */
+export function ProjectPickChip({ projectId, projects, onPick }: { projectId: ProjectId | null; projects: Project[]; onPick: (id: ProjectId) => void }) {
+  const t = useTheme()
+  const current = projects.find((p) => p.id === projectId)
+  return (
+    <PickerMenu
+      testId="tray-project"
+      side="top"
+      align="start"
+      sideOffset={8}
+      minWidth={224}
+      trigger={(open) => <TrayChip icon={G.folder} label={current?.name ?? 'Choose a project'} pressed={open} strong={!current} />}
+    >
+      <PickerLabel>Run in</PickerLabel>
+      {projects.map((p) => (
+        <PickerItem key={p.id} id={p.id} onSelect={() => onPick(p.id)}>
+          <Icon name="folder" size={18} color={t.text} style={{ opacity: 0.8 }} />
+          <Label color={t.text} truncate style={{ flexGrow: 1 }}>
+            {p.name}
+          </Label>
+          {p.id === projectId && <Icon source={G.checkBold} size={14} color={t.text} />}
+        </PickerItem>
+      ))}
     </PickerMenu>
   )
 }

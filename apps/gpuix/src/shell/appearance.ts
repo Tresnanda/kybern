@@ -3,24 +3,20 @@
 // The mode the reader picks (Light / Dark / System) is a Settings preference
 // (`settings/appearance.ts`); this module only supplies the two native halves:
 //
-//   useSystemVariant(VARIANT)               what macOS is showing now (the "System" value)
-//   useSyncWindowAppearance(variant, on)    keep the window's own appearance and the
-//                                           vibrancy material in step with the theme
+//   useSystemVariant(VARIANT)          what macOS is showing now (the "System" value)
+//   useSyncWindowAppearance(variant)   keep the window's own NSAppearance in step with the theme
 //
-// Hook-in (`ui.tsx` `ThemeProvider`): replace the launch-time `VARIANT` with
-// `useSystemVariant()`, and call `useSyncWindowAppearance(variant, translucent)`
-// with the resolved variant:
+// The window material (opaque, vibrancy or an adjustable blur) is `shell/windowMaterial.ts`.
 //
 //   const system = useSystemVariant(VARIANT)
 //   const variant = forced ? VARIANT : prefs.theme === 'system' ? system : prefs.theme
-//   useSyncWindowAppearance(variant, prefs.translucent)
+//   useSyncWindowAppearance(variant)
 //
 // The switch cross-fades like the desktop's view transition (`motion/themeFade.tsx`).
 import type { Pointer } from 'bun:ffi'
 import { useEffect, useSyncExternalStore } from 'react'
 import { snapshotBeforeThemeChange } from '../motion/themeFade.tsx'
 import { appearance } from '../settings/appearance.ts'
-import { applyDesktopMaterial } from '../native/material.ts'
 import { cls, cstr, each, getObjc, nsApp, sel } from '../native/objc.ts'
 
 export type Variant = 'dark' | 'light'
@@ -80,22 +76,15 @@ export function syncWindowAppearance(variant: Variant): boolean {
   } catch { return true }
 }
 
-let materialInstalledFor: Variant | null = null
-export function useSyncWindowAppearance(variant: Variant, enabled = true) {
+export function useSyncWindowAppearance(variant: Variant) {
   useEffect(() => {
-    const first = materialInstalledFor === null
-    materialInstalledFor = variant
-    // main.tsx already installs the launch material; avoid redundant native
-    // appearance and material work during the first scene.
-    if (first && enabled && process.env.KYBERN_OPAQUE !== '1') return
     let attempts = 0
     let timer: ReturnType<typeof setTimeout> | undefined
     const apply = () => {
-      const ready = syncWindowAppearance(variant)
-      if (enabled && process.env.KYBERN_OPAQUE !== '1') applyDesktopMaterial(variant)
-      if (!ready && ++attempts < 40) timer = setTimeout(apply, 50)
+      // The window may not exist for a few frames after launch.
+      if (!syncWindowAppearance(variant) && ++attempts < 40) timer = setTimeout(apply, 50)
     }
     apply()
     return () => clearTimeout(timer)
-  }, [variant, enabled])
+  }, [variant])
 }
