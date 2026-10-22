@@ -390,6 +390,29 @@ to native editing. `native-check.ts` verifies all five cancelled actions,
 held keys, unprevented Shift+Enter, and a batched Shift+Enter/character sequence. Native undo is unchanged. Full IME
 integration with a real input method still needs a manual pass.
 
+### Caps Lock in replayed keys
+
+A replayed key is inserted from GPUI's `key_char`, not from AppKit's text.
+GPUI builds a macOS `key_char` with `UCKeyTranslate` from Shift and Option
+only, so with Caps Lock on it was lowercase while ordinary typing (AppKit's
+`insertText:`) was uppercase. Typing with Caps Lock into the composer came out
+mixed: the letters it intercepts (`c x z y v`) always lowercase, and in a fast
+burst every key queued behind an intercepted one too. The same `key_char`
+reaches JS as `keyChar` (terminal input) and the held-key path.
+`caps_lock_gpui.py` adds Caps Lock (`alphaLock`) to the modifiers of
+`key_char` in `gpui_macos/src/events.rs` `parse_keystroke`; the binding `key`
+is unchanged, so shortcuts still match the unmodified character.
+
+`caps-lock-check.ts` sends AppKit key events with
+`NSEventModifierFlagCapsLock` to its lab window (`caps-lock-input.m`, in
+process, no global posting) and types into a plain input, the composer's
+`TokenTextarea` with its `interceptKeys`, and the notes editor, one key at a
+time and in a burst, plus Shift and unmodified controls. Before the fix it
+reported `cAPS LOcK vxyz` (slow), `caps lock vxyz` (burst) and `ABcd` (notes,
+behind an intercepted Escape). It assumes a Latin layout with letters on the
+ANSI keys; an IME input source such as Japanese sends printable keys to the
+input method first and never reaches the replay.
+
 ## Window close decisions
 
 ```tsx

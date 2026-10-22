@@ -146,5 +146,6 @@ run_hook("image_load_gpui.py")
 
 run_hook("idle_memory_gpui.py")
 run_hook("platforms_gpui.py")
+run_hook("caps_lock_gpui.py")
 
 hook_check.finish("GPUI hooks applied")
