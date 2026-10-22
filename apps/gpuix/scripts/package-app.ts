@@ -50,6 +50,8 @@ cpSync(path.join(root, 'src/assets/fonts'), path.join(resources, 'src/assets/fon
 cpSync(path.join(root, 'src/assets/providers'), path.join(resources, 'src/assets/providers'), {recursive:true})
 // The release announcement's artwork (`platform/UpdateSurface.tsx`).
 cpSync(path.join(root, '../desktop/public/release-background.png'), path.join(resources, 'release-background.png'))
+// The ported window-translucency code carries its MIT notice (`THIRD_PARTY_NOTICES.md`).
+cpSync(path.join(root, '../../THIRD_PARTY_NOTICES.md'), path.join(resources, 'THIRD_PARTY_NOTICES.md'))
 const previousCwd = process.cwd()
 const buildTemps = new Set(readdirSync(root).filter(name => name.endsWith('.bun-build')))
 process.chdir(root)

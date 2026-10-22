@@ -99,17 +99,3 @@ export function applyDesktopMaterial(appearance: 'dark' | 'light'): boolean {
     return true
   }
 }
-
-/** Retry until GPUI has created its window and blur view (a few frames after `render`). */
-export function installDesktopMaterial(appearance: 'dark' | 'light') {
-  let tries = 0
-  const tick = () => {
-    if (applyDesktopMaterial(appearance)) {
-      if (process.env.KYBERN_DEBUG_MATERIAL) console.log(`[material] applied after ${tries} tries`)
-      return
-    }
-    if (++tries > 40) return
-    setTimeout(tick, 50)
-  }
-  setTimeout(tick, 0)
-}

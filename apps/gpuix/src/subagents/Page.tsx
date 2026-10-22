@@ -58,7 +58,7 @@ export function SubagentPageMotion({ children }: { children: ReactNode }) {
       animate={{ translateX: page.outgoing ? -exit!.direction * 64 : 0, opacity: page.outgoing ? 0 : 1 }}
       transition={{ type: 'spring', duration: entrance.current.direction ? .26 : 0, bounce: .08 }}
       onMotionComplete={() => { if (page.outgoing) setExit(current => current?.token === token ? null : current) }}
-      style={{ display: 'flex', flexDirection: 'column', position: page.outgoing ? 'absolute' : 'relative', top: 0, left: 0, width: '100%', height: '100%', flexGrow: 1, minHeight: 0, backgroundColor: t.surface, pointerEvents: page.outgoing ? 'none' : 'auto' }}>
+      style={{ display: 'flex', flexDirection: 'column', position: page.outgoing ? 'absolute' : 'relative', top: 0, left: 0, width: '100%', height: '100%', flexGrow: 1, minHeight: 0, backgroundColor: t.content, pointerEvents: page.outgoing ? 'none' : 'auto' }}>
       <PaneProvider id={pane.id} snapshot={page.snapshot}>{children}</PaneProvider>
     </motion.div>)}
   </div>

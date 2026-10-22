@@ -4,6 +4,7 @@ import { N } from '../../nav/glyphs.ts'
 import { Label, useTheme } from '../../ui.tsx'
 import { Checkbox } from '../Checkbox.tsx'
 import { Segmented } from '../Segmented.tsx'
+import { Slider } from '../Slider.tsx'
 import { Switch } from '../Switch.tsx'
 import { TimePicker } from '../TimePicker.tsx'
 import { Toggle } from '../Toggle.tsx'
@@ -21,6 +22,7 @@ function Controls() {
   const [range, setRange] = useState('week')
   const [mode, setMode] = useState('auto')
   const [time, setTime] = useState('09:30')
+  const [opacity, setOpacity] = useState(90)
   return (
     <div style={{ position: 'relative', width: 1280, height: 820 }}>
       <Caption x={40} y={16}>Switch</Caption>
@@ -57,6 +59,10 @@ function Controls() {
       <Caption x={40} y={348}>Time picker</Caption>
       <At x={40} y={372}><TimePicker testId="time" width={168} value={time} onChange={setTime} /></At>
       <Caption x={240} y={372}>{time}</Caption>
+
+      <Caption x={40} y={424}>Slider</Caption>
+      <At x={40} y={448}><Slider testId="slider-a" aria-label="Opacity" ariaValueText={`${opacity} percent`} value={opacity} min={15} max={100} onChange={setOpacity} onCommit={setOpacity} valueLabel={`${opacity}%`} /></At>
+      <At x={300} y={448}><Slider testId="slider-auto" aria-label="Blur" ariaValueText="Automatic" value={30} min={1} max={64} onChange={() => {}} onCommit={() => {}} valueLabel="Auto" muted /></At>
     </div>
   )
 }

@@ -39,8 +39,10 @@ function gpuNs(): Map<number, number> {
   return map
 }
 
+/** NaN when `footprint -p` cannot read the process (root-owned, e.g. WindowServer). */
 function footprintMiB(pid: number): number {
-  const out = execFileSync('footprint', ['-p', String(pid)], { encoding: 'utf8' })
+  let out: string
+  try { out = execFileSync('footprint', ['-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }) } catch { return NaN }
   const m = out.match(/Footprint:\s+([\d.]+)\s+([KMG]B)/)
   if (!m) return NaN
   const v = Number(m[1])

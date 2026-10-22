@@ -20,7 +20,6 @@ import { Label, REDUCED_MOTION, useTheme } from './ui.tsx'
 import { BLUR, DISTANCE, DURATION, EASE } from './motion/kit.tsx'
 import { Presence } from './motion/Presence.tsx'
 import { PATCHED_NATIVE } from './native/local-build.ts'
-import { useAppearance } from './settings/appearance.ts'
 import { chunkGap, CodeChunk, CodeHeader, lineChunks, markdownParts, partGap, Prose, textChunks } from './transcript/markdown.tsx'
 import { ThreadImage } from './transcript/ThreadImage.tsx'
 import { MermaidBlock } from './transcript/MermaidBlock.tsx'
@@ -542,8 +541,7 @@ export function ScrollToBottom({ visible, bottom, onClick }: { visible: boolean;
  */
 export function BottomFade({ visible, bottom }: { visible: boolean; /** The measured overlay height: the wash ends on its top edge (tray and requests included). */ bottom: number }) {
   const t = useTheme()
-  const { translucent } = useAppearance()
-  if (translucent) return null
+  if (t.scope === 'window') return null
   return (
     <div
       testId="transcript-bottom-fade"

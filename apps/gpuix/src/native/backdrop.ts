@@ -18,6 +18,8 @@ declare module '@gpuix/native/host' {
 export const BACKDROP = {
   popup: {blur:40,saturation:1.5,radius:16},
   glass: {blur:16,saturation:1.25,radius:16},
+  /** Menus and pickers on whole-window glass: blurs what is under the transcript text without lifting its colors (the page cutout of `platform/translucency.ts`). */
+  cutout: {blur:16,saturation:1,radius:16},
   drop: {blur:18,saturation:1.25,radius:10},
   dropLabel: {blur:18,saturation:1.4,radius:8},
   liveScrim: {blur:10,saturation:1,radius:16,fadeTop:0.5},

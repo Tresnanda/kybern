@@ -33,5 +33,14 @@ export class Telemetry {
 export function parseResources(raw:string){
  const match=raw.match(/total\s+([\d.]+) MiB\s+cpu\s+([\d.]+)%\s+gpu\s+([\d.-]+) ms over ([\d.]+)s/)
  if(!match)throw Error(`Resource sampler failed: ${raw}`)
- return {footprintMiB:Number(match[1]),cpuPercent:Number(match[2]),gpuMs:Number(match[3]),sampleSeconds:Number(match[4])}
+ const windowServer=parseGroup(raw,'WindowServer')
+ return {footprintMiB:Number(match[1]),cpuPercent:Number(match[2]),gpuMs:Number(match[3]),sampleSeconds:Number(match[4]),...(windowServer?{windowServer}:{})}
+}
+/** One named group's `total` line (`sample.ts` prints a blank line, the group name, its pids, then the total). Footprint is NaN for root-owned processes, so only CPU and GPU are read. */
+export function parseGroup(raw:string,name:string){
+ const start=raw.split('\n').findIndex(line=>line.trim()===name)
+ if(start<0)return null
+ const lines=raw.split('\n').slice(start+1),end=lines.findIndex((line,i)=>i>0&&/^\S/.test(line))
+ const match=(end<0?lines:lines.slice(0,end)).join('\n').match(/total\s+\S+ MiB\s+cpu\s+([\d.]+)%\s+gpu\s+([\d.-]+) ms/)
+ return match?{cpuPercent:Number(match[1]),gpuMs:Number(match[2])}:null
 }

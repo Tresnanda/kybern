@@ -31,8 +31,13 @@ bun scripts/interact.ts dir   # collapse/rail motion frames + typing check
 
 Environment: `KYBERN_DATA_DIR` (default `~/.kybern`) or `KYBERN_URL` +
 `KYBERN_TOKEN`; `KYBERN_APPEARANCE=dark|light`; `KYBERN_REDUCED_MOTION=1`;
-`KYBERN_OPAQUE=1` for an opaque window; `KYBERN_GPUIX_THREAD=<id or title>`
+`KYBERN_OPAQUE=1` for an opaque window (scope none, native `opaque` from launch); `KYBERN_GPUIX_THREAD=<id or title>`
 opens a thread at launch.
+
+Window material pins (tests, bench, screenshots; they override both theme variants and are never saved):
+`KYBERN_WINDOW_MATERIAL=solid|window|sidebar` (`window` = translucent, whole window; `sidebar` = translucent, Sidebar only),
+`KYBERN_WINDOW_OPACITY=15…100`, `KYBERN_WINDOW_BLUR=1…64|auto`, and `KYBERN_WINDOW_BLUR_FAIL=1` (the adjustable blur
+reports failure, for the "Unavailable, use Auto" capture). Settings › Appearance › Window sets the same per theme.
 
 ## Spaces
 

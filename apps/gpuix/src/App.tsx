@@ -64,13 +64,7 @@ import { useApp, usePaneCompact } from './state.ts'
 import { COLUMN, GUTTER, Transcript } from './Transcript.tsx'
 import { ThreadRequests, useBlockingRequest } from './transcript/Requests.tsx'
 import { Label, REDUCED_MOTION, useTheme } from './ui.tsx'
-import { over } from './theme.ts'
-import { OPAQUE_WINDOW } from './platform/material.ts'
 import { TITLEBAR } from './nav/TitleBar.tsx'
-
-// An opaque window (capture mode, `KYBERN_OPAQUE=1`) is cleared dark by GPUI, which
-// turns the 88% light frame ~13% darker than over the desktop's light glass. Put
-// the frame on white. Every other window has the native material (desktop #39).
 
 const INSET = 8
 const CARD_RADIUS = 12
@@ -132,7 +126,7 @@ function Workspace() {
       onMouseDown={pointerNav}
       onMouseMove={taskDragging || splitDragging ? (event) => { if (taskDragging) trackTaskDrag(event); if (splitDragging) trackThreadDrag(event) } : undefined}
       onMouseUp={splitDragging ? finishSplitDrag : undefined}
-      style={{ userSelect: 'none', display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: OPAQUE_WINDOW && t.variant === 'light' ? over(t.frame, '#ffffff') : t.frame, position: 'relative' }}
+      style={{ userSelect: 'none', display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: t.glass.window, position: 'relative' }}
     >
       <TitleBar panelOpen={panelOpen} />
       <div style={{ display: 'flex', position: 'absolute', left: 0, right: 0, bottom: 0, top: TITLEBAR, paddingRight: INSET, paddingBottom: INSET }}>
@@ -183,7 +177,7 @@ function Workspace() {
               flexGrow: 1,
               minWidth: 0,
               overflow: 'hidden',
-              backgroundColor: t.surface,
+              backgroundColor: t.content,
               borderWidth: 0.6,
               borderColor: edge,
               borderTopRightRadius: CARD_RADIUS,
@@ -355,7 +349,7 @@ function BottomFade() {
           angle: 180,
           stops: [
             { color: t.variant === 'dark' ? 'rgba(24, 24, 24, 0)' : 'rgba(255, 255, 255, 0)', position: 0 },
-            { color: t.surface, position: 1 },
+            { color: t.content, position: 1 },
           ],
         },
       }}

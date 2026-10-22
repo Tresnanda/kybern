@@ -385,7 +385,7 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
         const text = terminalKey(e, model.applicationCursor)
         if (text !== null) { follow.current = true; setSelection(null); setRestart(n => n + 1); send(text) }
       }}
-      style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, paddingLeft: PAD_X, paddingRight: PAD_X, paddingTop: PAD_TOP, paddingBottom: PAD_BOTTOM, backgroundColor: t.surface }}>
+      style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, paddingLeft: PAD_X, paddingRight: PAD_X, paddingTop: PAD_TOP, paddingBottom: PAD_BOTTOM, backgroundColor: t.content }}>
       {model.mouseTracking ? <div testId="terminal-mouse-screen" style={{ display: 'flex', flexDirection: 'column', height: model.rows * ROW, flexShrink: 1, minHeight: 0, overflow: 'hidden' }}>{lines.map(renderLine)}</div> : <virtual-list ref={list} testId="terminal-lines" itemCount={lines.length} windowStart={start} estimatedItemHeight={ROW} overdraw={ROW * 4} onVisibleRange={e => { const a = e.startIndex ?? 0, b = e.endIndex ?? a + 40; setRange(old => old.start === Math.max(0, a - 4) && old.end === Math.min(lines.length, b + 4) ? old : { start: Math.max(0, a - 4), end: Math.min(lines.length, b + 4) }); follow.current = b >= lines.length - 1 }} style={{ height: model.rows * ROW, flexShrink: 1, minHeight: 0, width: '100%' }}>
         {lines.slice(start, end).map((line, i) => renderLine(line, start + i))}
       </virtual-list>}

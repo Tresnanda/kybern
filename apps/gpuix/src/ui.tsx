@@ -10,7 +10,9 @@ import { useAppearance } from './settings/appearance.ts'
 import { installThemeFade } from './motion/themeFade.tsx'
 import { useSyncWindowAppearance, useSystemVariant } from './shell/appearance.ts'
 import { FONT_UI, THEMES, themeFor, type Theme } from './theme.ts'
-import { FULL_TRANSLUCENCY, OPAQUE_WINDOW, fullTranslucency, useAccessibilityDisplay } from './platform/material.ts'
+import { useAccessibilityDisplay } from './platform/material.ts'
+import { resolveScope } from './platform/translucency.ts'
+import { useWindowMaterial } from './shell/windowMaterial.ts'
 import { REDUCED_MOTION } from './platform/reducedMotion.ts'
 import { Icon, type IconName } from './icons.tsx'
 import { PROVIDER_IMAGES, PROVIDER_VECTORS } from './providerMarks.ts'
@@ -37,10 +39,13 @@ export const ThemeProvider = ({ children }: { children: ReactNode }) => {
   const system = useSystemVariant(VARIANT)
   const forced = process.env.KYBERN_APPEARANCE === 'light' || process.env.KYBERN_APPEARANCE === 'dark'
   const variant = forced ? VARIANT : prefs.theme === 'system' ? system : prefs.theme
-  // The native material is always on (desktop #39); the switch only makes content glass.
-  useSyncWindowAppearance(variant, !OPAQUE_WINDOW)
+  // The window material is per theme variant (`platform/translucency.ts`); Reduce transparency and Increase contrast win.
   const a11y = useAccessibilityDisplay()
-  const theme = themeFor(variant, fullTranslucency(prefs.translucent, a11y) ? FULL_TRANSLUCENCY : null, a11y.increaseContrast, a11y.reduceTransparency)
+  const material = prefs.window[variant]
+  const scope = resolveScope(material, a11y)
+  useSyncWindowAppearance(variant)
+  useWindowMaterial(variant, material, scope)
+  const theme = themeFor(variant, scope, material.opacity, a11y.increaseContrast, a11y.reduceTransparency)
   installThemeFade(useGpuix()?.renderer)
   return <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>
 }

@@ -626,7 +626,7 @@ export function ComposerView(input: ComposerViewProps) {
           borderRadius: compact ? 14 : COMPOSER_RADIUS,
           borderWidth: 1,
           borderColor: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.052)' : 'rgba(13, 13, 13, 0.076)',
-          backgroundColor: t.variant === 'dark' ? t.composer : '#ffffff',
+          backgroundColor: t.glass.composer,
         }}
       >
         {completion.menu((card.current && renderer.getElementBounds?.(card.current.id)?.width) || 736)}

@@ -108,7 +108,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
   telemetry=new Telemetry()
   requireScreen()
   const at=performance.now()
-  launch=await launchFixture(process.env.KYBERN_BENCH_APP_ENTRY??path.join(import.meta.dir,'app.ts'),{...fixture.env,...proxy?.env,KYBERN_BENCH_WHEEL_LIBRARY:path.join(fixture.data,'bench-wheel.dylib'),KYBERN_CLIENT_CONFIG_DIR:client,KYBERN_GPUIX_CREDENTIALS_DIR:path.join(client,'credentials'),KYBERN_GPUIX_THREAD:'',KYBERN_GPUIX_ENVIRONMENT:'local',KYBERN_PACING_BASELINE:'0',KYBERN_PACING_RUNNING_ENTRY:'0',GPUIX_BACKGROUND:'1',KYBERN_APPEARANCE:'dark',KYBERN_REDUCED_MOTION:'0',KYBERN_FULL_RATE:process.env.KYBERN_FULL_RATE??'1',KYBERN_FRAME_TIMES:'1',KYBERN_FRAME_COSTS:'1',KYBERN_PACING_IGNORE_PHYSICAL_MOUSE:'1',KYBERN_PACING_PARENT_LEASE:path.resolve(root,'../..')},{stderr:telemetry.stderr})
+  launch=await launchFixture(process.env.KYBERN_BENCH_APP_ENTRY??path.join(import.meta.dir,'app.ts'),{...fixture.env,...proxy?.env,KYBERN_BENCH_WHEEL_LIBRARY:path.join(fixture.data,'bench-wheel.dylib'),KYBERN_CLIENT_CONFIG_DIR:client,KYBERN_GPUIX_CREDENTIALS_DIR:path.join(client,'credentials'),KYBERN_GPUIX_THREAD:'',KYBERN_GPUIX_ENVIRONMENT:'local',KYBERN_PACING_BASELINE:'0',KYBERN_PACING_RUNNING_ENTRY:'0',GPUIX_BACKGROUND:'1',KYBERN_APPEARANCE:process.env.KYBERN_APPEARANCE==='light'?'light':'dark',...Object.fromEntries(['KYBERN_WINDOW_MATERIAL','KYBERN_WINDOW_OPACITY','KYBERN_WINDOW_BLUR'].flatMap(k=>process.env[k]?[[k,process.env[k]!]]:[])),KYBERN_REDUCED_MOTION:'0',KYBERN_FULL_RATE:process.env.KYBERN_FULL_RATE??'1',KYBERN_FRAME_TIMES:'1',KYBERN_FRAME_COSTS:'1',KYBERN_PACING_IGNORE_PHYSICAL_MOUSE:'1',KYBERN_PACING_PARENT_LEASE:path.resolve(root,'../..')},{stderr:telemetry.stderr})
   await bounds(launch.app,'app-ready')
   const placement=startup?checkWindowOnscreenAsync(launch.pid).then(()=>null,error=>({error})):null
   if(!startup)await waitForWindowOnscreen(launch.pid)
@@ -227,7 +227,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
     r.evidence.olderTurnPainted=true
     r.timings.olderHistoryVisibleMs=performance.now()-timed;r.evidence.firstSeqAfter=after.firstSeq;r.evidence.olderBlocks=after.blocks-before.blocks
    }
-   const sampler=Bun.spawn(['bun',path.join(root,'perf/sample.ts'),String(options.seconds),`GPUIX=${launch!.pid}`],{stdout:'pipe',stderr:'pipe'})
+   const windowServer=process.env.KYBERN_BENCH_WINDOWSERVER==='1'?Bun.spawnSync(['pgrep','-x','WindowServer']).stdout.toString().trim().split('\n')[0]:'',sampler=Bun.spawn(['bun',path.join(root,'perf/sample.ts'),String(options.seconds),`GPUIX=${launch!.pid}`,...(windowServer?[`WindowServer=${windowServer}`]:[])],{stdout:'pipe',stderr:'pipe'})
    children.push(sampler)
    const unsampler=onExit(async()=>{sampler.kill();await sampler.exited})
    unregisterChildren.push(unsampler)

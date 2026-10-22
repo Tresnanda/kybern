@@ -35,7 +35,8 @@ and behave like the desktop, and it must not make idle or animation cost worse
   each row as padding. Rows are its direct children with stable keys.
 - No nested vertical scrollers. Long lists use `<virtual-list>`.
 - Menus, popovers and tooltips must be `<anchored>`, `SelectContent` or
-  `ComboboxContent` with an opaque fill, or they paint under the transcript.
+  `ComboboxContent`, or they paint under the transcript. Their fill is opaque (`t.popover`) on Solid and `t.glass.menu` / `t.glass.dense` on glass
+  (`theme.ts`); never a hand-made translucent fill. `PopupLayer` picks the fill and the backdrop from `t.scope`.
 - The `<textarea>` placeholder colour is fixed; `Composer.tsx` draws its own.
 - An `<input>` consumes Enter as its own submit action: handle Enter with `onSubmit`,
   never `onKeyDown` (arrows and Escape do reach `onKeyDown`), unless you use the

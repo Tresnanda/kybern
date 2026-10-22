@@ -30,6 +30,7 @@ function load() {
     msgSetBool: send([FFIType.bool], FFIType.void),
     msgSetPtr: send([FFIType.ptr], FFIType.void),
     msgPtrArg: send([FFIType.ptr], FFIType.ptr),
+    msgF64Ptr: send([FFIType.f64], FFIType.ptr),
     msgCStr: send([], FFIType.cstring),
   }
 }

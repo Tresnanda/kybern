@@ -1,4 +1,3 @@
-import { useAppearance } from '../settings/appearance.ts'
 // Requests that wait on the reader, stacked on the composer like the desktop's
 // `ComposerPanelStack` (`views/Thread.tsx`): tool approvals with their
 // consent variants, blocking user-input questions (`UserInputPanel`,
@@ -100,7 +99,6 @@ function RequestStack({ threadId }: { threadId: string }) {
  *  continues it. Painted opaque: GPUIX has no backdrop blur behind it. */
 export function StackedPanel({ children, closed }: { children: ReactNode; closed: boolean }) {
   const t = useTheme()
-  const { translucent } = useAppearance()
   const border = t.variant === 'dark' ? 'rgba(252, 252, 252, 0.052)' : 'rgba(13, 13, 13, 0.076)'
   return (
     <div
@@ -114,7 +112,7 @@ export function StackedPanel({ children, closed }: { children: ReactNode; closed
         width: '93.333%',
         alignSelf: 'center',
         marginBottom: closed ? 0 : -1,
-        backgroundColor: process.env.KYBERN_OPAQUE === '1' || !translucent ? t.popover : over(alpha(t.popover, 0.275), t.surface),
+        backgroundColor: t.scope === 'window' ? t.glass.dense : t.popover,
         borderWidth: 1,
         borderBottomWidth: closed ? 1 : 0,
         borderColor: border,

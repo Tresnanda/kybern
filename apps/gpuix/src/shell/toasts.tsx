@@ -302,7 +302,7 @@ function GhostLayer({ layer, leaving = false }: { layer: Layer; leaving?: boolea
   const width = WIDTH * (1 - 0.05 * step)
   return (
     <anchored position={{ x: x - (WIDTH - width) / 2, y: y - PEEK * step }} anchor="bottomRight" fit="snap" snapMargin={8} deferred priority={6 - step} occlude backdrop={BACKING} style={{ borderRadius: 10 }}>
-      <div onMouseEnter={hoverStack(true)} paintTransform={fade} style={{ width, height, borderRadius: 10, borderWidth: 1, borderColor: t.border, backgroundColor: t.popover }} />
+      <div onMouseEnter={hoverStack(true)} paintTransform={fade} style={{ width, height, borderRadius: 10, borderWidth: 1, borderColor: t.border, backgroundColor: t.glass.dense }} />
     </anchored>
   )
 }
@@ -392,7 +392,7 @@ function ToastCard({ item }: { item: Item }) {
         borderRadius: 10,
         borderWidth: 1,
         borderColor: t.border,
-        backgroundColor: t.popover,
+        backgroundColor: t.glass.dense,
         boxShadow: { offsetX: 0, offsetY: 4, blurRadius: 12, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.1)' },
       }}
     >

@@ -1,6 +1,6 @@
 import {test,expect} from 'bun:test'
 import {distribution,emptyResult,table} from './model.ts'
-import {Telemetry,parseResources} from './telemetry.ts'
+import {Telemetry,parseResources,parseGroup} from './telemetry.ts'
 test('frame quantiles and empty samples retain missingness',()=>{expect(distribution([])).toEqual({p50:null,p95:null,p99:null,max:null});expect(distribution([1,100,2,3]).p95).toBe(100)})
 test('native stream parser handles split lines and uses submission timestamps',()=>{
  const t=new Telemetry();t.stderr('[kybern-sub');t.stderr('mit] 0\n[kybern-work] renderMs=4.2 layoutMs=2.1 layoutCalls=7\n[pacing-commit] 2\n[kybern-submit] 16.6\n[kybern-submit] 55\n');const r=t.result({frames:0,costs:0,commits:0});expect(r.frames.count).toBe(3);expect(r.frames.over16_7).toBe(1);expect(r.frames.over33).toBe(1);expect(r.frames.max).toBeCloseTo(38.4);expect(r.work.layoutMs.p50).toBe(2.1);expect(r.work.reactCommits).toBe(1)
@@ -12,6 +12,17 @@ test('continuous scroll counts a stall before its first measured submission',()=
  expect(t.result(mark).frames.over33).toBe(0)
 })
 test('resource parser reads only the total and preserves actual sample interval',()=>{expect(parseResources('  total                                      241.0 MiB  cpu  12.34%  gpu   456.7 ms over 15.08s')).toEqual({footprintMiB:241,cpuPercent:12.34,gpuMs:456.7,sampleSeconds:15.08});expect(()=>parseResources('failed')).toThrow()})
+test('resource parser reads the GPUIX total and the WindowServer group separately',()=>{
+ const raw=`\nGPUIX\n  101    bun                                 200.0 MiB  cpu  10.00%  gpu   100.0 ms\n  total                                      200.0 MiB  cpu  10.00%  gpu   100.0 ms over 15.00s\n\nWindowServer\n  202    WindowServer                           NaN MiB  cpu   8.50%  gpu    40.5 ms\n  total                                          NaN MiB  cpu   8.50%  gpu    40.5 ms over 15.00s\n`
+ expect(parseResources(raw)).toEqual({footprintMiB:200,cpuPercent:10,gpuMs:100,sampleSeconds:15,windowServer:{cpuPercent:8.5,gpuMs:40.5}})
+ expect(parseGroup(raw,'Other')).toBeNull()
+ expect(parseResources(raw.split('\nWindowServer')[0]!)).not.toHaveProperty('windowServer')
+})
+test('table adds WindowServer columns only when measured',()=>{
+ const r=emptyResult('streaming',1);r.resources={cpuPercent:1,gpuMs:2,footprintMiB:3,sampleSeconds:15}
+ expect(table([r])).not.toContain('WS CPU')
+ r.resources.windowServer={cpuPercent:4,gpuMs:5};expect(table([r])).toContain('WS CPU %')
+})
 test('missing runs never render as zero performance',()=>{const r=emptyResult('thread-scroll',1);r.status='failed';r.reason='No scene';expect(table([r])).toContain('0/1');expect(table([r])).toContain('— / — / —')})
 
 import {mkdtempSync,writeFileSync,rmSync} from 'node:fs'
