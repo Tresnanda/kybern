@@ -1,5 +1,5 @@
 import { splitFocusedPane, splitPane, closePane, maximizePane, canSplitPane, useSplitRoot, useGroup, collectThreadPanes } from '../split/store.ts'
-import { isLowerLeaf, usePaneRects } from '../split/Workspace.tsx'
+import { isLowerLeaf, usePaneNarrower, usePaneRects } from '../split/Workspace.tsx'
 import { GroupStrip, useThreadRecord } from '../tabs/Strip.tsx'
 import { useWindowWidth } from '../shell/layout.ts'
 import { TasksBar } from '../tasks/Header.tsx'
@@ -18,7 +18,7 @@ import { EnvironmentTrigger } from '../environment/Panel.tsx'
 import { ISLAND } from '../MatrixLoader.tsx'
 import { toggleDock, useDock } from '../dock/store.ts'
 import { motion } from '@gpuix/react'
-import { useState, type ReactNode } from 'react'
+import { memo, useState, type ReactNode } from 'react'
 import { Swap, SwapOnChange } from '../motion/kit.tsx'
 import { isChildThread } from '../../../../packages/kybern-client/src/subagents.ts'
 import { subagentPhase, subagentTypeLabel } from '../../../../packages/kybern-client/src/subagents.ts'
@@ -240,7 +240,7 @@ const HANDOFF_COMPACT = 720
  * in the title bar, followed by the panel toggles. `size="sm"`: the 32 px strip of a lower split group. A subagent's page
  * keeps its breadcrumb instead of a strip.
  */
-export function ThreadHeader({ leafId: given, size = 'md' }: { leafId?: string; size?: 'md' | 'sm' } = {}) {
+export const ThreadHeader = memo(function ThreadHeader({ leafId: given, size = 'md' }: { leafId?: string; size?: 'md' | 'sm' } = {}) {
   const root = useSplitRoot()
   const leafId = given ?? (root.kind === 'leaf' ? root.id : getFocusedPaneId())
   const inSplit = !!given
@@ -251,7 +251,7 @@ export function ThreadHeader({ leafId: given, size = 'md' }: { leafId?: string; 
   const selected = useSelectedThread()
   const groupThread = useThreadRecord(group.threadId)
   const thread = inSplit ? groupThread : selected
-  const rect = usePaneRects().get(leafId)
+  const narrow = usePaneNarrower(leafId, HANDOFF_COMPACT)
   const providers = useNav((s) => s.providers)
   const [renaming, setRenaming] = useState(false)
   const [title, setTitle] = useState('')
@@ -267,7 +267,7 @@ export function ThreadHeader({ leafId: given, size = 'md' }: { leafId?: string; 
   const ancestors = ancestorsOf(thread)
   const mainThread = thread.subagent ? undefined : ancestors[0]
   const others = providers.filter((p) => p.available && p.kind !== thread.provider.kind)
-  const compactHandoff = inSplit || (rect ? rect.width < HANDOFF_COMPACT : false)
+  const compactHandoff = inSplit || narrow
   const box = size === 'md' ? 28 : 24
   const commitRename = () => {
     setRenaming(false)
@@ -408,7 +408,7 @@ export function ThreadHeader({ leafId: given, size = 'md' }: { leafId?: string; 
       </div>
     </>
   )
-}
+})
 
 /**
  * Split: each top group's header sits in the title bar over its own column (its pane's measured window rect), with a 1 px

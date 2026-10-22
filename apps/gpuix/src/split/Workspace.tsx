@@ -48,6 +48,12 @@ export const paneRects = () => bounds
 const subscribeRects = (listener: () => void) => { rectListeners.add(listener); return () => { rectListeners.delete(listener) } }
 const readRects = () => rectsSnapshot
 export const usePaneRects = () => useSyncExternalStore(subscribeRects, readRects)
+// Primitive reads of the rects: a resize or a dock spring changes the rects every frame, and these re-render their reader only
+// when the answer flips (the "no per-frame React" rule), unlike `usePaneRects`.
+/** Whether a leaf sits in the lower row of a split. */
+export const useLowerLeaf = (id: string) => useSyncExternalStore(subscribeRects, () => isLowerLeaf(rectsSnapshot, id))
+/** Whether a leaf is narrower than `width` (false while it has no rect). */
+export const usePaneNarrower = (id: string, width: number) => useSyncExternalStore(subscribeRects, () => { const r = rectsSnapshot.get(id); return r ? r.width < width : false })
 /** A leaf below another one (the lower row of a split): it draws a 32 px strip; top leaves draw theirs in the title bar. */
 export function isLowerLeaf(rects: ReadonlyMap<string, LayoutRect>, id: string) {
   const rect = rects.get(id)
@@ -156,7 +162,7 @@ function Leaf({ id, split, children }: { id: string; split: boolean; children: R
     const stop = observeElementBounds(renderer, node.id, event => setBounds(id, event.rect))
     return () => { stop(); setBounds(id, null) }
   }, [renderer, node, id])
-  const lower = isLowerLeaf(usePaneRects(), id)
+  const lower = useLowerLeaf(id)
   return <PaneProvider id={id} compact={split}><div ref={ref} testId={`pane-${id}`} onMouseDown={() => focusPane(id)} onFocus={() => focusPane(id)} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', position: 'relative' }}>
     {split && lower && <PaneHeaderOrNone id={id} />}
     <LeafBody id={id} focused={focused}><LeafContent id={id} split={split}><GroupContent leafId={id}>{children}</GroupContent></LeafContent></LeafBody>
