@@ -3,6 +3,7 @@
 // shows a readable fallback in that place and leaves the rest of the window
 // working. The fallback names the surface, shows the error and offers Reload,
 // which remounts the surface's tree from scratch.
+import { Button } from '../kit/Button.tsx'
 import { Component, Fragment, type ReactNode } from 'react'
 import { Label, useTheme } from '../ui.tsx'
 
@@ -50,27 +51,7 @@ function Fallback({ label, error, compact, onReload }: { label: string; error: E
           </Label>
         )}
       </div>
-      <div
-        testId="error-reload"
-        role="button"
-        onClick={onReload}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          height: 28,
-          paddingLeft: 12,
-          paddingRight: 12,
-          borderRadius: 10,
-          backgroundColor: t.buttonSecondary,
-          cursor: 'pointer',
-          hover: { backgroundColor: t.buttonSecondaryHover },
-          active: { opacity: 0.8 },
-        }}
-      >
-        <Label color={t.text} size={13} weight={500}>
-          Reload
-        </Label>
-      </div>
+      <Button testId="error-reload" onClick={onReload}>Reload</Button>
     </div>
   )
 }

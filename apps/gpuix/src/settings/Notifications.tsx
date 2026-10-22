@@ -4,7 +4,8 @@
 import { useEffect, useState } from 'react'
 import { notifications, type NotificationStatus } from '../native/notifications.ts'
 import { toast } from '../shell/toasts.tsx'
-import { Button, Row, Section } from './controls.tsx'
+import { Row, Section } from './controls.tsx'
+import { Button } from '../kit/Button.tsx'
 import { Switch } from '../kit/Switch.tsx'
 import { updateSettings, useSettings } from './store.ts'
 

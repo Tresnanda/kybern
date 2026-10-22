@@ -1,3 +1,4 @@
+import { Button } from '../kit/Button.tsx'
 import { useEnvironment } from './environment.ts'
 // Connection chrome (`App.tsx` `ConnectionBanner` and `Welcome` in the desktop):
 //
@@ -133,35 +134,8 @@ export function ConnectionBanner() {
   )
 }
 
-/** `Button size="xs" variant="chrome-outline"`: 24px, 12px text, a hairline border. */
 function ReconnectButton() {
-  const t = useTheme()
-  return (
-    <div
-      testId="connection-reconnect"
-      role="button"
-      onClick={reconnect}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        height: 24,
-        paddingLeft: 8,
-        paddingRight: 8,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: t.border,
-        flexShrink: 0,
-        pointerEvents: 'auto',
-        cursor: 'pointer',
-        hover: { backgroundColor: t.buttonSecondaryHover },
-        active: { opacity: 0.8 },
-      }}
-    >
-      <Label color={t.text} size={12} weight={500} lineHeight={16}>
-        Reconnect
-      </Label>
-    </div>
-  )
+  return <Button testId="connection-reconnect" size="sm" onClick={reconnect} style={{ pointerEvents: 'auto' }}>Reconnect</Button>
 }
 
 export type WelcomeKind = 'connecting' | 'unavailable' | 'empty'

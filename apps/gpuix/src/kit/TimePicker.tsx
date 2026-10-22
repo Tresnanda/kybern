@@ -7,8 +7,7 @@ import { useGpuixRequired, type PublicInstance, type StyleDesc } from '@gpuix/re
 import { useLayoutEffect, useRef, useState } from 'react'
 import { getAppTypographyScale } from '@/lib/kit/appTypography'
 import { Label, useTheme } from '../ui.tsx'
-import { FocusRing, useFocusRing, withAlpha } from './Switch.tsx'
-import { Fill } from './Toggle.tsx'
+import { Button } from './Button.tsx'
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i)
 const MINUTES = Array.from({ length: 60 }, (_, i) => i)
@@ -68,30 +67,5 @@ function TimeColumn({ label, values, selected, onSelect, testId }: { label: stri
 }
 
 function TimeOption({ entry, selected, onSelect, testId }: { entry: number; selected: boolean; onSelect: (value: number) => void; testId?: string }) {
-  const t = useTheme()
-  const [hover, setHover] = useState(false)
-  const focus = useFocusRing()
-  return (
-    <div
-      testId={testId}
-      role="option"
-      aria-label={pad(entry)}
-      aria-selected={selected}
-      tabIndex={0}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      onMouseDown={focus.handlers.onMouseDown}
-      onFocus={focus.handlers.onFocus}
-      onBlur={focus.handlers.onBlur}
-      onClick={() => onSelect(entry)}
-      onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') { focus.keyed(); onSelect(entry) } }}
-      style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', height: ITEM, flexShrink: 0, borderRadius: 10, cursor: 'pointer', backgroundColor: selected ? t.v('--primary') : undefined }}
-    >
-      {/* `default`: `[:hover]:bg-primary/90`; `ghost`: the secondary-hover fill. */}
-      <Fill on={hover} radius={10} color={selected ? withAlpha(t.v('--background'), 0.1) : t.v('--color-background-button-secondary-hover')} />
-      <Label color={selected ? t.v('--primary-foreground') : hover ? t.text : t.textSecondary} size={TYPE.uiPx} lineHeight={21} weight={500} style={{ pointerEvents: 'none' }}>{pad(entry)}</Label>
-      {/* `default`: `ring-1 ring-ring/60 ring-offset-1`; `ghost`: `ring-[--color-border-focus]/60`, no offset. */}
-      <FocusRing visible={focus.visible} radius={10} width={1} offset={selected ? 1 : 0} color={withAlpha(selected ? t.v('--ring') : t.v('--color-border-focus'), 0.6)} offsetColor={t.v('--background')} />
-    </div>
-  )
+  return <Button block variant={selected ? 'primary' : 'ghost'} testId={testId} label={pad(entry)} onClick={() => onSelect(entry)}>{pad(entry)}</Button>
 }

@@ -32,7 +32,9 @@ import { Checkbox } from '../kit/Checkbox.tsx'
 import { Skeleton } from '../kit/Skeleton.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { DURATION } from '../motion/tokens.ts'
-import { Button, PageBlock, selectOwnsEscape, useSettingsModal } from './controls.tsx'
+import { PageBlock, selectOwnsEscape, useSettingsModal } from './controls.tsx'
+import { Button } from '../kit/Button.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
 import { S } from './glyphs.ts'
 import { openSettingsTab } from './SettingsScreen.tsx'
 import { useSettings } from './store.ts'
@@ -62,7 +64,7 @@ export function AccountsHeaderAction() {
   const t = useTheme()
   const legacy = useAccountsLegacy()
   if (legacy) return null
-  return <div testId="account-add" role="button" tabIndex={0} aria-label="Add account" onClick={() => openAddAccount()} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') openAddAccount() }} style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, paddingLeft: 10, paddingRight: 10, borderWidth: 1, borderColor: t.border, borderRadius: 8, flexShrink: 0, hover: { backgroundColor: t.buttonTertiaryHover } }}><Icon source={N.plus} size={14} color={t.text} style={{ pointerEvents: 'none' }} /><Label color={t.text} size={14} lineHeight={21}>Add account</Label></div>
+  return <Button testId="account-add" icon={N.plus} label="Add account" onClick={() => openAddAccount()}>Add account</Button>
 }
 
 export function Accounts() {
@@ -115,7 +117,7 @@ function AgentSection({ provider, accounts, readOnly, onRemove, onAssign }: { pr
     {!readOnly && accounts.length > 1 && <div style={{ display: 'flex' }}><Note>Accounts share skills and installed plugin files. Sign-ins, sessions and connections stay separate. Conflicting local files are kept in backups.</Note></div>}
     <div style={{ display: 'flex', flexDirection: 'column', ...settingsCardStyle(t, g), overflow: 'hidden' }}><GlassEdge radius={12} color={g.highlight} />
       {accounts.map((account, index) => <AccountRow key={account.provider.instance} first={index === 0} account={account} readOnly={readOnly} onRemove={onRemove} onAssign={onAssign} />)}
-      {!readOnly && <div testId={`account-add-${provider.kind}`} role="button" tabIndex={0} aria-label={`Add ${provider.display_name} account`} onClick={() => openAddAccount({ provider: provider.kind })} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') openAddAccount({ provider: provider.kind }) }} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 44, paddingLeft: 18, paddingRight: 18, borderTopWidth: accounts.length ? 1 : 0, borderColor: t.v('--app-settings-card-border'), cursor: 'pointer', hover: { backgroundColor: t.hover } }}><Icon source={N.plus} size={16} color={t.textSecondary} style={{ pointerEvents: 'none' }} /><Label color={t.textSecondary} size={14} lineHeight={21}>{`Add ${provider.display_name} account`}</Label></div>}
+      {!readOnly && <div style={{ display: 'flex', alignItems: 'center', minHeight: 44, paddingLeft: 12, paddingRight: 12, borderTopWidth: accounts.length ? 1 : 0, borderColor: t.v('--app-settings-card-border') }}><Button testId={`account-add-${provider.kind}`} variant="ghost" icon={N.plus} label={`Add ${provider.display_name} account`} onClick={() => openAddAccount({ provider: provider.kind })}>{`Add ${provider.display_name} account`}</Button></div>}
     </div>
   </div></PageBlock>
 }
@@ -194,7 +196,6 @@ function UsageCell({ account }: { account: AccountSummary }) {
   const { kind, instance } = account.provider
   const entries = useAccountLimitEntries()
   const global = useNav((s) => s.limits)
-  const [hover, setHover] = useState(false)
   // The default account's limits are the global entry, labelled only once the agent has named accounts.
   const entry = limitsForAccount(account, entries, global)
   const binding = entry ? bindingLimit(entry.limits, Date.now()) : null
@@ -202,10 +203,10 @@ function UsageCell({ account }: { account: AccountSummary }) {
   const left = Math.max(0, Math.min(100, Math.round(100 - binding.used)))
   const window = limitLabel(binding.limit).toLowerCase()
   return <Tip label={`${left}% of the ${window} limit left · Open usage`} side="top" size={64}>
-    <div testId={`account-usage-${kind}-${instance}`} role="button" aria-label={`${left}% left`} tabIndex={0} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onClick={() => { setUsageAnchor(kind, instance); goPage('usage') }} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') { setUsageAnchor(kind, instance); goPage('usage') } }} style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 6, paddingRight: 6, paddingTop: 4, paddingBottom: 4, borderRadius: 6, flexShrink: 0, cursor: 'pointer', backgroundColor: hover ? t.buttonSecondaryHover : 'transparent' }}>
+    <Button testId={`account-usage-${kind}-${instance}`} variant="ghost" size="sm" label={`${left}% left`} onClick={() => { setUsageAnchor(kind, instance); goPage('usage') }}>
       <AccountUsageRing left={left} />
-      <Label color={hover ? t.text : t.textSecondary} size={13} lineHeight={19.5}>{`${left}%`}</Label>
-    </div>
+      <Label color={t.textSecondary} size={12} lineHeight={16} weight={500}>{`${left}%`}</Label>
+    </Button>
   </Tip>
 }
 
@@ -239,15 +240,13 @@ function HowToSignIn({ kind }: { kind: ProviderKind }) {
   const copy = () => { void copyText(command); setDone(true) }
   // `PopoverPopup` (`w-72`, 18px radius, 16px padding): title, a description with the command as inline code, then
   // the command on its own row with `CopyButton` (24px, icon only).
-  return <Menu testId={`account-how-${kind}`} align="end" width={288} fit="switch" panel={{ borderRadius: 18, padding: 16 }} onOpenChange={setOpen} trigger={() => <div style={{ display: 'flex', alignItems: 'center', minHeight: 28, paddingLeft: 9, paddingRight: 9, borderWidth: 1, borderColor: t.border, borderRadius: 8, hover: { backgroundColor: t.buttonTertiaryHover } }}><Label color={t.text} size={14} lineHeight={21}>How to sign in</Label></div>}>
+  return <Menu testId={`account-how-${kind}`} align="end" width={288} fit="switch" panel={{ borderRadius: 18, padding: 16 }} onOpenChange={setOpen} trigger={() => <Button>How to sign in</Button>}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <Label color={t.text} size={14} lineHeight={21} weight={500}>How to sign in</Label>
       <markdown style={{ userSelect: 'text' }} source={`Run \`${command}\` in your terminal. Kybern picks it up automatically.`} theme={description} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, height: 34, paddingLeft: 10, paddingRight: 4, borderWidth: 1, borderColor: t.border, borderRadius: 10 }}>
         <Label color={t.text} size={13} lineHeight={19.5} font={FONT_MONO} truncate>{command}</Label>
-        <div testId="account-copy-command" role="button" tabIndex={0} aria-label={done ? 'Copied' : 'Copy command'} onClick={copy} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') copy() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, flexShrink: 0, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
-          <Icon source={done ? N.check : S.copy} size={14} color={done ? t.v('--success') : t.textSecondary} style={{ pointerEvents: 'none' }} />
-        </div>
+        <IconButton testId="account-copy-command" size="sm" icon={done ? N.check : S.copy} label={done ? 'Copied' : 'Copy command'} color={done ? t.v('--success') : undefined} onClick={copy} />
       </div>
     </div>
   </Menu>
@@ -289,7 +288,7 @@ function AccountMenu({ account, onRename, onRemove, onAssign }: { account: Accou
   }
   const [open, setOpen] = useState(false)
   useSettingsModal(open)
-  return <Menu testId={`account-actions-${id}`} align="end" minWidth={192} onOpenChange={setOpen} trigger={() => <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, hover: { backgroundColor: t.buttonSecondaryHover } }}><Icon source={N.ellipsis} size={16} color={t.textSecondary} style={{ pointerEvents: 'none' }} /></div>}>
+  return <Menu testId={`account-actions-${id}`} align="end" minWidth={192} onOpenChange={setOpen} trigger={() => <IconButton icon={N.ellipsis} label="Account actions" active={open} />}>
     {!cli && <MenuItem id="rename" testId={`account-actions-${id}-rename`} label="Rename…" onSelect={onRename} />}
     {!cli && <MenuItem id="signin" testId={`account-actions-${id}-signin`} label="Sign in again" onSelect={() => openAddAccount({ provider: kind, instance })} />}
     {!cli && account.can_sign_out && account.status === 'signed_in' && <MenuItem id="sign_out" testId={`account-actions-${id}-sign_out`} label="Sign out" onSelect={() => void signOut()} />}
@@ -339,7 +338,7 @@ function RemoveDialog({ account, onClose }: { account: AccountSummary; onClose: 
       <Label color={t.text} size={18} lineHeight={22.5} weight={600}>{`Remove ${account.name}?`}</Label>
       <Label color={t.textSecondary} size={14} lineHeight={19.25}>{account.managed ? `Kybern signs ${account.name} out and deletes its folder. Threads that used ${account.name} switch to ${agent}’s default account on their next message.` : `Kybern stops using ${account.name}. The folder and its sign-in stay at ${account.directory ?? 'its folder'}.`}</Label>
     </div>
-    <DialogFooter><Button testId="account-remove-cancel" variant="ghost" onClick={onClose}>Cancel</Button><Button testId="account-remove-confirm" variant="destructive" disabled={busy} onClick={() => void remove()}>Remove account</Button></DialogFooter>
+    <DialogFooter><Button testId="account-remove-cancel" size="lg" onClick={onClose}>Cancel</Button><Button testId="account-remove-confirm" size="lg" variant="destructive" disabled={busy} onClick={() => void remove()}>Remove account</Button></DialogFooter>
   </DialogShell>
 }
 
@@ -391,7 +390,7 @@ function ProjectsDialog({ account, accounts, projects, projectAccounts, onClose 
       })}
       {sorted.length === 0 && <div style={{ paddingLeft: 8, paddingRight: 8, paddingTop: 12, paddingBottom: 12 }}><Label color={t.textSecondary} size={14} lineHeight={21}>No projects yet. Add a project from the sidebar.</Label></div>}
     </div>
-    <DialogFooter><Button testId="account-projects-cancel" variant="ghost" onClick={onClose}>Cancel</Button><Button testId="account-projects-save" variant="primary" disabled={saving} onClick={() => void save()}>Save</Button></DialogFooter>
+    <DialogFooter><Button testId="account-projects-cancel" size="lg" variant="ghost" onClick={onClose}>Cancel</Button><Button testId="account-projects-save" size="lg" variant="primary" disabled={saving} onClick={() => void save()}>Save</Button></DialogFooter>
   </DialogShell>
 }
 

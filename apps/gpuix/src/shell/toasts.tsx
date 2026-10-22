@@ -1,3 +1,4 @@
+import { Button } from '../kit/Button.tsx'
 import { onEnvironmentChange } from './environment.ts'
 // Toasts (issue #108 §23): the desktop's sonner `Toaster` at the bottom right
 // (`components/ui/sonner.tsx`, `views/AppUpdate.tsx`), on GPUIX.
@@ -415,31 +416,7 @@ function ToastCard({ item }: { item: Item }) {
         )}
       </div>
       {item.action && (
-        <div
-          testId="toast-action"
-          role="button"
-          onClick={() => {
-            item.action!.onClick()
-            dismiss(item.id)
-          }}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            height: 24,
-            paddingLeft: 8,
-            paddingRight: 8,
-            marginLeft: 8,
-            borderRadius: 4,
-            flexShrink: 0,
-            cursor: 'pointer',
-            backgroundColor: t.buttonPrimary,
-            active: { opacity: 0.8 },
-          }}
-        >
-          <Label color={t.buttonPrimaryText} size={12} weight={500} lineHeight={16}>
-            {item.action.label}
-          </Label>
-        </div>
+        <Button testId="toast-action" size="sm" variant="primary" onClick={() => { item.action!.onClick(); dismiss(item.id) }} style={{ marginLeft: 8 }}>{item.action.label}</Button>
       )}
       {/* No swipe-away on a desktop window: a hover close keeps a persistent toast dismissable. */}
       {hover && (

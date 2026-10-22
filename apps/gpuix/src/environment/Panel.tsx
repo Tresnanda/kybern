@@ -1,7 +1,7 @@
 import { activeEnvironment } from '../shell/environment.ts'
 import { useNav } from '../nav/store.ts'
 import { spawn } from 'node:child_process'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { motion } from '@gpuix/react'
 import { GitCommitIcon, GithubIcon, Edit02Icon, Copy01Icon, ArrowUpRight01Icon } from '@hugeicons/core-free-icons'
 import type { Diff, GitStatus, Thread } from '../../../../packages/kybern-client/src/types.ts'
@@ -20,23 +20,20 @@ import { MatrixLoader } from '../MatrixLoader.tsx'
 import { copyText } from '../transcript/store.ts'
 import { ENVIRONMENT_MOTION, useEnvironmentPanel, useEnvironmentDock, openEnvironmentPanel, closeEnvironmentPanel, finishEnvironmentClose } from './store.ts'
 import { ThreadNote } from './ThreadNote.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
 
 const G = { commit: glyph(GitCommitIcon), github: glyph(GithubIcon), changes: glyph(Edit02Icon), copy: glyph(Copy01Icon), external: glyph(ArrowUpRight01Icon) }
 const SECTIONS = [['changes', 'Changes'], ['repository', 'Repository'], ['pullRequest', 'Pull request'], ['editor', 'Editor'], ['notes', 'Notes']] as const
 type Section = typeof SECTIONS[number][0]
 export function EnvironmentTrigger({ threadId }: { threadId: string }) {
-  const t = useTheme()
+  const keyed = useRef(false)
   const panel = useEnvironmentPanel()
   const open = panel?.threadId === threadId && !panel.leaving
   const toggle = (keyboard = false) => {
     if (open) return closeEnvironmentPanel()
     openEnvironmentPanel(threadId, keyboard)
   }
-  return <div testId="environment-toggle" tabIndex={0} aria-label="Environment" aria-expanded={open}
-    onClick={() => toggle()} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') toggle(true) }}
-    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, backgroundColor: open ? t.buttonSecondaryHover : undefined, hover: { backgroundColor: t.buttonSecondaryHover } }}>
-    <Icon source={N.window} size={16} color={t.textSecondary} />
-  </div>
+  return <IconButton testId="environment-toggle" label="Environment" icon={N.window} active={open} onClick={() => { const keyboard = keyed.current; keyed.current = false; toggle(keyboard) }} onKeyboard={() => { keyed.current = true }} />
 }
 
 /** Keep deferred layers out of the title bar's cached island, which cannot replay their hit bounds. */
@@ -127,7 +124,7 @@ function EnvironmentPanel({ threadId }: { threadId: string }) {
   }
   return <>
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingLeft: 8 }}><Label color={muted(t, 0.4)} size={14} lineHeight={21}>Environment</Label>
-      <Menu testId="environment-sections" align="end" width={192} trigger={() => <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, pointerEvents: 'none' }}><Icon source={N.settings} size={14} color={t.textSecondary} /></div>}><MenuLabel>Sections</MenuLabel>{SECTIONS.map(([key, label]) => <MenuItem key={key} id={key} testId={`environment-section-${key}`} label={label} checked={!hidden[key]} keepOpen onSelect={() => { const next = { ...hidden, [key]: !hidden[key] }; setHidden(next); save('kybern.env.hidden', next) }} />)}</Menu>
+      <Menu testId="environment-sections" align="end" width={192} trigger={() => <IconButton label="Sections" icon={N.settings} glyph={14} />}><MenuLabel>Sections</MenuLabel>{SECTIONS.map(([key, label]) => <MenuItem key={key} id={key} testId={`environment-section-${key}`} label={label} checked={!hidden[key]} keepOpen onSelect={() => { const next = { ...hidden, [key]: !hidden[key] }; setHidden(next); save('kybern.env.hidden', next) }} />)}</Menu>
     </div>
     {!hidden.changes && <Row testId="environment-changes" icon={G.changes} label="Changes" disabled={!diff?.files.length} onClick={() => dock('changes')} trailing={(diff?.files.length ?? 0) > 0 && <><Label color={t.green} size={12}>{`+${diff?.files.reduce((n, f) => n + f.additions, 0) ?? 0}`}</Label><Label color={t.red} size={12}>{`−${diff?.files.reduce((n, f) => n + f.deletions, 0) ?? 0}`}</Label></>} />}
     <Menu testId="environment-running" width={260} trigger={() => <Row decorative icon={thread?.worktree ? N.worktree : N.laptop} label={thread?.worktree ? 'Worktree' : local ? 'Local' : 'Remote'} trailing={chevron} />}><MenuLabel>Running in</MenuLabel><MenuItem id="cwd" label={cwd || 'Local'} checked disabled={!local || !cwd} onSelect={() => spawn('open', ['-R', cwd], { stdio: 'ignore' }).on('error', () => {})} /></Menu>

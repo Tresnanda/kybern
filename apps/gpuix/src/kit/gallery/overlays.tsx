@@ -2,7 +2,8 @@
 // row of outline triggers at (40, 40); the right sheet holds a settings select for the stacked Escape check.
 import { useState, type ComponentType } from 'react'
 import { useTheme, Label } from '../../ui.tsx'
-import { AlertDialog, AlertDialogClose, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, KitButton } from '../AlertDialog.tsx'
+import { AlertDialog, AlertDialogClose, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../AlertDialog.tsx'
+import { Button } from '../Button.tsx'
 import { Select } from '../Select.tsx'
 import { Sheet, SheetClose, SheetDescription, SheetFooter, SheetHeader, SheetPanel, SheetTitle, type SheetSide } from '../Sheet.tsx'
 
@@ -27,8 +28,8 @@ function SheetBody({ id }: { id: string }) {
         </div>
       </SheetPanel>
       <SheetFooter>
-        <SheetClose variant="outline" testId={`sheet-${id}-cancel`}>Cancel</SheetClose>
-        <SheetClose variant="default" testId={`sheet-${id}-save`}>Save</SheetClose>
+        <SheetClose variant="secondary" testId={`sheet-${id}-cancel`}>Cancel</SheetClose>
+        <SheetClose variant="primary" testId={`sheet-${id}-save`}>Save</SheetClose>
       </SheetFooter>
     </>
   )
@@ -40,16 +41,16 @@ function OverlaysDemo() {
   const sides: SheetSide[] = ['right', 'left', 'top', 'bottom']
   return (
     <div style={{ position: 'absolute', left: 40, top: 40, display: 'flex', gap: 8 }}>
-      <KitButton variant="outline" testId="alert-trigger" onClick={() => setAlert(true)}>Delete note</KitButton>
-      {sides.map((side) => <KitButton key={side} variant="outline" testId={`sheet-${side}-trigger`} onClick={() => setSheet(side)}>{`Sheet ${side}`}</KitButton>)}
-      <KitButton variant="outline" testId="sheet-inset-trigger" onClick={() => setSheet('inset')}>Inset sheet</KitButton>
+      <Button testId="alert-trigger" onClick={() => setAlert(true)}>Delete note</Button>
+      {sides.map((side) => <Button key={side} testId={`sheet-${side}-trigger`} onClick={() => setSheet(side)}>{`Sheet ${side}`}</Button>)}
+      <Button testId="sheet-inset-trigger" onClick={() => setSheet('inset')}>Inset sheet</Button>
       <AlertDialog open={alert} onOpenChange={setAlert} testId="alert-popup">
         <AlertDialogHeader>
           <AlertDialogTitle>Delete this note forever?</AlertDialogTitle>
           <AlertDialogDescription>“Project brief” will be removed for good. You can’t undo this.</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogClose variant="outline" testId="alert-cancel">Cancel</AlertDialogClose>
+          <AlertDialogClose variant="secondary" testId="alert-cancel">Cancel</AlertDialogClose>
           <AlertDialogClose variant="destructive" testId="alert-confirm">Delete forever</AlertDialogClose>
         </AlertDialogFooter>
       </AlertDialog>

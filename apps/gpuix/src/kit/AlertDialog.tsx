@@ -13,13 +13,14 @@
 import { useGpuix, useWindowSize, type StyleDesc } from '@gpuix/react'
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { muted } from '../composer/Menu.tsx'
-import { Icon } from '../icons.tsx'
+
 import { N } from '../nav/glyphs.ts'
 import { pointerNav } from '../nav/store.ts'
 import { useSettingsModal } from '../settings/controls.tsx'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import type { Theme } from '../theme.ts'
-import { pressTransform } from '../motion/press.ts'
+
+
+import { Button, type ButtonVariant as ControlVariant } from './Button.tsx'
 import { SCALE } from '../motion/tokens.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 
@@ -195,100 +196,8 @@ export function useReturnFocus(open: boolean) {
 
 // ─── Buttons ──────────────────────────────────────────────────────────────
 
-// TODO(kit): stand-in for the desktop `Button` (`components/kit/button.tsx`) until the kit has one; only the
-// variants overlays and their galleries use. Size `default`: 32 high, 11px side padding inside a 1px border,
-// radius 10, 14/21 medium. `icon`: 32 square. Hover fills are instant; the desktop's 0.97 press scale has no
-// GPUIX subtree equivalent and is dropped.
+/** The desktop `Button` variant names `AlertDialogClose` and `SheetClose` callers still pass; `controlVariant` maps them onto `kit/Button`. */
 export type ButtonVariant = 'default' | 'outline' | 'destructive' | 'destructive-outline' | 'ghost' | 'secondary' | 'subtle'
-
-function buttonColors(t: Theme, variant: ButtonVariant) {
-  const fg = t.v('--foreground')
-  switch (variant) {
-    case 'default': return { bg: t.v('--primary'), hover: withAlpha(t.v('--primary'), 0.9), border: 'rgba(0, 0, 0, 0)', text: t.v('--primary-foreground') }
-    case 'destructive': return { bg: t.v('--destructive'), hover: withAlpha(t.v('--destructive'), 0.9), border: t.v('--destructive'), text: '#ffffff' }
-    case 'destructive-outline': return { bg: t.v('--color-background-elevated-primary-opaque'), hover: withAlpha(t.v('--destructive'), 0.04), border: t.border, text: t.v('--destructive') }
-    case 'secondary': return { bg: t.v('--secondary'), hover: withAlpha(t.v('--secondary'), 0.9), border: 'rgba(0, 0, 0, 0)', text: t.v('--secondary-foreground') }
-    case 'subtle': return { bg: t.buttonSecondary, hover: t.buttonSecondaryHover, border: 'rgba(0, 0, 0, 0)', text: fg }
-    case 'ghost': return { bg: 'rgba(0, 0, 0, 0)', hover: t.buttonSecondaryHover, border: 'rgba(0, 0, 0, 0)', text: t.textSecondary, hoverText: fg }
-    default: return { bg: 'rgba(0, 0, 0, 0)', hover: t.v('--color-background-elevated-secondary'), border: t.border, text: fg }
-  }
-}
-
-/** `#rrggbb`/`rgb()` at an alpha (Tailwind's `bg-primary/90`). */
-function withAlpha(color: string, alpha: number) {
-  const hex = color.match(/^#([0-9a-f]{6})$/i)
-  if (hex) { const n = parseInt(hex[1]!, 16); return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})` }
-  const rgb = color.match(/^rgba?\(([^)]+)\)$/)
-  if (rgb) { const [r, g, b, a = '1'] = rgb[1]!.split(/[\s,/]+/).filter(Boolean); return `rgba(${r}, ${g}, ${b}, ${Number(a) * alpha})` }
-  return color
-}
-
-export function KitButton({
-  children,
-  variant = 'default',
-  size = 'default',
-  icon,
-  label,
-  onClick,
-  disabled = false,
-  testId,
-  press = true,
-}: {
-  children?: string
-  /** `[data-slot="button"]` press (0.97). False where Base UI renders it as another part (`alert-dialog-close`), which does not scale. */
-  press?: boolean
-  variant?: ButtonVariant
-  /** Measured from the desktop in WebKit (1px border included). `sm`: 28 high, 9px side padding, 14/21 text. `chip`: auto height, 8/2 padding, 13/19.5 text (`--app-font-size-ui-sm`). */
-  size?: 'default' | 'icon' | 'sm' | 'chip'
-  /** Glyph source for `size="icon"` (16px at 80%). */
-  icon?: string
-  /** Accessible name (icon buttons). */
-  label?: string
-  onClick?: () => void
-  disabled?: boolean
-  testId?: string
-}) {
-  const t = useTheme()
-  const c = buttonColors(t, variant)
-  const [hover, setHover] = useState(false)
-  const text = hover && c.hoverText ? c.hoverText : c.text
-  return (
-    <div
-      testId={testId}
-      role="button"
-      aria-label={label ?? children}
-      tabIndex={disabled ? -1 : 0}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      onClick={() => { if (!disabled) onClick?.() }}
-      onKeyDown={(e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) onClick?.() }}
-      paintTransform={pressTransform(press && !disabled)}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: size === 'chip' ? 4 : size === 'sm' ? 6 : 8,
-        flexShrink: 0,
-        ...(size === 'chip' ? { paddingLeft: 8, paddingRight: 8, paddingTop: 2, paddingBottom: 2 } : { height: size === 'sm' ? 28 : 32 }),
-        ...(size === 'icon' ? { width: 32 } : size === 'sm' ? { paddingLeft: 9, paddingRight: 9 } : size === 'chip' ? {} : { paddingLeft: 11, paddingRight: 11 }),
-        borderRadius: 10,
-        borderWidth: 1,
-        borderColor: c.border,
-        backgroundColor: hover && !disabled ? c.hover : c.bg,
-        opacity: disabled ? 0.64 : 1,
-        cursor: disabled ? 'default' : 'pointer',
-      }}
-    >
-      {size === 'icon' && icon ? (
-        <Icon source={icon} size={16} color={text} style={{ opacity: 0.8, pointerEvents: 'none' }} />
-      ) : (
-        <Label color={text} size={size === 'chip' ? 13 : 14} lineHeight={size === 'chip' ? 19.5 : 21} weight={500} style={{ whiteSpace: 'nowrap', pointerEvents: 'none' }}>
-          {children}
-        </Label>
-      )}
-    </div>
-  )
-}
 
 // ─── AlertDialog ──────────────────────────────────────────────────────────
 
@@ -397,9 +306,21 @@ export function AlertDialogFooter({ children, variant = 'default' }: { children:
 
 /** `AlertDialogClose render={<Button variant=… />}`: a footer button that runs `onClick`, then closes. Its slot is
  *  `alert-dialog-close`, so unlike a plain `Button` it does not squash on press. */
-export function AlertDialogClose({ children, variant = 'outline', onClick, disabled, testId }: { children: string; variant?: ButtonVariant; onClick?: () => void; disabled?: boolean; testId?: string }) {
+export function AlertDialogClose({ children, variant = 'secondary', onClick, disabled, testId }: { children: string; variant?: ButtonVariant | ControlVariant; onClick?: () => void; disabled?: boolean; testId?: string }) {
   const ctx = useContext(AlertContext)
-  return <KitButton press={false} variant={variant} disabled={disabled} testId={testId} onClick={() => { onClick?.(); ctx?.close() }}>{children}</KitButton>
+  const { variant: kind, danger } = controlVariant(variant)
+  return <Button size="lg" variant={kind} danger={danger} disabled={disabled} testId={testId} onClick={() => { onClick?.(); ctx?.close() }}>{children}</Button>
+}
+
+/** The control system's variant for a legacy `KitButton` one (`outline`/`subtle`/`secondary` → secondary, `default` → primary). */
+export function controlVariant(variant: ButtonVariant | ControlVariant): { variant: ControlVariant; danger: boolean } {
+  switch (variant) {
+    case 'default': case 'primary': return { variant: 'primary', danger: false }
+    case 'destructive': return { variant: 'destructive', danger: false }
+    case 'destructive-outline': return { variant: 'secondary', danger: true }
+    case 'ghost': return { variant: 'ghost', danger: false }
+    default: return { variant: 'secondary', danger: false }
+  }
 }
 
 /** The ghost close glyph (`XIcon`) used by sheets and dialogs. */

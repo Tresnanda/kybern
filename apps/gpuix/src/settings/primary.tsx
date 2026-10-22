@@ -9,11 +9,15 @@ import type { PermissionMode, ProviderKind, OrchestrationSettings, RoleDefault }
 import { getClient, useApp } from '../state.ts'
 import { useNav } from '../nav/store.ts'
 import { loadProviders } from '../nav/live.ts'
+import { providerLabel } from '../sidebar/model.ts'
 import { Label, ink, useTheme } from '../ui.tsx'
 import { FONT_MONO } from '../theme.ts'
 import { N } from '../nav/glyphs.ts'
 import { Chevron } from '../motion/Chevron.tsx'
-import { Button, NumberField, PageBlock, Row, Section, Select, TextField } from './controls.tsx'
+import { PageBlock, Row, Section, Select } from './controls.tsx'
+import { Button } from '../kit/Button.tsx'
+import { NumberField } from '../kit/NumberField.tsx'
+import { TextField } from '../kit/Field.tsx'
 import { Switch } from '../kit/Switch.tsx'
 import { latestSettings, updateSettings, useSettings } from './store.ts'
 import { setAppearance, useAppearance } from './appearance.ts'
@@ -27,7 +31,7 @@ export function General() {
   if (!s) return null
   return <>
     <Section title="New threads">
-      <Row title="Default agent" description="Used when you start a thread from a project."><Select label="Default agent" testId="settings-default-agent" value={s.default_provider} disabled={saving} onChange={(value) => void updateSettings({ default_provider: value as ProviderKind })} options={providers.map((p) => ({ value: p.kind, label: p.display_name, disabled: !p.available, mark: p.kind }))} /></Row>
+      <Row title="Default agent" description="Used when you start a thread from a project."><Select label="Default agent" testId="settings-default-agent" value={s.default_provider} disabled={saving} onChange={(value) => void updateSettings({ default_provider: value as ProviderKind })} options={[...providers.map((p) => ({ value: p.kind, label: p.display_name, disabled: !p.available, mark: p.kind })), ...(providers.some((p) => p.kind === s.default_provider) ? [] : [{ value: s.default_provider, label: providerLabel(s.default_provider), mark: s.default_provider }])]} /></Row>
       <Row title="Default permissions" description={PERMISSION_HINT[s.default_permission_mode]}><Select label="Default permissions" testId="settings-permissions" value={s.default_permission_mode} disabled={saving} onChange={(value) => void updateSettings({ default_permission_mode: value as PermissionMode })} options={Object.entries(PERMISSION_LABEL).map(([value, label]) => ({ value, label }))} /></Row>
       <Row title="Use a worktree for new threads" description="Each thread gets its own branch and folder. Projects can override this."><Switch aria-label="Use a worktree for new threads" testId="settings-worktrees" checked={s.worktrees_default} disabled={saving} onCheckedChange={(worktrees_default) => void updateSettings({ worktrees_default })} /></Row>
     </Section>
@@ -47,7 +51,7 @@ function PreviewFolders() {
   const t = useTheme()
   const { settings, saving } = useSettings()
   const folders = settings?.preview_allowed_folders ?? []
-  return <Section title="Preview"><Row title="Allowed folders" description={folders.length > 0 ? 'Pages in these folders can open in Preview. Files inside your projects never need this.' : 'None yet. Kybern asks the first time a page outside your projects opens in Preview.'}>{folders.length > 0 && <div testId="preview-folders" style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 320, maxWidth: '100%' }}>{folders.map((folder, index) => <div key={folder} testId={`preview-folder-${index}`} style={{ display: 'flex', alignItems: 'center', gap: 4, height: 28, paddingLeft: 10, paddingRight: 4, borderRadius: 6, backgroundColor: t.v('--color-background-elevated-secondary') }}><Label color={ink(t, 0.85)} size={11} lineHeight={16} font={FONT_MONO} truncate style={{ flexGrow: 1 }}>{startTruncate(folder)}</Label><Button testId={`preview-folder-remove-${index}`} size="xs" variant="ghost" label={`Remove ${folder}`} disabled={saving} onClick={() => void updateSettings({ preview_allowed_folders: folders.filter((p) => p !== folder) })}>Remove</Button></div>)}</div>}</Row></Section>
+  return <Section title="Preview"><Row title="Allowed folders" description={folders.length > 0 ? 'Pages in these folders can open in Preview. Files inside your projects never need this.' : 'None yet. Kybern asks the first time a page outside your projects opens in Preview.'}>{folders.length > 0 && <div testId="preview-folders" style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 320, maxWidth: '100%' }}>{folders.map((folder, index) => <div key={folder} testId={`preview-folder-${index}`} style={{ display: 'flex', alignItems: 'center', gap: 4, height: 28, paddingLeft: 10, paddingRight: 4, borderRadius: 6, backgroundColor: t.v('--color-background-elevated-secondary') }}><Label color={ink(t, 0.85)} size={11} lineHeight={16} font={FONT_MONO} truncate style={{ flexGrow: 1 }}>{startTruncate(folder)}</Label><Button testId={`preview-folder-remove-${index}`} size="sm" variant="ghost" label={`Remove ${folder}`} disabled={saving} onClick={() => void updateSettings({ preview_allowed_folders: folders.filter((p) => p !== folder) })}>Remove</Button></div>)}</div>}</Row></Section>
 }
 
 /** The desktop truncates the start of a path (`dir="rtl"`), so the folder's own name stays visible. */
@@ -110,14 +114,14 @@ function RoleRow({ label, value, onChange }: { label: string; value?: RoleDefaul
   const providers = useNav((s) => s.providers)
   const { saving } = useSettings()
   const chosen = providers.find((p) => p.kind === value?.provider?.kind)
-  return <Row title={label}><div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Select label={`${label} agent`} value={value?.provider?.kind ?? ''} disabled={saving} onChange={(kind) => onChange(kind ? { provider: { kind: kind as ProviderKind, instance: 'default' } } : null)} options={[{ value: '', label: COPY.sameAsCoordinator }, ...providers.filter((p) => p.available).map((p) => ({ value: p.kind, label: p.display_name }))]} />{chosen && <Select label={`${label} model`} value={value?.model ?? ''} disabled={saving} onChange={(model) => onChange({ ...value, model: model || null })} options={[{ value: '', label: 'Default model' }, ...(chosen.models ?? []).map((m) => ({ value: m.id, label: m.display_name || m.id }))]} />}{chosen?.supported_efforts?.length ? <Select label={`${label} effort`} value={value?.effort ?? ''} disabled={saving} onChange={(effort) => onChange({ ...value, effort: effort || null })} options={[{ value: '', label: 'Default effort' }, ...chosen.supported_efforts.map((value) => ({ value, label: value }))]} /> : null}</div></Row>
+  return <Row title={label}><div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Select label={`${label} agent`} value={value?.provider?.kind ?? ''} disabled={saving} onChange={(kind) => onChange(kind ? { provider: { kind: kind as ProviderKind, instance: 'default' } } : null)} options={[{ value: '', label: COPY.sameAsCoordinator }, ...providers.filter((p) => p.available).map((p) => ({ value: p.kind, label: p.display_name, mark: p.kind }))]} />{chosen && <Select label={`${label} model`} value={value?.model ?? ''} disabled={saving} onChange={(model) => onChange({ ...value, model: model || null })} options={[{ value: '', label: 'Default model' }, ...(chosen.models ?? []).map((m) => ({ value: m.id, label: m.display_name || m.id }))]} />}{chosen?.supported_efforts?.length ? <Select label={`${label} effort`} value={value?.effort ?? ''} disabled={saving} onChange={(effort) => onChange({ ...value, effort: effort || null })} options={[{ value: '', label: 'Default effort' }, ...chosen.supported_efforts.map((value) => ({ value, label: value }))]} /> : null}</div></Row>
 }
 
 function ProfileField({ value, onSave, inherit }: { value?: string; onSave: (value: string) => void; inherit: string }) {
   const { saving } = useSettings()
   const [naming, setNaming] = useState(false)
   const [draft, setDraft] = useState(value ?? '')
-  return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Select label="OMP profile source" value={naming || (value && value !== 'default') ? 'named' : value === 'default' ? 'default' : 'inherit'} disabled={saving} options={[{ value: 'inherit', label: inherit }, { value: 'default', label: 'OMP default' }, { value: 'named', label: 'Named profile' }]} onChange={(mode) => { setNaming(mode === 'named'); if (mode !== 'named') onSave(mode === 'inherit' ? '' : 'default') }} />{(naming || (value && value !== 'default')) && <TextField label="Profile name" value={draft} onChange={setDraft} readOnly={saving} placeholder="Profile name" onBlur={() => { if (draft.trim() && draft.trim() !== value) onSave(draft.trim()) }} onSubmit={() => { if (draft.trim()) onSave(draft.trim()) }} />}</div>
+  return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Select label="OMP profile source" value={naming || (value && value !== 'default') ? 'named' : value === 'default' ? 'default' : 'inherit'} disabled={saving} options={[{ value: 'inherit', label: inherit }, { value: 'default', label: 'OMP default' }, { value: 'named', label: 'Named profile' }]} onChange={(mode) => { setNaming(mode === 'named'); if (mode !== 'named') onSave(mode === 'inherit' ? '' : 'default') }} />{(naming || (value && value !== 'default')) && <TextField label="Profile name" value={draft} onChange={setDraft} disabled={saving} placeholder="Profile name" onBlur={() => { if (draft.trim() && draft.trim() !== value) onSave(draft.trim()) }} onSubmit={() => { if (draft.trim()) onSave(draft.trim()) }} />}</div>
 }
 
 function OmpProfiles() {

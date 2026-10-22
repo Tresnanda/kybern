@@ -11,7 +11,9 @@ import { ink, Label, REDUCED_MOTION, useMaterial, useTheme } from '../ui.tsx'
 import { enterTransform } from '../motion/kit.tsx'
 import { DURATION, EASE } from '../motion/tokens.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
-import { SectionEnter, settingsOverlayOwnsEscape, TextField } from './controls.tsx'
+import { SectionEnter, settingsOverlayOwnsEscape } from './controls.tsx'
+import { SearchField } from '../kit/SearchField.tsx'
+import { Button } from '../kit/Button.tsx'
 import { useSettings, useSettingsConnection } from './store.ts'
 import { General, Agents } from './primary.tsx'
 import { Accounts, Integrations, Computer, Background } from './secondary.tsx'
@@ -48,7 +50,6 @@ export function SettingsScreen() {
   const [previousFocus] = useState(() => renderer?.getFocusedElementId?.())
   const [tab, setTab] = useState<Tab>(lastTab)
   const [query, setQuery] = useState('')
-  const [searchFocused, setSearchFocused] = useState(false)
   // Keep pointer navigation batched with its local keyboard/search state.
   // External rail/menu entries notify this mounted screen, or seed lastTab.
   useEffect(() => {
@@ -84,12 +85,12 @@ export function SettingsScreen() {
   return <div testId="page-settings" onKeyDown={(e) => { if (e.key === 'tab' && settingsOverlayOwnsEscape()) e.preventDefault() /* Tab navigation is the window default; an open overlay keeps it */; if (e.key === 'escape' && !settingsOverlayOwnsEscape()) { if (query) setQuery(''); else close(true) } }} style={{ display: 'flex', flexGrow: 1, minHeight: 0 }}>
     <div style={{ display: 'flex', flexDirection: 'column', width: 256, flexShrink: 0, paddingLeft: 6, paddingRight: 6, paddingTop: 8, paddingBottom: 12, backgroundColor: fills.sidebar, borderTopLeftRadius: 12, borderBottomLeftRadius: 12 }}>
       <div testId="settings-back" tabIndex={0} autoFocus onClick={() => close()} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') close(true) }} style={{ display: 'flex', alignItems: 'center', height: 28, gap: 8, paddingLeft: 8, borderRadius: 8, hover: { backgroundColor: t.hover } }}><Icon source={N.arrowLeft} size={16} color={t.iconSecondary} /><Label color={t.text} size={14} lineHeight={21}>Back to workspace</Label></div>
-      <div style={{ display: 'flex', position: 'relative', paddingTop: 8, paddingBottom: 8 }}><div style={{ position: 'absolute', left: 12, top: 16, pointerEvents: 'none' }}><Icon source={N.search} size={14} color={t.textSecondary} /></div><TextField testId="settings-search" tabIndex={0} onFocus={() => setSearchFocused(true)} onBlur={() => setSearchFocused(false)} label="Search settings" placeholder="Search settings…" style={{ position: 'relative', left: -0.5, top: -0.5, height: 31, borderRadius: 10, paddingLeft: 38, fontSize: 14, backgroundColor: t.inputGroupFill, borderColor: searchFocused ? ink(t, .3) : t.v('--input') }} value={query} onChange={setQuery} width="100%" onSubmit={() => { if (matches[0]) select(matches[0][0], true) }} onKeyDown={(e) => { if (e.key === 'escape' && !settingsOverlayOwnsEscape()) { if (query) setQuery(''); else close(true) } }} /></div>
+      <div style={{ display: 'flex', paddingTop: 8, paddingBottom: 8 }}><SearchField testId="settings-search" label="Search settings" placeholder="Search settings…" value={query} onChange={setQuery} width="100%" onSubmit={() => { if (matches[0]) select(matches[0][0], true) }} onKeyDown={(e) => { if (e.key === 'escape' && !settingsOverlayOwnsEscape()) { if (query) setQuery(''); else close(true) } }} /></div>
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
         {/* `t-tabs` (250 ms smooth-out): the pill sits in the first row's slot and is moved by paint (`paintTransform` translation); the keyboard moves it at once. */}
         {!query && pillTop >= 0 && <div paintTransform={PATCHED_NATIVE ? { initial: false, animate: { translateY: pillTop }, transition: { duration: keyboard || REDUCED_MOTION ? 0 : DURATION.fast, ease: [...EASE.smoothOut] }, retain: true } : undefined} style={{ position: 'absolute', left: 0, right: 0, top: PATCHED_NATIVE ? 0 : pillTop, height: 28, borderRadius: 6, backgroundColor: t.v('--sidebar-accent-active'), pointerEvents: 'none' }} />}
         {rows.map((row) => 'group' in row ? <div key={row.group} style={{ display: 'flex', alignItems: 'flex-start', paddingTop: 4, height: 33, marginTop: rows.indexOf(row) === 0 ? 0 : 12, paddingLeft: 8 }}><Label color={t.textSecondary} size={14} lineHeight={21} weight={500}>{row.group}</Label></div> : <div key={row.item[0]} testId={`settings-tab-${row.item[0]}`} tabIndex={0} aria-label={row.item[1]} onClick={() => select(row.item[0])} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') select(row.item[0], true) }} style={{ display: 'flex', position: 'relative', alignItems: 'center', height: 28, marginBottom: 2, paddingLeft: 8, gap: 8, borderRadius: 6, hover: { backgroundColor: row.item[0] === tab ? 'transparent' : t.hover } }}><Icon source={row.item[3]} size={16} color={t.text} /><Label color={t.text} size={14} lineHeight={21}>{row.item[1]}</Label></div>)}
-        {!matches.length && <div style={{ padding: 8 }}><Label color={t.textSecondary} size={14} lineHeight={21}>{`No settings match “${query}”.`}</Label><div testId="settings-clear-search" tabIndex={0} onClick={() => setQuery('')} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') setQuery('') }} style={{ padding: 8, borderRadius: 8, hover: { backgroundColor: t.hover } }}><Label color={t.text} size={14}>Clear search</Label></div></div>}
+        {!matches.length && <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4, padding: 8 }}><Label color={t.textSecondary} size={14} lineHeight={21}>{`No settings match “${query}”.`}</Label><Button testId="settings-clear-search" variant="ghost" size="sm" onClick={() => setQuery('')}>Clear search</Button></div>}
       </div>
       <div style={{ flexGrow: 1 }} /><div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 8, paddingRight: 8, paddingTop: 8 }}><div style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, backgroundColor: ink(t, 0.58 * 0.5) }} /><Label color={t.textSecondary} size={14} lineHeight={21}>{environment.name}</Label></div>
     </div>

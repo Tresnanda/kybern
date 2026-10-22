@@ -17,9 +17,13 @@ import { muted } from '../composer/Menu.tsx'
 import { useSettingsModal } from '../settings/controls.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import {
-  CLOSE_GLYPH, EASE_DEFAULT, EASE_IN_OUT_CSS, KitButton, ModalLayer, useEscapeLayer, usePresence, useReturnFocus, WindowSized,
+  CLOSE_GLYPH, EASE_DEFAULT, EASE_IN_OUT_CSS, ModalLayer, useEscapeLayer, usePresence, useReturnFocus, WindowSized,
+  controlVariant,
   type ButtonVariant,
 } from './AlertDialog.tsx'
+import type { ButtonVariant as ControlVariant } from './Button.tsx'
+import { Button } from './Button.tsx'
+import { IconButton } from './IconButton.tsx'
 
 export type SheetSide = 'right' | 'left' | 'top' | 'bottom'
 const DURATION = 0.2
@@ -125,7 +129,7 @@ export function Sheet({
             {children}
             {showCloseButton && (
               <div style={{ position: 'absolute', top: 8, right: 8 }}>
-                <KitButton variant="ghost" size="icon" icon={CLOSE_GLYPH} label="Close" testId={testId ? `${testId}-close` : undefined} onClick={() => setOpen(false)} />
+                <IconButton icon={CLOSE_GLYPH} label="Close" size="lg" testId={testId ? `${testId}-close` : undefined} onClick={() => setOpen(false)} />
               </div>
             )}
           </div>
@@ -189,7 +193,8 @@ export function SheetFooter({ children, variant = 'default' }: { children: React
 }
 
 /** `SheetClose render={<Button … />}`: a button that runs `onClick`, then closes the sheet. */
-export function SheetClose({ children, variant = 'outline', onClick, disabled, testId }: { children: string; variant?: ButtonVariant; onClick?: () => void; disabled?: boolean; testId?: string }) {
+export function SheetClose({ children, variant = 'secondary', onClick, disabled, testId }: { children: string; variant?: ButtonVariant | ControlVariant; onClick?: () => void; disabled?: boolean; testId?: string }) {
   const ctx = useContext(SheetContext)
-  return <KitButton variant={variant} disabled={disabled} testId={testId} onClick={() => { onClick?.(); ctx?.close() }}>{children}</KitButton>
+  const { variant: kind, danger } = controlVariant(variant)
+  return <Button size="lg" variant={kind} danger={danger} disabled={disabled} testId={testId} onClick={() => { onClick?.(); ctx?.close() }}>{children}</Button>
 }

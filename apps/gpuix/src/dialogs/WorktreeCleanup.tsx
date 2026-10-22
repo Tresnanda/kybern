@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import type { WorktreeInspectResult } from '../../../../packages/kybern-client/src/types.ts'
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
-import { Button } from '../settings/controls.tsx'
+import { Button } from '../kit/Button.tsx'
+import { Checkbox } from '../kit/Checkbox.tsx'
 import { getClient, refreshLists, useApp } from '../state.ts'
 import { errorText } from '../nav/actions.ts'
 import { FONT_MONO } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
-import { popAnimation } from '../kit/Pop.tsx'
 
 export function WorktreeCleanup({ threadId, close }: { threadId: string; close: () => void }) {
   const t = useTheme()
@@ -39,17 +39,21 @@ export function WorktreeCleanup({ threadId, close }: { threadId: string; close: 
         {inspection.exists ? <>
           <Label color={t.text} size={14} lineHeight={22}>{`${inspection.clean ? 'Source is clean.' : 'Source has changes.'} ${inspection.merged ? 'The branch is merged into the project checkout.' : 'The branch has commits that are not merged into the project checkout.'}`}</Label>
           {inspection.blockers.map((blocker) => <Label key={blocker} color={t.red} size={14}>{blocker}</Label>)}
-          {unsafe && <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}><WorktreeCheck testId="worktree-force" label="Remove the folder anyway" checked={force} onChange={setForce} disabled={busy} /><Label color={t.text} size={14} lineHeight={22} style={{ flexBasis:0, flexGrow:1, minWidth:0 }}>Remove the folder anyway. Save tracked and untracked source in a Git recovery ref first; restore it when this conversation continues. Keep unmerged commits on their branch.</Label></div>}
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}><WorktreeCheck testId="worktree-delete-branch" label="Delete the merged branch" checked={deleteBranch} onChange={setDeleteBranch} disabled={busy || !inspection.merged} /><Label color={t.text} size={14} lineHeight={22} style={{ flexBasis:0, flexGrow:1, minWidth:0 }}>Delete the merged branch. Keep the recovery ref so continuation can recreate it.</Label></div>
+          {unsafe && <CheckRow testId="worktree-force" label="Remove the folder anyway" checked={force} onChange={setForce} disabled={busy}>Remove the folder anyway. Save tracked and untracked source in a Git recovery ref first; restore it when this conversation continues. Keep unmerged commits on their branch.</CheckRow>}
+          <CheckRow testId="worktree-delete-branch" label="Delete the merged branch" checked={deleteBranch} onChange={setDeleteBranch} disabled={busy || !inspection.merged}>Delete the merged branch. Keep the recovery ref so continuation can recreate it.</CheckRow>
           {inspection.ignored_files > 0 && <Label color={t.textSecondary} size={14}>{`${inspection.ignored_files} ignored files remain. Move deliverables or remove build output before continuing.`}</Label>}
         </> : <Label color={t.text} size={14}>The folder is removed. Your conversation and source recovery ref remain available.</Label>}
       </>}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><Button variant="ghost" disabled={busy} onClick={dismiss}>{inspection?.exists === false ? 'Done' : 'Keep worktree'}</Button>{inspection?.exists !== false && <><Button variant="secondary" disabled={busy} onClick={() => setReload((n) => n + 1)}>Refresh</Button><Button variant="destructive" testId="worktree-remove" disabled={busy || !inspection || inspection.blockers.length > 0 || (!!unsafe && !force)} onClick={() => void remove()}>{busy ? 'Removing…' : force ? 'Remove worktree anyway' : 'Remove worktree'}</Button></>}</div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>{inspection?.exists === false ? <Button size="lg" variant="primary" disabled={busy} onClick={dismiss}>Done</Button> : <><Button size="lg" variant="secondary" disabled={busy} onClick={dismiss}>Keep worktree</Button><Button size="lg" variant="ghost" disabled={busy} onClick={() => setReload((n) => n + 1)}>Refresh</Button><Button size="lg" variant="destructive" testId="worktree-remove" disabled={busy || !inspection || inspection.blockers.length > 0 || (!!unsafe && !force)} onClick={() => void remove()}>{busy ? 'Removing…' : force ? 'Remove worktree anyway' : 'Remove worktree'}</Button></>}</div>
     </div>
   </Dialog>
 }
 
-function WorktreeCheck({checked,onChange,label,disabled,testId}:{checked:boolean;onChange:(v:boolean)=>void;label:string;disabled?:boolean;testId?:string}) {
- const t=useTheme()
- return <div testId={testId} role="checkbox" aria-label={label} aria-checked={checked} tabIndex={disabled?-1:0} onClick={()=>{if(!disabled)onChange(!checked)}} onKeyDown={e=>{if(!disabled&&(e.key==='space'||e.key==='enter'))onChange(!checked)}} style={{width:14,height:14,marginTop:4,flexShrink:0,borderRadius:4,borderWidth:1,borderColor:t.border,backgroundColor:checked?t.text:'transparent',opacity:disabled?0.45:1}}>{checked&&<Label color={t.surface} size={11} paintAnimation={popAnimation()}>✓</Label>}</div>
+/** A kit checkbox and its sentence: the sentence is part of the hit area. */
+function CheckRow({ checked, onChange, label, disabled, testId, children }: { checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean; testId?: string; children: string }) {
+  const t = useTheme()
+  return <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+    <Checkbox testId={testId} aria-label={label} checked={checked} onCheckedChange={onChange} disabled={disabled} style={{ marginTop: 3 }} />
+    <div onClick={() => { if (!disabled) onChange(!checked) }} style={{ display: 'flex', flexBasis: 0, flexGrow: 1, minWidth: 0, cursor: disabled ? 'default' : 'pointer' }}><Label color={disabled ? t.textTertiary : t.text} size={14} lineHeight={22}>{children}</Label></div>
+  </div>
 }
