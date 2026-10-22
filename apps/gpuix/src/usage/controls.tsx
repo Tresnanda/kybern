@@ -1,43 +1,10 @@
 import type { StyleDesc } from '@gpuix/react'
-import { useState, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 
-import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { pressTransform } from '../motion/press.ts'
-import { DURATION, EASE } from '../motion/tokens.ts'
-import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { Label, useTheme } from '../ui.tsx'
 
 export const row: StyleDesc = { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }
 export const column: StyleDesc = { display: 'flex', flexDirection: 'column', minWidth: 0 }
-
-/**
- * The sliding selection of a segmented control or tab strip (`t-tabs`: 250 ms `--ease-smooth-out`), `x` px from the strip's inner left
- * edge. The pill moves by paint (`paintTransform`: no layout or render per frame, like the rail's pill). Segments of different widths
- * keep one box as wide as the narrowest segment (`base`) and stretch it with `scaleX` about its left edge, so they stay paint-only too
- * (stretching only ever widens, which keeps the corners round). A keyboard move, Reduce Motion and the stock addon change at once.
- */
-export function SlidingPill({ x, width, base = width, instant, top = 3, height = 28, radius = 5, color }: { x: number; width: number; base?: number; instant: boolean; top?: number; height?: number; radius?: number; color: string }) {
-  const duration = REDUCED_MOTION || instant ? 0 : DURATION.fast
-  const ease = [...EASE.smoothOut] as [number, number, number, number]
-  const box = { position: 'absolute', top, height, borderRadius: radius, backgroundColor: color, pointerEvents: 'none' } as const
-  if (!PATCHED_NATIVE) return <div style={{ ...box, left: 3 + x, width }} />
-  return <div paintTransform={{ initial: false, animate: { translateX: x, scaleX: width / base }, origin: [0, 0.5], transition: { duration, ease }, retain: true }} style={{ ...box, left: 3, width: base }} />
-}
-
-/** Fixed-width segments let the native pill move without a measurement loop. `onChange` also says whether the keyboard chose the segment, so callers can skip entrance motion for it. */
-export function Segments<T extends string>({ value, options, onChange, testId, width = 72, plain = false, fontSize = 14 }: { value: T; options: readonly (readonly [T, ReactNode])[]; onChange: (value: T, byKey?: boolean) => void; testId: string; width?: number | readonly number[]; plain?: boolean; fontSize?: number }) {
-  const t = useTheme()
-  const [instant, setInstant] = useState(true)
-  const index = options.findIndex(([key]) => key === value)
-  const widths = options.map((_, i) => typeof width === 'number' ? width : width[i] ?? 72)
-  const left = widths.slice(0, Math.max(0,index)).reduce((a,b)=>a+b,0)
-  return <div role="tablist" aria-label={testId} style={{ ...row, gap: 0, alignSelf: 'flex-start', position: 'relative', padding: 3, height: 34, borderRadius: 8, backgroundColor: plain ? 'transparent' : t.buttonSecondary }}>
-    <SlidingPill x={left} width={widths[Math.max(0,index)]!} base={Math.min(...widths)} instant={instant} color={plain ? t.buttonSecondary : t.surface} />
-    {options.map(([key, label], i) => <div key={key} testId={`${testId}-${key}`} role="tab" aria-selected={key === value} tabIndex={0} paintTransform={pressTransform(true)} onClick={() => { setInstant(false); onChange(key, false) }} onKeyDown={e => {
-      const next = e.key === 'right' ? (i + 1) % options.length : e.key === 'left' ? (i + options.length - 1) % options.length : e.key === 'enter' || e.key === 'space' ? i : -1
-      if (next >= 0) { setInstant(true); onChange(options[next]![0], true) }
-    }} style={{ ...row, width: widths[i], height: 28, justifyContent: 'center', cursor: 'pointer' }}>{typeof label === 'string' ? <Label color={key === value ? t.text : t.textSecondary} size={fontSize} lineHeight={21}>{label}</Label> : label}</div>)}
-  </div>
-}
 
 export function Header({ title, children }: { title: string; children?: ReactNode }) {
   const t = useTheme()
