@@ -63,13 +63,14 @@ export function updateMemory(threadId: string, fn: (group: Group) => Group) {
   save(MEMORY_KEY, writeMemory(memory)); notifyTabs()
 }
 
-/** Close one tab; the chat never closes. Remembered for ⌘⇧T. */
+/** Close one tab; the chat never closes. Remembered for ⌘⇧T, except a terminal: its shell closes with the tab, so reopening it
+ *  would only show "This terminal has ended". */
 export function closeTab(leafId: string, key: string) {
   const group = groups[leafId]
   if (!group?.threadId || key === CHAT) return
   const index = group.tabs.findIndex((tab) => tabKey(tab) === key)
   if (index < 0) return
-  closed.push({ threadId: group.threadId, tab: group.tabs[index]!, leafId, index })
+  if (group.tabs[index]!.kind !== 'terminal') closed.push({ threadId: group.threadId, tab: group.tabs[index]!, leafId, index })
   if (closed.length > 30) closed.shift()
   // A group that held only this tab (a split-off document) closes with it.
   if (group.tabs.length === 1 && root.kind === 'split') { groups = { ...groups, [leafId]: { ...group, tabs: [] } }; closePane(leafId); return }
