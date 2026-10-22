@@ -46,7 +46,8 @@ export function noteImageHome(id: string): ImageHome {
 /** `.note-outline` sits 120px below the scroll top as its reading line. */
 const READING_LINE = 120
 /** `width`: the note is a tab beside a chat (ADE-54): it lays out by its own width, not the window's, and Escape stays put. */
-export function NoteEditor({ id, compact = false, width }: { id: string; compact?: boolean; width?: number }) {
+/** `onClose`: the editor is a tab (ADE-54); a missing note offers to close it instead of leaving for the Notes page. */
+export function NoteEditor({ id, compact = false, width, onClose }: { id: string; compact?: boolean; width?: number; onClose?: () => void }) {
   const t = useTheme()
   const k = useNotesTokens()
   const { renderer } = useGpuix()
@@ -195,7 +196,9 @@ export function NoteEditor({ id, compact = false, width }: { id: string; compact
   </div>
   return <div testId="note-editor" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
     {snap.phase === 'error' && <Banner opened={openedAt} title="Couldn’t open this note" detail={snap.error ?? ''}><Button onClick={() => void session.reload()}>Try again</Button></Banner>}
-    {snap.phase === 'missing' && <Banner opened={openedAt} title="This note no longer exists" detail="Return to Notes to open another document."><Button onClick={gallery}>Open Notes</Button></Banner>}
+    {snap.phase === 'missing' && (onClose
+      ? <Banner opened={openedAt} title="This note no longer exists" detail="It was deleted or moved to another workspace."><Button testId="note-close-tab" onClick={onClose}>Close tab</Button></Banner>
+      : <Banner opened={openedAt} title="This note no longer exists" detail="Return to Notes to open another document."><Button onClick={gallery}>Open Notes</Button></Banner>)}
     {snap.conflict && <Banner opened={openedAt} title="This note changed on another device" detail="Keep your version to replace theirs, or use theirs and discard your changes."><Button testId="note-use-theirs" danger onClick={() => session.useTheirs()}>Use theirs</Button><Button testId="note-keep-mine" variant="primary" onClick={() => session.keepMine()}>Keep mine</Button></Banner>}
     {deleted && <Banner opened={openedAt} title="This note is in Recently deleted" detail="Restore it to edit it again."><Button testId="note-restore" variant="primary" onClick={() => void restoreNote(id)}>Restore</Button></Banner>}
     {snap.phase === 'ready' && <>

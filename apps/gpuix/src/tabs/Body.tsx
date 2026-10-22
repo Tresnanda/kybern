@@ -92,8 +92,8 @@ function TabBody({ leafId, threadId, tab, children }: { leafId: string; threadId
     case 'preview': return <PreviewPane threadId={threadId} />
     case 'review': return thread ? <Measured>{(width) => <ReviewPane thread={thread} width={width} />}</Measured> : <LoadingLines />
     case 'pr': return <PrTab projectId={tab.projectId} number={tab.number} />
-    case 'note': return <Measured>{(width) => <NoteEditor key={tab.id} id={tab.id} width={width} />}</Measured>
-    case 'task': return <TaskTab id={tab.id} />
+    case 'note': return <Measured>{(width) => <NoteEditor key={tab.id} id={tab.id} width={width} onClose={() => closeTabAction(leafId, tabKey(tab))} />}</Measured>
+    case 'task': return <TaskTab id={tab.id} onClose={() => closeTabAction(leafId, tabKey(tab))} />
     case 'visual': return <VisualTab threadId={threadId} visualId={tab.id} />
     case 'artifact': return <ArtifactTab threadId={threadId} path={tab.path} url={tab.url} />
     case 'mermaid': return <MermaidTab code={tab.code} />
@@ -151,10 +151,10 @@ function PrTab({ projectId, number }: { projectId: string; number: number }) {
   return <Measured>{(width) => <Detail key={number} project={project} number={number} width={width} showBack={false} onBack={() => goPage('pulls')} onChanged={() => {}} />}</Measured>
 }
 
-function TaskTab({ id }: { id: string }) {
+function TaskTab({ id, onClose }: { id: string; onClose: () => void }) {
   const task = useTasks((s) => s.tasks[id])
   const loaded = useTasks((s) => s.loaded)
-  if (!task) return loaded ? <Empty testId="task-tab-missing"><EmptyHeader play={false}><EmptyMedia variant="icon" icon={N.tasks} /><EmptyTitle>This task is gone</EmptyTitle><EmptyDescription>It was deleted or moved to another workspace. Close this tab.</EmptyDescription></EmptyHeader></Empty> : <LoadingLines />
+  if (!task) return loaded ? <Empty testId="task-tab-missing"><EmptyHeader play={false}><EmptyMedia variant="icon" icon={N.tasks} /><EmptyTitle>This task is gone</EmptyTitle><EmptyDescription>It was deleted or moved to another workspace.</EmptyDescription></EmptyHeader><EmptyContent><Button size="sm" testId="task-tab-close" onClick={onClose}>Close tab</Button></EmptyContent></Empty> : <LoadingLines />
   return <Measured>{(width) => <TaskDetail task={task} sequence={[task.id]} width={width} />}</Measured>
 }
 
