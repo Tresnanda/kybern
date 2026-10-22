@@ -15,6 +15,12 @@ import { Para, muted } from '../transcript/kit.tsx'
 import { SubagentHover } from './Hover.tsx'
 import { Elapsed } from './Elapsed.tsx'
 import { SwapOnChange } from '../motion/kit.tsx'
+import { useState, type ReactNode } from 'react'
+import { N } from '../nav/glyphs.ts'
+import { Tip } from '../nav/overlay.tsx'
+import { fadeTo } from '../shell/motion.ts'
+import { usePaneAccess } from '../state.ts'
+import { openTabFromPane } from '../tabs/open.ts'
 const providers: readonly string[] = ['claude-code', 'codex', 'cursor', 'opencode', 'pi', 'omp']
 export function LaunchMember({ block, thread, task, delegated = false, grouped = false }: { block: Block; thread?: Thread; task?: RuntimeTask; delegated?: boolean; grouped?: boolean }) {
   const t = useTheme(), catalog = useNav(s => s.providers)
@@ -39,7 +45,7 @@ export function LaunchMember({ block, thread, task, delegated = false, grouped =
       {!grouped && state.phase === 'working' && <MatrixLoader />}
       <Icon source={T.chevronRight} size={14} color={muted(t)} />
     </div>
-    return <div style={{ display: 'flex', width: '100%', minWidth: 0 }}>{thread?.subagent ? <SubagentHover thread={thread}>{row}</SubagentHover> : row}</div>
+    return <PinRow id={id} title={title}>{thread?.subagent ? <SubagentHover thread={thread}>{row}</SubagentHover> : row}</PinRow>
   }
   const row = <div testId={`launch-member-${block.id}`} role="button" aria-label={`${id ? 'Open ' : ''}${title}, ${state.word}`} tabIndex={0} onClick={id ? () => openThread(id) : undefined} style={{ display: 'flex', gap: 8, alignItems: 'center', minHeight: 40, paddingLeft: 6, paddingRight: 6, borderRadius: 8, minWidth: 0, cursor: id ? 'pointer' : 'default', hover: { backgroundColor: t.buttonSecondaryHover } }}>
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 12, backgroundColor: t.buttonSecondary, flexShrink: 0 }}><ProviderMark kind={provider} size={12} /></div>
@@ -48,5 +54,27 @@ export function LaunchMember({ block, thread, task, delegated = false, grouped =
     {start?.startedAt && <Elapsed startedAt={start.startedAt} endedAt={start.endedAt} />}
     <SwapOnChange active={state.word} style={{ flexShrink: 0 }}><Label color={state.phase === 'failed' ? t.red : muted(t)} size={12}>{state.word}</Label></SwapOnChange>{id && <Icon source={T.chevronRight} size={14} color={muted(t)} />}
   </div>
-  return <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>{thread?.subagent ? <SubagentHover thread={thread}>{row}</SubagentHover> : row}{override && <Para color={muted(t)} size={11} style={{ paddingLeft: 38, paddingBottom: 6 }}>{override}</Para>}</div>
+  return <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}><PinRow id={id} title={title}>{thread?.subagent ? <SubagentHover thread={thread}>{row}</SubagentHover> : row}</PinRow>{override && <Para color={muted(t)} size={11} style={{ paddingLeft: 38, paddingBottom: 6 }}>{override}</Para>}</div>
+}
+
+/**
+ * A member row with "Pin as tab" (ADE-54): the child's live transcript opens as a tab of this thread instead of replacing the
+ * page. The pin shows while the pointer is over the row (and stays reachable by Tab).
+ */
+function PinRow({ id, title, children }: { id?: string; title: string; children: ReactNode }) {
+  const t = useTheme()
+  const pane = usePaneAccess()
+  const [hover, setHover] = useState(false)
+  if (!id) return <div style={{ display: 'flex', width: '100%', minWidth: 0 }}>{children}</div>
+  const pin = () => openTabFromPane(pane.id, { kind: 'thread', id, title })
+  return <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} style={{ display: 'flex', alignItems: 'center', width: '100%', minWidth: 0, gap: 2 }}>
+    <div style={{ display: 'flex', flexGrow: 1, minWidth: 0 }}>{children}</div>
+    <Tip label="Pin as tab" side="top">
+      <div testId={`pin-child-${id}`} role="button" tabIndex={0} aria-label={`Pin ${title} as a tab`} onClick={pin} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') pin() }}
+        paintTransform={fadeTo(hover ? 1 : 0).paintTransform}
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 6, flexShrink: 0, cursor: 'pointer', ...fadeTo(hover ? 1 : 0).style, hover: { backgroundColor: t.buttonSecondaryHover } }}>
+        <Icon source={N.pin} size={13} color={muted(t)} />
+      </div>
+    </Tip>
+  </div>
 }

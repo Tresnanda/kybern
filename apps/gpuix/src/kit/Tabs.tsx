@@ -38,11 +38,17 @@ export interface TabsItem {
   pinned?: boolean
   /** A 6 px dot in place of the ✕ until hover (a running terminal, an unsaved note). */
   dirty?: boolean
+  /** Shown but not selectable (an account that needs signing in); the label dims. */
+  disabled?: boolean
+  /** Glyph only; `label` stays the accessible name and the » menu entry. */
+  iconOnly?: boolean
   /** A trailing count or badge after the label (`text3`), or a node (coloured diff stats). */
   detail?: string
   extra?: ReactNode
   tooltip?: string
   testId?: string
+  /** Defaults to `<testId>-close`. */
+  closeTestId?: string
 }
 
 export interface TabsProps {
@@ -246,12 +252,12 @@ const TabView = memo(function TabView({ item, index, size, active, focused, prop
   const closable = !item.pinned && !!props.onClose
   const showClose = closable && (active || hover)
   const dim = active && !focused
-  const labelColor = active ? (dim ? t.textSecondary : t.text) : hover ? t.text : t.textSecondary
+  const labelColor = item.disabled ? t.textTertiary : active ? (dim ? t.textSecondary : t.text) : hover ? t.text : t.textSecondary
   const iconColor = active && !dim ? t.text : t.textSecondary
   const minWidth = props.minWidth ?? 96
   const underlineGap = props.underlineGap ?? (size === 'md' ? 9 : 4)
   const glyphNode = item.iconNode ?? (item.mark ? <ProviderMark kind={item.mark} size={geometry.glyph} /> : item.icon ? <Icon source={item.icon} size={geometry.glyph} color={iconColor} /> : null)
-  const label = item.preview
+  const label = item.iconOnly ? null : item.preview
     ? <ItalicLabel text={item.label} size={geometry.text} color={labelColor} />
     : <Label color={labelColor} size={geometry.text} weight={500} lineHeight={geometry.text + 3} truncate>{item.label}</Label>
   // The wrapper owns the box (hover fill, underline, drop line); the hit area and the ✕ are siblings inside it, so a press on
@@ -271,11 +277,12 @@ const TabView = memo(function TabView({ item, index, size, active, focused, prop
       onMouseMove={props.onTabMouseMove ? (event) => props.onTabMouseMove!(item.key, event, false) : undefined}
       onMouseLeave={props.onTabMouseMove ? (event) => props.onTabMouseMove!(item.key, event, true) : undefined}
       onClick={(event) => {
+        if (item.disabled) return
         if ((event.clickCount ?? 1) >= 2) props.onDoubleClick?.(item.key)
         else props.onSelect(item.key)
       }}
       onKeyDown={(event) => {
-        if (event.key === 'enter' || event.key === 'space') props.onSelect(item.key)
+        if (event.key === 'enter' || event.key === 'space') { if (!item.disabled) props.onSelect(item.key) }
         else if (event.key === 'left' || event.key === 'right') {
           const next = props.items[(index + (event.key === 'left' ? props.items.length - 1 : 1)) % props.items.length]
           if (next) props.onSelect(next.key)
@@ -284,7 +291,7 @@ const TabView = memo(function TabView({ item, index, size, active, focused, prop
       style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, flexShrink: 1, minWidth: 0, height: geometry.height, paddingLeft: geometry.pad, paddingRight: closable ? 6 : geometry.pad, cursor: 'pointer' }}
     >
       {glyphNode && <div style={{ display: 'flex', width: geometry.glyph, height: geometry.glyph, alignItems: 'center', justifyContent: 'center', flexShrink: 0, pointerEvents: 'none' }}>{glyphNode}</div>}
-      <div style={{ display: 'flex', alignItems: 'center', flexGrow: 1, flexShrink: 1, minWidth: 0, pointerEvents: 'none' }}>{label}</div>
+      {label && <div style={{ display: 'flex', alignItems: 'center', flexGrow: 1, flexShrink: 1, minWidth: 0, pointerEvents: 'none' }}>{label}</div>}
       {item.detail && <Label color={t.textTertiary} size={geometry.text - 1} style={{ flexShrink: 0 }}>{item.detail}</Label>}
       {item.extra}
       {!closable && item.dirty && <div style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, backgroundColor: t.textSecondary }} />}
@@ -297,7 +304,7 @@ const TabView = memo(function TabView({ item, index, size, active, focused, prop
       onMouseLeave={() => setHover(false)}
       style={{
         display: 'flex', alignItems: 'center', height: geometry.height, minWidth: item.pinned ? undefined : minWidth, maxWidth: item.pinned ? 320 : MAX, flexShrink: 0,
-        paddingRight: closable ? geometry.pad - 3 : 0, borderRadius: 8, position: 'relative',
+        paddingRight: closable ? geometry.pad - 3 : 0, borderRadius: 8, position: 'relative', ...(item.disabled ? { opacity: 0.55 } : {}),
         ...(dim ? { backgroundColor: tok.dim } : {}),
         hover: { backgroundColor: tok.hover },
       }}
@@ -306,7 +313,7 @@ const TabView = memo(function TabView({ item, index, size, active, focused, prop
       {hit}
       {closable && (
         <div
-          testId={`${item.testId ?? `tab-${item.key}`}-close`}
+          testId={item.closeTestId ?? `${item.testId ?? `tab-${item.key}`}-close`}
           role="button"
           aria-label={`Close ${item.label}`}
           onClick={() => props.onClose?.(item.key)}
@@ -320,7 +327,7 @@ const TabView = memo(function TabView({ item, index, size, active, focused, prop
     </div>
   )
   // The full name in a tooltip when the label can be cut (documents; the pinned chat names itself in the header).
-  return item.tooltip || item.label.length > 18 ? <Tip label={item.tooltip ?? item.label} side="bottom" size={geometry.height}>{tab}</Tip> : tab
+  return item.tooltip || item.iconOnly || item.label.length > 18 ? <Tip label={item.tooltip ?? item.label} side="bottom" size={geometry.height}>{tab}</Tip> : tab
 })
 
 

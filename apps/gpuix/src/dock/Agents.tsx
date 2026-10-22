@@ -1,3 +1,5 @@
+import { pinChildThread } from '../tabs/Body.tsx'
+import { getState } from '../state.ts'
 import { onEnvironmentChange } from '../shell/environment.ts'
 // The Agents pane retains completed children (unlike the sidebar's temporary
 // ChildRow). Tree ordering, phases, result clamps and workspace copy are shared.
@@ -219,6 +221,7 @@ const AgentRow = memo(function AgentRow({ row, fresh, last, rails, detailOpen, o
       <ErrorLine error={error} />
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
         <Button size="sm" onClick={() => openThread(thread.id)}>Open</Button>
+        <Button size="sm" testId={`dock-agent-pin-${thread.id}`} onClick={() => { const host = getState().selectedId ?? thread.parent_thread_id; if (host) pinChildThread(host, thread) }}>Pin as tab</Button>
         {(canStopDelegation(thread) || (thread.subagent && state.phase === 'working' && thread.subagent.capabilities?.stop !== false)) && <Button size="sm" danger busy={busy} onClick={() => void stop()}>{busy ? 'Stopping…' : 'Stop'}</Button>}
         {canRemoveWorktree(info) && <Button size="sm" danger onClick={() => onRemove(thread)}>Remove worktree</Button>}
       </div>

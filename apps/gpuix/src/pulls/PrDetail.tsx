@@ -15,11 +15,12 @@ import { Menu, MenuItem, Dialog, DialogHeader, Tip } from '../nav/overlay.tsx'
 import { popoverStyle, PopupLayer } from '../composer/Menu.tsx'
 import { getNav } from '../nav/store.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { column, row, Segments } from '../usage/controls.tsx'
+import { column, row } from '../usage/controls.tsx'
 import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
 import { RadioRow } from '../kit/RadioRow.tsx'
 import { SplitButton } from '../kit/SplitButton.tsx'
+import { Tabs, type TabsItem } from '../kit/Tabs.tsx'
 import { TextArea } from '../kit/TextArea.tsx'
 import { PrLoading, Problem, copy, openUrl } from './PrStates.tsx'
 import { Rise, SwapOnChange } from '../motion/kit.tsx'
@@ -58,7 +59,15 @@ export function Detail({ project, number, onBack, width, onChanged, showBack = t
   return <div testId="pr-detail" style={{ ...column, flexGrow: 1, minHeight: 0 }}>
     <div style={{ ...row, flexWrap: 'wrap', gap: 6, minHeight: 46, paddingLeft: 12, paddingRight: 12, paddingTop: 4, paddingBottom: 4, borderBottomWidth: 1, borderColor: t.border }}>
       {showBack && <IconButton icon={N.arrowLeft} label="Back to pull requests" testId="pr-back" onClick={onBack} />}
-      <Segments value={tab} onChange={go} testId="pr-tab" plain width={[82, width >= 736 && pr?.additions != null ? 146 : 82, 100]} options={(['summary', 'changes', 'timeline'] as const).map(key => [key, <div style={{ ...row, gap: 6 }}><Label color={tab === key ? t.text : t.textSecondary} size={14}>{key === 'summary' ? 'Summary' : key === 'changes' ? 'Changes' : 'Timeline'}</Label>{key === 'changes' && width >= 736 && pr?.additions != null && pr.deletions != null && <div style={{ ...row, gap: 3 }}><Label color={t.green} size={13}>{`+${pr.additions}`}</Label><Label color={t.red} size={13}>{`−${pr.deletions}`}</Label></div>}{key === 'timeline' && detail?.comment_count != null && <Label color={t.textSecondary} size={13}>{detail.comment_count}</Label>}</div>] as const)} />
+      {/* Summary, Changes and Timeline are tabs (ADE-55 §2.7), not a segmented control. */}
+      <div style={{ ...row, height: 38, flexShrink: 1, minWidth: 0 }}>
+        <Tabs testId="pr-tab" minWidth={0} overflow={false} animate={false} underlineGap={9} active={tab} onSelect={(key) => go(key as Tab)}
+          items={(['summary', 'changes', 'timeline'] as const).map((key): TabsItem => ({
+            key, label: key === 'summary' ? 'Summary' : key === 'changes' ? 'Changes' : 'Timeline', testId: `pr-tab-${key}`,
+            ...(key === 'changes' && width >= 736 && pr?.additions != null && pr.deletions != null ? { extra: <div style={{ ...row, gap: 3 }}><Label color={t.green} size={12}>{`+${pr.additions}`}</Label><Label color={t.red} size={12}>{`−${pr.deletions}`}</Label></div> } : {}),
+            ...(key === 'timeline' && detail?.comment_count != null ? { detail: String(detail.comment_count) } : {}),
+          }))} />
+      </div>
       <div style={{ flexGrow: 1 }} />
       {width >= 736 ? <div style={{ ...row, gap: 4 }}><IconButton icon={N.refresh} label="Refresh pull request" testId="pr-refresh-detail" disabled={loading} onClick={review.refresh}><SwapOnChange kind="icon" active={loading ? 'busy' : 'idle'} style={{ width: 16, height: 16 }}>{loading ? <SpinIcon testId="pr-detail-spinner" source={N.refresh} size={16} color={t.iconSecondary} /> : <Icon source={N.refresh} size={16} color={t.iconSecondary} />}</SwapOnChange></IconButton><IconButton icon={glyph(Link01Icon)} label="Copy link" testId="pr-copy-link" disabled={!pr} onClick={() => { if (pr) { copy(pr.url); flashCopied() } }}><SwapOnChange kind="icon" active={copied ? 'done' : 'link'} style={{ width: 16, height: 16 }}>{copied ? <Icon source={N.check} size={16} color={t.green} /> : <Icon source={glyph(Link01Icon)} size={16} color={t.iconSecondary} />}</SwapOnChange></IconButton><IconButton icon={glyph(LinkSquare02Icon)} label="Open on GitHub" testId="pr-open-github" disabled={!pr} onClick={() => pr && openUrl(pr.url)} /></div> : <Menu testId="pr-more" align="end" trigger={() => <IconButton icon={N.ellipsis} label="More actions" />}><MenuItem id="refresh" label="Refresh" disabled={loading} onSelect={review.refresh} /><MenuItem id="copy" label="Copy link" disabled={!pr} onSelect={() => pr && copy(pr.url)} /><MenuItem id="github" label="Open on GitHub" disabled={!pr} onSelect={() => pr && openUrl(pr.url)} /></Menu>}
 

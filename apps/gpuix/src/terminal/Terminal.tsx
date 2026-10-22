@@ -119,7 +119,7 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
     <div style={{ display: 'flex', alignItems: 'center', minHeight: 36, gap: 4, paddingLeft: 6, paddingRight: 6, paddingTop: 4, paddingBottom: 4, flexShrink: 0 }}>
       {/* The kit strip at the sm size (ADE-55 §2.7). In a thread, each session is its own tab beside the chat; this pane hosts several. */}
       <Tabs testId="terminal-tabs" size="sm" minWidth={0} underlineGap={6}
-        items={tabs.map((tab, index): TabsItem => { const kind = kinds.current.get(tab.id) ?? 'shell'; return { key: tab.id, label: label(tab, index), testId: `terminal-tab-${tab.id}`, ...(kind === 'shell' ? { icon: DOCK_ICONS.terminal } : { mark: kind }) } })}
+        items={tabs.map((tab, index): TabsItem => { const kind = kinds.current.get(tab.id) ?? 'shell'; return { key: tab.id, label: label(tab, index), testId: `terminal-tab-${tab.id}`, closeTestId: `terminal-tab-close-${tab.id}`, ...(kind === 'shell' ? { icon: DOCK_ICONS.terminal } : { mark: kind }) } })}
         active={current?.id ?? null} onSelect={select} onClose={(id) => void close(id)}
         trailing={<SidebarIconButton icon={N.plus} size="sm" label="New terminal" tooltip="New terminal" tooltipSide="bottom" testId="terminal-new" onClick={() => { if (!busy) void create() }} />} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>

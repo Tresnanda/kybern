@@ -7,6 +7,7 @@
 import { motion, useGpuix, useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { followLine, nextTabIndex, pickerTabs, type PickerTab } from '@/lib/accountUi'
+import { Tabs as KitTabs, type TabsItem } from '../kit/Tabs.tsx'
 import { formatEffort, PROVIDER_LABEL } from '@/lib/format'
 import {
   MODEL_FLAT_LIMIT,
@@ -520,70 +521,16 @@ function Tabs({
   const t = useTheme()
   const [hover, setHover] = useState<string | null>(null)
   const yellow = t.v('--color-accent-yellow')
-  const renderer = useGpuixRequired()
-  const nodes = useRef<(PublicInstance | null)[]>([])
-  // Roving focus (`ModelPickerTabs`): ←/→ move between enabled tabs, Home/End jump, Enter or Space activates.
-  const move = (key: string, index: number) => {
-    const target = key === 'right' ? nextTabIndex(tabs, index, 1) : key === 'left' ? nextTabIndex(tabs, index, -1) : key === 'home' ? nextTabIndex(tabs, -1, 1) : key === 'end' ? nextTabIndex(tabs, tabs.length, -1) : -1
-    const node = target >= 0 ? nodes.current[target] : null
-    if (node) renderer.focusElement?.(node.id)
-    return !!node
-  }
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 2, paddingLeft: 6, paddingRight: 6, paddingTop: 6 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 2, minWidth: 0, paddingBottom: 4, flexGrow: 1 }}>
-        {tabs.map((tab, tabPosition) => {
-          const hovered = hover === tab.key
-          const dim = tab.type === 'starred' ? 0.45 : tab.needsSignIn ? 0.3 : tab.notSetUp || tab.disabled ? 0.2 : busy && !tab.selected ? 0.2 : 0.45
-          const hoverDim = tab.type === 'starred' ? 1 : tab.needsSignIn || tab.notSetUp ? 0.6 : tab.disabled || busy ? dim : 1
-          const opacity = tab.selected ? 1 : hovered ? hoverDim : dim
-          const fill = tab.selected ? t.buttonSecondary : hovered && !(tab.type === 'account' && tab.disabled) ? t.buttonSecondaryHover : undefined
-          return (
-            <div
-              key={tab.key}
-              testId={`model-tab-${tab.key}`}
-              ref={node => { nodes.current[tabPosition] = node }}
-              role="tab"
-              aria-selected={tab.selected}
-              tabIndex={tab.selected ? 0 : -1}
-              onKeyDown={e => {
-                if (e.key === 'enter' || e.key === 'space') { if (tab.type === 'starred') onStarred(); else if (!tab.disabled) onAccount(tab); return }
-                move(e.key ?? '', tabPosition)
-              }}
-              onMouseEnter={() => setHover(tab.key)}
-              onMouseLeave={() => setHover((h) => (h === tab.key ? null : h))}
-              onClick={() => (tab.type === 'starred' ? onStarred() : onAccount(tab))}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                height: 28,
-                minWidth: 28,
-                paddingLeft: 6,
-                paddingRight: 6,
-                borderRadius: ROW_RADIUS,
-                flexShrink: 0,
-                opacity,
-                cursor: 'pointer',
-                ...(fill ? { backgroundColor: fill } : {}),
-              }}
-            >
-              {tab.type === 'starred' ? (
-                <Icon source={tab.selected ? G.starFilled : G.star} size={14} color={tab.selected ? yellow : t.textSecondary} />
-              ) : (
-                <>
-                  <ProviderMark kind={tab.kind} size={14} />
-                  {tab.label && (
-                    <Label color={t.text} size={13} truncate>
-                      {tab.label}
-                    </Label>
-                  )}
-                </>
-              )}
-            </div>
-          )
-        })}
+      {/* The kit strip (ADE-55 §2.7): Starred, then one tab per account; an account that needs setting up is shown, dimmed. */}
+      <div style={{ display: 'flex', alignItems: 'center', minWidth: 0, height: 32, paddingBottom: 4, flexGrow: 1 }}>
+        <KitTabs testId="model-tabs" minWidth={0} overflow={false} animate={false} underlineGap={4}
+          active={tabs.find((tab) => tab.selected)?.key ?? null}
+          items={tabs.map((tab): TabsItem => tab.type === 'starred'
+            ? { key: tab.key, label: 'Starred', iconOnly: true, testId: `model-tab-${tab.key}`, iconNode: <Icon source={tab.selected ? G.starFilled : G.star} size={14} color={tab.selected ? yellow : t.textSecondary} /> }
+            : { key: tab.key, label: tab.label || PROVIDER_LABEL[tab.kind as keyof typeof PROVIDER_LABEL] || tab.kind, iconOnly: !tab.label, mark: tab.kind, testId: `model-tab-${tab.key}`, disabled: tab.disabled || (busy && !tab.selected), ...(tab.needsSignIn ? { tooltip: 'Sign in to use this account' } : tab.notSetUp ? { tooltip: 'Set up this agent to use it' } : {}) })}
+          onSelect={(key) => { const tab = tabs.find((x) => x.key === key); if (!tab) return; if (tab.type === 'starred') onStarred(); else if (!tab.disabled) onAccount(tab) }} />
       </div>
       {canReload && (
         <div

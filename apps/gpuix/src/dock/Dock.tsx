@@ -218,6 +218,7 @@ function TabStrip({ threadId, width: _width, coordinator, activeTasks, stats }: 
     label: panel.label,
     icon: panel.icon,
     testId: `dock-tab-${panel.id}`,
+    closeTestId: `dock-tab-close-${panel.id}`,
     ...(panel.id === 'activity' && activeTasks > 0 ? { extra: <Label key={activeTasks} color={t.textSecondary} size={10} paintAnimation={popAnimation()}>{String(activeTasks)}</Label> } : {}),
     ...(panel.id === 'changes' && stats[0] + stats[1] > 0 ? { extra: <div key={`${stats[0]}:${stats[1]}`} style={{ display: 'flex', gap: 3, flexShrink: 0 }}><Label color={t.green} size={10} paintAnimation={popAnimation()}>{`+${stats[0]}`}</Label><Label color={t.red} size={10} paintAnimation={popAnimation()}>{`−${stats[1]}`}</Label></div> } : {}),
   }))
