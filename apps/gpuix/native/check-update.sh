@@ -54,6 +54,8 @@ input)
   bun native/scroll8-input-check.ts
   # Tab is a window default in 0.11: one move per press, a consumed Tab stays, the preview traps it.
   bun native/focus-check.ts
+  # Caps Lock typing through replayed (intercepted and queued) keys keeps its case (caps_lock_gpui.py).
+  bun native/caps-lock-check.ts
   ;;
 *) echo "unknown native check batch: $1" >&2; exit 2 ;;
 esac

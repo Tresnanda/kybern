@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.1
+
+<!-- kybern-release-title: Caps Lock types capitals in Kybern GPUIX -->
+<!-- kybern-release-summary: Typing with Caps Lock on in Kybern GPUIX no longer comes out in mixed case. -->
+
+- Type capitals with Caps Lock on in Kybern GPUIX. Some letters in the composer (c, v, x, y, z), keys typed quickly after them, and text in the notes editor came out lowercase, and the terminal received lowercase letters.
+
 ## 0.11.0
 
 <!-- kybern-release-title: Spaces and glass in Kybern GPUIX -->

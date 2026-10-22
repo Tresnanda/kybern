@@ -56,6 +56,8 @@ describe('bounded terminal', () => {
     expect(terminalKey({ key: 'up' }, true)).toBe('\x1bOA')
     expect(terminalKey({ key: 'enter' })).toBe('\r')
     expect(terminalKey({ key: 'a', keyChar: 'A', modifiers: { cmd: false, ctrl: false, alt: false, shift: true } })).toBe('A')
+    // Caps Lock: no Shift, and the typed character (keyChar, caps_lock_gpui.py) is what is sent.
+    expect(terminalKey({ key: 'a', keyChar: 'A', modifiers: { cmd: false, ctrl: false, alt: false, shift: false } })).toBe('A')
   })
   test('origin mode addresses inside scroll margins and reset restores normal modes', () => {
     const vt = new VT(10, 5)

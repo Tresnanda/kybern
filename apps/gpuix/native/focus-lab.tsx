@@ -27,7 +27,7 @@ function Lab() {
   }, [renderer])
   const stop = (name: string, extra: Record<string, unknown> = {}) => (
     <div key={name} ref={(node: { id: number } | null) => { refs.current.set(name, node) }} testId={`stop-${name}`} tabIndex={0}
-      style={{ width: 120, height: 32, borderRadius: 8, backgroundColor: focus === name ? t.hover : t.sidebar }} {...extra}>
+      style={{ width: 120, height: 32, borderRadius: 8, backgroundColor: focus === name ? t.hover : t.surface }} {...extra}>
       <text style={{ color: t.text, fontSize: 13 }}>{name}</text>
     </div>
   )
