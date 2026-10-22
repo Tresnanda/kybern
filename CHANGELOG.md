@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.12.0
+
+<!-- kybern-release-title: Tabs, new controls and real glass in Kybern GPUIX -->
+<!-- kybern-release-summary: Open files, diffs, terminals, the browser and more as tabs inside a thread, split them up to four ways, and use redesigned buttons and controls on a glass window that now really blurs. -->
+
+- Open files, diffs, terminals, the browser, Review, pull requests, notes, tasks, visuals, artifacts and diagrams as **tabs in the thread header**, next to the chat. A single click in Explorer or Changes opens a preview tab (italic) that the next click replaces. Tabs are kept per thread across restarts. ⌘1 goes to the chat, ⌘2–⌘9 to a tab, ⌃Tab cycles, ⌘W closes a tab and ⌘⇧T reopens one.
+- Pin a subagent or a delegated agent as a tab from the Agents panel or its row in the chat to watch it live; a delegated agent's tab has its own composer.
+- Split tabs as well as threads: ⌘\ and ⌘⇧\ move the active tab into a new group to the right or below, up to four groups, each with its own tabs. ⌘⌥ and an arrow key moves between groups. The dock keeps the lists you open things from.
+- Redesign the buttons and controls: one calm, tinted main action per card or dialog instead of a white pill, clear secondary and ghost buttons, disabled buttons that look disabled, one checkbox, radio, segmented control, chip and text field style, and select buttons that show names instead of ids.
+- On a glass window, menus, dialogs, sheets and the palette now blur what's behind them, and the strip above the composer, code blocks and your messages follow the glass instead of staying solid.
+- Remove the dark band above the composer; text scrolls under it and blurs the same way every time.
+- Fix the Split right and Split down icons, which were swapped.
+
 ## 0.11.1
 
 <!-- kybern-release-title: Caps Lock types capitals in Kybern GPUIX -->
