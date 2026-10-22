@@ -62,8 +62,8 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
   return rows
  }
  const startup=name.startsWith('startup-'),pr=name.startsWith('pr-'),proxy=pr?actionFixture({long:true}):null
- // `streaming-away` scrolls the view 800 px up from the tail (scroll pill and fades on); `streaming-menu` holds the model picker open (frosted menu over the stream).
- const streams=name==='streaming'||name==='streaming-away'||name==='streaming-menu'
+ // `streaming-away` scrolls the view 800 px up from the tail (scroll pill and fades on); `streaming-menu` holds the model picker open (frosted menu over the stream); `streaming-palette` holds the command palette open (ADE-58: a frosted dialog card over the stream).
+ const streams=name==='streaming'||name==='streaming-away'||name==='streaming-menu'||name==='streaming-palette'
  const results:Result[]=[]
  let launch:Launch|undefined
  const unregister=onExit(async()=>{await launch?.close();proxy?.close()})
@@ -199,6 +199,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
   await bounds(app,'scroll-to-bottom').catch(error=>{throw Error(`${error}; transcript offset ${start} -> ${settled}`)})
  }
  if(name==='streaming-menu'){await click(app,'model-picker');await bounds(app,'model-picker-panel')}
+ if(name==='streaming-palette'){await control('palette');await bounds(app,'palette')}
  if(name.startsWith('idle-')){await app.call('blur',{});await app.mouse.move({x:900,y:4})}else if(point)await app.mouse.move(point)
  if(scrolling)await inputDrive(point!,options.warmup*1000,name==='thread-fling');else await delay(options.warmup*1000)
  if(name.startsWith('idle-')){await app.call('blur',{});await delay(500)}

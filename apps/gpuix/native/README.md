@@ -1223,6 +1223,18 @@ submodule commit or npm dependency is required. See `PACKAGE-7.md` for results,
 to typecheck that patch without editing app files.
 
 
+### Backdrop alpha (ADE-58)
+
+The vertical pass of the backdrop filter used to keep the destination alpha (`source_alpha_blend_factor(Zero)`,
+`destination_alpha_blend_factor(One)`). Over a translucent window that left the scene's silhouettes in the alpha channel:
+glyph pixels are opaque, the coat around them is not, so the desktop showed through crisp text-shaped holes under every
+frosted surface (the "…" menu, the composer, pills) however well the colour was blurred. On Apple GPUs the pass now blends
+in the fragment shader, `mix(dst, blurred, coverage)` on all four channels with the target read through `[[color(0)]]`, so
+the alpha is blurred with the colour. A Metal function constant (`programmable_blend`, index 0) selects it per pipeline; other
+GPUs (Intel Macs cannot read the target in a shader) keep the fixed-function blend and the old look.
+`KYBERN_BACKDROP_PROGRAMMABLE=0` forces the old pass. `src/platform/verify.blur.ts` measures it: the "…" menu's window-alpha
+detail over dense text is 0.33 with the old pass and 0.005 with the new one (`perf/translucency-ade58-2026-10-23.md`).
+
 ## Round 3: scoped leaf paint
 
 `paint_replay.rs`, `paint_hooks.py`, and `paint_gpui.py` add a conservative

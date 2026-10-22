@@ -82,6 +82,7 @@ const server=Bun.serve({idleTimeout:255,port:0,hostname:'127.0.0.1',async fetch(
   if(state.getState().open.blocks.filter(b=>b.kind==='user').length!==Number(process.env.KYBERN_BENCH_HISTORY_TURNS??1000))throw Error('Unexpected historical turn count')
  }
  if(body.action==='idle'){state.set({threads:state.getState().threads.map(t=>t.status==='running'?{...t,status:'idle'}:t)})}
+ if(body.action==='palette'){nav.setNav({paletteOpen:true,keyboardNav:false})}
  if(body.action==='home'){nav.setNav({page:'home',keyboardNav:true});await state.selectThread(null)}
  if(body.action==='explorer'){dock.setDock(state.getState().selectedId,{open:true,tabs:['explorer'],tab:'explorer',width:538,instant:true});if(body.file)showFileInExplorer(state.getState().selectedId!,state.getState().open.thread!.project_id!,body.file)}
  if(body.action==='dock-close')dock.setDock(state.getState().selectedId,{open:false,instant:true})

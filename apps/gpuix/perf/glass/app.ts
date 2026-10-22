@@ -58,13 +58,25 @@ const composer = await import('../../src/composer/store.ts')
 
 const server = Bun.serve({ idleTimeout: 60, port: 0, hostname: '127.0.0.1', async fetch(req) {
   if (req.method !== 'POST') return new Response('POST only', { status: 405 })
-  const body = await req.json() as { action: string; thread?: string; px?: number; path?: string }
+  const body = await req.json() as { action: string; thread?: string; px?: number; path?: string; open?: boolean; page?: string }
   try {
     if (body.action === 'open-fixture-thread') {
       const id = body.thread ?? process.env.KYBERN_GLASS_THREAD
       if (!id) throw Error('No fixture thread: set KYBERN_GLASS_THREAD or pass `thread`')
       nav.setNav({ page: 'home', keyboardNav: true })
       await state.selectThread(id)
+    }
+    // ADE-56/57/58 surface captures (`src/platform/verify.blur.ts`): the home draft, a task page, the palette and a dialog.
+    if (body.action === 'draft') { nav.setNav({ page: 'home', keyboardNav: false }); await state.selectThread(null) }
+    if (body.action === 'page') nav.setNav({ page: (body.page ?? 'home') as never, settingsOpen: false, keyboardNav: false })
+    if (body.action === 'settings') nav.setNav({ settingsOpen: body.open !== false, keyboardNav: false })
+    if (body.action === 'palette') nav.setNav({ paletteOpen: body.open !== false, keyboardNav: false })
+    if (body.action === 'dialog') (await import('../../src/dialogs/store.ts')).showDialog(body.open === false ? null : { kind: 'project' })
+    if (body.action === 'task') {
+      const tasks = await import('../../src/tasks/store.ts')
+      nav.setNav({ page: 'tasks', keyboardNav: false })
+      const task = await tasks.createTask({ scope: 'global', title: 'Tidy the settings page', body: 'Group the rows and fix the spacing.' })
+      tasks.openTask(task.id)
     }
     if (body.action === 'render-capture') {
       // The window's own pixels with their alpha (GPUI renders the current tree to a PNG; the in-scene frost blur is part of
