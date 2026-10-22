@@ -102,7 +102,7 @@ export function useVisualDocument(threadId: string, visualId: string, id: string
 }
 
 export const VisualCard = memo(function VisualCard({ visual, threadId }: { visual: HtmlVisual; threadId: string }) {
-  const t = useTheme(), size = useNativeWindowSize(), id = `visual:${threadId}:${visual.id}`
+  const t = useTheme(), g = useGlass(), size = useNativeWindowSize(), id = `visual:${threadId}:${visual.id}`
   const pane = usePaneAccess()
   const [expanded, setExpanded] = useState(false)
   // A WK document has arbitrary interactive state. Once visited, retain its
