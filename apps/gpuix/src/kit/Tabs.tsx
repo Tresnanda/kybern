@@ -75,6 +75,8 @@ export interface TabsProps {
   underlineGap?: number
   /** Draw a 1 × 16 divider after this tab (the pinned chat). */
   dividerAfter?: string
+  /** A 1 × 16 bar between neighbouring tabs, hidden beside the active and the hovered tab (the thread strip). */
+  separators?: boolean
   /** Scroll and the » menu (on by default). Text-only strips that always fit pass false. */
   overflow?: boolean
   /** Tabs narrower than 96 (text-only strips). */
@@ -127,19 +129,24 @@ function italicTheme(t: Theme, size: number, color: string) {
 }
 const escapeMarkdown = (text: string) => text.replace(/([\\`*_[\]<>#|~!])/g, '\\$1')
 /** About 6.6 px per character at 13 px SF Pro: keep the italic label inside the 200 px tab (the tooltip has the rest). */
+const clipRoom = (size: number) => Math.floor((MAX - 2 * 8 - 14 - 6 - CLOSE - 6) / (size * 0.51))
 function clip(label: string, size: number) {
-  const room = Math.floor((MAX - 2 * 8 - 14 - 6 - CLOSE - 6) / (size * 0.51))
+  const room = clipRoom(size)
   return label.length > room ? `${label.slice(0, Math.max(1, room - 1))}…` : label
 }
+/** The trailing fade of a cut tab label. */
+const LABEL_FADE = { right: 20 }
 
 export const Tabs = memo(function Tabs(props: TabsProps) {
-  const { items, active, size = 'md', focused = true, onSelect, dividerAfter, overflow = true, trailing, testId, dropIndex = null, animate = true, style } = props
+  const { items, active, size = 'md', focused = true, onSelect, dividerAfter, separators = false, overflow = true, trailing, testId, dropIndex = null, animate = true, style } = props
   const t = useTheme()
   const { renderer } = useGpuix()
   const scroll = useRef<PublicInstance | null>(null)
   const row = useRef<PublicInstance | null>(null)
   const nodes = useRef(new Map<string, PublicInstance>())
   const [extent, setExtent] = useState({ view: 0, content: 0, offset: 0 })
+  // The hovered tab hides the separators on both of its sides, as the active tab does.
+  const [hovered, setHovered] = useState<string | null>(null)
   // Tabs present at the first render appear at once; later ones grow in. Closed tabs stay for their exit.
   const seen = useRef<Set<string> | null>(null)
   const fresh = useRef(new Set<string>())
@@ -188,6 +195,13 @@ export const Tabs = memo(function Tabs(props: TabsProps) {
   const geometry = GEOMETRY[size]
   const rendered: { item: TabsItem; leaving?: number }[] = items.map((item) => ({ item }))
   for (const exit of leaving) rendered.splice(Math.min(exit.index, rendered.length), 0, { item: exit.item, leaving: exit.width })
+  /** A bar on this tab's leading edge: not first, not after the pinned chat's divider, and neither side active or hovered. */
+  function separatorBefore(index: number) {
+    const before = rendered[index - 1], here = rendered[index]
+    if (!before || !here || before.leaving !== undefined || before.item.key === dividerAfter) return false
+    const lit = (key: string) => key === active || key === hovered
+    return !lit(before.item.key) && !lit(here.item.key)
+  }
   return (
     <div ref={props.stripRef} testId={testId} role="tablist" style={{ display: 'flex', alignItems: 'center', flexGrow: 1, flexShrink: 1, minWidth: 0, height: '100%', gap: 2, ...style }}>
       <div ref={scroll} onScroll={overflow ? readOffset : undefined} edgeFade={fade} style={{ display: 'flex', alignItems: 'center', flexShrink: 1, minWidth: 0, height: '100%', ...(overflow ? { overflowX: 'scroll', overflowY: 'hidden' } : {}) }}>
@@ -205,6 +219,8 @@ export const Tabs = memo(function Tabs(props: TabsProps) {
               geometry={geometry}
               register={(node) => { if (node) nodes.current.set(item.key, node); else nodes.current.delete(item.key); if (width === undefined) props.registerTab?.(item.key, node) }}
               drop={dropIndex === index}
+              separator={separators && width === undefined && separatorBefore(index)}
+              onHover={setHovered}
             />
             const divider = dividerAfter === item.key && rendered.length > 1 ? <div key={`${item.key}:divider`} style={{ width: 1, height: 16, marginLeft: 4, marginRight: 4, flexShrink: 0, backgroundColor: tok.divider }} /> : null
             if (width !== undefined) return <TabExit key={`${item.key}:leaving`} width={width} onDone={() => setLeaving((current) => current.filter((c) => c.item.key !== item.key))}>{body}</TabExit>
@@ -214,7 +230,7 @@ export const Tabs = memo(function Tabs(props: TabsProps) {
           {dropIndex !== null && dropIndex >= items.length && <DropLine color={tok.accent} />}
         </div>
       </div>
-      {overflowing && <OverflowMenu items={items} active={active} onSelect={onSelect} size={size} testId={testId} />}
+      {overflowing && <div style={{ display: 'flex', flexShrink: 0, marginRight: trailing ? 4 : 0 }}><OverflowMenu items={items} active={active} onSelect={onSelect} size={size} testId={testId} /></div>}
       {trailing}
     </div>
   )
@@ -244,9 +260,10 @@ function TabExit({ width, onDone, children }: { width: number; onDone: () => voi
     style={{ display: 'flex', flexShrink: 0, overflow: 'hidden', pointerEvents: 'none' }}>{children}</motion.div>
 }
 
-const TabView = memo(function TabView({ item, index, size, active, focused, props, tok, geometry, register, drop }: {
+const TabView = memo(function TabView({ item, index, size, active, focused, props, tok, geometry, register, drop, separator, onHover }: {
   item: TabsItem; index: number; size: 'md' | 'sm'; active: boolean; focused: boolean; props: TabsProps
   tok: ReturnType<typeof tabTokens>; geometry: (typeof GEOMETRY)['md' | 'sm']; register: (node: PublicInstance | null) => void; drop: boolean
+  separator: boolean; onHover: (update: (key: string | null) => string | null) => void
 }) {
   const t = useTheme()
   const { renderer } = useGpuix()
@@ -260,9 +277,13 @@ const TabView = memo(function TabView({ item, index, size, active, focused, prop
   const minWidth = props.minWidth ?? 96
   const underlineGap = props.underlineGap ?? (size === 'md' ? 9 : 4)
   const glyphNode = item.iconNode ?? (item.mark ? <ProviderMark kind={item.mark} size={geometry.glyph} /> : item.icon ? <Icon source={item.icon} size={geometry.glyph} color={iconColor} /> : null)
+  // A label longer than the tab's room fades out at its trailing edge instead of ending in "…" (the tooltip has the rest).
+  // Its width is estimated from the character count, as `clip` does; the stock addon has no fade and keeps the ellipsis.
+  const room = (item.pinned ? 320 : MAX) - geometry.pad - (glyphNode ? geometry.glyph + 6 : 0) - (closable ? 6 + CLOSE + geometry.pad - 3 : geometry.pad)
+  const fade = EDGE_FADE && !item.iconOnly && !item.detail && !item.extra && item.label.length * geometry.text * 0.53 > room
   const label = item.iconOnly ? null : item.preview
-    ? <ItalicLabel text={item.label} size={geometry.text} color={labelColor} />
-    : <Label color={labelColor} size={geometry.text} weight={500} lineHeight={geometry.text + 3} truncate>{item.label}</Label>
+    ? <ItalicLabel text={item.label} size={geometry.text} color={labelColor} fade={fade} />
+    : <Label color={labelColor} size={geometry.text} weight={500} lineHeight={geometry.text + 3} truncate={!fade} style={fade ? { whiteSpace: 'nowrap', overflow: 'hidden', minWidth: 0, flexShrink: 1 } : undefined}>{item.label}</Label>
   // The wrapper owns the box (hover fill, underline, drop line); the hit area and the ✕ are siblings inside it, so a press on
   // the ✕ never selects the tab or starts a drag.
   const hit = (
@@ -296,7 +317,7 @@ const TabView = memo(function TabView({ item, index, size, active, focused, prop
       style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, flexShrink: 1, minWidth: 0, height: geometry.height, paddingLeft: geometry.pad, paddingRight: closable ? 6 : geometry.pad, cursor: 'pointer' }}
     >
       {glyphNode && <div style={{ display: 'flex', width: geometry.glyph, height: geometry.glyph, alignItems: 'center', justifyContent: 'center', flexShrink: 0, pointerEvents: 'none' }}>{glyphNode}</div>}
-      {label && <div style={{ display: 'flex', alignItems: 'center', flexGrow: 1, flexShrink: 1, minWidth: 0, pointerEvents: 'none' }}>{label}</div>}
+      {label && <div edgeFade={fade ? LABEL_FADE : undefined} style={{ display: 'flex', alignItems: 'center', flexGrow: 1, flexShrink: 1, minWidth: 0, pointerEvents: 'none', ...(fade ? { overflow: 'hidden' } : {}) }}>{label}</div>}
       {item.detail && <Label color={t.textTertiary} size={geometry.text - 1} style={{ flexShrink: 0 }}>{item.detail}</Label>}
       {item.extra}
       {!closable && item.dirty && <div style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, backgroundColor: t.textSecondary }} />}
@@ -305,14 +326,15 @@ const TabView = memo(function TabView({ item, index, size, active, focused, prop
   const tab = (
     <div
       ref={(el) => { node.current = el; register(el) }}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      onMouseEnter={() => { setHover(true); onHover(() => item.key) }}
+      onMouseLeave={() => { setHover(false); onHover((key) => key === item.key ? null : key) }}
       style={{
         display: 'flex', alignItems: 'center', height: geometry.height, minWidth: item.pinned ? undefined : minWidth, maxWidth: item.pinned ? 320 : MAX, flexShrink: 0,
         paddingRight: closable ? geometry.pad - 3 : 0, borderRadius: 8, position: 'relative', ...(item.disabled ? { opacity: 0.55 } : {}),
         hover: { backgroundColor: tok.hover },
       }}
     >
+      {separator && <div style={{ position: 'absolute', left: -(props.gap ?? 2) / 2 - 0.5, top: (geometry.height - 16) / 2, width: 1, height: 16, backgroundColor: tok.divider, pointerEvents: 'none' }} />}
       {drop && <div style={{ position: 'absolute', left: -2, top: (geometry.height - 18) / 2, width: 2, height: 18, borderRadius: 1, backgroundColor: tok.accent, pointerEvents: 'none' }} />}
       {hit}
       {closable && (
@@ -335,9 +357,10 @@ const TabView = memo(function TabView({ item, index, size, active, focused, prop
 })
 
 
-function ItalicLabel({ text, size, color }: { text: string; size: number; color: string }) {
+function ItalicLabel({ text, size, color, fade = false }: { text: string; size: number; color: string; fade?: boolean }) {
   const t = useTheme()
-  const source = useMemo(() => `*${escapeMarkdown(clip(text, size))}*`, [text, size])
+  // Faded: a few characters past the room, cut by the fade rather than an ellipsis.
+  const source = useMemo(() => `*${escapeMarkdown(fade ? text.slice(0, clipRoom(size) + 6) : clip(text, size))}*`, [text, size, fade])
   return <markdown source={source} theme={italicTheme(t, size, color)} style={{ color, userSelect: 'none', flexShrink: 1, minWidth: 0 }} />
 }
 
