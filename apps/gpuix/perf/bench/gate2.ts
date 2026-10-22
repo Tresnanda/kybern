@@ -18,6 +18,10 @@ import path from 'node:path'
 import {plan} from './gate2-stats.ts'
 import type {Result} from './model.ts'
 
+/** Round-2 arm: whole-window glass at 90 / 64, dark, with the frost classes pinned. */
+function r2Arm(frost: string): Record<string, string> {
+  return {KYBERN_WINDOW_MATERIAL: 'window', KYBERN_WINDOW_OPACITY: '90', KYBERN_WINDOW_BLUR: '64', KYBERN_APPEARANCE: 'dark', KYBERN_GLASS_FROST: frost}
+}
 /** Environment per arm. Everything that picks the material is pinned, so arms differ by one variable. */
 export const ARMS: Record<string, Record<string, string>> = {
   window: {KYBERN_WINDOW_MATERIAL: 'window', KYBERN_WINDOW_OPACITY: '90', KYBERN_WINDOW_BLUR: '64'},
@@ -29,9 +33,12 @@ export const ARMS: Record<string, Record<string, string>> = {
   'solid-sf': {KYBERN_WINDOW_MATERIAL: 'solid', KYBERN_WINDOW_OPACITY: '90', KYBERN_WINDOW_BLUR: '64', KYBERN_TRANSLUCENCY_SINGLE_FILL: '1'},
   'window-light': {KYBERN_WINDOW_MATERIAL: 'window', KYBERN_WINDOW_OPACITY: '90', KYBERN_WINDOW_BLUR: '64', KYBERN_APPEARANCE: 'light'},
   'solid-light': {KYBERN_WINDOW_MATERIAL: 'solid', KYBERN_WINDOW_OPACITY: '90', KYBERN_WINDOW_BLUR: '64', KYBERN_APPEARANCE: 'light'},
+  // Round 2 (`docs/specs/gpuix-translucency-r2.md` §8): whole-window glass, dark, one build; the arms differ by `KYBERN_GLASS_FROST` only.
+  'w-tint': r2Arm('none'), 'w-tint-aa': r2Arm('none'), 'w-composer': r2Arm('composer'), 'w-pills': r2Arm('pills'), 'w-menus': r2Arm('menus'), 'w-all': r2Arm('all'),
+  'w-composer-fullres': {...r2Arm('composer'), KYBERN_BACKDROP_HALFRES: '0'},
 }
 /** Variables an arm may set; they are cleared before each launch so an inherited value cannot leak between arms. */
-const PINNED = ['KYBERN_WINDOW_MATERIAL', 'KYBERN_WINDOW_OPACITY', 'KYBERN_WINDOW_BLUR', 'KYBERN_TRANSLUCENCY_SINGLE_FILL', 'KYBERN_APPEARANCE', 'KYBERN_BENCH_PERSISTED_IDLE']
+const PINNED = ['KYBERN_WINDOW_MATERIAL', 'KYBERN_WINDOW_OPACITY', 'KYBERN_WINDOW_CONTENT_OPACITY', 'KYBERN_WINDOW_SURFACE_OPACITY', 'KYBERN_WINDOW_BLUR', 'KYBERN_GLASS_FROST', 'KYBERN_BACKDROP_HALFRES', 'KYBERN_TRANSLUCENCY_SINGLE_FILL', 'KYBERN_APPEARANCE', 'KYBERN_BENCH_PERSISTED_IDLE']
 
 export type WindowRow = {
   tag: string; round: number; arm: string; scenario: string; run: number; status: Result['status']; attempts: number; at: string

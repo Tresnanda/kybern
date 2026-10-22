@@ -33,7 +33,7 @@ export { REDUCED_MOTION }
 export const EASE_OUT: [number, number, number, number] = [...EASE.out]
 
 const ThemeContext = createContext<Theme>(THEMES[VARIANT])
-// The surfaces that follow the glass opacity live apart from the theme: an Opacity step changes this value and re-renders its readers only.
+// The surfaces that follow the glass opacities live apart from the theme: a slider step changes this value and re-renders its readers only.
 const MaterialContext = createContext<Material>(materialFor(VARIANT, 'none', 100))
 export const ThemeProvider = ({ children }: { children: ReactNode }) => {
   const prefs = useAppearance()
@@ -48,12 +48,12 @@ export const ThemeProvider = ({ children }: { children: ReactNode }) => {
   useSyncWindowAppearance(variant)
   useWindowMaterial(variant, material, scope)
   const theme = themeFor(variant, scope, a11y.increaseContrast, a11y.reduceTransparency)
-  const glass = materialFor(variant, scope, material.opacity)
+  const glass = materialFor(variant, scope, material.sidebarOpacity, material.contentOpacity, material.surfaceOpacity)
   installThemeFade(useGpuix()?.renderer)
   return <ThemeContext.Provider value={theme}><MaterialContext.Provider value={glass}>{children}</MaterialContext.Provider></ThemeContext.Provider>
 }
 export const useTheme = () => useContext(ThemeContext)
-/** The frame, panel, menu and settings-list fills, which follow the glass opacity; read the rest from `useTheme`. */
+/** The frame, panel and content fills and the glass tints (`GlassTokens`), which follow the glass opacities; read the rest from `useTheme`. */
 export const useMaterial = () => useContext(MaterialContext)
 
 /** The ink colour at an opacity, like Tailwind's `text-foreground/58`. */

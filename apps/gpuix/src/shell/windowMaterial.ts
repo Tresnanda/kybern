@@ -23,11 +23,11 @@ import { syncWindowAppearance } from './appearance.ts'
 export type Backing = { mode: 'opaque' | 'blurred' | 'transparent'; radius: number }
 /**
  * Opaque when nothing can show through: Solid and the accessibility overrides, and any scope whose lightest region covers
- * the desktop (`windowCoverage` ≥ `OPAQUE_COVERAGE`: light Sidebar only at the default 90, or opacity 100). Blurring the
+ * the desktop (`windowCoverage` ≥ `OPAQUE_COVERAGE`: light Sidebar only at the default 90, or both opacities 100). Blurring the
  * desktop behind an opaque window only costs WindowServer; the colours are unchanged.
  */
-export function backingFor(m: Pick<VariantMaterial, 'blur' | 'opacity'>, scope: WindowScope, variant: ThemeVariant): Backing {
-  if (scope === 'none' || windowCoverage(variant, scope, m.opacity) >= OPAQUE_COVERAGE) return { mode: 'opaque', radius: 0 }
+export function backingFor(m: Pick<VariantMaterial, 'blur' | 'sidebarOpacity' | 'contentOpacity'>, scope: WindowScope, variant: ThemeVariant): Backing {
+  if (scope === 'none' || windowCoverage(variant, scope, m.sidebarOpacity, m.contentOpacity) >= OPAQUE_COVERAGE) return { mode: 'opaque', radius: 0 }
   return m.blur === null ? { mode: 'blurred', radius: 0 } : { mode: 'transparent', radius: m.blur }
 }
 
@@ -125,7 +125,7 @@ export function installWindowMaterial(backing: Backing, variant: ThemeVariant) {
 }
 
 /** Keep the native window in step with the theme: called from `ThemeProvider`. */
-export function useWindowMaterial(variant: ThemeVariant, m: Pick<VariantMaterial, 'blur' | 'opacity'>, scope: WindowScope) {
+export function useWindowMaterial(variant: ThemeVariant, m: Pick<VariantMaterial, 'blur' | 'sidebarOpacity' | 'contentOpacity'>, scope: WindowScope) {
   const renderer = useGpuix()?.renderer as Renderer | undefined
   knownRenderer = renderer
   const backing = backingFor(m, scope, variant)

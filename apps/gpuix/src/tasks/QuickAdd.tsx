@@ -6,6 +6,8 @@ import { useApp } from '../state.ts'
 import { useSpaceProjects } from '../spaces/current.ts'
 import { toast } from '../shell/toasts.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
+import { GlassEdge } from '../kit/GlassEdge.tsx'
+import { raisedFill, useGlass } from '../platform/glass.ts'
 import { Menu, MenuItem } from '../nav/overlay.tsx'
 import { ProjectDot, notesTokens } from '../notes/kit.tsx'
 import { over } from '../theme.ts'
@@ -14,6 +16,7 @@ import { StatusGlyph } from './Glyphs.tsx'
 
 export function QuickAdd({ request, card = false }: { request: NonNullable<ReturnType<typeof taskState>['quick']>; card?: boolean }) {
   const t = useTheme()
+  const g = useGlass()
   const projects = useSpaceProjects()
   const [title, setTitle] = useState('')
   const [project, setProject] = useState(request.projectId ?? '')
@@ -123,7 +126,8 @@ export function QuickAdd({ request, card = false }: { request: NonNullable<Retur
   const dark = t.variant === 'dark'
   return (
     <div style={{ paddingBottom: 8 }}>
-      <div onMouseDownOutside={settle} testId="task-quick-card" style={{ display: 'flex', flexDirection: 'column', paddingTop: 10, paddingBottom: 10, paddingLeft: 12, paddingRight: 12, borderRadius: 10, backgroundColor: dark ? over(ink(t, 0.03), t.surface) : t.surface, boxShadow: dark ? { offsetX: 0, offsetY: 1, blurRadius: 2, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.25)' } : { offsetX: 0, offsetY: 1, blurRadius: 2, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.05)' }, borderWidth: dark ? 0 : 0.5, borderColor: 'rgba(0, 0, 0, 0.09)' }}>
+      <div onMouseDownOutside={settle} testId="task-quick-card" style={{ position: 'relative', display: 'flex', flexDirection: 'column', paddingTop: 10, paddingBottom: 10, paddingLeft: 12, paddingRight: 12, borderRadius: 10, backgroundColor: raisedFill(g, dark ? over(ink(t, 0.03), t.surface) : t.surface), ...(g.on ? { borderWidth: 1, borderColor: g.rim } : { boxShadow: dark ? { offsetX: 0, offsetY: 1, blurRadius: 2, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.25)' } : { offsetX: 0, offsetY: 1, blurRadius: 2, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.05)' }, borderWidth: dark ? 0 : 0.5, borderColor: 'rgba(0, 0, 0, 0.09)' }) }}>
+        <GlassEdge radius={10} color={g.highlight} />
         <textarea
           ref={setField}
           testId="task-quick-title"

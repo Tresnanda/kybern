@@ -64,7 +64,7 @@ edit(w, '    pub fn paint_quad(&mut self, quad: PaintQuad) {', '''    /// Filter
 m = 'crates/gpui_apple/src/metal_renderer.rs'
 edit(m, '    path_intermediate_texture: Option<metal::Texture>,', '    backdrop_resources: Option<BackdropResources>,\n    path_intermediate_texture: Option<metal::Texture>,')
 edit(m, '            path_intermediate_texture: None,', '            backdrop_resources: None,\n            path_intermediate_texture: None,')
-edit(m, '        for batch in scene.batches() {', '        if scene.backdrops.is_empty() { if let Some(r)=&mut self.backdrop_resources { r.scratch=None; } }\n        for batch in scene.batches() {')
+edit(m, '        for batch in scene.batches() {', '        if let Some(r)=&mut self.backdrop_resources { r.begin_frame(!scene.backdrops.is_empty()); }\n        for batch in scene.batches() {')
 edit(m, '            match batch {', '''            match batch {
                 PrimitiveBatch::Backdrop(index) => {
                     command_encoder.end_encoding();
@@ -108,6 +108,8 @@ exec((here / "gpu_telemetry_gpui.py").read_text())
 exec((here / "flick_frame_gpui.py").read_text())
 
 exec((here / "image_frames_gpui.py").read_text())
+
+exec((here / "alpha_blend_gpui.py").read_text())
 
 for name, text in pending.items():
     if (root/name).read_text()!=text: (root/name).write_text(text)

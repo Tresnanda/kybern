@@ -37,6 +37,8 @@ import { FONT_MONO, FONT_UI, over } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { cachedMarkdownTheme as markdownTheme } from './kit.tsx'
 import { T } from './glyphs.ts'
+import { GlassEdge } from '../kit/GlassEdge.tsx'
+import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
 import { alpha, Button, CountBadge, fg, muted, Para } from './kit.tsx'
 import { answerQuestions, errorText, interrupt, reportError, respondApproval } from './store.ts'
 
@@ -96,14 +98,17 @@ function RequestStack({ threadId }: { threadId: string }) {
 
 /** `chat-composer-stacked-top`: the composer's glass at half strength, top corners
  *  rounded, inset by the composer radius, open at the bottom where the input
- *  continues it. Painted opaque: GPUIX has no backdrop blur behind it. */
+ *  continues it. Whole-window glass frosts it like the composer (class `composer`); else it is opaque. */
 export function StackedPanel({ children, closed }: { children: ReactNode; closed: boolean }) {
   const t = useTheme()
-  const border = t.variant === 'dark' ? 'rgba(252, 252, 252, 0.052)' : 'rgba(13, 13, 13, 0.076)'
+  const g = useGlass()
+  const border = g.on ? g.frostRim : t.variant === 'dark' ? 'rgba(252, 252, 252, 0.052)' : 'rgba(13, 13, 13, 0.076)'
   return (
     <div
       testId="thread-request"
+      backdrop={frostBackdrop(g, 'composer', RADIUS - 1)}
       style={{
+        position: 'relative',
         display: 'flex',
         flexDirection: 'column',
         // `.composer-panel-stack` (kit.css:2780) inside the `w-14/15` stacked frame:
@@ -112,7 +117,7 @@ export function StackedPanel({ children, closed }: { children: ReactNode; closed
         width: '93.333%',
         alignSelf: 'center',
         marginBottom: closed ? 0 : -1,
-        backgroundColor: t.scope === 'window' ? t.glass.dense : t.popover,
+        backgroundColor: frostFill(g, 'composer', t.popover, 'frostStacked'),
         borderWidth: 1,
         borderBottomWidth: closed ? 1 : 0,
         borderColor: border,
@@ -122,6 +127,7 @@ export function StackedPanel({ children, closed }: { children: ReactNode; closed
         borderBottomRightRadius: closed ? RADIUS - 1 : 0,
       }}
     >
+      <GlassEdge radius={RADIUS - 1} color={g.frostHighlight} />
       {children}
     </div>
   )
@@ -456,12 +462,13 @@ function ApprovalActions({
  *  (`ComposerPickerMenuPopup side="top" align="start"`). */
 function MoreMenu({ items }: { items: { label: string; shortcut?: number; run: () => void }[] }) {
   const t = useTheme()
+  const g = useGlass()
   const [open, setOpen] = useState(false)
   return (
     <div style={{ position: 'relative' }}>
       <Button variant="ghost" icon={T.dots} onClick={() => setOpen(!open)} testId="approval-more" />
       {open && (
-        <anchored side="top" align="start" gap={6} fit="switch">
+        <anchored side="top" align="start" gap={6} fit="switch" backdrop={frostBackdrop(g, 'menus', 12) ?? (g.on ? { blur: 0 } : undefined)}>
           <div
             onMouseDownOutside={() => setOpen(false)}
             style={{
@@ -469,13 +476,16 @@ function MoreMenu({ items }: { items: { label: string; shortcut?: number; run: (
               flexDirection: 'column',
               minWidth: 200,
               padding: 4,
+              position: 'relative',
               borderRadius: 12,
               borderWidth: 1,
-              borderColor: t.border,
-              backgroundColor: t.popover,
-              boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: -8, color: 'rgba(0, 0, 0, 0.28)' },
+              borderColor: g.on ? g.frostRim : t.border,
+              backgroundColor: frostFill(g, 'menus', t.popover, 'frostMenu'),
+              // A shadow under a translucent fill would darken its interior (GPUI paints it beneath the whole box).
+              ...(g.on ? {} : { boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: -8, color: 'rgba(0, 0, 0, 0.28)' } }),
             }}
           >
+            <GlassEdge radius={12} color={g.frostHighlight} />
             {items.map((item) => (
               <div
                 key={item.label}

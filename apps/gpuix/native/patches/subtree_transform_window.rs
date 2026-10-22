@@ -181,12 +181,9 @@ impl SubtreeTransformContext {
                 let (sx, sy) = m.axes();
                 let s = sx.min(sy);
                 let (rx, ry, rw, rh) = m.rect(shape.bounds[0], shape.bounds[1], shape.bounds[2], shape.bounds[3]);
-                let r = shape.radii;
-                let (id, generation) = pool.intern(
-                    Bounds::new(point(px(rx), px(ry)), size(px(rw), px(rh))),
-                    Corners { top_left: px(r[0] * s), top_right: px(r[1] * s), bottom_right: px(r[2] * s), bottom_left: px(r[3] * s) },
-                    mask.clone(),
-                );
+                // Radii, or an edge fade's ramps, scale with the scope.
+                let (id, generation) =
+                    pool.intern_node(Bounds::new(point(px(rx), px(ry)), size(px(rw), px(rh))), shape.radii.map(|r| r * s), mask.clone(), shape.kind);
                 pool.sync_node(scene, id, scale_factor);
                 mask.rounded_clip = id;
                 mask.clip_generation = generation;

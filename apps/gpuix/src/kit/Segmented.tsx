@@ -11,6 +11,7 @@ import { Tip } from '../nav/overlay.tsx'
 import { over } from '../theme.ts'
 import { DURATION, EASE } from '../motion/kit.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { useGlass } from '../platform/glass.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { FocusRing, useFocusRing, withAlpha } from './Switch.tsx'
 
@@ -42,6 +43,7 @@ type Box = { x: number; w: number }
 
 export function Segmented({ options, value, onChange, busy = false, 'aria-label': label, textSize = 14, segmentHeight = 24, segmentPadX = 8, fill = false, testId, style }: SegmentedProps) {
   const t = useTheme()
+  const g = useGlass()
   const renderer = useGpuixRequired()
   const track = useRef<PublicInstance>(null)
   const buttons = useRef(new Map<string, PublicInstance>())
@@ -95,7 +97,13 @@ export function Segmented({ options, value, onChange, busy = false, 'aria-label'
     }
   }
 
+  // Whole-window glass (`platform/glass.ts`): the track is a recess tint and the thumb is an opaque plate, so it reads on any desktop.
   const thumbFill = dark ? t.v('--composer-surface') : over(t.v('--composer-surface'), over(t.v('--color-background-elevated-secondary'), t.v('--background')))
+  const thumb = g.on
+    ? dark
+      ? { backgroundColor: over('rgba(255, 255, 255, 0.08)', t.popover), borderColor: 'rgba(255, 255, 255, 0.1)', shadow: 'rgba(0, 0, 0, 0.35)', blur: 1, rim: 'rgba(255, 255, 255, 0.1)' }
+      : { background: { type: 'linear-gradient' as const, angle: 180, stops: [{ color: '#ffffff', position: 0 }, { color: '#f6f6f6', position: 1 }] as [{ color: string; position: number }, { color: string; position: number }] }, borderColor: 'rgba(0, 0, 0, 0.11)', shadow: 'rgba(0, 0, 0, 0.14)', blur: 1.5, rim: 'rgba(255, 255, 255, 1)' }
+    : { backgroundColor: thumbFill, borderColor: ink(t, dark ? 0.07 : 0.05), shadow: `rgba(0, 0, 0, ${dark ? 0.16 : 0.04})`, blur: 1.5 / 2, rim: `rgba(255, 255, 255, ${dark ? 0.04 : 0.5})` }
   return (
     <div
       ref={track}
@@ -111,21 +119,22 @@ export function Segmented({ options, value, onChange, busy = false, 'aria-label'
       }}
       style={{
         position: 'relative', display: 'flex', alignItems: 'center', alignSelf: fill ? 'stretch' : 'flex-start', gap: 2, padding: 2, minWidth: 0, flexShrink: fill ? 1 : 0,
-        borderWidth: 1, borderColor: ink(t, dark ? 0.08 : 0.07), borderRadius: 8, overflow: 'hidden',
-        backgroundColor: dark ? t.v('--background') : t.v('--color-background-elevated-secondary'),
+        borderWidth: 1, borderColor: g.on ? g.recessRim : ink(t, dark ? 0.08 : 0.07), borderRadius: 8, overflow: 'hidden',
+        backgroundColor: g.on ? g.recess : dark ? t.v('--background') : t.v('--color-background-elevated-secondary'),
         ...style,
       }}
     >
       {/* `box-shadow: inset 0 1px 2px rgba(0,0,0,.25 | .06)`: a soft shade under the top edge. */}
-      <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 3, pointerEvents: 'none', background: { type: 'linear-gradient', angle: 180, stops: [{ color: `rgba(0, 0, 0, ${dark ? 0.2 : 0.05})`, position: 0 }, { color: 'rgba(0, 0, 0, 0)', position: 1 }] } }} />
+      <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 3, pointerEvents: 'none', background: { type: 'linear-gradient', angle: 180, stops: [{ color: g.on ? g.recessShade : `rgba(0, 0, 0, ${dark ? 0.2 : 0.05})`, position: 0 }, { color: 'rgba(0, 0, 0, 0)', position: 1 }] } }} />
       {pill && (() => {
+        const { shadow, blur, rim: rimColor, ...paint } = thumb
         const style = {
           position: 'absolute', top: 1, height: segmentHeight, borderRadius: 6, borderWidth: 1, pointerEvents: 'none',
-          borderColor: ink(t, dark ? 0.07 : 0.05), backgroundColor: thumbFill,
-          boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 1.5 / 2, spreadRadius: 0, color: `rgba(0, 0, 0, ${dark ? 0.16 : 0.04})` },
+          ...paint,
+          boxShadow: { offsetX: 0, offsetY: 1, blurRadius: blur, spreadRadius: 0, color: shadow },
         } as const
         // `inset 0 1px 0 rgba(255,255,255,.04 | .5)`: the raised rim's top highlight.
-        const rim = <div style={{ position: 'absolute', left: 1, right: 1, top: 0, height: 1, backgroundColor: `rgba(255, 255, 255, ${dark ? 0.04 : 0.5})`, pointerEvents: 'none' }} />
+        const rim = <div style={{ position: 'absolute', left: 1, right: 1, top: 0, height: 1, backgroundColor: rimColor, pointerEvents: 'none' }} />
         const ease = [...EASE.smoothOut] as [number, number, number, number]
         // Equal-width segments (`fill`, or labels that happen to match): the pill only moves, so it slides as a paint-only translation
         // from the first segment's slot (no layout or render per frame). Different widths also change the pill's width, which needs the

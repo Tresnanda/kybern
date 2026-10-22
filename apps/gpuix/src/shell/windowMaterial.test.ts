@@ -3,8 +3,9 @@ import { DEFAULT_VARIANT_MATERIAL, resolveScope, type ThemeVariant, type Variant
 import { backingFor } from './windowMaterial.ts'
 
 type Choice = 'solid' | 'window' | 'sidebar'
+// A content opacity of 100 is Sidebar only (`resolveScope`), so a "whole window" at 100 is the highest it can be: 99.
 const material = (choice: Choice, opacity: number, blur: number | null): VariantMaterial => ({
-  material: choice === 'solid' ? 'solid' : 'translucent', opacity, blur, sidebarOnly: choice === 'sidebar',
+  ...DEFAULT_VARIANT_MATERIAL, material: choice === 'solid' ? 'solid' : 'translucent', sidebarOpacity: opacity, contentOpacity: choice === 'sidebar' ? 100 : Math.min(opacity, 99), blur,
 })
 const backing = (variant: ThemeVariant, choice: Choice, opacity: number, blur: number | null, a11y = { reduceTransparency: false, increaseContrast: false }) => {
   const m = material(choice, opacity, blur)

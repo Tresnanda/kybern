@@ -11,14 +11,25 @@ export interface BackdropFilter {
   /** Fraction of height over which the filter fades in from the top (0…1). */
   fadeTop?: number
 }
+/** Alpha ramp toward an element's edges for everything it and its subtree paint (`EDGE_FADE` in
+ * `local-build.ts`): alpha × r², r = clamp(distance to the edge / ramp, 0, 1), the smallest over the faded
+ * edges. Nested fades multiply; hit testing ignores them. Logical pixels. */
+export interface EdgeFade {
+  /** Ramp length for each faded edge; omitted or 0 = that edge is not faded. */
+  top?: number; bottom?: number; left?: number; right?: number
+  /** Move the bottom (top) edge of the ramp inward: content below `height − insetBottom` is fully transparent. */
+  insetBottom?: number; insetTop?: number
+}
 declare module '@gpuix/native/host' {
-  interface HostProps { backdrop?: BackdropFilter }
+  interface HostProps { backdrop?: BackdropFilter; edgeFade?: EdgeFade }
 }
 
 export const BACKDROP = {
   popup: {blur:40,saturation:1.5,radius:16},
   glass: {blur:16,saturation:1.25,radius:16},
-  /** Menus and pickers on whole-window glass: blurs what is under the transcript text without lifting its colors (the page cutout of `platform/translucency.ts`). */
+  /** Frosted glass on whole-window glass (composer, pills, menus, popover cards): blurs what is under the transcript text without lifting its colors. */
+  frost: {blur:16,saturation:1,radius:16},
+  /** Alias of `frost` kept for one release. */
   cutout: {blur:16,saturation:1,radius:16},
   drop: {blur:18,saturation:1.25,radius:10},
   dropLabel: {blur:18,saturation:1.4,radius:8},

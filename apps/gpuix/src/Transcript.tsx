@@ -30,6 +30,9 @@ import { alpha, muted, Para } from './transcript/kit.tsx'
 import { over } from './theme.ts'
 import { AnswerImages, DateSeparator, Turn, TurnFooter, turnTimestamp } from './transcript/Turn.tsx'
 import { useComposerOverlayHeight } from './composer/height.ts'
+import { GlassEdge } from './kit/GlassEdge.tsx'
+import { frostBackdrop, frostFill, frostHoverFill, useGlass } from './platform/glass.ts'
+import { EDGE_FADE } from './native/local-build.ts'
 import { loadEarlier, useActionError, useEarlierError, usePacedBlocks } from './transcript/store.ts'
 
 export { markdownTheme } from './transcript/kit.tsx'
@@ -64,6 +67,7 @@ const scrollAnchors = new Map<string, SavedAnchor>()
 export function Transcript() {
   const pane = usePaneAccess()
   const t = useTheme()
+  const faded = useGlass().on && EDGE_FADE
   const renderer = useGpuixRequired()
   const threadId = useApp((s) => s.selectedId)
   const thread = useApp(s => s.open.thread)
@@ -400,6 +404,7 @@ export function Transcript() {
 
   return (
     <TranscriptTail.Provider value={tailRef}><TranscriptFocusRestoration.Provider value={restoreFocus}><TranscriptRowStateScope.Provider value={rowStateScope}><SparseRetention.Provider value={nativeWindow.context}><div ref={surfaceRef} testId="transcript-surface" onScroll={wheelAtTop} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+      <OverlayFadeFrame faded={faded} visible={!atTail}>
       <virtual-list
         {...TRANSCRIPT_SCROLL_LAYOUT}
         {...(sparse ? { estimatedItemHeight: 160, itemCount: count, windowStart: windowIndices?.[0] ?? 0, windowIndices, ...nativeWindow.props } : { estimatedItemHeight: 160 })}
@@ -454,6 +459,7 @@ export function Transcript() {
           <BottomSpace key="__bottom" nodeRef={bottomRef} testId={`transcript-bottom:${pane.id}`} />,
         ]}
       </virtual-list>
+      </OverlayFadeFrame>
       {overflow && <OverlayRail items={railItems} active={activeId} height={paneHeight} onJump={(id) => {
         const index = rows.findIndex(row => row.turn.user?.id === id)
         if (index < 0 || !list.current) return
@@ -489,6 +495,19 @@ function BottomSpace({ nodeRef, testId }: { nodeRef: (node: PublicInstance | nul
 }
 function OverlayRail(props: Omit<ComponentProps<typeof MessageRail>, 'bottomInset'>) {
   return <MessageRail {...props} bottomInset={useOverlay()} />
+}
+/**
+ * Whole-window glass has no surface for the bottom wash to fade into, so while the view is away from the tail the scroller itself
+ * fades out above the composer (`edgeFade`: an alpha ramp over the last 32 px above the overlay; what lies under the overlay is
+ * clear). The frame is only mounted with the patched addon on glass, and re-renders alone when the overlay grows a line.
+ */
+function OverlayFadeFrame({ faded, visible, children }: { faded: boolean; visible: boolean; children: React.ReactNode }) {
+  if (!faded) return <>{children}</>
+  return <FadeFrame visible={visible}>{children}</FadeFrame>
+}
+function FadeFrame({ visible, children }: { visible: boolean; children: React.ReactNode }) {
+  const overlay = useOverlay()
+  return <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }} edgeFade={visible ? { bottom: 32, insetBottom: overlay } : undefined}>{children}</div>
 }
 function OverlayFade({ visible }: { visible: boolean }) {
   return <BottomFade visible={visible} bottom={useOverlay()} />
@@ -536,6 +555,7 @@ const TurnItem = memo(function TurnItem({ turn, threadId, isLast, threadRunning,
  *  faster (150 ms). Reduce Motion fades only. */
 export function ScrollToBottom({ visible, bottom, onClick }: { visible: boolean; bottom: number; onClick: () => void }) {
   const t = useTheme()
+  const g = useGlass()
   const hidden = { opacity: 0, translateY: -DISTANCE.micro, scale: 0.95, blur: BLUR.small }
   return (
     <Presence
@@ -549,7 +569,10 @@ export function ScrollToBottom({ visible, bottom, onClick }: { visible: boolean;
         role="button"
         aria-label="Scroll to bottom"
         onClick={visible ? onClick : undefined}
+        // Whole-window glass (`platform/glass.ts`): a frost pill with a hairline rim and no shadow; else the opaque elevated pill.
+        backdrop={frostBackdrop(g, 'pills', 16)}
         style={{
+          position: 'relative',
           display: 'flex',
           width: 32,
           height: 32,
@@ -557,14 +580,15 @@ export function ScrollToBottom({ visible, bottom, onClick }: { visible: boolean;
           alignItems: 'center',
           justifyContent: 'center',
           borderWidth: 1,
-          borderColor: t.border,
-          backgroundColor: t.v('--color-background-elevated-primary-opaque'),
+          borderColor: g.on ? g.pillRim : t.border,
+          backgroundColor: frostFill(g, 'pills', t.v('--color-background-elevated-primary-opaque')),
           cursor: 'pointer',
           pointerEvents: visible ? 'auto' : 'none',
-          boxShadow: { offsetX: 0, offsetY: 2, blurRadius: 8, spreadRadius: -2, color: alpha('#000000', t.variant === 'dark' ? 0.4 : 0.12) },
-          hover: { backgroundColor: over(t.v('--color-background-elevated-secondary'), t.surface) },
+          ...(g.on ? {} : { boxShadow: { offsetX: 0, offsetY: 2, blurRadius: 8, spreadRadius: -2, color: alpha('#000000', t.variant === 'dark' ? 0.4 : 0.12) } }),
+          hover: { backgroundColor: frostHoverFill(g, 'pills', over(t.v('--color-background-elevated-secondary'), t.surface)) },
         }}
       >
+        <GlassEdge radius={16} color={g.frostHighlight} />
         <Icon source={T.arrowDown} size={14} color={t.text} />
       </div>
     </Presence>

@@ -27,16 +27,19 @@ edit(s,'    pub shadows: Vec<Shadow>,','    /// Rounded masks shared by all prim
 edit(s,'        self.shadows.clear();','        self.rounded_clips.clear();\n        self.shadows.clear();')
 edit(s,'        self.replay(0..previous.len(), &previous);','        self.replay(0..previous.len(), &previous);\n        self.rounded_clips = previous.rounded_clips.clone();\n        self.rounded_clip_scale = previous.rounded_clip_scale;')
 pending[s] += '''
-/// One immutable link of an arbitrarily nested rounded content mask.
+/// One immutable link of an arbitrarily nested rounded content mask. `kind` 1
+/// is an edge fade (N3): `radii` then hold the top, right, bottom and left ramps.
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 #[allow(missing_docs)]
-pub struct RoundedClip { pub bounds: [f32;4], pub radii: [f32;4], pub parent: u32 }
+pub struct RoundedClip { pub bounds: [f32;4], pub radii: [f32;4], pub parent: u32, pub kind: u32 }
 impl Scene {
     pub(crate) fn rounded_contains(&self, mut id:u32, point:Point<Pixels>) -> bool {
         let x=point.x.as_f32()*self.rounded_clip_scale; let y=point.y.as_f32()*self.rounded_clip_scale;
         while id!=0 {
             let Some(n)=self.rounded_clips.get(id as usize) else {return false;};
+            // Hit testing ignores edge fades.
+            if n.kind!=0 { id=n.parent; continue; }
             let [left,top,width,height]=n.bounds;
             if x<left || y<top || x>=left+width || y>=top+height { return false; }
             let right=x>=left+width/2.; let bottom=y>=top+height/2.;
@@ -66,14 +69,27 @@ edit(m,'        command_encoder.set_render_pipeline_state(&self.paths_rasterizat
 
 shader='crates/gpui_apple/src/shaders.metal'
 edit(shader,'using namespace metal;', '''using namespace metal;
-struct RoundedClipNode { float bounds[4]; float radii[4]; uint parent; };
+struct RoundedClipNode { float bounds[4]; float radii[4]; uint parent; uint kind; };
+// Edge fade link (N3): ramps are top, right, bottom, left; 0 leaves that edge alone.
+float edge_fade_alpha(float2 p, float2 lo, float2 size, float4 band) {
+  float4 d=float4(p.y-lo.y, lo.x+size.x-p.x, lo.y+size.y-p.y, p.x-lo.x);
+  float4 r=select(float4(1.), saturate(d/max(band,float4(1e-4))), band>0.);
+  float m=min(min(r.x,r.y),min(r.z,r.w));
+  return m*m;
+}
 // All scene primitives share this analytic intersection. Interior fragments take
-// cheap comparisons; only corner pixels evaluate a circle distance.
+// cheap comparisons; only corner pixels evaluate a circle distance. Edge fades
+// multiply, so nested scopes compound.
 float rounded_clip_alpha(float2 p, uint id, device const RoundedClipNode *clips) {
-  float coverage=1.;
+  float coverage=1., fade=1.;
   while(id!=0) {
     RoundedClipNode n=clips[id];
     float2 lo=float2(n.bounds[0],n.bounds[1]), size=float2(n.bounds[2],n.bounds[3]);
+    if(n.kind!=0) {
+      fade*=edge_fade_alpha(p,lo,size,float4(n.radii[0],n.radii[1],n.radii[2],n.radii[3]));
+      id=n.parent;
+      continue;
+    }
     bool right=p.x>=lo.x+size.x/2., bottom=p.y>=lo.y+size.y/2.;
     float r=n.radii[bottom?(right?2:3):(right?1:0)];
     float2 c=lo+float2(right?size.x-r:r,bottom?size.y-r:r);
@@ -83,7 +99,8 @@ float rounded_clip_alpha(float2 p, uint id, device const RoundedClipNode *clips)
     coverage=min(coverage,saturate(0.5-distance));
     id=n.parent;
   }
-  return coverage;
+  if(fade<=0.) discard_fragment();
+  return coverage*fade;
 }
 ''')
 # Apply coverage to every return, including original fast paths, preserving each

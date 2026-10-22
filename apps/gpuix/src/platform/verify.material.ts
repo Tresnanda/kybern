@@ -16,7 +16,7 @@ import path from 'node:path'
 import { launch } from '@gpuix/react/automation'
 import { pixels } from '../../native/png.ts'
 import { THEMES, materialFor } from '../theme.ts'
-import { DEFAULT_VARIANT_MATERIAL } from './translucency.ts'
+import { DEFAULT_VARIANT_MATERIAL, isSidebarOnly } from './translucency.ts'
 import { assertScratchDataDir, until, windowId } from './verify.lib.ts'
 
 assertScratchDataDir()
@@ -83,9 +83,9 @@ async function choose(ctx: Ctx, want: { material?: 'solid' | 'translucent'; side
     state.material = want.material
     await settle(400)
   }
-  if (want.sidebarOnly !== undefined && state.material === 'translucent' && want.sidebarOnly !== state.sidebarOnly) {
+  if (want.sidebarOnly !== undefined && state.material === 'translucent' && want.sidebarOnly !== isSidebarOnly(state)) {
     await app.getByTestId(`settings-sidebar-only-${variant}`).click()
-    state.sidebarOnly = want.sidebarOnly
+    state.contentOpacity = want.sidebarOnly ? 100 : state.lastContentOpacity
     await settle(400)
   }
   if (want.auto && state.blur !== null) {
@@ -146,17 +146,21 @@ await session('main', {}, async (ctx) => {
   const back = await until(async () => { await settle(300); const p = points(shot('settings-restored')); return differs(p.content, solid.content) ? p : null }, 'glass returns once the options clear', 8000)
   check('8 restored', near(back.content, whole.content, 6) || differs(back.content, solid.content), `${fmt(back.content)} (whole window ${fmt(whole.content)})`)
 
-  // 9. Opacity 100 and 15 (keys: the slider commits on Home / End).
-  const opacity = app.getByTestId(`settings-opacity-${variant}`)
-  await opacity.click(); await opacity.press('end'); await settle(700)
-  const full = points(shot('settings-opacity-100'))
+  // 9. Opacity 99 and 15 (Advanced › Sidebar opacity and Content opacity; keys: a slider commits on Home / End / ←). Content 100 is Sidebar only,
+  // so the highest whole-window coat is 99.
+  await app.getByTestId(`settings-advanced-${variant}`).click(); await settle(400)
+  const sidebarOpacity = app.getByTestId(`settings-sidebar-opacity-${variant}`), contentOpacity = app.getByTestId(`settings-content-opacity-${variant}`)
+  await sidebarOpacity.click(); await sidebarOpacity.press('end')
+  await contentOpacity.click(); await contentOpacity.press('end'); await contentOpacity.press('left'); await settle(900)
+  const full = points(shot('settings-opacity-99'))
   const coat100 = [...(variant === 'dark' ? rgbOf(T.surface).map((v) => Math.round(v * 0.8)) : rgbOf(T.surface)), 255]
-  check('9 opacity 100', near(full.content, coat100, 3), `${fmt(full.content)} vs coat ${fmt(coat100)}`)
-  await opacity.press('home'); await settle(700)
+  check('9 opacity 99', near(full.content, coat100, 4), `${fmt(full.content)} vs coat ${fmt(coat100)}`)
+  await sidebarOpacity.press('home'); await contentOpacity.press('home'); await settle(900)
   const thin = points(shot('settings-opacity-15'))
   check('9 opacity 15', differs(thin.content, whole.content) || differs(thin.frame, whole.frame), `${fmt(thin.content)} vs 90%: ${fmt(whole.content)}`)
-  await opacity.press('end'); for (let i = 0; i < 10; i++) await opacity.press('left')
-  await settle(700)
+  await sidebarOpacity.press('end'); for (let i = 0; i < 10; i++) await sidebarOpacity.press('left')
+  await contentOpacity.press('end'); for (let i = 0; i < 11; i++) await contentOpacity.press('left')
+  await settle(900)
   // 4. Blur Auto (vibrancy instead of the window-server blur).
   await settle(500)
   await choose(ctx, { auto: true })

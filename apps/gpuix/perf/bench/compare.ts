@@ -1,6 +1,6 @@
 import {readFileSync} from 'node:fs'
 import {percentile,fmt,type Result} from './model.ts'
-const [a,b]=process.argv.slice(2);if(!a||!b)throw Error('usage: bun perf/bench/compare.ts a.json b.json')
+const [a,b]=process.argv.slice(2).filter(arg=>!arg.startsWith('--'));if(!a||!b)throw Error('usage: bun perf/bench/compare.ts a.json b.json')
 const read=(p:string)=>JSON.parse(readFileSync(p,'utf8')) as {schemaVersion:number;aborted?:boolean;fullRate:string;resourceSeconds:number;warmupSeconds:number;renderFlags?:Record<string,string>;hardware?:string;workload?:{counts:Record<string,number>};results:Result[]}
 const before=read(a),after=read(b)
 if(before.aborted||after.aborted)throw Error('Incomplete/aborted suite; comparison refused')
@@ -10,6 +10,8 @@ if(before.hardware!==after.hardware||JSON.stringify(before.workload?.counts)!==J
 const integerWheel=(doc:typeof before)=>doc.renderFlags?.KYBERN_BENCH_INTEGER_WHEEL==null?'1':doc.renderFlags.KYBERN_BENCH_INTEGER_WHEEL==='1'?'1':'0'
 const directWheel=(doc:typeof before)=>doc.renderFlags?.KYBERN_BENCH_DIRECT_VIEW==null?'0':doc.renderFlags.KYBERN_BENCH_DIRECT_VIEW==='0'?'0':'1'
 const wheelMismatch=integerWheel(before)!==integerWheel(after)||directWheel(before)!==directWheel(after)
+// A frost class or the half-resolution blur changes what the build paints: two suites that differ in it are only pairable on purpose.
+for(const key of ['KYBERN_GLASS_FROST','KYBERN_BACKDROP_HALFRES'])if((before.renderFlags?.[key]??'app default')!==(after.renderFlags?.[key]??'app default')&&!process.argv.includes('--allow-glass-diff'))throw Error(`${key} differs between the suites; pass --allow-glass-diff if that is the A/B`)
 const flagsDiffer=JSON.stringify(before.renderFlags)!==JSON.stringify(after.renderFlags)
 const ws=[...before.results,...after.results].some(r=>r.resources.windowServer)
 console.log(`| Scenario | Δ p95 ms | Δ >33 ms | Δ CPU points | Δ GPU ms | Δ MiB |${ws?' Δ WS CPU points | Δ WS GPU ms | Δ WS GPU % |':''} Noise flag |\n|---|---:|---:|---:|---:|---:|${ws?'---:|---:|---:|':''}---|`)

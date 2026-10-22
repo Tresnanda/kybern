@@ -1,7 +1,7 @@
 /**
  * Tables for the interleaved translucency gate. Reads the JSON lines `gate2.ts` writes.
  *
- *   bun perf/bench/gate2-report.ts <file.jsonl> [--tag primary] [--pairs window:solid,window:sidebar,sidebar:solid,solid-aa:solid] [--aa solid-aa:solid|none] [--rounds 1,2] [--json out.json]
+ *   bun perf/bench/gate2-report.ts <file.jsonl> [--tag primary] [--pairs window:solid,window:sidebar,sidebar:solid,solid-aa:solid] [--aa solid-aa:solid|none] [--rounds 1,2] [--limit gpuFrame=30] [--json out.json]
  *
  * Unit of analysis is the block (one arm, one round, one scenario = three windows). A block value is the median of its
  * windows (the >33 ms count is their sum, i.e. per 45 s). A pair is the same round and scenario for the two arms, and is
@@ -120,6 +120,8 @@ if (import.meta.main) {
   const args = process.argv.slice(2), file = args[0]?.startsWith('--') ? undefined : args[0]
   const opt = (name: string) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : undefined }
   if (!file) throw Error('usage: bun perf/bench/gate2-report.ts <file.jsonl> [--tag primary] [--pairs a:b,c:d] [--aa solid-aa:solid] [--json out.json]')
+  // Round 2 (spec §8.3) allows +30% GPUIX GPU ms per frame: `--limit gpuFrame=30` replaces a metric's threshold for this report.
+  for (let i = args.indexOf('--limit'); i >= 0; i = args.indexOf('--limit', i + 1)) { const [key, value] = args[i + 1]!.split('='); const m = METRICS.find(x => x.key === key); if (!m) throw Error(`Unknown metric ${key}`); m.threshold = Number(value) }
   const only = opt('rounds')?.split(',').map(Number), rows = readRows(file, opt('tag') ?? 'primary').filter(r => !only || only.includes(r.round)), pairs = (opt('pairs') ?? 'window:solid,window:sidebar,sidebar:solid').split(','), aaOpt = opt('aa') ?? 'solid-aa:solid', aa = aaOpt === 'none' ? null : aaOpt
   const {text, summary} = markdown(rows, pairs, aa)
   console.log(text)

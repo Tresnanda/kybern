@@ -73,7 +73,9 @@ export function withAlpha(color: string, alpha: number): string {
  * overlapping parts do not show through each other. GPUIX applies opacity per element, so disabled controls paint
  * their colours pre-composited over `under` (the colour beneath, opaque) and onto `surface` (the page) instead.
  */
-export function dim(color: string, surface: string, under?: string, alpha = 0.64): string {
+export function dim(color: string, surface: string, under?: string, alpha = 0.64, glass = false): string {
+  // Whole-window glass has no page colour to flatten onto: keep the translucency instead of painting an opaque slab.
+  if (glass) return withAlpha(under ? over(color, under) : color, alpha)
   return over(withAlpha(under ? over(color, under) : color, alpha), surface)
 }
 
@@ -104,7 +106,7 @@ export function Switch({ checked: checkedProp, defaultChecked = false, onChecked
   const toggle = () => { if (!disabled) setChecked(!checked) }
   // Disabled: colours flattened onto the page instead of a per-element opacity (see `dim`).
   const page = t.v('--background')
-  const d = (c: string, under?: string) => (disabled ? dim(c, page, under) : c)
+  const d = (c: string, under?: string) => (disabled ? dim(c, page, under, undefined, t.scope === 'window') : c)
   const track = checked ? t.switchOn : t.switchOff
   const thumb = <div style={{ flexGrow: 1, height: 16, borderRadius: 8, backgroundColor: d('#ffffff'), boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 3 / 2, spreadRadius: 0, color: `rgba(0, 0, 0, ${disabled ? 0.064 : 0.1})` }, pointerEvents: 'none' }} />
   const layer: StyleDesc = { position: 'absolute', left: 0, top: 0, width: 32, height: 20, borderRadius: 10, borderWidth: 1, pointerEvents: 'none' }

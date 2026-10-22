@@ -46,6 +46,8 @@ import { getClient, setThreadOpen, usePaneCompact, focusPane, getFocusedPaneId, 
 import { useCurrentSpaceId } from './spaces/current.ts'
 import { FONT_UI } from './theme.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from './ui.tsx'
+import { GlassEdge } from './kit/GlassEdge.tsx'
+import { frostBackdrop, frostFill, useGlass } from './platform/glass.ts'
 import { addWindowKeyHandler } from './nav/keys.ts'
 import { keyboardAnswer } from './requests/Panel.tsx'
 import { isUserInput, connectorApproval } from '../../../packages/kybern-client/src/userInput.ts'
@@ -387,6 +389,7 @@ export function ComposerView(input: ComposerViewProps) {
   const props = { ...input, draftKey: `${pane.id}:${input.draftKey}`, readOnly: input.readOnly || pane.frozen }
   const measureOverlay = useMeasureComposerOverlay()
   const t = useTheme()
+  const g = useGlass()
   const renderer = useGpuixRequired()
   const { running, provider, providers, model, effort, mode } = props
   const connected = useApp((s) => s.status === 'open')
@@ -620,16 +623,20 @@ export function ComposerView(input: ComposerViewProps) {
           if (props.readOnly || !e.paths?.length) return
           void addFiles(e.paths)
         }}
+        // Whole-window glass (`platform/glass.ts`): the frost tint over a scene blur, a hairline rim and a top highlight, no shadow.
+        backdrop={frostBackdrop(g, 'composer', compact ? 14 : COMPOSER_RADIUS)}
         style={{
+          position: 'relative',
           display: 'flex',
           flexDirection: 'column',
           width: '100%',
           borderRadius: compact ? 14 : COMPOSER_RADIUS,
           borderWidth: 1,
-          borderColor: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.052)' : 'rgba(13, 13, 13, 0.076)',
-          backgroundColor: t.glass.composer,
+          borderColor: g.on ? g.frostRim : t.variant === 'dark' ? 'rgba(252, 252, 252, 0.052)' : 'rgba(13, 13, 13, 0.076)',
+          backgroundColor: frostFill(g, 'composer', t.glass.composer),
         }}
       >
+        <GlassEdge radius={compact ? 14 : COMPOSER_RADIUS} color={g.frostHighlight} />
         {completion.menu((card.current && renderer.getElementBounds?.(card.current.id)?.width) || 736)}
         {/* `dragOver && border-[color:var(--color-border-focus)]` with the card's `transition-colors duration-200`. */}
         <DropHighlight over={dragOver} radius={compact ? 14 : COMPOSER_RADIUS} color={t.v('--color-border-focus')} />

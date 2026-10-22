@@ -13,6 +13,7 @@ import { SLASH_ICON, TASK_ICON } from './icons.ts'
 import { PopupLayer, popoverStyle } from '../composer/Menu.tsx'
 import { FONT_MONO, FONT_UI, over, type Theme } from '../theme.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { useGlass } from '../platform/glass.ts'
 import { notesTokens } from '../notes/kit.tsx'
 import { statusGlyphSource } from '../tasks/Glyphs.tsx'
 import { useTasks } from '../tasks/store.ts'
@@ -378,13 +379,15 @@ export const RichEditor = forwardRef<RichEditorHandle, RichEditorProps>(function
 /** `.task-line-make-button`: "Make task" at the end of the hovered checklist line. */
 function MakeTaskButton({ line, compact, onClick }: { line: MakeTaskLine & { rect: Rect }; compact: boolean; onClick: () => void }) {
   const t = useTheme()
+  const g = useGlass()
   const k = notesTokens(t)
   const row = over(k.hover, t.surface)
   const [x, y, w, h] = line.rect
+  // Whole-window glass: a translucent row would show the line's own text through it, so the chip is a small dense plate with a hairline.
   return <div testId="editor-make-task" role="button" aria-label="Make a task from this line (⌘⇧T)" onClick={onClick}
     style={{ position: 'absolute', left: x + w - 120, top: y, width: 120, height: h, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', cursor: 'pointer' }}>
-    <div style={{ width: 14, height: h, background: { type: 'linear-gradient', angle: 90, stops: [{ color: withAlpha(row, 0), position: 0 }, { color: row, position: 0.86 }] } }} />
-    <div style={{ display: 'flex', alignItems: 'center', gap: 5, height: h, backgroundColor: row, hover: { opacity: 1 } }}>
+    {!g.on && <div style={{ width: 14, height: h, background: { type: 'linear-gradient', angle: 90, stops: [{ color: withAlpha(row, 0), position: 0 }, { color: row, position: 0.86 }] } }} />}
+    <div style={{ display: 'flex', alignItems: 'center', gap: 5, height: h, backgroundColor: g.on ? g.denseFloat : row, ...(g.on ? { paddingLeft: 6, paddingRight: 6, borderRadius: 6, borderWidth: 1, borderColor: g.rim } : {}), hover: { opacity: 1 } }}>
       <Icon source={TASK_ICON} size={13} color={k.fg2} />
       <Label color={k.fg2} size={compact ? 12 : 13} style={{ pointerEvents: 'none' }}>Make task</Label>
     </div>

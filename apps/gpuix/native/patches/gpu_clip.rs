@@ -13,7 +13,9 @@ fn gpu_clip_prune(scene: &Scene, mut mask: ContentMask<ScaledPixels>, bounds: Bo
     let mut id=mask.rounded_clip;
     while id!=0 {
         let Some(clip)=scene.rounded_clips.get(id as usize) else { return mask; };
-        if !clip_contains_rect(rect,clip.bounds,clip.radii) { return mask; }
+        // An edge fade (N3) is skipped only where it multiplies by exactly 1.
+        let inside = if clip.kind != 0 { gpui::edge_fade_interior(rect,clip.bounds,clip.radii) } else { clip_contains_rect(rect,clip.bounds,clip.radii) };
+        if !inside { return mask; }
         id=clip.parent;
     }
     mask.rounded_clip=0;

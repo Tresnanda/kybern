@@ -201,7 +201,7 @@ function Workspace() {
               flexGrow: 1,
               minWidth: 0,
               overflow: 'hidden',
-              backgroundColor: t.content,
+              backgroundColor: fills.content,
               borderWidth: 0.6,
               borderColor: edge,
               borderTopRightRadius: CARD_RADIUS,
@@ -353,9 +353,10 @@ function ConversationPage() {
   )
 }
 
-/** Transcript bottom fade: min(12%, 40px), transparent → surface. */
+/** Transcript bottom fade: min(12%, 40px), transparent → surface. Whole-window glass has no surface to fade into (`t.content` is clear). */
 function BottomFade() {
   const t = useTheme()
+  if (t.scope === 'window') return null
   return (
     <div
       style={{

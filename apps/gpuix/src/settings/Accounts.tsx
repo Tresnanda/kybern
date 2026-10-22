@@ -20,7 +20,9 @@ import { getClient, useApp } from '../state.ts'
 import { motion, useGpuix, type PublicInstance } from '@gpuix/react'
 import { nativeCapabilities } from '../native/api.ts'
 import { EASE } from '../motion/kit.tsx'
-import { ink, Label, ProviderMark, REDUCED_MOTION, useMaterial, useTheme } from '../ui.tsx'
+import { ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { GlassEdge } from '../kit/GlassEdge.tsx'
+import { settingsCardStyle, useGlass } from '../platform/glass.ts'
 import { FONT_MONO } from '../theme.ts'
 import { markdownTheme } from '../transcript/kit.tsx'
 import { AccountAvatar, AccountDot, AccountUsageRing } from '../usage/AccountMark.tsx'
@@ -107,11 +109,11 @@ function listAgents(missing: ProviderStatus[]): string {
 
 function AgentSection({ provider, accounts, readOnly, onRemove, onAssign }: { provider: ProviderStatus; accounts: AccountSummary[]; readOnly: boolean; onRemove: (account: AccountSummary) => void; onAssign: (account: AccountSummary) => void }) {
   const t = useTheme()
-  const fills = useMaterial()
+  const g = useGlass()
   return <PageBlock><div testId={`accounts-${provider.kind}`} style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 30 }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 2 }}><ProviderMark kind={provider.kind} size={14} /><Label color={t.text} size={14} lineHeight={19.6} weight={600}>{provider.display_name}</Label></div>
     {!readOnly && accounts.length > 1 && <div style={{ display: 'flex' }}><Note>Accounts share skills and installed plugin files. Sign-ins, sessions and connections stay separate. Conflicting local files are kept in backups.</Note></div>}
-    <div style={{ display: 'flex', flexDirection: 'column', borderWidth: 1, borderColor: t.v('--app-settings-card-border'), borderRadius: 12, backgroundColor: fills.settingsCard, overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', ...settingsCardStyle(t, g), overflow: 'hidden' }}><GlassEdge radius={12} color={g.highlight} />
       {accounts.map((account, index) => <AccountRow key={account.provider.instance} first={index === 0} account={account} readOnly={readOnly} onRemove={onRemove} onAssign={onAssign} />)}
       {!readOnly && <div testId={`account-add-${provider.kind}`} role="button" tabIndex={0} aria-label={`Add ${provider.display_name} account`} onClick={() => openAddAccount({ provider: provider.kind })} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') openAddAccount({ provider: provider.kind }) }} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 44, paddingLeft: 18, paddingRight: 18, borderTopWidth: accounts.length ? 1 : 0, borderColor: t.v('--app-settings-card-border'), cursor: 'pointer', hover: { backgroundColor: t.hover } }}><Icon source={N.plus} size={16} color={t.textSecondary} style={{ pointerEvents: 'none' }} /><Label color={t.textSecondary} size={14} lineHeight={21}>{`Add ${provider.display_name} account`}</Label></div>}
     </div>

@@ -16,6 +16,8 @@ import { alpha } from '../transcript/kit.tsx'
 import { over } from '../theme.ts'
 import { notesTokens } from '../notes/kit.tsx'
 import { ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { GlassEdge } from '../kit/GlassEdge.tsx'
+import { raisedFill, raisedRim, useGlass } from '../platform/glass.ts'
 import { RunComposer } from './RunComposer.tsx'
 import { markDockEscape, setTasks, useTasks } from './store.ts'
 
@@ -28,6 +30,7 @@ const fade = { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { d
 
 export function TaskDock({ task, right, onHeight, emptyRef }: { task: TaskItem; right: number; onHeight: (height: number) => void; emptyRef: { current: boolean } }) {
   const t = useTheme()
+  const g = useGlass()
   const k = notesTokens(t)
   const renderer = useGpuixRequired()
   const open = useTasks((s) => s.composer?.length === 1 && s.composer[0] === task.id)
@@ -61,13 +64,16 @@ export function TaskDock({ task, right, onHeight, emptyRef }: { task: TaskItem; 
         borderRadius: 14,
         cursor: 'text',
         // Opaque in both themes: the dark field is the page with a 5% lift, the light one the page with a hairline and a soft shadow.
-        backgroundColor: dark ? over(ink(t, 0.05), t.surface) : t.surface,
-        borderWidth: 0.5,
-        borderColor: dark ? k.hair : ink(t, 0.12),
-        ...(dark ? {} : { boxShadow: { offsetX: 0, offsetY: 2, blurRadius: 8, spreadRadius: -2, color: 'rgba(0, 0, 0, 0.06)' } }),
-        hover: { backgroundColor: dark ? over(ink(t, 0.07), t.surface) : t.surface, borderColor: dark ? ink(t, 0.12) : ink(t, 0.16) },
+        // On whole-window glass it is a raised card (tint, rim, top highlight, no shadow): the list ends above it, so nothing passes under.
+        position: 'relative',
+        backgroundColor: raisedFill(g, dark ? over(ink(t, 0.05), t.surface) : t.surface),
+        borderWidth: g.on ? 1 : 0.5,
+        borderColor: raisedRim(g, dark ? k.hair : ink(t, 0.12)),
+        ...(dark || g.on ? {} : { boxShadow: { offsetX: 0, offsetY: 2, blurRadius: 8, spreadRadius: -2, color: 'rgba(0, 0, 0, 0.06)' } }),
+        hover: { backgroundColor: raisedFill(g, dark ? over(ink(t, 0.07), t.surface) : t.surface, true), borderColor: g.on ? g.rim : dark ? ink(t, 0.12) : ink(t, 0.16) },
       }}
     >
+      <GlassEdge radius={14} color={g.highlight} />
       <ProviderMark kind={(following ? run!.provider.kind : 'claude-code')} size={14} />
       <Label color={k.fg3} size={13} lineHeight={19.5} truncate style={{ flexGrow: 1 }}>
         {following ? `Follow up with ${PROVIDER_LABEL[run!.provider.kind]}…` : `Tell an agent what to do with ${task.key}…`}
@@ -79,11 +85,12 @@ export function TaskDock({ task, right, onHeight, emptyRef }: { task: TaskItem; 
     <div
       ref={(el) => { node.current = el }}
       testId="task-dock"
-      style={{ position: 'absolute', left: 0, right, bottom: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: BAND, paddingBottom: GUTTER }}
+      style={{ position: 'absolute', left: 0, right, bottom: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: g.on ? 0 : BAND, paddingBottom: GUTTER }}
     >
-      {/* Opaque for its last 8px: a row passing right above the tray otherwise showed through the nearly opaque tail. */}
-      <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: BAND, pointerEvents: 'none', background: { type: 'linear-gradient', angle: 180, stops: [{ color: alpha(t.surface, 0), position: 0 }, { color: t.surface, position: (BAND - 8) / BAND }] } }} />
-      <div style={{ position: 'absolute', left: 0, right: 0, top: BAND, bottom: 0, pointerEvents: 'none', backgroundColor: t.surface }} />
+      {/* Opaque for its last 8px: a row passing right above the tray otherwise showed through the nearly opaque tail. Not on whole-window
+          glass: there is no colour that equals the desktop behind the window, so the list ends at the dock's top edge instead (`TaskDetail`). */}
+      {!g.on && <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: BAND, pointerEvents: 'none', background: { type: 'linear-gradient', angle: 180, stops: [{ color: alpha(t.surface, 0), position: 0 }, { color: t.surface, position: (BAND - 8) / BAND }] } }} />}
+      {!g.on && <div style={{ position: 'absolute', left: 0, right: 0, top: BAND, bottom: 0, pointerEvents: 'none', backgroundColor: t.surface }} />}
       <div
         onKeyDown={(e) => { if (open && e.key === 'escape' && !e.defaultPrevented) { markDockEscape(); close() } }}
         style={{ position: 'relative', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', width: '100%', maxWidth: 660 + GUTTER * 2, minHeight: FIELD_HEIGHT, paddingLeft: GUTTER, paddingRight: GUTTER }}

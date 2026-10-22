@@ -55,6 +55,39 @@ impl BackdropKernel {
         }
         result
     }
+    /// One pass of the half-resolution path (N2) at `sigma` in half-size texels.
+    /// Dense Gaussian taps out to 3 sigma, cut at 48 texels (2.4 sigma at most,
+    /// up to sigma 20) so they fold into at most 49 linear reads; wider blurs keep
+    /// the sparse 49 positions of `new`. The horizontal pass reads the full-size
+    /// target, where a linear read between two half texels is not their mix, so
+    /// it folds only when the unfolded taps would not fit (sigma > 8).
+    fn half(sigma: f32, horizontal: bool) -> Self {
+        let mut result = Self { count: 0, padding: [0; 3], taps: [[0.; 4]; 49] };
+        if !sigma.is_finite() || sigma <= 0. {
+            return result;
+        }
+        let reach = (3. * sigma).ceil() as i32;
+        if reach > 60 {
+            return Self::new(sigma, true);
+        }
+        let reach = reach.min(48);
+        let weights: Vec<f32> = (-reach..=reach).map(|i| (-0.5 * (i * i) as f32 / (sigma * sigma)).exp()).collect();
+        let total: f32 = weights.iter().sum();
+        if horizontal && weights.len() <= 49 {
+            for (index, w) in weights.iter().enumerate() {
+                result.taps[index] = [(index as i32 - reach) as f32, w / total, 0., 0.];
+            }
+            result.count = weights.len() as u32;
+            return result;
+        }
+        for pair in (0..weights.len()).step_by(2) {
+            let a = weights[pair];
+            let b = weights.get(pair + 1).copied().unwrap_or(0.);
+            result.taps[result.count as usize] = [(pair as i32 - reach) as f32 + b / (a + b), (a + b) / total, 0., 0.];
+            result.count += 1;
+        }
+        result
+    }
 }
 
 #[cfg(test)]
@@ -85,6 +118,30 @@ mod tests {
                 assert!((actual - expected / total).abs() < 0.00001, "sigma={sigma} centre={centre}");
             }
         }
+    }
+    #[test]
+    fn half_kernels_are_dense_gaussians_within_49_reads() {
+        let values: Vec<_> = (0..241).map(|i| ((i * 29 + i * i * 11) % 241) as f32 / 241.0).collect();
+        for sigma in [4.01f32, 6., 8., 12., 16., 18., 20.] {
+            let reach = ((3. * sigma).ceil() as i32).min(48);
+            let total: f32 = (-reach..=reach).map(|i| (-0.5 * (i * i) as f32 / (sigma * sigma)).exp()).sum();
+            for horizontal in [false, true] {
+                let kernel = BackdropKernel::half(sigma, horizontal);
+                assert!(kernel.count > 0 && kernel.count <= 49, "sigma={sigma}");
+                let sum: f32 = kernel.taps[..kernel.count as usize].iter().map(|t| t[1]).sum();
+                assert!((sum - 1.).abs() < 1e-5);
+                if horizontal && sigma <= 8. {
+                    assert!(kernel.taps[..kernel.count as usize].iter().all(|t| t[0].fract() == 0.), "sigma={sigma}: block samples must not interpolate");
+                }
+                for centre in [60f32, 120., 180.] {
+                    let expected: f32 = (-reach..=reach).map(|i| values[(centre as i32 + i) as usize] * (-0.5 * (i * i) as f32 / (sigma * sigma)).exp()).sum::<f32>() / total;
+                    let actual: f32 = kernel.taps[..kernel.count as usize].iter().map(|t| sample(&values, centre + t[0]) * t[1]).sum();
+                    assert!((actual - expected).abs() < 1e-5, "sigma={sigma} horizontal={horizontal}");
+                }
+            }
+        }
+        assert_eq!(BackdropKernel::half(40., false).count, 49);
+        assert_eq!(BackdropKernel::half(40., false).taps[1][0], BackdropKernel::new(40., true).taps[1][0]);
     }
     #[test]
     fn dense_kernel_is_bounded_and_wide_blur_retains_original_positions() {

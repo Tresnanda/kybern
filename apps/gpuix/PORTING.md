@@ -88,6 +88,15 @@ selectable text. Good candidates: sidebar rows (100% × 28), the title bar, the
 rail, loaders, chips. An island that changes re-renders alone; the rest of the
 window replays its last frame.
 
+## Materials (window translucency)
+
+On whole-window glass, never composite onto `t.surface` or paint an opaque fill on a content-area surface; use
+`platform/glass.ts` (`raisedFill`, `wash`, `frostFill`, `frostBackdrop`; the tints come from `useGlass()`). Never put an
+outer shadow under a fill with alpha < 0.85: GPUI paints a drop shadow beneath the whole box, so behind a translucent fill it
+darkens the interior. Depth comes from the rim, the `GlassEdge` top highlight and, for frost, the blur. A fade on glass is
+`edgeFade` (an alpha ramp), never a gradient to an opaque colour. Solid and Sidebar only must stay byte-identical: the
+helpers return the call site's own fill outside `scope === 'window'`.
+
 ## Motion and feel
 
 Follow the `/animate` rules: nothing animates on keyboard shortcuts or 100+/day

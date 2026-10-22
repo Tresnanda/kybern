@@ -32,6 +32,7 @@ import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { useSettingsModal } from '../settings/controls.tsx'
 import { Label, useTheme } from '../ui.tsx'
+import { raisedFill, raisedRim, useGlass } from '../platform/glass.ts'
 import { useEscapeLayer } from './AlertDialog.tsx'
 
 export type SelectOption = { value: string; label: string; disabled?: boolean }
@@ -99,6 +100,7 @@ export function Select({
   testId?: string
 }) {
   const t = useTheme()
+  const g = useGlass()
   const { renderer } = useGpuix()
   const [own, setOwn] = useState(defaultValue)
   const value = valueProp !== undefined ? valueProp : own
@@ -242,10 +244,10 @@ export function Select({
           paddingRight: m.px,
           borderRadius: m.radius,
           borderWidth: 1,
-          borderColor: variant === 'ghost' ? 'rgba(0, 0, 0, 0)' : t.border,
+          borderColor: variant === 'ghost' ? 'rgba(0, 0, 0, 0)' : raisedRim(g, t.border),
           ...(variant === 'ghost'
             ? hover || open ? { backgroundColor: t.v('--color-background-elevated-secondary') } : {}
-            : { backgroundColor: t.v('--color-background-control-opaque') }),
+            : { backgroundColor: raisedFill(g, t.v('--color-background-control-opaque')) }),
           opacity: disabled ? 0.64 : 1,
           cursor: disabled ? 'default' : 'pointer',
         }}
