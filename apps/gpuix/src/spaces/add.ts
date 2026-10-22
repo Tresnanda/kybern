@@ -17,7 +17,8 @@ function openDraft(project: Project) {
 export async function addProjectToCurrentSpace(path: string): Promise<Project | null> {
   const client = getClient()
   if (!client) throw new Error('Not connected')
-  const spaceId = currentSpaceId()
+  // Before `spaces.list` answers, the saved id is only a hint and may name a deleted space, which the daemon refuses.
+  const spaceId = getSpaces().supported === true ? currentSpaceId() : null
   const project = await client.call('projects.add', { path, ...(spaceId ? { space_id: spaceId } : {}) })
   if (getClient() !== client) return null
   await refreshLists()

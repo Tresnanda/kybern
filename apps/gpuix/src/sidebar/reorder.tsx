@@ -304,8 +304,9 @@ function finish() {
 function finishWhenMoved(id: string, from: string | null) {
   const left = () => getState().projects.find((p) => p.id === id)?.space_id !== from
   if (left()) return finish()
-  const stop = subscribeState(() => { if (left()) { stop(); finish() } })
-  setTimeout(() => { stop(); if (current?.settle?.space) finish() }, 4000)
+  const stop = subscribeState(() => { if (left()) { stop(); clearTimeout(timer); finish() } })
+  // A move that never lands (it failed and the project stays) still ends this drag, never a later one.
+  const timer = setTimeout(() => { stop(); if (current?.settle?.space && current.id === id) finish() }, 4000)
 }
 export const cancelProjectDrag = () => {
   pending = null
@@ -317,7 +318,8 @@ export const cancelProjectDrag = () => {
 function scrollRail(drag: Drag, dt: number) {
   const rail = getSpaceScroller()
   const bounds = rail && renderer?.getElementBounds?.(rail.id)
-  if (!rail || !bounds || drag.x < bounds.x || drag.x > bounds.x + bounds.width) return false
+  // Only inside the section: above it are the page buttons, below it Usage and Settings.
+  if (!rail || !bounds || drag.x < bounds.x || drag.x > bounds.x + bounds.width || drag.y < bounds.y || drag.y > bounds.y + bounds.height) return false
   const speed = edgeSpeed(drag.y, bounds.y, bounds.y + bounds.height, 24)
   if (!speed) return false
   const offset = renderer!.getScrollOffset?.(rail.id)
@@ -325,6 +327,8 @@ function scrollRail(drag: Drag, dt: number) {
   const next = Math.min(0, offset[1]! - speed * dt)
   if (next === offset[1]) return true
   renderer!.scrollTo?.(rail.id, 0, next)
+  // At the end the scroller clamps: nothing moved, so the tiles need no new measurement.
+  if (renderer!.getScrollOffset?.(rail.id)?.[1] === offset[1]) return true
   measureSpaceTargets(renderer)
   retarget(drag.x, drag.y)
   return true

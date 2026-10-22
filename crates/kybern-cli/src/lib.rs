@@ -1358,7 +1358,9 @@ pub async fn run() -> Result<()> {
             }
             ProjectsCmd::Move { project, space } => {
                 let project_id = resolve_project(&client, &project, false).await?;
-                let space_id = spaces::resolve_space(&spaces::list(&client).await?, &space)?;
+                let all = spaces::list(&client).await?;
+                let space_id = spaces::resolve_space(&all, &space)?;
+                let space_name = all.iter().find(|s| s.id == space_id).map_or_else(|| space_id.to_string(), |s| s.name.clone());
                 let p = client
                     .call::<ProjectsUpdate>(ProjectsUpdateParams {
                         project_id,
@@ -1370,7 +1372,7 @@ pub async fn run() -> Result<()> {
                         space_id: Some(space_id),
                     })
                     .await?;
-                if json { println!("{}", serde_json::to_string_pretty(&p)?) } else { println!("{}  moved to {space_id}", p.name) }
+                if json { println!("{}", serde_json::to_string_pretty(&p)?) } else { println!("{}  moved to {space_name}", p.name) }
             }
             ProjectsCmd::Remove { id } => {
                 client.call::<ProjectsRemove>(ProjectsRemoveParams { project_id: id.parse()? }).await?;

@@ -43,7 +43,6 @@ import { Icon } from './icons.tsx'
 import { MatrixLoader } from './MatrixLoader.tsx'
 import { Spinner } from './kit/Spinner.tsx'
 import { getClient, setThreadOpen, usePaneCompact, focusPane, getFocusedPaneId, usePaneAccess, getPane, selectPaneThread, setPane, set, useApp } from './state.ts'
-import { inSpace } from '../../../packages/kybern-client/src/spaces.ts'
 import { useCurrentSpaceId } from './spaces/current.ts'
 import { FONT_UI } from './theme.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from './ui.tsx'
@@ -212,8 +211,10 @@ export function useDraftTarget() {
   // The most recently active thread's project, or the first project.
   const spaceId = useCurrentSpaceId()
   const recentProject = useApp((s) => {
-    const here = s.projects.filter((p) => !isFreeChatProject(p.id) && inSpace(p.id, s.projects, spaceId))
-    return s.threads.find((th) => here.some((p) => p.id === th.project_id))?.project_id ?? here[0]?.id
+    // Runs on every store update (streaming included): one pass over each list.
+    const here = s.projects.filter((p) => !isFreeChatProject(p.id) && (spaceId === null || p.space_id === spaceId))
+    const ids = new Set(here.map((p) => p.id))
+    return s.threads.find((th) => ids.has(th.project_id))?.project_id ?? here[0]?.id
   })
   const entry = useApp(s => s.draft)
   const projectId = entry.projectId ? entry.projectId : draft.projectId === undefined ? recentProject ?? null : draft.projectId

@@ -2,14 +2,14 @@
 // space (two or more), and a "+" tile that opens the editor. The active space wears a pill on
 // the leading edge. Switching never animates.
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { SPACE_COPY, SPACE_LIMIT } from '../../../../packages/kybern-client/src/spaces.ts'
-import type { Space, Thread } from '../../../../packages/kybern-client/src/types.ts'
+import type { Project, Space, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { attentionKind, type AttentionKind } from '../sidebar/model.ts'
 import { N } from '../nav/glyphs.ts'
 import { ContextMenu, MenuItem, MenuSeparator, Tip } from '../nav/overlay.tsx'
-import { useNav } from '../nav/store.ts'
+import { useNav, type NavState } from '../nav/store.ts'
 import { observeElementBounds } from '../native/layout.ts'
 import { pressTransform } from '../motion/press.ts'
 import { DURATION, EASE } from '../motion/kit.tsx'
@@ -37,24 +37,34 @@ export function useRailSpacesVisible(): boolean {
   return useSpaces((s) => s.supported === true)
 }
 
-/** Another space's most urgent attention: a blocked or failed thread, else an unread finished one. */
+type AttentionInputs = [threads: readonly Thread[], projects: readonly Project[], unread: NavState['unread'], dismissals: NavState['attentionDismissals']]
+let attentionMemo: { inputs: AttentionInputs; key: string } | null = null
+/** Each space's attention as `space:kind|…`, recomputed only when its inputs change. */
+function attentionKey(...inputs: AttentionInputs): string {
+  if (attentionMemo && inputs.every((value, index) => value === attentionMemo!.inputs[index])) return attentionMemo.key
+  const [threads, projects, unread, attentionDismissals] = inputs
+  const spaceOf = new Map(projects.map((project) => [project.id, project.space_id ?? null]))
+  const out: Record<string, AttentionKind> = {}
+  const rank: Record<AttentionKind, number> = { blocked: 0, failed: 1, done: 2 }
+  for (const thread of threads) {
+    const space = spaceOf.get(thread.project_id)
+    if (!space) continue
+    const kind = attentionKind(thread, { unread, attentionDismissals })
+    if (kind && (out[space] === undefined || rank[kind] < rank[out[space]!])) out[space] = kind
+  }
+  attentionMemo = { inputs, key: Object.entries(out).map(([space, kind]) => `${space}:${kind}`).join('|') }
+  return attentionMemo.key
+}
+
+/**
+ * Another space's most urgent attention: a blocked or failed thread, else an unread finished one. Selected as a string, so
+ * thread updates that change no space's attention do not re-render the rail section (§7.5).
+ */
 function useSpaceAttention(): Record<string, AttentionKind> {
-  const threads = useApp((s) => s.threads)
-  const projects = useApp((s) => s.projects)
   const unread = useNav((s) => s.unread)
   const attentionDismissals = useNav((s) => s.attentionDismissals)
-  return useMemo(() => {
-    const spaceOf = new Map(projects.map((project) => [project.id, project.space_id ?? null]))
-    const out: Record<string, AttentionKind> = {}
-    const rank: Record<AttentionKind, number> = { blocked: 0, failed: 1, done: 2 }
-    for (const thread of threads as readonly Thread[]) {
-      const space = spaceOf.get(thread.project_id)
-      if (!space) continue
-      const kind = attentionKind(thread, { unread, attentionDismissals })
-      if (kind && (out[space] === undefined || rank[kind] < rank[out[space]!])) out[space] = kind
-    }
-    return out
-  }, [threads, projects, unread, attentionDismissals])
+  const key = useApp((s) => attentionKey(s.threads, s.projects, unread, attentionDismissals))
+  return useMemo(() => Object.fromEntries(key ? key.split('|').map((entry) => entry.split(':') as [string, AttentionKind]) : []), [key])
 }
 
 export function RailSpaces() {
@@ -86,6 +96,7 @@ export function RailSpaces() {
 
   // A switch scrolls the active tile into view, instantly.
   const activeRow = useRef<PublicInstance | null>(null)
+  const activeRef = useCallback((node: PublicInstance | null) => { activeRow.current = node }, [])
   useEffect(() => { if (activeRow.current) renderer.scrollIntoView?.(activeRow.current.id) }, [current, renderer])
 
   if (supported !== true) return null
@@ -103,7 +114,7 @@ export function RailSpaces() {
             count={spaces.length}
             active={space.id === current}
             dot={space.id === current ? undefined : attention[space.id]}
-            rowRef={space.id === current ? (node) => { activeRow.current = node } : undefined}
+            rowRef={space.id === current ? activeRef : undefined}
           />
         ))}
         <NewSpaceTile full={spaces.length >= SPACE_LIMIT} />

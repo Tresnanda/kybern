@@ -97,10 +97,10 @@ export function QuickAdd({ request, card = false }: { request: NonNullable<Retur
     </Menu>
   )
   if (!card) {
-    // `.tk-quick`: a 40px row on the row grid (28 priority + 58 key), the status glyph, the title and the project; no buttons, Return adds.
+    // `.tk-quick`: a 40px row on the row grid (22 checkbox slot + 28 priority + 58 key), the status glyph, the title and the project; no buttons, Return adds.
     return (
-      <div onMouseDownOutside={settle} style={{ display: 'flex', alignItems: 'center', height: 40, paddingLeft: 20, paddingRight: 12, backgroundColor: ink(t, t.variant === 'dark' ? 0.035 : 0.03) }}>
-        <div style={{ width: 86, flexShrink: 0 }} />
+      <div onMouseDownOutside={settle} style={{ display: 'flex', alignItems: 'center', height: 40, paddingLeft: 8, paddingRight: 12, backgroundColor: ink(t, t.variant === 'dark' ? 0.035 : 0.03) }}>
+        <div style={{ width: 22 + 86, flexShrink: 0 }} />
         <div style={{ display: 'flex', alignItems: 'center', width: 26, flexShrink: 0 }}><StatusGlyph status={request.status} /></div>
         <input
           ref={setField}

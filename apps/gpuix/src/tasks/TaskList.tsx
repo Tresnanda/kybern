@@ -93,7 +93,8 @@ export function TaskList({
             style={{
               display: 'flex',
               alignItems: 'center',
-              paddingLeft: 20,
+              // On the rows' grid past their checkbox slot (8 + 22): the glyph over the priority column, the label over the keys.
+              paddingLeft: 30,
               paddingRight: 20,
               paddingTop: index ? 14 : 4,
               height: index ? 50 : 40,
@@ -205,7 +206,7 @@ export const TaskRow = memo(function TaskRow({
           }}
           style={{ ...cardSurface(t, raised, focused), opacity: dragOpacity }}
         >
-          <CardLines task={task} detail={detail} checkShown={hover || selected} check={<Check testId={`task-select-${task.id}`} checked={selected} onClick={() => pick(task.id, sequence)} />} />
+          <CardLines task={task} detail={detail} checkShown={hover || selected} check={<Check testId={`task-select-${task.id}`} checked={selected} onClick={(shift) => pick(task.id, sequence, shift)} />} />
         </div>
       </div>
       </ShiftRow>
@@ -244,7 +245,7 @@ export const TaskRow = memo(function TaskRow({
       >
         {selected && focused && <div style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, borderWidth: 2, borderColor: ink(t, 0.14), borderRadius: card ? 8 : 0, pointerEvents: 'none' }} />}
         {/* The checkbox is always on screen, in its own 22px slot at the row's start. */}
-        <div style={{ width: 22, flexShrink: 0 }}><SelectCheck lit={hover || focused || selected}><Check testId={`task-select-${task.id}`} checked={selected} onClick={() => pick(task.id, sequence)} /></SelectCheck></div>
+        <div style={{ width: 22, flexShrink: 0 }}><SelectCheck lit={hover || focused || selected}><Check testId={`task-select-${task.id}`} checked={selected} onClick={(shift) => pick(task.id, sequence, shift)} /></SelectCheck></div>
         <div onClick={() => openTask(task.id)} style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
           <div style={{ width: 28, pointerEvents: 'none', userSelect: 'none' }}>
             <PriorityGlyph priority={task.priority} />
@@ -259,7 +260,7 @@ export const TaskRow = memo(function TaskRow({
           </Label>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', flexGrow: 1, minWidth: 0 }}>
-          <div onClick={() => pick(task.id, sequence)} style={{ display: 'flex', width: 26, height: 30, alignItems: 'center' }}><StatusGlyph status={task.status} /></div>
+          <div onClick={(e) => pick(task.id, sequence, !!e.modifiers?.shift)} style={{ display: 'flex', width: 26, height: 30, alignItems: 'center' }}><StatusGlyph status={task.status} /></div>
           <div
             testId={`task-drag-${task.id}`}
             onMouseDown={(e) => beginTaskDrag(task.id, e, renderer, sequence, draggable)}

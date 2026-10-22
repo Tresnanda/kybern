@@ -15,7 +15,7 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import { useGpuix } from '@gpuix/react'
 import { applyDesktopMaterial } from '../native/material.ts'
-import { setWindowBlurRadius } from '../native/windowBlur.ts'
+import { blurCallAvailable, setWindowBlurRadius } from '../native/windowBlur.ts'
 import type { ThemeVariant, VariantMaterial, WindowScope } from '../platform/translucency.ts'
 import { syncWindowAppearance } from './appearance.ts'
 
@@ -56,11 +56,14 @@ function setBackground(renderer: Renderer | null | undefined, mode: Backing['mod
 }
 
 let timer: ReturnType<typeof setTimeout> | undefined
-/** Retry for up to two seconds: GPUI creates the window and its blur view a few frames after `render`. */
-function retry(step: () => boolean, onGiveUp?: () => void) {
+/** Retry for up to two seconds: GPUI creates the window and its blur view a few frames after `render`. `step` returns true when
+ * done, false to try again, or 'give-up' when trying again cannot help. */
+function retry(step: () => boolean | 'give-up', onGiveUp?: () => void) {
   let tries = 0
   const tick = () => {
-    if (step()) return
+    const done = step()
+    if (done === 'give-up') { onGiveUp?.(); return }
+    if (done) return
     if (++tries > 40) { onGiveUp?.(); return }
     timer = setTimeout(tick, 50)
   }
@@ -85,19 +88,24 @@ function apply(renderer: Renderer | null | undefined, backing: Backing, variant:
     vibrancy(variant)
     return
   }
-  // transparent: on the next tick, after GPUI has applied its own background change.
-  setBackground(renderer, 'transparent')
-  retry(() => {
-    if (!setWindowBlurRadius(backing.radius)) return false
-    blurEverApplied = true
-    setUnavailable(false)
-    return true
-  }, () => {
-    // Refused, or the private call is gone: keep the vibrancy material.
+  // Refused, or the private call is gone: keep the vibrancy material.
+  const fallBack = () => {
     setUnavailable(true)
     setBackground(renderer, 'blurred')
     vibrancy(variant)
-  })
+  }
+  // Without the call there is nothing to wait for, and the window never shows the sharp desktop through a clear backing.
+  if (!blurCallAvailable()) return fallBack()
+  // transparent: on the next tick, after GPUI has applied its own background change.
+  setBackground(renderer, 'transparent')
+  retry(() => {
+    const result = setWindowBlurRadius(backing.radius)
+    if (result === 'unavailable') return 'give-up'
+    if (result === 'not-ready') return false
+    blurEverApplied = true
+    setUnavailable(false)
+    return true
+  }, fallBack)
 }
 
 /**

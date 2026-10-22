@@ -131,9 +131,17 @@ function followTarget(): SpaceId | null {
   return target
 }
 
+// What `reconcile` reads. The app store changes many times a second while a turn streams; skip those that touch none of it.
+let seen: unknown[] = []
+const unchanged = (next: unknown[]) => next.length === seen.length && next.every((value, index) => value === seen[index])
+
 /** Keep the active space and the open view in step, and remember each space's last view. */
 function reconcile() {
   if (switching) return
+  const s = getState()
+  const inputs = [getNav(), getSpaces(), s.selectedId, s.draft, s.threads, s.projects, s.open.thread]
+  if (unchanged(inputs)) return
+  seen = inputs
   const target = followTarget()
   if (target) {
     setNav({ spaceId: target })
@@ -156,4 +164,4 @@ export function startSpaces() {
   reconcile()
 }
 
-onEnvironmentChange(() => { for (const stop of stops) stop(); stops = []; switching = false }, -100)
+onEnvironmentChange(() => { for (const stop of stops) stop(); stops = []; switching = false; seen = [] }, -100)

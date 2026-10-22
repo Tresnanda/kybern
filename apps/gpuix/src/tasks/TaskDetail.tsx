@@ -91,7 +91,8 @@ export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: strin
   return (
     <>
       <div style={{ display: 'flex', flexGrow: 1, minHeight: 0, position: 'relative' }}>
-        <div onMouseDown={() => { if (taskState().composer && composerEmpty.current) setTasks({ composer: null }) }} style={{ display: 'flex', flexGrow: 1, minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
+        {/* Ends 1px above the dock's end: at a fractional page edge the list's clip rounded outward and its last pixel row showed under the dock. */}
+        <div onMouseDown={() => { if (taskState().composer && composerEmpty.current) setTasks({ composer: null }) }} style={{ display: 'flex', flexGrow: 1, minWidth: 0, minHeight: 0, marginBottom: 1, overflow: 'hidden' }}>
         <virtual-list testId="task-detail" style={{ flexGrow: 1, minWidth: 0, minHeight: 0 }}>
           <div key="content" style={{ ...padding, paddingTop: 48, display: 'flex', flexDirection: 'column', gap: 14 }}>
             <TitleField value={edit.title} saved={task.title} onChange={edit.editTitle} onCommit={() => void edit.flush()} onEnter={() => setEditing(true)} />
@@ -158,7 +159,7 @@ export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: strin
               </div>
             </div>
           ))}
-          <div key="dock-room" style={{ height: dockHeight + 24 }} />
+          <div key="dock-room" style={{ height: Math.max(140, dockHeight + 32) }} />
         </virtual-list>
         </div>
         {sidePanel > 0 && <div style={{ display: 'flex', flexDirection: 'column', width: sidePanel, flexShrink: 0, padding: 20, borderLeftWidth: 1, borderColor: k.hair }}>

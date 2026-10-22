@@ -9,7 +9,7 @@ import { observeElementBounds, type LayoutRect } from './native/layout.ts'
 // day starts, a virtual list that follows the tail, earlier pages loaded when
 // the top comes into view (reading position kept), and the 32px "Scroll to
 // bottom" button while away from the tail. Rows live in `transcript/`.
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import { motion, useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { createTurnGrouper, type TurnGroup } from '../../../packages/kybern-client/src/transcript.ts'
 import { calendarDateKey } from '../../desktop/src/lib/format.ts'
@@ -72,8 +72,6 @@ export function Transcript() {
   const threadRunning = useApp((s) => s.open.thread?.status === 'running' || s.open.thread?.status === 'awaiting-approval')
   const earlierError = useEarlierError()
   const actionError = useActionError()
-  // Whatever floats at the bottom (composer, the panels stacked on it, or a blocking question alone) as the app lays it out.
-  const overlay = useComposerOverlayHeight() || OVERLAY_FALLBACK
   const groupTurns = useMemo(() => createTurnGrouper(), [threadId])
   const turns = useMemo(() => groupTurns(blocks), [blocks, groupTurns])
   const rowStateScope = useMemo(() => new Map<string, unknown>(), [threadId])
@@ -430,10 +428,10 @@ export function Transcript() {
             if(cacheSlots) slotCache.set(row.key, {mounted, height, node:row.node, element})
             return element
           }),
-          <div key="__bottom" ref={bottomRef} testId={`transcript-bottom:${pane.id}`} style={{ height: overlay + OVERLAY_GAP }} />,
+          <BottomSpace key="__bottom" nodeRef={bottomRef} testId={`transcript-bottom:${pane.id}`} />,
         ]}
       </virtual-list>
-      {overflow && <MessageRail items={railItems} active={activeId} height={paneHeight} bottomInset={overlay} onJump={(id) => {
+      {overflow && <OverlayRail items={railItems} active={activeId} height={paneHeight} onJump={(id) => {
         const index = rows.findIndex(row => row.turn.user?.id === id)
         if (index < 0 || !list.current) return
         setAtTail(false)
@@ -453,10 +451,27 @@ export function Transcript() {
           </div>
         </div>
       )}
-      <BottomFade visible={!atTail} bottom={overlay} />
-      <ScrollToBottom visible={!atTail} bottom={overlay + 24} onClick={scrollToBottom} />
+      <OverlayFade visible={!atTail} />
+      <OverlayScrollButton visible={!atTail} onClick={scrollToBottom} />
     </div></SparseRetention.Provider></TranscriptRowStateScope.Provider></TranscriptFocusRestoration.Provider></TranscriptTail.Provider>
   )
+}
+
+// The overlay's height changes whenever the composer grows a line. Only these small pieces subscribe to it, so typing
+// re-renders them and not the whole transcript.
+/** Whatever floats at the bottom (composer, the panels stacked on it, or a blocking question alone) as the app lays it out. */
+const useOverlay = () => useComposerOverlayHeight() || OVERLAY_FALLBACK
+function BottomSpace({ nodeRef, testId }: { nodeRef: (node: PublicInstance | null) => void; testId: string }) {
+  return <div ref={nodeRef} testId={testId} style={{ height: useOverlay() + OVERLAY_GAP }} />
+}
+function OverlayRail(props: Omit<ComponentProps<typeof MessageRail>, 'bottomInset'>) {
+  return <MessageRail {...props} bottomInset={useOverlay()} />
+}
+function OverlayFade({ visible }: { visible: boolean }) {
+  return <BottomFade visible={visible} bottom={useOverlay()} />
+}
+function OverlayScrollButton({ visible, onClick }: { visible: boolean; onClick: () => void }) {
+  return <ScrollToBottom visible={visible} bottom={useOverlay() + 24} onClick={onClick} />
 }
 
 /** The centred chat column (`ROW`: 736px, no inset of its own). */

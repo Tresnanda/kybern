@@ -56,8 +56,15 @@ const resolve = (theme: Appearance) => forced ?? (theme === 'system' ? getSystem
 
 function apply(next: AppearancePrefs, persist: boolean) {
   if (persist) {
-    mkdirSync(path.dirname(file()), { recursive: true })
-    writeFileSync(file(), JSON.stringify({ version: 2, theme: next.theme, window: next.window }))
+    try {
+      mkdirSync(path.dirname(file()), { recursive: true })
+      writeFileSync(file(), JSON.stringify({ version: 2, theme: next.theme, window: next.window }))
+    } catch (error) {
+      // Show what is saved, not a dragged value that would be lost on relaunch; the caller reports the error.
+      prefs = pinned(stored)
+      for (const listener of listeners) listener()
+      throw error
+    }
     stored = next
   }
   prefs = pinned(next)

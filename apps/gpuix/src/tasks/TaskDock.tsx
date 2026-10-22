@@ -81,7 +81,8 @@ export function TaskDock({ task, right, onHeight, emptyRef }: { task: TaskItem; 
       testId="task-dock"
       style={{ position: 'absolute', left: 0, right, bottom: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: BAND, paddingBottom: GUTTER }}
     >
-      <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: BAND, pointerEvents: 'none', background: { type: 'linear-gradient', angle: 180, stops: [{ color: alpha(t.surface, 0), position: 0 }, { color: t.surface, position: 1 }] } }} />
+      {/* Opaque for its last 8px: a row passing right above the tray otherwise showed through the nearly opaque tail. */}
+      <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: BAND, pointerEvents: 'none', background: { type: 'linear-gradient', angle: 180, stops: [{ color: alpha(t.surface, 0), position: 0 }, { color: t.surface, position: (BAND - 8) / BAND }] } }} />
       <div style={{ position: 'absolute', left: 0, right: 0, top: BAND, bottom: 0, pointerEvents: 'none', backgroundColor: t.surface }} />
       <div
         onKeyDown={(e) => { if (open && e.key === 'escape' && !e.defaultPrevented) { markDockEscape(); close() } }}

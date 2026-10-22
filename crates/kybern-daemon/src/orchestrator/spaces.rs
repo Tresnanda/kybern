@@ -84,8 +84,11 @@ impl Orchestrator {
         let now = Utc::now();
         let space = Space { id: Uuid::now_v7(), name, color, logo, position: 0, created_at: now, updated_at: now };
         let _guard = self.inner.space_writes.lock().unwrap_or_else(|e| e.into_inner());
-        // Re-check under the lock so two clients cannot both take the same name.
+        // Re-check under the lock so two clients cannot both take the same name, or both take the 50th place.
         self.checked_name(&space.name, None)?;
+        if self.list_spaces()?.len() >= SPACE_LIMIT {
+            return Err(invalid("You can have up to 50 spaces."));
+        }
         let stored = self.inner.store.space_insert(&space).map_err(internal)?;
         self.publish_spaces();
         Ok(stored)
@@ -148,6 +151,8 @@ impl Orchestrator {
         if is_free_chat_project(project_id) {
             return Err(invalid("Free chat isn't in a space."));
         }
+        // Held so a space deleted meanwhile reads as "not found", not as a foreign-key failure.
+        let _guard = self.inner.space_writes.lock().unwrap_or_else(|e| e.into_inner());
         if self.inner.store.space_get(space_id).map_err(internal)?.is_none() {
             return Err(RpcError::not_found("space"));
         }

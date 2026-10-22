@@ -90,7 +90,8 @@ export function checkHandledClick() {
   checkClickAt = -Infinity
   return hit
 }
-export function Check({ checked, onClick, testId }: { checked: boolean; onClick: () => void; testId?: string }) {
+/** `onClick` gets whether Shift was held: it extends the selection as a range (`pickTask`). */
+export function Check({ checked, onClick, testId }: { checked: boolean; onClick: (shift: boolean) => void; testId?: string }) {
   const t = useTheme()
   const keyboard = useNav((s) => s.keyboardNav)
   return (
@@ -101,12 +102,12 @@ export function Check({ checked, onClick, testId }: { checked: boolean; onClick:
       aria-checked={checked}
       aria-label="Select task"
       onMouseDown={() => { checkDownAt = performance.now() }}
-      onClick={() => {
+      onClick={(e) => {
         checkClickAt = performance.now()
-        onClick()
+        onClick(!!e.modifiers?.shift)
       }}
       onKeyDown={(e) => {
-        if (e.key === 'space') onClick()
+        if (e.key === 'space') onClick(!!e.modifiers?.shift)
       }}
       style={{ width: 26, height: 30, display: 'flex', alignItems: 'center', cursor: 'pointer' }}
     >

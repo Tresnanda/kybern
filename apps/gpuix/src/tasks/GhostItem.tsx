@@ -29,7 +29,9 @@ export function GhostRow({ task, project }: { task: TaskItem; project: string })
   const t = useTheme()
   const chrome = useHeldChrome()
   return (
-    <div testId="task-ghost" style={{ pointerEvents: 'none', display: 'flex', alignItems: 'center', width: '100%', height: '100%', paddingLeft: 20, paddingRight: 20, borderRadius: 8, ...chrome }}>
+    <div testId="task-ghost" style={{ pointerEvents: 'none', display: 'flex', alignItems: 'center', width: '100%', height: '100%', paddingLeft: 8, paddingRight: 20, borderRadius: 8, ...chrome }}>
+      {/* The row's checkbox slot, so the held row's columns stay where they were. */}
+      <div style={{ width: 22, flexShrink: 0 }} />
       <div style={{ width: 28, flexShrink: 0 }}><PriorityGlyph priority={task.priority} /></div>
       <Label color={t.textTertiary} size={12} truncate style={{ width: 58, flexShrink: 0, pointerEvents: 'none' }}>{task.key}</Label>
       <div style={{ pointerEvents: 'none', display: 'flex', alignItems: 'center', width: 26, flexShrink: 0 }}><StatusGlyph status={task.status} /></div>

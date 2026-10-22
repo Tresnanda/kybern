@@ -8,9 +8,10 @@
 // Pointer: a press jumps to the pointer and a drag follows (bounds from `getElementBounds`, like `EffortSlider`),
 // and releasing commits. `onChange` runs on every move (the caller throttles it), `onCommit` on release or a key.
 // Hover and press feedback are instant and the thumb has no motion: this is a control used a hundred times a
-// day (PORTING.md § Motion). Keys: ←/↓ −1, →/↑ +1, Shift ±10, Home/End min/max, each committing at once.
+// day (PORTING.md § Motion). Keys: ←/↓ −1, →/↑ +1, Shift ±10, Home/End min/max. Each key shows its value at once and goes
+// through `onChange`; a run of keys (a held arrow) commits once, 250 ms after the last, or when focus leaves.
 import { useGpuix, type PublicInstance } from '@gpuix/react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { FocusRing, useFocusRing } from './Switch.tsx'
 
@@ -22,7 +23,7 @@ export function Slider({ value, min, max, onChange, onCommit, valueLabel, muted 
   value: number; min: number; max: number
   /** Live, on every move; the caller throttles it. */
   onChange: (value: number) => void
-  /** Release, or a key press. */
+  /** Release, or the end of a run of key presses. */
   onCommit: (value: number) => void
   valueLabel: string
   /** Auto: the fill and the value read as inactive. */
@@ -43,6 +44,20 @@ export function Slider({ value, min, max, onChange, onCommit, valueLabel, muted 
   const shown = drag ?? value
   const ratio = (shown - min) / (max - min)
   const fill = muted ? t.textTertiary : t.switchOn
+  // Key steps not yet committed: a held arrow repeats ~30 times a second, and each commit saves and rebuilds the theme.
+  const keyed = useRef<number | null>(null)
+  const keyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const commit = useRef(onCommit)
+  commit.current = onCommit
+  const flushKeys = () => {
+    clearTimeout(keyTimer.current)
+    const next = keyed.current
+    if (next === null) return
+    keyed.current = null
+    setDrag(null)
+    commit.current(next)
+  }
+  useEffect(() => () => flushKeys(), [])
 
   const at = (x: number | undefined) => {
     const bounds = track.current ? renderer?.getElementBounds?.(track.current.id) : null
@@ -79,15 +94,21 @@ export function Slider({ value, min, max, onChange, onCommit, valueLabel, muted 
         onMouseUp={(e) => { if (dragging.current !== null) end(at(e.x)) }}
         onMouseLeave={() => { if (dragging.current !== null) end(dragging.current) }}
         onFocus={focus.handlers.onFocus}
-        onBlur={focus.handlers.onBlur}
+        onBlur={() => { flushKeys(); focus.handlers.onBlur() }}
         onKeyDown={(e) => {
           if (disabled) return
           const step = (e.modifiers?.shift ? 10 : 1) * (e.key === 'right' || e.key === 'up' ? 1 : e.key === 'left' || e.key === 'down' ? -1 : 0)
-          const next = e.key === 'home' ? min : e.key === 'end' ? max : step ? clamp(value + step, min, max) : null
+          const from = keyed.current ?? value
+          const next = e.key === 'home' ? min : e.key === 'end' ? max : step ? clamp(from + step, min, max) : null
           if (next === null) return
           e.preventDefault()
           focus.keyed()
-          if (next !== value) onCommit(next)
+          if (next === from) return
+          keyed.current = next
+          setDrag(next)
+          onChange(next)
+          clearTimeout(keyTimer.current)
+          keyTimer.current = setTimeout(flushKeys, 250)
         }}
         style={{ position: 'relative', width: TRACK, height: 28, flexShrink: 0, cursor: disabled ? 'default' : 'pointer' }}
       >

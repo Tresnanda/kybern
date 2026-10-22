@@ -155,7 +155,11 @@ pub async fn run(client: &Client, cmd: SpacesCmd, json: bool) -> Result<()> {
                 let count = projects.iter().filter(|project| project.space_id == Some(space_id)).count();
                 let name = spaces.iter().find(|s| s.id == space_id).map(|s| s.name.clone()).unwrap_or_default();
                 let target = target_name(&spaces, space_id);
-                if !confirmed(&format!("Delete \"{name}\"? Its {count} projects move to {target}."))? {
+                let question = match count {
+                    0 => format!("Delete \"{name}\"?"),
+                    count => format!("Delete \"{name}\"? Its {} move to {target}.", projects_phrase(count)),
+                };
+                if !confirmed(&question)? {
                     return Ok(());
                 }
             }
@@ -163,7 +167,9 @@ pub async fn run(client: &Client, cmd: SpacesCmd, json: bool) -> Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
-                println!("deleted; {} projects moved to {}", result.moved_projects, result.moved_to);
+                let target =
+                    spaces.iter().find(|s| s.id == result.moved_to).map_or_else(|| result.moved_to.to_string(), |s| s.name.clone());
+                println!("deleted; {} moved to {target}", projects_phrase(result.moved_projects as usize));
             }
         }
         SpacesCmd::Reorder { spaces } => {
@@ -179,6 +185,10 @@ pub async fn run(client: &Client, cmd: SpacesCmd, json: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn projects_phrase(count: usize) -> String {
+    if count == 1 { "1 project".into() } else { format!("{count} projects") }
 }
 
 /// The name of the space a deleted space's projects move to (above it, or the next for the first).

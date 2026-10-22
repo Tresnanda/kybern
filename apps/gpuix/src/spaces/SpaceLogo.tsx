@@ -27,8 +27,10 @@ export function initialsSize(text: string, size: TileSize): number {
 
 export function SpaceLogo({ space, size, previewImage }: { space: Pick<Space, 'name' | 'color' | 'logo'>; size: TileSize; /** A `data:` URI shown instead of the stored logo (the editor's live preview). */ previewImage?: string | null }) {
   const t = useTheme()
-  const swatch = SWATCHES[space.color]
-  const stored = useSpaceImage(space.logo.kind === 'image' ? space.logo.asset_id : null)
+  // A colour this client does not know (a newer daemon's) draws as blue rather than breaking the rail.
+  const swatch = SWATCHES[space.color] ?? SWATCHES.blue
+  // While the editor previews a picked file, its asset is the raw upload (up to 2 MB): never fetch or cache that.
+  const stored = useSpaceImage(space.logo.kind === 'image' && !previewImage ? space.logo.asset_id : null)
   const image = previewImage ?? stored
   const initials = spaceInitials(space.name)
   const icon = space.logo.kind === 'icon' ? SPACE_GLYPHS[space.logo.icon] : undefined
