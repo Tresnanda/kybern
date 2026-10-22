@@ -52,13 +52,15 @@ import { addWindowKeyHandler } from './nav/keys.ts'
 import { keyboardAnswer } from './requests/Panel.tsx'
 import { isUserInput, connectorApproval } from '../../../packages/kybern-client/src/userInput.ts'
 import { answerApproval } from './transcript/Requests.tsx'
-import { FooterChip } from './composer/chips.tsx'
+import { useControls } from './kit/controls.ts'
+import { IconButton } from './kit/IconButton.tsx'
+import { PickerChip } from './kit/PickerChip.tsx'
 import { G } from './composer/glyphs.ts'
 import { muted, PickerItem, PickerMenu } from './composer/Menu.tsx'
 import { useCompletion } from './composer/Completion.tsx'
 import { useThreadCommands } from './composer/commands.ts'
 import { tokenIcon } from './composer/token-icons.ts'
-import { ModelPicker, ModelTriggerLabel } from './composer/ModelPicker.tsx'
+import { accountLead, ModelPicker, ModelTriggerLabel } from './composer/ModelPicker.tsx'
 import { PermissionPicker } from './composer/PermissionPicker.tsx'
 import { Leave, Pop, SwapOnChange, useLeavingList } from './composer/motion.tsx'
 import { Rise } from './motion/kit.tsx'
@@ -607,6 +609,7 @@ export function ComposerView(input: ComposerViewProps) {
     }
   }
 
+  const triggerAccount = provider && provider.instance !== 'default' ? props.accounts.find(a => a.provider.kind === provider.kind && a.provider.instance === provider.instance) ?? null : null
   const modelName = current?.display_name ?? (model ? uncataloguedName(model) : provider ? PROVIDER_LABEL[provider.kind] : '')
 
   return (
@@ -736,9 +739,7 @@ export function ComposerView(input: ComposerViewProps) {
               side="top"
               align="start"
               trigger={(open) => (
-                <FooterChip square pressed={open}>
-                  {() => <Icon name="plus" size={18} color={t.text} />}
-                </FooterChip>
+                <IconButton icon="plus" label="Add" active={open} />
               )}
             >
               <PickerItem id="files" testId="add-files" onSelect={() => void addFiles()}>
@@ -778,17 +779,15 @@ export function ComposerView(input: ComposerViewProps) {
                   lastModelRefresh.current = Date.now()
                   void props.onReloadModels(true).catch((e) => setError(`Unable to reload models: ${errorText(e)}`))
                 }}
-                label={(color) => (
+                lead={accountLead(provider.kind, triggerAccount)}
+                label={() => (
                   <ModelTriggerLabel
-                    kind={provider.kind}
-                    account={provider.instance !== 'default' ? props.accounts.find(a => a.provider.kind === provider.kind && a.provider.instance === provider.instance) ?? null : null}
+                    account={triggerAccount}
                     model={modelName}
                     qualifier={qualifier}
                     fast={traits.fast}
                     effort={(current?.display_name ?? model) && effortLabel ? formatEffort(effortLabel) : null}
                     traits={traits.labels}
-                    chevron={canPickModel || canReload || canPickProvider}
-                    color={color}
                   />
                 )}
               />
@@ -816,14 +815,15 @@ export function ComposerView(input: ComposerViewProps) {
  * spinner or the stop square grows in). A keyboard send still swaps because it reports state, not navigation, and never delays input.
  */
 export function SendButton({ running, sending, canSend, steering, disabledReason, onSubmit, onStop }: { running: boolean; sending: boolean; canSend: boolean; steering: boolean; disabledReason?: string | null; onSubmit: () => void; onStop?: () => void }) {
-  const t = useTheme()
-  const ink = t.v('--color-background-elevated-primary-opaque')
+  const c = useControls()
+  const inactive = !running && !sending && !canSend
+  const glyph = inactive ? c.disabled.fg : c.send.fg
   return (
     <Tip label={running ? 'Stop generation' : disabledReason ?? (steering ? 'Steer now ⌘↵' : 'Send ↵')}>
-      <RoundButton testId={running ? 'stop' : 'send'} disabled={running ? false : !canSend} onClick={running ? onStop : onSubmit}>
+      <RoundButton testId={running ? 'stop' : 'send'} disabled={running ? false : !canSend} inactive={inactive} onClick={running ? onStop : onSubmit}>
         {/* `IconSwap` arrow ↔ spinner while sending, arrow ↔ stop square while the thread runs (`Composer.tsx:1441`); the spinner is the shared-clock loader. */}
         <SwapOnChange kind="icon" active={running ? 'stop' : sending ? 'sending' : 'send'} style={{ width: 20, height: 20 }}>
-          {running ? <Icon source={G.stop} size={10} color={ink} /> : sending ? <MatrixLoader rgb={rgbOf(ink)} alpha={1} gap={1.5} /> : <Icon name="send" size={20} color={ink} />}
+          {running ? <Icon source={G.stop} size={10} color={glyph} /> : sending ? <MatrixLoader rgb={rgbOf(glyph)} alpha={1} gap={1.5} /> : <Icon name="send" size={20} color={glyph} />}
         </SwapOnChange>
       </RoundButton>
     </Tip>
@@ -838,10 +838,15 @@ function rgbOf(color: string): [number, number, number] {
   return [r, g, b]
 }
 
-/** `COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME` on a `prominent` button: the ink circle, 30% when off. It grows to 1.05 on hover (`hover:scale-105`, 150 ms) and squashes on press. */
-function RoundButton({ children, disabled, onClick, onMouseEnter, onMouseLeave, onMouseDown, onFocus, onBlur, onKeyDown, testId }: {
+/**
+ * Direction C Send (`useControls().send`): a 32 px circle (28 in a split pane) in the accent tint with the tinted glyph; an inactive
+ * Send drops to the disabled fill and glyph. Stop is the same circle. It still grows to 1.05 on hover and squashes on press.
+ */
+function RoundButton({ children, disabled, inactive, onClick, onMouseEnter, onMouseLeave, onMouseDown, onFocus, onBlur, onKeyDown, testId }: {
   children: ReactNode
   disabled?: boolean
+  /** Looks switched off (a Send with nothing to send); a sending Send is disabled but keeps its tint. */
+  inactive?: boolean
   onClick?: () => void
   /** The tooltip trigger's handlers (`Tip` clones them onto its child). */
   onMouseEnter?: () => void
@@ -852,7 +857,7 @@ function RoundButton({ children, disabled, onClick, onMouseEnter, onMouseLeave, 
   onKeyDown?: (event: { key?: string }) => void
   testId: string
 }) {
-  const t = useTheme()
+  const c = useControls()
   const [hover, setHover] = useState(false)
   // `surfaceMode === "split" && "!size-7"`: 28px in a split pane.
   const size = usePaneCompact() ? 28 : 32
@@ -877,10 +882,9 @@ function RoundButton({ children, disabled, onClick, onMouseEnter, onMouseLeave, 
         height: size,
         borderRadius: size / 2,
         flexShrink: 0,
-        backgroundColor: t.text,
-        opacity: disabled ? 0.3 : 1,
+        backgroundColor: inactive ? c.disabled.bg : c.send.bg,
         cursor: disabled ? 'default' : 'pointer',
-        active: disabled ? {} : { opacity: 0.8 },
+        ...(disabled ? {} : { focusVisible: { outlineWidth: 2, outlineColor: c.focus, outlineOffset: 0 } }),
       }}
     >
       {children}
@@ -905,36 +909,21 @@ function RunningControls({
   onPromptMode: (mode: 'queue' | 'steer') => void
 }) {
   const t = useTheme()
-  const [hover, setHover] = useState(false)
   // `@max-[360px]:gap-0 @max-[360px]:px-1.5`: the label goes (it stays for screen readers) and the clock, or the spinner while sending, stands in.
   const icon = !useFooterFit().model
+  const text = sending ? 'Sending…' : steering ? 'Steer now' : 'Queue'
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
-      <div
+      <PickerChip
         testId="queue"
-        onMouseEnter={() => setHover(true)}
-        onMouseLeave={() => setHover(false)}
-        onClick={canSend ? onSubmit : undefined}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: icon ? 0 : 4,
-          paddingLeft: icon ? 6 : 8,
-          paddingRight: icon ? 6 : 8,
-          paddingTop: 2,
-          paddingBottom: 2,
-          borderRadius: 10,
-          backgroundColor: hover && canSend ? t.buttonSecondaryHover : t.buttonSecondary,
-          opacity: canSend ? 1 : 0.64,
-          cursor: canSend ? 'pointer' : 'default',
-        }}
+        chevron={false}
+        disabled={!canSend}
+        onClick={onSubmit}
+        label={text}
+        {...(icon ? (sending ? { lead: <Spinner size={12} color={t.text} /> } : { icon: 'clock' }) : {})}
       >
-        {icon ? (sending ? <Spinner size={12} color={t.text} /> : <Icon name="clock" size={14} color={t.text} />) : (
-          <Label color={t.text} size={13} weight={500} lineHeight={18}>
-            {sending ? 'Sending…' : steering ? 'Steer now' : 'Queue'}
-          </Label>
-        )}
-      </div>
+        {icon ? null : text}
+      </PickerChip>
       {canSteer && (
         <PickerMenu
           testId="delivery"
@@ -942,9 +931,7 @@ function RunningControls({
           align="end"
           width={240}
           trigger={(open) => (
-            <FooterChip square pressed={open}>
-              {(color) => <Icon name="chevronDown" size={12} color={color} />}
-            </FooterChip>
+            <IconButton icon="chevronDown" label="Delivery" glyph={12} active={open} />
           )}
         >
           <PickerItem id="queue" onSelect={() => onPromptMode('queue')} style={{ paddingTop: 4, paddingBottom: 4 }}>

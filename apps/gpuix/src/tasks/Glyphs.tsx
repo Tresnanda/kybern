@@ -7,6 +7,7 @@ import { useNav } from '../nav/store.ts'
 import { Icon } from '../icons.tsx'
 import { SwapOnChange } from '../motion/kit.tsx'
 import { N } from '../nav/glyphs.ts'
+import { Checkbox } from '../kit/Checkbox.tsx'
 
 // Paths mirror desktop TaskGlyphs.tsx; SVG is the native renderer's single node.
 const wrap = (body: string) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14">${body}</svg>`
@@ -90,33 +91,34 @@ export function checkHandledClick() {
   checkClickAt = -Infinity
   return hit
 }
-/** `onClick` gets whether Shift was held: it extends the selection as a range (`pickTask`). */
-export function Check({ checked, onClick, testId }: { checked: boolean; onClick: (shift: boolean) => void; testId?: string }) {
-  const t = useTheme()
-  const keyboard = useNav((s) => s.keyboardNav)
+let checkShift = false
+/**
+ * The selection checkbox (the kit `Checkbox`) in a 26 x 30 hit area. `onClick` gets whether Shift was held: it extends the selection as a
+ * range (`pickTask`). The box and its padding both select; whichever gets the click first handles it, the other sees `checkClickAt` and
+ * leaves it. Shift is read from the press (the box's own toggle carries no modifiers).
+ */
+export function SelectBox({ checked, onClick, testId }: { checked: boolean; onClick: (shift: boolean) => void; testId?: string }) {
   return (
     <div
-      testId={testId}
-      tabIndex={0}
-      role="checkbox"
-      aria-checked={checked}
-      aria-label="Select task"
-      onMouseDown={() => { checkDownAt = performance.now() }}
+      onMouseDown={(e) => { checkDownAt = performance.now(); checkShift = !!e.modifiers?.shift }}
       onClick={(e) => {
+        if (performance.now() - checkClickAt < 50) return
         checkClickAt = performance.now()
         onClick(!!e.modifiers?.shift)
       }}
-      onKeyDown={(e) => {
-        if (e.key === 'space') onClick(!!e.modifiers?.shift)
-      }}
       style={{ width: 26, height: 30, display: 'flex', alignItems: 'center', cursor: 'pointer' }}
     >
-      {/* `TaskCheckBox`: a 14px box, 1.5 stroke, filled with the foreground and a surface-coloured tick once picked. */}
-      <svg
-        source={checked
-          ? '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14"><defs><mask id="tick"><rect width="14" height="14" fill="white"/><path d="M4.3 7.2 6.1 9 9.7 5.2" fill="none" stroke="black" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></mask></defs><rect x="1.25" y="1.25" width="11.5" height="11.5" rx="3.25" fill="currentColor" stroke="currentColor" stroke-width="1.5" mask="url(#tick)"/></svg>'
-          : '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14"><rect x="1.25" y="1.25" width="11.5" height="11.5" rx="3.25" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>'}
-        style={{ width: 14, height: 14, color: checked ? t.text : ink(t, 0.4), pointerEvents: 'none' }}
+      <Checkbox
+        testId={testId}
+        aria-label="Select task"
+        checked={checked}
+        onCheckedChange={() => {
+          if (performance.now() - checkClickAt < 50) return
+          checkClickAt = performance.now()
+          const shift = checkShift
+          checkShift = false
+          onClick(shift)
+        }}
       />
     </div>
   )

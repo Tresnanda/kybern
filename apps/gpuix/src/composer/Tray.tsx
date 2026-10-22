@@ -9,7 +9,7 @@ import type { GitBranchesResult, Project, ProjectId } from '../../../../packages
 import type { ReactNode } from 'react'
 import { useApp } from '../state.ts'
 import { useSpaceProjects } from '../spaces/current.ts'
-import { TrayChip } from './chips.tsx'
+import { PickerChip } from '../kit/PickerChip.tsx'
 import { G } from './glyphs.ts'
 import { CheckMark, muted, PickerItem, PickerLabel, PickerMenu, PickerSeparator } from './Menu.tsx'
 import { loadBranches, patchDraft, useComposer } from './store.ts'
@@ -85,7 +85,7 @@ function ProjectChip({ projectId, projects }: { projectId: ProjectId; projects: 
       align="start"
       sideOffset={8}
       minWidth={224}
-      trigger={(open) => <TrayChip icon={G.folder} label={current?.name ?? 'Choose a project'} pressed={open} strong={!current} />}
+      trigger={(open) => <PickerChip icon={G.folder} open={open} truncate maxWidth={256}>{current?.name ?? 'Choose a project'}</PickerChip>}
     >
       <PickerLabel>{coordinator ? 'Project' : 'Chat location'}</PickerLabel>
       {!coordinator && (
@@ -119,7 +119,7 @@ function FreeChatChip({ projects }: { projects: Project[] }) {
       align="start"
       sideOffset={8}
       minWidth={256}
-      trigger={(open) => <TrayChip icon={G.message} label="Free chat" strong pressed={open} />}
+      trigger={(open) => <PickerChip icon={G.message} open={open} truncate maxWidth={256}>Free chat</PickerChip>}
     >
       <PickerLabel>Chat location</PickerLabel>
       <PickerItem id="free" onSelect={() => {}}>
@@ -157,7 +157,7 @@ export function WorkspaceTrayChip({ useWorktree, isGit, checkoutHint, onChange }
       sideOffset={8}
       width={256}
       trigger={(open) => (
-        <TrayChip icon={useWorktree ? G.worktree : G.laptop} label={useWorktree ? 'New worktree' : 'Checkout'} strong={useWorktree} pressed={open} />
+        <PickerChip icon={useWorktree ? G.worktree : G.laptop} open={open} truncate maxWidth={256}>{useWorktree ? 'New worktree' : 'Checkout'}</PickerChip>
       )}
     >
       <PickerLabel>Run in</PickerLabel>
@@ -229,7 +229,7 @@ export function BranchTrayChip({
       sideOffset={8}
       width={288}
       onOpenChange={(open) => open && onOpen()}
-      trigger={(open) => <TrayChip icon={G.branch} label={shown} strong={!!baseBranch} pressed={open} />}
+      trigger={(open) => <PickerChip icon={G.branch} open={open} truncate maxWidth={256}>{shown}</PickerChip>}
     >
       <PickerLabel>{useWorktree ? 'Fork the worktree from' : 'Branch'}</PickerLabel>
       {branches === null ? (
@@ -279,7 +279,7 @@ export function ProjectPickChip({ projectId, projects, onPick }: { projectId: Pr
       align="start"
       sideOffset={8}
       minWidth={224}
-      trigger={(open) => <TrayChip icon={G.folder} label={current?.name ?? 'Choose a project'} pressed={open} strong={!current} />}
+      trigger={(open) => <PickerChip icon={G.folder} open={open} truncate maxWidth={256}>{current?.name ?? 'Choose a project'}</PickerChip>}
     >
       <PickerLabel>Run in</PickerLabel>
       {projects.map((p) => (

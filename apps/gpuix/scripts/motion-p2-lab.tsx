@@ -10,12 +10,13 @@ import { ThemeProvider, useTheme, Label, ink } from '../src/ui.tsx'
 import { Collapse } from '../src/motion/kit.tsx'
 import { Attachments, SendButton } from '../src/Composer.tsx'
 import { ComposerTray } from '../src/requests/ComposerTray.tsx'
-import { TrayChip } from '../src/composer/chips.tsx'
+import { PickerChip } from '../src/kit/PickerChip.tsx'
 import { Dim } from '../src/composer/motion.tsx'
 import { EffortSlider } from '../src/composer/ModelPicker.tsx'
 import { BottomFade, ScrollToBottom } from '../src/Transcript.tsx'
 import { ResponseImage } from '../src/transcript/images.tsx'
-import { Button, Chevron } from '../src/transcript/kit.tsx'
+import { Chevron } from '../src/transcript/kit.tsx'
+import { Button } from '../src/kit/Button.tsx'
 import { PanelEnter, PanelPresence, keyboardAnswer } from '../src/requests/Panel.tsx'
 import { SubagentBar } from '../src/subagents/Page.tsx'
 import { Floating } from '../src/live/Floating.tsx'
@@ -66,7 +67,7 @@ function Lab() {
       <div testId="send-slot" style={at(16, 16, 60, 44)}><SendButton running={running} sending={sending} canSend steering={false} onSubmit={() => {}} onStop={() => {}} /></div>
       <div testId="attachments" style={{ ...at(100, 24, 440, 84), flexDirection: 'column' }}><Attachments items={attachments} uploading={0} onRemove={a => setAttachments(list => list.filter(item => item.id !== a.id))} /></div>
       <div testId="queued" style={{ ...at(560, 16, 560, 140), flexDirection: 'column', justifyContent: 'flex-end', alignItems: 'center' }}>{queue.length > 0 && <div style={{ display: 'flex', flexDirection: 'column', width: '93.33%', borderWidth: 1, borderBottomWidth: 0, borderColor: t.border, borderTopLeftRadius: 18.2, borderTopRightRadius: 18.2, backgroundColor: t.popover }}><ComposerTray data={{ threadId: 'lab', subagents: [], tasks: [], helpers: [], queued: queue as never }} /></div>}</div>
-      <div testId="tray" style={at(16, 140, 200, 36)}><TrayChip testId="tray-chip" icon={G.clock} label="main" /></div>
+      <div testId="tray" style={at(16, 140, 200, 36)}><PickerChip testId="tray-chip" icon={G.clock} onClick={() => {}}>main</PickerChip></div>
       <div testId="slider" style={{ ...at(240, 130, 300, 70), flexDirection: 'column', borderRadius: 12, backgroundColor: card }}>
         <EffortSlider efforts={['low', 'medium', 'high', 'xhigh', 'max']} value={effort} disabled={false} onEscape={() => {}} onChange={async next => { setEffort(next); return true }} />
       </div>
@@ -88,7 +89,7 @@ function Lab() {
           </div>
         </PanelPresence>
       </div>
-      <div testId="button" style={at(16, 430, 160, 32)}><Button swap variant="default">{label ? 'Sending…' : 'Send answer'}</Button></div>
+      <div testId="button" style={at(16, 430, 160, 32)}><Button swap variant="primary">{label ? 'Sending…' : 'Send answer'}</Button></div>
       <div testId="disclosure" style={{ ...at(200, 430, 320, 120), flexDirection: 'column' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 24 }}><Label color={t.textSecondary}>Worked for 12s</Label><Chevron open={open} color={t.textSecondary} /></div>
         <Collapse open={open}><div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 6 }}>{[0, 1, 2].map(i => <Label key={i} color={t.textSecondary} size={12}>{`Ran command ${i + 1}`}</Label>)}</div></Collapse>

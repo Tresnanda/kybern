@@ -4,17 +4,13 @@ import { Menu, MenuItem, MenuSeparator } from '../nav/overlay.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { ProjectDot } from '../notes/kit.tsx'
 import { PriorityGlyph, StatusGlyph } from './Glyphs.tsx'
-import { Icon } from '../icons.tsx'
+import { ICONS } from '../icons.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
 import { useApp } from '../state.ts'
 import { useSpaceProjects } from '../spaces/current.ts'
 import { deleteTasks, setTasks, taskState, updateMany, updateTask, useTasks } from './store.ts'
-import { pressTransform } from '../motion/press.ts'
-
-/** `.tk-prop .v`: 28px, 6px padding, a glyph and the value, on the properties panel. */
-function Value({ children }: { children: React.ReactNode }) {
-  const t = useTheme()
-  return <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 28, marginLeft: -6, paddingLeft: 6, paddingRight: 6, borderRadius: 6, pointerEvents: 'none', hover: { backgroundColor: ink(t, 0.05) } }}>{children}</div>
-}
+import { Button } from '../kit/Button.tsx'
+import { PickerChip } from '../kit/PickerChip.tsx'
 
 export function TaskMenus({ ids, property, label, value, bar }: { ids: string[]; property: 'status' | 'priority'; label?: string; value?: boolean; bar?: boolean }) {
   const t = useTheme()
@@ -26,32 +22,12 @@ export function TaskMenus({ ids, property, label, value, bar }: { ids: string[];
       testId={`task-${property}`}
       open={menu === property}
       onOpenChange={(open) => setTasks({ menu: open ? property : null })}
-      trigger={() => value && first ? (
-        <Value>
-          {property === 'status' ? <StatusGlyph status={first.status} /> : <PriorityGlyph priority={first.priority} />}
-          <Label color={ink(t, 0.86)} size={13} lineHeight={19.5}>{property === 'status' ? STATUS_LABEL[first.status] : PRIORITY_LABEL[first.priority]}</Label>
-        </Value>
+      trigger={(open) => value && first ? (
+        // The property panel's picker: quiet (no fill at rest, the chevron and a neutral fill on hover).
+        <PickerChip quiet size="sm" open={open} lead={property === 'status' ? <StatusGlyph status={first.status} /> : <PriorityGlyph priority={first.priority} />}>{property === 'status' ? STATUS_LABEL[first.status] : PRIORITY_LABEL[first.priority]}</PickerChip>
       ) : (
-        // `.tk-selbar .tk-btn` (bar): 32px, 10px padding, 7px gap, the glyph at secondary ink; it snaps to 0.97 on press.
-        <div
-          paintTransform={bar ? pressTransform(true, 0.97, 0, 0) : undefined}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: bar ? 7 : 0,
-            height: bar ? 32 : 28,
-            paddingLeft: bar ? 10 : 8,
-            paddingRight: bar ? 10 : 8,
-            borderRadius: bar ? 8 : 7,
-            hover: { backgroundColor: t.hover },
-            pointerEvents: 'none',
-          }}
-        >
-          {bar && (property === 'status' ? <StatusGlyph status="todo" mono /> : <PriorityGlyph priority={3} />)}
-          <Label color={bar ? ink(t, 0.86) : t.textSecondary} size={13}>
-            {label ?? (first ? (property === 'status' ? STATUS_LABEL[first.status] : PRIORITY_LABEL[first.priority]) : property)}
-          </Label>
-        </div>
+        // The selection bar's Status and Priority: secondary buttons at the bar's 32.
+        <Button size={bar ? 'lg' : 'sm'} chevron>{label ?? (first ? (property === 'status' ? STATUS_LABEL[first.status] : PRIORITY_LABEL[first.priority]) : property)}</Button>
       )}
     >
       {(property === 'status' ? USER_STATUSES : PRIORITY_MENU_ORDER).map((value) => (
@@ -83,14 +59,10 @@ export function ProjectMenu({ task, value }: { task: TaskItem; value?: boolean }
   return (
     <Menu
       testId="task-project"
-      trigger={() => value ? (
-        <Value><ProjectDot projectId={task.scope === 'project' ? task.project_id ?? null : null} /><Label color={ink(t, 0.86)} size={13} lineHeight={19.5} truncate>{projects.find((p) => p.id === task.project_id)?.name ?? 'Global'}</Label></Value>
+      trigger={(open) => value ? (
+        <PickerChip quiet size="sm" open={open} lead={<ProjectDot projectId={task.scope === 'project' ? task.project_id ?? null : null} />} truncate>{projects.find((p) => p.id === task.project_id)?.name ?? 'Global'}</PickerChip>
       ) : (
-        <div style={{ display: 'flex', alignItems: 'center', height: 28, paddingLeft: 8, paddingRight: 8, pointerEvents: 'none' }}>
-          <Label color={t.textSecondary} size={12} truncate>
-            {projects.find((p) => p.id === task.project_id)?.name ?? 'Global'}
-          </Label>
-        </div>
+        <PickerChip quiet size="sm" open={open} truncate>{projects.find((p) => p.id === task.project_id)?.name ?? 'Global'}</PickerChip>
       )}
     >
       {[{ id: '', name: 'Global' }, ...projects].map((p) => (
@@ -118,11 +90,7 @@ export function MoreMenu({ task, sequence, onOpenChange, icon }: { task: TaskIte
     <Menu
       onOpenChange={onOpenChange}
       testId={`task-more-${task.id}`}
-      trigger={() => (
-        <div style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-          {icon ? <Icon source={icon} size={16} color={ink(t, 0.6)} /> : <Label color={t.textTertiary}>⋯</Label>}
-        </div>
-      )}
+      trigger={() => (icon ? <IconButton icon={icon} label="More actions" glyph={16} /> : <IconButton icon={ICONS.ellipsis} label="More actions" />)}
     >
       <MenuItem id="status" label="Change status…" shortcut="S" onSelect={() => setTasks({ focused: task.id, menu: 'status' })} />
       <MenuItem id="priority" label="Change priority…" shortcut="P" onSelect={() => setTasks({ focused: task.id, menu: 'priority' })} />

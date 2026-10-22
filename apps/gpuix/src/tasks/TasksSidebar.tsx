@@ -7,6 +7,8 @@ import { useAddProject } from '../sidebar/rows.tsx'
 import { useNav } from '../nav/store.ts'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
+import { IconButton } from '../kit/IconButton.tsx'
+import { SearchField } from '../kit/SearchField.tsx'
 import { ContextMenu, MenuItem, Tip } from '../nav/overlay.tsx'
 import { ProjectDot } from '../notes/kit.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
@@ -81,28 +83,23 @@ export function TasksSidebar() {
           Tasks
         </Label>
         <Tip label="New task · C" side="bottom">
-          <div testId="task-new" onClick={() => quickAdd()} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 7, cursor: 'pointer', hover: { backgroundColor: ink(t, 0.05) } }}>
-            <Icon source={N.newThread} size={16} color={ink(t, 0.6)} />
-          </div>
+          <div style={{ display: 'flex', flexShrink: 0 }}><IconButton testId="task-new" icon={N.newThread} label="New task" glyph={16} onClick={() => quickAdd()} /></div>
         </Tip>
       </div>
       <div style={{ paddingLeft: 10, paddingRight: 10, paddingBottom: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, height: 28, paddingLeft: 9, paddingRight: 9, borderRadius: 8, backgroundColor: ink(t, t.variant === 'dark' ? 0.05 : 0.04) }}>
-          <Icon source={N.search} size={14} color={ink(t, 0.4)} />
-          <input
-            testId="task-search"
-            aria-label="Search tasks"
-            placeholder="Search"
-            value={query}
-            onFocus={() => taskTyping(true)}
-            onBlur={() => taskTyping(false)}
-            onChange={(e) => setTasks({ query: e.value ?? '', openId: null, quick: null })}
-            onKeyDown={(e) => {
-              if (e.key === 'escape') setTasks({ query: '' })
-            }}
-            style={{ flexGrow: 1, minWidth: 0, height: 28, fontSize: 13, color: t.text, backgroundColor: 'transparent', borderWidth: 0 }}
-          />
-        </div>
+        <SearchField
+          testId="task-search"
+          label="Search tasks"
+          placeholder="Search"
+          width="100%"
+          value={query}
+          onFocus={() => taskTyping(true)}
+          onBlur={() => taskTyping(false)}
+          onChange={(value) => setTasks({ query: value, openId: null, quick: null })}
+          onKeyDown={(e) => {
+            if (e.key === 'escape') setTasks({ query: '' })
+          }}
+        />
       </div>
       <virtual-list style={{ flexGrow: 1, minHeight: 0, width: '100%' }}>
         {(['all', 'inbox', 'running', 'needs_review', 'done', 'global'] as const).map((filter) => (
@@ -129,9 +126,7 @@ export function TasksSidebar() {
           </div>
           <div style={{ flexGrow: 1 }} />
           <Tip label="Add project" side="right">
-            <div testId="task-add-project" onClick={() => { void addProject() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, marginRight: -4, marginBottom: -3, borderRadius: 6, opacity: hover || !rows.some((r) => r.visible) ? 1 : 0, cursor: 'pointer', hover: { backgroundColor: ink(t, 0.05) } }}>
-              <Icon source={N.plus} size={14} color={t.textTertiary} />
-            </div>
+            <div style={{ display: 'flex', marginRight: -4, marginBottom: -3, opacity: hover || !rows.some((r) => r.visible) ? 1 : 0 }}><IconButton testId="task-add-project" size="sm" icon={N.plus} label="Add project" onClick={() => { void addProject() }} /></div>
           </Tip>
         </div>
         {rows.map(({ project, pinned, visible }) => (

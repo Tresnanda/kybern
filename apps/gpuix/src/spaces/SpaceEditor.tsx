@@ -16,10 +16,11 @@ import type { Space, SpaceColor, SpaceLogo as Logo } from '../../../../packages/
 import { popoverStyle, PopupLayer } from '../composer/Menu.tsx'
 import { uploadPath } from '../composer/store.ts'
 import { Icon } from '../icons.tsx'
-import { KitButton } from '../kit/AlertDialog.tsx'
+import { Button } from '../kit/Button.tsx'
+import { TextField } from '../kit/Field.tsx'
+import { RADIUS } from '../kit/controls.ts'
 import { Spinner } from '../kit/Spinner.tsx'
 import { N } from '../nav/glyphs.ts'
-import { TextField } from '../settings/controls.tsx'
 import { getState } from '../state.ts'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { SWATCHES } from './colors.ts'
@@ -220,15 +221,9 @@ export function SpaceEditor({ mode, space, still }: { mode: 'create' | 'edit'; s
             : <Icon source={N.imageUpload} size={18} color={fileHover ? t.link : t.textTertiary} style={{ pointerEvents: 'none' }} />}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flexGrow: 1 }}>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <div testId="space-upload" role="button" aria-label={hasImage ? SPACE_COPY.replaceImage : SPACE_COPY.uploadImage} onClick={() => void choose()} style={{ cursor: 'pointer' }}>
-              <Label color={t.text} size={13}>{hasImage ? SPACE_COPY.replaceImage : SPACE_COPY.uploadImage}</Label>
-            </div>
-            {hasImage && (
-              <div testId="space-remove-image" role="button" aria-label={SPACE_COPY.removeImage} onClick={() => setLogo({ kind: 'initials' })} style={{ cursor: 'pointer' }}>
-                <Label color={t.textSecondary} size={13}>{SPACE_COPY.removeImage}</Label>
-              </div>
-            )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: -8 }}>
+            <Button testId="space-upload" size="sm" onClick={() => void choose()}>{hasImage ? SPACE_COPY.replaceImage : SPACE_COPY.uploadImage}</Button>
+            {hasImage && <Button testId="space-remove-image" variant="ghost" size="sm" onClick={() => setLogo({ kind: 'initials' })}>{SPACE_COPY.removeImage}</Button>}
           </div>
           <Label color={t.textSecondary} size={12}>{SPACE_COPY.imageHint}</Label>
         </div>
@@ -261,11 +256,11 @@ export function SpaceEditor({ mode, space, still }: { mode: 'create' | 'edit'; s
       {error && <div testId="space-editor-error"><Label color={t.red} size={12} lineHeight={16}>{error}</Label></div>}
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-        <div style={{ display: 'flex', borderRadius: 11, ...focusRing(zone === 'cancel') }}>
-          <KitButton variant="outline" testId="space-cancel" onClick={() => closeSpaceEditor()}>{SPACE_COPY.cancel}</KitButton>
+        <div style={{ display: 'flex', borderRadius: RADIUS.lg, ...focusRing(zone === 'cancel') }}>
+          <Button testId="space-cancel" onClick={() => closeSpaceEditor()}>{SPACE_COPY.cancel}</Button>
         </div>
-        <div style={{ display: 'flex', borderRadius: 11, ...focusRing(zone === 'primary') }}>
-          <KitButton variant="default" testId="space-save" disabled={!canSave} onClick={() => void submit()}>{mode === 'create' ? SPACE_COPY.create : SPACE_COPY.save}</KitButton>
+        <div style={{ display: 'flex', borderRadius: RADIUS.lg, ...focusRing(zone === 'primary') }}>
+          <Button variant="primary" kbd="⌘↵" testId="space-save" disabled={!canSave} onClick={() => void submit()}>{mode === 'create' ? SPACE_COPY.create : SPACE_COPY.save}</Button>
         </div>
       </div>
     </PopupLayer>

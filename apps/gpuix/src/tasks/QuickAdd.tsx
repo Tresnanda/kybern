@@ -11,6 +11,8 @@ import { raisedFill, useGlass } from '../platform/glass.ts'
 import { Menu, MenuItem } from '../nav/overlay.tsx'
 import { ProjectDot, notesTokens } from '../notes/kit.tsx'
 import { over } from '../theme.ts'
+import { PickerChip } from '../kit/PickerChip.tsx'
+import { TextField } from '../kit/Field.tsx'
 import { createTask, openTask, setTasks, taskState } from './store.ts'
 import { StatusGlyph } from './Glyphs.tsx'
 
@@ -88,13 +90,10 @@ export function QuickAdd({ request, card = false }: { request: NonNullable<Retur
   }
   const onChange = (e: { value?: string }) => { const value = e.value ?? ''; draft.current.title = value; setTitle(value) }
   const settle = () => { if (menuOpen.current || draft.current.busy) return; void submit(); setTasks({ quick: null }) }
-  // `.tk-btn`: 28px, 6px padding, 6px gap, the project dot and its name, quiet until hovered.
+  // The scope chip: a quiet `PickerChip` (the project dot and its name; fill and chevron on hover), never squeezed to "Gl…".
   const projectButton = (
-    <Menu onOpenChange={(open) => { menuOpen.current = open; if (!open && field) queueMicrotask(() => renderer.focusElement?.(field.id)) }} testId="task-quick-project" align="end" sideOffset={6} trigger={() => (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, height: 28, minWidth: 28, paddingLeft: 6, paddingRight: 6, borderRadius: 7, pointerEvents: 'none', hover: { backgroundColor: ink(t, 0.06) } }}>
-        <ProjectDot projectId={project || null} />
-        <Label color={k.fg2} size={13} lineHeight={19.5} truncate style={{ maxWidth: 128 }}>{name}</Label>
-      </div>
+    <Menu onOpenChange={(open) => { menuOpen.current = open; if (!open && field) queueMicrotask(() => renderer.focusElement?.(field.id)) }} testId="task-quick-project" align="end" sideOffset={6} rootStyle={{ flexShrink: 0 }} trigger={(open) => (
+      <PickerChip quiet size="sm" open={open} lead={<ProjectDot projectId={project || null} />} maxWidth={160} style={{ flexShrink: 0 }}>{name}</PickerChip>
     )}>
       {[{ id: '', name: 'Global' }, ...projects].map((p) => <MenuItem testId={`task-quick-project-${p.id || 'global'}`} key={p.id} id={p.id || 'global'} label={p.name} checked={project === p.id} onSelect={() => setProject(p.id)} />)}
     </Menu>
@@ -105,18 +104,17 @@ export function QuickAdd({ request, card = false }: { request: NonNullable<Retur
       <div onMouseDownOutside={settle} style={{ display: 'flex', alignItems: 'center', height: 40, paddingLeft: 8, paddingRight: 12, backgroundColor: ink(t, t.variant === 'dark' ? 0.035 : 0.03) }}>
         <div style={{ width: 22 + 86, flexShrink: 0 }} />
         <div style={{ display: 'flex', alignItems: 'center', width: 26, flexShrink: 0 }}><StatusGlyph status={request.status} /></div>
-        <input
+        <TextField
           ref={setField}
           testId="task-quick-title"
-          aria-label="New task title"
+          label="New task title"
           placeholder="Task title"
+          bare
           value={title}
-          readOnly={busy}
           interceptKeys={['enter', 'escape']}
-          onChange={onChange}
+          onChange={(value) => { draft.current.title = value; setTitle(value) }}
           onKeyDown={keys}
-          theme={{ text: t.text, caret: t.text }}
-          style={{ flexGrow: 1, minWidth: 0, height: 28, fontSize: 13, color: t.text, backgroundColor: 'transparent', borderWidth: 0 }}
+          shell={{ flexGrow: 1 }}
         />
         {projectButton}
       </div>
