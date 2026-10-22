@@ -170,7 +170,8 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
   // Glass scopes (`platform/translucency.ts`, `platform/glass.ts`): whole window → the frost-menu tint over a scene blur (`denseFloat`
   // without the blur when the gate dropped the class); Sidebar only → dense fill, no blur (the layer is transparent over opaque
   // content); Solid and the accessibility overrides → today's opaque popover.
-  const glass = t.scope !== 'none' && material !== 'none' && !appear
+  // A dialog's card frosts like a menu on whole-window glass only; Sidebar only and Solid keep its opaque popover (and its scrim never frosts).
+  const glass = t.scope !== 'none' && material !== 'none' && (!appear || (appear === 'dialog' && g.on))
   const radiusPx = typeof (style as StyleDesc | undefined)?.borderRadius === 'number' ? (style as StyleDesc).borderRadius as number : 16
   const menuBackdrop = kind === 'tooltip' ? undefined : frostBackdrop(g, 'menus', radiusPx)
   const blurred = glass && !!menuBackdrop
@@ -225,7 +226,8 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
   const innerStyle = glass && (style as StyleDesc | undefined)?.backgroundColor
     ? {
         ...style as StyleDesc,
-        backgroundColor: kind === 'tooltip' ? t.glass.dense : frostFill(g, 'menus', t.glass.dense, 'frostMenu'),
+        // A tooltip is a tint only (no blur under it): the dense float, so the text behind never reads through.
+        backgroundColor: kind === 'tooltip' ? (g.on ? g.denseFloat : t.glass.dense) : frostFill(g, 'menus', t.glass.dense, 'frostMenu'),
         ...(layered ? { position: 'relative' as const, borderColor: g.frostRim, boxShadow: undefined } : {}),
       }
     : style

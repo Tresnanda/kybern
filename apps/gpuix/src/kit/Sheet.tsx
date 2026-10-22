@@ -16,6 +16,7 @@ import { createContext, useContext, useState, type ReactNode } from 'react'
 import { muted } from '../composer/Menu.tsx'
 import { useSettingsModal } from '../settings/controls.tsx'
 import { Label, useTheme } from '../ui.tsx'
+import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
 import {
   CLOSE_GLYPH, EASE_DEFAULT, EASE_IN_OUT_CSS, ModalLayer, useEscapeLayer, usePresence, useReturnFocus, WindowSized,
   controlVariant,
@@ -59,6 +60,7 @@ export function Sheet({
   testId?: string
 }) {
   const t = useTheme()
+  const g = useGlass()
   const [own, setOwn] = useState(defaultOpen)
   const open = openProp ?? own
   const setOpen = (next: boolean) => { if (openProp === undefined) setOwn(next); onOpenChange?.(next) }
@@ -103,13 +105,14 @@ export function Sheet({
           anchor={side === 'bottom' ? 'bottomLeft' : 'topLeft'}
           priority={6}
           radius={radius}
+          backdrop={frostBackdrop(g, 'menus', radius)}
           testId={testId}
           focus
           onKeyDown={(e) => { if (e.key === 'escape' && escape.claim()) setOpen(false) }}
           // A press in a nested popup (an alert's card, a select hanging past the panel) is not a scrim press.
           onMouseDownOutside={dismissible ? () => { if (escape.isTop()) setOpen(false) } : undefined}
           // `shadow-lg/5`: two 5% layers; the wrapper carries the wider one, the panel the tighter one.
-          style={{ display: 'flex', borderRadius: radius, boxShadow: { offsetX: 0, offsetY: 10, blurRadius: 15, spreadRadius: -3, color: 'rgba(0, 0, 0, 0.05)' } }}
+          style={{ display: 'flex', borderRadius: radius, ...(g.on ? {} : { boxShadow: { offsetX: 0, offsetY: 10, blurRadius: 15, spreadRadius: -3, color: 'rgba(0, 0, 0, 0.05)' } }) }}
         >
           <div
             style={{
@@ -118,12 +121,12 @@ export function Sheet({
               position: 'relative',
               width: panelWidth,
               ...(vertical ? { height: H } : { maxHeight: H - 48 }),
-              backgroundColor: t.v('--popover'),
-              borderColor: t.border,
+              backgroundColor: frostFill(g, 'menus', t.v('--popover'), 'frostMenu'),
+              borderColor: g.on ? g.frostRim : t.border,
               ...border,
               borderRadius: radius,
               overflow: 'hidden',
-              boxShadow: { offsetX: 0, offsetY: 4, blurRadius: 6, spreadRadius: -4, color: 'rgba(0, 0, 0, 0.05)' },
+              ...(g.on ? {} : { boxShadow: { offsetX: 0, offsetY: 4, blurRadius: 6, spreadRadius: -4, color: 'rgba(0, 0, 0, 0.05)' } }),
             }}
           >
             {children}

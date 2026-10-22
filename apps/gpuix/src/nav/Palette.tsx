@@ -233,7 +233,7 @@ function PaletteDialog() {
 
   let index = -1
   return (
-    // CommandDialogPopup has no backdrop filter, including full translucency.
+    // The desktop's CommandDialogPopup has no backdrop filter; here the card frosts like a menu on whole-window glass (the dialog path).
     <Dialog onClose={close} width={672} variant="palette" testId="palette" instant={getNav().keyboardNav}>
       <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, paddingLeft: 0, paddingRight: 0 }}>
         <div style={{ paddingLeft: 10, paddingRight: 10, paddingTop: 6, paddingBottom: 6 }}>

@@ -939,7 +939,7 @@ export function Dialog({
       />
       <PopupLayer
         still={still}
-        material={palette ? 'none' : 'popup'}
+        material="popup"
         appear="dialog"
         materialize={{ origin: [0.5, 0.5] }}
         leaving={leaving}

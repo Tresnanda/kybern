@@ -23,6 +23,9 @@ import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { Button, type ButtonVariant as ControlVariant } from './Button.tsx'
 import { SCALE } from '../motion/tokens.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
+import type { BackdropFilter } from '../native/backdrop.ts'
+import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
+import { GlassEdge } from './GlassEdge.tsx'
 
 // ─── Escape stack ─────────────────────────────────────────────────────────
 
@@ -124,6 +127,7 @@ export function ModalLayer({
   focus,
   onKeyDown,
   onMouseDownOutside,
+  backdrop,
   style,
   children,
 }: {
@@ -144,6 +148,8 @@ export function ModalLayer({
   focus?: boolean
   onKeyDown?: (e: { key?: string; modifiers?: { shift?: boolean } }) => void
   onMouseDownOutside?: () => void
+  /** The scene blur under a frosted card (whole-window glass, `frostBackdrop`); it moves with the card's transform. */
+  backdrop?: BackdropFilter
   style?: StyleDesc
   children?: ReactNode
 }) {
@@ -174,6 +180,7 @@ export function ModalLayer({
         onKeyDown={onKeyDown}
         onMouseDown={pointerNav}
         onMouseDownOutside={onMouseDownOutside}
+        {...(backdrop ? { backdrop } : {})}
         {...(paintTransform ? { paintTransform, onMotionComplete: (event: { motionGeneration?: number }) => { if (phase === 'exit' && event.motionGeneration === gen) onExited?.(event) } } : {})}
         style={{ ...(phase === 'exit' ? { pointerEvents: 'none' } : {}), ...style }}
       >
@@ -222,6 +229,7 @@ export function AlertDialog({
   testId?: string
 }) {
   const t = useTheme()
+  const g = useGlass()
   const [own, setOwn] = useState(defaultOpen)
   const open = openProp ?? own
   const setOpen = (next: boolean) => { if (openProp === undefined) setOwn(next); onOpenChange?.(next) }
@@ -255,6 +263,7 @@ export function AlertDialog({
           anchor="leftCenter"
           priority={6}
           radius={22}
+          backdrop={frostBackdrop(g, 'menus', 22)}
           testId={testId}
           focus
           onKeyDown={(e) => { if (e.key === 'escape' && escape.claim()) setOpen(false) }}
@@ -265,12 +274,15 @@ export function AlertDialog({
             maxHeight: size.height - 32,
             borderRadius: 22,
             borderWidth: 1,
-            borderColor: t.borderLight,
-            backgroundColor: t.v('--popover'),
-            boxShadow: { offsetX: 0, offsetY: 16, blurRadius: 50, spreadRadius: -12, color: t.variant === 'dark' ? 'rgba(0, 0, 0, 0.7)' : 'rgba(0, 0, 0, 0.34)' },
+            position: 'relative',
+            borderColor: g.on ? g.frostRim : t.borderLight,
+            // Whole-window glass: the menu frost, and no shadow under a fill that is not opaque.
+            backgroundColor: frostFill(g, 'menus', t.v('--popover'), 'frostMenu'),
+            ...(g.on ? {} : { boxShadow: { offsetX: 0, offsetY: 16, blurRadius: 50, spreadRadius: -12, color: t.variant === 'dark' ? 'rgba(0, 0, 0, 0.7)' : 'rgba(0, 0, 0, 0.34)' } }),
             overflow: 'hidden',
           }}
         >
+          <GlassEdge radius={22} color={g.frostHighlight} />
           {children}
         </ModalLayer>
       </AlertContext.Provider>
