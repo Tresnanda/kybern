@@ -105,10 +105,10 @@ export const N = {
   window: glyph(AppWindowMacIcon),
   /** `LayoutSidebarIcon` = SidebarLeft01. */
   layoutSidebar: glyph(SidebarLeft01Icon),
-  /** `SquareSplitVertical` (Split right / Open to the right). */
-  splitRight: glyph(SquareSplitVerticalIcon),
-  /** `SquareSplitHorizontal` (Split down / Open below). */
-  splitDown: glyph(SquareSplitHorizontalIcon),
+  /** Split right / Open to the right: hugeicons' `SquareSplitHorizontal` draws the vertical divider (a left | right split). */
+  splitRight: glyph(SquareSplitHorizontalIcon),
+  /** Split down / Open below: `SquareSplitVertical` draws the horizontal divider. */
+  splitDown: glyph(SquareSplitVerticalIcon),
   /** `BackToParentIcon` = ArrowTurnBackward. */
   backToParent: glyph(ArrowTurnBackwardIcon),
   stop: filled(StopIcon),
