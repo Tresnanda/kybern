@@ -39,7 +39,10 @@ export const BLUR_MAX = 64 // source DESKTOP_WINDOW_BLUR_RADIUS_MAX
 export const NATIVE_BLUR_MAX = 100 // WindowMaterial.m kMaxBlurRadius (native clamp)
 /** Where the slider rests while blur is Auto (source VIBRANCY_EQUIVALENT_BLUR_RADIUS). */
 export const VIBRANCY_EQUIVALENT_BLUR = 30
-/** Set by the perf gate (`perf/translucency-2026-10.md`). true → new installs default to Sidebar only. */
+/**
+ * Set by the perf gate (`perf/translucency-2026-10.md`, rerun in `perf/translucency-gate-2-2026-10-22.md`). true → new installs
+ * default to Sidebar only. The rerun kept it: whole-window glass fails streaming intervals over 33 ms and WindowServer GPU time.
+ */
 export const DEFAULT_SIDEBAR_ONLY = true
 export const DEFAULT_VARIANT_MATERIAL: VariantMaterial = { material: 'translucent', opacity: 90, blur: 64, sidebarOnly: DEFAULT_SIDEBAR_ONLY }
 /** Sidebar only also makes the thread panel glass (the source's own `--app-sidebar-surface`); false keeps it opaque. */

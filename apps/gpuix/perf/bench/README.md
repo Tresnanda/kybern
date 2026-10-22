@@ -241,3 +241,10 @@ submission and exact measured frame count to emit every interval over 16.7 ms,
 with native draw/layout costs, React commits and input-paint probes. Its counts
 must agree with the result JSON. Categories are correlations; uninstrumented
 JS/GC/shaping work is not inferred from a short native draw.
+
+## Interleaved material gate
+
+`gate2.ts` runs arms of environment pins (`KYBERN_WINDOW_MATERIAL`, blur, single fill, theme) interleaved A B B A across rounds with a
+seeded scenario order, a discarded warm-up pass and a thermal check, and writes one JSON line per window. `gate2-report.ts` turns it
+into paired tables with bootstrap CIs, a 10% submission-count validity rule and an A/A arm. `gate2-stats.ts` holds the schedule and
+statistics (tests in `gate2-stats.test.ts`). Results and the decision: `perf/translucency-gate-2-2026-10-22.md`.
