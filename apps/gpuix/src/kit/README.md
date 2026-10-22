@@ -40,9 +40,9 @@ the alternative is `secondary danger` on the leading edge, Cancel + primary trai
 | Component | Props | Replaced |
 | --- | --- | --- |
 | `Button` | `variant` primary/secondary/ghost/destructive, `danger`, `size` sm/md/lg, `icon`, `iconAfter`, `chevron`, `kbd`, `busy`, `disabled`, `swap`, `trailing`, `block`, `onKeyboard`, `label` | `transcript/kit` Button, `settings/controls` Button, `usage/controls` Button, `KitButton`, `EnvButton`, `GuardButton`, `PaneButton`, tray `HeaderButton`, Notes `HeaderButton`, and the one-off pills |
-| `IconButton` | `icon`, `label` (required), `size`, `active`, `secondary`, `glyph`, `color`, `disabled` | sidebar `IconButton`, title-bar `ChromeIcon`, `ChromeButton`, editor toolbar, terminal toolbar, `AddButton`, `Toggle`'s icon form |
+| `IconButton` | `icon`, `label` (required), `size`, `active`, `secondary`, `glyph`, `color`, `disabled` | sidebar `IconButton`, title-bar `ChromeIcon`, `ChromeButton`, editor toolbar, terminal toolbar, `AddButton`, `Toggle` (deleted) |
 | `SplitButton` | `variant` primary/secondary, `size`, `onClick`, `menu` (the `MenuItem`s), `menuAlign` | the PR Merge pair, Notes compose + chevron |
-| `PickerChip` | `icon`/`mark`/`dot`/`lead`, `secondary`, `chevron`, `open`, `selected`, `neutral`, `quiet`, `size` sm/md, `truncate`, `maxWidth` | `FooterChip`, `TrayChip`, Notes `Chip`, the Tasks scope chip, the model trigger, "Queue ⌄", the dock empty-state chips |
+| `PickerChip` | `icon`/`mark`/`dot`/`lead`, `secondary`, `chevron`, `open`, `selected`, `neutral`, `quiet`, `muted`, `size` sm/md, `truncate`, `maxWidth` | `FooterChip`, `TrayChip`, Notes `Chip`, the Tasks scope chip, the model trigger, "Queue ⌄", the dock empty-state chips |
 | `TokenChip` | `onRemove`, `lead` | the Computer-use app chips, `Combobox` chips |
 | `Checkbox` | as before (`indeterminate`, `invalid`) | the Tasks `Check`, the criteria box, `WorktreeCheck`, the close-guard box, coordinator glyph checkboxes |
 | `Radio`, `RadioRow` | `checked`, `title`, `description`, `onSelect` | the question-card and PR-review radios |
@@ -110,16 +110,15 @@ They keep an Escape stack (the innermost
 overlay closes first: a `Select` inside a `Sheet`; `useEscapeLayer(open)` returns `claim()` for Escape and `isTop()` for outside
 presses, and `nav/overlay.tsx`'s `Dialog` defers to `kitOverlayOpen()`) and return focus to the opener. Neither traps Tab yet.
 The window size is read only while one is mounted (`WindowSized`). `ModalLayer`, `useEscapeLayer`, `usePresence`, `WindowSized`
-and `KitButton` (the desktop `Button`: `variant` default/outline/destructive/…, `size`, `icon`) are exported for other dialogs.
+are exported for other dialogs; the footer buttons are the one `Button` (`AlertDialogClose`/`SheetClose` map the desktop's variant names with `controlVariant`).
 
 ## Form controls
 
 - `Switch` (`checked`/`defaultChecked`/`onCheckedChange`, `disabled`, `aria-label`): 32×20 track, 12 px thumb travel, press stretch.
 - `Checkbox` (same plus `indeterminate`, `invalid`): the check strokes itself in (`.t-check-path`), painted natively by
   `paintAnimation: { kind: 'stroke' }` (`motion/success.ts` `strokeDraw`; no render or JS per frame).
-- `Toggle` (`pressed`/`defaultPressed`/`onPressedChange`, `variant` default/outline, `size` xs/sm/default/lg, `icon`, children = label).
-- `Segmented` (`options: {value,label,unavailable?}[]`, `value`, `onChange`, `busy`, `textSize` 14, `segmentHeight` 24, `segmentPadX` 8,
-  `fill`): radiogroup with the raised thumb that slides between segments; arrow keys skip unavailable options.
+- `Segmented` (`options: {value,label,icon?,count?,unavailable?}[]`, `value`, `onChange`, `busy`, `size` md/sm, `segmentPadX`, `fill`): radiogroup with the sliding tinted thumb;
+  arrow keys skip unavailable options.
 - `TimePicker` (`value` "HH:MM", `onChange`, `width` 168): two scrolling columns.
 - `Select` (`options: SelectEntry[]` = `{value,label,disabled?} | {group} | {separator:true}`, `value`/`defaultValue`/`onValueChange`,
   `placeholder`, `size` xs/sm/default/lg, `variant`, `surface` settings/composer, `side`, `align`, `sideOffset`, `width`, `label`):
@@ -157,7 +156,7 @@ Leaves only: a box with a background does not scale (no subtree scale in the ren
 - `HoverCard`, `Tip` (`nav/overlay.tsx`), `Menu`, `ContextMenu` and `MenuSub`: popups stay mounted through their exit (`PopupLayer`
   `leaving`/`onLeft`): menus 150 ms to 0.99, tooltips and hover cards 80 ms. A close from the keyboard (Escape, Enter on an item)
   unmounts at once; a tooltip or card that opened `instant` leaves at once too; submenus leave with the root menu.
-- `Switch`, `Segmented` (equal-width segments) and `Toggle`'s `Fill` move or fade as paint-only transforms; `Badge` pops a numeric
+- `Switch` and `Segmented` (equal-width segments) move or fade as paint-only transforms; `Badge` pops a numeric
   label when it changes after mount (`useCountPop`).
 - `dock/loading.tsx` `LoadingLines`, `useAfter`: a skeleton that only shows after 150 ms of waiting (never a flash for fast reads).
 

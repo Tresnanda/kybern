@@ -123,8 +123,8 @@ export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: strin
               />
             </div>
           ))}
-          <div key="add-criterion" style={padding}>
-            <Button testId="task-add-criterion" variant="ghost" size="sm" icon="plus" style={{ marginLeft: -6 }} onClick={() => { changeCriteria([...criteria, { checked: false, text: '' }], false); setFocusRow({ index: criteria.length, token: Date.now() }) }}>Add a criterion</Button>
+          <div key="add-criterion" style={{ ...padding, display: 'flex', alignItems: 'center' }}>
+            <Button testId="task-add-criterion" variant="ghost" size="sm" icon="plus" onClick={() => { changeCriteria([...criteria, { checked: false, text: '' }], false); setFocusRow({ index: criteria.length, token: Date.now() }) }}>Add a criterion</Button>
           </div>
           <div key="notes-title" style={{ ...padding, paddingTop: 36, paddingBottom: 8, display: 'flex', alignItems: 'center' }}>
             <Label color={t.text} size={13} lineHeight={19.5} weight={600}>Linked notes</Label>
@@ -141,7 +141,7 @@ export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: strin
             </div>
           ))}
           <div key="link-note" style={padding}>
-            <Menu testId="task-attach-note" trigger={() => <Button variant="ghost" size="sm" icon="plus" style={{ marginLeft: -6 }}>Link a note</Button>}>
+            <Menu testId="task-attach-note" trigger={() => <Button variant="ghost" size="sm" icon="plus">Link a note</Button>}>
               {availableNotes.filter((note) => !note.deleted_at && !task.note_ids.includes(note.id) && noteRpc(note.id) === getClient()).map((note) => <MenuItem key={note.id} id={note.id} testId={`task-attach-${note.id}`} label={note.title || 'Untitled'} onSelect={() => void updateTask(task.id, { note_ids: [...task.note_ids, note.id] }).catch(() => {})} />)}
             </Menu>
           </div>

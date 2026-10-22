@@ -37,6 +37,8 @@ export interface PickerChipProps {
   selected?: boolean
   neutral?: boolean
   quiet?: boolean
+  /** An unselected chip reads in secondary ink until hovered (a filter row), instead of full ink. */
+  muted?: boolean
   size?: 'sm' | 'md'
   disabled?: boolean
   /** Let the chip shrink and its label truncate (a footer row that must fit); `maxWidth` caps it. */
@@ -50,7 +52,7 @@ export interface PickerChipProps {
   style?: StyleDesc
 }
 
-export function PickerChip({ children, icon, mark, dot, lead, secondary, chevron = true, open = false, selected = false, neutral = false, quiet = false, size = 'md', disabled = false, truncate = false, maxWidth, onClick, onKeyboard, label, testId, style }: PickerChipProps) {
+export function PickerChip({ children, icon, mark, dot, lead, secondary, chevron = true, open = false, selected = false, neutral = false, quiet = false, muted = false, size = 'md', disabled = false, truncate = false, maxWidth, onClick, onKeyboard, label, testId, style }: PickerChipProps) {
   const t = useTheme()
   const c = useControls()
   const g = CONTROL[size]
@@ -59,7 +61,7 @@ export function PickerChip({ children, icon, mark, dot, lead, secondary, chevron
   const selectedBg = neutral || quiet ? c.ink(0.12) : c.chip.selBg
   const rest = selected ? selectedBg : open ? (quiet ? c.prop.hover : c.chip.open) : quiet ? 'rgba(0, 0, 0, 0)' : c.chip.bg
   const hoverBg = selected ? selectedBg : quiet ? c.prop.hover : c.chip.hover
-  const fg = disabled ? c.disabled.fg : selected && !neutral && !quiet ? c.chip.selFg : lit || open || selected || quiet ? t.text : t.text
+  const fg = disabled ? c.disabled.fg : selected && !neutral && !quiet ? c.chip.selFg : muted && !selected && !lit && !open ? t.textSecondary : t.text
   const glyphColor = disabled ? c.disabled.fg : selected && !neutral && !quiet ? c.chip.selFg : lit ? t.text : t.iconSecondary
   const showChevron = chevron && (!quiet || lit || open)
   const hasLead = !!(icon || mark || dot || lead)

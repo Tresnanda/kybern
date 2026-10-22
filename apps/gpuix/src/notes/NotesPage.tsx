@@ -167,7 +167,7 @@ function emptyDetail(filter: NotesFilter): string {
 
 /** A scope chip: a `PickerChip` kept quiet and neutral (Notes keeps selection in ink), no chevron (a single-select filter). */
 function Chip({ label, selected, dot, icon, onClick, testId }: { label: string; selected?: boolean; dot?: string | null; icon?: string; onClick: (byKey: boolean) => void; testId?: string }) {
-  return <PickerChip quiet neutral chevron={false} testId={testId} label={label} selected={selected} icon={icon} lead={dot !== undefined && dot !== null ? <ProjectDot projectId={dot} /> : undefined}
+  return <PickerChip quiet neutral muted chevron={false} testId={testId} label={label} selected={selected} icon={icon} lead={dot !== undefined && dot !== null ? <ProjectDot projectId={dot} /> : undefined}
     onKeyboard={() => onClick(true)} onClick={() => onClick(false)}>{label}</PickerChip>
 }
 

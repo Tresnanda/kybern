@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { WorktreeInspectResult } from '../../../../packages/kybern-client/src/types.ts'
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
+import { N } from '../nav/glyphs.ts'
 import { Button } from '../kit/Button.tsx'
 import { Checkbox } from '../kit/Checkbox.tsx'
 import { getClient, refreshLists, useApp } from '../state.ts'
@@ -44,7 +45,7 @@ export function WorktreeCleanup({ threadId, close }: { threadId: string; close: 
           {inspection.ignored_files > 0 && <Label color={t.textSecondary} size={14}>{`${inspection.ignored_files} ignored files remain. Move deliverables or remove build output before continuing.`}</Label>}
         </> : <Label color={t.text} size={14}>The folder is removed. Your conversation and source recovery ref remain available.</Label>}
       </>}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>{inspection?.exists === false ? <Button size="lg" variant="primary" disabled={busy} onClick={dismiss}>Done</Button> : <><Button size="lg" variant="secondary" disabled={busy} onClick={dismiss}>Keep worktree</Button><Button size="lg" variant="ghost" disabled={busy} onClick={() => setReload((n) => n + 1)}>Refresh</Button><Button size="lg" variant="destructive" testId="worktree-remove" disabled={busy || !inspection || inspection.blockers.length > 0 || (!!unsafe && !force)} onClick={() => void remove()}>{busy ? 'Removing…' : force ? 'Remove worktree anyway' : 'Remove worktree'}</Button></>}</div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>{inspection?.exists === false ? <Button size="lg" variant="primary" disabled={busy} onClick={dismiss}>Done</Button> : <><Button size="lg" variant="ghost" icon={N.refresh} disabled={busy} onClick={() => setReload((n) => n + 1)}>Refresh</Button><div style={{ flexGrow: 1 }} /><Button size="lg" variant="secondary" disabled={busy} onClick={dismiss}>Keep worktree</Button><Button size="lg" variant="destructive" testId="worktree-remove" disabled={busy || !inspection || inspection.blockers.length > 0 || (!!unsafe && !force)} onClick={() => void remove()}>{busy ? 'Removing…' : force ? 'Remove worktree anyway' : 'Remove worktree'}</Button></>}</div>
     </div>
   </Dialog>
 }
@@ -54,6 +55,6 @@ function CheckRow({ checked, onChange, label, disabled, testId, children }: { ch
   const t = useTheme()
   return <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
     <Checkbox testId={testId} aria-label={label} checked={checked} onCheckedChange={onChange} disabled={disabled} style={{ marginTop: 3 }} />
-    <div onClick={() => { if (!disabled) onChange(!checked) }} style={{ display: 'flex', flexBasis: 0, flexGrow: 1, minWidth: 0, cursor: disabled ? 'default' : 'pointer' }}><Label color={disabled ? t.textTertiary : t.text} size={14} lineHeight={22}>{children}</Label></div>
+    <div onClick={() => { if (!disabled) onChange(!checked) }} style={{ display: 'flex', flexBasis: 0, flexGrow: 1, minWidth: 0, cursor: disabled ? 'default' : 'pointer' }}><Label color={disabled ? t.textTertiary : t.text} size={14} lineHeight={22} style={{ flexBasis: 0, flexGrow: 1, minWidth: 0 }}>{children}</Label></div>
   </div>
 }
