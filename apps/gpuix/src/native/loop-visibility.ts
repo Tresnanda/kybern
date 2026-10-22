@@ -18,7 +18,8 @@ export function hasWholePaint({rect, clippedRect:clip}: Pick<ElementBoundsEvent,
 /** `whole`: visible only while nothing clips it (`hasWholePaint`). A chat kept mounted under a document tab (`ChatHidden`, opacity
  *  0) still has a painted rect, so its loops count as hidden explicitly: loaders, spinners and timers there present no frames. */
 export function useLoopVisibility(activeProp = true, whole = false) {
-  const active = activeProp && !useChatHidden()
+  const hidden = useChatHidden()
+  const active = activeProp && !hidden
   const renderer = useGpuix()?.renderer
   const canObserve = typeof (renderer as {addLayoutObserver?: unknown} | undefined)?.addLayoutObserver === 'function'
   const ref = useRef<PublicInstance | null>(null)
