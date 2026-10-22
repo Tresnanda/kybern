@@ -43,12 +43,14 @@ export interface PickerChipProps {
   truncate?: boolean
   maxWidth?: number
   onClick?: () => void
+  /** Called instead of `onClick` when Enter or Space activates the chip (keyboard-navigation flags). */
+  onKeyboard?: () => void
   label?: string
   testId?: string
   style?: StyleDesc
 }
 
-export function PickerChip({ children, icon, mark, dot, lead, secondary, chevron = true, open = false, selected = false, neutral = false, quiet = false, size = 'md', disabled = false, truncate = false, maxWidth, onClick, label, testId, style }: PickerChipProps) {
+export function PickerChip({ children, icon, mark, dot, lead, secondary, chevron = true, open = false, selected = false, neutral = false, quiet = false, size = 'md', disabled = false, truncate = false, maxWidth, onClick, onKeyboard, label, testId, style }: PickerChipProps) {
   const t = useTheme()
   const c = useControls()
   const g = CONTROL[size]
@@ -72,7 +74,7 @@ export function PickerChip({ children, icon, mark, dot, lead, secondary, chevron
       aria-expanded={open || undefined}
       aria-disabled={disabled || undefined}
       onClick={disabled ? undefined : onClick}
-      onKeyDown={onClick ? (e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) onClick() } : undefined}
+      onKeyDown={onClick ? (e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) (onKeyboard ?? onClick)() } : undefined}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       paintTransform={pressTransform(!disabled && !!onClick, SCALE.large)}

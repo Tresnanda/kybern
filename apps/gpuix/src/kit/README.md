@@ -14,6 +14,51 @@ checked against it, in images, with `scripts/kit9-pair.ts` (see "Verifying").
   `kit/hoverController.ts` so only one is visible app-wide.
 - Never a JS timer or React commit driving visible movement per frame: use `motion.div` tweens or paint animations.
 
+## The control system (ADE-55, Direction C "Tinted state")
+
+One set of controls for the whole app. Colour means state: the commit action and every selection share one translucent accent tint, never
+a solid slab; neutrals are ink alphas, so every control composites on any surface including whole-window glass (the dark column serves
+Solid dark and glass alike). Spec: `.kybern-artifacts/ade-55-design/spec.md`. A live board of every component is
+`gallery/controlsBoard.tsx` (`KIT_SECTION=controls-board`, captured by `bun scripts/kit-controls-board.ts <out> [dark|light|both]`).
+
+**Tokens (`controls.ts`).** `RADIUS` (xs 5, sm 8, md 9, lg 11, xl 13, field 9, check 5, kbd 5, pill 999, segTrack 11, segThumb 9),
+`HEIGHT` (xs 20, sm 24, md 28, lg 32, xl 36), `SPACE` (the 4 pt grid), `CONTROL[size]` (per `sm|md|lg`: height, padX, iconPad, label
+and glyph size, gap, radius) and `useControls()` / `controlsFor(theme)` (the colour tokens: `primary`, `secondary`, `ghost`,
+`destructive`, `danger`, `disabled`, `focus`, `field`, `chip`, `segmented`, `check`, …). Nothing hard-codes 8/10/14 or 28/32 on a
+control any more. Hover, pressed and keyboard focus (`focusVisible`, a 2 px accent outline) are native styles with no React state; only
+the ghost label and icon buttons track the pointer, because a native hover cannot recolour a child.
+
+**States.** rest, hover (one fill step up), pressed (a further step plus `SCALE.press`), `focusVisible` (keyboard only), selected/on
+(tint, never colour alone), disabled (the disabled fill and `text3`, no hover, press or shadow: a disabled primary no longer looks
+primary), busy (label kept, a 12 px spinner leads it, disabled).
+
+**One-primary rule.** At most one `primary` per surface (card, dialog, bar, header, composer, settings section). On a confirm surface the
+destructive action is the primary (`destructive`) and Cancel/Keep is `secondary`. A safe primary with a destructive alternative:
+the alternative is `secondary danger` on the leading edge, Cancel + primary trailing. Lowest weight is `ghost`. The primary owns ⌘↵
+(`kbd="⌘↵"`). Menus never contain buttons.
+
+| Component | Props | Replaced |
+| --- | --- | --- |
+| `Button` | `variant` primary/secondary/ghost/destructive, `danger`, `size` sm/md/lg, `icon`, `iconAfter`, `chevron`, `kbd`, `busy`, `disabled`, `swap`, `trailing`, `block`, `onKeyboard`, `label` | `transcript/kit` Button, `settings/controls` Button, `usage/controls` Button, `KitButton`, `EnvButton`, `GuardButton`, `PaneButton`, tray `HeaderButton`, Notes `HeaderButton`, and the one-off pills |
+| `IconButton` | `icon`, `label` (required), `size`, `active`, `secondary`, `glyph`, `color`, `disabled` | sidebar `IconButton`, title-bar `ChromeIcon`, `ChromeButton`, editor toolbar, terminal toolbar, `AddButton`, `Toggle`'s icon form |
+| `SplitButton` | `variant` primary/secondary, `size`, `onClick`, `menu` (the `MenuItem`s), `menuAlign` | the PR Merge pair, Notes compose + chevron |
+| `PickerChip` | `icon`/`mark`/`dot`/`lead`, `secondary`, `chevron`, `open`, `selected`, `neutral`, `quiet`, `size` sm/md, `truncate`, `maxWidth` | `FooterChip`, `TrayChip`, Notes `Chip`, the Tasks scope chip, the model trigger, "Queue ⌄", the dock empty-state chips |
+| `TokenChip` | `onRemove`, `lead` | the Computer-use app chips, `Combobox` chips |
+| `Checkbox` | as before (`indeterminate`, `invalid`) | the Tasks `Check`, the criteria box, `WorktreeCheck`, the close-guard box, coordinator glyph checkboxes |
+| `Radio`, `RadioRow` | `checked`, `title`, `description`, `onSelect` | the question-card and PR-review radios |
+| `Segmented` | `size` sm/md, options with `icon` and `count`, `fill` | `settings/controls` Segmented, `usage/controls` Segments (non-tab uses), the Tasks view toggle |
+| `TextField`, `SearchField`, `NumberField`, `TextArea`, `FieldShell` | `size` md/lg, `invalid`, `disabled`, `bare`, `leading`, `trailing`, `width` | `settings/controls` TextField/NumberField, the palette, settings, PR list and Notes searches, `AnswerField`, the PR review and environment textareas, `EnvInput` |
+| `SelectTrigger` | the display name as children, `mark`, `size`, `open`, `placeholder` | the `settings/controls` Select trigger, `kit/Select`'s trigger, the usage period button |
+| `Kbd` | `keys` | `nav/overlay` Kbd (18 high, one chip per key, a 1 px ink edge) |
+
+`Slider` (Settings only; the model-picker effort slider is unchanged) draws the 4 px track, the accent fill and the 16 px thumb; `Switch`
+keeps its 32 × 20 geometry with no off-track border, the new thumb shadow and a native focus ring. The nav rail is unchanged by design.
+Tasks and Notes keep their quiet look: `PickerChip quiet` (transparent at rest, a neutral ink fill and the chevron on hover) for the
+property pickers and `neutral` for selected filters, so their selection stays ink; accent stays on the commit action, focus and
+selection elsewhere.
+
+Known gaps: a disabled `TextField` shows the ink edge only (the spec's 45° hatch needs a repeating pattern the renderer lacks).
+
 ## Verifying (the gallery)
 
 `visual/kit/` renders a named *section* of the desktop's own kit components (Vite + WebKit, no daemon);

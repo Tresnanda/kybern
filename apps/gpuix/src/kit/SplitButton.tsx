@@ -15,6 +15,8 @@ export interface SplitButtonProps {
   size?: ControlSize
   onClick: () => void
   disabled?: boolean
+  /** The menu part stays live while the label part is disabled (a blocked Merge still offers Close). */
+  keepMenu?: boolean
   /** The menu part's items (`MenuItem`s). */
   menu: ReactNode
   menuAlign?: 'start' | 'center' | 'end'
@@ -24,7 +26,7 @@ export interface SplitButtonProps {
   style?: StyleDesc
 }
 
-export function SplitButton({ children, variant = 'primary', size = 'md', onClick, disabled = false, menu, menuAlign = 'end', testId, menuTestId, menuLabel = 'More actions', style }: SplitButtonProps) {
+export function SplitButton({ children, variant = 'primary', size = 'md', onClick, disabled = false, keepMenu = false, menu, menuAlign = 'end', testId, menuTestId, menuLabel = 'More actions', style }: SplitButtonProps) {
   const c = useControls()
   const g = CONTROL[size]
   const v = variant === 'primary' ? c.primary : c.secondary
@@ -32,6 +34,9 @@ export function SplitButton({ children, variant = 'primary', size = 'md', onClic
   const bg = disabled ? c.disabled.bg : v.bg
   const r = g.radius
   const weight = variant === 'primary' ? 600 : 500
+  const menuOff = disabled && !keepMenu
+  const mfg = menuOff ? c.disabled.fg : v.fg
+  const mbg = menuOff ? c.disabled.bg : v.bg
   const part: StyleDesc = { display: 'flex', alignItems: 'center', justifyContent: 'center', height: g.height, backgroundColor: bg, cursor: disabled ? 'default' : 'pointer' }
   return (
     <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0, ...style }}>
@@ -47,10 +52,10 @@ export function SplitButton({ children, variant = 'primary', size = 'md', onClic
         <div style={{ position: 'absolute', left: 0, top: 6, bottom: 6, width: 1, backgroundColor: fg, opacity: 0.22 }} />
       </div>
       <Menu testId={menuTestId} align={menuAlign} trigger={() => (
-        <div role="button" aria-label={menuLabel} style={{ ...part, width: 24, borderTopRightRadius: r, borderBottomRightRadius: r, ...(disabled ? {} : { hover: { backgroundColor: v.hover }, active: { backgroundColor: v.press } }) }}>
-          <Icon source={N.chevronDown} size={12} color={fg} style={{ pointerEvents: 'none' }} />
+        <div role="button" aria-label={menuLabel} style={{ ...part, backgroundColor: mbg, cursor: menuOff ? 'default' : 'pointer', width: 24, borderTopRightRadius: r, borderBottomRightRadius: r, ...(menuOff ? {} : { hover: { backgroundColor: v.hover }, active: { backgroundColor: v.press } }) }}>
+          <Icon source={N.chevronDown} size={12} color={mfg} style={{ pointerEvents: 'none' }} />
         </div>
-      )}>{disabled ? null : menu}</Menu>
+      )}>{menuOff ? null : menu}</Menu>
     </div>
   )
 }

@@ -12,7 +12,7 @@ import { motion, type StyleDesc } from '@gpuix/react'
 import { useState } from 'react'
 import { DURATION, EASE } from '../motion/kit.tsx'
 import { strokeDraw } from '../motion/success.ts'
-import { over } from '../theme.ts'
+
 import { REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { dim, useControllable, useFocusRing, withAlpha } from './Switch.tsx'
 import { RADIUS, useControls } from './controls.ts'

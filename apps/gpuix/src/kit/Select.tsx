@@ -29,10 +29,9 @@ import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { muted, PopupLayer, surfaceShadow } from '../composer/Menu.tsx'
 import { Icon } from '../icons.tsx'
-import { N } from '../nav/glyphs.ts'
+
 import { useSettingsModal } from '../settings/controls.tsx'
 import { Label, useTheme } from '../ui.tsx'
-import { raisedFill, raisedRim, useGlass } from '../platform/glass.ts'
 import { useEscapeLayer } from './AlertDialog.tsx'
 import { SelectTrigger } from './SelectTrigger.tsx'
 
@@ -102,7 +101,6 @@ export function Select({
   testId?: string
 }) {
   const t = useTheme()
-  const g = useGlass()
   const { renderer } = useGpuix()
   const [own, setOwn] = useState(defaultValue)
   const value = valueProp !== undefined ? valueProp : own

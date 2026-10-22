@@ -109,7 +109,6 @@ export function Switch({ checked: checkedProp, defaultChecked = false, onChecked
   // Disabled: colours flattened onto the page instead of a per-element opacity (see `dim`).
   const page = t.v('--background')
   const d = (color: string, under?: string) => (disabled ? dim(color, page, under, 0.4, t.scope === 'window') : color)
-  const track = checked ? c.switch.on : c.switch.off
   const thumb = <div style={{ flexGrow: 1, height: 16, borderRadius: 8, backgroundColor: d('#ffffff'), boxShadow: [{ offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 0.5, color: 'rgba(0, 0, 0, 0.12)' }, { offsetX: 0, offsetY: 1, blurRadius: 1, spreadRadius: 0, color: `rgba(0, 0, 0, ${disabled ? 0.1 : 0.25})` }], pointerEvents: 'none' }} />
   const layer: StyleDesc = { position: 'absolute', left: 0, top: 0, width: 32, height: 20, borderRadius: 10, pointerEvents: 'none' }
   return (

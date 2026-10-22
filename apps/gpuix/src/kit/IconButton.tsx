@@ -3,7 +3,7 @@
 // `sidebar/rows.tsx` IconButton, `nav/TitleBar` ChromeIcon, `notes/EditorBar` IconButton, the terminal toolbar buttons,
 // Tasks `AddButton`, `ChromeButton` and `Toggle`'s icon form. The hit area is never under 24.
 import type { StyleDesc } from '@gpuix/react'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Icon } from '../icons.tsx'
 import { SCALE } from '../motion/kit.tsx'
 import { pressTransform } from '../motion/press.ts'
@@ -23,15 +23,22 @@ export interface IconButtonProps {
   secondary?: boolean
   disabled?: boolean
   onClick?: () => void
+  /** Called on Enter/Space before `onClick` (keyboard-navigation flags), like `Button`. */
+  onKeyboard?: () => void
   /** Glyph size; defaults to 14 at `sm` and 16 above. */
   glyph?: number
   /** Overrides the rest glyph colour (a status colour). */
   color?: string
+  /** Replaces the glyph (a spinner, or a glyph that swaps on change); `icon` is then unused. */
+  children?: ReactNode
+  /** Focus reporters (a row that keeps its actions showing while one is focused). */
+  onFocus?: () => void
+  onBlur?: () => void
   testId?: string
   style?: StyleDesc
 }
 
-export function IconButton({ icon, label, size = 'md', active = false, secondary = false, disabled = false, onClick, glyph, color, testId, style }: IconButtonProps) {
+export function IconButton({ icon, label, size = 'md', active = false, secondary = false, disabled = false, onClick, onKeyboard, glyph, color, children, onFocus, onBlur, testId, style }: IconButtonProps) {
   const t = useTheme()
   const c = useControls()
   const g = CONTROL[size]
@@ -48,7 +55,9 @@ export function IconButton({ icon, label, size = 'md', active = false, secondary
       aria-pressed={active || undefined}
       aria-disabled={disabled || undefined}
       onClick={disabled ? undefined : onClick}
-      onKeyDown={onClick ? (e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) onClick() } : undefined}
+      onKeyDown={onClick ? (e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) { onKeyboard?.(); onClick() } } : undefined}
+      onFocus={onFocus}
+      onBlur={onBlur}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       paintTransform={pressTransform(!disabled && !!onClick, SCALE.large)}
@@ -64,7 +73,7 @@ export function IconButton({ icon, label, size = 'md', active = false, secondary
         ...style,
       }}
     >
-      <Icon source={glyphSource(icon)} size={glyph ?? g.iconOnly} color={fg} style={{ pointerEvents: 'none' }} />
+      {children ?? <Icon source={glyphSource(icon)} size={glyph ?? g.iconOnly} color={fg} style={{ pointerEvents: 'none' }} />}
     </div>
   )
 }

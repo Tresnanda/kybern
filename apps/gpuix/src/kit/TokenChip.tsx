@@ -7,13 +7,15 @@ import { N } from '../nav/glyphs.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { HEIGHT, RADIUS, useControls } from './controls.ts'
 
-export function TokenChip({ children, lead, onRemove, removeLabel, disabled = false, testId, style }: {
+export function TokenChip({ children, lead, onRemove, removeLabel, removeTestId, disabled = false, testId, style }: {
   children: string
   lead?: ReactNode
   /** Shows the ✕ when set. */
   onRemove?: () => void
   /** Accessible name of the ✕ (default "Remove <label>"). */
   removeLabel?: string
+  /** Test id of the ✕ (default `<testId>-remove`). */
+  removeTestId?: string
   disabled?: boolean
   testId?: string
   style?: StyleDesc
@@ -26,7 +28,7 @@ export function TokenChip({ children, lead, onRemove, removeLabel, disabled = fa
       <Label color={disabled ? c.disabled.fg : t.text} size={12} lineHeight={16} weight={500} truncate>{children}</Label>
       {onRemove && (
         <div
-          testId={testId ? `${testId}-remove` : undefined}
+          testId={removeTestId ?? (testId ? `${testId}-remove` : undefined)}
           role="button" tabIndex={disabled ? -1 : 0} aria-label={removeLabel ?? `Remove ${children}`}
           onClick={disabled ? undefined : onRemove}
           onKeyDown={(e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) onRemove() }}

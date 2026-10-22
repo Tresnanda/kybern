@@ -74,7 +74,8 @@ export interface TextFieldProps extends Omit<InputProps, 'value' | 'onChange' | 
   style?: StyleDesc
   shell?: StyleDesc
   testId?: string
-  onSubmit?: () => void
+  /** The input's submit handler (it receives the event: `e.modifiers?.cmd` for ⌘↵). */
+  onSubmit?: InputProps['onSubmit']
   onBlur?: () => void
 }
 
