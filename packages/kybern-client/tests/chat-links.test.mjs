@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chatLink, kybernRef, kybernRefsIn, splitKybernRefs } from "../src/chatLinks.ts";
-import { createHistoryPagingGate, EARLIER_HISTORY_ENTRIES } from "../src/historyPaging.ts";
+import { createHistoryPagingGate, EARLIER_HISTORY_ENTRIES, EARLIER_HISTORY_PAGE, historyPageShowedNothing, historyTop } from "../src/historyPaging.ts";
 
 test("chat references separate connected files from external URLs and preserve location suffixes", () => {
   for (const [input, path, line] of [
@@ -66,6 +66,20 @@ test("history prefetch waits for reading intent and loads each nearby cursor onc
   assert.equal(gate.claim(50, 900, 600, true), true, "browsing continues across pages");
   assert.equal(gate.claim(null, 0, 600, true), false, "oldest page stops loading");
   assert.equal(gate.claim(20, 0, 0, true), false, "hidden viewport does not fetch");
+});
+
+test("older pages ask for whole turns, and a page inside one turn shows the reader nothing", () => {
+  assert.deepEqual(EARLIER_HISTORY_PAGE, { transcript_limit: EARLIER_HISTORY_ENTRIES, whole_turns: true, transcript_only: true });
+  const work = (turnId, count) => Array.from({ length: count }, () => ({ turnId, kind: "tool" }));
+  const middle = [...work("b", 120), { turnId: "c", kind: "user" }];
+  assert.deepEqual(historyTop(middle), { key: "b", prompt: false });
+  const deeper = [...work("b", 240), ...middle];
+  assert.equal(historyPageShowedNothing(historyTop(middle), historyTop(deeper)), true, "more of the same turn");
+  const prompt = [{ turnId: "b", kind: "user" }, ...deeper];
+  assert.equal(historyPageShowedNothing(historyTop(deeper), historyTop(prompt)), false, "the turn's prompt appeared");
+  const older = [...work("a", 3), ...prompt];
+  assert.equal(historyPageShowedNothing(historyTop(prompt), historyTop(older)), false, "an older turn appeared");
+  assert.deepEqual(historyTop([]), { key: "", prompt: false });
 });
 
 test("thread row disclosure hides branches without losing orphan or selected threads", async () => {

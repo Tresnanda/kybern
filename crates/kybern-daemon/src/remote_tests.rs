@@ -1638,6 +1638,93 @@ async fn cached_history_pages_match_full_history_and_keep_their_sequence_barrier
     assert!(matches!(current.transcript.last(), Some(TranscriptEntry::Notice { text, .. }) if text == "New live entry"));
 }
 
+/// Shaped like a delegating thread: a prompt, then hundreds of subagent tool
+/// rows in the same turn. Row pages of 120 ended inside the turn and added
+/// nothing a reader could see; whole-turn pages bring each prompt with its work.
+#[tokio::test]
+async fn whole_turn_history_pages_add_whole_turns_and_leave_thread_state_out() {
+    let host = Host::start().await;
+    let thread = host.thread();
+    let notice = |turn: Uuid, text: String| {
+        host.state
+            .store
+            .event_append(thread.id, Some(turn), EventPayload::ProviderNotice { data: None, level: NoticeLevel::Info, text })
+            .unwrap();
+    };
+    let turns: Vec<Uuid> = (0..3).map(|_| Uuid::now_v7()).collect();
+    for (index, turn) in turns.iter().enumerate() {
+        let rows = if index == 1 { 900 } else { 5 };
+        for row in 0..rows {
+            notice(*turn, format!("turn {index} row {row}"));
+        }
+    }
+    host.state
+        .store
+        .event_append(
+            thread.id,
+            Some(turns[2]),
+            EventPayload::ProviderCommandsUpdated {
+                commands: vec![ProviderCommand { name: "review".into(), description: "Review the change".into() }],
+            },
+        )
+        .unwrap();
+    let client = host.client().await;
+    let params =
+        ThreadsGetParams { thread_id: thread.id, transcript_limit: Some(3), include_tool_output: Some(false), ..Default::default() };
+    let recent = client.call::<ThreadsGet>(params.clone()).await.unwrap();
+    assert_eq!(recent.transcript.len(), 3);
+    assert_eq!(recent.provider_commands.len(), 1);
+    let barrier = recent.thread.last_seq;
+    let full =
+        client.call::<ThreadsGet>(ThreadsGetParams { transcript_limit: None, through_seq: Some(barrier), ..params.clone() }).await.unwrap();
+
+    let page_turns = |page: &[TranscriptEntry]| {
+        let mut ids: Vec<Uuid> = page
+            .iter()
+            .map(|entry| match entry {
+                TranscriptEntry::Notice { turn_id, .. } => *turn_id,
+                other => panic!("unexpected row {other:?}"),
+            })
+            .collect();
+        ids.dedup();
+        ids
+    };
+    let mut collected = recent.transcript;
+    let mut cursor = recent.next_before_seq;
+    let mut pages = Vec::new();
+    while let Some(before_seq) = cursor {
+        let older = client
+            .call::<ThreadsGet>(ThreadsGetParams {
+                before_seq: Some(before_seq),
+                through_seq: Some(barrier),
+                whole_turns: Some(true),
+                transcript_only: Some(true),
+                ..params.clone()
+            })
+            .await
+            .unwrap();
+        assert_eq!(older.thread.last_seq, barrier);
+        assert!(older.provider_commands.is_empty() && older.runtime_tasks.is_empty() && older.pending_approvals.is_empty());
+        pages.push(page_turns(&older.transcript));
+        cursor = older.next_before_seq;
+        let mut entries = older.transcript;
+        entries.append(&mut collected);
+        collected = entries;
+    }
+    // The first older page finishes the newest turn and reaches into the
+    // 900-row turn, so it brings that whole turn too; then the oldest turn.
+    assert_eq!(pages, [vec![turns[1], turns[2]], vec![turns[0]]]);
+    assert_eq!(serde_json::to_value(collected).unwrap(), serde_json::to_value(full.transcript).unwrap());
+
+    // Without the new fields an older page keeps the legacy shape.
+    let legacy = client
+        .call::<ThreadsGet>(ThreadsGetParams { before_seq: recent.next_before_seq, through_seq: Some(barrier), ..params })
+        .await
+        .unwrap();
+    assert_eq!(legacy.transcript.len(), 3);
+    assert_eq!(legacy.provider_commands.len(), 1);
+}
+
 /// Local wire workload; not a physical-device, WAN, CPU or energy benchmark.
 #[tokio::test]
 #[ignore]

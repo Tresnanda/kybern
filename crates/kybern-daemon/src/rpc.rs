@@ -328,29 +328,36 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let mut thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
             let through_seq = p.through_seq.map_or(thread.last_seq, |seq| seq.min(thread.last_seq));
             thread.last_seq = through_seq;
-            let store = state.store.clone();
             let id = p.thread_id;
-            let projection = state
-                .thread_projections
-                .get_or_build((id, through_seq), move || {
-                    Ok(crate::thread_projection::ThreadProjection {
-                        transcript: store.project_transcript_through(id, through_seq)?,
-                        runtime_tasks: store.runtime_tasks_for_thread_through(id, through_seq)?,
-                        provider_usage: store.provider_usage_through(id, through_seq)?,
-                        provider_commands: store.provider_commands_through(id, through_seq)?,
-                        pending_questions: store.pending_questions_through(id, through_seq)?,
-                    })
-                })
-                .await
-                .map_err(internal)?;
-            let (mut transcript, next_before_seq) =
-                kybern_store::transcript_page_ref(&projection.transcript, p.transcript_limit, p.before_seq);
+            let projection = state.thread_projections.transcript(state.store.clone(), id, through_seq).await.map_err(internal)?;
+            let (mut transcript, next_before_seq) = kybern_store::transcript_page_ref_with(
+                projection.transcript.rows(),
+                p.transcript_limit,
+                p.before_seq,
+                p.whole_turns.unwrap_or(false),
+            );
             if p.defer_tool_stream.unwrap_or(false) {
                 state.store.mark_tool_streams_omitted_through(id, &mut transcript, through_seq).map_err(internal)?;
             }
             if p.include_tool_output.unwrap_or(true) {
                 state.store.hydrate_tool_outputs_through(id, &mut transcript, through_seq).map_err(internal)?;
             }
+            // An older page only extends the transcript the client already
+            // holds. Its runtime tasks alone were 1.1 MB of a 1.2 MB page.
+            if p.transcript_only.unwrap_or(false) && p.before_seq.is_some() {
+                return ok(ThreadsGetResult {
+                    notes: Default::default(),
+                    thread,
+                    transcript,
+                    next_before_seq,
+                    pending_approvals: Vec::new(),
+                    runtime_tasks: Vec::new(),
+                    provider_usage: Default::default(),
+                    provider_commands: Vec::new(),
+                    pending_questions: Vec::new(),
+                });
+            }
+            let side = state.thread_projections.side_state(&projection, state.store.clone(), id, through_seq).await.map_err(internal)?;
             let pending_approvals = state.store.approvals_pending(Some(id)).map_err(internal)?;
             ok(ThreadsGetResult {
                 notes: state.store.thread_notes(thread.id).map_err(internal)?,
@@ -358,10 +365,10 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 transcript,
                 next_before_seq,
                 pending_approvals,
-                runtime_tasks: projection.runtime_tasks.clone(),
-                provider_usage: projection.provider_usage.clone(),
-                provider_commands: projection.provider_commands.clone(),
-                pending_questions: projection.pending_questions.clone(),
+                runtime_tasks: side.runtime_tasks.clone(),
+                provider_usage: side.provider_usage.clone(),
+                provider_commands: side.provider_commands.clone(),
+                pending_questions: side.pending_questions.clone(),
             })
         }
         ThreadsRecoverOmpAnswer::NAME => {

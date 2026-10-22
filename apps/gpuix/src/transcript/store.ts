@@ -11,7 +11,7 @@ import { spawn } from 'node:child_process'
 import { useContext, useMemo, useEffect, useState, useSyncExternalStore } from 'react'
 import { TranscriptRowStateScope } from './rowStateScope.ts'
 import { prependThreadHistory, type Block } from '../../../../packages/kybern-client/src/transcript.ts'
-import { EARLIER_HISTORY_ENTRIES } from '../../../../packages/kybern-client/src/historyPaging.ts'
+import { EARLIER_HISTORY_PAGE, historyPageShowedNothing, historyTop } from '../../../../packages/kybern-client/src/historyPaging.ts'
 import type { ApprovalDecision, Diff, Thread, ThreadEvent, ThreadId, TurnId } from '../../../../packages/kybern-client/src/types.ts'
 import { useNav } from '../nav/store.ts'
 import { getClient, getThreadSession, primeThreadHistory, takeThreadHistory, reloadPaneThread, getThreadOpen, setThreadOpen, getFocusedPaneId, getPane, getPaneState, onThreadEvent, subscribe, useApp, usePaneAccess, usePaneId } from '../state.ts'
@@ -237,7 +237,7 @@ export async function revertTo(threadId: ThreadId, turnId: TurnId) {
 
 export const earlierError = createCell<string | null>(null)
 const earlierErrors = new Map<string, ReturnType<typeof createCell<string | null>>>()
-const earlierLoads = new Map<string, Promise<void>>()
+const earlierLoads = new Map<string, Promise<boolean>>()
 function errorFor(id: string) {
   let cell = earlierErrors.get(id)
   if (!cell) { cell = createCell<string | null>(null); earlierErrors.set(id, cell) }
@@ -248,14 +248,16 @@ export function useEarlierError() {
   const cell = id ? errorFor(id) : earlierError
   return useSyncExternalStore(cell.subscribe, cell.get)
 }
-/** Shared paging per thread; each pane retains its own virtual-list anchor. */
-export function loadEarlier(paneId = getFocusedPaneId()): Promise<void> {
+/** Shared paging per thread; each pane retains its own virtual-list anchor.
+ *  Resolves true when the page left the oldest turn as it was (no new turn,
+ *  prompt still missing): the reader at the top saw nothing new. */
+export function loadEarlier(paneId = getFocusedPaneId()): Promise<boolean> {
   const threadId = getPaneState(paneId).selectedId
-  if (!threadId) return Promise.resolve()
+  if (!threadId) return Promise.resolve(false)
   const pending = earlierLoads.get(threadId)
   if (pending) return pending
   const base = getThreadOpen(threadId)
-  if (!base?.loaded || base.nextBeforeSeq == null || base.loadingEarlier) return Promise.resolve()
+  if (!base?.loaded || base.nextBeforeSeq == null || base.loadingEarlier) return Promise.resolve(false)
   const cursor = base.nextBeforeSeq
   const owner = activeEnvironment(), client = getClient(), session = getThreadSession(threadId)
   const events: ThreadEvent[] = []
@@ -267,20 +269,22 @@ export function loadEarlier(paneId = getFocusedPaneId()): Promise<void> {
   const prefetched = takeThreadHistory(threadId, base)
   const request = () => rpc().call('threads.get', {
     thread_id: threadId, include_tool_output: false, defer_tool_stream: true,
-    transcript_limit: EARLIER_HISTORY_ENTRIES, before_seq: cursor, through_seq: base.lastSeq,
+    ...EARLIER_HISTORY_PAGE, before_seq: cursor, through_seq: base.lastSeq,
   })
-  const pendingLoad: Promise<void> = (prefetched ? prefetched.then(page => page ?? (valid() ? request() : null)) : request()).then(page => {
-    if (!page || !valid()) return
+  const pendingLoad: Promise<boolean> = (prefetched ? prefetched.then(page => page ?? (valid() ? request() : null)) : request()).then(page => {
+    if (!page || !valid()) return false
     const started = performance.now()
     const next = prependThreadHistory(base, page, events.filter(event => event.seq > base.lastSeq), getThreadOpen(threadId)!)
     startupMark('history-projected', { cursor, durationMs: performance.now() - started, entries: page.transcript.length })
     setThreadOpen(threadId, next)
     startupMark('history-ready', { cursor: base.nextBeforeSeq, entries: page.transcript.length })
     primeThreadHistory(threadId)
+    return next.nextBeforeSeq != null && historyPageShowedNothing(historyTop(base.blocks), historyTop(next.blocks))
   }).catch(reason => {
-    if (!valid()) return
+    if (!valid()) return false
     error.set(errorText(reason))
     setThreadOpen(threadId, { ...getThreadOpen(threadId)!, loadingEarlier: false })
+    return false
   }).finally(() => { stop(); if (earlierLoads.get(threadId) === pendingLoad) earlierLoads.delete(threadId) })
   earlierLoads.set(threadId, pendingLoad)
   startupMark('history-start', { cursor: base.nextBeforeSeq, prefetched: !!prefetched })

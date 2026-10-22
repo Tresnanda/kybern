@@ -10,8 +10,9 @@ const response = (before: number, through: number, id: string, text: string, com
   pending_approvals: [], notes: { text: '', revision: 0 },
 }) as unknown as ThreadsGetResult
 KybernClient.prototype.connect = () => {}
-KybernClient.prototype.call = ((_method: string, params: { before_seq?: number; through_seq?: number }) => {
+KybernClient.prototype.call = ((_method: string, params: { before_seq?: number; through_seq?: number; whole_turns?: boolean; transcript_only?: boolean }) => {
   if (params.before_seq === undefined) return Promise.resolve(response(1000, 10000, 'tail', 'start', false))
+  assert.ok(params.whole_turns && params.transcript_only, 'older pages ask for whole turns and only the transcript')
   return new Promise(resolve => reads.push({ before: params.before_seq, through: params.through_seq, resolve }))
 }) as typeof KybernClient.prototype.call
 KybernClient.prototype.subscribeEvents = ((_params: unknown, callback: typeof live) => {
@@ -41,7 +42,7 @@ for (let index = 0; index < 100; index++) {
   live({ kind: 'assistant_text_delta', thread_id: 'history', turn_id: 'turn', seq: ++seq, at, message_id: 'tail', origin: { kind: 'root' }, delta: ` ${index}` })
   const visibleTail = getState().open.blocks.find(block => block.id === 'tail#0')
   request.resolve(response(before - 1, barrier, `older-${index}`, `older ${index}`))
-  await pending
+  assert.equal(await pending, true, 'more of the same turn shows the reader nothing')
   const open = getState().open
   assert.equal(open.lastSeq, seq)
   assert.equal(open.blocks.find(block => block.kind === 'assistant' && block.messageId === 'tail')?.kind, 'assistant')
@@ -66,4 +67,19 @@ current.resolve(response(999, 10001, 'new-snapshot', 'current'))
 await demand
 assert.equal(getState().open.blocks.some(block => block.id === 'old-snapshot#0'), false)
 assert.equal(getState().open.blocks.some(block => block.id === 'new-snapshot#0'), true)
+
+// A page that brings the oldest turn's prompt (or an older turn) ends the
+// top-of-transcript chain; the last page has nothing left to load.
+process.env.KYBERN_HISTORY_PREFETCH = '0'
+const prompt = loadEarlier()
+const promptRead = reads.at(-1)!
+promptRead.resolve({
+  ...response(500, promptRead.through!, 'older-prompt', 'answer'),
+  transcript: [{ role: 'user', id: 'prompt', turn_id: 'turn', seq: 500, at, origin: { kind: 'root' }, message: { text: 'Question', attachments: [] } }],
+} as unknown as ThreadsGetResult)
+assert.equal(await prompt, false, 'the prompt appeared')
+const last = loadEarlier()
+const lastRead = reads.at(-1)!
+lastRead.resolve({ ...response(0, lastRead.through!, 'older-last', 'first'), next_before_seq: null } as unknown as ThreadsGetResult)
+assert.equal(await last, false, 'history is complete')
 resetClient()

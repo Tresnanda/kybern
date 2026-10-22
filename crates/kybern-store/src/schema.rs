@@ -536,6 +536,11 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX projects_space ON projects(space_id);
     COMMIT;
     ",
+    // v28: an older transcript page asks whether each of its tool rows has a
+    // persisted output stream. Without this index every page scanned all of the
+    // thread's tool starts and deltas (25 ms per page on a 47k-event thread).
+    "CREATE INDEX tool_delta_identity ON events(thread_id, json_extract(payload, '$.tool_call_id'), seq)
+      WHERE kind = 'tool_call_output_delta';",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

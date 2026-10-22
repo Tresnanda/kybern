@@ -1181,6 +1181,10 @@ export interface ThreadsGetParams {
   include_tool_output?: boolean;
   /** When true, completed output-delta streams are marked for exact lazy hydration. */
   defer_tool_stream?: boolean;
+  /** When true, a page also returns the earlier rows of its oldest turn, so it starts at a turn boundary. */
+  whole_turns?: boolean;
+  /** With before_seq: only the transcript page; thread-wide state comes back empty. */
+  transcript_only?: boolean;
 }
 
 export interface ThreadsRecoverOmpAnswerParams { thread_id: ThreadId; turn_id: TurnId }

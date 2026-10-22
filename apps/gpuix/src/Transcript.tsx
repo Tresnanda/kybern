@@ -130,6 +130,15 @@ export function Transcript() {
   const [codeState, setCodeState] = useState<Record<string, CodeState>>({})
   const [activeId, setActiveId] = useState<string | null>(null)
   const nearTop = useRef(false)
+  // Reaching the top asks for one page. A page from inside a long turn adds
+  // nothing to the screen, so it does not use up that intent while the reader
+  // is still at the top; a page that shows a turn or prompt ends the chain.
+  const loadFromTop = useCallback(function next() {
+    const id = pane.get().selectedId
+    void loadEarlier(pane.id).then(nothing => {
+      if (nothing && nearTop.current && !pane.frozen && pane.get().selectedId === id) next()
+    })
+  }, [pane])
 
   useEffect(() => {
     setCodeState(threadId ? scrollAnchors.get(`${pane.id}:${threadId}`)?.code ?? {} : {})
@@ -395,7 +404,7 @@ export function Transcript() {
           if (tail !== atTail) setAtTail(tail)
           // Prefetch while the first turns are on screen (`useEarlierHistory`).
           const top = start <= lead + 1
-          if (!pane.frozen && top && !nearTop.current && !earlierError && pane.get().open.nextBeforeSeq != null && !pane.get().open.loadingEarlier) void loadEarlier(pane.id)
+          if (!pane.frozen && top && !nearTop.current && !earlierError && pane.get().open.nextBeforeSeq != null && !pane.get().open.loadingEarlier) loadFromTop()
           nearTop.current = top
         }}
       >

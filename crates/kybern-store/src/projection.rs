@@ -129,9 +129,9 @@ pub fn should_omit_tool_output(output: &Value) -> bool {
     json_payload_exceeds(output, LARGE_TOOL_OUTPUT_BYTES)
 }
 
-/// Temporary lookup state for a replay. It is dropped with the fold; cached
-/// projections keep only transcript rows. Structural recovery rebuilds it.
-#[derive(Default)]
+/// Lookup state for a replay. It lives with the fold, so a cached fold can be
+/// cloned and extended with newer events. Structural recovery rebuilds it.
+#[derive(Default, Clone)]
 struct TranscriptLookup {
     omit_tool_outputs: bool,
     users: std::collections::HashSet<MessageId>,
@@ -164,7 +164,7 @@ impl TranscriptLookup {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct TranscriptFold {
     lookup: TranscriptLookup,
     out: Vec<TranscriptEntry>,
@@ -201,6 +201,11 @@ impl TranscriptFold {
 
     pub fn finish(self) -> Vec<TranscriptEntry> {
         self.out
+    }
+
+    /// The rows folded so far.
+    pub fn rows(&self) -> &[TranscriptEntry] {
+        &self.out
     }
 }
 

@@ -679,6 +679,17 @@ pub struct ThreadsGetParams {
     /// `threads.tool_output`. Omit to preserve legacy snapshots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub defer_tool_stream: Option<bool>,
+    /// When true, a paged request also returns the earlier rows of its oldest
+    /// turn, so every page starts at a turn boundary (a bounded number of extra
+    /// rows). Clients that show one row per turn otherwise get pages that add
+    /// nothing visible inside long tool-heavy turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whole_turns: Option<bool>,
+    /// With `before_seq`: return only the transcript page. Thread-wide state the
+    /// client holds from its first page (runtime tasks, provider commands and
+    /// usage, pending questions and approvals, notes) comes back empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_only: Option<bool>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsGetResult {

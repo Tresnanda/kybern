@@ -1,7 +1,9 @@
 import type { ThreadState } from '../../../../packages/kybern-client/src/transcript.ts'
 import type { ThreadsGetResult } from '../../../../packages/kybern-client/src/types.ts'
 
-export const HISTORY_PREFETCH_BYTES = 1024 * 1024
+/** A whole-turn page of a delegating turn measured 2.3–2.6 MB (thousands of
+ * collapsed subagent tool rows); 1 MiB discarded exactly the pages that need it. */
+export const HISTORY_PREFETCH_BYTES = 4 * 1024 * 1024
 
 /** One unmounted older page per open session. A live event invalidates the
  * snapshot, so consuming it uses the normal demand-load replay barrier. */
