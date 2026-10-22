@@ -35,37 +35,56 @@ import { imageSource } from '../../../desktop/src/lib/responseImages.ts'
 import { activeTab, CHAT, tabKey, type Tab } from './model.ts'
 import { closeTabAction, keepTab, openTab, registerHostedPane } from './open.ts'
 import { useThreadRecord } from './Strip.tsx'
+import { ChatHidden } from './hidden.ts'
 
-/** A leaf's content: `children` is its conversation page; another active tab replaces it. */
+/**
+ * A leaf's content: `children` is its conversation page. A document tab is drawn over it; the chat stays mounted underneath
+ * once it has been shown (opacity 0, no pointer events, never `visibility: hidden`), so ⌘1 returns at once to the same
+ * reading position instead of rebuilding the transcript. Other document tabs mount only while active.
+ */
 export function GroupContent({ leafId, children }: { leafId: string; children: ReactNode }) {
   const group = useGroup(leafId)
   const selected = useApp((s) => s.selectedId)
-  if (!group.threadId || group.threadId !== selected || group.active === CHAT) return children
   const tab = activeTab(group)
-  if (tab.kind === 'chat') return children
+  const doc = !!group.threadId && group.threadId === selected && group.active !== CHAT && tab.kind !== 'chat'
+  const [chatShown, setChatShown] = useState(!doc)
+  if (!doc && !chatShown) setChatShown(true)
   const key = tabKey(tab)
   const preview = group.preview === key
-  return (
-    <div
-      key={key}
-      testId={`tab-body-${key}`}
-      // A preview tab the reader scrolls or types in is kept (single click → italic tab → permanent once used).
-      onScroll={preview ? () => keepTab(leafId, key) : undefined}
-      onKeyDown={preview ? () => keepTab(leafId, key) : undefined}
-      style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', position: 'relative' }}
-    >
-      <ErrorBoundary label="this tab">
-        <TabBody leafId={leafId} threadId={group.threadId} tab={tab}>{children}</TabBody>
-      </ErrorBoundary>
-    </div>
-  )
+  return <>
+    {(chatShown || !doc) && (
+      <div testId={doc ? `chat-hidden-${leafId}` : undefined} style={doc
+        ? { position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', opacity: 0, pointerEvents: 'none' }
+        : { display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0, position: 'relative' }}>
+        <ChatHidden.Provider value={doc}>{children}</ChatHidden.Provider>
+      </div>
+    )}
+    {doc && (
+      <DocumentHost key={key} testId={`tab-body-${key}`} onUsed={preview ? () => keepTab(leafId, key) : undefined}>
+        <ErrorBoundary label="this tab">
+          <TabBody leafId={leafId} threadId={group.threadId!} tab={tab}>{children}</TabBody>
+        </ErrorBoundary>
+      </DocumentHost>
+    )}
+  </>
+}
+
+/** A document tab's box. It takes keyboard focus when it opens, so typing never lands in the hidden chat's composer. A preview
+ *  tab the reader scrolls or types in is kept (single click → italic tab → permanent once used). */
+function DocumentHost({ testId, onUsed, children }: { testId: string; onUsed?: () => void; children: ReactNode }) {
+  const renderer = useGpuixRequired()
+  const [node, setNode] = useState<PublicInstance | null>(null)
+  useEffect(() => { if (node) renderer.focusElement?.(node.id) }, [node, renderer])
+  return <div ref={setNode} testId={testId} tabIndex={-1} onScroll={onUsed} onKeyDown={onUsed}
+    style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', position: 'relative' }}>{children}</div>
 }
 
 function TabBody({ leafId, threadId, tab, children }: { leafId: string; threadId: string; tab: Tab; children: ReactNode }) {
   const thread = useThreadRecord(threadId)
   switch (tab.kind) {
     case 'chat': return children
-    case 'file': return <FileViewer key={tabKey(tab)} {...(tab.root === 'project' ? { projectId: thread?.project_id } : { threadId })} path={tab.path} line={tab.line} />
+    // Switching tabs is instant (spec §1.5): no pane entrance on the content.
+    case 'file': return <FileViewer key={tabKey(tab)} {...(tab.root === 'project' ? { projectId: thread?.project_id } : { threadId })} path={tab.path} line={tab.line} instant />
     case 'diff': return thread ? <DiffPane key={tab.path ?? '*'} thread={thread} mode="all" path={tab.path} /> : <LoadingLines />
     case 'terminal': return <TerminalTab leafId={leafId} threadId={threadId} tab={tab} />
     case 'preview': return <PreviewPane threadId={threadId} />

@@ -101,7 +101,7 @@ export const GroupStrip = memo(function GroupStrip({ leafId, size = 'md', onRena
       onDoubleClick={(key) => { if (key === CHAT) onRename?.(); else { keepTab(leafId, key); selectTab(leafId, key) } }}
       onTabMouseDown={(key, event, rect) => { const item = items.find((i) => i.key === key); if (item) beginTabsDrag(leafId, key, item, event, rect, size) }}
       onTabMouseMove={(_key, event, left) => trackTabsPress(event, left)}
-      onTabMouseUp={() => endTabsPress()}
+      onTabMouseUp={(_key, event) => endTabsPress(event)}
       registerTab={(key, node) => { const tabs = stripRegistry(leafId).tabs; if (node) tabs.set(key, node); else tabs.delete(key) }}
       stripRef={(node) => { stripRegistry(leafId).strip = node }}
       trailing={<><div paintTransform={fadeTo(quiet ? 0 : 1).paintTransform} style={{ display: 'flex', ...fadeTo(quiet ? 0 : 1).style }}><AddMenu leafId={leafId} threadId={group.threadId} size={size} /></div>{trailing}</>}

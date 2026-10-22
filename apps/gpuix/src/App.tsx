@@ -20,7 +20,7 @@ import { UsagePage } from './usage/UsagePage.tsx'
 import { PullRequestsPage } from './pulls/PullRequestsPage.tsx'
 import { TasksDragLayer, trackTaskDrag, useHeldTask } from './tasks/drag.tsx'
 import { TabDragLayer } from './dock/reorder.tsx'
-import { TabsDragLayer } from './tabs/drag.tsx'
+import { finishTabsDrag, moveTabsDrag, TabsDragLayer, useTabsDragging } from './tabs/drag.tsx'
 import { ProjectDragLayer } from './sidebar/reorder.tsx'
 import { TasksPage } from './tasks/TasksPage.tsx'
 import { TasksSidebar } from './tasks/TasksSidebar.tsx'
@@ -101,6 +101,7 @@ export function App() {
 function Workspace() {
   const splitDragging = useSplitDragging()
   const taskDragging = !!useHeldTask()
+  const tabsDragging = useTabsDragging()
   useTasksFeed()
   const t = useTheme()
   const fills = useMaterial()
@@ -148,8 +149,8 @@ function Workspace() {
       // kybern.css:26–35: chrome inherits select-none; document bodies opt in.
       // Any press makes later navigation pointer-driven again (`keyboardNav`).
       onMouseDown={pointerNav}
-      onMouseMove={taskDragging || splitDragging ? (event) => { if (taskDragging) trackTaskDrag(event); if (splitDragging) trackThreadDrag(event) } : undefined}
-      onMouseUp={splitDragging ? finishSplitDrag : undefined}
+      onMouseMove={taskDragging || splitDragging || tabsDragging ? (event) => { if (taskDragging) trackTaskDrag(event); if (splitDragging) trackThreadDrag(event); if (tabsDragging) moveTabsDrag(event) } : undefined}
+      onMouseUp={splitDragging || tabsDragging ? (event) => { if (splitDragging) finishSplitDrag(event); if (tabsDragging) finishTabsDrag(event) } : undefined}
       style={{ userSelect: 'none', display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: singleFill ? undefined : fills.frame, position: 'relative' }}
     >
       {singleFill && <FrameFill color={fills.frame} />}

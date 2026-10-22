@@ -8,9 +8,11 @@
  * Scratch only: `/Users/mymac/projects/ade-gpuix-scratch/tabs-ade54` (never ~/.kybern, never port 4219).
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { launch, type App } from '@gpuix/react/automation'
+import type { App } from '@gpuix/react/automation'
+import { launchFixture } from '../requests/harness.ts'
+import { captureWindow } from '../transcript/live.ts'
 
 process.env.VISUAL_SCRATCH ??= '/Users/mymac/projects/ade-gpuix-scratch/tabs-ade54'
 const fixture = await import('../../visual/fixture.ts')
@@ -77,6 +79,59 @@ const scenarios: Scenario[] = [
   },
   { name: 'subagent', ui: { 'kybern.split-view.v2': { version: 2, root: leaf('main', parent.id), focusedPaneId: 'main', groups: { main: group(parent.id, [{ tab: { kind: 'thread', id: child.id, title: child.title }, key: `thread:${child.id}` }], `thread:${child.id}`) } } } },
   {
+    // The dock keeps the tree; one click opens the italic preview tab, the next click replaces it.
+    name: 'explorer-preview',
+    ui: { 'kybern.split-view.v2': { version: 2, root: leaf('main', main.id), focusedPaneId: 'main', groups: { main: group(main.id, [], 'chat') } }, 'kybern.dock.choices': [[main.id, { open: true, tabs: ['explorer', 'changes', 'agents'], tab: 'explorer', width: 440 }]] },
+    drive: async (app) => {
+      await app.getByTestId('dock-file-src').click(); await Bun.sleep(600)
+      await app.getByTestId('dock-file-src/Explorer.tsx').click(); await Bun.sleep(600)
+      assert.equal(await app.getByTestId('tab-file:project:src/Explorer.tsx').count(), 1, 'preview tab opened')
+      await app.getByTestId('dock-file-src/theme.ts').click(); await Bun.sleep(600)
+      assert.equal(await app.getByTestId('tab-file:project:src/Explorer.tsx').count(), 0, 'preview tab replaced')
+      assert.equal(await app.getByTestId('tab-file:project:src/theme.ts').count(), 1, 'new preview tab')
+      // Enter on the tree keeps it (as a double click would); the next click opens a second tab.
+      await app.getByTestId('dock-file-tree-focus').press('enter'); await Bun.sleep(300)
+      await app.getByTestId('dock-file-src/Resize.tsx').click(); await Bun.sleep(800)
+      assert.equal(await app.getByTestId('tab-file:project:src/theme.ts').count(), 1, 'kept tab stays')
+      assert.equal(await app.getByTestId('tab-file:project:src/Resize.tsx').count(), 1, 'second preview tab')
+      await app.getByTestId('tab-file:project:src/theme.ts').click(); await Bun.sleep(600)
+      console.log('[tabs] PASS explorer preview tabs')
+    },
+  },
+  {
+    // ⌘2 / ⌘1, ⌃Tab, ⌘W, ⌘⇧T, ⌘\ (a document into a new group), ⌘⌥← back to the chat's group, and a drag reorder.
+    name: 'keyboard',
+    ui: { 'kybern.split-view.v2': { version: 2, root: leaf('main', main.id), focusedPaneId: 'main', groups: { main: group(main.id, [file('src/Explorer.tsx'), file('src/theme.ts'), file('docs/notes.md')], 'chat') } } },
+    drive: async (app) => {
+      const root = app.getByTestId('app-ready')
+      const active = async (key: string) => (await app.getByTestId(`tab-body-${key}`).count()) === 1
+      await root.press('cmd-2'); await Bun.sleep(400)
+      assert.ok(await active('file:project:src/Explorer.tsx'), '⌘2 opens the first document')
+      await root.press('ctrl-tab'); await Bun.sleep(400)
+      assert.ok(await active('file:project:src/theme.ts'), '⌃Tab cycles')
+      await app.getByTestId('tab-body-file:project:src/theme.ts').press('cmd-w'); await Bun.sleep(500)
+      assert.equal(await app.getByTestId('tab-file:project:src/theme.ts').count(), 0, '⌘W closes the tab')
+      await root.press('cmd-shift-t'); await Bun.sleep(500)
+      assert.equal(await app.getByTestId('tab-file:project:src/theme.ts').count(), 1, '⌘⇧T reopens it')
+      await app.getByTestId('tab-file:project:docs/notes.md').click(); await Bun.sleep(400)
+      assert.ok(await active('file:project:docs/notes.md'), 'a click selects a tab')
+      // Drag the last tab before the first document.
+      const from = await app.getByTestId('tab-file:project:docs/notes.md').center()
+      const to = await app.getByTestId('tab-file:project:src/Explorer.tsx').bounds()
+      await drag(app, from, { x: to.x + 6, y: to.y + to.height / 2 })
+      const order = await Promise.all(['docs/notes.md', 'src/Explorer.tsx'].map(async (f) => (await app.getByTestId(`tab-file:project:${f}`).bounds()).x))
+      assert.ok(order[0]! < order[1]!, `drag reordered (${order})`)
+      await root.press('cmd-3'); await Bun.sleep(300)
+      await root.press('cmd-\\'); await Bun.sleep(1500)
+      assert.equal(await app.getByTestId('split-header-main').count(), 1, '⌘\\ moved the document into a new group')
+      await root.press('cmd-alt-left'); await Bun.sleep(400)
+      // ⌘W on the chat keeps today's behaviour (the tab never closes): checked last.
+      await root.press('cmd-1'); await Bun.sleep(300)
+      assert.equal(await app.getByTestId('tab-body-chat').count(), 0)
+      console.log('[tabs] PASS keyboard: ⌘1-9, ⌃Tab, ⌘W, ⌘⇧T, drag reorder, ⌘\\')
+    },
+  },
+  {
     name: 'split-two',
     ui: { 'kybern.split-view.v2': { version: 2, root: split('s1', 'horizontal', leaf('a', main.id), leaf('b', main.id)), focusedPaneId: 'a', groups: { a: group(main.id, [], 'chat'), b: only1(main.id, [file('src/Explorer.tsx'), file('src/theme.ts')], 'file:project:src/Explorer.tsx') } } },
   },
@@ -89,39 +144,50 @@ const scenarios: Scenario[] = [
   },
 ]
 
+/** Press, travel 7 px so the capture layer mounts, wait for it to paint, move in steps and release (as `tasks/verify.ts`). */
+async function drag(app: App, from: { x: number; y: number }, to: { x: number; y: number }) {
+  await app.mouse.move(from)
+  await app.mouse.down(from)
+  await app.mouse.move({ x: from.x - 7, y: from.y }, { pressedButton: 0 })
+  await app.getByTestId('tabs-drag-layer').waitFor({ timeoutMs: 5000 })
+  await Bun.sleep(100)
+  for (let i = 1; i <= 8; i++) await app.mouse.move({ x: from.x + (to.x - from.x) * i / 8, y: from.y + (to.y - from.y) * i / 8 }, { pressedButton: 0 })
+  await Bun.sleep(150)
+  await app.mouse.up(to)
+  await Bun.sleep(600)
+}
+
 // A local page for the browser tab (discovered by the daemon's server scan).
 const PREVIEW_PORT = 47611
-const page = Bun.serve({ port: PREVIEW_PORT, fetch: () => new Response('<!doctype html><title>Tabs preview</title><body style="font:15px system-ui;padding:32px"><h1>Preview tab</h1><p>One native web view per thread, placed in the tab’s slot.</p></body>', { headers: { 'content-type': 'text/html' } }) })
+const page = Bun.serve({ port: PREVIEW_PORT, fetch: () => new Response('<!doctype html><title>Tabs preview</title><body style="font:15px system-ui;padding:32px"><h1>Preview tab</h1><p>One native web view per thread, placed in the tab’s slot.</p></body>', { headers: { 'content-type': 'text/html; charset=utf-8' } }) })
 
 const uiFile = path.join(DATA_DIR, 'gpuix-ui.json')
-const base = existsSync(uiFile) ? JSON.parse(readFileSync(uiFile, 'utf8')) : {}
 const results: string[] = []
 for (const theme of themes) for (const scenario of scenarios) {
   if (only.length && !only.includes(scenario.name)) continue
-  writeFileSync(uiFile, JSON.stringify({ ...base, 'kybern.split-view.v1': undefined, 'kybern.tabs.threads': [], ...scenario.ui }))
-  const app = await launch({
-    command: 'bun',
-    args: [path.join(import.meta.dir, '../main.tsx')],
-    env: {
-      GPUIX_BACKGROUND: '1', KYBERN_OPAQUE: '1', KYBERN_REDUCED_MOTION: '1', KYBERN_APPEARANCE: theme,
-      KYBERN_DATA_DIR: DATA_DIR, KYBERN_CLIENT_CONFIG_DIR: CLIENT_DIR, KYBERN_GPUIX_CREDENTIALS_DIR: CREDS_DIR,
-      KYBERN_WINDOW_SIZE: scenario.size ?? '1440x900',
-      ...(process.env.NAPI_RS_NATIVE_LIBRARY_PATH ? { NAPI_RS_NATIVE_LIBRARY_PATH: process.env.NAPI_RS_NATIVE_LIBRARY_PATH } : {}),
-    },
+  // Each scenario starts from its own saved layout only (the previous run's dock or sidebar choices do not carry over).
+  writeFileSync(uiFile, JSON.stringify({ 'kybern.tabs.threads': [], ...scenario.ui }))
+  const fixtureApp = await launchFixture(path.join(import.meta.dir, '../main.tsx'), {
+    GPUIX_BACKGROUND: '1', KYBERN_OPAQUE: '1', KYBERN_REDUCED_MOTION: '1', KYBERN_APPEARANCE: theme,
+    KYBERN_DATA_DIR: DATA_DIR, KYBERN_CLIENT_CONFIG_DIR: CLIENT_DIR, KYBERN_GPUIX_CREDENTIALS_DIR: CREDS_DIR, KYBERN_URL: '', KYBERN_TOKEN: '',
+    KYBERN_WINDOW_SIZE: scenario.size ?? '1440x900',
   })
+  const app = fixtureApp.app
   try {
     await app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })
     await app.getByTestId('tab-chat').waitFor({ timeoutMs: 30_000 }).catch(() => {})
     await Bun.sleep(2500)
     await scenario.drive?.(app)
     const out = path.join(OUT, `${scenario.name}-${theme}.png`)
-    await app.screenshot({ path: out })
+    // The browser's page is a native web view that GPUI's own screenshot omits: capture the window instead.
+    if (scenario.name === 'browser') captureWindow(fixtureApp.pid, out)
+    else await app.screenshot({ path: out })
     results.push(out)
     console.log(`[tabs] ${scenario.name} ${theme} → ${out}`)
   } catch (error) {
     console.error(`[tabs] ${scenario.name} ${theme} failed:`, error)
   } finally {
-    await app.close()
+    await fixtureApp.close()
   }
 }
 page.stop(true)

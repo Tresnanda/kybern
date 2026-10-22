@@ -270,7 +270,7 @@ const TabView = memo(function TabView({ item, index, size, active, focused, prop
       aria-label={item.tooltip ?? item.label}
       tabIndex={active ? 0 : -1}
       onMouseDown={(event) => {
-        if (event.button !== 0) return
+        if ((event.button ?? 0) !== 0) return
         props.onTabMouseDown?.(item.key, event, node.current ? renderer?.getElementBounds?.(node.current.id) ?? null : null)
       }}
       onMouseUp={(event) => props.onTabMouseUp?.(item.key, event)}

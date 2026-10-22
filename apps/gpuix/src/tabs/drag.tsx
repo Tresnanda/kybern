@@ -36,19 +36,30 @@ export function stripRegistry(leafId: string) {
 }
 
 export function beginTabsDrag(leafId: string, key: string, item: TabsItem, event: EventPayload, _rect: LayoutRect | null, size: 'md' | 'sm') {
-  if (event.button !== 0 || event.x == null || event.y == null) return
+  if ((event.button ?? 0) !== 0 || event.x == null || event.y == null) return
   pending = { leafId, key, item, size, x: event.x, y: event.y }
 }
 /** Moves over the pressed tab; leaving it, or 6 px of travel, starts the drag. */
 export function trackTabsPress(event: EventPayload, left = false) {
-  if (!pending || drag) return
+  if (drag) { if (!left) moveTabsDrag(event); return }
+  if (!pending) return
   if (event.pressedButton !== 0 && !left) { pending = null; return }
   if (!left && Math.hypot((event.x ?? pending.x) - pending.x, (event.y ?? pending.y) - pending.y) < 6) return
   const start = pending
   pending = null
   publish({ ...start, x: event.x ?? start.x, y: event.y ?? start.y })
 }
-export function endTabsPress() { pending = null }
+/** A release on the pressed tab: GPUI keeps sending a held press's events to the element it started on. */
+export function endTabsPress(event?: EventPayload) { if (drag) { if (event) moveTabsDrag(event); finish(true) } pending = null }
+let renderer: object | null = null
+/** Moves while a tab is held, from the capture layer, the pressed tab or the window root (App). */
+export function moveTabsDrag(e: EventPayload) {
+  if (!drag || !renderer || e.x == null || e.y == null) return
+  if (e.eventType === 'mouseMove' && e.pressedButton != null && e.pressedButton !== 0) { finish(true); return }
+  const next = targetAt(renderer, e.x, e.y)
+  publish({ ...drag, x: e.x, y: e.y, target: next.target, refused: next.refused })
+}
+export function finishTabsDrag(e?: EventPayload) { if (!drag) return; if (e) moveTabsDrag(e); finish(true) }
 
 function targetAt(renderer: object, x: number, y: number): { target?: Target; refused?: boolean } {
   if (!drag) return {}
@@ -100,19 +111,15 @@ function finish(commit: boolean) {
 
 /** The capture layer and the held tab, mounted once at the window root (App). */
 export function TabsDragLayer() {
-  const renderer = useGpuixRequired()
+  const gpuix = useGpuixRequired()
   const t = useTheme()
   const current = useSyncExternalStore(subscribe, () => drag)
   const [anchor, setAnchor] = useState<PublicInstance | null>(null)
   const [origin, setOrigin] = useState(0)
-  useEffect(() => anchor ? observeElementBounds(renderer, anchor.id, (e) => setOrigin(e.rect?.y ?? 0)) : undefined, [anchor, renderer])
+  useEffect(() => anchor ? observeElementBounds(gpuix, anchor.id, (e) => setOrigin(e.rect?.y ?? 0)) : undefined, [anchor, gpuix])
   useEffect(() => addWindowKeyHandler((e) => { if (e.key === 'escape' && (drag || pending)) { finish(false); return true } }), [])
-  const move = (e: EventPayload) => {
-    if (!drag || e.x == null || e.y == null) return
-    if (e.eventType === 'mouseMove' && e.pressedButton !== 0) { finish(true); return }
-    const next = targetAt(renderer, e.x, e.y)
-    publish({ ...drag, x: e.x, y: e.y, target: next.target, refused: next.refused })
-  }
+  useEffect(() => { renderer = gpuix; return () => { if (renderer === gpuix) renderer = null } }, [gpuix])
+  const move = moveTabsDrag
   const rect = current?.target?.kind === 'edge' ? paneRects().get(current.target.leafId) : undefined
   return <>
     <div ref={setAnchor} style={{ position: 'absolute', left: 0, top: 0, width: 0, height: 0, pointerEvents: 'none' }} />

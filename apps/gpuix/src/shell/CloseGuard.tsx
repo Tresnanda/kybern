@@ -9,6 +9,8 @@ import { errorText } from '../nav/actions.ts'
 import { getClient, getState } from '../state.ts'
 import { Label, ProviderMark, useTheme } from '../ui.tsx'
 import { load, save, flush } from './persist.ts'
+import { closeActiveTab } from '../tabs/open.ts'
+import { closeRequestSource } from '../tabs/closeKey.ts'
 
 export function CloseGuard() {
   const renderer = useGpuixRequired()
@@ -21,6 +23,8 @@ export function CloseGuard() {
   useEffect(() => {
     if (!renderer.setCloseGuard || !renderer.resolveCloseRequest) return
     const off = setWindowCloseHandler(renderer, () => {
+      // ⌘W closes the active document tab, never the thread; on the chat tab the window closes as before (ADE-54).
+      if (closeRequestSource() !== 'pointer' && closeActiveTab()) return false
       const busy = getState().threads.filter((t) => t.status === 'running' || t.status === 'awaiting-approval')
       if (!load('kybern.askBeforeClose', true) || !busy.length) return true
       setPending(busy); setAskAgain(true); setError('')

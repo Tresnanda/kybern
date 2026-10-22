@@ -8,6 +8,7 @@ import { visualFrameHeight, visualHeight, visualLink, visualThemeFragment, VISUA
 import { activeEnvironment } from '../shell/environment.ts'
 import { getClient, usePaneAccess } from '../state.ts'
 import { openTabFromPane } from '../tabs/open.ts'
+import { useChatHidden } from '../tabs/hidden.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
@@ -117,7 +118,8 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
     return () => clearTimeout(id)
   }, [overFigure, overControl])
   const [height, setHeight] = useState(() => heights.get(id) ?? visualFrameHeight(visual, VISUAL_COLUMN_WIDTH))
-  const active = useNav(state => state.page === 'home' && !state.settingsOpen)
+  const hidden = useChatHidden()
+  const active = useNav(state => state.page === 'home' && !state.settingsOpen) && !hidden
   const { error, loaded, skeleton, retry: retryDocument } = useVisualDocument(threadId, visual.id, id, {
     onHover: setOverFigure,
     onSize: (measured) => {
