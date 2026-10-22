@@ -340,7 +340,6 @@ function ConversationPage() {
           <Transcript />
         </ErrorBoundary>
       )}
-      <BottomFade />
       <div ref={measureComposerOverlay} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, display: 'flex', justifyContent: 'center', paddingLeft: gutter, paddingRight: gutter, paddingBottom: 16 }}>
         {/* Pending approvals and questions stack on the composer; a blocking one replaces it. */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: COLUMN }}>
@@ -353,35 +352,6 @@ function ConversationPage() {
         </div>
       </div>
     </>
-  )
-}
-
-/** Transcript bottom fade: min(12%, 40px), transparent → surface. Whole-window glass has no surface to fade into (`t.content` is clear). */
-function BottomFade() {
-  const t = useTheme()
-  if (t.scope === 'window') return null
-  return (
-    <div
-      style={{
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        bottom: 0,
-        height: 40,
-        pointerEvents: 'none',
-        // Paints over the card's bottom edge, so it carries the card's corners.
-        borderBottomLeftRadius: CARD_RADIUS,
-        borderBottomRightRadius: CARD_RADIUS,
-        background: {
-          type: 'linear-gradient',
-          angle: 180,
-          stops: [
-            { color: t.variant === 'dark' ? 'rgba(24, 24, 24, 0)' : 'rgba(255, 255, 255, 0)', position: 0 },
-            { color: t.content, position: 1 },
-          ],
-        },
-      }}
-    />
   )
 }
 
