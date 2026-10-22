@@ -23,7 +23,7 @@ import { useFocusedPane, useGroup, useSplitRoot } from '../split/store.ts'
 import { ink, ProviderMark, useTheme } from '../ui.tsx'
 import { CHAT, tabKey, type Tab } from './model.ts'
 import { closeTabAction, keepTab, openTab, selectTab } from './open.ts'
-import { beginTabsDrag, endTabsPress, stripRegistry, trackTabsPress, useTabsDrop } from './drag.tsx'
+import { beginTabsDrag, endTabsPress, releaseStrip, stripRegistry, trackTabsPress, unregisterTab, useTabsDrop } from './drag.tsx'
 
 const ICONS = { browser: glyph(BrowserIcon), diagram: glyph(FlowchartIcon), image: glyph(Image01Icon) }
 const base = (path: string) => path.replace(/\/+$/, '').split('/').pop() || path
@@ -105,8 +105,8 @@ export const GroupStrip = memo(function GroupStrip({ leafId, size = 'md', onRena
       onTabMouseDown={(key, event, rect) => { const item = items.find((i) => i.key === key); if (item) beginTabsDrag(leafId, key, item, event, rect, size) }}
       onTabMouseMove={(_key, event, left) => trackTabsPress(event, left)}
       onTabMouseUp={(_key, event) => endTabsPress(event)}
-      registerTab={(key, node) => { const tabs = stripRegistry(leafId).tabs; if (node) tabs.set(key, node); else tabs.delete(key) }}
-      stripRef={(node) => { stripRegistry(leafId).strip = node }}
+      registerTab={(key, node) => { if (node) stripRegistry(leafId).tabs.set(key, node); else unregisterTab(leafId, key) }}
+      stripRef={(node) => { if (node) stripRegistry(leafId).strip = node; else releaseStrip(leafId) }}
       trailing={<><div paintTransform={fadeTo(quiet ? 0 : 1).paintTransform} style={{ display: 'flex', ...fadeTo(quiet ? 0 : 1).style }}><AddMenu leafId={leafId} threadId={group.threadId} size={size} /></div>{trailing}</>}
     />
     </div>

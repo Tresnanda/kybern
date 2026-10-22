@@ -34,6 +34,9 @@ export function stripRegistry(leafId: string) {
   if (!entry) strips.set(leafId, entry = { strip: null, tabs: new Map() })
   return entry
 }
+/** A strip that unmounts (its leaf closed or its header left) drops its entry, so closed splits leave nothing behind. */
+export function releaseStrip(leafId: string) { strips.delete(leafId) }
+export function unregisterTab(leafId: string, key: string) { strips.get(leafId)?.tabs.delete(key) }
 
 export function beginTabsDrag(leafId: string, key: string, item: TabsItem, event: EventPayload, _rect: LayoutRect | null, size: 'md' | 'sm') {
   if ((event.button ?? 0) !== 0 || event.x == null || event.y == null) return

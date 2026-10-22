@@ -287,7 +287,9 @@ const TabView = memo(function TabView({ item, index, size, active, focused, prop
       onKeyDown={(event) => {
         if (event.key === 'enter' || event.key === 'space') { if (!item.disabled) props.onSelect(item.key) }
         else if (event.key === 'left' || event.key === 'right') {
-          const next = props.items[(index + (event.key === 'left' ? props.items.length - 1 : 1)) % props.items.length]
+          // From the tab's place among the live items (`index` also counts tabs still animating out).
+          const at = Math.max(0, props.items.findIndex((i) => i.key === item.key))
+          const next = props.items[(at + (event.key === 'left' ? props.items.length - 1 : 1)) % props.items.length]
           if (next) props.onSelect(next.key)
         }
       }}

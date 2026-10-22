@@ -272,7 +272,7 @@ function restore() {
   focusPane(findThreadPane(root, stored.focusedPaneId)?.id ?? collectThreadPanes(root)[0]!.id)
   restoring = false
   if (getState().status === 'open') for (const leaf of collectThreadPanes(root)) if (leaf.threadId) void selectPaneThread(leaf.id, leaf.threadId).catch(console.error)
-  // The first v2 write replaces the v1 entry; it stays readable for an older build until then.
+  // v2 is written beside the v1 entry, which is left as it was, so an older build still finds its layout.
   persist(); notify(); notifyTabs()
 }
 export function startSplitView() { if (!started) { started = true; restore() } }
