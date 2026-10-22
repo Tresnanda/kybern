@@ -5,13 +5,14 @@ import { useGpuix, useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { spawn } from 'node:child_process'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FileEntry, FilesReadResult } from '../../../../packages/kybern-client/src/types.ts'
-import { Icon } from '../icons.tsx'
 import { ResizeHandle, useResize } from '../kit/Resize.tsx'
 import { ISLAND } from '../MatrixLoader.tsx'
 import { errorText } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
 import { Menu, MenuItem } from '../nav/overlay.tsx'
-import { IconButton } from '../sidebar/rows.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
+import { SearchField } from '../kit/SearchField.tsx'
+import { Button } from '../kit/Button.tsx'
 import { getClient, useApp } from '../state.ts'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { copyText } from '../transcript/store.ts'
@@ -20,7 +21,7 @@ import { Label, useTheme } from '../ui.tsx'
 import { Rise } from '../motion/kit.tsx'
 import { LoadingLines } from './loading.tsx'
 import { takeExplorerSelection, useExplorerSelection } from './explorerSelection.ts'
-import { Action, DockEmpty, ErrorLine } from './parts.tsx'
+import { DockEmpty, ErrorLine } from './parts.tsx'
 import { MotionFileTreeRows, type TreeRow } from './MotionFileTree.tsx'
 import { TREE_ROW_HEIGHT, TREE_WINDOW_THRESHOLD, treeWindowRange } from './fileTreeMotion.ts'
 
@@ -132,7 +133,7 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
   return <div style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0 }}>
     <div style={{ display: 'flex', flexDirection: 'column', width: column.width, flexShrink: 0, position: 'relative', borderRightWidth: 0.6, borderColor: t.borderLight }}>
       <div {...ISLAND} style={{ display: 'flex', width: '100%', height: 44, alignItems: 'center', padding: 8 }}>
-        <input testId="dock-file-search" placeholder="Search files…" aria-label="Search files" value={query} onChange={(e) => setQuery(e.value ?? '')} style={{ width: '100%', height: 28, paddingLeft: 8, paddingRight: 8, fontSize: 12, color: t.text, backgroundColor: t.buttonSecondary, borderRadius: 6 }} />
+        <SearchField testId="dock-file-search" placeholder="Search files…" label="Search files" value={query} onChange={setQuery} width="100%" />
       </div>
       <ErrorLine error={error} />
       <div ref={tree} testId="dock-file-tree-focus" tabIndex={0} role="tree" aria-label="Project files" onKeyDown={event => {
@@ -204,14 +205,14 @@ const FileViewer = memo(function FileViewer({ projectId, path, instant, onClose 
   return <>
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 36, paddingLeft: 10, paddingRight: 4, flexShrink: 0, borderBottomWidth: 0.6, borderColor: t.borderLight }}>
       <Label color={t.textSecondary} size={11} truncate style={{ flexGrow: 1 }}>{path.replaceAll('/', ' › ')}</Label>
-      {canPreview && <Action press={false} onClick={() => setPreview(!preview)}>{showPreview ? 'Source' : 'Preview'}</Action>}
-      <Menu align="end" minWidth={190} testId="dock-file-actions" trigger={() => <IconButton icon={N.ellipsis} size={28} label="File actions" />}>
+      {canPreview && <Button size="sm" onClick={() => setPreview(!preview)}>{showPreview ? 'Source' : 'Preview'}</Button>}
+      <Menu align="end" minWidth={190} testId="dock-file-actions" trigger={() => <IconButton icon={N.ellipsis} label="File actions" />}>
         <MenuItem id="relative" label="Copy relative path" onSelect={() => copyText(path)} />
         <MenuItem id="absolute" label="Copy absolute path" disabled={!absolutePath} onSelect={() => { if (absolutePath) copyText(absolutePath) }} />
         <MenuItem id="contents" label="Copy contents" disabled={!file || file.binary} onSelect={() => { if (file && !file.binary) copyText(file.content) }} />
         <MenuItem id="reveal" label="Reveal in Finder" icon={N.folder} disabled={!absolutePath || !activeEnvironment().local} onSelect={() => { if (absolutePath && activeEnvironment().local) spawn('open', ['-R', absolutePath], { stdio: 'ignore' }).on('error', () => {}) }} />
       </Menu>
-      <IconButton icon={N.x} size={28} label="Close file" onClick={onClose} testId="dock-file-close" />
+      <IconButton icon={N.x} label="Close file" onClick={onClose} testId="dock-file-close" />
     </div>
     <ErrorLine error={error} retry={() => setReload((n) => n + 1)} />
     {file ? <Rise kind="pane" play={play} style={{ flexGrow: 1, minHeight: 0, minWidth: 0 }}>{file.binary ? <DockEmpty icon={N.note} title="Binary file" body="Open this file in your editor to view it." /> : <>

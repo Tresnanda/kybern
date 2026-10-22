@@ -1,6 +1,6 @@
 import type { StyleDesc } from '@gpuix/react'
 import { useState, type ReactNode } from 'react'
-import { setNav } from '../nav/store.ts'
+
 import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { pressTransform } from '../motion/press.ts'
 import { DURATION, EASE } from '../motion/tokens.ts'
@@ -8,13 +8,6 @@ import { PATCHED_NATIVE } from '../native/local-build.ts'
 
 export const row: StyleDesc = { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }
 export const column: StyleDesc = { display: 'flex', flexDirection: 'column', minWidth: 0 }
-
-export function Button({ children, onClick, testId, disabled, primary, style, label }: { label?: string; children: ReactNode; onClick?: () => void; testId?: string; disabled?: boolean; primary?: boolean; style?: StyleDesc }) {
-  const t = useTheme()
-  // A button drawn inside Menu's trigger is decorative. Its wrapper owns input.
-  const run = () => { if (!disabled) onClick?.() }
-  return <div testId={testId} role="button" aria-label={label ?? (typeof children === 'string' ? children : undefined)} tabIndex={disabled || !onClick ? -1 : 0} onClick={onClick ? run : undefined} onKeyDown={onClick ? e => { if (e.key === 'enter' || e.key === 'space') { setNav({ keyboardNav: true }); run() } } : undefined} paintTransform={pressTransform(!!onClick && !disabled)} style={{ ...row, pointerEvents: onClick ? 'auto' : 'none', justifyContent: 'center', height: 28, paddingLeft: 10, paddingRight: 10, borderRadius: 8, cursor: disabled ? 'default' : 'pointer', opacity: disabled ? .5 : 1, backgroundColor: primary ? t.buttonPrimary : 'transparent', hover: { backgroundColor: disabled ? 'transparent' : primary ? t.buttonPrimary : t.buttonTertiaryHover }, active: { backgroundColor: t.buttonSecondaryHover }, ...style }}>{typeof children === 'string' || typeof children === 'number' ? <Label color={primary ? t.buttonPrimaryText : t.text} size={14} lineHeight={21}>{children}</Label> : children}</div>
-}
 
 /**
  * The sliding selection of a segmented control or tab strip (`t-tabs`: 250 ms `--ease-smooth-out`), `x` px from the strip's inner left

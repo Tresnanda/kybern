@@ -15,9 +15,11 @@ import { DOCK_ICONS } from './icons.ts'
 import { Icon } from '../icons.tsx'
 import { ISLAND } from '../MatrixLoader.tsx'
 import { N } from '../nav/glyphs.ts'
-import { Menu, MenuItem } from '../nav/overlay.tsx'
+import { Menu, MenuItem, Tip } from '../nav/overlay.tsx'
 import { useNav } from '../nav/store.ts'
 import { IconButton } from '../sidebar/rows.tsx'
+import { IconButton as KitIconButton } from '../kit/IconButton.tsx'
+import { PickerChip } from '../kit/PickerChip.tsx'
 import { useApp } from '../state.ts'
 import { EASE_OUT, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { Activity, isActiveTask, useRuntimeTasks } from './Activity.tsx'
@@ -145,11 +147,7 @@ function NoPanels({ threadId, coordinator, instant }: { threadId: string; coordi
       </EmptyHeader>
       <EmptyContent style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 6 }}>
         {panels.map((panel) => (
-          <div key={panel.id} testId={`dock-empty-${panel.id}`} role="button" aria-label={`Open ${panel.label} panel`} onClick={() => chooseTab(threadId, panel.id)} paintTransform={pressTransform()}
-            style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, paddingLeft: 8, paddingRight: 10, borderRadius: 8, cursor: 'pointer', borderWidth: 1, borderColor: t.v('--border'), hover: { backgroundColor: t.buttonSecondaryHover } }}>
-            <Icon source={panel.icon} size={14} color={t.textSecondary} />
-            <Label color={t.text} size={13}>{panel.label}</Label>
-          </div>
+          <PickerChip key={panel.id} testId={`dock-empty-${panel.id}`} icon={panel.icon} chevron={false} label={`Open ${panel.label} panel`} onClick={() => chooseTab(threadId, panel.id)}>{panel.label}</PickerChip>
         ))}
       </EmptyContent>
     </Empty>
@@ -277,10 +275,10 @@ function TabStrip({ threadId, width, coordinator, activeTasks, stats }: { thread
         })}
       </div>
     </div>
-    <Menu align="end" minWidth={176} testId="dock-add" trigger={() => <IconButton icon={N.plus} size={28} label="Add panel" />}>
+    <Menu align="end" minWidth={176} testId="dock-add" trigger={() => <KitIconButton icon={N.plus} label="Add panel" />}>
       {panels.map((panel) => <MenuItem key={panel.id} id={panel.id} icon={panel.icon} label={panel.label} shortcut={dock.tabs.includes(panel.id) ? 'Open' : undefined} testId={`dock-add-${panel.id}`} onSelect={() => select(panel.id, keyboard)} />)}
     </Menu>
-    <IconButton icon={N.panelRight} size={28} label="Collapse panel" tooltip="Collapse panel (⌘J)" onClick={() => setDock(threadId, { open: false, instant: false })} testId="dock-collapse" />
+    <Tip label="Collapse panel (⌘J)" side="top" size={28}><KitIconButton icon={N.panelRight} label="Collapse panel" onClick={() => setDock(threadId, { open: false, instant: false })} testId="dock-collapse" /></Tip>
   </div>
 }
 

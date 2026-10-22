@@ -14,9 +14,8 @@ import { useAccessibilityDisplay } from './platform/material.ts'
 import { resolveScope } from './platform/translucency.ts'
 import { useWindowMaterial } from './shell/windowMaterial.ts'
 import { REDUCED_MOTION } from './platform/reducedMotion.ts'
-import { Icon, type IconName } from './icons.tsx'
+import { Icon } from './icons.tsx'
 import { PROVIDER_IMAGES, PROVIDER_VECTORS } from './providerMarks.ts'
-import { pressTransform } from './motion/press.ts'
 import { EASE } from './motion/tokens.ts'
 
 function systemVariant(): 'dark' | 'light' {
@@ -105,46 +104,6 @@ export function Label({
     >
       {children}
     </text>
-  )
-}
-
-/** Square chrome button: 28px, radius 10, 16px glyph (`views/chrome.tsx`). */
-export function ChromeButton({
-  icon,
-  onClick,
-  size = 28,
-  glyph = 16,
-  color,
-  testId,
-}: {
-  icon: IconName
-  onClick?: () => void
-  size?: number
-  glyph?: number
-  color?: string
-  testId?: string
-}) {
-  const t = useTheme()
-  return (
-    <div
-      testId={testId}
-      onClick={onClick}
-      paintTransform={pressTransform(!!onClick)}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: size,
-        height: size,
-        borderRadius: 10,
-        flexShrink: 0,
-        cursor: onClick ? 'pointer' : 'default',
-        hover: { backgroundColor: t.buttonTertiaryHover },
-        active: { backgroundColor: t.buttonSecondaryHover },
-      }}
-    >
-      <Icon name={icon} size={glyph} color={color ?? t.iconPrimary} />
-    </div>
   )
 }
 

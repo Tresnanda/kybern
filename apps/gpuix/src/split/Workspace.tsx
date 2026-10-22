@@ -10,7 +10,8 @@ import { clampSplitRatioForWidth, shouldStackHorizontalSplit } from '../../../de
 import { PaneProvider, focusPane, getPane, selectPaneThread, useApp } from '../state.ts'
 import { observeElementBounds, type LayoutRect } from '../native/layout.ts'
 import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { Button, Para, alpha } from '../transcript/kit.tsx'
+import { Para, alpha } from '../transcript/kit.tsx'
+import { Button } from '../kit/Button.tsx'
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { usePacing } from '../drag/pacing.ts'
 import { DragGhost, type Settle } from '../drag/Ghost.tsx'
@@ -176,23 +177,12 @@ function LeafContent({ id, split, children }: { id: string; split: boolean; chil
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 8, marginBottom: 12, backgroundColor: t.buttonSecondary }}><Icon source={N.columns} size={16} color={t.textSecondary} /></div>
     <Label color={t.text} size={15} weight={500} lineHeight={18}>Start a conversation</Label>
     <div style={{ display: 'flex', maxWidth: 216, marginTop: 4, justifyContent: 'center' }}><Para color={t.textSecondary} size={13} lineHeight={19} style={{ textAlign: 'center' }}>Start a new thread, choose a recent one, or drag one here.</Para></div>
-    <PaneButton testId={`pane-new-${id}`} tone="primary" top={16} onClick={() => { focusPane(id); showDraft(true) }}>New thread</PaneButton>
+    <Button testId={`pane-new-${id}`} variant="primary" style={{ marginTop: 16 }} onClick={() => { focusPane(id); showDraft(true) }}>New thread</Button>
     {recent.length > 0 && <div style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', marginTop: 16 }}>
-      {recent.map(thread => <PaneButton key={thread.id} testId={`pane-recent-${id}-${thread.id}`} tone="ghost" mark={thread.provider.kind} onClick={() => { focusPane(id); void selectPaneThread(id, thread.id) }}>{thread.title || 'Untitled'}</PaneButton>)}
+      {recent.map(thread => <Button key={thread.id} testId={`pane-recent-${id}-${thread.id}`} variant="ghost" block label={thread.title || 'Untitled'} style={{ justifyContent: 'flex-start', paddingLeft: 8, paddingRight: 8 }} onClick={() => { focusPane(id); void selectPaneThread(id, thread.id) }}><ProviderMark kind={thread.provider.kind} size={14} /><Label color={t.text} size={14} lineHeight={20} truncate style={{ pointerEvents: 'none' }}>{thread.title || 'Untitled'}</Label></Button>)}
     </div>}
-    <PaneButton tone="outline" top={16} icon={N.x} onClick={() => closePane(id)}>Close pane</PaneButton>
+    <Button size="sm" icon={N.x} style={{ marginTop: 16 }} onClick={() => closePane(id)}>Close pane</Button>
   </div></div>
-}
-/** Kit buttons of the empty pane: default `sm` (28px), ghost `sm` rows with a provider mark, `chrome-outline` `xs`. */
-function PaneButton({ children, tone, onClick, testId, top = 0, icon, mark }: { children: string; tone: 'primary' | 'ghost' | 'outline'; onClick: () => void; testId?: string; top?: number; icon?: string; mark?: string }) {
-  const t = useTheme()
-  const row = tone === 'ghost'
-  return <div testId={testId} role="button" tabIndex={0} onClick={onClick} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onClick() }}
-    style={{ display: 'flex', alignItems: 'center', justifyContent: row ? 'flex-start' : 'center', gap: 6, height: tone === 'outline' ? 26 : 28, width: row ? '100%' : undefined, minWidth: 0, marginTop: top, paddingLeft: row ? 8 : tone === 'outline' ? 8 : 9, paddingRight: row ? 8 : tone === 'outline' ? 8 : 9, borderRadius: 8, borderWidth: 1, borderColor: tone === 'outline' ? t.border : 'rgba(0, 0, 0, 0)', backgroundColor: tone === 'primary' ? t.buttonPrimary : undefined, cursor: 'pointer', hover: tone === 'primary' ? { opacity: 0.9 } : { backgroundColor: t.buttonSecondaryHover } }}>
-    {mark && <ProviderMark kind={mark} size={14} />}
-    {icon && <Icon source={icon} size={14} color={t.text} />}
-    <Label color={tone === 'primary' ? t.buttonPrimaryText : t.text} size={tone === 'outline' ? 13 : 14} weight={row ? 400 : 500} lineHeight={16} truncate>{children}</Label>
-  </div>
 }
 function PaneHeaderOrNone({ id }: { id: string }) {
   // An empty pane has no header: the empty state carries its own actions.

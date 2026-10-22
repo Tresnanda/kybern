@@ -4,19 +4,18 @@ import { isFreeChatProject } from '../../../../packages/kybern-client/src/types.
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { getNav, setNav } from '../nav/store.ts'
 import { Dialog, Menu, MenuItem } from '../nav/overlay.tsx'
-import { Icon } from '../icons.tsx'
-import { N } from '../nav/glyphs.ts'
 import { NOTES_META, ProjectDot, notesTokens } from './kit.tsx'
-import { Button, Select, TextField } from '../settings/controls.tsx'
+import { Button } from '../kit/Button.tsx'
+import { TextField } from '../kit/Field.tsx'
+import { PickerChip } from '../kit/PickerChip.tsx'
 import { getClient, getState, useApp } from '../state.ts'
 import { useSpaceProjects } from '../spaces/current.ts'
 import { RichEditor, type RichEditorHandle } from '../editor/RichEditor.tsx'
 import type { ImageHome } from '../editor/images.ts'
 import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
-import { ink, Label, useTheme } from '../ui.tsx'
+import { Label, useTheme } from '../ui.tsx'
 import { createNote, currentNoteHome, getNotes, newNote, openNote, openQuickNote, recordNote, rpc, setNotes, useNotes, useNotesFeed, type Capture } from './store.ts'
-import { pressTransform } from '../motion/press.ts'
 
 /** Mounted with the palette; the editor and picker themselves unmount when closed. */
 export function NotesOverlays() {
@@ -64,7 +63,7 @@ function QuickNote() {
     <div onKeyDown={(e) => { if (e.modifiers?.cmd && e.key === 'enter') void finish() }} style={{ display: 'flex', flexDirection: 'column', paddingTop: 16, paddingLeft: 20, paddingRight: 20, paddingBottom: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 19.5, marginBottom: 10 }}>
         <Label color={k.fg3} size={NOTES_META} lineHeight={19.5}>New note in</Label>
-        <Menu testId="quick-note-scope" align="start" sideOffset={6} trigger={() => <div style={{ display: 'flex', alignItems: 'center', gap: 7, pointerEvents: 'none' }}><ProjectDot projectId={draft.project || null} /><Label color={k.fg2} size={NOTES_META} lineHeight={19.5}>{scope}</Label><Icon source={N.chevronDown} size={10} color={k.fg3} /></div>}>
+        <Menu testId="quick-note-scope" align="start" sideOffset={6} trigger={(open) => <PickerChip quiet size="sm" open={open} lead={<ProjectDot projectId={draft.project || null} />}>{scope}</PickerChip>}>
           {[{ id: '', name: 'Global' }, ...projects.filter((p) => !isFreeChatProject(p.id))].map((p) => <MenuItem key={p.id} id={p.id || 'global'} label={p.name} checked={draft.project === p.id} onSelect={() => update({ project: p.id })} />)}
         </Menu>
       </div>
@@ -78,8 +77,8 @@ function QuickNote() {
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, height: 28 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexGrow: 1 }}><Label color={k.fg2} size={NOTES_META} lineHeight={19.5} weight={500}>Esc</Label><Label color={k.fg3} size={NOTES_META} lineHeight={19.5}>saves and closes</Label></div>
-        <div testId="quick-note-discard" tabIndex={0} aria-label="Discard" onClick={discard} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') discard() }} paintTransform={pressTransform()} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 28, paddingLeft: 11.5, paddingRight: 11.5, borderRadius: 10, cursor: 'pointer', hover: { backgroundColor: k.hover } }}><Label color={ink(t, 0.58)} size={14} lineHeight={21} weight={500}>Discard</Label></div>
-        <div testId="quick-note-save" tabIndex={busy ? -1 : 0} aria-label="Save note" onClick={() => { if (!busy) void finish() }} onKeyDown={(e) => { if (!busy && (e.key === 'enter' || e.key === 'space')) void finish() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 28, paddingLeft: 11.5, paddingRight: 11.5, borderRadius: 10, backgroundColor: t.buttonPrimary, opacity: busy ? 0.6 : 1, cursor: 'pointer' }}><Label color={t.buttonPrimaryText} size={14} lineHeight={21} weight={500}>{busy ? 'Saving…' : 'Save note'}</Label></div>
+        <Button testId="quick-note-discard" variant="ghost" label="Discard" onClick={discard}>Discard</Button>
+        <Button testId="quick-note-save" variant="primary" label="Save note" busy={busy} kbd="⌘↵" onClick={() => void finish()}>{busy ? 'Saving…' : 'Save note'}</Button>
       </div>
     </div>
   </Dialog>

@@ -6,7 +6,7 @@ import { useState } from 'react'
 import { exportFileName, noteMarkdown } from '@/state/notesModel'
 import type { NoteSummary } from '../../../../packages/kybern-client/src/types.ts'
 import { Menu, MenuItem, Dialog } from '../nav/overlay.tsx'
-import { Button } from '../settings/controls.tsx'
+import { Button } from '../kit/Button.tsx'
 import { useSpaceProjects } from '../spaces/current.ts'
 import { toast } from '../shell/toasts.tsx'
 import { Label, useTheme } from '../ui.tsx'
@@ -40,7 +40,7 @@ export function NoteMenu({ note, readText, part, trigger }: { note: NoteSummary;
       })()} />}
       {part === 'share' ? null : note.deleted_at ? <><MenuItem id="restore" label="Restore" onSelect={() => void restoreNote(note.id)} /><MenuItem id="purge" label="Delete forever…" destructive onSelect={() => setPurging(true)} /></> : <MenuItem id="delete" testId="note-delete" label="Delete" destructive onSelect={() => { markNoteLeaving(note); void deleteNote(note.id) }} />}
     </Menu>
-    {moving && <Dialog onClose={() => setMoving(false)} width={360}><div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 20 }}><Label color={t.text} size={17}>Move note</Label><Button onClick={() => move()}>Global</Button><virtual-list style={{ height: Math.min(280, projects.length * 36) }}>{projects.map((p) => <div key={p.id} style={{ paddingBottom: 8 }}><Button onClick={() => move(p.id)}>{p.name}</Button></div>)}</virtual-list></div></Dialog>}
-    {purging && <Dialog onClose={() => setPurging(false)} width={400}><div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 20 }}><Label color={t.text} size={17}>Delete this note forever?</Label><Label color={t.textSecondary}>This cannot be undone.</Label><Button onClick={() => setPurging(false)}>Cancel</Button><Button testId="note-purge-confirm" onClick={() => run(async () => { await rpc(note.id).call('notes.purge', { id: note.id }); await refreshNotes(); gallery(); setPurging(false) })}>Delete forever</Button></div></Dialog>}
+    {moving && <Dialog onClose={() => setMoving(false)} width={360}><div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 20 }}><Label color={t.text} size={17}>Move note</Label><Button block onClick={() => move()}>Global</Button><virtual-list style={{ height: Math.min(280, projects.length * 36) }}>{projects.map((p) => <div key={p.id} style={{ paddingBottom: 8 }}><Button block onClick={() => move(p.id)}>{p.name}</Button></div>)}</virtual-list></div></Dialog>}
+    {purging && <Dialog onClose={() => setPurging(false)} width={400}><div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 20 }}><Label color={t.text} size={17}>Delete this note forever?</Label><Label color={t.textSecondary}>This cannot be undone.</Label><div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><Button size="lg" onClick={() => setPurging(false)}>Cancel</Button><Button size="lg" variant="destructive" testId="note-purge-confirm" onClick={() => run(async () => { await rpc(note.id).call('notes.purge', { id: note.id }); await refreshNotes(); gallery(); setPurging(false) })}>Delete forever</Button></div></div></Dialog>}
   </>
 }

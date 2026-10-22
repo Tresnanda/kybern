@@ -14,7 +14,7 @@ import type { TaskItem } from '../../../../packages/kybern-client/src/types.ts'
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { getNav } from '../nav/store.ts'
 import { openThread } from '../nav/history.ts'
-import { Button } from '../settings/controls.tsx'
+import { Button } from '../kit/Button.tsx'
 import { observeElementBounds } from '../native/layout.ts'
 import { onWindowVisibility } from '../native/visibility.ts'
 import { useApp } from '../state.ts'
@@ -189,13 +189,13 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
   />
   if (compact) return <div testId="thread-note-editor" style={{ display: 'flex', flexDirection: 'column', minHeight: 120, maxHeight: 320, padding: 10, gap: 6, borderRadius: 8, backgroundColor: t.buttonSecondary }}>
     {snap.phase === 'ready' ? <div testId="thread-note-scroll" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, overflow: 'scroll' }}>{body('compact')}</div> : <Label color={t.textSecondary} size={12}>{snap.phase === 'loading' ? 'Loading note…' : snap.error ?? 'This note is unavailable.'}</Label>}
-    {snap.conflict ? <div style={{ display: 'flex', gap: 6 }}><Button onClick={() => session.useTheirs()}>Use theirs</Button><Button onClick={() => session.keepMine()}>Keep mine</Button></div> : <div onClick={() => void session.flush()}><Label color={snap.status === 'error' ? t.red : t.textSecondary} size={11}>{status}</Label></div>}
+    {snap.conflict ? <div style={{ display: 'flex', gap: 6 }}><Button size="sm" danger onClick={() => session.useTheirs()}>Use theirs</Button><Button size="sm" variant="primary" onClick={() => session.keepMine()}>Keep mine</Button></div> : <div onClick={() => void session.flush()}><Label color={snap.status === 'error' ? t.red : t.textSecondary} size={11}>{status}</Label></div>}
   </div>
   return <div testId="note-editor" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
     {snap.phase === 'error' && <Banner opened={openedAt} title="Couldn’t open this note" detail={snap.error ?? ''}><Button onClick={() => void session.reload()}>Try again</Button></Banner>}
     {snap.phase === 'missing' && <Banner opened={openedAt} title="This note no longer exists" detail="Return to Notes to open another document."><Button onClick={gallery}>Open Notes</Button></Banner>}
-    {snap.conflict && <Banner opened={openedAt} title="This note changed on another device" detail="Keep your version to replace theirs, or use theirs and discard your changes."><Button testId="note-use-theirs" onClick={() => session.useTheirs()}>Use theirs</Button><Button testId="note-keep-mine" onClick={() => session.keepMine()}>Keep mine</Button></Banner>}
-    {deleted && <Banner opened={openedAt} title="This note is in Recently deleted" detail="Restore it to edit it again."><Button testId="note-restore" onClick={() => void restoreNote(id)}>Restore</Button></Banner>}
+    {snap.conflict && <Banner opened={openedAt} title="This note changed on another device" detail="Keep your version to replace theirs, or use theirs and discard your changes."><Button testId="note-use-theirs" danger onClick={() => session.useTheirs()}>Use theirs</Button><Button testId="note-keep-mine" variant="primary" onClick={() => session.keepMine()}>Keep mine</Button></Banner>}
+    {deleted && <Banner opened={openedAt} title="This note is in Recently deleted" detail="Restore it to edit it again."><Button testId="note-restore" variant="primary" onClick={() => void restoreNote(id)}>Restore</Button></Banner>}
     {snap.phase === 'ready' && <>
       <div ref={viewport} testId="note-viewport" style={{ display: 'flex', flexGrow: 1, minHeight: 0, position: 'relative' }}>
         <div ref={scroller} testId="note-body-list" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexGrow: 1, minHeight: 0, overflow: 'scroll' }}>

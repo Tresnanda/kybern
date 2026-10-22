@@ -11,7 +11,8 @@ import { useNav } from '../nav/store.ts'
 import { getClient, onOpenEvent } from '../state.ts'
 import { RuntimeTaskRow } from '../transcript/rows.tsx'
 import { clockDuration, ink, Label, useTheme } from '../ui.tsx'
-import { Action, DockEmpty, ErrorLine, Section } from './parts.tsx'
+import { DockEmpty, ErrorLine, Section } from './parts.tsx'
+import { Button } from '../kit/Button.tsx'
 
 export const isActiveTask = (task: RuntimeTask) => ['pending', 'running', 'waiting', 'stopping'].includes(task.status)
 export function useRuntimeTasks(threadId: string) {
@@ -83,8 +84,8 @@ const Task = memo(function Task({ task, thread }: { task: RuntimeTask; thread?: 
     <Label color={t.textSecondary} size={11} truncate style={{ paddingLeft: 22 }}>{task.detail || (task.last_tool_name ? `Using ${task.last_tool_name}` : task.backgrounded ? 'Running in background' : task.status)}</Label>
     <Label color={t.textTertiary} size={10} style={{ paddingLeft: 22, paddingTop: 3 }}>{metrics}</Label>
     {active && <div style={{ display: 'flex', paddingLeft: 14, gap: 4 }}>
-      {task.capabilities.background && <Action disabled={busy} onClick={() => void run('background')} testId={`dock-task-background-${task.id}`}>Move to background</Action>}
-      {task.capabilities.stop && <Action disabled={busy || task.status === 'stopping'} onClick={() => void run('stop')} testId={`dock-task-stop-${task.id}`}>{busy || task.status === 'stopping' ? 'Stopping…' : 'Stop'}</Action>}
+      {task.capabilities.background && <Button size="sm" disabled={busy} onClick={() => void run('background')} testId={`dock-task-background-${task.id}`}>Move to background</Button>}
+      {task.capabilities.stop && <Button size="sm" danger disabled={busy || task.status === 'stopping'} onClick={() => void run('stop')} testId={`dock-task-stop-${task.id}`}>{busy || task.status === 'stopping' ? 'Stopping…' : 'Stop'}</Button>}
     </div>}
     <ErrorLine error={error} />
   </div>

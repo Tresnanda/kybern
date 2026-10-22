@@ -3,7 +3,7 @@ import { isEmptyThreadNote, noteTitle } from '@/state/notesModel'
 import { relativeTime } from '@/lib/format'
 import { isFreeChatProject, type NoteSummary, type Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { ProjectDot, Ring } from '../notes/kit.tsx'
-import { muted } from '../nav/overlay.tsx'
+import { muted, Tip } from '../nav/overlay.tsx'
 import { DecoratedTextarea } from '../native/decorated-input.tsx'
 import { markdownInputDecorations, noteInputMarkColors } from '../native/input-marks.ts'
 import { NoteEditor } from '../notes/NoteEditor.tsx'
@@ -15,11 +15,11 @@ import { ArrowUpRight01Icon } from '@hugeicons/core-free-icons'
 import { glyph } from '../icons.tsx'
 const ARROW_UP_RIGHT = glyph(ArrowUpRight01Icon)
 import { useApp } from '../state.ts'
-import { IconButton } from '../sidebar/rows.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
+import { Button } from '../kit/Button.tsx'
 import { TaskWindow, type TaskWindowEntry } from '../tasks/TaskWindow.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
-import { Action, ErrorLine, Section } from './parts.tsx'
-import { pressTransform } from '../motion/press.ts'
+import { ErrorLine, Section } from './parts.tsx'
 
 export function ScopeHeader({ thread, action }: { thread: Thread; action: React.ReactNode }) {
   const name = useApp(s => s.projects.find(p => p.id === thread.project_id)?.name)
@@ -51,8 +51,8 @@ export function NotesPane({ thread }: { thread: Thread }) {
   }
   entries.push({ key: 'footer', height: 40, render: () => <DockFooter testId="dock-all-notes" onClick={all}>Show all in Notes</DockFooter> })
   return <div testId="dock-notes" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
-    <ScopeHeader thread={thread} action={<IconButton icon={N.plus} label="New note" testId="dock-new-note" onClick={quick} />} />
-    <DockSection label="This thread">{own && !isEmptyThreadNote(own) && <IconButton icon={ARROW_UP_RIGHT} size={20} glyph={14} label="Open in Notes" tooltip="Open in Notes" tooltipSide="top" onClick={() => openNote(own.id)} />}</DockSection>
+    <ScopeHeader thread={thread} action={<IconButton icon={N.plus} size="sm" label="New note" testId="dock-new-note" onClick={quick} />} />
+    <DockSection label="This thread">{own && !isEmptyThreadNote(own) && <Tip label="Open in Notes" side="top" size={24}><IconButton icon={ARROW_UP_RIGHT} size="sm" glyph={14} label="Open in Notes" onClick={() => openNote(own.id)} /></Tip>}</DockSection>
     <div style={{ paddingLeft: 8, paddingRight: 8, paddingBottom: 16 }}><ThreadNote key={thread.id} threadId={thread.id} noteId={own?.id} /></div>
     <ErrorLine error={error} retry={() => void refreshNotes()} />
     {!loaded ? <Section label="Loading notes…" /> : entries.length ? <TaskWindow entries={entries} testId="dock-notes-list" /> : <Section label={`Other notes for ${project ? projectName ?? 'this project' : 'Global'} appear here.`} />}
@@ -102,7 +102,6 @@ export function DockSection({ label, count, children }: { label: string; count?:
   return <div style={{ display: 'flex', alignItems: 'center', height: 28, flexShrink: 0, gap: 6, paddingLeft: 14, paddingRight: 6 }}><Label color={muted(t, 0.58)} size={13}>{label}</Label>{count !== undefined && <Label color={muted(t, 0.4)} size={13}>{String(count)}</Label>}<div style={{ flexGrow: 1 }} />{children}</div>
 }
 export function DockFooter({ children, testId, onClick }: { children: string; testId: string; onClick: () => void }) {
-  const t = useTheme()
-  // `DockFooterLink`: a `press` button.
-  return <div testId={testId} role="button" tabIndex={0} onClick={onClick} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onClick() }} paintTransform={pressTransform()} style={{ display: 'flex', alignItems: 'center', height: 28, marginLeft: 6, marginRight: 6, marginTop: 4, marginBottom: 8, paddingLeft: 8, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.hover } }}><Label color={muted(t, 0.7)} size={13}>{children}</Label></div>
+  // `DockFooterLink`: a ghost button.
+  return <Button variant="ghost" size="sm" testId={testId} onClick={onClick} style={{ alignSelf: 'flex-start', marginLeft: 6, marginTop: 4, marginBottom: 8 }}>{children}</Button>
 }

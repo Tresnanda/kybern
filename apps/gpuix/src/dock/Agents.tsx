@@ -22,7 +22,9 @@ import { Elapsed } from '../subagents/Elapsed.tsx'
 import { getClient } from '../state.ts'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { ink, Label, modelLabel, ProviderMark, useTheme } from '../ui.tsx'
-import { Action, DockEmpty, ErrorLine, Section } from './parts.tsx'
+import { DockEmpty, ErrorLine, Section } from './parts.tsx'
+import { Button } from '../kit/Button.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
 import { flatTree, TICK_GAP, TreeLines, type TreeShape } from '../tree/Tree.tsx'
 
 const choices = new Map<string, { tree: Record<string, boolean>; detail: Record<string, boolean> }>()
@@ -114,7 +116,7 @@ export function Agents({ thread }: { thread: Thread }) {
     <ErrorLine error={error} retry={() => setReload((n) => n + 1)} />
     {!rows.length ? loaded && !error ? <DockEmpty lineage instant={dockInstant} icon={N.users} title="No agents yet" body="Ask the agent to delegate work to another agent; children appear here." /> : null : <>
       <Section label={lineageSummary(counts) || `${counts.total} ${counts.total === 1 ? 'agent' : 'agents'}`}>
-        {stoppable.length >= 2 && <Action disabled={busy} onClick={() => void run(() => Promise.all(stoppable.map((th) => getClient()!.call('threads.interrupt', { thread_id: th.id }))))}>Stop all</Action>}
+        {stoppable.length >= 2 && <Button variant="ghost" size="sm" danger disabled={busy} onClick={() => void run(() => Promise.all(stoppable.map((th) => getClient()!.call('threads.interrupt', { thread_id: th.id }))))}>Stop all</Button>}
       </Section>
       <div {...FILL_ISLAND} style={{ display: 'flex', flexGrow: 1, minHeight: 0 }}>
         <virtual-list testId="dock-agents-list" style={{ width: '100%', height: '100%' }}>
@@ -125,8 +127,8 @@ export function Agents({ thread }: { thread: Thread }) {
     {removing && <Dialog onClose={() => { if (!busy) setRemoving(null) }} width={420} testId="dock-remove-worktree">
       <DialogHeader title="Remove this worktree?" description={`${removing?.title || 'This agent'} left its worktree on disk because it has unmerged changes. Removing it deletes those files from this Mac. The branch is deleted only if already merged.`} onClose={() => { if (!busy) setRemoving(null) }} />
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: 12 }}>
-        <Action press={false} disabled={busy} onClick={() => setRemoving(null)}>Cancel</Action>
-        <Action disabled={busy} onClick={() => void run(async () => { if (removing) await getClient()!.call('delegations.worktree_remove', { thread_id: removing.id, force: true }); setRemoving(null) })}>{busy ? 'Removing…' : 'Remove worktree'}</Action>
+        <Button size="lg" disabled={busy} onClick={() => setRemoving(null)}>Cancel</Button>
+        <Button size="lg" variant="destructive" busy={busy} onClick={() => void run(async () => { if (removing) await getClient()!.call('delegations.worktree_remove', { thread_id: removing.id, force: true }); setRemoving(null) })}>{busy ? 'Removing…' : 'Remove worktree'}</Button>
       </div>
     </Dialog>}
   </>
@@ -203,7 +205,7 @@ const AgentRow = memo(function AgentRow({ row, fresh, last, rails, detailOpen, o
       {result ? <>
         <Label color={muted(t, 0.65)} size={11}>Result</Label>
         <markdown style={{ userSelect: 'text' }} source={clamp && !expanded ? result.split('\n').slice(0, 8).join('\n').slice(0, 720) : result} theme={cachedMarkdownTheme(t)} />
-        {clamp && <Action press={false} onClick={() => setExpanded(!expanded)}>{expanded ? 'Show less' : 'Show more'}</Action>}
+        {clamp && <Button variant="ghost" size="sm" style={{ alignSelf: 'flex-start' }} onClick={() => setExpanded(!expanded)}>{expanded ? 'Show less' : 'Show more'}</Button>}
       </> : <Label color={muted(t, 0.8)} size={12}>{state.phase === 'working' || state.phase === 'waiting' ? 'The result comes back to this thread when the agent finishes.' : 'Open the thread to see its work.'}</Label>}
       {info?.branch && <Label color={muted(t, 0.8)} size={11}>{`Branch · ${info.branch}`}</Label>}
       {info?.head_commit && <Label color={muted(t, 0.8)} size={11}>{`Commit · ${info.head_commit.slice(0, 7)}`}</Label>}
@@ -211,14 +213,14 @@ const AgentRow = memo(function AgentRow({ row, fresh, last, rails, detailOpen, o
       {!!info?.files_touched?.length && <>
         <Label color={muted(t, 0.65)} size={11}>{`Files touched · ${info.files_touched.length}`}</Label>
         <code style={{ userSelect: 'text' }} code={(allFiles ? info.files_touched : info.files_touched.slice(0, 6)).join('\n')} theme={cachedMarkdownTheme(t)} showLineNumbers={false} />
-        {info.files_touched.length > 6 && <Action press={false} onClick={() => setAllFiles(!allFiles)}>{allFiles ? 'Show fewer' : `Show all ${info.files_touched.length} files`}</Action>}
+        {info.files_touched.length > 6 && <Button variant="ghost" size="sm" style={{ alignSelf: 'flex-start' }} onClick={() => setAllFiles(!allFiles)}>{allFiles ? 'Show fewer' : `Show all ${info.files_touched.length} files`}</Button>}
       </>}
       {!!info?.conflicts?.length && <Label color={t.warning} size={11}>{`${info.conflicts.length} ownership conflicts · open the thread for details`}</Label>}
       <ErrorLine error={error} />
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-        <Action onClick={() => openThread(thread.id)}>Open</Action>
-        {(canStopDelegation(thread) || (thread.subagent && state.phase === 'working' && thread.subagent.capabilities?.stop !== false)) && <Action disabled={busy} onClick={() => void stop()}>{busy ? 'Stopping…' : 'Stop'}</Action>}
-        {canRemoveWorktree(info) && <Action onClick={() => onRemove(thread)}>Remove worktree</Action>}
+        <Button size="sm" onClick={() => openThread(thread.id)}>Open</Button>
+        {(canStopDelegation(thread) || (thread.subagent && state.phase === 'working' && thread.subagent.capabilities?.stop !== false)) && <Button size="sm" danger busy={busy} onClick={() => void stop()}>{busy ? 'Stopping…' : 'Stop'}</Button>}
+        {canRemoveWorktree(info) && <Button size="sm" danger onClick={() => onRemove(thread)}>Remove worktree</Button>}
       </div>
     </div></Collapse>
     <TreeLines shape={shape} />
@@ -228,11 +230,9 @@ const AgentRow = memo(function AgentRow({ row, fresh, last, rails, detailOpen, o
 /** The tree's expand toggle: a 22 px ghost button whose chevron turns with the children it reveals (`DisclosureChevron`, 220 ms). */
 function TreeToggle({ open, onClick, testId }: { open: boolean; onClick: () => void; testId: string }) {
   const t = useTheme()
-  const [hover, setHover] = useState(false)
-  return <div testId={testId} role="button" aria-label={open ? 'Collapse agents' : 'Expand agents'} onClick={onClick} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: 6, flexShrink: 0, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
-    <Chevron open={open} size={14} color={hover ? ink(t, 0.82) : muted(t, 0.6)} />
-  </div>
+  return <IconButton testId={testId} icon={N.chevronDown} label={open ? 'Collapse agents' : 'Expand agents'} size="sm" onClick={onClick}>
+    <Chevron open={open} size={14} color={t.iconSecondary} />
+  </IconButton>
 }
 
 onEnvironmentChange(() => { choices.clear() })

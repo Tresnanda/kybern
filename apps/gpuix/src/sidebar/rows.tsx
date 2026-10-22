@@ -1,5 +1,7 @@
 import { useSidebarRowLease } from './Window.tsx'
-import { KitButton } from '../kit/AlertDialog.tsx'
+import { Button } from '../kit/Button.tsx'
+import { CONTROL } from '../kit/controls.ts'
+import { IconButton, type IconButtonProps } from '../kit/IconButton.tsx'
 import { MoveToSpaceMenu } from '../spaces/MoveToSpace.tsx'
 import { inCurrentSpace } from '../spaces/current.ts'
 import { SPACE_COPY } from '../../../../packages/kybern-client/src/spaces.ts'
@@ -16,7 +18,7 @@ import { activeEnvironment } from '../shell/environment.ts'
 // Each row is memoized and owns its hover state, so moving the pointer re-renders
 // one row and a list update re-renders only the rows whose props changed.
 import { useGpuix, type PublicInstance } from '@gpuix/react'
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { childState, canStopDelegation } from '../../../../packages/kybern-client/src/delegations.ts'
 import { SUBAGENT_SIDEBAR_HOLD_MS, subagentThreadPhase, type SubagentPhase } from '../../../../packages/kybern-client/src/subagents.ts'
 import { FREE_CHAT_PROJECT_ID, type Project, type Thread, type ThreadActivityState } from '../../../../packages/kybern-client/src/types.ts'
@@ -34,7 +36,6 @@ import { beginProjectDrag, consumeProjectDrag, endProjectPending, trackProjectDr
 import { leftSource } from '../drag/leave.ts'
 import { filterSummary, isFiltering, providerLabel, threadAgents } from './model.ts'
 import { popAnimation, popTransform, usePopOnChange } from '../kit/Pop.tsx'
-import { pressTransform } from '../motion/press.ts'
 import { Chevron } from '../motion/Chevron.tsx'
 import { SwapOnChange } from '../motion/kit.tsx'
 import { pressRow } from '../shell/motion.ts'
@@ -98,88 +99,26 @@ function useContextMenu() {
   }
 }
 
-/**
- * `SidebarIconButton`: a square, `rounded-sm` button whose glyph brightens on
- * hover (`text-muted-foreground/60 hover:text-foreground/82`).
- */
-export function IconButton({
-  icon,
-  size = 20,
-  glyph = 14,
-  color,
-  hoverColor,
-  label,
-  tooltip,
-  tooltipSide = 'top',
-  onClick,
-  active,
-  radius = 6,
-  testId,
-  children,
-  onHover,
-  press = false,
-}: {
-  onHover?: (on: boolean) => void
-  /** Desktop `press` (scale 0.97 on :active): only where the desktop control has it; tooltip/menu triggers do not. */
-  press?: boolean
-  icon: string
-  size?: number
-  glyph?: number
-  color?: string
-  hoverColor?: string
-  label: string
-  tooltip?: string | string[]
-  tooltipSide?: 'top' | 'bottom'
-  onClick?: () => void
-  active?: boolean
-  radius?: number
-  testId?: string
-  children?: ReactNode
-}) {
-  const t = useTheme()
-  const { hover, bind } = useHover()
-  const rest = color ?? muted(t, 0.6)
-  const button = (
-    <div
-      testId={testId}
-      aria-label={label}
-      role="button"
-      onMouseEnter={() => {
-        bind.onMouseEnter()
-        onHover?.(true)
-      }}
-      onMouseLeave={() => {
-        bind.onMouseLeave()
-        onHover?.(false)
-      }}
-      onClick={onClick}
-      paintTransform={pressTransform(press && !!onClick)}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: size,
-        height: size,
-        borderRadius: radius,
-        flexShrink: 0,
-        cursor: 'pointer',
-        position: 'relative',
-        ...(active ? { backgroundColor: accentActive(t) } : {}),
-        hover: { backgroundColor: active ? accentActive(t) : t.buttonSecondaryHover },
-      }}
-    >
-      <Icon source={icon} size={glyph} color={hover || active ? (hoverColor ?? ink(t, 0.82)) : rest} />
-      {children}
-    </div>
-  )
+/** The kit `IconButton` with the sidebar's tooltip (`tooltip` is the text, then any shortcut keys). */
+export function SidebarIconButton({ tooltip, tooltipSide = 'top', ...props }: IconButtonProps & { tooltip?: string | string[]; tooltipSide?: 'top' | 'bottom' }) {
+  const button = <IconButton {...props} />
   if (!tooltip) return button
   const [text, ...keys] = Array.isArray(tooltip) ? tooltip : [tooltip]
   return (
-    <Tip label={text!} shortcut={keys.length ? keys : undefined} side={tooltipSide} size={size}>
+    <Tip label={text!} shortcut={keys.length ? keys : undefined} side={tooltipSide} size={CONTROL[props.size ?? 'md'].height}>
       {button}
     </Tip>
   )
 }
+
+/**
+ * The old numeric-size sidebar button, kept as a thin wrapper over `SidebarIconButton` for `dock/Dock.tsx`'s tab strip (the tab-strip
+ * lane replaces it). New code uses `kit/IconButton` or `SidebarIconButton`.
+ */
+function LegacyIconButton({ size = 20, glyph = 14, tooltip, tooltipSide, ...rest }: { icon: string; size?: number; glyph?: number; label: string; tooltip?: string | string[]; tooltipSide?: 'top' | 'bottom'; onClick?: () => void; active?: boolean; testId?: string; press?: boolean; radius?: number; color?: string; hoverColor?: string }) {
+  return <SidebarIconButton icon={rest.icon} label={rest.label} onClick={rest.onClick} active={rest.active} testId={rest.testId} size={size >= 32 ? 'lg' : size >= 26 ? 'md' : 'sm'} glyph={glyph} tooltip={tooltip} tooltipSide={tooltipSide} />
+}
+export { LegacyIconButton as IconButton }
 
 export function Dot({ color, pop = false }: { color: string; /** Pops in (`t-pop`) when it mounts. */ pop?: boolean }) {
   return <div paintTransform={pop ? popTransform() : undefined} style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: color, flexShrink: 0 }} />
@@ -308,7 +247,7 @@ export const SectionLabel = memo(function SectionLabel({ text = 'Projects' }: { 
               align="end"
               minWidth={192}
               testId="sidebar-filter"
-              trigger={() => <IconButton icon={N.filter} label="Filter threads" tooltip={menuOpen ? undefined : 'Filter threads'} active={filtering} />}
+              trigger={() => <SidebarIconButton icon={N.filter} size="sm" glyph={15} label="Filter threads" tooltip={menuOpen ? undefined : 'Filter threads'} active={filtering} />}
             >
               <MenuLabel>Show</MenuLabel>
               {(['all', 'pinned', 'working'] as const).map((value) => (
@@ -337,7 +276,7 @@ export const SectionLabel = memo(function SectionLabel({ text = 'Projects' }: { 
                 </>
               )}
             </Menu>
-            <IconButton icon={N.plus} label="Add project" tooltip="Add project" onClick={() => void onAddProject()} testId="add-project" />
+            <SidebarIconButton icon={N.plus} size="sm" glyph={15} label="Add project" tooltip="Add project" onClick={() => void onAddProject()} testId="add-project" />
             </div>
         </div>
       </div>
@@ -353,11 +292,7 @@ export const MessageRow = memo(function MessageRow({ text, clearFilter }: { text
       {/* `flexShrink` + `minWidth: 0` let the sentence wrap inside the column instead of running out of it. */}
       <Label color={muted(t, clearFilter ? 0.6 : 0.48)} lineHeight={21} style={{ minWidth: 0, flexShrink: 1 }}>{text}</Label>
       {clearFilter && (
-        <div onClick={() => setNav({ filter: DEFAULT_FILTER })} style={{ cursor: 'pointer' }}>
-          <Label color={ink(t, 0.85)} style={{ textDecoration: 'underline' }}>
-            Show all threads
-          </Label>
-        </div>
+        <Button variant="ghost" size="sm" onClick={() => setNav({ filter: DEFAULT_FILTER })}>Show all threads</Button>
       )}
     </div>
   )
@@ -470,7 +405,7 @@ export const ProjectHeader = memo(function ProjectHeader({
         </div>
         <div style={{ position: 'absolute', top: 4, right: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
           {/* A creation affordance: always on screen, muted until the pointer is on it. */}
-          <IconButton icon={N.newThread} label="New thread" tooltip="New thread" onClick={() => newThread(project.id)} testId={`project-new-${project.id}`} />
+          <SidebarIconButton icon={N.newThread} size="sm" glyph={15} label="New thread" tooltip="New thread" onClick={() => newThread(project.id)} testId={`project-new-${project.id}`} />
         </div>
       </div>
       {menu.at && (
@@ -636,20 +571,19 @@ export const ThreadRow = memo(function ThreadRow({
         <div style={{ position: 'absolute', top: 0, bottom: 0, right: 6, display: 'flex', alignItems: 'center' }}>
           <Reveal show={reveal}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <IconButton
+              <SidebarIconButton
                 icon={thread.pinned ? N.pinFilled : N.pin}
+                size="sm"
                 glyph={15}
-                color={muted(t, 0.34)}
                 label={thread.pinned ? 'Unpin' : 'Pin'}
 
                 testId={`pin-${thread.id}`}
                 onClick={() => void updateThread(thread.id, { pinned: !thread.pinned }).catch((e) => console.error('[sidebar] Unable to pin:', errorText(e)))}
               />
-              <IconButton
+              <SidebarIconButton
                 icon={N.archive}
+                size="sm"
                 glyph={15}
-                color={muted(t, 0.42)}
-                hoverColor={ink(t, 0.89)}
                 label="Archive"
 
                 testId={`archive-${thread.id}`}
@@ -820,7 +754,7 @@ export const ChildRow = memo(function ChildRow({
         )}
         <div style={{ position: 'absolute', top: 0, bottom: 0, right: 6, display: 'flex', alignItems: 'center' }}>
           <Reveal show={reveal}>
-            <IconButton icon={N.x} glyph={15} color={muted(t, 0.45)} hoverColor={ink(t, 0.89)} label="Dismiss" tooltip="Dismiss" onClick={() => setLeaveAsked(true)} />
+            <SidebarIconButton icon={N.x} size="sm" glyph={15} label="Dismiss" tooltip="Dismiss" onClick={() => setLeaveAsked(true)} />
           </Reveal>
         </div>
       </div>
@@ -875,15 +809,11 @@ export const CreateCoordinatorRow = memo(function CreateCoordinatorRow({ project
 })
 
 export const MoreRow = memo(function MoreRow({ projectId, count, showAll, onToggle }: { projectId: string; count: number; showAll: boolean; onToggle: (id: string) => void }) {
-  const t = useTheme()
-  const { hover, bind } = useHover()
   return (
     <div style={{ paddingTop: 2, ...INSET }}>
-      <div testId={`more-${projectId}`} {...bind} onClick={() => onToggle(projectId)} style={{ display: 'flex', alignItems: 'center', height: 28, paddingLeft: 32, paddingRight: 8, cursor: 'pointer' }}>
-        <Label color={hover ? t.text : muted(t, 0.79)} truncate>
-          {showAll ? 'Show less' : `Show ${count} more`}
-        </Label>
-      </div>
+      <Button variant="ghost" size="sm" testId={`more-${projectId}`} onClick={() => onToggle(projectId)} style={{ alignSelf: 'flex-start', marginLeft: 24 }}>
+        {showAll ? 'Show less' : `Show ${count} more`}
+      </Button>
     </div>
   )
 })
@@ -898,7 +828,7 @@ export const EmptySpaceRow = memo(function EmptySpaceRow({ onlySpace }: { onlySp
         <Label color={t.text} size={13} lineHeight={19.5} weight={500}>{SPACE_COPY.emptyTitle}</Label>
         {!onlySpace && <Label color={t.textSecondary} size={12} lineHeight={18} style={{ minWidth: 0, flexShrink: 1 }}>{SPACE_COPY.emptyDescription}</Label>}
       </div>
-      <KitButton variant="outline" size="sm" testId="empty-space-add" onClick={() => void onAddProject()}>{SPACE_COPY.emptyAction}</KitButton>
+      <Button size="sm" testId="empty-space-add" onClick={() => void onAddProject()}>{SPACE_COPY.emptyAction}</Button>
     </div>
   )
 })

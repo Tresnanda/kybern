@@ -5,13 +5,15 @@ import type { TerminalInfo, TerminalOutputNotification, TerminalExitedNotificati
 import { getClient, useApp } from '../state.ts'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 import { ContextMenu, Menu, MenuItem, MenuLabel, MenuSeparator } from '../nav/overlay.tsx'
-import { IconButton } from '../sidebar/rows.tsx'
+import { SidebarIconButton } from '../sidebar/rows.tsx'
+import { Button } from '../kit/Button.tsx'
+import { TextField } from '../kit/Field.tsx'
 import { copyText } from '../transcript/store.ts'
 import { N } from '../nav/glyphs.ts'
 import { Icon } from '../icons.tsx'
 import { DOCK_ICONS } from '../dock/icons.ts'
 import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { Action, ErrorLine } from '../dock/parts.tsx'
+import { ErrorLine } from '../dock/parts.tsx'
 import { DURATION, EASE, revealTransform } from '../motion/kit.tsx'
 import { fadeTo } from '../shell/motion.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
@@ -116,22 +118,22 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
     <div style={{ display: 'flex', alignItems: 'center', minHeight: 36, gap: 4, paddingLeft: 6, paddingRight: 6, paddingTop: 4, paddingBottom: 4, flexShrink: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', flexGrow: 1, minWidth: 0, overflowX: 'scroll', gap: 4 }}>
         {tabs.map((tab, index) => <TabChip key={tab.id} id={tab.id} kind={kinds.current.get(tab.id) ?? 'shell'} title={label(tab, index)} active={tab.id === current?.id} onSelect={() => select(tab.id)} onClose={() => void close(tab.id)} />)}
-        <IconButton icon={N.plus} size={28} radius={8} label="New terminal" tooltip="New terminal" tooltipSide="bottom" testId="terminal-new" onClick={() => { if (!busy) void create() }} />
+        <SidebarIconButton icon={N.plus} size="sm" label="New terminal" tooltip="New terminal" tooltipSide="bottom" testId="terminal-new" onClick={() => { if (!busy) void create() }} />
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
-        <Menu align="end" testId="terminal-cli" width={208} trigger={() => <IconButton icon={DOCK_ICONS.terminal} size={28} radius={8} label="Open an agent CLI" tooltip="Open an agent CLI" tooltipSide="bottom" />}>
+        <Menu align="end" testId="terminal-cli" width={208} trigger={() => <SidebarIconButton icon={DOCK_ICONS.terminal} size="sm" label="Open an agent CLI" tooltip="Open an agent CLI" tooltipSide="bottom" />}>
           <MenuLabel>Open in a new tab</MenuLabel>
           <MenuItem id="shell" icon={DOCK_ICONS.terminal} label="Shell" onSelect={() => void create()} />
           {providers.some(p => p.available && p.binary_path) && <><MenuSeparator /><MenuLabel>Agent CLIs in this environment</MenuLabel></>}
           {providers.filter(p => p.available && p.binary_path).map(p => <MenuItem key={p.kind} id={p.kind} iconNode={<ProviderMark kind={p.kind} size={14} />} label={p.display_name} onSelect={() => void create([p.binary_path!], p.kind)} />)}
         </Menu>
-        <div style={{ opacity: current ? 1 : 0.45 }}><IconButton icon={DOCK_ICONS.trash} size={28} radius={8} label="Close active terminal tab" tooltip="Close terminal" tooltipSide="bottom" testId={current ? `terminal-close-${current.id}` : undefined} onClick={() => { if (current) void close(current.id) }} /></div>
+        <div style={{ opacity: current ? 1 : 0.45 }}><SidebarIconButton icon={DOCK_ICONS.trash} size="sm" label="Close active terminal tab" tooltip="Close terminal" tooltipSide="bottom" testId={current ? `terminal-close-${current.id}` : undefined} onClick={() => { if (current) void close(current.id) }} /></div>
       </div>
     </div>
     <ErrorLine error={error} retry={() => void refresh()} />
     {current ? <div key={current.id} paintTransform={PATCHED_NATIVE && fadeFor.current === current.id ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease: [...EASE.out] as [number, number, number, number] } } : undefined} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0 }}>
       <Screen info={current} width={width} onTitle={title => setTitles(old => old[current.id] === title ? old : { ...old, [current.id]: title })} onExit={() => void close(current.id)} />
-    </div> : <Action onClick={() => void create()}>Open terminal</Action>}
+    </div> : <Button style={{ alignSelf: 'flex-start', margin: 8 }} onClick={() => void create()}>Open terminal</Button>}
   </div>
 }
 
@@ -368,8 +370,8 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
   return <>
     <ErrorLine error={error} />
     {search !== null && <div style={{ display: 'flex', alignItems: 'center', height: 32, gap: 4, paddingLeft: 8 }}>
-      <input testId="terminal-search" autoFocus aria-label="Search terminal scrollback" value={search} placeholder="Search scrollback…" onChange={e => { find(e.value ?? '', false, -1) }} onSubmit={() => find(search)} onKeyDown={e => { if (e.key === 'escape') { setSearch(null); if (host.current) renderer?.focusElement?.(host.current.id) } }} style={{ flexGrow: 1, height: 26, fontSize: 12, color: t.text, backgroundColor: t.buttonSecondary }} />
-      <Label color={t.textSecondary} size={10}>{match < 0 ? 'No match' : `Line ${match + 1}`}</Label><Action onClick={() => find(search, true)}>↑</Action><Action onClick={() => find(search)}>↓</Action><Action onClick={() => setSearch(null)}>Close</Action>
+      <TextField testId="terminal-search" autoFocus label="Search terminal scrollback" value={search} placeholder="Search scrollback…" onChange={v => { find(v, false, -1) }} onSubmit={() => find(search)} onKeyDown={e => { if (e.key === 'escape') { setSearch(null); if (host.current) renderer?.focusElement?.(host.current.id) } }} shell={{ flexGrow: 1 }} />
+      <Label color={t.textSecondary} size={10}>{match < 0 ? 'No match' : `Line ${match + 1}`}</Label><Button variant="ghost" size="sm" label="Previous match" onClick={() => find(search, true)}>↑</Button><Button variant="ghost" size="sm" label="Next match" onClick={() => find(search)}>↓</Button><Button variant="ghost" size="sm" onClick={() => setSearch(null)}>Close</Button>
     </div>}
     <div ref={host} testId="terminal-screen" tabIndex={0} role="textbox" aria-label="Terminal"
       onFocus={() => { if (!model.focused) noteTerminalFocus(true); model.focused = true; model.cursorInitialized = true; setFocused(true); if (model.focusReporting) send('\x1b[I') }}

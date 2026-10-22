@@ -21,6 +21,8 @@ import { isChildThread } from '../../../../packages/kybern-client/src/subagents.
 import { subagentPhase, subagentTypeLabel } from '../../../../packages/kybern-client/src/subagents.ts'
 import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
+import { Button } from '../kit/Button.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
 import { getClient, getState, set, useApp, usePaneAccess, focusPane } from '../state.ts'
 import { ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { archiveThread, errorText, updateThread } from './actions.ts'
@@ -49,14 +51,13 @@ export function usePanelOpen(): boolean {
   return sidebarOpen
 }
 
-/** 28px square chrome control with a 16px glyph (`SIDEBAR_TRIGGER_CLASS_NAME`). */
+/** 28px square chrome control with a 16px glyph: the kit `IconButton`, with the tooltip and the dim that eases for a disabled one. */
 function ChromeIcon({
   icon,
   label,
   tooltip,
   onClick,
   disabled,
-  color,
   glyph = 16,
   pressed,
   testId,
@@ -68,40 +69,15 @@ function ChromeIcon({
   tooltip?: string
   onClick?: () => void
   disabled?: boolean
-  color?: string
   glyph?: number
   pressed?: boolean
   testId?: string
 }) {
-  const t = useTheme()
-  const [hover, setHover] = useState(false)
   // Back and forward dim while there is nowhere to go; the opacity eases so a step does not flicker them (`transition-opacity duration-150`).
   const dim = fadeTo(disabled ? 0.4 : 1)
   const button = (
-    <div
-      testId={testId}
-      role="button"
-      aria-label={label}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      onClick={disabled ? undefined : onClick}
-      paintTransform={dim.paintTransform}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: 28,
-        height: 28,
-        borderRadius: 8,
-        flexShrink: 0,
-        ...dim.style,
-        cursor: disabled ? 'default' : 'pointer',
-        pointerEvents: decorative ? 'none' : 'auto',
-        ...(pressed ? { backgroundColor: t.buttonSecondaryHover } : {}),
-        ...(disabled ? {} : { hover: { backgroundColor: t.buttonSecondaryHover } }),
-      }}
-    >
-      <Icon source={icon} size={glyph} color={color ?? (hover && !disabled ? t.text : t.textSecondary)} />
+    <div paintTransform={dim.paintTransform} style={{ display: 'flex', flexShrink: 0, ...dim.style }}>
+      <IconButton testId={testId} icon={icon} label={label} glyph={glyph} active={pressed} onClick={disabled ? undefined : onClick} style={{ pointerEvents: decorative || disabled ? 'none' : 'auto', cursor: disabled ? 'default' : 'pointer' }} />
     </div>
   )
   // A disabled control shows no tooltip, as a disabled button gets no pointer events on the web.
@@ -337,25 +313,9 @@ export function ThreadHeader({ paneId }: { paneId?: string } = {}) {
             minWidth={192}
             testId="handoff-menu"
             trigger={() => (
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  height: 28,
-                  paddingLeft: paneId ? 9 : 10,
-                  paddingRight: paneId ? 9 : 10,
-                  borderRadius: 8,
-                  borderWidth: 1,
-                  borderColor: t.border,
-                  cursor: 'pointer',
-                  pointerEvents: 'auto',
-                  hover: { backgroundColor: t.buttonSecondaryHover },
-                }}
-              >
-                <Icon source={N.handoff} size={14} color={ink(t, 0.8)} />
-                {!paneId && <Label color={t.text}>Hand off</Label>}
-              </div>
+              <Button variant="ghost" icon="handoff" label="Hand off" style={{ pointerEvents: 'auto' }}>
+                {paneId ? undefined : 'Hand off'}
+              </Button>
             )}
           >
             {others.map((p) => (
@@ -373,7 +333,7 @@ export function ThreadHeader({ paneId }: { paneId?: string } = {}) {
           align="end"
           minWidth={208}
           testId={paneId ? `pane-actions-${paneId}` : "thread-actions"}
-          trigger={(open) => <ChromeIcon decorative icon={N.ellipsis} label="Thread actions" glyph={14} color={t.text} pressed={open} />}
+          trigger={(open) => <ChromeIcon decorative icon={N.ellipsis} label="Thread actions" pressed={open} />}
         >
 
           <MenuItem id="split-right" testId={paneId ? `pane-right-${paneId}` : "header-split-right"} disabled={paneId ? !canSplitPane(root, paneId, 'horizontal') : false} icon={N.splitRight} label="Split right" shortcut="⌘\" onSelect={() => split('horizontal')} />
@@ -441,15 +401,10 @@ function PanelToggles() {
 
 /** A plain header chip (`ChatHeaderButton tone="plain"`). */
 function HeaderChip({ children, onClick, testId }: { children: ReactNode; onClick: () => void; testId?: string }) {
-  const t = useTheme()
   return (
-    <div
-      testId={testId}
-      onClick={onClick}
-      style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, maxWidth: 176, paddingLeft: 6, paddingRight: 6, borderRadius: 8, cursor: 'pointer', pointerEvents: 'auto', flexShrink: 0, hover: { backgroundColor: t.buttonSecondaryHover } }}
-    >
+    <Button variant="ghost" testId={testId} onClick={onClick} style={{ gap: 6, maxWidth: 176, paddingLeft: 6, paddingRight: 6, pointerEvents: 'auto' }}>
       {children}
-    </div>
+    </Button>
   )
 }
 

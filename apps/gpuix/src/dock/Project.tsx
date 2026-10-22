@@ -20,7 +20,10 @@ import { getClient, getState, set, useApp } from '../state.ts'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { DockFooter, DockSection as Section, ScopeHeader } from './Notes.tsx'
-import { Action, ErrorLine, SwitchRow } from './parts.tsx'
+import { ErrorLine, SwitchRow } from './parts.tsx'
+import { Button } from '../kit/Button.tsx'
+import { Segmented } from '../kit/Segmented.tsx'
+import { TextArea } from '../kit/TextArea.tsx'
 
 export function ProjectPane({ thread }: { thread: Thread }) {
   const t = useTheme()
@@ -73,7 +76,7 @@ export function ProjectPane({ thread }: { thread: Thread }) {
       <div key="setup">{space.setup ? <NoteRow note={space.setup} onClick={() => setSelected(space.setup)} /> : <Hint>{PROJECT_SPACE_COPY.setupEmpty}</Hint>}</div>
       <div key="memory-heading" style={{ paddingTop: 8 }}><Section label="Memory" count={space.memory.length || undefined} /></div>
       {space.memory.length ? space.memory.map((note) => <NoteRow key={note.id} note={note} onClick={() => setSelected(note)} />) : <Hint key="memory-empty">{PROJECT_SPACE_COPY.memoryEmpty}</Hint>}
-      <div key="coordinator-heading" style={{ paddingTop: 8 }}><Section label={COPY.section}><Action textSize={13} onClick={() => setConfirm('redo')}>{COPY.redo}</Action></Section></div>
+      <div key="coordinator-heading" style={{ paddingTop: 8 }}><Section label={COPY.section}><Button variant="ghost" size="sm" onClick={() => setConfirm('redo')}>{COPY.redo}</Button></Section></div>
       <div key="coordinator" style={{ display: 'flex', flexDirection: 'column', gap: 14, marginLeft: 6, marginRight: 6, padding: 10, paddingBottom: 6, borderRadius: 8, borderWidth: 1, borderColor: t.borderLight }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Choice label={COPY.autonomy} value={effective.lead_autonomy} options={AUTONOMY_OPTIONS} disabled={busy} onChange={value => void write(withOverrideField(current(), 'lead_autonomy', value as typeof effective.lead_autonomy))} />
         <Label color={t.textTertiary} size={13} lineHeight={18.2}>{AUTONOMY_OPTIONS.find(o => o.value === effective.lead_autonomy)!.hint}</Label></div>
@@ -92,12 +95,12 @@ export function ProjectPane({ thread }: { thread: Thread }) {
               onEffortChange={(effort) => change({ ...value, effort })}
               onProviderChange={(provider, choice) => change({ provider, model: choice?.model, effort: choice?.effort })}
               onReload={() => void loadProviders(true)} label={(color) => <Label color={color} size={12} truncate>{chip.label}</Label>} />
-            {value && <Action disabled={busy} onClick={() => void change(null)}>Reset</Action>}
+            {value && <Button variant="ghost" size="sm" disabled={busy} onClick={() => void change(null)}>Reset</Button>}
           </div>
         })}</div></div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
           <Label color={t.textTertiary} size={10}>{COPY.defaultsFrom}</Label>
-          <Action disabled={busy || !project?.coordinator} onClick={() => setConfirm('reset')}>{COPY.reset}</Action>
+          <Button variant="ghost" size="sm" disabled={busy || !project?.coordinator} onClick={() => setConfirm('reset')}>{COPY.reset}</Button>
         </div>
       </div>
       <div key="brief-switch" style={{ margin: 6, padding: 10, borderRadius: 8, borderWidth: 0.6, borderColor: t.borderLight }}>
@@ -109,11 +112,11 @@ export function ProjectPane({ thread }: { thread: Thread }) {
     {confirm && <Dialog onClose={() => { if (!busy) setConfirm(null) }} width={430}>
       <DialogHeader title={confirm === 'redo' ? COPY.redoTitle : COPY.resetTitle} description={confirm === 'redo' ? COPY.redoDetail : COPY.resetDetail} onClose={() => { if (!busy) setConfirm(null) }} />
       <div style={{ display: 'flex', justifyContent: 'flex-end', padding: 12, gap: 8 }}>
-        <Action press={false} disabled={busy} onClick={() => setConfirm(null)}>Cancel</Action>
-        <Action disabled={busy} onClick={() => { void (async () => {
+        <Button size="lg" disabled={busy} onClick={() => setConfirm(null)}>Cancel</Button>
+        <Button size="lg" variant="primary" busy={busy} onClick={() => { void (async () => {
           if (confirm === 'reset') { if (await write(null)) setConfirm(null) }
           else { setBusy(true); try { await getClient()!.call('coordinator.setup', { project_id: projectId }); setConfirm(null) } catch (e) { setError(errorText(e)) } finally { setBusy(false) } }
-        })() }}>{confirm === 'redo' ? COPY.redo : COPY.reset}</Action>
+        })() }}>{confirm === 'redo' ? COPY.redo : COPY.reset}</Button>
       </div>
     </Dialog>}
   </>
@@ -128,7 +131,7 @@ function Choice({ label, value, options, disabled, onChange }: { label: string; 
   const t = useTheme()
   return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
     <Label color={t.textSecondary} size={13} lineHeight={16}>{label}</Label>
-    <div role="radiogroup" aria-label={label} onKeyDown={e => { const step = e.key === 'right' || e.key === 'down' ? 1 : e.key === 'left' || e.key === 'up' ? -1 : 0; if (step && !disabled) onChange(options[(options.findIndex(o => o.value === value) + step + options.length) % options.length]!.value) }} style={{ display: 'flex', height: 30, padding: 2, backgroundColor: t.variant === 'dark' ? t.v('--background') : t.v('--color-background-elevated-secondary'), borderRadius: 8, borderWidth: 1, borderColor: t.borderLight }}>{options.map(option => <div key={option.value} role="radio" aria-checked={option.value === value} aria-label={option.label} tabIndex={disabled || option.value !== value ? -1 : 0} aria-disabled={disabled} onClick={() => { if (!disabled) onChange(option.value) }} onKeyDown={e => { if (!disabled && (e.key === 'enter' || e.key === 'space')) onChange(option.value) }} style={{ flexGrow: 1, flexBasis: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, borderWidth: option.value === value ? 1 : 0, borderColor: t.borderLight, backgroundColor: option.value === value ? t.composer : 'transparent', cursor: disabled ? 'default' : 'pointer' }}><Label size={14} color={option.value === value ? t.text : t.textSecondary}>{option.label}</Label></div>)}</div>
+    <Segmented fill aria-label={label} busy={disabled} value={value} onChange={onChange} options={options.map((o) => ({ value: o.value, label: o.label }))} />
   </div>
 }
 
@@ -165,19 +168,19 @@ function Brief({ projectId, summary, onSave }: { projectId: string; summary: Not
     } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
   }
   return <>
-    <Section label="Brief"><Action testId={busy || (!editing && !!summary && !note) ? 'dock-brief-loading' : 'dock-brief-edit'} disabled={busy || (!editing && !!summary && !note)} onClick={() => {
+    <Section label="Brief"><Button variant="ghost" size="sm" testId={busy || (!editing && !!summary && !note) ? 'dock-brief-loading' : 'dock-brief-edit'} disabled={busy || (!editing && !!summary && !note)} onClick={() => {
       if (editing) { briefDrafts.delete(projectId); setEditing(false) }
       else {
         if (briefDrafts.size >= 40) briefDrafts.delete(briefDrafts.keys().next().value!)
         briefDrafts.set(projectId, { body: note?.body ?? '', base: note })
         setBase(note); setBody(note?.body ?? ''); setEditing(true)
       }
-    }}>{editing ? 'Cancel' : summary ? 'Edit' : 'Write'}</Action></Section>
+    }}>{editing ? 'Cancel' : summary ? 'Edit' : 'Write'}</Button></Section>
     <ErrorLine error={error} />
     <div style={{ marginLeft: 6, marginRight: 6, paddingTop: editing ? 0 : 8, borderRadius: 8, backgroundColor: editing ? 'transparent' : t.buttonSecondary }}>
     {editing ? <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 8, paddingRight: 8 }}>
-      <textarea testId="dock-brief-editor" value={body} onChange={(e) => { const text = e.value ?? ''; setBody(text); briefDrafts.set(projectId, { body: text, base }) }} placeholder={PROJECT_SPACE_COPY.briefPlaceholder} style={{ height: 160, width: '100%', fontSize: 12, color: t.text, backgroundColor: t.buttonSecondary, borderRadius: 8, padding: 8 }} />
-      <Action disabled={busy} testId="dock-brief-save" onClick={() => void save()}>{busy ? 'Saving…' : 'Save brief'}</Action>
+      <TextArea label="Brief" testId="dock-brief-editor" value={body} onChange={(text) => { setBody(text); briefDrafts.set(projectId, { body: text, base }) }} placeholder={PROJECT_SPACE_COPY.briefPlaceholder} minRows={8} maxRows={12} />
+      <Button variant="primary" size="sm" busy={busy} testId="dock-brief-save" style={{ alignSelf: 'flex-end' }} onClick={() => void save()}>{busy ? 'Saving…' : 'Save brief'}</Button>
     </div> : note?.body ? <div style={{ paddingLeft: 8, paddingRight: 8, maxHeight: 180, overflow: 'hidden' }}><markdown style={{ userSelect: 'text' }} source={note.body} theme={cachedMarkdownTheme(t)} /></div> : <Hint>{summary?.preview || PROJECT_SPACE_COPY.briefEmpty}</Hint>}
     <div style={{ paddingTop: 6, paddingBottom: 6, paddingLeft: 8, paddingRight: 8 }}><Label color={t.textTertiary} size={13} lineHeight={16}>{PROJECT_SPACE_COPY.briefOwner}</Label></div>
     </div>
