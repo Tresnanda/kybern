@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.11.0
+
+<!-- kybern-release-title: Spaces and glass in Kybern GPUIX -->
+<!-- kybern-release-summary: Group projects into Spaces, give Kybern GPUIX a frosted glass window, load long histories in one scroll, and get faster CI and a GPUIX that now builds for Linux and Windows. -->
+
+- Add **Spaces** to Kybern GPUIX: group projects into spaces from the rail, each with an image or an icon on a colour. Drag a project onto a space or use **Move to space**, switch with ⌃1–⌃9, and the sidebar, Home, Tasks, Notes, Pull requests and the palette follow the space you're in. Existing projects start in **Personal**; with one space the rail shows only **+**.
+- Make Kybern GPUIX translucent: **Settings › Appearance › Window** sets Solid or Translucent per theme, with **Sidebar only** as the default. **Advanced** adds sidebar, content and surface opacity and the desktop blur. On whole-window glass the composer, menus and floating buttons are frosted and cards are raised, and fades melt into the glass instead of ending in a band. Reduce transparency and Increase contrast keep the window solid.
+- Load older history in whole turns: threads where agents delegated work now scroll back to their first message in a couple of gestures instead of stopping on a page that showed nothing new, and each page loads more than 10 times faster while the thread is running.
+- Put the task page's **Tell an agent** field and its composer in one floating card, with workspace and branch as chips, as in the desktop app.
+- Keep **+** buttons and task checkboxes visible without hovering, and select a board card with its checkbox (shift-click for a range) instead of opening the task.
+- Keep the last reply above the composer at any composer height, cap the composer at 40% of the window, and drop the empty band above question cards. Images open and close faster.
+- Open linked Markdown files rendered, with **Show source**.
+- Move Kybern GPUIX to GPUIX 0.11 with one-step Tab focus, and check new GPUIX releases weekly.
+- Build the patched GPUIX app for Linux and Windows in a first spike; the plan for both betas is in `apps/gpuix/PORTING-PLATFORMS.md`.
+- Run pull request checks in about 5 minutes instead of 11, skip Rust and WebKit checks on GPUIX-only changes, and cache release builds so releases publish sooner.
+
 ## 0.10.3
 
 <!-- kybern-release-title: Kybern GPUIX for Intel Macs -->
