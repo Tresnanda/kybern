@@ -1,10 +1,10 @@
 // Opening, closing and moving in-thread tabs (ADE-54). Every opener in the app goes through `openTab`: it finds the group that
 // should hold the tab (the one that already has it, else the focused group of that thread, else the thread's first group),
 // and a thread with no group on screen just remembers the tab for when it is shown.
-import { getClient, getFocusedPaneId, focusPane, getPaneState, setPaneAlias } from '../state.ts'
+import { getClient, getFocusedPaneId, focusPane, getPaneState, selectThread, setPaneAlias } from '../state.ts'
 import { closeTab, getGroup, getGroups, groupsOfThread, moveTabToGroup, reopenClosedTab, splitTab, updateGroup, updateMemory, getSplitRoot, splitFocusedPane, type SplitDirection } from '../split/store.ts'
 import { activateIn, CHAT, cycleIn, hasTab, numberIn, openIn, permanentIn, reorderIn, tabKey, type Tab } from './model.ts'
-import { setNav } from '../nav/store.ts'
+import { getNav, setNav } from '../nav/store.ts'
 
 /** Pane ids of child-thread tabs, mapped to the leaf that hosts them (links inside a child tab open in its host group). */
 const hosts = new Map<string, string>()
@@ -19,6 +19,8 @@ export interface OpenOptions {
   focus?: boolean
   /** Prefer this leaf when it shows the thread (the pane the opener lives in). */
   leaf?: string
+  /** Make it the group's active tab (default true). False adds it beside the others: an agent's open never covers the chat. */
+  activate?: boolean
 }
 
 /** The leaf that should take a new tab of `threadId`, or null when the thread is off screen. */
@@ -35,17 +37,29 @@ export function openTab(threadId: string, tab: Tab, options: OpenOptions = {}): 
   const leaves = groupsOfThread(threadId)
   const holder = leaves.find((id) => hasTab(getGroup(id), key))
   const target = holder ?? leafForThread(threadId, options.leaf)
-  if (!target) { updateMemory(threadId, (g) => openIn(g, tab, options.preview)); return false }
-  updateGroup(target, (g) => openIn(g, tab, options.preview))
-  if (options.focus !== false) focusPane(target)
+  const activate = options.activate !== false
+  if (!target) { updateMemory(threadId, (g) => openIn(g, tab, options.preview, activate)); return false }
+  updateGroup(target, (g) => openIn(g, tab, options.preview, activate))
+  if (activate && options.focus !== false) focusPane(target)
   return true
 }
 
-/** Open from inside a pane (a transcript, a child tab): the thread is the pane's group's. */
+/** Open from inside a pane (a transcript, a child tab): the thread is the pane's group's. A subagent's page has no tab strip, so
+ *  what it opens (a file link, an image, a diagram) becomes a tab of its parent thread, and the pane goes to the parent (⌘[ returns). */
 export function openTabFromPane(paneId: string, tab: Tab, options: OpenOptions = {}) {
   const leaf = hostLeaf(paneId)
-  const threadId = getGroup(leaf).threadId ?? getPaneState(paneId).selectedId
+  const pane = getPaneState(paneId)
+  const threadId = getGroup(leaf).threadId ?? pane.selectedId
   if (!threadId) return false
+  const thread = pane.open.thread?.id === threadId ? pane.open.thread : null
+  const parent = thread?.subagent ? thread.parent_thread_id : null
+  if (parent) {
+    const shown = groupsOfThread(parent).length > 0
+    const opened = openTab(parent, tab, options)
+    // `openThread` (nav/history.ts) without importing it: history → state → … → this module would be a cycle.
+    if (!shown) { focusPane(leaf); setNav({ page: 'home', settingsOpen: false }); void selectThread(parent) }
+    return opened
+  }
   return openTab(threadId, tab, { ...options, leaf })
 }
 
@@ -71,8 +85,16 @@ export function focusedGroup() {
   return group?.threadId ? { leaf, group } : null
 }
 
-/** ⌘W: the focused group's active tab. Returns false on the chat tab (today's behaviour applies). */
+/** Whether the thread page and its tabs are on screen (not another page, Settings or the palette): ⌘W and ⌘⇧T act only then. */
+export function tabsInView(): boolean {
+  const nav = getNav()
+  return nav.page === 'home' && !nav.settingsOpen && !nav.paletteOpen
+}
+
+/** ⌘W: the focused group's active tab. Returns false on the chat tab (today's behaviour applies) and while the tabs are not on
+ *  screen, so a tab the reader cannot see is never closed. */
 export function closeActiveTab(): boolean {
+  if (!tabsInView()) return false
   const focused = focusedGroup()
   if (!focused || focused.group.active === CHAT) return false
   setNav({ keyboardNav: true })
@@ -80,6 +102,7 @@ export function closeActiveTab(): boolean {
   return true
 }
 export function reopenTab(): boolean {
+  if (!tabsInView()) return false
   const focused = focusedGroup()
   return !!focused && reopenClosedTab(focused.leaf)
 }

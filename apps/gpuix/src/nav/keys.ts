@@ -49,8 +49,8 @@ function shortcut(event: EventPayload): boolean {
   const key = event.key
   const nav = getNav()
   const home = nav.page === 'home' && !nav.settingsOpen
-  if (key === '\\' && home) { splitActive(m.shift ? 'vertical' : 'horizontal'); return true }
-  if (key === 't' && m.shift && home) return reopenTab()
+  if (key === '\\' && home && !nav.paletteOpen) { splitActive(m.shift ? 'vertical' : 'horizontal'); return true }
+  if (key === 't' && m.shift && home && !nav.paletteOpen) return reopenTab()
   if (m.shift) return false
   if (home && !nav.paletteOpen && key && /^[1-9]$/.test(key)) return numberTab(Number(key))
   if (key === 'w' && home && !nav.paletteOpen) return closeActiveTab()

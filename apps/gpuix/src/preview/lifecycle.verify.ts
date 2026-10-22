@@ -17,7 +17,7 @@ const client = { endpoint: { url: 'ws://127.0.0.1:9999/ws' }, call: async (metho
 } }
 // The store opens previews as tabs (ADE-54), which pulls in the split store's pane helpers; they are inert here.
 const noop = () => {}
-mock.module('../state.ts', () => ({ getClient: () => client, getState: () => ({ threads: [{ id: 'thread', cwd: '/scratch' }], projects: [] }), DEFAULT_PANE: 'main', createPane: noop, closePaneState: noop, focusPane: noop, getFocusedPaneId: () => 'main', getPane: () => undefined, getPaneState: () => undefined, selectPaneThread: noop, setPane: noop, setPaneAlias: noop, subscribe: () => noop }))
+mock.module('../state.ts', () => ({ getClient: () => client, getState: () => ({ threads: [{ id: 'thread', cwd: '/scratch' }], projects: [] }), DEFAULT_PANE: 'main', createPane: noop, closePaneState: noop, focusPane: noop, getFocusedPaneId: () => 'main', getPane: () => undefined, getPaneState: () => undefined, selectPaneThread: noop, selectThread: async () => {}, setPane: noop, setPaneAlias: noop, subscribe: () => noop }))
 mock.module('./browser.ts', () => ({ launchBrowser: async (url: string) => { launched.push(url); if (waitLaunch) await new Promise<void>(resolve => { waitLaunch = resolve }) } }))
 const { openPreview, closePreview, previewState, setPreview, launchPreview, resetPreviews, retryPreview, setPreviewProxy } = await import('./store.ts')
 await openPreview('thread', 'http://localhost/first', false, false)
