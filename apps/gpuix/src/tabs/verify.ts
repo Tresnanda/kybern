@@ -12,10 +12,11 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { App } from '@gpuix/react/automation'
 import { launchFixture } from '../requests/harness.ts'
-import { captureWindow } from '../transcript/live.ts'
 
 process.env.VISUAL_SCRATCH ??= '/Users/mymac/projects/ade-gpuix-scratch/tabs-ade54'
 const fixture = await import('../../visual/fixture.ts')
+// After the scratch dir is set: `live.ts` reads the fixture's paths when it loads.
+const { captureWindow } = await import('../transcript/live.ts')
 const { DATA_DIR, CLIENT_DIR, CREDS_DIR, SCRATCH } = fixture
 
 const args = process.argv.slice(2)
