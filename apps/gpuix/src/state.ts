@@ -99,7 +99,11 @@ function mirrorFocus() {
 export function createPane(id: string) {
   if (!panes.has(id)) panes.set(id, { selectedId: null, open: emptyThreadState(), draft: {}, generation: 0 })
 }
-export function focusPane(id: string) {
+/** Panes hosted inside another (a pinned child-thread tab) focus their host instead (`tabs/open.ts`). */
+let paneAlias: (id: string) => string = (id) => id
+export function setPaneAlias(alias: (id: string) => string) { paneAlias = alias }
+export function focusPane(requested: string) {
+  const id = paneAlias(requested)
   if (!panes.has(id) || focusedPaneId === id) return
   focusedPaneId = id
   mirrorFocus(); emit()
