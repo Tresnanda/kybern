@@ -18,6 +18,7 @@ import { SwapOnChange } from '../motion/kit.tsx'
 import { useState, type ReactNode } from 'react'
 import { N } from '../nav/glyphs.ts'
 import { Tip } from '../nav/overlay.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
 import { fadeTo } from '../shell/motion.ts'
 import { usePaneAccess } from '../state.ts'
 import { openTabFromPane } from '../tabs/open.ts'
@@ -58,22 +59,23 @@ export function LaunchMember({ block, thread, task, delegated = false, grouped =
 }
 
 /**
- * A member row with "Pin as tab" (ADE-54): the child's live transcript opens as a tab of this thread instead of replacing the
- * page. The pin shows while the pointer is over the row (and stays reachable by Tab).
+ * A row with "Pin as tab" (ADE-54): the child's live transcript opens as a tab of this thread instead of replacing the page. Used
+ * by launch members and the transcript's "Delegating …" row. The pin shows while the pointer is over the row or it has keyboard
+ * focus (it stays reachable by Tab).
  */
-function PinRow({ id, title, children }: { id?: string; title: string; children: ReactNode }) {
-  const t = useTheme()
+export function PinRow({ id, title, children }: { id?: string; title: string; children: ReactNode }) {
   const pane = usePaneAccess()
   const [hover, setHover] = useState(false)
+  const [focused, setFocused] = useState(false)
   if (!id) return <div style={{ display: 'flex', width: '100%', minWidth: 0 }}>{children}</div>
   const pin = () => openTabFromPane(pane.id, { kind: 'thread', id, title })
+  const shown = hover || focused
   return <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} style={{ display: 'flex', alignItems: 'center', width: '100%', minWidth: 0, gap: 2 }}>
-    <div style={{ display: 'flex', flexGrow: 1, minWidth: 0 }}>{children}</div>
+    {/* A column, so a row without its own width (the transcript's `RowLine`) stretches to the pin. */}
+    <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}>{children}</div>
     <Tip label="Pin as tab" side="top">
-      <div testId={`pin-child-${id}`} role="button" tabIndex={0} aria-label={`Pin ${title} as a tab`} onClick={pin} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') pin() }}
-        paintTransform={fadeTo(hover ? 1 : 0).paintTransform}
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 6, flexShrink: 0, cursor: 'pointer', ...fadeTo(hover ? 1 : 0).style, hover: { backgroundColor: t.buttonSecondaryHover } }}>
-        <Icon source={N.pin} size={13} color={muted(t)} />
+      <div paintTransform={fadeTo(shown ? 1 : 0).paintTransform} style={{ display: 'flex', flexShrink: 0, ...fadeTo(shown ? 1 : 0).style }}>
+        <IconButton testId={`pin-child-${id}`} size="sm" icon={N.pin} glyph={13} label={`Pin ${title} as a tab`} onClick={pin} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} />
       </div>
     </Tip>
   </div>

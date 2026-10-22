@@ -1,6 +1,6 @@
 import { ProviderMark } from '../ui.tsx'
 import { PanelPresence, PanelEnter } from '../requests/Panel.tsx'
-import { LaunchMember } from '../subagents/Launch.tsx'
+import { LaunchMember, PinRow } from '../subagents/Launch.tsx'
 import { AgentItemCard } from '../coordinator/AgentItem.tsx'
 import { SentToRow } from './Messages.tsx'
 import { openThread } from '../nav/history.ts'
@@ -662,19 +662,23 @@ export function RuntimeTaskRow({ task, thread }: { task: RuntimeTask; thread?: T
     ? task.status === 'waiting' ? 'Monitoring' : task.status === 'stopping' ? 'Stopping' : 'Active'
     : task.status === 'failed' ? 'Failed' : task.status === 'stopped' || task.status === 'interrupted' ? 'Stopped' : 'Completed'
   const tree = useTreeSlot()
+  const line = (
+    <RowLine
+      icon={task.kind === 'process' ? T.terminal : T.robot}
+      label={task.kind === 'agent' ? `${active ? 'Delegating' : 'Delegated'} ${task.title}` : `Started ${noun} · ${task.title}`}
+      trailing={
+        <Label color={task.status === 'failed' ? t.red : muted(t, 0.55)} size={11}>
+          {status}
+        </Label>
+      }
+      chevron={task.kind === 'agent' ? 'forward' : undefined}
+      onClick={thread ? () => openThread(thread.id) : undefined}
+    />
+  )
   return (
     <div paintTransform={tree.rise} style={{ position: 'relative', paddingTop: 4, paddingBottom: 4 }}>
-      <RowLine
-        icon={task.kind === 'process' ? T.terminal : T.robot}
-        label={task.kind === 'agent' ? `${active ? 'Delegating' : 'Delegated'} ${task.title}` : `Started ${noun} · ${task.title}`}
-        trailing={
-          <Label color={task.status === 'failed' ? t.red : muted(t, 0.55)} size={11}>
-            {status}
-          </Label>
-        }
-        chevron={task.kind === 'agent' ? 'forward' : undefined}
-        onClick={thread ? () => openThread(thread.id) : undefined}
-      />
+      {/* A delegated agent's row pins its child thread as a tab (ADE-54), like the launch members. */}
+      {task.kind === 'agent' && thread ? <PinRow id={thread.id} title={thread.title || task.title}>{line}</PinRow> : line}
       {tree.lines}
     </div>
   )
