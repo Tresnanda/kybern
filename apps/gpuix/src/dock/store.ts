@@ -3,7 +3,8 @@ import { onEnvironmentChange, onEnvironmentLeaving } from '../shell/environment.
 // Dock choices belong to the selected thread; closing a tab discards its content.
 // Bounded per-environment layout preferences survive ordinary app exits.
 import { useSyncExternalStore } from 'react'
-import { getState } from '../state.ts'
+import { getClient, getState, subscribe as subscribeApp } from '../state.ts'
+import { openTab } from '../tabs/open.ts'
 
 export type DockTab = 'agents' | 'activity' | 'changes' | 'explorer' | 'project' | 'notes' | 'tasks' | 'review' | 'artifacts' | 'terminal' | 'preview'
 export interface DockState {
@@ -27,7 +28,27 @@ export function restoreDockChoices(value: unknown): Map<string, DockState> {
   }
   return restored
 }
-const choices = restoreDockChoices(load('kybern.dock.choices', []))
+/** Threads whose saved dock still had the terminal panel (saved before ADE-54). */
+export function legacyTerminalThreads(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((entry): entry is [string, { tabs: unknown[] }] => Array.isArray(entry) && typeof entry[0] === 'string' && Array.isArray(entry[1]?.tabs) && entry[1].tabs.includes('terminal')).map(([key]) => key)
+}
+const saved = load('kybern.dock.choices', [])
+const choices = restoreDockChoices(saved)
+// The shells those docks showed keep running in the daemon; on the first connection each live one becomes a background tab of its
+// thread (once: the choices are saved again without the panel).
+const legacy = legacyTerminalThreads(saved)
+if (legacy.length) {
+  const off = subscribeApp(() => {
+    const client = getState().status === 'open' ? getClient() : null
+    if (!client) return
+    off()
+    save('kybern.dock.choices', [...choices].map(([key, value]) => [key, { ...value, instant: false }]))
+    for (const threadId of legacy) void client.call('terminals.list', { thread_id: threadId }).then(({ terminals }) => {
+      for (const info of terminals) if (info.alive) openTab(threadId, { kind: 'terminal', id: info.id }, { activate: false, focus: false })
+    }, () => {})
+  })
+}
 const listeners = new Set<() => void>()
 const emit = () => { for (const listener of listeners) listener() }
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } }

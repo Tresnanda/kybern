@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { dockGeometry, restoreDockChoices } from './store.ts'
+import { dockGeometry, legacyTerminalThreads, restoreDockChoices } from './store.ts'
 
 describe('dock layout and thread choices', () => {
   test('reserves 320px for chat and overlays below 736px of available space', () => {
@@ -58,3 +58,8 @@ async function isolated(source: string) {
     return JSON.parse(output)
   } finally { rmSync(dir, { recursive: true, force: true }) }
 }
+
+test('threads whose saved dock had the old terminal panel', () => {
+  expect(legacyTerminalThreads([['a', { tabs: ['terminal', 'explorer'] }], ['b', { tabs: ['explorer'] }], null, ['c', {}], 'x'])).toEqual(['a'])
+  expect(legacyTerminalThreads({ corrupt: true })).toEqual([])
+})
