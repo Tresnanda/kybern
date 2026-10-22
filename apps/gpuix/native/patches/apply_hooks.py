@@ -6,6 +6,8 @@ code fails loudly instead of patching the wrong place.
 import sys
 from pathlib import Path
 
+import hook_check
+
 src = Path(sys.argv[1])
 
 
@@ -19,8 +21,14 @@ def edit(path: str, old: str, new: str, count: int = 1) -> None:
         s = (src / path).read_text()
     found = s.count(old)
     if found != count:
-        raise SystemExit(f"{path}: expected {count} anchor(s), found {found}; nothing written:\n{old}")
+        hook_check.missing(f"{path}: expected {count} anchor(s), found {found}; nothing written:\n{old}")
+        pending[path] = s
+        return
     pending[path] = s.replace(old, new)
+
+
+def run_hook(name: str) -> None:
+    hook_check.run(name, Path(__file__).parent, globals())
 
 
 # lib.rs: register the module.
@@ -63,17 +71,20 @@ edit(
 # GpuixView: fields visible to the island module, plus the island registry.
 edit(r, "    virtual_lists: HashMap<u64, VirtualListEntry>,\n    /// Latest pointer sample",
      "    pub(crate) virtual_lists: HashMap<u64, VirtualListEntry>,\n    /// Kybern patch: cached islands (`cache_island.rs`).\n    pub(crate) islands: crate::cache_island::Islands,\n    /// Latest pointer sample")
-edit(r, "    highlights: HashMap<u64, HighlightCacheEntry>,\n}\n\n/// Two-level cache",
-     "    pub(crate) highlights: HashMap<u64, HighlightCacheEntry>,\n}\n\n/// Two-level cache")
+edit(r, "    highlights: HashMap<u64, HighlightCacheEntry>,\n    /// What `onLayout`",
+     "    pub(crate) highlights: HashMap<u64, HighlightCacheEntry>,\n    /// What `onLayout`")
 edit(r, "            virtual_lists: HashMap::new(),", "            virtual_lists: HashMap::new(),\n            islands: Default::default(),")
+
+edit(r, "    paint_reports: SharedPaintReports,\n}", "    pub(crate) paint_reports: SharedPaintReports,\n}")
+edit(r, "    fn keyboard_focus_path(", "    pub(crate) fn keyboard_focus_path(")
 
 # BuildCtx: fields the island module fills, plus the island context.
 edit(r, "    virtual_lists: &'a mut HashMap<u64, VirtualListEntry>,\n    pub motion_states",
      "    pub(crate) virtual_lists: &'a mut HashMap<u64, VirtualListEntry>,\n    pub motion_states")
-edit(r, "    highlights: &'a mut HashMap<u64, HighlightCacheEntry>,\n    /// `onHighlight` payloads",
-     "    pub(crate) highlights: &'a mut HashMap<u64, HighlightCacheEntry>,\n    /// `onHighlight` payloads")
-edit(r, "    highlight_events: &'a mut Vec<(u64, usize)>,\n}",
-     "    pub(crate) highlight_events: &'a mut Vec<(u64, usize)>,\n"
+edit(r, "    highlights: &'a mut HashMap<u64, HighlightCacheEntry>,\n    paint_reports: &'a SharedPaintReports,",
+     "    pub(crate) highlights: &'a mut HashMap<u64, HighlightCacheEntry>,\n    pub(crate) paint_reports: &'a SharedPaintReports,")
+edit(r, "    highlight_events: &'a mut Vec<(u64, usize)>,\n    /// See `GpuixView::keyboard_focus_path`.\n    pub keyboard_focus: Option<Arc<[u64]>>,\n}",
+     "    pub(crate) highlight_events: &'a mut Vec<(u64, usize)>,\n    /// See `GpuixView::keyboard_focus_path`.\n    pub keyboard_focus: Option<Arc<[u64]>>,\n"
      "    /// Kybern patch: the island this build renders, if any.\n"
      "    pub(crate) island_root: Option<u64>,\n"
      "    /// Kybern patch: building a `<virtual-list>` row (diagnostic inline override).\n"
@@ -81,18 +92,18 @@ edit(r, "    highlight_events: &'a mut Vec<(u64, usize)>,\n}",
      "    pub(crate) islands: &'a mut crate::cache_island::Islands,\n}")
 
 # Both existing BuildCtx constructions build outside any island.
-edit(r, "            highlights: &mut self.highlights,\n            highlight_events: &mut highlight_events,\n        };",
-     "            highlights: &mut self.highlights,\n            highlight_events: &mut highlight_events,\n            island_root: None,\n            in_virtual_row: true,\n            islands: &mut self.islands,\n        };")
-edit(r, "                    highlights: &mut self.highlights,\n                    highlight_events: &mut highlight_events,\n                };",
-     "                    highlights: &mut self.highlights,\n                    highlight_events: &mut highlight_events,\n                    island_root: None,\n                    in_virtual_row: false,\n                    islands: &mut self.islands,\n                };")
+edit(r, "            highlights: &mut self.highlights,\n            paint_reports: &self.paint_reports,\n            highlight_events: &mut highlight_events,\n            keyboard_focus,\n        };",
+     "            highlights: &mut self.highlights,\n            paint_reports: &self.paint_reports,\n            highlight_events: &mut highlight_events,\n            keyboard_focus,\n            island_root: None,\n            in_virtual_row: true,\n            islands: &mut self.islands,\n        };")
+edit(r, "                    highlights: &mut self.highlights,\n                    paint_reports: &self.paint_reports,\n                    highlight_events: &mut highlight_events,\n                    keyboard_focus,\n                };",
+     "                    highlights: &mut self.highlights,\n                    paint_reports: &self.paint_reports,\n                    highlight_events: &mut highlight_events,\n                    keyboard_focus,\n                    island_root: None,\n                    in_virtual_row: false,\n                    islands: &mut self.islands,\n                };")
 
 # Root render: prune islands with the other per-element state.
-edit(r, "        self.virtual_lists\n            .retain(|id, _| tree.elements.contains_key(id));\n        // Build the element tree.",
-     "        self.virtual_lists\n            .retain(|id, _| tree.elements.contains_key(id));\n        self.islands.prune(&tree);\n        // Build the element tree.")
+edit(r, "        self.virtual_lists\n            .retain(|id, _| tree.elements.contains_key(id));\n        // Pruned by listener, not existence",
+     "        self.virtual_lists\n            .retain(|id, _| tree.elements.contains_key(id));\n        self.islands.prune(&tree);\n        // Pruned by listener, not existence")
 
 # build_element: an element with `cache` becomes a cached island.
-edit(r, "    let Some(element) = ctx.tree.elements.get(&id) else {\n        return gpui::Empty.into_any_element();\n    };\n\n    let animated_style",
-     "    let Some(element) = ctx.tree.elements.get(&id) else {\n        return gpui::Empty.into_any_element();\n    };\n\n"
+edit(r, "    let Some(element) = tree.elements.get(&id) else {\n        return gpui::Empty.into_any_element();\n    };\n\n    let animated_style",
+     "    let Some(element) = tree.elements.get(&id) else {\n        return gpui::Empty.into_any_element();\n    };\n\n"
      "    // Kybern patch: cached islands (`cache_island.rs`).\n"
      "    if crate::cache_island::is_island(element) {\n"
      "        if let Some(island) = crate::cache_island::island_element(id, element, ctx, window, cx) {\n"
@@ -110,7 +121,7 @@ edit(r, "fn emit_highlight_events(callback: &Option<EventCallback>, events: &[(u
 
 # Native titlebar: register module and attach gestures before host event wiring.
 edit("lib.rs", "mod cache_island;\n", "mod cache_island;\nmod window_drag;\n")
-edit(r, "    // Wire up events.\n", "    if element.custom_props.get(\"windowDrag\").and_then(|v| v.as_bool()) == Some(true) {\n        el = crate::window_drag::apply(el);\n    }\n\n    // Wire up events.\n")
+edit(r, "    // Wire up events.\n", "    if element.custom_props().get(\"windowDrag\").and_then(|v| v.as_bool()) == Some(true) {\n        el = crate::window_drag::apply(el);\n    }\n\n    // Wire up events.\n")
 
 # Key interception and close decisions: optional event token and native replies.
 edit("lib.rs", "mod window_drag;\n", "mod window_drag;\nmod key_intercept;\nmod close_guard;\n")
@@ -129,7 +140,7 @@ edit(r, "    pub fn zoom_window(&self) -> Result<()> {", """    pub fn resolve_k
     #[napi]
     pub fn set_close_guard(&self, enabled: bool) -> Result<()> {
         #[cfg(target_os = "macos")]
-        return update_window(|view, window, cx| crate::close_guard::install(if enabled { view.event_callback.clone() } else { None }, window, cx));
+        return update_window(move |view, window, cx| crate::close_guard::install(if enabled { view.event_callback.clone() } else { None }, window, cx));
         #[cfg(not(target_os = "macos"))]
         Err(Error::from_reason("Close guards are currently macOS-only"))
     }
@@ -216,7 +227,7 @@ edit(i, "        let runs = match self.marked_range.as_ref() {", """        let 
         let runs = match display_marked.as_ref() {""")
 # Retained-tree inspection is used by automation. Never serialize a secure value.
 edit("retained_tree.rs", '            obj.insert("customProps".to_string(), serde_json::Value::Object(custom));', """            let mut custom = custom;
-            if element.element_type == "input" && element.custom_props.get("secure").and_then(|v| v.as_bool()) == Some(true) {
+            if element.element_type == "input" && element.custom_props().get("secure").and_then(|v| v.as_bool()) == Some(true) {
                 custom.remove("value");
                 custom.remove("aria-valuetext");
             }
@@ -266,22 +277,8 @@ edit(r, "    ctx.inherited = parent_inherited;\n    built", """    ctx.inherited
         crate::translate::apply(built, motion.translate_x.unwrap_or(0.0), motion.translate_y.unwrap_or(0.0))
     } else { built }""")
 
-# Explicit startup font registration through GPUI's platform text system.
-edit(r, "    pub fn zoom_window(&self) -> Result<()> {", """    pub fn register_font(&self, data: napi::bindgen_prelude::Buffer) -> Result<()> {
-        let bytes = data.to_vec();
-        #[cfg(target_os = "macos")]
-        return update_window_without_view(move |window, cx| {
-            cx.text_system().add_fonts(vec![std::borrow::Cow::Owned(bytes)])
-                .map_err(|error| Error::from_reason(error.to_string()))?;
-            window.refresh();
-            Ok(())
-        })?;
-        #[cfg(not(target_os = "macos"))]
-        Err(Error::from_reason("Font registration is currently macOS-only"))
-    }
-
-    #[napi]
-    pub fn zoom_window(&self) -> Result<()> {""")
+# `registerFont` is upstream's since 0.11 (it also validates the font file), so the
+# startup font registration this patch carried is dropped.
 
 # A list row must establish the available width before percentage-sized islands
 # are measured: cached views intentionally have no intrinsic content width.
@@ -387,6 +384,8 @@ a = "automation.rs"
 edit(a, "    pub height: f64,", "    pub height: f64,\n    pub clip: Option<[f64; 4]>,")
 edit(a, "            height: f64::from(f32::from(bounds.size.height)),", "            height: f64::from(f32::from(bounds.size.height)),\n            clip: None,")
 edit(a, "el.on_painted(move |bounds, _, _| record_bounds(id, bounds))", "el.on_painted(move |bounds, window, _| record_clipped_bounds(id, bounds, window))")
+# Host divs and text report through track_host_bounds (0.11); keep the clip, rounded masks and subtree geometry bounds_tracker used to record.
+edit(a, "    el.on_painted(move |bounds, _, cx| {\n        record_bounds(id, bounds);", "    el.on_painted(move |bounds, window, cx| {\n        record_clipped_bounds(id, bounds, window);")
 edit(a, "pub fn record_bounds(id: u64, bounds: Bounds<Pixels>) {", """fn record_clipped_bounds(id: u64, bounds: Bounds<Pixels>, window: &Window) {
     let clipped = bounds.intersect(&window.content_mask().bounds).intersect(&Bounds { origin: point(px(0.), px(0.)), size: window.viewport_size() });
     let mut value = ElementBounds::from_gpui(bounds);
@@ -517,29 +516,29 @@ edit(i, "            for quad in prepaint.selection.drain(..) {", """           
 
 edit(i, "                    content: index.to_string(),", "                    content: index.to_string(),\n                    decorations: Vec::new(),")
 
-exec((Path(__file__).parent / "markdown_hooks.py").read_text())
+run_hook("markdown_hooks.py")
 
-exec((Path(__file__).parent / "diff_hooks.py").read_text())
+run_hook("diff_hooks.py")
 
 edit("lib.rs", "mod cache_island;", "mod cache_island;\nmod backdrop;")
-edit("renderer.rs", "    ctx.inherited = parent_inherited;", "    let built = if element.element_type == \"anchored\" { built } else { crate::backdrop::apply(built, element.custom_props.get(\"backdrop\"), style.and_then(|s|s.opacity).unwrap_or(1.0) as f32) };\n    ctx.inherited = parent_inherited;")
+edit("renderer.rs", "    ctx.inherited = parent_inherited;", "    let built = if element.element_type == \"anchored\" { built } else { crate::backdrop::apply(built, element.custom_props().get(\"backdrop\"), style.and_then(|s|s.opacity).unwrap_or(1.0) as f32) };\n    ctx.inherited = parent_inherited;")
 
 # edgeFade (N3, edge_fade.rs): a fade link in the rounded clip chain around the element's paint and
 # backdrop, inside its own retained translation/transform scopes (the fade moves with the element).
 edit("lib.rs", "mod backdrop;", "mod backdrop;\nmod edge_fade;")
-edit("renderer.rs", "    ctx.inherited = parent_inherited;", "    let built = crate::edge_fade::apply(built, element.custom_props.get(\"edgeFade\"));\n    ctx.inherited = parent_inherited;")
+edit("renderer.rs", "    ctx.inherited = parent_inherited;", "    let built = crate::edge_fade::apply(built, element.custom_props().get(\"edgeFade\"));\n    ctx.inherited = parent_inherited;")
 
-edit("custom_elements/anchored.rs", "        if !has_fill {", "        if !has_fill && !ctx.props.contains_key(\"backdrop\") {")
+edit("custom_elements/anchored.rs", "        if !declares_fill {", "        if !declares_fill && !ctx.props.contains_key(\"backdrop\") {")
 edit("custom_elements/anchored.rs", "        let anchored = anchored.child(content);", "        let anchored = anchored.child(crate::backdrop::apply(content.into_any_element(), ctx.props.get(\"backdrop\"), ctx.style.and_then(|s|s.opacity).unwrap_or(1.0) as f32));")
 
-exec((Path(__file__).parent / "paint_hooks.py").read_text())
-exec((Path(__file__).parent / "frame_hooks.py").read_text())
-exec((Path(__file__).parent / "paint_text_hooks.py").read_text())
-exec((Path(__file__).parent / "rotate_hooks.py").read_text())
-exec((Path(__file__).parent / "pop_hooks.py").read_text())
-exec((Path(__file__).parent / "clipboard_hooks.py").read_text())
-exec((Path(__file__).parent / "explorer_motion_hooks.py").read_text())
-exec((Path(__file__).parent / "subtree_translation_hooks.py").read_text())
+run_hook("paint_hooks.py")
+run_hook("frame_hooks.py")
+run_hook("paint_text_hooks.py")
+run_hook("rotate_hooks.py")
+run_hook("pop_hooks.py")
+run_hook("clipboard_hooks.py")
+run_hook("explorer_motion_hooks.py")
+run_hook("subtree_translation_hooks.py")
 
 edit("renderer.rs", 'style.and_then(|s|s.opacity).unwrap_or(1.0) as f32) };', 'style.and_then(|s|s.opacity).unwrap_or(1.0) as f32, style) };')
 edit("custom_elements/anchored.rs", 'ctx.style.and_then(|s|s.opacity).unwrap_or(1.0) as f32));', 'ctx.style.and_then(|s|s.opacity).unwrap_or(1.0) as f32, ctx.style));')
@@ -555,42 +554,45 @@ edit("automation.rs", "BOUNDS.with(|cell| cell.borrow().get(&id).copied())", "BO
 # Explicit pointer-events:auto and anchored overlays retain hard barriers.
 edit("renderer.rs", "                el.block_mouse_except_scroll()", "                el.block_non_ancestor_mouse()")
 
-exec((Path(__file__).parent / "scroll_hooks.py").read_text())
-exec((Path(__file__).parent / "convo9_hooks.py").read_text())
-exec((Path(__file__).parent / "window_platform_hooks.py").read_text())
-exec((Path(__file__).parent / "editor9_hooks.py").read_text())
-exec((Path(__file__).parent / "subtree_transform_hooks.py").read_text())
-exec((Path(__file__).parent / "file_drag_hooks.py").read_text())
-exec((Path(__file__).parent / "stream_fade_hooks.py").read_text())
-exec((Path(__file__).parent / "stroke_draw_hooks.py").read_text())
-exec((Path(__file__).parent / "transcript_scroll_hooks.py").read_text())
-exec((Path(__file__).parent / "markdown_document_hooks.py").read_text())
+run_hook("scroll_hooks.py")
+run_hook("convo9_hooks.py")
+run_hook("window_platform_hooks.py")
+run_hook("editor9_hooks.py")
+run_hook("subtree_transform_hooks.py")
+run_hook("file_drag_hooks.py")
+run_hook("stream_fade_hooks.py")
+run_hook("stroke_draw_hooks.py")
+run_hook("transcript_scroll_hooks.py")
+run_hook("markdown_document_hooks.py")
 
-exec((Path(__file__).parent / "sparse_list_hooks.py").read_text())
+run_hook("sparse_list_hooks.py")
 
-exec((Path(__file__).parent / "motion_frame_hooks.py").read_text())
+run_hook("motion_frame_hooks.py")
 
-exec((Path(__file__).parent / "image_memory_hooks.py").read_text())
-exec((Path(__file__).parent / "flick_bounds_hooks.py").read_text())
-exec((Path(__file__).parent / "automation_display_hooks.py").read_text())
-exec((Path(__file__).parent / "image_owner_hooks.py").read_text())
-exec((Path(__file__).parent / "large_alloc_hooks.py").read_text())
+run_hook("image_memory_hooks.py")
+run_hook("flick_bounds_hooks.py")
+run_hook("automation_display_hooks.py")
+run_hook("image_owner_hooks.py")
+run_hook("large_alloc_hooks.py")
 
-exec((Path(__file__).parent / "code_memory_hooks.py").read_text())
-exec((Path(__file__).parent / "code_small_hooks.py").read_text())
-exec((Path(__file__).parent / "link_hover_hooks.py").read_text())
-exec((Path(__file__).parent / "paint_clip_hooks.py").read_text())
+run_hook("code_memory_hooks.py")
+run_hook("code_small_hooks.py")
+run_hook("link_hover_hooks.py")
+run_hook("paint_clip_hooks.py")
 
 for path, text in pending.items():
     (src / path).write_text(text)
 print(f"hooks applied to {len(pending)} files")
 
-exec((Path(__file__).parent / "selection_surface_hooks.py").read_text())
-exec((Path(__file__).parent / "hover_owner_hooks.py").read_text())
-exec((Path(__file__).parent / "snapshot_strokes_hooks.py").read_text())
-exec((Path(__file__).parent / "hover_fade_hooks.py").read_text())
-exec((Path(__file__).parent / "shimmer_band_hooks.py").read_text())
-exec((Path(__file__).parent / "image_load_hooks.py").read_text())
-exec((Path(__file__).parent / "motion_trace_hooks.py").read_text())
+run_hook("selection_surface_hooks.py")
+run_hook("hover_owner_hooks.py")
+run_hook("snapshot_strokes_hooks.py")
+run_hook("hover_fade_hooks.py")
+run_hook("shimmer_band_hooks.py")
+run_hook("image_load_hooks.py")
+run_hook("motion_trace_hooks.py")
 
-exec((Path(__file__).parent / "idle_memory_hooks.py").read_text())
+run_hook("idle_memory_hooks.py")
+run_hook("platforms_hooks.py")
+
+hook_check.finish("all native hooks applied")

@@ -20,6 +20,14 @@ ci = "github"
 # The local-artifacts phase makes host depend directly on the gate: plan-only
 # gates leave skipped builds, which dist permits the host job to bypass.
 local-artifacts-jobs = ["./release-ci"]
+# dist also makes the desktop bundles wait for the gate, although only the
+# publishing `host` job must. release.yml is hand-edited to drop
+# `custom-release-ci` from `custom-desktop`'s needs, so the bundles (the longest
+# phase) run while CI finishes. After `dist generate` (remove allow-dirty for
+# it), reapply that edit; the release gate test fails if it is missing or if
+# `host` stops waiting for the gate, and scripts/check-release-workflow.mjs (CI)
+# fails when release.yml differs from `dist generate` anywhere else.
+allow-dirty = ["ci"]
 # The desktop bundles need every target's archive, and host waits for them.
 global-artifacts-jobs = ["./desktop"]
 github-custom-job-permissions = { "release-ci" = { actions = "read", contents = "read" }, "desktop" = { contents = "read" } }

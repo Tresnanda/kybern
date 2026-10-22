@@ -7,12 +7,16 @@ import { createRequire } from 'node:module'
 import { UNIVERSAL_PROPS } from '@gpuix/native/host'
 import { fileURLToPath } from 'node:url'
 
-/** napi-rs's name for this Mac's addon: `darwin-arm64` on Apple Silicon, `darwin-x64` on Intel. */
-export const NATIVE_ARCH = `darwin-${process.arch}`
+/**
+ * napi-rs's name for this machine's addon: `darwin-arm64` on Apple Silicon,
+ * `darwin-x64` on Intel, `linux-x64-gnu` and `win32-x64-msvc` for the ADE-52 port.
+ */
+export const NATIVE_ARCH =
+  process.platform === 'linux' ? `linux-${process.arch}-gnu` : process.platform === 'win32' ? `win32-${process.arch}-msvc` : `darwin-${process.arch}`
 const built = fileURLToPath(new URL(`../../native/build/gpuix-native.${NATIVE_ARCH}.node`, import.meta.url))
 
 export const PATCHED_NATIVE =
-  process.platform === 'darwin' &&
+  (process.platform === 'darwin' || process.platform === 'linux' || process.platform === 'win32') &&
   (process.arch === 'arm64' || process.arch === 'x64') &&
   process.env.KYBERN_GPUIX_NATIVE !== 'npm' &&
   existsSync(process.env.NAPI_RS_NATIVE_LIBRARY_PATH ?? built)

@@ -1,5 +1,6 @@
 // Build the synthetic fixture separately; it never enters the shipped frontend.
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -190,25 +191,65 @@ c.commit()`,path.join(dataDir,"state.sqlite"),thread.id],{encoding:"utf8"})
     cleanups.push(() => servers.kill("SIGTERM"))
     process.env.KYBERN_PREVIEW_FIXTURE = JSON.stringify({ url: `ws://127.0.0.1:${port}/ws`, http_base: `http://127.0.0.1:${port}`, token: readFileSync(path.join(dataDir, "daemon.token"), "utf8").trim(), thread_id: thread.id, project, outside, ports, realMockup: "/Users/mymac/projects/ade/previews/ade-31/mockup.html" })
   }
-  const dist = path.join(scratch, "dist")
-  const build = spawnSync("pnpm", ["exec", "vite", "build", "--config", "perf/vite.config.ts", "--outDir", dist], { cwd: desktop, encoding: "utf8", env: {
-    ...process.env,
-    KYBERN_PERF_FIXTURE: fixture,
-    VITE_LIVE_TOOLS_HISTORY: process.env.KYBERN_PERF_LIVE_HISTORY ?? "0",
-    VITE_LIVE_TOOLS_THREAD: process.env.KYBERN_PERF_LIVE_THREAD ?? "0",
-    VITE_LIVE_TOOLS_SHELL: process.env.KYBERN_PERF_LIVE_SHELL ?? "0",
-    VITE_LIVE_TOOLS_EMPTY_SIDEBAR: process.env.KYBERN_PERF_LIVE_EMPTY_SIDEBAR ?? "0",
-    VITE_LIVE_TOOLS_IMPORT_APP: process.env.KYBERN_PERF_LIVE_IMPORT_APP ?? "0",
-    VITE_LIVE_TOOLS_STACKED_CONTENT_CARD: process.env.KYBERN_PERF_LIVE_STACKED_CONTENT_CARD ?? "0",
-    VITE_LIVE_TOOLS_UNBOUND_TURN_DIFFS: process.env.KYBERN_PERF_LIVE_UNBOUND_TURN_DIFFS ?? "0",
-    VITE_EARLIER_STATUS_UNHOSTED: process.env.KYBERN_PERF_EARLIER_STATUS_UNHOSTED ?? "0",
-  } })
-  if (build.error) throw build.error
-  if (build.status !== 0) throw new Error(build.stdout + build.stderr)
+  // KYBERN_RENDER_CACHE_DIR (CI) shares one build per distinct build input and
+  // one compiled runner across the separate invocations of a job. Unset, every
+  // call builds and interprets from the current sources, as it always did.
+  const cacheDir = process.env.KYBERN_RENDER_CACHE_DIR
+  // Everything the Vite configs read from the environment. The runner-only
+  // settings (window size, foreground, output folders, binaries) are left out
+  // so the 1100px and 480px passes of a fixture share a build.
+  const runnerOnly = /^KYBERN_(PERF_(WIDTH|HEIGHT|FOREGROUND|KEEP_ACTIVE|SHOTS_DIR|TIMEOUT|DEBUG_LAYERS|HISTORY|HOLD|MEMORY_DIR|NATIVE_IMAGE|DAEMON_BINARY|CLI_BINARY|SCREENSHOT)|RENDER_CACHE_DIR|NO_ACTIVATE)$/
+  const buildEnv = Object.fromEntries(Object.entries(process.env)
+    .filter(([name]) => /^(KYBERN_|VITE_|TAURI_ENV_)/.test(name) && !runnerOnly.test(name))
+    .sort(([a], [b]) => a < b ? -1 : 1))
+  const buildKey = createHash("sha256").update(JSON.stringify({ fixture, buildEnv })).digest("hex").slice(0, 16)
+  let dist = cacheDir ? path.join(cacheDir, "dist", buildKey) : path.join(scratch, "dist")
+  if (!cacheDir || !existsSync(path.join(dist, ".complete"))) {
+    const outDir = cacheDir ? path.join(scratch, "dist") : dist
+    const build = spawnSync("pnpm", ["exec", "vite", "build", "--config", "perf/vite.config.ts", "--outDir", outDir], { cwd: desktop, encoding: "utf8", env: {
+      ...process.env,
+      KYBERN_PERF_FIXTURE: fixture,
+      VITE_LIVE_TOOLS_HISTORY: process.env.KYBERN_PERF_LIVE_HISTORY ?? "0",
+      VITE_LIVE_TOOLS_THREAD: process.env.KYBERN_PERF_LIVE_THREAD ?? "0",
+      VITE_LIVE_TOOLS_SHELL: process.env.KYBERN_PERF_LIVE_SHELL ?? "0",
+      VITE_LIVE_TOOLS_EMPTY_SIDEBAR: process.env.KYBERN_PERF_LIVE_EMPTY_SIDEBAR ?? "0",
+      VITE_LIVE_TOOLS_IMPORT_APP: process.env.KYBERN_PERF_LIVE_IMPORT_APP ?? "0",
+      VITE_LIVE_TOOLS_STACKED_CONTENT_CARD: process.env.KYBERN_PERF_LIVE_STACKED_CONTENT_CARD ?? "0",
+      VITE_LIVE_TOOLS_UNBOUND_TURN_DIFFS: process.env.KYBERN_PERF_LIVE_UNBOUND_TURN_DIFFS ?? "0",
+      VITE_EARLIER_STATUS_UNHOSTED: process.env.KYBERN_PERF_EARLIER_STATUS_UNHOSTED ?? "0",
+    } })
+    if (build.error) throw build.error
+    if (build.status !== 0) throw new Error(build.stdout + build.stderr)
+    if (cacheDir) {
+      // Publish the finished build in one rename so an interrupted run never leaves a half-written entry.
+      mkdirSync(path.dirname(dist), { recursive: true })
+      const staged = `${dist}.${process.pid}`
+      cpSync(outDir, staged, { recursive: true })
+      writeFileSync(path.join(staged, ".complete"), "")
+      rmSync(dist, { recursive: true, force: true })
+      renameSync(staged, dist)
+    }
+  }
   const config = JSON.parse(readFileSync(path.join(desktop, "src-tauri/tauri.conf.json"), "utf8"))
   const csp = path.join(scratch, "csp.txt")
   writeFileSync(csp, config.app.security.csp)
-  const result = spawnSync("swift", [path.join(desktop, "scripts/check-rendering.swift"), dist, csp, fixture, ...(process.env.KYBERN_PERF_SCREENSHOT ? [process.env.KYBERN_PERF_SCREENSHOT] : [])], { stdio: "inherit" })
+  const swiftArgs = [dist, csp, fixture, ...(process.env.KYBERN_PERF_SCREENSHOT ? [process.env.KYBERN_PERF_SCREENSHOT] : [])]
+  const swiftSource = path.join(desktop, "scripts/check-rendering.swift")
+  let runner = ["swift", swiftSource]
+  if (cacheDir) {
+    // Compile the runner once; `swift file.swift` recompiles and interprets it on every call.
+    const sourceHash = createHash("sha256").update(readFileSync(swiftSource)).digest("hex").slice(0, 16)
+    const binary = path.join(cacheDir, `check-rendering-${sourceHash}`)
+    if (!existsSync(binary)) {
+      const staged = `${binary}.${process.pid}`
+      const compile = spawnSync("swiftc", [swiftSource, "-o", staged], { encoding: "utf8" })
+      if (compile.error) throw compile.error
+      if (compile.status !== 0) throw new Error(compile.stdout + compile.stderr)
+      renameSync(staged, binary)
+    }
+    runner = [binary]
+  }
+  const result = spawnSync(runner[0], [...runner.slice(1), ...swiftArgs], { stdio: "inherit" })
   if (result.error) throw result.error
   process.exitCode = result.status ?? 1
 } finally {

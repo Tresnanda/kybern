@@ -3,10 +3,10 @@
 edit("lib.rs", "mod cache_island;", "mod cache_island;\nmod idle_memory;")
 edit("renderer.rs", """        #[cfg(target_os = "macos")]
         {
-            let running = MAC_PLATFORM.with(|p| {""", """        #[cfg(target_os = "macos")]
+            let running = EMBEDDED_PLATFORM.with(|p| {""", """        #[cfg(target_os = "macos")]
         {
             crate::idle_memory::tick_pool();
-            let running = MAC_PLATFORM.with(|p| {""")
+            let running = EMBEDDED_PLATFORM.with(|p| {""")
 edit("renderer.rs", "    pub fn zoom_window(&self) -> Result<()> {", '''    pub fn set_window_state_callback(&self, callback: Option<ThreadsafeFunction<serde_json::Value>>) {
         crate::idle_memory::set_window_state_callback(callback);
     }

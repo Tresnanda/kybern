@@ -1,13 +1,20 @@
 """Patch @gpuix/native's JS bridge and declarations atomically."""
 import sys
 from pathlib import Path
+import hook_check
 root = Path(sys.argv[1])
 pending = {}
 def edit(name, old, new):
     text = pending.get(name, (root / name).read_text())
     if text.count(old) != 1:
-        raise SystemExit(f"{name}: moved anchor; nothing written: {old}")
+        hook_check.missing(f"{name}: expected 1 anchor(s), found {text.count(old)}; nothing written:\n{old}")
+        pending[name] = text
+        return
     pending[name] = text.replace(old, new)
+
+
+def run_hook(file):
+    hook_check.run(file, Path(__file__).parent, globals())
 
 edit('dist/mutations.js', '    "motion",\n    "testId",', '    "motion",\n    // Kybern native capabilities.\n    "backdrop",\n    "paintAnimation",\n    "cache",\n    "windowDrag",\n    "interceptKeys",\n    "secure",\n    "softWrap",\n    "testId",')
 edit('dist/host.d.ts', 'export interface HostProps {', 'export interface HostProps {\n    cache?: boolean | "fill";\n    /** Empty titlebar region; do not place on interactive controls. */\n    windowDrag?: boolean;')
@@ -27,7 +34,6 @@ edit('dist/host.d.ts', 'export interface HostProps {', 'export interface HostPro
 edit('index.d.ts', 'export declare class GpuixRenderer {', 'export declare class GpuixRenderer {\n  setSubtreeTranslation(elementId: number, translation: { translateX: number; translateY: number }): void')
 edit('dist/host.d.ts', 'export interface InputProps extends HostProps {', 'export interface InputProps extends HostProps {\n    /** Key names delivered before native editing actions, with preventDefault(). */\n    interceptKeys?: string[];\n    /** Password input: masked paint/accessibility, no copy or cut. */\n    secure?: boolean;')
 edit('index.d.ts', 'export declare class GpuixRenderer {', 'export declare class GpuixRenderer {\n  resolveKeyEvent(token: number, prevented: boolean): void\n  setCloseGuard(enabled: boolean): void\n  resolveCloseRequest(token: number, allow: boolean): void')
-edit('dist/host.d.ts', '    onKeyDown?: (event: EventPayload) => void;', '    onKeyDown?: (event: EventPayload & { preventDefault(): void; defaultPrevented: boolean }) => void;')
 edit('dist/renderer-state.js', '        dispatch(event) {\n            const root = active;', """        dispatch(event) {
             if (event.eventType === "shouldClose") {
                 Promise.resolve().then(() => state.shouldClose?.() ?? true)
@@ -35,16 +41,16 @@ edit('dist/renderer-state.js', '        dispatch(event) {\n            const roo
                     .catch(error => { renderer.resolveCloseRequest(event.requestId, false); console.error(error); });
                 return true;
             }
-            if (event.eventType === "keyDown") {
-                event.defaultPrevented = false;
-                event.preventDefault = () => { event.defaultPrevented = true; };
-                if (event.requestId != null) {
-                    const handler = active?.eventHandlers.get(event.elementId)?.get("keyDown");
-                    try { handler?.(event); active?.handlers.onEvent?.(event); }
-                    catch (error) { event.preventDefault(); throw error; }
-                    finally { renderer.resolveKeyEvent(event.requestId, event.defaultPrevented); }
-                    return !!handler;
-                }
+            if (event.eventType === "keyDown" && event.requestId != null) {
+                // An intercepted key (`interceptKeys`) waits on native for the verdict.
+                // It carries its own flags: the keystroke's ordinary keyDown follows.
+                const flags = { prevented: false, stopped: false };
+                const keyEvent = toKeyEvent(event, flags);
+                const handler = active?.eventHandlers.get(event.elementId)?.get("keyDown");
+                try { handler?.(keyEvent); active?.handlers.onEvent?.(keyEvent); }
+                catch (error) { flags.prevented = true; throw error; }
+                finally { renderer.resolveKeyEvent(event.requestId, flags.prevented); }
+                return !!handler;
             }
             const root = active;""")
 edit('dist/renderer-state.js', 'const STATE_KEY =', """/** Install a close guard. Rejections veto; repeated close attempts coalesce. */
@@ -82,14 +88,13 @@ edit('dist/automation/client.js', '        nativeSimulateScrollWheel(x, y, delta
         },
         nativeSimulateScrollWheel(x, y, deltaX, deltaY, modifiers) {""")
 
-edit('dist/runtime.js', '        stopped = true;', '        stopped = true;\n        renderer.setFrameWakeCallback?.(null);')
-edit('dist/runtime.js', '    loop();\n    return { stop };', '    if (typeof renderer.setFrameWakeCallback === "function" && process.env.KYBERN_VSYNC_WAKE !== "0") {\n        renderer.setFrameWakeCallback((error) => {\n            if (stopped) return;\n            try {\n                if (error) options.onError?.(error);\n                else if (renderer.tick() === false) { stop(); options.onTerminated?.(); }\n            } catch (error) { options.onError?.(error); }\n            finally { renderer.acknowledgeFrameWake(); }\n        });\n    }\n    loop();\n    return { stop };')
 edit('dist/automation/protocol.js', '    scrollWheel: {', '    fileDrop: {\n        params: pointSchema.extend({ paths: z.array(z.string()).min(1) }),\n        result: okSchema,\n    },\n    scrollWheel: {')
 edit('dist/automation/protocol.d.ts', '    readonly scrollWheel: {', '    readonly fileDrop: {\n        readonly params: z.ZodObject<{ x: z.ZodNumber; y: z.ZodNumber; paths: z.ZodArray<z.ZodString> }, z.core.$strip>;\n        readonly result: z.ZodObject<{ ok: z.ZodLiteral<true> }, z.core.$strip>;\n    };\n    readonly scrollWheel: {')
-exec((Path(__file__).parent / "scroll_js.py").read_text())
-exec((Path(__file__).parent / "render9_js.py").read_text())
-exec((Path(__file__).parent / "motion_native_js.py").read_text())
+run_hook("scroll_js.py")
+run_hook("render9_js.py")
+run_hook("motion_native_js.py")
 
 for name, text in pending.items():
-    (root / name).write_text(text)
-print(f"JS patch applied to {len(pending)} files")
+    if not hook_check.CHECK or not hook_check.problems:
+        (root / name).write_text(text)
+hook_check.finish(f"JS patch applied to {len(pending)} files")

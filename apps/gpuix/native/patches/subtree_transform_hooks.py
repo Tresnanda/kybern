@@ -10,10 +10,10 @@ rt = 'retained_tree.rs'
 edit(rt, '    pub(crate) subtree_translation_updates: HashSet<u64>,', '    pub(crate) subtree_translation_updates: HashSet<u64>,\n    pub(crate) subtree_transform_updates: HashSet<u64>,')
 edit(rt, '            subtree_translation_updates: HashSet::new(),', '            subtree_translation_updates: HashSet::new(),\n            subtree_transform_updates: HashSet::new(),')
 edit(rt, '            crate::subtree_translation::forget(id);', '            crate::subtree_translation::forget(id);\n            self.subtree_transform_updates.remove(&id);\n            crate::subtree_transform::forget(id);')
-edit(rt, '        let had_translation = self.elements.get(&id).is_some_and(|e|e.custom_props.contains_key("paintTranslate"));', '''        let had_translation = self.elements.get(&id).is_some_and(|e|e.custom_props.contains_key("paintTranslate"));
+edit(rt, '        let had_translation = self.elements.get(&id).is_some_and(|e|e.custom_props().contains_key("paintTranslate"));', '''        let had_translation = self.elements.get(&id).is_some_and(|e|e.custom_props().contains_key("paintTranslate"));
         let is_transform = key == "paintTransform" && crate::subtree_transform::valid(&value) && !value.is_null();
-        let had_transform = self.elements.get(&id).is_some_and(|e|e.custom_props.contains_key("paintTransform"));''')
-edit(rt, '        if is_translation && had_translation && self.elements.get(&id).is_some_and(|e|e.custom_props.contains_key("paintTranslate")) {self.subtree_translation_updates.insert(id);}', '''        if is_transform && had_transform {self.subtree_transform_updates.insert(id);}
-        else if is_translation && had_translation && self.elements.get(&id).is_some_and(|e|e.custom_props.contains_key("paintTranslate")) {self.subtree_translation_updates.insert(id);}''')
+        let had_transform = self.elements.get(&id).is_some_and(|e|e.custom_props().contains_key("paintTransform"));''')
+edit(rt, '        if is_translation && had_translation && self.elements.get(&id).is_some_and(|e|e.custom_props().contains_key("paintTranslate")) {self.subtree_translation_updates.insert(id); self.dirty = true;}', '''        if is_transform && had_transform {self.subtree_transform_updates.insert(id); self.dirty = true;}
+        else if is_translation && had_translation && self.elements.get(&id).is_some_and(|e|e.custom_props().contains_key("paintTranslate")) {self.subtree_translation_updates.insert(id); self.dirty = true;}''')
 # A new scope over cached descendants needs their hitboxes and accessibility nodes recorded inside it.
 edit(rt, '            if is_translation && !had_translation {', '            if (is_translation && !had_translation) || (is_transform && !had_transform) {')

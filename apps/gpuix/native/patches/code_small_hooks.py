@@ -13,17 +13,9 @@ edit('renderer.rs', '            return Ok(running);\n        }\n\n        #[cfg
 edit('renderer.rs', '"syntaxCache": ({', '"smallAllocator":crate::large_alloc::code_small_stats(),\n            "syntaxCache": ({')
 edit('renderer.rs', '        let app_handle = app.run_embedded(move |cx: &mut gpui::App| {', '        let app_handle = app.run_embedded(move |cx: &mut gpui::App| {\n            gpui::set_code_memory_collector(crate::large_alloc::code_small_after_frame);')
 edit('renderer.rs', '''        drop(tree);
-        self.request_invalidate()?;
-        Ok(destroyed)
-    }
-
-    // ── Frame loop''', '''        drop(tree);
+        // A re-render that changed nothing sends a batch of identical resends.''', '''        drop(tree);
         if destroyed.len() >= 64 { crate::large_alloc::code_small_request(); }
-        self.request_invalidate()?;
-        Ok(destroyed)
-    }
-
-    // ── Frame loop''')
+        // A re-render that changed nothing sends a batch of identical resends.''')
 for kind in ['syntax','markdown']:
     old=f'        update_window(move |view, _, _| view.{kind}_documents.lock().unwrap().release(&id))'
     edit('renderer.rs',old,f'''        let result = update_window(move |view, _, _| view.{kind}_documents.lock().unwrap().release(&id));

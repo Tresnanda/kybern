@@ -44,13 +44,34 @@ test('generated release host blocks a failed or cancelled gate', async () => {
   for (const result of ['failure', 'cancelled']) assert.equal(allowed('custom-release-ci', result), false)
 })
 
-test('desktop bundles wait for the gate and dist binaries, and host waits for them', async () => {
+test('desktop bundles start with the daemon archives, and host waits for them and for the gate', async () => {
   const { workflow, host, allowed } = await releaseJobs()
   const desktop = workflow.split('\n  custom-desktop:\n')[1].split('\n  # Determines if we should publish')[0]
-  assert.match(desktop, /needs:[\s\S]*- build-local-artifacts[\s\S]*- custom-release-ci/)
+  const needs = desktop.match(/    needs:\n((?:      - [\w-]+\n)+)/)[1].split('\n').map(line => line.replace('      - ', '')).filter(Boolean)
+  // The bundles are the longest phase and need only the archives; the gate waits for CI.
+  assert.deepEqual(needs, ['plan', 'build-local-artifacts'])
   assert.match(desktop, /uses: \.\/\.github\/workflows\/desktop\.yml/)
-  assert.match(host, /needs:[\s\S]*- custom-desktop/)
+  assert.match(host, /needs:[\s\S]*- custom-release-ci[\s\S]*- custom-desktop/)
   for (const result of ['failure', 'cancelled']) assert.equal(allowed('custom-desktop', result), false)
+})
+
+test('every required job is a job of ci.yml, and main runs all of them', async () => {
+  const { readFileSync } = await import('node:fs')
+  const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
+  const jobs = workflow.split('\njobs:\n')[1].split(/\n  (?=[\w-]+:\n)/)
+  const names = jobs.flatMap(job => {
+    const template = job.match(/^    name: (.*)$/m)?.[1]
+    if (!template) return []
+    // Expand `${{ matrix.key }}` over the `key: [a, b]` lists of the job's matrix.
+    const lists = Object.fromEntries([...job.matchAll(/^        (\w+): \[(.*)\]$/gm)].map(([, key, values]) => [key, values.split(',').map(value => value.trim())]))
+    const keys = Object.keys(lists)
+    if (!keys.length) return [template]
+    return keys.flatMap(key => lists[key].map(value => template.replace(`\${{ matrix.${key} }}`, value)))
+  })
+  for (const name of requiredJobs) assert.ok(names.includes(name), `ci.yml has no job named "${name}"`)
+  // A pull request may skip a job through the `changes` job; a push must not.
+  const changes = jobs.find(job => job.trimStart().startsWith('changes:'))
+  assert.match(changes, /if \[ "\$EVENT" != pull_request \]; then\n\s+files=ALL/)
 })
 
 test('GPUIX bundles both macOS targets from dist binaries without compiling the daemon', async () => {

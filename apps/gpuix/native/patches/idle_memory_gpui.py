@@ -4,7 +4,8 @@
 # move, screen, appearance and accessibility-display changes from AppKit's own
 # callbacks instead of polling NSWindow from JS.
 m = 'crates/gpui_macos/src/gpui_macos.rs'
-edit(m, 'pub(crate) fn wake_embedded_frame_host() {', '''static WINDOW_STATE_OBSERVER: std::sync::RwLock<Option<std::sync::Arc<dyn Fn() + Send + Sync>>> = std::sync::RwLock::new(None);
+edit(m, 'pub use platform::MacPlatform;', '''pub use platform::MacPlatform;
+static WINDOW_STATE_OBSERVER: std::sync::RwLock<Option<std::sync::Arc<dyn Fn() + Send + Sync>>> = std::sync::RwLock::new(None);
 /// Install a nonblocking notification for window occlusion, key, move, screen,
 /// appearance and accessibility-display changes (embedded hosts re-read state).
 pub fn set_window_state_observer(observer: Option<std::sync::Arc<dyn Fn() + Send + Sync>>) {
@@ -29,8 +30,7 @@ pub fn set_window_state_observer(observer: Option<std::sync::Arc<dyn Fn() + Send
 pub(crate) fn notify_window_state() {
     let observer = WINDOW_STATE_OBSERVER.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
     if let Some(observer) = observer { observer(); }
-}
-pub(crate) fn wake_embedded_frame_host() {''')
+}''')
 w = 'crates/gpui_macos/src/window.rs'
 edit(w, '''            lock.stop_display_link();
             lock.renderer.release_passive_region_target();

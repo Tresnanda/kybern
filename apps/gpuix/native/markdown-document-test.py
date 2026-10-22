@@ -12,11 +12,12 @@ cross = [] if target == host else ["--target", target]
 deps = root / ("build/target/release/deps" if not cross else f"build/target/{target}/release/deps")
 rlib = next(deps.glob("libpulldown_cmark-*.rlib"))
 wrapper = root / "build/markdown-model-test.rs"
+# Forward slashes: a Windows path's backslashes would be escapes inside the attribute string.
 wrapper.write_text(
-    'mod markdown {#[path="' + str(root / "upstream/packages/native/src/markdown/parser.rs") + '"] pub mod parser;}\n'
-    '#[path="' + str(root / "patches/markdown_model.rs") + '"] mod markdown_model;\n'
+    'mod markdown {#[path="' + (root / "upstream/packages/native/src/markdown/parser.rs").as_posix() + '"] pub mod parser;}\n'
+    '#[path="' + (root / "patches/markdown_model.rs").as_posix() + '"] mod markdown_model;\n'
 )
-output = root / "build/markdown-model-tests"
+output = root / ("build/markdown-model-tests" + os.environ.get("KYBERN_EXE_SUFFIX", ""))
 subprocess.run([
     "rustc", "+1.97.1", "--edition=2021", "--test", str(wrapper),
     "--extern", "pulldown_cmark=" + str(rlib), "-L", "dependency=" + str(deps),

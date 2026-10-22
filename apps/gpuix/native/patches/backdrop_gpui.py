@@ -1,6 +1,7 @@
 """Reconstruct GPUI backdrop support from the pinned submodule source."""
 from pathlib import Path
 import subprocess, sys
+import hook_check
 root = Path(sys.argv[1]); here = Path(__file__).parent
 pending = {}
 def edit(name, old, new, count=1):
@@ -8,8 +9,13 @@ def edit(name, old, new, count=1):
     if text is None:
         text = subprocess.check_output(['git', '-C', str(root), 'show', f'HEAD:{name}'], text=True)
     if text.count(old) != count:
-        raise SystemExit(f'{name}: expected {count} anchors for {old!r}, got {text.count(old)}')
+        hook_check.missing(f'{name}: expected {count} anchors for {old!r}, got {text.count(old)}')
+        pending[name] = text
+        return
     pending[name] = text.replace(old, new)
+
+def run_hook(file):
+    hook_check.run(file, here, globals())
 s = 'crates/gpui/src/scene.rs'
 edit(s, '    pub shadows: Vec<Shadow>,', '    pub backdrops: Vec<Backdrop>,\n    backdrop_order_offset: u32,\n    maximum_order: u32,\n    pub shadows: Vec<Shadow>,')
 edit(s, '        self.shadows.clear();', '        self.backdrops.clear(); self.backdrop_order_offset=0; self.maximum_order=0;\n        self.shadows.clear();')
@@ -72,42 +78,42 @@ edit(m, '            match batch {', '''            match batch {
                     command_encoder=new_command_encoder_for_texture(command_buffer,texture,viewport_size,None);
                 },''')
 pending[m] += '\ninclude!("backdrop_renderer.rs");\n'
-exec((here / "paint_gpui.py").read_text())
-exec((here / "frame_gpui.py").read_text())
-exec((here / "paint_buffers_gpui.py").read_text())
-exec((here / "frame_drawable_gpui.py").read_text())
-exec((here / "paint_region_gpui.py").read_text())
-exec((here / "paint_text_gpui.py").read_text())
-exec((here / "markdown_gpui.py").read_text())
-exec((here / "rotate_gpui.py").read_text())
-exec((here / "pop_gpui.py").read_text())
-exec((here / "frame_cost_gpui.py").read_text())
-exec((here / "pointer_gpui.py").read_text())
-exec((here / "rounded_clip_gpui.py").read_text())
-exec((here / "subtree_translation_gpui.py").read_text())
-exec((here / "paint_region_crop_gpui.py").read_text())
+run_hook("paint_gpui.py")
+run_hook("frame_gpui.py")
+run_hook("paint_buffers_gpui.py")
+run_hook("frame_drawable_gpui.py")
+run_hook("paint_region_gpui.py")
+run_hook("paint_text_gpui.py")
+run_hook("markdown_gpui.py")
+run_hook("rotate_gpui.py")
+run_hook("pop_gpui.py")
+run_hook("frame_cost_gpui.py")
+run_hook("pointer_gpui.py")
+run_hook("rounded_clip_gpui.py")
+run_hook("subtree_translation_gpui.py")
+run_hook("paint_region_crop_gpui.py")
 
-exec((here / "scroll_gpui.py").read_text())
-exec((here / "text_scale_gpui.py").read_text())
-exec((here / "font_weight_gpui.py").read_text())
-exec((here / "subtree_transform_gpui.py").read_text())
-exec((here / "stream_fade_gpui.py").read_text())
-exec((here / "stroke_draw_gpui.py").read_text())
+run_hook("scroll_gpui.py")
+run_hook("text_scale_gpui.py")
+run_hook("font_weight_gpui.py")
+run_hook("subtree_transform_gpui.py")
+run_hook("stream_fade_gpui.py")
+run_hook("stroke_draw_gpui.py")
 
-exec((here / "sparse_list_gpui.py").read_text())
+run_hook("sparse_list_gpui.py")
 
-exec((Path(__file__).parent / "motion_frame_gpui.py").read_text())
-exec((Path(__file__).parent / "cache_frame_gpui.py").read_text())
+run_hook("motion_frame_gpui.py")
+run_hook("cache_frame_gpui.py")
 
-exec((here / "image_memory_gpui.py").read_text())
-exec((here / "memory_counters_gpui.py").read_text())
-exec((here / "frame_memory_gpui.py").read_text())
+run_hook("image_memory_gpui.py")
+run_hook("memory_counters_gpui.py")
+run_hook("frame_memory_gpui.py")
 
-exec((here / "gpu_clip_gpui.py").read_text())
-exec((here / "gpu_telemetry_gpui.py").read_text())
-exec((here / "flick_frame_gpui.py").read_text())
+run_hook("gpu_clip_gpui.py")
+run_hook("gpu_telemetry_gpui.py")
+run_hook("flick_frame_gpui.py")
 
-exec((here / "image_frames_gpui.py").read_text())
+run_hook("image_frames_gpui.py")
 
 exec((here / "alpha_blend_gpui.py").read_text())
 
@@ -121,21 +127,24 @@ text=(here/'rounded_clip.rs').read_text()
 if not dest.exists() or dest.read_text()!=text:dest.write_text(text)
 print('GPUI backdrop hooks applied')
 
-exec((here / "backdrop_kernel_gpui.py").read_text())
+run_hook("backdrop_kernel_gpui.py")
 
-exec((here / "code_memory_gpui.py").read_text())
+run_hook("code_memory_gpui.py")
 
-exec((here / "code_frame_gpui.py").read_text())
-exec((here / "code_collect_gpui.py").read_text())
-exec((here / "hover_reconcile_gpui.py").read_text())
-exec((here / "hover_owner_gpui.py").read_text())
-exec((here / "snapshot_strokes_gpui.py").read_text())
-exec((here / "compositor_loops_gpui.py").read_text())
-exec((here / "compositor_covers_gpui.py").read_text())
-exec((here / "translate_text_gpui.py").read_text())
-exec((here / "shimmer_band_gpui.py").read_text())
-exec((here / "hover_fade_gpui.py").read_text())
-exec((here / "motion_trace_gpui.py").read_text())
-exec((here / "image_load_gpui.py").read_text())
+run_hook("code_frame_gpui.py")
+run_hook("code_collect_gpui.py")
+run_hook("hover_reconcile_gpui.py")
+run_hook("hover_owner_gpui.py")
+run_hook("snapshot_strokes_gpui.py")
+run_hook("compositor_loops_gpui.py")
+run_hook("compositor_covers_gpui.py")
+run_hook("translate_text_gpui.py")
+run_hook("shimmer_band_gpui.py")
+run_hook("hover_fade_gpui.py")
+run_hook("motion_trace_gpui.py")
+run_hook("image_load_gpui.py")
 
-exec((here / "idle_memory_gpui.py").read_text())
+run_hook("idle_memory_gpui.py")
+run_hook("platforms_gpui.py")
+
+hook_check.finish("GPUI hooks applied")

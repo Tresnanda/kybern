@@ -1,0 +1,103 @@
+# Warms the cargo cache of release.yml's build-local-artifacts jobs.
+#
+# A tag can restore caches saved by main but never another tag's, and
+# `dist build` runs in a differently named workflow and job than main's CI, so
+# without this the release builds kybernd and kybern from scratch every time.
+# This workflow builds the same archives on the same runners with the same
+# `dist build` arguments, from main, and saves the cache under the shared key
+# .github/dist-build-setup.yml restores. Keep the two in step: the key, and no
+# CARGO_*, CC*, CXX*, CMAKE* or RUST* variables (rust-cache hashes them into
+# the key).
+#
+# rust-cache keeps only the dependencies, keyed on the lockfile, manifests and
+# toolchain, and never replaces an existing entry, so a run whose key already
+# exists only restores it (keeping it from expiring) and builds nothing. The
+# weekly run keeps the entries alive between releases: GitHub deletes a cache
+# nobody has restored for seven days.
+name: Dist cache
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
+      - 'crates/**'
+      - 'apps/desktop/src-tauri/**'
+      - 'dist-workspace.toml'
+      - '.github/dist-build-setup.yml'
+      - '.github/workflows/dist-cache.yml'
+  # Pull requests that edit this workflow run it to check it; they cannot save
+  # a cache that a tag could restore. (A workflow_dispatch needs the file on
+  # the default branch, so a new version cannot be dispatched from a branch.)
+  pull_request:
+    paths:
+      - '.github/dist-build-setup.yml'
+      - '.github/workflows/dist-cache.yml'
+  schedule:
+    - cron: '37 4 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: dist-cache-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install dist
+        shell: bash
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
+      - id: plan
+        run: echo "matrix=$(dist plan --output-format=json | jq -c '.ci.github.artifacts_matrix')" >> "$GITHUB_OUTPUT"
+
+  warm:
+    name: warm (${{ join(matrix.targets, ', ') }})
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container && matrix.container.image || null }}
+    steps:
+      - name: enable windows longpaths
+        run: |
+          git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust non-interactively if not already installed
+        if: ${{ matrix.container }}
+        run: |
+          if ! command -v cargo > /dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          fi
+      - id: cache
+        name: Cache cargo builds
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: dist-${{ join(matrix.targets, '-') }}
+          # Only main (and a dispatch from a branch, which a tag cannot read) saves.
+          save-if: ${{ github.event_name != 'pull_request' }}
+      - name: Install dist
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: ${{ matrix.install_dist.run }}
+      - name: Install dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          ${{ matrix.packages_install }}
+      - name: Build the daemon and CLI
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: dist build ${{ matrix.dist_args }} --output-format=json > dist-manifest.json

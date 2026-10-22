@@ -130,8 +130,8 @@ jobs:
       - name: "Cache cargo builds"
         uses: "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6"
         with:
-          "cache-on-failure": true
-          "key": "dist-${{ join(matrix.targets, '-') }}"
+          "save-if": false
+          "shared-key": "dist-${{ join(matrix.targets, '-') }}"
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest
@@ -231,10 +231,12 @@ jobs:
             ${{ env.BUILD_MANIFEST_NAME }}
 
   custom-desktop:
+    # Hand-edited (dist-workspace.toml: allow-dirty = ["ci"]): dist would also
+    # list custom-release-ci here. The bundles only need the daemon archives;
+    # `host` still waits for both the gate and the bundles before publishing.
     needs:
       - plan
       - build-local-artifacts
-      - custom-release-ci
     uses: ./.github/workflows/desktop.yml
     with:
       plan: ${{ needs.plan.outputs.val }}

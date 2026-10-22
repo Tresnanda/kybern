@@ -20,7 +20,7 @@ fn parse(value: &serde_json::Value) -> Option<gpui::ColorTransition> {
 pub(crate) fn transition_for(element: &RetainedElement, tree: &RetainedTree) -> Option<gpui::ColorTransition> {
     let mut current = Some(element);
     while let Some(node) = current {
-        if let Some(value) = node.custom_props.get("hoverTransition") {
+        if let Some(value) = node.custom_props().get("hoverTransition") {
             return parse(value);
         }
         current = node.parent.and_then(|parent| tree.elements.get(&parent));

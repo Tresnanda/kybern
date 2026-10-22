@@ -30,22 +30,3 @@ fn schedule(clock: Weak<RefCell<Clock>>, window: &gpui::Window) {
     });
 }
 
-#[cfg(target_os="macos")]
-static WAKE_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-pub(crate) fn acknowledge_wake() {
-    #[cfg(target_os="macos")]
-    WAKE_PENDING.store(false, std::sync::atomic::Ordering::Release);
-}
-pub(crate) fn set_waker(callback: Option<ThreadsafeFunction<Value>>) {
-    #[cfg(target_os="macos")]
-    {
-        acknowledge_wake();
-        gpui_macos::set_embedded_frame_waker(callback.map(|callback| {
-            std::sync::Arc::new(move || {
-                if !WAKE_PENDING.swap(true, std::sync::atomic::Ordering::AcqRel) {
-                    if callback.call(Ok(Value::Null), ThreadsafeFunctionCallMode::NonBlocking) != napi::Status::Ok { acknowledge_wake(); }
-                }
-            }) as std::sync::Arc<dyn Fn() + Send + Sync>
-        }));
-    }
-}

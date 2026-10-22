@@ -1,0 +1,147 @@
+# ADE-52 spike: build the Kybern-patched GPUIX addon on Linux x64 and Windows x64
+# and put the app on screen there (#113, apps/gpuix/PORTING-PLATFORMS.md).
+#
+# Manual only. Each job builds `kybernd` for its platform, runs
+# `apps/gpuix/native/update.sh` with the on-screen macOS checks off, then
+# `apps/gpuix/scripts/platform-smoke.ts`: a scratch daemon with one seeded
+# thread (no agent runs), the app and the rounded-clip lab captured to PNGs,
+# with rounded clipping on and off (KYBERN_ROUNDED_CLIP=0, the before state).
+# Neither runner has a GPU: Linux renders with Mesa's lavapipe (software
+# Vulkan) under Xvfb; Windows uses Direct3D 11 on WARP (the Microsoft Basic
+# Render Driver). Screenshots, logs and the addon are uploaded as artifacts.
+name: GPUIX platforms
+
+on:
+  workflow_dispatch:
+    inputs:
+      lto:
+        description: Build the addon with the release profile's fat LTO (slower; off is enough to check a patch)
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: gpuix-platforms-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  platform:
+    name: ${{ matrix.os }} (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: windows
+            runner: windows-2022
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      KYBERN_GPUIX_TARGET: ${{ matrix.target }}
+      KYBERN_NATIVE_CHECKS: '0'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_RELEASE_LTO: ${{ inputs.lto && 'true' || 'off' }}
+      # Git Bash on Windows has `python`, not `python3`; the hook drivers read
+      # and write UTF-8 (Windows' default code page is cp1252).
+      PYTHON: ${{ matrix.os == 'windows' && 'python' || 'python3' }}
+      PYTHONUTF8: '1'
+    steps:
+      - name: Allow long paths (zed's tree) and keep LF line endings
+        if: matrix.os == 'windows'
+        run: |
+          git config --global core.longpaths true
+          git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install GPUI's system packages, Xvfb, Mesa lavapipe and ImageMagick
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc g++ clang pkg-config libfontconfig-dev libfreetype-dev libwayland-dev \
+            libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev libssl-dev libzstd-dev \
+            libvulkan1 mesa-vulkan-drivers vulkan-tools xvfb xauth imagemagick fonts-dejavu-core
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+      - name: Install the GPUIX Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+          no-cache: true
+      - uses: actions/setup-python@v5
+        if: matrix.os == 'windows'
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/setup-pnpm-apps
+        with:
+          gpuix: 'true'
+      - name: Build the scratch daemon
+        run: cargo build -p kybern
+      - name: Build the patched GPUIX addon
+        working-directory: apps/gpuix/native
+        run: |
+          start=$(date +%s)
+          ./update.sh
+          echo "addon build took $(( $(date +%s) - start )) s (LTO: $CARGO_PROFILE_RELEASE_LTO)"
+          ls -la build/gpuix-native.*.node
+      - name: Typecheck the app
+        working-directory: apps/gpuix
+        run: pnpm typecheck
+      - name: Smoke test on screen (Linux, Xvfb + lavapipe)
+        if: matrix.os == 'linux'
+        working-directory: apps/gpuix
+        run: |
+          vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName' || true
+          for clip in 1 0; do
+            KYBERN_ROUNDED_CLIP=$clip timeout 600 xvfb-run -a -s '-screen 0 1440x900x24' \
+              bun scripts/platform-smoke.ts --kybernd "$GITHUB_WORKSPACE/target/debug/kybernd" \
+              --out "smoke/clip-$clip" --port $((4377 + clip))
+          done
+      - name: Smoke test on screen (Windows, D3D11)
+        if: matrix.os == 'windows'
+        working-directory: apps/gpuix
+        run: |
+          for clip in 1 0; do
+            KYBERN_ROUNDED_CLIP=$clip timeout 600 \
+              bun scripts/platform-smoke.ts --kybernd "$GITHUB_WORKSPACE/target/debug/kybernd.exe" \
+              --out "smoke/clip-$clip" --port $((4377 + clip))
+          done
+      # Only the PNGs and daemon logs: the scratch dirs also hold the app's
+      # sockets, which the upload cannot read on Windows.
+      - name: Collect screenshots and logs
+        if: always()
+        working-directory: apps/gpuix
+        run: |
+          mkdir -p smoke-out
+          for dir in smoke/clip-*; do
+            [ -d "$dir" ] || continue
+            name=$(basename "$dir")
+            for png in "$dir"/*.png; do [ -f "$png" ] && cp "$png" "smoke-out/$name-$(basename "$png")"; done
+            [ -f "$dir/scratch/daemon.log" ] && cp "$dir/scratch/daemon.log" "smoke-out/$name-app-daemon.log"
+          done
+          ls -la smoke-out
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gpuix-${{ matrix.os }}-screens
+          path: apps/gpuix/smoke-out
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload the addon
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gpuix-native-${{ matrix.target }}
+          path: apps/gpuix/native/build/gpuix-native.*.node
+          retention-days: 7

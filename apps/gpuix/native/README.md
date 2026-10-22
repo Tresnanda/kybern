@@ -235,6 +235,38 @@ the checks. If upstream moved code a hook anchors on, `apply_hooks.py` names the
 anchor and writes nothing: adjust that one edit and rerun. Then run the app's
 usual checks and commit `VERSION`, `patches/` and the lockfile.
 
+**List every moved anchor first.** A hook driver stops at its first miss, which
+turns a port into one rerun per anchor. `--check` keeps going and prints all of
+them (a miss can cascade into later edits that anchor on text it would have
+added, so fix a file's first miss first):
+
+```sh
+cd apps/gpuix/native && git -C upstream checkout -q --force @gpuix/native@0.12.0
+git -C upstream submodule update -q --init zed && cp patches/*.rs upstream/packages/native/src/
+python3 patches/apply_hooks.py upstream/packages/native/src --check   # native crate
+python3 patches/backdrop_gpui.py upstream/zed --check                 # GPUI fork
+python3 patches/patch_js.py <dir of the npm package> --check          # also patch_react.py
+```
+
+Each prints `MISSING <file>: expected N anchor(s), found M` with the first line
+of the anchor, and exits 1 when anything is missing (`patches/hook_check.py`).
+Run it on a disposable checkout; the drivers still write the hooks that matched.
+`update.sh` resets zed (`reset --hard`, `clean`) before moving its submodule,
+since the previous run edited it in place.
+
+**Weekly canary.** `.github/workflows/gpuix-canary.yml` runs
+`tools/gpuix_canary.py` every Monday and on demand. It skips when npm's latest is
+`VERSION`; otherwise it runs the four `--check` passes above against the new
+release on a Linux runner (a couple of minutes, no cargo), and lists the napi
+methods the release added that one of our patches also defines (a clash is a
+compile error, and one clash hides the next). When the hooks match, a macOS job
+runs `KYBERN_NATIVE_CHECKS=0 update.sh <latest>` and the app's typecheck and unit
+tests, which is what a static check cannot see. The result is one issue labelled
+`gpuix-canary`: "the patches no longer apply" with the anchors,
+"the build fails", or "ready to adopt"; it closes itself when `VERSION` catches
+up. The canary never pushes. Locally:
+`python3 -I tools/gpuix_canary.py --version 0.12.0 --report /tmp/canary.md`.
+
 Prerequisites: Rust 1.97.1 (from upstream's `rust-toolchain.toml`) and Xcode's
 Metal Toolchain (`xcodebuild -downloadComponent MetalToolchain`). The first
 build takes a few minutes and about 2 GB in `build/`.
@@ -248,6 +280,61 @@ macOS 13.0), so both arches share `build/kybern-webview.dylib`. Rosetta runs nee
 macOS 27 or earlier (macOS 28 drops it for apps); package local Intel apps with
 `--test` (`packaging/README.md`). What Rosetta does
 not prove, and the Windows/Linux plan: `../PORTING-PLATFORMS.md`.
+
+Linux and Windows (ADE-52 spike): run `update.sh` on that OS with
+`KYBERN_NATIVE_CHECKS=0` (Git Bash on Windows, with `PYTHON=python` and
+`PYTHONUTF8=1`). It writes `build/gpuix-native.linux-x64-gnu.node` (or
+`linux-arm64-gnu`) and `build/gpuix-native.win32-x64-msvc.node`, which
+`src/native/local-build.ts` loads. Two drivers run last and only touch
+Linux/Windows code:
+
+- `patches/platforms_hooks.py` (native crate): off macOS, `update_window` and
+  `update_window_without_view` box the hook's closure into `UiCommand::Run`,
+  run it on the `gpuix-ui` thread and wait for its result, so a hook is
+  written once and only has to be `Send + 'static`. Keep paint-time
+  thread-local reads inside the closure: outside it they read the JS thread's
+  empty copy.
+- `patches/platforms_gpui.py` (GPUI): backdrop batches draw nothing on wgpu and
+  Direct3D; `ContentMask` and the rounded clip chain walk in WGSL and HLSL
+  (`KYBERN_ROUNDED_CLIP=0` squares every chain, for before/after checks);
+  compositor loops stay in the scene. A new Metal-only GPU patch needs its
+  WGSL/HLSL counterpart here, or Linux/Windows draw it wrong.
+
+`.github/workflows/gpuix-platforms.yml` builds both and runs
+`scripts/platform-smoke.ts` on screen (Xvfb + lavapipe, D3D11 on WARP). On a
+Mac, an arm64 Linux container gives the same check in about a minute.
+
+## The 0.11.0 port (from 0.10.0)
+
+0.11.0 has no GPUI rebase (the Zed fork moves 18 commits: `f77e5cf`), the same
+Rust 1.97.1, and a new `packages/gpui-terminal` crate that we do not use. Every
+GPUI-side anchor still matched; `--check` found 17 problems in the native crate (14 moved
+anchors, 2 cascades from them, 1 changed count) and 1 in the JS patch. What was done with each, so the next port can tell a
+dropped patch from one that only changed its anchor:
+
+| Patch | 0.11.0 | What changed |
+|---|---|---|
+| `register_font` (`apply_hooks.py`) | **dropped** | Upstream's `registerFont` (with font validation) is the same call. The app already guarded on it. |
+| `set_frame_wake_callback`, `acknowledge_frame_wake`, `frame_clock::set_waker`, the display-link hook and the `runtime.js` wake edit (`frame_*`, `patch_js.py`) | **dropped** | Upstream wakes the JS loop from the display link itself (`set_frame_wake_hook`, `setFrameWakeCallback(loop)`, on unless `frameMs` is set). Wiring ours too woke the loop twice and clashed on the napi name. `KYBERN_VSYNC_WAKE` is no longer read; `subscribe_animation_frames` stays. |
+| `onKeyDown` type edit (`patch_js.py`) | **dropped** | Upstream's `KeyEvent` has `preventDefault`/`defaultPrevented`/`stopPropagation`. |
+| `interceptKeys` dispatch (`patch_js.py`) | reworked | Builds the intercepted event with upstream's `toKeyEvent` flags. Its verdict still goes back through `resolveKeyEvent`, and its `stopPropagation` in native keeps the window's Tab default from running for an intercepted key. |
+| Island fields, `BuildCtx` init, root prune, `build_element` lookup (`apply_hooks.py`) | re-anchored | New fields (`paint_reports`, `keyboard_focus`), `let tree = ctx.tree`. `cache_island.rs` builds its `BuildCtx` with both; `paint_reports` and `keyboard_focus_path` are `pub(crate)` for it. |
+| Element accessors (every `.rs`/`_hooks.py` that read `custom_props`/`events`) | mechanical | They moved behind `extras`: `custom_props()`, `events()`. |
+| Bounds replay in `cache_island` | kept, needs nothing | Upstream records host bounds with `on_painted` (`track_host_bounds`) instead of a `bounds_tracker` child. The island's snapshot-after-paint and replay-into-gaps canvases are independent of how a bound is recorded. |
+| Clipped bounds, rounded masks, subtree geometry (`apply_hooks.py`, `subtree_translation_hooks.py`) | reworked | `bounds_tracker` used to carry them. They are now applied inside `track_host_bounds` (`record_clipped_bounds`, `record_start_region` with the window's subtree geometry). Bounds are the border box now (the old child filled the padding box). |
+| `selection_surface_hooks.py` | reworked | Custom surfaces pass `selection_start_flag` into `track_host_bounds` rather than into a child canvas. |
+| Dirty batches (`paint_hooks.py`, `subtree_*_hooks.py`) | reworked | `apply_batch` now invalidates only when the tree reports `dirty`. Our paint-only paths (`paint_updates`, `paintTranslate`, `paintTransform` retains) skip `mark_render_changed`, so they set `dirty` themselves. Without it a retained translation never repaints. |
+| `has_fill` (anchored) | re-anchored | Upstream now keys on `declares_fill`, so an explicit transparent fill opts out of the forced opaque backing. |
+| `dragOver`, `scroll` list accessibility, code-small destroy path, idle-memory pump | re-anchored | `style.active`/`focus_visible` neighbours, `let list = …;`, the `if dirty` block, `EMBEDDED_PLATFORM` (was `MAC_PLATFORM`). The window-state observer in `gpui_macos.rs` now anchors on `pub use platform::MacPlatform;`. |
+| `hover_reconcile`/`hover_owner`, `layout_observer.rs`, `key_intercept.rs`, `idle_memory` | kept | Patched code unchanged and compiled against 0.11. Upstream also added "hover ends when the pointer leaves the window" and `onLayout`; the hover-fade and link-hover checks could not run after the restart (below), so the interplay is verified by `pointer-check`, `link-check` and the click checks only. |
+| `keyboardFocusDim` default (`patch_react.py`) | new | Off unless a root passes `keyboardFocusDim: true`. |
+
+App side: `SettingsScreen` no longer calls `focusNext` itself (the window does
+now; it only stops the default while a settings overlay owns Tab);
+`ImageMorph` keeps its own trapped Tab and stops the default so focus does not
+move a second time behind the modal; the terminal stops the default for every
+key it forwards to the shell. Tab navigation is otherwise left on: a Tab the
+composer's `interceptKeys` consumes never reaches the window handler.
 
 ## Window drag regions
 
@@ -1929,3 +2016,4 @@ chain:
 The JS side releases once the window has spent 60 s not key or hidden (`src/platform/idleMemory.ts`), adding a
 full `Bun.gc(true)`; `Bun.shrink()` is opt-in (`KYBERN_IDLE_SHRINK=1`) because it discards compiled JS and slowed the
 next opens. Measurements and the remaining driver-owned `IOAccelerator` memory: `../perf/ramfix/README.md`.
+

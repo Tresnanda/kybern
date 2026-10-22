@@ -63,10 +63,10 @@ sends to the open thread or starts one from home.
 
 ## Known gaps
 
-- `@gpuix/native` 0.10.0 has no `registerFont`, so the Cal Sans wordmark and
-  JetBrains Mono fall back to SF Pro semibold and Menlo. The converted TTFs in
-  `src/assets/fonts` load automatically once the API ships.
-- No letter-spacing, dashed borders or springs; motion is eased tweens.
+- Cal Sans and JetBrains Mono load through `registerFont` (upstream since 0.11.0;
+  the converted TTFs are in `src/assets/fonts`). On a stock addon without it the
+  wordmark and code fall back to SF Pro semibold and Menlo.
+- No letter-spacing.
 - GPUIX markdown keeps links monochrome (underlined) rather than accent blue,
   and renders bold at 700 instead of the desktop's 500.
 - Notes, Tasks, Pull requests, Usage and Settings are placeholders; menus,

@@ -19,12 +19,25 @@ and behave like the desktop, and it must not make idle or animation cost worse
 - Icons: `src/icons.tsx` (the same Hugeicons glyphs and stroke widths as
   `lib/kit/icons.tsx`). Add glyphs there.
 
-## GPUIX 0.10.0 rules (the README is ahead of the npm release)
+## GPUIX 0.11.0 rules
 
 - Check `node_modules/@gpuix/react/dist/**/*.d.ts` and
   `node_modules/@gpuix/native/index.d.ts` before using a documented API.
-  Missing in 0.10.0: `registerFont`, `scrollbarColor`, `keyboardFocusDim`,
-  `borderStyle`.
+  New in 0.11.0, so usable now: `registerFont` (the Kybern patch for it is
+  gone), `scrollbarColor` and scrollbar styles, dashed `borderStyle`, shadow
+  lists, `aspectRatio`, `onLayout`, `onScrollChange`, `createPortal`,
+  `getElementsAt`, `keyboardFocusDim`, `focusVisible`.
+- Tab and Shift+Tab move focus through `tabIndex` elements by default, as the
+  window's last action for the keystroke. A handler that consumes Tab (a
+  terminal, a trapped modal, an editor action) calls `e.preventDefault()`, or
+  the focus moves as well. The Escape layer stack only knows layers pushed with
+  upstream's `pushDismissLayer`; Kybern's overlays keep their own Escape handlers.
+- `keyboardFocusDim` defaults to **off** here (a Kybern patch in
+  `patch_react.py`): upstream's default dims every other focusable to 40% after
+  keyboard input, and the app draws its own focus look. A root can opt in with
+  `keyboardFocusDim: true`.
+- A host element's bounds (`getElementBounds`, automation) are its border box,
+  as in a DOM `getBoundingClientRect`; before 0.11 they were the padding box.
 - `div` is not flex until `display: 'flex'`. Shrinking children need `minWidth: 0`.
 - Every `<text>` needs `color`. Do not mix strings and expressions in one
   `<text>` (`Show {n} more` lays out as separate items): use a template string.

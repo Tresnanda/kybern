@@ -194,10 +194,11 @@ export function ImageViewer({ src, label, from, source, onClose, finalFocus, tes
     <anchored backdrop={{ blur: 0 }} position={{ x: 0, y: 0 }} fit="snap" snapMargin={0} deferred priority={4} occlude>
       <div testId={web.id} style={{ display: 'flex' }}>
       <div ref={root} testId={testId} tabIndex={0} autoFocus
-        onKeyDown={(e: { key?: string; modifiers?: { shift?: boolean } }) => {
+        onKeyDown={(e: { key?: string; modifiers?: { shift?: boolean }; preventDefault(): void }) => {
           if (e.key === 'escape' && !kitOverlayOpen()) close(true)
           // Modal while open: Tab and Shift-Tab wrap among its own stops instead of reaching the window behind it.
-          else if (e.key === 'tab' && root.current) (e.modifiers?.shift ? renderer.focusPreviousWithin : renderer.focusNextWithin)?.call(renderer, root.current.id)
+          // The window's own Tab navigation would move focus a second time, behind the modal.
+          else if (e.key === 'tab' && root.current) { e.preventDefault(); (e.modifiers?.shift ? renderer.focusPreviousWithin : renderer.focusNextWithin)?.call(renderer, root.current.id) }
         }}
         style={{ position: 'relative', width: window.width, height: window.height }}
       >

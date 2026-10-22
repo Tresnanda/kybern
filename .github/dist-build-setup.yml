@@ -1,7 +1,12 @@
 # Steps dist injects into every build-local-artifacts job (see
 # `github-build-setup` in dist-workspace.toml).
+#
+# Release runs only restore this cache. .github/workflows/dist-cache.yml saves
+# it from main with the same shared key, so a tag finds a warm target directory
+# (a cache saved under a tag could never be restored by another tag, and only
+# filled the repository's cache storage).
 - name: Cache cargo builds
   uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
   with:
-    key: dist-${{ join(matrix.targets, '-') }}
-    cache-on-failure: true
+    shared-key: dist-${{ join(matrix.targets, '-') }}
+    save-if: false

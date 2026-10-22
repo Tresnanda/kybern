@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+# A new push to a pull request supersedes its running checks. Pushes to main
+# never cancel anything: each commit has its own group, because a release
+# waits for the exact commit's main run (scripts/check-release-ci.mjs) and a
+# shared group would drop the pending run of an intermediate commit.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -14,8 +22,55 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  changes:
+    # Pull requests run only the jobs their files can affect. main runs every
+    # job on every push (releases require all of them), so there every output
+    # is true. The paths are the inputs of each job, not of the product:
+    #   rust     the Cargo workspace, which includes apps/desktop/src-tauri, and
+    #            the transcript fixtures its tests embed
+    #   desktop  the Tauri frontend, the shared TypeScript client, the scripts,
+    #            workflows and dist config its regression tests read, and the
+    #            fixtures and daemon visuals script its unit tests load
+    #   webkit   what the Tauri WebKit fixtures build and run against
+    #   gpuix    the GPUIX app, plus apps/desktop (it imports the Tauri sources
+    #            through `@/`, their node_modules, tauri.conf.json and assets)
+    name: changes
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # The pull request's file list.
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.paths.outputs.rust }}
+      desktop: ${{ steps.paths.outputs.desktop }}
+      webkit: ${{ steps.paths.outputs.webkit }}
+      gpuix: ${{ steps.paths.outputs.gpuix }}
+    steps:
+      - id: paths
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PULL_REQUEST: ${{ github.event.pull_request.number }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            files=ALL
+          else
+            files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST/files" --jq '.[] | .filename, (.previous_filename // empty)')
+          fi
+          echo "changed files:"; echo "${files:-<none>}" | sed 's/^/  /'
+          matches() { [ "$files" = ALL ] || echo "$files" | grep -Eq "$1"; }
+          output() { if matches "$2"; then echo "$1=true"; else echo "$1=false"; fi >> "$GITHUB_OUTPUT"; }
+          # Editing this workflow or its setup action runs everything.
+          self='^\.github/(workflows/ci\.yml|actions/setup-pnpm-apps/)'
+          output rust "$self|^(crates/|apps/desktop/src-tauri/|fixtures/|Cargo\.(toml|lock)$|rust(-toolchain|fmt)\.toml$|\.cargo/)"
+          output desktop "$self|^(apps/desktop/|packages/|scripts/|fixtures/|\.github/|dist-workspace\.toml$|Cargo\.toml$|crates/kybern/dist\.toml$|crates/kybern-drivers/src/cursor/sdk/|crates/kybern-daemon/src/visuals/)"
+          output webkit "$self|^(apps/desktop/|packages/|crates/|fixtures/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|\.cargo/)"
+          output gpuix "$self|^(apps/gpuix/|apps/desktop/|packages/)"
+
   fmt:
     name: rustfmt
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -27,6 +82,8 @@ jobs:
 
   check:
     name: clippy + test (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -39,6 +96,13 @@ jobs:
           toolchain: stable
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Pull requests restore main's cache; only main writes it, which
+          # keeps the repository's cache storage under its limit. The WebKit
+          # job restores the macOS one (same key, so the cache
+          # main already holds).
+          shared-key: check
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Linux desktop and credential-store dependencies
         if: runner.os == 'Linux'
         run: |
@@ -50,24 +114,109 @@ jobs:
           -- -D warnings
       - name: test
         run: cargo test --workspace
-      - name: Build visual fixture binaries with the tested Rust target
-        if: runner.os == 'macOS'
+
+  desktop:
+    # Platform-independent checks run once, on Linux. The macOS-only WebKit
+    # fixtures are the `webkit` job.
+    name: desktop (typecheck + lint + test + build)
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-pnpm-apps
+      - name: typecheck
+        working-directory: apps/desktop
+        run: pnpm typecheck
+      - name: test
+        working-directory: apps/desktop
+        run: pnpm test
+      - name: Release gate regression tests
+        run: node --test scripts/check-release-ci.test.mjs scripts/verify-macos-signing.test.mjs
+      - name: release.yml matches dist's output
+        run: |
+          version=$(sed -n 's/^cargo-dist-version = "\(.*\)"$/\1/p' dist-workspace.toml)
+          curl --proto '=https' --tlsv1.2 -LsSf "https://github.com/axodotdev/cargo-dist/releases/download/v$version/cargo-dist-installer.sh" | sh
+          node scripts/check-release-workflow.mjs
+      - name: Cursor SDK host lifecycle
+        run: node --test crates/kybern-drivers/src/cursor/sdk/host.test.mjs
+      - name: lint
+        working-directory: apps/desktop
+        run: pnpm lint
+      - name: build
+        working-directory: apps/desktop
+        run: pnpm build
+
+  gpuix:
+    # GPUIX has no native runner here (its window checks need a display), but
+    # its types and unit tests do not. It imports the Tauri sources through
+    # `@/`, so their dependencies are installed too.
+    name: gpuix (typecheck + test)
+    needs: changes
+    if: needs.changes.outputs.gpuix == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-pnpm-apps
+        with:
+          gpuix: 'true'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+          # The Bun binary downloads in seconds; a cache entry per ref is not worth the storage.
+          no-cache: true
+      - name: typecheck
+        working-directory: apps/gpuix
+        run: pnpm typecheck
+      # Since 0.11 the stock Linux binding links xkbcommon-x11; some unit tests load it.
+      - name: native binding libraries
+        run: sudo apt-get install -y --no-install-recommends libxkbcommon-x11-0
+      - name: test
+        working-directory: apps/gpuix
+        run: bun test
+
+  webkit:
+    # The Tauri frontend in system WebKit (check-rendering.mjs). Each fixture
+    # takes 5 to 20 seconds, almost all of it the page itself running, so the
+    # time is spent on a runner's clock and CI is shortest when the fixtures are
+    # spread over runners. They are independent, hence four shards of roughly
+    # equal length. Within a shard the invocations share one Vite build per
+    # distinct build environment and one compiled Swift runner through
+    # KYBERN_RENDER_CACHE_DIR.
+    name: native WebKit (${{ matrix.shard }})
+    needs: changes
+    if: needs.changes.outputs.webkit == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [interactive, features, rendering-1, rendering-2]
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-pnpm-apps
+      - name: Share builds between fixtures
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/render-cache"
+          echo "KYBERN_RENDER_CACHE_DIR=$RUNNER_TEMP/render-cache" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        if: matrix.shard == 'interactive'
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: matrix.shard == 'interactive'
+        with:
+          # The debug dependencies `check (macos-15)` builds for the tests;
+          # only that job saves them.
+          shared-key: check
+          save-if: false
+      - name: Build visual fixture binaries
+        if: matrix.shard == 'interactive'
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
         run: cargo build -p kybern
-      - uses: actions/setup-node@v4
-        if: runner.os == 'macOS'
-        with:
-          node-version: 22
-      - name: Enable Corepack for the visual fixture
-        if: runner.os == 'macOS'
-        run: corepack enable
-      - name: Install visual fixture dependencies
-        if: runner.os == 'macOS'
-        working-directory: apps/desktop
-        run: pnpm install --frozen-lockfile
       - name: Native WebKit durable interactive visuals
-        if: runner.os == 'macOS'
+        if: matrix.shard == 'interactive'
         timeout-minutes: 10
         working-directory: apps/desktop
         shell: bash
@@ -84,48 +233,14 @@ jobs:
           # when the runner cannot provide a visible foreground WebKit window.
           node scripts/check-rendering.mjs visuals | tee "$RUNNER_TEMP/native-visuals/visuals.log"
       - name: Upload native visual diagnostics
-        if: runner.os == 'macOS' && !cancelled()
+        if: matrix.shard == 'interactive' && !cancelled()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: native-visuals-${{ matrix.os }}
+          name: native-visuals-macos-15
           path: ${{ runner.temp }}/native-visuals
           if-no-files-found: ignore
-
-  desktop:
-    name: desktop (typecheck + lint + build, ${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-15]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: corepack enable
-      - name: install
-        working-directory: apps/desktop
-        run: pnpm install --frozen-lockfile
-      - name: typecheck
-        working-directory: apps/desktop
-        run: pnpm typecheck
-      - name: test
-        working-directory: apps/desktop
-        run: pnpm test
-      - name: Release gate regression tests
-        run: node --test scripts/check-release-ci.test.mjs scripts/verify-macos-signing.test.mjs
-      - name: Cursor SDK host lifecycle
-        run: node --test crates/kybern-drivers/src/cursor/sdk/host.test.mjs
-      - name: lint
-        working-directory: apps/desktop
-        run: pnpm lint
-      - name: build
-        id: frontend-build
-        working-directory: apps/desktop
-        run: pnpm build
       - name: Native WebKit accounts, native subagents, and pull request review
-        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        if: matrix.shard == 'features' && !cancelled()
         timeout-minutes: 30
         working-directory: apps/desktop
         shell: bash
@@ -163,38 +278,42 @@ jobs:
             done
           done
       - name: Upload native feature UI diagnostics
-        if: runner.os == 'macOS' && !cancelled()
+        if: matrix.shard == 'features' && !cancelled()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: native-feature-ui-${{ matrix.os }}
+          name: native-feature-ui-macos-15
           path: ${{ runner.temp }}/native-feature-ui
           if-no-files-found: ignore
+      - name: Build the production frontend for the window material check
+        if: matrix.shard == 'rendering-1'
+        working-directory: apps/desktop
+        run: pnpm exec vite build
       - name: Native WebKit theme provider lifecycle
-        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        if: matrix.shard == 'rendering-1' && !cancelled()
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs theme-provider
       - name: Native WebKit window materials
-        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        if: matrix.shard == 'rendering-1' && !cancelled()
         working-directory: apps/desktop
         run: node --experimental-strip-types scripts/check-window-material.mjs
       - name: Native WebKit rendering
-        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        if: matrix.shard == 'rendering-1' && !cancelled()
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs
       - name: Native WebKit context menus
-        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        if: matrix.shard == 'rendering-1' && !cancelled()
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs materials
       - name: Native WebKit large transcript scaling
-        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        if: matrix.shard == 'rendering-1' && !cancelled()
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs scaling
       - name: Native WebKit virtual transcript interactions
-        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        if: matrix.shard == 'rendering-1' && !cancelled()
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs interaction
       - name: Native WebKit history retention
-        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        if: matrix.shard == 'rendering-2' && !cancelled()
         working-directory: apps/desktop
         run: |
           node scripts/check-rendering.mjs history-retention
@@ -202,46 +321,61 @@ jobs:
             VITE_HISTORY_READING_OFFSET=$offset KYBERN_PERF_WIDTH=480 node scripts/check-rendering.mjs history-retention
           done
       - name: Native WebKit deferred tool output
-        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        if: matrix.shard == 'rendering-1' && !cancelled()
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs tool-memory
       - name: Native WebKit usage environment isolation
-        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        if: matrix.shard == 'rendering-1' && !cancelled()
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs usage
       - name: Native WebKit terminal graphics lifecycle
-        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        if: matrix.shard == 'rendering-1' && !cancelled()
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs terminal-memory
       - name: Native WebKit Markdown memory
-        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        if: matrix.shard == 'rendering-1' && !cancelled()
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs markdown-memory
       - name: Native WebKit worker lifecycle
-        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        if: matrix.shard == 'rendering-2' && !cancelled()
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs worker-lifecycle
       - name: Native WebKit icon lifecycle
-        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        if: matrix.shard == 'rendering-2' && !cancelled()
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs icon-swap
       - name: Native WebKit question forms
-        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        if: matrix.shard == 'rendering-2' && !cancelled()
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs questions
       - name: Native WebKit artifact previews
-        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        if: matrix.shard == 'rendering-2' && !cancelled()
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs artifacts
       - name: Native WebKit background continuation
-        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        if: matrix.shard == 'rendering-2' && !cancelled()
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs continuation
       - name: Native WebKit session picker
-        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        if: matrix.shard == 'rendering-2' && !cancelled()
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs sessions
       - name: Native WebKit chat and environment controls
-        if: runner.os == 'macOS' && !cancelled() && steps.frontend-build.outcome == 'success'
+        if: matrix.shard == 'rendering-2' && !cancelled()
         working-directory: apps/desktop
         run: node scripts/check-rendering.mjs chat-fixes
+
+  ci:
+    # One check that is red when any job failed or was cancelled, and green when
+    # the jobs a pull request does not need were skipped. A branch protection
+    # rule needs only this name.
+    name: CI
+    if: always()
+    needs: [changes, fmt, check, desktop, gpuix, webkit]
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          case " $RESULTS " in *" failure "*|*" cancelled "*) exit 1 ;; esac

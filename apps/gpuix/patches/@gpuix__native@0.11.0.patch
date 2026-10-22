@@ -1,5 +1,5 @@
 diff --git a/dist/automation/client.js b/dist/automation/client.js
-index c70a840dfde917eda48054ad2d71e2f54af2c48d..163e6683b006810f11b27c33305bed02c19d37a0 100644
+index 71fbec0386d23f5240943a1c84b1a45e42a65204..9d27bdd29d93f1b950ff18d2ce5030c348fba0c5 100644
 --- a/dist/automation/client.js
 +++ b/dist/automation/client.js
 @@ -66,8 +66,12 @@ export class InProcessBackend extends ValidatedAutomationBackend {
@@ -16,7 +16,7 @@ index c70a840dfde917eda48054ad2d71e2f54af2c48d..163e6683b006810f11b27c33305bed02
              return { ok: true };
          },
          keystrokes: (params) => {
-@@ -496,8 +500,15 @@ export function liveRendererAsTest(renderer) {
+@@ -500,8 +504,15 @@ export function liveRendererAsTest(renderer) {
              renderer.simulateMouseMove(x, y, pressedButton, modifiers);
              afterInput();
          },
@@ -77,7 +77,7 @@ index 37cc70406f67838394b07664259720cf9dd9f748..09a5c21aacf092351270d6322bee5e84
          }),
          result: okSchema,
 diff --git a/dist/host.d.ts b/dist/host.d.ts
-index cc6b7ef926c5c3122fff6107341913364a215710..1e32c026847d12f5d2c157e38bb643978f422018 100644
+index 74dea743a2c536658dc833f884ef317970c8d5d3..0e3b91d02142569526e5a131b15b59cdfb39ae44 100644
 --- a/dist/host.d.ts
 +++ b/dist/host.d.ts
 @@ -5,6 +5,10 @@ export * from "./mutations.js";
@@ -107,7 +107,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..1e32c026847d12f5d2c157e38bb64397
      /** Duration in seconds. */
      duration?: number;
      /** Delay in seconds. */
-@@ -274,7 +287,62 @@ export interface HighlightSpec {
+@@ -300,7 +313,62 @@ export interface HighlightSpec {
      /** Corner radius of the wash. Defaults to 2. */
      radius?: number;
  }
@@ -170,16 +170,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..1e32c026847d12f5d2c157e38bb64397
      style?: StyleDesc;
      /** Primary button only, like the DOM. Use `onAuxClick` for the others. */
      onClick?: (event: EventPayload) => void;
-@@ -287,7 +355,7 @@ export interface HostProps {
-     onMouseMove?: (event: EventPayload) => void;
-     /** Fires when user clicks OUTSIDE this element. Use for "click outside to close". */
-     onMouseDownOutside?: (event: EventPayload) => void;
--    onKeyDown?: (event: EventPayload) => void;
-+    onKeyDown?: (event: EventPayload & { preventDefault(): void; defaultPrevented: boolean }) => void;
-     onKeyUp?: (event: EventPayload) => void;
-     onFocus?: (event: EventPayload) => void;
-     onBlur?: (event: EventPayload) => void;
-@@ -342,6 +410,10 @@ export interface HostProps {
+@@ -384,6 +452,10 @@ export interface HostProps {
      motion?: MotionProps;
  }
  export interface InputProps extends HostProps {
@@ -190,7 +181,7 @@ index cc6b7ef926c5c3122fff6107341913364a215710..1e32c026847d12f5d2c157e38bb64397
      /** External editor value. Native edits apply immediately and report through onChange. */
      value?: string;
      placeholder?: string;
-@@ -405,6 +477,8 @@ export interface SvgProps extends HostProps {
+@@ -453,6 +525,8 @@ export interface SvgProps extends HostProps {
   * scroller, so `whiteSpace` and `overflowX` do nothing.
   */
  export interface CodeProps extends HostProps {
@@ -199,40 +190,41 @@ index cc6b7ef926c5c3122fff6107341913364a215710..1e32c026847d12f5d2c157e38bb64397
      /** The source to display. Rendered one div per line at an exact line height. */
      code?: string;
      /** Language alias such as "ts", "rust", "bash". Beats `path` for detection. */
-@@ -468,7 +542,7 @@ export type WindowSizeHost = Pick<GpuixRenderer, "getWindowSize">;
+@@ -519,7 +593,7 @@ export type WindowSizeHost = Pick<GpuixRenderer, "getWindowSize">;
  export type WindowInsetsHost = Pick<GpuixRenderer, "getWindowInsets">;
  export type SelectionHost = Pick<GpuixRenderer, "getSelectedText">;
  /** `applyBatch` plus the live renderer methods a host may also expose. */
--export type NativeRenderer = MutationHost & Partial<Pick<GpuixRenderer, "focusElement" | "focusNext" | "focusPrevious" | "getFocusedElementId" | "focusNextWithin" | "focusPreviousWithin" | "blur" | "setWindowKeyEvents" | "setWindowSelectionChange" | "getElementBounds" | "scrollTo" | "scrollToItem" | "scrollIntoView" | "setImage" | "setImagePixels" | "getScrollOffset" | "getListScrollTop" | "getSelectedText" | "clearSelection" | "getPaintedHighlights" | "getWindowSize" | "getWindowInsets" | "setWindowTitle" | "promptForPaths" | "activateWindow" | "minimizeWindow" | "zoomWindow" | "toggleFullscreen" | "setDebugFrameOverlay" | "getDebugFrameOverlay" | "cycleDebugFrameOverlay" | "resetDebugFrameOverlayStats" | "getDebugFrameOverlayStats">>;
-+export type NativeRenderer = MutationHost & Partial<Pick<GpuixRenderer, "focusElement" | "focusNext" | "focusPrevious" | "getFocusedElementId" | "focusNextWithin" | "focusPreviousWithin" | "blur" | "resolveKeyEvent" | "setCloseGuard" | "resolveCloseRequest" | "setSubtreeTranslation" | "getMotionCapabilities" | "setWindowKeyEvents" | "setWindowSelectionChange" | "getElementBounds" | "scrollTo" | "scrollToItem" | "scrollIntoView" | "setImage" | "setImagePixels" | "getScrollOffset" | "getListScrollTop" | "getSelectedText" | "clearSelection" | "getPaintedHighlights" | "getWindowSize" | "getWindowInsets" | "setWindowTitle" | "promptForPaths" | "activateWindow" | "minimizeWindow" | "zoomWindow" | "toggleFullscreen" | "setDebugFrameOverlay" | "getDebugFrameOverlay" | "cycleDebugFrameOverlay" | "resetDebugFrameOverlayStats" | "getDebugFrameOverlayStats">>;
+-export type NativeRenderer = MutationHost & Partial<Pick<GpuixRenderer, "focusElement" | "focusNext" | "focusPrevious" | "getFocusedElementId" | "focusNextWithin" | "focusPreviousWithin" | "blur" | "setWindowKeyEvents" | "setWindowSelectionChange" | "getElementBounds" | "getElementsAt" | "scrollTo" | "scrollToItem" | "scrollIntoView" | "setImage" | "setImagePixels" | "getScrollOffset" | "getListScrollTop" | "getSelectedText" | "clearSelection" | "getPaintedHighlights" | "getWindowSize" | "getWindowInsets" | "setWindowTitle" | "registerFont" | "promptForPaths" | "activateWindow" | "minimizeWindow" | "zoomWindow" | "toggleFullscreen" | "setDebugFrameOverlay" | "getDebugFrameOverlay" | "cycleDebugFrameOverlay" | "resetDebugFrameOverlayStats" | "getDebugFrameOverlayStats">>;
++export type NativeRenderer = MutationHost & Partial<Pick<GpuixRenderer, "focusElement" | "focusNext" | "focusPrevious" | "getFocusedElementId" | "focusNextWithin" | "focusPreviousWithin" | "blur" | "resolveKeyEvent" | "setCloseGuard" | "resolveCloseRequest" | "setSubtreeTranslation" | "getMotionCapabilities" | "setWindowKeyEvents" | "setWindowSelectionChange" | "getElementBounds" | "getElementsAt" | "scrollTo" | "scrollToItem" | "scrollIntoView" | "setImage" | "setImagePixels" | "getScrollOffset" | "getListScrollTop" | "getSelectedText" | "clearSelection" | "getPaintedHighlights" | "getWindowSize" | "getWindowInsets" | "setWindowTitle" | "registerFont" | "promptForPaths" | "activateWindow" | "minimizeWindow" | "zoomWindow" | "toggleFullscreen" | "setDebugFrameOverlay" | "getDebugFrameOverlay" | "cycleDebugFrameOverlay" | "resetDebugFrameOverlayStats" | "getDebugFrameOverlayStats">>;
  /** Commit-phase mutation facade shared by framework adapters. */
  export interface MutationRenderer {
      createElement(id: number, elementType: string): void;
 diff --git a/dist/mutations.d.ts b/dist/mutations.d.ts
-index dc645f7af4cca2917a59c340b185b539c7c34e0f..6319f3b998f7952876bc376709242de835e0ecb1 100644
+index f095555e429a7cc49a887556d32b2d0ce4de7ee3..cf47e28cf9d82c70480ef1103714e9dada00c7f9 100644
 --- a/dist/mutations.d.ts
 +++ b/dist/mutations.d.ts
-@@ -6,7 +6,7 @@ export interface MutationQueue extends MutationRenderer {
+@@ -12,7 +12,7 @@ export interface MutationQueue extends MutationRenderer {
      readonly pending: number;
  }
  export declare function createMutationQueue(renderer: MutationHost, onDestroyed?: (ids: readonly number[]) => void, scheduleFlush?: (flush: () => void) => void): MutationQueue;
--export declare const EVENT_PROPS: readonly [readonly ["onToggleFile", "toggleFile"], readonly ["onShowMore", "showMore"], readonly ["onLineClick", "lineClick"], readonly ["onLinkClick", "linkClick"], readonly ["onVisibleRange", "visibleRange"], readonly ["onHighlight", "highlight"], readonly ["onMotionComplete", "motionComplete"], readonly ["onChange", "change"], readonly ["onSubmit", "submit"], readonly ["onClick", "click"], readonly ["onAuxClick", "auxClick"], readonly ["onMouseDown", "mouseDown"], readonly ["onMouseUp", "mouseUp"], readonly ["onMouseEnter", "mouseEnter"], readonly ["onMouseLeave", "mouseLeave"], readonly ["onMouseMove", "mouseMove"], readonly ["onMouseDownOutside", "mouseDownOutside"], readonly ["onKeyDown", "keyDown"], readonly ["onKeyUp", "keyUp"], readonly ["onFocus", "focus"], readonly ["onBlur", "blur"], readonly ["onScroll", "scroll"], readonly ["onFileDrop", "fileDrop"]];
-+export declare const EVENT_PROPS: readonly [readonly ["onToggleFile", "toggleFile"], readonly ["onShowMore", "showMore"], readonly ["onLineClick", "lineClick"], readonly ["onLinkClick", "linkClick"], readonly ["onVisibleRange", "visibleRange"], readonly ["onHighlight", "highlight"], readonly ["onMotionComplete", "motionComplete"], readonly ["onChange", "change"], readonly ["onSubmit", "submit"], readonly ["onClick", "click"], readonly ["onAuxClick", "auxClick"], readonly ["onMouseDown", "mouseDown"], readonly ["onMouseUp", "mouseUp"], readonly ["onMouseEnter", "mouseEnter"], readonly ["onMouseLeave", "mouseLeave"], readonly ["onMouseMove", "mouseMove"], readonly ["onMouseDownOutside", "mouseDownOutside"], readonly ["onKeyDown", "keyDown"], readonly ["onKeyUp", "keyUp"], readonly ["onFocus", "focus"], readonly ["onBlur", "blur"], readonly ["onScroll", "scroll"], readonly ["onFileDrop", "fileDrop"], readonly ["onFileDragChange", "fileDragChange"], readonly ["onLoad", "load"]];
+-export declare const EVENT_PROPS: readonly [readonly ["onToggleFile", "toggleFile"], readonly ["onShowMore", "showMore"], readonly ["onLineClick", "lineClick"], readonly ["onLinkClick", "linkClick"], readonly ["onVisibleRange", "visibleRange"], readonly ["onHighlight", "highlight"], readonly ["onMotionComplete", "motionComplete"], readonly ["onChange", "change"], readonly ["onSubmit", "submit"], readonly ["onClick", "click"], readonly ["onAuxClick", "auxClick"], readonly ["onMouseDown", "mouseDown"], readonly ["onMouseUp", "mouseUp"], readonly ["onMouseEnter", "mouseEnter"], readonly ["onMouseLeave", "mouseLeave"], readonly ["onMouseMove", "mouseMove"], readonly ["onMouseDownOutside", "mouseDownOutside"], readonly ["onKeyDown", "keyDown"], readonly ["onKeyUp", "keyUp"], readonly ["onFocus", "focus"], readonly ["onBlur", "blur"], readonly ["onScroll", "scroll"], readonly ["onLayout", "layout"], readonly ["onScrollChange", "scrollChange"], readonly ["onFileDrop", "fileDrop"]];
++export declare const EVENT_PROPS: readonly [readonly ["onToggleFile", "toggleFile"], readonly ["onShowMore", "showMore"], readonly ["onLineClick", "lineClick"], readonly ["onLinkClick", "linkClick"], readonly ["onVisibleRange", "visibleRange"], readonly ["onHighlight", "highlight"], readonly ["onMotionComplete", "motionComplete"], readonly ["onChange", "change"], readonly ["onSubmit", "submit"], readonly ["onClick", "click"], readonly ["onAuxClick", "auxClick"], readonly ["onMouseDown", "mouseDown"], readonly ["onMouseUp", "mouseUp"], readonly ["onMouseEnter", "mouseEnter"], readonly ["onMouseLeave", "mouseLeave"], readonly ["onMouseMove", "mouseMove"], readonly ["onMouseDownOutside", "mouseDownOutside"], readonly ["onKeyDown", "keyDown"], readonly ["onKeyUp", "keyUp"], readonly ["onFocus", "focus"], readonly ["onBlur", "blur"], readonly ["onScroll", "scroll"], readonly ["onLayout", "layout"], readonly ["onScrollChange", "scrollChange"], readonly ["onFileDrop", "fileDrop"], readonly ["onFileDragChange", "fileDragChange"], readonly ["onLoad", "load"]];
  export declare const EVENT_PROP_NAMES: ReadonlySet<string>;
- export declare const RESERVED_PROPS: ReadonlySet<string>;
- export declare const BUILT_IN_TYPES: ReadonlySet<string>;
+ /**
+  * Event type for a handler prop. Adapters walk an element's own props and look
 diff --git a/dist/mutations.js b/dist/mutations.js
-index 7d0eda6cb58127462067cb9d5a442a9ea606c671..b6678e38f5fa0ffbfb89e7c52e8f51ae3fbb1551 100644
+index f517f20be37230511112c0b1702def9db4c10bfa..b448ed3ae16d8b85adf214346745a7590b9701f3 100644
 --- a/dist/mutations.js
 +++ b/dist/mutations.js
-@@ -1,5 +1,6 @@
+@@ -9,6 +9,7 @@ export function appliedBatchCount() {
+ }
  export function createMutationQueue(renderer, onDestroyed = () => { }, scheduleFlush) {
      let queue = [];
 +    const subtreeDeclarations = new Map();
      let flushScheduled = false;
      const enqueue = (mutation) => {
          queue.push(mutation);
-@@ -18,6 +19,7 @@ export function createMutationQueue(renderer, onDestroyed = () => { }, scheduleF
+@@ -27,6 +28,7 @@ export function createMutationQueue(renderer, onDestroyed = () => { }, scheduleF
              return queue.length;
          },
          createElement(id, elementType) {
@@ -240,8 +232,8 @@ index 7d0eda6cb58127462067cb9d5a442a9ea606c671..b6678e38f5fa0ffbfb89e7c52e8f51ae
              enqueue(["createElement", id, elementType]);
          },
          destroyElement(id) {
-@@ -43,6 +45,13 @@ export function createMutationQueue(renderer, onDestroyed = () => { }, scheduleF
-             enqueue(["setRoot", id]);
+@@ -55,6 +57,13 @@ export function createMutationQueue(renderer, onDestroyed = () => { }, scheduleF
+             enqueue(["setKeyboardFocusDim", enabled]);
          },
          setCustomProp(id, key, value) {
 +            // An unchanged React declaration must not overwrite an imperative
@@ -254,24 +246,24 @@ index 7d0eda6cb58127462067cb9d5a442a9ea606c671..b6678e38f5fa0ffbfb89e7c52e8f51ae
              enqueue(["setCustomProp", id, key, value]);
          },
          flushMutations() {
-@@ -50,6 +59,7 @@ export function createMutationQueue(renderer, onDestroyed = () => { }, scheduleF
-             if (queue.length === 0)
+@@ -63,6 +72,7 @@ export function createMutationQueue(renderer, onDestroyed = () => { }, scheduleF
                  return;
+             appliedBatches++;
              const destroyed = renderer.applyBatch(JSON.stringify(queue));
 +            for (const id of destroyed) subtreeDeclarations.delete(id);
              onDestroyed(destroyed);
              queue = [];
          },
-@@ -80,6 +90,8 @@ export const EVENT_PROPS = [
-     ["onBlur", "blur"],
-     ["onScroll", "scroll"],
+@@ -95,6 +105,8 @@ export const EVENT_PROPS = [
+     ["onLayout", "layout"],
+     ["onScrollChange", "scrollChange"],
      ["onFileDrop", "fileDrop"],
 +    ["onFileDragChange", "fileDragChange"],
 +    ["onLoad", "load"],
  ];
  export const EVENT_PROP_NAMES = new Set(EVENT_PROPS.map(([name]) => name));
- export const RESERVED_PROPS = new Set([
-@@ -94,6 +106,17 @@ export const UNIVERSAL_PROPS = new Set([
+ /**
+@@ -115,6 +127,17 @@ export const UNIVERSAL_PROPS = new Set([
      "autoFocus",
      "tabIndex",
      "motion",
@@ -290,19 +282,22 @@ index 7d0eda6cb58127462067cb9d5a442a9ea606c671..b6678e38f5fa0ffbfb89e7c52e8f51ae
      "highlight",
      "role",
 diff --git a/dist/renderer-state.d.ts b/dist/renderer-state.d.ts
-index 7999b493e35e2c0c7224f1be7de1e467f6357de2..ee7cd27eb9e0b40daef0aa573fa5cc427fcd16d1 100644
+index 840446e908b564832e49f54daad27b4e01abc03a..b866da4aa5e861d0802bc912a122113d9ad3a4ee 100644
 --- a/dist/renderer-state.d.ts
 +++ b/dist/renderer-state.d.ts
 @@ -1,3 +1,4 @@
 +export declare function setWindowCloseHandler(renderer: NativeRenderer, handler: () => boolean | Promise<boolean>): () => void;
  import type { EventPayload } from "../index.js";
- import type { ElementIdAllocator, EventHandlerMap, NativeRenderer, WindowKeyEventHandler } from "./host.js";
+ import type { ElementIdAllocator, EventHandlerMap, HostEventHandler, KeyEvent, NativeRenderer, WindowEventHandler, WindowKeyEventHandler } from "./host.js";
  export interface RendererRootHandlers {
 diff --git a/dist/renderer-state.js b/dist/renderer-state.js
-index 21c90e91db66a09da919caeb990cc44225a94189..13db155595949bfd0ffd5b81f5d860621372f7e8 100644
+index 03ac7acb9ec7ecc79490ee013f200471926cc47b..5a74ef8a280754eb0543e601b9a5471fa1da596d 100644
 --- a/dist/renderer-state.js
 +++ b/dist/renderer-state.js
-@@ -1,3 +1,15 @@
+@@ -5,6 +5,18 @@ function isAncestor(ancestor, layer) {
+     }
+     return false;
+ }
 +/** Install a close guard. Rejections veto; repeated close attempts coalesce. */
 +export function setWindowCloseHandler(renderer, handler) {
 +    const state = createRendererState(renderer);
@@ -316,9 +311,9 @@ index 21c90e91db66a09da919caeb990cc44225a94189..13db155595949bfd0ffd5b81f5d86062
 +    };
 +}
  const STATE_KEY = Symbol.for("@gpuix/native/renderer-states");
- function allStates() {
-     const existing = Reflect.get(globalThis, STATE_KEY);
-@@ -39,6 +51,23 @@ export function createRendererState(renderer) {
+ /** Register an open overlay on this renderer's layer stack. */
+ export function pushDismissLayer(renderer, layer, options) {
+@@ -81,6 +93,23 @@ export function createRendererState(renderer) {
              return binding;
          },
          dispatch(event) {
@@ -328,51 +323,22 @@ index 21c90e91db66a09da919caeb990cc44225a94189..13db155595949bfd0ffd5b81f5d86062
 +                    .catch(error => { renderer.resolveCloseRequest(event.requestId, false); console.error(error); });
 +                return true;
 +            }
-+            if (event.eventType === "keyDown") {
-+                event.defaultPrevented = false;
-+                event.preventDefault = () => { event.defaultPrevented = true; };
-+                if (event.requestId != null) {
-+                    const handler = active?.eventHandlers.get(event.elementId)?.get("keyDown");
-+                    try { handler?.(event); active?.handlers.onEvent?.(event); }
-+                    catch (error) { event.preventDefault(); throw error; }
-+                    finally { renderer.resolveKeyEvent(event.requestId, event.defaultPrevented); }
-+                    return !!handler;
-+                }
++            if (event.eventType === "keyDown" && event.requestId != null) {
++                // An intercepted key (`interceptKeys`) waits on native for the verdict.
++                // It carries its own flags: the keystroke's ordinary keyDown follows.
++                const flags = { prevented: false, stopped: false };
++                const keyEvent = toKeyEvent(event, flags);
++                const handler = active?.eventHandlers.get(event.elementId)?.get("keyDown");
++                try { handler?.(keyEvent); active?.handlers.onEvent?.(keyEvent); }
++                catch (error) { flags.prevented = true; throw error; }
++                finally { renderer.resolveKeyEvent(event.requestId, flags.prevented); }
++                return !!handler;
 +            }
              const root = active;
              if (!root)
                  return false;
-diff --git a/dist/runtime.js b/dist/runtime.js
-index 3a3d64d72a471e955037efecac7e19df02bb9221..8c9dd4008be29ac7f99a4160818c664ca6b5798b 100644
---- a/dist/runtime.js
-+++ b/dist/runtime.js
-@@ -34,6 +34,7 @@ export function startFrameLoop(renderer, options = {}) {
-     let stopped = false;
-     const stop = () => {
-         stopped = true;
-+        renderer.setFrameWakeCallback?.(null);
-         if (timer !== undefined)
-             clearTimeout(timer);
-         timer = undefined;
-@@ -56,6 +57,16 @@ export function startFrameLoop(renderer, options = {}) {
-         }
-         timer = setTimeout(loop, Math.max(0, frameMs - (performance.now() - started)));
-     };
-+    if (typeof renderer.setFrameWakeCallback === "function" && process.env.KYBERN_VSYNC_WAKE !== "0") {
-+        renderer.setFrameWakeCallback((error) => {
-+            if (stopped) return;
-+            try {
-+                if (error) options.onError?.(error);
-+                else if (renderer.tick() === false) { stop(); options.onTerminated?.(); }
-+            } catch (error) { options.onError?.(error); }
-+            finally { renderer.acknowledgeFrameWake(); }
-+        });
-+    }
-     loop();
-     return { stop };
- }
 diff --git a/dist/testing.js b/dist/testing.js
-index fb14e5ee95bd9d32fa8bca800dfe1be016cbed0f..5786b8301edca1b78b92a8d1fe78919f9730a17d 100644
+index 9af08d9c4b6a83a1c8f1a35c14bad16cadd4c9db..f9b5716cd3928d832cd6e4c174ffd83c7db5903d 100644
 --- a/dist/testing.js
 +++ b/dist/testing.js
 @@ -129,9 +129,12 @@ export class TestRenderer {
@@ -391,7 +357,7 @@ index fb14e5ee95bd9d32fa8bca800dfe1be016cbed0f..5786b8301edca1b78b92a8d1fe78919f
      }
      /** Dispatch a wheel without the surrounding flushes, for perf sampling.
 diff --git a/index.d.ts b/index.d.ts
-index 2ec4b84d0cad37c2d57585af3abaec2478518728..0bc51a9408ceff4ca8d343040d95a215ae067228 100644
+index 4eded3a21879e8df7ee34145a1bce4f805b8be27..536f037d363419892ff31ec9c491cc5c48b36bcf 100644
 --- a/index.d.ts
 +++ b/index.d.ts
 @@ -34,6 +34,13 @@ export declare class AvailableUpdate {
