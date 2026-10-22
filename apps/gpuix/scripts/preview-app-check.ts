@@ -45,8 +45,9 @@ try {for(const appearance of ['dark','light']) for(const reduced of ['0','1']){
     await a.getByTestId('preview-more').click();await a.getByTestId('preview-float').click();await a.getByTestId('preview-mini').waitFor();await Bun.sleep(500);shot('app-mini')
     await a.getByTestId('preview-mini-return').click();await a.getByTestId('preview-slot-dock').waitFor();await Bun.sleep(300)
     assert.equal(log().filter(e=>e.data?.kind==='fixture-page').length,1,'Dock / mini reloaded local document');assert.equal(log().find(e=>e.data?.kind==='fixture-page').data.identity,pageIdentity)
-    await a.getByTestId('visual-expand').click();await a.getByTestId('visual-expanded').waitFor();await Bun.sleep(500);shot('app-visual-expanded');await a.getByTestId('dialog-close').click();await Bun.sleep(300)
-    assert.equal(log().filter(e=>e.data?.kind==='fixture-visual').length,1,'Expanding visual reloaded its document')
+    // "Open in a tab" (ADE-54): the visual tab is its own web view, so it loads the document once more; ⌘1 returns to the chat.
+    await a.getByTestId('visual-expand').click();await a.getByTestId('visual-tab').waitFor();await Bun.sleep(500);shot('app-visual-tab');await a.getByTestId('app-ready').press('cmd-1');await Bun.sleep(300)
+    assert.equal(log().filter(e=>e.data?.kind==='fixture-visual').length,2,'The visual tab loaded its document more than once')
     await a.getByTestId('preview-address').fill(`http://127.0.0.1:${server.port}/`);await a.getByTestId('preview-address').press('enter');await wait(()=>log().some(e=>e.data?.asset===true),'localhost root assets');await Bun.sleep(300);shot('app-server')
     await a.getByTestId('preview-more').click();await a.getByTestId('preview-device').click();await a.getByTestId('preview-rotate').click();await Bun.sleep(300);shot('app-device')
     assert.equal(log().filter(e=>e.data?.asset===true).length,1,'Device toolbar reloaded server')

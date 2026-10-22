@@ -11,7 +11,6 @@ import { openTabFromPane } from '../tabs/open.ts'
 import { useChatHidden } from '../tabs/hidden.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { Button } from '../kit/Button.tsx'
-import { IconButton } from '../kit/IconButton.tsx'
 import { Icon } from '../icons.tsx'
 import { T } from './glyphs.ts'
 import { PopupLayer } from '../composer/Menu.tsx'
@@ -19,13 +18,10 @@ import { Tip } from '../nav/overlay.tsx'
 import { useLoaderTime, easeInOut, NATIVE_PAINT_ANIMATIONS } from '../MatrixLoader.tsx'
 import { webHost } from '../native/webview.ts'
 import { observeElementBounds, type ElementBoundsEvent } from '../native/layout.ts'
-import { useNativeWindowSize } from '../native/layout-hooks.ts'
 import { useWebLayer } from '../native/web-occlusion.ts'
-import { Dialog } from '../nav/overlay.tsx'
 import { visualTheme } from '../preview/theme.ts'
 import { launchBrowser } from '../preview/browser.ts'
 import { useNav } from '../nav/store.ts'
-import { raisedFill, useGlass } from '../platform/glass.ts'
 import { EXIT, Presence } from '../motion/Presence.tsx'
 import { webDocumentEnter } from '../motion/kit.tsx'
 
@@ -102,9 +98,8 @@ export function useVisualDocument(threadId: string, visualId: string, id: string
 }
 
 export const VisualCard = memo(function VisualCard({ visual, threadId }: { visual: HtmlVisual; threadId: string }) {
-  const t = useTheme(), g = useGlass(), size = useNativeWindowSize(), id = `visual:${threadId}:${visual.id}`
+  const t = useTheme(), id = `visual:${threadId}:${visual.id}`
   const pane = usePaneAccess()
-  const [expanded, setExpanded] = useState(false)
   // A WK document has arbitrary interactive state. Once visited, retain its
   // owner until this transcript closes; native offscreen placement hides it
   // without reloading the document. Ordinary Markdown/code bodies stay bounded.
@@ -129,25 +124,14 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
       setHeight(next)
     },
   })
-  const [expandedHeight, expandedWidth] = [Math.max(100, size.height - 32 - 44 - 2), Math.max(320, size.width - 32)]
-  const frame = <VisualSlot id={id} height={expanded ? expandedHeight : height} active={active && loaded && !error} onHover={setOverFigure} />
-  const control = showControl && loaded && !error && !expanded
+  const control = showControl && loaded && !error
   if (control && !controlMounted) setControlMounted(true)
   return <div testId="visual-card" data-status={error ? 'error' : loaded ? 'ready' : 'loading'} style={{ display: 'flex', flexDirection: 'column', marginTop: 8, marginBottom: 8, position: 'relative' }}>
-    {expanded ? <>
-      <div style={{ height, width: '100%' }} />
-      <Dialog instant width={expandedWidth} radius={14} onClose={() => setExpanded(false)} testId="visual-expanded">
-        {/* The desktop's native <dialog> opens and closes without motion (`instant`). `.visual-reply__expanded-header`: 44px, 16px / 8px inset, the title and a ghost close button. */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 44, paddingLeft: 16, paddingRight: 8, backgroundColor: raisedFill(g, t.surface) }}>
-          <Label color={t.text} weight={500} truncate style={{ flexGrow: 1 }}>{visual.title || 'Interactive visual'}</Label>
-          <IconButton testId="dialog-close" label="Close expanded preview" icon={T.close} onClick={() => setExpanded(false)} />
-        </div>
-        {frame}
-      </Dialog>
-    </> : <div style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
-      {frame}
+    {/* "Open in a tab" opens the whole document as a visual tab (ADE-54) with its own web view (`VisualTab`). */}
+    <div style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
+      <VisualSlot id={id} height={height} active={active && loaded && !error} onHover={setOverFigure} />
       {/* The glass control sits 8px inside the top-right corner (`.visual-reply__open`). It is an anchored layer so it paints above the native document. */}
-      {controlMounted && !expanded && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 0 }}>
+      {controlMounted && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 0 }}>
         <PopupLayer leaving={!control} onLeft={() => setControlMounted(false)} kind="tooltip" side="bottom" align="end" sideOffset={8} alignOffset={-8} material="none" occlude style={{ borderRadius: 14 }}>
           <Tip label="Open in a tab" side="bottom" size={28}>
             <div
@@ -171,7 +155,7 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
           </Tip>
         </PopupLayer>
       </div>}
-    </div>}
+    </div>
     {/* The skeleton fades out when the document is ready, while the document itself fades in (`webDocumentEnter`). */}
     <Presence show={skeleton && !loaded && !error} exit={EXIT.backdrop} style={{ position: 'absolute', top: 0, left: 0, right: 0, height }}><Skeleton height={height} /></Presence>
     {error && <div testId="visual-error" style={{ position: 'absolute', top: 0, left: 0, right: 0, height, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, paddingTop: Math.min(height * 0.35, 160), paddingLeft: 16, paddingRight: 16, borderRadius: 10, borderWidth: 1, borderColor: t.border, backgroundColor: ink(t, 0.04) }}>
