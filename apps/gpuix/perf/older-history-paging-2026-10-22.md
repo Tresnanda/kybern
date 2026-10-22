@@ -62,8 +62,12 @@ Client folding was not a cause: `prependThreadHistory` over all 17 pages took
   `through_seq` clones the newest cached fold of the same thread and applies
   only the events after it (`Store::extend_transcript_fold`). Side state is
   computed once per projection, on demand.
-- Stream marking uses per-row indexed lookups (migration 28,
-  `tool_delta_identity`), proportional to the page.
+- Stream marking comes from the projection fold, not from queries: the fold
+  now also reads `tool_call_output_delta` events and remembers, per tool
+  invocation, whether it has a delta and a persisted completion
+  (`TranscriptFold::mark_tool_streams_omitted`). A page marks its rows from that
+  in-memory set, so a page costs nothing for it and no index over `events` is
+  needed (see "Stream marking without an index" below). There is no migration.
 - GPUIX, desktop: older pages request `EARLIER_HISTORY_PAGE`
   (`whole_turns` + `transcript_only`). GPUIX `loadEarlier` resolves whether the
   page left the oldest turn unchanged; while the reader stays at the top, such a
@@ -105,8 +109,8 @@ gesture (cause 2); after, a page inside one turn also continues on its own.
 
 **Whole thread, `01a13354`**, fixed snapshot, top to bottom: 63 pages (54
 without a prompt), 78.3 MB → 7 pages (none without a prompt), 8.2 MB. With
-legacy params the after-daemon serves a warm page in 9 ms (was 33 ms), from
-the stream-marking index alone.
+legacy params the after-daemon serves a warm page in 8–9 ms (was 33 ms), from
+the in-fold stream marks alone.
 
 **Live walk, cold daemon per run** (5 pages, `through_seq` 10 events behind
 head, +1 per page; p50 per page). Legacy params on the after-daemon still
@@ -118,8 +122,55 @@ reread side state and serialize the 1.1 MB task list per new head:
 | `01a15724` | ~156 ms | 44 ms | 6 ms |
 | `01a13e23` | ~129 ms | 59 ms | 9 ms |
 
-Migration 28 (`tool_delta_identity`) took ~12 s once on the 5.3 GB copy, at
-daemon startup.
+An earlier version of this fix marked streams through a partial expression
+index over `events` (`tool_delta_identity`, migration 28). Building it scanned
+the whole 5.3 GB table: ~12 s once at daemon startup on the copy. That
+migration never shipped and is gone; the section below replaces it. The numbers
+above were taken with the index and still describe the page shapes; the table
+below compares both versions in one session.
+
+## Stream marking without an index
+
+Migration 28 (`tool_delta_identity`) is gone. Marking now comes from the
+projection fold, which also reads `tool_call_output_delta` events (as an
+identity only: the delta text is not decoded) and keeps, per call ID, its newest
+start and whether that start has seen a delta and a persisted completion. This
+matches the old query exactly, including reused call IDs, the snapshot barrier
+and a stream flushed after its completion, because a delta or completion
+belongs to the newest start of its ID. It also needs no page window, so a tool
+that streams across a page edge or across turns (19 tool starts in the copy) is
+marked correctly; a per-page range query over `events` would have missed them.
+
+Why not a range query: real data has 128,855 deltas in the whole store (71 MB,
+at most 3.8 MB per thread) and every one precedes its completion, but 19 tool
+starts stream across a turn boundary, so a page's own sequence range cannot decide
+them without a lookahead per row. The fold sees every event anyway.
+
+Same copy, release daemons built from the previous commit (index) and from this
+change, a fresh clone per start, loopback, the Mac busy with another benchmark
+(read single-digit milliseconds as noise). Page times are
+`threads.get` with the GPUIX older-page parameters, whole thread top to bottom,
+warm cache; "live" is the 5-page walk with `through_seq` ten events behind head.
+
+| | With migration 28 | Without |
+| --- | ---: | ---: |
+| First start on the copy (schema 26), 3 starts | 6.9–8.2 s | 5.4–6.1 s |
+| Second start (nothing to migrate) | n/a | 1.6 s |
+| Cold first page, `01a13354` / `01a13e23` / delta-heavy `01a14f75-9977` (page cache pre-read, 2 starts) | 616–1008 / 126–144 / 28–31 ms | 561–624 / 130–131 / 36–53 ms |
+| `01a13354` page p50 / max | 7.1 / 22.1 ms | 4.9–5.5 / 18–27 ms |
+| `01a1269a` page p50 / max | 8.5 / 13.4 ms | 7.3–7.7 / 10 ms |
+| `01a15724` page p50 / max | 2.8 / 8.3 ms | 1.8–2.1 / 6.5 ms |
+| `01a13e23` page p50 / max | 1.2 / 8.4 ms | 1.0–1.1 / 9.7–10.4 ms |
+| Legacy params, `01a13354` warm page p50 | 9.3 ms | 9.2 ms |
+| Live walk p50, `01a13354` / `01a1269a` / `01a15724` / `01a13e23` | 20 / 14 / 20 / 24 ms | 20 / 12 / 13 / 9 ms |
+
+The first start's remaining ~5 s is not from this change (a second start takes
+1.6 s). The 12 s measured earlier was the index build on a cold file cache.
+The first, uncontrolled cold-page comparison looked 2× slower for the new
+daemon only because the index build had read the whole file into the page cache
+at startup; with the cache equally warm, and deltas decoded as identities, the
+cold first page matches. The fold adds the delta events (tens of milliseconds
+at most on the heaviest thread) to a one-time projection build.
 
 GPUIX's prefetch cap rose from 1 MiB to 4 MiB: the whole-turn pages of
 delegating turns (2.3–2.6 MB) were exactly the ones the old cap discarded.
@@ -134,8 +185,11 @@ stability on prepend relies on the unchanged `pendingAnchor` path.
 
 - `kybern-store`: whole-turn paging (one page per turn, bounded oversized
   turns cover every row once, equal sequences, live rows, unordered input);
-  incremental fold equals a full fold at every split; indexed stream marking
-  (reused call IDs, snapshot barrier, query plan uses the index).
+  incremental fold equals a full fold at every split; stream marks
+  (reused call IDs, snapshot barrier, a stream flushed after its completion,
+  a tool that streams across turns, a tool still running at the head; marks do
+  not depend on where a page starts or ends, and an extended fold marks like a
+  fresh one).
 - `kybern-daemon`: `whole_turn_history_pages_add_whole_turns_and_leave_thread_state_out`
   (a 900-row turn between prompts; pages match full history; legacy shape
   without the new fields); projection cache base selection and extension.
@@ -147,7 +201,7 @@ stability on prepend relies on the unchanged `pendingAnchor` path.
 ## Reproduce
 
 - `crates/kybern-store/examples/profile_older_pages.rs <gpuix-scratch copy> <thread ids>`:
-  fold, side state and per-page stream marking times.
+  fold, side state and per-page stream marking times (use full thread ids).
 - Wire walks used a `KybernClient` script against a scratch daemon: per reader
   "reach the top", pages and bytes until a new prompt row appears, with RPC and
   `prependThreadHistory` time.

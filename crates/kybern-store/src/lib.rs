@@ -1326,9 +1326,14 @@ impl Store {
     /// Fold bounded batches outside the connection lock. A saved long thread
     /// must not block the sidebar's sparse activity reads for its entire replay.
     pub fn project_transcript_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<Vec<TranscriptEntry>> {
+        Ok(self.project_transcript_fold_through(thread_id, through_seq)?.finish())
+    }
+
+    /// The same fold, kept whole to mark tool streams on a page.
+    pub fn project_transcript_fold_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<TranscriptFold> {
         let mut fold = TranscriptFold::omitting_tool_outputs();
         self.extend_transcript_fold(thread_id, &mut fold, 0, through_seq)?;
-        Ok(fold.finish())
+        Ok(fold)
     }
 
     /// Continue a fold that already holds every event through `after` with the
@@ -1348,13 +1353,14 @@ impl Store {
         loop {
             let (events, bytes) = self.with(|c| {
                 // Exclude only known no-op events. Unknown/new kinds still
-                // enter the fold. Keep this aligned with its no-op arm.
+                // enter the fold. Keep this aligned with its no-op arm. Output
+                // deltas stay in: the fold records which invocations streamed.
                 let mut statement = c.prepare_cached(
                     "SELECT seq, thread_id, turn_id, at, kind, payload FROM events
                      WHERE thread_id = ?1 AND seq > ?2 AND seq <= ?3 AND kind NOT IN (
                        'async_questions_requested', 'provider_commands_updated', 'provider_usage_updated',
                        'thread_created', 'thread_updated', 'message_queued', 'message_queue_updated',
-                       'thread_notes_updated', 'message_removed', 'thread_archived', 'tool_call_output_delta', 'checkpoint_updated',
+                       'thread_notes_updated', 'message_removed', 'thread_archived', 'checkpoint_updated',
                        'thread_message_held', 'thread_message_resolved', 'thread_message_updated'
                      ) ORDER BY seq LIMIT ?4",
                 )?;
@@ -1381,53 +1387,6 @@ impl Store {
                 return Ok(());
             }
         }
-    }
-
-    /// Mark completed tool rows whose exact invocation has persisted output
-    /// deltas. The projection intentionally does not concatenate those deltas;
-    /// clients can request them later through the sequence-bounded tool-output
-    /// RPC. Each check is bounded by the tool-start sequence and the reused-ID
-    /// barrier so a later invocation cannot make an earlier row appear
-    /// stream-hydratable.
-    ///
-    /// The work is proportional to the page, not the thread: the completion and
-    /// delta lookups go through their identity indexes. Scanning every tool start
-    /// and delta of the thread cost 25 ms per page on a 47k-event thread.
-    pub fn mark_tool_streams_omitted_through(
-        &self,
-        thread_id: ThreadId,
-        entries: &mut [TranscriptEntry],
-        through_seq: EventSeq,
-    ) -> Result<()> {
-        if !entries.iter().any(|entry| matches!(entry, TranscriptEntry::ToolCall { complete: true, .. })) {
-            return Ok(());
-        }
-        self.with(|c| {
-            let mut completion = c.prepare_cached(TOOL_COMPLETION_EXISTS_AT_START_SQL)?;
-            let mut stream = c.prepare_cached(TOOL_STREAM_EXISTS_AT_START_SQL)?;
-            let thread = thread_id.to_string();
-            let mut checked = std::collections::HashMap::<(EventSeq, String), bool>::new();
-            for entry in entries.iter_mut() {
-                let TranscriptEntry::ToolCall { seq, call, complete: true, stream_omitted, .. } = entry else { continue };
-                let key = (*seq, call.id.clone());
-                let recoverable = match checked.get(&key) {
-                    Some(known) => *known,
-                    None => {
-                        // A turn failure can mark an unfinished row complete with a
-                        // synthetic null output. It has no durable result to hydrate,
-                        // so only advertise a stream when the invocation also has a
-                        // persisted completion event.
-                        let streamed = stream.query_row(params![thread, *seq, through_seq, call.id], |_| Ok(())).optional()?.is_some();
-                        let known =
-                            streamed && completion.query_row(params![thread, call.id, *seq, through_seq], |_| Ok(())).optional()?.is_some();
-                        checked.insert(key, known);
-                        known
-                    }
-                };
-                *stream_omitted = recoverable;
-            }
-            Ok(())
-        })
     }
 
     /// Fetch the completion belonging to this exact start, at the requested
@@ -1929,35 +1888,6 @@ fn row_to_checkpoint(r: &rusqlite::Row<'_>) -> rusqlite::Result<Checkpoint> {
     })
 }
 
-// Completion lookup uses the existing tool_completion_lookup index. The
-// intervening-start check ranges over the thread's sequence index, and prevents
-// crossing a reused call ID without adding a migration or a second read model.
-const TOOL_COMPLETION_EXISTS_AT_START_SQL: &str = "
-    SELECT 1 FROM events c
-    WHERE c.thread_id = ?1 AND c.kind = 'tool_call_completed'
-      AND json_extract(c.payload, '$.tool_call_id') = ?2
-      AND c.seq > ?3 AND c.seq <= ?4
-      AND EXISTS (SELECT 1 FROM events s WHERE s.seq = ?3 AND s.thread_id = ?1
-                  AND s.kind = 'tool_call_started' AND json_extract(s.payload, '$.call.id') = ?2)
-      AND NOT EXISTS (SELECT 1 FROM events n WHERE n.thread_id = ?1
-                      AND n.seq > ?3 AND n.seq <= c.seq AND n.kind = 'tool_call_started'
-                      AND json_extract(n.payload, '$.call.id') = ?2)
-    LIMIT 1";
-
-/// Whether an exact invocation has a persisted output delta. Uses the
-/// `tool_delta_identity` and `tool_start_identity` indexes.
-const TOOL_STREAM_EXISTS_AT_START_SQL: &str = "
-    SELECT 1 FROM events d
-    WHERE d.thread_id = ?1 AND d.kind = 'tool_call_output_delta'
-      AND json_extract(d.payload, '$.tool_call_id') = ?4
-      AND d.seq > ?2 AND d.seq <= ?3
-      AND EXISTS (SELECT 1 FROM events s WHERE s.seq = ?2 AND s.thread_id = ?1
-                  AND s.kind = 'tool_call_started' AND json_extract(s.payload, '$.call.id') = ?4)
-      AND NOT EXISTS (SELECT 1 FROM events n WHERE n.thread_id = ?1
-                      AND n.kind = 'tool_call_started' AND json_extract(n.payload, '$.call.id') = ?4
-                      AND n.seq > ?2 AND n.seq <= d.seq)
-    LIMIT 1";
-
 const TOOL_OUTPUT_AT_START_SQL: &str = "
     SELECT c.seq, c.payload FROM events c
     WHERE c.thread_id = ?1 AND c.kind = 'tool_call_completed'
@@ -2101,6 +2031,14 @@ fn row_to_compact_event_inner(r: &rusqlite::Row<'_>, preserve_omission: bool) ->
     let turn: Option<String> = r.get(2)?;
     let payload = if kind == "tool_call_completed" {
         compact_or_decode_tool_completion(payload, preserve_omission).map_err(other)?
+    } else if kind == "tool_call_output_delta" && !preserve_omission {
+        // The projection keeps which invocation streamed, not what it printed.
+        #[derive(serde::Deserialize)]
+        struct Identity {
+            tool_call_id: String,
+        }
+        let Identity { tool_call_id } = serde_json::from_str(payload).map_err(other)?;
+        EventPayload::ToolCallOutputDelta { tool_call_id, delta: String::new() }
     } else {
         serde_json::from_str(payload).map_err(other)?
     };
@@ -2653,7 +2591,7 @@ mod tests {
             Some(TranscriptEntry::ToolCall { output: None, output_omitted: true, .. })
         ));
         let mut stream_marked = transcript.clone();
-        store.mark_tool_streams_omitted_through(thread.id, &mut stream_marked, i64::MAX).unwrap();
+        store.project_transcript_fold_through(thread.id, i64::MAX).unwrap().mark_tool_streams_omitted(&mut stream_marked);
         assert!(matches!(
             stream_marked.iter().find(|entry| matches!(entry, TranscriptEntry::ToolCall { .. })),
             Some(TranscriptEntry::ToolCall { stream_omitted: true, .. })
@@ -2708,8 +2646,9 @@ mod older_page_stream_tests {
         }
     }
     fn marks(store: &Store, thread: ThreadId, through: EventSeq) -> Vec<(EventSeq, String, bool)> {
-        let mut rows = store.project_transcript_through(thread, through).unwrap();
-        store.mark_tool_streams_omitted_through(thread, &mut rows, through).unwrap();
+        let fold = store.project_transcript_fold_through(thread, through).unwrap();
+        let mut rows = fold.rows().to_vec();
+        fold.mark_tool_streams_omitted(&mut rows);
         rows.into_iter()
             .filter_map(|row| match row {
                 TranscriptEntry::ToolCall { seq, call, stream_omitted, .. } => Some((seq, call.id, stream_omitted)),
@@ -2745,18 +2684,78 @@ mod older_page_stream_tests {
     }
 
     #[test]
-    fn page_stream_check_uses_the_delta_identity_index() {
-        let (store, thread) = store_with(&[]);
-        let plan = store
-            .with(|c| {
-                let mut statement = c.prepare(&format!("EXPLAIN QUERY PLAN {TOOL_STREAM_EXISTS_AT_START_SQL}"))?;
-                Ok(statement
-                    .query_map(params![thread.to_string(), 1i64, 2i64, "call"], |row| row.get::<_, String>(3))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?)
-            })
-            .unwrap();
-        assert!(plan.iter().any(|detail| detail.contains("tool_delta_identity")), "query plan: {plan:?}");
-        assert!(!plan.iter().any(|detail| detail.starts_with("SCAN")), "a page must not scan the thread: {plan:?}");
+    fn page_stream_marks_do_not_depend_on_the_page_window() {
+        // Tools whose output spans pages, turns and a running snapshot: the
+        // marks come from the fold, so where a page starts or ends changes nothing.
+        let (store, thread) = store_with(&[
+            (1, EventPayload::TurnStarted { message_id: MessageId::nil(), message: UserMessage::text("one") }),
+            (2, start("bg")),
+            (3, start("quiet")),
+            (4, done("quiet")),
+            (
+                5,
+                EventPayload::TurnCompleted {
+                    stop_reason: StopReason::Completed,
+                    usage: Usage::default(),
+                    cost_usd: None,
+                    duration_ms: 1,
+                    terminal_message_id: None,
+                },
+            ),
+            (6, EventPayload::TurnStarted { message_id: MessageId::new_v4(), message: UserMessage::text("two") }),
+            // A background tool started in turn one streams and completes in turn two.
+            (7, delta("bg")),
+            (8, start("run")),
+            (9, delta("run")),
+            (10, done("bg")),
+            // `run` streams but is still running at this head.
+        ]);
+        let all = [(2, "bg".to_string(), true), (3, "quiet".into(), false), (8, "run".into(), false)];
+        assert_eq!(marks(&store, thread, 10), all);
+        // Before its completion, `bg` is not yet recoverable; after, it is, wherever the page starts.
+        assert_eq!(marks(&store, thread, 9)[0], (2, "bg".into(), false));
+        let fold = store.project_transcript_fold_through(thread, 10).unwrap();
+        for lo in 0..fold.rows().len() {
+            for hi in lo..fold.rows().len() {
+                let mut page = fold.rows()[lo..=hi].to_vec();
+                fold.mark_tool_streams_omitted(&mut page);
+                for row in page {
+                    if let TranscriptEntry::ToolCall { seq, stream_omitted, .. } = row {
+                        let expected = all.iter().find(|(s, ..)| *s == seq).unwrap().2;
+                        assert_eq!(stream_omitted, expected, "row {seq} on page {lo}..={hi}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn page_stream_marks_extend_with_the_fold() {
+        // A cached fold extended with newer events equals a fold from scratch.
+        let (store, thread) = store_with(&[
+            (1, EventPayload::TurnStarted { message_id: MessageId::nil(), message: UserMessage::text("run") }),
+            (2, start("a")),
+            (3, delta("a")),
+            (4, start("b")),
+            (5, done("a")),
+            (6, delta("b")),
+            (7, done("b")),
+        ]);
+        for split in 1..7 {
+            let mut fold = TranscriptFold::omitting_tool_outputs();
+            store.extend_transcript_fold(thread, &mut fold, 0, split).unwrap();
+            store.extend_transcript_fold(thread, &mut fold, split, 7).unwrap();
+            let mut rows = fold.rows().to_vec();
+            fold.mark_tool_streams_omitted(&mut rows);
+            let marked: Vec<_> = rows
+                .iter()
+                .filter_map(|row| match row {
+                    TranscriptEntry::ToolCall { call, stream_omitted, .. } => Some((call.id.as_str(), *stream_omitted)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(marked, [("a", true), ("b", true)], "split at {split}");
+        }
     }
 }
 
@@ -2855,36 +2854,13 @@ mod tool_output_allocation_tests {
         // output when its turn fails. Without a durable completion event there
         // is no threads.tool_output result that can hydrate the stream, so the
         // snapshot must leave the persisted stream unmarked.
-        let mut snapshot = store.project_transcript_through(thread, 4).unwrap();
-        store.mark_tool_streams_omitted_through(thread, &mut snapshot, 4).unwrap();
+        let fold = store.project_transcript_fold_through(thread, 4).unwrap();
+        let mut snapshot = fold.rows().to_vec();
+        fold.mark_tool_streams_omitted(&mut snapshot);
         assert!(matches!(
             snapshot.iter().find(|entry| matches!(entry, TranscriptEntry::ToolCall { .. })),
             Some(TranscriptEntry::ToolCall { complete: true, output: Some(serde_json::Value::Null), stream_omitted: false, .. })
         ));
-    }
-
-    #[test]
-    fn completion_guard_uses_the_tool_id_expression_index() {
-        let store = fixture();
-        let plan = store
-            .with(|c| {
-                let mut statement = c.prepare(&format!("EXPLAIN QUERY PLAN {TOOL_COMPLETION_EXISTS_AT_START_SQL}"))?;
-                Ok(statement
-                    .query_map(params![ThreadId::nil().to_string(), "call", 1i64, 2i64], |row| row.get::<_, String>(3))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?)
-            })
-            .unwrap();
-        assert!(plan.iter().any(|detail| detail.contains("tool_completion_lookup")), "query plan: {plan:?}");
-    }
-
-    #[test]
-    fn large_canonical_result_without_stream_does_not_need_completion_scan() {
-        let store = fixture();
-        let thread = ThreadId::nil();
-        complete(&store, thread, "canonical-only", serde_json::json!("x".repeat(2 * 1024 * 1024)), false);
-        let mut rows = vec![entry("canonical-only", true, false)];
-        store.mark_tool_streams_omitted_through(thread, &mut rows, i64::MAX).unwrap();
-        assert!(matches!(rows[0], TranscriptEntry::ToolCall { stream_omitted: false, .. }));
     }
 
     #[test]

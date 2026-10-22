@@ -18,7 +18,8 @@ fn main() -> anyhow::Result<()> {
         let thread: ThreadId = id.parse()?;
         let head = store.thread_get(thread)?.ok_or_else(|| anyhow::anyhow!("missing thread"))?.last_seq;
         let start = Instant::now();
-        let entries = store.project_transcript_through(thread, head)?;
+        let fold_state = store.project_transcript_fold_through(thread, head)?;
+        let entries = fold_state.rows().to_vec();
         let fold = ms(start);
         let start = Instant::now();
         let tasks = store.runtime_tasks_for_thread_through(thread, head)?.len();
@@ -34,7 +35,7 @@ fn main() -> anyhow::Result<()> {
             let (mut page, next) = transcript_page_ref(&entries, Some(120), Some(before));
             let slice = ms(start);
             let start = Instant::now();
-            store.mark_tool_streams_omitted_through(thread, &mut page, head)?;
+            fold_state.mark_tool_streams_omitted(&mut page);
             let streams = ms(start);
             let start = Instant::now();
             let bytes = serde_json::to_vec(&page)?.len();

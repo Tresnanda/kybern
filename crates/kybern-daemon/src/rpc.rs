@@ -337,7 +337,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 p.whole_turns.unwrap_or(false),
             );
             if p.defer_tool_stream.unwrap_or(false) {
-                state.store.mark_tool_streams_omitted_through(id, &mut transcript, through_seq).map_err(internal)?;
+                projection.transcript.mark_tool_streams_omitted(&mut transcript);
             }
             if p.include_tool_output.unwrap_or(true) {
                 state.store.hydrate_tool_outputs_through(id, &mut transcript, through_seq).map_err(internal)?;
