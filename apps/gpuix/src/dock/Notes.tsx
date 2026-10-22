@@ -10,6 +10,8 @@ import { NoteEditor } from '../notes/NoteEditor.tsx'
 import { getNotes, openNote, openQuickNote, recordNote, refreshNotes, rpc, setNotes, useNotes } from '../notes/store.ts'
 import { load, save } from '../shell/persist.ts'
 import { goPage } from '../nav/history.ts'
+import { openTabFromPane } from '../tabs/open.ts'
+import { getFocusedPaneId } from '../state.ts'
 import { N } from '../nav/glyphs.ts'
 import { ArrowUpRight01Icon } from '@hugeicons/core-free-icons'
 import { glyph } from '../icons.tsx'
@@ -60,7 +62,9 @@ export function NotesPane({ thread }: { thread: Thread }) {
 }
 const NoteRow = memo(function NoteRow({ note }: { note: NoteSummary }) {
   const t = useTheme()
-  return <div testId={`dock-note-${note.id}`} role="button" tabIndex={0} onClick={() => openNote(note.id)} onKeyDown={e => { if (e.key === 'enter') openNote(note.id) }} style={{ display: 'flex', flexDirection: 'column', gap: 2, height: 54, paddingTop: 6, paddingBottom: 6, paddingLeft: 8, paddingRight: 8, marginLeft: 6, marginRight: 6, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.hover } }}>
+  // A note opens as a tab beside the chat (ADE-54); "Show all in Notes" still leaves for the Notes page.
+  const open = () => { if (!openTabFromPane(getFocusedPaneId(), { kind: 'note', id: note.id, title: noteTitle(note) })) openNote(note.id) }
+  return <div testId={`dock-note-${note.id}`} role="button" tabIndex={0} onClick={open} onKeyDown={e => { if (e.key === 'enter') open() }} style={{ display: 'flex', flexDirection: 'column', gap: 2, height: 54, paddingTop: 6, paddingBottom: 6, paddingLeft: 8, paddingRight: 8, marginLeft: 6, marginRight: 6, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.hover } }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'none' }}><Label color={t.text} size={14} lineHeight={21} truncate style={{ flexGrow: 1 }}>{noteTitle(note)}</Label>{note.checklist.total > 0 && <Ring done={note.checklist.done} total={note.checklist.total} color={muted(t, 0.55)} />}<Label color={muted(t, 0.55)} size={13}>{relativeTime(note.updated_at, Date.now())}</Label></div>
     <Label color={muted(t, 0.6)} size={13} lineHeight={19.5} truncate style={{ pointerEvents: 'none' }}>{note.preview.replace(/\s+/g, ' ').trim()}</Label>
   </div>

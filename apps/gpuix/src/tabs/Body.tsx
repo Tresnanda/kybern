@@ -90,7 +90,7 @@ function TabBody({ leafId, threadId, tab, children }: { leafId: string; threadId
     case 'preview': return <PreviewPane threadId={threadId} />
     case 'review': return thread ? <Measured>{(width) => <ReviewPane thread={thread} width={width} />}</Measured> : <LoadingLines />
     case 'pr': return <PrTab projectId={tab.projectId} number={tab.number} />
-    case 'note': return <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}><NoteEditor key={tab.id} id={tab.id} compact /></div>
+    case 'note': return <Measured>{(width) => <NoteEditor key={tab.id} id={tab.id} width={width} />}</Measured>
     case 'task': return <TaskTab id={tab.id} />
     case 'visual': return <VisualTab threadId={threadId} visualId={tab.id} />
     case 'artifact': return <ArtifactTab threadId={threadId} path={tab.path} url={tab.url} />
@@ -153,7 +153,7 @@ function TaskTab({ id }: { id: string }) {
   const task = useTasks((s) => s.tasks[id])
   const loaded = useTasks((s) => s.loaded)
   if (!task) return loaded ? <Empty testId="task-tab-missing"><EmptyHeader play={false}><EmptyMedia variant="icon" icon={N.tasks} /><EmptyTitle>This task is gone</EmptyTitle><EmptyDescription>It was deleted or moved to another workspace. Close this tab.</EmptyDescription></EmptyHeader></Empty> : <LoadingLines />
-  return <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}><TaskDetail task={task} sequence={[task.id]} /></div>
+  return <Measured>{(width) => <TaskDetail task={task} sequence={[task.id]} width={width} />}</Measured>
 }
 
 function ImageTab({ threadId, source, label }: { threadId: string; source: string; label?: string }) {

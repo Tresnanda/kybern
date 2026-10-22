@@ -63,7 +63,7 @@ export function PreviewChrome({ threadId }: { threadId: string }) {
     // Handoff is registered by Explorer without changing preview document ownership.
     showFileInExplorer(threadId, thread.project_id, explorerPath)
   }
-  const deviceLabel = s.device ? 'Hide device toolbar' : 'Show device toolbar', floatLabel = s.floating ? 'Return to panel' : 'Float over chat'
+  const deviceLabel = s.device ? 'Hide device toolbar' : 'Show device toolbar', floatLabel = s.floating ? 'Return to tab' : 'Float over chat'
   return <div testId="preview-chrome" style={{ display: 'flex', alignItems: 'center', height: 36, flexShrink: 0, gap: 4, paddingLeft: 8, paddingRight: 6, position: 'relative', borderBottomWidth: 1, borderColor: t.surfaceDivider }}>
     <div role="group" aria-label="Navigation" style={{ display: 'flex', gap: 2 }}>
       <Dim on={back}><IconButton testId="preview-back" icon={N.arrowLeft} size="sm" label="Back" onClick={() => back && go(-1)} /></Dim>

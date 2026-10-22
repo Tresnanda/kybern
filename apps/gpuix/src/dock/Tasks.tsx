@@ -2,6 +2,8 @@ import { memo, useRef, useState } from 'react'
 import { isOpenStatus, sortTasks, splitTaskBody, STATUS_LABEL } from '@/state/tasksModel'
 import { isFreeChatProject, type TaskItem, type Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { goPage } from '../nav/history.ts'
+import { openTabFromPane } from '../tabs/open.ts'
+import { getFocusedPaneId } from '../state.ts'
 import { N } from '../nav/glyphs.ts'
 import { createTask, chooseFilter, openTask, refreshTasks, useTasks } from '../tasks/store.ts'
 import { StatusGlyph, PriorityGlyph } from '../tasks/Glyphs.tsx'
@@ -13,7 +15,8 @@ import { Label, useTheme } from '../ui.tsx'
 import { toast } from '../shell/toasts.tsx'
 import { DockFooter, DockSection, ScopeHeader } from './Notes.tsx'
 import { DockEmpty, ErrorLine, Section } from './parts.tsx'
-const open = (id: string) => { openTask(id); goPage('tasks') }
+/** A task opens as a tab beside the chat (ADE-54); the Tasks page is a click away from its footer. */
+const open = (id: string) => { if (!openTabFromPane(getFocusedPaneId(), { kind: 'task', id })) { openTask(id); goPage('tasks') } }
 export function TasksPane({ thread }: { thread: Thread }) {
   const tasks = useTasks(s => s.tasks)
   const loaded = useTasks(s => s.loaded)

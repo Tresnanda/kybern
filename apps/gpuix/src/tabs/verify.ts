@@ -36,6 +36,10 @@ const changes = byTitle('Inline file changes')
 const parent = byTitle('Native subagents')
 const child = threads.find((th) => th.parent_thread_id === parent.id && th.subagent)!
 const other = byTitle('Long review thread')
+const { notes } = await client.call('notes.list', {})
+const note = notes.find((n) => n.title === 'Design review notes') ?? notes[0]!
+const { tasks } = await client.call('tasks.items.list', {})
+const task = tasks.find((t) => t.body.includes('- [ ]')) ?? tasks[0]!
 
 // Source files for the file tabs, in the scratch project only.
 const root = main.cwd
@@ -130,6 +134,13 @@ const scenarios: Scenario[] = [
       assert.equal(await app.getByTestId('tab-body-chat').count(), 0)
       console.log('[tabs] PASS keyboard: ⌘1-9, ⌃Tab, ⌘W, ⌘⇧T, drag reorder, ⌘\\')
     },
+  },
+  {
+    // Note and task links from a thread open as tabs beside the chat.
+    name: 'note-task',
+    ui: { 'kybern.split-view.v2': { version: 2, root: split('s1', 'horizontal', leaf('a', main.id), leaf('b', main.id), 0.55), focusedPaneId: 'a', groups: {
+      a: group(main.id, [{ tab: { kind: 'note', id: note.id }, key: `note:${note.id}` }], `note:${note.id}`), b: only1(main.id, [{ tab: { kind: 'task', id: task.id }, key: `task:${task.id}` }], `task:${task.id}`),
+    } } },
   },
   {
     name: 'split-two',

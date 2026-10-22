@@ -24,7 +24,8 @@ import { EDGE_FADE } from '../native/local-build.ts'
 import { openTask, taskState, taskTyping, setTasks, updateTask } from './store.ts'
 
 
-export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: string[] }) {
+/** `width`: the task is a tab beside a chat (ADE-54) and lays out by its own width rather than the window's. */
+export function TaskDetail({ task, sequence, width }: { task: TaskItem; sequence: string[]; width?: number }) {
   const t = useTheme()
   const g = useGlass()
   const availableNotes = useNotes((s) => s.notes)
@@ -80,8 +81,9 @@ export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: strin
   const size = useWindowSize({ intervalMs: 300 })
   const sidebar = useSidebarWidth()
   // `.tk-dcol`: 620px, or the main column less 24px each side; the side panel is 296px.
-  const sidePanel = size.width - 52 - sidebar - 8 >= 760 ? 296 : 0
-  const main = size.width - 52 - sidebar - 8 - sidePanel
+  const available = width ?? size.width - 52 - sidebar - 8
+  const sidePanel = available >= 760 ? 296 : 0
+  const main = available - sidePanel
   const gutter = Math.max(24, (main - 620) / 2)
   const padding = { paddingLeft: gutter, paddingRight: gutter, paddingBottom: 0 }
   const k = notesTokens(t)

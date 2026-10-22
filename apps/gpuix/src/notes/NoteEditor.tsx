@@ -45,12 +45,14 @@ export function noteImageHome(id: string): ImageHome {
 }
 /** `.note-outline` sits 120px below the scroll top as its reading line. */
 const READING_LINE = 120
-export function NoteEditor({ id, compact = false }: { id: string; compact?: boolean }) {
+/** `width`: the note is a tab beside a chat (ADE-54): it lays out by its own width, not the window's, and Escape stays put. */
+export function NoteEditor({ id, compact = false, width }: { id: string; compact?: boolean; width?: number }) {
   const t = useTheme()
   const k = useNotesTokens()
   const { renderer } = useGpuix()
   const size = useWindowSize({ intervalMs: 300 })
-  const docWidth = Math.min(640, size.width - 60 - 48)
+  const room = width ?? size.width - 60
+  const docWidth = Math.min(640, room - 48)
   const session = useMemo(() => noteSession(id), [id])
   const snap = useSyncExternalStore(session.subscribe, session.getSnapshot)
   const summary = useNotes((s) => s.notes.find((n) => n.id === id))
@@ -78,8 +80,8 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
   useEffect(() => addWindowKeyHandler((e) => {
     if (getNav().paletteOpen || getNav().settingsOpen || getNotes().quick || getNotes().capture) return
     if (e.modifiers?.cmd && e.key === 's') { void session.flush(); return true }
-    if (!compact && e.key === 'escape' && !editing) { gallery(); return true }
-  }), [session, editing, compact])
+    if (!compact && width === undefined && e.key === 'escape' && !editing) { gallery(); return true }
+  }), [session, editing, compact, width])
   const finish = () => { renderer?.blur?.(); void session.flush() }
   // The document rises in when a pointer opened it (gallery click, New note); Enter and ⌘N show it at once. Banners that
   // appear later play their own entrance, those present when the note opened are part of the page's.
@@ -121,7 +123,7 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
   }, [snap.body, snap.epoch, state?.canUndo, state?.height])
   const headings = (state?.headings ?? []).slice(0, 80)
   // Desktop `hasOutline`: two headings and room in the margin.
-  const hasOutline = !compact && headings.length >= 2 && size.width >= 1050
+  const hasOutline = !compact && headings.length >= 2 && (width ?? size.width) >= 1050
   const editorTop = () => {
     const id = editor.current?.id
     const box = id != null ? renderer?.getElementBounds?.(id) : null
