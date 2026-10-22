@@ -336,7 +336,7 @@ function OverflowMenu({ items, active, onSelect, size, testId }: { items: TabsIt
   const box = size === 'md' ? 24 : 20
   return (
     <Menu align="end" minWidth={208} testId={testId ? `${testId}-overflow` : 'tabs-overflow'} trigger={(open) => (
-      <div role="button" aria-label="Show all tabs" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: box, height: box, borderRadius: 6, flexShrink: 0, cursor: 'pointer', ...(open ? { backgroundColor: ink(t, 0.08) } : {}), hover: { backgroundColor: ink(t, 0.06) } }}>
+      <div role="button" aria-label="Show all tabs" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: box, height: box, marginLeft: 4, borderRadius: 6, flexShrink: 0, cursor: 'pointer', ...(open ? { backgroundColor: ink(t, 0.08) } : {}), hover: { backgroundColor: ink(t, 0.06) } }}>
         <Icon source={OVERFLOW} size={14} color={t.textSecondary} />
       </div>
     )}>

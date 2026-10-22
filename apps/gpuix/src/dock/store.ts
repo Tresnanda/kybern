@@ -14,7 +14,8 @@ export interface DockState {
   instant: boolean
 }
 const DEFAULT: DockState = { open: false, tabs: [], tab: null, width: 538, instant: false }
-const TABS: DockTab[] = ['agents', 'activity', 'changes', 'explorer', 'project', 'notes', 'tasks', 'review', 'artifacts', 'terminal', 'preview']
+// Terminal, preview and review were viewer panels; since ADE-54 they open as tabs beside the chat, so saved choices drop them.
+const TABS: DockTab[] = ['agents', 'activity', 'changes', 'explorer', 'project', 'notes', 'tasks', 'artifacts']
 export function restoreDockChoices(value: unknown): Map<string, DockState> {
   const restored = new Map<string, DockState>()
   if (!Array.isArray(value)) return restored

@@ -14,6 +14,8 @@ import { EASE_OUT, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { DURATION, Rise, ZOOM } from '../motion/kit.tsx'
 import { alpha, muted, Para } from './kit.tsx'
 import { useFresh } from './motion.tsx'
+import { usePaneAccess } from '../state.ts'
+import { openTabFromPane } from '../tabs/open.ts'
 
 const sizes = new Map<string, { width: number; height: number } | null>()
 
@@ -91,7 +93,8 @@ function srcFor(source: string): string | null {
  * `at` is when the image arrived: one that just did resolves from a blur (`t-img`, 400 ms); history and recycled rows paint plainly.
  * A click morphs the image into the shared preview (`motion/ImageMorph.tsx`); Enter or Space opens it at once.
  */
-export function ResponseImage({ source, label = 'Agent image', compact = false, thumbnail = false, at }: { source: string; label?: string; compact?: boolean; thumbnail?: boolean; at?: string }) {
+/** `tabSource`: what an image tab reloads from (a thread-relative path), when `source` is already the loaded data. */
+export function ResponseImage({ source, tabSource, label = 'Agent image', compact = false, thumbnail = false, at }: { source: string; tabSource?: string; label?: string; compact?: boolean; thumbnail?: boolean; at?: string }) {
   const t = useTheme()
   const fresh = useFresh(at)
   // `t-img` starts when the bitmap has decoded (`<img onLoad>`), not on mount, so the blur resolves over the picture
@@ -99,6 +102,7 @@ export function ResponseImage({ source, label = 'Agent image', compact = false, 
   const [decoded, setDecoded] = useState(!fresh)
   useEffect(() => { if (decoded) return; const id = setTimeout(() => setDecoded(true), 1500); return () => clearTimeout(id) }, [decoded])
   const renderer = useGpuixRequired()
+  const pane = usePaneAccess()
   const restoreFocus = useTranscriptFocusRestoration()
   // The thumbnail paints the image cropped (`cover`); the reply image shows all of it.
   const viewer = useImageViewer({ radius: compact ? 8 : 12, fit: thumbnail ? 'cover' : 'contain' })
@@ -136,7 +140,7 @@ export function ResponseImage({ source, label = 'Agent image', compact = false, 
         if (restoreFocus) restoreFocus(trigger.id)
         else renderer.focusElement?.(trigger.id)
       }
-    }} onClose={viewer.hide} />}
+    }} onClose={viewer.hide} onOpenInTab={() => openTabFromPane(pane.id, { kind: 'image', source: tabSource ?? source, label })} />}
     </>
   )
 }

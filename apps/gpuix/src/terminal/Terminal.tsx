@@ -14,6 +14,7 @@ import { Icon } from '../icons.tsx'
 import { DOCK_ICONS } from '../dock/icons.ts'
 import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { ErrorLine } from '../dock/parts.tsx'
+import { Tabs, type TabsItem } from '../kit/Tabs.tsx'
 import { DURATION, EASE, revealTransform } from '../motion/kit.tsx'
 import { fadeTo } from '../shell/motion.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
@@ -116,10 +117,11 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
   }
   return <div testId="dock-terminal" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
     <div style={{ display: 'flex', alignItems: 'center', minHeight: 36, gap: 4, paddingLeft: 6, paddingRight: 6, paddingTop: 4, paddingBottom: 4, flexShrink: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'center', flexGrow: 1, minWidth: 0, overflowX: 'scroll', gap: 4 }}>
-        {tabs.map((tab, index) => <TabChip key={tab.id} id={tab.id} kind={kinds.current.get(tab.id) ?? 'shell'} title={label(tab, index)} active={tab.id === current?.id} onSelect={() => select(tab.id)} onClose={() => void close(tab.id)} />)}
-        <SidebarIconButton icon={N.plus} size="sm" label="New terminal" tooltip="New terminal" tooltipSide="bottom" testId="terminal-new" onClick={() => { if (!busy) void create() }} />
-      </div>
+      {/* The kit strip at the sm size (ADE-55 §2.7). In a thread, each session is its own tab beside the chat; this pane hosts several. */}
+      <Tabs testId="terminal-tabs" size="sm" minWidth={0} underlineGap={6}
+        items={tabs.map((tab, index): TabsItem => { const kind = kinds.current.get(tab.id) ?? 'shell'; return { key: tab.id, label: label(tab, index), testId: `terminal-tab-${tab.id}`, ...(kind === 'shell' ? { icon: DOCK_ICONS.terminal } : { mark: kind }) } })}
+        active={current?.id ?? null} onSelect={select} onClose={(id) => void close(id)}
+        trailing={<SidebarIconButton icon={N.plus} size="sm" label="New terminal" tooltip="New terminal" tooltipSide="bottom" testId="terminal-new" onClick={() => { if (!busy) void create() }} />} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
         <Menu align="end" testId="terminal-cli" width={208} trigger={() => <SidebarIconButton icon={DOCK_ICONS.terminal} size="sm" label="Open an agent CLI" tooltip="Open an agent CLI" tooltipSide="bottom" />}>
           <MenuLabel>Open in a new tab</MenuLabel>
@@ -134,26 +136,6 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
     {current ? <div key={current.id} paintTransform={PATCHED_NATIVE && fadeFor.current === current.id ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease: [...EASE.out] as [number, number, number, number] } } : undefined} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0 }}>
       <Screen info={current} width={width} onTitle={title => setTitles(old => old[current.id] === title ? old : { ...old, [current.id]: title })} onExit={() => void close(current.id)} />
     </div> : <Button style={{ alignSelf: 'flex-start', margin: 8 }} onClick={() => void create()}>Open terminal</Button>}
-  </div>
-}
-
-/** A desktop `TabChip`: the glyph becomes a close button on hover. */
-function TabChip({ id, kind, title, active, onSelect, onClose }: { id: string; kind: string; title: string; active: boolean; onSelect: () => void; onClose: () => void }) {
-  const t = useTheme()
-  const [hover, setHover] = useState(false)
-  const glyph = fadeTo(hover ? 0 : 1)
-  return <div role="button" tabIndex={0} testId={`terminal-tab-${id}`} aria-label={title} onClick={onSelect} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onSelect() }}
-    style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, paddingLeft: 6, paddingRight: 10, flexShrink: 0, borderRadius: 8, cursor: 'pointer', backgroundColor: active ? t.buttonSecondary : hover ? t.buttonSecondaryHover : undefined }}>
-    {/* The glyph hands over to the close X on hover: both stay mounted and fade (the glyph out, the X in via `t-reveal`), so nothing pops. */}
-    <div role="button" aria-label={`Close ${title}`} testId={`terminal-tab-close-${id}`} onClick={() => onClose()} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', width: 16, height: 16, borderRadius: 8, flexShrink: 0, backgroundColor: hover ? t.buttonSecondaryHover : undefined, hover: { backgroundColor: t.buttonSecondary } }}>
-      <div paintTransform={glyph.paintTransform} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', ...glyph.style }}>
-        {kind === 'shell' ? <Icon source={DOCK_ICONS.terminal} size={14} color={t.text} /> : <ProviderMark kind={kind} size={14} />}
-      </div>
-      <div paintTransform={revealTransform(hover, false)} style={{ position: 'absolute', left: 1, top: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', ...(PATCHED_NATIVE ? {} : { opacity: hover ? 1 : 0 }) }}>
-        <Icon source={N.x} size={14} color={t.text} />
-      </div>
-    </div>
-    <Label size={13} color={active || hover ? t.text : t.textSecondary} truncate style={{ maxWidth: 160 }}>{title}</Label>
   </div>
 }
 

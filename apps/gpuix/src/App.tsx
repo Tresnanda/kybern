@@ -20,6 +20,7 @@ import { UsagePage } from './usage/UsagePage.tsx'
 import { PullRequestsPage } from './pulls/PullRequestsPage.tsx'
 import { TasksDragLayer, trackTaskDrag, useHeldTask } from './tasks/drag.tsx'
 import { TabDragLayer } from './dock/reorder.tsx'
+import { TabsDragLayer } from './tabs/drag.tsx'
 import { ProjectDragLayer } from './sidebar/reorder.tsx'
 import { TasksPage } from './tasks/TasksPage.tsx'
 import { TasksSidebar } from './tasks/TasksSidebar.tsx'
@@ -238,8 +239,9 @@ function Workspace() {
       <DockResizeCapture />
       <TasksDragLayer />
       <ProjectDragLayer />
-<TabDragLayer />
+      <TabDragLayer />
       <SplitDragLayer />
+      <TabsDragLayer />
       <ThemeFade />
     </div>
   )

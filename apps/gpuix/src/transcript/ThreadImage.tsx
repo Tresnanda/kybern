@@ -19,6 +19,7 @@ import { muted } from './kit.tsx'
 import { Button } from '../kit/Button.tsx'
 import { ImageLightbox, ResponseImage } from './images.tsx'
 import { ImageViewer } from '../motion/ImageMorph.tsx'
+import { openTab } from '../tabs/open.ts'
 
 /** Retried once after this, for an image the agent wrote moments before its reply arrived. */
 const RETRY_MS = 1500
@@ -62,7 +63,7 @@ async function load(threadId: string, source: string, signal: AbortSignal): Prom
   return { source: `data:${media};base64,${Buffer.from(data).toString('base64')}`, bytes: data.byteLength }
 }
 
-function useThreadImage(threadId: string | null, source: string) {
+export function useThreadImage(threadId: string | null, source: string) {
   const environment = useEnvironment()
   const key = `${environment.revision}:${threadId}:${source}`
   const [state, setState] = useState<{ key: string; image?: Loaded; failure?: Failure; attempt: number }>(() => ({ key, image: cache.get(key), attempt: 0 }))
@@ -107,7 +108,7 @@ function LocalThreadImage({ threadId, source, label, at }: { threadId: string | 
   const image = useThreadImage(threadId, source)
   const cwd = useApp(s => s.threads.find(th => th.id === threadId)?.cwd ?? (s.open.thread?.id === threadId ? s.open.thread?.cwd : undefined))
   const environment = useEnvironment()
-  if (image.image) return <ResponseImage source={image.image.source} label={label} at={at} />
+  if (image.image) return <ResponseImage source={image.image.source} tabSource={source} label={label} at={at} />
   if (!image.failure) return <ImageCard label={label} loading />
   const local = environment.local && cwd
   const file = local ? path.resolve(cwd, decodeURIComponent(reference(source).replace(/^file:\/\/(localhost)?/, ''))) : null
@@ -139,7 +140,7 @@ function ImageCard({ label, reason, loading = false, onRetry, onReveal }: { labe
 export function ThreadImagePreview({ threadId, source, onClose }: { threadId: string; source: string; onClose: () => void }) {
   const image = useThreadImage(threadId, source)
   const label = decodeURIComponent(reference(source).split('/').pop() ?? 'Image')
-  if (image.image) return <ImageViewer testId="image-lightbox" src={image.image.source} label={label} from={null} source={() => null} onClose={onClose} />
+  if (image.image) return <ImageViewer testId="image-lightbox" src={image.image.source} label={label} from={null} source={() => null} onClose={onClose} onOpenInTab={() => openTab(threadId, { kind: 'image', source, label })} />
   return image.failure ? <ImageLightboxCard label={label} reason={image.failure.reason} onClose={onClose} onRetry={image.retry} /> : null
 }
 

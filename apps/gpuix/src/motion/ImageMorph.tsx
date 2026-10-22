@@ -15,7 +15,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import type { PaintTransformProps, PaintTransformValue } from '@gpuix/native/host'
-import { Icon } from '../icons.tsx'
+import { glyph, Icon } from '../icons.tsx'
+import { SquareArrowExpand01Icon } from '@hugeicons/core-free-icons'
 import { N } from '../nav/glyphs.ts'
 import { kitOverlayOpen } from '../kit/AlertDialog.tsx'
 import { DISTANCE, DURATION, EASE, ZOOM } from './kit.tsx'
@@ -132,11 +133,15 @@ export interface ImageViewerProps {
   onClose: () => void
   /** Focus to restore after it closes (e.g. the opener, keeping a transcript's reading position). */
   finalFocus?: () => void
+  /** "Open in tab" (ADE-54): the image becomes a tab of the thread; the quick look closes. */
+  onOpenInTab?: () => void
   testId?: string
 }
 
 /** The open preview: scrim, toolbar and the morphing image, on its own top layer. */
-export function ImageViewer({ src, label, from, source, onClose, finalFocus, testId = 'image-viewer' }: ImageViewerProps) {
+const OPEN_TAB = glyph(SquareArrowExpand01Icon)
+
+export function ImageViewer({ src, label, from, source, onClose, finalFocus, onOpenInTab, testId = 'image-viewer' }: ImageViewerProps) {
   const t = useTheme()
   const renderer = useGpuixRequired()
   // An open preview owned by a transcript row keeps that row mounted while its thumbnail scrolls away.
@@ -204,9 +209,14 @@ export function ImageViewer({ src, label, from, source, onClose, finalFocus, tes
       >
       {/* The scrim takes outside clicks; the image and toolbar sit above it. */}
       <div testId={`${testId}-scrim`} onClick={() => close(false)} paintTransform={scrim} style={{ position: 'absolute', left: 0, top: 0, width: window.width, height: window.height, backgroundColor: SCRIM }} />
-      <div testId={`${testId}-bar`} paintTransform={chrome} style={{ position: 'absolute', left: rect.x, top: rect.y - BAR - GAP, width: rect.width, height: BAR, display: 'flex', alignItems: 'center', paddingLeft: 16, paddingRight: 116, borderRadius: 14, borderWidth: 1, borderColor: t.borderLight, backgroundColor: t.popover }}>
+      <div testId={`${testId}-bar`} paintTransform={chrome} style={{ position: 'absolute', left: rect.x, top: rect.y - BAR - GAP, width: rect.width, height: BAR, display: 'flex', alignItems: 'center', paddingLeft: 16, paddingRight: onOpenInTab ? 148 : 116, borderRadius: 14, borderWidth: 1, borderColor: t.borderLight, backgroundColor: t.popover }}>
         <Label color={t.text} size={13} weight={500} truncate>{label}</Label>
         <ImageActions source={src} label={label} />
+        {onOpenInTab && <div testId={`${testId}-open-tab`} role="button" aria-label="Open in tab" tabIndex={0} onClick={() => { onOpenInTab(); close(true) }}
+          onKeyDown={(e: { key?: string }) => { if (e.key === 'enter' || e.key === 'space') { onOpenInTab(); close(true) } }}
+          style={{ position: 'absolute', top: 10, right: 108, display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: t.buttonTertiaryHover } }}>
+          <Icon source={OPEN_TAB} size={14} color={t.iconSecondary} />
+        </div>}
         <div testId={`${testId}-close`} role="button" aria-label="Close preview" tabIndex={0} onClick={() => close(false)}
           onKeyDown={(e: { key?: string }) => { if (e.key === 'enter' || e.key === 'space') close(true) }}
           style={{ position: 'absolute', top: 10, right: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: t.buttonTertiaryHover } }}>

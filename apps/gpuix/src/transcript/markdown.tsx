@@ -1,3 +1,4 @@
+import { openTabFromPane } from '../tabs/open.ts'
 import { useTranscriptRowLease } from './Window.tsx'
 // Native GFM keeps prose, tables and syntax highlighting in single bounded
 // nodes. Code expansion contributes rows to the OUTER transcript virtual list.
@@ -268,16 +269,28 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
     // An image link (or an inline image native Markdown paints as a link) opens the image, wherever its folder is.
     if (localImageLink(href) || (link.kind === 'file' && /\.(?:png|jpe?g|gif|webp|avif)$/i.test(link.path))) { setImage(href); return }
     try {
-      if (link.kind === 'external') { spawn('open', [link.url]).on('error', e => reportError('Unable to open link', e)); return }
+      if (link.kind === 'external') {
+        // A pull request of this thread's own repository opens as a tab; any other link goes to the browser.
+        const pr = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(link.url)
+        const thread = pane.get().open.thread
+        if (pr && thread) {
+          const git = await client.call('git.status', { thread_id: thread.id }).catch(() => null)
+          const repo = git?.remote_url && /[:/]([^/:]+\/[^/]+?)(?:\.git)?$/.exec(git.remote_url)?.[1]
+          if (repo && repo.toLowerCase() === pr[1]!.toLowerCase() && openTabFromPane(pane.id, { kind: 'pr', projectId: thread.project_id, number: Number(pr[2]) })) return
+        }
+        spawn('open', [link.url]).on('error', e => reportError('Unable to open link', e)); return
+      }
+      // From inside a thread, files, notes and tasks open as permanent tabs beside the chat (ADE-54); the page is a click away.
       if (link.kind === 'file') {
         const threadId = pane.get().selectedId
         if (!threadId) return
-        const file = await client.call('threads.files.read', { thread_id: threadId, path: link.path })
-        setPreview({ title: link.line ? `${link.path}:${link.line}` : link.path, text: file.content, code: true, line: link.line, markdown: MARKDOWN_FILE.test(link.path) })
+        if (!openTabFromPane(pane.id, { kind: 'file', path: link.path, root: 'thread', ...(link.line ? { line: link.line } : {}) })) {
+          const file = await client.call('threads.files.read', { thread_id: threadId, path: link.path })
+          setPreview({ title: link.line ? `${link.path}:${link.line}` : link.path, text: file.content, code: true, line: link.line, markdown: MARKDOWN_FILE.test(link.path) })
+        }
       } else if (link.kind === 'kybern') {
-        // A chip opens the note or task page, as on the desktop.
-        if (link.target === 'note') openNote(link.id)
-        else { goPage('tasks'); openTask(link.id) }
+        if (link.target === 'note') { if (!openTabFromPane(pane.id, { kind: 'note', id: link.id })) openNote(link.id) }
+        else if (!openTabFromPane(pane.id, { kind: 'task', id: link.id })) { goPage('tasks'); openTask(link.id) }
       }
     } catch (e) { reportError('Unable to open link', e) }
   }

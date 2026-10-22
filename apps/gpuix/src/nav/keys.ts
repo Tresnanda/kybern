@@ -1,7 +1,11 @@
-import { splitFocusedPane } from '../split/store.ts'
+import { closeActiveTab, cycleTabs, focusGroupToward, numberTab, reopenTab, splitActive } from '../tabs/open.ts'
+import { paneRects } from '../split/Workspace.tsx'
 // Window shortcuts (`App.tsx` `useHotkey` + `state/navigation.ts`): ⌘N new chat,
 // ⌘B thread panel, ⌘K search, ⌘[ / ⌘] back and forward, ⌘↑ a subagent's
-// parent, ⌘, Settings. They work while typing, like the desktop's
+// parent, ⌘, Settings. In-thread tabs (ADE-54): ⌘1 the chat, ⌘2–⌘9 the tabs (⌘9 the
+// last), ⌃Tab / ⌃⇧Tab cycle, ⌘W closes the tab (never the thread), ⌘⇧T reopens the
+// last closed one, ⌘\ / ⌘⇧\ move the tab into a new group (on the chat: a second
+// thread pane), ⌘⌥←/→/↑/↓ focus the next group. They work while typing, like the desktop's
 // `allowInInput`. Nothing they change animates: they set `keyboardNav` first.
 //
 // `main.tsx` passes `onWindowKeyDown` to `render()`. Other surfaces can add
@@ -29,13 +33,27 @@ function subagentParent(): string | null {
   return thread?.subagent && thread.parent_thread_id ? thread.parent_thread_id : null
 }
 
+/** The tab shortcuts that are not ⌘-only: ⌃Tab cycles, ⌘⌥ arrows move between groups. */
+function tabShortcut(event: EventPayload): boolean {
+  const m = event.modifiers
+  const nav = getNav()
+  if (nav.page !== 'home' || nav.settingsOpen || nav.paletteOpen) return false
+  if (m?.ctrl && !m.cmd && !m.alt && event.key === 'tab') return cycleTabs(m.shift ? -1 : 1)
+  if (m?.cmd && m.alt && !m.ctrl && !m.shift && (event.key === 'left' || event.key === 'right' || event.key === 'up' || event.key === 'down')) return focusGroupToward(event.key, paneRects())
+  return false
+}
+
 function shortcut(event: EventPayload): boolean {
   const m = event.modifiers
   if (!m?.cmd || m.ctrl || m.alt) return false
   const key = event.key
   const nav = getNav()
-  if (key === '\\' && nav.page === 'home' && !nav.settingsOpen) { splitFocusedPane(m.shift ? 'vertical' : 'horizontal'); return true }
+  const home = nav.page === 'home' && !nav.settingsOpen
+  if (key === '\\' && home) { splitActive(m.shift ? 'vertical' : 'horizontal'); return true }
+  if (key === 't' && m.shift && home) return reopenTab()
   if (m.shift) return false
+  if (home && !nav.paletteOpen && key && /^[1-9]$/.test(key)) return numberTab(Number(key))
+  if (key === 'w' && home && !nav.paletteOpen) return closeActiveTab()
   switch (key) {
     case 'k':
       setNav({ paletteOpen: !nav.paletteOpen })
@@ -84,7 +102,12 @@ export function onWindowKeyDown(event: EventPayload) {
   // Mark the change as keyboard-driven before it lands, so nothing it opens animates.
   const before = getNav().keyboardNav
   if (isShortcut(event)) setNav({ keyboardNav: true })
-  if (!shortcut(event) && !before) setNav({ keyboardNav: false })
+  if (!shortcut(event) && !tabShortcut(event) && !before) setNav({ keyboardNav: false })
 }
 
-const isShortcut = (event: EventPayload) => !!event.modifiers?.cmd && !event.modifiers.ctrl && !event.modifiers.alt && (!event.modifiers.shift || event.key === '\\')
+const isShortcut = (event: EventPayload) => {
+  const m = event.modifiers
+  if (m?.ctrl && !m.cmd && !m.alt && event.key === 'tab') return true
+  if (m?.cmd && m.alt && !m.ctrl && (event.key === 'left' || event.key === 'right' || event.key === 'up' || event.key === 'down')) return true
+  return !!m?.cmd && !m.ctrl && !m.alt && (!m.shift || event.key === '\\' || event.key === 't')
+}

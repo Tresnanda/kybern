@@ -2,6 +2,7 @@
 // and Codex in one project: agent and project pickers, Add connector and Refresh, the
 // Plugins/Connectors switch with search, and one card row per integration with its
 // actions, Connect and Sign in chips.
+import { openTab } from '../tabs/open.ts'
 import { useEffect, useState } from 'react'
 import type { Integration, IntegrationAction, IntegrationsCatalog, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
@@ -80,8 +81,10 @@ export function Integrations() {
     try {
       await client.call('integrations.login', { thread_id: thread.id, name: item.id })
       if (getClient() !== client) return
-      chooseTab(thread.id, 'terminal')
-      setDock(thread.id, { open: true })
+      // The sign-in runs in a terminal of the thread: open it beside the chat.
+      const { terminals } = await client.call('terminals.list', { thread_id: thread.id })
+      const latest = terminals.at(-1)
+      if (latest) openTab(thread.id, { kind: 'terminal', id: latest.id })
       setNav({ settingsOpen: false })
     } catch (e) {
       setError(errorText(e))

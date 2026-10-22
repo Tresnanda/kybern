@@ -41,8 +41,10 @@ describe('dock layout and thread choices', () => {
 
 test('restoring dock preferences rejects corrupt values and stale tabs', () => {
   expect(restoreDockChoices({ corrupt: true }).size).toBe(0)
-  const restored = restoreDockChoices([null, ['thread', { open: true, tabs: ['terminal', 'unknown', 'terminal'], tab: 'unknown', width: -5, instant: true }]])
-  expect(restored.get('thread')).toEqual({ open: true, tabs: ['terminal'], tab: 'terminal', width: 416, instant: false })
+  const restored = restoreDockChoices([null, ['thread', { open: true, tabs: ['agents', 'unknown', 'agents'], tab: 'unknown', width: -5, instant: true }]])
+  expect(restored.get('thread')).toEqual({ open: true, tabs: ['agents'], tab: 'agents', width: 416, instant: false })
+  // Terminal, preview and review open as tabs beside the chat since ADE-54: saved dock choices drop them.
+  expect(restoreDockChoices([['t', { open: true, tabs: ['terminal', 'preview', 'review', 'explorer'], tab: 'terminal' }]]).get('t')).toMatchObject({ tabs: ['explorer'], tab: 'explorer' })
 })
 
 // Persistence is part of setDock now: even a bare `bun test` must not save test

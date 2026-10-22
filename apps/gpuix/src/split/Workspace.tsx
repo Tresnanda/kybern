@@ -3,6 +3,7 @@ import { BACKDROP_ALLOWED } from '../native/backdrop-material.ts'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { ThreadHeader } from '../nav/TitleBar.tsx'
+import { GroupContent } from '../tabs/Body.tsx'
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { motion, useGpuixRequired, type PublicInstance, type EventPayload } from '@gpuix/react'
 import { dropZoneAt, splitForZone, type DropZone } from './geometry.ts'
@@ -30,6 +31,30 @@ import { canSplitPane, collectThreadPanes, closePane, getSplitRoot, resizePane, 
 const ROW_LEFT = 58
 const ROW_WIDTH = 244
 const bounds = new Map<string, LayoutRect>()
+// Each leaf's window rect, published for the title bar (top groups draw their strips over their own column), the tab drag
+// and ⌘⌥ arrow focus. A new snapshot only when a rect changes.
+let rectsSnapshot: ReadonlyMap<string, LayoutRect> = new Map()
+const rectListeners = new Set<() => void>()
+function setBounds(id: string, rect: LayoutRect | null) {
+  const old = bounds.get(id)
+  if (rect && old && old.x === rect.x && old.y === rect.y && old.width === rect.width && old.height === rect.height) return
+  if (!rect && !old) return
+  if (rect) bounds.set(id, rect); else bounds.delete(id)
+  rectsSnapshot = new Map(bounds)
+  for (const listener of rectListeners) listener()
+}
+export const paneRects = () => bounds
+const subscribeRects = (listener: () => void) => { rectListeners.add(listener); return () => { rectListeners.delete(listener) } }
+const readRects = () => rectsSnapshot
+export const usePaneRects = () => useSyncExternalStore(subscribeRects, readRects)
+/** A leaf below another one (the lower row of a split): it draws a 32 px strip; top leaves draw theirs in the title bar. */
+export function isLowerLeaf(rects: ReadonlyMap<string, LayoutRect>, id: string) {
+  const rect = rects.get(id)
+  if (!rect) return false
+  let top = Infinity
+  for (const r of rects.values()) top = Math.min(top, r.y)
+  return rect.y > top + 1
+}
 type Source = { title: string; kind: string; bounds: () => { x: number; y: number; width: number; height: number } | null }
 type Ghost = { title: string; kind: string; offX: number; offY: number; width: number; height: number; homeY: number }
 type Drag = { kind: 'resize'; id: string; horizontal: boolean; rect: LayoutRect } | { kind: 'thread'; id: string; x: number; y: number; ghost?: Ghost; target?: { id: string; zone: DropZone }; settle?: Settle }
@@ -90,7 +115,7 @@ function cancel() {
   stopReleaseWatch?.(); stopReleaseWatch = undefined
   pending = null; stopSelection?.(); stopSelection = undefined; publish(null)
 }
-onEnvironmentChange(() => { cancel(); suppressedThread = null; bounds.clear() })
+onEnvironmentChange(() => { cancel(); suppressedThread = null; for (const id of [...bounds.keys()]) setBounds(id, null) })
 
 export function SplitWorkspace({ children }: { children: ReactNode }) {
   const root = useSplitRoot()
@@ -127,13 +152,14 @@ function Leaf({ id, split, children }: { id: string; split: boolean; children: R
   const [node, ref] = useState<PublicInstance | null>(null)
   useEffect(() => {
     if (!node) return
-    const stop = observeElementBounds(renderer, node.id, event => { if (event.rect) bounds.set(id, event.rect); else bounds.delete(id) })
-    return () => { stop(); bounds.delete(id) }
+    const stop = observeElementBounds(renderer, node.id, event => setBounds(id, event.rect))
+    return () => { stop(); setBounds(id, null) }
   }, [renderer, node, id])
+  const lower = isLowerLeaf(usePaneRects(), id)
   return <PaneProvider id={id} compact={split}><div ref={ref} testId={`pane-${id}`} onMouseDown={() => focusPane(id)} onFocus={() => focusPane(id)} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', position: 'relative' }}>
-    {split && <PaneHeaderOrNone id={id} />}
-    <LeafBody id={id} focused={focused}><LeafContent id={id} split={split}>{children}</LeafContent></LeafBody>
-    {split && <FocusRing focused={focused} color={alpha(t.v('--color-border-focus'), .28)} />}
+    {split && lower && <PaneHeaderOrNone id={id} />}
+    <LeafBody id={id} focused={focused}><LeafContent id={id} split={split}><GroupContent leafId={id}>{children}</GroupContent></LeafContent></LeafBody>
+    {split && <FocusRing focused={focused} color={alpha(t.v('--color-border-focus'), .55)} />}
   </div></PaneProvider>
 }
 /** `.split-thread-pane::after`: the focused pane's ring fades in and out over 120 ms. Focus moved from the keyboard (⌘⌥←/→) swaps it at once. Paint-only. */
@@ -189,9 +215,10 @@ function PaneHeaderOrNone({ id }: { id: string }) {
   const selected = useApp(s => s.selectedId)
   return selected ? <PaneHeader id={id} /> : null
 }
+/** A lower group's 32 px strip (`sm` tabs) with its pane actions; the top groups' strips are in the title bar. */
 function PaneHeader({ id }: { id: string }) {
   const t = useTheme()
-  return <div testId={`pane-header-${id}`} onMouseDown={() => focusPane(id)} onClick={() => focusPane(id)} style={{ display: 'flex', alignItems: 'center', height: 46, flexShrink: 0, paddingLeft: 20, paddingRight: 20, gap: 8, borderBottomWidth: 1, borderColor: t.border }}><ThreadHeader paneId={id} /></div>
+  return <div testId={`pane-header-${id}`} onMouseDown={() => focusPane(id)} style={{ display: 'flex', alignItems: 'center', height: 32, flexShrink: 0, paddingLeft: 6, paddingRight: 6, gap: 4, borderBottomWidth: 1, borderColor: t.surfaceDivider }}><ThreadHeader leafId={id} size="sm" /></div>
 }
 export function moveSplitDrag(e: EventPayload) {
   const current = drag
@@ -255,7 +282,7 @@ export function SplitDragLayer() {
 }
 type Box = { x: number; y: number; width: number; height: number }
 /** The drop target: the pane dims, the highlight fades and grows in, and it springs when the zone changes. Reduce Motion paints the final state with no tween (a zero-length tween leaves it invisible). */
-function DropOverlay({ rect, zone, whole }: { rect: Box; zone: DropZone; whole: boolean }) {
+export function DropOverlay({ rect, zone, whole }: { rect: Box; zone: DropZone; whole: boolean }) {
   const t = useTheme()
   const side = !whole && (zone === 'left' || zone === 'right'), stack = !whole && (zone === 'top' || zone === 'bottom')
   const hl = {

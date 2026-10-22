@@ -1,4 +1,7 @@
-import { splitFocusedPane, splitPane, closePane, maximizePane, canSplitPane, useSplitRoot } from '../split/store.ts'
+import { splitFocusedPane, splitPane, closePane, maximizePane, canSplitPane, useSplitRoot, useGroup, collectThreadPanes } from '../split/store.ts'
+import { isLowerLeaf, usePaneRects } from '../split/Workspace.tsx'
+import { GroupStrip, useThreadRecord } from '../tabs/Strip.tsx'
+import { useWindowWidth } from '../shell/layout.ts'
 import { TasksBar } from '../tasks/Header.tsx'
 import { NoteEditorBar } from '../notes/EditorBar.tsx'
 import { NotesHeaderActions, NotesHeaderTitle } from '../notes/Header.tsx'
@@ -23,7 +26,7 @@ import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
-import { getClient, getState, set, useApp, usePaneAccess, focusPane } from '../state.ts'
+import { getClient, getState, set, useApp, usePaneAccess, focusPane, getFocusedPaneId } from '../state.ts'
 import { ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { archiveThread, errorText, updateThread } from './actions.ts'
 import { N } from './glyphs.ts'
@@ -62,7 +65,9 @@ function ChromeIcon({
   pressed,
   testId,
   decorative = false,
+  size = 28,
 }: {
+  size?: number
   decorative?: boolean
   icon: string
   label: string
@@ -77,7 +82,7 @@ function ChromeIcon({
   const dim = fadeTo(disabled ? 0.4 : 1)
   const button = (
     <div paintTransform={dim.paintTransform} style={{ display: 'flex', flexShrink: 0, ...dim.style }}>
-      <IconButton testId={testId} icon={icon} label={label} glyph={glyph} active={pressed} onClick={disabled ? undefined : onClick} style={{ pointerEvents: decorative || disabled ? 'none' : 'auto', cursor: disabled ? 'default' : 'pointer' }} />
+      <IconButton testId={testId} icon={icon} label={label} glyph={glyph} size={size === 28 ? 'md' : 'sm'} active={pressed} onClick={disabled ? undefined : onClick} style={{ pointerEvents: decorative || disabled ? 'none' : 'auto', cursor: disabled ? 'default' : 'pointer' }} />
     </div>
   )
   // A disabled control shows no tooltip, as a disabled button gets no pointer events on the web.
@@ -131,6 +136,7 @@ export function TitleBar({ panelOpen }: { panelOpen: boolean }) {
         <div style={{ position: 'absolute', left: RAIL + sidebarWidth, top: 13, width: 1, height: 20, backgroundColor: t.variant === 'dark' ? 'rgba(255, 255, 255, 0.09)' : 'rgba(0, 0, 0, 0.10)' }} />
       )}
       {settingsOpen && <SettingsBreadcrumb />}
+      {!settingsOpen && page === 'home' && splitRoot.kind === 'split' && <SplitStrips panelOpen={panelOpen} />}
       <motion.div
         windowDrag
         initial={false}
@@ -138,7 +144,7 @@ export function TitleBar({ panelOpen }: { panelOpen: boolean }) {
         transition={REDUCED_MOTION || instant || resizing ? { duration: 0 } : drawerSlide(panelOpen)}
         style={{ position: 'absolute', top: 0, right: 8, height: TITLEBAR, display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 20, paddingRight: 12 }}
       >
-        {!settingsOpen && page === 'home' && (splitRoot.kind === 'split' ? <><div style={{ flexGrow: 1 }} /><PanelToggles /></> : <ThreadHeader />)}
+        {!settingsOpen && page === 'home' && (splitRoot.kind === 'split' ? <><div windowDrag style={{ flexGrow: 1, height: '100%' }} /><PanelToggles /></> : <ThreadHeader />)}
         {!settingsOpen && page === 'notes' && <NotesBar />}
         {!settingsOpen && page === 'tasks' && <TasksBar />}
       </motion.div>
@@ -225,17 +231,33 @@ function ancestorsOf(thread: Thread): Thread[] {
   return chain
 }
 
-export function ThreadHeader({ paneId }: { paneId?: string } = {}) {
+/** The width under which "Hand off" shows its glyph only (spec §6). */
+const HANDOFF_COMPACT = 720
+
+/**
+ * A group's header (ADE-54): its tab strip (the chat tab is the title: provider mark + thread title, double click renames),
+ * then empty space that drags the window, Hand off and the ⋯ thread menu. Without `leafId` it is the single group's header
+ * in the title bar, followed by the panel toggles. `size="sm"`: the 32 px strip of a lower split group. A subagent's page
+ * keeps its breadcrumb instead of a strip.
+ */
+export function ThreadHeader({ leafId: given, size = 'md' }: { leafId?: string; size?: 'md' | 'sm' } = {}) {
   const root = useSplitRoot()
+  const leafId = given ?? (root.kind === 'leaf' ? root.id : getFocusedPaneId())
+  const inSplit = !!given
+  const paneId = inSplit ? leafId : undefined
   const split = (direction: 'horizontal' | 'vertical') => paneId ? splitPane(paneId, direction) : splitFocusedPane(direction)
   const t = useTheme()
-  const thread = useSelectedThread()
+  const group = useGroup(leafId)
+  const selected = useSelectedThread()
+  const groupThread = useThreadRecord(group.threadId)
+  const thread = inSplit ? groupThread : selected
+  const rect = usePaneRects().get(leafId)
   const providers = useNav((s) => s.providers)
   const [renaming, setRenaming] = useState(false)
   const [title, setTitle] = useState('')
   if (!thread) {
     // Home: only the panel toggles (`SurfaceHeader minimal`).
-    return (
+    return inSplit ? <div windowDrag style={{ flexGrow: 1, height: '100%' }} /> : (
       <>
         <div windowDrag style={{ flexGrow: 1, height: '100%' }} />
         <PanelToggles />
@@ -245,19 +267,22 @@ export function ThreadHeader({ paneId }: { paneId?: string } = {}) {
   const ancestors = ancestorsOf(thread)
   const mainThread = thread.subagent ? undefined : ancestors[0]
   const others = providers.filter((p) => p.available && p.kind !== thread.provider.kind)
+  const compactHandoff = inSplit || (rect ? rect.width < HANDOFF_COMPACT : false)
+  const box = size === 'md' ? 28 : 24
   const commitRename = () => {
     setRenaming(false)
     const next = title.trim()
     if (next && next !== thread.title) void updateThread(thread.id, { title: next }).catch((e) => console.error('[titlebar] Unable to rename:', errorText(e)))
   }
+  const strip = group.threadId === thread.id && !thread.subagent
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexGrow: 1, minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0, height: '100%' }}>
         {thread.subagent ? (
           <Breadcrumb thread={thread} ancestors={ancestors} />
         ) : (
           <>
-            {mainThread && (
+            {mainThread && size === 'md' && (
               <HeaderChip testId="main-thread" onClick={() => openThread(mainThread.id)}>
                 <Icon source={N.arrowLeft} size={14} color={muted(t, 1)} />
                 <Label color={muted(t, 1)} truncate>
@@ -265,40 +290,36 @@ export function ThreadHeader({ paneId }: { paneId?: string } = {}) {
                 </Label>
               </HeaderChip>
             )}
-            <ProviderMark kind={thread.provider.kind} size={14} tone="header" />
             {renaming ? (
-              <input
-                autoFocus
-                value={title}
-                onChange={(e) => setTitle(e.value ?? '')}
-                onSubmit={commitRename}
-                onBlur={commitRename}
-                onKeyDown={(e) => {
-                  if (e.key === 'escape') setRenaming(false)
-                }}
-                testId="header-rename"
-                style={{ width: 360, height: 22, paddingLeft: 4, paddingRight: 4, borderRadius: 6, borderWidth: 1, borderColor: t.v('--ring'), color: t.text, fontSize: 14 }}
-              />
+              <>
+                <ProviderMark kind={thread.provider.kind} size={14} tone="header" />
+                <input
+                  autoFocus
+                  value={title}
+                  onChange={(e) => setTitle(e.value ?? '')}
+                  onSubmit={commitRename}
+                  onBlur={commitRename}
+                  onKeyDown={(e) => {
+                    if (e.key === 'escape') setRenaming(false)
+                  }}
+                  testId="header-rename"
+                  style={{ width: 360, height: 22, paddingLeft: 4, paddingRight: 4, borderRadius: 6, borderWidth: 1, borderColor: t.v('--ring'), color: t.text, fontSize: 14 }}
+                />
+              </>
+            ) : strip ? (
+              <GroupStrip leafId={leafId} size={size} onRename={isChildThread(thread) ? undefined : () => { setTitle(thread.title); setRenaming(true) }} />
             ) : (
-              <div
-                testId="header-title"
-                onClick={(e) => {
-                  if ((e.clickCount ?? 1) >= 2 && !isChildThread(thread)) {
-                    setTitle(thread.title)
-                    setRenaming(true)
-                  }
-                }}
-                style={{ display: 'flex', minWidth: 0, flexShrink: 1, pointerEvents: 'auto' }}
-              >
-                <TitleSwap threadId={thread.id} title={thread.title || 'Untitled'}>
-                  <Label color={t.text} truncate>
-                    {thread.title || 'Untitled'}
-                  </Label>
-                </TitleSwap>
-              </div>
+              <>
+                <ProviderMark kind={thread.provider.kind} size={14} tone="header" />
+                <div testId="header-title" style={{ display: 'flex', minWidth: 0, flexShrink: 1 }}>
+                  <TitleSwap threadId={thread.id} title={thread.title || 'Untitled'}>
+                    <Label color={t.text} truncate>{thread.title || 'Untitled'}</Label>
+                  </TitleSwap>
+                </div>
+              </>
             )}
-            <ThreadContextChips thread={thread} />
-            {thread.coordinator_project_id && (
+            {size === 'md' && !inSplit && <ThreadContextChips thread={thread} />}
+            {thread.coordinator_project_id && size === 'md' && !inSplit && (
               <Label color={muted(t, 0.6)} size={10} weight={500} style={{ flexShrink: 0 }}>
                 Project coordinator
               </Label>
@@ -306,16 +327,19 @@ export function ThreadHeader({ paneId }: { paneId?: string } = {}) {
           </>
         )}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+      <div windowDrag style={{ flexGrow: 1, minWidth: 8, height: '100%' }} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: size === 'md' ? 8 : 4, flexShrink: 0 }}>
         {!thread.subagent && others.length > 0 && (
           <Menu
             align="end"
             minWidth={192}
-            testId="handoff-menu"
+            testId={paneId ? `handoff-menu-${paneId}` : 'handoff-menu'}
             trigger={() => (
-              <Button variant="ghost" icon="handoff" label="Hand off" style={{ pointerEvents: 'auto' }}>
-                {paneId ? undefined : 'Hand off'}
-              </Button>
+              <Tip label="Hand off" side="bottom" disabled={!compactHandoff}>
+                <Button variant="ghost" icon="handoff" label="Hand off" size={size} style={{ pointerEvents: 'auto' }}>
+                  {compactHandoff ? undefined : 'Hand off'}
+                </Button>
+              </Tip>
             )}
           >
             {others.map((p) => (
@@ -333,7 +357,7 @@ export function ThreadHeader({ paneId }: { paneId?: string } = {}) {
           align="end"
           minWidth={208}
           testId={paneId ? `pane-actions-${paneId}` : "thread-actions"}
-          trigger={(open) => <ChromeIcon decorative icon={N.ellipsis} label="Thread actions" pressed={open} />}
+          trigger={(open) => <ChromeIcon decorative icon={N.ellipsis} label="Thread actions" pressed={open} size={box} />}
         >
 
           <MenuItem id="split-right" testId={paneId ? `pane-right-${paneId}` : "header-split-right"} disabled={paneId ? !canSplitPane(root, paneId, 'horizontal') : false} icon={N.splitRight} label="Split right" shortcut="⌘\" onSelect={() => split('horizontal')} />
@@ -380,10 +404,37 @@ export function ThreadHeader({ paneId }: { paneId?: string } = {}) {
             </>
           )}
         </Menu>
-        <PanelToggles />
+        {!inSplit && <PanelToggles />}
       </div>
     </>
   )
+}
+
+/**
+ * Split: each top group's header sits in the title bar over its own column (its pane's measured window rect), with a 1 px
+ * tick between columns; lower groups draw a 32 px strip in their pane (`split/Workspace.tsx`). The panel toggles stay at the
+ * window's trailing edge.
+ */
+const TOGGLES_ROOM = 92
+function SplitStrips({ panelOpen }: { panelOpen: boolean }) {
+  const t = useTheme()
+  const root = useSplitRoot()
+  const rects = usePaneRects()
+  const windowWidth = useWindowWidth()
+  const leaves = collectThreadPanes(root).filter((leaf) => rects.has(leaf.id) && !isLowerLeaf(rects, leaf.id))
+  const minLeft = panelOpen ? 0 : LEADING_X + 84
+  const maxRight = windowWidth - 8 - TOGGLES_ROOM
+  return <>{leaves.map((leaf, index) => {
+    const r = rects.get(leaf.id)!
+    const left = Math.max(r.x, minLeft)
+    const right = Math.min(r.x + r.width, maxRight)
+    if (right - left < 60) return null
+    return <div key={leaf.id} windowDrag testId={`split-header-${leaf.id}`} onMouseDown={() => focusPane(leaf.id)}
+      style={{ position: 'absolute', left, top: 0, width: right - left, height: TITLEBAR, display: 'flex', alignItems: 'center', gap: 8, paddingLeft: index === 0 && !panelOpen ? 4 : 12, paddingRight: 8 }}>
+      {index > 0 && r.x >= minLeft && <div style={{ position: 'absolute', left: 0, top: 13, width: 1, height: 20, backgroundColor: t.variant === 'dark' ? 'rgba(255, 255, 255, 0.09)' : 'rgba(0, 0, 0, 0.10)' }} />}
+      <ThreadHeader leafId={leaf.id} />
+    </div>
+  })}</>
 }
 
 /** The Environment card and right dock toggles. */

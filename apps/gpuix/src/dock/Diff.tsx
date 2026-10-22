@@ -10,7 +10,10 @@ import { getClient, onOpenEvent, useApp } from '../state.ts'
 import { desktopDiffTheme } from '../native/diff.ts'
 import { NativeDiffHeader } from '../native/DiffView.tsx'
 import { Label, useTheme } from '../ui.tsx'
-import { ErrorLine } from './parts.tsx'
+import { Action, ErrorLine } from './parts.tsx'
+import { openTab } from '../tabs/open.ts'
+import { diffFileIcons } from '../native/diff-file-icons.ts'
+import { getFileIconName } from '../../../desktop/src/lib/kit/fileIcons.ts'
 import { LoadingLines } from './loading.tsx'
 
 export function openWeb(url: string) {
@@ -18,7 +21,12 @@ export function openWeb(url: string) {
   if (/^https?:\/\//i.test(url)) spawn('open', [url], { stdio: 'ignore' }).on('error', () => {})
 }
 
-export function DiffPane({ thread, onStats }: { thread: Thread; onStats: (adds: number, dels: number) => void }) {
+/**
+ * `list` (the dock's Changes tab): the environment, commit and pull request actions, then one row per changed file that opens
+ * its diff as a tab (one click: the preview tab; a double click keeps it). `all` (the Changes tab beside the chat): every file's
+ * diff, open. `path`: one file's diff tab.
+ */
+export function DiffPane({ thread, onStats, mode = 'list', path }: { thread: Thread; onStats?: (adds: number, dels: number) => void; mode?: 'list' | 'all'; path?: string }) {
   const t = useTheme()
   const project = useApp(s => s.projects.find(p => p.id === thread.project_id))
   const [diff, setDiff] = useState<ThreadDiff | null>(null)
@@ -38,7 +46,7 @@ export function DiffPane({ thread, onStats }: { thread: Thread; onStats: (adds: 
     void client.call('threads.diff', { thread_id: thread.id, include_patch: false }).then(changes => {
       if (!current) return
       setDiff(changes); setLoaded(true)
-      onStats(changes.files.reduce((n, f) => n + f.additions, 0), changes.files.reduce((n, f) => n + f.deletions, 0))
+      onStats?.(changes.files.reduce((n, f) => n + f.additions, 0), changes.files.reduce((n, f) => n + f.deletions, 0))
     }, e => {
       if (!current) return
       // A new thread has no checkpoint yet; its project still has git status.
@@ -64,8 +72,9 @@ export function DiffPane({ thread, onStats }: { thread: Thread; onStats: (adds: 
       refresh()
     } catch (e) { setError(errorText(e)) } finally { setBusy(null) }
   }
-  const files = diff?.files ?? []
+  const files = (diff?.files ?? []).filter((file) => !path || file.path === path)
   return <>
+    {mode === 'list' && <>
     <div {...ISLAND} style={{ display: 'flex', flexDirection: 'column', width: '100%', gap: 2, padding: 6, flexShrink: 0 }}>
       <Label color={t.textSecondary} size={14} lineHeight={21} style={{ paddingLeft: 8, paddingTop: 2, paddingBottom: 2, opacity: 0.4 }}>Environment</Label>
       <EnvironmentRow icon={N.laptop} label={project?.name ?? 'Local'} trailing="Local" />
@@ -83,6 +92,7 @@ export function DiffPane({ thread, onStats }: { thread: Thread; onStats: (adds: 
       </>}
     </div>
     <div style={{ height: 1, marginLeft: 6, marginRight: 6, marginTop: 4, marginBottom: 4, backgroundColor: t.borderLight }} />
+    </>}
     <ErrorLine error={error} retry={refresh} />
     {notice && <Label color={t.textSecondary} size={11} style={{ padding: 12 }}>{notice}</Label>}
     {!files.length ? loaded && !error ? <div style={{ display: 'flex', flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingLeft: 20, paddingRight: 20 }}><Label color={t.textSecondary} size={12} style={{ textAlign: 'center', opacity: 0.7 }}>No changes yet. Files the agent edits in this thread show up here with their diff.</Label></div> : null : <>
@@ -91,17 +101,20 @@ export function DiffPane({ thread, onStats }: { thread: Thread; onStats: (adds: 
         <Label color={t.text} size={14} lineHeight={21} style={{ flexGrow: 1 }}>{`${files.length} ${files.length === 1 ? 'file' : 'files'} changed`}</Label>
         <Label color={t.green} size={11}>{`+${files.reduce((n, f) => n + f.additions, 0)}`}</Label>
         <Label color={t.red} size={11}>{`−${files.reduce((n, f) => n + f.deletions, 0)}`}</Label>
+        {mode === 'list' && <Action testId="dock-diff-open-all" onClick={() => openTab(thread.id, { kind: 'diff' })}>Open all</Action>}
       </div>
-      <virtual-list testId="dock-diff-list" style={{ flexGrow: 1, minHeight: 0, width: '100%' }}>
-        {files.map((file) => <FileDiff key={`${diff?.to}:${generation}:${file.path}`} file={file} threadId={thread.id} />)}
+      <virtual-list testId={mode === 'list' ? 'dock-diff-list' : 'diff-tab-list'} style={{ flexGrow: 1, minHeight: 0, width: '100%' }}>
+        {files.map((file) => mode === 'list'
+          ? <ChangeRow key={file.path} file={file} threadId={thread.id} />
+          : <FileDiff key={`${diff?.to}:${generation}:${file.path}`} file={file} threadId={thread.id} defaultOpen />)}
       </virtual-list>
     </>}
   </>
 }
 
-const FileDiff = memo(function FileDiff({ file, threadId }: { file: FileChange; threadId: string }) {
+export const FileDiff = memo(function FileDiff({ file, threadId, defaultOpen = false }: { file: FileChange; threadId: string; defaultOpen?: boolean }) {
   const t = useTheme()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen)
   const [patch, setPatch] = useState<string | null>(null)
   const [truncated, setTruncated] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -135,3 +148,21 @@ function EnvironmentRow({ icon, label, trailing, onClick, disabled, testId }: { 
     {trailing && <Label color={t.textSecondary} size={14} lineHeight={21}>{trailing}</Label>}
   </div>
 }
+
+/** A changed file in the dock: one click opens its diff as the preview tab, a double click keeps it. */
+const ChangeRow = memo(function ChangeRow({ file, threadId }: { file: FileChange; threadId: string }) {
+  const t = useTheme()
+  const name = file.path.split('/').pop() ?? file.path
+  const folder = file.path.slice(0, Math.max(0, file.path.length - name.length - 1))
+  return <div testId={`dock-change-${file.path}`} role="button" tabIndex={0}
+    onClick={(e) => openTab(threadId, { kind: 'diff', path: file.path }, { preview: (e.clickCount ?? 1) < 2, focus: false })}
+    onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') openTab(threadId, { kind: 'diff', path: file.path }) }}
+    style={{ display: 'flex', alignItems: 'center', gap: 8, height: 30, marginLeft: 6, marginRight: 6, paddingLeft: 8, paddingRight: 8, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
+    <Icon source={diffFileIcons[getFileIconName(file.path)] ?? DOCK_ICONS.changes} size={14} color={t.textSecondary} />
+    <Label color={t.text} size={13} truncate style={{ flexShrink: 1 }}>{name}</Label>
+    {folder && <Label color={t.textTertiary} size={12} truncate style={{ flexShrink: 2 }}>{folder}</Label>}
+    <div style={{ flexGrow: 1 }} />
+    {file.additions > 0 && <Label color={t.green} size={11}>{`+${file.additions}`}</Label>}
+    {file.deletions > 0 && <Label color={t.red} size={11}>{`−${file.deletions}`}</Label>}
+  </div>
+})

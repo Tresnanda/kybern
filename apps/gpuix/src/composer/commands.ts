@@ -1,6 +1,7 @@
 // The slash commands of an open thread (`views/Thread.tsx` `commands`): sessions,
 // compact, the harness's own commands, new, reconnect, stop, the dock panels,
 // pull request, archive, settings and usage.
+import { openTab } from '../tabs/open.ts'
 import { useMemo } from 'react'
 import { threadCommandSpecs, type ThreadCommandId } from '@/lib/threadCommands'
 import { isFreeChatProject, type Thread } from '../../../../packages/kybern-client/src/types.ts'
@@ -41,7 +42,7 @@ export function useThreadCommands(thread: Thread | null, attach: () => void): Sl
       activity: { icon: G.workflow, run: panel('activity') },
       agents: { icon: N.users, run: panel('agents') },
       attach: { icon: G.paperclip, run: attach },
-      terminal: { icon: G.terminal, run: panel('terminal') },
+      terminal: { icon: G.terminal, run: () => { void client().call('terminals.create', { thread_id: thread.id, cols: 100, rows: 24 }).then(info => openTab(thread.id, { kind: 'terminal', id: info.id })).catch(error => toast.error('Unable to open a terminal', { description: errorText(error) })) } },
       changes: { icon: G.changes, run: panel('changes') },
       files: { icon: G.folders, run: panel('explorer') },
       environment: { icon: N.branch, run: panel('changes') },

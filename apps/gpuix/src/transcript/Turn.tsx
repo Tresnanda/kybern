@@ -1,3 +1,4 @@
+import { openTab } from '../tabs/open.ts'
 import type { PublicInstance } from '@gpuix/react'
 import { chooseTab, setDock } from '../dock/store.ts'
 import { getFileIconName } from '../../../desktop/src/lib/kit/fileIcons.ts'
@@ -349,7 +350,7 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
           {canUndo && (
             <Button variant="ghost" size="sm" testId="edited-undo" busy={reverting} iconAfter={T.undo} onClick={() => void undo()}>Undo</Button>
           )}
-          <Button testId="edited-review" size="sm" onClick={() => { chooseTab(threadId, 'changes'); setDock(threadId, { open: true }) }}>Review</Button>
+          <Button testId="edited-review" size="sm" onClick={() => openTab(threadId, { kind: 'diff' })}>Review</Button>
           <IconButton testId="edited-files-toggle" label={expanded ? 'Hide edited files' : 'Show edited files'} icon={T.chevronDown} size="sm" onClick={() => setExpanded(!expanded)}>
             <Chevron open={expanded} color={muted(t, t.variant === 'dark' ? 0.5 : 0.7)} />
           </IconButton>
@@ -425,7 +426,7 @@ function EditedFileRow({ file, threadId, turnId, first, border }: { file: Diff['
         <div style={{ flexGrow: 1 }} />
         <DiffStat additions={file.additions} deletions={file.deletions} />
         </div>
-        <IconButton testId={`edited-review-${file.path}`} label={`Open ${file.path} in the diff panel`} icon={T.panelRight} size="sm" onClick={() => { chooseTab(threadId, 'changes'); setDock(threadId, { open: true }) }} />
+        <IconButton testId={`edited-review-${file.path}`} label={`Open the changes in ${file.path} in a tab`} icon={T.panelRight} size="sm" onClick={() => openTab(threadId, { kind: 'diff', path: file.path })} />
       </div>
       <Collapse open={open && ready}>
         <div style={{ display: 'flex', flexDirection: 'column', borderTopWidth: 1, borderColor: raisedRim(g, border), backgroundColor: g.on ? 'rgba(0, 0, 0, 0)' : t.v('--background') }}>

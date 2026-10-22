@@ -5,7 +5,7 @@ import { useGpuix, useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { spawn } from 'node:child_process'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FileEntry, FilesReadResult } from '../../../../packages/kybern-client/src/types.ts'
-import { ResizeHandle, useResize } from '../kit/Resize.tsx'
+
 import { ISLAND } from '../MatrixLoader.tsx'
 import { errorText } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
@@ -21,6 +21,7 @@ import { Label, useTheme } from '../ui.tsx'
 import { Rise } from '../motion/kit.tsx'
 import { LoadingLines } from './loading.tsx'
 import { takeExplorerSelection, useExplorerSelection } from './explorerSelection.ts'
+import { openTab } from '../tabs/open.ts'
 import { DockEmpty, ErrorLine } from './parts.tsx'
 import { MotionFileTreeRows, type TreeRow } from './MotionFileTree.tsx'
 import { TREE_ROW_HEIGHT, TREE_WINDOW_THRESHOLD, treeWindowRange } from './fileTreeMotion.ts'
@@ -44,8 +45,7 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
   const selectionRequest = useExplorerSelection(), threadId = useApp(s => s.selectedId)
   const reveal = useRef<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
-  const closeFile = useCallback(() => setSelected(null), [])
-  const [error, setError] = useState<string | null>(null)
+    const [error, setError] = useState<string | null>(null)
   const requested = useRef(new Set<string>())
   const live = useRef(true)
   useEffect(() => { live.current = true; return () => { live.current = false } }, [])
@@ -113,25 +113,29 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
     if (index < 0 || !treeList.current) return
     setFocus(index); scrollToRow(index); reveal.current = null
   }, [rows, scrollToRow])
-  const activate = useCallback((row: TreeRow) => {
+  // A file opens as a tab of the thread (ADE-54): one click is the italic preview tab the next click replaces; a double click,
+  // or Enter, keeps it.
+  const activate = useCallback((row: TreeRow, keep = false) => {
     reveal.current = null
     if (row.kind === 'directory') {
       setExpanded((previous) => { const next = new Set(previous); if (next.has(row.path)) next.delete(row.path); else next.add(row.path); return next })
       load(row.path)
     } else if (row.kind === 'error') { setError(null); load(row.path, true) }
-    else if (row.kind !== 'loading' && row.kind !== 'empty') setSelected(row.path)
-  }, [load])
+    else if (row.kind !== 'loading' && row.kind !== 'empty') {
+      setSelected(row.path)
+      if (threadId) openTab(threadId, { kind: 'file', path: row.path, root: 'project' }, { preview: !keep, focus: false })
+    }
+  }, [load, threadId])
   // How the last file was chosen: Enter/Space opens it without the pane entrance (keyboard actions are instant); a click plays it.
   const byKey = useRef(false)
-  const activateRow = useCallback((row: TreeRow, index: number) => {
+  const activateRow = useCallback((row: TreeRow, index: number, clicks = 1) => {
     byKey.current = false
-    setFocus(index); activate(row)
+    setFocus(index); activate(row, clicks >= 2)
     if (tree.current) renderer?.focusElement?.(tree.current.id)
   }, [activate, renderer])
-  // `Explorer.tsx`: the file tree column resizes 176-520 (240 by default) and is saved.
-  const column = useResize({ initial: 240, min: 176, max: 520, side: 'left', storageKey: 'kybern.explorer.width' })
+  // The dock keeps the tree only; files open as tabs beside the chat (ADE-54).
   return <div style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0 }}>
-    <div style={{ display: 'flex', flexDirection: 'column', width: column.width, flexShrink: 0, position: 'relative', borderRightWidth: 0.6, borderColor: t.borderLight }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, position: 'relative' }}>
       <div {...ISLAND} style={{ display: 'flex', width: '100%', height: 44, alignItems: 'center', padding: 8 }}>
         <SearchField testId="dock-file-search" placeholder="Search files…" label="Search files" value={query} onChange={setQuery} width="100%" />
       </div>
@@ -148,7 +152,7 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
         else if (event.key === 'end') next = rows.length - 1
         else if (event.key === 'right') { if (row.kind === 'directory' && !expanded.has(row.path)) activate(row); else if (row.kind === 'directory') next = Math.min(rows.length - 1, index + 1) }
         else if (event.key === 'left') { if (row.kind === 'directory' && expanded.has(row.path)) activate(row); else { for (let i = index - 1; i >= 0; i--) if (rows[i]!.depth < row.depth) { next = i; break } } }
-        else if (event.key === 'enter' || event.key === 'space') activate(row)
+        else if (event.key === 'enter' || event.key === 'space') activate(row, true)
         else if (event.key.length === 1) {
           const now = Date.now(), previous = typeAhead.current
           const value = (now - previous.at < 700 ? previous.value : '') + event.key.toLocaleLowerCase()
@@ -165,41 +169,43 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
         <MotionFileTreeRows rows={rows} open={expanded} loading={loadingDirs} selected={selected} focus={focus} virtual={virtualTree} window={virtualTree ? treeWindow : undefined} search={results !== null} activate={activateRow} />
       </TreeHost>
       </div>
-      <ResizeHandle testId="dock-file-tree-resize" edge="right" label="Resize file tree" dragging={column.dragging} onPointerDown={column.onPointerDown} onReset={column.reset} />
-    </div>
-    <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, minHeight: 0 }}>
-      {selected ? <FileViewer key={selected} projectId={projectId} path={selected} instant={byKey.current} onClose={closeFile} /> : <div style={{ display: 'flex', flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: 20 }}><Label color={t.textSecondary} size={12} style={{ opacity: 0.7, textAlign: 'center' }}>Select a file from the tree to view it.</Label></div>}
     </div>
   </div>
 }
 
 const MARKDOWN_PREVIEW_BYTES = 2 * 1024 * 1024
-const FileViewer = memo(function FileViewer({ projectId, path, instant, onClose }: { projectId: string; path: string; instant: boolean; onClose: () => void }) {
+/**
+ * A file tab's body (ADE-54): a project file (`projectId`, read through `files.read`) or a path a chat names (`threadId`,
+ * `threads.files.read`, relative to the thread's folder). `line` scrolls the source to that line.
+ */
+export const FileViewer = memo(function FileViewer({ projectId, threadId, path, line, instant = false }: { projectId?: string; threadId?: string; path: string; line?: number; instant?: boolean }) {
   const t = useTheme()
   // Decided when the viewer mounts: the loaded file enters as `t-pane` unless it was opened from the keyboard.
   const [play] = useState(!instant)
   const markdownFile = /\.(md|mdx|markdown)$/i.test(path)
   const project = useApp((s) => s.projects.find((p) => p.id === projectId))
-  const absolutePath = project ? `${project.path}/${path}` : null
+  const thread = useApp((s) => threadId ? s.threads.find((th) => th.id === threadId) : undefined)
+  const absolutePath = path.startsWith('/') ? path : project ? `${project.path}/${path}` : thread ? `${thread.cwd}/${path}` : null
   const [file, setFile] = useState<FilesReadResult | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [preview, setPreview] = useState(() => /\.(md|mdx|markdown)$/i.test(path))
+  const [preview, setPreview] = useState(() => /\.(md|mdx|markdown)$/i.test(path) && !line)
   const [reload, setReload] = useState(0)
   useEffect(() => {
     let current = true
     setError(null)
     const read = async () => {
       const client = getClient()!
-      const first = await client.call('files.read', { project_id: projectId, path, max_bytes: 256 * 1024 })
+      if (!projectId && threadId) { const file = await client.call('threads.files.read', { thread_id: threadId, path }); return { content: file.content, truncated: false, binary: false, size: file.content.length } as FilesReadResult }
+      const first = await client.call('files.read', { project_id: projectId!, path, max_bytes: 256 * 1024 })
       if (markdownFile && !first.binary && first.truncated && first.size <= MARKDOWN_PREVIEW_BYTES) {
-        const full = await client.call('files.read', { project_id: projectId, path, max_bytes: MARKDOWN_PREVIEW_BYTES })
+        const full = await client.call('files.read', { project_id: projectId!, path, max_bytes: MARKDOWN_PREVIEW_BYTES })
         if (!full.truncated && Buffer.byteLength(full.content, 'utf8') <= MARKDOWN_PREVIEW_BYTES) return full
       }
       return first
     }
     void read().then((result) => { if (current) setFile(result) }, (e) => { if (current) setError(errorText(e)) })
     return () => { current = false }
-  }, [projectId, path, reload, markdownFile])
+  }, [projectId, threadId, path, reload, markdownFile])
   const canPreview = markdownFile && file && !file.binary && !file.truncated && file.size <= MARKDOWN_PREVIEW_BYTES
   const showPreview = preview && canPreview
   return <>
@@ -212,20 +218,20 @@ const FileViewer = memo(function FileViewer({ projectId, path, instant, onClose 
         <MenuItem id="contents" label="Copy contents" disabled={!file || file.binary} onSelect={() => { if (file && !file.binary) copyText(file.content) }} />
         <MenuItem id="reveal" label="Reveal in Finder" icon={N.folder} disabled={!absolutePath || !activeEnvironment().local} onSelect={() => { if (absolutePath && activeEnvironment().local) spawn('open', ['-R', absolutePath], { stdio: 'ignore' }).on('error', () => {}) }} />
       </Menu>
-      <IconButton icon={N.x} label="Close file" onClick={onClose} testId="dock-file-close" />
+
     </div>
     <ErrorLine error={error} retry={() => setReload((n) => n + 1)} />
     {file ? <Rise kind="pane" play={play} style={{ flexGrow: 1, minHeight: 0, minWidth: 0 }}>{file.binary ? <DockEmpty icon={N.note} title="Binary file" body="Open this file in your editor to view it." /> : <>
       {showPreview ? <virtual-list testId="dock-file-content" {...EXPLORER_SCROLL_LAYOUT} overdraw={0} style={{ flexGrow: 1, minHeight: 0, overflowX: 'scroll' }}>
         <div style={{ padding: 12 }}><DocumentMarkdown source={file.content} theme={cachedMarkdownTheme(t)} /></div>
-      </virtual-list> : <FileCode content={file.content} path={path} />}
+      </virtual-list> : <FileCode content={file.content} path={path} line={line} />}
       {file.truncated && <Label color={t.textSecondary} size={11} style={{ padding: 8 }}>Showing the first 256 KB. Open the file in your editor for the rest.</Label>}
     </>}</Rise> : !error && <LoadingLines testId="dock-file-loading" />}
   </>
 })
 
 // Share one whole-document parse across the bounded native rows.
-export function FileCode({ content, path }: { content: string; path: string }) {
+export function FileCode({ content, path, line }: { content: string; path: string; line?: number }) {
   const renderer = useGpuixRequired()
   const [ready, setReady] = useState<{ content: string; path: string; document: SyntaxDocument } | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -247,15 +253,23 @@ export function FileCode({ content, path }: { content: string; path: string }) {
   })) : [], [document])
   const sourceWidth = useMemo(() => content.split('\n').reduce((width, line) => Math.max(width, line.length * 7.3 + 60), 400), [content])
   const t = useTheme()
+  // A link to `path:line` scrolls the line into view (three lines of context above it) and marks it.
+  const list = useRef<PublicInstance | null>(null)
+  useEffect(() => {
+    if (!document || !line || !list.current) return
+    const at = Math.max(0, line - 4)
+    ;(renderer as { scrollToItem?: (id: number, index: number, offset?: number) => void }).scrollToItem?.(list.current.id, Math.floor(at / 64), (at % 64) * 20)
+  }, [document, line, renderer])
   if (error) return <ErrorLine error={error} retry={() => setRetry(n => n + 1)} />
   if (!document) return <LoadingLines testId="dock-source-loading" />
-  return <div testId="dock-file-horizontal" style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0, overflowX: 'scroll' }}><virtual-list testId="dock-file-content" {...EXPLORER_SCROLL_LAYOUT} estimatedItemHeight={1280} overdraw={0} style={{ flexGrow: 1, flexShrink: 0, minHeight: 0, height: '100%', width: sourceWidth }}>
-    {chunks.map(chunk => <CodeChunk key={chunk.start} document={document} start={chunk.start} end={chunk.end} />)}
+  return <div testId="dock-file-horizontal" style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0, overflowX: 'scroll' }}><virtual-list ref={list} testId="dock-file-content" {...EXPLORER_SCROLL_LAYOUT} estimatedItemHeight={1280} overdraw={0} style={{ flexGrow: 1, flexShrink: 0, minHeight: 0, height: '100%', width: sourceWidth }}>
+    {chunks.map(chunk => <CodeChunk key={chunk.start} document={document} start={chunk.start} end={chunk.end} mark={line && line > chunk.start && line <= chunk.end ? line : undefined} />)}
   </virtual-list></div>
 }
-const CodeChunk = memo(function CodeChunk({ document, start, end }: { document: SyntaxDocument; start: number; end: number }) {
+const CodeChunk = memo(function CodeChunk({ document, start, end, mark }: { document: SyntaxDocument; start: number; end: number; mark?: number }) {
   const t = useTheme()
-  return <div testId={`dock-code-chunk-${start}`} style={{ display: 'flex', height: (end - start) * 20, width: '100%', minWidth: 0 }}>
+  return <div testId={`dock-code-chunk-${start}`} style={{ display: 'flex', height: (end - start) * 20, width: '100%', minWidth: 0, position: 'relative' }}>
+    {mark !== undefined && <div testId="dock-code-line-mark" style={{ position: 'absolute', left: 0, right: 0, top: (mark - 1 - start) * 20, height: 20, backgroundColor: t.variant === 'dark' ? 'rgba(51, 134, 214, 0.14)' : 'rgba(1, 105, 204, 0.08)', pointerEvents: 'none' }} />}
     <text style={{ width: 44, flexShrink: 0, paddingRight: 10, fontFamily: FONT_MONO, fontSize: 12, lineHeight: 20, color: t.textTertiary, textAlign: 'right', userSelect: 'none' }}>{Array.from({ length: end - start }, (_, i) => String(start + i + 1)).join('\n')}</text>
     <VirtualCode document={document.id} revision={document.revision} startLine={start} endLine={end} theme={cachedMarkdownTheme(t)} style={{ userSelect: 'text', flexGrow: 1, minWidth: 0, fontFamily: FONT_MONO, fontSize: 12, lineHeight: 20 }} />
   </div>

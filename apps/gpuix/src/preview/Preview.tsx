@@ -29,6 +29,7 @@ import { previewDockSize } from './Surface.tsx'
 import { useElementBounds } from '../native/layout-hooks.ts'
 import { clampPlayerSize, defaultPlayerSize, type PlayerSize } from '../../../../packages/kybern-client/src/previewMiniPlayer.ts'
 import { dockGeometry, useDock } from '../dock/store.ts'
+import { useGroups } from '../split/store.ts'
 import { useSidebarWidth, useWindowWidth } from '../shell/layout.ts'
 import { PreviewResizeCapture } from './resize.tsx'
 import { MiniResize, type MiniCorner } from './MiniResize.tsx'
@@ -135,7 +136,10 @@ export function PreviewIntegration({ insetBottom = 0 }: { insetBottom?: number }
     return getClient()!.onNotification('previews.open_requested', payload => { const request = payload as PreviewOpenRequestedNotification; showPreview(request.thread_id); void openPreview(request.thread_id, request.target) })
   }, [connected])
   useEffect(() => addWindowKeyHandler(e => { if (id && page === 'home' && !settings && e.modifiers?.cmd && e.modifiers.alt && e.key === 'p') { setNav({ keyboardNav: true }); const s = previewState(id); if (s.entries.length) { setPreview(id, { floating: !s.floating }); if (s.floating) showPreview(id) } else showPreview(id); return true } }), [id, page, settings])
-  const ids = [...new Set([id, floating].filter((value): value is string => !!value))].sort()
+  // One native document per thread: the threads whose browser tab is active in some group, the selected one, and the floating one.
+  const groups = useGroups()
+  const shown = Object.values(groups).filter((g) => g.threadId && g.active === 'preview').map((g) => g.threadId)
+  const ids = [...new Set([id, floating, ...shown].filter((value): value is string => !!value))].sort()
   return <>{ids.map(threadId => <PreviewSurface key={threadId} threadId={threadId} />)}{floating && page === 'home' && !settings ? <MiniPlayer key={floating} insetBottom={insetBottom} insetEnd={insetEnd} threadId={floating} /> : null}<PreviewResizeCapture /></>
 }
 function MiniPlayer({ threadId, insetBottom, insetEnd }: { threadId: string; insetBottom: number; insetEnd: number }) {
