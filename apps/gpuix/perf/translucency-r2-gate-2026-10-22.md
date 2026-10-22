@@ -3,7 +3,10 @@
 Decides which frost classes (a scene blur behind the glass tint) ship on whole-window glass, per `docs/specs/gpuix-translucency-r2.md` §8.
 Control = the same build with every class tint-only (`KYBERN_GLASS_FROST=none`, `denseFloat` fill, same rim and highlight).
 
-**Decision: no class passes the keep/drop rule, so `FROST_DEFAULT` in `src/platform/translucency.ts` is now empty.**
+> **Superseded:** the shipped `FROST_DEFAULT` keeps all three classes on. The rule agreed for this feature is stutter, and every class
+> passes frame pacing; the extra GPU time per frame below was accepted (`src/platform/translucency.ts`, commit a4a48990a).
+
+**Decision: no class passes the keep/drop rule, so `FROST_DEFAULT` in `src/platform/translucency.ts` was set empty.**
 Composer, pills and menus all fall back to the layered tint (`denseFloat`, rim, top highlight, no blur, no shadow).
 `KYBERN_GLASS_FROST=menus|composer|pills|all` turns a class back on.
 

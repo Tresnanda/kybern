@@ -1,13 +1,15 @@
 // On-screen check for older-history paging: scroll a long delegating thread to the top and count how many
 // wheel gestures bring new prompts into view. Needs a scratch daemon whose data holds such a thread.
 import assert from 'node:assert/strict'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { launch, type App } from '@gpuix/react/automation'
 
 const data = process.env.KYBERN_DATA_DIR ?? ''
 if (!data.includes('gpuix-scratch')) throw Error('Scratch daemon required')
 const thread = process.env.KYBERN_GPUIX_THREAD ?? ''
-const out = process.env.KYBERN_VERIFY_OUTPUT ?? '.'
+// Captures show the scratch thread; never write them into the checkout by default.
+const out = process.env.KYBERN_VERIFY_OUTPUT ?? tmpdir()
 const gestures = Number(process.env.GESTURES ?? 24)
 let app: App | undefined
 try {
