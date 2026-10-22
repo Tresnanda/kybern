@@ -9,6 +9,10 @@
  * Explorer and Changes panes beside the chat), one every 350 ms; (2) a 2×2 split on the long thread, 15 s idle, then
  * 20 ⌃Tab presses (tabs) or 20 dock pane switches (dock). Footprint (`footprint`), CPU time (`ps`), frame intervals
  * (`KYBERN_FRAME_TIMES`) and the key-to-content latency seen by automation.
+ *
+ *   FILE=src/Big.tsx CONTENT=1 PERF_OUT=<json> bun perf/tabs-ade54.ts tabs 3
+ * opens that project file instead of `src/Explorer.tsx`, and with CONTENT=1 waits for its highlighted code (the first code
+ * chunk) instead of the tab body, so the latency includes the read and the syntax document (the file-tab mount cost).
  */
 import { execFileSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
@@ -39,11 +43,12 @@ const intervals = (stamps: number[]) => stamps.slice(1).map((t, i) => t - stamps
 const busy = (gaps: number[]) => gaps.filter((g) => g < 250)
 const leaf = (id: string, threadId: string) => ({ kind: 'leaf', id, threadId })
 const file = (p: string) => ({ kind: 'file', path: p, root: 'project' })
+const FILE = process.env.FILE ?? 'src/Explorer.tsx'
 
 function layout(kind: 'switch' | 'split') {
   if (mode === 'tabs') {
     const groups = kind === 'switch'
-      ? { main: { threadId: long.id, tabs: [{ kind: 'chat' }, file('src/Explorer.tsx'), { kind: 'diff' }], active: 'chat', preview: null } }
+      ? { main: { threadId: long.id, tabs: [{ kind: 'chat' }, file(FILE), { kind: 'diff' }], active: 'chat', preview: null } }
       : {
         a: { threadId: long.id, tabs: [{ kind: 'chat' }], active: 'chat', preview: null }, b: { threadId: long.id, tabs: [file('src/Explorer.tsx'), file('src/theme.ts')], active: 'file:project:src/Explorer.tsx', preview: null },
         c: { threadId: long.id, tabs: [{ kind: 'diff' }, file('docs/notes.md')], active: 'diff:*', preview: null }, d: { threadId: other.id, tabs: [{ kind: 'chat' }], active: 'chat', preview: null },
@@ -82,7 +87,7 @@ for (let run = 1; run <= runs; run++) {
       const started = performance.now()
       if (mode === 'tabs') {
         await root.press(i % 2 === 0 ? 'cmd-2' : 'cmd-1')
-        const target = i % 2 === 0 ? 'tab-body-file:project:src/Explorer.tsx' : 'transcript-surface'
+        const target = i % 2 === 0 ? (process.env.CONTENT ? 'dock-code-chunk-0' : `tab-body-file:project:${FILE}`) : 'transcript-surface'
         for (let n = 0; n < 200 && !(await app.getByTestId(target).count()); n++) await Bun.sleep(5)
       } else {
         await app.getByTestId(i % 2 === 0 ? 'dock-tab-changes' : 'dock-tab-explorer').click()
@@ -116,7 +121,7 @@ for (let run = 1; run <= runs; run++) {
   }
   console.log(JSON.stringify(rows.slice(-2)))
 }
-const out = path.join(import.meta.dir, `tabs-ade54-${mode}.json`)
+const out = process.env.PERF_OUT ?? path.join(import.meta.dir, `tabs-ade54-${mode}.json`)
 writeFileSync(out, JSON.stringify(rows, null, 1))
 client.close?.()
 console.log(`[perf] ${rows.length} rows → ${out}`)

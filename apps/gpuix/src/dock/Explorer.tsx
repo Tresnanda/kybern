@@ -1,5 +1,6 @@
 import { DocumentMarkdown } from '../native/markdownDocument.tsx'
-import { createSyntaxDocument, releaseSyntaxDocument, VirtualCode, type SyntaxDocument } from '../native/syntax.tsx'
+import { VirtualCode, type SyntaxDocument } from '../native/syntax.tsx'
+import { acquireSyntax, cachedRead, peekSyntax, rememberRead } from './fileCache.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { useGpuix, useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { spawn } from 'node:child_process'
@@ -180,13 +181,16 @@ const MARKDOWN_PREVIEW_BYTES = 2 * 1024 * 1024
  */
 export const FileViewer = memo(function FileViewer({ projectId, threadId, path, line, instant = false }: { projectId?: string; threadId?: string; path: string; line?: number; instant?: boolean }) {
   const t = useTheme()
-  // Decided when the viewer mounts: the loaded file enters as `t-pane` unless it was opened from the keyboard.
-  const [play] = useState(!instant)
+  // Decided when the viewer mounts: the loaded file enters as `t-pane` unless it was opened from the keyboard or is cached.
+  const [play] = useState(() => !instant && !cachedRead(projectId ? `p:${projectId}` : `t:${threadId}`, path))
   const markdownFile = /\.(md|mdx|markdown)$/i.test(path)
   const project = useApp((s) => s.projects.find((p) => p.id === projectId))
   const thread = useApp((s) => threadId ? s.threads.find((th) => th.id === threadId) : undefined)
   const absolutePath = path.startsWith('/') ? path : project ? `${project.path}/${path}` : thread ? `${thread.cwd}/${path}` : null
-  const [file, setFile] = useState<FilesReadResult | null>(null)
+  // A file shown before (`fileCache.ts`) draws at once and is re-read behind it; an unchanged read keeps the same object, so its
+  // syntax document is not rebuilt.
+  const owner = projectId ? `p:${projectId}` : `t:${threadId}`
+  const [file, setFile] = useState<FilesReadResult | null>(() => cachedRead(owner, path) ?? null)
   const [error, setError] = useState<string | null>(null)
   const [preview, setPreview] = useState(() => /\.(md|mdx|markdown)$/i.test(path) && !line)
   const [reload, setReload] = useState(0)
@@ -203,9 +207,15 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
       }
       return first
     }
-    void read().then((result) => { if (current) setFile(result) }, (e) => { if (current) setError(errorText(e)) })
+    void read().then((result) => {
+      if (!current) return
+      const cached = cachedRead(owner, path)
+      const same = cached && cached.content === result.content && cached.truncated === result.truncated && cached.binary === result.binary
+      if (!same) rememberRead(owner, path, result)
+      setFile(same ? cached : result)
+    }, (e) => { if (current) setError(errorText(e)) })
     return () => { current = false }
-  }, [projectId, threadId, path, reload, markdownFile])
+  }, [owner, projectId, threadId, path, reload, markdownFile])
   const canPreview = markdownFile && file && !file.binary && !file.truncated && file.size <= MARKDOWN_PREVIEW_BYTES
   const showPreview = preview && canPreview
   return <>
@@ -233,19 +243,21 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
 // Share one whole-document parse across the bounded native rows.
 export function FileCode({ content, path, line }: { content: string; path: string; line?: number }) {
   const renderer = useGpuixRequired()
-  const [ready, setReady] = useState<{ content: string; path: string; document: SyntaxDocument } | null>(null)
+  // A document parsed for this text before (`fileCache.ts`) draws on the first render; otherwise it parses once and is kept.
+  const [ready, setReady] = useState<{ content: string; path: string; document: SyntaxDocument } | null>(() => {
+    const document = peekSyntax(renderer, path, content)
+    return document ? { content, path, document } : null
+  })
   const [error, setError] = useState<string | null>(null)
   const [retry, setRetry] = useState(0)
   useEffect(() => {
     let live = true
-    let document: SyntaxDocument | undefined
     setError(null)
-    void createSyntaxDocument(renderer, { text: content, path }).then(next => {
-      document = next
-      if (live) setReady({ content, path, document: next })
-      else releaseSyntaxDocument(renderer, next.id)
+    const lease = acquireSyntax(renderer, path, content)
+    void lease.pending.then(next => {
+      if (live) setReady((prev) => prev?.document.id === next.id && prev.content === content && prev.path === path ? prev : { content, path, document: next })
     }, error => { if (live) setError(String(error)) })
-    return () => { live = false; if (document) releaseSyntaxDocument(renderer, document.id) }
+    return () => { live = false; lease.release() }
   }, [renderer, content, path, retry])
   const document = ready?.content === content && ready.path === path ? ready.document : null
   const chunks = useMemo(() => document ? Array.from({ length: Math.ceil(document.lineCount / 64) }, (_, index) => ({
