@@ -9,7 +9,7 @@ import { emptyThreadState } from '../../../../packages/kybern-client/src/transcr
 import { connect, set, getState, useApp } from '../state.ts'
 import { patch } from '../composer/store.ts'
 import { ThemeProvider, useTheme, Label } from '../ui.tsx'
-import { Button } from '../transcript/kit.tsx'
+import { Button } from '../kit/Button.tsx'
 import { ThreadRequests } from '../transcript/Requests.tsx'
 import { ComposerView } from '../Composer.tsx'
 import { NativeSubagentComposer } from '../subagents/Composer.tsx'
@@ -101,7 +101,7 @@ function Fixture() {
   if (page === 'notes') return <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: t.surface }}><Button testId="fixture-back" onClick={() => setNav({ page: 'home' })}>Back</Button><NotesPage /></div>
   if (page === 'tasks') return <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: t.surface }}><Button testId="fixture-back" onClick={() => setNav({ page: 'home' })}>Back</Button><TasksPage /></div>
   return <div testId="fixture-ready" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: t.surface }}>
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: 18 }}>{['secret', 'activity', 'permissions', 'limit', 'brief', 'settings', 'merge', 'native-live', 'native-failed', 'readonly', 'details', 'item', 'task-item', 'task-chip'].map(name => <Button key={name} testId={`fixture-${name}`} variant={selected === name ? 'default' : 'ghost'} onClick={() => { choose(name); show(name) }}>{name}</Button>)}</div>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: 18 }}>{['secret', 'activity', 'permissions', 'limit', 'brief', 'settings', 'merge', 'native-live', 'native-failed', 'readonly', 'details', 'item', 'task-item', 'task-chip'].map(name => <Button key={name} testId={`fixture-${name}`} variant={selected === name ? 'secondary' : 'ghost'} onClick={() => { choose(name); show(name) }}>{name}</Button>)}</div>
     <div style={{ flexGrow: 1 }} />
     {[...new Set(calls)].map(method => <div key={method} testId={`rpc-${method}`} style={{ width: 1, height: 1 }} />)}
     <div style={{ display: 'flex', flexDirection: 'column', width: 736, alignSelf: 'center', paddingBottom: 24 }}>

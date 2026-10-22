@@ -5,7 +5,8 @@ import { getClient, useApp } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { Icon } from '../icons.tsx'
 import { T } from '../transcript/glyphs.ts'
-import { Button, muted } from '../transcript/kit.tsx'
+import { muted } from '../transcript/kit.tsx'
+import { Button } from '../kit/Button.tsx'
 import { openNote } from '../notes/store.ts'
 import { openTask, useTasks } from '../tasks/store.ts'
 import { goPage } from '../nav/history.ts'
@@ -61,9 +62,9 @@ export const AgentItemCard = memo(function AgentItemCard({ result, inset = true 
       <Icon source={result.kind === 'task' ? T.listChecks : T.note} size={16} color={muted(t, disabled ? .45 : .7)} />
       <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flexGrow: 1 }}><Label color={disabled ? muted(t) : t.text} size={13} truncate>{`${result.kind === 'task' ? `${result.key} ` : ''}${title}`}</Label><Label color={muted(t)} size={11.5} lineHeight={20} truncate>{meta}</Label></div>
       <div style={{ display: 'flex', gap: 6, minWidth: 116, justifyContent: 'flex-end' }}>
-        {result.action === 'created' && !gone && !removed && <Button variant="ghost" testId={`item-undo-${result.id}`} disabled={undo === 'removing'} onClick={() => void remove(false)}>Undo</Button>}
-        {removed && <Button variant="ghost" testId={`item-restore-${result.id}`} disabled={undo === 'restoring'} onClick={() => void remove(true)}>Restore</Button>}
-        {!disabled && <Button variant="ghost" testId={`item-open-${result.id}`} onClick={() => { void openAgentItem(result.kind, result.id).catch(e => reportError('Unable to open item', e)) }}>Open</Button>}
+        {result.action === 'created' && !gone && !removed && <Button variant="ghost" size="sm" testId={`item-undo-${result.id}`} disabled={undo === 'removing'} onClick={() => void remove(false)}>Undo</Button>}
+        {removed && <Button variant="ghost" size="sm" testId={`item-restore-${result.id}`} disabled={undo === 'restoring'} onClick={() => void remove(true)}>Restore</Button>}
+        {!disabled && <Button variant="ghost" size="sm" testId={`item-open-${result.id}`} onClick={() => { void openAgentItem(result.kind, result.id).catch(e => reportError('Unable to open item', e)) }}>Open</Button>}
       </div>
     </div>
   </>

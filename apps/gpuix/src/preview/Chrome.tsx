@@ -5,11 +5,10 @@ import { Alert02Icon, LinkSquare02Icon, SmartPhone01Icon, PictureInPictureIcon }
 import { glyph, Icon, ICONS } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { Menu, MenuItem, MenuSeparator } from '../nav/overlay.tsx'
-import { IconButton } from '../sidebar/rows.tsx'
-import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
+import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { revealTransform, SwapOnChange } from '../motion/kit.tsx'
 import { fadeTo } from '../shell/motion.ts'
-import { muted } from '../nav/overlay.tsx'
 import type { ReactNode } from 'react'
 import { nativeCapabilities } from '../native/api.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
@@ -67,8 +66,8 @@ export function PreviewChrome({ threadId }: { threadId: string }) {
   const deviceLabel = s.device ? 'Hide device toolbar' : 'Show device toolbar', floatLabel = s.floating ? 'Return to panel' : 'Float over chat'
   return <div testId="preview-chrome" style={{ display: 'flex', alignItems: 'center', height: 36, flexShrink: 0, gap: 4, paddingLeft: 8, paddingRight: 6, position: 'relative', borderBottomWidth: 1, borderColor: t.surfaceDivider }}>
     <div role="group" aria-label="Navigation" style={{ display: 'flex', gap: 2 }}>
-      <Dim on={back}><IconButton testId="preview-back" icon={N.arrowLeft} size={24} label="Back" onClick={() => back && go(-1)} /></Dim>
-      {!narrow && <Dim on={forward}><IconButton testId="preview-forward" icon={N.arrowRight} size={24} label="Forward" onClick={() => forward && go(1)} /></Dim>}
+      <Dim on={back}><IconButton testId="preview-back" icon={N.arrowLeft} size="sm" label="Back" onClick={() => back && go(-1)} /></Dim>
+      {!narrow && <Dim on={forward}><IconButton testId="preview-forward" icon={N.arrowRight} size="sm" label="Forward" onClick={() => forward && go(1)} /></Dim>}
       <Dim on={!!entry}><ReloadButton loading={s.loading} onClick={() => entry && previewCommand(threadId, s.loading ? 'stop' : 'reload')} /></Dim>
     </div>
     <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} style={{ display: 'flex', alignItems: 'center', flexGrow: 1, minWidth: 0, height: 28, gap: 6, paddingLeft: 8, paddingRight: 8, borderRadius: 8, backgroundColor: editing ? t.v('--color-background-elevated-secondary') : undefined, borderWidth: editing ? 1 : 0, borderColor: t.variant === 'dark' ? 'rgba(115, 115, 115, 0.45)' : 'rgba(163, 163, 163, 0.45)', hover: { backgroundColor: t.buttonSecondary } }}>
@@ -79,11 +78,11 @@ export function PreviewChrome({ threadId }: { threadId: string }) {
         {address?.segments.length ? address.segments.map((part, i) => <Label key={i} color={part.emphasis && !s.navigatedAway ? t.text : t.textSecondary} size={12} truncate style={{ flexShrink: part.emphasis ? 0 : 1, pointerEvents: 'none' }}>{part.text}</Label>) : <Label color={t.textSecondary} size={12} truncate>Enter a URL or file path</Label>}
       </div>}
       {/* Shown while the bar is hovered: `t-reveal` (150 ms in with a 4 px slide, 100 ms out), inert while hidden. */}
-      {entry && !editing && <div paintTransform={revealTransform(hover)} style={{ ...(hover ? {} : { pointerEvents: 'none' }), ...(PATCHED_NATIVE ? {} : { opacity: hover ? 1 : 0 }) }}><div style={{ opacity: fileRemote ? 0.4 : 1 }}><IconButton press testId="preview-browser" icon={externalIcon} size={24} glyph={13} label={fileRemote ? `This file is on ${environment.name}` : 'Open in browser'} onHover={setHover} onClick={() => !fileRemote && void launchPreview(threadId)} /></div></div>}
+      {entry && !editing && <div paintTransform={revealTransform(hover)} style={{ ...(hover ? {} : { pointerEvents: 'none' }), ...(PATCHED_NATIVE ? {} : { opacity: hover ? 1 : 0 }) }}><div style={{ opacity: fileRemote ? 0.4 : 1 }}><IconButton testId="preview-browser" icon={externalIcon} size="sm" glyph={13} label={fileRemote ? `This file is on ${environment.name}` : 'Open in browser'} onClick={() => !fileRemote && void launchPreview(threadId)} /></div></div>}
     </div>
     {entry && <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-      {!narrow && <><IconButton testId="preview-device" icon={deviceIcon} size={28} label={deviceLabel} active={s.device} onClick={() => setPreview(threadId, { device: !s.device })} /><IconButton testId="preview-float" icon={floatIcon} size={28} label={floatLabel} active={s.floating} onClick={() => entry.kind !== 'external' && setPreview(threadId, { floating: !s.floating })} /></>}
-      <Menu align="end" testId="preview-more" minWidth={224} trigger={() => <IconButton icon={N.ellipsis} label="More" size={28} />}>
+      {!narrow && <><IconButton testId="preview-device" icon={deviceIcon} size="md" label={deviceLabel} active={s.device} onClick={() => setPreview(threadId, { device: !s.device })} /><IconButton testId="preview-float" icon={floatIcon} size="md" label={floatLabel} active={s.floating} onClick={() => entry.kind !== 'external' && setPreview(threadId, { floating: !s.floating })} /></>}
+      <Menu align="end" testId="preview-more" minWidth={224} trigger={() => <IconButton icon={N.ellipsis} label="More" size="md" />}>
         {narrow && <><MenuItem id="device" testId="preview-device" label={deviceLabel} icon={deviceIcon} onSelect={() => setPreview(threadId, { device: !s.device })} /><MenuItem id="float" testId="preview-float" label={floatLabel} icon={floatIcon} disabled={entry.kind === 'external'} onSelect={() => setPreview(threadId, { floating: !s.floating })} /></>}
         <MenuItem id="fresh" testId="preview-fresh" label="Reload without cache" icon={N.refresh} onSelect={() => previewCommand(threadId, 'reload', true)} />
         <MenuItem id="copy" label="Copy address" icon={ICONS.copy} onSelect={() => copyText(address?.full ?? '')} />
@@ -107,14 +106,11 @@ export function Dim({ on, children }: { on: boolean; children: ReactNode }) {
 /** Reload while idle, Stop while a page loads: the glyph swaps like `t-icon-swap` (the old one shrinks and blurs out, the new one grows in). */
 export function ReloadButton({ loading, onClick }: { loading: boolean; onClick: () => void }) {
   const t = useTheme()
-  const [hover, setHover] = useState(false)
-  const label = loading ? 'Stop loading' : 'Reload'
   return (
-    <div testId="preview-reload" role="button" aria-label={label} onClick={onClick} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 6, flexShrink: 0, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
+    <IconButton testId="preview-reload" label={loading ? 'Stop loading' : 'Reload'} icon={loading ? N.x : N.refresh} size="sm" onClick={onClick}>
       <SwapOnChange kind="icon" active={loading ? 'stop' : 'reload'} style={{ width: 14, height: 14 }}>
-        <Icon source={loading ? N.x : N.refresh} size={14} color={hover ? ink(t, 0.82) : muted(t, 0.6)} />
+        <Icon source={loading ? N.x : N.refresh} size={14} color={t.iconSecondary} style={{ pointerEvents: 'none' }} />
       </SwapOnChange>
-    </div>
+    </IconButton>
   )
 }

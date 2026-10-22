@@ -12,7 +12,8 @@ import { useNav } from '../nav/store.ts'
 import { openThread } from '../nav/history.ts'
 import { controlSubagent } from '../requests/Activity.tsx'
 import { getThreadOpen, subscribe, useApp, usePaneAccess, PaneProvider, type AppState } from '../state.ts'
-import { Button, Para, muted } from '../transcript/kit.tsx'
+import { Para, muted } from '../transcript/kit.tsx'
+import { Button } from '../kit/Button.tsx'
 import { copyText } from '../transcript/store.ts'
 import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
@@ -88,10 +89,10 @@ export function SubagentBar({ thread, embedded = false }: { thread: Thread; embe
     <ProviderMark kind={thread.provider.kind} size={12} />
     <Label color={muted(t)} size={12} truncate>{[thread.model, thread.effort, tokens].filter(Boolean).join(' · ')}</Label>
     <div style={{ flexGrow: 1 }} />
-    {phase === 'failed' && (info.result || info.detail) && <BarAction play={settled}><Button variant="ghost" onClick={() => copyText(info.result || info.detail || '')}>Copy error</Button></BarAction>}
-    {thread.parent_thread_id && <Button variant="ghost" testId="subagent-open-parent" onClick={() => openThread(thread.parent_thread_id!)}>Open parent</Button>}
-    {phase === 'working' && info.capabilities?.background && !info.backgrounded && <Button variant="ghost" testId="subagent-run-background" onClick={() => void controlSubagent(thread, 'background')}>Run in background</Button>}
-    {phase === 'working' && info.capabilities?.stop !== false && <Button variant="chrome-outline" testId="subagent-stop" onClick={() => void controlSubagent(thread, 'stop')}>Stop</Button>}
+    {phase === 'failed' && (info.result || info.detail) && <BarAction play={settled}><Button variant="ghost" size="sm" onClick={() => copyText(info.result || info.detail || '')}>Copy error</Button></BarAction>}
+    {thread.parent_thread_id && <Button variant="ghost" size="sm" testId="subagent-open-parent" onClick={() => openThread(thread.parent_thread_id!)}>Open parent</Button>}
+    {phase === 'working' && info.capabilities?.background && !info.backgrounded && <Button variant="ghost" size="sm" testId="subagent-run-background" onClick={() => void controlSubagent(thread, 'background')}>Run in background</Button>}
+    {phase === 'working' && info.capabilities?.stop !== false && <Button size="sm" testId="subagent-stop" onClick={() => void controlSubagent(thread, 'stop')}>Stop</Button>}
   </div>
 }
 

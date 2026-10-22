@@ -10,7 +10,7 @@ import { onWindowKeyDown } from '../nav/keys.ts'
 import { getState, set } from '../state.ts'
 import { Transcript } from '../Transcript.tsx'
 import { Label, ThemeProvider, useTheme } from '../ui.tsx'
-import { Button } from './kit.tsx'
+import { Button } from '../kit/Button.tsx'
 import { ResponseImage } from './images.tsx'
 
 const at = '2026-10-15T06:00:00Z'

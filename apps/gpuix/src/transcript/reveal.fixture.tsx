@@ -3,7 +3,7 @@ import { render } from '@gpuix/react'
 import { useState } from 'react'
 import { useSmoothText } from './motion.tsx'
 import { ThemeProvider, useTheme } from '../ui.tsx'
-import { Button } from './kit.tsx'
+import { Button } from '../kit/Button.tsx'
 const source = 'A calm stream preserves whole words and Unicode 🌿 while the provider pauses between bursts. '.repeat(12)
 function Fixture() {
   const t = useTheme(), [target, setTarget] = useState(''), [complete, setComplete] = useState(false)

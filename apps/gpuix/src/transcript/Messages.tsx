@@ -15,7 +15,8 @@ import { EDGE_FADE } from '../native/local-build.ts'
 import { raisedFill, raisedRim, useGlass } from '../platform/glass.ts'
 import { Icon } from '../icons.tsx'
 import { T } from './glyphs.ts'
-import { Button, Chevron, Para, TEXT, fg, muted } from './kit.tsx'
+import { Chevron, Para, TEXT, fg, muted } from './kit.tsx'
+import { Button } from '../kit/Button.tsx'
 import { PanelPresence, PanelEnter, keyboardAnswer } from '../requests/Panel.tsx'
 import { clear } from '../notes/kit.tsx'
 import { SwapOnChange } from '../motion/kit.tsx'
@@ -43,7 +44,6 @@ function SenderChip({ part, kind }: { part: ThreadMessagePart; kind?: string }) 
  *  lines (seven) and "Show more" gets a hairline above it. */
 const GLASS_CLAMP_LINES = 7
 function ClampedMarkdown({ id, text, fade }: { id: string; text: string; fade: string }) {
-  const t = useTheme()
   const g = useGlass()
   const clamp = resultNeedsClamp(text)
   const [expanded, setExpanded] = useRowState(`clamp:${id}`, false)
@@ -53,9 +53,7 @@ function ClampedMarkdown({ id, text, fade }: { id: string; text: string; fade: s
       <BoundedMarkdown text={text} />
       {shut && !g.on && <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 49, pointerEvents: 'none', background: { type: 'linear-gradient', angle: 180, stops: [{ color: clear(fade), position: 0 }, { color: fade, position: 1 }] } }} />}
     </div>
-    {clamp && <div style={g.on && !EDGE_FADE && shut ? { display: 'flex', flexDirection: 'column', marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderColor: g.rim } : { display: 'flex', flexDirection: 'column' }}><div testId="clamp-toggle" role="button" tabIndex={0} aria-expanded={expanded} onClick={() => setExpanded(!expanded)} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') { keyboardAnswer(); setExpanded(!expanded) } }} style={{ display: 'flex', alignSelf: 'flex-start', marginLeft: -4, paddingLeft: 4, paddingRight: 4, paddingTop: 2, paddingBottom: 2, borderRadius: 6, cursor: 'pointer' }}>
-      <Label color={fg(t, 0.55)} size={12} lineHeight={16} style={{ hover: { color: t.text } }}>{expanded ? 'Show less' : 'Show more'}</Label>
-    </div></div>}
+    {clamp && <div style={g.on && !EDGE_FADE && shut ? { display: 'flex', flexDirection: 'column', marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderColor: g.rim } : { display: 'flex', flexDirection: 'column' }}><Button variant="ghost" size="sm" testId="clamp-toggle" onKeyboard={keyboardAnswer} onClick={() => setExpanded(!expanded)} style={{ alignSelf: 'flex-start', marginLeft: -8 }}>{expanded ? 'Show less' : 'Show more'}</Button></div>}
   </div>
 }
 
@@ -98,9 +96,9 @@ export function WorkspaceFacts({ item }: { item: Pick<AgentResultItem, 'workspac
     {item.head_commit && <Para color={muted(t)} size={11} selectable>{`${item.base_commit ? `${item.base_commit.slice(0, 8)} → ` : ''}${item.head_commit.slice(0, 8)}`}</Para>}
     {item.diffstat && <Para color={muted(t)} size={12}>{`${item.diffstat.files} files · +${item.diffstat.additions} −${item.diffstat.deletions}`}</Para>}
     {files.slice(0, 5).map(file => <Para key={file} color={muted(t)} size={11} selectable>{file}</Para>)}
-    {files.length > 5 && <div style={{ display: 'flex' }}><Button variant="ghost" onClick={() => setAll(true)}>{`Show all ${files.length} files`}</Button></div>}
+    {files.length > 5 && <div style={{ display: 'flex' }}><Button variant="ghost" size="sm" onClick={() => setAll(true)}>{`Show all ${files.length} files`}</Button></div>}
     {all && <TextDetail text={files.join('\n')} title="Changed files" code onClose={() => setAll(false)} />}
-    {conflicts.map((c, i) => <div key={`${c.path}:${i}`} style={{ display: 'flex', gap: 8 }}><Para color={t.red} size={12} selectable style={{ flexGrow: 1 }}>{`Ownership conflict: ${c.path}`}</Para><Button variant="ghost" onClick={() => openThread(c.owner_thread_id)}>Open owner</Button></div>)}
+    {conflicts.map((c, i) => <div key={`${c.path}:${i}`} style={{ display: 'flex', gap: 8 }}><Para color={t.red} size={12} selectable style={{ flexGrow: 1 }}>{`Ownership conflict: ${c.path}`}</Para><Button variant="ghost" size="sm" onClick={() => openThread(c.owner_thread_id)}>Open owner</Button></div>)}
   </div>
 }
 function ResultRow({ item }: { item: AgentResultItem }) {
@@ -114,7 +112,7 @@ function ResultRow({ item }: { item: AgentResultItem }) {
     {!expanded && <Para color={muted(t)} size={12} style={{ lineClamp: 2 }}>{resultPreview(item)}</Para>}
     <PanelPresence show={expanded}><PanelEnter><div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 8 }}>
       {(item.result || item.error) && <ClampedMarkdown id={`result:${item.task_id}`} text={item.result || item.error || ''} fade={over(card(t), t.v('--app-opaque-content-surface'))} />}
-      <WorkspaceFacts item={item} /><div style={{ display: 'flex' }}><Button variant="subtle" testId={`result-open-${item.task_id}`} onClick={() => openThread(item.thread_id)}>Open agent</Button></div>
+      <WorkspaceFacts item={item} /><div style={{ display: 'flex' }}><Button size="sm" testId={`result-open-${item.task_id}`} onClick={() => openThread(item.thread_id)}>Open agent</Button></div>
     </div></PanelEnter></PanelPresence>
   </div>
 }
@@ -147,7 +145,7 @@ export function SentToRow({ block, threadId }: { block: ToolBlock; threadId: str
       {live.held && <Para color={muted(t)} size={12}>{`Waiting for you to approve it in ${title}.`}</Para>}
       {live.state === 'dismissed' && <Para color={muted(t)} size={12}>{`Dismissed in ${title}. It was not delivered.`}</Para>}
       <PanelPresence show={expanded}><PanelEnter><div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 8 }}><DetailSection label="Message"><ClampedMarkdown id={`sent:${block.id}`} text={input.body} fade={t.v('--app-opaque-content-surface')} /></DetailSection>{live.reply && <DetailSection label="Reply"><ClampedMarkdown id={`sent-reply:${block.id}`} text={live.reply.body} fade={t.v('--app-opaque-content-surface')} /></DetailSection>}{result?.waitTimedOut && !live.reply && <Para color={muted(t)} size={12}>No reply yet. It will arrive here when the thread answers.</Para>}</div></PanelEnter></PanelPresence>
-      {(expanded || live.held) && input.threadId && <div style={{ display: 'flex' }}><Button variant="subtle" onClick={() => openThread(input.threadId)}>Open</Button></div>}
+      {(expanded || live.held) && input.threadId && <div style={{ display: 'flex' }}><Button size="sm" onClick={() => openThread(input.threadId)}>Open</Button></div>}
     </div>
     {tree.lines}
   </div>

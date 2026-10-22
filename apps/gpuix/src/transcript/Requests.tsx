@@ -26,7 +26,7 @@ import { secretRequestInput } from '../../../../packages/kybern-client/src/secre
 import { briefProposalInput, leadGitCardInput, settingsProposalInput } from '../../../../packages/kybern-client/src/coordinatorCards.ts'
 import type { ApprovalDecision, ApprovalRequest, AsyncQuestionRequest, JsonValue, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
-import { PanelEnter, PanelPresence } from '../requests/Panel.tsx'
+import { keyboardAnswer, PanelEnter, PanelPresence } from '../requests/Panel.tsx'
 import { SecretRequestPanel } from '../requests/Secret.tsx'
 import { ActivityPanels, useRequestActivity } from '../requests/Activity.tsx'
 import { ComposerTray, trayVisible } from '../requests/ComposerTray.tsx'
@@ -39,7 +39,14 @@ import { cachedMarkdownTheme as markdownTheme } from './kit.tsx'
 import { T } from './glyphs.ts'
 import { GlassEdge } from '../kit/GlassEdge.tsx'
 import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
-import { alpha, Button, CountBadge, fg, muted, Para } from './kit.tsx'
+import { alpha, CountBadge, fg, muted, Para } from './kit.tsx'
+import { Button } from '../kit/Button.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
+import { RadioRow } from '../kit/RadioRow.tsx'
+import { Checkbox } from '../kit/Checkbox.tsx'
+import { TextArea } from '../kit/TextArea.tsx'
+import { TextField } from '../kit/Field.tsx'
+import { useControls } from '../kit/controls.ts'
 import { answerQuestions, errorText, interrupt, reportError, respondApproval } from './store.ts'
 
 const EMPTY: never[] = []
@@ -443,15 +450,15 @@ function ApprovalActions({
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
       <MoreMenu items={items} />
-      <Button variant="chrome-outline" onClick={() => onChoose(3)} testId="approval-decline">
+      <Button onKeyboard={keyboardAnswer} onClick={() => onChoose(3)} testId="approval-decline">
         Decline
       </Button>
       {sessionShortcut !== undefined && sessionLabel && (
-        <Button variant="chrome-outline" onClick={() => onChoose(sessionShortcut)}>
+        <Button onKeyboard={keyboardAnswer} onClick={() => onChoose(sessionShortcut)}>
           {sessionLabel}
         </Button>
       )}
-      <Button onClick={() => onChoose(primaryShortcut)} testId="approval-primary">
+      <Button variant="primary" onKeyboard={keyboardAnswer} onClick={() => onChoose(primaryShortcut)} testId="approval-primary">
         {primaryLabel}
       </Button>
     </div>
@@ -466,7 +473,7 @@ function MoreMenu({ items }: { items: { label: string; shortcut?: number; run: (
   const [open, setOpen] = useState(false)
   return (
     <div style={{ position: 'relative' }}>
-      <Button variant="ghost" icon={T.dots} onClick={() => setOpen(!open)} testId="approval-more" />
+      <IconButton icon={T.dots} label="More approval options" onClick={() => setOpen(!open)} testId="approval-more" />
       {open && (
         <anchored side="top" align="start" gap={6} fit="switch" backdrop={frostBackdrop(g, 'menus', 12) ?? (g.on ? { blur: 0 } : undefined)}>
           <div
@@ -574,7 +581,7 @@ function QuestionSteps({
                   <Para color={muted(t)} size={12} lineHeight={18}>{q.title}</Para>
                   <Para color={t.text} size={12} lineHeight={18}>{q.secret ? 'Hidden answer' : q.answers.join('\n')}</Para>
                 </div>
-                <Button variant="ghost" icon={T.pencil} onClick={() => setStep(index)} />
+                <IconButton icon={T.pencil} label={`Edit answer to ${q.title}`} size="sm" onClick={() => setStep(index)} />
               </div>
             ))}
           </div>
@@ -593,16 +600,16 @@ function QuestionSteps({
         </Para>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           {onDecline && (
-            <Button variant="ghost" disabled={busy} onClick={onDecline} testId="question-decline">
+            <Button variant="ghost" onKeyboard={keyboardAnswer} disabled={busy} onClick={onDecline} testId="question-decline">
               Decline
             </Button>
           )}
           {step > 0 && (
-            <Button variant="chrome-outline" disabled={busy} onClick={() => setStep(step - 1)} icon={T.arrowLeft}>
+            <Button onKeyboard={keyboardAnswer} disabled={busy} onClick={() => setStep(step - 1)} icon={T.arrowLeft}>
               Previous
             </Button>
           )}
-          <Button swap disabled={busy || !canContinue} onClick={next} iconAfter={reviewing ? undefined : T.arrowRight} testId="question-next">
+          <Button variant="primary" swap onKeyboard={keyboardAnswer} disabled={busy || !canContinue} onClick={next} iconAfter={reviewing ? undefined : T.arrowRight} testId="question-next">
             {busy ? 'Sending…' : reviewing ? (questions.length === 1 ? 'Send answer' : 'Send answers') : step === questions.length - 1 ? 'Review answers' : 'Next'}
           </Button>
         </div>
@@ -611,56 +618,37 @@ function QuestionSteps({
   )
 }
 
-/** `question-panel-option`: a radio or checkbox row, filled when chosen. */
+/** `question-panel-option`: a single answer is a `RadioRow`; a multi-select row is the same row with a kit `Checkbox`. The selected row takes the tint. */
 function Option({ label, description, checked, multiple, onPick, testId }: { label: string; description?: string; checked: boolean; multiple: boolean; onPick: () => void; testId?: string }) {
   const t = useTheme()
+  const c = useControls()
+  if (!multiple) return <RadioRow testId={testId} checked={checked} title={label} description={description} onSelect={onPick} style={{ marginTop: 2 }} />
   return (
     <div
       testId={testId}
+      role="checkbox"
+      aria-checked={checked}
+      aria-label={label}
+      tabIndex={0}
       onClick={onPick}
+      onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') onPick() }}
       style={{
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 10,
-        marginTop: 4,
-        paddingLeft: 10,
-        paddingRight: 10,
-        paddingTop: 8,
-        paddingBottom: 8,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: checked ? t.borderHeavy : 'rgba(0, 0, 0, 0)',
-        backgroundColor: checked ? t.buttonSecondary : 'rgba(0, 0, 0, 0)',
-        cursor: 'pointer',
-        hover: { backgroundColor: t.buttonSecondaryHover },
+        display: 'flex', alignItems: 'flex-start', gap: 10, marginTop: 2, padding: 8, borderRadius: 12, cursor: 'pointer',
+        backgroundColor: checked ? c.optionSelected : 'rgba(0, 0, 0, 0)',
+        hover: { backgroundColor: checked ? c.optionSelected : c.ink(0.04) },
+        focusVisible: { outlineWidth: 2, outlineColor: c.focus, outlineOffset: 0 },
       }}
     >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: 13,
-          height: 13,
-          marginTop: 3,
-          flexShrink: 0,
-          borderRadius: multiple ? 3 : 7,
-          borderWidth: checked ? 0 : 1,
-          borderColor: muted(t, 0.8),
-          backgroundColor: checked ? t.text : 'rgba(0, 0, 0, 0)',
-        }}
-      >
-        {checked && (multiple ? <Icon source={T.check} size={10} color={t.surface} /> : <div style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: t.surface }} />)}
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, minWidth: 0 }}>
-        <Para color={t.text} size={12} lineHeight={19.5} weight={500}>{label}</Para>
-        {description ? <Para color={muted(t)} size={12} lineHeight={18}>{description}</Para> : null}
+      <div style={{ display: 'flex', paddingTop: 2 }}><Checkbox checked={checked} aria-label={label} style={{ pointerEvents: 'none' }} /></div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexGrow: 1, flexShrink: 1, minWidth: 0 }}>
+        <Label color={t.text} size={14} lineHeight={20} weight={500} style={{ pointerEvents: 'none' }}>{label}</Label>
+        {description ? <Label color={t.textSecondary} size={13} lineHeight={19} style={{ pointerEvents: 'none' }}>{description}</Label> : null}
       </div>
     </div>
   )
 }
 
-/** `question-panel-answer` + `question-panel-field`. */
+/** `question-panel-answer` + `question-panel-field`: a kit `TextField` for one line, `TextArea` above that. */
 function AnswerField({ label, value, onChange, rows = 3, testId }: { label: string; value: string; onChange: (value: string) => void; rows?: number; testId?: string }) {
   const t = useTheme()
   return (
@@ -668,17 +656,9 @@ function AnswerField({ label, value, onChange, rows = 3, testId }: { label: stri
       <Label color={muted(t)} size={11} lineHeight={16.5} style={{ marginBottom: 6 }}>
         {label}
       </Label>
-      <div style={{ paddingLeft: 12, paddingRight: 12, paddingTop: 10, paddingBottom: 10, borderRadius: 8, borderWidth: 1, borderColor: t.border, backgroundColor: t.v('--color-background-control') }}>
-        <textarea
-          testId={testId}
-          value={value}
-          minRows={rows}
-          maxRows={8}
-          onChange={(e) => onChange(e.value ?? '')}
-          theme={{ caret: t.text }}
-          style={{ width: '100%', fontSize: 12, lineHeight: 18, color: t.text, fontFamily: FONT_UI }}
-        />
-      </div>
+      {rows <= 1
+        ? <TextField label={label} testId={testId} value={value} onChange={onChange} />
+        : <TextArea label={label} testId={testId} value={value} onChange={onChange} minRows={rows} maxRows={8} />}
     </div>
   )
 }
@@ -820,15 +800,17 @@ function UserInputPanel({ approval, count }: { approval: ApprovalRequest; count:
       </div>
       {error && <Para color={t.red} size={11} lineHeight={16.5} style={{ paddingLeft: 16, paddingRight: 16, paddingTop: 8 }}>{error}</Para>}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 14 }}>
-        <Button variant="ghost" disabled={busy} onClick={() => void submit()}>Decline</Button>
+        <Button variant="ghost" onKeyboard={keyboardAnswer} disabled={busy} onClick={() => void submit()}>Decline</Button>
         {approval.tool_name === 'ui_confirm' ? (
           <>
-            <Button variant="chrome-outline" disabled={busy} onClick={() => void submit({ confirmed: false })}>Do not confirm</Button>
-            <Button disabled={busy} onClick={() => void submit({ confirmed: true })}>Confirm</Button>
+            <Button onKeyboard={keyboardAnswer} disabled={busy} onClick={() => void submit({ confirmed: false })}>Do not confirm</Button>
+            <Button variant="primary" onKeyboard={keyboardAnswer} disabled={busy} onClick={() => void submit({ confirmed: true })}>Confirm</Button>
           </>
         ) : (
           <Button
+            variant="primary"
             swap
+            onKeyboard={keyboardAnswer}
             disabled={busy || (approval.tool_name === 'ui_select' && !value)}
             onClick={() => {
               if (!elicitation) return void submit({ value })

@@ -6,11 +6,11 @@ import { memo, useEffect, useRef, useState } from 'react'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { observeElementBounds } from '../native/layout.ts'
 import { Dialog } from '../nav/overlay.tsx'
-import { Pill, useSlidingPill } from '../composer/SlidingPill.tsx'
-import { Icon } from '../icons.tsx'
 import { Label, ink, useTheme } from '../ui.tsx'
 import { useNativeWindowSize } from '../native/layout-hooks.ts'
 import { CopyAction } from './bubble.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
+import { Segmented } from '../kit/Segmented.tsx'
 import { CODE, muted } from './kit.tsx'
 import { CodeChunk, lineChunks } from './markdown.tsx'
 import { T } from './glyphs.ts'
@@ -32,17 +32,7 @@ function useDiagram(code: string, dark: boolean) {
 }
 
 function Segment({ source, onChange }: { source: boolean; onChange: (source: boolean) => void }) {
-  const t = useTheme()
-  const [hover, setHover] = useState<boolean | null>(null)
-  const { rowRef, tab, pill } = useSlidingPill(source ? 'source' : 'preview', 2)
-  return <div ref={rowRef} testId="diagram-view" role="group" aria-label="Diagram view" style={{ position: 'relative', display: 'flex', gap: 2, padding: 2, borderRadius: 8, backgroundColor: t.buttonSecondary }}>
-    <Pill pill={pill} top={2} height={27.6} style={{ borderRadius: 6, backgroundColor: t.v('--sidebar-accent-active'), boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 2, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.08)' } }} />
-    {[false, true].map(value => <div key={String(value)} ref={tab(value ? 'source' : 'preview')} testId={value ? 'diagram-source' : 'diagram-preview'} role="button" aria-pressed={source === value} aria-label={value ? 'Show diagram source' : 'Show diagram'}
-      onClick={() => onChange(value)} onMouseEnter={() => setHover(value)} onMouseLeave={() => setHover(h => (h === value ? null : h))}
-      style={{ display: 'flex', alignItems: 'center', height: 27.6, paddingLeft: 10, paddingRight: 10, borderRadius: 6, cursor: 'pointer' }}>
-      <Label color={source === value || hover === value ? t.text : t.textSecondary} weight={500} lineHeight={19.6}>{value ? 'Source' : 'Preview'}</Label>
-    </div>)}
-  </div>
+  return <Segmented testId="diagram" aria-label="Diagram view" size="sm" value={source ? 'source' : 'preview'} onChange={value => onChange(value === 'source')} options={[{ value: 'preview', label: 'Preview' }, { value: 'source', label: 'Source' }]} />
 }
 
 export const MermaidBlock = memo(function MermaidBlock({ code, source, onSource }: { code: string; source: boolean; onSource: (source: boolean) => void }) {
@@ -69,9 +59,7 @@ export const MermaidBlock = memo(function MermaidBlock({ code, source, onSource 
       <div style={{ display: 'flex', flexGrow: 1, minWidth: 0, alignItems: 'center' }}>
         {image ? <Segment source={source} onChange={onSource} /> : <Label color={muted(t)} style={{ paddingLeft: 4 }}>{diagram.status === 'loading' ? 'Rendering diagram…' : 'Mermaid source'}</Label>}
       </div>
-      {image && <div testId="diagram-expand" role="button" aria-label="Expand diagram" onClick={() => setExpanded(true)} style={{ display: 'flex', width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
-        <Icon source={T.expand} size={14} color={muted(t)} />
-      </div>}
+      {image && <IconButton testId="diagram-expand" label="Expand diagram" icon={T.expand} size="sm" onClick={() => setExpanded(true)} />}
       <CopyAction text={code} testId="code-copy" />
     </div>
     {showImage

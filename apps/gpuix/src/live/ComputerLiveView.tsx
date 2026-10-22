@@ -6,7 +6,7 @@ import type { ComputerFrame, Settings } from '../../../../packages/kybern-client
 import { getClient, useApp } from '../state.ts'
 import { onWindowVisibility, isWindowVisible } from '../native/visibility.ts'
 import { useDock } from '../dock/store.ts'
-import { IconButton } from '../sidebar/rows.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
 import { N } from '../nav/glyphs.ts'
 import { EASE_OUT, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { EASE } from '../motion/kit.tsx'
@@ -138,5 +138,5 @@ export function Ripple({ x, y, onDone }: { x: number; y: number; onDone: () => v
 /** The hover buttons in the card's top-right corner: they rise into place when the pointer is over the card or themselves. */
 export function LiveControls({ hovered, expanded, onEnter, onLeave, onToggle, onClose }: { hovered: boolean; expanded: boolean; onEnter: () => void; onLeave: () => void; onToggle: () => void; onClose: () => void }) {
   const t = useTheme()
-  return <div onMouseEnter={onEnter} onMouseLeave={onLeave} paintTransform={controlsTransform(hovered)} backdrop={hovered && BACKDROP_ALLOWED ? {...BACKDROP.liveControls,radius:8} : undefined} style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 4, ...(PATCHED_NATIVE ? {} : { opacity: hovered ? 1 : 0 }), pointerEvents: hovered ? 'auto' : 'none', backgroundColor: BACKDROP_ALLOWED ? 'rgba(0,0,0,.45)' : t.popover, borderRadius: 8 }}><IconButton icon={N.window} size={28} label={expanded ? 'Show smaller' : 'Show larger'} onClick={onToggle} /><IconButton icon={N.x} size={28} testId="computer-live-close" label="Hide until the next task" onClick={onClose} /></div>
+  return <div onMouseEnter={onEnter} onMouseLeave={onLeave} paintTransform={controlsTransform(hovered)} backdrop={hovered && BACKDROP_ALLOWED ? {...BACKDROP.liveControls,radius:8} : undefined} style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 4, ...(PATCHED_NATIVE ? {} : { opacity: hovered ? 1 : 0 }), pointerEvents: hovered ? 'auto' : 'none', backgroundColor: BACKDROP_ALLOWED ? 'rgba(0,0,0,.45)' : t.popover, borderRadius: 8 }}><IconButton icon={N.window} color="rgba(255,255,255,0.88)" style={{ hover: { backgroundColor: 'rgba(255,255,255,0.16)' }, active: { backgroundColor: 'rgba(255,255,255,0.1)' } }} label={expanded ? 'Show smaller' : 'Show larger'} onClick={onToggle} /><IconButton icon={N.x} color="rgba(255,255,255,0.88)" style={{ hover: { backgroundColor: 'rgba(255,255,255,0.16)' }, active: { backgroundColor: 'rgba(255,255,255,0.1)' } }} testId="computer-live-close" label="Hide until the next task" onClick={onClose} /></div>
 }

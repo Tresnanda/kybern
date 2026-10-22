@@ -8,7 +8,8 @@ import { visualFrameHeight, visualHeight, visualLink, visualThemeFragment, VISUA
 import { activeEnvironment } from '../shell/environment.ts'
 import { getClient } from '../state.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { Button } from './kit.tsx'
+import { Button } from '../kit/Button.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
 import { Icon } from '../icons.tsx'
 import { T } from './glyphs.ts'
 import { PopupLayer } from '../composer/Menu.tsx'
@@ -117,9 +118,7 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
         {/* The desktop's native <dialog> opens and closes without motion (`instant`). `.visual-reply__expanded-header`: 44px, 16px / 8px inset, the title and a ghost close button. */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 44, paddingLeft: 16, paddingRight: 8, backgroundColor: t.surface }}>
           <Label color={t.text} weight={500} truncate style={{ flexGrow: 1 }}>{visual.title || 'Interactive visual'}</Label>
-          <div testId="dialog-close" role="button" aria-label="Close expanded preview" onClick={() => setExpanded(false)} style={{ display: 'flex', width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 8, cursor: 'pointer', flexShrink: 0, hover: { backgroundColor: t.buttonSecondaryHover } }}>
-            <Icon source={T.close} size={14} color={t.textSecondary} />
-          </div>
+          <IconButton testId="dialog-close" label="Close expanded preview" icon={T.close} onClick={() => setExpanded(false)} />
         </div>
         {frame}
       </Dialog>
@@ -156,7 +155,7 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
     {error && <div testId="visual-error" style={{ position: 'absolute', top: 0, left: 0, right: 0, height, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, paddingTop: Math.min(height * 0.35, 160), paddingLeft: 16, paddingRight: 16, borderRadius: 10, borderWidth: 1, borderColor: t.border, backgroundColor: ink(t, 0.04) }}>
       <Label color={t.text} weight={500} style={{ textAlign: 'center' }}>{`Couldn’t load “${visual.title}”`}</Label>
       {error && <Label color={t.textSecondary} size={13} style={{ textAlign: 'center', lineClamp: 2 }}>{error}</Label>}
-      <Button testId="visual-retry" variant="subtle" onClick={() => retry(n => n + 1)}><Icon source={T.rotateCcw} size={14} color={t.text} />Retry</Button>
+      <Button testId="visual-retry" icon={T.rotateCcw} onClick={() => retry(n => n + 1)}>Retry</Button>
     </div>}
   </div>
 })

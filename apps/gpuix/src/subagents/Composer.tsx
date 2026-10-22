@@ -5,7 +5,8 @@ import { ComposerView } from '../Composer.tsx'
 import { useComposer } from '../composer/store.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { getClient, useApp, usePaneAccess } from '../state.ts'
-import { Button, Para, muted } from '../transcript/kit.tsx'
+import { Para, muted } from '../transcript/kit.tsx'
+import { Button } from '../kit/Button.tsx'
 import { errorText, reportError } from '../transcript/store.ts'
 import { useTheme } from '../ui.tsx'
 import { StackedPanel } from '../transcript/Requests.tsx'
@@ -65,7 +66,7 @@ export function NativeSubagentComposer({ thread }: { thread: Thread }) {
     <div testId="subagent-message-status" style={{ display: 'flex', flexDirection: 'column', padding: 12, gap: 6 }}>
       <Para color={muted(t)} size={12}>{active ? 'Messages arrive at this subagent’s next tool call. Attachments are sent as file references.' : 'This subagent has finished. Send an undelivered message to its parent.'}</Para>
       {error && <Para color={t.red} size={12}>{`Unable to load delivery status: ${error}`}</Para>}
-      {messages.length > 0 && <virtual-list style={{ width: '100%', height: Math.min(160, messages.length * 56) }}>{messages.map(message => <div key={message.id} testId={`subagent-message-${message.status}`} style={{ display: 'flex', gap: 8, paddingBottom: 8, alignItems: 'center' }}><div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Para color={message.status === 'failed' && !message.parent_queued ? t.red : muted(t)} size={12}>{message.parent_queued ? 'Queued for parent' : message.status === 'pending' ? 'Waiting for next tool call' : message.status === 'delivered' ? 'Delivered to subagent' : message.error ?? 'Not delivered — subagent finished'}</Para><Para color={muted(t)} size={12} style={{ lineClamp: 2 }}>{message.message.parts.map(part => part.type === 'text' ? part.text : part.type === 'file_mention' ? `@${part.path}` : part.type === 'attachment' ? part.name : part.type === 'image' ? 'Attached image' : 'Reference').join(' ')}</Para></div>{message.status === 'failed' && !message.parent_queued && <Button variant="ghost" testId={`subagent-forward-${message.id}`} disabled={forwarding === message.id} onClick={() => void forward(message)}>{forwarding === message.id ? 'Sending…' : 'Send to parent'}</Button>}</div>)}</virtual-list>}
+      {messages.length > 0 && <virtual-list style={{ width: '100%', height: Math.min(160, messages.length * 56) }}>{messages.map(message => <div key={message.id} testId={`subagent-message-${message.status}`} style={{ display: 'flex', gap: 8, paddingBottom: 8, alignItems: 'center' }}><div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Para color={message.status === 'failed' && !message.parent_queued ? t.red : muted(t)} size={12}>{message.parent_queued ? 'Queued for parent' : message.status === 'pending' ? 'Waiting for next tool call' : message.status === 'delivered' ? 'Delivered to subagent' : message.error ?? 'Not delivered — subagent finished'}</Para><Para color={muted(t)} size={12} style={{ lineClamp: 2 }}>{message.message.parts.map(part => part.type === 'text' ? part.text : part.type === 'file_mention' ? `@${part.path}` : part.type === 'attachment' ? part.name : part.type === 'image' ? 'Attached image' : 'Reference').join(' ')}</Para></div>{message.status === 'failed' && !message.parent_queued && <Button variant="ghost" size="sm" testId={`subagent-forward-${message.id}`} disabled={forwarding === message.id} onClick={() => void forward(message)}>{forwarding === message.id ? 'Sending…' : 'Send to parent'}</Button>}</div>)}</virtual-list>}
     </div>
   </StackedPanel>} />
 }

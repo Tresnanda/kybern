@@ -15,7 +15,8 @@ import { Label, useTheme } from '../ui.tsx'
 import { Rise } from '../motion/kit.tsx'
 import { Icon } from '../icons.tsx'
 import { T } from './glyphs.ts'
-import { Button, muted } from './kit.tsx'
+import { muted } from './kit.tsx'
+import { Button } from '../kit/Button.tsx'
 import { ImageLightbox, ResponseImage } from './images.tsx'
 import { ImageViewer } from '../motion/ImageMorph.tsx'
 
@@ -127,8 +128,8 @@ function ImageCard({ label, reason, loading = false, onRetry, onReveal }: { labe
       </div>
       <Label color={muted(t)} size={12} lineHeight={16}>{loading ? 'Loading image…' : reason ?? ''}</Label>
       {(onRetry || onReveal) && <div style={{ display: 'flex', gap: 8 }}>
-        {onRetry && <Button variant="subtle" testId="thread-image-retry" onClick={onRetry}>Retry</Button>}
-        {onReveal && <Button variant="ghost" testId="thread-image-reveal" onClick={onReveal}>Show in Finder</Button>}
+        {onRetry && <Button size="sm" testId="thread-image-retry" onClick={onRetry}>Retry</Button>}
+        {onReveal && <Button variant="ghost" size="sm" testId="thread-image-reveal" onClick={onReveal}>Show in Finder</Button>}
       </div>}
     </div>
   </Rise>

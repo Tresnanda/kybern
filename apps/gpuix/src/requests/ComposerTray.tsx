@@ -35,6 +35,8 @@ import { reportError } from '../transcript/store.ts'
 import { markTreeOpen, TICK_GAP, TreeGroup, TreeItem, TreeLines, useTreeSlot, type TreeShape } from '../tree/Tree.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { controlSubagent, showDock } from './Activity.tsx'
+import { Button } from '../kit/Button.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
 
 /** Row height. The body scrolls once its rows and the labels after the first pass `MAX_ROWS` rows of height; a half row peeks
  *  under the edge. */
@@ -130,22 +132,12 @@ function TrayHeader({ counts, subagents, tasks, open, onToggle }: { counts: Tray
           </div>
         </SwapOnChange>
       </div>
-      {open && stoppable.length >= 2 && <HeaderButton testId="subagents-stop-all" onClick={() => { for (const child of stoppable) void controlSubagent(child, 'stop') }}>Stop all</HeaderButton>}
+      {open && stoppable.length >= 2 && <Button size="sm" testId="subagents-stop-all" onClick={() => { for (const child of stoppable) void controlSubagent(child, 'stop') }}>Stop all</Button>}
       <div testId="composer-tray-chevron" onClick={toggle} style={{ display: 'flex', alignItems: 'center', height: 36, paddingLeft: 8, paddingRight: 8, flexShrink: 0, cursor: 'pointer' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20 }}>
           <Chevron open={open} source={T.chevronDown} turn={180} size={12} color={ink(t, 0.45)} />
         </div>
       </div>
-    </div>
-  )
-}
-
-function HeaderButton({ children, onClick, testId }: { children: string; onClick: () => void; testId: string }) {
-  const t = useTheme()
-  return (
-    <div testId={testId} role="button" tabIndex={0} onClick={onClick} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onClick() }}
-      style={{ display: 'flex', alignItems: 'center', height: 24, paddingLeft: 8, paddingRight: 8, borderRadius: 8, flexShrink: 0, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
-      <Label color={ink(t, 0.7)} size={12} weight={500}>{children}</Label>
     </div>
   )
 }
@@ -337,14 +329,8 @@ function Clock({ startedAt, endedAt }: { startedAt: number; endedAt: number | nu
   return <Elapsed startedAt={startedAt} endedAt={endedAt} size={12} tabular color={ink(t, 0.42)} />
 }
 function IconAction({ label, glyph, size = 12, onClick, testId }: { label: string; glyph: string; size?: number; onClick: () => void; testId: string }) {
-  const t = useTheme()
   const focus = useRowFocus()
-  return (
-    <div testId={testId} role="button" aria-label={label} tabIndex={0} {...focus} onClick={onClick} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onClick() }}
-      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
-      <Icon source={glyph} size={size} color={ink(t, 0.48)} />
-    </div>
-  )
+  return <IconButton testId={testId} label={label} icon={glyph} glyph={size} size="sm" onClick={onClick} {...focus} />
 }
 
 const SubagentRow = memo(function SubagentRow({ thread }: { thread: Thread }) {
@@ -419,10 +405,7 @@ const QueuedRow = memo(function QueuedRow({ item, threadId }: { item: QueuedMess
         : <Icon source={preview.kind === 'update' ? G.workflow : G.clock} size={14} color={ink(t, 0.5)} />}
       trailing={<div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         {preview.imageCount > 0 && !preview.imagesOnly && <ImageCount count={preview.imageCount} thumb={thumb} />}
-        <div testId={`queued-remove-${item.id}`} role="button" aria-label="Remove queued follow-up" tabIndex={0} onClick={remove} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') remove() }}
-          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
-          <Icon source={G.x} size={12} color={ink(t, 0.38)} />
-        </div>
+        <IconButton testId={`queued-remove-${item.id}`} label="Remove queued follow-up" icon={G.x} glyph={12} size="sm" onClick={remove} />
       </div>}
     >
       <Title testId="queued-preview">{preview.text}</Title>
