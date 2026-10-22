@@ -32,12 +32,18 @@ fn scratch_bucket(v: u64) -> u64 { v.max(1).div_ceil(SCRATCH_BUCKET) * SCRATCH_B
 impl BackdropResources {
     fn new(device:&metal::Device, format:metal::MTLPixelFormat)->Result<Self> {
         let lib=device.new_library_with_source(include_str!("backdrop.metal"),&metal::CompileOptions::new()).map_err(|e|anyhow::anyhow!(e))?;
+        // KYBERN_BACKDROP_PROGRAMMABLE=0 forces the fixed-function pass (the control for the alpha check).
+        let programmable=device.supports_family(metal::MTLGPUFamily::Apple1)&&!std::env::var("KYBERN_BACKDROP_PROGRAMMABLE").is_ok_and(|v|v=="0");
+        let constants=||{let c=metal::FunctionConstantValues::new();c.set_constant_value_at_index(&programmable as *const bool as *const c_void,metal::MTLDataType::Bool,0);c};
         let pipeline=|blend:bool|->Result<metal::RenderPipelineState>{
             let d=metal::RenderPipelineDescriptor::new();
             let vertex=lib.get_function("backdrop_vertex",None).map_err(|e|anyhow::anyhow!(e))?; d.set_vertex_function(Some(&vertex));
-            let fragment=lib.get_function("backdrop_fragment",None).map_err(|e|anyhow::anyhow!(e))?; d.set_fragment_function(Some(&fragment));
+            let fragment=lib.get_function("backdrop_fragment",Some(constants())).map_err(|e|anyhow::anyhow!(e))?; d.set_fragment_function(Some(&fragment));
             let a=d.color_attachments().object_at(0).unwrap();a.set_pixel_format(format);
-            if blend {a.set_blending_enabled(true);a.set_source_rgb_blend_factor(metal::MTLBlendFactor::SourceAlpha);a.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);a.set_source_alpha_blend_factor(metal::MTLBlendFactor::Zero);a.set_destination_alpha_blend_factor(metal::MTLBlendFactor::One);}
+            // Apple GPUs: the vertical pass blends in the shader (`mix(dst, blurred, coverage)` on RGBA, reading the target through
+            // `[[color(0)]]`), so the blurred alpha reaches the target; the fixed-function blend (alpha factors Zero / One) kept the
+            // destination alpha and left the scene's silhouettes in it. Other GPUs cannot read the target and keep that blend.
+            if blend && !programmable {a.set_blending_enabled(true);a.set_source_rgb_blend_factor(metal::MTLBlendFactor::SourceAlpha);a.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);a.set_source_alpha_blend_factor(metal::MTLBlendFactor::Zero);a.set_destination_alpha_blend_factor(metal::MTLBlendFactor::One);}
             device.new_render_pipeline_state(&d).map_err(|e|anyhow::anyhow!(e))
         };
         Ok(Self{horizontal:pipeline(false)?,vertical:pipeline(true)?,scratch:None,pool:Default::default()})
