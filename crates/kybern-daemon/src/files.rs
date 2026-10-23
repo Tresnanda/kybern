@@ -457,9 +457,11 @@ pub async fn read_file(
 /// Replace an existing project file with `content`: same directory temp file,
 /// fsync, permissions kept, then an atomic rename over the original. Paths go
 /// through `resolve` (no `..`, hidden or generated folders, or symlink
-/// escapes). A symlinked file is written through to its target, which
-/// `resolve` already proved is inside the root. With `expected_version`, a file
-/// that changed since is left alone and the write fails with a conflict.
+/// escapes). A symlinked file is written through to its target, which must
+/// itself pass `resolve`, so a link cannot reach `.env` or `.git`. With
+/// `expected_version`, a file that changed since is left alone and the write
+/// fails with a conflict; daemon saves are serialized so two clients racing on
+/// one version cannot both win.
 pub async fn write_file(
     root: &Path,
     rel: &str,
@@ -473,28 +475,40 @@ pub async fn write_file(
     if !target.is_file() {
         anyhow::bail!("not a file: {rel}");
     }
+    let canon_root = std::fs::canonicalize(root)?;
+    let real = target.strip_prefix(&canon_root).map_err(|_| anyhow::anyhow!("path must stay inside the project"))?;
+    resolve(&canon_root, &real.to_string_lossy())?;
     let expected = expected_version.map(str::to_owned);
     let rel = rel.to_string();
     tokio::task::spawn_blocking(move || -> Result<kybern_protocol::methods::FilesWriteResult> {
         use std::io::Read;
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _saving = SAVING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let meta = std::fs::metadata(&target)?;
         if let Some(expected) = expected
             && expected != file_version(&meta)
         {
             return Err(WriteConflict.into());
         }
-        let mut probe = Vec::with_capacity(8192);
-        std::fs::File::open(&target)?.take(8192).read_to_end(&mut probe)?;
-        anyhow::ensure!(!probe.contains(&0), "This is a binary file. Edit it in your editor instead.");
+        // The editor shows a lossy UTF-8 decoding, so saving over a file in another encoding would replace its every
+        // non-UTF-8 byte; such files (and binary ones) are refused. A cut inside a character at the cap is fine.
+        let mut existing = Vec::with_capacity((meta.len() as usize).min(4 * MAX_WRITE_BYTES));
+        std::fs::File::open(&target)?.take(4 * MAX_WRITE_BYTES as u64).read_to_end(&mut existing)?;
+        anyhow::ensure!(!existing[..existing.len().min(8192)].contains(&0), "This is a binary file. Edit it in your editor instead.");
+        anyhow::ensure!(
+            std::str::from_utf8(&existing).map_or_else(|error| error.error_len().is_none(), |_| true),
+            "This file is not UTF-8 text. Edit it in your editor instead."
+        );
         let dir = target.parent().ok_or_else(|| anyhow::anyhow!("not a file: {rel}"))?;
         let name = target.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
         let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let temp = dir.join(format!(".{name}.kybern-{}-{unique}.tmp", std::process::id()));
         let written = (|| -> std::io::Result<()> {
-            let mut file = std::fs::File::create(&temp)?;
-            file.write_all(content.as_bytes())?;
+            // `create_new` never follows a planted link; the original's mode is set before any content lands.
+            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temp)?;
             file.set_permissions(meta.permissions())?;
+            file.write_all(content.as_bytes())?;
             file.sync_all()?;
             std::fs::rename(&temp, &target)
         })();
@@ -618,10 +632,11 @@ mod tests {
 
         std::fs::write(root.join(".env"), "SECRET=1").unwrap();
         std::fs::write(root.join("blob.bin"), b"\0\x01").unwrap();
+        std::fs::write(root.join("latin1.txt"), b"caf\xe9\n").unwrap();
         std::fs::write(base.join("outside.ts"), "x").unwrap();
         std::fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
         std::fs::write(root.join("node_modules/pkg/index.js"), "x").unwrap();
-        for path in ["../outside.ts", ".env", "missing.ts", "src", "node_modules/pkg/index.js", "blob.bin"] {
+        for path in ["../outside.ts", ".env", "missing.ts", "src", "node_modules/pkg/index.js", "blob.bin", "latin1.txt"] {
             assert!(write_file(&root, path, "x".into(), None).await.is_err(), "{path} must not be writable");
         }
         assert!(write_file(&root, "src/app.ts", "x".repeat(super::MAX_WRITE_BYTES + 1), None).await.is_err());
@@ -631,6 +646,11 @@ mod tests {
             assert!(write_file(&root, "escape.ts", "x".into(), None).await.is_err());
             assert!(write_thread_file(&root, "escape.ts", "x".into(), None).await.is_err());
             assert_eq!(std::fs::read_to_string(base.join("outside.ts")).unwrap(), "x");
+            // A link inside the project may not reach a hidden or generated file either.
+            std::os::unix::fs::symlink(root.join(".env"), root.join("src/env.ts")).unwrap();
+            assert!(write_file(&root, "src/env.ts", "x".into(), None).await.is_err());
+            assert_eq!(std::fs::read_to_string(root.join(".env")).unwrap(), "SECRET=1");
+            std::fs::remove_file(root.join("src/env.ts")).unwrap();
         }
 
         // Thread files resolve against the cwd, absolute paths inside it included.
