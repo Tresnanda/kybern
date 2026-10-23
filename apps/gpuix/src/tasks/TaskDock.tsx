@@ -2,29 +2,21 @@
 // page. Collapsed it is a one-line field; pressing it (or ⌘↵) opens the run composer in the same slot, growing upward from the
 // field (`Collapse`: height and opacity over 220 ms, a fade under Reduce Motion). Esc, the Hide chevron, or a click on the page
 // while the draft is empty puts it back. A band above it fades into the opaque page colour, so rows never show through.
-import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
-import { useEffect, useRef, useState } from 'react'
 import { PROVIDER_LABEL } from '@/lib/format'
 import { isLiveRun, latestRun } from '@/state/tasksModel'
 import type { TaskItem } from '../../../../packages/kybern-client/src/types.ts'
 import { Collapse } from '../motion/kit.tsx'
 import { Presence } from '../motion/Presence.tsx'
 import { DURATION, EASE } from '../motion/tokens.ts'
-import { observeElementBounds } from '../native/layout.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
-import { alpha } from '../transcript/kit.tsx'
 import { over } from '../theme.ts'
 import { notesTokens } from '../notes/kit.tsx'
 import { ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { GlassEdge } from '../kit/GlassEdge.tsx'
 import { raisedFill, raisedRim, useGlass } from '../platform/glass.ts'
+import { DockShell, DOCK_FIELD_HEIGHT, DOCK_GUTTER } from './DockShell.tsx'
 import { RunComposer } from './RunComposer.tsx'
 import { markDockEscape, setTasks, useTasks } from './store.ts'
-
-/** `.tk-dock[data-filled]`: the gradient band above the dock. */
-const BAND = 28
-const FIELD_HEIGHT = 44
-const GUTTER = 16
 
 const fade = { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease: [...EASE.out] as [number, number, number, number] } }
 
@@ -32,15 +24,7 @@ export function TaskDock({ task, right, onHeight, emptyRef }: { task: TaskItem; 
   const t = useTheme()
   const g = useGlass()
   const k = notesTokens(t)
-  const renderer = useGpuixRequired()
   const open = useTasks((s) => s.composer?.length === 1 && s.composer[0] === task.id)
-  const node = useRef<PublicInstance | null>(null)
-  // The page's bottom padding follows the dock's height (`--tk-dock-h`).
-  useEffect(() => {
-    const id = node.current?.id
-    if (id == null) return
-    return observeElementBounds(renderer, id, (event) => { if (event.rect) onHeight(Math.round(event.rect.height)) })
-  }, [renderer])
   const run = latestRun(task)
   const following = !!run && (isLiveRun(run) || task.status === 'needs_review')
   const dark = t.variant === 'dark'
@@ -58,7 +42,7 @@ export function TaskDock({ task, right, onHeight, emptyRef }: { task: TaskItem; 
         alignItems: 'center',
         gap: 10,
         width: '100%',
-        height: FIELD_HEIGHT,
+        height: DOCK_FIELD_HEIGHT,
         paddingLeft: 16,
         paddingRight: 16,
         borderRadius: 14,
@@ -82,33 +66,20 @@ export function TaskDock({ task, right, onHeight, emptyRef }: { task: TaskItem; 
     </div>
   )
   return (
-    <div
-      ref={(el) => { node.current = el }}
-      testId="task-dock"
-      style={{ position: 'absolute', left: 0, right, bottom: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: g.on ? 0 : BAND, paddingBottom: GUTTER }}
-    >
-      {/* Opaque for its last 8px: a row passing right above the tray otherwise showed through the nearly opaque tail. Not on whole-window
-          glass: there is no colour that equals the desktop behind the window, so the list ends at the dock's top edge instead (`TaskDetail`). */}
-      {!g.on && <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: BAND, pointerEvents: 'none', background: { type: 'linear-gradient', angle: 180, stops: [{ color: alpha(t.surface, 0), position: 0 }, { color: t.surface, position: (BAND - 8) / BAND }] } }} />}
-      {!g.on && <div style={{ position: 'absolute', left: 0, right: 0, top: BAND, bottom: 0, pointerEvents: 'none', backgroundColor: t.surface }} />}
-      <div
-        onKeyDown={(e) => { if (open && e.key === 'escape' && !e.defaultPrevented) { markDockEscape(); close() } }}
-        style={{ position: 'relative', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', width: '100%', maxWidth: 660 + GUTTER * 2, minHeight: FIELD_HEIGHT, paddingLeft: GUTTER, paddingRight: GUTTER }}
-      >
-        {/* The field waits under the composer: it fades out as the composer grows over it, and back in as it shrinks. */}
-        <Presence show={!open} enter={PATCHED_NATIVE ? fade : undefined} exit={{ to: { opacity: 0 }, duration: 0.1 }} style={{ position: 'absolute', left: GUTTER, right: GUTTER, bottom: 0 }}>
-          {field}
+    <DockShell right={right} onHeight={onHeight} onEscape={() => { if (open) { markDockEscape(); close() } }}>
+      {/* The field waits under the composer: it fades out as the composer grows over it, and back in as it shrinks. */}
+      <Presence show={!open} enter={PATCHED_NATIVE ? fade : undefined} exit={{ to: { opacity: 0 }, duration: 0.1 }} style={{ position: 'absolute', left: DOCK_GUTTER, right: DOCK_GUTTER, bottom: 0 }}>
+        {field}
+      </Presence>
+      {REDUCED_MOTION ? (
+        <Presence show={open} enter={PATCHED_NATIVE ? fade : undefined} exit={{ to: { opacity: 0 }, duration: 0.1 }} style={{ position: 'relative' }}>
+          {open ? <RunComposer key={task.id} ids={[task.id]} onEmptyChange={(empty) => { emptyRef.current = empty }} /> : null}
         </Presence>
-        {REDUCED_MOTION ? (
-          <Presence show={open} enter={PATCHED_NATIVE ? fade : undefined} exit={{ to: { opacity: 0 }, duration: 0.1 }} style={{ position: 'relative' }}>
-            {open ? <RunComposer key={task.id} ids={[task.id]} onEmptyChange={(empty) => { emptyRef.current = empty }} /> : null}
-          </Presence>
-        ) : (
-          <Collapse open={open}>
-            <RunComposer key={task.id} ids={[task.id]} onEmptyChange={(empty) => { emptyRef.current = empty }} />
-          </Collapse>
-        )}
-      </div>
-    </div>
+      ) : (
+        <Collapse open={open}>
+          <RunComposer key={task.id} ids={[task.id]} onEmptyChange={(empty) => { emptyRef.current = empty }} />
+        </Collapse>
+      )}
+    </DockShell>
   )
 }
