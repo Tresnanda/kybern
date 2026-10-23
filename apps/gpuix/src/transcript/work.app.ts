@@ -8,12 +8,18 @@
 //   step {count | to}           stop feeding; apply `count` ticks now, or every tick up to (not including) tick `to`
 //   settle {turn}               end turn `turn`
 //   open {match}                rows whose state key contains `match` start open when they mount (`setRowStateDefault`)
+//   counters                    mounted host elements and components under the transcript (one fiber walk)
 //   last-run                    the test id of the live turn's newest run row (null before `chunkRuns` existed)
 //   open-next                   the next run whose calls have not started yet opens when it mounts (its first call's row key)
 import { writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 await import('../../perf/glass/app.ts')
+// The glass entry keeps the fiber root but drops pacing-app's commit log; `work.perf.ts` counts commits from it.
+const g = globalThis as Record<string, unknown>
+const hook = g.__REACT_DEVTOOLS_GLOBAL_HOOK__ as { onCommitFiberRoot: (...args: unknown[]) => void }
+const keep = hook.onCommitFiberRoot
+hook.onCommitFiberRoot = (...args) => { keep(...args); console.error('[pacing-commit]', performance.now()) }
 const state = await import('../state.ts')
 const { applyEvent } = await import('../../../../packages/kybern-client/src/transcript.ts')
 const { workTurnEvent, WORK_TICKS_PER_SEGMENT } = await import('../../perf/bench/workTurn.ts')
@@ -63,6 +69,20 @@ const server = Bun.serve({ idleTimeout: 60, port: 0, hostname: '127.0.0.1', asyn
       const segment = Math.floor(tick / WORK_TICKS_PER_SEGMENT) + (tick % WORK_TICKS_PER_SEGMENT >= 7 ? 1 : 0)
       opened.push(`group:tool:${live}-tool-${segment * 4}`)
       return Response.json({ match: opened.at(-1), segment, testId: `work-run-tool:${live}-tool-${segment * 4}` })
+    }
+    if (body.action === 'counters') {
+      type Fiber = { tag?: number; type?: unknown; memoizedProps?: { testId?: string }; child?: Fiber; sibling?: Fiber }
+      const root = (g.__glassFiberRoot as { current?: Fiber } | undefined)?.current
+      let host = 0, components = 0, inside = false
+      const walk = (fiber: Fiber | undefined, transcript: boolean) => {
+        for (let f = fiber; f; f = f.sibling) {
+          const here = transcript || f.memoizedProps?.testId === 'transcript-surface'
+          if (here) { inside = true; if (typeof f.type === 'string') host++; else if (typeof f.type === 'function' || typeof f.type === 'object') components++ }
+          walk(f.child, here)
+        }
+      }
+      walk(root, false)
+      return Response.json({ tick, blocks: state.getState().open.blocks.length, transcript: inside, hostElements: host, components })
     }
     if (body.action === 'last-run') {
       const chunks = await import('../../../desktop/src/lib/workChunks.ts') as { chunkRuns?: (blocks: unknown[], tasks: Map<string, unknown>) => { kind: string; blocks: { id: string }[] }[] }
