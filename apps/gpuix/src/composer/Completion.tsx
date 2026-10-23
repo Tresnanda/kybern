@@ -11,7 +11,6 @@ import { useTasks, refreshTasks } from '../tasks/store.ts'
 // ⌃N/⌃P remain additional shortcuts.
 //
 // Completion uses the native UTF-16 selection and one undoable edit.
-import { FloatingLayer } from '@gpuix/react/floating'
 import { inlineTokenLabel, mentionTokenKind } from '@/lib/inlineTokenLabel'
 import { useEffect, useMemo, useState } from 'react'
 import {
@@ -56,7 +55,7 @@ import { getClient, useApp } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { useNativeWindowSize } from '../native/layout-hooks.ts'
 import { G } from './glyphs.ts'
-import { muted, PICKER_RADIUS, popoverStyle, SectionLabel } from './Menu.tsx'
+import { muted, PICKER_RADIUS, PopupLayer, popoverStyle, SectionLabel } from './Menu.tsx'
 
 export interface SlashCommand {
   name: string
@@ -616,7 +615,9 @@ function CompletionList({
   }), [projects, threads])
   const projectName = (id: string | null | undefined) => (id && !isFreeChatProject(id) ? lookups.projects[id]?.name : undefined)
   return (
-    <FloatingLayer
+    // The shared popup layer, so the list frosts like every menu on glass (ADE-71). It takes no focus: the composer keeps typing.
+    <PopupLayer
+      kind="menu"
       side="top"
       align="start"
       sideOffset={8}
@@ -701,7 +702,7 @@ function CompletionList({
         })
       )}
       </div>
-    </FloatingLayer>
+    </PopupLayer>
   )
 }
 

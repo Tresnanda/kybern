@@ -11,6 +11,7 @@ import { observeElementBounds, type LayoutRect } from '../native/layout.ts'
 import type { TabsItem } from '../kit/Tabs.tsx'
 import { Icon } from '../icons.tsx'
 import { Label, ProviderMark, useTheme } from '../ui.tsx'
+import { useGlass } from '../platform/glass.ts'
 import { canSplitPane, getGroup, getSplitRoot } from '../split/store.ts'
 import { dropZoneAt, splitForZone, type DropZone } from '../split/geometry.ts'
 import { DropOverlay, paneRects } from '../split/Workspace.tsx'
@@ -124,6 +125,7 @@ export function TabsDragLayer() {
   useEffect(() => anchor ? observeElementBounds(gpuix, anchor.id, (e) => setOrigin(e.rect?.y ?? 0)) : undefined, [anchor, gpuix])
   useEffect(() => addWindowKeyHandler((e) => { if (e.key === 'escape' && (drag || pending)) { finish(false); return true } }), [])
   useEffect(() => { renderer = gpuix; return () => { if (renderer === gpuix) renderer = null } }, [gpuix])
+  const g = useGlass()
   const move = moveTabsDrag
   const rect = current?.target?.kind === 'edge' ? paneRects().get(current.target.leafId) : undefined
   return <>
@@ -131,7 +133,7 @@ export function TabsDragLayer() {
     {current && <div testId="tabs-drag-layer" onMouseMove={move} onMouseEnter={move} onMouseUp={(e) => { move(e); finish(true) }}
       style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', cursor: current.refused ? 'not-allowed' : 'grabbing' }} />}
     {current && rect && current.target?.kind === 'edge' && <DropOverlay key={`${current.target.leafId}:${current.target.zone}`} rect={{ x: rect.x, y: rect.y - origin, width: rect.width, height: rect.height }} zone={current.target.zone} whole={false} />}
-    {current && <div testId="tabs-drag-ghost" style={{ position: 'absolute', left: current.x + 10, top: current.y - origin + 10, display: 'flex', alignItems: 'center', gap: 6, height: current.size === 'md' ? 28 : 24, paddingLeft: 8, paddingRight: 10, borderRadius: 8, backgroundColor: t.surface, borderWidth: 1, borderColor: t.border, boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.2)' }, pointerEvents: 'none', opacity: current.refused ? 0.6 : 1 }}>
+    {current && <div testId="tabs-drag-ghost" style={{ position: 'absolute', left: current.x + 10, top: current.y - origin + 10, display: 'flex', alignItems: 'center', gap: 6, height: current.size === 'md' ? 28 : 24, paddingLeft: 8, paddingRight: 10, borderRadius: 8, backgroundColor: g.on ? g.denseFloat : t.surface, borderWidth: 1, borderColor: t.border, boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.2)' }, pointerEvents: 'none', opacity: current.refused ? 0.6 : 1 }}>
       {current.item.mark ? <ProviderMark kind={current.item.mark} size={14} /> : current.item.icon ? <Icon source={current.item.icon} size={14} color={t.textSecondary} /> : null}
       <Label color={t.text} size={current.size === 'md' ? 13 : 12} weight={500}>{current.item.label}</Label>
     </div>}

@@ -214,7 +214,7 @@ export function NoteEditor({ id, compact = false, width, onClose }: { id: string
               onChange={(e) => session.edit({ title: (e.value ?? '').replace(/\s*\n\s*/g, ' ').slice(0, 300) })} onBlur={() => void session.flush()}
               onSubmit={() => editor.current?.focus('start')}
               onKeyDown={(e) => { if (e.key === 'down' && !e.modifiers?.shift) { e.preventDefault(); editor.current?.focus('start') } }}
-              theme={{ text: k.fg, caret: k.fg }} style={{ width: '100%', height: 37, marginBottom: 24, fontSize: 30.15, lineHeight: 36.6, fontWeight: 650, color: k.fg, backgroundColor: t.surface }} />
+              theme={{ text: k.fg, caret: k.fg }} style={{ width: '100%', height: 37, marginBottom: 24, fontSize: 30.15, lineHeight: 36.6, fontWeight: 650, color: k.fg }} />
             {body('page')}
             {/* The blank space under the text is part of the page: click it to keep writing. */}
             {!deleted && <div testId="note-add-block" style={{ width: '100%', minHeight: 96, paddingBottom: 48, cursor: 'text' }} onClick={() => editor.current?.focus('end')} />}
