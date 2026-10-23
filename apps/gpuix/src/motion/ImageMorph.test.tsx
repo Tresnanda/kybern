@@ -168,7 +168,7 @@ test('a tall image opens without a morph, at the top; scroll pans, ⌘-scroll zo
   expect(stage()).toMatchObject({ scale: 1, translateX: 0, translateY: 0 })
   h.fire('viewer-zoom-surface', { eventType: 'scroll', x: 600, y: 300, deltaX: 0, deltaY: -200, precise: true, modifiers: {} })
   expect(stage().translateY).toBe(-200)
-  h.fire('viewer-zoom-surface', { eventType: 'scroll', x: 600, y: 300, deltaX: 0, deltaY: -40, precise: true, modifiers: { cmd: true } })
+  h.fire('viewer-zoom-surface', { eventType: 'scroll', x: 600, y: 300, deltaX: 0, deltaY: 40, precise: true, modifiers: { cmd: true } })
   expect(stage().scale).toBeGreaterThan(1)
   h.fire('viewer', { eventType: 'keyDown', key: '0', modifiers: { cmd: true } })
   expect(stage()).toMatchObject({ scale: 1, translateY: 0 })
@@ -177,5 +177,30 @@ test('a tall image opens without a morph, at the top; scroll pans, ⌘-scroll zo
   expect(h.props('viewer-zoom-surface-stage').paintTransform.transition.duration).toBeGreaterThan(0)
   h.fire('viewer-zoom-surface', { eventType: 'scroll', x: 600, y: 300, deltaX: 0, deltaY: -10, precise: true, modifiers: {} })
   expect(h.props('viewer-zoom-surface-stage').paintTransform.transition.duration).toBe(0)
+  h.root.unmount()
+})
+
+// Review 2026-10-23: Escape closed the preview and then bubbled on (GPUIX bubbles a keystroke through every ancestor and then
+// the window handlers unless a handler stops it). An empty composer's window handler cancels the agent's turn on Escape while a
+// request is pending, and the preview hands focus back to that composer as it closes.
+test('Escape closes the preview and stops there; zoom keys stop there too; other keys bubble on', () => {
+  const h = harness()
+  const closed: string[] = [], outer: string[] = []
+  h.render(<div testId="card" onKeyDown={(e: { key?: string }) => outer.push(e.key ?? '')}>
+    <ImageViewer testId="viewer" src={pngOfSize(1620, 3240)} label="sheet.png" from={null} source={() => null} onClose={() => closed.push('closed')} />
+  </div>)
+  // Native sends one keystroke to the focused element, then to each ancestor, sharing its id.
+  const press = (key: string, keystrokeId: number, modifiers = {}) => {
+    h.fire('viewer', { eventType: 'keyDown', key, modifiers, keystrokeId })
+    h.fire('card', { eventType: 'keyDown', key, modifiers, keystrokeId })
+  }
+  press('=', 1, { cmd: true })
+  expect(h.props('viewer-zoom-surface-stage').paintTransform.animate.scale).toBeGreaterThan(1)
+  press('a', 2)
+  expect(outer).toEqual(['a'])
+  // Zoomed in, Escape still closes (Quick Look's rule; ⌘0 is the way back to fit) and the card never hears it.
+  press('escape', 3)
+  expect(closed).toEqual(['closed'])
+  expect(outer).toEqual(['a'])
   h.root.unmount()
 })

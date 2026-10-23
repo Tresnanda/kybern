@@ -6,7 +6,7 @@
 // (pans), a double click (fit ↔ 100% at that point) and ⌘+ ⌘− ⌘0 (`ZoomController.key`, wired by the owner of the focus).
 // GPUIX 0.11 reports no pinch or magnify gesture to JS, so a trackpad pinch does nothing; ⌘-scroll and the keys stand in.
 // The source is always the full image (the preview never swaps in a downscaled copy), so zooming shows its own pixels.
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import type { PaintTransformProps } from '@gpuix/native/host'
 import { Segmented } from '../kit/Segmented.tsx'
@@ -99,7 +99,8 @@ export function ZoomPane({ src, label, keys }: { src: string; label: string; key
   const renderer = useGpuixRequired()
   const node = useRef<PublicInstance | null>(null)
   const [box, setBox] = useState({ width: 0, height: 0 })
-  const size = imageSize(src)
+  // The header is read once per source (a local file is a disk read; a large data URI is not cached by `imageSize`).
+  const size = useMemo(() => imageSize(src), [src])
   const scaleFactor = useNativeWindowSize().scaleFactor
   const controller = useZoomController({
     image: size, viewport: box, scaleFactor, pad: TAB_PAD, reduced: REDUCED_MOTION,

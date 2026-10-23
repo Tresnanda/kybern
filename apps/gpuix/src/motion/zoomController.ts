@@ -47,6 +47,8 @@ export interface KeyInput { key?: string; modifiers?: { cmd?: boolean; ctrl?: bo
 
 /** A line-based wheel (a mouse) pans this many points a line. */
 const LINE = 20
+/** A press that travels further than this (points) is a drag, and its release is not a click. */
+const SLOP = 4
 
 export class ZoomController {
   private cfg: ZoomConfig = { image: null, viewport: { width: 1, height: 1 }, origin: { x: 0, y: 0 }, scaleFactor: 1, reduced: false }
@@ -54,6 +56,8 @@ export class ZoomController {
   private duration = 0
   private pointer: Point | null = null
   private drag: { x: number; y: number; view: View } | null = null
+  /** The last press moved past `SLOP`: the click that follows its release is swallowed. */
+  private dragged = false
   private listeners = new Set<() => void>()
   private snap: ZoomSnapshot = NONE
   private snapKey = ''
@@ -161,6 +165,7 @@ export class ZoomController {
     const now = this.current()
     this.pointer = this.local(x, y)
     this.drag = now ? { ...this.local(x, y), view: now.view } : null
+    this.dragged = false
     if (now) this.changed()
   }
 
@@ -172,6 +177,7 @@ export class ZoomController {
     const now = this.current()
     if (!now) return
     const p = this.local(x, y)
+    if (Math.hypot(p.x - this.drag.x, p.y - this.drag.y) > SLOP) this.dragged = true
     this.set(panBy(this.drag.view, p.x - this.drag.x, p.y - this.drag.y, this.cfg.image!, this.cfg.viewport, now.lim), false)
   }
 
@@ -181,9 +187,13 @@ export class ZoomController {
     this.changed()
   }
 
-  /** A click: the second of a double click toggles at that point. Returns where it landed so the shell can treat the letterbox as the backdrop. */
+  /**
+   * A click: the second of a double click toggles at that point. Returns where it landed so the shell can treat the letterbox as
+   * the backdrop. The click that ends a drag is no click at all (null): a pan released over the letterbox must not close the lightbox.
+   */
   click(x: number, y: number, count: number, at = Date.now()): 'toggled' | 'image' | 'outside' | null {
     const now = this.current()
+    if (this.dragged) { this.dragged = false; this.lastClick = null; return null }
     if (!now) return null
     // The platform's click count when it has one; otherwise (injected clicks report 1) two clicks close together are a double.
     const last = this.lastClick

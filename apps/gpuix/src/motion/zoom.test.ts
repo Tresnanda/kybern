@@ -125,9 +125,10 @@ test('a fitted view follows a window resize; a free one keeps its zoom and re-cl
 })
 
 test('wheel zoom: scrolling one way zooms in, the other out, in bounded steps', () => {
-  expect(wheelFactor(-10, true)).toBeGreaterThan(1)
-  expect(wheelFactor(10, true)).toBeLessThan(1)
-  expect(wheelFactor(-10000, true)).toBe(2)
-  expect(wheelFactor(10000, true)).toBe(0.5)
-  expect(wheelFactor(-1, false)).toBeGreaterThan(wheelFactor(-1, true))
+  // GPUI's deltaY is positive toward the top (the wheel rolled up): that zooms in.
+  expect(wheelFactor(10, true)).toBeGreaterThan(1)
+  expect(wheelFactor(-10, true)).toBeLessThan(1)
+  expect(wheelFactor(10000, true)).toBe(2)
+  expect(wheelFactor(-10000, true)).toBe(0.5)
+  expect(wheelFactor(1, false)).toBeGreaterThan(wheelFactor(1, true))
 })

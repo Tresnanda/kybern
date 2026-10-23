@@ -232,10 +232,13 @@ export function ImageViewer({ src, label, from, source, onClose, finalFocus, onO
     <anchored backdrop={{ blur: 0 }} position={{ x: 0, y: 0 }} fit="snap" snapMargin={0} deferred priority={4} occlude>
       <div testId={web.id} style={{ display: 'flex' }}>
       <div ref={root} testId={testId} tabIndex={0} autoFocus
-        onKeyDown={(e: { key?: string; modifiers?: { shift?: boolean; cmd?: boolean; ctrl?: boolean; alt?: boolean }; preventDefault(): void }) => {
-          if (e.key === 'escape' && !kitOverlayOpen()) close(true)
+        onKeyDown={(e: { key?: string; modifiers?: { shift?: boolean; cmd?: boolean; ctrl?: boolean; alt?: boolean }; preventDefault(): void; stopPropagation?(): void }) => {
+          // Escape closes the preview, zoomed or not (Quick Look's rule; ⌘0 fits). The keys it takes stop here: the window's
+          // handlers and the cards around the thumbnail must not see them (an empty composer's Escape cancels the agent's turn
+          // while a request is pending, and the preview hands focus back to that composer as it closes).
+          if (e.key === 'escape' && !kitOverlayOpen()) { e.preventDefault(); e.stopPropagation?.(); close(true) }
           // ⌘+ ⌘− ⌘0 zoom the picture (`ZoomController.key`).
-          else if (zoom.key(e)) e.preventDefault()
+          else if (zoom.key(e)) { e.preventDefault(); e.stopPropagation?.() }
           // Modal while open: Tab and Shift-Tab wrap among its own stops instead of reaching the window behind it.
           // The window's own Tab navigation would move focus a second time, behind the modal.
           else if (e.key === 'tab' && root.current) { e.preventDefault(); (e.modifiers?.shift ? renderer.focusPreviousWithin : renderer.focusNextWithin)?.call(renderer, root.current.id) }

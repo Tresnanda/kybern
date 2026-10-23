@@ -104,7 +104,11 @@ export function toggleZoom(view: View, lim: Limits): number {
   return isActual(view, lim) ? lim.fit : lim.actual
 }
 
-/** ⌘-scroll and pinch: the factor one wheel event applies. Pixel (trackpad) deltas are fine; line (mouse wheel) ones are coarse. */
+/**
+ * ⌘-scroll: the factor one wheel event applies. Pixel (trackpad) deltas are fine; line (mouse wheel) ones are coarse. GPUI's
+ * `deltaY` is positive for a scroll toward the top (the wheel rolled up), which zooms in, as ⌘/ctrl-scroll does in browsers,
+ * Figma and Sketch.
+ */
 export function wheelFactor(deltaY: number, precise: boolean): number {
-  return clamp(Math.exp(-deltaY * (precise ? 0.01 : 0.12)), 0.5, 2)
+  return clamp(Math.exp(deltaY * (precise ? 0.01 : 0.12)), 0.5, 2)
 }

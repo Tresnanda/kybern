@@ -41,7 +41,7 @@ for (const mode of modes) for (const theme of themes) {
     await Bun.sleep(400)
     console.log(name, 'cmd+', await percent())
     await shot('3-cmd-plus')
-    await surface.wheel(0, -80, { modifiers: 'cmd' })
+    await surface.wheel(0, 80, { modifiers: 'cmd' }) // wheel rolled up: zooms in
     await Bun.sleep(300)
     console.log(name, 'cmd-scroll', await percent())
     await surface.wheel(0, -120)

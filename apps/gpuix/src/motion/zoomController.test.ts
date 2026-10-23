@@ -49,14 +49,14 @@ test('a single click on the letterbox is the backdrop; on the picture it is noth
 
 test('⌘-scroll zooms about the pointer in direct (unanimated) steps, within the range', () => {
   const c = make()
-  c.wheel({ x: 600, y: 300, deltaX: 0, deltaY: -40, precise: true, modifiers: { cmd: true } })
+  c.wheel({ x: 600, y: 300, deltaX: 0, deltaY: 40, precise: true, modifiers: { cmd: true } })
   const one = c.snapshot()
   expect(one.view.z).toBeGreaterThan(c.snapshot().limits!.fit)
   expect(one.duration).toBe(0)
   expect(one.zoomed).toBe(true)
-  for (let i = 0; i < 100; i++) c.wheel({ x: 600, y: 300, deltaX: 0, deltaY: -200, precise: true, modifiers: { cmd: true } })
-  expect(c.snapshot().percent).toBe(800)
   for (let i = 0; i < 100; i++) c.wheel({ x: 600, y: 300, deltaX: 0, deltaY: 200, precise: true, modifiers: { cmd: true } })
+  expect(c.snapshot().percent).toBe(800)
+  for (let i = 0; i < 100; i++) c.wheel({ x: 600, y: 300, deltaX: 0, deltaY: -200, precise: true, modifiers: { cmd: true } })
   expect(c.snapshot().fitted).toBe(true)
   // Back at fit it follows the window again.
   c.configure(config({ viewport: { width: 600, height: 400 } }))
@@ -145,4 +145,59 @@ test('an image of unknown size does not zoom', () => {
   expect(c.snapshot().enabled).toBe(false)
   expect(c.key({ key: '=', modifiers: { cmd: true } })).toBe(false)
   expect(c.click(400, 250, 2)).toBeNull()
+})
+
+// Review 2026-10-23: the click that ends a drag landed on the letterbox and closed the lightbox mid-pan.
+test('the click that ends a drag is not a click: no backdrop close, no double-click toggle', () => {
+  const c = make()
+  c.click(400, 250, 2)
+  // Press on the picture, pan, release over the letterbox (left of the picture after the pan).
+  c.pointerDown(500, 300)
+  c.pointerMove(560, 320, true)
+  c.pointerUp()
+  expect(c.click(105, 350, 1)).toBeNull()
+  // A press that barely moves is still a click, and the next press starts afresh.
+  c.pointerDown(105, 350)
+  c.pointerMove(107, 351, true)
+  c.pointerUp()
+  expect(c.click(107, 351, 1, 10_000)).not.toBeNull()
+  c.pointerDown(600, 300)
+  c.pointerUp()
+  expect(c.click(600, 300, 1, 20_000)).toBe('image')
+})
+
+test('zoom stays anchored under the pointer, clamps at both ends, and keeps a small image centred', () => {
+  const c = make()
+  const before = c.snapshot().view, at = { x: 300, y: 200 }
+  const under = { x: (at.x - before.x) / before.z, y: (at.y - before.y) / before.z }
+  c.wheel({ x: 100 + at.x, y: 50 + at.y, deltaX: 0, deltaY: 30, precise: true, modifiers: { cmd: true } })
+  const after = c.snapshot().view
+  expect((at.x - after.x) / after.z).toBeCloseTo(under.x)
+  expect((at.y - after.y) / after.z).toBeCloseTo(under.y)
+  // Zoomed past the viewport, the picture always covers it: it can never be dragged off screen.
+  for (let i = 0; i < 20; i++) c.wheel({ x: 600, y: 300, deltaX: 0, deltaY: 200, precise: true, modifiers: { cmd: true } })
+  c.pointerDown(500, 300); c.pointerMove(-20_000, -20_000, true); c.pointerUp()
+  const far = c.snapshot().view
+  expect(far.x + 3240 * far.z).toBeGreaterThanOrEqual(1000 - 1e-6)
+  expect(far.y + 2594 * far.z).toBeGreaterThanOrEqual(700 - 1e-6)
+  // A small image never zooms out below 100% or its fit, and stays centred whatever the drag.
+  const small = make({ image: { width: 200, height: 100 } })
+  for (let i = 0; i < 20; i++) small.wheel({ x: 600, y: 300, deltaX: 0, deltaY: -200, precise: true, modifiers: { cmd: true } })
+  const s = small.snapshot()
+  expect(s.view.z).toBeCloseTo(s.limits!.min)
+  small.pointerDown(500, 300); small.pointerMove(900, 600, true); small.pointerUp()
+  expect(small.snapshot().view.x + 100 * small.snapshot().view.z).toBeCloseTo(500)
+  expect(small.snapshot().view.y + 50 * small.snapshot().view.z).toBeCloseTo(350)
+})
+
+test('a window resize while zoomed keeps the zoom and clamps the picture to the new viewport', () => {
+  const c = make()
+  c.click(400, 250, 2)
+  for (let i = 0; i < 50; i++) c.wheel({ x: 600, y: 300, deltaX: -100, deltaY: -100, precise: true })
+  const z = c.snapshot().view.z
+  c.configure(config({ viewport: { width: 1400, height: 900 } }))
+  const view = c.snapshot().view
+  expect(view.z).toBe(z)
+  expect(view.x + 3240 * z).toBeGreaterThanOrEqual(1400 - 1e-6)
+  expect(view.y + 2594 * z).toBeGreaterThanOrEqual(900 - 1e-6)
 })
