@@ -2,11 +2,11 @@
 // `TextArea` build on the shell. 28 high (`lg` 32 in dialogs), radius 9, an ink fill with no edge; hover adds a 1 px ink edge,
 // focus a 1.5 px accent edge over a faint accent wash, invalid a 1 px red edge and a 3 px red halo, disabled drops the fill for
 // a 1 px ink edge (the spec's 45° hatch needs a repeating pattern the renderer does not have, so it is the edge alone).
-// Placeholder text is `text3` (the native input fixes it); the caret is the accent.
+// Placeholder text is the theme's `textPlaceholder`, painted over the input (the native one is a fixed grey); the caret is the accent.
 import type { InputProps, StyleDesc } from '@gpuix/react'
 import { useState, type ReactNode } from 'react'
 import { FONT_MONO, FONT_UI } from '../theme.ts'
-import { useTheme } from '../ui.tsx'
+import { Label, useTheme } from '../ui.tsx'
 import { HEIGHT, RADIUS, useControls } from './controls.ts'
 
 export type FieldSize = 'md' | 'lg'
@@ -79,25 +79,34 @@ export interface TextFieldProps extends Omit<InputProps, 'value' | 'onChange' | 
   onBlur?: () => void
 }
 
-export function TextField({ label, value, onChange, size = 'md', width, invalid = false, disabled = false, bare = false, mono = false, leading, trailing, style, shell, testId, onBlur, onFocus, ...props }: TextFieldProps) {
+export function TextField({ label, value, onChange, size = 'md', width, invalid = false, disabled = false, bare = false, mono = false, leading, trailing, style, shell, testId, onBlur, onFocus, placeholder, ...props }: TextFieldProps) {
   const t = useTheme()
   const [focused, setFocused] = useState(false)
+  const font = mono ? FONT_MONO : FONT_UI
+  const fontSize = typeof style?.fontSize === 'number' ? style.fontSize : size === 'lg' ? 14 : 13
   return (
     <FieldShell size={size} focused={focused} invalid={invalid} disabled={disabled} bare={bare} width={width} leading={leading} trailing={trailing} style={shell}>
-      <input
-        {...props}
-        testId={testId}
-        tabIndex={disabled ? -1 : 0}
-        aria-label={label}
-        aria-invalid={invalid || undefined}
-        value={value}
-        readOnly={disabled}
-        theme={{ caret: t.text, textMuted: t.textPlaceholder, ...props.theme }}
-        onChange={(e) => onChange(e.value ?? '')}
-        onFocus={(e) => { setFocused(true); onFocus?.(e) }}
-        onBlur={() => { setFocused(false); onBlur?.() }}
-        style={{ flexGrow: 1, flexShrink: 1, minWidth: 0, height: '100%', borderWidth: 0, fontFamily: mono ? FONT_MONO : FONT_UI, fontSize: size === 'lg' ? 14 : 13, color: disabled ? t.textTertiary : t.text, backgroundColor: 'rgba(0, 0, 0, 0)', ...style }}
-      />
+      <div style={{ position: 'relative', display: 'flex', flexGrow: 1, flexShrink: 1, minWidth: 0, height: '100%' }}>
+        {/* GPUIX paints its own placeholder in a fixed #8f8f8f (2.6:1 on frost, 3.2:1 on white); this one follows the theme. */}
+        {placeholder && !value && (
+          <div testId={testId ? `${testId}-placeholder` : undefined} style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>
+            <Label color={t.textPlaceholder} size={fontSize} font={font} truncate>{placeholder}</Label>
+          </div>
+        )}
+        <input
+          {...props}
+          testId={testId}
+          tabIndex={disabled ? -1 : 0}
+          aria-label={label}
+          aria-invalid={invalid || undefined}
+          value={value}
+          readOnly={disabled}
+          onChange={(e) => onChange(e.value ?? '')}
+          onFocus={(e) => { setFocused(true); onFocus?.(e) }}
+          onBlur={() => { setFocused(false); onBlur?.() }}
+          style={{ flexGrow: 1, flexShrink: 1, minWidth: 0, height: '100%', borderWidth: 0, fontFamily: font, fontSize, color: disabled ? t.textTertiary : t.text, backgroundColor: 'rgba(0, 0, 0, 0)', ...style }}
+        />
+      </div>
     </FieldShell>
   )
 }
