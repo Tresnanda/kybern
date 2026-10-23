@@ -55,6 +55,56 @@ resolution.
 Not reproduced: the JS-side 459 MB after 8 hours. A replay grows it by about 20 MB and
 it stays flat across rounds. The memory log is there to catch that in a real session.
 
+## A normal session on this branch (with the image fix)
+
+`session.ts`, a stripped copy of the real store: 12 of the day's threads opened in turn
+with three history pages each, the orchestrator streamed in process, six document tabs
+(code, Markdown, diff, image), then Home and a minute idle.
+
+| Phase | Footprint | Peak | Tag 1 | Live JS heap (after full GC) |
+|---|---:|---:|---:|---:|
+| Home | 221 | 242 | 112 | 24 |
+| 12 threads | 251 | 266 | 126 | — |
+| Streamed | 283 | 308 | 138 | 41 |
+| Six tabs open | 348 | 359 | 136 | 38 |
+| Home, idle | **294** | 359 | 130 | 29 |
+
+The live JS heap stays at 24–41 MB; transcripts, Markdown caches and the file cache are
+not the large retainers.
+
+## The live-turn leak (open)
+
+The installed app grew from 459 to 554 MB in `App-Specific Tag 1` in one hour of live
+agent turns, and stayed flat while nothing streamed. `live.ts` reproduces it through the
+real path: the scratch daemon's Claude binary is `apps/desktop/scripts/profile-replay-driver.py`
+(settings `providers.claude-code.binary`, `KYBERN_PERF_REPLAY_JSONL` on the daemon), so
+each `PROFILE_REPLAY` message streams a recorded session through the driver, store and
+WebSocket while the app watches the thread.
+
+| Live pass (orchestrator session, window painting) | Tag 1 | Footprint | Live JS heap |
+|---|---:|---:|---:|
+| open | 116 | 260 | 39 |
+| after pass 1 | 148 | 355 (peak 485) | 34 |
+| after pass 2 | 191 | 399 | 34 |
+| after pass 3 | 231 | 439 | 36 |
+
+About 40 MB per pass, never returned, while the live heap stays flat. Ruled out:
+- **The WebSocket client.** `socket.ts`, the same client with no UI: 11,085 events, Tag 1 flat at about 8.5 MB.
+- **The native streaming-document API.** `doc-churn.ts`, without painting: 12,350 updates, flat.
+- **JS objects.** The full-GC heap is constant.
+- **The addon's private mimalloc.** `malloc_history` puts every 128 MB Tag 1 region in Bun's own allocator, reserved at launch, which backs JSC strings and napi buffers.
+
+The growth needs painted frames of a live reply: with the display asleep the
+frame clock stops, the virtual list lays out nothing, and passes do not grow (forced
+captures and `KYBERN_STREAM_EVENT_FRAME=0` do not substitute). The in-process replay
+(`real.ts`) never marks the thread running, so it does not mount the live row
+(`StreamMarkdown` document mode, `useSmoothText`, caret and word fades).
+
+Next, with a display awake: one pass each with `KYBERN_STREAM_DOCUMENT=0`,
+`KYBERN_SMOOTH_STREAM=0`, `KYBERN_REDUCED_MOTION=1` and `KYBERN_COMPOSITOR_LOOPS=0`
+(`perf/memlog/live.ts <label> <thread> 2 2`), then `MallocStackLogging=lite` and
+`malloc_history -callTree -invert` on the run that grows, to name the napi entry point.
+
 ## Running
 
 ```sh
@@ -63,6 +113,10 @@ export KYBERN_DATA_DIR=$D NAPI_RS_NATIVE_LIBRARY_PATH="/Applications/Kybern GPUI
 bun perf/memlog/real.ts open <thread> [thread ...]           # open, all history, visit, Home
 KYBERN_MEMLOG_REPLAY=<thread> bun perf/memlog/real.ts replay  # stream it back; KYBERN_MEMLOG_ROUNDS for a soak
 KYBERN_IMAGE_FILES=0 bun perf/memlog/images-check.ts before <thread>   # thread and lightbox captures
+bun perf/memlog/session.ts <label> <streamed thread> <thread ...>      # the normal session above
+bun perf/memlog/live.ts <label> <thread> [passes] [minutes]           # live turns via the replay binary
+bun perf/memlog/socket.ts <raw|fold> <thread> [passes]                # the same, client only
+bun perf/memlog/doc-churn.ts <reply.md> [rounds] [replies] [step]     # native streaming documents, no painting
 ```
 
 Before running a daemon on a copy of the real store, delete every thread you do not
