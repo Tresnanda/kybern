@@ -105,9 +105,11 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Linux desktop and credential-store dependencies
         if: runner.os == 'Linux'
+        # Usually under a minute; a stalled mirror once held this step for 18 minutes.
+        timeout-minutes: 6
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev
       - name: clippy
         run: >
           cargo clippy --workspace --all-targets
