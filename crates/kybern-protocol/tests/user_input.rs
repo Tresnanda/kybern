@@ -84,3 +84,32 @@ fn secret_answers_are_redacted_before_they_are_stored() {
     let reply = ApprovalDecision::Submit { response: json!({"answers":{"Which?":"Blue"}}) };
     assert_eq!(plain.redacted_decision(&reply), reply);
 }
+#[test]
+fn visual_answers_match_the_schema_or_are_a_reply() {
+    let request = request(
+        "kybern_visual_answer",
+        json!({"visual_id":"00000000-0000-0000-0000-000000000004","title":"Pick a layout","schema":{"type":"object","properties":{"layout":{"enum":["A","B","C"]}},"required":["layout"]}}),
+    );
+    assert!(request.is_user_input());
+    assert!(request.validate_decision(&ApprovalDecision::AllowOnce).is_err());
+    assert!(request.validate_decision(&ApprovalDecision::Deny { reason: Some("skipped".into()) }).is_ok());
+    let submit = |response: Value| request.validate_decision(&ApprovalDecision::Submit { response });
+    assert!(submit(json!({"answer":{"layout":"B"},"label":"Layout B"})).is_ok());
+    assert!(submit(json!({"reply":"B, with the panel on the left"})).is_ok());
+    for bad in [
+        json!({}),
+        json!({"answer":null}),
+        json!({"answer":{"layout":"D"}}),
+        json!({"answer":{}}),
+        json!({"answer":{"layout":"B"},"label":7}),
+        json!({"reply":"  "}),
+        json!({"answer":"x".repeat(9000)}),
+    ] {
+        assert!(submit(bad.clone()).is_err(), "{bad}");
+    }
+    let free = request_without_schema();
+    assert!(free.validate_decision(&ApprovalDecision::Submit { response: json!({"answer":[1,2,3]}) }).is_ok());
+}
+fn request_without_schema() -> ApprovalRequest {
+    request("kybern_visual_answer", json!({"visual_id":"00000000-0000-0000-0000-000000000004","title":"Tune"}))
+}

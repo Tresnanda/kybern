@@ -206,11 +206,20 @@ export function ImageViewer({ src, label, from, source, onClose, finalFocus, onO
   }
   // A hidden window has no native frames, so a pending exit would never complete.
   useEffect(() => { if (closing && !isWindowVisible()) finish() })
+  // The exit normally ends on the image's `onMotionComplete`; this only guarantees the unmount if it never reports
+  // (ADE-70: a closed preview that stayed mounted took every click in the window).
+  useEffect(() => {
+    if (!closing) return
+    const timer = setTimeout(finish, closing.timing.duration * 1000 + 250)
+    return () => clearTimeout(timer)
+  }, [closing])
+  // A keyboard open has no transform yet, so the exit names its start: from `false` there is nothing to animate.
+  const shown = !!(start || fadeIn)
 
   // The morph scales about the fitted picture's centre, which is not the room's.
   const origin: [number, number] = [home.x / area.width, home.y / area.height]
   const outer: PaintTransformProps | undefined = closing
-    ? { initial: false, animate: closing.to.outer, transition: closing.timing, generation: closing.generation, origin }
+    ? { initial: shown ? false : LANDED.outer, animate: closing.to.outer, transition: closing.timing, generation: closing.generation, origin }
     : start ? { initial: start.outer, animate: LANDED.outer, transition: MORPH_OPEN, retain: true, origin }
     : fadeIn ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease: bezier(EASE.smoothOut) }, retain: true }
     : undefined
@@ -219,17 +228,18 @@ export function ImageViewer({ src, label, from, source, onClose, finalFocus, onO
     : { initial: start?.inner ?? false, animate: LANDED.inner, transition: MORPH_OPEN }
   // The scrim and the toolbar follow the image's timing, both ways. Under Reduce Motion everything is one 150 ms fade.
   const scrim: PaintTransformProps | undefined = !PATCHED_NATIVE || (!from && !closing) ? undefined : closing
-    ? { initial: false, animate: { opacity: 0 }, transition: closing.timing }
+    ? { initial: from ? false : { opacity: 1 }, animate: { opacity: 0 }, transition: closing.timing }
     : { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: morph ? MORPH_OPEN : { duration: DURATION.quick, ease: bezier(EASE.smoothOut) } }
   const nudge = REDUCED_MOTION ? 0 : -DISTANCE.micro
   const chrome: PaintTransformProps | undefined = !PATCHED_NATIVE || (!from && !closing) ? undefined : closing
-    ? { initial: false, animate: { opacity: 0, translateY: nudge }, transition: closing.timing }
+    ? { initial: from ? false : { opacity: 1, translateY: 0 }, animate: { opacity: 0, translateY: nudge }, transition: closing.timing }
     : { initial: { opacity: 0, translateY: nudge }, animate: { opacity: 1, translateY: 0 }, transition: morph ? MORPH_OPEN : { duration: DURATION.quick, ease: bezier(EASE.smoothOut) } }
   const outline = t.variant === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'
   return (
     // An anchored layer paints an opaque backing unless it asks for none (`backdrop: { blur: 0 }`); the scrim is our own
     // child so it can fade. The web occlusion keeps an embedded browser preview under the scrim.
-    <anchored backdrop={{ blur: 0 }} position={{ x: 0, y: 0 }} fit="snap" snapMargin={0} deferred priority={4} occlude>
+    // Closing, it lets clicks through at once: the window behind is live again before the fade ends.
+    <anchored backdrop={{ blur: 0 }} position={{ x: 0, y: 0 }} fit="snap" snapMargin={0} deferred priority={4} occlude={!closing}>
       <div testId={web.id} style={{ display: 'flex' }}>
       <div ref={root} testId={testId} tabIndex={0} autoFocus
         onKeyDown={(e: { key?: string; modifiers?: { shift?: boolean; cmd?: boolean; ctrl?: boolean; alt?: boolean }; preventDefault(): void; stopPropagation?(): void }) => {
@@ -243,7 +253,7 @@ export function ImageViewer({ src, label, from, source, onClose, finalFocus, onO
           // The window's own Tab navigation would move focus a second time, behind the modal.
           else if (e.key === 'tab' && root.current) { e.preventDefault(); (e.modifiers?.shift ? renderer.focusPreviousWithin : renderer.focusNextWithin)?.call(renderer, root.current.id) }
         }}
-        style={{ position: 'relative', width: window.width, height: window.height }}
+        style={{ position: 'relative', width: window.width, height: window.height, pointerEvents: closing ? 'none' : undefined }}
       >
       {/* The scrim takes outside clicks; the image and toolbar sit above it. */}
       <div testId={`${testId}-scrim`} onClick={() => close(false)} paintTransform={scrim} style={{ position: 'absolute', left: 0, top: 0, width: window.width, height: window.height, backgroundColor: SCRIM }} />

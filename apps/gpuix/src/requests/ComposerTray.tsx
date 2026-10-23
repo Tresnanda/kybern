@@ -13,6 +13,7 @@
 // row lifts out and closes up (`Leave`), and its label leaves with the last one; a subagent that settles cross-swaps its
 // loader for a check or alert and dims to the finished ink (`Dim`, 150 ms, paint-only); a changed count in the summary swaps
 // in place (`SwapOnChange`). Reduce Motion: fades, or nothing.
+import { useNav } from '../nav/store.ts'
 import { createContext, memo, useContext, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { QueuedMessage, RuntimeTask, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { commandSummary, queuedPreview, trayDefaultOpen, traySummary, type TrayCounts } from '../../../../packages/kybern-client/src/composerTray.ts'
@@ -386,12 +387,13 @@ const TaskRow = memo(function TaskRow({ task, threadId }: { task: RuntimeTask; t
 const HelperRow = memo(function HelperRow({ thread }: { thread: Thread }) {
   const t = useTheme()
   const approval = thread.status === 'awaiting-approval'
+  const waiting = useNav((s) => s.pending[thread.id]?.own) === 'question' ? 'Needs input' : 'Needs approval'
   const amber = t.variant === 'dark' ? '#fcd34d' : '#d97706'
   return (
     <Row testId={`helper-${thread.id}`} onOpen={() => openThread(thread.id)}
       glyph={thread.status === 'running' ? <ProviderMark kind={thread.provider.kind} size={14} /> : approval ? <Icon source={G.hand} size={14} color={amber} /> : thread.status === 'failed' ? <Icon source={T.alert} size={14} color={t.red} /> : <Icon source={T.check} size={14} color={ink(t, 0.45)} />}>
       <Title>{thread.title || 'Untitled'}</Title>
-      <Meta color={approval ? amber : thread.status === 'failed' ? t.red : undefined}>{thread.status === 'running' ? 'Helper' : approval ? 'Needs approval' : thread.status === 'failed' ? 'Failed' : 'Helper · idle'}</Meta>
+      <Meta color={approval ? amber : thread.status === 'failed' ? t.red : undefined}>{thread.status === 'running' ? 'Helper' : approval ? waiting : thread.status === 'failed' ? 'Failed' : 'Helper · idle'}</Meta>
     </Row>
   )
 })

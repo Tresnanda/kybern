@@ -24,18 +24,24 @@ use crate::settings::SettingsStore;
 
 mod accounts;
 mod agent_items;
+mod askpass;
+mod child_questions;
 mod delegation;
 mod lead;
 mod lead_git;
 mod lead_proposals;
+mod login_request;
 mod messaging;
 mod notes;
 mod omp_recovery;
+mod pick_request;
+mod request_tools;
 mod secret_request;
 mod spaces;
 mod subagent_messaging;
 mod subagents;
 mod tasks;
+mod visual_answer;
 mod worktrees;
 
 #[derive(Clone)]
@@ -247,6 +253,10 @@ impl Orchestrator {
                 anyhow::ensure!(!object.contains_key("thread_id"), "HTML tools are bound to the current thread.");
                 object.insert("thread_id".into(), serde_json::json!(thread_id));
                 let params: methods::HtmlPublishParams = crate::app_tools::parse(serde_json::Value::Object(object))?;
+                let ask = crate::visuals::answer_ask(&params)?;
+                if ask.is_some() {
+                    self.ensure_one_visual_question(turn_id, &live).await?;
+                }
                 let event = crate::visuals::publish(
                     &self.inner.store,
                     &self.inner.paths,
@@ -255,12 +265,19 @@ impl Orchestrator {
                     &params.html,
                     &params.title,
                     params.height,
+                    ask,
                 )
                 .await?;
                 let EventPayload::HtmlPublished { visual } = &event.payload else { unreachable!() };
-                let result = serde_json::json!({"visual":visual,"message":"The visual is published inline. Add only what the page does not already explain."});
+                let visual = visual.clone();
                 let _ = self.inner.events.send(event);
-                return Ok(result);
+                if visual.ask.is_some() {
+                    let wait = crate::visuals::answer_wait(params.timeout_seconds);
+                    return self.execute_visual_answer(thread_id, turn_id, &live, visual, wait).await;
+                }
+                return Ok(
+                    serde_json::json!({"visual":visual,"message":"The visual is published inline. Add only what the page does not already explain."}),
+                );
             }
             if name == crate::previews::agent::TOOL {
                 let roots = crate::previews::thread_roots(&self.inner.store, &thread);
@@ -287,6 +304,15 @@ impl Orchestrator {
             if crate::secrets::is_tool(name) {
                 return self.execute_request_secret(&thread, turn_id, &live, arguments).await;
             }
+            if crate::pick::is_tool(name) {
+                return self.execute_request_pick(&thread, turn_id, &live, arguments).await;
+            }
+            if login_request::is_tool(name) {
+                return self.execute_request_login(&thread, turn_id, &live, arguments).await;
+            }
+            if request_tools::is_tool(name) {
+                return self.execute_request_tool(&thread, turn_id, &live, name, arguments).await;
+            }
             if crate::lead_git::is_tool(name) {
                 return self.execute_lead_git(&thread, turn_id, &live, arguments).await;
             }
@@ -298,6 +324,9 @@ impl Orchestrator {
             }
             if delegation::is_tool(name) {
                 return self.execute_agent_tool(&thread, turn_id, &live, name, arguments).await;
+            }
+            if child_questions::is_tool(name) {
+                return self.execute_child_question_tool(&thread, name, arguments).await;
             }
             if messaging::is_tool(name) {
                 return self.execute_messaging_tool(&thread, turn_id, &live, name, arguments).await;
@@ -460,6 +489,8 @@ struct Inner {
     space_writes: std::sync::Mutex<()>,
     /// Agent requests to show a page, forwarded as `previews.open_requested`.
     preview_requests: tokio::sync::broadcast::Sender<methods::PreviewOpenRequestedNotification>,
+    /// Live state of sign-in, permission and deadline cards, forwarded as `requests.progress`.
+    requests: crate::requests::RequestHub,
     /// Preview tickets, revoked when a thread is archived.
     previews: Arc<crate::previews::tickets::PreviewTickets>,
     /// Account plan limits per provider, forwarded as `usage.limits.changed`.
@@ -558,14 +589,42 @@ impl Orchestrator {
     /// Everything else passes through unchanged; the stored message keeps the chips.
     fn provider_message<'a>(&self, message: &'a UserMessage, live: &LiveSession) -> std::borrow::Cow<'a, UserMessage> {
         let computer = crate::computer::ComputerUse::expand_mention(message, live.computer_tools);
-        match self.expand_item_mentions(computer.as_ref().unwrap_or(message)) {
+        let items = match self.expand_item_mentions(computer.as_ref().unwrap_or(message)) {
             Some(expanded) => std::borrow::Cow::Owned(expanded),
             None => match computer {
                 Some(expanded) => std::borrow::Cow::Owned(expanded),
                 None => std::borrow::Cow::Borrowed(message),
             },
+        };
+        let (store, assets) = (&self.inner.store, &self.inner.paths.assets);
+        match crate::chips::expand(&items, |id| {
+            let id: AssetId = id.parse().ok()?;
+            store.asset_get(id).ok().flatten()?;
+            Some(assets.join(id.to_string()))
+        }) {
+            Some(expanded) => std::borrow::Cow::Owned(expanded),
+            None => items,
         }
     }
+}
+
+/// The file extension for an uploaded asset: its name's own (short and alphanumeric), else one for its media type.
+fn asset_extension(name: &str, media_type: &str) -> Option<String> {
+    let own = std::path::Path::new(name).extension().and_then(|ext| ext.to_str()).map(str::to_ascii_lowercase);
+    if let Some(ext) = own.filter(|ext| (1..=5).contains(&ext.len()) && ext.chars().all(|c| c.is_ascii_alphanumeric())) {
+        return Some(ext);
+    }
+    let ext = match media_type.split(';').next().unwrap_or("").trim() {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/heic" => "heic",
+        "application/pdf" => "pdf",
+        "text/plain" => "txt",
+        _ => return None,
+    };
+    Some(ext.into())
 }
 
 /// Computer-use consent for one tool call, bound to its owning turn.
@@ -761,6 +820,7 @@ impl Orchestrator {
                 spaces_changed: tokio::sync::broadcast::channel(64).0,
                 space_writes: std::sync::Mutex::new(()),
                 preview_requests: tokio::sync::broadcast::channel(64).0,
+                requests: Default::default(),
                 previews: Arc::default(),
                 usage,
                 task_writes: std::sync::Mutex::new(()),
@@ -788,6 +848,11 @@ impl Orchestrator {
     pub fn with_previews(mut self, previews: Arc<crate::previews::tickets::PreviewTickets>) -> Self {
         Arc::get_mut(&mut self.inner).expect("preview tickets must be installed before cloning the orchestrator").previews = previews;
         self
+    }
+
+    /// Live state of the request cards, for `requests.progress` and `requests.act`.
+    pub fn requests(&self) -> &crate::requests::RequestHub {
+        &self.inner.requests
     }
 
     /// Agent requests to show a page, for forwarding to connected clients.
@@ -1053,7 +1118,7 @@ impl Orchestrator {
             for a in self.inner.store.approvals_pending(Some(t.id))? {
                 let decision = ApprovalDecision::Deny { reason: Some("daemon restarted".into()) };
                 self.inner.store.approval_resolve(a.id, &decision)?;
-                self.emit(t.id, Some(a.turn_id), EventPayload::ApprovalResolved { approval_id: a.id, decision })?;
+                self.emit(t.id, Some(a.turn_id), EventPayload::ApprovalResolved { approval_id: a.id, decision, answered_by: None })?;
             }
             // A restart is not the agent's failure: end the turn as interrupted and
             // leave the thread idle so its queue keeps draining.
@@ -1110,6 +1175,12 @@ impl Orchestrator {
             self.inner.queue_wakeup.notify_one();
         }
         let _ = self.inner.events.send(ev.clone());
+        if matches!(
+            ev.payload,
+            EventPayload::ApprovalRequested { .. } | EventPayload::UserInputRequested { .. } | EventPayload::ApprovalResolved { .. }
+        ) {
+            self.track_child_question(&ev);
+        }
         if task_order.is_some() {
             self.track_task_run(&ev);
         }
@@ -2304,10 +2375,23 @@ impl Orchestrator {
     }
 
     pub async fn respond_approval(&self, approval_id: ApprovalId, decision: ApprovalDecision) -> Result<()> {
+        self.respond_approval_as(approval_id, decision, None).await
+    }
+
+    /// Answer a request. `answered_by` names a delegating agent answering for the user.
+    /// A `kybern_answers` response (normalized answers, attachments included) is turned
+    /// into the harness's own response first.
+    pub(super) async fn respond_approval_as(
+        &self,
+        approval_id: ApprovalId,
+        decision: ApprovalDecision,
+        answered_by: Option<RequestAnswerer>,
+    ) -> Result<()> {
         let (approval, resolved) = self.inner.store.approval_get(approval_id)?.ok_or_else(|| anyhow!("approval not found"))?;
         if resolved {
-            return Err(anyhow!("approval already resolved"));
+            return Err(anyhow!("This request was already answered."));
         }
+        let decision = self.native_answer(&approval, decision)?;
         approval.validate_decision(&decision).map_err(|message| anyhow!(message))?;
         let live =
             self.inner.sessions.lock().await.get(&approval.thread_id).cloned().ok_or_else(|| anyhow!("thread has no live session"))?;
@@ -2327,7 +2411,7 @@ impl Orchestrator {
         if daemon_owned {
             live.touch();
             self.inner.store.approval_resolve(approval_id, &decision)?;
-            self.emit(approval.thread_id, Some(approval.turn_id), EventPayload::ApprovalResolved { approval_id, decision })?;
+            self.emit(approval.thread_id, Some(approval.turn_id), EventPayload::ApprovalResolved { approval_id, decision, answered_by })?;
             self.restore_running_after_approval(approval.thread_id, &live).await?;
             return Ok(());
         }
@@ -2338,9 +2422,43 @@ impl Orchestrator {
         pending.remove(&approval_id);
         drop(pending);
         self.inner.store.approval_resolve(approval_id, &decision)?;
-        self.emit(approval.thread_id, Some(approval.turn_id), EventPayload::ApprovalResolved { approval_id, decision })?;
+        self.emit(approval.thread_id, Some(approval.turn_id), EventPayload::ApprovalResolved { approval_id, decision, answered_by })?;
         self.restore_running_after_approval(approval.thread_id, &live).await?;
         Ok(())
+    }
+
+    /// The harness's own response for normalized answers (`{"kybern_answers": [...]}`); any other decision unchanged.
+    fn native_answer(&self, approval: &ApprovalRequest, decision: ApprovalDecision) -> Result<ApprovalDecision> {
+        let ApprovalDecision::Submit { response } = &decision else { return Ok(decision) };
+        let Some(answers) = response.get(NORMALIZED_ANSWERS_KEY) else { return Ok(decision) };
+        let answers: Vec<UserInputAnswer> =
+            serde_json::from_value(answers.clone()).map_err(|_| anyhow!("The answers could not be read. Answer the question again."))?;
+        let response =
+            encode_answers(approval, &answers, |attachment| self.attachment_path(attachment)).map_err(|message| anyhow!(message))?;
+        Ok(ApprovalDecision::Submit { response })
+    }
+
+    /// Where an answer's attachment is on disk: an uploaded asset, or a file the user chose.
+    fn attachment_path(&self, attachment: &UserInputAttachment) -> Option<String> {
+        if !matches!(attachment.kind.as_str(), "image" | "file" | "window") {
+            return None;
+        }
+        if let Some(id) = attachment.asset_id {
+            let info = self.inner.store.asset_get(id).ok().flatten()?;
+            let path = self.inner.paths.assets.join(id.to_string());
+            if !path.is_file() {
+                return None;
+            }
+            // Agents tell an image by its extension (Claude's Read does), and assets are stored by id alone: hand over a
+            // hard link named `<id>.<ext>` beside it.
+            let named = asset_extension(&info.name, &info.media_type).map(|ext| self.inner.paths.assets.join(format!("{id}.{ext}")));
+            if let Some(named) = named.filter(|named| named.is_file() || std::fs::hard_link(&path, named).is_ok()) {
+                return Some(named.to_string_lossy().into_owned());
+            }
+            return Some(path.to_string_lossy().into_owned());
+        }
+        let path = std::path::Path::new(attachment.path.as_deref()?);
+        (path.is_absolute() && path.exists()).then(|| path.to_string_lossy().into_owned())
     }
 
     async fn restore_running_after_approval(&self, thread_id: ThreadId, live: &LiveSession) -> Result<()> {
@@ -2431,43 +2549,7 @@ impl Orchestrator {
         operation: Option<Uuid>,
         wait: Duration,
     ) -> Result<(ApprovalId, DaemonAnswer)> {
-        let (card, mut receiver) = {
-            let mut approvals = live.daemon_approvals.lock().await;
-            let reusable = approvals.iter().find(|(_, entry)| {
-                entry.turn_id == turn_id && entry.key == key && entry.consumed_by.is_none_or(|by| Some(by) == operation)
-            });
-            match reusable {
-                Some((id, entry)) => (*id, entry.decision.subscribe()),
-                None => {
-                    let approval = ApprovalRequest {
-                        id: Uuid::now_v7(),
-                        thread_id,
-                        turn_id,
-                        tool_call_id: None,
-                        tool_name: tool_name.into(),
-                        input,
-                        summary,
-                        suggestions: Vec::new(),
-                        created_at: Utc::now(),
-                    };
-                    let (sender, receiver) = tokio::sync::watch::channel(None);
-                    let card = approval.id;
-                    approvals.insert(card, DaemonApproval { turn_id, key, decision: sender, consumed_by: None });
-                    drop(approvals);
-                    if let Some(turn) = live.turn.lock().await.as_mut() {
-                        turn.active_messages.remove(&EventOrigin::Root);
-                    }
-                    self.inner.store.approval_insert(&approval)?;
-                    self.emit(thread_id, Some(turn_id), EventPayload::ApprovalRequested { approval })?;
-                    let mut t = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?;
-                    if t.status != ThreadStatus::AwaitingApproval {
-                        t.status = ThreadStatus::AwaitingApproval;
-                        self.update_thread(t)?;
-                    }
-                    (card, receiver)
-                }
-            }
-        };
+        let (card, mut receiver) = self.open_daemon_card(thread_id, turn_id, live, key, tool_name, input, summary, operation).await?;
         let decision = tokio::time::timeout(wait, receiver.wait_for(Option::is_some)).await;
         let answer = match decision {
             Ok(Ok(decision)) => match decision.clone() {
@@ -2478,6 +2560,80 @@ impl Orchestrator {
             Err(_) => DaemonAnswer::Pending,
         };
         Ok((card, answer))
+    }
+
+    /// Raise a daemon-owned approval card (or, for a retry with the same `key`
+    /// in the same turn, find the one already open) without waiting for it.
+    /// The receiver holds the decision once there is one. Resolve a card the
+    /// daemon answers itself with [`Self::finish_daemon_card`].
+    #[allow(clippy::too_many_arguments)]
+    async fn open_daemon_card(
+        &self,
+        thread_id: ThreadId,
+        turn_id: TurnId,
+        live: &Arc<LiveSession>,
+        key: String,
+        tool_name: &str,
+        input: serde_json::Value,
+        summary: String,
+        operation: Option<Uuid>,
+    ) -> Result<(ApprovalId, tokio::sync::watch::Receiver<Option<ApprovalDecision>>)> {
+        let mut approvals = live.daemon_approvals.lock().await;
+        let reusable = approvals
+            .iter()
+            .find(|(_, entry)| entry.turn_id == turn_id && entry.key == key && entry.consumed_by.is_none_or(|by| Some(by) == operation));
+        if let Some((id, entry)) = reusable {
+            return Ok((*id, entry.decision.subscribe()));
+        }
+        let approval = ApprovalRequest {
+            id: Uuid::now_v7(),
+            thread_id,
+            turn_id,
+            tool_call_id: None,
+            tool_name: tool_name.into(),
+            input,
+            summary,
+            suggestions: Vec::new(),
+            created_at: Utc::now(),
+            questions: Vec::new(),
+        }
+        .with_questions();
+        let (sender, receiver) = tokio::sync::watch::channel(None);
+        let card = approval.id;
+        approvals.insert(card, DaemonApproval { turn_id, key, decision: sender, consumed_by: None });
+        drop(approvals);
+        if let Some(turn) = live.turn.lock().await.as_mut() {
+            turn.active_messages.remove(&EventOrigin::Root);
+        }
+        self.inner.store.approval_insert(&approval)?;
+        self.emit(thread_id, Some(turn_id), EventPayload::ApprovalRequested { approval })?;
+        let mut t = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?;
+        if t.status != ThreadStatus::AwaitingApproval {
+            t.status = ThreadStatus::AwaitingApproval;
+            self.update_thread(t)?;
+        }
+        Ok((card, receiver))
+    }
+
+    /// The daemon answers its own card (a sign-in that finished, a deadline
+    /// that ran out). False when the user answered first: that answer stands.
+    async fn finish_daemon_card(
+        &self,
+        thread_id: ThreadId,
+        turn_id: TurnId,
+        live: &LiveSession,
+        card: ApprovalId,
+        decision: ApprovalDecision,
+    ) -> Result<bool> {
+        let Some(entry) = live.daemon_approvals.lock().await.remove(&card) else { return Ok(false) };
+        if entry.decision.borrow().is_some() {
+            return Ok(false);
+        }
+        entry.decision.send_replace(Some(decision.clone()));
+        self.inner.store.approval_resolve(card, &decision)?;
+        self.emit(thread_id, Some(turn_id), EventPayload::ApprovalResolved { approval_id: card, decision, answered_by: None })?;
+        self.restore_running_after_approval(thread_id, live).await?;
+        Ok(true)
     }
 
     /// Spend a card's one-time answer on `operation`. False when another
@@ -2507,7 +2663,7 @@ impl Orchestrator {
             let decision = ApprovalDecision::Deny { reason: Some("turn ended".into()) };
             entry.decision.send_replace(Some(decision.clone()));
             self.inner.store.approval_resolve(id, &decision)?;
-            self.emit(thread_id, Some(turn_id), EventPayload::ApprovalResolved { approval_id: id, decision })?;
+            self.emit(thread_id, Some(turn_id), EventPayload::ApprovalResolved { approval_id: id, decision, answered_by: None })?;
         }
         let mut pending = live.pending.lock().await;
         let ids = pending.keys().copied().collect::<Vec<_>>();
@@ -2521,7 +2677,7 @@ impl Orchestrator {
                 let _ = live.session.respond_permission(&provider_id, &decision).await;
             }
             self.inner.store.approval_resolve(id, &decision)?;
-            self.emit(thread_id, Some(turn_id), EventPayload::ApprovalResolved { approval_id: id, decision })?;
+            self.emit(thread_id, Some(turn_id), EventPayload::ApprovalResolved { approval_id: id, decision, answered_by: None })?;
         }
         Ok(())
     }
@@ -2924,6 +3080,8 @@ impl Orchestrator {
             .as_ref()
             .map(|gateway| {
                 let mut tools = crate::app_tools::native_tool_definitions();
+                // Privacy permissions are a macOS thing.
+                tools.retain(|tool| cfg!(target_os = "macos") || tool.name != PERMISSION_REQUEST_TOOL);
                 if thread.coordinator_project_id.is_some() {
                     // Only the project Coordinator is offered the git tool.
                     tools.push(crate::lead_git::tool_definition());
@@ -2938,6 +3096,23 @@ impl Orchestrator {
                 gateway.register_coordinator(thread.id, session_instance_id, tools, restrictions, coordinator_instructions, guide)
             })
             .transpose()?;
+        // Claude Code gives up on an MCP tool call after about a minute, which would end a
+        // sign-in, a permission request or a question with a deadline while the user is
+        // still deciding. The daemon bounds every call itself (the longest waits are a few
+        // hours), so leave the limit to it unless the user set their own. Newer Claude Code
+        // also aborts a call with no progress for 5 min; the `timeout` of Kybern's own server
+        // entry (`claude.rs`) lifts that for Kybern alone. `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT`
+        // stays unset: it would let every other MCP server of the user hang a turn for hours.
+        if thread.provider.kind == ProviderKind::ClaudeCode && !provider_settings.env.contains_key("MCP_TOOL_TIMEOUT") {
+            provider_settings.env.insert("MCP_TOOL_TIMEOUT".into(), "21600000".into());
+        }
+        // Commands in the session can ask for a password through a private card.
+        // Codex runs commands in a sandbox that can't reach the daemon outside
+        // Full access, so it only gets the helper there.
+        let askpass_allowed = thread.provider.kind != ProviderKind::Codex || thread.permission_mode == PermissionMode::FullAccess;
+        if askpass_allowed && let Some(env) = self.askpass_env(thread.id, session_instance_id) {
+            provider_settings.env.extend(env);
+        }
         let config = SessionConfig {
             cwd: PathBuf::from(&thread.cwd),
             model: thread.model.clone(),
@@ -3004,6 +3179,16 @@ impl Orchestrator {
         let pump_live = live.clone();
         tokio::spawn(async move { this.pump(thread_id, pump_live, events).await });
         Ok(live)
+    }
+
+    /// The askpass variables for one session, when the daemon can be reached
+    /// over loopback and the bundled CLI is known.
+    fn askpass_env(&self, thread_id: ThreadId, session_instance_id: Uuid) -> Option<std::collections::BTreeMap<String, String>> {
+        let gateway = self.inner.native_tools.as_ref()?;
+        let cli = crate::askpass::find_cli()?;
+        let script = crate::askpass::install_script(&self.inner.paths.root, &cli).ok()?;
+        let (url, token) = gateway.register_askpass(thread_id, session_instance_id)?;
+        Some(crate::askpass::session_env(&script, &url, &token))
     }
 
     /// Whether a session spawned now would expose the computer-use tools.
@@ -3407,8 +3592,11 @@ impl Orchestrator {
             let mut result = if this.owns_app_tool_turn(thread_id, &live, Some(turn_id)).await.is_none() {
                 Err("app tool request is stale".to_string())
             } else {
-                let timeout = if let Some(budget) =
-                    crate::secrets::call_budget(&name, &arguments).or_else(|| crate::lead_git::call_budget(&name, &arguments))
+                let timeout = if let Some(budget) = crate::secrets::call_budget(&name, &arguments)
+                    .or_else(|| crate::lead_git::call_budget(&name, &arguments))
+                    .or_else(|| crate::visuals::call_budget(&name, &arguments))
+                    .or_else(|| crate::pick::call_budget(&name, &arguments))
+                    .or_else(|| request_call_budget(&name, &arguments))
                 {
                     budget
                 } else if delegation::BLOCKING_TOOLS.contains(&name.as_str())
@@ -3785,6 +3973,7 @@ impl Orchestrator {
                             summary,
                             suggestions,
                             created_at: Utc::now(),
+                            questions: Vec::new(),
                         };
                         self.emit(thread_id, Some(turn_id), EventPayload::ApprovalAutoAllowed { approval })?;
                     }
@@ -3815,7 +4004,9 @@ impl Orchestrator {
                     summary,
                     suggestions,
                     created_at: Utc::now(),
-                };
+                    questions: Vec::new(),
+                }
+                .with_questions();
                 self.inner.store.approval_insert(&approval)?;
                 live.pending.lock().await.insert(approval.id, request_id);
                 let event = if approval.is_user_input() {
@@ -3836,7 +4027,7 @@ impl Orchestrator {
                     pending.remove(&approval_id);
                     let decision = ApprovalDecision::Deny { reason: Some("withdrawn by provider".into()) };
                     self.inner.store.approval_resolve(approval_id, &decision)?;
-                    self.emit(thread_id, turn_id, EventPayload::ApprovalResolved { approval_id, decision })?;
+                    self.emit(thread_id, turn_id, EventPayload::ApprovalResolved { approval_id, decision, answered_by: None })?;
                     if pending.is_empty()
                         && let Some(mut thread) = self.inner.store.thread_get(thread_id)?
                         && thread.status == ThreadStatus::AwaitingApproval
@@ -4223,6 +4414,25 @@ fn clean_title(text: &str) -> String {
     let line = line.trim_matches(|c: char| c == '"' || c == '\'' || c == '*' || c == '#' || c == '`').trim_end_matches('.').trim();
     let title: String = line.chars().take(80).collect();
     if title.split_whitespace().count() > 12 { String::new() } else { title }
+}
+
+/// What `kybern askpass` gets back for a prompt.
+pub(crate) use askpass::PromptReply;
+
+/// The wait budget of the summoned-card tools (sign-in, question, permission, terminal).
+pub(crate) fn request_call_budget(name: &str, arguments: &serde_json::Value) -> Option<Duration> {
+    login_request::call_budget(name).or_else(|| request_tools::call_budget(name, arguments))
+}
+
+/// The summoned-card tools offered to agent sessions.
+pub(crate) fn child_question_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
+    child_questions::tool_definitions()
+}
+
+pub(crate) fn request_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
+    let mut tools = vec![login_request::tool_definition()];
+    tools.extend(request_tools::tool_definitions());
+    tools
 }
 
 pub fn title_from_message(message: &UserMessage) -> String {
@@ -7679,7 +7889,9 @@ for line in sys.stdin:
     }
 
     include!("orchestrator/delegation_tests.rs");
+    include!("orchestrator/child_questions_tests.rs");
     include!("orchestrator/secret_tests.rs");
+    include!("orchestrator/request_tests.rs");
     include!("orchestrator/lead_git_tests.rs");
     include!("orchestrator/capabilities_tests.rs");
     include!("orchestrator/lead_tests.rs");

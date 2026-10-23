@@ -4,8 +4,11 @@ mod account_login;
 mod agent_guide;
 mod app_tools;
 mod artifacts;
+mod askpass;
 mod auth;
 mod bounded_broadcast;
+mod chips;
+mod cli_login;
 mod computer;
 mod config;
 mod cursor_setup;
@@ -21,12 +24,14 @@ mod lead_git;
 mod maintenance;
 mod native_tools_mcp;
 mod orchestrator;
+mod pick;
 mod power;
 mod previews;
 mod provider_accounts;
 mod provider_assets;
 #[cfg(test)]
 mod remote_tests;
+mod requests;
 mod rpc;
 mod secrets;
 mod self_update;
@@ -231,7 +236,8 @@ pub async fn run() -> Result<()> {
         shutdown_token.cancel();
         tracing::info!("shutting down");
     };
-    axum::serve(listener, app).with_graceful_shutdown(shutdown).await?;
+    // The askpass endpoint checks which process holds the connection (`askpass::connection_owned_by`).
+    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown).await?;
     queue_worker.abort();
     notes_worker.abort();
     let _ = maintenance_worker.await;

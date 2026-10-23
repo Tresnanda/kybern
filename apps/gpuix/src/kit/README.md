@@ -40,7 +40,7 @@ the alternative is `secondary danger` on the leading edge, Cancel + primary trai
 | Component | Props | Replaced |
 | --- | --- | --- |
 | `Button` | `variant` primary/secondary/ghost/destructive, `danger`, `size` sm/md/lg, `icon`, `iconAfter`, `chevron`, `kbd`, `busy`, `disabled`, `swap`, `trailing`, `block`, `onKeyboard`, `label` | `transcript/kit` Button, `settings/controls` Button, `usage/controls` Button, `KitButton`, `EnvButton`, `GuardButton`, `PaneButton`, tray `HeaderButton`, Notes `HeaderButton`, and the one-off pills |
-| `IconButton` | `icon`, `label` (required), `size`, `active`, `secondary`, `glyph`, `color`, `disabled` | sidebar `IconButton`, title-bar `ChromeIcon`, `ChromeButton`, editor toolbar, terminal toolbar, `AddButton`, `Toggle` (deleted) |
+| `IconButton` | `icon`, `label` (required), `size`, `active`, `secondary`, `glyph`, `color`, `disabled`, `tabIndex`; mouse handlers compose with its hover, so a `Tip` can wrap it directly | sidebar `IconButton`, title-bar `ChromeIcon`, `ChromeButton`, editor toolbar, terminal toolbar, `AddButton`, `Toggle` (deleted) |
 | `SplitButton` | `variant` primary/secondary, `size`, `onClick`, `menu` (the `MenuItem`s), `menuAlign` | the PR Merge pair, Notes compose + chevron |
 | `PickerChip` | `icon`/`mark`/`dot`/`lead`, `secondary`, `chevron`, `open`, `selected`, `neutral`, `quiet`, `muted`, `size` sm/md, `truncate`, `maxWidth` | `FooterChip`, `TrayChip`, Notes `Chip`, the Tasks scope chip, the model trigger, "Queue ⌄", the dock empty-state chips |
 | `TokenChip` | `onRemove`, `lead` | the Computer-use app chips, `Combobox` chips |

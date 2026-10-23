@@ -13,6 +13,8 @@ export function tokenIcon(kind: InlineTokenKind, token: string): string {
     case 'thread': return G.message
     case 'note': return T.note
     case 'task': return T.listChecks
+    case 'secret': return G.key
+    case 'anchor': return G.target
     case 'attachment': return diffFileIcons[token.startsWith('@image') ? 'file-jpg' : getFileIconName(token.slice(1))] ?? T.file
     default: return diffFileIcons[getFileIconName(token.slice(1))] ?? T.file
   }

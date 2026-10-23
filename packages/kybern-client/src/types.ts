@@ -591,7 +591,66 @@ export interface ThreadActivitySummary {
   active_agents: number;
   active_processes: number;
   active_monitors: number;
+  /** Running delegated children; absent from older daemons. */
+  active_children?: number;
+  /** What this thread's oldest waiting request asks for. */
+  pending_request?: PendingRequestKind | null;
+  /** A delegated descendant waits on the user: `question` when any of them asks one. */
+  pending_child_request?: PendingRequestKind | null;
 }
+
+/** Whether a waiting request asks the user to answer or to approve. */
+export type PendingRequestKind = "approval" | "question";
+
+/** One question of a request, in one shape for every harness (`kybern_protocol::UserInputQuestion`). */
+export interface UserInputQuestion {
+  /** The key the answer goes under. */
+  id: string;
+  header?: string | null;
+  /** Markdown. */
+  question: string;
+  options: UserInputOption[];
+  multi_select: boolean;
+  allow_custom: boolean;
+  secret: boolean;
+  /** The harness can take images and files with the answer. */
+  attachments: boolean;
+}
+
+export interface UserInputOption {
+  label: string;
+  description?: string | null;
+  /** Text or code shown while the option is focused. Markdown. */
+  preview?: string | null;
+  /** The harness's own id for the option (Cursor). */
+  value?: string | null;
+}
+
+/** A file or picture sent with an answer. */
+export interface UserInputAttachment {
+  kind: "image" | "file" | "window";
+  name: string;
+  asset_id?: AssetId | null;
+  /** Absolute path, for a file. */
+  path?: string | null;
+}
+
+/** The answer to one question; sent as `{ kybern_answers: UserInputAnswer[] }` and turned into the harness's own response by the daemon. */
+export interface UserInputAnswer {
+  id: string;
+  answers: string[];
+  attachments?: UserInputAttachment[];
+}
+
+/** The delegating agent that answered a request for the user. */
+export interface RequestAnswerer {
+  thread_id: ThreadId;
+  title: string;
+}
+
+export const NORMALIZED_ANSWERS_KEY = "kybern_answers";
+/** `tool_name` of a question Cursor asks through `cursor/ask_question`. */
+export const CURSOR_QUESTION_TOOL = "cursor_ask_question";
 
 export interface ApprovalRequest {
   id: ApprovalId;
@@ -604,6 +663,8 @@ export interface ApprovalRequest {
   summary: string;
   suggestions: JsonValue[];
   created_at: DateTime;
+  /** The questions in one shape for every harness; absent when it is not a question, or from an older daemon. */
+  questions?: UserInputQuestion[];
 }
 
 /** `tool_name` of the daemon's card asking the user for one secret (`kybern_request_secret`). `input` is a `SecretRequestInput`. The answer is `{ decision: "submit", response: { secret } }` or a deny; stored and broadcast copies carry `REDACTED_SECRET` instead of the value. */
@@ -627,6 +688,137 @@ export interface SecretRequestInput {
   replaces: boolean;
   /** Hint for the empty field, if the agent gave one. */
   placeholder?: string | null;
+}
+
+/** `tool_name` of the daemon's card asking the user to point at something (`kybern_request_pick`). `input` is a `PickRequestInput`. The answer is `{ decision: "submit", response }` with the picked target (shape per `PickKind`) or a deny. */
+export const PICK_REQUEST_TOOL = "kybern_request_pick";
+/** Largest answer, in bytes of JSON, a pick card may submit. */
+export const MAX_PICK_RESPONSE_BYTES = 48 * 1024;
+
+/** What the user is asked to point at. */
+export type PickKind = "preview_element" | "visual_element" | "file" | "folder" | "image" | "window";
+
+/** The `input` of a `PICK_REQUEST_TOOL` approval. */
+export interface PickRequestInput {
+  kind: PickKind;
+  /** What the agent needs, in a sentence the user can act on. */
+  prompt: string;
+}
+
+/** `tool_name` of the daemon's sign-in card (`kybern_request_login`). `input` is a `LoginRequestInput`. A client only answers with a deny (the decline row); every other step goes through `requests.act` and the card's `RequestProgress`. The daemon resolves the card with `{ status: "signed_in" | "already_signed_in", cli, account? }`. */
+export const LOGIN_REQUEST_TOOL = "kybern_request_login";
+/** `tool_name` of the private card behind `kybern askpass` (sudo, ssh and git prompts). `input` is a `PromptRequestInput`. Never answered automatically. The answer is `{ decision: "submit", response: { secret } }` (masked), `{ value }` (visible) or `{ confirmed }` (yes/no), or a deny; a `secret` is redacted in stored copies. */
+export const PROMPT_REQUEST_TOOL = "kybern_askpass";
+/** `tool_name` of the daemon's macOS permission card (`kybern_request_permission`). `input` is a `PermissionRequestInput`. A client only answers with a deny; the rest goes through `requests.act`. */
+export const PERMISSION_REQUEST_TOOL = "kybern_request_permission";
+/** Longest askpass answer, in bytes. */
+export const MAX_PROMPT_ANSWER_BYTES = 4096;
+
+/** The `input` of a `LOGIN_REQUEST_TOOL` approval. */
+export interface LoginRequestInput {
+  /** The CLI to sign in, e.g. `gh`. */
+  cli: string;
+  /** The service's name for the title, e.g. `GitHub`. */
+  service: string;
+  reason: string;
+  /** The Account line, e.g. "github.com, any account you choose". */
+  account: string;
+  /** The Access line (scopes), when the CLI has any. */
+  access?: string | null;
+  /** What the sign-in changes, e.g. "`gh` for this Mac, so your terminal uses it too". */
+  signs_in: string;
+  /** The command the terminal path runs, e.g. `gh auth login`. */
+  command: string;
+  /** Row order of the ways offered: `browser` and `terminal`. */
+  methods: string[];
+  /** The agent supplied the command; the CLI is not in Kybern's table. */
+  custom?: boolean;
+}
+
+/** The `input` of a `PROMPT_REQUEST_TOOL` approval. */
+export interface PromptRequestInput {
+  /** `sudo`, `ssh_passphrase`, `ssh_host_key`, `git_username`, `git_password` or `other`. */
+  purpose: string;
+  /** The prompt as the program printed it. */
+  prompt: string;
+  /** Mask the field. */
+  secret: boolean;
+  /** Ask yes or no (an SSH host key). No default answer, `Return` stays inert. */
+  confirm: boolean;
+  /** The command that asked, from the parent processes. */
+  command?: string | null;
+  /** The harness's display name, e.g. `Claude Code`. */
+  harness: string;
+  host?: string | null;
+  /** An SSH host key's type, e.g. `ED25519`. */
+  key_type?: string | null;
+  fingerprint?: string | null;
+  /** 1 on the first ask, 2 or more when the same command asked again (a wrong password). */
+  attempt: number;
+  /** Seconds the helper waits before it fails the command. */
+  wait_seconds: number;
+}
+
+/** The `input` of a `PERMISSION_REQUEST_TOOL` approval. */
+export interface PermissionRequestInput {
+  /** `camera`, `microphone`, `screen_recording`, `accessibility`, `local_network`, `full_disk_access`, `notifications` or `location`. */
+  pane: string;
+  app: string;
+  bundle_id?: string | null;
+  app_path?: string | null;
+  reason: string;
+  /** e.g. "Privacy & Security › Camera". */
+  pane_label: string;
+  /** The `x-apple.systempreferences:` link that opens the pane. */
+  url: string;
+  /** The user must add the app to a list (Full Disk Access, Accessibility). */
+  needs_app_added: boolean;
+  /** The app needs a relaunch once the permission is on. */
+  relaunch: boolean;
+  /** Kybern can see the grant itself; otherwise the user confirms it. */
+  detects: boolean;
+}
+
+/** `deadline` inside an `AskUserQuestion` approval's `input` (the daemon's `kybern_ask_user` with a default and a wait). The daemon answers with `defaults` at `ends_at` unless paused (`requests.act` `pause` / `resume`) or held (`hold`); the answer then carries `auto: { at, waited_seconds }`. */
+export interface QuestionDeadline {
+  /** Question text → the option label chosen when the deadline fires. */
+  defaults: Record<string, string>;
+  seconds: number;
+  started_at: DateTime;
+  ends_at: DateTime;
+}
+
+export type RequestKind = "login" | "permission" | "question" | "terminal";
+export type RequestPhase = "asking" | "waiting" | "paste_code" | "verifying" | "done" | "failed" | "not_granted" | "paused" | "held";
+
+/** Live state of a request card; pushed as `requests.progress` and listed by the `requests.progress` method. Not persisted. */
+export interface RequestProgress {
+  approval_id: ApprovalId;
+  thread_id: ThreadId;
+  kind: RequestKind;
+  phase: RequestPhase;
+  /** `browser` or `terminal` for a login. */
+  method?: string | null;
+  /** A login's sign-in page, or a permission's System Settings link. */
+  url?: string | null;
+  user_code?: string | null;
+  /** The terminal a sign-in or `kybern_run_in_terminal` opened (open it as a tab). */
+  terminal?: TerminalInfo | null;
+  account?: string | null;
+  error?: string | null;
+  /** When the wait ends: a login's timeout or a question's deadline. */
+  ends_at?: DateTime | null;
+  /** Time left while a deadline is paused, in milliseconds. */
+  remaining_ms?: number | null;
+  updated_at: DateTime;
+}
+export const REQUESTS_PROGRESS_NOTIFICATION = "requests.progress";
+
+/** Limits for questions that answer themselves after a deadline (`kybern_ask_user`). */
+export interface AskDeadlineSettings {
+  enabled: boolean;
+  /** The longest wait an agent can set, in seconds. */
+  max_seconds: number;
 }
 
 /**
@@ -703,9 +895,21 @@ export interface HtmlVisual {
   height: number;
   /** Content heights measured at publish, ascending by width; absent when not measured. */
   heights?: VisualHeight[];
+  /** Set when the agent waits for the reader's answer; the question is a `VISUAL_ANSWER_TOOL` card. */
+  ask?: VisualAsk | null;
 }
+export interface VisualAsk { schema?: JsonValue | null }
+export type VisualAnswerStatus = "answered" | "replied" | "skipped" | "cancelled" | "timed_out";
+/** The receipt under an answered visual. */
+export interface VisualAnswerRecord { status: VisualAnswerStatus; answer?: JsonValue | null; label?: string | null; at: DateTime }
+/** `tool_name` of the daemon's card behind `kybern_html_publish` with `await_answer`. `input` is a `VisualAnswerInput`; the answer is `{ decision: "submit", response: { answer, label } }`, `{ response: { reply } }` for a typed reply, or a deny to skip. */
+export const VISUAL_ANSWER_TOOL = "kybern_visual_answer";
+export interface VisualAnswerInput { visual_id: Uuid; title: string; schema?: JsonValue | null }
+/** One control in a visual's picture, in CSS pixels from the page's top-left. */
+export interface VisualControl { x: number; y: number; w: number; h: number; r: number; role: string }
+export interface HtmlSnapshotResult { key: string; width: number; height: number; scale: number; clamped?: boolean; clamp: number; controls: VisualControl[] }
 export type TranscriptEntry =
-  | { role: "visual"; turn_id: TurnId; seq: EventSeq; at: DateTime; visual: HtmlVisual }
+  | { role: "visual"; turn_id: TurnId; seq: EventSeq; at: DateTime; visual: HtmlVisual; answer?: VisualAnswerRecord | null }
   | { role: "image"; id: string; turn_id: TurnId; seq: number; at: string; origin: EventOrigin; source: string }
   | {
       role: "user";
@@ -754,6 +958,8 @@ export type TranscriptEntry =
       decision?: ApprovalDecision | null;
       /** Allowed by Full access without asking the user. */
       auto?: boolean;
+      /** The delegating agent that answered for the user. */
+      answered_by?: RequestAnswerer | null;
     }
   | {
       role: "turn_summary";
@@ -846,6 +1052,7 @@ export interface RecoveredAssistantBlock {
 export type EventPayload =
   | { kind: "assistant_message_blocks_recovered"; message_id: MessageId; session_id: string; native_entry_id: string; blocks: RecoveredAssistantBlock[]; terminal_message_id: MessageId }
   | { kind: "html_published"; visual: HtmlVisual }
+  | { kind: "visual_answered"; visual_id: Uuid; status: VisualAnswerStatus; answer?: JsonValue | null; label?: string | null; message_id?: MessageId | null; message?: UserMessage | null }
   | { kind: "async_questions_requested"; request: AsyncQuestionRequest }
   | { kind: "async_questions_answered"; request_id: string; answers: string[]; message_id: MessageId; message: UserMessage }
   | { kind: "thread_created"; thread: Thread }
@@ -910,6 +1117,8 @@ export type EventPayload =
       kind: "approval_resolved";
       approval_id: ApprovalId;
       decision: ApprovalDecision;
+      /** The delegating agent that answered for the user; absent when the user did. */
+      answered_by?: RequestAnswerer | null;
     }
   /** A harness permission request Kybern allowed because the thread is in Full access. */
   | { kind: "approval_auto_allowed"; approval: ApprovalRequest }
@@ -1737,6 +1946,8 @@ export interface Settings {
   orchestration: OrchestrationSettings;
   /** Give new agent sessions a short guide to Kybern. Defaults to on. */
   tell_agents_about_kybern: boolean;
+  /** Whether an agent's question may carry a default and a wait, and the longest wait. */
+  ask_deadlines?: AskDeadlineSettings;
   /** Folders outside a project the user allowed Preview to serve files from. */
   preview_allowed_folders?: string[];
 }
@@ -1908,6 +2119,47 @@ export interface ComputerNoteSetParams {
   text: string;
   /** The app's display name, for a note that does not exist yet. */
   app?: string | null;
+}
+
+/** Where `secrets.target` and `secrets.store` look. Pass exactly one. */
+export interface SecretsWorkspace {
+  thread_id?: string | null;
+  project_id?: string | null;
+}
+
+export interface SecretsTargetParams extends SecretsWorkspace {
+  env_key: string;
+  /** Env file relative to the workspace. Default `.env`. */
+  file?: string | null;
+}
+
+/** What storing into a file would do, checked without a value. */
+export interface SecretsTargetResult {
+  file: string;
+  /** The key is already in the file; storing replaces it. */
+  replaces: boolean;
+  /** Git ignores the file (true outside a repository). */
+  ignored: boolean;
+  /** Git tracks the file, so it can never take a secret. */
+  tracked: boolean;
+  /** The file already exists. */
+  exists: boolean;
+}
+
+export interface SecretsStoreParams extends SecretsWorkspace {
+  env_key: string;
+  /** The secret. Written to the file and never stored, traced or returned. */
+  value: string;
+  file?: string | null;
+  /** Add the file to the `.gitignore` beside it first, when git does not ignore it yet. */
+  add_to_gitignore?: boolean;
+}
+
+export interface SecretsStoreResult {
+  env_key: string;
+  file: string;
+  replaced: boolean;
+  gitignore_updated: boolean;
 }
 
 export interface SettingsUpdateParams {
@@ -2360,7 +2612,8 @@ export interface Methods {
   "threads.files.write": [ThreadFileWriteParams, FilesWriteResult];
   "threads.files.resolve": [ThreadFilesResolveParams, ThreadFilesResolveResult];
   "skills.list": [SkillsListParams, SkillsListResult];
-  "threads.visuals.publish": [{ thread_id: ThreadId; html: string; title: string; height: number }, { visual: HtmlVisual }];
+  "threads.visuals.publish": [{ thread_id: ThreadId; html: string; title: string; height: number; await_answer?: boolean | null; answer_schema?: JsonValue | null; timeout_seconds?: number | null }, { visual: HtmlVisual }];
+  "threads.visuals.snapshot": [{ thread_id: ThreadId; visual_id: Uuid; width: number; theme: JsonValue; lock?: JsonValue | null }, HtmlSnapshotResult];
   "threads.visuals.preview": [{ thread_id: ThreadId; html: string; width?: number; appearance?: "dark" | "light" }, { width: number; content_height: number; captured_height: number; console_messages: {level: string; text: string}[]; missing_images: string[]; screenshot: string }];
   "threads.visuals.read": [{ thread_id: ThreadId; visual_id: Uuid; max_bytes?: number | null }, { html: string; truncated?: boolean }];
   "threads.visuals.frame": [{ thread_id: ThreadId; visual_id: Uuid; max_bytes?: number | null }, { ticket: string }];
@@ -2429,6 +2682,8 @@ export interface Methods {
   "terminals.unsubscribe": [TerminalsCloseParams, Empty];
   "approvals.respond": [ApprovalsRespondParams, Empty];
   "approvals.list": [ApprovalsListParams, ApprovalsListResult];
+  "requests.progress": [{ thread_id?: ThreadId | null }, { items: RequestProgress[] }];
+  "requests.act": [{ approval_id: ApprovalId; action: string; value?: string | null }, Empty];
   "events.subscribe": [EventsSubscribeParams, EventsSubscribeResult];
   "events.unsubscribe": [EventsUnsubscribeParams, Empty];
   "events.range": [EventsRangeParams, EventsRangeResult];
@@ -2441,6 +2696,8 @@ export interface Methods {
   "computer.frame": [ComputerFrameParams, ComputerFrameResult];
   "computer.notes.list": [Empty, ComputerNotesResult];
   "computer.notes.set": [ComputerNoteSetParams, ComputerNotesResult];
+  "secrets.target": [SecretsTargetParams, SecretsTargetResult];
+  "secrets.store": [SecretsStoreParams, SecretsStoreResult];
   "usage.summary": [UsageSummaryParams, UsageSummaryResult];
   "usage.limits": [UsageLimitsParams, UsageLimitsResult];
   "git.status": [GitStatusParams, GitStatus];

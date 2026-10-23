@@ -14,8 +14,8 @@ const instantNow = () => Date.now() - answeredAt < 1200
  * faint and 2 px blurred → rest, painted natively (`paintTransform`, no layout per frame). A keyboard answer shows the next card at
  * once; Reduce Motion fades. Decided on mount, so a keyboard answer a moment later does not cut a running entrance.
  */
-export function PanelEnter({ children }: { children: ReactNode }) {
-  const [transform] = useState(() => !PATCHED_NATIVE || instantNow() ? undefined : REDUCED_MOTION
+export function PanelEnter({ children, always = false }: { children: ReactNode; /** Rise in even after a keyboard answer (the password prompt). */ always?: boolean }) {
+  const [transform] = useState(() => !PATCHED_NATIVE || (instantNow() && !always) ? undefined : REDUCED_MOTION
     ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: 0.18, ease: [...EASE.out] as [number, number, number, number] } }
     : { initial: { opacity: 0, translateY: 6, blur: 2 }, animate: { opacity: 1, translateY: 0, blur: 0 }, transition: { duration: 0.18, ease: [...EASE.out] as [number, number, number, number] } })
   return <div paintTransform={transform} style={{ display: 'flex', flexDirection: 'column', width: '100%', position: 'relative' }}>{children}</div>

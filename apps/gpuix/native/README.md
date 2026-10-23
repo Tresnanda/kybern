@@ -813,9 +813,19 @@ and one floating thread). Dock and mini-player publish clipped native geometry;
 the WK view never moves between parents or reloads on a slot change. Hidden
 docked documents unload after five minutes, with a new ticket on return. Native
 window occlusion/minimize notifications pause visual bootstrap loops and suspend
-media. Hidden views surrender native focus. Destruction removes both message
-handlers, observers, views, media, and the last host's key monitor. Native web
-input routes app shortcuts back to the existing JS shortcut handlers.
+media. Destruction removes both message handlers, observers, views, media, and
+the last host's key and mouse monitors. Native web input routes app shortcuts
+back to the existing JS shortcut handlers.
+
+Keyboard handback (ADE-69): a clicked document becomes AppKit's first responder,
+and GPUIView, its sibling, never reclaims it on click, so keys meant for the
+composer went to the page and beeped. The document gives the keyboard back to
+GPUIView on a press outside it (local mouse monitor), on an Escape the page left
+unhandled (WebKit sends it up the chain as `cancelOperation:` to `KybernWebClip`;
+preventDefault, a modal dialog or fullscreen keep it, and GPUI never sees it), on
+hide or destroy, and on the `release` op, which `src/native/focusHandback.ts` sends
+before every GPUIX focus move and on element focus events. Other unhandled plain
+keys end silently at the clip instead of NSBeep. `webview-check.ts` covers it.
 
 GPUI popups publish rounded occlusion paths, including a native dim layer for
 modal scrims. An expanded visual inherits its popup layer so it appears above
@@ -1513,8 +1523,11 @@ no React render, Taffy layout, prepaint, island wake or ancestor invalidation.
   Quads, shadows, images, surfaces, backdrops and underlines scale about the origin (radii, borders, blur and
   thickness scale too); glyph and SVG sprites take the full affine in their `transformation`; paths transform their
   vertices. Opacity multiplies every primitive's alpha. Masks pushed inside the scope (rounded overflow) map
-  through the transform; the mask at the scope's entry stays in window coordinates; each primitive keeps its own
-  narrower clip (GPUI's four-strip border quads). Hitboxes and AccessKit bounds follow the paint.
+  through the transform; the mask at the scope's entry stays in window coordinates; a primitive keeps only the
+  edges of its own clip that are narrower than those masks (ancestor clips are never mapped, so an `overflow:
+  hidden` viewport stays put while a stage inside it pans: ADE-71's cut-off tall image). A border-only quad inside
+  a scope stays one quad instead of GPUI's four strips, whose masks were cut by the ancestor clip before the
+  transform. Hitboxes and AccessKit bounds follow the paint. Check: `bun native/pan-clip-check.ts`.
 - `blur` paints a backdrop pass over what the subtree drew (bounds + 8 px), marked so frames set its radius; a
   settled blur renders once to drop the pass. Like CSS `filter: blur()` it is applied before the transform.
 - Limits: rotation is exact for sprites and paths; quads/images/masks keep their axes (centres rotate), and

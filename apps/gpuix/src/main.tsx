@@ -12,11 +12,13 @@ import { connect } from './state.ts'
 import { startSplitView } from './split/store.ts'
 import { ThemeProvider, VARIANT } from './ui.tsx'
 import { startPerfProbe } from './perf/probe.ts'
+import { startPickHub } from './pick/hub.ts'
 import { getAccessibilityDisplay } from './platform/material.ts'
 import { resolveScope, type ThemeVariant } from './platform/translucency.ts'
 import { backingFor, installWindowMaterial } from './shell/windowMaterial.ts'
 import { startAppUpdateChecks } from './platform/update.ts'
 import { installFrameSource } from './native/frame.ts'
+import { handbackOnFocus, installFocusHandback } from './native/focusHandback.ts'
 import { hasSavedFrame, installWindowFrame, startWindowShell } from './shell/window.ts'
 import { startEnvironmentWindow } from './windows/window.ts'
 import { installRuntimeSafetyNet } from './shell/errors.ts'
@@ -31,6 +33,10 @@ function Fonts({ children }: { children: ReactNode }) {
   useEffect(() => {
     startupMark('fonts-start')
     installFrameSource(renderer)
+    // Focus that GPUIX moves takes the keyboard back from a clicked web document (`native/focusHandback.ts`).
+    installFocusHandback(renderer)
+    // Point for me: the picker in the Preview and visuals, and ⌥-click anchors (`pick/hub.ts`).
+    startPickHub()
     // `registerFont` landed after @gpuix/native 0.10.0; until then the UI
     // falls back to installed fonts (SF Pro, Menlo).
     const register = (renderer as { registerFont?: (bytes: Uint8Array) => void }).registerFont
@@ -107,6 +113,7 @@ render(
     show: !hasSavedFrame(),
     // Window shortcuts (⌘N, ⌘B, ⌘K, ⌘[ ⌘], ⌘↑, ⌘,): `nav/keys.ts`.
     onKeyDown: onWindowKeyDown,
+    onEvent: handbackOnFocus,
   },
 )
 startupMark('render-returned')

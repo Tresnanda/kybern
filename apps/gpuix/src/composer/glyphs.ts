@@ -14,7 +14,12 @@ import {
   HandIcon,
   File01Icon,
   Edit02Icon,
+  CursorPointer01Icon,
   FolderLibraryIcon,
+  Image01Icon,
+  Key01Icon,
+  Target02Icon,
+  Upload01Icon,
   WorkflowSquare01Icon,
   Note01Icon,
   PuzzleIcon,
@@ -73,6 +78,13 @@ export const G = {
   terminal: glyph(CommandLineIcon),
   search: glyph(Search01Icon),
   clock: glyph(Clock01Icon),
+  /** `Key01Icon`: a stored secret's chip and the catcher's strip. */
+  key: glyph(Key01Icon),
+  /** `Target02Icon`: an element the user pointed at. */
+  target: glyph(Target02Icon),
+  pointer: glyph(CursorPointer01Icon),
+  image: glyph(Image01Icon),
+  upload: glyph(Upload01Icon),
   /** The stop control's 10px rounded square. */
   background: glyph(SquareArrowDown01Icon),
   stop: '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10"><rect width="10" height="10" rx="2" fill="#000"/></svg>',

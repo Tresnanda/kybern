@@ -15,6 +15,7 @@ import path from 'node:path'
 import { useRef, useSyncExternalStore } from 'react'
 import { getClient, getState, refreshLists, selectPaneThread, getFocusedPaneId, getPane, getPaneState, setPane, usePaneAccess, useApp } from '../state.ts'
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
+import type { MentionPart } from '../../../../packages/kybern-client/src/userInput.ts'
 import type {
   AccountSummary,
   GitBranchesResult,
@@ -372,6 +373,31 @@ export function restoreToComposer(draftKey: string, parts: readonly ContentPart[
   const restore = restorers.get(keys.includes(focused) ? focused : keys[0] ?? '')
   if (!restore) return false
   restore(sentDrafts.get(parts) ?? { text: fallbackText, attachments: [], references: null })
+  return true
+}
+
+// A chip made outside the composer (an element ⌥-clicked in the Preview) goes into that thread's composer at its caret.
+const chipInserters = new Map<string, (part: MentionPart) => void>()
+/** Chips made while no composer showed the thread (its Preview tab was in front): they land when its composer is back. */
+const waitingChips = new Map<string, MentionPart[]>()
+export function onComposerInsertChip(draftKey: string, insert: (part: MentionPart) => void) {
+  chipInserters.set(draftKey, insert)
+  // The registered key carries its pane prefix (`main:thread:<id>`); the waiting chips are keyed without it.
+  const bare = draftKey.slice(draftKey.indexOf(':') + 1)
+  const waiting = waitingChips.get(bare)
+  if (waiting) { waitingChips.delete(bare); for (const part of waiting) setTimeout(() => insert(part), 0) }
+  return () => { if (chipInserters.get(draftKey) === insert) chipInserters.delete(draftKey) }
+}
+/** Inserts `part` into the composer showing `draftKey` (without its pane prefix): the focused pane's first. False when none shows it. */
+export function insertChipIntoComposer(draftKey: string, part: MentionPart): boolean {
+  const keys = [...chipInserters.keys()].filter((key) => key === draftKey || key.endsWith(`:${draftKey}`))
+  const focused = `${getFocusedPaneId()}:${draftKey}`
+  const insert = chipInserters.get(keys.includes(focused) ? focused : keys[0] ?? '')
+  if (!insert) {
+    waitingChips.set(draftKey, [...(waitingChips.get(draftKey) ?? []).slice(-7), part])
+    return false
+  }
+  insert(part)
   return true
 }
 

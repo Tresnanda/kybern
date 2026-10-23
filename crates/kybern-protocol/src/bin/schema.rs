@@ -33,6 +33,13 @@ fn main() {
     add::<Project>(&mut types, "Project");
     add::<TranscriptEntry>(&mut types, "TranscriptEntry");
     add::<ApprovalRequest>(&mut types, "ApprovalRequest");
+    add::<RequestProgress>(&mut types, "RequestProgress");
+    add::<LoginRequestInput>(&mut types, "LoginRequestInput");
+    add::<PromptRequestInput>(&mut types, "PromptRequestInput");
+    add::<PermissionRequestInput>(&mut types, "PermissionRequestInput");
+    add::<QuestionDeadline>(&mut types, "QuestionDeadline");
+    add::<UserInputQuestion>(&mut types, "UserInputQuestion");
+    add::<UserInputAnswer>(&mut types, "UserInputAnswer");
     add::<ProviderStatus>(&mut types, "ProviderStatus");
     add::<Scope>(&mut types, "Scope");
     add::<Checkpoint>(&mut types, "Checkpoint");
@@ -73,6 +80,8 @@ fn main() {
     method::<AccountsList>(&mut methods);
     method::<AccountsLoginStart>(&mut methods);
     method::<AccountsLoginGet>(&mut methods);
+    method::<RequestsProgress>(&mut methods);
+    method::<RequestsAct>(&mut methods);
     method::<AccountsLoginInput>(&mut methods);
     method::<AccountsLoginCancel>(&mut methods);
     method::<AccountsLoginFinish>(&mut methods);
@@ -173,6 +182,8 @@ fn main() {
     method::<ComputerFrameGet>(&mut methods);
     method::<ComputerNotesList>(&mut methods);
     method::<ComputerNoteSet>(&mut methods);
+    method::<SecretsTarget>(&mut methods);
+    method::<SecretsStore>(&mut methods);
     method::<UsageSummary>(&mut methods);
     method::<UsageLimits>(&mut methods);
     method::<PairingCreate>(&mut methods);
@@ -204,6 +215,7 @@ fn main() {
     method::<HtmlRead>(&mut methods);
     method::<HtmlFrame>(&mut methods);
     method::<HtmlRevoke>(&mut methods);
+    method::<HtmlSnapshot>(&mut methods);
     method::<PreviewOpen>(&mut methods);
     method::<PreviewClose>(&mut methods);
     method::<PreviewProbe>(&mut methods);

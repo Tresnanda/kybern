@@ -2,22 +2,44 @@ import { environmentKey, onEnvironmentChange } from './environment.ts'
 // Agent event toasts (desktop `state/rpc.ts` `announce`): a turn that finishes or
 // fails, or an agent that needs an approval or an answer, while the reader is not
 // looking at that thread. Finished and failed toasts last 6 s; approval and
-// question toasts stay until answered (and go when `approval_resolved` arrives).
+// question toasts stay until answered (and go when `approval_resolved` arrives, or once the reader looks at that thread:
+// the card itself is then on screen and the toast would only cover its buttons).
 //
 // The same rules as the desktop: top-level threads only, nothing for events that
 // predate this window, one announcement per event sequence, the "Finished
 // working" toast once per turn, and nothing at all when the daemon's `notifications` setting is off.
-import type { Settings, ThreadEvent, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
+// A delegated agent's question or approval is announced on its top-level thread
+// ("Fix login · Parser audit needs your input"), since nobody watches the agent's own thread.
+// Questions say "Needs your input", approvals "Needs approval: …".
+import type { ApprovalRequest, Settings, Thread, ThreadEvent, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { openThread } from '../nav/history.ts'
 import { onLiveEvent } from '../nav/live.ts'
-import { getNav } from '../nav/store.ts'
+import { getNav, subscribeNav } from '../nav/store.ts'
 import { notifications } from '../native/notifications.ts'
 import { isWindowVisible } from '../native/visibility.ts'
-import { getClient, getState } from '../state.ts'
+import { getClient, getState, subscribe } from '../state.ts'
 import { isWindowFocused } from './window.ts'
 import { toast } from './toasts.tsx'
+import { questionLine, waitingLine } from './waitingLine.ts'
+import { agentName } from '../requests/model.ts'
 
 const DONE_MS = 6000
+
+/** The top-level thread a delegated agent works for, or null for a thread that is not a delegated agent. */
+function rootOf(threadId: ThreadId): { root: Thread; child: Thread } | null {
+  const children = getNav().children
+  const child = children[threadId]
+  if (!child?.delegation) return null
+  let cursor: Thread | undefined = child
+  for (let depth = 0; cursor && depth < 8; depth++) {
+    const parent: ThreadId | null | undefined = cursor.parent_thread_id
+    if (!parent) return null
+    const top = getState().threads.find((t) => t.id === parent)
+    if (top) return { root: top, child }
+    cursor = children[parent]
+  }
+  return null
+}
 
 let started = false
 let owner: ReturnType<typeof getClient> = null
@@ -33,6 +55,26 @@ export function startAgentToasts() {
   started = true
   const startedAt = Date.now()
   const announced = new Map<ThreadId, number>()
+  /** Waiting toasts on screen, by thread. */
+  const waiting = new Map<ThreadId, Set<string>>()
+  let watch: ReturnType<typeof setInterval> | null = null
+  const isViewing = (threadId: ThreadId) => {
+    const nav = getNav()
+    return getState().selectedId === threadId && nav.page === 'home' && !nav.settingsOpen && isWindowVisible() && isWindowFocused()
+  }
+  const forget = (threadId: ThreadId, id: string) => {
+    const ids = waiting.get(threadId)
+    ids?.delete(id)
+    if (ids && !ids.size) waiting.delete(threadId)
+    if (!waiting.size && watch) { clearInterval(watch); watch = null }
+  }
+  // Window focus has no event here, so a short check runs only while a waiting toast is up.
+  const clearViewed = () => {
+    for (const [threadId, ids] of [...waiting]) if (isViewing(threadId)) for (const id of [...ids]) { toast.dismiss(id); forget(threadId, id) }
+  }
+  stops.push(subscribeNav(() => { if (waiting.size) clearViewed() }))
+  stops.push(subscribe(() => { if (waiting.size) clearViewed() }))
+  stops.push(() => { if (watch) clearInterval(watch); watch = null; waiting.clear() })
   const finished = new Map<ThreadId, string>()
   const targets = new Map<string, { environment: string; thread: string }>()
   stops.push(notifications.onClick(id => {
@@ -55,7 +97,11 @@ export function startAgentToasts() {
 
   stops.push(onLiveEvent((event: ThreadEvent) => {
     if (getClient() !== client) return
-    if (event.kind === 'approval_resolved') return toast.dismiss(`agent-input:${event.approval_id}`)
+    if (event.kind === 'approval_resolved') {
+      const id = `agent-input:${event.approval_id}`
+      forget(event.thread_id, id)
+      return toast.dismiss(id)
+    }
     const kind =
       event.kind === 'turn_failed'
         ? 'failed'
@@ -65,27 +111,33 @@ export function startAgentToasts() {
             ? 'done'
             : null
     if (!kind || !enabled) return
-    const thread = getState().threads.find((t) => t.id === event.thread_id)
-    // Child and subagent threads are not in the list: the desktop's `threadCanNotify`.
+    const own = getState().threads.find((t) => t.id === event.thread_id)
+    // Child and subagent threads are not in the list: the desktop's `threadCanNotify`. A delegated agent's request is the exception.
+    const delegated = !own && kind === 'blocked' ? rootOf(event.thread_id) : null
+    const thread = own ?? delegated?.root
     if (!thread) return
+    // A delegated agent speaks under its own name ("Parser audit is waiting for your answer").
+    const delegatedName = delegated ? delegated.child.title || 'An agent' : undefined
     // Replayed history updates the transcript without replaying old alerts.
     if (Date.parse(event.at) < startedAt || event.seq <= (announced.get(event.thread_id) ?? 0)) return
     announced.set(event.thread_id, event.seq)
     const nav = getNav()
-    const viewing = getState().selectedId === event.thread_id && nav.page === 'home' && !nav.settingsOpen
+    const viewing = (getState().selectedId === event.thread_id || (!!delegated && getState().selectedId === thread.id)) && nav.page === 'home' && !nav.settingsOpen
     if (viewing && isWindowVisible() && isWindowFocused()) return
     if (kind === 'done') {
       if (event.turn_id && finished.get(event.thread_id) === event.turn_id) return
       if (event.turn_id) finished.set(event.thread_id, event.turn_id)
     }
     const title = thread.title || 'Thread'
+    const named = agentName(thread.provider.kind)
+    const agent = delegatedName ?? named.charAt(0).toUpperCase() + named.slice(1)
     if (!isWindowFocused()) {
       const id = `agent:${event.thread_id}:${event.seq}`
       targets.set(id, { environment: environmentKey(), thread: event.thread_id })
       if (targets.size > 256) targets.delete(targets.keys().next().value!)
       const body = event.kind === 'turn_failed' ? `Failed: ${event.error}`
-        : event.kind === 'approval_requested' ? `Needs approval: ${event.approval.summary}`
-        : event.kind === 'user_input_requested' ? 'Needs your input' : 'Finished working'
+        : event.kind === 'approval_requested' ? waitingLine(event.approval, agent)
+        : event.kind === 'user_input_requested' ? questionLine(event.approval, agent) : 'Finished working'
       void notifications.requestPermission().then(status => {
         if (status === 'granted' && getClient() === client && enabled && !isWindowFocused()) {
           return notifications.post({ id, title, body }).then(posted => { if (process.env.KYBERN_DEBUG_NOTIFICATIONS) console.error('[notifications] posted', posted, id, title, body) })
@@ -95,9 +147,12 @@ export function startAgentToasts() {
     }
     const open = { label: 'Open thread', onClick: () => openThread(event.thread_id) }
     if (event.kind === 'user_input_requested' || event.kind === 'approval_requested') {
+      const id = `agent-input:${event.approval.id}`
+      waiting.set(event.thread_id, (waiting.get(event.thread_id) ?? new Set()).add(id))
+      watch ??= setInterval(clearViewed, 1000)
       toast(title, {
-        id: `agent-input:${event.approval.id}`,
-        description: event.kind === 'user_input_requested' ? 'Needs your input' : `Needs approval: ${event.approval.summary}`,
+        id,
+        description: event.kind === 'user_input_requested' ? questionLine(event.approval, agent) : waitingLine(event.approval, agent),
         duration: Infinity,
         action: open,
       })

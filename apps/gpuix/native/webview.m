@@ -9,7 +9,7 @@ static NSMutableArray<NSString *> *events;
 static NSString *lastEvent;
 static NSMutableDictionary *hosts;
 static NSMutableDictionary<NSNumber *, NSDictionary *> *occlusions;
-static id keyMonitor;
+static id keyMonitor, mouseMonitor;
 static BOOL pointerCaptured;
 static void emit(NSDictionary *event) {
   NSData *data = [NSJSONSerialization dataWithJSONObject:event options:0 error:nil];
@@ -18,6 +18,7 @@ static void emit(NSDictionary *event) {
   @synchronized(events) { if (events.count < 512) { wake = !events.count; [events addObject:[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]]; } }
   if (wake && signalJS) signalJS();
 }
+static BOOL releaseFocus(NSWindow *window);
 @interface KybernWebClip : NSView
 @property NSArray<NSBezierPath *> *blocked;
 @end
@@ -31,12 +32,38 @@ static void emit(NSDictionary *event) {
   for (NSBezierPath *path in self.blocked) if ([path containsPoint:local]) return nil;
   return [super hitTest:point];
 }
+// WebKit passes a key on to the web view's next responder only when the page left it unhandled: no preventDefault and
+// no default action (a field, a modal dialog or fullscreen closing). An unhandled Escape arrives as cancelOperation:
+// and gives the keyboard to GPUI. It ends here, so GPUI never sees it (it would close a menu or cancel a turn awaiting
+// approval). Other plain keys end here silently, as in Safari, instead of NSBeep; ⌘ keys continue up the chain.
+- (void)cancelOperation:(id)sender { releaseFocus(self.window); }
+- (void)keyDown:(NSEvent *)event {
+  if (event.modifierFlags & NSEventModifierFlagCommand) [super keyDown:event];
+}
 @end
 @interface KybernWebShade : NSView
 @end
 @implementation KybernWebShade
 - (NSView *)hitTest:(NSPoint)point { return nil; }
 @end
+// GPUI's key view. Our clips are its siblings under the content view, so a web view that holds first responder keeps
+// every keystroke: GPUIView is not in its responder chain and never claims first responder on click (Zed sets it once,
+// at window creation). Unhandled keys then end in NSBeep.
+static NSView *gpuiView(NSWindow *window) {
+  NSMutableArray<NSView *> *queue = [NSMutableArray arrayWithObject:window.contentView];
+  while (queue.count) {
+    NSView *view = queue.firstObject; [queue removeObjectAtIndex:0];
+    if ([NSStringFromClass(view.class) isEqual:@"GPUIView"]) return view;
+    if (![view isKindOfClass:KybernWebClip.class]) [queue addObjectsFromArray:view.subviews];
+  }
+  return window.contentView;
+}
+static WKWebView *focusedWeb(NSWindow *window);
+// Hand the keyboard back to GPUI when one of our documents holds it. WebKit blurs the page as the view resigns.
+static BOOL releaseFocus(NSWindow *window) {
+  if (!window || !focusedWeb(window)) return NO;
+  return [window makeFirstResponder:gpuiView(window)];
+}
 @interface KybernWebHost : NSObject <WKNavigationDelegate, WKScriptMessageHandler, WKURLSchemeHandler>
 @property NSString *identifier;
 @property NSString *category;
@@ -74,6 +101,9 @@ static void emit(NSDictionary *event) {
 - (void)userContentController:(WKUserContentController *)controller didReceiveScriptMessage:(WKScriptMessage *)message {
   if ([message.name isEqual:@"kybernFrame"] && !message.frameInfo.isMainFrame) {
     self.childFrame = message.frameInfo;
+    // A dictionary comes from the picker (`src/pick/pickerScript.ts`, run in this isolated world): the page's own scripts
+    // cannot reach this handler. Its fields are page data and stay untrusted, so the client bounds them again.
+    if ([message.body isKindOfClass:NSDictionary.class]) { emit(@{@"id":self.identifier,@"generation":self.generation,@"type":@"frameMessage",@"data":message.body}); return; }
     emit(@{@"id":self.identifier,@"generation":self.generation,@"type":@"navigation",@"url":message.frameInfo.request.URL.absoluteString ?: @""}); return;
   }
   // The untrusted child has the same handler name but cannot send host events.
@@ -104,8 +134,9 @@ static void emit(NSDictionary *event) {
 }
 - (void)visibility {
   BOOL visible = self.placed && self.clip.window.isVisible && !self.clip.window.isMiniaturized && (self.clip.window.occlusionState & NSWindowOcclusionStateVisible);
+  // Before hiding: AppKit resigns a hidden first responder to the window itself, which handles no keys.
+  if (!visible && focusedWeb(self.web.window) == self.web) [self.web.window makeFirstResponder:gpuiView(self.web.window)];
   self.clip.hidden = !visible;
-  if (!visible && [self.web.window.firstResponder isKindOfClass:NSView.class] && [(NSView *)self.web.window.firstResponder isDescendantOf:self.web]) [self.web.window makeFirstResponder:self.clip.superview];
   if (self.hasVisibility && self.lastVisible == visible) return;
   self.hasVisibility = YES; self.lastVisible = visible;
   emit(@{@"id":self.identifier,@"generation":self.generation,@"type":@"visibility",@"visible":@(visible)});
@@ -153,6 +184,7 @@ static void emit(NSDictionary *event) {
 }
 - (void)dispose {
   [NSNotificationCenter.defaultCenter removeObserver:self];
+  if (focusedWeb(self.web.window) == self.web) [self.web.window makeFirstResponder:gpuiView(self.web.window)];
   [self.web stopLoading]; self.web.navigationDelegate = nil;
   [self.web.configuration.userContentController removeScriptMessageHandlerForName:@"kybern"];
   [self.web.configuration.userContentController removeScriptMessageHandlerForName:@"kybernFrame" contentWorld:[WKContentWorld worldWithName:@"KybernPreview"]];
@@ -160,6 +192,12 @@ static void emit(NSDictionary *event) {
 }
 @end
 
+static WKWebView *focusedWeb(NSWindow *window) {
+  NSResponder *responder = window.firstResponder;
+  if (![responder isKindOfClass:NSView.class]) return nil;
+  for (KybernWebHost *host in hosts.allValues) if (host.web && [(NSView *)responder isDescendantOf:host.web]) return host.web;
+  return nil;
+}
 void kybern_web_init(void (*callback)(void)) { events = [NSMutableArray new]; hosts = [NSMutableDictionary new]; occlusions = [NSMutableDictionary new]; signalJS = callback; }
 const char *kybern_web_next(void) {
   @synchronized(events) { if (!events.count) return NULL; lastEvent = events.firstObject; [events removeObjectAtIndex:0]; return lastEvent.UTF8String; }
@@ -170,6 +208,7 @@ void kybern_web_command(const char *json) {
   dispatch_async(dispatch_get_main_queue(), ^{
     NSString *identifier = cmd[@"id"], *op = cmd[@"op"];
     if ([op isEqual:@"capture"]) { pointerCaptured = [cmd[@"active"] boolValue]; return; }
+    if ([op isEqual:@"release"]) { for (NSWindow *w in NSApp.windows) releaseFocus(w); return; }
     if ([op isEqual:@"occlusion"]) {
       if ([cmd[@"rect"] isKindOfClass:NSDictionary.class]) occlusions[cmd[@"layer"]] = cmd; else [occlusions removeObjectForKey:cmd[@"layer"]];
       for (KybernWebHost *host in hosts.allValues) [host mask]; return;
@@ -190,6 +229,22 @@ void kybern_web_command(const char *json) {
         }
         return event;
       }];
+      // A press anywhere outside the document that holds the keyboard (GPUI, a popup cut out of the document, the
+      // title bar) gives it back to GPUI before the press is dispatched. A press in another document moves it there.
+      if (!mouseMonitor) mouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown | NSEventMaskOtherMouseDown handler:^NSEvent *(NSEvent *event) {
+        NSWindow *window = event.window; WKWebView *web = focusedWeb(window);
+        NSView *frame = window.contentView.superview ?: window.contentView;
+        NSView *hit = [frame hitTest:[frame convertPoint:event.locationInWindow fromView:nil]];
+        // A live inline visual goes back to its picture on a press anywhere else: tell its owner where the press landed
+        // (window points, top-left origin) so a press on its own caption does not count.
+        NSPoint at = event.locationInWindow; CGFloat top = window.contentView.bounds.size.height - at.y;
+        for (KybernWebHost *h in hosts.allValues)
+          if ([h.category isEqual:@"visual"] && h.placed && h.web.window == window && !(hit && [hit isDescendantOf:h.web]))
+            emit(@{@"id":h.identifier,@"generation":h.generation,@"type":@"outsidePress",@"x":@(at.x),@"y":@(top)});
+        if (!web) return event;
+        for (KybernWebHost *h in hosts.allValues) if (hit && h.web && [hit isDescendantOf:h.web]) return event;
+        releaseFocus(window); return event;
+      }];
       NSUInteger count = 0; for (KybernWebHost *h in hosts.allValues) if ([h.category isEqual:@"preview"]) count++;
       if (host || ([cmd[@"category"] isEqual:@"preview"] && count >= 2)) { emit(@{@"id":identifier,@"type":@"failed",@"message":@"Close another preview and try again."}); return; }
       NSWindow *window = nil; for (NSWindow *w in NSApp.windows) if (w.canBecomeKeyWindow) { window = w; break; }
@@ -207,6 +262,8 @@ void kybern_web_command(const char *json) {
       [config.userContentController addUserScript:[[WKUserScript alloc] initWithSource:frameScript injectionTime:WKUserScriptInjectionTimeAtDocumentEnd forMainFrameOnly:NO inContentWorld:world]];
       host.clip = [KybernWebClip new]; host.clip.wantsLayer = YES; host.clip.layer.masksToBounds = YES; host.clip.hidden = YES;
       host.web = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:config]; host.web.navigationDelegate = host;
+      // A visual sits on the thread's own material, like its picture: nothing is painted behind the page.
+      if ([host.category isEqual:@"visual"]) @try { [host.web setValue:@NO forKey:@"drawsBackground"]; } @catch (NSException *e) {}
       host.shade = [KybernWebShade new]; host.shade.wantsLayer = YES;
       [host.clip addSubview:host.web]; [host.clip addSubview:host.shade]; [window.contentView addSubview:host.clip]; hosts[identifier] = host;
       for (NSNotificationName name in @[NSWindowDidChangeOcclusionStateNotification, NSWindowDidMiniaturizeNotification, NSWindowDidDeminiaturizeNotification]) [NSNotificationCenter.defaultCenter addObserver:host selector:@selector(visibility) name:name object:window];
@@ -232,7 +289,7 @@ void kybern_web_command(const char *json) {
       if (script && host.childFrame) [host.web evaluateJavaScript:script inFrame:host.childFrame inContentWorld:[WKContentWorld worldWithName:@"KybernPreview"] completionHandler:^(id value, NSError *error) {}];
       return;
     }
-    if ([op isEqual:@"destroy"]) { [host dispose]; [hosts removeObjectForKey:identifier]; if (!hosts.count && keyMonitor) { [NSEvent removeMonitor:keyMonitor]; keyMonitor = nil; } emit(@{@"id":identifier,@"generation":host.generation,@"type":@"destroyed"}); return; }
+    if ([op isEqual:@"destroy"]) { [host dispose]; [hosts removeObjectForKey:identifier]; if (!hosts.count && keyMonitor) { [NSEvent removeMonitor:keyMonitor]; keyMonitor = nil; } if (!hosts.count && mouseMonitor) { [NSEvent removeMonitor:mouseMonitor]; mouseMonitor = nil; } emit(@{@"id":identifier,@"generation":host.generation,@"type":@"destroyed"}); return; }
     if ([op isEqual:@"place"]) {
       NSView *content = host.clip.superview;
       double x = [cmd[@"x"] doubleValue], y = [cmd[@"y"] doubleValue], width = [cmd[@"width"] doubleValue], height = [cmd[@"height"] doubleValue];
@@ -282,6 +339,59 @@ void kybern_web_command(const char *json) {
       emit(@{@"id":identifier,@"type":@"probe",@"data":@{@"opacity":@(shown.opacity),@"scale":@(shown.transform.m11),@"animating":@([host.clip.layer animationForKey:@"kybern-present-opacity"] != nil || [host.clip.layer animationForKey:@"kybern-present-transform"] != nil)}}); return;
     }
     if ([op isEqual:@"post"]) { [host.web evaluateJavaScript:cmd[@"script"] completionHandler:nil]; return; }
+    if ([op isEqual:@"snapshot"]) {
+      // The document as it looks now, written as a PNG at the backing scale (a live visual going back to its picture).
+      NSString *path = cmd[@"path"], *identifier = host.identifier; NSNumber *generation = host.generation, *token = cmd[@"token"] ?: @0;
+      WKSnapshotConfiguration *config = [WKSnapshotConfiguration new]; config.afterScreenUpdates = NO;
+      [host.web takeSnapshotWithConfiguration:config completionHandler:^(NSImage *image, NSError *error) {
+        CGImageRef cg = [image CGImageForProposedRect:NULL context:nil hints:nil];
+        NSData *png = cg ? [[[NSBitmapImageRep alloc] initWithCGImage:cg] representationUsingType:NSBitmapImageFileTypePNG properties:@{}] : nil;
+        BOOL written = png && [png writeToFile:path atomically:YES];
+        emit(@{@"id":identifier,@"generation":generation,@"type":@"snapshot",@"token":token,@"ok":@(written),@"path":written ? path : @"",
+               @"width":@(cg ? CGImageGetWidth(cg) : 0),@"height":@(cg ? CGImageGetHeight(cg) : 0),@"message":error.localizedDescription ?: @""});
+      }];
+      return;
+    }
+    if ([op isEqual:@"frame"]) {
+      // Runs `script` in the page's frame, in the isolated `KybernPreview` world: the DOM is shared, JavaScript globals are
+      // not, so the page cannot call or replace what runs here. The result (when `rid` is set) comes back as `frameResult`.
+      NSString *script = cmd[@"script"], *rid = cmd[@"rid"];
+      void (^fail)(NSString *) = ^(NSString *message) { if (rid) emit(@{@"id":identifier,@"generation":host.generation,@"type":@"frameResult",@"rid":rid,@"ok":@NO,@"message":message}); };
+      if (![script isKindOfClass:NSString.class] || !host.childFrame) { fail(@"The page has not loaded yet."); return; }
+      [host.web evaluateJavaScript:script inFrame:host.childFrame inContentWorld:[WKContentWorld worldWithName:@"KybernPreview"] completionHandler:^(id value, NSError *error) {
+        if (!rid) return;
+        if (error) { fail(error.localizedDescription ?: @"The page did not run the script."); return; }
+        id result = value && [NSJSONSerialization isValidJSONObject:@[value]] ? value : [NSNull null];
+        emit(@{@"id":identifier,@"generation":host.generation,@"type":@"frameResult",@"rid":rid,@"ok":@YES,@"value":result});
+      }];
+      return;
+    }
+    if ([op isEqual:@"snapshotRect"]) {
+      // A PNG of a rectangle of the page (CSS pixels in the child frame's viewport) written to `path` under the temp folder.
+      // The wrapper scales and offsets the child (device mode), so its box is read first.
+      NSString *rid = cmd[@"rid"], *path = cmd[@"path"];
+      void (^fail)(NSString *) = ^(NSString *message) { if (rid) emit(@{@"id":identifier,@"generation":host.generation,@"type":@"snapshotRect",@"rid":rid,@"ok":@NO,@"message":message}); };
+      if (![path isKindOfClass:NSString.class] || ![path hasPrefix:NSTemporaryDirectory()] || ![path.pathExtension isEqual:@"png"]) { fail(@"The snapshot path is not allowed."); return; }
+      double rx = [cmd[@"x"] doubleValue], ry = [cmd[@"y"] doubleValue], rw = [cmd[@"width"] doubleValue], rh = [cmd[@"height"] doubleValue];
+      NSString *probe = @"(()=>{const f=document.querySelector('iframe');if(!f)return null;const r=f.getBoundingClientRect();return [r.left,r.top,r.width/(f.offsetWidth||r.width||1)]})()";
+      [host.web evaluateJavaScript:probe completionHandler:^(id box, NSError *error) {
+        NSArray *frame = [box isKindOfClass:NSArray.class] && [box count] == 3 ? box : @[@0, @0, @1];
+        double scale = [frame[2] doubleValue] > 0 ? [frame[2] doubleValue] : 1;
+        NSRect wanted = NSMakeRect([frame[0] doubleValue] + rx * scale, [frame[1] doubleValue] + ry * scale, MAX(1, rw * scale), MAX(1, rh * scale));
+        wanted = NSIntersectionRect(wanted, host.web.bounds);
+        if (NSIsEmptyRect(wanted)) { fail(@"The element is not on screen."); return; }
+        WKSnapshotConfiguration *config = [WKSnapshotConfiguration new];
+        config.rect = wanted; config.snapshotWidth = @(MIN(1200, wanted.size.width * 2));
+        [host.web takeSnapshotWithConfiguration:config completionHandler:^(NSImage *image, NSError *snapError) {
+          if (!image) { fail(snapError.localizedDescription ?: @"The page could not be captured."); return; }
+          NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithData:image.TIFFRepresentation];
+          NSData *png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+          if (!png || ![png writeToFile:path atomically:YES]) { fail(@"The capture could not be saved."); return; }
+          emit(@{@"id":identifier,@"generation":host.generation,@"type":@"snapshotRect",@"rid":rid ?: @"",@"ok":@YES,@"path":path,@"width":@(wanted.size.width),@"height":@(wanted.size.height)});
+        }];
+      }];
+      return;
+    }
     if ([op isEqual:@"focus"]) [host.clip.window makeFirstResponder:host.web];
   });
 }

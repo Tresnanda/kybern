@@ -140,6 +140,21 @@ test('Reduce Motion never animates, and a tall image opens at its top fitted to 
   expect(tall.snapshot()).toMatchObject({ fitted: true, zoomed: false })
 })
 
+test('a tall image pans all the way to its bottom edge at fit and at 100%', () => {
+  // The reported sheet (2720 × 7014) in a 1000 × 634 room on a Retina screen. The transform must carry the image's bottom
+  // to the viewport's bottom; the cut-off picture was the native clip moving with the pan, not the pan stopping short.
+  const viewport = { width: 1000, height: 634 }
+  const c = make({ image: { width: 2720, height: 7014 }, viewport })
+  const bottom = () => { const s = c.snapshot(); return s.stage.y + s.transform.translateY + s.stage.height * s.transform.scale }
+  for (let i = 0; i < 40; i++) c.wheel({ x: 600, y: 400, deltaX: 0, deltaY: -200, precise: true })
+  expect(c.snapshot().fitted).toBe(true)
+  expect(bottom()).toBeCloseTo(viewport.height)
+  c.zoomTo(c.snapshot().limits!.actual, undefined, false)
+  for (let i = 0; i < 60; i++) c.wheel({ x: 600, y: 400, deltaX: 0, deltaY: -200, precise: true })
+  expect(c.snapshot().actual).toBe(true)
+  expect(bottom()).toBeCloseTo(viewport.height)
+})
+
 test('an image of unknown size does not zoom', () => {
   const c = make({ image: null })
   expect(c.snapshot().enabled).toBe(false)

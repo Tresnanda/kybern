@@ -18,7 +18,15 @@ const IDLE: CardUi = { highlight: 0, note: false, sending: null, error: '', expa
 const cards = new Map<string, CardUi>()
 const listeners = new Set<() => void>()
 
-export const getCardUi = (id: string): CardUi => cards.get(id) ?? IDLE
+/** A card's starting state when it differs from `IDLE` (a default answer highlighted first, or none at all). Stable objects, so
+ *  `useSyncExternalStore` sees the same snapshot until the first patch. */
+const starts = new Map<string, CardUi>()
+export function setCardStart(id: string, start: Partial<CardUi>) {
+  const current = starts.get(id)
+  if (!current || Object.entries(start).some(([key, value]) => current[key as keyof CardUi] !== value)) starts.set(id, { ...IDLE, ...start })
+}
+
+export const getCardUi = (id: string): CardUi => cards.get(id) ?? starts.get(id) ?? IDLE
 
 export function patchCardUi(id: string, patch: Partial<CardUi>) {
   cards.set(id, { ...getCardUi(id), ...patch })
@@ -26,6 +34,7 @@ export function patchCardUi(id: string, patch: Partial<CardUi>) {
 }
 
 export function forgetCardUi(id: string) {
+  starts.delete(id)
   if (cards.delete(id)) for (const listener of listeners) listener()
 }
 
@@ -39,5 +48,18 @@ export const someoneIsTyping = (): boolean => typing.size > 0
 
 /** Moves keyboard focus to the card on screen (↑ ↓ in the empty composer). Set by the card's root while it is mounted. */
 let focusRoot: (() => void) | null = null
-export const registerCardFocus = (focus: (() => void) | null) => { focusRoot = focus }
+/** Returns the unregister; a card that leaves after the next one arrived (its exit runs on) leaves the newer one registered. */
+export const registerCardFocus = (focus: () => void) => {
+  focusRoot = focus
+  return () => { if (focusRoot === focus) focusRoot = null }
+}
 export const focusCard = () => focusRoot?.()
+
+/** Key handlers of cards that are not built from `approvalCard` rows (sign-in, permission): the empty composer routes digits,
+ *  ↑ ↓ and Esc to the card on screen through them, as it does through `handleCardKey`. Keyed by approval id. */
+const cardKeys = new Map<string, (key: string) => boolean>()
+export function registerCardKeys(approvalId: string, handler: (key: string) => boolean): () => void {
+  cardKeys.set(approvalId, handler)
+  return () => { if (cardKeys.get(approvalId) === handler) cardKeys.delete(approvalId) }
+}
+export const cardKeyHandler = (approvalId: string) => cardKeys.get(approvalId)

@@ -135,6 +135,9 @@ pub struct SubtreeTransformContext {
     blur: f32,
     scale_factor: f32,
     visual_mask: ContentMask<Pixels>,
+    /// `visual_mask` before any transform: what `content_mask()` reads while painting in this context. A primitive's own
+    /// clip narrower than this is its own; the rest of it is the ancestors' masks, already in `visual_mask`.
+    base_mask: Bounds<Pixels>,
 }
 impl SubtreeTransformContext {
     fn build(
@@ -154,6 +157,7 @@ impl SubtreeTransformContext {
         // The mask at the outermost scope stays put; masks established inside follow the
         // scopes that were active when they were pushed.
         let mut mask = outer.clone();
+        let base_mask = masks.iter().fold(outer.bounds, |base, (bounds, _, _)| base.intersect(bounds));
         // A scope's own clip, in its host box mapped through every scope up to and including it; its corners are
         // given on screen, so a thumbnail's radius holds while the image scales up.
         for (depth, ((_, _, value), host)) in scopes.iter().zip(&boxes).enumerate() {
@@ -190,7 +194,7 @@ impl SubtreeTransformContext {
             }
             mask.bounds = mask.bounds.intersect(&visual);
         }
-        Self { scopes, boxes, outer, masks, matrix, opacity, shadow_opacity, blur, scale_factor, visual_mask: mask }
+        Self { scopes, boxes, outer, masks, matrix, opacity, shadow_opacity, blur, scale_factor, visual_mask: mask, base_mask }
     }
     /// A replacement when any of `values` changes one of this context's scopes.
     fn updated(
@@ -389,12 +393,30 @@ impl crate::scene::Primitive {
         let (sx, sy) = m.axes();
         let r = sx.min(sy);
         let opacity = context.opacity;
-        // The scope's mask, narrowed by the primitive's own clip mapped through the transform: GPUI paints a
-        // border-only quad as four strips, each clipped to its strip, and other paint narrows its mask the same way.
+        // The scope's mask, narrowed by the primitive's own clip mapped through the transform (paint that narrows its
+        // own mask; a border-only quad is no longer split into strips inside a scope). Only the edges narrower than the
+        // context's untransformed mask (by more than GPUI's pixel snap) are the primitive's own: the others are ancestor
+        // clips, which `visual_mask` already places (the one at the scope's entry stays put). Mapping those too dragged
+        // an `overflow: hidden` viewport along with a panned image and cut the picture off (ADE-71).
         let mut mask = context.visual_mask.scale(factor);
         let own = self.content_mask().bounds;
-        let (ox, oy, ow, oh) = m.envelope(own.origin.x.0, own.origin.y.0, own.size.width.0, own.size.height.0);
-        mask.bounds = mask.bounds.intersect(&Bounds::new(point(ScaledPixels(ox), ScaledPixels(oy)), size(ScaledPixels(ow), ScaledPixels(oh))));
+        let base = context.base_mask.scale(factor);
+        let narrower = [
+            own.origin.x.0 > base.origin.x.0 + 1.0,
+            own.origin.y.0 > base.origin.y.0 + 1.0,
+            own.origin.x.0 + own.size.width.0 < base.origin.x.0 + base.size.width.0 - 1.0,
+            own.origin.y.0 + own.size.height.0 < base.origin.y.0 + base.size.height.0 - 1.0,
+        ];
+        if narrower.iter().any(|&n| n) {
+            let (ox, oy, ow, oh) = m.envelope(own.origin.x.0, own.origin.y.0, own.size.width.0, own.size.height.0);
+            let b = mask.bounds;
+            let (mut x0, mut y0, mut x1, mut y1) = (b.origin.x.0, b.origin.y.0, b.origin.x.0 + b.size.width.0, b.origin.y.0 + b.size.height.0);
+            if narrower[0] { x0 = x0.max(ox) }
+            if narrower[1] { y0 = y0.max(oy) }
+            if narrower[2] { x1 = x1.min(ox + ow) }
+            if narrower[3] { y1 = y1.min(oy + oh) }
+            mask.bounds = Bounds::new(point(ScaledPixels(x0), ScaledPixels(y0)), size(ScaledPixels((x1 - x0).max(0.0)), ScaledPixels((y1 - y0).max(0.0))));
+        }
         let rect = |b: &mut Bounds<ScaledPixels>| {
             let (x, y, w, h) = m.rect(b.origin.x.0, b.origin.y.0, b.size.width.0, b.size.height.0);
             *b = Bounds::new(point(ScaledPixels(x), ScaledPixels(y)), size(ScaledPixels(w), ScaledPixels(h)));

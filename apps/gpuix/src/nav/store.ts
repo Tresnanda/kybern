@@ -5,6 +5,7 @@ import { onEnvironmentChange } from '../shell/environment.ts'
 // (projects, threads, the open thread) stays in `state.ts`.
 import { useSyncExternalStore } from 'react'
 import type {
+  PendingRequestKind,
   ProviderKind,
   ProviderLimits,
   ProviderStatus,
@@ -57,6 +58,8 @@ export interface NavState {
   /** Provider subagent and delegated child threads, which `threads.list` leaves out. */
   children: Record<ThreadId, Thread>
   activity: Record<ThreadId, ThreadActivityState>
+  /** What a thread's own waiting request asks for, and what its delegated agents wait on (`threads.list` activity). */
+  pending: Record<ThreadId, ThreadPending>
   /** Turns that finished while the reader looked elsewhere (desktop "done" notifications). */
   unread: Record<ThreadId, true>
   /** Child rows the reader dismissed, or that finished and left. */
@@ -82,6 +85,9 @@ export interface NavState {
   spaceViews: Record<string, NavEntry>
 }
 
+/** A thread's waiting requests: its own oldest one, and the strongest of its delegated agents' (a question outranks an approval). */
+export interface ThreadPending { own?: PendingRequestKind; child?: PendingRequestKind }
+
 export const DEFAULT_FILTER: SidebarFilter = { threads: 'all', agent: null }
 
 const initialNav: NavState = {
@@ -96,6 +102,7 @@ const initialNav: NavState = {
   handoff: null,
   children: {},
   activity: {},
+  pending: {},
   unread: {},
   dismissed: {},
   providers: [],

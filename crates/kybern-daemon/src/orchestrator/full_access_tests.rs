@@ -106,7 +106,7 @@ async fn full_access_still_asks_questions_forms_and_plans() {
     let fixture = Fixture::new();
     let (thread, live, responses) = full_access_turn(&fixture, ProviderKind::ClaudeCode, PermissionMode::FullAccess).await;
     let asks =
-        ["AskUserQuestion", "mcp_elicitation", "request_user_input", "opencode_question", "ui_select", "ui_confirm", "ExitPlanMode", SECRET_REQUEST_TOOL];
+        ["AskUserQuestion", "mcp_elicitation", "request_user_input", "opencode_question", "ui_select", "ui_confirm", "ExitPlanMode", SECRET_REQUEST_TOOL, LOGIN_REQUEST_TOOL, PROMPT_REQUEST_TOOL, PERMISSION_REQUEST_TOOL];
     for (index, tool) in asks.iter().enumerate() {
         fixture.orchestrator.handle_driver_event(thread.id, &live, permission_request(&format!("q{index}"), tool)).await.unwrap();
     }

@@ -469,6 +469,9 @@ impl Drop for NativeMcpConfig {
     }
 }
 
+/// How long Kybern's MCP server may stay silent during one call (6 h, as `MCP_TOOL_TIMEOUT`).
+const KYBERN_MCP_SILENT_MS: u64 = 6 * 60 * 60 * 1000;
+
 fn write_claude_mcp_config(bridge: &NativeToolBridge) -> Result<NativeMcpConfig> {
     bridge.validate()?;
     let endpoint = bridge
@@ -485,6 +488,9 @@ fn write_claude_mcp_config(bridge: &NativeToolBridge) -> Result<NativeMcpConfig>
                 "type": "http",
                 "url": endpoint,
                 "headers": { "Authorization": format!("Bearer {authorization}") },
+                // Claude Code aborts a call that sends nothing for 5 min, which ends a waiting visual, sign-in, permission
+                // or question while the user is still deciding. The daemon bounds every call itself (at most a few hours).
+                "timeout": KYBERN_MCP_SILENT_MS,
             }
         }
     });
@@ -1914,6 +1920,10 @@ impl AgentSession for SessionHandle {
         let response = match decision {
             ApprovalDecision::Submit { response } => {
                 input["answers"] = response.get("answers").cloned().ok_or_else(|| DriverError::Protocol("missing answers".into()))?;
+                // Per-question notes and the chosen preview (`AskUserQuestion`'s `annotations`): attachments, exact multi-select labels.
+                if let Some(annotations) = response.get("annotations").filter(|annotations| annotations.is_object()) {
+                    input["annotations"] = annotations.clone();
+                }
                 json!({ "behavior": "allow", "updatedInput": input })
             }
             ApprovalDecision::AllowOnce => json!({ "behavior": "allow", "updatedInput": input }),
@@ -2240,6 +2250,26 @@ mod tests {
             response["response"]["response"]["updatedInput"],
             json!({ "questions": questions, "answers": { "Which sections?": "Intro, Summary" } })
         );
+        // A multi-select answer goes as the list of labels, with notes when a label holds a comma.
+        session.handle_control_request(&json!({ "request_id": "labels", "request": { "subtype": "can_use_tool", "tool_name": "AskUserQuestion", "input": { "questions": questions } } })).await;
+        assert!(matches!(rx.recv().await, Some(DriverEvent::PermissionRequest { .. })));
+        let annotations = json!({ "Which sections?": { "notes": "Selected options, exactly: \"Intro, short\"; \"Summary\"" } });
+        handle
+            .respond_permission(
+                "labels",
+                &ApprovalDecision::Submit {
+                    response: json!({ "answers": { "Which sections?": ["Intro, short", "Summary"] }, "annotations": annotations }),
+                },
+            )
+            .await
+            .unwrap();
+        let response = tokio::time::timeout(std::time::Duration::from_secs(1), async { child.lines.lock().await.recv().await.unwrap() })
+            .await
+            .unwrap();
+        assert_eq!(
+            response["response"]["response"]["updatedInput"],
+            json!({ "questions": questions, "answers": { "Which sections?": ["Intro, short", "Summary"] }, "annotations": annotations })
+        );
         session.handle_control_request(&json!({ "request_id": "form", "request": { "subtype": "elicitation", "message": "Name", "requestedSchema": { "type": "object" } } })).await;
         assert!(matches!(rx.recv().await, Some(DriverEvent::PermissionRequest { tool_name, .. }) if tool_name == "mcp_elicitation"));
         handle
@@ -2302,6 +2332,7 @@ mod tests {
         let value: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(value["mcpServers"]["kybern"]["url"], "http://127.0.0.1:4199/native-tools/mcp");
         assert_eq!(value["mcpServers"]["kybern"]["headers"]["Authorization"], "Bearer session-capability");
+        assert_eq!(value["mcpServers"]["kybern"]["timeout"], 21_600_000);
         assert!(config.path.exists());
         let path = config.path.clone();
         drop(config);

@@ -1265,6 +1265,16 @@ pub struct ThreadActivitySummary {
     pub active_agents: u32,
     pub active_processes: u32,
     pub active_monitors: u32,
+    /// Running delegated children (Kybern delegation, not provider subagents). Clients load a parent's children from this
+    /// at startup: a delegated child is no runtime task of its parent, so `active_agents` never counts it.
+    #[serde(default)]
+    pub active_children: u32,
+    /// What this thread's oldest waiting request asks for, if one waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_request: Option<crate::PendingRequestKind>,
+    /// A delegated descendant waits on the user: `question` when any of them asks one, else `approval`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_child_request: Option<crate::PendingRequestKind>,
 }
 
 /// A pending or resolved request for the user to approve a tool call.
@@ -1285,6 +1295,11 @@ pub struct ApprovalRequest {
     #[serde(default)]
     pub suggestions: Vec<Value>,
     pub created_at: DateTime<Utc>,
+    /// The request's questions in one shape for every harness (see
+    /// [`crate::user_input_questions`]); empty when it is not a question.
+    /// Older clients keep reading `input`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub questions: Vec<crate::UserInputQuestion>,
 }
 
 /// `tool_name` of the daemon-raised approval behind the `kybern_request_secret`
@@ -1317,6 +1332,264 @@ pub struct SecretRequestInput {
     /// Hint for the empty field, if the agent gave one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
+}
+
+/// `tool_name` of the daemon-raised card behind `kybern_html_publish` with
+/// `await_answer`: the published visual waits for the reader's answer. Clients
+/// draw it as an answer bar under the visual rather than as a card.
+///
+/// `input` is a [`VisualAnswerInput`]. The answer is
+/// `ApprovalDecision::Submit { response: {"answer": <value>, "label": "<words>"} }`
+/// (the value matches `input.schema`, at most [`MAX_VISUAL_ANSWER_BYTES`]),
+/// `Submit { response: {"reply": "<message>"} }` when the reader typed instead,
+/// or `Deny` to skip.
+pub const VISUAL_ANSWER_TOOL: &str = "kybern_visual_answer";
+/// Longest visual answer, in bytes of JSON.
+pub const MAX_VISUAL_ANSWER_BYTES: usize = 8 * 1024;
+
+/// The `input` of a [`VISUAL_ANSWER_TOOL`] card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct VisualAnswerInput {
+    pub visual_id: uuid::Uuid,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<Value>,
+}
+
+/// `tool_name` of the daemon-raised approval behind the `kybern_request_pick`
+/// tool: the agent asks the user to point at something (an element in the
+/// Preview or an inline visual, a file or folder, an image, a window) instead
+/// of describing it.
+///
+/// `input` is a [`PickRequestInput`]. The answer is
+/// `ApprovalDecision::Submit { response }` with the picked target (see
+/// [`PickKind`] for the shape per kind) or `Deny`.
+pub const PICK_REQUEST_TOOL: &str = "kybern_request_pick";
+/// Largest answer, in bytes of JSON, a pick card may submit.
+pub const MAX_PICK_RESPONSE_BYTES: usize = 48 * 1024;
+
+/// What the user is asked to point at, and the `response` object the card submits for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PickKind {
+    /// An element in the Preview page. `{selector, tag, text?, box:{x,y,width,height}, html?, page_url?, screenshot_asset?}`.
+    PreviewElement,
+    /// An element in an inline visual. Same as `preview_element` plus `id` (the element's `data-kybern-id`, when it has one).
+    VisualElement,
+    /// A file in the workspace. `{path}`, workspace-relative.
+    File,
+    /// A folder in the workspace. `{path}`, workspace-relative (`.` is the workspace itself).
+    Folder,
+    /// An image the user drops, pastes or chooses. `{asset_id, name}`.
+    Image,
+    /// A window or screen area the user captures. `{asset_id, app?, title?}`.
+    Window,
+}
+
+/// The `input` of a [`PICK_REQUEST_TOOL`] approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PickRequestInput {
+    pub kind: PickKind,
+    /// What the agent needs, in a sentence the user can act on.
+    pub prompt: String,
+}
+
+/// `tool_name` of the daemon-raised approval behind `kybern_request_login`: the
+/// card "Sign in to GitHub to continue". The sign-in itself runs in the daemon
+/// and the card follows it through [`RequestProgress`]; the client drives it
+/// with `requests.act` (`browser`, `terminal`, `paste`, `cancel`, `retry`).
+///
+/// `input` is a [`LoginRequestInput`]. Clients may only answer `Deny` (the
+/// decline row); the daemon resolves the card with `Submit { response:
+/// {"status": "signed_in", "cli", "account"?} }` once the CLI is signed in.
+pub const LOGIN_REQUEST_TOOL: &str = "kybern_request_login";
+/// `tool_name` of the daemon-raised approval behind `kybern askpass`, the
+/// helper behind `SUDO_ASKPASS`, `SSH_ASKPASS` and `GIT_ASKPASS`. Always a
+/// private card, never answered automatically in any permission mode.
+///
+/// `input` is a [`PromptRequestInput`]. The answer is `Submit { response:
+/// {"secret": "<value>"} }` for a masked prompt, `{"value": "<text>"}` for a
+/// visible one (a git username) and `{"confirmed": true|false}` for a yes/no
+/// prompt (an SSH host key), or `Deny`. A `secret` is redacted like
+/// [`REDACTED_SECRET`] in stored and broadcast copies.
+pub const PROMPT_REQUEST_TOOL: &str = "kybern_askpass";
+/// `tool_name` of the daemon-raised approval behind `kybern_request_permission`:
+/// the card "Let <app> use the camera". The daemon watches for the grant where
+/// the OS lets it; the client drives the rest with `requests.act` (`open`,
+/// `check`, `granted`, `stop`). Resolved by the daemon with `Submit { response:
+/// {"status": "granted"|"user_confirmed"|...} }`; clients may only `Deny`.
+///
+/// `input` is a [`PermissionRequestInput`].
+pub const PERMISSION_REQUEST_TOOL: &str = "kybern_request_permission";
+/// Longest askpass answer, in bytes.
+pub const MAX_PROMPT_ANSWER_BYTES: usize = 4096;
+
+/// The `input` of a [`LOGIN_REQUEST_TOOL`] approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LoginRequestInput {
+    /// The CLI to sign in, e.g. `gh`.
+    pub cli: String,
+    /// The service's name for the title, e.g. `GitHub`.
+    pub service: String,
+    /// Why the agent needs it.
+    pub reason: String,
+    /// The Account line of the card, e.g. "github.com, any account you choose".
+    pub account: String,
+    /// The Access line (scopes), if the CLI has any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<String>,
+    /// What the sign-in changes, e.g. "`gh` for this Mac, so your terminal uses it too".
+    pub signs_in: String,
+    /// The command that signs in, as the terminal path runs it.
+    pub command: String,
+    /// The ways offered, in row order: `browser` and `terminal`.
+    pub methods: Vec<String>,
+    /// The CLI is not in Kybern's table; the agent supplied the command.
+    #[serde(default)]
+    pub custom: bool,
+}
+
+/// The `input` of a [`PROMPT_REQUEST_TOOL`] approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PromptRequestInput {
+    /// `sudo`, `ssh_passphrase`, `ssh_host_key`, `git_username`, `git_password`
+    /// or `other`.
+    pub purpose: String,
+    /// The prompt exactly as the program printed it (credentials in URLs removed).
+    pub prompt: String,
+    /// Mask the field.
+    pub secret: bool,
+    /// Ask yes or no (an SSH host key). There is no default answer.
+    pub confirm: bool,
+    /// The command that asked, found by walking parent processes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// The harness's display name, e.g. `Claude Code`.
+    pub harness: String,
+    /// The host the prompt is about (ssh and git), if the prompt names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// An SSH host key's type, e.g. `ED25519`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_type: Option<String>,
+    /// An SSH host key's fingerprint, e.g. `SHA256:...`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
+    /// 1 for the first ask, 2 when the same command asked again (a wrong password).
+    pub attempt: u32,
+    /// Seconds the helper waits before it fails the command.
+    pub wait_seconds: u64,
+}
+
+/// The `input` of a [`PERMISSION_REQUEST_TOOL`] approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PermissionRequestInput {
+    /// `camera`, `microphone`, `screen_recording`, `accessibility`,
+    /// `local_network`, `full_disk_access`, `notifications` or `location`.
+    pub pane: String,
+    /// The app that needs the permission, as the agent named it.
+    pub app: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_id: Option<String>,
+    /// Where the app is, when Kybern found it (for "show in Finder").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_path: Option<String>,
+    pub reason: String,
+    /// The pane's name as System Settings shows it, e.g. "Privacy & Security › Camera".
+    pub pane_label: String,
+    /// The `x-apple.systempreferences:` link that opens the pane.
+    pub url: String,
+    /// The user must add the app to a list (Full Disk Access, Accessibility).
+    pub needs_app_added: bool,
+    /// The app has to be relaunched once the permission is on.
+    pub relaunch: bool,
+    /// Kybern can see the grant itself; otherwise the user confirms it.
+    pub detects: bool,
+}
+
+/// How a question card's deadline works (`kybern_ask_user` with `default` and
+/// `deadline_seconds`). Lives in an `AskUserQuestion` approval's `input` as
+/// `deadline`. The daemon answers with the defaults at `ends_at` unless the
+/// user pauses (`requests.act` `pause` and `resume`) or holds it (`hold`);
+/// the answer then carries `auto: {"at", "waited_seconds"}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct QuestionDeadline {
+    /// The question text → the option label chosen when the deadline fires.
+    pub defaults: std::collections::BTreeMap<String, String>,
+    /// The wait the agent asked for after the user's cap, in seconds.
+    pub seconds: u64,
+    pub started_at: DateTime<Utc>,
+    pub ends_at: DateTime<Utc>,
+}
+
+/// What kind of request a [`RequestProgress`] belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestKind {
+    Login,
+    Permission,
+    Question,
+    /// A terminal tab a `kybern_run_in_terminal` call opened; `approval_id`
+    /// is the call's own id and no card exists.
+    Terminal,
+}
+
+/// Where a request is. Not every phase applies to every kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestPhase {
+    /// The card is waiting for a choice.
+    Asking,
+    /// Kybern waits for the user to finish elsewhere (browser, terminal, System Settings).
+    Waiting,
+    /// A login needs the code the page showed (`requests.act` `paste`).
+    PasteCode,
+    Verifying,
+    /// Succeeded; the card stays about 900 ms, then leaves.
+    Done,
+    /// The attempt ended without success; `error` says why and the rows return.
+    Failed,
+    /// A permission is still off after the user said or Kybern saw otherwise.
+    NotGranted,
+    /// A question deadline is paused; `remaining_ms` is what is left.
+    Paused,
+    /// The user chose to wait; no deadline remains.
+    Held,
+}
+
+/// Live state of a request card, pushed as `requests.progress` and readable
+/// with `requests.progress`. Not persisted; the card's approval is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RequestProgress {
+    pub approval_id: ApprovalId,
+    pub thread_id: ThreadId,
+    pub kind: RequestKind,
+    pub phase: RequestPhase,
+    /// `browser` or `terminal` for a login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    /// A login's sign-in page, or a permission's System Settings link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// The one-time code the page asks for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_code: Option<String>,
+    /// The terminal a sign-in or `kybern_run_in_terminal` opened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<crate::methods::TerminalInfo>,
+    /// Who is signed in, once known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    /// What went wrong, in a sentence that says what to do next.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// When the wait ends: a login's timeout or a question's deadline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ends_at: Option<DateTime<Utc>>,
+    /// Time left while a deadline is paused, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining_ms: Option<u64>,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// `tool_name` of the daemon-raised approval behind `kybern_coordinator_propose_brief`:
@@ -1379,10 +1652,16 @@ pub fn is_user_input_tool(tool_name: &str) -> bool {
         tool_name,
         "AskUserQuestion"
             | SECRET_REQUEST_TOOL
+            | VISUAL_ANSWER_TOOL
+            | PICK_REQUEST_TOOL
+            | LOGIN_REQUEST_TOOL
+            | PROMPT_REQUEST_TOOL
+            | PERMISSION_REQUEST_TOOL
             | COORDINATOR_BRIEF_TOOL
             | COORDINATOR_SETTINGS_TOOL
             | "request_user_input"
             | "opencode_question"
+            | crate::CURSOR_QUESTION_TOOL
             | "mcp_elicitation"
             | "ui_select"
             | "ui_confirm"
@@ -1420,13 +1699,38 @@ impl ApprovalRequest {
                         response.get("answers").and_then(|a| a.get(index))
                     };
                     let valid = if self.tool_name == "AskUserQuestion" {
-                        answer.and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty())
+                        // A multi-select answer is a list of labels; Claude also takes the older comma-joined text.
+                        answer.is_some_and(|answer| match answer {
+                            Value::String(s) => !s.trim().is_empty(),
+                            Value::Array(items) => {
+                                !items.is_empty() && items.iter().all(|v| v.as_str().is_some_and(|s| !s.trim().is_empty()))
+                            }
+                            _ => false,
+                        })
                     } else {
                         answer
                             .and_then(Value::as_array)
                             .is_some_and(|a| !a.is_empty() && a.iter().all(|v| v.as_str().is_some_and(|s| !s.trim().is_empty())))
                     };
                     if !valid {
+                        return Err(invalid());
+                    }
+                }
+            }
+            crate::CURSOR_QUESTION_TOOL => {
+                let questions = self.user_input_questions();
+                let answers = response.get("answers").and_then(Value::as_array).ok_or_else(invalid)?;
+                for question in &questions {
+                    let chosen = answers
+                        .iter()
+                        .find(|answer| answer.get("questionId").and_then(Value::as_str) == Some(question.id.as_str()))
+                        .and_then(|answer| answer.get("selectedOptionIds"))
+                        .and_then(Value::as_array)
+                        .ok_or_else(invalid)?;
+                    let known = |id: &Value| {
+                        question.options.iter().any(|option| Some(option.value.as_deref().unwrap_or(&option.label)) == id.as_str())
+                    };
+                    if chosen.is_empty() || (!question.multi_select && chosen.len() > 1) || !chosen.iter().all(known) {
                         return Err(invalid());
                     }
                 }
@@ -1465,6 +1769,46 @@ impl ApprovalRequest {
                     return Err(format!("Enter a value of up to {} KiB, or decline.", MAX_SECRET_BYTES / 1024));
                 }
             }
+            VISUAL_ANSWER_TOOL => {
+                if let Some(reply) = response.get("reply") {
+                    if !reply.as_str().is_some_and(|reply| !reply.trim().is_empty() && reply.len() <= 64 * 1024) {
+                        return Err("Write a reply, or skip.".into());
+                    }
+                    return Ok(());
+                }
+                let answer = response.get("answer").filter(|answer| !answer.is_null()).ok_or_else(invalid)?;
+                if serde_json::to_vec(answer).map_or(true, |bytes| bytes.len() > MAX_VISUAL_ANSWER_BYTES) {
+                    return Err(format!("The answer is larger than {} KiB. Choose again in the visual.", MAX_VISUAL_ANSWER_BYTES / 1024));
+                }
+                if response.get("label").is_some_and(|label| !label.as_str().is_some_and(|label| label.chars().count() <= 200)) {
+                    return Err(invalid());
+                }
+                if let Some(schema) = self.input.get("schema").filter(|schema| schema.is_object()) {
+                    validate_answer_value(schema, answer)?;
+                }
+            }
+            PICK_REQUEST_TOOL => {
+                let small = serde_json::to_vec(response).is_ok_and(|bytes| bytes.len() <= MAX_PICK_RESPONSE_BYTES);
+                if !(response.is_object() && small) {
+                    return Err("Pick something again, or decline.".into());
+                }
+            }
+            PROMPT_REQUEST_TOOL => {
+                let text = |key: &str| response.get(key).and_then(Value::as_str);
+                let valid = if self.input.get("confirm").and_then(Value::as_bool) == Some(true) {
+                    response.get("confirmed").is_some_and(Value::is_boolean)
+                } else if self.input.get("secret").and_then(Value::as_bool) == Some(true) {
+                    text("secret")
+                        .is_some_and(|secret| !secret.is_empty() && secret.len() <= MAX_PROMPT_ANSWER_BYTES && !secret.contains('\0'))
+                } else {
+                    text("value").is_some_and(|value| value.len() <= MAX_PROMPT_ANSWER_BYTES && !value.contains('\0'))
+                };
+                if !valid {
+                    return Err("Enter an answer, or cancel.".into());
+                }
+            }
+            // The daemon resolves these cards; a client can only decline them.
+            LOGIN_REQUEST_TOOL | PERMISSION_REQUEST_TOOL => return Err("Use the card's buttons, or decline.".into()),
             COORDINATOR_BRIEF_TOOL => {
                 let text = response.get("text").and_then(Value::as_str).map(str::trim);
                 if !text.is_some_and(|text| !text.is_empty() && text.len() <= MAX_BRIEF_BYTES) {
@@ -1510,6 +1854,9 @@ impl ApprovalRequest {
         let ApprovalDecision::Submit { response } = decision else { return decision.clone() };
         match self.tool_name.as_str() {
             SECRET_REQUEST_TOOL => ApprovalDecision::Submit { response: serde_json::json!({ "secret": REDACTED_SECRET }) },
+            PROMPT_REQUEST_TOOL if response.get("secret").is_some() => {
+                ApprovalDecision::Submit { response: serde_json::json!({ "secret": REDACTED_SECRET }) }
+            }
             "request_user_input" => {
                 let secret_ids: Vec<&str> = self
                     .input
@@ -1537,6 +1884,12 @@ impl ApprovalRequest {
 
 // Elicitation schemas are provider-owned. Validate the structural constraints at
 // the daemon boundary as well as the form, so CLI and concurrent clients agree.
+/// A visual's answer against the agent's `answer_schema` (the form subset elicitation supports).
+fn validate_answer_value(schema: &Value, value: &Value) -> Result<(), String> {
+    validate_form_value(schema, value)
+        .map_err(|_| "This answer does not match what the agent asked for. Choose again in the visual.".into())
+}
+
 fn validate_form_value(schema: &Value, value: &Value) -> Result<(), String> {
     let invalid = || "Check the form values and required fields before submitting.".to_string();
     let valid_type = match schema.get("type").and_then(Value::as_str) {
@@ -1646,6 +1999,46 @@ pub struct HtmlVisual {
     /// preview browser was not installed or measuring exceeded its budget.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub heights: Vec<VisualHeight>,
+    /// Set when the agent waits for the reader's answer (`kybern_html_publish`
+    /// with `await_answer`). The pending question is a [`VISUAL_ANSWER_TOOL`] card.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask: Option<VisualAsk>,
+}
+
+/// What a visual asks the reader.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct VisualAsk {
+    /// JSON Schema the answer must match, when the agent gave one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<Value>,
+}
+
+/// How a visual's question ended.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VisualAnswerStatus {
+    /// The reader sent an answer from the visual.
+    Answered,
+    /// The reader typed a message instead.
+    Replied,
+    /// The reader chose Skip.
+    Skipped,
+    /// The turn ended first.
+    Cancelled,
+    /// Nobody answered in time.
+    TimedOut,
+}
+
+/// The receipt under an answered visual.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct VisualAnswerRecord {
+    pub status: VisualAnswerStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<Value>,
+    /// The words the visual gave the answer ("Layout B · Side panel").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub at: DateTime<Utc>,
 }
 
 /// One content height measured at a frame width, in CSS pixels.
@@ -1664,6 +2057,8 @@ pub enum TranscriptEntry {
         seq: EventSeq,
         at: DateTime<Utc>,
         visual: HtmlVisual,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        answer: Option<VisualAnswerRecord>,
     },
     Image {
         id: String,
@@ -1736,6 +2131,9 @@ pub enum TranscriptEntry {
         /// Allowed by Full access without asking the user.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         auto: bool,
+        /// The delegating agent that answered for the user.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        answered_by: Option<crate::RequestAnswerer>,
     },
     TurnSummary {
         turn_id: TurnId,
@@ -1837,10 +2235,31 @@ pub struct Settings {
     /// Give new agent sessions a short guide to Kybern: images, notes and
     /// tasks, other threads, helpers. Applies to sessions started after the change.
     pub tell_agents_about_kybern: bool,
+    /// Whether an agent's question may carry a default and a wait, and the
+    /// longest wait it can set (`kybern_ask_user`).
+    pub ask_deadlines: AskDeadlineSettings,
     /// Folders outside a project the user allowed the Preview panel to serve
     /// files from. Canonical absolute paths; a grant covers descendants.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preview_allowed_folders: Vec<String>,
+}
+
+/// Limits for questions that answer themselves after a deadline. Read each
+/// time an agent asks. Approvals, passwords, secrets, sign-ins and
+/// permissions never have a deadline, whatever these say.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct AskDeadlineSettings {
+    /// Let an agent give a question a default and a wait. Off: the question waits for the user.
+    pub enabled: bool,
+    /// The longest wait an agent can set, in seconds (60..=14400).
+    pub max_seconds: u64,
+}
+
+impl Default for AskDeadlineSettings {
+    fn default() -> Self {
+        Self { enabled: true, max_seconds: 15 * 60 }
+    }
 }
 
 /// Limits for `kybern_agent_delegate`. Read each time an agent delegates.
@@ -2064,6 +2483,7 @@ impl Default for Settings {
             computer_use: ComputerUseSettings::default(),
             orchestration: OrchestrationSettings::default(),
             tell_agents_about_kybern: true,
+            ask_deadlines: AskDeadlineSettings::default(),
             preview_allowed_folders: Vec::new(),
         }
     }
@@ -2578,6 +2998,7 @@ mod orchestration_tests {
             summary: String::new(),
             suggestions: vec![],
             created_at: Utc::now(),
+            questions: Vec::new(),
         }
     }
 

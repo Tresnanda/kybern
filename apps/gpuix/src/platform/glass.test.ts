@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { THEMES, materialFor, themeFor } from '../theme.ts'
 import { FROST_CLASSES, FROST_DEFAULT, parseFrostClasses, type ThemeVariant } from './translucency.ts'
 import { frostFill, frosted, frostedWith, raisedFill, raisedRim, wash } from './glass.ts'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const window = (variant: ThemeVariant, surface: number | null = null) => materialFor(variant, 'window', 90, 90, surface).glass
 const solid = (variant: ThemeVariant) => materialFor(variant, 'none', 100).glass
@@ -117,4 +119,13 @@ describe('content wells and floating cards (ADE-56)', () => {
       expect(frostFill(solid(variant), 'menus', '#123456', 'frostMenu')).toBe('#123456')
     })
   }
+})
+
+// ADE-71: the `@ $ /` completion list rendered through the raw floating layer and stayed an opaque slab on glass. Every
+// floating surface goes through `PopupLayer` (composer/Menu.tsx), which frosts on glass.
+test('only PopupLayer uses the raw floating layer', () => {
+  const root = new URL('..', import.meta.url).pathname
+  const users = [...new Bun.Glob('**/*.{ts,tsx}').scanSync(root)]
+    .filter(file => !file.includes('.test.') && readFileSync(join(root, file), 'utf8').includes('@gpuix/react/floating'))
+  expect(users).toEqual(['composer/Menu.tsx'])
 })

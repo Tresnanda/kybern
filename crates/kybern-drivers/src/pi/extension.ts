@@ -45,6 +45,8 @@ const APP_TOOL_NAMES = new Set([
   "kybern_agent_status",
   "kybern_agent_cancel",
   "kybern_agent_wait",
+  "kybern_pending_questions",
+  "kybern_answer_question",
   "kybern_thread_interrupt",
   "kybern_computer_apps",
   "kybern_computer_observe",
@@ -62,6 +64,11 @@ const APP_TOOL_NAMES = new Set([
   "kybern_task_update",
   "kybern_task_claim",
   "kybern_request_secret",
+  "kybern_request_login",
+  "kybern_ask_user",
+  "kybern_request_permission",
+  "kybern_run_in_terminal",
+  "kybern_request_pick",
   "kybern_git",
   "kybern_coordinator_propose_brief",
   "kybern_coordinator_propose_settings",
@@ -93,6 +100,37 @@ const SECRET_TOOL_NAME = "kybern_request_secret";
 function secretToolTimeoutMs(args) {
   const seconds = Number.isFinite(args?.timeout_seconds) ? Math.min(Math.max(args.timeout_seconds, 10), 3600) : 600;
   return seconds * 1000 + 30 * 1000;
+}
+// kybern_html_publish with await_answer waits for the reader for up to
+// timeout_seconds (default 900, 30 to 3600), plus the daemon's slack.
+function visualAnswerTimeoutMs(args) {
+  const seconds = Number.isFinite(args?.timeout_seconds) ? Math.min(Math.max(args.timeout_seconds, 30), 3600) : 900;
+  return seconds * 1000 + 30 * 1000;
+}
+
+// The summoned-card tools wait for the user; the daemon's own budget (a little
+// over each tool's wait) is mirrored here.
+function requestToolTimeoutMs(name, args) {
+  switch (name) {
+    case "kybern_request_login":
+      return 26 * 60 * 1000;
+    case "kybern_request_permission":
+      return 31 * 60 * 1000;
+    case "kybern_ask_user": {
+      const deadline = Number.isFinite(args?.deadline_seconds) ? Math.min(Math.max(args.deadline_seconds, 0), 14400) : 0;
+      return (3600 + deadline + 60) * 1000;
+    }
+    case "kybern_request_pick": {
+      const wait = Number.isFinite(args?.timeout_seconds) ? Math.min(Math.max(args.timeout_seconds, 10), 3600) : 900;
+      return (wait + 60) * 1000;
+    }
+    case "kybern_run_in_terminal": {
+      const wait = Number.isFinite(args?.timeout_seconds) ? Math.min(Math.max(args.timeout_seconds, 10), 1800) : 600;
+      return (wait + 11 * 60) * 1000;
+    }
+    default:
+      return undefined;
+  }
 }
 // kybern_git push, open_pr and merge_pr wait for the user's card for up to 10
 // minutes, plus the daemon's slack. Its other ops fit the long tool budget.
@@ -322,6 +360,10 @@ async function executeAppTool(name, toolCallId, args, signal, ctx) {
     timeout:
       name === SECRET_TOOL_NAME
         ? secretToolTimeoutMs(args)
+        : name === "kybern_html_publish" && args?.await_answer === true
+        ? visualAnswerTimeoutMs(args)
+        : requestToolTimeoutMs(name, args) !== undefined
+        ? requestToolTimeoutMs(name, args)
         : name === GIT_TOOL_NAME
         ? gitToolTimeoutMs(args)
         : name.startsWith("kybern_computer_") || APPROVAL_TOOL_NAMES.has(name) || LONG_TOOL_NAMES.has(name)

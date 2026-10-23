@@ -13,6 +13,9 @@ import { FONT_MONO } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { Kbd } from '../kit/Kbd.tsx'
 import { Spinner } from '../kit/Spinner.tsx'
+import { SuccessCheck } from '../motion/SuccessCheck.tsx'
+import { RG } from './glyphs.ts'
+import { CodeText } from './summoned.tsx'
 import { TextField } from '../kit/Field.tsx'
 import { useControls } from '../kit/controls.ts'
 import { useGlass } from '../platform/glass.ts'
@@ -45,8 +48,12 @@ export function useCardTokens() {
       delBg: light ? 'rgba(224, 46, 42, 0.08)' : 'rgba(255, 92, 84, 0.12)',
       hover: c.ink(light ? 0.045 : 0.05),
       highlight: c.acc(light ? 0.09 : 0.17),
+      /** The free answer's row while it is the field: the selection tint at 60 %. */
+      editFill: c.acc((light ? 0.09 : 0.17) * 0.6),
       highlightFg: c.accentFg,
       chipBg: c.ink(0.06),
+      successBg: light ? 'rgba(26, 138, 62, 0.10)' : 'rgba(63, 185, 80, 0.16)',
+      doneBg: light ? 'rgba(26, 138, 62, 0.07)' : 'rgba(63, 185, 80, 0.10)',
     }
   }, [t, c, g.on])
 }
@@ -63,30 +70,40 @@ export const GLYPHS: Record<CardModel['glyph'], string> = {
 /** The card's root: one focusable element that answers the card's keys while it has focus itself. A card that arrives while nothing
  *  has focus and nobody is typing takes focus; one that arrives while the composer has focus never steals it (the composer routes
  *  the same keys). */
-export function CardShell({ testId, onKey, children, stealFocus = true }: { testId: string; onKey?: (event: { key?: string; modifiers?: { cmd?: boolean; alt?: boolean; ctrl?: boolean; shift?: boolean } }) => boolean | void; children: ReactNode; stealFocus?: boolean }) {
+export function CardShell({ testId, onKey, children, stealFocus = true, cmdKeys, onPointerEnter, onPointerLeave, onFocusIn, onPointerDown, onFocusChange, onWidth }: { testId: string; onKey?: (event: { key?: string; modifiers?: { cmd?: boolean; alt?: boolean; ctrl?: boolean; shift?: boolean } }) => boolean | void; children: ReactNode; stealFocus?: boolean; /** ⌘ keys besides ⌘E that reach `onKey` (⌘C copies a sign-in code). */ cmdKeys?: string[]; onPointerEnter?: () => void; onPointerLeave?: () => void; /** A key or click landed in the card (pauses a countdown). */ onFocusIn?: () => void; /** A click landed in or outside the card: a row's focus ring hides until the next key, as `:focus-visible` would. */ onPointerDown?: () => void; /** The root itself gained or lost keyboard focus. */ onFocusChange?: (focused: boolean) => void; /** The card's own width, after the first paint and on every resize. */ onWidth?: (width: number) => void }) {
   const renderer = useGpuixRequired()
   const root = useRef<import('@gpuix/react').PublicInstance | null>(null)
+  // GPUIX reports no focus event for a programmatic focus: the card says so itself when it takes focus, answers a key, or loses a click.
+  const focusChange = useRef(onFocusChange)
+  focusChange.current = onFocusChange
   useEffect(() => {
-    registerCardFocus(() => { if (root.current) renderer.focusElement?.(root.current.id) })
-    return () => registerCardFocus(null)
+    return registerCardFocus(() => { if (root.current) { renderer.focusElement?.(root.current.id); focusChange.current?.(true) } })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   useEffect(() => {
     if (!stealFocus || someoneIsTyping() || !root.current) return
-    if (renderer.getFocusedElementId?.() == null) renderer.focusElement?.(root.current.id)
+    if (renderer.getFocusedElementId?.() == null) { renderer.focusElement?.(root.current.id); onFocusChange?.(true) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   return (
     <div
       ref={root} testId={testId} tabIndex={0}
+      {...(onPointerEnter ? { onMouseEnter: onPointerEnter } : {})}
+      {...(onPointerLeave ? { onMouseLeave: onPointerLeave } : {})}
+      {...(onFocusIn || onPointerDown ? { onMouseDown: () => { onPointerDown?.(); onFocusIn?.() } } : {})}
+      {...(onFocusChange ? { onFocus: () => onFocusChange(true), onBlur: () => onFocusChange(false) } : {})}
+      {...(onPointerDown ? { onMouseDownOutside: onPointerDown } : {})}
+      {...(onWidth ? { onLayout: (e: { width?: number }) => { if (e.width !== undefined) onWidth(e.width) } } : {})}
       onKeyDown={(e) => {
         // Keys bubble here from the card's own fields, links and buttons: a digit typed into an answer, or Return on "Cancel turn",
         // belongs to them. The card answers only while its root itself has focus (rows are not focusable).
+        onFocusIn?.()
         const focused = renderer.getFocusedElementId?.()
         if (focused != null && root.current && focused !== root.current.id) return
+        onFocusChange?.(true)
         const m = e.modifiers
         if (m?.alt || m?.ctrl || m?.shift) return
-        if (m?.cmd && e.key !== 'e') return
+        if (m?.cmd && e.key !== 'e' && !cmdKeys?.includes(e.key ?? '')) return
         if (onKey?.(e)) e.preventDefault()
       }}
       style={{ display: 'flex', flexDirection: 'column', minWidth: 0, paddingLeft: 16, paddingRight: 16, paddingTop: 14, paddingBottom: 12 }}
@@ -109,14 +126,16 @@ export function useExpandShortcut(active: boolean, toggle: () => void) {
 
 // ---- header ----
 
-/** Tile, verb-first title, queue badge and context chip; the meta line sits under the title text. */
-export function RequestHeader({ glyph, title, chip, chipGlyph, badge, aside, meta }: { glyph: string; title: string; chip?: { label: string; mono?: boolean }; chipGlyph?: string; badge?: string; /** Plain text at the right ("Question 1 of 2"). */ aside?: string; meta?: string }) {
+/** Tile, verb-first title, queue badge and context chip; the meta line sits under the title text. `tileMark` replaces the glyph
+ *  (a service mark, a pane glyph); `tone="success"` turns the tile green and draws the check in; `error` sits under the title in red. */
+export function RequestHeader({ glyph, title, chip, chipGlyph, chipMark, badge, aside, meta, tileMark, tone, error, wrap = false }: { glyph: string; title: string; chip?: { label: string; mono?: boolean }; chipGlyph?: string; /** A provider mark before the chip label. */ chipMark?: ReactNode; badge?: string; /** At the right: plain text ("2 answered") or a node ("Density · 2 of 3"). */ aside?: ReactNode; meta?: string; tileMark?: ReactNode; tone?: 'success'; error?: string; /** The title may wrap: the tile and the aside align to its first line. */ wrap?: boolean }) {
   const k = useCardTokens()
+  const success = tone === 'success'
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 24, minWidth: 0 }}>
-        <div style={{ display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center', borderRadius: 7, flexShrink: 0, backgroundColor: k.chipBg }}>
-          <Icon source={glyph} size={14} color={k.c.kbd.fg} />
+      <div style={{ display: 'flex', alignItems: wrap ? 'flex-start' : 'center', gap: 10, minHeight: 24, minWidth: 0 }}>
+        <div testId={success ? 'request-success' : undefined} style={{ display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center', borderRadius: 7, flexShrink: 0, marginTop: wrap ? -2 : 0, backgroundColor: success ? k.successBg : k.chipBg }}>
+          {success ? <SuccessCheck size={14} color={k.add} /> : tileMark ?? <Icon source={glyph} size={14} color={k.c.kbd.fg} />}
         </div>
         <div style={{ display: 'flex', flexGrow: 1, flexShrink: 1, minWidth: 0 }}>
           <text style={{ color: k.t.text, fontSize: 14, lineHeight: 20, fontWeight: 600, fontFamily: '.SystemUIFont', minWidth: 0 }}>{title}</text>
@@ -126,10 +145,12 @@ export function RequestHeader({ glyph, title, chip, chipGlyph, badge, aside, met
             <Label color={k.highlightFg} size={11.5} lineHeight={14} weight={600} style={{ fontVariantNumeric: 'tabular-nums' } as never}>{badge}</Label>
           </div>
         )}
-        {aside && <Label color={k.t.textTertiary} size={12} lineHeight={16} style={{ flexShrink: 0, fontVariantNumeric: 'tabular-nums' } as never}>{aside}</Label>}
+        {aside != null && aside !== false && (typeof aside === 'string'
+          ? <Label color={k.t.textTertiary} size={12} lineHeight={wrap ? 20 : 16} style={{ flexShrink: 0, fontVariantNumeric: 'tabular-nums' } as never}>{aside}</Label>
+          : aside)}
         {chip && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, height: 22, paddingLeft: chipGlyph ? 7 : 9, paddingRight: 9, borderRadius: 999, flexShrink: 1, minWidth: 0, backgroundColor: k.chipBg }}>
-            {chipGlyph && <Icon source={chipGlyph} size={12} color={k.t.textTertiary} />}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, height: 22, paddingLeft: chipGlyph || chipMark ? 7 : 9, paddingRight: 9, borderRadius: 999, flexShrink: 1, minWidth: 0, backgroundColor: k.chipBg }}>
+            {chipMark ?? (chipGlyph && <Icon source={chipGlyph} size={12} color={k.t.textTertiary} />)}
             <Label color={k.t.textSecondary} size={chip.mono ? 11 : 12} lineHeight={14} weight={500} font={chip.mono ? FONT_MONO : undefined} truncate>{chip.label}</Label>
           </div>
         )}
@@ -137,7 +158,44 @@ export function RequestHeader({ glyph, title, chip, chipGlyph, badge, aside, met
       {meta && (
         <text style={{ color: k.t.textSecondary, fontSize: 12, lineHeight: 17, fontFamily: '.SystemUIFont', marginLeft: 34, marginTop: 4, minWidth: 0 }}>{meta}</text>
       )}
+      {error && (
+        <text testId="request-error" style={{ color: k.del, fontSize: 12, lineHeight: 17, fontFamily: '.SystemUIFont', marginLeft: 34, marginTop: 4, minWidth: 0 }}>{error.replace(/`/g, '')}</text>
+      )}
     </div>
+  )
+}
+
+/** The line that replaces the rows while Kybern waits (spinner, what it waits for, the time left), or the green "continuing" line. */
+export function StatusRow({ tone = 'wait', label, trailing, testId }: { tone?: 'wait' | 'done'; label: string; trailing?: ReactNode; testId?: string }) {
+  const k = useCardTokens()
+  const done = tone === 'done'
+  return (
+    <div testId={testId} role="status" aria-label={label} style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 32, marginTop: 10, paddingLeft: 8, paddingRight: 10, borderRadius: 9, minWidth: 0, backgroundColor: done ? k.doneBg : k.c.ink(k.t.variant === 'light' ? 0.035 : 0.04) }}>
+      <div style={{ display: 'flex', width: 18, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        {done ? <Icon source={RG.checkCircle} size={16} color={k.add} /> : <Spinner size={14} color={k.t.textSecondary} />}
+      </div>
+      <Label color={k.t.text} size={13} lineHeight={18} weight={500} truncate style={{ flexGrow: 1, flexShrink: 1 }}>{label}</Label>
+      {trailing}
+    </div>
+  )
+}
+
+/** A key–value grid in a well: keys 92 wide in `text3`, values in `text` (mono where asked). */
+export function KeyValueWell({ rows, keyWidth = 92, testId }: { rows: { key: string; value: string; mono?: boolean }[]; keyWidth?: number; testId?: string }) {
+  const k = useCardTokens()
+  return (
+    <Well>
+      <div testId={testId} style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+        {rows.map((row) => (
+          <div key={row.key} style={{ display: 'flex', alignItems: 'flex-start', minWidth: 0 }}>
+            <div style={{ display: 'flex', width: keyWidth, flexShrink: 0 }}><Label color={k.t.textTertiary} size={12.5} lineHeight={18}>{row.key}</Label></div>
+            {!row.mono && row.value.includes('`')
+              ? <div style={{ display: 'flex', flexGrow: 1, flexShrink: 1, minWidth: 0 }}><CodeText text={row.value} size={12.5} lineHeight={18} color={k.t.text} /></div>
+              : <text style={{ color: k.t.text, fontSize: row.mono ? 11.5 : 12.5, lineHeight: 18, fontFamily: row.mono ? FONT_MONO : '.SystemUIFont', minWidth: 0, flexGrow: 1, flexShrink: 1, userSelect: 'text' }}>{row.value}</text>}
+          </div>
+        ))}
+      </div>
+    </Well>
   )
 }
 
@@ -375,9 +433,16 @@ export function DigitKey({ n, highlighted }: { n: number | string; highlighted: 
   )
 }
 
-export function OptionRow({ n, label, description, highlighted, dim, sending, onClick, testId, children, lead, disabled, enterHint = true, cursor = false, role = 'radio' }: {
+/**
+ * One numbered row. Every request card shares its geometry (ADE-69..71 question card spec): the list bleeds 8 into the card's 16
+ * gutter, so the tint runs from x 8 with radius 10 (18 − 8); the lead (digit, checkbox) is centred in a 24 column at x 16, and the
+ * label starts at x 50, the header title's edge; trailing glyphs end at W − 16.
+ */
+export function OptionRow({ n, label, description, highlighted, dim, sending, onClick, testId, children, lead, disabled, enterHint = true, cursor = false, focused = false, field, muted = false, checked = false, role = 'radio', tag }: {
   n?: number
   label: Part[]
+  /** A small capsule after the label ("Default"). */
+  tag?: string
   description?: string
   highlighted: boolean
   dim?: boolean
@@ -393,32 +458,58 @@ export function OptionRow({ n, label, description, highlighted, dim, sending, on
   enterHint?: boolean
   /** A keyboard cursor on an untinted row (multi-select). */
   cursor?: boolean
+  /** The keyboard focus ring (2 px of the accent outside the tint), while the card holds keyboard focus. */
+  focused?: boolean
+  /** Replaces the label: the row is that field (the question's free answer), with the field's tint and the ring as its edge. */
+  field?: ReactNode
+  /** The label in `text2` ("Something else…"). */
+  muted?: boolean
+  /** A checked multi-select row: the label goes to 600 with no tint. */
+  checked?: boolean
   role?: 'radio' | 'checkbox'
 }) {
   const k = useCardTokens()
   const tall = !!children || !!description
+  const editing = field !== undefined
+  const fg = highlighted ? k.highlightFg : muted ? k.t.textSecondary : k.t.text
+  const weight = highlighted || checked ? 600 : 500
+  const labelNode = <RowLabel parts={label} color={fg} weight={weight} code={highlighted ? k.c.acc(0.2) : k.chipBg} />
   return (
     <div
-      testId={testId} role={role} aria-checked={highlighted} aria-label={label.map((p) => p.text).join('')} aria-keyshortcuts={n ? String(n) : undefined}
-      onClick={disabled ? undefined : onClick}
-      paintTransform={pressTransform(!disabled && !children, SCALE.tiny)}
+      testId={testId} role={role} aria-checked={highlighted || checked} aria-label={label.map((p) => p.text).join('')} aria-keyshortcuts={n ? String(n) : undefined}
+      onClick={disabled || editing ? undefined : onClick}
+      paintTransform={pressTransform(!disabled && !children && !editing, SCALE.tiny)}
       style={{
-        display: 'flex', alignItems: tall ? 'flex-start' : 'center', gap: 10, minHeight: 32, borderRadius: 9, minWidth: 0,
-        paddingLeft: 8, paddingRight: 10, paddingTop: tall ? 7 : 0, paddingBottom: tall ? 8 : 0,
-        opacity: dim ? 0.38 : 1, cursor: disabled ? 'default' : 'pointer',
-        backgroundColor: highlighted ? k.highlight : cursor ? k.hover : 'rgba(0, 0, 0, 0)',
-        ...(highlighted || disabled ? {} : { hover: { backgroundColor: k.hover } }),
+        display: 'flex', alignItems: 'flex-start', gap: 10, minHeight: 32, borderRadius: 10, minWidth: 0,
+        paddingLeft: 8, paddingRight: 8, paddingTop: 7, paddingBottom: tall ? 8 : 7,
+        opacity: dim ? 0.38 : 1, cursor: disabled ? 'default' : editing ? 'text' : 'pointer',
+        backgroundColor: editing ? k.editFill : highlighted ? k.highlight : cursor ? k.hover : 'rgba(0, 0, 0, 0)',
+        ...(focused || editing ? { outlineWidth: 2, outlineColor: k.c.focus, outlineOffset: 0 } : {}),
+        ...(highlighted || disabled || editing ? {} : { hover: { backgroundColor: k.hover } }),
       }}
     >
-      {lead ?? (n !== undefined ? <div style={{ display: 'flex', paddingTop: tall ? 0 : 0 }}><DigitKey n={n} highlighted={highlighted} /></div> : null)}
-      <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, minWidth: 0, gap: 1, paddingTop: lead ? 0 : 0 }}>
-        <RowLabel parts={label} color={highlighted ? k.highlightFg : k.t.text} weight={highlighted ? 600 : 500} code={highlighted ? k.c.acc(0.2) : k.chipBg} />
-        {description && <text style={{ color: k.t.textSecondary, fontSize: 12, lineHeight: 17, fontFamily: '.SystemUIFont', minWidth: 0, pointerEvents: 'none' }}>{description}</text>}
+      <div style={{ display: 'flex', width: 24, height: 18, alignItems: 'center', justifyContent: 'center', flexShrink: 0, pointerEvents: 'none' }}>
+        {lead ?? (n !== undefined ? <DigitKey n={n} highlighted={highlighted || editing} /> : null)}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, minWidth: 0, gap: 1 }}>
+        {editing
+          ? field
+          : tag
+            ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                {labelNode}
+                <div testId={testId ? `${testId}-tag` : undefined} style={{ display: 'flex', alignItems: 'center', height: 18, paddingLeft: 7, paddingRight: 7, borderRadius: 999, flexShrink: 0, backgroundColor: highlighted ? k.c.acc(0.2) : k.chipBg, pointerEvents: 'none' }}>
+                  <Label color={highlighted ? k.highlightFg : k.t.textSecondary} size={11} lineHeight={14} weight={500}>{tag}</Label>
+                </div>
+              </div>
+            )
+            : labelNode}
+        {description && !editing && <text style={{ color: k.t.textSecondary, fontSize: 12, lineHeight: 17, fontFamily: '.SystemUIFont', minWidth: 0, pointerEvents: 'none' }}>{description}</text>}
         {children}
       </div>
       {sending
         ? <Spinner size={14} color={k.highlightFg} />
-        : highlighted && enterHint && !children ? <Label color={k.highlightFg} size={13} lineHeight={18} style={{ alignSelf: tall ? 'flex-start' : 'center' }}>↵</Label> : null}
+        : highlighted && enterHint && !children && !editing ? <Label color={k.highlightFg} size={13} lineHeight={18}>↵</Label> : null}
     </div>
   )
 }
@@ -442,8 +533,9 @@ export function NoteField({ agent, value, onChange, onSend, onBack }: { agent: s
   )
 }
 
-export function OptionList({ children, label }: { children: ReactNode; label: string }) {
-  return <div role="radiogroup" aria-label={label} style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 10, minWidth: 0 }}>{children}</div>
+/** The rows, bled 8 into the card's gutter on both sides (`bleed="start"`: the leading side only, beside a preview pane). */
+export function OptionList({ children, label, bleed = 'both', style }: { children: ReactNode; label: string; bleed?: 'both' | 'start'; style?: StyleDesc }) {
+  return <div role="radiogroup" aria-label={label} style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 10, marginLeft: -8, marginRight: bleed === 'both' ? -8 : 0, minWidth: 0, ...style }}>{children}</div>
 }
 
 // ---- hint line ----
@@ -461,13 +553,15 @@ export function CancelLink({ onClick }: { onClick: () => void }) {
 }
 
 /** The line under the rows: the keys on the left, the quiet action (or a form's buttons) on the right. */
-export function Hints({ left, right, error }: { left: ReactNode; right?: ReactNode; error?: string }) {
+/** The keys sit on the lead edge (x 16, the digit column), the actions on the trailing edge (W − 16). `actions` is a footer with
+ *  28 pt buttons (a question's Attach, Decline, Send): 10 above it and 28 high. */
+export function Hints({ left, right, error, actions = false }: { left: ReactNode; right?: ReactNode; error?: string; actions?: boolean }) {
   const k = useCardTokens()
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-      {error && <text style={{ color: k.t.red, fontSize: 12, lineHeight: 17, fontFamily: '.SystemUIFont', marginTop: 6, paddingLeft: 8, minWidth: 0 }}>{error}</text>}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, minHeight: 22, paddingLeft: 8, paddingRight: 2, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexGrow: 1, flexShrink: 1, minWidth: 0 }}>{left}</div>
+      {error && <text style={{ color: k.t.red, fontSize: 12, lineHeight: 17, fontFamily: '.SystemUIFont', marginTop: 6, minWidth: 0 }}>{error}</text>}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: actions ? 10 : 8, minHeight: actions ? 28 : 22, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexGrow: 1, flexShrink: 1, minWidth: 0, overflow: 'hidden' }}>{left}</div>
         {right}
       </div>
     </div>

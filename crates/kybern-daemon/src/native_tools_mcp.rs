@@ -36,7 +36,15 @@ const MAX_TEXT_BYTES: usize = 256 * 1024;
 #[derive(Clone, Default)]
 pub(crate) struct NativeToolsGateway {
     sessions: Arc<Mutex<HashMap<String, Arc<NativeToolSession>>>>,
+    /// `kybern askpass` capabilities, one per agent session (see `askpass.rs`).
+    askpass: Arc<Mutex<HashMap<String, AskpassSession>>>,
     endpoint: Arc<RwLock<Option<String>>>,
+}
+
+#[derive(Clone, Copy)]
+struct AskpassSession {
+    thread_id: ThreadId,
+    session_instance_id: Uuid,
 }
 
 struct NativeToolSession {
@@ -106,7 +114,30 @@ impl NativeToolsGateway {
         Ok(bridge)
     }
 
+    /// Issue the credential `kybern askpass` uses in this session, and the
+    /// address it calls. A replacement revokes the thread's earlier one.
+    pub(crate) fn register_askpass(&self, thread_id: ThreadId, session_instance_id: Uuid) -> Option<(String, String)> {
+        let endpoint = self.endpoint.read().unwrap_or_else(|error| error.into_inner()).clone()?;
+        let url = endpoint.strip_suffix("/mcp").map(|base| format!("{base}/askpass"))?;
+        let token = crate::auth::generate();
+        let mut sessions = self.askpass.lock().unwrap_or_else(|error| error.into_inner());
+        sessions.retain(|_, session| session.thread_id != thread_id);
+        sessions.insert(crate::auth::hash(&token), AskpassSession { thread_id, session_instance_id });
+        Some((url, token))
+    }
+
+    fn authenticate_askpass(&self, credential: &str) -> Option<AskpassSession> {
+        if credential.len() > 256 {
+            return None;
+        }
+        self.askpass.lock().unwrap_or_else(|error| error.into_inner()).get(&crate::auth::hash(credential)).copied()
+    }
+
     pub(crate) fn revoke(&self, session_instance_id: Uuid) {
+        self.askpass
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|_, session| session.session_instance_id != session_instance_id);
         self.sessions
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -139,7 +170,55 @@ fn mcp_instructions(bridge: &NativeToolBridge) -> Option<String> {
 }
 
 pub(crate) fn routes() -> Router<AppState> {
-    Router::new().route("/native-tools/mcp", post(handle)).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
+    Router::new()
+        .route("/native-tools/mcp", post(handle))
+        .route("/native-tools/askpass", post(handle_askpass))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
+}
+
+/// `kybern askpass`: one prompt from a command in an agent session. The reply
+/// is `{"answer": ...}` or `{"cancelled": true, "message": ...}`; it is never
+/// cached, logged or kept.
+async fn handle_askpass(State(state): State<AppState>, extensions: axum::http::Extensions, headers: HeaderMap, body: Bytes) -> Response {
+    // Loopback only: the Tailscale listener serves the same routes, and a prompt never comes from another machine.
+    let peer = extensions.get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|info| info.0);
+    if headers.contains_key(header::ORIGIN) || !peer.is_some_and(|peer| peer.ip().is_loopback()) {
+        return no_store(StatusCode::FORBIDDEN.into_response());
+    }
+    let session = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .and_then(|credential| state.native_tools.authenticate_askpass(credential));
+    let Some(session) = session else { return no_store(StatusCode::UNAUTHORIZED.into_response()) };
+    #[derive(serde::Deserialize)]
+    struct Body {
+        prompt: String,
+        #[serde(default)]
+        pid: u32,
+    }
+    let Ok(Body { prompt, pid }) = serde_json::from_slice::<Body>(&body) else {
+        return no_store(StatusCode::BAD_REQUEST.into_response());
+    };
+    // The pid is the client's word: it must own this very connection, or any process with the token could borrow a real
+    // sudo's helper to raise a card whose answer comes back to it.
+    let owned = match peer {
+        Some(peer) => tokio::task::spawn_blocking(move || crate::askpass::connection_owned_by(pid, peer)).await.unwrap_or(false),
+        None => false,
+    };
+    let reply = if owned {
+        state.orchestrator.ask_prompt(session.thread_id, session.session_instance_id, prompt, pid).await
+    } else {
+        crate::orchestrator::PromptReply::Cancelled(
+            "Kybern only shows a password prompt that sudo, ssh or git asked for. Run the real command (for example `sudo -A …`) instead."
+                .into(),
+        )
+    };
+    let value = match reply {
+        crate::orchestrator::PromptReply::Answer(answer) => json!({ "answer": answer }),
+        crate::orchestrator::PromptReply::Cancelled(message) => json!({ "cancelled": true, "message": message }),
+    };
+    no_store(Json(value).into_response())
 }
 
 fn authorize(gateway: &NativeToolsGateway, headers: &HeaderMap) -> std::result::Result<Arc<NativeToolSession>, StatusCode> {
@@ -276,7 +355,10 @@ async fn handle(State(state): State<AppState>, headers: HeaderMap, body: Bytes) 
                 return rpc_error(id, -32000, "Too many concurrent tool requests", StatusCode::TOO_MANY_REQUESTS);
             };
             let budget = crate::secrets::call_budget(name, &arguments)
+                .or_else(|| crate::pick::call_budget(name, &arguments))
                 .or_else(|| crate::lead_git::call_budget(name, &arguments))
+                .or_else(|| crate::visuals::call_budget(name, &arguments))
+                .or_else(|| crate::orchestrator::request_call_budget(name, &arguments))
                 .unwrap_or(Duration::from_secs(65));
             let response = tokio::time::timeout(
                 budget,

@@ -1060,9 +1060,39 @@ pub struct ThreadsRevertResult {
 }
 method!(ThreadsRevert, "threads.revert", Some(Scope::OrchestrationOperate), ThreadsRevertParams, ThreadsRevertResult);
 
+// ---- request cards ----
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct RequestsProgressParams {
+    /// Only this thread's cards; every thread's when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<ThreadId>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RequestsProgressResult {
+    pub items: Vec<RequestProgress>,
+}
+/// What the user did on a request card that is not an answer.
+///
+/// Login (`kybern_request_login`): `browser`, `terminal`, `paste` (`value` is
+/// the code), `cancel` (back to the rows), `retry`. Needs `access:write`: it
+/// changes the machine's own CLI login. Permission: `check`, `granted` ("I've
+/// granted it"), `stop`. Question with a deadline: `pause`, `resume`, `hold`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RequestsActParams {
+    pub approval_id: ApprovalId,
+    pub action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+method!(RequestsProgress, "requests.progress", Some(Scope::OrchestrationRead), RequestsProgressParams, RequestsProgressResult);
+method!(RequestsAct, "requests.act", Some(Scope::OrchestrationOperate), RequestsActParams, Empty);
+/// Sent to every client that may read orchestration state whenever a request card changes. Params are a `RequestProgress`.
+pub const REQUESTS_PROGRESS_NOTIFICATION: &str = "requests.progress";
+
 // ---- terminals ----
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TerminalInfo {
     pub id: TerminalId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1360,6 +1390,69 @@ pub struct ComputerNoteSetParams {
 }
 // Notes reach every later agent session, like settings do.
 method!(ComputerNoteSet, "computer.notes.set", Some(Scope::OrchestrationOperate), ComputerNoteSetParams, ComputerNotesResult);
+
+// ---- pasted secrets ----
+
+/// Where `secrets.store` and `secrets.target` look: a thread's workspace, or the
+/// project's folder for a chat that has not started yet. Pass exactly one.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct SecretsWorkspace {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<ThreadId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SecretsTargetParams {
+    #[serde(flatten)]
+    pub workspace: SecretsWorkspace,
+    pub env_key: String,
+    /// Env file relative to the workspace. Default `.env`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+}
+
+/// What storing into a file would do, checked without a value.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SecretsTargetResult {
+    /// The file relative to the workspace, e.g. `.env`.
+    pub file: String,
+    /// The key is already in the file; storing replaces it.
+    pub replaces: bool,
+    /// Git ignores the file (true outside a repository).
+    pub ignored: bool,
+    /// Git tracks the file, so it can never take a secret.
+    pub tracked: bool,
+    /// The file already exists.
+    pub exists: bool,
+}
+method!(SecretsTarget, "secrets.target", Some(Scope::OrchestrationOperate), SecretsTargetParams, SecretsTargetResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SecretsStoreParams {
+    #[serde(flatten)]
+    pub workspace: SecretsWorkspace,
+    pub env_key: String,
+    /// The secret. Written to the file and never stored, traced or returned.
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// Add the file to the `.gitignore` next to it first, when git does not ignore it yet.
+    #[serde(default)]
+    pub add_to_gitignore: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SecretsStoreResult {
+    pub env_key: String,
+    pub file: String,
+    pub replaced: bool,
+    /// The daemon added the file to `.gitignore`.
+    pub gitignore_updated: bool,
+}
+// Writes a file in the workspace, like a settings change, so it needs the same scope as the card's answer.
+method!(SecretsStore, "secrets.store", Some(Scope::OrchestrationOperate), SecretsStoreParams, SecretsStoreResult);
 
 // ---- usage ----
 
@@ -2167,6 +2260,15 @@ pub struct HtmlPublishParams {
     pub html: String,
     pub title: String,
     pub height: u32,
+    /// Agents only (`kybern_html_publish`): the call waits for the reader's answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub await_answer: Option<bool>,
+    /// JSON Schema the answer must match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_schema: Option<serde_json::Value>,
+    /// How long to wait for the answer, 30–3600 seconds (default 900).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HtmlPublishResult {
@@ -2220,6 +2322,48 @@ pub struct HtmlRevokeParams {
     pub ticket: String,
 }
 method!(HtmlRevoke, "threads.visuals.revoke", Some(Scope::OrchestrationRead), HtmlRevokeParams, Empty);
+/// A picture of a visual for the transcript: rendered headlessly at the
+/// column width in the reader's theme, on a transparent background.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlSnapshotParams {
+    pub thread_id: ThreadId,
+    pub visual_id: uuid::Uuid,
+    /// The figure's width in CSS pixels, 240–1600.
+    pub width: u32,
+    /// The theme the page receives: `{appearance, variables}`, as in `#kybern-theme=`.
+    pub theme: serde_json::Value,
+    /// The answered state to draw (`{state, answer}`, as `kybern-answer-state` carries), if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock: Option<serde_json::Value>,
+}
+/// One control in a snapshot, in CSS pixels from the page's top-left.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct VisualControl {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// Corner radius.
+    pub r: f32,
+    /// `button`, `link`, `tab`, `switch`, `checkbox`, `radio`, `slider`, `field` or `select`.
+    pub role: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlSnapshotResult {
+    /// Names the picture: `GET /threads/{thread}/visuals/{visual}/snapshot/{key}.png`
+    /// (bearer token), and `{key}-fade.png` when `clamped`.
+    pub key: String,
+    pub width: u32,
+    /// Content height in CSS pixels (the picture is twice as many device pixels).
+    pub height: u32,
+    pub scale: u32,
+    /// Content taller than the clamp has a picture cut at `clamp` that fades out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clamped: bool,
+    pub clamp: u32,
+    pub controls: Vec<VisualControl>,
+}
+method!(HtmlSnapshot, "threads.visuals.snapshot", Some(Scope::OrchestrationRead), HtmlSnapshotParams, HtmlSnapshotResult);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ArtifactsListParams {
@@ -3019,6 +3163,8 @@ registry!(
     AccountsList,
     AccountsLoginStart,
     AccountsLoginGet,
+    RequestsProgress,
+    RequestsAct,
     AccountsLoginInput,
     AccountsLoginCancel,
     AccountsLoginFinish,
@@ -3118,6 +3264,8 @@ registry!(
     ComputerFrameGet,
     ComputerNotesList,
     ComputerNoteSet,
+    SecretsTarget,
+    SecretsStore,
     UsageSummary,
     UsageLimits,
     PairingCreate,
@@ -3149,6 +3297,7 @@ registry!(
     HtmlRead,
     HtmlFrame,
     HtmlRevoke,
+    HtmlSnapshot,
     PreviewOpen,
     PreviewClose,
     PreviewProbe,

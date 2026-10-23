@@ -11,7 +11,6 @@ import { useTasks, refreshTasks } from '../tasks/store.ts'
 // ⌃N/⌃P remain additional shortcuts.
 //
 // Completion uses the native UTF-16 selection and one undoable edit.
-import { FloatingLayer } from '@gpuix/react/floating'
 import { inlineTokenLabel, mentionTokenKind } from '@/lib/inlineTokenLabel'
 import { useEffect, useMemo, useState } from 'react'
 import {
@@ -56,7 +55,7 @@ import { getClient, useApp } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { useNativeWindowSize } from '../native/layout-hooks.ts'
 import { G } from './glyphs.ts'
-import { muted, PICKER_RADIUS, popoverStyle, SectionLabel } from './Menu.tsx'
+import { muted, PICKER_RADIUS, PopupLayer, popoverStyle, SectionLabel } from './Menu.tsx'
 
 export interface SlashCommand {
   name: string
@@ -481,6 +480,12 @@ export function useCompletion({
     setThreadRefs([])
     setMentionRefs([])
   }
+  /** A chip the composer itself makes (a stored secret, a pointed-at element): registered as a mention, shown as `token`. */
+  const addChip = (part: ComposerMentionReference['part'], token: string): TokenReference => {
+    const reference = { token, part }
+    setMentionRefs(list => [...list.filter(r => r.part.path !== part.path && r.token !== token), reference])
+    return mentionReference(reference)
+  }
   const snapshot = (): DraftReferences => ({ mentioned, picked, threads: threadRefs, mentions: mentionRefs })
   /** Adds a sent draft's chips back (a failed send's Edit); setters only, so a stale closure is safe. */
   const restore = (refs: DraftReferences) => {
@@ -515,7 +520,7 @@ export function useCompletion({
     ...[...mentioned].map(fileReference),
     ...[...picked.values()].map(skillReference),
   ].filter(r => text.includes(r.token))
-  return { menu, onKey, buildParts, reset, snapshot, restore, tokens, open: open && items.length > 0 }
+  return { menu, onKey, buildParts, reset, snapshot, restore, addChip, tokens, open: open && items.length > 0 }
 }
 
 const NO_NOTES: NoteSummary[] = []
@@ -616,7 +621,9 @@ function CompletionList({
   }), [projects, threads])
   const projectName = (id: string | null | undefined) => (id && !isFreeChatProject(id) ? lookups.projects[id]?.name : undefined)
   return (
-    <FloatingLayer
+    // The shared popup layer, so the list frosts like every menu on glass (ADE-71). It takes no focus: the composer keeps typing.
+    <PopupLayer
+      kind="menu"
       side="top"
       align="start"
       sideOffset={8}
@@ -701,7 +708,7 @@ function CompletionList({
         })
       )}
       </div>
-    </FloatingLayer>
+    </PopupLayer>
   )
 }
 

@@ -253,6 +253,17 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         ThreadsList::NAME => {
             let p: ThreadsListParams = parse_or_default(params)?;
             let mut threads = state.store.threads_list(p.project_id, p.include_archived).map_err(internal)?;
+            // Counted before the children are filtered out: a parent whose delegated children still run must say so, or a
+            // client that starts while they work never lists them.
+            let mut running_children: std::collections::HashMap<ThreadId, u32> = std::collections::HashMap::new();
+            for thread in &threads {
+                if let Some(delegation) = &thread.delegation
+                    && delegation.status == DelegationStatus::Running
+                    && thread.status != ThreadStatus::Archived
+                {
+                    *running_children.entry(delegation.parent_thread_id).or_default() += 1;
+                }
+            }
             // Subagent and delegated threads are opt-in: older clients must never list one as a normal thread.
             if let Some(parent) = p.parent_thread_id {
                 threads
@@ -260,16 +271,39 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             } else if !p.include_subagents {
                 threads.retain(|thread| thread.subagent.is_none() && thread.delegation.is_none());
             }
-            let activity = threads
+            let (own_pending, child_pending) = pending_request_kinds(&state.store).map_err(internal)?;
+            let mut activity: Vec<ThreadActivitySummary> = threads
                 .iter()
                 .map(|thread| {
                     let tasks = state.store.runtime_tasks_for_thread(thread.id).map_err(internal)?;
-                    Ok(kybern_store::project_thread_activity(thread.id, &tasks))
+                    let mut summary = kybern_store::project_thread_activity(thread.id, &tasks);
+                    summary.active_children = running_children.get(&thread.id).copied().unwrap_or(0);
+                    summary.pending_request = own_pending.get(&thread.id).copied();
+                    summary.pending_child_request = child_pending.get(&thread.id).copied();
+                    Ok(summary)
                 })
                 .collect::<Result<Vec<_>, RpcError>>()?
                 .into_iter()
-                .filter(|summary| summary.state.is_some())
+                .filter(|summary| {
+                    summary.state.is_some()
+                        || summary.active_children > 0
+                        || summary.pending_request.is_some()
+                        || summary.pending_child_request.is_some()
+                })
                 .collect();
+            // Delegated agents are left out of the list, but their rows say what they wait on: add their kinds alone.
+            let mut waiting: Vec<_> = own_pending.iter().filter(|(id, _)| !threads.iter().any(|thread| thread.id == **id)).collect();
+            waiting.sort_by_key(|(id, _)| **id);
+            activity.extend(waiting.into_iter().map(|(id, kind)| ThreadActivitySummary {
+                thread_id: *id,
+                state: None,
+                active_agents: 0,
+                active_processes: 0,
+                active_monitors: 0,
+                active_children: 0,
+                pending_request: Some(*kind),
+                pending_child_request: child_pending.get(id).copied(),
+            }));
             ok(ThreadsListResult { threads, activity })
         }
         ThreadsSearch::NAME => {
@@ -662,6 +696,18 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             notes.set(&p.bundle_id, app.as_deref(), &p.text).map_err(bad)?;
             ok(ComputerNotesResult { notes: notes.list() })
         }
+        SecretsTarget::NAME => {
+            let p: SecretsTargetParams = parse(params)?;
+            let cwd = secrets_workspace(state, &p.workspace)?;
+            ok(crate::secrets::check_pasted(std::path::Path::new(&cwd), p.file.as_deref(), &p.env_key).await.map_err(bad)?)
+        }
+        SecretsStore::NAME => {
+            let p: SecretsStoreParams = parse(params)?;
+            let cwd = secrets_workspace(state, &p.workspace)?;
+            ok(crate::secrets::store_pasted(std::path::Path::new(&cwd), p.file.as_deref(), &p.env_key, p.value, p.add_to_gitignore)
+                .await
+                .map_err(bad)?)
+        }
         SettingsUpdate::NAME => {
             let p: SettingsUpdateParams = parse(params)?;
             let updated = state.settings.set(p.settings).map_err(internal)?;
@@ -772,8 +818,14 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 .visual_latest_turn(p.thread_id)
                 .map_err(internal)?
                 .ok_or_else(|| RpcError::invalid_params("Send a message in this thread before publishing a visual."))?;
-            let event =
-                crate::visuals::publish(&state.store, &state.paths, p.thread_id, turn, &p.html, &p.title, p.height).await.map_err(bad)?;
+            if p.await_answer == Some(true) || p.answer_schema.is_some() {
+                return Err(RpcError::invalid_params(
+                    "Only an agent's kybern_html_publish can wait for an answer. Publish without await_answer.",
+                ));
+            }
+            let event = crate::visuals::publish(&state.store, &state.paths, p.thread_id, turn, &p.html, &p.title, p.height, None)
+                .await
+                .map_err(bad)?;
             let EventPayload::HtmlPublished { visual } = &event.payload else { unreachable!() };
             let result = HtmlPublishResult { visual: visual.clone() };
             let _ = state.events.send(event);
@@ -795,6 +847,11 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             ok(Empty {})
         }
         HtmlRead::NAME => ok(crate::visuals::read(&state.store, parse(params)?).map_err(bad)?),
+        HtmlSnapshot::NAME => {
+            let p: HtmlSnapshotParams = parse(params)?;
+            state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            ok(crate::visuals::snapshot(&state.store, &state.paths, p).await.map_err(bad)?)
+        }
         HtmlFrame::NAME => ok(crate::visuals::issue(&state.store, parse(params)?).map_err(bad)?),
         HtmlRevoke::NAME => {
             crate::visuals::revoke(parse(params)?);
@@ -964,6 +1021,19 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             state.orchestrator.respond_approval(p.approval_id, p.decision).await.map_err(bad)?;
             ok(Empty {})
         }
+        RequestsProgress::NAME => {
+            let p: RequestsProgressParams = parse_or_default(params)?;
+            let items = state.orchestrator.requests().list(p.thread_id);
+            let items =
+                if ctx.principal.has(Scope::AccessWrite) { items } else { items.into_iter().map(crate::ws::redact_progress).collect() };
+            ok(RequestsProgressResult { items })
+        }
+        RequestsAct::NAME => {
+            let p: RequestsActParams = parse(params)?;
+            let act = crate::requests::RequestAct { action: p.action, value: p.value, can_write: ctx.principal.has(Scope::AccessWrite) };
+            state.orchestrator.requests().act(p.approval_id, act).map_err(bad)?;
+            ok(Empty {})
+        }
         ApprovalsList::NAME => {
             let p: ApprovalsListParams = parse_or_default(params)?;
             ok(ApprovalsListResult { approvals: state.store.approvals_pending(p.thread_id).map_err(internal)? })
@@ -997,6 +1067,15 @@ fn parse<T: DeserializeOwned>(v: Value) -> Result<T, RpcError> {
 
 fn parse_or_default<T: DeserializeOwned + Default>(v: Value) -> Result<T, RpcError> {
     if v.is_null() { Ok(T::default()) } else { parse(v) }
+}
+
+/// The folder a pasted secret is stored under: the thread's workspace, or the project's folder.
+fn secrets_workspace(state: &AppState, workspace: &SecretsWorkspace) -> Result<String, RpcError> {
+    match (workspace.thread_id, workspace.project_id) {
+        (Some(id), None) => Ok(state.store.thread_get(id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?.cwd),
+        (None, Some(id)) => Ok(state.store.project_get(id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?.path),
+        _ => Err(RpcError::invalid_params("pass either thread_id or project_id")),
+    }
 }
 
 fn internal(e: impl std::fmt::Display) -> RpcError {
@@ -1069,4 +1148,26 @@ fn hostname() -> String {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "unknown".into())
+}
+
+type PendingKinds = std::collections::HashMap<ThreadId, PendingRequestKind>;
+
+/// Each thread's oldest waiting request kind, and for each delegating ancestor what its
+/// delegated descendants wait on (a question outranks an approval).
+fn pending_request_kinds(store: &kybern_store::Store) -> anyhow::Result<(PendingKinds, PendingKinds)> {
+    let mut own = PendingKinds::new();
+    let mut below = PendingKinds::new();
+    for approval in store.approvals_pending(None)? {
+        let kind = approval.pending_kind();
+        own.entry(approval.thread_id).or_insert(kind);
+        let mut cursor = store.thread_get(approval.thread_id)?;
+        for _ in 0..16 {
+            let Some(thread) = cursor.filter(|thread| thread.delegation.is_some()) else { break };
+            let Some(parent) = thread.parent_thread_id else { break };
+            let entry = below.entry(parent).or_insert(kind);
+            *entry = (*entry).max(kind);
+            cursor = store.thread_get(parent)?;
+        }
+    }
+    Ok((own, below))
 }

@@ -5,7 +5,7 @@ import { DecoratedTextarea } from '../native/decorated-input.tsx'
 import { nativeCapabilities, type InputSelection } from '../native/api.ts'
 import { useTheme } from '../ui.tsx'
 import { FONT_MONO } from '../theme.ts'
-import { tinted } from '../transcript/kit.tsx'
+import { alpha, tinted } from '../transcript/kit.tsx'
 import { RichHistory, textEdit } from '../notes/rich-text.ts'
 import { editTokenText, snapToChips, tokenDisplayOffset, tokenSourceOffset, tokenText, type TokenReference, type TokenText } from './token-text.ts'
 
@@ -23,11 +23,13 @@ interface Props extends TextareaProps {
   editorRef: Ref<TokenTextareaHandle>
   nativeRef: Ref<PublicInstance>
   onEditorError?: (message: string) => void
+  /** A source range painted with the accent wash (the run the secret catcher caught); ignored where it touches a chip. */
+  wash?: { start: number; end: number } | null
 }
 const historyDoc = (text: string) => ({ text, marks: [], lines: [] })
 /** Inline labels are native atomic runs. Offset conversion is confined here;
  * completion queries, clipboard serialization and wire parts use raw tokens. */
-export function TokenTextarea({ references, editorRef, nativeRef, onEditorError, ...props }: Props) {
+export function TokenTextarea({ references, editorRef, nativeRef, onEditorError, wash, ...props }: Props) {
   const t = useTheme()
   const accent = t.v('--color-accent-blue')
   const renderer = useGpuixRequired()
@@ -108,10 +110,10 @@ export function TokenTextarea({ references, editorRef, nativeRef, onEditorError,
   }
   return <DecoratedTextarea {...props} value={projection.text}
     ref={element => { node.current = element; if (typeof nativeRef === 'function') nativeRef(element); else if (nativeRef) nativeRef.current = element }}
-    decorations={projection.spans.map((span, index) => {
+    decorations={[...projection.spans.map((span, index) => {
       const icon = references.find(r => r.token === span.token)?.icon
       return { start: span.start, end: span.end, atomic: true, id: `token:${index}:${span.token}`, style: { color: accent, fontWeight: 500 }, ...(icon ? { icon: { svg: tinted(icon, accent), color: '', font: FONT_MONO, size: 13.3 } } : {}) }
-    })}
+    }), ...washDecoration(projection, wash, accent)]}
     interceptKeys={[...new Set([...(props.interceptKeys ?? []), 'c', 'x', 'z', 'y', 'backspace', 'delete'])]}
     onChange={event => {
       const value = event.value ?? ''
@@ -157,4 +159,12 @@ export function TokenTextarea({ references, editorRef, nativeRef, onEditorError,
       props.onKeyDown?.(event)
     }}
   />
+}
+
+/** The wash behind a caught run (`acc .16`, radius 4), in display offsets; none when it would overlap a chip. */
+function washDecoration(doc: TokenText, range: { start: number; end: number } | null | undefined, accent: string) {
+  if (!range || range.end <= range.start || range.end > doc.source.length) return []
+  const start = tokenDisplayOffset(doc, range.start), end = tokenDisplayOffset(doc, range.end, true)
+  if (end <= start || doc.spans.some(span => start < span.end && span.start < end)) return []
+  return [{ start, end, id: 'secret-catch', style: { backgroundColor: alpha(accent, 0.16), borderRadius: 4 } }]
 }

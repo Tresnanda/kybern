@@ -23,6 +23,7 @@ import { canSelfUpdate, closeUpdateDetails, dismissUpdateAnnouncement, installAp
 import { pressTransform } from '../motion/press.ts'
 import { BLUR, EASE, SCALE } from '../motion/kit.tsx'
 import { Presence } from '../motion/Presence.tsx'
+import { frostBackdrop, frostFill, useGlass } from './glass.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 
 const ICON = { download: glyph(Download04Icon), arrowRight: glyph(ArrowRight01Icon), arrowUpRight: glyph(ArrowUpRight01Icon), x: glyph(Cancel01Icon) }
@@ -107,13 +108,14 @@ export function RailUpdateButton() {
 /** Infrequent update notices use the toast transition and never take focus. */
 function UpdateAnnouncement({ version, notes, leaving, onGone }: { version: string; notes: string | null; leaving: boolean; onGone: () => void }) {
   const t = useTheme()
+  const g = useGlass()
   const size = useWindowSize({ intervalMs: 250 })
   const release = useMemo(() => releasePresentation(version, notes), [version, notes])
   // The card enters and leaves by paint (`t-toast`: 16px, scale 0.97 and a 2px blur, 350 / 250 ms) with no layout per frame. Reduce
   // Motion shows it at once and fades it out over 100 ms (`Presence`).
   return <anchored position={{ x: size.width - 16, y: size.height - 16 }} anchor="bottomRight" fit="snap" snapMargin={16} deferred priority={5} occlude style={{ borderRadius: 24 }}>
     <Presence show={!leaving} enter={TOAST_ENTER()} exit={TOAST_EXIT} onGone={onGone} style={{ borderRadius: 24 }}>
-    <div testId="update-announcement" aria-label="Kybern update available" style={{ display: 'flex', flexDirection: 'column', position: 'relative', width: Math.min(352, size.width - 32), borderRadius: 24, borderWidth: 1, borderColor: t.border, backgroundColor: t.popover, boxShadow: surfaceShadow(t), overflow: 'hidden' }}>
+    <div testId="update-announcement" aria-label="Kybern update available" backdrop={frostBackdrop(g, 'menus', 24)} style={{ display: 'flex', flexDirection: 'column', position: 'relative', width: Math.min(352, size.width - 32), borderRadius: 24, borderWidth: 1, borderColor: g.on ? g.frostRim : t.border, backgroundColor: frostFill(g, 'menus', t.popover, 'frostMenu'), boxShadow: surfaceShadow(t), overflow: 'hidden' }}>
       <ReleaseArtwork compact />
       <ArtworkClose testId="update-announcement-dismiss" label="Dismiss update announcement" onClick={dismissUpdateAnnouncement} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 20 }}>

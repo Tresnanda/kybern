@@ -1,15 +1,57 @@
-import type { ApprovalRequest, ContentPart } from "./types.ts"
+import { COORDINATOR_BRIEF_TOOL, COORDINATOR_SETTINGS_TOOL, CURSOR_QUESTION_TOOL, LOGIN_REQUEST_TOOL, NORMALIZED_ANSWERS_KEY, PICK_REQUEST_TOOL, PROMPT_REQUEST_TOOL, SECRET_REQUEST_TOOL, VISUAL_ANSWER_TOOL, type ApprovalRequest, type PendingRequestKind, type ContentPart, type UserInputAnswer, type UserInputAttachment } from "./types.ts"
 
 export const record = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}
 export const string = (value: unknown): string => typeof value === "string" ? value : ""
 export const array = (value: unknown): unknown[] => Array.isArray(value) ? value : []
 
-export function isUserInput(approval: ApprovalRequest): boolean {
-  return ["AskUserQuestion", "request_user_input", "opencode_question", "mcp_elicitation", "ui_select", "ui_confirm", "ui_input", "ui_editor"].includes(approval.tool_name)
+export function isUserInput(approval: Pick<ApprovalRequest, "tool_name">): boolean {
+  return ["AskUserQuestion", "request_user_input", "opencode_question", CURSOR_QUESTION_TOOL, "mcp_elicitation", "ui_select", "ui_confirm", "ui_input", "ui_editor"].includes(approval.tool_name)
 }
 
-export function questionsFor(approval: ApprovalRequest) {
+export interface QuestionOption {
+  label: string
+  description: string
+  /** Text or code to show while the option is focused. Markdown. */
+  preview?: string
+}
+
+/** One question of a request, as the cards draw it. */
+export interface QuestionSpec {
+  id: string
+  /** The question. Markdown. */
+  title: string
+  header: string
+  multiple: boolean
+  custom: boolean
+  secret: boolean
+  options: QuestionOption[]
+  /** The harness can take images and files with the answer; only daemons that send `questions` say so. */
+  attachments?: boolean
+}
+
+const option = (item: unknown): QuestionOption => {
+  if (typeof item === "string") return { label: item, description: "" }
+  const preview = string(record(item).preview)
+  return { label: string(record(item).label), description: string(record(item).description), ...(preview.trim() ? { preview } : {}) }
+}
+
+/** The request's questions: the daemon's normalized `questions` when it sends them, else read from the harness's `input`.
+ *  Pi's dialogs (`ui_*`) and MCP forms keep their own form. */
+export function questionsFor(approval: Pick<ApprovalRequest, "tool_name" | "input" | "questions">): QuestionSpec[] {
+  if (approval.tool_name.startsWith("ui_")) return []
+  if (approval.questions?.length) {
+    return approval.questions.map((q) => ({
+      id: q.id,
+      title: q.question,
+      header: q.header ?? "",
+      multiple: q.multi_select,
+      custom: q.allow_custom,
+      secret: q.secret,
+      attachments: q.attachments,
+      options: q.options.map((o) => ({ label: o.label, description: o.description ?? "", ...(o.preview?.trim() ? { preview: o.preview } : {}) })),
+    }))
+  }
   return array(record(approval.input).questions).map((item, index) => {
     const question = record(item)
     return {
@@ -19,18 +61,45 @@ export function questionsFor(approval: ApprovalRequest) {
       multiple: question.multiSelect === true || question.multiple === true,
       custom: question.custom !== false,
       secret: question.isSecret === true,
-      options: array(question.options).map((item) => typeof item === "string" ? { label: item, description: "" } : { label: string(record(item).label), description: string(record(item).description) }),
+      options: array(question.options).map(option),
     }
   })
 }
 
-export function questionResponse(approval: ApprovalRequest, answers: string[][]): unknown {
+/** The harness's own response to `answers` (one list per question, in order). A multi-select Claude answer is the list of
+ *  labels, never a comma-joined string, so a label with a comma stays whole. */
+export function questionResponse(approval: Pick<ApprovalRequest, "tool_name" | "input" | "questions">, answers: string[][]): unknown {
   const questions = questionsFor(approval)
   if (answers.length !== questions.length || answers.some((answer) => !answer.length || answer.some((s) => !s.trim()))) throw new Error("Answer each question before continuing.")
   if (approval.tool_name === "opencode_question") return { answers }
-  if (approval.tool_name === "AskUserQuestion") return { answers: Object.fromEntries(questions.map((q, i) => [q.title, answers[i]!.join(", ")])) }
+  if (approval.tool_name === "AskUserQuestion") return { answers: Object.fromEntries(questions.map((q, i) => [q.title, q.multiple ? answers[i]! : answers[i]!.join(", ")])) }
+  if (approval.tool_name === CURSOR_QUESTION_TOOL) {
+    const ids = approval.questions ?? []
+    return { answers: questions.map((q, i) => ({ questionId: q.id, selectedOptionIds: answers[i]!.map((label) => ids[i]?.options.find((o) => o.label === label)?.value ?? label) })) }
+  }
   return { answers: Object.fromEntries(questions.map((q, i) => [q.id, { answers: answers[i] }])) }
 }
+
+/** Answers the daemon turns into the harness's own response, attachments included (`kybern_answers`). Needs a daemon that sent `questions`. */
+export function normalizedResponse(questions: Pick<QuestionSpec, "id">[], answers: string[][], attachments: UserInputAttachment[][] = []): { [NORMALIZED_ANSWERS_KEY]: UserInputAnswer[] } {
+  if (answers.length !== questions.length || answers.some((answer, i) => !answer.some((s) => s.trim()) && !attachments[i]?.length)) throw new Error("Answer each question before continuing.")
+  return {
+    [NORMALIZED_ANSWERS_KEY]: questions.map((q, i) => ({
+      id: q.id,
+      answers: answers[i]!.map((s) => s.trim()).filter(Boolean),
+      ...(attachments[i]?.length ? { attachments: attachments[i] } : {}),
+    })),
+  }
+}
+
+/** Whether a request waits for an answer (a question, a form, a sign-in, a secret) or an approval; `ApprovalRequest::pending_kind`. */
+export function pendingKind(approval: Pick<ApprovalRequest, "tool_name" | "input">): PendingRequestKind {
+  const answers = isUserInput(approval) || [SECRET_REQUEST_TOOL, VISUAL_ANSWER_TOOL, PICK_REQUEST_TOOL, LOGIN_REQUEST_TOOL, PROMPT_REQUEST_TOOL, COORDINATOR_BRIEF_TOOL, COORDINATOR_SETTINGS_TOOL].includes(approval.tool_name)
+  return answers && !connectorApproval(approval as ApprovalRequest) ? "question" : "approval"
+}
+
+/** The daemon's reason when a restart cut a request off. */
+export const DAEMON_RESTARTED = "daemon restarted"
 
 /** A harness asking for consent to drive an app on this machine, sent as an MCP elicitation. */
 export interface ConnectorApproval {
@@ -111,6 +180,66 @@ export function noteMentionPart(note: { id: string; title: string }): MentionPar
 export function taskMentionPart(task: { id: string; key: string; title: string }): MentionPart {
   const title = mentionLabel(task.title, "Untitled task")
   return { type: "mention", name: title, path: taskMentionPath(task.id), display_name: task.key ? `${task.key} ${title}` : title }
+}
+
+/** A secret the user pasted and Kybern stored privately: the daemon turns `kybern://secret/<KEY>?file=<file>` into the name and file, never a value. */
+export const SECRET_MENTION_PREFIX = "kybern://secret/"
+/** An element the user ⌥-clicked in the Preview or a visual: `kybern://anchor/<base64url JSON>`, expanded by the daemon into bounded page data. */
+export const ANCHOR_MENTION_PREFIX = "kybern://anchor/"
+
+/** What an anchor chip carries; every field is bounded again by the daemon. */
+export interface AnchorPayload {
+  selector: string
+  tag?: string
+  text?: string
+  html?: string
+  page_url?: string
+  /** The element's `data-kybern-id`, when it is in an inline visual. */
+  id?: string
+  box?: { x: number; y: number; width: number; height: number }
+  /** The daemon asset of the element's crop. */
+  screenshot_asset?: string
+}
+
+const toBase64Url = (text: string): string => {
+  let binary = ""
+  for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+}
+const fromBase64Url = (value: string): string => {
+  const binary = atob(value.replace(/-/g, "+").replace(/_/g, "/"))
+  return new TextDecoder().decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)))
+}
+
+/** The mention part for a stored secret. The chip reads as `$KEY`; the value is in the file only. */
+export function secretMentionPart(secret: { key: string; file: string }): MentionPart {
+  const file = secret.file === ".env" ? "" : `?file=${encodeURIComponent(secret.file)}`
+  return { type: "mention", name: secret.key, path: `${SECRET_MENTION_PREFIX}${secret.key}${file}`, display_name: secret.key }
+}
+
+/** The mention part for a pointed-at element. */
+export function anchorMentionPart(label: string, payload: AnchorPayload): MentionPart {
+  const name = mentionLabel(label, "Element")
+  return { type: "mention", name, path: `${ANCHOR_MENTION_PREFIX}${toBase64Url(JSON.stringify(payload))}`, display_name: name }
+}
+
+/** What a composer chip path stands for, or null for any other path. */
+export function parseComposerChip(path: string): { kind: "secret"; key: string; file: string } | { kind: "anchor"; payload: AnchorPayload } | null {
+  if (path.startsWith(SECRET_MENTION_PREFIX)) {
+    const [key = "", query = ""] = path.slice(SECRET_MENTION_PREFIX.length).split("?")
+    if (!key) return null
+    const file = /(?:^|&)file=([^&]*)/.exec(query)?.[1]
+    let decoded = ".env"
+    try { if (file) decoded = decodeURIComponent(file) } catch { /* keep the default */ }
+    return { kind: "secret", key, file: decoded }
+  }
+  if (path.startsWith(ANCHOR_MENTION_PREFIX)) {
+    try {
+      const payload = JSON.parse(fromBase64Url(path.slice(ANCHOR_MENTION_PREFIX.length))) as AnchorPayload
+      return payload && typeof payload === "object" && typeof payload.selector === "string" ? { kind: "anchor", payload } : null
+    } catch { return null }
+  }
+  return null
 }
 
 /** Kybern's own consent for computer use, asked by the daemon rather than a harness. */

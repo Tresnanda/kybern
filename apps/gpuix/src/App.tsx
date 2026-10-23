@@ -52,6 +52,7 @@ import { PATCHED_NATIVE } from './native/local-build.ts'
 import { TitleBar, usePanelOpen } from './nav/TitleBar.tsx'
 import { Sidebar } from './Sidebar.tsx'
 import { startAgentToasts } from './shell/agentToasts.ts'
+import { startRequestProgress } from './requests/progress.ts'
 import { ConnectionBanner, useWelcome, Welcome, type WelcomeKind } from './shell/Connection.tsx'
 import { ErrorBoundary } from './shell/ErrorBoundary.tsx'
 import { useSidebarDragging, useSidebarWidth } from './shell/layout.ts'
@@ -141,6 +142,7 @@ function Workspace() {
   useEffect(() => {
     startLive()
     startAgentToasts()
+    startRequestProgress()
     installWindowSurface()
   }, [connectionStatus])
 

@@ -7,6 +7,7 @@ import type { TaskItem } from '../../../../packages/kybern-client/src/types.ts'
 import { ProjectDot } from '../notes/kit.tsx'
 import { over } from '../theme.ts'
 import { ink, Label, useTheme } from '../ui.tsx'
+import { useGlass } from '../platform/glass.ts'
 import { PriorityGlyph, StatusGlyph } from './Glyphs.tsx'
 
 // Board rotation remains pending the native carry-resource acceptance gate.
@@ -14,9 +15,11 @@ import { PriorityGlyph, StatusGlyph } from './Glyphs.tsx'
  * GPUI uses Gaussian sigma directly; CSS box-shadow blur has sigma = radius/2. */
 export function useHeldChrome() {
   const t = useTheme()
+  const g = useGlass()
   const dark = t.variant === 'dark'
   return {
-    backgroundColor: dark ? over(ink(t, 0.055), t.surface) : t.surface,
+    // A held card floats over the board: the dense glass float on whole-window glass, never an opaque slab.
+    backgroundColor: g.on ? g.denseFloat : dark ? over(ink(t, 0.055), t.surface) : t.surface,
     borderWidth: dark ? 0 : 0.5,
     borderColor: 'rgba(0, 0, 0, 0.12)',
     boxShadow: dark

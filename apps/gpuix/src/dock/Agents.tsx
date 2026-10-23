@@ -157,7 +157,7 @@ const AgentRow = memo(function AgentRow({ row, fresh, last, rails, detailOpen, o
 }) {
   const t = useTheme()
   const { thread, childCount, depth, open } = row
-  const state = childState(thread)
+  const state = childState(thread, useNav((s) => s.pending[thread.id]?.own))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)

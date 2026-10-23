@@ -3,10 +3,14 @@ import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type { LayoutRect, RoundedLayoutClip } from './layout.ts'
 
-export type WebEvent = { id: string; generation?: number; type: string; message?: string; url?: string; visible?: boolean; key?: string; modifiers?: { cmd: boolean; ctrl: boolean; alt: boolean; shift: boolean }; data?: Record<string, unknown> }
+export type WebEvent = { id: string; generation?: number; type: string; message?: string; url?: string; visible?: boolean; key?: string; modifiers?: { cmd: boolean; ctrl: boolean; alt: boolean; shift: boolean }; data?: Record<string, unknown>
+  /** `outsidePress`: window points; `snapshot`: the PNG's pixel size. */
+  x?: number; y?: number; width?: number; height?: number; path?: string; ok?: boolean; token?: number }
 let bridge: ReturnType<typeof load> | undefined, wake: JSCallback | undefined
 let nextGeneration = 0
 let pointerCaptures = 0
+/** Documents that were created and not yet destroyed (the picker looks for the live visuals of a thread). */
+const live = new Set<string>()
 const listeners = new Set<(event: WebEvent) => void>()
 const occlusions = new Map<number, { rect: LayoutRect; radius: number; dim: number; order: number; inputOnly: boolean }>()
 function load(file: string) {
@@ -15,6 +19,24 @@ function load(file: string) {
     kybern_web_next: { args: [], returns: FFIType.cstring },
     kybern_web_command: { args: [FFIType.ptr], returns: FFIType.void },
   })
+}
+let requestId = 0
+const pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>()
+/** One native request, answered by a `frameResult` or `snapshot` event with its `rid`. */
+function request(rid: string, send: () => void, timeoutMs = 8000): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { pending.delete(rid); reject(new Error('The page did not answer. Reload it and try again.')) }, timeoutMs)
+    pending.set(rid, { resolve, reject, timer })
+    try { send() } catch (error) { clearTimeout(timer); pending.delete(rid); reject(error as Error) }
+  })
+}
+function settle(event: WebEvent) {
+  const rid = (event as WebEvent & { rid?: string }).rid, entry = rid ? pending.get(rid) : undefined
+  if (!rid || !entry) return
+  pending.delete(rid); clearTimeout(entry.timer)
+  const raw = event as WebEvent & { ok?: boolean; value?: unknown; path?: string; width?: number; height?: number }
+  if (raw.ok) entry.resolve(event.type === 'snapshotRect' ? { path: raw.path, width: raw.width, height: raw.height } : raw.value)
+  else entry.reject(new Error(event.message || 'The page could not do that.'))
 }
 function initialize() {
   if (bridge) return
@@ -28,6 +50,7 @@ function initialize() {
       const raw = loaded.symbols.kybern_web_next()
       if (!raw) break
       const event = JSON.parse(String(raw)) as WebEvent
+      if (event.type === 'frameResult' || event.type === 'snapshotRect') settle(event)
       for (const listener of listeners) { try { listener(event) } catch (e) { console.error('[webview]', e) } }
     }
   }, { args: [], returns: FFIType.void, threadsafe: true })
@@ -52,8 +75,9 @@ export function webDocument(url: string, kind: 'file' | 'server' | 'visual') {
   const frame=document.querySelector('iframe'), send=data=>window.webkit.messageHandlers.kybern.postMessage(data);
   let visible=true, theme, last='';
   function post(force=false){const data={kind:'kybern-visual-host',visible,theme};const key=JSON.stringify(data);if(force||key!==last){last=key;frame.contentWindow?.postMessage(data,'*');frame.contentWindow?.postMessage({type:'kybern-preview-visibility',visible},'*')}}
-  window.kybernVisible=value=>{visible=value;post()};window.kybernTheme=value=>{theme=value;document.documentElement.style.background=value.variables?.['--background']||'transparent';post()};
+  window.kybernVisible=value=>{visible=value;post()};window.kybernTheme=value=>{theme=value;document.documentElement.style.background=value.variables?.['--background']||'transparent';document.documentElement.style.colorScheme=value.appearance==='light'?'light':'dark';post()};
   window.kybernLayout=(w,h,scale,left,top)=>{Object.assign(frame.style,{width:w+'px',height:h+'px',transform:'translate('+left+'px,'+top+'px) scale('+scale+')'})};
+  window.kybernSend=data=>frame.contentWindow?.postMessage(data,'*');
   window.kybernCommand=action=>{if(action==='reload')frame.src=frame.src;else if(action==='back'||action==='forward')frame.contentWindow.postMessage({type:'go',delta:action==='back'?-1:1},'*')};
   window.addEventListener('message',event=>{if(event.source!==frame.contentWindow||!event.data||typeof event.data!=='object')return;if(event.data.kind==='kybern-visual-link'&&!navigator.userActivation?.isActive)return;send(event.data)});
   ${kind === 'visual' ? "frame.addEventListener('mouseenter',()=>send({kind:'kybern-visual-hover',value:true}));frame.addEventListener('mouseleave',()=>send({kind:'kybern-visual-hover',value:false}));" : ''}
@@ -71,6 +95,7 @@ export const webHost = {
   create(id: string, url: string, kind: 'file' | 'server' | 'visual') {
     const generation = ++nextGeneration
     command({ op: 'create', id, category: kind === 'visual' ? 'visual' : 'preview', generation, allowedOrigins: [new URL(url).origin], html: webDocument(url, kind) })
+    live.add(id)
     return generation
   },
   place(id: string, rect: LayoutRect, clip: LayoutRect, logical: { width: number; height: number; scale: number; left: number; top: number; radius?: number; roundedClips?: RoundedLayoutClip[] | null }, visible = true, layer = 0) {
@@ -79,6 +104,8 @@ export const webHost = {
       layer, radius: logical.radius ?? 0, roundedClips: logical.roundedClips ?? [], layout: `window.kybernLayout?.(${[logical.width, logical.height, logical.scale, logical.left, logical.top].join(',')})` })
   },
   hide(id: string) { if (bridge) command({ op: 'hide', id }) },
+  /** Give the keyboard back to GPUI if a document holds it (`native/webview.m` `releaseFocus`); otherwise nothing. */
+  releaseFocus() { if (bridge) command({ op: 'release', id: '' }) },
   /** Test seam: the document layer's presented opacity and scale, as a `probe` event. */
   probe(id: string) { if (bridge) command({ op: 'probe', id }) },
   /**
@@ -91,10 +118,31 @@ export const webHost = {
       ...(motion.from?.opacity !== undefined ? { fromOpacity: motion.from.opacity } : {}), ...(motion.from?.scale !== undefined ? { fromScale: motion.from.scale } : {}) })
   },
   post(id: string, script: string) { command({ op: 'post', id, script }) },
+  /** A message to the page (`bootstrap.js`: `kybern-visual-click`, `kybern-visual-lock`, `kybern-visual-select`). */
+  send(id: string, data: Record<string, unknown>) { command({ op: 'post', id, script: `window.kybernSend?.(${JSON.stringify(data)})` }) },
+  /** The document as it looks now, written to `path` as a PNG; answered by a `snapshot` event with the same `token`. */
+  snapshot(id: string, path: string, token: number) { command({ op: 'snapshot', id, path, token }) },
   theme(id: string, theme: unknown) { command({ op: 'post', id, script: `window.kybernTheme?.(${JSON.stringify(theme)})` }) },
   navigate(id: string, url: string) { command({ op: 'navigate', id, url }) },
   action(id: string, action: 'reload' | 'back' | 'forward' | 'stop') { command({ op: 'action', id, action }) },
-  destroy(id: string) { if (bridge) command({ op: 'destroy', id }) },
+  destroy(id: string) { live.delete(id); if (bridge) command({ op: 'destroy', id }) },
+  /** Ids of the documents that exist now (created, not destroyed). */
+  documents(): string[] { return [...live] },
+  /** Give the document the keyboard (picking: Esc is read by the page). */
+  focus(id: string) { if (bridge) command({ op: 'focus', id }) },
+  /**
+   * Run `script` in the page's frame in Kybern's isolated world (`native/webview.m` `frame`): the page shares the DOM but cannot
+   * reach this script's globals. Resolves with the script's JSON value; rejects when the page has not loaded or the script throws.
+   */
+  frame(id: string, script: string): Promise<unknown> {
+    const rid = String(++requestId)
+    return request(rid, () => command({ op: 'frame', id, script, rid }))
+  },
+  /** A PNG of a rectangle of the page (CSS pixels in the page's viewport) saved to `path`, which must be under the temp folder. */
+  snapshotRect(id: string, rect: { x: number; y: number; width: number; height: number }, path: string): Promise<{ path: string; width: number; height: number }> {
+    const rid = String(++requestId)
+    return request(rid, () => command({ op: 'snapshotRect', id, rid, path, ...rect })) as Promise<{ path: string; width: number; height: number }>
+  },
   capturePointer() {
     if (++pointerCaptures === 1 && bridge) command({ op: 'capture', id: '', active: true })
     let live = true

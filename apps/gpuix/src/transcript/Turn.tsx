@@ -1,4 +1,5 @@
 import { openTab } from '../tabs/open.ts'
+import { expiredQuestion } from '../../../../packages/kybern-client/src/requestCards.ts'
 import type { PublicInstance } from '@gpuix/react'
 import { chooseTab, setDock } from '../dock/store.ts'
 import { getFileIconName } from '../../../desktop/src/lib/kit/fileIcons.ts'
@@ -44,6 +45,7 @@ import { Shimmer } from './motion.tsx'
 import { GROUP_TREE, HEADER_STEM, WorkRows, type RowContext } from './rows.tsx'
 import { markTreeOpen, TreeGroup, TreeLines } from '../tree/Tree.tsx'
 import { filePatch, hydrateToolOutput, loadFilePatch, reportError, revertTo, useChildThreads, useRowState, useTurnDiff, type ToolBlock } from './store.ts'
+import { signInRows } from './signIn.ts'
 
 const isTaskActive = (task: RuntimeTask) => task.status === 'pending' || task.status === 'running' || task.status === 'waiting' || task.status === 'stopping'
 
@@ -115,7 +117,8 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
   )
   const children = useChildThreads(threadId, launches)
   const cards = useMemo(() => itemCards(group), [group.work, group.answer?.text])
-  const ctx = useMemo<RowContext>(() => ({ threadId, tasksByToolCall, childrenByParent: hierarchy.childrenByParent, children, inlineItemIds: running ? undefined : cards.inlineCallIds }), [threadId, tasksByToolCall, hierarchy, children, cards, running])
+  const signIn = useMemo(() => signInRows(group.work), [group.work])
+  const ctx = useMemo<RowContext>(() => ({ threadId, tasksByToolCall, childrenByParent: hierarchy.childrenByParent, children, inlineItemIds: running ? undefined : cards.inlineCallIds, signIn }), [threadId, tasksByToolCall, hierarchy, children, cards, running, signIn])
   const settled = useMemo(() => {
     const agentBlocks: Block[] = []
     const disclosureBlocks: Block[] = []
@@ -123,7 +126,10 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
       if (
         (block.kind === 'tool' && isAgentLaunchBlock(block, tasksByToolCall.get(block.call.id))) ||
         (block.kind === 'runtime_task' && block.task.kind === 'agent') ||
-        isOrchestrationBlock(block)
+        isOrchestrationBlock(block) ||
+        // A question a restart cut off still wants an answer (its "Reply in chat"), and an answer an agent gave for the user
+        // ("Answered by Coordinator") is the user's to see: both stay outside the fold.
+        (block.kind === 'approval' && (expiredQuestion(block.approval, block.decision) || !!block.answeredBy))
       )
         agentBlocks.push(block)
       else if (block.kind !== 'visual') disclosureBlocks.push(block)
@@ -168,7 +174,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
         </div>
       )}
 
-      {group.visuals?.map(block => <VisualCard key={block.id} visual={block.visual} threadId={threadId} />)}
+      {group.visuals?.map(block => <VisualCard key={block.id} visual={block.visual} answer={block.answer} threadId={threadId} />)}
       {running && (
         <div testId="live-work" style={{ display: 'flex', flexDirection: 'column', paddingBottom: 8 }}>
           <WorkingHeader since={group.user?.at ?? group.work[0]?.at ?? ''} />

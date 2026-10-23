@@ -32,6 +32,7 @@ pub fn routes() -> Router<AppState> {
         .route("/assets", post(upload_asset).options(asset_preflight))
         .route("/assets/{id}", get(get_asset).options(asset_preflight))
         .route("/threads/{id}/image", get(get_thread_image).options(asset_preflight))
+        .route("/threads/{id}/visuals/{visual}/snapshot/{file}", get(get_visual_snapshot).options(asset_preflight))
 }
 
 async fn pair(State(state): State<AppState>, headers: HeaderMap, Json(req): Json<PairRequest>) -> Response {
@@ -298,6 +299,24 @@ mod tests {
         assert_eq!(response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).unwrap(), "tauri://localhost");
         assert_eq!(response.headers().get(header::ACCESS_CONTROL_ALLOW_METHODS).unwrap(), "GET, POST, OPTIONS");
         assert_eq!(response.headers().get(header::ACCESS_CONTROL_ALLOW_HEADERS).unwrap(), "authorization, content-type, x-kybern-filename");
+    }
+}
+
+/// A visual's transcript picture (`threads.visuals.snapshot` draws it first).
+async fn get_visual_snapshot(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((id, visual, file)): Path<(Uuid, Uuid, String)>,
+) -> Response {
+    let Some(raw) = bearer(&headers) else { return (StatusCode::UNAUTHORIZED, "missing token").into_response() };
+    if !matches!(authenticate(&state.store, &raw), Ok(Some(p)) if p.has(kybern_protocol::Scope::OrchestrationRead)) {
+        return (StatusCode::FORBIDDEN, "token cannot read visuals").into_response();
+    }
+    match crate::visuals::snapshot_file(&state.paths.root, id, visual, &file).await {
+        Some(bytes) => {
+            ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "private, max-age=31536000, immutable")], bytes).into_response()
+        }
+        None => (StatusCode::NOT_FOUND, "Draw this picture with threads.visuals.snapshot first.").into_response(),
     }
 }
 

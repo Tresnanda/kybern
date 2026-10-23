@@ -53,7 +53,7 @@ fn snake(value: impl serde::Serialize) -> Result<String> {
 /// The persistence boundary for secret answers: an `ApprovalResolved` event
 /// never stores or broadcasts the value of a secret answer, whoever emits it.
 fn redact_resolved_approval(c: &Connection, payload: &mut EventPayload) -> Result<()> {
-    let EventPayload::ApprovalResolved { approval_id, decision } = payload else { return Ok(()) };
+    let EventPayload::ApprovalResolved { approval_id, decision, .. } = payload else { return Ok(()) };
     if matches!(decision, ApprovalDecision::Submit { .. })
         && let Some(approval) = approval_row(c, *approval_id)?
     {
@@ -1577,6 +1577,15 @@ impl Store {
 
     pub fn approval_get(&self, id: ApprovalId) -> Result<Option<(ApprovalRequest, bool)>> {
         self.with(|c| approval_row(c, id))
+    }
+
+    /// The recorded decision of a resolved request (a secret answer redacted), `None` while it waits.
+    pub fn approval_decision(&self, id: ApprovalId) -> Result<Option<ApprovalDecision>> {
+        self.with(|c| {
+            let text: Option<Option<String>> =
+                c.query_row("SELECT decision FROM approvals WHERE id = ?1 AND resolved = 1", [id.to_string()], |r| r.get(0)).optional()?;
+            Ok(text.flatten().and_then(|text| serde_json::from_str(&text).ok()))
+        })
     }
 
     pub fn approvals_pending(&self, thread_id: Option<ThreadId>) -> Result<Vec<ApprovalRequest>> {

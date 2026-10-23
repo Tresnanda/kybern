@@ -1,6 +1,7 @@
 mod accounts;
 mod coordinator;
 mod render;
+mod requests;
 mod spaces;
 
 use std::path::PathBuf;
@@ -108,6 +109,15 @@ enum VisualsCmd {
         thread: String,
         ticket: String,
     },
+    /// Draw a visual's transcript picture (transparent, 2x). Prints its key and the HTTP path of the PNG.
+    Snapshot {
+        thread: String,
+        visual: uuid::Uuid,
+        #[arg(long, default_value_t = 736)]
+        width: u32,
+        #[arg(long, default_value = "dark")]
+        appearance: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -126,6 +136,17 @@ enum Cmd {
     History {
         #[command(subcommand)]
         cmd: coordinator::HistoryCmd,
+    },
+    /// The helper behind SUDO_ASKPASS, SSH_ASKPASS and GIT_ASKPASS in agent sessions: shows the prompt as a private card and prints the answer.
+    #[command(hide = true)]
+    Askpass {
+        /// The prompt, as the asking program passes it.
+        prompt: Vec<String>,
+    },
+    /// See or press the request cards agents summon: sign-ins, permissions, questions with a deadline.
+    Requests {
+        #[command(subcommand)]
+        cmd: requests::RequestsCmd,
     },
     /// Show daemon info.
     Info,
@@ -387,6 +408,18 @@ enum Cmd {
     Computer {
         #[command(subcommand)]
         cmd: Option<ComputerCmd>,
+    },
+    /// Save a secret to a git-ignored env file in a thread's workspace; the value is read from stdin.
+    SecretStore {
+        thread: String,
+        /// The variable to set, e.g. STRIPE_SECRET_KEY.
+        key: String,
+        /// Env file relative to the workspace.
+        #[arg(long, default_value = ".env")]
+        file: String,
+        /// Add the file to the .gitignore beside it when git does not ignore it yet.
+        #[arg(long)]
+        add_to_gitignore: bool,
     },
     /// Token usage and cost.
     Usage {
@@ -1128,12 +1161,18 @@ pub async fn run() -> Result<()> {
     if let Cmd::Cursor { cmd } = &cli.cmd {
         return cursor_setup(cmd).await;
     }
+    // The helper talks to its own session's endpoint, not to a client connection.
+    if let Cmd::Askpass { prompt } = &cli.cmd {
+        return requests::askpass(prompt).await;
+    }
     let ep = Endpoint::resolve(cli.url.clone(), cli.token.clone(), cli.data_dir.clone())?;
     let client = Client::connect(&ep).await?;
     let json = cli.json;
 
     match cli.cmd {
         Cmd::Cursor { .. } => unreachable!("local Cursor setup handled before connecting"),
+        Cmd::Askpass { .. } => unreachable!("askpass handled before connecting"),
+        Cmd::Requests { cmd } => requests::requests(&client, cmd).await?,
         Cmd::Coordinator { cmd } => coordinator::coordinator(&client, cmd).await?,
         Cmd::History { cmd } => coordinator::history(&client, cmd).await?,
         Cmd::Info => {
@@ -1772,6 +1811,27 @@ pub async fn run() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             }
         },
+        Cmd::SecretStore { thread, key, file, add_to_gitignore } => {
+            let mut value = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut value)?;
+            let value = value.trim_end_matches(['\n', '\r']).to_owned();
+            let result = client
+                .call::<SecretsStore>(SecretsStoreParams {
+                    workspace: SecretsWorkspace { thread_id: Some(thread.parse()?), project_id: None },
+                    env_key: key,
+                    value,
+                    file: Some(file),
+                    add_to_gitignore,
+                })
+                .await?;
+            println!(
+                "Stored {} in {}{}{}.",
+                result.env_key,
+                result.file,
+                if result.replaced { " (replaced)" } else { "" },
+                if result.gitignore_updated { " and added it to .gitignore" } else { "" }
+            );
+        }
         Cmd::Computer { cmd } => {
             let status = match cmd.unwrap_or(ComputerCmd::Doctor) {
                 ComputerCmd::Status => {
@@ -1938,7 +1998,19 @@ pub async fn run() -> Result<()> {
         Cmd::Visuals { cmd } => match cmd {
             VisualsCmd::Publish { thread, path, title, height } => {
                 let html = tokio::fs::read_to_string(path).await?;
-                print_json(&client.call::<HtmlPublish>(HtmlPublishParams { thread_id: thread.parse()?, html, title, height }).await?)?;
+                print_json(
+                    &client
+                        .call::<HtmlPublish>(HtmlPublishParams {
+                            thread_id: thread.parse()?,
+                            html,
+                            title,
+                            height,
+                            await_answer: None,
+                            answer_schema: None,
+                            timeout_seconds: None,
+                        })
+                        .await?,
+                )?;
             }
             VisualsCmd::Preview { thread, path, width, appearance, screenshot } => {
                 let html = tokio::fs::read_to_string(path).await?;
@@ -1971,6 +2043,14 @@ pub async fn run() -> Result<()> {
             }
             VisualsCmd::Revoke { thread, ticket } => {
                 client.call::<HtmlRevoke>(HtmlRevokeParams { thread_id: thread.parse()?, ticket }).await?;
+            }
+            VisualsCmd::Snapshot { thread, visual, width, appearance } => {
+                let thread_id: ThreadId = thread.parse()?;
+                let theme = serde_json::json!({ "appearance": appearance, "variables": { "--background": "transparent" } });
+                let result =
+                    client.call::<HtmlSnapshot>(HtmlSnapshotParams { thread_id, visual_id: visual, width, theme, lock: None }).await?;
+                println!("/threads/{thread_id}/visuals/{visual}/snapshot/{}.png", result.key);
+                print_json(&result)?;
             }
         },
         Cmd::Artifacts { cmd } => match cmd {

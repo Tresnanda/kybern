@@ -108,7 +108,8 @@ async function run() {
   const inline = mounted.figure.querySelector("iframe")!, figure = mounted.figure
   const dark = await snapshot(inline)
   check(dark.isolated && dark.image && dark.table===3 && dark.bars===3,"Script, formatted SVG/table, opaque origin and deleted local image render")
-  check(dark.background===surface(),`AC 1: the page background (${dark.background}) is the transcript surface (${surface()})`)
+  // Since v0.14.0 the injected page script paints no background (ADE-69): the transcript shows through, so the page reads as the surface.
+  check(dark.background==="rgba(0, 0, 0, 0)"||dark.background===surface(),`AC 1: the page background (${dark.background}) is transparent or the transcript surface (${surface()})`)
   const style = getComputedStyle(figure)
   check(style.borderTopWidth==="0px" && style.backgroundColor==="rgba(0, 0, 0, 0)" && style.borderRadius==="0px","Inline visual has no border, fill or radius")
   check(!document.querySelector("[data-visual-reply] ~ .flex button, [data-visual-reply] + div button"),"No chip row under the visual")
@@ -142,8 +143,8 @@ async function run() {
   if (tooltip) { const t = tooltip.getBoundingClientRect(); report({stage:"visual-tooltip",top:t.top,bottom:t.bottom,left:t.left,right:t.right,button:{top:rect.top,bottom:rect.bottom,right:rect.right},box:{left:box.left,right:box.right,bottom:box.bottom}}); check(t.top>=rect.bottom-1 && t.right<=box.right+1 && t.left>=box.left-1,"Tooltip sits below the button inside the frame"); check(t.bottom<=box.bottom+1,"Tooltip stays inside the frame's bounds") }
   await screenshot("visuals-hover-dark")
   const beforeThemeLoads = transport.frameLoads; appearance("light"); await sleep(120)
-  const light = await snapshot(inline); check(light.foreground!==dark.foreground && light.background!==dark.background,"Theme follows live without reload")
-  check(light.background===surface(),"Light page background is the light surface")
+  const light = await snapshot(inline); check(light.foreground!==dark.foreground && (light.background!==dark.background || light.background==="rgba(0, 0, 0, 0)"),"Theme follows live without reload")
+  check(light.background==="rgba(0, 0, 0, 0)"||light.background===surface(),"Light page background is transparent or the light surface")
   check(transport.frameLoads===beforeThemeLoads && light.counter===1,"Theme preserves document and counter")
   await screenshot("visuals-hover-light")
   force.remove(); open.blur(); open.dispatchEvent(new MouseEvent("mouseleave")); await sleep(300)

@@ -122,6 +122,12 @@ function onEvent(event: ThreadEvent) {
       if (!getNav().unread[event.thread_id]) setNav({ unread: { ...getNav().unread, [event.thread_id]: true } })
       return
     }
+    // A request raised or answered anywhere (a delegated agent's included) changes which rows say "Needs input".
+    case 'approval_requested':
+    case 'user_input_requested':
+    case 'approval_resolved':
+      scheduleActivity()
+      return
     case 'runtime_task_started':
     case 'runtime_task_updated':
     case 'runtime_task_completed':
@@ -161,15 +167,24 @@ function loadChildren(parentId: ThreadId): Promise<void> {
 
 function applyActivity(summaries: ThreadActivitySummary[] | undefined) {
   const activity: NavState['activity'] = {}
+  const pending: NavState['pending'] = {}
   for (const summary of summaries ?? []) {
     if (summary.state) activity[summary.thread_id] = summary.state
-    if (summary.active_agents > 0) void loadChildren(summary.thread_id)
+    if (summary.pending_request || summary.pending_child_request) {
+      pending[summary.thread_id] = {
+        ...(summary.pending_request ? { own: summary.pending_request } : {}),
+        ...(summary.pending_child_request ? { child: summary.pending_child_request } : {}),
+      }
+    }
+    // Delegated children are no runtime tasks of their parent: they count in `active_children` (ADE-74).
+    if (summary.active_agents > 0 || (summary.active_children ?? 0) > 0) void loadChildren(summary.thread_id)
   }
   const current = getNav().activity
   const same =
     Object.keys(activity).length === Object.keys(current).length &&
     Object.entries(activity).every(([id, value]) => current[id] === value)
   if (!same) setNav({ activity })
+  if (JSON.stringify(pending) !== JSON.stringify(getNav().pending)) setNav({ pending })
 }
 
 let activityTimer: ReturnType<typeof setTimeout> | undefined

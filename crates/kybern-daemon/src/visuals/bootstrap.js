@@ -1,6 +1,6 @@
 (function () {
   const style = document.getElementById("kybern-visual-theme");
-  const base = "html{background:var(--background);color:var(--foreground);font:14px/1.5 var(--font-sans);-webkit-font-smoothing:antialiased;scrollbar-width:none}html::-webkit-scrollbar{display:none}body{margin:0}code,pre,kbd{font-family:var(--font-mono)}";
+  const base = "html{background:transparent;color:var(--foreground);font:14px/1.5 var(--font-sans);-webkit-font-smoothing:antialiased;scrollbar-width:none}html::-webkit-scrollbar{display:none}body{margin:0}code,pre,kbd{font-family:var(--font-mono)}";
   // The app's own scrollbars (styles/kit.css): 10px track, transparent, a 6px rounded thumb that
   // floats 2px from the edge and darkens on hover. Only `*::-webkit-*` rules and no standard
   // `scrollbar-*` property, so any scrollbar styling in the page itself wins at equal specificity
@@ -75,7 +75,52 @@
     for (const media of document.querySelectorAll("video,audio")) if (!active) media.pause();
     if (changed) window.dispatchEvent(new CustomEvent("kybern-visibility", { detail: { visible: active } }));
   }
-  window.addEventListener("message", e => { if (e.source !== window.parent) return; const data = e.data; if (!data || data.kind !== "kybern-visual-host") return; theme(data.theme); if (typeof data.visible === "boolean") visibility(data.visible); });
+  // Visuals that ask: the page drafts an answer, Kybern draws the send button and reports the outcome back.
+  let answerState = { state: "waiting", answer: undefined };
+  function announce(next) {
+    answerState = { state: String(next.state || "waiting"), answer: next.answer };
+    document.documentElement.dataset.kybernAnswer = answerState.state;
+    window.dispatchEvent(new CustomEvent("kybern-answer-state", { detail: { state: answerState.state, answer: answerState.answer } }));
+  }
+  try { const match = /[#&]kybern-lock=([^&]*)/.exec(location.hash); if (match) { const lock = JSON.parse(decodeURIComponent(match[1])); answerState = { state: String(lock.state || "answered"), answer: lock.answer }; document.addEventListener("DOMContentLoaded", () => announce(answerState)); } } catch (_) {}
+  function post(data) { if (window.parent !== window) window.parent.postMessage(data, "*"); }
+  const answer = Object.freeze({
+    draft(value, options) {
+      let json; try { json = JSON.stringify(value); } catch (_) { return false; }
+      if (json === undefined || json.length > 8192) return false;
+      const label = options && typeof options.label === "string" ? options.label.slice(0, 120) : undefined;
+      post({ kind: "kybern-visual-draft", value: JSON.parse(json), label });
+      return true;
+    },
+    clear() { post({ kind: "kybern-visual-draft", value: null }); },
+    submit() { post({ kind: "kybern-visual-submit" }); },
+    get state() { return answerState.state; },
+    get answer() { return answerState.answer; },
+  });
+  try { Object.defineProperty(window, "kybern", { value: Object.freeze({ answer }), configurable: false, writable: false }); } catch (_) {}
+  const typing = el => !!(el && el.closest && el.closest("input,textarea,select,[contenteditable],[contenteditable=true]"));
+  document.addEventListener("keydown", e => {
+    if (e.defaultPrevented || e.isComposing) return;
+    if (e.key === "Escape") post({ kind: "kybern-visual-escape" });
+    else if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && !typing(e.target)) post({ kind: "kybern-visual-submit" });
+  });
+  // A click on the picture, replayed where it landed once the live page is ready.
+  function replay(x, y) {
+    const el = document.elementFromPoint(x, y);
+    if (!el || el === document.documentElement || el === document.body) return;
+    if (typing(el) && el.focus) { el.focus(); return; }
+    const target = el.closest("button,a[href],input,select,summary,label,[role],[onclick],[data-kybern-id]") || el;
+    if (target.click) target.click();
+  }
+  window.addEventListener("message", e => {
+    if (e.source !== window.parent) return;
+    const data = e.data;
+    if (!data || typeof data !== "object") return;
+    if (data.kind === "kybern-visual-host") { theme(data.theme); if (typeof data.visible === "boolean") visibility(data.visible); }
+    else if (data.kind === "kybern-visual-lock") announce(data);
+    else if (data.kind === "kybern-visual-click" && Number.isFinite(data.x) && Number.isFinite(data.y)) replay(data.x, data.y);
+    else if (data.kind === "kybern-visual-select" && Number.isInteger(data.index)) window.dispatchEvent(new CustomEvent("kybern-answer-select", { detail: { index: data.index } }));
+  });
   document.addEventListener("click", e => {
     const link = e.isTrusted && e.composedPath().find(node => node && node.matches && node.matches("a[href]"));
     if (!link || window.parent === window) return;

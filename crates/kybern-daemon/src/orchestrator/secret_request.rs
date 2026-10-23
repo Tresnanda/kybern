@@ -117,7 +117,7 @@ impl Orchestrator {
         let decision = ApprovalDecision::Deny { reason: Some(TIMED_OUT.into()) };
         entry.decision.send_replace(Some(decision.clone()));
         self.inner.store.approval_resolve(card, &decision)?;
-        self.emit(thread_id, Some(turn_id), EventPayload::ApprovalResolved { approval_id: card, decision })?;
+        self.emit(thread_id, Some(turn_id), EventPayload::ApprovalResolved { approval_id: card, decision, answered_by: None })?;
         self.restore_running_after_approval(thread_id, live).await?;
         Ok(None)
     }
