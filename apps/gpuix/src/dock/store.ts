@@ -41,10 +41,11 @@ const legacy = legacyTerminalThreads(saved)
 if (legacy.length) {
   const off = subscribeApp(() => {
     const client = getState().status === 'open' ? getClient() : null
-    if (!client) return
+    // A listener must never throw into the app's emit: anything but a live client (a test stub) waits.
+    if (typeof client?.call !== 'function') return
     off()
     save('kybern.dock.choices', [...choices].map(([key, value]) => [key, { ...value, instant: false }]))
-    for (const threadId of legacy) void client.call('terminals.list', { thread_id: threadId }).then(({ terminals }) => {
+    for (const threadId of legacy) void Promise.resolve().then(() => client.call('terminals.list', { thread_id: threadId })).then(({ terminals }) => {
       for (const info of terminals) if (info.alive) openTab(threadId, { kind: 'terminal', id: info.id }, { activate: false, focus: false })
     }, () => {})
   })

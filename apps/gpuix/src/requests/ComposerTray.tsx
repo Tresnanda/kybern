@@ -18,7 +18,6 @@ import type { QueuedMessage, RuntimeTask, Thread } from '../../../../packages/ky
 import { commandSummary, queuedPreview, trayDefaultOpen, traySummary, type TrayCounts } from '../../../../packages/kybern-client/src/composerTray.ts'
 import { stoppableSubagents, subagentCounts, subagentDetail, subagentSpan, subagentThreadPhase, subagentTypeLabel, type SubagentPhase } from '../../../../packages/kybern-client/src/subagents.ts'
 import { Icon } from '../icons.tsx'
-import { MatrixLoader } from '../MatrixLoader.tsx'
 import { G } from '../composer/glyphs.ts'
 import { Dim, Leave, useLeavingList } from '../composer/motion.tsx'
 import { SECTION_LABEL, SectionLabel } from '../composer/Menu.tsx'
@@ -34,7 +33,7 @@ import { FONT_MONO } from '../theme.ts'
 import { T } from '../transcript/glyphs.ts'
 import { reportError } from '../transcript/store.ts'
 import { markTreeOpen, TICK_GAP, TreeGroup, TreeItem, TreeLines, useTreeSlot, type TreeShape } from '../tree/Tree.tsx'
-import { ink, Label, useTheme } from '../ui.tsx'
+import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
 import { controlSubagent, showDock } from './Activity.tsx'
 import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
@@ -106,6 +105,9 @@ function TrayHeader({ counts, subagents, tasks, open, onToggle }: { counts: Tray
   const state = working ? 'working' : counts.subagents.failed > 0 ? 'failed' : counts.subagents.done + counts.subagents.stopped > 0 ? 'done' : 'queued'
   const label = segments.map(s => s.text).join(', ')
   const toggle = () => onToggle(false)
+  // A working subagent shows its harness; with only background tasks running, a terminal.
+  const lead = subagents.find(s => subagentThreadPhase(s) === 'working')
+  const workingGlyph = lead ? <ProviderMark kind={lead.provider.kind} size={14} /> : <Icon source={G.terminal} size={14} color={ink(t, 0.5)} />
   return (
     // "Stop all" sits between the summary and the chevron but outside the toggle: GPUIX clicks bubble, and a stop must not
     // also close the tray. The summary is the focusable toggle; the chevron is a second pointer target for the same toggle.
@@ -120,7 +122,7 @@ function TrayHeader({ counts, subagents, tasks, open, onToggle }: { counts: Tray
         onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onToggle(true) }}
         style={{ display: 'flex', alignItems: 'center', gap: 8, height: 36, paddingLeft: 14, paddingRight: 8, cursor: 'pointer', flexGrow: 1, flexShrink: 1, minWidth: 0 }}
       >
-        <StatusGlyph phase={state} />
+        <StatusGlyph phase={state} working={workingGlyph} />
         {/* The whole line swaps as one (`TextSwap`): swapping a single segment would slide its neighbours under the outgoing copy. */}
         <SwapOnChange active={label} style={{ justifyContent: 'flex-start', flexGrow: 1, flexShrink: 1, minWidth: 0, overflow: 'hidden' }}>
           <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
@@ -143,12 +145,13 @@ function TrayHeader({ counts, subagents, tasks, open, onToggle }: { counts: Tray
   )
 }
 
-/** Loader while working, then a check, an alert or a stop square; the change cross-swaps (`IconSwap`), the first state paints still. */
-function StatusGlyph({ phase }: { phase: SubagentPhase | 'queued' }) {
+/** What is working (its harness mark, or a terminal for a background task), then a check, an alert or a stop square; the change
+ *  cross-swaps (`IconSwap`), the first state paints still. */
+function StatusGlyph({ phase, working }: { phase: SubagentPhase | 'queued'; working: ReactNode }) {
   const t = useTheme()
   return (
     <SwapOnChange kind="icon" active={phase} style={{ width: 16, height: 16, flexShrink: 0 }}>
-      {phase === 'working' ? <MatrixLoader whole />
+      {phase === 'working' ? working
         : phase === 'failed' ? <Icon source={T.alert} size={14} color={t.red} />
         : phase === 'stopped' ? <Icon source={G.stop} size={9} color={ink(t, 0.45)} />
         : phase === 'queued' ? <Icon source={G.clock} size={14} color={ink(t, 0.5)} />
@@ -354,7 +357,7 @@ const SubagentRow = memo(function SubagentRow({ thread }: { thread: Thread }) {
     <Dim dimmed={phase === 'done' || phase === 'stopped'} level={0.7}>
       <SubagentHover thread={thread}>
         <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}>
-          <Row testId={`subagent-open-${thread.id}`} onOpen={() => openThread(thread.id)} glyph={<StatusGlyph phase={phase} />} actions={actions} trailing={span && <Clock startedAt={span.startedAt} endedAt={span.endedAt} />}>
+          <Row testId={`subagent-open-${thread.id}`} onOpen={() => openThread(thread.id)} glyph={<StatusGlyph phase={phase} working={<ProviderMark kind={thread.provider.kind} size={14} />} />} actions={actions} trailing={span && <Clock startedAt={span.startedAt} endedAt={span.endedAt} />}>
             <Title keep={!!failure}>{thread.title || 'Subagent'}</Title>
             {failure ? <Meta color={t.red} shrink>{failure.text}</Meta> : type && <Meta>{type}</Meta>}
           </Row>
@@ -386,7 +389,7 @@ const HelperRow = memo(function HelperRow({ thread }: { thread: Thread }) {
   const amber = t.variant === 'dark' ? '#fcd34d' : '#d97706'
   return (
     <Row testId={`helper-${thread.id}`} onOpen={() => openThread(thread.id)}
-      glyph={thread.status === 'running' ? <MatrixLoader whole /> : approval ? <Icon source={G.hand} size={14} color={amber} /> : thread.status === 'failed' ? <Icon source={T.alert} size={14} color={t.red} /> : <Icon source={T.check} size={14} color={ink(t, 0.45)} />}>
+      glyph={thread.status === 'running' ? <ProviderMark kind={thread.provider.kind} size={14} /> : approval ? <Icon source={G.hand} size={14} color={amber} /> : thread.status === 'failed' ? <Icon source={T.alert} size={14} color={t.red} /> : <Icon source={T.check} size={14} color={ink(t, 0.45)} />}>
       <Title>{thread.title || 'Untitled'}</Title>
       <Meta color={approval ? amber : thread.status === 'failed' ? t.red : undefined}>{thread.status === 'running' ? 'Helper' : approval ? 'Needs approval' : thread.status === 'failed' ? 'Failed' : 'Helper · idle'}</Meta>
     </Row>

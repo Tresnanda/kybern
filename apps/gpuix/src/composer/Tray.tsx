@@ -7,6 +7,7 @@ import { Icon } from '../icons.tsx'
 import { GlassEdge } from '../kit/GlassEdge.tsx'
 import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
 import { Label, useTheme } from '../ui.tsx'
+import { alpha } from '../transcript/kit.tsx'
 import type { GitBranchesResult, Project, ProjectId } from '../../../../packages/kybern-client/src/types.ts'
 import type { ReactNode } from 'react'
 import { useApp } from '../state.ts'
@@ -52,8 +53,10 @@ export function LandingTray({ projectId, useWorktree }: { projectId: ProjectId |
 export function TrayFrame({ children, testId = 'landing-tray' }: { children: ReactNode; testId?: string }) {
   const t = useTheme()
   const g = useGlass()
-  // `--composer-backing-surface` (`kybern.css:12`, the light mix in `theme.logic`).
-  const backing = t.variant === 'dark' ? '#222222' : t.v('--composer-backing-surface')
+  // `--composer-backing-surface` (`kybern.css:12`, the light mix in `theme.logic`). With any glass on it takes the composer
+  // card's own 90% (`--composer-surface`, `kit.css:2659`), so the strip is never an opaque slab above a translucent card.
+  const solid = t.variant === 'dark' ? '#222222' : t.v('--composer-backing-surface')
+  const backing = t.scope === 'none' ? solid : alpha(solid, 0.9)
   return (
     <div
       testId={testId}
