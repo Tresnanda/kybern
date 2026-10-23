@@ -1,5 +1,6 @@
 import { environmentEndpoint, onEnvironmentChange, registerEnvironmentConnection } from './shell/environment.ts'
 import { startupMark } from './perf/startup.ts'
+import { addMemoryContext, memoryStep } from './perf/memoryLog.ts'
 import { HistoryPrefetch } from './shell/historyPrefetch.ts'
 import { EARLIER_HISTORY_PAGE } from '../../../packages/kybern-client/src/historyPaging.ts'
 import { onFrame } from './native/frame.ts'
@@ -182,6 +183,19 @@ export async function reloadPaneThread(paneId: string, threadId: string) {
   sessions.get(threadId)?.stop?.(); sessions.delete(threadId)
   return selectPaneThread(paneId, threadId)
 }
+/** Characters of text in a transcript, visiting at most `budget` values (the memory log's size estimate). */
+function textChars(value: unknown, budget = { left: 200_000 }): number {
+  if (typeof value === 'string') return value.length
+  if (!value || typeof value !== 'object' || --budget.left < 0) return 0
+  let chars = 0
+  for (const item of Array.isArray(value) ? value : Object.values(value)) chars += textChars(item, budget)
+  return chars
+}
+addMemoryContext('panes', () => [...panes].map(([id, pane]) => ({
+  id, thread: pane.selectedId, loaded: pane.open.loaded, blocks: pane.open.blocks.length,
+  moreHistory: pane.open.nextBeforeSeq != null, textKChars: Math.round(textChars(pane.open.blocks) / 1000),
+})))
+addMemoryContext('sessions', () => sessions.size)
 export function getThreadOpen(id: string) { return sessions.get(id)?.open ?? [...panes.values()].find(p => p.selectedId === id)?.open }
 export function setThreadOpen(id: string, open: ThreadState, textOnly = false) {
   const session = sessions.get(id)
@@ -373,6 +387,7 @@ export async function selectPaneThread(paneId: string, id: ThreadId | null, keep
     startupMark('thread-projected', { id, blocks: seeded.blocks.length })
     setThreadOpen(id, seeded)
     startupMark('thread-ready', { id, entries: res.transcript.length })
+    memoryStep('thread-open', { id, entries: res.transcript.length, blocks: seeded.blocks.length })
     const sub = owner.subscribeEvents(
       { thread_id: id, after_seq: res.thread.last_seq, include_tool_output: false },
       event => {

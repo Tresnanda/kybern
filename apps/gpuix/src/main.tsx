@@ -20,6 +20,7 @@ import { installFrameSource } from './native/frame.ts'
 import { hasSavedFrame, installWindowFrame, startWindowShell } from './shell/window.ts'
 import { startEnvironmentWindow } from './windows/window.ts'
 import { installRuntimeSafetyNet } from './shell/errors.ts'
+import { startMemoryLog } from './perf/memoryLog.ts'
 
 // The terminal draws xterm's weights (300 text, 500 bold); italics are their own family until GPUIX styles take `fontStyle`.
 const FONTS = ['CalSans-Regular.ttf', 'JetBrainsMono-Regular.ttf', 'JetBrainsMono-Light.ttf', 'JetBrainsMono-Medium.ttf', 'JetBrainsMono-LightItalic.ttf', 'JetBrainsMono-MediumItalic.ttf']
@@ -59,6 +60,8 @@ startSplitView()
 connect()
 // Packaged builds check the release feed 15 s after launch, then every 6 h (`platform/update.ts`).
 startAppUpdateChecks()
+// A line a minute in `memory.jsonl` (`perf/memoryLog.ts`), so a footprint spike can be traced afterwards.
+startMemoryLog()
 
 // Resolve the endpoint and start the socket while Bun loads the workspace's
 // page/editor modules. The first render still uses the complete App and fonts.
