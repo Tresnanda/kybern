@@ -11,6 +11,9 @@ edit(w, '            self.pop_subtree_mask();\n', '            self.pop_subtree_
 edit(w, '    subtree_geometry: Option<SubtreeGeometry>,\n}', '    subtree_geometry: Option<SubtreeGeometry>,\n    transform_base: Option<(Bounds<Pixels>, std::sync::Arc<SubtreeTransformContext>)>,\n}')
 edit(w, '            subtree_geometry: self.subtree_geometry(),\n        };\n        self.next_frame.hitboxes.push(hitbox.clone());', '            subtree_geometry: self.subtree_geometry(),\n            transform_base: None,\n        };\n        let hitbox = self.transform_hitbox(hitbox);\n        self.next_frame.hitboxes.push(hitbox.clone());')
 pending[w] += '\ninclude!("subtree_transform_window.rs");\n'
+# A border-only quad painted inside a scope stays one quad: split into strips, each strip's mask is cut by the ancestor
+# clips before the transform, so a border panned into view from outside an `overflow: hidden` viewport never painted.
+edit(w, '        if !self.subtree_tags.is_empty() {self.next_frame.scene.insert_primitive(quad);return;}', '        if !self.subtree_tags.is_empty() || self.subtree_transform.context.is_some() {self.next_frame.scene.insert_primitive(quad);return;}')
 edit('crates/gpui/src/element.rs', '                            window.record_subtree_a11y(node_id);', '                            window.record_subtree_a11y(node_id);\n                            window.transform_a11y_node(node_id, &mut node);')
 a = 'crates/gpui/src/window/a11y.rs'
 pending[a] += '\ninclude!("../subtree_transform_a11y.rs");\n'

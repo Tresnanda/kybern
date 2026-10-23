@@ -1523,8 +1523,11 @@ no React render, Taffy layout, prepaint, island wake or ancestor invalidation.
   Quads, shadows, images, surfaces, backdrops and underlines scale about the origin (radii, borders, blur and
   thickness scale too); glyph and SVG sprites take the full affine in their `transformation`; paths transform their
   vertices. Opacity multiplies every primitive's alpha. Masks pushed inside the scope (rounded overflow) map
-  through the transform; the mask at the scope's entry stays in window coordinates; each primitive keeps its own
-  narrower clip (GPUI's four-strip border quads). Hitboxes and AccessKit bounds follow the paint.
+  through the transform; the mask at the scope's entry stays in window coordinates; a primitive keeps only the
+  edges of its own clip that are narrower than those masks (ancestor clips are never mapped, so an `overflow:
+  hidden` viewport stays put while a stage inside it pans: ADE-71's cut-off tall image). A border-only quad inside
+  a scope stays one quad instead of GPUI's four strips, whose masks were cut by the ancestor clip before the
+  transform. Hitboxes and AccessKit bounds follow the paint. Check: `bun native/pan-clip-check.ts`.
 - `blur` paints a backdrop pass over what the subtree drew (bounds + 8 px), marked so frames set its radius; a
   settled blur renders once to drop the pass. Like CSS `filter: blur()` it is applied before the transform.
 - Limits: rotation is exact for sprites and paths; quads/images/masks keep their axes (centres rotate), and
