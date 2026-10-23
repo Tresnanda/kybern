@@ -25,16 +25,27 @@ after narration waits 90 ms. Everything is `paintTransform` (tier 1), fresh rows
 
 ## Results
 
-**Frame intervals, draw cost, CPU and GPU: not measured yet.** The machine's display slept for the whole session (screen
-unlocked, user away). GPUI presents no frames then (`[kybern-submit]` / `[kybern-work]` stay silent even on the hidden test
-display) and the app's timers are throttled, so the leased runs never started and the unleased ones were discarded
-(`L5/perf/invalid/`: in one, the "before" feed managed 5 events/s instead of 25). Run on an awake display:
+**Frame intervals, draw cost, CPU and GPU** (review pass, 2026-10-23, display awake: `locked: 0 displayAsleep: false
+testDisplay: ready`). A B B A, three 10 s windows per run after an 8 s warm-up; the table is the mean over the six windows of
+each variant (`KYBERN_DATA_DIR=<gpuix-scratch>/l5-work/data NAPI_RS_NATIVE_LIBRARY_PATH=<patched addon> bun src/transcript/work.perf.ts --before 84d44d0dd [--open]`). Raw rows: `.kybern-artifacts/ade-54-58/review2/perf/work-perf-{closed,open}.json` and `.log`. The first L5
+attempt and the review's first rerun read no frames at all: `work.perf.ts` sampled with a blocking `execFileSync`, so the
+app's `[kybern-submit]`/`[kybern-work]` lines were only parsed after `t.result` had read the window (React commits, counted
+later, looked fine). The sampler is asynchronous now; those runs are in `review2/perf/invalid/`.
 
-```sh
-cd apps/gpuix
-KYBERN_DATA_DIR=/Users/mymac/projects/ade-gpuix-scratch/l5-work/data NAPI_RS_NATIVE_LIBRARY_PATH=<patched addon> \
-  bun src/transcript/work.perf.ts --before 84d44d0dd --out <dir>/work-perf-closed.json      # add --open for the worst case
-```
+| Runs | Variant | Frame p50 / p95 / p99 ms | > 33 ms per window | Full draws | Render p50 / p95 ms | Layout p95 ms | React commits | CPU | GPU ms / 10 s | Footprint | Events by the last window |
+|---|---|---|---:|---:|---|---:|---:|---:|---:|---:|---:|
+| closed | before | 16.8 / 34.6 / 100.3 | 45 | 313 | 18.2 / 22.0 | 9.6 | 610 | 72.3% | 1,545 | 362 MiB | 824 |
+| | after | 16.7 / 32.6 / 64.7 | 36 | 202 | 13.5 / 17.1 | 8.8 | 560 | 46.4% | 1,439 | 317 MiB | 940 |
+| all open | before | 67.1 / 99.1 / 128.3 | 125 | 139 | 69.9 / 86.1 | 66.7 | 240 | 99.1% | 624 | 392 MiB | 506 |
+| | after | 16.5 / 89.0 / 113.1 | 118 | 129 | 62.5 / 72.8 | 44.9 | 334 | 94.1% | 689 | 461 MiB | 587 |
+
+Closed (the default, what a reader sees while an agent works): no regression; app CPU falls by about a third (72% → 46%),
+frame p99 from 100 to 65 ms, a third fewer full draws, each about a quarter cheaper, 45 MiB less footprint, and the shared JS
+thread keeps up with more of the feed (940 events delivered against 824). Frame p95 is unchanged within noise (both sit on
+the 60 Hz test display's 16.7 ms cadence half the time). All open (the opt-in worst case: every chip mounted): both variants
+saturate one core; the new rows deliver 16% more events with better frame, render and layout percentiles, at about 14% more
+host elements per delivered event (5.8 against 5.1) and ~70 MiB more footprint by the last window. That cost is the chips;
+nothing to fix for the stream itself.
 
 **Mounted elements (structural, independent of the display).** Host elements and components under `transcript-surface` after
 each window, against events delivered so far (the fixture thread's own history included):
@@ -60,7 +71,7 @@ skip their render; only the run that grew (or whose call settled) recounts its s
 reasoning sees `liveThinkingId` (`rows.tsx` `WorkRows`). The old live rows remounted a `Rise` per call and a blurred
 "Thinking" row between calls; a run's group key changed when a second call joined it (a remount). Neither happens now.
 
-A first 5-second A B B A probe (display state changing during the run, so diagnostic only) read 56–58% CPU, ~298 MiB and
+An earlier 5-second A B B A probe (display state changing during the run, so diagnostic only) read 56–58% CPU, ~298 MiB and
 ~375 React commits per 5 s before against 37–39%, ~262 MiB and ~285 after, at the same delivered events (350 vs 358).
 
 **Motion** (`L5/sheets/strip-*`, native clock paused, frames every 50 ms): a call arriving in an open run is invisible at 0,
