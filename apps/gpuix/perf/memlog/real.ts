@@ -68,9 +68,10 @@ try {
   if (replayed) {
     // Stream a stored thread back through the live path, sampling as it goes.
     const memlog = async (args: Record<string, unknown> = {}) => (await fetch(`http://127.0.0.1:${port('memlog')}`, { method: 'POST', body: JSON.stringify({ action: 'status', ...args }) })).json() as Promise<Record<string, any>>
+    await control('open', { thread: replayed }); await memlog({ action: 'tab', tab: { kind: 'chat' } })
     for (let round = 1; round <= Number(process.env.KYBERN_MEMLOG_ROUNDS ?? 1); round++) {
     if (round > 1) { await control('home'); await Bun.sleep(2000); await sample(`round-${round - 1}-home`) }
-    let status = await memlog({ action: 'replay', thread: replayed, perFrame: Number(process.env.KYBERN_MEMLOG_PER_FRAME ?? 4) })
+    let status = await memlog({ action: 'replay', thread: replayed, perFrame: Number(process.env.KYBERN_MEMLOG_PER_FRAME ?? 4), last: Number(process.env.KYBERN_MEMLOG_LAST ?? 0) || undefined, running: process.env.KYBERN_MEMLOG_RUNNING === '1' })
     const trace: unknown[] = []
     for (let next = 0.1; !status.done; await Bun.sleep(150)) {
       status = await memlog()
@@ -107,6 +108,25 @@ try {
   await sample('home-after')
   await Bun.sleep(Number(process.env.KYBERN_MEMLOG_IDLE_MS ?? 60000))
   await sample('home-idle')
+  if (process.env.KYBERN_MEMLOG_SNAPSHOT === '1') {
+    const file = path.join(out, 'heap.json')
+    await fetch(`http://127.0.0.1:${port('memlog')}`, { method: 'POST', body: JSON.stringify({ action: 'snapshot', file }) })
+    console.log('snapshot', file)
+  }
+  // With `MallocStackLogging=lite`: who allocated each `App-Specific Tag 1` region and how much of it is resident.
+  if (process.env.KYBERN_MEMLOG_TAG1_STACKS === '1') {
+    const env = { ...process.env, MallocStackLogging: '' }
+    const lines: string[] = []
+    for (const line of execFileSync('vmmap', ['-v', String(f.pid)], { encoding: 'utf8', maxBuffer: 1 << 28, env }).split('\n').filter(l => /^App-Specific Tag 1\s/.test(l))) {
+      const m = /\s([0-9a-f]+)-([0-9a-f]+)\s+\[\s*([\d.]+[KMG])\s+([\d.]+[KMG])/.exec(line)
+      if (!m) continue
+      let stack = ''
+      try { stack = execFileSync('malloc_history', [String(f.pid), `0x${m[1]}`], { encoding: 'utf8', env }).split('\n').filter(l => /\(gpuix-native|\(bun\)|mi_/.test(l)).slice(0, 4).map(l => l.trim().slice(0, 140)).join(' | ') } catch { stack = 'no stack' }
+      lines.push(`${m[1]} ${m[3]} resident ${m[4]} :: ${stack}`)
+    }
+    writeFileSync(path.join(out, 'tag1-stacks.txt'), lines.join('\n'))
+    console.log(lines.join('\n'))
+  }
   // With `MallocStackLogging=1` in the environment: what was live at the footprint peak.
   if (process.env.MallocStackLogging === 'full') {
     const file = path.join(out, 'high-water.txt')

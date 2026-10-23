@@ -62,6 +62,10 @@ connect()
 startAppUpdateChecks()
 // A line a minute in `memory.jsonl` (`perf/memoryLog.ts`), so a footprint spike can be traced afterwards.
 startMemoryLog()
+// React's development build adds a `performance.measure` entry for every component it renders, and Bun keeps them
+// all: live turns grew a session by 40–150 MB each (`perf/memlog/README.md`). Packaged builds use production React
+// (`scripts/package-app.ts`); a development run clears the entries every 10 s. Nothing in the app reads them.
+if (process.env.NODE_ENV !== 'production') setInterval(() => { performance.clearMeasures(); performance.clearMarks() }, 10_000).unref()
 
 // Resolve the endpoint and start the socket while Bun loads the workspace's
 // page/editor modules. The first render still uses the complete App and fonts.

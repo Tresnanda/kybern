@@ -59,6 +59,8 @@ let result: Awaited<ReturnType<typeof Bun.build>>
 try {
 result = await Bun.build({
   entrypoints: [path.join(root, 'packaging/entry.ts')], target: 'bun',
+  // Production React: the development build records a performance entry per component render and never clears them.
+  define: { 'process.env.NODE_ENV': JSON.stringify('production') },
   compile: {target:`bun-darwin-${arch}`, outfile:path.join(macos, 'Kybern GPUIX'), autoloadDotenv:false, autoloadBunfig:false, autoloadTsconfig:false, autoloadPackageJson:false},
   external: ['@gpuix/native-*'],
   plugins: [{name:'bundle-resource-urls', setup(build) {

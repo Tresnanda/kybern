@@ -52,8 +52,65 @@ the thread open, 344 → 279 MB with the lightbox open. Inline images are sharpe
 before (ImageIO resampling instead of GPU minification); the lightbox is full
 resolution.
 
-Not reproduced: the JS-side 459 MB after 8 hours. A replay grows it by about 20 MB and
-it stays flat across rounds. The memory log is there to catch that in a real session.
+The 459 MB after 8 hours came from live turns instead (see the live-turn leak below).
+
+## A normal session on this branch (with the image fix)
+
+`session.ts`, a stripped copy of the real store: 12 of the day's threads opened in turn
+with three history pages each, the orchestrator streamed in process, six document tabs
+(code, Markdown, diff, image), then Home and a minute idle.
+
+| Phase | Footprint | Peak | Tag 1 | Live JS heap (after full GC) |
+|---|---:|---:|---:|---:|
+| Home | 221 | 242 | 112 | 24 |
+| 12 threads | 251 | 266 | 126 | — |
+| Streamed | 283 | 308 | 138 | 41 |
+| Six tabs open | 348 | 359 | 136 | 38 |
+| Home, idle | **294** | 359 | 130 | 29 |
+
+The live JS heap stays at 24–41 MB; transcripts, Markdown caches and the file cache are
+not the large retainers.
+
+## The live-turn leak: development React (fixed)
+
+The installed app grew from 459 to 554 MB in `App-Specific Tag 1` in one hour of live
+agent turns and stayed flat while nothing streamed. `live.ts` reproduces it through the
+real path: the scratch daemon's Claude binary is `apps/desktop/scripts/profile-replay-driver.py`
+(settings `providers.claude-code.binary`, `KYBERN_PERF_REPLAY_JSONL` on the daemon), so
+each `PROFILE_REPLAY` message streams a recorded session through the driver, store and
+WebSocket while the app watches the thread. `real.ts` with `KYBERN_MEMLOG_LAST` and
+`KYBERN_MEMLOG_ROUNDS` reproduces it in process, without the daemon.
+
+Cause: the packaged app ran React's development build. `scripts/package-app.ts` never
+defined `NODE_ENV`, so the bundle kept `react-reconciler.development.js` (9
+`performance.measure` call sites; 0 with the define). React 19.2's development build
+records a `performance.measure` entry for every component it renders, and nothing
+clears them; each streamed token re-renders rows. A heap snapshot after three replays
+held 46 MB in the `Performance` object and 2,578 owner-stack `Error`s. The entries live
+in Bun's allocator, so the GC'd heap (24–41 MB) never showed them.
+
+Fix: `package-app.ts` defines `process.env.NODE_ENV` as `production`. A development run
+(`bun src/main.tsx`) clears the entries every 10 s (`main.tsx`). Nothing in the app reads
+them.
+
+| Live passes, window painting | Tag 1 (dev → production) | Footprint (dev → production) |
+|---|---:|---:|
+| open | 115 → 111 | 215 → 214 |
+| after pass 1 | 213 → 139 | 356 → 273 |
+| after pass 2 | 271 → 146 | 415 → 292 |
+| after pass 3 | — → 149 | — → **299** |
+
+In process, three rounds of one pass: dev 117 → 146 → 197 → 347; production 104 → 134 →
+162 → 161, 295 MB footprint idle.
+
+What it was not (each measured): the WebSocket client (`socket.ts`: 11,085 events, flat),
+the native streaming-document API (`doc-churn.ts`: 12,350 updates, flat), RPC traffic
+(about 95 KB a pass), and the addon's private mimalloc (`KYBERN_MEMLOG_TAG1_STACKS=1`: the
+growing regions are Bun's own 128 MB reservations). The growth needs painted frames:
+with the display asleep, or with a document tab covering the chat, nothing grows.
+
+Still open: transient peaks of 406–470 MB while a pass streams (the replay is faster than
+a real agent), and the heavy fixture (`perf/ramfix/retained.ts`) on this branch.
 
 ## Running
 
@@ -63,6 +120,10 @@ export KYBERN_DATA_DIR=$D NAPI_RS_NATIVE_LIBRARY_PATH="/Applications/Kybern GPUI
 bun perf/memlog/real.ts open <thread> [thread ...]           # open, all history, visit, Home
 KYBERN_MEMLOG_REPLAY=<thread> bun perf/memlog/real.ts replay  # stream it back; KYBERN_MEMLOG_ROUNDS for a soak
 KYBERN_IMAGE_FILES=0 bun perf/memlog/images-check.ts before <thread>   # thread and lightbox captures
+bun perf/memlog/session.ts <label> <streamed thread> <thread ...>      # the normal session above
+bun perf/memlog/live.ts <label> <thread> [passes] [minutes]           # live turns via the replay binary
+bun perf/memlog/socket.ts <raw|fold> <thread> [passes]                # the same, client only
+bun perf/memlog/doc-churn.ts <reply.md> [rounds] [replies] [step]     # native streaming documents, no painting
 ```
 
 Before running a daemon on a copy of the real store, delete every thread you do not
