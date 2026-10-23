@@ -6,6 +6,7 @@ import { useRef, useState } from 'react'
 import { TokenTextarea, type TokenTextareaHandle } from './TokenTextarea.tsx'
 import { skillReference } from './Completion.tsx'
 import { ICON_PAD, type TokenReference } from './token-text.ts'
+import { textEdit } from '../notes/rich-text.ts'
 
 const entry = createRequire(import.meta.url).resolve('@gpuix/react')
 const { createRoot, flushSync } = await import(pathToFileURL(path.join(path.dirname(entry), 'reconciler/reconciler.js')).href)
@@ -95,4 +96,19 @@ test('a caret restore against a native buffer that changed under it is skipped, 
   h.native.text = '$'; h.native.selection = { start: 1, end: 1 }
   await Bun.sleep(5)
   expect(h.native.selection).toEqual({ start: 1, end: 1 })
+})
+
+test('a diff that starts or ends inside a chip is widened to the whole chip', async () => {
+  const { snapToChips, tokenText } = await import('./token-text.ts')
+  const refs = [{ token: '@a.ts', label: 'a.ts', icon: 'i' }, { token: '@b.ts', label: 'b.ts', icon: 'i' }]
+  const previous = tokenText('@a.ts @b.ts x @', refs), next = tokenText('@b.ts x ', refs)
+  const bare = textEdit(previous.text, next.text)
+  // The bare diff begins after the shared icon room, inside the first chip.
+  expect(bare.start).toBeGreaterThan(0)
+  const snapped = snapToChips(previous, next, bare)
+  expect(snapped.start).toBe(0)
+  expect(previous.text.slice(0, snapped.start) + snapped.text + previous.text.slice(snapped.end)).toBe(next.text)
+  // Ending inside a chip widens the same way, and a diff clear of chips is untouched.
+  const typed = tokenText('@a.ts hi', refs), more = tokenText('@a.ts hi!', refs)
+  expect(snapToChips(typed, more, textEdit(typed.text, more.text))).toEqual(textEdit(typed.text, more.text))
 })

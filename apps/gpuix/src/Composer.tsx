@@ -94,6 +94,7 @@ import {
   uploadBytes,
   useComposer,
 } from './composer/store.ts'
+import { alreadyAttachedText, contentHash, newFiles } from './composer/attached.ts'
 
 export const COMPOSER_RADIUS = 19.2
 const DEFAULT_PLACEHOLDER = 'Ask anything, @ to mention, $ skills, or / commands'
@@ -323,6 +324,8 @@ interface Attachment {
   /** Inline label (`image1`) the prompt can mention as `@image1`. */
   label: string
   path: string
+  /** A pasted image's content digest, so pasting the same picture twice attaches it once (`composer/attached.ts`). */
+  hash?: string
 }
 
 /**
@@ -399,6 +402,11 @@ export function ComposerView(input: ComposerViewProps) {
   const [text, setText] = useState(saved?.text ?? '')
   const [attachments, setAttachments] = useState<Attachment[]>(saved?.attachments ?? [])
   const [uploading, setUploading] = useState(0)
+  // What the composer holds or is uploading, read by the add paths so a repeat is skipped even mid-upload.
+  const attachmentsNow = useRef(attachments)
+  attachmentsNow.current = attachments
+  const pendingPaths = useRef(new Set<string>())
+  const pendingHashes = useRef(new Set<string>())
   // A Finder drag over the card (`dragOver` in the desktop composer), eased by `DropHighlight`.
   const [dragOver, setDragOver] = useState(false)
   const [sending, setSending] = useState(false)
@@ -536,8 +544,6 @@ export function ComposerView(input: ComposerViewProps) {
       setSending(false)
     }
   }
-  const attachmentsNow = useRef(attachments)
-  attachmentsNow.current = attachments
   useEffect(() => onComposerRestore(props.draftKey, (draft) => {
     // A label the draft's own attachments took meanwhile is renumbered, in the restored text too.
     const taken = attachmentsNow.current.map((a) => a.label), renamed = new Map<string, string>()
@@ -555,6 +561,9 @@ export function ComposerView(input: ComposerViewProps) {
   }), [props.draftKey])
 
   const addClipboardImage = async (image: ClipboardImage) => {
+    const hash = contentHash(image.data)
+    if (attachmentsNow.current.some((a) => a.hash === hash) || pendingHashes.current.has(hash)) { setFeedback(alreadyAttachedText([image.name ?? 'This image'])); focusEditor(); return }
+    pendingHashes.current.add(hash)
     setUploading((n) => n + 1)
     setError(null)
     const name = image.name ?? 'pasted-image.png'
@@ -562,23 +571,28 @@ export function ComposerView(input: ComposerViewProps) {
       const info = await uploadBytes(name, image.mediaType, image.data)
       // Native images accept data URIs, so previews need no temporary file.
       const path = `data:${image.mediaType};base64,${Buffer.from(image.data).toString('base64')}`
-      setAttachments((list) => [...list, { ...info, path, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }])
+      setAttachments((list) => [...list, { ...info, path, hash, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }])
     } catch (e) { setError(`Unable to attach image: ${errorText(e)}`) }
-    finally { setUploading((n) => n - 1); focusEditor() }
+    finally { pendingHashes.current.delete(hash); setUploading((n) => n - 1); focusEditor() }
   }
 
   const addFiles = async (picked?: string[]) => {
     const paths = picked ?? (await renderer.promptForPaths?.({ files: true, multiple: true, prompt: 'Attach' }))
     if (!paths?.length) return
-    setFeedback(null)
-    setUploading((n) => n + paths.length)
-    for (const path of paths) {
+    // A file already attached (or on its way) is not attached again.
+    const { fresh, duplicates } = newFiles([...attachmentsNow.current, ...[...pendingPaths.current].map((path) => ({ path }))], paths)
+    setFeedback(duplicates.length ? alreadyAttachedText(duplicates.map((path) => path.split('/').pop() || path)) : null)
+    if (!fresh.length) { focusEditor(); return }
+    for (const path of fresh) pendingPaths.current.add(path)
+    setUploading((n) => n + fresh.length)
+    for (const path of fresh) {
       try {
         const info = await uploadPath(path)
         setAttachments((list) => [...list, { ...info, path, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }])
       } catch (e) {
         setError(`Unable to attach ${path.split('/').pop()}: ${errorText(e)}`)
       } finally {
+        pendingPaths.current.delete(path)
         setUploading((n) => n - 1)
       }
     }
