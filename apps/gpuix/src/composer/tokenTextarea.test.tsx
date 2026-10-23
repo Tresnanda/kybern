@@ -5,7 +5,7 @@ import path from 'node:path'
 import { useRef, useState } from 'react'
 import { TokenTextarea, type TokenTextareaHandle } from './TokenTextarea.tsx'
 import { skillReference } from './Completion.tsx'
-import { ICON_PAD, type TokenReference } from './token-text.ts'
+import { ICON_PAD, tokenText, type TokenReference } from './token-text.ts'
 import { textEdit } from '../notes/rich-text.ts'
 
 const entry = createRequire(import.meta.url).resolve('@gpuix/react')
@@ -111,4 +111,104 @@ test('a diff that starts or ends inside a chip is widened to the whole chip', as
   // Ending inside a chip widens the same way, and a diff clear of chips is untouched.
   const typed = tokenText('@a.ts hi', refs), more = tokenText('@a.ts hi!', refs)
   expect(snapToChips(typed, more, textEdit(typed.text, more.text))).toEqual(textEdit(typed.text, more.text))
+})
+
+// Review 2026-10-23 (shared editor code): every programmatic edit (a pick, a pick-again removal, cut, undo, redo) goes through
+// `snapToChips`. For any two documents, the widened edit must still produce `next` exactly, never end strictly inside a chip of
+// `previous` (the native input would widen it and drop text), and never split a surrogate pair.
+test('snapToChips: random edits around adjacent chips, emoji and plain text always give the next text on chip boundaries', async () => {
+  const { snapToChips, tokenText } = await import('./token-text.ts')
+  const refs = [
+    { token: '@a.ts', label: 'a.ts', icon: 'i' }, { token: '@a.tsx', label: 'a.tsx', icon: 'i' }, { token: '@b.ts', label: 'b.ts', icon: 'i' },
+    { token: '$review', label: 'review' }, { token: '@image1', label: 'image1', icon: 'i' },
+  ]
+  const pieces = ['@a.ts', '@a.tsx', '@b.ts', '$review', '@image1', ' ', ' ', '\n', 'x', 'hi', '👍🏽', '😀', 'é', '.', '(']
+  let seed = 7
+  const rand = (n: number) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n }
+  const make = () => Array.from({ length: 1 + rand(8) }, () => pieces[rand(pieces.length)]).join('')
+  const inside = (text: string, at: number) => at > 0 && at < text.length && /[\uDC00-\uDFFF]/.test(text[at]!) && /[\uD800-\uDBFF]/.test(text[at - 1]!)
+  for (let i = 0; i < 4000; i++) {
+    const source = make()
+    // An edit of the source the way the composer makes one: delete a range, insert a piece, or both (whole code points only).
+    const points = [...source], from = rand(points.length + 1), to = from + rand(points.length + 1 - from)
+    const edited = points.slice(0, from).join('') + (rand(2) ? pieces[rand(pieces.length)] : '') + points.slice(to).join('')
+    const previous = tokenText(source, refs), next = tokenText(edited, refs)
+    const snapped = snapToChips(previous, next, textEdit(previous.text, next.text))
+    const result = previous.text.slice(0, snapped.start) + snapped.text + previous.text.slice(snapped.end)
+    expect({ source, edited, result }).toEqual({ source, edited, result: next.text })
+    for (const span of previous.spans) {
+      expect(span.start < snapped.start && snapped.start < span.end).toBe(false)
+      expect(span.start < snapped.end && snapped.end < span.end).toBe(false)
+    }
+    expect(inside(previous.text, snapped.start) || inside(previous.text, snapped.end)).toBe(false)
+  }
+})
+
+/** The native input here behaves like `input_api.rs`: an `editInput` that intersects an atomic chip widens to the whole chip. */
+test('removing one of two adjacent chips, a chip at either end, and re-inserting two keep the native text and the composer in step', () => {
+  const native = { text: '', selection: null as null | { start: number; end: number }, atoms: [] as { start: number; end: number }[], widened: 0 }
+  let committed: string | null = null, observer: ((error: Error | null, event: unknown) => void) | null = null
+  const renderer = {
+    applyBatch(json: string) {
+      for (const [op, , a, b] of JSON.parse(json) as [string, number, any, any][]) if ((op === 'setProp' || op === 'setCustomProp') && a === 'value') committed = b
+      return []
+    },
+    setWindowKeyEvents() {}, setWindowSelectionChange() {}, registerFont() {}, getTextSelection() { return null }, setTextSelection() {},
+    getInputSelection() { const at = native.selection ?? { start: native.text.length, end: native.text.length }; return { ...at, reversed: false, composing: false } },
+    setInputSelection(_id: number, start: number, end: number) { native.selection = { start, end } },
+    editInput(_id: number, edit: { start: number; end: number; text: string; expectedValue: string }) {
+      if (edit.expectedValue !== native.text) throw Error('Input changed before the edit')
+      let { start, end } = edit
+      // The native rule: a replacement that intersects an atom takes the whole atom.
+      for (const atom of native.atoms) if (atom.start < end && start < atom.end && (start > atom.start || end < atom.end)) { start = Math.min(start, atom.start); end = Math.max(end, atom.end); native.widened++ }
+      native.text = native.text.slice(0, start) + edit.text + native.text.slice(end)
+      native.atoms = []
+      native.selection = { start: start + edit.text.length, end: start + edit.text.length }
+    },
+    setInputDecorations(_id: number, decorations: { start: number; end: number; atomic?: boolean }[], expected: string) {
+      if (expected !== native.text) throw Error('Input changed before decorations')
+      native.atoms = decorations.filter((d) => d.atomic).map(({ start, end }) => ({ start, end }))
+    },
+    hitTestInputDecoration() { return null },
+    addLayoutObserver(_target: unknown, callback: (error: Error | null, event: unknown) => void) { observer = callback; return 1 },
+    removeLayoutObserver() {}, isLayoutObserverActive() { return true },
+  }
+  const root = createRoot(renderer)
+  const refs: TokenReference[] = [{ token: '@a.ts', label: 'a.ts', icon: 'i' }, { token: '@b.ts', label: 'b.ts', icon: 'i' }, { token: '@image1', label: 'image1', icon: 'i' }]
+  let handle: TokenTextareaHandle | null = null, text = ''
+  function Chips({ initial }: { initial: string }) {
+    const [value, setValue] = useState(initial)
+    const ref = useRef<TokenTextareaHandle>(null)
+    handle = ref.current; text = value
+    return <TokenTextarea testId="composer" editorRef={ref} nativeRef={() => {}} value={value} references={refs} onChange={(e) => setValue(e.value ?? '')} />
+  }
+  const source = '@a.ts @b.ts 👍🏽 x @image1'
+  native.text = tokenText(source, refs).text
+  flushSync(() => root.render(<Chips initial={source} />))
+  // The editor is painted: its decorations (the atoms) are applied natively.
+  flushSync(() => observer!(null, { elementId: 1, rect: { x: 0, y: 0, width: 100, height: 20 }, clippedRect: null, frame: 1 }))
+  flushSync(() => root.render(<Chips initial={source} />))
+  expect(native.atoms.length).toBe(3)
+  const step = (start: number, end: number, insert: string, expected: string) => {
+    flushSync(() => { expect(handle!.edit(start, end, insert)).toBe(true) })
+    flushSync(() => root.render(<Chips initial={source} />))
+    flushSync(() => observer!(null, { elementId: 1, rect: { x: 0, y: 0, width: 100, height: 20 }, clippedRect: null, frame: 2 }))
+    expect(text).toBe(expected)
+    expect(native.text).toBe(tokenText(expected, refs).text)
+    expect(committed).toBe(native.text)
+  }
+  // The first of two adjacent chips, at the start: the labels share their icon room, so the bare diff starts inside a chip
+  // and the native input would widen it over the shared prefix (before the fix it ate the neighbour's icon room).
+  step(0, 6, '', '@b.ts 👍🏽 x @image1')
+  // A chip inserted before another one (the same shared prefix, the other way round).
+  step(0, 0, '@a.ts ', '@a.ts @b.ts 👍🏽 x @image1')
+  // The second of two adjacent chips.
+  step(6, 12, '', '@a.ts 👍🏽 x @image1')
+  // The last chip, at the end, and the emoji before it untouched.
+  step(13, 20, '', '@a.ts 👍🏽 x ')
+  // Two chips inserted back at once, next to each other, and both removed at once.
+  step(0, 6, '@b.ts @a.ts ', '@b.ts @a.ts 👍🏽 x ')
+  step(0, 12, '', '👍🏽 x ')
+  expect(native.widened).toBe(0)
+  root.unmount()
 })

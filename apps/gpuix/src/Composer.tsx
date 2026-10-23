@@ -576,7 +576,7 @@ export function ComposerView(input: ComposerViewProps) {
       const info = await uploadBytes(name, image.mediaType, image.data)
       // Native images accept data URIs, so previews need no temporary file.
       const path = `data:${image.mediaType};base64,${Buffer.from(image.data).toString('base64')}`
-      setAttachments((list) => [...list, { ...info, path, hash, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }])
+      setAttachments((list) => list.some((a) => a.hash === hash) ? list : [...list, { ...info, path, hash, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }])
     } catch (e) { setError(`Unable to attach image: ${errorText(e)}`) }
     finally { pendingHashes.current.delete(hash); setUploading((n) => n - 1); focusEditor() }
   }
@@ -584,7 +584,7 @@ export function ComposerView(input: ComposerViewProps) {
   const addFiles = async (picked?: string[]) => {
     const paths = picked ?? (await renderer.promptForPaths?.({ files: true, multiple: true, prompt: 'Attach' }))
     if (!paths?.length) return
-    // A file already attached (or on its way) is not attached again.
+    // A file already attached (or on its way) is not attached again, however its path is spelled (`fileKey`).
     const { fresh, duplicates } = newFiles([...attachmentsNow.current, ...[...pendingPaths.current].map((path) => ({ path }))], paths)
     setFeedback(duplicates.length ? alreadyAttachedText(duplicates.map((path) => path.split('/').pop() || path)) : null)
     if (!fresh.length) { focusEditor(); return }
@@ -593,7 +593,8 @@ export function ComposerView(input: ComposerViewProps) {
     for (const path of fresh) {
       try {
         const info = await uploadPath(path)
-        setAttachments((list) => [...list, { ...info, path, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }])
+        // Checked again as it lands: another add may have raced it between this upload and the next render.
+        setAttachments((list) => newFiles(list, [path]).fresh.length ? [...list, { ...info, path, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }] : list)
       } catch (e) {
         setError(`Unable to attach ${path.split('/').pop()}: ${errorText(e)}`)
       } finally {

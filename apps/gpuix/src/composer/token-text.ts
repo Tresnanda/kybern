@@ -47,15 +47,17 @@ export function editTokenText(doc: TokenText, displayed: string): { value: strin
  * The widened range replaces the same text with the same result.
  */
 export function snapToChips(previous: TokenText, next: TokenText, edit: { start: number; end: number; text: string }): { start: number; end: number; text: string } {
-  let { start, end } = edit, head = ''
+  let { start, end } = edit
   const delta = previous.text.length - next.text.length
-  // The prefix is shared, so a chip of either document that straddles `start` starts the range earlier.
-  for (const span of [...previous.spans, ...next.spans]) if (span.start < start && start < span.end) start = Math.min(start, span.start)
-  head = previous.text.slice(start, edit.start)
-  // The suffix is shared too, but `next` counts from its own end.
-  let tail = ''
-  for (const span of previous.spans) if (span.start < end && end < span.end) end = Math.max(end, span.end)
-  for (const span of next.spans) if (span.start < end - delta && end - delta < span.end) end = Math.max(end, span.end + delta)
-  tail = previous.text.slice(edit.end, end)
-  return { start, end, text: head + edit.text + tail }
+  // Widening one edge to a chip of one document can land it inside a chip of the other, so both edges are widened until
+  // neither moves (spans only grow the range, so this ends).
+  for (let moved = true; moved;) {
+    moved = false
+    // The prefix is shared, so a chip of either document that straddles `start` starts the range earlier.
+    for (const span of [...previous.spans, ...next.spans]) if (span.start < start && start < span.end) { start = span.start; moved = true }
+    // The suffix is shared too, but `next` counts from its own end.
+    for (const span of previous.spans) if (span.start < end && end < span.end) { end = span.end; moved = true }
+    for (const span of next.spans) if (span.start < end - delta && end - delta < span.end) { end = span.end + delta; moved = true }
+  }
+  return { start, end, text: previous.text.slice(start, edit.start) + edit.text + previous.text.slice(edit.end, end) }
 }

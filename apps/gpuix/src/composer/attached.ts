@@ -1,19 +1,26 @@
 // What the @ / $ picker marks as already attached, and the toggle that removes it. The source of truth is the composer's own
-// text: an item is attached while its token stands in the draft, so deleting the chip in the editor un-marks the row. Pure
-// text work, shared by `Completion.tsx` (rows, picks) and `Composer.tsx` (attachment de-duplication).
+// text: an item is attached while its token stands in the draft as a chip, so deleting the chip in the editor, undoing a
+// pick or pasting a chip back is what the row shows. Tokens are found with `tokenText`, the scan the editor draws chips with
+// (the longest known token wins at a position), so the picker and the editor never disagree. Pure text work, shared by
+// `Completion.tsx` (rows, picks) and `Composer.tsx` (attachment de-duplication).
 import { createHash } from 'node:crypto'
+import { realpathSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { tokenText } from './token-text.ts'
 
 export type Range = readonly [start: number, end: number]
 
-/** The same boundary rule as `tokenText`: a token starts the text or follows whitespace or an opening bracket, and ends it or precedes whitespace or closing punctuation. */
-export function tokenRanges(text: string, token: string): Range[] {
-  const found: Range[] = []
-  if (!token) return found
-  for (let at = text.indexOf(token); at >= 0; at = text.indexOf(token, at + token.length)) {
-    const before = text[at - 1], after = text[at + token.length]
-    if ((before === undefined || /\s|[([{]/.test(before)) && (after === undefined || /\s|[.,!?;:)\]}]/.test(after))) found.push([at, at + token.length])
-  }
-  return found
+/** Where the editor would draw `token` as a chip, given the other `known` tokens (a longer one at the same place wins). */
+export function tokenRanges(text: string, token: string, known: readonly string[] = []): Range[] {
+  if (!token) return []
+  return tokenText(text, [token, ...known].map((t) => ({ token: t, label: t }))).spans
+    .filter((span) => span.token === token)
+    .map((span) => [span.sourceStart, span.sourceEnd] as const)
+}
+
+/** Every token of `known` that stands in `text` as a chip, the picker's own trigger excepted. One scan for all rows. */
+export function standingTokens(text: string, known: readonly string[], trigger: Range | null = null): Set<string> {
+  return new Set(tokenText(withoutTrigger(text, trigger), known.map((t) => ({ token: t, label: t }))).spans.map((span) => span.token))
 }
 
 /** `text` with the range the user is still typing (the `@qu` that opened the picker) blanked, so it never counts as an attachment. */
@@ -21,16 +28,18 @@ export function withoutTrigger(text: string, trigger: Range | null): string {
   return trigger ? text.slice(0, trigger[0]) + ' '.repeat(Math.max(0, trigger[1] - trigger[0])) + text.slice(trigger[1]) : text
 }
 
-export const hasToken = (text: string, token: string | null | undefined, trigger: Range | null = null) => !!token && tokenRanges(withoutTrigger(text, trigger), token).length > 0
+export const hasToken = (text: string, token: string | null | undefined, trigger: Range | null = null, known: readonly string[] = []) =>
+  !!token && tokenRanges(withoutTrigger(text, trigger), token, known).length > 0
 
 export interface TextEdit { start: number; end: number; replacement: string }
 
 /**
  * One edit that removes every standing `token` and the picker's own trigger text. A removed token takes one neighbouring space
  * with it (the one after it, else the one before), so no gap is left; the edit spans first to last so it is one undo step.
+ * `known`: the draft's other chip tokens, so a longer chip that starts with `token` (`@a.ts.bak`) is never cut.
  */
-export function removalEdit(text: string, token: string, trigger: Range | null): TextEdit | null {
-  const spans: [number, number][] = tokenRanges(withoutTrigger(text, trigger), token).map(([start, end]) => {
+export function removalEdit(text: string, token: string, trigger: Range | null, known: readonly string[] = []): TextEdit | null {
+  const spans: [number, number][] = tokenRanges(withoutTrigger(text, trigger), token, known).map(([start, end]) => {
     if (/\s/.test(text[end] ?? '') && text[end] !== '\n') return [start, end + 1]
     if (start > 0 && /\s/.test(text[start - 1]!) && text[start - 1] !== '\n') return [start - 1, end]
     return [start, end]
@@ -50,11 +59,26 @@ export function removalEdit(text: string, token: string, trigger: Range | null):
   return { start, end, replacement }
 }
 
-/** The files to add: paths not already attached (or repeated in this very batch), and those that were. Compared by path as given. */
-export function newFiles(attached: readonly { path?: string }[], paths: readonly string[]): { fresh: string[]; duplicates: string[] } {
-  const seen = new Set(attached.flatMap((a) => (a.path ? [a.path] : [])))
+/**
+ * The identity of an attached file: its absolute path with `.`/`..`, doubled and trailing slashes resolved (a relative path is
+ * read from the working directory, as `uploadPath` reads it), and symlinks followed when it exists. Data URIs (pasted images)
+ * are their own identity.
+ */
+export function fileKey(path: string): string {
+  if (path.startsWith('data:')) return path
+  const absolute = resolve(path)
+  try { return realpathSync.native(absolute) } catch { return absolute }
+}
+
+/** The files to add: paths not already attached (or repeated in this very batch), and those that were. Compared by `fileKey`. */
+export function newFiles(attached: readonly { path?: string }[], paths: readonly string[], key: (path: string) => string = fileKey): { fresh: string[]; duplicates: string[] } {
+  const seen = new Set(attached.flatMap((a) => (a.path ? [key(a.path)] : [])))
   const fresh: string[] = [], duplicates: string[] = []
-  for (const path of paths) (seen.has(path) ? duplicates : fresh).push(path), seen.add(path)
+  for (const path of paths) {
+    const id = key(path)
+    ;(seen.has(id) ? duplicates : fresh).push(path)
+    seen.add(id)
+  }
   return { fresh, duplicates }
 }
 

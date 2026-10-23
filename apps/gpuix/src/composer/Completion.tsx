@@ -51,7 +51,7 @@ import { isChildThread } from '../../../../packages/kybern-client/src/subagents.
 import { isFreeChatProject, type ContentPart, type NoteId, type NoteSummary, type ProjectId, type ProviderKind, type SkillInfo, type TaskItem, type Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { useControls } from '../kit/controls.ts'
-import { hasToken, removalEdit, type Range } from './attached.ts'
+import { removalEdit, standingTokens, type Range } from './attached.ts'
 import { getClient, useApp } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { useNativeWindowSize } from '../native/layout-hooks.ts'
@@ -362,9 +362,18 @@ export function useCompletion({
       case 'command': return null
     }
   }
-  const attachedIds = useMemo(() => new Set(items.filter((item) => hasToken(text, tokenOf(item), trigger)).map((item) => item.id)),
+  // Every token the editor can draw as a chip, so a mark (and a removal) sees the text exactly as the editor does.
+  const knownTokens = (): string[] => [...new Set([
+    ...mentionRefs.map((r) => r.token), ...threadRefs.map((r) => r.token), ...[...mentioned].map((path) => `@${path}`),
+    ...[...picked.values()].map((s) => skillReference(s).token), ...attachments.map((a) => a.token),
+    ...items.flatMap((item) => { const token = tokenOf(item); return token ? [token] : [] }),
+  ])]
+  const attachedIds = useMemo(() => {
+    const standing = standingTokens(text, knownTokens(), trigger)
+    return new Set(items.filter((item) => { const token = tokenOf(item); return !!token && standing.has(token) }).map((item) => item.id))
+  },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [items, text, mention?.start, skill?.start, slash?.start, caret, mentionRefs, threadRefs, mentioned])
+    [items, text, mention?.start, skill?.start, slash?.start, caret, mentionRefs, threadRefs, mentioned, picked, attachments])
 
   const replace = (start: number, token: string, added?: TokenReference) => {
     // Whitespace already after the caret stands in for the token's own trailing space; the replacement takes it over so
@@ -376,24 +385,23 @@ export function useCompletion({
     return true
   }
 
-  /** Picking an attached item again: its token (and the trigger text) leaves the draft, and its reference with it. */
-  const detach = (item: Item, token: string): boolean => {
-    const change = removalEdit(text, token, trigger)
+  /**
+   * Picking an attached item again: its token (and the trigger text) leaves the draft in one undoable edit. Its chip reference
+   * stays, as it does when the chip is deleted from the keyboard: `tokens` and `buildParts` only use references whose token is
+   * in the text, and an undo that brings the token back must bring back its chip, its wire part and its check.
+   */
+  const detach = (token: string): boolean => {
+    const change = removalEdit(text, token, trigger, knownTokens())
     if (!change) return false
-    if (edit) { if (!edit(change.start, change.end, change.replacement)) return true }
+    if (edit) edit(change.start, change.end, change.replacement)
     else setText(`${text.slice(0, change.start)}${change.replacement}${text.slice(change.end)}`)
-    if (item.type === 'note' || item.type === 'task') setMentionRefs((list) => list.filter((r) => r.token !== token))
-    else if (item.type === 'thread') setThreadRefs((list) => list.filter((r) => r.token !== token))
-    else if (item.type === 'file') setMentioned((set) => { const next = new Set(set); next.delete(item.path); return next })
-    else if (item.type === 'plugin') setPicked((map) => { const next = new Map(map); next.delete(item.skill.path); return next })
-    else if (item.type === 'skill') setPicked((map) => { const next = new Map(map); next.delete(item.skill.name.toLowerCase()); return next })
     return true
   }
 
   const pick = (i: number) => {
     const item = items[i]
     if (!item) return
-    if (attachedIds.has(item.id) && detach(item, tokenOf(item)!)) return
+    if (attachedIds.has(item.id) && detach(tokenOf(item)!)) return
     if ((item.type === 'note' || item.type === 'task') && mention) {
       const part = item.type === 'note' ? noteMentionPart({ id: item.note.id, title: noteTitle(item.note) }) : taskMentionPart(item.task)
       const reference = createComposerMentionReference(part, mentionRefs, threadRefs.map(r => r.token))
