@@ -3,7 +3,7 @@
 // replays it); the browser keeps its one native web view per thread (`preview/Surface.tsx` places it in whichever slot shows).
 import { toast } from '../shell/toasts.tsx'
 import { errorText } from '../nav/actions.ts'
-import { useEffect, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import type { TerminalInfo, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { subagentThreadPhase } from '../../../../packages/kybern-client/src/subagents.ts'
@@ -34,6 +34,7 @@ import { VisualTab } from '../transcript/Visual.tsx'
 import { MermaidTab } from '../transcript/MermaidBlock.tsx'
 import { useThreadImage } from '../transcript/ThreadImage.tsx'
 import { imageSource } from '../../../desktop/src/lib/responseImages.ts'
+import { ZoomPane } from '../motion/ZoomSurface.tsx'
 import { activeTab, CHAT, tabKey, type Tab } from './model.ts'
 import { closeTabAction, keepTab, openTab, registerHostedPane } from './open.ts'
 import { useThreadRecord } from './Strip.tsx'
@@ -73,12 +74,18 @@ export function GroupContent({ leafId, children }: { leafId: string; children: R
 
 /** A document tab's box. It takes keyboard focus when it opens, so typing never lands in the hidden chat's composer. A preview
  *  tab the reader scrolls or types in is kept (single click → italic tab → permanent once used). */
+type DocumentKey = { key?: string; modifiers?: { cmd?: boolean; ctrl?: boolean; alt?: boolean; shift?: boolean } }
+/** The key handler a document body registers (the image tab's ⌘+ ⌘− ⌘0); the host calls it for keys while the tab has focus. */
+const DocumentKeys = createContext<MutableRefObject<((event: DocumentKey) => boolean) | null> | null>(null)
+
 function DocumentHost({ testId, onUsed, children }: { testId: string; onUsed?: () => void; children: ReactNode }) {
   const renderer = useGpuixRequired()
   const [node, setNode] = useState<PublicInstance | null>(null)
+  const keys = useRef<((event: DocumentKey) => boolean) | null>(null)
   useEffect(() => { if (node) renderer.focusElement?.(node.id) }, [node, renderer])
-  return <div ref={setNode} testId={testId} tabIndex={-1} onScroll={onUsed} onKeyDown={onUsed}
-    style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', position: 'relative' }}>{children}</div>
+  return <div ref={setNode} testId={testId} tabIndex={-1} onScroll={onUsed}
+    onKeyDown={(event: DocumentKey & { preventDefault(): void }) => { if (keys.current?.(event)) { event.preventDefault(); return } onUsed?.() }}
+    style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', position: 'relative' }}><DocumentKeys.Provider value={keys}>{children}</DocumentKeys.Provider></div>
 }
 
 function TabBody({ leafId, threadId, tab, children }: { leafId: string; threadId: string; tab: Tab; children: ReactNode }) {
@@ -164,9 +171,11 @@ function ImageTab({ threadId, source, label }: { threadId: string; source: strin
   const local = target?.kind === 'local'
   const loaded = useThreadImage(local ? threadId : null, source)
   const src = local ? loaded.image?.source : target?.kind ? source : undefined
+  const keys = useContext(DocumentKeys)
+  // The picture zooms and pans like the lightbox's (`motion/ZoomSurface.tsx`); the margin is the surface's own.
+  if (src) return <div testId="image-tab" style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0 }}><ZoomPane src={src} label={label ?? 'Image'} keys={keys} /></div>
   return <div testId="image-tab" style={{ display: 'flex', flexGrow: 1, minHeight: 0, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-    {src ? <img src={src} alt={label ?? 'Image'} objectFit="contain" style={{ width: '100%', height: '100%' }} />
-      : <Label color={t.textSecondary}>{loaded.failure?.reason ?? 'Loading image…'}</Label>}
+    <Label color={t.textSecondary}>{loaded.failure?.reason ?? 'Loading image…'}</Label>
   </div>
 }
 
