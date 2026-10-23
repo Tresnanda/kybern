@@ -27,6 +27,9 @@ interface Spec {
 
 const plain = (label: string) => [{ text: label }]
 
+/** A failed answer: what went wrong, then what to do. */
+const sendFailed = (e: unknown) => `Unable to send your answer: ${errorText(e).replace(/\.$/, '')}. Check it and try again.`
+
 /** One step per question, then a review. Answers are picked with digits or a click; ↑ ↓ move, Return continues. */
 function QuestionCard({ specs, count, busy, error, onSend, onDecline }: { specs: Spec[]; count: number; busy: boolean; error: string; onSend: (answers: string[][]) => void; onDecline?: () => void }) {
   const k = useCardTokens()
@@ -161,7 +164,7 @@ export function UserInputPanel({ approval, count }: { approval: ApprovalRequest;
     try {
       await respondApproval(approval.id, response === undefined ? { decision: 'deny' } : { decision: 'submit', response })
     } catch (e) {
-      setError(errorText(e))
+      setError(sendFailed(e))
     } finally {
       setBusy(false)
     }
@@ -174,7 +177,7 @@ export function UserInputPanel({ approval, count }: { approval: ApprovalRequest;
         specs={questions.map((q): Spec => ({ id: q.id, title: q.title, options: q.options, multiple: q.multiple, custom: q.custom || !q.options.length, secret: q.secret }))}
         onDecline={() => void submit()}
         onSend={(answers) => {
-          try { void submit(questionResponse(approval, answers)) } catch (e) { setError(errorText(e)) }
+          try { void submit(questionResponse(approval, answers)) } catch (e) { setError(sendFailed(e)) }
         }}
       />
     )
@@ -272,7 +275,7 @@ export function AsyncQuestionPanel({ threadId, request, count }: { threadId: Thr
         try {
           await answerQuestions(threadId, request.id, answers.map((a) => a.join(', ').trim()))
         } catch (e) {
-          setError(errorText(e))
+          setError(sendFailed(e))
         } finally {
           setBusy(false)
         }

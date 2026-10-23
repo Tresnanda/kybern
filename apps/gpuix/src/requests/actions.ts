@@ -5,9 +5,11 @@ import { isUserInput, connectorApproval } from '../../../../packages/kybern-clie
 import { secretRequestInput } from '../../../../packages/kybern-client/src/secretRequest.ts'
 import { briefProposalInput, leadGitCardInput, settingsProposalInput } from '../../../../packages/kybern-client/src/coordinatorCards.ts'
 import { sendToThread } from '../composer/store.ts'
-import { getState } from '../state.ts'
+import { kitOverlayOpen } from '../kit/AlertDialog.tsx'
+import { getNav } from '../nav/store.ts'
+import { getPaneIds, getPaneState, getState } from '../state.ts'
 import { interrupt, reportError, respondApproval } from '../transcript/store.ts'
-import { approvalCard, forwardsDeclineReason, stepHighlight, type CardModel } from './model.ts'
+import { agentName, approvalCard, forwardsDeclineReason, stepHighlight, type CardModel } from './model.ts'
 import { keyboardAnswer } from './Panel.tsx'
 import { getCardUi, patchCardUi } from './ui.ts'
 
@@ -17,10 +19,20 @@ export function isRowCard(approval: ApprovalRequest): boolean {
   return !isUserInput(approval) || !!connectorApproval(approval)
 }
 
-export const threadProvider = (): string | undefined => getState().open.thread?.provider.kind
+/**
+ * The harness of the thread that asked, wherever it is open: not the focused pane's, which in a split can be another thread with
+ * another harness (its rows would map a digit to a different choice, and its decline note to the wrong path).
+ */
+export function threadProvider(threadId: ThreadId): string | undefined {
+  for (const id of getPaneIds()) {
+    const thread = getPaneState(id).open.thread
+    if (thread?.id === threadId) return thread.provider.kind
+  }
+  return getState().threads.find((thread) => thread.id === threadId)?.provider.kind
+}
 
 export function cardFor(approval: ApprovalRequest): CardModel | null {
-  return isRowCard(approval) ? approvalCard(approval, threadProvider()) : null
+  return isRowCard(approval) ? approvalCard(approval, threadProvider(approval.thread_id)) : null
 }
 
 export const SEND_ERROR = 'Unable to send your choice. Check the connection and pick again.'
@@ -58,15 +70,17 @@ export function sendDecline(approval: ApprovalRequest, threadId: ThreadId, note:
   const reason = note.trim()
   if (keyboard) keyboardAnswer()
   const decision: ApprovalDecision = reason ? { decision: 'deny', reason } : { decision: 'deny' }
-  const forwarded = forwardsDeclineReason(approval, threadProvider())
+  // A harness that reads the deny's `reason` must not also get the note as a message; one that drops it gets only the message.
+  const provider = threadProvider(approval.thread_id)
+  const forwarded = forwardsDeclineReason(approval, provider)
   void send(approval, decision, card.rows.length - 1, reason && !forwarded
-    ? () => { sendToThread(threadId, { parts: [{ type: 'text', text: reason }] }, 'queue').catch((e) => reportError('Unable to send your note', e)) }
+    ? () => { sendToThread(threadId, { parts: [{ type: 'text', text: reason }] }, 'queue').catch((e) => reportError(`Unable to send your note to ${agentName(provider)}. Send it again as a message`, e)) }
     : undefined)
 }
 
 export function cancelTurn(threadId: ThreadId, keyboard = true) {
   if (keyboard) keyboardAnswer()
-  interrupt(threadId).catch((e) => reportError('Unable to stop the turn', e))
+  interrupt(threadId).catch((e) => reportError('Unable to cancel the turn. Press Esc to try again', e))
 }
 
 export function moveHighlight(approval: ApprovalRequest, dir: 1 | -1): boolean {
@@ -78,19 +92,26 @@ export function moveHighlight(approval: ApprovalRequest, dir: 1 | -1): boolean {
   return true
 }
 
-/** Digits, ↑ ↓, Return and Esc for a row card (the card's own handler and the empty composer's). False when the key is not for the card. */
+/** An overlay that owns Esc is open: a kit dialog, sheet, select or combobox, or the command palette. */
+const overlayOwnsEscape = () => kitOverlayOpen() || getNav().paletteOpen
+
+/**
+ * Digits, ↑ ↓, Return and Esc for a row card (the card's own handler and the empty composer's). False when the key is not for
+ * the card: the note field is open, the key comes from a composer of another thread (a task's follow-up composer while the pane
+ * shows a different thread), or Esc belongs to an open overlay.
+ */
 export function handleCardKey(approval: ApprovalRequest, threadId: ThreadId, key: string): boolean {
+  if (approval.thread_id !== threadId) return false
   const ui = getCardUi(approval.id)
   if (ui.note) return false
   if (/^[1-9]$/.test(key)) return chooseRow(approval, Number(key) - 1, true)
   if (key === 'up') return moveHighlight(approval, -1)
   if (key === 'down') return moveHighlight(approval, 1)
-  if (key === 'enter') return chooseRow(approval, ui.highlight, true)
-  if (key === 'escape') { if (ui.sending === null) cancelTurn(threadId); return true }
+  if (key === 'enter') return chooseRow(approval, Math.min(ui.highlight, (cardFor(approval)?.rows.length ?? 1) - 1), true)
+  if (key === 'escape') {
+    if (overlayOwnsEscape()) return false
+    if (ui.sending === null) cancelTurn(threadId)
+    return true
+  }
   return false
-}
-
-/** The same numbered choices for the card and the empty composer (digits only; the composer calls `handleCardKey` for the rest). */
-export function answerApproval(approval: ApprovalRequest, threadId: ThreadId, n: number): boolean {
-  return isRowCard(approval) && handleCardKey(approval, threadId, String(n))
 }

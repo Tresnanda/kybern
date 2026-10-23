@@ -5,16 +5,17 @@ numbered rows, a hint line. Spec and tokens: `.kybern-artifacts/ade-approval-des
 
 | File | What |
 | --- | --- |
-| `model.ts` | `approvalCard(approval, provider)`: title, well and the rows (label, RPC) of every tool approval and consent kind. The rows, the key map and the RPC come from this one table, so they cannot drift. `sessionLabel` words the session option for what each harness really allows. |
-| `shell.ts` | Splits the real `input.command` on `&&`, `\|\|`, `;`, `\|`, `\|&`, `&` and newlines (quotes, `$(…)`, heredocs and comments are not split) so `a && b` never reads as `a`. |
-| `actions.ts` | `chooseRow`, `sendDecline`, `cancelTurn`, `handleCardKey`: what a click, a digit or a key does. The card and the composer share them. |
+| `model.ts` | `approvalCard(approval, provider)`: title, well and the rows (label, RPC) of every tool approval and consent kind. The rows, the key map and the RPC come from this one table, so they cannot drift. `sessionLabel` words the session option for what each harness really allows (Claude's suggested rules, prefix rules as "… commands"; OpenCode's patterns; Codex's exact command or edited files; Pi's exact call only through Kybern's extension; Cursor's own "always" option), and leaves it out when the harness would only approve once. |
+| `shell.ts` | Splits the real `input.command` on `&&`, `\|\|`, `;`, `\|`, `\|&`, `&` and newlines (quotes, `$(…)`, backticks, `((…))`, `[[ … ]]`, `case` terminators, heredocs and comments are not split) so `a && b` never reads as `a`. Display only: no allow rule is built from a segment. A command that is not a plain chain, or a split that would lose a character, stays whole. |
+| `actions.ts` | `chooseRow`, `sendDecline`, `cancelTurn`, `handleCardKey`: what a click, a digit or a key does. The card and the composer share them. The harness is the one of the approval's own thread, not the focused pane's. |
 | `ui.ts` | Highlight, open note, choice in flight, expanded well; module state because the composer also routes keys. |
 | `Card.tsx` | Header, wells (`CodeWell`, `DiffWell`, `PlanWell`, …), `OptionRow`, `NoteField`, `Hints`. |
 | `ApprovalCard.tsx`, `Question.tsx`, `Secret.tsx`, `../coordinator/Cards.tsx` | The card kinds built from those parts. |
 
 Keys: digits follow the visible order and Decline is always the last number. ↑ ↓ move the highlight (in the empty composer they hand
-the keyboard to the card), Return picks the highlighted row only with the card focused (never from the composer), Esc cancels the turn
-(forms ignore it), ⌘E expands a clamped well. A card that arrives while someone is typing never takes focus.
+the keyboard to the card), Return picks the highlighted row only with the card root focused (never from the composer, a link or a
+field inside the card), Esc cancels the turn (forms ignore it; an open kit overlay or the palette keeps it), ⌘E expands a clamped well.
+Keys from a composer of another thread are ignored. A card that arrives while someone is typing never takes focus.
 
 Decline opens a note field in the row. Claude's driver and the daemon's own cards (computer use, notes and tasks) carry the note as the
 deny `reason`; every other driver drops it, so the note also goes as the next queued message.

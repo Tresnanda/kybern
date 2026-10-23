@@ -6,7 +6,7 @@ import { useApp } from '../state.ts'
 import { ICONS } from '../icons.tsx'
 import { cancelTurn, chooseRow, handleCardKey, sendDecline } from './actions.ts'
 import { CancelLink, CardShell, GLYPHS, HintText, Hints, Kbd, NoteField, OptionList, OptionRow, RequestHeader, WellFor } from './Card.tsx'
-import { approvalCard } from './model.ts'
+import { approvalCard, forwardsDeclineReason } from './model.ts'
 import { forgetCardUi, patchCardUi, useCardUi } from './ui.ts'
 
 /** The thread's folder as the chip shows it: relative to the home folder, tail only when long. */
@@ -55,7 +55,8 @@ export function ApprovalCard({ threadId, approval, count }: { threadId: ThreadId
       <Hints
         error={ui.error}
         left={sending ? <HintText>Sending your choice…</HintText> : ui.note
-          ? <><Kbd keys={['↵']} /><HintText>to send your note</HintText><HintText>·</HintText><Kbd keys={['esc']} /><HintText>to go back</HintText></>
+          // A harness that drops a deny's reason gets the note as the next message (`sendDecline`): say so before it goes.
+          ? <><Kbd keys={['↵']} /><HintText>{forwardsDeclineReason(approval, provider) ? 'to send your note' : 'to send it as your next message'}</HintText><HintText>·</HintText><Kbd keys={['esc']} /><HintText>to go back</HintText></>
           : <><Kbd keys={['↑', '↓']} /><HintText>to move</HintText><HintText>·</HintText><Kbd keys={['1']} /><HintText>–</HintText><Kbd keys={[String(rows.length)]} /><HintText>or</HintText><Kbd keys={['↵']} /><HintText>to choose</HintText></>}
         right={sending || ui.note ? undefined : <CancelLink onClick={() => cancelTurn(threadId, false)} />}
       />

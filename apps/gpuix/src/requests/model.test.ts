@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ApprovalRequest } from '../../../../packages/kybern-client/src/types.ts'
-import { approvalCard, commandOf, diffLines, editDiff, forwardsDeclineReason, grantLines, listParts, rowForDigit, sessionLabel, stepHighlight, type CardModel, type Part } from './model.ts'
+import { approvalCard, commandOf, diffLines, editDiff, forwardsDeclineReason, grantLines, listParts, rowForDigit, sessionLabel, shellQuote, stepHighlight, type CardModel, type Part } from './model.ts'
 
 const base = { id: 'a1', thread_id: 't', turn_id: 'u', tool_call_id: 'c', created_at: '2026-10-23T00:00:00Z', summary: '' }
 const request = (tool_name: string, input: unknown, suggestions: unknown[] = [], summary = ''): ApprovalRequest => ({ ...base, tool_name, input: input as never, suggestions: suggestions as never, summary })
@@ -14,16 +14,31 @@ describe('commandOf', () => {
     expect(commandOf({ metadata: { command: 'ls | wc' } })).toBe('ls | wc')
     expect(commandOf({ command: ['git', 'status'] })).toBe('git status')
     expect(commandOf({ rawInput: { command: 'x' } })).toBe('x')
+    expect(commandOf({ title: 'Run', raw: { command: 'a && b' } })).toBe('a && b')
     expect(commandOf({})).toBe('')
+  })
+  test('an argv array is quoted word by word, so a script argument never reads as a chain', () => {
+    expect(commandOf({ command: ['bash', '-lc', 'rm -rf x && echo ok'] })).toBe(`bash -lc 'rm -rf x && echo ok'`)
+    expect(commandOf({ command: ['echo', "it's", ''] })).toBe(`echo 'it'\\''s' ''`)
+    expect(shellQuote('src/a.ts')).toBe('src/a.ts')
   })
 })
 
 describe('session option', () => {
   test('Claude names the rules its suggestions add, and says so when they outlive the session', () => {
     const r = request('Bash', { command: 'pnpm run typecheck && bun test src' }, [rule('session', 'pnpm run typecheck:*', 'bun test:*')])
-    expect(plain(sessionLabel(r, 'claude-code', 'command'))).toBe('Allow `pnpm run typecheck` and `bun test` for this session')
+    expect(plain(sessionLabel(r, 'claude-code', 'command'))).toBe('Allow `pnpm run typecheck` and `bun test` commands for this session')
     const saved = request('Bash', { command: 'bun test' }, [rule('localSettings', 'bun test:*')])
-    expect(plain(sessionLabel(saved, 'claude-code', 'command'))).toBe('Always allow `bun test`')
+    expect(plain(sessionLabel(saved, 'claude-code', 'command'))).toBe('Always allow `bun test` commands')
+  })
+  test('an exact Claude rule is not called a prefix, and a rule with no command allows every command', () => {
+    expect(plain(sessionLabel(request('Bash', { command: 'ls -la' }, [rule('session', 'ls -la')]), 'claude-code', 'command'))).toBe('Allow `ls -la` for this session')
+    expect(plain(sessionLabel(request('Bash', { command: 'ls' }, [rule('session', '')]), 'claude-code', 'command'))).toBe('Allow every command for this session')
+  })
+  test('a Claude suggestion the card cannot name is still sent, so the label says so', () => {
+    const r = request('Bash', { command: 'x' }, [rule('session', 'x'), { type: 'setMode', mode: 'bypassPermissions', destination: 'session' }])
+    expect(plain(sessionLabel(r, 'claude-code', 'command'))).toBe('Allow `x` and other permission changes for this session')
+    expect(plain(sessionLabel(request('Bash', {}, [{ type: 'removeRules', destination: 'session' }]), 'claude-code', 'command'))).toBe('Allow the permission changes Claude suggests for this session')
   })
   test('long lists read "a, b and N more"', () => {
     expect(plain(listParts(['a', 'b', 'c', 'd', 'e', 'f']))).toBe('`a`, `b` and 4 more')
@@ -36,13 +51,24 @@ describe('session option', () => {
     const r = request('Edit', { file_path: '/a' }, [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }])
     expect(plain(sessionLabel(r, 'claude-code', 'edit'))).toBe('Allow edits for this session')
   })
-  test('Codex and Pi remember only the exact call', () => {
+  test('Codex remembers the exact command, and the files of an edit', () => {
     expect(plain(sessionLabel(request('shell', { command: 'x' }), 'codex', 'command'))).toBe('Allow this exact command for this session')
-    expect(plain(sessionLabel(request('Bash', { command: 'x' }), 'pi', 'command'))).toBe('Allow this exact command for this session')
+    expect(plain(sessionLabel(request('apply_patch', { changes: [{ path: '/a' }] }), 'codex', 'edit'))).toBe('Allow edits to this file for this session')
+    expect(plain(sessionLabel(request('apply_patch', { changes: [{ path: '/a' }, { path: '/b' }] }), 'codex', 'edit'))).toBe('Allow edits to these files for this session')
+  })
+  test('Pi remembers the exact call through Kybern\'s extension; its other prompts only approve once', () => {
+    expect(plain(sessionLabel(request('bash', { command: 'x' }), 'pi', 'command'))).toBe('Allow this exact command for this session')
+    expect(sessionLabel({ ...request('bash', { command: 'x' }), tool_call_id: null }, 'omp', 'command')).toBeNull()
+  })
+  test('Cursor offers its own always option, or nothing when it has none', () => {
+    const options = (kinds: string[]) => ({ title: 'Run ls', options: kinds.map((kind, i) => ({ id: String(i), name: kind === 'AllowAlways' ? 'allow always' : kind, kind })) })
+    expect(plain(sessionLabel(request('execute', options(['AllowOnce', 'AllowAlways', 'RejectOnce'])), 'cursor', 'command'))).toBe('Allow always')
+    expect(sessionLabel(request('execute', options(['AllowOnce', 'RejectOnce'])), 'cursor', 'command')).toBeNull()
   })
   test('OpenCode names its always patterns', () => {
-    expect(plain(sessionLabel(request('bash', {}, ['pnpm run *']), 'opencode', 'command'))).toBe('Allow `pnpm run` for this session')
-    expect(plain(sessionLabel(request('bash', {}, ['*']), 'opencode', 'command'))).toBe('Allow `bash` for this session')
+    expect(plain(sessionLabel(request('bash', {}, ['pnpm run *']), 'opencode', 'command'))).toBe('Allow `pnpm run` commands for this session')
+    expect(plain(sessionLabel(request('bash', {}, ['*']), 'opencode', 'command'))).toBe('Allow every `bash` request for this session')
+    expect(plain(sessionLabel(request('edit', {}, ['src/*']), 'opencode', 'edit'))).toBe('Allow `src/*` for this session')
   })
 })
 
@@ -52,7 +78,7 @@ describe('the rows of each card, in key order', () => {
     const card = approvalCard(request('Bash', { command: 'pnpm run typecheck && bun test src' }, session), 'claude-code', 'ade/apps/gpuix')
     expect(card?.kind).toBe('command')
     expect(card?.well).toEqual({ kind: 'command', command: 'pnpm run typecheck && bun test src' })
-    expect(rowLabels(card)).toEqual(['Run once', 'Allow `pnpm run typecheck` and `bun test` for this session', 'Decline and tell Claude what to do instead'])
+    expect(rowLabels(card)).toEqual(['Run once', 'Allow `pnpm run typecheck` and `bun test` commands for this session', 'Decline and tell Claude what to do instead'])
     expect(card?.rows.map((r) => r.action)).toEqual([
       { kind: 'decide', decision: { decision: 'allow_once' } },
       { kind: 'decide', decision: { decision: 'allow_always' } },
@@ -67,6 +93,17 @@ describe('the rows of each card, in key order', () => {
   })
   test('Codex names Codex', () => {
     expect(rowLabels(approvalCard(request('shell', { command: 'ls' }), 'codex'))?.at(-1)).toBe('Decline and tell Codex what to do instead')
+  })
+  test('a Codex network request with no command is a grant, not "Run this command?"', () => {
+    const card = approvalCard(request('shell', { command: '', network: { host: 'registry.npmjs.org' } }, [], 'network access to registry.npmjs.org'), 'codex')
+    expect(card?.kind).toBe('grant')
+    expect(rowLabels(card)).toEqual(['Grant once', 'Grant for this session', 'Decline and tell Codex what to do instead'])
+  })
+  test('a Codex edit that asks for a write root says the session option covers the root', () => {
+    const card = approvalCard(request('apply_patch', { changes: [{ path: '/w/a.ts', diff: '+x' }], grant_root: '/w/out' }), 'codex')
+    expect(card?.kind).toBe('edit')
+    expect(card?.meta).toBe('Codex also asks to write in /w/out for the rest of the session.')
+    expect(rowLabels(card)![1]).toBe('Allow writes in `/w/out` for this session')
   })
   test('an edit shows its diff', () => {
     const card = approvalCard(request('Edit', { file_path: '/p/src/date.ts', old_string: 'a\nb', new_string: 'a\nc\nd' }, [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }]), 'claude-code')
@@ -92,7 +129,7 @@ describe('the rows of each card, in key order', () => {
   })
   test('computer use: background offers Always allow as row 3 and decline is 4; foreground has no Always', () => {
     const background = approvalCard(request('kybern_computer_use', { app: 'Safari', mode: 'background' }), 'claude-code')
-    expect(rowLabels(background)).toEqual(['Allow once', 'Allow for this session', 'Always allow Safari', 'Decline and tell Claude what to do instead'])
+    expect(rowLabels(background)).toEqual(['Allow for this turn', 'Allow for this session', 'Always allow Safari in the background', 'Decline and tell Claude what to do instead'])
     expect(background?.rows[2]!.action).toEqual({ kind: 'decide', decision: { decision: 'submit', response: { scope: 'always' } } })
     expect(rowLabels(approvalCard(request('kybern_computer_use', { app: 'Safari', mode: 'foreground' }), 'claude-code'))).toHaveLength(3)
   })

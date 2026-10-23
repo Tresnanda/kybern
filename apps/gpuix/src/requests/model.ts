@@ -63,6 +63,8 @@ const code = (value: string): Part => ({ text: value, code: true })
 const lasts = (destination: unknown) => destination === 'session'
 
 const stripRule = (rule: string): string => rule.replace(/:\*$/, '').replace(/ \*$/, '').trim()
+/** A rule that ends in a wildcard (`pnpm run:*`, `pnpm run *`) allows every command that starts with it. */
+const isPrefix = (rule: string): boolean => /(:\*| \*)$/.test(rule.trim())
 const clip = (value: string, max = 34): string => (value.length > max ? `${value.slice(0, max - 1)}…` : value)
 
 /** `a`, `a and b`, `a, b and 3 more`: two names, then a count. */
@@ -75,40 +77,74 @@ export function listParts(names: string[]): Part[] {
 
 interface Scope { names: Part[]; session: boolean }
 
-/** What Claude's `updatedPermissions` (the approval's `suggestions`) allows: rules, a mode switch or folders. */
+/** The names, then " commands" when a name is a prefix rule (`pnpm run` allows `pnpm run anything`), like Claude Code's own prompt. */
+const scopeNames = (names: string[], prefix: boolean, more = false): Part[] => [...listParts(names), ...(prefix ? [text(' commands')] : []), ...(more ? [text(' and other permission changes')] : [])]
+
+/**
+ * What Claude's `updatedPermissions` (the approval's `suggestions`, all sent with "allow for this session") allows: rules, a mode
+ * switch or folders. An update the card cannot name is still sent, so the label says there is more.
+ */
 function claudeScope(suggestions: JsonValue[]): Scope | null {
   const names: string[] = []
+  let prefix = false
   let modes = 0
+  let more = false
+  let every = false
   let session = true
   for (const raw of suggestions) {
     const update = record(raw)
     if (!lasts(update.destination)) session = false
-    if (update.type === 'addRules' && (update.behavior === undefined || update.behavior === 'allow')) {
+    if ((update.type === 'addRules' || update.type === 'replaceRules') && (update.behavior === undefined || update.behavior === 'allow')) {
       for (const rule of array(update.rules).map(record)) {
-        const tool = string(rule.toolName), content = stripRule(string(rule.ruleContent))
-        names.push(/^(bash|shell)$/i.test(tool) ? content || tool : content ? `${tool}(${content})` : tool)
+        const tool = string(rule.toolName), raw = string(rule.ruleContent), content = stripRule(raw)
+        const shell = /^(bash|shell)$/i.test(tool)
+        if (shell && content && isPrefix(raw)) prefix = true
+        if (shell && !content) every = true
+        else names.push(shell ? content : content ? `${tool}(${content})` : tool)
       }
     } else if (update.type === 'setMode' && update.mode === 'acceptEdits') modes++
     else if (update.type === 'addDirectories') names.push(...array(update.directories).map(String))
+    else more = true
   }
-  if (!names.length && !modes) return null
-  return { names: names.length ? listParts(names) : [text('edits')], session }
+  // A shell rule with no command allows every command: that is the scope to name, whatever else comes with it.
+  if (every) return { names: [text('every command'), ...(names.length || modes || more ? [text(' and other permission changes')] : [])], session }
+  if (!names.length && !modes) return more ? { names: [text('the permission changes Claude suggests')], session } : null
+  return { names: names.length ? scopeNames(names, prefix, more) : [text('edits'), ...(more ? [text(' and other permission changes')] : [])], session }
 }
 
 /** OpenCode's `always` patterns (the request's suggestions) approve matching requests for the rest of the session. */
-function opencodeScope(approval: ApprovalRequest): Scope | null {
-  const patterns = approval.suggestions.filter((s): s is string => typeof s === 'string').map(stripRule)
-  const names = patterns.filter((p) => p && p !== '*')
-  return { names: names.length ? listParts(names) : [code(approval.tool_name)], session: true }
+function opencodeScope(approval: ApprovalRequest): Scope {
+  const raw = approval.suggestions.filter((s): s is string => typeof s === 'string')
+  const names = raw.map(stripRule).filter((p) => p && p !== '*')
+  const prefix = /^(bash|shell)$/i.test(approval.tool_name) && raw.some((p) => p.trim() !== '*' && isPrefix(p))
+  return { names: names.length ? scopeNames(names, prefix) : [text('every '), code(approval.tool_name), text(' request')], session: true }
+}
+
+/** The label of Cursor's own "always" option for this request, or null when it offers none (Cursor would then allow once). */
+function cursorAlways(approval: ApprovalRequest): Part[] | null {
+  const option = array(record(approval.input).options).map(record).find((o) => /^allowalways/i.test(string(o.kind).replace(/[_\s-]/g, '')))
+  if (!option) return null
+  const name = string(option.name).trim()
+  return [text(name ? name.charAt(0).toUpperCase() + name.slice(1) : 'Always allow this request')]
 }
 
 type Noun = 'command' | 'edit' | 'read' | 'other'
-const exactNoun = (noun: Noun) => (noun === 'command' ? 'this exact command' : noun === 'edit' ? 'these exact edits' : noun === 'read' ? 'reads of this file' : 'this exact request')
+
+/** Codex's "accept for session" remembers this exact command, and an edit's files (later edits to them go through). */
+function codexNoun(approval: ApprovalRequest, noun: Noun): string {
+  if (noun === 'command') return 'this exact command'
+  if (noun === 'edit') return array(record(approval.input).changes).length > 1 ? 'edits to these files' : 'edits to this file'
+  return 'this exact request'
+}
+
+/** Pi's "always allow" (Kybern's extension) remembers this exact call, input and all, until the session or the mode changes. */
+const piNoun = (noun: Noun) => (noun === 'command' ? 'this exact command' : noun === 'edit' ? 'this exact edit' : noun === 'read' ? 'this exact read' : 'this exact call')
 
 /**
  * The "allow for this session" option, worded for what the harness really allows, or null when it allows nothing beyond one run:
- * Claude applies the rules in `suggestions` (an empty list changes nothing), OpenCode its `always` patterns, Codex and Pi remember
- * only this exact call until the session ends, and Cursor's "always" is its own allowlist.
+ * Claude applies the rules in `suggestions` (an empty list changes nothing), OpenCode its `always` patterns, Codex remembers this
+ * command or the edited files, Pi (through Kybern's extension, which gives the call an id) this exact call, and Cursor offers its
+ * own "always" option. Pi's other permission prompts and a Cursor request without that option only approve once.
  */
 export function sessionLabel(approval: ApprovalRequest, provider: string | undefined, noun: Noun, subject = ''): Part[] | null {
   const lead = (scope: Scope): Part[] => scope.session ? [text('Allow '), ...scope.names, text(' for this session')] : [text('Always allow '), ...scope.names]
@@ -117,22 +153,32 @@ export function sessionLabel(approval: ApprovalRequest, provider: string | undef
       const scope = claudeScope(approval.suggestions)
       return scope ? lead(scope) : null
     }
-    case 'opencode': return lead(opencodeScope(approval)!)
-    case 'codex': case 'pi': case 'omp': return [text(`Allow ${exactNoun(noun)} for this session`)]
-    case 'cursor': return [text(`Always allow ${noun === 'command' ? 'this command' : 'this request'}`)]
+    case 'opencode': return lead(opencodeScope(approval))
+    case 'codex': return [text(`Allow ${codexNoun(approval, noun)} for this session`)]
+    case 'pi': case 'omp': return approval.tool_call_id ? [text(`Allow ${piNoun(noun)} for this session`)] : null
+    case 'cursor': return cursorAlways(approval)
     default: return [text(`Allow ${subject || 'this'} for this session`)]
   }
 }
 
 // ---- reading the request ----
 
-/** The real command text, never the one-line summary (`a && b` must not read as `a`). */
+/** One argv word as the shell would need it typed: quoted when it holds a space or a shell character. */
+export function shellQuote(word: string): string {
+  if (word && /^[A-Za-z0-9_\-./:=+@%,~^]+$/.test(word)) return word
+  return `'${word.replace(/'/g, `'\\''`)}'`
+}
+
+/**
+ * The real command text, never the one-line summary (`a && b` must not read as `a`). An argv array is quoted word by word, so
+ * `["bash", "-lc", "a && b"]` reads as one `bash` call with its script, not as a chain.
+ */
 export function commandOf(input: JsonValue): string {
   const o = record(input)
-  for (const source of [o, record(o.metadata), record(o.rawInput), record(o.raw_input), record(o.input)]) {
+  for (const source of [o, record(o.metadata), record(o.rawInput), record(o.raw_input), record(o.raw), record(o.input)]) {
     const value = source.command ?? source.cmd
     if (typeof value === 'string' && value.trim()) return value
-    if (Array.isArray(value) && value.length) return value.map(String).join(' ')
+    if (Array.isArray(value) && value.length) return value.map((word) => shellQuote(String(word))).join(' ')
   }
   return ''
 }
@@ -222,9 +268,10 @@ export function approvalCard(approval: ApprovalRequest, provider: string | undef
   const computer = computerConsent(approval)
   if (computer) {
     const rows = [
-      decide('once', [text('Allow once')], { decision: 'allow_once' }),
+      // The daemon's "once" lasts the turn (`ConsentAnswer::Turn`), and "always" covers background work only.
+      decide('once', [text('Allow for this turn')], { decision: 'allow_once' }),
       decide('session', [text('Allow for this session')], { decision: 'allow_always' }),
-      ...(computer.foreground ? [] : [decide('always', [text(`Always allow ${computer.app}`)], { decision: 'submit', response: { scope: 'always' } })]),
+      ...(computer.foreground ? [] : [decide('always', [text(`Always allow ${computer.app} in the background`)], { decision: 'submit', response: { scope: 'always' } })]),
       deniedRow(agent),
     ]
     return {
@@ -252,7 +299,9 @@ export function approvalCard(approval: ApprovalRequest, provider: string | undef
   }
   const { kind, detail } = toolLine({ id: approval.tool_call_id ?? '', name: approval.tool_name, input: approval.input })
   const command = commandOf(approval.input)
-  if (command || kind === 'command') {
+  const lines = grantLines(approval.input)
+  // Codex asks for network access through a command approval with no command: that is a grant, not "Run this command?".
+  if (command || (kind === 'command' && !lines.length)) {
     return { kind: 'command', glyph: 'terminal', agent, chip, title: 'Run this command?', well: { kind: 'command', command: command || detail || approval.summary }, rows: withSession(decide('once', [text('Run once')], { decision: 'allow_once' }), session('command'), deniedRow(agent)) }
   }
   if (kind === 'read') {
@@ -261,17 +310,19 @@ export function approvalCard(approval: ApprovalRequest, provider: string | undef
   if (kind === 'edit' || kind === 'write') {
     const diff = editDiff(approval.input)
     const creating = kind === 'write'
+    // Codex's "accept for session" on an edit that asks for a write root also grants writes under that root.
+    const root = provider === 'codex' ? string(record(approval.input).grant_root) : ''
     return {
       kind: 'edit', glyph: 'pencil', agent, chip, title: creating ? 'Create this file?' : 'Apply this edit?',
+      meta: root ? `${agent} also asks to write in ${root} for the rest of the session.` : undefined,
       well: diff ? { kind: 'diff', diff } : detail ? { kind: 'file', path: detail } : null,
-      rows: withSession(decide('once', [text(creating ? 'Create file' : 'Apply edit')], { decision: 'allow_once' }), session('edit'), deniedRow(agent)),
+      rows: withSession(decide('once', [text(creating ? 'Create file' : 'Apply edit')], { decision: 'allow_once' }), root ? [text('Allow writes in '), code(root), text(' for this session')] : session('edit'), deniedRow(agent)),
     }
   }
-  const lines = grantLines(approval.input)
   return {
     kind: 'grant', glyph: 'shield', agent, chip: { label: agent }, title: approval.summary && !lines.length ? `${approval.summary}?` : 'Grant these permissions?',
     well: lines.length ? { kind: 'grants', lines } : { kind: 'text', text: permissionBody(approval.input) },
-    rows: withSession(decide('once', [text('Grant once')], { decision: 'allow_once' }), provider === 'claude-code' ? session('other') : [text('Grant for this session')], deniedRow(agent)),
+    rows: withSession(decide('once', [text('Grant once')], { decision: 'allow_once' }), provider === 'codex' ? [text('Grant for this session')] : session('other'), deniedRow(agent)),
   }
 }
 

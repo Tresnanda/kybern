@@ -60,8 +60,9 @@ export const GLYPHS: Record<CardModel['glyph'], string> = {
 
 // ---- keyboard focus ----
 
-/** The card's root: one focusable element that answers the card's keys. A card that arrives while nothing has focus and nobody is
- *  typing takes focus; one that arrives while the composer has focus never steals it (the composer routes the same keys). */
+/** The card's root: one focusable element that answers the card's keys while it has focus itself. A card that arrives while nothing
+ *  has focus and nobody is typing takes focus; one that arrives while the composer has focus never steals it (the composer routes
+ *  the same keys). */
 export function CardShell({ testId, onKey, children, stealFocus = true }: { testId: string; onKey?: (event: { key?: string; modifiers?: { cmd?: boolean; alt?: boolean; ctrl?: boolean; shift?: boolean } }) => boolean | void; children: ReactNode; stealFocus?: boolean }) {
   const renderer = useGpuixRequired()
   const root = useRef<import('@gpuix/react').PublicInstance | null>(null)
@@ -79,6 +80,10 @@ export function CardShell({ testId, onKey, children, stealFocus = true }: { test
     <div
       ref={root} testId={testId} tabIndex={0}
       onKeyDown={(e) => {
+        // Keys bubble here from the card's own fields, links and buttons: a digit typed into an answer, or Return on "Cancel turn",
+        // belongs to them. The card answers only while its root itself has focus (rows are not focusable).
+        const focused = renderer.getFocusedElementId?.()
+        if (focused != null && root.current && focused !== root.current.id) return
         const m = e.modifiers
         if (m?.alt || m?.ctrl || m?.shift) return
         if (m?.cmd && e.key !== 'e') return

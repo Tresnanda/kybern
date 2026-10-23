@@ -28,7 +28,7 @@ export function CoordinatorCard({ approval, count }: { approval: ApprovalRequest
   const respond = async (decision: ApprovalDecision) => {
     if (busy) return
     setBusy(true); setError('')
-    try { await respondApproval(approval.id, decision) } catch (e) { setError(errorText(e)); setBusy(false) }
+    try { await respondApproval(approval.id, decision) } catch (e) { setError(`Unable to send your answer: ${errorText(e).replace(/\.$/, '')}. Try again.`); setBusy(false) }
   }
   const accept = () => respond(brief ? { decision: 'submit', response: { text } } : settings ? { decision: 'submit', response: { accepted: settings.changes.map(c => c.path).filter(path => accepted.has(path)) } } : { decision: 'allow_once' })
   useEffect(() => addWindowKeyHandler(e => {
