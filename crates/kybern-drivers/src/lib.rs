@@ -47,6 +47,7 @@ pub mod codex;
 pub mod codex_integrations;
 pub mod cursor;
 pub mod edit_paths;
+pub mod login_recipes;
 pub mod models;
 mod ndjson;
 pub mod omp_profile;

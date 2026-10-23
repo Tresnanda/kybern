@@ -21,6 +21,11 @@ import { CoordinatorCard } from '../coordinator/Cards.tsx'
 import { ApprovalCard } from '../requests/ApprovalCard.tsx'
 import { AsyncQuestionPanel, UserInputPanel } from '../requests/Question.tsx'
 import { isRowCard } from '../requests/actions.ts'
+import { loginRequestInput, permissionRequestInput, promptRequestInput } from '../../../../packages/kybern-client/src/requestCards.ts'
+import { LoginRequestPanel } from '../requests/Login.tsx'
+import { PromptRequestPanel } from '../requests/Prompt.tsx'
+import { PermissionRequestPanel } from '../requests/Permission.tsx'
+import { useRequestProgress } from '../requests/progress.ts'
 import { useApp, usePaneAccess } from '../state.ts'
 import { ThemeScope, useTheme } from '../ui.tsx'
 import { GlassEdge } from '../kit/GlassEdge.tsx'
@@ -32,16 +37,17 @@ const RADIUS = 19.2
 
 /** Whether the first pending request replaces the composer input (`hideInput`). */
 export function useBlockingRequest(): boolean {
-  return useApp((s) => {
-    const approval = s.open.pendingApprovals[0]
-    if (!approval || !s.selectedId) return false
-    return (isUserInput(approval) && !connectorApproval(approval)) || ownForm(approval)
-  })
+  const approval = useApp((s) => (s.selectedId ? s.open.pendingApprovals[0] ?? null : null))
+  const phase = useRequestProgress(approval?.id ?? '')?.phase
+  if (!approval) return false
+  return (isUserInput(approval) && !connectorApproval(approval)) || ownForm(approval, phase)
 }
 
-/** A pick of an element is a choice card (the composer stays); a file, image or window is a closed form. */
+/** Cards that are their own closed form: the secret and password prompts, a pick of a file, image or window (an element pick is
+ *  a choice card and keeps the composer), the Coordinator's proposals, and the sign-in card while it takes a pasted code. */
 const closedPick = (a: ApprovalRequest) => { const pick = pickRequestInput(a); return !!pick && !isElementPick(pick.kind) }
-const ownForm = (a: ApprovalRequest) => !!secretRequestInput(a) || closedPick(a) || !!briefProposalInput(a) || !!settingsProposalInput(a)
+const ownForm = (a: ApprovalRequest, phase?: string) =>
+  !!secretRequestInput(a) || !!promptRequestInput(a) || closedPick(a) || !!briefProposalInput(a) || !!settingsProposalInput(a) || (phase === 'paste_code' && !!loginRequestInput(a))
 
 /** The open thread's pending approval or question, or nothing. */
 export function ThreadRequests() {
@@ -68,13 +74,15 @@ function RequestStack({ threadId }: { threadId: string }) {
   const showTray = trayVisible(tray)
   const request = !!(approval || questions[0])
   const visible = !!(request || activity.visible || showTray)
-  const closed = !!approval && ((isUserInput(approval) && !connectorApproval(approval)) || ownForm(approval))
+  const phase = useRequestProgress(approval?.id ?? '')?.phase
+  const closed = !!approval && ((isUserInput(approval) && !connectorApproval(approval)) || ownForm(approval, phase))
   return (
     <PanelPresence show={visible}>{pending.length > 1 && <QueueSlivers count={pending.length} />}<StackedPanel closed={closed}>
       {/* `t-panel-enter`: each request rises into the stack as it arrives. */}
       <ActivityPanels threadId={threadId} data={activity} />
       <PanelPresence show={showTray}><PanelEnter><ComposerTray data={tray} divided={request} /></PanelEnter></PanelPresence>
-      {request && <PanelEnter key={approval ? approval.id : questions[0]!.id}>
+      {/* A password prompt always rises in, even right after a keyboard answer: a private prompt must be seen arriving. */}
+      {request && <PanelEnter key={approval ? approval.id : questions[0]!.id} always={!!approval && !!promptRequestInput(approval)}>
         {approval ? (
           <ApprovalRequestCard threadId={threadId} approval={approval} count={pending.length} />
         ) : (
@@ -143,6 +151,12 @@ function ApprovalRequestCard({ threadId, approval, count }: { threadId: ThreadId
   const secret = secretRequestInput(approval)
   if (secret) return <SecretRequestPanel approval={approval} input={secret} count={count} />
   if (briefProposalInput(approval) || settingsProposalInput(approval) || leadGitCardInput(approval)) return <CoordinatorCard approval={approval} count={count} />
+  const login = loginRequestInput(approval)
+  if (login) return <LoginRequestPanel approval={approval} input={login} count={count} threadId={threadId} />
+  const prompt = promptRequestInput(approval)
+  if (prompt) return <PromptRequestPanel approval={approval} input={prompt} count={count} threadId={threadId} />
+  const permission = permissionRequestInput(approval)
+  if (permission) return <PermissionRequestPanel approval={approval} input={permission} count={count} threadId={threadId} />
   if (isRowCard(approval)) return <ApprovalCard threadId={threadId} approval={approval} count={count} />
   return <UserInputPanel approval={approval} count={count} />
 }

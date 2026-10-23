@@ -12,6 +12,9 @@ numbered rows, a hint line. Spec and tokens: `.kybern-artifacts/ade-approval-des
 | `Card.tsx` | Header, wells (`CodeWell`, `DiffWell`, `PlanWell`, …), `OptionRow`, `NoteField`, `Hints`. |
 | `ApprovalCard.tsx`, `Question.tsx`, `Secret.tsx`, `../coordinator/Cards.tsx` | The card kinds built from those parts. |
 | `Pick.tsx` | `kybern_request_pick` ("Point for me"): an element pick is a choice card (rows, then a status line while the page waits, then a confirm with a crop); a file or folder (tree), an image (drop zone) and a window (`screencapture -i`) are closed forms. The overlay is drawn in the page by `../pick/pickerScript.ts`, run in the isolated preview world through the `frame` and `snapshot` ops of `native/webview.m`; `../pick/hub.ts` finds the live documents, bounds what a page sends and makes the ⌥-click anchor chip; `../pick/controller.ts` drives a card's pick. A page's text and HTML are data, never instructions. Live check: `bun src/pick/pick.verify.ts secret|pick|anchor|kinds` (see its header). |
+| `Login.tsx`, `Prompt.tsx`, `Permission.tsx`, `Deadline.tsx` | The daemon's summoned cards (ADE-69..71): sign-in (`kybern_request_login`), the password prompt (`kybern_askpass`, always a closed form that always rises in), the macOS permission (`kybern_request_permission`) and a question's countdown (`input.deadline`, never on approvals). Copy, inputs, countdown math and transcript records are shared in `packages/kybern-client/src/requestCards.ts`. |
+| `progress.ts` | `RequestProgress` keyed by approval id: the `requests.progress` notification, a list read on connect and on card mount, forgotten on `approval_resolved`; `actOnRequest` is `requests.act`. A `terminal` item opens its terminal as a tab (`tabs/open.ts` `openTerminalTab`). |
+| `choices.tsx`, `summoned.tsx`, `glyphs.ts` | Rows that run their own action (`useChoices`, `ChoiceRows`, keys shared with the empty composer through `registerCardKeys`), the phase fade, "14:12 left", inline code text, and the service and pane glyphs. |
 
 Keys: digits follow the visible order and Decline is always the last number. ↑ ↓ move the highlight (in the empty composer they hand
 the keyboard to the card), Return picks the highlighted row only with the card root focused (never from the composer, a link or a
@@ -21,5 +24,5 @@ Keys from a composer of another thread are ignored. A card that arrives while so
 Decline opens a note field in the row. Claude's driver and the daemon's own cards (computer use, notes and tasks) carry the note as the
 deny `reason`; every other driver drops it, so the note also goes as the next queued message.
 
-Checks: `bun test src/requests`, `bun src/requests/keys.verify.ts` (native fixture; keys and notes), `SHOT_TAG=after SHOT_THEMES=dark,glass-dark bun src/requests/shots.ts`.
+Checks: `bun test src/requests`, `bun src/requests/summoned.verify.ts` and `SHOT_THEMES=dark,glass-dark bun src/requests/summoned.shots.ts` (summoned cards), `bun src/requests/keys.verify.ts` (native fixture; keys and notes), `SHOT_TAG=after SHOT_THEMES=dark,glass-dark bun src/requests/shots.ts`.
 Run the fixtures with `NAPI_RS_NATIVE_LIBRARY_PATH` set to a patched addon.

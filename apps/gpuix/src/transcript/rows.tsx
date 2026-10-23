@@ -8,6 +8,10 @@ import { pickRecordText, pickRequestInput } from '../../../../packages/kybern-cl
 import { secretRequestInput, secretOutcomeLine, secretPartsText } from '../../../../packages/kybern-client/src/secretRequest.ts'
 import { answerRowText, visualAnswerInput } from '../../../../packages/kybern-client/src/visualAnswer.ts'
 import { coordinatorCardLine, cardPartsText } from '../../../../packages/kybern-client/src/coordinatorCards.ts'
+import { recordText, requestRecord } from '../../../../packages/kybern-client/src/requestCards.ts'
+import { RequestRecordRow } from './RequestRecord.tsx'
+import { SignInChip } from './SignInChip.tsx'
+import type { LoginRecipe } from '../../../../packages/kybern-client/src/loginRecipes.ts'
 // Work rows inside a turn (`views/Transcript.tsx` WorkRows → ToolRow/WorkRow):
 // tool calls with their expandable result, the work between two pieces of
 // narration folded into one summary row (`chunkRuns`, `WorkRun.tsx`), nested child calls
@@ -53,6 +57,8 @@ export interface RowContext {
   childrenByParent: ReadonlyMap<string, ToolBlock[]>
   /** Subagent and delegated threads this thread launched (`threads.list { parent_thread_id }`). */
   children: readonly Thread[]
+  /** Tool rows (by call id) that get the "Sign in to …" chip: the turn's latest signed-out failure of each CLI. */
+  signIn?: ReadonlyMap<string, LoginRecipe>
 }
 
 /** The child thread a launch started: a subagent by its task or call
@@ -141,6 +147,9 @@ export function approvalRowText(approval: ApprovalRequest, decision: ApprovalDec
   if (asked) return answerRowText(asked.title, decision)
   const pick = pickRequestInput(approval)
   if (pick) return pickRecordText(pick, decision, live)
+  // The daemon resolves every card when its turn ends, so a card with no decision is still waiting.
+  const record = requestRecord(approval, decision, true)
+  if (record) return recordText(record)
   const coordinator = coordinatorCardLine(approval, decision, live)
   if (coordinator) return cardPartsText(coordinator)
   const connector = connectorApproval(approval)
@@ -361,6 +370,14 @@ export const WorkRow = memo(function WorkRow({
     case 'runtime_task':
       return <RuntimeTaskRow task={block.task} thread={block.task.kind === 'agent' ? launchThread(block, ctx) : undefined} />
     case 'approval': {
+      // An undecided card is waiting: the daemon resolves it when the turn ends.
+      const record = block.auto ? null : requestRecord(block.approval, block.decision, true)
+      if (record) return (
+        <div paintTransform={tree.rise} style={{ position: 'relative', display: 'flex', alignItems: 'center', paddingTop: 4, paddingBottom: 4, minWidth: 0 }}>
+          <RequestRecordRow approval={block.approval} decision={block.decision} record={record} />
+          {tree.lines}
+        </div>
+      )
       const text = approvalRowText(block.approval, block.decision, live, block.auto)
       const denied = block.decision?.decision === 'deny'
       const color = denied ? destructive(t, 0.85) : block.decision ? fg(t, 0.8) : muted(t)
@@ -452,7 +469,9 @@ const ToolRow = memo(function ToolRow({ block, ctx }: { block: ToolBlock; ctx: R
         labelColor={tone}
         shimmer={!block.complete || active}
         trailing={
-          view.surface?.app && !view.label.endsWith(view.surface.app) ? (
+          ctx.signIn?.get(block.call.id) ? (
+            <SignInChip callId={block.call.id} threadId={ctx.threadId} recipe={ctx.signIn.get(block.call.id)!} />
+          ) : view.surface?.app && !view.label.endsWith(view.surface.app) ? (
             <Label color={muted(t, 0.55)} size={11}>
               {view.surface.app}
             </Label>

@@ -97,6 +97,10 @@ impl AppTools {
         self.terminals.list(None)
     }
 
+    pub(crate) fn terminal_manager(&self) -> &TerminalManager {
+        &self.terminals
+    }
+
     pub(crate) fn new(store: Store, terminals: TerminalManager) -> Self {
         Self { store, terminals }
     }
@@ -347,6 +351,7 @@ pub(crate) fn native_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinit
     definitions.extend(notes_tasks_tool_definitions());
     definitions.push(crate::secrets::tool_definition());
     definitions.push(crate::pick::tool_definition());
+    definitions.extend(crate::orchestrator::request_tool_definitions());
     for tool in &mut definitions {
         if tool.input_schema["properties"].get("operation_id").is_none() {
             continue;

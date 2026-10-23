@@ -8,7 +8,7 @@ import { pendingFor, removePending, settledPending, subscribePending, withPendin
 // for the parts the transcript owns: approvals, saved tool output, turn diffs,
 // earlier history pages, and per-row disclosure state that must survive a row
 // being unmounted by the virtual list.
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { useContext, useMemo, useEffect, useState, useSyncExternalStore } from 'react'
 import { TranscriptRowStateScope } from './rowStateScope.ts'
 import { prependThreadHistory, type Block } from '../../../../packages/kybern-client/src/transcript.ts'
@@ -90,6 +90,11 @@ export function copyText(text: string) {
   const p = spawn('pbcopy')
   p.on('error', () => {})
   p.stdin.end(text)
+}
+
+/** The clipboard's text (a pasted sign-in code). Empty when it holds none. */
+export function readClipboardText(): string {
+  try { return spawnSync('pbpaste', { encoding: 'utf8', timeout: 1000 }).stdout ?? '' } catch { return '' }
 }
 
 // ---- approvals and questions ----

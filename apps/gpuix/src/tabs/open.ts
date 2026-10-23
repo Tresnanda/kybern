@@ -48,6 +48,12 @@ export function openTab(threadId: string, requested: Tab, options: OpenOptions =
   return true
 }
 
+/** A terminal the daemon opened for a thread (a sign-in's terminal path, `kybern_run_in_terminal`) as a tab of that thread. It
+ *  becomes the active tab, so the reader sees where to type; `focus: false` leaves keyboard focus where it is. */
+export function openTerminalTab(threadId: string, terminal: { id: string; title?: string }, options: OpenOptions = {}): boolean {
+  return openTab(threadId, { kind: 'terminal', id: terminal.id, ...(terminal.title ? { title: terminal.title } : {}) }, options)
+}
+
 /** Open from inside a pane (a transcript, a child tab): the thread is the pane's group's. A subagent's page has no tab strip, so
  *  what it opens (a file link, an image, a diagram) becomes a tab of its parent thread, and the pane goes to the parent (⌘[ returns). */
 export function openTabFromPane(paneId: string, requested: Tab, options: OpenOptions = {}) {

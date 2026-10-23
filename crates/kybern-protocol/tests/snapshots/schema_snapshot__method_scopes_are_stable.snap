@@ -28,6 +28,10 @@ expression: scopes
   - "access:write"
 - - providers.accounts.login.get
   - "orchestration:read"
+- - requests.progress
+  - "orchestration:read"
+- - requests.act
+  - "orchestration:operate"
 - - providers.accounts.login.input
   - "access:write"
 - - providers.accounts.login.cancel

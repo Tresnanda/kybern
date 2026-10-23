@@ -412,6 +412,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let mut projects = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_projects());
     let mut spaces = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_spaces());
     let mut preview_requests = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_preview_requests());
+    let mut request_progress = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.requests().subscribe());
     if !state.store.token_is_active(ctx.principal.token_id).unwrap_or(false) {
         return;
     }
@@ -537,6 +538,23 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                     Err(_) => settings = None,
                 }
             }
+            progress = async {
+                match request_progress.as_mut() {
+                    Some(progress) => progress.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match progress {
+                    Ok(progress) => {
+                        // A paired phone sees a card's step, never the sign-in page, code or terminal.
+                        let progress = if ctx.principal.has(Scope::AccessWrite) { progress } else { redact_progress(progress) };
+                        let _ = ctx.out.notify(kybern_protocol::methods::REQUESTS_PROGRESS_NOTIFICATION, progress).await;
+                    }
+                    // Clients also read `requests.progress`, so a missed step is recovered.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => request_progress = None,
+                }
+            }
             login = async {
                 match account_logins.as_mut() {
                     Some(logins) => logins.recv().await,
@@ -586,6 +604,14 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     drop(ctx);
     writer.abort();
     tracing::info!("client disconnected");
+}
+
+/// What a client without `access:write` may see of a card's progress.
+pub(crate) fn redact_progress(mut progress: kybern_protocol::RequestProgress) -> kybern_protocol::RequestProgress {
+    progress.url = None;
+    progress.user_code = None;
+    progress.terminal = None;
+    progress
 }
 
 async fn handle_text(state: &AppState, ctx: &Arc<ConnectionCtx>, text: &str) {

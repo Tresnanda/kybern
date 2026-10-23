@@ -24,14 +24,17 @@ use crate::settings::SettingsStore;
 
 mod accounts;
 mod agent_items;
+mod askpass;
 mod delegation;
 mod lead;
 mod lead_git;
 mod lead_proposals;
+mod login_request;
 mod messaging;
 mod notes;
 mod omp_recovery;
 mod pick_request;
+mod request_tools;
 mod secret_request;
 mod spaces;
 mod subagent_messaging;
@@ -303,6 +306,12 @@ impl Orchestrator {
             if crate::pick::is_tool(name) {
                 return self.execute_request_pick(&thread, turn_id, &live, arguments).await;
             }
+            if login_request::is_tool(name) {
+                return self.execute_request_login(&thread, turn_id, &live, arguments).await;
+            }
+            if request_tools::is_tool(name) {
+                return self.execute_request_tool(&thread, turn_id, &live, name, arguments).await;
+            }
             if crate::lead_git::is_tool(name) {
                 return self.execute_lead_git(&thread, turn_id, &live, arguments).await;
             }
@@ -476,6 +485,8 @@ struct Inner {
     space_writes: std::sync::Mutex<()>,
     /// Agent requests to show a page, forwarded as `previews.open_requested`.
     preview_requests: tokio::sync::broadcast::Sender<methods::PreviewOpenRequestedNotification>,
+    /// Live state of sign-in, permission and deadline cards, forwarded as `requests.progress`.
+    requests: crate::requests::RequestHub,
     /// Preview tickets, revoked when a thread is archived.
     previews: Arc<crate::previews::tickets::PreviewTickets>,
     /// Account plan limits per provider, forwarded as `usage.limits.changed`.
@@ -786,6 +797,7 @@ impl Orchestrator {
                 spaces_changed: tokio::sync::broadcast::channel(64).0,
                 space_writes: std::sync::Mutex::new(()),
                 preview_requests: tokio::sync::broadcast::channel(64).0,
+                requests: Default::default(),
                 previews: Arc::default(),
                 usage,
                 task_writes: std::sync::Mutex::new(()),
@@ -813,6 +825,11 @@ impl Orchestrator {
     pub fn with_previews(mut self, previews: Arc<crate::previews::tickets::PreviewTickets>) -> Self {
         Arc::get_mut(&mut self.inner).expect("preview tickets must be installed before cloning the orchestrator").previews = previews;
         self
+    }
+
+    /// Live state of the request cards, for `requests.progress` and `requests.act`.
+    pub fn requests(&self) -> &crate::requests::RequestHub {
+        &self.inner.requests
     }
 
     /// Agent requests to show a page, for forwarding to connected clients.
@@ -2456,43 +2473,7 @@ impl Orchestrator {
         operation: Option<Uuid>,
         wait: Duration,
     ) -> Result<(ApprovalId, DaemonAnswer)> {
-        let (card, mut receiver) = {
-            let mut approvals = live.daemon_approvals.lock().await;
-            let reusable = approvals.iter().find(|(_, entry)| {
-                entry.turn_id == turn_id && entry.key == key && entry.consumed_by.is_none_or(|by| Some(by) == operation)
-            });
-            match reusable {
-                Some((id, entry)) => (*id, entry.decision.subscribe()),
-                None => {
-                    let approval = ApprovalRequest {
-                        id: Uuid::now_v7(),
-                        thread_id,
-                        turn_id,
-                        tool_call_id: None,
-                        tool_name: tool_name.into(),
-                        input,
-                        summary,
-                        suggestions: Vec::new(),
-                        created_at: Utc::now(),
-                    };
-                    let (sender, receiver) = tokio::sync::watch::channel(None);
-                    let card = approval.id;
-                    approvals.insert(card, DaemonApproval { turn_id, key, decision: sender, consumed_by: None });
-                    drop(approvals);
-                    if let Some(turn) = live.turn.lock().await.as_mut() {
-                        turn.active_messages.remove(&EventOrigin::Root);
-                    }
-                    self.inner.store.approval_insert(&approval)?;
-                    self.emit(thread_id, Some(turn_id), EventPayload::ApprovalRequested { approval })?;
-                    let mut t = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?;
-                    if t.status != ThreadStatus::AwaitingApproval {
-                        t.status = ThreadStatus::AwaitingApproval;
-                        self.update_thread(t)?;
-                    }
-                    (card, receiver)
-                }
-            }
-        };
+        let (card, mut receiver) = self.open_daemon_card(thread_id, turn_id, live, key, tool_name, input, summary, operation).await?;
         let decision = tokio::time::timeout(wait, receiver.wait_for(Option::is_some)).await;
         let answer = match decision {
             Ok(Ok(decision)) => match decision.clone() {
@@ -2503,6 +2484,78 @@ impl Orchestrator {
             Err(_) => DaemonAnswer::Pending,
         };
         Ok((card, answer))
+    }
+
+    /// Raise a daemon-owned approval card (or, for a retry with the same `key`
+    /// in the same turn, find the one already open) without waiting for it.
+    /// The receiver holds the decision once there is one. Resolve a card the
+    /// daemon answers itself with [`Self::finish_daemon_card`].
+    #[allow(clippy::too_many_arguments)]
+    async fn open_daemon_card(
+        &self,
+        thread_id: ThreadId,
+        turn_id: TurnId,
+        live: &Arc<LiveSession>,
+        key: String,
+        tool_name: &str,
+        input: serde_json::Value,
+        summary: String,
+        operation: Option<Uuid>,
+    ) -> Result<(ApprovalId, tokio::sync::watch::Receiver<Option<ApprovalDecision>>)> {
+        let mut approvals = live.daemon_approvals.lock().await;
+        let reusable = approvals
+            .iter()
+            .find(|(_, entry)| entry.turn_id == turn_id && entry.key == key && entry.consumed_by.is_none_or(|by| Some(by) == operation));
+        if let Some((id, entry)) = reusable {
+            return Ok((*id, entry.decision.subscribe()));
+        }
+        let approval = ApprovalRequest {
+            id: Uuid::now_v7(),
+            thread_id,
+            turn_id,
+            tool_call_id: None,
+            tool_name: tool_name.into(),
+            input,
+            summary,
+            suggestions: Vec::new(),
+            created_at: Utc::now(),
+        };
+        let (sender, receiver) = tokio::sync::watch::channel(None);
+        let card = approval.id;
+        approvals.insert(card, DaemonApproval { turn_id, key, decision: sender, consumed_by: None });
+        drop(approvals);
+        if let Some(turn) = live.turn.lock().await.as_mut() {
+            turn.active_messages.remove(&EventOrigin::Root);
+        }
+        self.inner.store.approval_insert(&approval)?;
+        self.emit(thread_id, Some(turn_id), EventPayload::ApprovalRequested { approval })?;
+        let mut t = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread vanished"))?;
+        if t.status != ThreadStatus::AwaitingApproval {
+            t.status = ThreadStatus::AwaitingApproval;
+            self.update_thread(t)?;
+        }
+        Ok((card, receiver))
+    }
+
+    /// The daemon answers its own card (a sign-in that finished, a deadline
+    /// that ran out). False when the user answered first: that answer stands.
+    async fn finish_daemon_card(
+        &self,
+        thread_id: ThreadId,
+        turn_id: TurnId,
+        live: &LiveSession,
+        card: ApprovalId,
+        decision: ApprovalDecision,
+    ) -> Result<bool> {
+        let Some(entry) = live.daemon_approvals.lock().await.remove(&card) else { return Ok(false) };
+        if entry.decision.borrow().is_some() {
+            return Ok(false);
+        }
+        entry.decision.send_replace(Some(decision.clone()));
+        self.inner.store.approval_resolve(card, &decision)?;
+        self.emit(thread_id, Some(turn_id), EventPayload::ApprovalResolved { approval_id: card, decision })?;
+        self.restore_running_after_approval(thread_id, live).await?;
+        Ok(true)
     }
 
     /// Spend a card's one-time answer on `operation`. False when another
@@ -2949,6 +3002,8 @@ impl Orchestrator {
             .as_ref()
             .map(|gateway| {
                 let mut tools = crate::app_tools::native_tool_definitions();
+                // Privacy permissions are a macOS thing.
+                tools.retain(|tool| cfg!(target_os = "macos") || tool.name != PERMISSION_REQUEST_TOOL);
                 if thread.coordinator_project_id.is_some() {
                     // Only the project Coordinator is offered the git tool.
                     tools.push(crate::lead_git::tool_definition());
@@ -2963,6 +3018,20 @@ impl Orchestrator {
                 gateway.register_coordinator(thread.id, session_instance_id, tools, restrictions, coordinator_instructions, guide)
             })
             .transpose()?;
+        // Claude Code gives up on an MCP tool call after about a minute, which would end a
+        // sign-in, a permission request or a question with a deadline while the user is
+        // still deciding. The daemon bounds every call itself (the longest waits are a few
+        // hours), so leave the limit to it unless the user set their own.
+        if thread.provider.kind == ProviderKind::ClaudeCode && !provider_settings.env.contains_key("MCP_TOOL_TIMEOUT") {
+            provider_settings.env.insert("MCP_TOOL_TIMEOUT".into(), "21600000".into());
+        }
+        // Commands in the session can ask for a password through a private card.
+        // Codex runs commands in a sandbox that can't reach the daemon outside
+        // Full access, so it only gets the helper there.
+        let askpass_allowed = thread.provider.kind != ProviderKind::Codex || thread.permission_mode == PermissionMode::FullAccess;
+        if askpass_allowed && let Some(env) = self.askpass_env(thread.id, session_instance_id) {
+            provider_settings.env.extend(env);
+        }
         let config = SessionConfig {
             cwd: PathBuf::from(&thread.cwd),
             model: thread.model.clone(),
@@ -3029,6 +3098,16 @@ impl Orchestrator {
         let pump_live = live.clone();
         tokio::spawn(async move { this.pump(thread_id, pump_live, events).await });
         Ok(live)
+    }
+
+    /// The askpass variables for one session, when the daemon can be reached
+    /// over loopback and the bundled CLI is known.
+    fn askpass_env(&self, thread_id: ThreadId, session_instance_id: Uuid) -> Option<std::collections::BTreeMap<String, String>> {
+        let gateway = self.inner.native_tools.as_ref()?;
+        let cli = crate::askpass::find_cli()?;
+        let script = crate::askpass::install_script(&self.inner.paths.root, &cli).ok()?;
+        let (url, token) = gateway.register_askpass(thread_id, session_instance_id)?;
+        Some(crate::askpass::session_env(&script, &url, &token))
     }
 
     /// Whether a session spawned now would expose the computer-use tools.
@@ -3436,6 +3515,7 @@ impl Orchestrator {
                     .or_else(|| crate::lead_git::call_budget(&name, &arguments))
                     .or_else(|| crate::visuals::call_budget(&name, &arguments))
                     .or_else(|| crate::pick::call_budget(&name, &arguments))
+                    .or_else(|| request_call_budget(&name, &arguments))
                 {
                     budget
                 } else if delegation::BLOCKING_TOOLS.contains(&name.as_str())
@@ -4250,6 +4330,21 @@ fn clean_title(text: &str) -> String {
     let line = line.trim_matches(|c: char| c == '"' || c == '\'' || c == '*' || c == '#' || c == '`').trim_end_matches('.').trim();
     let title: String = line.chars().take(80).collect();
     if title.split_whitespace().count() > 12 { String::new() } else { title }
+}
+
+/// What `kybern askpass` gets back for a prompt.
+pub(crate) use askpass::PromptReply;
+
+/// The wait budget of the summoned-card tools (sign-in, question, permission, terminal).
+pub(crate) fn request_call_budget(name: &str, arguments: &serde_json::Value) -> Option<Duration> {
+    login_request::call_budget(name).or_else(|| request_tools::call_budget(name, arguments))
+}
+
+/// The summoned-card tools offered to agent sessions.
+pub(crate) fn request_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
+    let mut tools = vec![login_request::tool_definition()];
+    tools.extend(request_tools::tool_definitions());
+    tools
 }
 
 pub fn title_from_message(message: &UserMessage) -> String {
@@ -7707,6 +7802,7 @@ for line in sys.stdin:
 
     include!("orchestrator/delegation_tests.rs");
     include!("orchestrator/secret_tests.rs");
+    include!("orchestrator/request_tests.rs");
     include!("orchestrator/lead_git_tests.rs");
     include!("orchestrator/capabilities_tests.rs");
     include!("orchestrator/lead_tests.rs");

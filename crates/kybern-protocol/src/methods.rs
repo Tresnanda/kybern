@@ -1060,9 +1060,39 @@ pub struct ThreadsRevertResult {
 }
 method!(ThreadsRevert, "threads.revert", Some(Scope::OrchestrationOperate), ThreadsRevertParams, ThreadsRevertResult);
 
+// ---- request cards ----
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct RequestsProgressParams {
+    /// Only this thread's cards; every thread's when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<ThreadId>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RequestsProgressResult {
+    pub items: Vec<RequestProgress>,
+}
+/// What the user did on a request card that is not an answer.
+///
+/// Login (`kybern_request_login`): `browser`, `terminal`, `paste` (`value` is
+/// the code), `cancel` (back to the rows), `retry`. Needs `access:write`: it
+/// changes the machine's own CLI login. Permission: `check`, `granted` ("I've
+/// granted it"), `stop`. Question with a deadline: `pause`, `resume`, `hold`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RequestsActParams {
+    pub approval_id: ApprovalId,
+    pub action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+method!(RequestsProgress, "requests.progress", Some(Scope::OrchestrationRead), RequestsProgressParams, RequestsProgressResult);
+method!(RequestsAct, "requests.act", Some(Scope::OrchestrationOperate), RequestsActParams, Empty);
+/// Sent to every client that may read orchestration state whenever a request card changes. Params are a `RequestProgress`.
+pub const REQUESTS_PROGRESS_NOTIFICATION: &str = "requests.progress";
+
 // ---- terminals ----
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TerminalInfo {
     pub id: TerminalId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3133,6 +3163,8 @@ registry!(
     AccountsList,
     AccountsLoginStart,
     AccountsLoginGet,
+    RequestsProgress,
+    RequestsAct,
     AccountsLoginInput,
     AccountsLoginCancel,
     AccountsLoginFinish,

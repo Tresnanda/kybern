@@ -57,7 +57,7 @@ import { ANSWER_COPY } from '../../../packages/kybern-client/src/visualAnswer.ts
 import { isVisualAnswerCard, pendingVisualAnswer, replyToVisual } from './requests/VisualAnswer.tsx'
 import { setThreadComposerFocus } from './composer/focus.ts'
 import { handleCardKey, isRowCard } from './requests/actions.ts'
-import { focusCard, setComposerEmpty } from './requests/ui.ts'
+import { cardKeyHandler, focusCard, setComposerEmpty } from './requests/ui.ts'
 import { useControls } from './kit/controls.ts'
 import { IconButton } from './kit/IconButton.tsx'
 import { PickerChip } from './kit/PickerChip.tsx'
@@ -649,11 +649,15 @@ export function ComposerView(input: ComposerViewProps) {
     if (m?.cmd || m?.alt || m?.ctrl || m?.shift) return false
     if (!empty || sending || !props.currentThreadId || !/^([1-9]|escape|up|down)$/.test(e.key ?? '')) return false
     const approval = pane.get().open.pendingApprovals[0]
-    if (!approval || !isRowCard(approval)) return false
+    if (!approval) return false
+    // A summoned card (sign-in, permission) routes its own keys; the password prompt registers none, so typing stays typing.
+    const custom = approval.thread_id === props.currentThreadId ? cardKeyHandler(approval.id) : undefined
+    if (!custom && !isRowCard(approval)) return false
+    const route = (key: string) => custom ? custom(key) : handleCardKey(approval, props.currentThreadId!, key)
     // Return is never taken from the composer, so a stray Enter cannot approve anything; ↑ ↓ hand the keyboard to the card.
-    if (e.key === 'up' || e.key === 'down') { focusCard(); return handleCardKey(approval, props.currentThreadId, e.key) }
+    if (e.key === 'up' || e.key === 'down') { focusCard(); return route(e.key) }
     keyboardAnswer()
-    if (!handleCardKey(approval, props.currentThreadId, e.key!)) return false
+    if (!route(e.key!)) return false
     if (!/^[1-9]$/.test(e.key!)) return true
     approvalDigit.current = e.key!
     // GPUIX 0.10 delivers events asynchronously and cannot prevent native text

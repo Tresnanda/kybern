@@ -126,6 +126,14 @@ expression: schema_for!(Settings)
       "type": "boolean",
       "default": true
     },
+    "ask_deadlines": {
+      "description": "Whether an agent's question may carry a default and a wait, and the\nlongest wait it can set (`kybern_ask_user`).",
+      "$ref": "#/$defs/AskDeadlineSettings",
+      "default": {
+        "enabled": true,
+        "max_seconds": 900
+      }
+    },
     "preview_allowed_folders": {
       "description": "Folders outside a project the user allowed the Preview panel to serve\nfiles from. Canonical absolute paths; a grant covers descendants.",
       "type": "array",
@@ -498,6 +506,24 @@ expression: schema_for!(Settings)
           "const": "worktree"
         }
       ]
+    },
+    "AskDeadlineSettings": {
+      "description": "Limits for questions that answer themselves after a deadline. Read each\ntime an agent asks. Approvals, passwords, secrets, sign-ins and\npermissions never have a deadline, whatever these say.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Let an agent give a question a default and a wait. Off: the question waits for the user.",
+          "type": "boolean",
+          "default": true
+        },
+        "max_seconds": {
+          "description": "The longest wait an agent can set, in seconds (60..=14400).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 900
+        }
+      }
     }
   }
 }

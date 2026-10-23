@@ -6,6 +6,7 @@ import { globalNotesHome, setGlobalNotesHome, watchGlobalNotesHome } from '../no
 import { PERMISSION_HINT, PERMISSION_LABEL } from '../../../desktop/src/lib/format.ts'
 import { AUTONOMY_OPTIONS, WORKSPACE_OPTIONS, COORDINATOR_ROLES, COORDINATOR_SETTINGS_COPY as COPY, autonomyHint, effectiveCoordinatorSettings, withGlobalRoleDefault } from '../../../../packages/kybern-client/src/coordinatorSettings.ts'
 import type { PermissionMode, ProviderKind, OrchestrationSettings, RoleDefault } from '../../../../packages/kybern-client/src/types.ts'
+import { ASK_DEADLINE_DEFAULTS, askDeadlineOptions } from '../../../../packages/kybern-client/src/requestCards.ts'
 import { getClient, useApp } from '../state.ts'
 import { useNav } from '../nav/store.ts'
 import { loadProviders } from '../nav/live.ts'
@@ -103,6 +104,7 @@ export function Agents() {
       <Row title="Active agents per Coordinator" description="The same limit for a project's Coordinator, which usually runs more agents at once than an ordinary thread."><NumberField label="Active agents per Coordinator" unit="agents" min={1} max={16} value={current.lead_max_children} disabled={saving} onCommit={(lead_max_children) => change({ lead_max_children })} /></Row>
       <Row title="Delegation depth" description="1 lets only top-level threads delegate. 2 also lets their agents delegate again."><NumberField label="Delegation depth" unit="levels" min={1} max={4} value={current.max_depth} disabled={saving} onCommit={(max_depth) => change({ max_depth })} /></Row>
     </Section>
+    <AskDeadlineSection />
     <Section title={COPY.defaultsSection}>
       <Row title={COPY.autonomy} description={autonomyHint(effective.lead_autonomy)}><Select label={COPY.autonomy} value={effective.lead_autonomy} options={AUTONOMY_OPTIONS} disabled={saving} onChange={(v) => change({ lead_autonomy: v as OrchestrationSettings['lead_autonomy'] })} /></Row>
       <Row title={COPY.workspace} description="Where the Coordinator's agents edit when it doesn't choose. An own worktree keeps parallel work apart."><Select label={COPY.workspace} value={effective.lead_workspace} options={WORKSPACE_OPTIONS} disabled={saving} onChange={(v) => change({ lead_workspace: v as OrchestrationSettings['lead_workspace'] })} /></Row>
@@ -113,6 +115,19 @@ export function Agents() {
     <Section title="Installed agents">{providers.map((p) => <Row key={p.kind} title={p.display_name} description={[p.unavailable_reason ?? p.binary_path ?? 'Not found on PATH', updates.data?.updates.find((u) => u.kind === p.kind)?.message].filter(Boolean).join('\n')}><Label color={t.textSecondary} size={12}>{p.version ?? (p.available ? 'Installed' : 'Not installed')}</Label>{p.available && p.kind !== 'cursor' && !s.providers[p.kind]?.binary && <Button disabled={!!busy} onClick={() => void runUpdate(p.kind)}>{busy === p.kind ? 'Updating…' : 'Update now'}</Button>}</Row>)}<Row title="Update status" description={message || updates.error || 'Refresh to read the latest update status.'}><Button onClick={updates.refresh}>Refresh</Button></Row></Section>
     <CursorSetup />
   </>
+}
+
+/** Questions with a deadline (`kybern_ask_user`): whether agents may set one, and the longest wait. Never on approvals. */
+export function AskDeadlineSection() {
+  const { settings: s, saving } = useSettings()
+  if (!s) return null
+  const deadlines = s.ask_deadlines ?? ASK_DEADLINE_DEFAULTS
+  return (
+    <Section title="Questions">
+      <Row title="Let agents answer for you after a deadline" description="An agent may set a default and a wait. Kybern shows the countdown and picks the default when it ends. Off, questions wait for you."><Switch aria-label="Let agents answer for you after a deadline" testId="settings-ask-deadlines" checked={deadlines.enabled} disabled={saving} onCheckedChange={(enabled) => void updateSettings({ ask_deadlines: { ...(latestSettings()!.ask_deadlines ?? ASK_DEADLINE_DEFAULTS), enabled } })} /></Row>
+      <Row title="Longest wait an agent can set" description="Shorter requests keep their own time."><Select label="Longest wait an agent can set" testId="settings-ask-deadline-max" value={String(deadlines.max_seconds)} disabled={saving || !deadlines.enabled} options={askDeadlineOptions(deadlines.max_seconds)} onChange={(value) => void updateSettings({ ask_deadlines: { ...(latestSettings()!.ask_deadlines ?? ASK_DEADLINE_DEFAULTS), max_seconds: Number(value) } })} /></Row>
+    </Section>
+  )
 }
 
 function DaemonUpdateRow() {

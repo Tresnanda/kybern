@@ -1,6 +1,7 @@
 mod accounts;
 mod coordinator;
 mod render;
+mod requests;
 mod spaces;
 
 use std::path::PathBuf;
@@ -135,6 +136,17 @@ enum Cmd {
     History {
         #[command(subcommand)]
         cmd: coordinator::HistoryCmd,
+    },
+    /// The helper behind SUDO_ASKPASS, SSH_ASKPASS and GIT_ASKPASS in agent sessions: shows the prompt as a private card and prints the answer.
+    #[command(hide = true)]
+    Askpass {
+        /// The prompt, as the asking program passes it.
+        prompt: Vec<String>,
+    },
+    /// See or press the request cards agents summon: sign-ins, permissions, questions with a deadline.
+    Requests {
+        #[command(subcommand)]
+        cmd: requests::RequestsCmd,
     },
     /// Show daemon info.
     Info,
@@ -1149,12 +1161,18 @@ pub async fn run() -> Result<()> {
     if let Cmd::Cursor { cmd } = &cli.cmd {
         return cursor_setup(cmd).await;
     }
+    // The helper talks to its own session's endpoint, not to a client connection.
+    if let Cmd::Askpass { prompt } = &cli.cmd {
+        return requests::askpass(prompt).await;
+    }
     let ep = Endpoint::resolve(cli.url.clone(), cli.token.clone(), cli.data_dir.clone())?;
     let client = Client::connect(&ep).await?;
     let json = cli.json;
 
     match cli.cmd {
         Cmd::Cursor { .. } => unreachable!("local Cursor setup handled before connecting"),
+        Cmd::Askpass { .. } => unreachable!("askpass handled before connecting"),
+        Cmd::Requests { cmd } => requests::requests(&client, cmd).await?,
         Cmd::Coordinator { cmd } => coordinator::coordinator(&client, cmd).await?,
         Cmd::History { cmd } => coordinator::history(&client, cmd).await?,
         Cmd::Info => {

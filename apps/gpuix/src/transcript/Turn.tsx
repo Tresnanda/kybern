@@ -44,6 +44,7 @@ import { Shimmer } from './motion.tsx'
 import { GROUP_TREE, HEADER_STEM, WorkRows, type RowContext } from './rows.tsx'
 import { markTreeOpen, TreeGroup, TreeLines } from '../tree/Tree.tsx'
 import { filePatch, hydrateToolOutput, loadFilePatch, reportError, revertTo, useChildThreads, useRowState, useTurnDiff, type ToolBlock } from './store.ts'
+import { signInRows } from './signIn.ts'
 
 const isTaskActive = (task: RuntimeTask) => task.status === 'pending' || task.status === 'running' || task.status === 'waiting' || task.status === 'stopping'
 
@@ -115,7 +116,8 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
   )
   const children = useChildThreads(threadId, launches)
   const cards = useMemo(() => itemCards(group), [group.work, group.answer?.text])
-  const ctx = useMemo<RowContext>(() => ({ threadId, tasksByToolCall, childrenByParent: hierarchy.childrenByParent, children, inlineItemIds: running ? undefined : cards.inlineCallIds }), [threadId, tasksByToolCall, hierarchy, children, cards, running])
+  const signIn = useMemo(() => signInRows(group.work), [group.work])
+  const ctx = useMemo<RowContext>(() => ({ threadId, tasksByToolCall, childrenByParent: hierarchy.childrenByParent, children, inlineItemIds: running ? undefined : cards.inlineCallIds, signIn }), [threadId, tasksByToolCall, hierarchy, children, cards, running, signIn])
   const settled = useMemo(() => {
     const agentBlocks: Block[] = []
     const disclosureBlocks: Block[] = []

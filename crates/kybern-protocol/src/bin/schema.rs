@@ -33,6 +33,11 @@ fn main() {
     add::<Project>(&mut types, "Project");
     add::<TranscriptEntry>(&mut types, "TranscriptEntry");
     add::<ApprovalRequest>(&mut types, "ApprovalRequest");
+    add::<RequestProgress>(&mut types, "RequestProgress");
+    add::<LoginRequestInput>(&mut types, "LoginRequestInput");
+    add::<PromptRequestInput>(&mut types, "PromptRequestInput");
+    add::<PermissionRequestInput>(&mut types, "PermissionRequestInput");
+    add::<QuestionDeadline>(&mut types, "QuestionDeadline");
     add::<ProviderStatus>(&mut types, "ProviderStatus");
     add::<Scope>(&mut types, "Scope");
     add::<Checkpoint>(&mut types, "Checkpoint");
@@ -73,6 +78,8 @@ fn main() {
     method::<AccountsList>(&mut methods);
     method::<AccountsLoginStart>(&mut methods);
     method::<AccountsLoginGet>(&mut methods);
+    method::<RequestsProgress>(&mut methods);
+    method::<RequestsAct>(&mut methods);
     method::<AccountsLoginInput>(&mut methods);
     method::<AccountsLoginCancel>(&mut methods);
     method::<AccountsLoginFinish>(&mut methods);

@@ -1,9 +1,10 @@
 // Questions and input forms in the request family: blocking questions from a harness (`UserInputPanel`), the form-shaped
 // requests (`ui_select`, `ui_confirm`, `ui_input`, `ui_editor`, MCP elicitation) and non-blocking async questions.
 // A question's options are the same numbered rows as an approval's; its last row is the free answer.
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { array, questionResponse, questionsFor, record, string } from '../../../../packages/kybern-client/src/userInput.ts'
-import type { ApprovalRequest, AsyncQuestionRequest, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
+import type { ApprovalRequest, AsyncQuestionRequest, QuestionDeadline, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
+import { defaultOption, questionDeadline } from '../../../../packages/kybern-client/src/requestCards.ts'
 import { answerQuestions, errorText, respondApproval } from '../transcript/store.ts'
 import { T } from '../transcript/glyphs.ts'
 import { Button } from '../kit/Button.tsx'
@@ -14,6 +15,16 @@ import { TextField } from '../kit/Field.tsx'
 import { Label } from '../ui.tsx'
 import { CardShell, DigitKey, HintText, Hints, Kbd, OptionList, OptionRow, RequestHeader, useCardTokens, Well } from './Card.tsx'
 import { keyboardAnswer } from './Panel.tsx'
+import { DeadlineHint, usePauseController } from './Deadline.tsx'
+import { actOnRequest, refreshProgress, useRequestProgress } from './progress.ts'
+
+/** "Wait for me": the question keeps waiting with no deadline (`requests.act hold`). Gone once held. */
+function WaitForMe({ approvalId, disabled }: { approvalId: string; disabled: boolean }) {
+  const phase = useRequestProgress(approvalId)?.phase
+  const [busy, setBusy] = useState(false)
+  if (phase === 'held') return null
+  return <Button variant="ghost" size="sm" testId="question-hold" disabled={disabled || busy} onKeyboard={keyboardAnswer} onClick={() => { setBusy(true); void actOnRequest(approvalId, 'hold').catch(() => {}).finally(() => setBusy(false)) }}>Wait for me</Button>
+}
 
 interface Spec {
   id: string
@@ -31,13 +42,19 @@ const plain = (label: string) => [{ text: label }]
 const sendFailed = (e: unknown) => `Unable to send your answer: ${errorText(e).replace(/\.$/, '')}. Check it and try again.`
 
 /** One step per question, then a review. Answers are picked with digits or a click; ↑ ↓ move, Return continues. */
-function QuestionCard({ specs, count, busy, error, onSend, onDecline }: { specs: Spec[]; count: number; busy: boolean; error: string; onSend: (answers: string[][]) => void; onDecline?: () => void }) {
+function QuestionCard({ specs, count, busy, error, onSend, onDecline, deadline }: { specs: Spec[]; count: number; busy: boolean; error: string; onSend: (answers: string[][]) => void; onDecline?: () => void; /** A daemon question that answers itself with its defaults. */ deadline?: { approvalId: string; deadline: QuestionDeadline } }) {
   const k = useCardTokens()
   const [step, setStep] = useState(0)
-  const [selected, setSelected] = useState<Record<string, string[]>>({})
+  // The default rows start picked (and highlighted), so Send answer sends what the countdown would.
+  const defaults = (q: Spec) => defaultOption(deadline?.deadline ?? null, q)
+  const [selected, setSelected] = useState<Record<string, string[]>>(() => Object.fromEntries(specs.flatMap((q) => defaults(q) >= 0 && !q.multiple ? [[q.id, [q.options[defaults(q)]!.label]]] : [])))
+  const deadlinePhase = useRequestProgress(deadline?.approvalId ?? '')?.phase
+  const pause = usePauseController(deadline?.approvalId ?? '', !!deadline && deadlinePhase !== 'held')
   const [custom, setCustom] = useState<Record<string, string>>({})
-  const [cursor, setCursor] = useState(0)
+  const [cursor, setCursor] = useState(() => Math.max(0, specs[0] ? defaults(specs[0]) : 0))
   const reviewing = step === specs.length
+  // One question with a deadline sends straight away: its default is already picked, as the countdown would send it.
+  const direct = !!deadline && specs.length === 1
   const answersFor = (q: Spec): string[] => custom[q.id]?.trim() ? [...(q.multiple ? (selected[q.id] ?? []) : []), custom[q.id]!.trim()] : (selected[q.id] ?? [])
   const ready = specs.every((q) => answersFor(q).length)
   const canContinue = reviewing ? ready : !!specs[step] && answersFor(specs[step]!).length > 0
@@ -47,7 +64,7 @@ function QuestionCard({ specs, count, busy, error, onSend, onDecline }: { specs:
   const goto = (next: number) => { setStep(next); setCursor(0) }
   const next = () => {
     if (busy || !canContinue) return
-    if (reviewing) onSend(specs.map(answersFor))
+    if (reviewing || direct) onSend(specs.map(answersFor))
     else goto(step + 1)
   }
   const pick = (index: number) => {
@@ -61,6 +78,7 @@ function QuestionCard({ specs, count, busy, error, onSend, onDecline }: { specs:
   }
   const onKey = (e: { key?: string; modifiers?: { cmd?: boolean } }): boolean => {
     if (busy || reviewing || e.modifiers?.cmd) return false
+    if (e.key && /^([1-9]|up|down|space|enter)$/.test(e.key)) pause.touch()
     const key = e.key ?? ''
     if (/^[1-9]$/.test(key)) { const i = Number(key) - 1; if (i < rows) { keyboardAnswer(); pick(i); return true } return false }
     if (key === 'up' || key === 'down') {
@@ -75,7 +93,7 @@ function QuestionCard({ specs, count, busy, error, onSend, onDecline }: { specs:
   }
   const last = step === specs.length - 1
   return (
-    <CardShell testId="question-panel" onKey={onKey}>
+    <CardShell testId="question-panel" onKey={onKey} {...(deadline ? { onPointerEnter: () => pause.hover(true), onPointerLeave: () => pause.hover(false), onFocusIn: pause.touch } : {})}>
       <RequestHeader
         glyph={T.question}
         title={reviewing ? 'Review your answers' : q!.title}
@@ -101,6 +119,7 @@ function QuestionCard({ specs, count, busy, error, onSend, onDecline }: { specs:
             return (
               <OptionRow
                 key={option.label} n={q!.multiple ? undefined : i + 1} label={plain(option.label)} description={option.description} testId={`question-option-${i}`}
+                tag={deadline && defaults(q!) === i ? 'Default' : undefined}
                 role={q!.multiple ? 'checkbox' : 'radio'} highlighted={checked} cursor={q!.multiple && cursor === i && !checked} enterHint={false} disabled={busy} dim={busy}
                 lead={q!.multiple ? <div style={{ display: 'flex', paddingTop: 1 }}><Checkbox checked={checked} aria-label={option.label} style={{ pointerEvents: 'none' }} /></div> : undefined}
                 onClick={() => pick(i)}
@@ -116,7 +135,7 @@ function QuestionCard({ specs, count, busy, error, onSend, onDecline }: { specs:
               <div style={{ display: 'flex', marginTop: 7 }}>
                 <TextField
                   label="Your answer" testId="question-answer" value={custom[q!.id] ?? ''} placeholder="Type an answer" shell={{ flexGrow: 1, height: 30, borderRadius: 8 }}
-                  onChange={(v) => { setCustom({ ...custom, [q!.id]: v }); if (!q!.multiple && v) setSelected({ ...selected, [q!.id]: [] }) }}
+                  onChange={(v) => { pause.touch(); setCustom({ ...custom, [q!.id]: v }); if (!q!.multiple && v) setSelected({ ...selected, [q!.id]: [] }) }}
                   interceptKeys={['enter']} onKeyDown={(e) => { if (e.key === 'enter' && canContinue) { e.preventDefault(); next() } }}
                 />
               </div>
@@ -126,15 +145,16 @@ function QuestionCard({ specs, count, busy, error, onSend, onDecline }: { specs:
       )}
       <Hints
         error={error}
-        left={reviewing ? <HintText>Check your answers before sending.</HintText> : total > 1 && rows > 0
+        left={deadline && !reviewing ? <DeadlineHint approvalId={deadline.approvalId} deadline={deadline.deadline} chosen={specs.length === 1 && defaults(specs[0]!) >= 0 ? specs[0]!.options[defaults(specs[0]!)]!.label : null} /> : reviewing ? <HintText>Check your answers before sending.</HintText> : total > 1 && rows > 0
           ? <><Kbd keys={['↑', '↓']} /><HintText>to move</HintText><HintText>·</HintText><Kbd keys={['1']} /><HintText>–</HintText><Kbd keys={[String(rows)]} /><HintText>{q!.multiple ? 'to toggle' : 'to choose'}</HintText></>
           : <HintText>The agent is waiting for your answer.</HintText>}
         right={
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            {deadline && <WaitForMe approvalId={deadline.approvalId} disabled={busy} />}
             {onDecline && <Button variant="ghost" size="sm" disabled={busy} onClick={onDecline} onKeyboard={keyboardAnswer} testId="question-decline">Decline</Button>}
             {step > 0 && <Button size="sm" disabled={busy} onClick={() => goto(step - 1)} onKeyboard={keyboardAnswer} icon={T.arrowLeft}>Previous</Button>}
             <Button variant="primary" size="sm" swap disabled={busy || !canContinue} onClick={next} onKeyboard={keyboardAnswer} kbd="↵" testId="question-next">
-              {busy ? 'Sending…' : reviewing ? (specs.length === 1 ? 'Send answer' : 'Send answers') : last ? 'Review answers' : 'Next'}
+              {busy ? 'Sending…' : reviewing || direct ? (specs.length === 1 ? 'Send answer' : 'Send answers') : last ? 'Review answers' : 'Next'}
             </Button>
           </div>
         }
@@ -152,6 +172,8 @@ export function UserInputPanel({ approval, count }: { approval: ApprovalRequest;
   const [fields, setFields] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const deadline = questionDeadline(approval)
+  useEffect(() => { if (deadline) void refreshProgress(approval.thread_id) }, [approval.id])
   const elicitation = approval.tool_name === 'mcp_elicitation'
   const isUrl = elicitation && input.mode === 'url'
   const schema = record(input.requestedSchema ?? input.requested_schema)
@@ -173,7 +195,7 @@ export function UserInputPanel({ approval, count }: { approval: ApprovalRequest;
   if (questions.length) {
     return (
       <QuestionCard
-        count={count} busy={busy} error={error}
+        count={count} busy={busy} error={error} deadline={deadline ? { approvalId: approval.id, deadline } : undefined}
         specs={questions.map((q): Spec => ({ id: q.id, title: q.title, options: q.options, multiple: q.multiple, custom: q.custom || !q.options.length, secret: q.secret }))}
         onDecline={() => void submit()}
         onSend={(answers) => {

@@ -646,6 +646,122 @@ export interface PickRequestInput {
   prompt: string;
 }
 
+/** `tool_name` of the daemon's sign-in card (`kybern_request_login`). `input` is a `LoginRequestInput`. A client only answers with a deny (the decline row); every other step goes through `requests.act` and the card's `RequestProgress`. The daemon resolves the card with `{ status: "signed_in" | "already_signed_in", cli, account? }`. */
+export const LOGIN_REQUEST_TOOL = "kybern_request_login";
+/** `tool_name` of the private card behind `kybern askpass` (sudo, ssh and git prompts). `input` is a `PromptRequestInput`. Never answered automatically. The answer is `{ decision: "submit", response: { secret } }` (masked), `{ value }` (visible) or `{ confirmed }` (yes/no), or a deny; a `secret` is redacted in stored copies. */
+export const PROMPT_REQUEST_TOOL = "kybern_askpass";
+/** `tool_name` of the daemon's macOS permission card (`kybern_request_permission`). `input` is a `PermissionRequestInput`. A client only answers with a deny; the rest goes through `requests.act`. */
+export const PERMISSION_REQUEST_TOOL = "kybern_request_permission";
+/** Longest askpass answer, in bytes. */
+export const MAX_PROMPT_ANSWER_BYTES = 4096;
+
+/** The `input` of a `LOGIN_REQUEST_TOOL` approval. */
+export interface LoginRequestInput {
+  /** The CLI to sign in, e.g. `gh`. */
+  cli: string;
+  /** The service's name for the title, e.g. `GitHub`. */
+  service: string;
+  reason: string;
+  /** The Account line, e.g. "github.com, any account you choose". */
+  account: string;
+  /** The Access line (scopes), when the CLI has any. */
+  access?: string | null;
+  /** What the sign-in changes, e.g. "`gh` for this Mac, so your terminal uses it too". */
+  signs_in: string;
+  /** The command the terminal path runs, e.g. `gh auth login`. */
+  command: string;
+  /** Row order of the ways offered: `browser` and `terminal`. */
+  methods: string[];
+  /** The agent supplied the command; the CLI is not in Kybern's table. */
+  custom?: boolean;
+}
+
+/** The `input` of a `PROMPT_REQUEST_TOOL` approval. */
+export interface PromptRequestInput {
+  /** `sudo`, `ssh_passphrase`, `ssh_host_key`, `git_username`, `git_password` or `other`. */
+  purpose: string;
+  /** The prompt as the program printed it. */
+  prompt: string;
+  /** Mask the field. */
+  secret: boolean;
+  /** Ask yes or no (an SSH host key). No default answer, `Return` stays inert. */
+  confirm: boolean;
+  /** The command that asked, from the parent processes. */
+  command?: string | null;
+  /** The harness's display name, e.g. `Claude Code`. */
+  harness: string;
+  host?: string | null;
+  /** An SSH host key's type, e.g. `ED25519`. */
+  key_type?: string | null;
+  fingerprint?: string | null;
+  /** 1 on the first ask, 2 or more when the same command asked again (a wrong password). */
+  attempt: number;
+  /** Seconds the helper waits before it fails the command. */
+  wait_seconds: number;
+}
+
+/** The `input` of a `PERMISSION_REQUEST_TOOL` approval. */
+export interface PermissionRequestInput {
+  /** `camera`, `microphone`, `screen_recording`, `accessibility`, `local_network`, `full_disk_access`, `notifications` or `location`. */
+  pane: string;
+  app: string;
+  bundle_id?: string | null;
+  app_path?: string | null;
+  reason: string;
+  /** e.g. "Privacy & Security › Camera". */
+  pane_label: string;
+  /** The `x-apple.systempreferences:` link that opens the pane. */
+  url: string;
+  /** The user must add the app to a list (Full Disk Access, Accessibility). */
+  needs_app_added: boolean;
+  /** The app needs a relaunch once the permission is on. */
+  relaunch: boolean;
+  /** Kybern can see the grant itself; otherwise the user confirms it. */
+  detects: boolean;
+}
+
+/** `deadline` inside an `AskUserQuestion` approval's `input` (the daemon's `kybern_ask_user` with a default and a wait). The daemon answers with `defaults` at `ends_at` unless paused (`requests.act` `pause` / `resume`) or held (`hold`); the answer then carries `auto: { at, waited_seconds }`. */
+export interface QuestionDeadline {
+  /** Question text → the option label chosen when the deadline fires. */
+  defaults: Record<string, string>;
+  seconds: number;
+  started_at: DateTime;
+  ends_at: DateTime;
+}
+
+export type RequestKind = "login" | "permission" | "question" | "terminal";
+export type RequestPhase = "asking" | "waiting" | "paste_code" | "verifying" | "done" | "failed" | "not_granted" | "paused" | "held";
+
+/** Live state of a request card; pushed as `requests.progress` and listed by the `requests.progress` method. Not persisted. */
+export interface RequestProgress {
+  approval_id: ApprovalId;
+  thread_id: ThreadId;
+  kind: RequestKind;
+  phase: RequestPhase;
+  /** `browser` or `terminal` for a login. */
+  method?: string | null;
+  /** A login's sign-in page, or a permission's System Settings link. */
+  url?: string | null;
+  user_code?: string | null;
+  /** The terminal a sign-in or `kybern_run_in_terminal` opened (open it as a tab). */
+  terminal?: TerminalInfo | null;
+  account?: string | null;
+  error?: string | null;
+  /** When the wait ends: a login's timeout or a question's deadline. */
+  ends_at?: DateTime | null;
+  /** Time left while a deadline is paused, in milliseconds. */
+  remaining_ms?: number | null;
+  updated_at: DateTime;
+}
+export const REQUESTS_PROGRESS_NOTIFICATION = "requests.progress";
+
+/** Limits for questions that answer themselves after a deadline (`kybern_ask_user`). */
+export interface AskDeadlineSettings {
+  enabled: boolean;
+  /** The longest wait an agent can set, in seconds. */
+  max_seconds: number;
+}
+
 /**
  * `tool_name` of the Coordinator's "Save this as the project brief?" card. `input` is a
  * `BriefProposalInput`; the answer is `{ decision: "submit", response: { text } }` with the
@@ -1767,6 +1883,8 @@ export interface Settings {
   orchestration: OrchestrationSettings;
   /** Give new agent sessions a short guide to Kybern. Defaults to on. */
   tell_agents_about_kybern: boolean;
+  /** Whether an agent's question may carry a default and a wait, and the longest wait. */
+  ask_deadlines?: AskDeadlineSettings;
   /** Folders outside a project the user allowed Preview to serve files from. */
   preview_allowed_folders?: string[];
 }
@@ -2501,6 +2619,8 @@ export interface Methods {
   "terminals.unsubscribe": [TerminalsCloseParams, Empty];
   "approvals.respond": [ApprovalsRespondParams, Empty];
   "approvals.list": [ApprovalsListParams, ApprovalsListResult];
+  "requests.progress": [{ thread_id?: ThreadId | null }, { items: RequestProgress[] }];
+  "requests.act": [{ approval_id: ApprovalId; action: string; value?: string | null }, Empty];
   "events.subscribe": [EventsSubscribeParams, EventsSubscribeResult];
   "events.unsubscribe": [EventsUnsubscribeParams, Empty];
   "events.range": [EventsRangeParams, EventsRangeResult];

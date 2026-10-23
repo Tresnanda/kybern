@@ -1383,6 +1383,204 @@ pub struct PickRequestInput {
     pub prompt: String,
 }
 
+/// `tool_name` of the daemon-raised approval behind `kybern_request_login`: the
+/// card "Sign in to GitHub to continue". The sign-in itself runs in the daemon
+/// and the card follows it through [`RequestProgress`]; the client drives it
+/// with `requests.act` (`browser`, `terminal`, `paste`, `cancel`, `retry`).
+///
+/// `input` is a [`LoginRequestInput`]. Clients may only answer `Deny` (the
+/// decline row); the daemon resolves the card with `Submit { response:
+/// {"status": "signed_in", "cli", "account"?} }` once the CLI is signed in.
+pub const LOGIN_REQUEST_TOOL: &str = "kybern_request_login";
+/// `tool_name` of the daemon-raised approval behind `kybern askpass`, the
+/// helper behind `SUDO_ASKPASS`, `SSH_ASKPASS` and `GIT_ASKPASS`. Always a
+/// private card, never answered automatically in any permission mode.
+///
+/// `input` is a [`PromptRequestInput`]. The answer is `Submit { response:
+/// {"secret": "<value>"} }` for a masked prompt, `{"value": "<text>"}` for a
+/// visible one (a git username) and `{"confirmed": true|false}` for a yes/no
+/// prompt (an SSH host key), or `Deny`. A `secret` is redacted like
+/// [`REDACTED_SECRET`] in stored and broadcast copies.
+pub const PROMPT_REQUEST_TOOL: &str = "kybern_askpass";
+/// `tool_name` of the daemon-raised approval behind `kybern_request_permission`:
+/// the card "Let <app> use the camera". The daemon watches for the grant where
+/// the OS lets it; the client drives the rest with `requests.act` (`open`,
+/// `check`, `granted`, `stop`). Resolved by the daemon with `Submit { response:
+/// {"status": "granted"|"user_confirmed"|...} }`; clients may only `Deny`.
+///
+/// `input` is a [`PermissionRequestInput`].
+pub const PERMISSION_REQUEST_TOOL: &str = "kybern_request_permission";
+/// Longest askpass answer, in bytes.
+pub const MAX_PROMPT_ANSWER_BYTES: usize = 4096;
+
+/// The `input` of a [`LOGIN_REQUEST_TOOL`] approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LoginRequestInput {
+    /// The CLI to sign in, e.g. `gh`.
+    pub cli: String,
+    /// The service's name for the title, e.g. `GitHub`.
+    pub service: String,
+    /// Why the agent needs it.
+    pub reason: String,
+    /// The Account line of the card, e.g. "github.com, any account you choose".
+    pub account: String,
+    /// The Access line (scopes), if the CLI has any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<String>,
+    /// What the sign-in changes, e.g. "`gh` for this Mac, so your terminal uses it too".
+    pub signs_in: String,
+    /// The command that signs in, as the terminal path runs it.
+    pub command: String,
+    /// The ways offered, in row order: `browser` and `terminal`.
+    pub methods: Vec<String>,
+    /// The CLI is not in Kybern's table; the agent supplied the command.
+    #[serde(default)]
+    pub custom: bool,
+}
+
+/// The `input` of a [`PROMPT_REQUEST_TOOL`] approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PromptRequestInput {
+    /// `sudo`, `ssh_passphrase`, `ssh_host_key`, `git_username`, `git_password`
+    /// or `other`.
+    pub purpose: String,
+    /// The prompt exactly as the program printed it (credentials in URLs removed).
+    pub prompt: String,
+    /// Mask the field.
+    pub secret: bool,
+    /// Ask yes or no (an SSH host key). There is no default answer.
+    pub confirm: bool,
+    /// The command that asked, found by walking parent processes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// The harness's display name, e.g. `Claude Code`.
+    pub harness: String,
+    /// The host the prompt is about (ssh and git), if the prompt names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// An SSH host key's type, e.g. `ED25519`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_type: Option<String>,
+    /// An SSH host key's fingerprint, e.g. `SHA256:...`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
+    /// 1 for the first ask, 2 when the same command asked again (a wrong password).
+    pub attempt: u32,
+    /// Seconds the helper waits before it fails the command.
+    pub wait_seconds: u64,
+}
+
+/// The `input` of a [`PERMISSION_REQUEST_TOOL`] approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PermissionRequestInput {
+    /// `camera`, `microphone`, `screen_recording`, `accessibility`,
+    /// `local_network`, `full_disk_access`, `notifications` or `location`.
+    pub pane: String,
+    /// The app that needs the permission, as the agent named it.
+    pub app: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_id: Option<String>,
+    /// Where the app is, when Kybern found it (for "show in Finder").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_path: Option<String>,
+    pub reason: String,
+    /// The pane's name as System Settings shows it, e.g. "Privacy & Security › Camera".
+    pub pane_label: String,
+    /// The `x-apple.systempreferences:` link that opens the pane.
+    pub url: String,
+    /// The user must add the app to a list (Full Disk Access, Accessibility).
+    pub needs_app_added: bool,
+    /// The app has to be relaunched once the permission is on.
+    pub relaunch: bool,
+    /// Kybern can see the grant itself; otherwise the user confirms it.
+    pub detects: bool,
+}
+
+/// How a question card's deadline works (`kybern_ask_user` with `default` and
+/// `deadline_seconds`). Lives in an `AskUserQuestion` approval's `input` as
+/// `deadline`. The daemon answers with the defaults at `ends_at` unless the
+/// user pauses (`requests.act` `pause` and `resume`) or holds it (`hold`);
+/// the answer then carries `auto: {"at", "waited_seconds"}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct QuestionDeadline {
+    /// The question text → the option label chosen when the deadline fires.
+    pub defaults: std::collections::BTreeMap<String, String>,
+    /// The wait the agent asked for after the user's cap, in seconds.
+    pub seconds: u64,
+    pub started_at: DateTime<Utc>,
+    pub ends_at: DateTime<Utc>,
+}
+
+/// What kind of request a [`RequestProgress`] belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestKind {
+    Login,
+    Permission,
+    Question,
+    /// A terminal tab a `kybern_run_in_terminal` call opened; `approval_id`
+    /// is the call's own id and no card exists.
+    Terminal,
+}
+
+/// Where a request is. Not every phase applies to every kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestPhase {
+    /// The card is waiting for a choice.
+    Asking,
+    /// Kybern waits for the user to finish elsewhere (browser, terminal, System Settings).
+    Waiting,
+    /// A login needs the code the page showed (`requests.act` `paste`).
+    PasteCode,
+    Verifying,
+    /// Succeeded; the card stays about 900 ms, then leaves.
+    Done,
+    /// The attempt ended without success; `error` says why and the rows return.
+    Failed,
+    /// A permission is still off after the user said or Kybern saw otherwise.
+    NotGranted,
+    /// A question deadline is paused; `remaining_ms` is what is left.
+    Paused,
+    /// The user chose to wait; no deadline remains.
+    Held,
+}
+
+/// Live state of a request card, pushed as `requests.progress` and readable
+/// with `requests.progress`. Not persisted; the card's approval is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RequestProgress {
+    pub approval_id: ApprovalId,
+    pub thread_id: ThreadId,
+    pub kind: RequestKind,
+    pub phase: RequestPhase,
+    /// `browser` or `terminal` for a login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    /// A login's sign-in page, or a permission's System Settings link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// The one-time code the page asks for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_code: Option<String>,
+    /// The terminal a sign-in or `kybern_run_in_terminal` opened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<crate::methods::TerminalInfo>,
+    /// Who is signed in, once known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    /// What went wrong, in a sentence that says what to do next.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// When the wait ends: a login's timeout or a question's deadline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ends_at: Option<DateTime<Utc>>,
+    /// Time left while a deadline is paused, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining_ms: Option<u64>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// `tool_name` of the daemon-raised approval behind `kybern_coordinator_propose_brief`:
 /// the card "Save this as the project brief?" holds the Coordinator's proposed
 /// text, which the user can edit. This card is the only way agent text reaches
@@ -1445,6 +1643,9 @@ pub fn is_user_input_tool(tool_name: &str) -> bool {
             | SECRET_REQUEST_TOOL
             | VISUAL_ANSWER_TOOL
             | PICK_REQUEST_TOOL
+            | LOGIN_REQUEST_TOOL
+            | PROMPT_REQUEST_TOOL
+            | PERMISSION_REQUEST_TOOL
             | COORDINATOR_BRIEF_TOOL
             | COORDINATOR_SETTINGS_TOOL
             | "request_user_input"
@@ -1555,6 +1756,22 @@ impl ApprovalRequest {
                     return Err("Pick something again, or decline.".into());
                 }
             }
+            PROMPT_REQUEST_TOOL => {
+                let text = |key: &str| response.get(key).and_then(Value::as_str);
+                let valid = if self.input.get("confirm").and_then(Value::as_bool) == Some(true) {
+                    response.get("confirmed").is_some_and(Value::is_boolean)
+                } else if self.input.get("secret").and_then(Value::as_bool) == Some(true) {
+                    text("secret")
+                        .is_some_and(|secret| !secret.is_empty() && secret.len() <= MAX_PROMPT_ANSWER_BYTES && !secret.contains('\0'))
+                } else {
+                    text("value").is_some_and(|value| value.len() <= MAX_PROMPT_ANSWER_BYTES && !value.contains('\0'))
+                };
+                if !valid {
+                    return Err("Enter an answer, or cancel.".into());
+                }
+            }
+            // The daemon resolves these cards; a client can only decline them.
+            LOGIN_REQUEST_TOOL | PERMISSION_REQUEST_TOOL => return Err("Use the card's buttons, or decline.".into()),
             COORDINATOR_BRIEF_TOOL => {
                 let text = response.get("text").and_then(Value::as_str).map(str::trim);
                 if !text.is_some_and(|text| !text.is_empty() && text.len() <= MAX_BRIEF_BYTES) {
@@ -1600,6 +1817,9 @@ impl ApprovalRequest {
         let ApprovalDecision::Submit { response } = decision else { return decision.clone() };
         match self.tool_name.as_str() {
             SECRET_REQUEST_TOOL => ApprovalDecision::Submit { response: serde_json::json!({ "secret": REDACTED_SECRET }) },
+            PROMPT_REQUEST_TOOL if response.get("secret").is_some() => {
+                ApprovalDecision::Submit { response: serde_json::json!({ "secret": REDACTED_SECRET }) }
+            }
             "request_user_input" => {
                 let secret_ids: Vec<&str> = self
                     .input
@@ -1975,10 +2195,31 @@ pub struct Settings {
     /// Give new agent sessions a short guide to Kybern: images, notes and
     /// tasks, other threads, helpers. Applies to sessions started after the change.
     pub tell_agents_about_kybern: bool,
+    /// Whether an agent's question may carry a default and a wait, and the
+    /// longest wait it can set (`kybern_ask_user`).
+    pub ask_deadlines: AskDeadlineSettings,
     /// Folders outside a project the user allowed the Preview panel to serve
     /// files from. Canonical absolute paths; a grant covers descendants.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preview_allowed_folders: Vec<String>,
+}
+
+/// Limits for questions that answer themselves after a deadline. Read each
+/// time an agent asks. Approvals, passwords, secrets, sign-ins and
+/// permissions never have a deadline, whatever these say.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct AskDeadlineSettings {
+    /// Let an agent give a question a default and a wait. Off: the question waits for the user.
+    pub enabled: bool,
+    /// The longest wait an agent can set, in seconds (60..=14400).
+    pub max_seconds: u64,
+}
+
+impl Default for AskDeadlineSettings {
+    fn default() -> Self {
+        Self { enabled: true, max_seconds: 15 * 60 }
+    }
 }
 
 /// Limits for `kybern_agent_delegate`. Read each time an agent delegates.
@@ -2202,6 +2443,7 @@ impl Default for Settings {
             computer_use: ComputerUseSettings::default(),
             orchestration: OrchestrationSettings::default(),
             tell_agents_about_kybern: true,
+            ask_deadlines: AskDeadlineSettings::default(),
             preview_allowed_folders: Vec::new(),
         }
     }

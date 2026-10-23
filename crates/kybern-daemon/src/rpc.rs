@@ -1000,6 +1000,19 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             state.orchestrator.respond_approval(p.approval_id, p.decision).await.map_err(bad)?;
             ok(Empty {})
         }
+        RequestsProgress::NAME => {
+            let p: RequestsProgressParams = parse_or_default(params)?;
+            let items = state.orchestrator.requests().list(p.thread_id);
+            let items =
+                if ctx.principal.has(Scope::AccessWrite) { items } else { items.into_iter().map(crate::ws::redact_progress).collect() };
+            ok(RequestsProgressResult { items })
+        }
+        RequestsAct::NAME => {
+            let p: RequestsActParams = parse(params)?;
+            let act = crate::requests::RequestAct { action: p.action, value: p.value, can_write: ctx.principal.has(Scope::AccessWrite) };
+            state.orchestrator.requests().act(p.approval_id, act).map_err(bad)?;
+            ok(Empty {})
+        }
         ApprovalsList::NAME => {
             let p: ApprovalsListParams = parse_or_default(params)?;
             ok(ApprovalsListResult { approvals: state.store.approvals_pending(p.thread_id).map_err(internal)? })
