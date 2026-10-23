@@ -92,6 +92,15 @@ impl Orchestrator {
         let Ok(Some(thread)) = self.inner.store.thread_get(thread_id) else {
             return cancelled("This chat no longer exists.");
         };
+        // Only a real sudo, ssh or git may ask: the agent's own shell running `kybern askpass` could fake a sudo prompt.
+        // Tests stand in for sudo with their own process.
+        let trusted = (cfg!(test) && pid == std::process::id())
+            || tokio::task::spawn_blocking(move || askpass::asked_by_trusted_program(pid)).await.unwrap_or(false);
+        if !trusted {
+            return cancelled(
+                "Kybern only shows a password prompt that sudo, ssh or git asked for. Run the real command (for example `sudo -A …`) instead.",
+            );
+        }
         let command = tokio::task::spawn_blocking(move || askpass::requesting_command(pid)).await.ok().flatten();
         let class = askpass::classify(&prompt, command.as_deref());
         if let Some(host) = class.host.as_deref().filter(|host| class.purpose.starts_with("git_") && askpass::is_github(host)) {
@@ -122,9 +131,31 @@ impl Orchestrator {
                 Ok(opened) => opened,
                 Err(_) => return cancelled("Kybern could not show the prompt. Run the command again."),
             };
-        let waited = tokio::time::timeout(Duration::from_secs(WAIT_SECONDS), super::request_tools::wait_decision(&mut decision)).await;
+        // The asking command may give up first (Claude's Bash stops a command after 2 min): then the card goes too.
+        let gone = async {
+            while tokio::task::spawn_blocking(move || askpass::process_alive(pid)).await.unwrap_or(false) {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        };
+        let waited = tokio::time::timeout(Duration::from_secs(WAIT_SECONDS), async {
+            tokio::select! {
+                answer = super::request_tools::wait_decision(&mut decision) => Some(answer),
+                () = gone => None,
+            }
+        })
+        .await;
         let answer = match waited {
-            Ok(answer) => answer,
+            Ok(Some(answer)) => answer,
+            Ok(None) => {
+                let exited = ApprovalDecision::Deny { reason: Some("command exited".into()) };
+                match self.finish_daemon_card(thread_id, turn_id, &live, card, exited).await {
+                    Ok(true) | Err(_) => {
+                        live.daemon_approvals.lock().await.remove(&card);
+                        return cancelled("The command that asked has already exited.");
+                    }
+                    Ok(false) => decision.borrow().clone(),
+                }
+            }
             Err(_) => {
                 let timed_out = ApprovalDecision::Deny { reason: Some("timed out".into()) };
                 // The user may have answered in the same instant: that answer stands.

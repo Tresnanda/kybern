@@ -282,6 +282,12 @@ async fn a_host_key_is_a_yes_or_no_and_github_is_sent_to_the_sign_in() {
     assert!(live.daemon_approvals.lock().await.is_empty());
 
     let stale = fixture.orchestrator.ask_prompt(thread.id, Uuid::now_v7(), "Password:".into(), std::process::id()).await;
+    // A helper whose parent is not sudo, ssh or git (here: this test process) may not raise a card.
+    let mut child = std::process::Command::new("/bin/sleep").arg("5").spawn().unwrap();
+    let faked = fixture.orchestrator.ask_prompt(thread.id, live.session_instance_id, "[sudo] password for me: ".into(), child.id()).await;
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(matches!(faked, super::PromptReply::Cancelled(message) if message.contains("only shows a password prompt that sudo, ssh or git asked for")));
     assert!(matches!(stale, super::PromptReply::Cancelled(_)), "a replaced session cannot ask");
 }
 

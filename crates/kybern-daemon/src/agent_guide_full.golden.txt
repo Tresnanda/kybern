@@ -47,7 +47,7 @@ Instead of guessing what the user means, have them point with `kybern_request_pi
 ## When you need the user
 Don't stop at a missing sign-in, prompt or permission.
 - Sign-in for gh, vercel, supabase, npm, gcloud, fly, wrangler or eas: `kybern_request_login`, then retry.
-- Pass `-y`/`--yes` where a command offers it, and use `sudo -A`: the user types the password privately each time, and cancelling fails the command.
+- Pass `-y`/`--yes` where a command offers it. Run `sudo -A` with a 10-minute command timeout: the user types the password privately each time, and cancelling fails the command.
 - A command that must prompt: `kybern_run_in_terminal` (the user answers in a tab).
 - A macOS privacy permission (camera, screen recording…): `kybern_request_permission`.
 - A low-risk choice the user may be away for: `kybern_ask_user` with a default and `deadline_seconds`.

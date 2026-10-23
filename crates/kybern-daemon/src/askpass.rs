@@ -182,6 +182,61 @@ fn proc_of(pid: u32) -> Option<Proc> {
     Some(Proc { ppid: ppid.trim().parse().ok()?, command: command.trim().to_string() })
 }
 
+/// The executable a process runs, as the kernel knows it: a script named `sudo` resolves to its interpreter.
+#[cfg(target_os = "macos")]
+fn executable_of(pid: u32) -> Option<PathBuf> {
+    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    // SAFETY: `buf` is a writable buffer of the length passed; the call writes at most that many bytes.
+    let n = unsafe { libc::proc_pidpath(pid as libc::c_int, buf.as_mut_ptr().cast(), buf.len() as u32) };
+    (n > 0).then(|| PathBuf::from(String::from_utf8_lossy(&buf[..n as usize]).into_owned()))
+}
+
+#[cfg(target_os = "linux")]
+fn executable_of(pid: u32) -> Option<PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn executable_of(_pid: u32) -> Option<PathBuf> {
+    None
+}
+
+/// Whether `path` is a real sudo, ssh or git program that may ask through the helper. sudo must be the system one;
+/// ssh and git may come from the system, the Xcode or Command Line Tools developer folders, Homebrew or /usr/local.
+pub fn is_trusted_asker(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else { return false };
+    if name == "sudo" {
+        return path == Path::new("/usr/bin/sudo");
+    }
+    let known = matches!(name, "ssh" | "scp" | "sftp" | "ssh-add" | "git") || name.starts_with("git-");
+    let place = path.to_string_lossy();
+    const ROOTS: &[&str] = &[
+        "/usr/bin/",
+        "/bin/",
+        "/usr/libexec/",
+        "/usr/lib/git-core/",
+        "/opt/homebrew/",
+        "/usr/local/",
+        "/Library/Developer/CommandLineTools/",
+        "/Applications/Xcode",
+        "/nix/store/",
+    ];
+    known && ROOTS.iter().any(|root| place.starts_with(root))
+}
+
+/// Whether the helper `helper_pid` was started by a real sudo, ssh or git (its direct parent, since the helper script
+/// `exec`s the CLI). Anything else, such as the agent's own shell running `kybern askpass`, may not raise a card.
+pub fn asked_by_trusted_program(helper_pid: u32) -> bool {
+    proc_of(helper_pid).and_then(|helper| executable_of(helper.ppid)).is_some_and(|path| is_trusted_asker(&path))
+}
+
+/// Whether the process still exists.
+pub fn process_alive(pid: u32) -> bool {
+    // SAFETY: signal 0 only checks for the process; nothing is delivered.
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
 const ASKERS: &[&str] = &["sudo", "ssh", "scp", "sftp", "rsync", "git"];
 
 /// The command that asked, found by walking up from the helper. The nearest
@@ -249,6 +304,37 @@ pub fn card_input(class: &Classified, prompt: &str, command: Option<String>, har
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_real_sudo_ssh_and_git_may_ask() {
+        for ok in [
+            "/usr/bin/sudo",
+            "/usr/bin/ssh",
+            "/usr/bin/git",
+            "/opt/homebrew/bin/ssh",
+            "/Applications/Xcode.app/Contents/Developer/usr/libexec/git-core/git-remote-https",
+            "/Library/Developer/CommandLineTools/usr/bin/git",
+        ] {
+            assert!(is_trusted_asker(Path::new(ok)), "{ok}");
+        }
+        for bad in [
+            "/bin/zsh",
+            "/bin/sh",
+            "/tmp/sudo",
+            "/opt/homebrew/bin/sudo",
+            "/Users/me/bin/git",
+            "/usr/bin/python3",
+            "/opt/homebrew/bin/node",
+        ] {
+            assert!(!is_trusted_asker(Path::new(bad)), "{bad}");
+        }
+    }
+
+    #[test]
+    fn this_process_is_alive_and_a_bogus_one_is_not() {
+        assert!(process_alive(std::process::id()));
+        assert!(!process_alive(999_999));
+    }
+
     use super::*;
 
     const HOST_KEY: &str = "The authenticity of host '203.0.113.24 (203.0.113.24)' can't be established.\nED25519 key fingerprint is SHA256:abc/DEF+123.\nThis key is not known by any other names.\nAre you sure you want to continue connecting (yes/no/[fingerprint])? ";
