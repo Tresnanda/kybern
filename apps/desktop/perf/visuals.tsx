@@ -108,7 +108,8 @@ async function run() {
   const inline = mounted.figure.querySelector("iframe")!, figure = mounted.figure
   const dark = await snapshot(inline)
   check(dark.isolated && dark.image && dark.table===3 && dark.bars===3,"Script, formatted SVG/table, opaque origin and deleted local image render")
-  check(dark.background===surface(),`AC 1: the page background (${dark.background}) is the transcript surface (${surface()})`)
+  // Since v0.14.0 the injected page script paints no background (ADE-69): the transcript shows through, so the page reads as the surface.
+  check(dark.background==="rgba(0, 0, 0, 0)"||dark.background===surface(),`AC 1: the page background (${dark.background}) is transparent or the transcript surface (${surface()})`)
   const style = getComputedStyle(figure)
   check(style.borderTopWidth==="0px" && style.backgroundColor==="rgba(0, 0, 0, 0)" && style.borderRadius==="0px","Inline visual has no border, fill or radius")
   check(!document.querySelector("[data-visual-reply] ~ .flex button, [data-visual-reply] + div button"),"No chip row under the visual")
