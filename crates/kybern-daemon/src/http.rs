@@ -244,6 +244,29 @@ mod tests {
     }
 
     #[test]
+    fn a_session_owns_the_images_its_harness_stored() {
+        let roots = |session: Option<&str>| super::ImageRoots {
+            root: "/work/ade".into(),
+            cwd: "/work/ade".into(),
+            home: None,
+            data_dir: "/data".into(),
+            session: session.map(String::from),
+        };
+        let session = "9aba3aec-2abd-453c-9753-0dcadbb13d74";
+        let path = std::path::Path::new("/private/tmp/claude-501/-Users-me-ade/9aba3aec-2abd-453c-9753-0dcadbb13d74/images/1.png");
+        assert!(roots(Some(session)).is_session_attachment(path));
+        assert!(!roots(Some("another-session-id")).is_session_attachment(path), "another conversation's image");
+        assert!(!roots(None).is_session_attachment(path));
+        for other in [
+            "/private/tmp/claude-501/p/9aba3aec-2abd-453c-9753-0dcadbb13d74/scratchpad/1.png",
+            "/private/tmp/claude-501/p/9aba3aec-2abd-453c-9753-0dcadbb13d74/images/deeper/1.png",
+            "/Users/me/Pictures/9aba3aec-2abd-453c-9753-0dcadbb13d74/images/1.png",
+        ] {
+            assert!(!roots(Some(session)).is_session_attachment(std::path::Path::new(other)), "{other}");
+        }
+    }
+
+    #[test]
     fn message_references_are_targets_code_spans_and_words() {
         let text =
             "Saved ![shot](</a b/c.png> \"t\") and [x](/d/e(1).png), ![y](/j k.png \"title\") see `/f g.png` or /h.png. Also /i.png.bak";
@@ -306,6 +329,7 @@ async fn get_thread_image(
             cwd: thread.cwd.clone().into(),
             home: directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()),
             data_dir: state.paths.root.clone(),
+            session: thread.provider_session_id.clone(),
         };
         let (path, outside) = match thread_image_path(&state, id, &roots, &query.path).await {
             Ok(found) => found,
@@ -409,7 +433,7 @@ async fn thread_image_path(
     let outside = roots.place(&path).map_err(refuse)?;
     // An absolute reference may still land inside through an alias of the folder (`/var` for `/private/var`). One that
     // lands outside, through a symlink too, needs a naming message.
-    if outside {
+    if outside && !roots.is_session_attachment(&path) {
         let named = match named {
             Some(named) => named,
             None => thread_names(state, thread_id, reference, &targets, roots).await,
@@ -429,9 +453,26 @@ struct ImageRoots {
     cwd: std::path::PathBuf,
     home: Option<std::path::PathBuf>,
     data_dir: std::path::PathBuf,
+    /// The thread's provider session id, which names the folder a harness keeps the session's pasted images in.
+    session: Option<String>,
 }
 
 impl ImageRoots {
+    /// Whether a canonical path is an image the harness stored for this very thread: `<temp dir>/…/<session id>/images/<file>`
+    /// (Claude Code keeps a pasted image at `/private/tmp/claude-501/<project>/<session>/images/1.png`). The user attached
+    /// it, so it opens whether or not a message spells its path out. The session id is a UUID the conversation owns, the
+    /// folder must be under a temp dir, and protected locations are refused before this is asked.
+    fn is_session_attachment(&self, path: &std::path::Path) -> bool {
+        let Some(session) = self.session.as_deref().filter(|id| id.len() >= 8 && !id.contains(['/', '\\'])) else { return false };
+        let in_temp = ["/tmp", "/private/tmp"]
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .chain(std::fs::canonicalize(std::env::temp_dir()))
+            .any(|temp| path.starts_with(temp));
+        let parts: Vec<&str> = path.components().filter_map(|part| part.as_os_str().to_str()).collect();
+        in_temp && parts.len() >= 3 && parts[parts.len() - 3] == session && parts[parts.len() - 2] == "images"
+    }
+
     fn lexically_inside(&self, target: &std::path::Path) -> bool {
         target.starts_with(&self.root) || target.starts_with(&self.cwd)
     }

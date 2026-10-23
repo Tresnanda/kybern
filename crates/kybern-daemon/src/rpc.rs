@@ -728,7 +728,9 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         ThreadFileRead::NAME => {
             let p: ThreadFileReadParams = parse(params)?;
             let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
-            ok(crate::files::read_thread_file(std::path::Path::new(&thread.cwd), &p.path, p.max_bytes).await.map_err(bad)?)
+            ok(crate::files::read_thread_file(&state.file_indexes, std::path::Path::new(&thread.cwd), &p.path, p.max_bytes)
+                .await
+                .map_err(bad)?)
         }
         ThreadFilesResolve::NAME => {
             let p: ThreadFilesResolveParams = parse(params)?;
