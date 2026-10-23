@@ -641,7 +641,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&absolute).unwrap(), "thread");
         assert!(write_thread_file(&root, "../outside.ts", "x".into(), None).await.is_err());
         assert!(write_thread_file(&root, "src/app.ts", "x".into(), thread.version.as_deref()).await.unwrap_err().is::<WriteConflict>());
-        assert_eq!(read_thread_file(&indexes, &root, "src/app.ts", 1024, Some(&saved.version)).await.unwrap().unchanged, true);
+        assert!(read_thread_file(&indexes, &root, "src/app.ts", 1024, Some(&saved.version)).await.unwrap().unchanged);
         std::fs::remove_dir_all(base).unwrap();
     }
 

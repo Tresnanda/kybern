@@ -851,7 +851,7 @@ async fn thread_context_guidance_and_the_guide_describe_the_new_tools() {
     }
     let golden = include_str!("../agent_guide_full.golden.txt");
     assert!(golden.contains("`kybern_agent_delegate`") && golden.contains("end your turn") && golden.contains("held until the user approves"));
-    assert!(golden.len() <= 6000);
+    assert!(golden.len() <= crate::agent_guide::MAX_GUIDE_BYTES);
 }
 
 // ---- review fixes ----

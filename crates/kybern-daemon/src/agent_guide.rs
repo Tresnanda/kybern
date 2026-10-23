@@ -14,7 +14,7 @@ pub(crate) const GUIDE_VERSION: u32 = 10;
 
 /// Hard ceiling for the rendered guide (about 1.5k tokens at 4 bytes a token).
 #[cfg(test)]
-const MAX_GUIDE_BYTES: usize = 6100;
+pub(crate) const MAX_GUIDE_BYTES: usize = 6100;
 
 /// Which groups of Kybern tools a session has.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
