@@ -518,6 +518,44 @@ Implementation: `patches/code_wrap.rs`.
 including Unicode and a long unbroken token.
 The reviewed screenshot retains syntax colours and line numbers.
 
+## Code editor textarea (ADE-61)
+
+```tsx
+<CodeEditorInput testId="file-editor" value={initial} theme={markdownTheme}
+  syntaxDocument={doc.id} syntaxRevision={doc.revision} softWrap={wrap} showLineNumbers
+  revealLine={`${line}:${nonce}`} interceptKeys={[...]} onChange={...} />   // src/native/code-editor.tsx
+```
+
+`<textarea codeEditor>` keeps the native edit model (selection, IME, clipboard,
+word/line navigation, undo/redo) and adds what a file tab needs:
+
+- Syntect colours from a registered syntax document (`createSyntaxDocument` /
+  `updateSyntaxDocument`). Typing never waits for a parse: until the next
+  revision lands, the last revision's spans are mapped onto the live buffer by
+  common prefix and suffix, so only the edited span is plain.
+- A line-number gutter per logical line (wrapped rows keep their number; the
+  caret's line is `text_muted`, others `text_faint`), at least 44 px wide.
+- `softWrap={false}`: no wrapping, horizontal wheel/trackpad scroll and caret
+  follow. Default (absent or true) wraps at the text column's width.
+- The editor fills its box and scrolls inside it. Measure never shapes text;
+  prepaint shapes at the final width with a per-line cache (lines are moved
+  over from the previous layout by a hash of text and runs), and an unchanged
+  frame does no text work. Paint skips rows outside the viewport (all
+  textareas).
+- `revealLine="<1-based line>:<nonce>"` scrolls that line three rows from the
+  top and puts the caret on it, once per new value.
+
+Measured on a 5,000-line TypeScript file (dark, Reduce Motion, background
+window, `KYBERN_FRAME_COSTS`, `src/dock/verify-editor.ts perf`): the window draw
+after each of 30 keystrokes was 7.7–8.3 ms median, 25 ms p95, 37 ms max. The
+stock textarea reshaped the whole buffer at several Taffy probe widths per
+frame: 4.7 s median per keystroke on the same file.
+
+Anchors: `custom_elements/input.rs` (see `patches/code_editor_hooks.py`).
+Implementation: `patches/code_editor.rs`. Limits: no LSP, no multiple
+cursors; `decorations` still work but syntax colours win their runs; the undo
+history is the stock 200 snapshots of the whole buffer.
+
 ## Native springs and translation
 
 ```tsx
