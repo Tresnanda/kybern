@@ -211,8 +211,15 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
     ? presenceTransform({ show: !leaving, enter: arrive, exit, generation: phase.current.generation, fresh: phase.current.generation === phase.current.mounted })
     : undefined
   // Nothing will animate (or can: a hidden window has no native frames), so an owner waiting on `onLeft` must not wait.
+  // Otherwise the exit ends on `onMotionComplete`; the timer only guarantees it if a layer never reports (ADE-70).
+  const left = useRef(false)
+  const leave = () => { if (!left.current) { left.current = true; onLeft?.() } }
+  if (!leaving) left.current = false
   useEffect(() => {
-    if (leaving && (!transform || exitsInstantly(exit))) onLeft?.()
+    if (!leaving) return
+    if (!transform || exitsInstantly(exit)) return leave()
+    const timer = setTimeout(leave, exit.duration * 1000 + 250)
+    return () => clearTimeout(timer)
   }, [leaving])
   // Materializing: the glass filter moves inside the transformed box (it scales and fades with the popup), and the
   // layer's own backing is transparent. An explicit `{ blur: 0 }` is how an anchored layer asks for that.
@@ -241,7 +248,7 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
       snapMargin={collisionPadding}
       deferred
       priority={priority}
-      occlude={occlude}
+      occlude={occlude && !leaving}
     >
       <div testId={webLayer.id} style={{ display: 'flex' }}>
       <div
@@ -250,7 +257,7 @@ export const PopupLayer = forwardRef<PublicInstance, Omit<Props, 'ref'> & {
         ref={ref}
         {...(transform ? {
           paintTransform: transform,
-          onMotionComplete: (event: { motionGeneration?: number }) => { if (leaving && event.motionGeneration === phase.current.generation) onLeft?.() },
+          onMotionComplete: (event: { motionGeneration?: number }) => { if (leaving && event.motionGeneration === phase.current.generation) leave() },
           ...(glassBackdrop ? { backdrop: glassBackdrop } : {}),
         } : {})}
         style={leaving ? { ...innerStyle, pointerEvents: 'none' } : innerStyle}

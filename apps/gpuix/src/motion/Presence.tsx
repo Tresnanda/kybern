@@ -111,6 +111,12 @@ export function Presence({ show, enter, exit, children, onGone, testId, style }:
     if (wasPresent.current && !present) onGone?.()
     wasPresent.current = present
   }, [present, onGone])
+  // The exit normally ends on `onMotionComplete`; this only guarantees the unmount if a layer never reports (ADE-70).
+  useEffect(() => {
+    if (show || !present) return
+    const timer = setTimeout(() => { last.current = null; setPresent(false) }, exit.duration * 1000 + 250)
+    return () => clearTimeout(timer)
+  }, [show, present, exit.duration])
   if (gone || (!show && !present)) return null
   const current = generation.current
   return (

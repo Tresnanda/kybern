@@ -117,6 +117,24 @@ test('a close with the thumbnail gone shrinks and fades; Escape closes at once',
   k.root.unmount()
 })
 
+// ADE-70: a preview opened without a thumbnail (a work-row file chip, a link) and closed with X stayed mounted at
+// opacity 0: its exit started from `initial: false`, never animated and never completed, so it took every click.
+test('a preview opened without a thumbnail fades out from its shown values, lets clicks through and always unmounts', async () => {
+  const h = harness()
+  const closed: string[] = []
+  h.render(<ImageViewer testId="viewer" src={image} label="icon.png" from={null} source={() => null} onClose={() => closed.push('closed')} />)
+  h.fire('viewer-close', { eventType: 'click' })
+  const exit = h.props('viewer-image').paintTransform
+  expect(exit).toMatchObject({ initial: LANDED.outer, animate: { opacity: 0 } })
+  expect(h.props('viewer-scrim').paintTransform).toMatchObject({ initial: { opacity: 1 }, animate: { opacity: 0 } })
+  expect(h.style.get(h.id('viewer'))).toMatchObject({ pointerEvents: 'none' })
+  expect(closed).toEqual([])
+  // Even if the native layer never reports the exit, the preview goes away.
+  await new Promise(resolve => setTimeout(resolve, exit.transition.duration * 1000 + 300))
+  expect(closed).toEqual(['closed'])
+  h.root.unmount()
+})
+
 // Review 2026-10-21: Tab left the open preview for the window behind it; it kept the size it opened with on a resize.
 test('Tab and Shift-Tab wrap inside the open preview, and it follows window resizes', () => {
   const h = harness()
