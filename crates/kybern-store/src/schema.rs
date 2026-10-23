@@ -536,6 +536,8 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX projects_space ON projects(space_id);
     COMMIT;
     ",
+    // A thread note follows its thread's title until someone renames the note itself.
+    "ALTER TABLE notes ADD COLUMN title_edited INTEGER NOT NULL DEFAULT 0;",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {
