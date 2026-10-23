@@ -230,9 +230,15 @@ void kybern_web_command(const char *json) {
       // title bar) gives it back to GPUI before the press is dispatched. A press in another document moves it there.
       if (!mouseMonitor) mouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown | NSEventMaskOtherMouseDown handler:^NSEvent *(NSEvent *event) {
         NSWindow *window = event.window; WKWebView *web = focusedWeb(window);
-        if (!web) return event;
         NSView *frame = window.contentView.superview ?: window.contentView;
         NSView *hit = [frame hitTest:[frame convertPoint:event.locationInWindow fromView:nil]];
+        // A live inline visual goes back to its picture on a press anywhere else: tell its owner where the press landed
+        // (window points, top-left origin) so a press on its own caption does not count.
+        NSPoint at = event.locationInWindow; CGFloat top = window.contentView.bounds.size.height - at.y;
+        for (KybernWebHost *h in hosts.allValues)
+          if ([h.category isEqual:@"visual"] && h.placed && h.web.window == window && !(hit && [hit isDescendantOf:h.web]))
+            emit(@{@"id":h.identifier,@"generation":h.generation,@"type":@"outsidePress",@"x":@(at.x),@"y":@(top)});
+        if (!web) return event;
         for (KybernWebHost *h in hosts.allValues) if (hit && h.web && [hit isDescendantOf:h.web]) return event;
         releaseFocus(window); return event;
       }];
@@ -253,6 +259,8 @@ void kybern_web_command(const char *json) {
       [config.userContentController addUserScript:[[WKUserScript alloc] initWithSource:frameScript injectionTime:WKUserScriptInjectionTimeAtDocumentEnd forMainFrameOnly:NO inContentWorld:world]];
       host.clip = [KybernWebClip new]; host.clip.wantsLayer = YES; host.clip.layer.masksToBounds = YES; host.clip.hidden = YES;
       host.web = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:config]; host.web.navigationDelegate = host;
+      // A visual sits on the thread's own material, like its picture: nothing is painted behind the page.
+      if ([host.category isEqual:@"visual"]) @try { [host.web setValue:@NO forKey:@"drawsBackground"]; } @catch (NSException *e) {}
       host.shade = [KybernWebShade new]; host.shade.wantsLayer = YES;
       [host.clip addSubview:host.web]; [host.clip addSubview:host.shade]; [window.contentView addSubview:host.clip]; hosts[identifier] = host;
       for (NSNotificationName name in @[NSWindowDidChangeOcclusionStateNotification, NSWindowDidMiniaturizeNotification, NSWindowDidDeminiaturizeNotification]) [NSNotificationCenter.defaultCenter addObserver:host selector:@selector(visibility) name:name object:window];
@@ -328,6 +336,19 @@ void kybern_web_command(const char *json) {
       emit(@{@"id":identifier,@"type":@"probe",@"data":@{@"opacity":@(shown.opacity),@"scale":@(shown.transform.m11),@"animating":@([host.clip.layer animationForKey:@"kybern-present-opacity"] != nil || [host.clip.layer animationForKey:@"kybern-present-transform"] != nil)}}); return;
     }
     if ([op isEqual:@"post"]) { [host.web evaluateJavaScript:cmd[@"script"] completionHandler:nil]; return; }
+    if ([op isEqual:@"snapshot"]) {
+      // The document as it looks now, written as a PNG at the backing scale (a live visual going back to its picture).
+      NSString *path = cmd[@"path"], *identifier = host.identifier; NSNumber *generation = host.generation, *token = cmd[@"token"] ?: @0;
+      WKSnapshotConfiguration *config = [WKSnapshotConfiguration new]; config.afterScreenUpdates = NO;
+      [host.web takeSnapshotWithConfiguration:config completionHandler:^(NSImage *image, NSError *error) {
+        CGImageRef cg = [image CGImageForProposedRect:NULL context:nil hints:nil];
+        NSData *png = cg ? [[[NSBitmapImageRep alloc] initWithCGImage:cg] representationUsingType:NSBitmapImageFileTypePNG properties:@{}] : nil;
+        BOOL written = png && [png writeToFile:path atomically:YES];
+        emit(@{@"id":identifier,@"generation":generation,@"type":@"snapshot",@"token":token,@"ok":@(written),@"path":written ? path : @"",
+               @"width":@(cg ? CGImageGetWidth(cg) : 0),@"height":@(cg ? CGImageGetHeight(cg) : 0),@"message":error.localizedDescription ?: @""});
+      }];
+      return;
+    }
     if ([op isEqual:@"focus"]) [host.clip.window makeFirstResponder:host.web];
   });
 }

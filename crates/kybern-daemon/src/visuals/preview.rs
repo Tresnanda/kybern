@@ -184,6 +184,83 @@ pub(super) async fn measure(root: &Path, html: &str, widths: &[u32], fragment: &
     session.shutdown().await;
     Ok(heights)
 }
+/// A transcript picture of a visual: device scale 2, transparent background, the
+/// content's own height (≤ 2000), its controls, and for a page taller than
+/// `clamp` a second picture cut at `clamp` whose last 112 px fade to transparent.
+pub(super) struct Snapshot {
+    pub height: u32,
+    pub png: Vec<u8>,
+    pub fade: Option<Vec<u8>>,
+    pub controls: Vec<kybern_protocol::methods::VisualControl>,
+}
+pub(super) const SNAPSHOT_SCALE: u32 = 2;
+/// Height of the tall fade, in CSS pixels.
+const FADE: u32 = 112;
+pub(super) async fn snapshot(root: &Path, html: String, width: u32, appearance: &str, fragment: &str, clamp: u32) -> Result<Snapshot> {
+    let executable = executable(root).await?;
+    let _permit = browser_permits().acquire().await?;
+    tokio::time::timeout(Duration::from_secs(20), render_snapshot(root, executable, html, width, appearance, fragment, clamp))
+        .await
+        .context("The visual took too long to render. Reload to try again.")?
+}
+async fn render_snapshot(
+    root: &Path,
+    executable: PathBuf,
+    html: String,
+    width: u32,
+    appearance: &str,
+    fragment: &str,
+    clamp: u32,
+) -> Result<Snapshot> {
+    let mut session = Session::start(root, &executable, html, 1).await?;
+    let page_url = session.page_url.clone();
+    let cdp = &mut session.cdp;
+    let metrics = |height: u32| json!({"width":width,"height":height,"deviceScaleFactor":SNAPSHOT_SCALE,"mobile":false});
+    cdp.call("Emulation.setDeviceMetricsOverride", metrics(1)).await?;
+    cdp.call("Emulation.setDefaultBackgroundColorOverride", json!({"color":{"r":0,"g":0,"b":0,"a":0}})).await?;
+    cdp.call(
+        "Emulation.setEmulatedMedia",
+        json!({"features":[{"name":"prefers-color-scheme","value":appearance},{"name":"prefers-reduced-motion","value":"reduce"}]}),
+    )
+    .await?;
+    cdp.call("Page.navigate", json!({"url":format!("{page_url}{fragment}")})).await?;
+    while !cdp.loaded {
+        cdp.next().await?;
+    }
+    let measured = cdp.call("Runtime.evaluate", json!({"expression":SETTLE_AND_MEASURE,"awaitPromise":true,"returnByValue":true})).await?;
+    let height = measured.pointer("/result/value").and_then(Value::as_u64).unwrap_or(80).clamp(80, 2000) as u32;
+    cdp.call("Emulation.setDeviceMetricsOverride", metrics(height)).await?;
+    // A resize can reflow fluid charts: settle again before reading boxes and pixels.
+    cdp.call("Runtime.evaluate", json!({"expression":SETTLE,"awaitPromise":true})).await?;
+    let found = cdp.call("Runtime.evaluate", json!({"expression":CONTROLS,"returnByValue":true})).await?;
+    let controls = found
+        .pointer("/result/value")
+        .and_then(|value| serde_json::from_value::<Vec<kybern_protocol::methods::VisualControl>>(value.clone()).ok())
+        .unwrap_or_default();
+    let png = capture_png(cdp, width, height).await?;
+    let fade = if height > clamp {
+        let solid = clamp.saturating_sub(FADE);
+        let mask = format!(
+            "(()=>{{const s=document.documentElement.style;for(const p of ['mask-image','-webkit-mask-image'])s.setProperty(p,'linear-gradient(to bottom,#000 {solid}px,transparent {clamp}px)');for(const p of ['mask-size','-webkit-mask-size'])s.setProperty(p,'100% {clamp}px');for(const p of ['mask-repeat','-webkit-mask-repeat'])s.setProperty(p,'no-repeat');return new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))}})()"
+        );
+        cdp.call("Runtime.evaluate", json!({"expression":mask,"awaitPromise":true})).await?;
+        Some(capture_png(cdp, width, clamp).await?)
+    } else {
+        None
+    };
+    session.shutdown().await;
+    Ok(Snapshot { height, png, fade, controls })
+}
+async fn capture_png(cdp: &mut Cdp, width: u32, height: u32) -> Result<Vec<u8>> {
+    use base64::Engine as _;
+    let params = json!({"format":"png","captureBeyondViewport":false,"clip":{"x":0,"y":0,"width":width,"height":height,"scale":1}});
+    let result = cdp.call("Page.captureScreenshot", params).await?;
+    let data = result["data"].as_str().ok_or_else(|| anyhow!("The preview browser returned no picture."))?;
+    Ok(base64::engine::general_purpose::STANDARD.decode(data)?)
+}
+const SETTLE: &str = "document.fonts.ready.then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))";
+/// The page's interactive elements and their boxes: what a click on the picture may reach.
+const CONTROLS: &str = r#"(()=>{const roles={button:'button',a:'link',summary:'button',select:'select',textarea:'field'};const out=[];for(const el of document.querySelectorAll('button,a[href],input,select,textarea,summary,label[for],[role=button],[role=tab],[role=switch],[role=checkbox],[role=radio],[role=slider],[role=link],[onclick],[data-kybern-id]')){if(out.length>=200)break;const r=el.getBoundingClientRect();if(r.width<4||r.height<4)continue;const cs=getComputedStyle(el);if(cs.visibility==='hidden'||cs.display==='none'||cs.pointerEvents==='none'||Number(cs.opacity)===0)continue;const tag=el.tagName.toLowerCase();let role=el.getAttribute('role')||roles[tag]||'button';if(tag==='input'){const t=(el.type||'text').toLowerCase();role=t==='checkbox'?'checkbox':t==='radio'?'radio':t==='range'?'slider':['button','submit','reset'].includes(t)?'button':'field'}if(!['button','link','tab','switch','checkbox','radio','slider','field','select'].includes(role))role='button';const radius=parseFloat(cs.borderTopLeftRadius)||0;out.push({x:Math.round(r.left*2)/2,y:Math.round((r.top+scrollY)*2)/2,w:Math.round(r.width*2)/2,h:Math.round(r.height*2)/2,r:Math.min(radius,Math.min(r.width,r.height)/2),role})}return out})()"#;
 const SETTLE_AND_MEASURE: &str = "document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(Math.ceil(Math.max(document.documentElement.getBoundingClientRect().height,document.body.scrollHeight,document.body.getBoundingClientRect().height)))))))";
 
 /// One headless browser, its debugging connection and a page server.

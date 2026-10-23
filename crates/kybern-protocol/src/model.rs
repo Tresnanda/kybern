@@ -1323,6 +1323,28 @@ pub struct SecretRequestInput {
     pub placeholder: Option<String>,
 }
 
+/// `tool_name` of the daemon-raised card behind `kybern_html_publish` with
+/// `await_answer`: the published visual waits for the reader's answer. Clients
+/// draw it as an answer bar under the visual rather than as a card.
+///
+/// `input` is a [`VisualAnswerInput`]. The answer is
+/// `ApprovalDecision::Submit { response: {"answer": <value>, "label": "<words>"} }`
+/// (the value matches `input.schema`, at most [`MAX_VISUAL_ANSWER_BYTES`]),
+/// `Submit { response: {"reply": "<message>"} }` when the reader typed instead,
+/// or `Deny` to skip.
+pub const VISUAL_ANSWER_TOOL: &str = "kybern_visual_answer";
+/// Longest visual answer, in bytes of JSON.
+pub const MAX_VISUAL_ANSWER_BYTES: usize = 8 * 1024;
+
+/// The `input` of a [`VISUAL_ANSWER_TOOL`] card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct VisualAnswerInput {
+    pub visual_id: uuid::Uuid,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<Value>,
+}
+
 /// `tool_name` of the daemon-raised approval behind `kybern_coordinator_propose_brief`:
 /// the card "Save this as the project brief?" holds the Coordinator's proposed
 /// text, which the user can edit. This card is the only way agent text reaches
@@ -1383,6 +1405,7 @@ pub fn is_user_input_tool(tool_name: &str) -> bool {
         tool_name,
         "AskUserQuestion"
             | SECRET_REQUEST_TOOL
+            | VISUAL_ANSWER_TOOL
             | COORDINATOR_BRIEF_TOOL
             | COORDINATOR_SETTINGS_TOOL
             | "request_user_input"
@@ -1469,6 +1492,24 @@ impl ApprovalRequest {
                     return Err(format!("Enter a value of up to {} KiB, or decline.", MAX_SECRET_BYTES / 1024));
                 }
             }
+            VISUAL_ANSWER_TOOL => {
+                if let Some(reply) = response.get("reply") {
+                    if !reply.as_str().is_some_and(|reply| !reply.trim().is_empty() && reply.len() <= 64 * 1024) {
+                        return Err("Write a reply, or skip.".into());
+                    }
+                    return Ok(());
+                }
+                let answer = response.get("answer").filter(|answer| !answer.is_null()).ok_or_else(invalid)?;
+                if serde_json::to_vec(answer).map_or(true, |bytes| bytes.len() > MAX_VISUAL_ANSWER_BYTES) {
+                    return Err(format!("The answer is larger than {} KiB. Choose again in the visual.", MAX_VISUAL_ANSWER_BYTES / 1024));
+                }
+                if response.get("label").is_some_and(|label| !label.as_str().is_some_and(|label| label.chars().count() <= 200)) {
+                    return Err(invalid());
+                }
+                if let Some(schema) = self.input.get("schema").filter(|schema| schema.is_object()) {
+                    validate_answer_value(schema, answer)?;
+                }
+            }
             COORDINATOR_BRIEF_TOOL => {
                 let text = response.get("text").and_then(Value::as_str).map(str::trim);
                 if !text.is_some_and(|text| !text.is_empty() && text.len() <= MAX_BRIEF_BYTES) {
@@ -1541,6 +1582,12 @@ impl ApprovalRequest {
 
 // Elicitation schemas are provider-owned. Validate the structural constraints at
 // the daemon boundary as well as the form, so CLI and concurrent clients agree.
+/// A visual's answer against the agent's `answer_schema` (the form subset elicitation supports).
+fn validate_answer_value(schema: &Value, value: &Value) -> Result<(), String> {
+    validate_form_value(schema, value)
+        .map_err(|_| "This answer does not match what the agent asked for. Choose again in the visual.".into())
+}
+
 fn validate_form_value(schema: &Value, value: &Value) -> Result<(), String> {
     let invalid = || "Check the form values and required fields before submitting.".to_string();
     let valid_type = match schema.get("type").and_then(Value::as_str) {
@@ -1650,6 +1697,46 @@ pub struct HtmlVisual {
     /// preview browser was not installed or measuring exceeded its budget.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub heights: Vec<VisualHeight>,
+    /// Set when the agent waits for the reader's answer (`kybern_html_publish`
+    /// with `await_answer`). The pending question is a [`VISUAL_ANSWER_TOOL`] card.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask: Option<VisualAsk>,
+}
+
+/// What a visual asks the reader.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct VisualAsk {
+    /// JSON Schema the answer must match, when the agent gave one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<Value>,
+}
+
+/// How a visual's question ended.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VisualAnswerStatus {
+    /// The reader sent an answer from the visual.
+    Answered,
+    /// The reader typed a message instead.
+    Replied,
+    /// The reader chose Skip.
+    Skipped,
+    /// The turn ended first.
+    Cancelled,
+    /// Nobody answered in time.
+    TimedOut,
+}
+
+/// The receipt under an answered visual.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct VisualAnswerRecord {
+    pub status: VisualAnswerStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<Value>,
+    /// The words the visual gave the answer ("Layout B · Side panel").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub at: DateTime<Utc>,
 }
 
 /// One content height measured at a frame width, in CSS pixels.
@@ -1668,6 +1755,8 @@ pub enum TranscriptEntry {
         seq: EventSeq,
         at: DateTime<Utc>,
         visual: HtmlVisual,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        answer: Option<VisualAnswerRecord>,
     },
     Image {
         id: String,

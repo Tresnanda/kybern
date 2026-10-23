@@ -5,6 +5,7 @@ import { AgentItemCard } from '../coordinator/AgentItem.tsx'
 import { SentToRow } from './Messages.tsx'
 import { openThread } from '../nav/history.ts'
 import { secretRequestInput, secretOutcomeLine, secretPartsText } from '../../../../packages/kybern-client/src/secretRequest.ts'
+import { answerRowText, visualAnswerInput } from '../../../../packages/kybern-client/src/visualAnswer.ts'
 import { coordinatorCardLine, cardPartsText } from '../../../../packages/kybern-client/src/coordinatorCards.ts'
 // Work rows inside a turn (`views/Transcript.tsx` WorkRows → ToolRow/WorkRow):
 // tool calls with their expandable result, the work between two pieces of
@@ -135,6 +136,8 @@ export function approvalRowText(approval: ApprovalRequest, decision: ApprovalDec
   if (auto) return `Allowed by Full access — ${approval.summary || approval.tool_name}`
   const secret = secretRequestInput(approval)
   if (secret) return secretPartsText(secretOutcomeLine(secret, decision, live))
+  const asked = visualAnswerInput(approval)
+  if (asked) return answerRowText(asked.title, decision)
   const coordinator = coordinatorCardLine(approval, decision, live)
   if (coordinator) return cardPartsText(coordinator)
   const connector = connectorApproval(approval)

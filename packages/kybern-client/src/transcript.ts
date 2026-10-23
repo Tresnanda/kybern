@@ -23,7 +23,7 @@ import type {
 } from "./types.ts"
 
 export type Block =
-  | { kind: "visual"; id: string; turnId: TurnId; at: string; seq: number; visual: import("./types.ts").HtmlVisual }
+  | { kind: "visual"; id: string; turnId: TurnId; at: string; seq: number; visual: import("./types.ts").HtmlVisual; answer?: import("./types.ts").VisualAnswerRecord | null }
   | { kind: "image"; id: string; turnId: TurnId; at: string; seq: number; source: string }
   | { kind: "user"; id: string; turnId: TurnId; at: string; seq: number; message: UserMessage }
   | {
@@ -167,7 +167,7 @@ export function applyBackgroundEvent(state: ThreadState, event: ThreadEvent): Th
 
 function entryToBlock(e: TranscriptEntry): Block | null {
   switch (e.role) {
-    case "visual": return { kind: "visual", id: e.visual.id, turnId: e.turn_id, at: e.at, seq: e.seq, visual: e.visual }
+    case "visual": return { kind: "visual", id: e.visual.id, turnId: e.turn_id, at: e.at, seq: e.seq, visual: e.visual, answer: e.answer ?? null }
     case "image": return e.origin.kind === "root" ? { kind: "image", id: e.id, turnId: e.turn_id, at: e.at, seq: e.seq, source: e.source } : null
     case "approval":
       return { kind: "approval", id: `approval:${e.approval.id}`, turnId: e.turn_id, at: e.approval.created_at, seq: e.seq ?? 0, approval: e.approval, decision: e.decision ?? null, ...(e.auto ? { auto: true } : {}) }
@@ -380,6 +380,14 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       // Once the exact stream is deferred, individual replay/live suffixes
       // would be incomplete. Keep the marker and recover the whole sequence.
       if (b && b.kind === "tool" && !b.streamOmitted) blocks = replaceAt(blocks, idx, { ...b, stream: b.stream + ev.delta })
+      break
+    }
+    case "visual_answered": {
+      const idx = blocks.findIndex(block => block.kind === "visual" && block.id === ev.visual_id)
+      const b = blocks[idx]
+      if (b && b.kind === "visual") blocks = replaceAt(blocks, idx, { ...b, answer: { status: ev.status, answer: ev.answer ?? null, label: ev.label ?? null, at } })
+      // A typed reply is the reader's own message in the turn.
+      if (ev.message_id && ev.message && !blocks.some((block) => block.kind === "user" && block.id === ev.message_id)) blocks = [...blocks, { kind: "user", id: ev.message_id, turnId, at, seq: ev.seq, message: ev.message }]
       break
     }
     case "html_published": {

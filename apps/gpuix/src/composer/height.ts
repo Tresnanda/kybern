@@ -1,10 +1,13 @@
 import { usePaneAccess, useApp } from '../state.ts'
 import { useGpuixRequired, type PublicInstance } from "@gpuix/react"
 import { useEffect, useRef, useState, useSyncExternalStore } from "react"
-import { observeElementBounds } from "../native/layout.ts"
+import { observeElementBounds, type LayoutRect } from "../native/layout.ts"
 import { webHost } from '../native/webview.ts'
 
 const measurements = new Map<object, { priority: number; height: number; pane: string }>()
+const cards = new Map<object, LayoutRect>()
+/** Where composer cards are on screen (window points): a live visual turns back into its picture before it slides under one. */
+export const composerCardRects = (): LayoutRect[] => [...cards.values()]
 const listeners = new Set<() => void>()
 let height = 0
 function publish() {
@@ -40,11 +43,12 @@ export function useMeasureComposerOverlay(priority = 0) {
     const key = owner.current
     const stop = observeElementBounds(renderer, node.id, event => {
       if (priority === 0) webHost.occlusion(-node.id, event.clippedRect, 24, 0, 1)
+      if (priority === 0) { if (event.clippedRect) cards.set(key, event.clippedRect); else cards.delete(key) }
       if (event.rect) measurements.set(key, { priority, height: event.rect.height, pane: pane.id })
       else measurements.delete(key)
       publish()
     })
-    return () => { stop(); if (priority === 0) webHost.occlusion(-node.id, null); measurements.delete(key); publish() }
+    return () => { stop(); if (priority === 0) webHost.occlusion(-node.id, null); cards.delete(key); measurements.delete(key); publish() }
   }, [renderer, node, priority, pane])
   return setNode
 }

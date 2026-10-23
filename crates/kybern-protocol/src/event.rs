@@ -137,6 +137,21 @@ pub enum EventPayload {
     HtmlPublished {
         visual: HtmlVisual,
     },
+    /// A visual that asked the reader a question got its answer, or stopped
+    /// waiting. `message` is the reader's typed reply (`Replied`), shown as
+    /// their message.
+    VisualAnswered {
+        visual_id: uuid::Uuid,
+        status: VisualAnswerStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        answer: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_id: Option<MessageId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<UserMessage>,
+    },
     ToolCallStarted {
         call: ToolCall,
         #[serde(default)]
@@ -271,6 +286,7 @@ impl EventPayload {
             Self::AssistantMessageCompleted { .. } => "assistant_message_completed",
             Self::AssistantMessageBlocksRecovered { .. } => "assistant_message_blocks_recovered",
             Self::HtmlPublished { .. } => "html_published",
+            Self::VisualAnswered { .. } => "visual_answered",
             Self::ToolCallStarted { .. } => "tool_call_started",
             Self::ToolCallOutputDelta { .. } => "tool_call_output_delta",
             Self::ToolCallCompleted { .. } => "tool_call_completed",

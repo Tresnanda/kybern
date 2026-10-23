@@ -288,6 +288,8 @@ expression: scopes
   - "orchestration:read"
 - - threads.visuals.revoke
   - "orchestration:read"
+- - threads.visuals.snapshot
+  - "orchestration:read"
 - - previews.open
   - "orchestration:operate"
 - - previews.close

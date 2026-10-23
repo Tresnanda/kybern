@@ -53,6 +53,9 @@ import { frostBackdrop, frostFill, raisedFill, useGlass } from './platform/glass
 import { addWindowKeyHandler } from './nav/keys.ts'
 import { keyboardAnswer } from './requests/Panel.tsx'
 import { isUserInput, connectorApproval } from '../../../packages/kybern-client/src/userInput.ts'
+import { ANSWER_COPY } from '../../../packages/kybern-client/src/visualAnswer.ts'
+import { isVisualAnswerCard, pendingVisualAnswer, replyToVisual } from './requests/VisualAnswer.tsx'
+import { setThreadComposerFocus } from './composer/focus.ts'
 import { handleCardKey, isRowCard } from './requests/actions.ts'
 import { focusCard, setComposerEmpty } from './requests/ui.ts'
 import { useControls } from './kit/controls.ts'
@@ -175,12 +178,14 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: Thread; placehol
   return (
     <ComposerView
       draftKey={`thread:${threadId}`}
+      focusRef={(focus) => setThreadComposerFocus(pane.id, focus)}
       projectId={isFreeChatProject(thread.project_id) ? undefined : thread.project_id}
       currentThreadId={threadId}
       thread={thread}
       placeholder={
         approval
-          ? isUserInput(approval) && !connectorApproval(approval) ? 'Answer the questions above' : 'Resolve this approval request to continue'
+          ? isVisualAnswerCard(approval) ? ANSWER_COPY.placeholder
+          : isUserInput(approval) && !connectorApproval(approval) ? 'Answer the questions above' : 'Resolve this approval request to continue'
           : running
             ? 'Ask for follow-up changes'
             : coordinator
@@ -190,7 +195,11 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: Thread; placehol
       running={running}
       starting={starting && thread.status !== 'running' && thread.status !== 'awaiting-approval'}
       onStop={() => void interruptThread(threadId).catch(() => {})}
-      onSend={(message, delivery) => sendToThread(threadId, message, delivery)}
+      onSend={(message, delivery) => {
+        // A message typed while a visual waits for an answer answers it in words.
+        const waiting = pendingVisualAnswer(threadId)
+        return (waiting && replyToVisual(waiting, message)) || sendToThread(threadId, message, delivery)
+      }}
       canSteer={handoffSelected || STEERABLE.includes(thread.provider.kind)}
       mode={mode}
       onModeChange={(m) => void setThreadMode(threadId, m).catch((e) => console.error('Unable to change mode:', errorText(e)))}

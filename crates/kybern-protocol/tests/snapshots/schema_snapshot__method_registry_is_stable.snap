@@ -145,6 +145,7 @@ expression: names
 - threads.visuals.read
 - threads.visuals.frame
 - threads.visuals.revoke
+- threads.visuals.snapshot
 - previews.open
 - previews.close
 - previews.probe

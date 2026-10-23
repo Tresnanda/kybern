@@ -558,6 +558,52 @@ expression: schema_for!(ThreadEvent)
       ]
     },
     {
+      "description": "A visual that asked the reader a question got its answer, or stopped\nwaiting. `message` is the reader's typed reply (`Replied`), shown as\ntheir message.",
+      "type": "object",
+      "properties": {
+        "visual_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "status": {
+          "$ref": "#/$defs/VisualAnswerStatus"
+        },
+        "answer": true,
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UserMessage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "const": "visual_answered"
+        }
+      },
+      "required": [
+        "kind",
+        "visual_id",
+        "status"
+      ]
+    },
+    {
       "type": "object",
       "properties": {
         "call": {
@@ -2463,6 +2509,17 @@ expression: schema_for!(ThreadEvent)
           "items": {
             "$ref": "#/$defs/VisualHeight"
           }
+        },
+        "ask": {
+          "description": "Set when the agent waits for the reader's answer (`kybern_html_publish`\nwith `await_answer`). The pending question is a [`VISUAL_ANSWER_TOOL`] card.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VisualAsk"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -2489,6 +2546,45 @@ expression: schema_for!(ThreadEvent)
       "required": [
         "width",
         "height"
+      ]
+    },
+    "VisualAsk": {
+      "description": "What a visual asks the reader.",
+      "type": "object",
+      "properties": {
+        "schema": {
+          "description": "JSON Schema the answer must match, when the agent gave one."
+        }
+      }
+    },
+    "VisualAnswerStatus": {
+      "description": "How a visual's question ended.",
+      "oneOf": [
+        {
+          "description": "The reader sent an answer from the visual.",
+          "type": "string",
+          "const": "answered"
+        },
+        {
+          "description": "The reader typed a message instead.",
+          "type": "string",
+          "const": "replied"
+        },
+        {
+          "description": "The reader chose Skip.",
+          "type": "string",
+          "const": "skipped"
+        },
+        {
+          "description": "The turn ended first.",
+          "type": "string",
+          "const": "cancelled"
+        },
+        {
+          "description": "Nobody answered in time.",
+          "type": "string",
+          "const": "timed_out"
+        }
       ]
     },
     "ToolCall": {

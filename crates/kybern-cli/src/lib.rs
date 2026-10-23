@@ -108,6 +108,15 @@ enum VisualsCmd {
         thread: String,
         ticket: String,
     },
+    /// Draw a visual's transcript picture (transparent, 2x). Prints its key and the HTTP path of the PNG.
+    Snapshot {
+        thread: String,
+        visual: uuid::Uuid,
+        #[arg(long, default_value_t = 736)]
+        width: u32,
+        #[arg(long, default_value = "dark")]
+        appearance: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1938,7 +1947,19 @@ pub async fn run() -> Result<()> {
         Cmd::Visuals { cmd } => match cmd {
             VisualsCmd::Publish { thread, path, title, height } => {
                 let html = tokio::fs::read_to_string(path).await?;
-                print_json(&client.call::<HtmlPublish>(HtmlPublishParams { thread_id: thread.parse()?, html, title, height }).await?)?;
+                print_json(
+                    &client
+                        .call::<HtmlPublish>(HtmlPublishParams {
+                            thread_id: thread.parse()?,
+                            html,
+                            title,
+                            height,
+                            await_answer: None,
+                            answer_schema: None,
+                            timeout_seconds: None,
+                        })
+                        .await?,
+                )?;
             }
             VisualsCmd::Preview { thread, path, width, appearance, screenshot } => {
                 let html = tokio::fs::read_to_string(path).await?;
@@ -1971,6 +1992,14 @@ pub async fn run() -> Result<()> {
             }
             VisualsCmd::Revoke { thread, ticket } => {
                 client.call::<HtmlRevoke>(HtmlRevokeParams { thread_id: thread.parse()?, ticket }).await?;
+            }
+            VisualsCmd::Snapshot { thread, visual, width, appearance } => {
+                let thread_id: ThreadId = thread.parse()?;
+                let theme = serde_json::json!({ "appearance": appearance, "variables": { "--background": "transparent" } });
+                let result =
+                    client.call::<HtmlSnapshot>(HtmlSnapshotParams { thread_id, visual_id: visual, width, theme, lock: None }).await?;
+                println!("/threads/{thread_id}/visuals/{visual}/snapshot/{}.png", result.key);
+                print_json(&result)?;
             }
         },
         Cmd::Artifacts { cmd } => match cmd {

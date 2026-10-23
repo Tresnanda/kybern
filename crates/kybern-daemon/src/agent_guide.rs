@@ -10,11 +10,11 @@
 use std::collections::BTreeSet;
 
 /// Bumped with every wording change so a changed guide is a deliberate act.
-pub(crate) const GUIDE_VERSION: u32 = 10;
+pub(crate) const GUIDE_VERSION: u32 = 11;
 
 /// Hard ceiling for the rendered guide (about 1.5k tokens at 4 bytes a token).
 #[cfg(test)]
-pub(crate) const MAX_GUIDE_BYTES: usize = 6100;
+pub(crate) const MAX_GUIDE_BYTES: usize = 6500;
 
 /// Which groups of Kybern tools a session has.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -93,7 +93,8 @@ pub(crate) fn render(tools: &GuideTools) -> String {
              Put findings in the conversation. Answer ordinary questions in plain text. For a substantial comparison, plan, diagram or visual report, prefer an inline page from `kybern_html_publish` over a Markdown file or an external link. Write a separate report file only when the user asks for one or the task needs a repository document, and still give the useful findings here. Publish elsewhere only when the user wants a shareable link.\n\
              \n\
              ## Visual replies\n\
-             Write one self-contained HTML document; call `kybern_html_preview` for a screenshot and console diagnostics, then `kybern_html_publish` before your final written reply. The page appears where you publish it, above that reply. Publication stores a durable inline attachment, embeds supported absolute local image paths, and needs no browser. Preview installs Kybern’s own small headless browser on first use; retry in a minute if it is installing. Pages run scripts in an isolated sandbox and follow the reader’s theme live through CSS variables (see the tool description). Keep width fluid and height content-driven; avoid an outer card or banner title. The reader sees the page: add only what it does not explain in the final reply.\n",
+             Write one self-contained HTML document; call `kybern_html_preview` for a screenshot and console diagnostics, then `kybern_html_publish` before your final written reply. The page appears where you publish it, above that reply, stored durably with supported absolute local images embedded. Preview installs Kybern’s own small headless browser on first use; retry in a minute if it is installing. Pages run sandboxed and follow the reader’s theme through CSS variables (see the tool description). Keep width fluid and height content-driven. Kybern shows your title under the page, so don't repeat it in the page; paint no page background (it is transparent) and no outer card. The reader sees the page: add only what it does not explain in the final reply.\n\
+             To have the reader choose or tune something before you go on, publish with `await_answer` and an `answer_schema`. The call waits; the page calls `kybern.answer.draft(value, {label})` as they choose, and Kybern draws the send button, so draw none. The result is answered, replied (they typed instead), skipped, cancelled or timed_out.\n",
         );
     }
     if tools.has("kybern_preview_open") {
@@ -180,7 +181,7 @@ mod tests {
             include_str!("agent_guide_full.golden.txt"),
             "guide wording changed: bump GUIDE_VERSION and update the golden file (KYBERN_UPDATE_GOLDEN=1)"
         );
-        assert_eq!(GUIDE_VERSION, 10);
+        assert_eq!(GUIDE_VERSION, 11);
     }
 
     #[test]

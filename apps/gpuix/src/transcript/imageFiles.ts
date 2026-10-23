@@ -43,6 +43,11 @@ function prune(dir: string) {
   } catch { /* An unreadable cache folder only costs disk space. */ }
 }
 
+/** A file in the image cache for the native layer to write (a live visual's frame); pruned with the rest. */
+export function imageCachePath(name: string): string {
+  return path.join(cacheFolder(), name)
+}
+
 const hex = (value: string | Uint8Array) => Bun.hash(value).toString(16).padStart(16, '0')
 const touch = (file: string) => { try { const now = new Date(); utimesSync(file, now, now) } catch { /* Pruned later. */ } }
 

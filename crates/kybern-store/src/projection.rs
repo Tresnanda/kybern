@@ -593,7 +593,23 @@ fn apply_transcript_event(
             }
             EventPayload::HtmlPublished { visual } => {
                 let Some(turn_id) = turn_id.or(last_turn_id_value) else { continue };
-                out.push(TranscriptEntry::Visual { turn_id, seq: ev.seq, at: ev.at, visual: visual.clone() });
+                out.push(TranscriptEntry::Visual { turn_id, seq: ev.seq, at: ev.at, visual: visual.clone(), answer: None });
+            }
+            EventPayload::VisualAnswered { visual_id, status, answer, label, message_id, message } => {
+                for entry in out.iter_mut().rev() {
+                    if let TranscriptEntry::Visual { visual, answer: record, .. } = entry
+                        && visual.id == *visual_id
+                    {
+                        *record = Some(VisualAnswerRecord { status: *status, answer: answer.clone(), label: label.clone(), at: ev.at });
+                        break;
+                    }
+                }
+                // A typed reply is the reader's own message in the turn.
+                if let (Some(message_id), Some(message), Some(turn_id)) = (message_id, message, turn_id.or(last_turn_id_value))
+                    && !lookup.users.contains(message_id)
+                {
+                    out.push(TranscriptEntry::User { id: *message_id, turn_id, seq: ev.seq, message: message.clone(), at: ev.at });
+                }
             }
             EventPayload::ToolCallStarted { call, origin } => {
                 let Some(turn_id) = turn_id.or(last_turn_id_value) else { continue };

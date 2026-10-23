@@ -277,6 +277,7 @@ async fn handle(State(state): State<AppState>, headers: HeaderMap, body: Bytes) 
             };
             let budget = crate::secrets::call_budget(name, &arguments)
                 .or_else(|| crate::lead_git::call_budget(name, &arguments))
+                .or_else(|| crate::visuals::call_budget(name, &arguments))
                 .unwrap_or(Duration::from_secs(65));
             let response = tokio::time::timeout(
                 budget,

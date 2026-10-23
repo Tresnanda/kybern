@@ -11,6 +11,7 @@ import { briefProposalInput, leadGitCardInput, settingsProposalInput } from '../
 import type { ApprovalRequest, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { PanelEnter, PanelPresence } from '../requests/Panel.tsx'
 import { SecretRequestPanel } from '../requests/Secret.tsx'
+import { isVisualAnswerCard, useVisualAnswerStub, VisualAnswerStub } from '../requests/VisualAnswer.tsx'
 import { ActivityPanels, useRequestActivity } from '../requests/Activity.tsx'
 import { ComposerTray, trayVisible } from '../requests/ComposerTray.tsx'
 import { loadQueue, useComposer } from '../composer/store.ts'
@@ -53,7 +54,10 @@ function RequestStack({ threadId }: { threadId: string }) {
   useEffect(() => {
     if (!pane.frozen) void loadQueue(threadId)
   }, [threadId, running, pane.frozen])
-  const approval = pending[0] ?? null
+  const first = pending[0] ?? null
+  // A waiting visual is answered under its figure; it takes this slot only while the figure is out of view.
+  const stub = useVisualAnswerStub(first)
+  const approval = first && isVisualAnswerCard(first) && !stub ? null : first
   const activity = useRequestActivity(threadId)
   // Subagents, background tasks, helpers and queued follow-ups share one tray (`ComposerTray`) in this surface.
   const tray = { threadId, subagents: activity.strip?.rows ?? EMPTY, tasks: activity.active, helpers: activity.helpers, queued }
@@ -129,6 +133,7 @@ export function StackedPanel({ children, closed }: { children: ReactNode; closed
 }
 
 function ApprovalRequestCard({ threadId, approval, count }: { threadId: ThreadId; approval: ApprovalRequest; count: number }) {
+  if (isVisualAnswerCard(approval)) return <VisualAnswerStub approval={approval} count={count} />
   const secret = secretRequestInput(approval)
   if (secret) return <SecretRequestPanel approval={approval} input={secret} count={count} />
   if (briefProposalInput(approval) || settingsProposalInput(approval) || leadGitCardInput(approval)) return <CoordinatorCard approval={approval} count={count} />

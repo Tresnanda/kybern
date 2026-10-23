@@ -785,8 +785,14 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 .visual_latest_turn(p.thread_id)
                 .map_err(internal)?
                 .ok_or_else(|| RpcError::invalid_params("Send a message in this thread before publishing a visual."))?;
-            let event =
-                crate::visuals::publish(&state.store, &state.paths, p.thread_id, turn, &p.html, &p.title, p.height).await.map_err(bad)?;
+            if p.await_answer == Some(true) || p.answer_schema.is_some() {
+                return Err(RpcError::invalid_params(
+                    "Only an agent's kybern_html_publish can wait for an answer. Publish without await_answer.",
+                ));
+            }
+            let event = crate::visuals::publish(&state.store, &state.paths, p.thread_id, turn, &p.html, &p.title, p.height, None)
+                .await
+                .map_err(bad)?;
             let EventPayload::HtmlPublished { visual } = &event.payload else { unreachable!() };
             let result = HtmlPublishResult { visual: visual.clone() };
             let _ = state.events.send(event);
@@ -808,6 +814,11 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             ok(Empty {})
         }
         HtmlRead::NAME => ok(crate::visuals::read(&state.store, parse(params)?).map_err(bad)?),
+        HtmlSnapshot::NAME => {
+            let p: HtmlSnapshotParams = parse(params)?;
+            state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            ok(crate::visuals::snapshot(&state.store, &state.paths, p).await.map_err(bad)?)
+        }
         HtmlFrame::NAME => ok(crate::visuals::issue(&state.store, parse(params)?).map_err(bad)?),
         HtmlRevoke::NAME => {
             crate::visuals::revoke(parse(params)?);

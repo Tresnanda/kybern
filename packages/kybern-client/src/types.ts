@@ -705,9 +705,21 @@ export interface HtmlVisual {
   height: number;
   /** Content heights measured at publish, ascending by width; absent when not measured. */
   heights?: VisualHeight[];
+  /** Set when the agent waits for the reader's answer; the question is a `VISUAL_ANSWER_TOOL` card. */
+  ask?: VisualAsk | null;
 }
+export interface VisualAsk { schema?: JsonValue | null }
+export type VisualAnswerStatus = "answered" | "replied" | "skipped" | "cancelled" | "timed_out";
+/** The receipt under an answered visual. */
+export interface VisualAnswerRecord { status: VisualAnswerStatus; answer?: JsonValue | null; label?: string | null; at: DateTime }
+/** `tool_name` of the daemon's card behind `kybern_html_publish` with `await_answer`. `input` is a `VisualAnswerInput`; the answer is `{ decision: "submit", response: { answer, label } }`, `{ response: { reply } }` for a typed reply, or a deny to skip. */
+export const VISUAL_ANSWER_TOOL = "kybern_visual_answer";
+export interface VisualAnswerInput { visual_id: Uuid; title: string; schema?: JsonValue | null }
+/** One control in a visual's picture, in CSS pixels from the page's top-left. */
+export interface VisualControl { x: number; y: number; w: number; h: number; r: number; role: string }
+export interface HtmlSnapshotResult { key: string; width: number; height: number; scale: number; clamped?: boolean; clamp: number; controls: VisualControl[] }
 export type TranscriptEntry =
-  | { role: "visual"; turn_id: TurnId; seq: EventSeq; at: DateTime; visual: HtmlVisual }
+  | { role: "visual"; turn_id: TurnId; seq: EventSeq; at: DateTime; visual: HtmlVisual; answer?: VisualAnswerRecord | null }
   | { role: "image"; id: string; turn_id: TurnId; seq: number; at: string; origin: EventOrigin; source: string }
   | {
       role: "user";
@@ -848,6 +860,7 @@ export interface RecoveredAssistantBlock {
 export type EventPayload =
   | { kind: "assistant_message_blocks_recovered"; message_id: MessageId; session_id: string; native_entry_id: string; blocks: RecoveredAssistantBlock[]; terminal_message_id: MessageId }
   | { kind: "html_published"; visual: HtmlVisual }
+  | { kind: "visual_answered"; visual_id: Uuid; status: VisualAnswerStatus; answer?: JsonValue | null; label?: string | null; message_id?: MessageId | null; message?: UserMessage | null }
   | { kind: "async_questions_requested"; request: AsyncQuestionRequest }
   | { kind: "async_questions_answered"; request_id: string; answers: string[]; message_id: MessageId; message: UserMessage }
   | { kind: "thread_created"; thread: Thread }
@@ -2362,7 +2375,8 @@ export interface Methods {
   "threads.files.write": [ThreadFileWriteParams, FilesWriteResult];
   "threads.files.resolve": [ThreadFilesResolveParams, ThreadFilesResolveResult];
   "skills.list": [SkillsListParams, SkillsListResult];
-  "threads.visuals.publish": [{ thread_id: ThreadId; html: string; title: string; height: number }, { visual: HtmlVisual }];
+  "threads.visuals.publish": [{ thread_id: ThreadId; html: string; title: string; height: number; await_answer?: boolean | null; answer_schema?: JsonValue | null; timeout_seconds?: number | null }, { visual: HtmlVisual }];
+  "threads.visuals.snapshot": [{ thread_id: ThreadId; visual_id: Uuid; width: number; theme: JsonValue; lock?: JsonValue | null }, HtmlSnapshotResult];
   "threads.visuals.preview": [{ thread_id: ThreadId; html: string; width?: number; appearance?: "dark" | "light" }, { width: number; content_height: number; captured_height: number; console_messages: {level: string; text: string}[]; missing_images: string[]; screenshot: string }];
   "threads.visuals.read": [{ thread_id: ThreadId; visual_id: Uuid; max_bytes?: number | null }, { html: string; truncated?: boolean }];
   "threads.visuals.frame": [{ thread_id: ThreadId; visual_id: Uuid; max_bytes?: number | null }, { ticket: string }];

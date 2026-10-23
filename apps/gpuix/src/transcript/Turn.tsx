@@ -168,7 +168,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
         </div>
       )}
 
-      {group.visuals?.map(block => <VisualCard key={block.id} visual={block.visual} threadId={threadId} />)}
+      {group.visuals?.map(block => <VisualCard key={block.id} visual={block.visual} answer={block.answer} threadId={threadId} />)}
       {running && (
         <div testId="live-work" style={{ display: 'flex', flexDirection: 'column', paddingBottom: 8 }}>
           <WorkingHeader since={group.user?.at ?? group.work[0]?.at ?? ''} />

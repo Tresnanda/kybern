@@ -36,6 +36,7 @@ mod spaces;
 mod subagent_messaging;
 mod subagents;
 mod tasks;
+mod visual_answer;
 mod worktrees;
 
 #[derive(Clone)]
@@ -247,6 +248,10 @@ impl Orchestrator {
                 anyhow::ensure!(!object.contains_key("thread_id"), "HTML tools are bound to the current thread.");
                 object.insert("thread_id".into(), serde_json::json!(thread_id));
                 let params: methods::HtmlPublishParams = crate::app_tools::parse(serde_json::Value::Object(object))?;
+                let ask = crate::visuals::answer_ask(&params)?;
+                if ask.is_some() {
+                    self.ensure_one_visual_question(turn_id, &live).await?;
+                }
                 let event = crate::visuals::publish(
                     &self.inner.store,
                     &self.inner.paths,
@@ -255,12 +260,19 @@ impl Orchestrator {
                     &params.html,
                     &params.title,
                     params.height,
+                    ask,
                 )
                 .await?;
                 let EventPayload::HtmlPublished { visual } = &event.payload else { unreachable!() };
-                let result = serde_json::json!({"visual":visual,"message":"The visual is published inline. Add only what the page does not already explain."});
+                let visual = visual.clone();
                 let _ = self.inner.events.send(event);
-                return Ok(result);
+                if visual.ask.is_some() {
+                    let wait = crate::visuals::answer_wait(params.timeout_seconds);
+                    return self.execute_visual_answer(thread_id, turn_id, &live, visual, wait).await;
+                }
+                return Ok(
+                    serde_json::json!({"visual":visual,"message":"The visual is published inline. Add only what the page does not already explain."}),
+                );
             }
             if name == crate::previews::agent::TOOL {
                 let roots = crate::previews::thread_roots(&self.inner.store, &thread);
@@ -3407,8 +3419,9 @@ impl Orchestrator {
             let mut result = if this.owns_app_tool_turn(thread_id, &live, Some(turn_id)).await.is_none() {
                 Err("app tool request is stale".to_string())
             } else {
-                let timeout = if let Some(budget) =
-                    crate::secrets::call_budget(&name, &arguments).or_else(|| crate::lead_git::call_budget(&name, &arguments))
+                let timeout = if let Some(budget) = crate::secrets::call_budget(&name, &arguments)
+                    .or_else(|| crate::lead_git::call_budget(&name, &arguments))
+                    .or_else(|| crate::visuals::call_budget(&name, &arguments))
                 {
                     budget
                 } else if delegation::BLOCKING_TOOLS.contains(&name.as_str())

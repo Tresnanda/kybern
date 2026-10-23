@@ -25,6 +25,16 @@ expression: schema_for!(TranscriptEntry)
         "visual": {
           "$ref": "#/$defs/HtmlVisual"
         },
+        "answer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VisualAnswerRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "role": {
           "type": "string",
           "const": "visual"
@@ -454,6 +464,17 @@ expression: schema_for!(TranscriptEntry)
           "items": {
             "$ref": "#/$defs/VisualHeight"
           }
+        },
+        "ask": {
+          "description": "Set when the agent waits for the reader's answer (`kybern_html_publish`\nwith `await_answer`). The pending question is a [`VISUAL_ANSWER_TOOL`] card.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VisualAsk"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -480,6 +501,70 @@ expression: schema_for!(TranscriptEntry)
       "required": [
         "width",
         "height"
+      ]
+    },
+    "VisualAsk": {
+      "description": "What a visual asks the reader.",
+      "type": "object",
+      "properties": {
+        "schema": {
+          "description": "JSON Schema the answer must match, when the agent gave one."
+        }
+      }
+    },
+    "VisualAnswerRecord": {
+      "description": "The receipt under an answered visual.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/VisualAnswerStatus"
+        },
+        "answer": true,
+        "label": {
+          "description": "The words the visual gave the answer (\"Layout B · Side panel\").",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "status",
+        "at"
+      ]
+    },
+    "VisualAnswerStatus": {
+      "description": "How a visual's question ended.",
+      "oneOf": [
+        {
+          "description": "The reader sent an answer from the visual.",
+          "type": "string",
+          "const": "answered"
+        },
+        {
+          "description": "The reader typed a message instead.",
+          "type": "string",
+          "const": "replied"
+        },
+        {
+          "description": "The reader chose Skip.",
+          "type": "string",
+          "const": "skipped"
+        },
+        {
+          "description": "The turn ended first.",
+          "type": "string",
+          "const": "cancelled"
+        },
+        {
+          "description": "Nobody answered in time.",
+          "type": "string",
+          "const": "timed_out"
+        }
       ]
     },
     "EventOrigin": {

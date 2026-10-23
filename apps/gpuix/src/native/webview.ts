@@ -3,7 +3,9 @@ import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type { LayoutRect, RoundedLayoutClip } from './layout.ts'
 
-export type WebEvent = { id: string; generation?: number; type: string; message?: string; url?: string; visible?: boolean; key?: string; modifiers?: { cmd: boolean; ctrl: boolean; alt: boolean; shift: boolean }; data?: Record<string, unknown> }
+export type WebEvent = { id: string; generation?: number; type: string; message?: string; url?: string; visible?: boolean; key?: string; modifiers?: { cmd: boolean; ctrl: boolean; alt: boolean; shift: boolean }; data?: Record<string, unknown>
+  /** `outsidePress`: window points; `snapshot`: the PNG's pixel size. */
+  x?: number; y?: number; width?: number; height?: number; path?: string; ok?: boolean; token?: number }
 let bridge: ReturnType<typeof load> | undefined, wake: JSCallback | undefined
 let nextGeneration = 0
 let pointerCaptures = 0
@@ -52,8 +54,9 @@ export function webDocument(url: string, kind: 'file' | 'server' | 'visual') {
   const frame=document.querySelector('iframe'), send=data=>window.webkit.messageHandlers.kybern.postMessage(data);
   let visible=true, theme, last='';
   function post(force=false){const data={kind:'kybern-visual-host',visible,theme};const key=JSON.stringify(data);if(force||key!==last){last=key;frame.contentWindow?.postMessage(data,'*');frame.contentWindow?.postMessage({type:'kybern-preview-visibility',visible},'*')}}
-  window.kybernVisible=value=>{visible=value;post()};window.kybernTheme=value=>{theme=value;document.documentElement.style.background=value.variables?.['--background']||'transparent';post()};
+  window.kybernVisible=value=>{visible=value;post()};window.kybernTheme=value=>{theme=value;document.documentElement.style.background=value.variables?.['--background']||'transparent';document.documentElement.style.colorScheme=value.appearance==='light'?'light':'dark';post()};
   window.kybernLayout=(w,h,scale,left,top)=>{Object.assign(frame.style,{width:w+'px',height:h+'px',transform:'translate('+left+'px,'+top+'px) scale('+scale+')'})};
+  window.kybernSend=data=>frame.contentWindow?.postMessage(data,'*');
   window.kybernCommand=action=>{if(action==='reload')frame.src=frame.src;else if(action==='back'||action==='forward')frame.contentWindow.postMessage({type:'go',delta:action==='back'?-1:1},'*')};
   window.addEventListener('message',event=>{if(event.source!==frame.contentWindow||!event.data||typeof event.data!=='object')return;if(event.data.kind==='kybern-visual-link'&&!navigator.userActivation?.isActive)return;send(event.data)});
   ${kind === 'visual' ? "frame.addEventListener('mouseenter',()=>send({kind:'kybern-visual-hover',value:true}));frame.addEventListener('mouseleave',()=>send({kind:'kybern-visual-hover',value:false}));" : ''}
@@ -93,6 +96,10 @@ export const webHost = {
       ...(motion.from?.opacity !== undefined ? { fromOpacity: motion.from.opacity } : {}), ...(motion.from?.scale !== undefined ? { fromScale: motion.from.scale } : {}) })
   },
   post(id: string, script: string) { command({ op: 'post', id, script }) },
+  /** A message to the page (`bootstrap.js`: `kybern-visual-click`, `kybern-visual-lock`, `kybern-visual-select`). */
+  send(id: string, data: Record<string, unknown>) { command({ op: 'post', id, script: `window.kybernSend?.(${JSON.stringify(data)})` }) },
+  /** The document as it looks now, written to `path` as a PNG; answered by a `snapshot` event with the same `token`. */
+  snapshot(id: string, path: string, token: number) { command({ op: 'snapshot', id, path, token }) },
   theme(id: string, theme: unknown) { command({ op: 'post', id, script: `window.kybernTheme?.(${JSON.stringify(theme)})` }) },
   navigate(id: string, url: string) { command({ op: 'navigate', id, url }) },
   action(id: string, action: 'reload' | 'back' | 'forward' | 'stop') { command({ op: 'action', id, action }) },

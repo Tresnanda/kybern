@@ -2167,6 +2167,15 @@ pub struct HtmlPublishParams {
     pub html: String,
     pub title: String,
     pub height: u32,
+    /// Agents only (`kybern_html_publish`): the call waits for the reader's answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub await_answer: Option<bool>,
+    /// JSON Schema the answer must match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_schema: Option<serde_json::Value>,
+    /// How long to wait for the answer, 30–3600 seconds (default 900).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HtmlPublishResult {
@@ -2220,6 +2229,48 @@ pub struct HtmlRevokeParams {
     pub ticket: String,
 }
 method!(HtmlRevoke, "threads.visuals.revoke", Some(Scope::OrchestrationRead), HtmlRevokeParams, Empty);
+/// A picture of a visual for the transcript: rendered headlessly at the
+/// column width in the reader's theme, on a transparent background.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlSnapshotParams {
+    pub thread_id: ThreadId,
+    pub visual_id: uuid::Uuid,
+    /// The figure's width in CSS pixels, 240–1600.
+    pub width: u32,
+    /// The theme the page receives: `{appearance, variables}`, as in `#kybern-theme=`.
+    pub theme: serde_json::Value,
+    /// The answered state to draw (`{state, answer}`, as `kybern-answer-state` carries), if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock: Option<serde_json::Value>,
+}
+/// One control in a snapshot, in CSS pixels from the page's top-left.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct VisualControl {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// Corner radius.
+    pub r: f32,
+    /// `button`, `link`, `tab`, `switch`, `checkbox`, `radio`, `slider`, `field` or `select`.
+    pub role: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HtmlSnapshotResult {
+    /// Names the picture: `GET /threads/{thread}/visuals/{visual}/snapshot/{key}.png`
+    /// (bearer token), and `{key}-fade.png` when `clamped`.
+    pub key: String,
+    pub width: u32,
+    /// Content height in CSS pixels (the picture is twice as many device pixels).
+    pub height: u32,
+    pub scale: u32,
+    /// Content taller than the clamp has a picture cut at `clamp` that fades out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clamped: bool,
+    pub clamp: u32,
+    pub controls: Vec<VisualControl>,
+}
+method!(HtmlSnapshot, "threads.visuals.snapshot", Some(Scope::OrchestrationRead), HtmlSnapshotParams, HtmlSnapshotResult);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ArtifactsListParams {
@@ -3149,6 +3200,7 @@ registry!(
     HtmlRead,
     HtmlFrame,
     HtmlRevoke,
+    HtmlSnapshot,
     PreviewOpen,
     PreviewClose,
     PreviewProbe,
