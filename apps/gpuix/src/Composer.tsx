@@ -89,6 +89,7 @@ import {
   patchDraft,
   removeQueued,
   sendToThread,
+  STEERABLE,
   setThreadMode,
   setThreadModel,
   uploadPath,
@@ -99,8 +100,6 @@ import { alreadyAttachedText, contentHash, newFiles } from './composer/attached.
 
 export const COMPOSER_RADIUS = 19.2
 const DEFAULT_PLACEHOLDER = 'Ask anything, @ to mention, $ skills, or / commands'
-/** Agents whose running turn accepts steering (`views/Thread.tsx:388`). */
-const STEERABLE = ['claude-code', 'codex', 'pi', 'omp']
 
 export function Composer({ thread, tray }: { thread: Thread | null; tray?: ReactNode }) {
   const status = useApp((s) => s.status)

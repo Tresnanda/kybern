@@ -22,7 +22,8 @@ import { MatrixLoader } from '../MatrixLoader.tsx'
 import { G } from '../composer/glyphs.ts'
 import { Dim, Leave, useLeavingList } from '../composer/motion.tsx'
 import { SECTION_LABEL, SectionLabel } from '../composer/Menu.tsx'
-import { removeQueued } from '../composer/store.ts'
+import { removeQueued, STEERABLE, steerQueued } from '../composer/store.ts'
+import { useApp } from '../state.ts'
 import { Chevron } from '../motion/Chevron.tsx'
 import { Collapse, Rise, SwapOnChange, revealTransform } from '../motion/kit.tsx'
 import { openThread } from '../nav/history.ts'
@@ -398,6 +399,9 @@ const QueuedRow = memo(function QueuedRow({ item, threadId }: { item: QueuedMess
   const thumb = preview.images[0]
   const outline = ink(t, 0.1)
   const remove = () => void removeQueued(threadId, item.id).catch(e => reportError('Unable to remove follow-up', e))
+  // A running turn of an agent that takes steering can get the follow-up now instead of after it ends.
+  const steerable = useApp((s) => { const thread = s.threads.find((x) => x.id === threadId); return !!thread && thread.status === 'running' && STEERABLE.includes(thread.provider.kind) })
+  const steer = () => void steerQueued(threadId, item).catch(e => reportError('Couldn’t steer with this follow-up. If the turn just ended it was already sent; otherwise try again', e))
   return (
     <Row testId={`queued-${item.id}`} hoverable={false}
       glyph={thumb && preview.imagesOnly
@@ -405,6 +409,7 @@ const QueuedRow = memo(function QueuedRow({ item, threadId }: { item: QueuedMess
         : <Icon source={preview.kind === 'update' ? G.workflow : G.clock} size={14} color={ink(t, 0.5)} />}
       trailing={<div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         {preview.imageCount > 0 && !preview.imagesOnly && <ImageCount count={preview.imageCount} thumb={thumb} />}
+        {steerable && <Button testId={`queued-steer-${item.id}`} variant="ghost" size="sm" onClick={steer}>Steer now</Button>}
         <IconButton testId={`queued-remove-${item.id}`} label="Remove queued follow-up" icon={G.x} glyph={12} size="sm" onClick={remove} />
       </div>}
     >
